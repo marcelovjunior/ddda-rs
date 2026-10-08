@@ -13,6 +13,9 @@ name = "ddtool"
 version = "0.1.0"
 dependencies = [
  "mtarc",
+ "mtmod",
+ "mtmrl",
+ "mtshader",
  "mttex",
 ]
 
@@ -31,6 +34,21 @@ version = "0.1.0"
 dependencies = [
  "miniz_oxide",
 ]
+
+[[package]]
+name = "mtmod"
+version = "0.1.0"
+dependencies = [
+ "mtshader",
+]
+
+[[package]]
+name = "mtmrl"
+version = "0.1.0"
+
+[[package]]
+name = "mtshader"
+version = "0.1.0"
 
 [[package]]
 name = "mttex"

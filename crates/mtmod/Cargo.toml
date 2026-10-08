@@ -1,0 +1,10 @@
+[package]
+name = "mtmod"
+version = "0.1.0"
+description = "Reader for MT Framework MOD models (rModel v0xD4, Dragon's Dogma: Dark Arisen PC)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtshader = { path = "../mtshader" }

@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use mtarc::{decode_payload, Archive};
 
+mod model;
 mod scan;
 mod tex;
 
@@ -20,7 +21,10 @@ const USAGE: &str = "usage:
   ddtool arc-ls <file.arc>
   ddtool arc-scan <nativePC dir> [--inflate]
   ddtool tex-scan <nativePC dir>
-  ddtool tex-dds <file.arc> <entry path> <out.dds>";
+  ddtool tex-dds <file.arc> <entry path> <out.dds>
+  ddtool mod-scan <nativePC dir>
+  ddtool mrl-scan <nativePC dir>
+  ddtool mod-info <nativePC dir> <file.arc> <entry path>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,6 +34,9 @@ fn main() -> ExitCode {
         ["arc-scan", dir, "--inflate"] => arc_scan(Path::new(dir), true),
         ["tex-scan", dir] => tex::tex_scan(Path::new(dir)),
         ["tex-dds", arc, entry, out] => tex::tex_dds(Path::new(arc), entry, Path::new(out)),
+        ["mod-scan", dir] => model::mod_scan(Path::new(dir)),
+        ["mrl-scan", dir] => model::mrl_scan(Path::new(dir)),
+        ["mod-info", dir, arc, entry] => model::mod_info(Path::new(dir), Path::new(arc), entry),
         _ => Err(USAGE.to_string()),
     };
     match result {

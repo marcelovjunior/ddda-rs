@@ -85,6 +85,58 @@ where
     })
 }
 
+/// Like [`for_each_resource`] but per archive: `visit` gets every entry
+/// whose type is in `types`, inflated, in archive order.
+pub fn for_each_archive<F>(dir: &Path, types: &[u32], visit: F) -> Result<Walk, String>
+where
+    F: Fn(&Path, &[(Entry, Vec<u8>)]) -> Vec<String> + Sync,
+{
+    let mut files = Vec::new();
+    find_arcs(dir, &mut files).map_err(|e| format!("{}: {e}", dir.display()))?;
+    files.sort();
+    let next = AtomicUsize::new(0);
+    let visited = AtomicUsize::new(0);
+    let failures = Mutex::new(Vec::new());
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = files.get(i) else { break };
+                let res = (|| -> Result<Vec<(Entry, Vec<u8>)>, String> {
+                    let mut file = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
+                    let arc = Archive::read_index(&mut file).map_err(|e| e.to_string())?;
+                    let mut out = Vec::new();
+                    for e in arc.entries.iter().filter(|e| types.contains(&e.type_hash)) {
+                        let bytes = mtarc::read_entry(&mut file, e).map_err(|x| x.to_string())?;
+                        out.push((e.clone(), bytes));
+                    }
+                    Ok(out)
+                })();
+                match res {
+                    Ok(items) => {
+                        visited.fetch_add(items.len(), Ordering::Relaxed);
+                        let errs = visit(path, &items);
+                        if !errs.is_empty() {
+                            let mut f = failures.lock().unwrap();
+                            f.extend(errs.into_iter().map(|e| format!("{}: {e}", path.display())));
+                        }
+                    }
+                    Err(msg) => failures
+                        .lock()
+                        .unwrap()
+                        .push(format!("{}: {msg}", path.display())),
+                }
+            });
+        }
+    });
+    Ok(Walk {
+        archives: files.len(),
+        visited: visited.into_inner(),
+        failures: failures.into_inner().unwrap(),
+    })
+}
+
 /// Reads one entry from an archive by its in-archive path and type hash.
 pub fn read_one(arc_path: &Path, entry_path: &str, type_hash: u32) -> Result<Vec<u8>, String> {
     let (arc, mut file) = Archive::open(arc_path).map_err(|e| format!("{}: {e}", arc_path.display()))?;

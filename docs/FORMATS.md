@@ -52,3 +52,86 @@ tiles its file exactly, with no gaps, overlap or trailing bytes.
 
 Inspection: `ddtool tex-dds <arc> <entry> <out.dds>` writes a legacy DDS
 (DXT1/3/5 and 32-bit formats) for viewing in external tools.
+
+## MFX: shader package index (`mtshader`)
+
+`nativePC\usershader\BbsShaderPackage.mfx` names every shader object:
+
+- input layouts (kind 9), e.g. `IANonSkinTBN`
+- textures (kind 1), e.g. `tAlbedoMap`
+- feature switches (kind 2), e.g. `FAlbedo`
+- samplers (kind 3)
+- constant buffers (kind 0), e.g. `CBMaterial`
+
+**Ids.** Other files refer to an object by `(JAMCRC(name) & 0xFFFFF) << 12 | entry index`.
+
+- **Checked:** all 500,929 MRL shader-object ids and all 24 MOD vertex formats resolve this way.
+- The layouts are read from the user's install at runtime; nothing is embedded in this repo.
+
+**Element type codes.** These follow from the element offsets plus the checks noted against each code.
+
+| Code | Meaning | Evidence |
+| --- | --- | --- |
+| 1 | f32 | positions lie inside the model bounds |
+| 2 | f16 | UVs, some weights |
+| 5 | s16 normalised (/32767) | |
+| 8 | u8 | joints |
+| 9 | u8 biased `x/255*2-1` | normals unit length to 0.008 |
+| 10 | u8 normalised | |
+| 11 | 4 × u8 biased, packed | normals unit length |
+| 13 | u8 colour | |
+
+*Unresolved:*
+- Codes 3, 4, 7 and 14 are only used by particles, sprites and 1-weight skins.
+- The exe's mapping to `D3DDECLTYPE` has not been traced yet.
+
+## MOD: `rModel` v0xD4 (`mtmod`)
+
+**Checked:** `ddtool mod-scan` passes on the full install.
+
+- All 28,094 models (3,940 distinct) parse.
+- All 215,267 meshes decode through their MFX layout: 70.2 M vertices, 71.3 M triangles.
+- Every skinned vertex's weights sum to 1.
+- There are no non-finite UVs.
+- All 67,469 material names resolve in the same-path MRL by JAMCRC.
+
+**Layout.** See the crate docs. Facts established on the data:
+
+- The header is 0x84 bytes, the first table always starts at 0x84, and the mesh table plus weight bounds end exactly at the vertex buffer.
+- Indices are u16 triangle strips (topology byte 4 everywhere), with no restart markers and with 4 zero bytes after the buffer.
+- Indices lie in `[vertex_start, vertex_start + vertex_count)`.
+- A mesh's vertices start at `vertex_byte_offset + (base_vertex + vertex_start) * stride`.
+- Strip winding: even triangles are `(a,b,c)` and odd ones `(b,a,c)`. With that, the face normal `(b-a)x(c-a)` agrees with the stored normals on 98.4% of 1.0 M non-degenerate sample triangles.
+- Quantised (s16) positions scale by one factor, the largest bbox extent, plus the bbox min. Checked: per-axis maxima equal `extent/max_extent`.
+- Weights:
+  - Semantic 0 is in the position's w.
+  - Further semantics follow in order (u8 or f16).
+  - The remainder up to 1.0 goes to the last joint.
+
+**Unresolved:**
+- 0.18% of normals deviate from unit length by more than 0.05.
+- 25,811 of 30.7 M skinned vertices use a joint at or above the model's bone count. The 256-byte joint remap table is the likely explanation; it is not yet applied.
+- The `IASkinBridge*` layouts have no UVs (51,651 meshes); their role is unknown.
+- `draw_mode`, the LOD byte semantics (255 = all LODs?), and the meaning of the groups.
+
+## MRL: `rMaterial` v0x20 (`mtmrl`)
+
+**Checked:** `ddtool mrl-scan` parses all 28,152 lists (3,972 distinct). All 2,077,947 commands resolve in the MFX. Every texture index is in range (1-based; 0 = none).
+
+**Material classes** are MtDTI names: `nDraw::MaterialStdEst` (most common), `DDMaterialStd`, `MaterialNull`, `DDMaterialWater`, `DDMaterialInner`, `MaterialStd`.
+
+**What a material carries.** It is described entirely by MFX feature switches and texture slots:
+
+- `FAlbedo` = `FAlbedoMap` / `FAlbedoMapAdd` / ...
+- `FBump` = `FBumpNormalMap` / `FBumpDetailNormalMap` / `FBump` (none)
+- `FSpecular` = `FSpecularMap` / `FSpecularDisable`
+- `FTransparency` = `FTransparencyAlpha` / ...
+- Textures: `tAlbedoMap`, `tNormalMap`, `tSpecularMap`, `tEnvMap`, `tEmissionMap`, `tDetailNormalMap`, and others.
+
+`ddtool mod-info <nativePC> <arc> <entry>` lists a model's meshes, layouts and material bindings.
+
+**Unresolved:**
+- The constant-buffer layouts (MFX kind 0 entries are not parsed yet).
+- The two state-bit words.
+- The animation block.
+- The blend, depth and rasterizer state ids.
