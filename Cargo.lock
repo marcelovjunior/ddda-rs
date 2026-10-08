@@ -13,6 +13,7 @@ name = "ddtool"
 version = "0.1.0"
 dependencies = [
  "mtarc",
+ "mttex",
 ]
 
 [[package]]
@@ -30,3 +31,7 @@ version = "0.1.0"
 dependencies = [
  "miniz_oxide",
 ]
+
+[[package]]
+name = "mttex"
+version = "0.1.0"

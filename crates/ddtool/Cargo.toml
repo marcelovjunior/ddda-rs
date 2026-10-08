@@ -8,3 +8,4 @@ publish.workspace = true
 
 [dependencies]
 mtarc = { path = "../mtarc" }
+mttex = { path = "../mttex" }
