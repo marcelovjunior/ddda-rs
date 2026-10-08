@@ -1,0 +1,27 @@
+# Whitelist: ignore everything, then allow only our own source and docs.
+# Game files, extracted assets, Ghidra databases, decompiler exports and
+# recordings must never be committed (see AGENTS.md).
+/*
+!/.gitignore
+!/AGENTS.md
+!/CLAUDE.md
+!/README.md
+!/Cargo.toml
+!/Cargo.lock
+!/rustfmt.toml
+!/crates/
+!/docs/
+!/research/
+!/scripts/
+target/
+*.arc
+*.exe
+*.dll
+*.pdb
+*.gpr
+*.rep/
+*.jsonl
+*.bin
+*.tex
+*.mod
+*.lmt

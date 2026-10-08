@@ -1,0 +1,10 @@
+[package]
+name = "mtarc"
+version = "0.1.0"
+description = "Reader for MT Framework ARC v7 archives (Dragon's Dogma: Dark Arisen PC)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+miniz_oxide.workspace = true

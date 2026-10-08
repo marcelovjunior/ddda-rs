@@ -1,0 +1,10 @@
+[package]
+name = "ddtool"
+version = "0.1.0"
+description = "Command-line inspection of a Dragon's Dogma: Dark Arisen install"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtarc = { path = "../mtarc" }
