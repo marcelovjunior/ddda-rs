@@ -6,10 +6,11 @@ Each class registers with a static-init stub:
     mov ecx, thisDTI
     call MtDTI::MtDTI (0x00CF5780)
     [push dtor; mov dword [thisDTI], dtiVtable; call atexit]
+Usage: dti_registry.py <unpacked exe> <out.json>
 Writes JSON records: dti, name, parent, parent_name, size, args, dti_vtable.
 """
 import json, struct, sys
-EXE, XREFS, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
+EXE, OUT = sys.argv[1], sys.argv[2]
 CTOR = 0x00CF5780
 d = open(EXE, 'rb').read()
 pe = struct.unpack_from('<I', d, 0x3c)[0]
@@ -62,12 +63,20 @@ def parse_site(call):
         else: break
     return rec
 
+# Call sites: every E8 rel32 in .text whose target is the constructor. A raw
+# byte scan, because Ghidra's auto-analysis never disassembled ~60 of the
+# static-init stubs, so its cross-references miss them.
+text_va, text_len, text_off = secs[0]
+sites = []
+for i in range(text_off, text_off + text_len - 5):
+    if d[i] == 0xE8:
+        va = text_va + (i - text_off)
+        if va + 5 + struct.unpack_from('<i', d, i + 1)[0] == CTOR:
+            sites.append(va)
 recs, bad = [], []
-for line in open(XREFS):
-    if line.startswith('From '):
-        site = int(line.split()[1], 16)
-        r = parse_site(site)
-        (recs if r and r['name'] else bad).append(r or hex(site))
+for site in sites:
+    r = parse_site(site)
+    (recs if r and r['name'] else bad).append(r or hex(site))
 by_dti = {r['dti']: r for r in recs}
 for r in recs:
     p = by_dti.get(r['parent'])

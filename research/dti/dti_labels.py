@@ -6,7 +6,7 @@ A virtual method is named after the most-base class whose vtable has that
 function at that slot (the class that introduced or last overrode it).
 """
 import csv, json, re, struct, sys, collections
-sys.path.insert(0, 'E:/ddda-re/scripts')
+sys.path.insert(0, __import__('os').path.dirname(__file__))
 from peimg import Img
 im = Img('E:/ddda-re/bin/DDDA.exe.unpacked.exe')
 reg = json.load(open('E:/ddda-re/notes/dti-registry.json'))
@@ -47,6 +47,38 @@ for c in classes:
     if c['vtable']:
         st = int(c['vtable'], 16)
         c['vtable_slots'] = [hex(im.u32(st + 4 * k)) for k in range(vt_len(st))]
+
+# vt_len stops at the first word outside .text, but data that follows a vtable
+# can still look like a .text address: resource classes are followed by their
+# extension string ('tex\0' = 0x00786574), others by ASCII/UTF-16/UTF-8 strings.
+# Trim the run at the first slot that is (a) past slot 4 (getDTI), (b) not a
+# getDTI stub, (c) used by only one vtable, and (d) unaligned (48,579 of the
+# 48,633 real slots are 16-byte aligned; the other 54 are _purecall, shared by
+# many vtables), or a printable word not preceded by a function boundary, or a
+# resource class's 2-3 letter extension string.
+def _boundary(w):
+    o = im.off(w)
+    return d[o - 1] in (0xCC, 0x90, 0xC3) or d[o - 3] == 0xC2 or d[o - 5] == 0xE9 or d[o - 2] == 0xEB
+def _printable(w):
+    return all(x == 0 or 0x20 <= x < 0x7F for x in w.to_bytes(4, 'little'))
+_mult = collections.Counter(int(f, 16) for c in classes for f in set(c.get('vtable_slots') or []))
+_stubs = set(stub_to_dti)
+for c in classes:
+    s = c.get('vtable_slots')
+    if not s:
+        continue
+    is_res = re.match(r'r[A-Z]', c['name']) is not None
+    for i, f in enumerate(s):
+        w = int(f, 16)
+        if i < 5 or w in _stubs or _mult[w] >= 2:
+            continue
+        raw = w.to_bytes(4, 'little')
+        if (w % 16 or (_printable(w) and not _boundary(w))
+                or (is_res and raw[3] == 0 and re.fullmatch(rb'[a-z0-9]{2,3}', raw.rstrip(b'\0')))):
+            c['vtable_slots'] = s[:i]
+            c['vtable_trailing'] = raw.rstrip(b'\0').decode('latin-1')
+            stats['vtable_trimmed'] += 1
+            break
 
 # depth for "most-base introducer" rule
 def chain(c):

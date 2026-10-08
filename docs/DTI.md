@@ -24,10 +24,9 @@ call 0x00CF5780                    ; MtDTI constructor (thiscall)
 push dtor ; mov [thisDTI], dtiVtable ; call atexit
 ```
 
-- 4,343 call sites, all parsed; 4,324 have a parent that is itself
-  registered. The 19 others are roots (`MtObject`) or have parents
-  registered another way. The format survey counts about 4,405 classes in
-  total, so about 60 register through a different path (not yet traced).
+- 4,405 call sites, found by scanning `.text` for `call 0x00CF5780`
+  (Ghidra's auto-analysis had disassembled only 4,343 of them), all
+  parsed. Every class except the root `MtObject` has a registered parent.
 - Descriptor: 0x20 bytes. Observed fields from the constructor:
   `+0x00` vtable, `+0x04` name, `+0x08` next sibling, `+0x0C` first child,
   `+0x10` parent, `+0x14` hash-bucket chain, `+0x18` size (low 23 bits)
@@ -42,15 +41,19 @@ push dtor ; mov [thisDTI], dtiVtable ; call atexit
   gets the class allocator (`0x00CF5E20`), allocates `size` bytes and calls
   the class constructor. Constructors may take `this` in `esi`, not `ecx`
   (link-time optimised conventions). Take conventions from disassembly.
-- **getDTI** is a tiny `mov eax, <DTI>; ret` stub, found for 4,328 classes.
+- **getDTI** is a tiny `mov eax, <DTI>; ret` stub, found for 4,390 classes.
 - **Class vtables** have `getDTI` at **slot 4**. Checked on all 4,598 vtable
   words that point at a getDTI stub: the word 16 bytes earlier is a
   deleting destructor in 4,010 cases by flag-test pattern, and the
   remainder are destructors that store their own vtable address there.
   Slot 0 is the deleting destructor.
-- Result: 4,285 classes with a resolved vtable (43 ambiguous, 15 none),
-  25,712 distinct virtual functions attributed to the class that
-  introduces them.
+- Result: 4,343 classes with a resolved vtable (47 ambiguous, 15 none),
+  25,791 distinct virtual functions attributed to the class that
+  introduces them; 43,850 labels in all.
+- Applied to the project: about 16,100 functions that only vtables
+  reference were created. 99 targets were not code (UTF-16 text after a
+  vtable, see below) and were rejected; they are listed with reasons in
+  the private `dti-labels-failures.csv`.
 
 ## Naming in the Ghidra project
 
@@ -60,9 +63,32 @@ push dtor ; mov [thisDTI], dtiVtable ; call atexit
 verified to install the class vtable. Labels use SourceType.ANALYSIS, so
 later manual names (USER_DEFINED) always win.
 
+## Known issues
+
+- The vtable length is found by walking forward while words point into
+  `.text`. Data after a vtable can look like a code address: every
+  resource class's vtable is directly followed by its extension string
+  (`tex\0` = `0x00786574`, `mod\0`, `mrl\0`, ...), and others by ASCII,
+  UTF-16 or UTF-8 text. `dti_labels.py` now trims each run at the first
+  slot (past slot 4, not a getDTI stub, used by one vtable only) that is
+  unaligned (48,579 of 48,633 real slots are 16-byte aligned; the other 54
+  are the shared `_purecall`), or printable without a preceding function
+  boundary, or a resource class's 2-3 letter extension. 143 vtables are
+  trimmed; this removes all 99 rejected rows plus 57 targets that Ghidra
+  *had* accepted as functions. The trailing word is kept as
+  `vtable_trailing`, which also gives each resource's extension straight
+  from the exe.
+- **Pending (needs the Ghidra project lock):** run
+  `RemoveBogusDtiFunctions.java` with the private
+  `dti-bogus-functions.csv` (the 57 garbage functions, removed only if
+  they still carry their ANALYSIS name), then `ApplyDtiLabels.java` with
+  the regenerated `dti-labels.csv`. Not yet done because the MCP server
+  holds the project.
+
 ## Not done yet
 
 - MtPropertyList reflection (field names, types and offsets, e.g.
   `mPawnID`). This would name struct fields the way DTI names classes.
-- The ~60 classes registered outside `0x00CF5780`.
-- The 43 classes with more than one candidate vtable.
+- The 47 classes with more than one candidate vtable.
+- A tighter vtable end (stop at the next vtable's start or at
+  non-function targets).

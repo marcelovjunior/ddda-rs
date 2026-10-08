@@ -8,6 +8,8 @@
 
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.PrintWriter;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.script.GhidraScript;
@@ -25,11 +27,13 @@ public class ApplyDtiLabels extends GhidraScript {
     @Override
     protected void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length != 1) {
-            throw new IllegalArgumentException("usage: ApplyDtiLabels <labels.csv>");
+        if (args.length < 1 || args.length > 2) {
+            throw new IllegalArgumentException(
+                "usage: ApplyDtiLabels <labels.csv> [failures.csv]");
         }
         SymbolTable st = currentProgram.getSymbolTable();
         int funcsCreated = 0, funcsNamed = 0, labels = 0, skippedUser = 0, failed = 0;
+        PrintWriter failOut = args.length == 2 ? new PrintWriter(new FileWriter(args[1])) : null;
         try (BufferedReader r = new BufferedReader(new FileReader(args[0]))) {
             String line = r.readLine(); // header
             while ((line = r.readLine()) != null) {
@@ -52,6 +56,12 @@ public class ApplyDtiLabels extends GhidraScript {
                             fn = createFunction(a, null);
                             if (fn == null) {
                                 failed++;
+                                Function host = getFunctionContaining(a);
+                                String why = host != null
+                                    ? "inside " + host.getName(true) + "@" + host.getEntryPoint()
+                                    : getInstructionAt(a) == null ? "not disassemblable"
+                                    : "createFunction refused";
+                                fail(failOut, line, why);
                                 continue;
                             }
                             funcsCreated++;
@@ -77,15 +87,28 @@ public class ApplyDtiLabels extends GhidraScript {
                 }
                 catch (Exception e) {
                     failed++;
-                    if (failed <= 20) {
-                        printerr("row failed: " + line + " : " + e.getMessage());
-                    }
+                    fail(failOut, line, "exception: " + e.getMessage());
                 }
+            }
+        }
+        finally {
+            if (failOut != null) {
+                failOut.close();
             }
         }
         println(String.format(
             "ApplyDtiLabels: functions created=%d named=%d, data labels=%d, skipped(user)=%d, failed=%d",
             funcsCreated, funcsNamed, labels, skippedUser, failed));
         analyzeChanges(currentProgram);
+    }
+
+    /** Records a failed row (to the failures file if given, else the log). */
+    private void fail(PrintWriter out, String row, String why) {
+        if (out != null) {
+            out.println(row + "," + why.replace(',', ';'));
+        }
+        else {
+            printerr("row failed: " + row + " : " + why);
+        }
     }
 }

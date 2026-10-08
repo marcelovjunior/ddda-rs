@@ -9,7 +9,7 @@ at them; the vtable is the run of code pointers containing that word.
 Both are recorded; agreement is the confidence signal.
 """
 import json, re, struct, sys
-sys.path.insert(0, 'E:/ddda-re/scripts')
+sys.path.insert(0, __import__('os').path.dirname(__file__))
 from peimg import Img
 im = Img('E:/ddda-re/bin/DDDA.exe.unpacked.exe')
 reg = json.load(open('E:/ddda-re/notes/dti-registry.json'))
