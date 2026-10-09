@@ -41,7 +41,7 @@ report to `head`.
 
 **Head, first cut.** Traced: player vf05 -> 0x00B565A0 creates two
 `uAmbientShadow` (player +0x58B0, +0x58B4), texture
-`effect	ex\cm	_cm100_07_GM` (DXT5 32x32; the shape is in the colour,
+`effect\tex\cm\t_cm100_07_GM` (DXT5 32x32; the shape is in the colour,
 white middle, black edges), `mParentNo` 0x10 and 0x14, `mSize` x body
 scale (player +0x2E54 -> +0xF78), registered with FUN_00DB58B0(0xB, ...).
 Constructor defaults 0x00E79BC0: mSize 50, mFov 30, mStart 1, mEnd 100,
