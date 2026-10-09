@@ -13,6 +13,7 @@
 //! Nothing here writes a save.
 
 pub mod pawn;
+pub mod knowledge;
 pub mod pawns;
 pub mod xml;
 

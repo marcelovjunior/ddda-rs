@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/pawn-knowledge-map`
 - **Board area:** `formats/save`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -32,4 +32,20 @@ to `head`.
 
 ## Results
 
-(filled in by the agent)
+Added `ddsave::knowledge`: installed-exe readers for 52 quest, 97 enemy,
+18 area rows; 92 enemy-to-counter mappings; 113 unique-counter rules.
+Pure per-pawn bit progress, source f32 stars, completion predicate, area
+reverse mapping and counter gates. Reuses existing strict pawn-save reader.
+Minimal ddexe dependency/module/lock extension approved by head #1401.
+
+Five new tests pass; full ddsave suite passes 18. Private original-written
+main pawn examples: quest5=6/6 (3 stars), enemy8=2/11 (1), area210=3/3 (3).
+Encounter/kill and unique-counter examples also resolve. Source assembly
+proves encounter equality passes, unlike a misleading decompiler expression.
+Targeted Clippy passes allowing the existing field_reassign_with_default
+finding in unchanged pawns.rs. Details/addresses in PAWN_KNOWLEDGE.md.
+
+No original-menu visual comparison or automatic award/increment pipeline
+implemented. Eleven enemy counter IDs have no menu row and are preserved;
+bulk tables read from the install, no copied game data or identities.
+Next: compare live menu tabs and trace counter increment/notification rules.
