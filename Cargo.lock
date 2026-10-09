@@ -3572,6 +3572,14 @@ name = "mtshader"
 version = "0.1.0"
 
 [[package]]
+name = "mtsound"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "mttex"
 version = "0.1.0"
 
