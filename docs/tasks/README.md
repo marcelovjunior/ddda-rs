@@ -67,12 +67,18 @@ Codex lane: see `docs/CODEX.md`.
 | [ledge](ledge.md) | Ledge grab and climb, turn rate, stop motions from the exe | core | claude-1 | assigned |
 | [blend](blend.md) | Motion blending between actions | core | claude-2 | assigned |
 | [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude-3 | assigned |
-| [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-1 | assigned |
-| [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex-1 | assigned |
+| [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-3 | merged 2026-10-09 |
+| [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex-4 | merged 2026-10-09 |
 | [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex-1 | assigned |
 | [text](text.md) | Message/text resources reader (dialogue, item names) | reader | codex-2 | merged 2026-10-09 |
-| [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex-1 | assigned |
+| [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex-1 | merged 2026-10-09 |
 | [oracle](oracle.md) | In-process probe: run unfocused, capture frames, input, calls, teleport | core | claude-4 | assigned |
 | [pawns-rift](pawns-rift.md) | Riftstones, the Rift, recruiting pawns, pawn data | research | claude-5 | assigned |
 | [shops-economy](shops-economy.md) | Shops, prices, forging, storage | research | claude-6 | assigned |
 | [events-quests](events-quests.md) | Cutscenes, events, quests, story flags | research | claude-7 | assigned |
+| [weather-data](weather-data.md) | Weather, fog and sky readers + clock interpolation | reader + exe | codex-1 | assigned (priority 1) |
+| [npc-dialogue-links](npc-dialogue-links.md) | NPC ledger, schedules, dialogue links | reader + exe | codex-1 | assigned (2) |
+| [gui-structure](gui-structure.md) | GUI resources (HUD, menus, loading screens) | reader | codex-1 | assigned (3) |
+| [map-travel-links](map-travel-links.md) | World map, landmarks, fast travel | reader + exe | codex-1 | assigned (4) |
+| [sound-resources](sound-resources.md) | Sound banks, requests, streams | reader | codex-1 | assigned (5) |
+| [effect-links](effect-links.md) | Effect lists, motion-to-effect links | reader | codex-1 | assigned (6) |
