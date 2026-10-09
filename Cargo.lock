@@ -2363,6 +2363,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddnet"
+version = "0.1.0"
+dependencies = [
+ "ddhost",
+ "ddid",
+ "ddsim",
+ "ddstory",
+]
+
+[[package]]
 name = "ddnpc"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,13 @@
+[package]
+name = "ddnet"
+version = "0.1.0"
+description = "LAN co-op over UDP: host-authoritative server over ddhost, client prediction and interpolation (ADR 0002 section 8)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddid = { path = "../ddid" }
+ddsim = { path = "../ddsim" }
+ddhost = { path = "../ddhost" }
+ddstory = { path = "../ddstory" }
