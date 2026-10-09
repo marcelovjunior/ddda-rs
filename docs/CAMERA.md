@@ -223,8 +223,13 @@ target as the start and `near-plane-centre - target` as displacement.
 Thus this is a sweep outward from target toward the candidate centre,
 not a search for the first clear point moving inward. **0x010fd710**
 applies a 0.1 cm contact-normal offset; initial overlap has a separate
-penetration response. The current follow-camera bisection remains an
-approximation and has not been replaced in this fade checkpoint.
+penetration response. The followup replaces bisection with an outward
+nearest-contact cast and applies that response. Contact geometry reuses
+`ddsim::sweep` conservative advancement, already used for character
+collision. It is a geometric replacement for the original GJK callbacks;
+degenerate contacts, tied contacts and collision-category prefilters have
+not been compared. Ray and sweep both reject bit0x10 only after selecting
+the nearest result, preserving the source's no-search-past behavior.
 
 Field stage 100 already includes layout-object collision through
 `Terrain::add_scenery_cells`. Nonfield loading uses only the stage merged
@@ -233,7 +238,7 @@ preserves its authored material record and triangle attribute, matching
 the field loader (previously these were discarded by `Terrain::add`).
 An installed regression verifies unchanged triangle count and 100 surface
 casts against the actual Cassardis SBC metadata, including nonzero flags.
-This supplies metadata; the camera still needs the hit filter hookup.
+`Ground::ray_with_flags` carries this flag word to the camera hit filter.
 Whether the reported Cassardis porch pillar
 is represented in that merged SBC remains to be checked; no new scenery
 collision or guessed near-plane reduction is introduced here.

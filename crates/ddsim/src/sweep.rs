@@ -361,6 +361,14 @@ fn first_contact(a: V3, b: V3, r: f32, m: V3, t: &Tri) -> Option<(f32, V3, f32)>
     None
 }
 
+/// Sphere contact using the same geometric replacement as the character
+/// capsule: `(fraction, surface-to-sphere normal, negative initial gap)`.
+/// This exposes geometry only, without character slide/grounding rules.
+/// The original's convex callback machinery is not reproduced here.
+pub fn sphere_contact(center: V3, radius: f32, motion: V3, triangle: &Tri) -> Option<(f32, V3, f32)> {
+    first_contact(center, center, radius, motion, triangle)
+}
+
 /// The result of a sweep.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Swept {

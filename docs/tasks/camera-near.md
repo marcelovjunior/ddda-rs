@@ -74,6 +74,19 @@ installed Cassardis regression passes: unchanged triangle count and at
 least 100 surface casts retain their source metadata, including nonzero
 flags. No additional geometry was introduced.
 
-Next: connect the source bit0x10 hit filter and establish whether the porch
-pillar has SBC geometry at the maintainer's exact probe position.
+Sweep followup (head #2493): replaced inward bisection with the sourced
+target-outward nearest sphere cast, using existing character-contact
+geometry through a narrow `sphere_contact` wrapper. `Ground::ray_with_flags`
+and the Terrain override preserve nearest ray metadata. Both ray/sweep
+reject bit0x10 after selecting the hit, and sweep response stands 0.1 cm
+off the surface. Three geometric regressions cover a clear pocket past a
+thin wall, a flagged nearest wall with an unflagged wall behind it, and
+initial overlap. The three new and one existing follow-camera regression
+pass, as does the nearest-ray metadata regression. Release ddview build
+passes (two existing warnings). No new original/render comparison yet.
+
+Next: compare the corrected camera at the reported porch/room wall.
+Head's probe #2486 found a wall only 42 cm ahead of the eye (near96), with
+drawn st200_md12 about 10 cm beyond its SBC; this is not evidence for adding
+new scenery geometry. The porch pillar itself was not yet probed.
 No game or install changes; no live game control used for this checkpoint.
