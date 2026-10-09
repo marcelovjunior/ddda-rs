@@ -57,9 +57,21 @@ pub trait Owner {
     /// A reflected property read by a condition.
     fn var(&self, env: &Self::Env<'_>, v: &Var) -> Result<Value, Error>;
     /// A process's "update" callback (state entry).
-    fn update(&mut self, env: &mut Self::Env<'_>, p: &Process, mem: &mut ProcMem, at: ProcAt) -> Result<(), Error>;
+    fn update(
+        &mut self,
+        env: &mut Self::Env<'_>,
+        p: &Process,
+        mem: &mut ProcMem,
+        at: ProcAt,
+    ) -> Result<(), Error>;
     /// A process's "state" callback (every frame).
-    fn state(&mut self, env: &mut Self::Env<'_>, p: &Process, mem: &mut ProcMem, at: ProcAt) -> Result<(), Error>;
+    fn state(
+        &mut self,
+        env: &mut Self::Env<'_>,
+        p: &Process,
+        mem: &mut ProcMem,
+        at: ProcAt,
+    ) -> Result<(), Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -115,9 +127,14 @@ fn has_sub(c: &Cluster) -> bool {
 
 impl Core {
     pub fn new(path: &str, graph: Arc<Graph>) -> Result<Core, Error> {
-        let root = graph.root.as_ref().ok_or_else(|| Error::Data(format!("{path}: no root machine")))?;
+        let root = graph
+            .root
+            .as_ref()
+            .ok_or_else(|| Error::Data(format!("{path}: no root machine")))?;
         if graph.attribute & 2 != 0 && has_sub(root) {
-            return Err(Error::Unimplemented(format!("{path}: per-cluster work (mFSMAttribute bit 2) with sub-machines")));
+            return Err(Error::Unimplemented(format!(
+                "{path}: per-cluster work (mFSMAttribute bit 2) with sub-machines"
+            )));
         }
         let mut s = Core {
             path: path.to_string(),
@@ -168,7 +185,8 @@ impl Core {
         (0..self.levels.len())
             .filter_map(|k| {
                 let c = cluster_of(&g, &self.levels, k)?;
-                c.state(self.levels[k].current).map(|s| String::from_utf8_lossy(&s.name).into_owned())
+                c.state(self.levels[k].current)
+                    .map(|s| String::from_utf8_lossy(&s.name).into_owned())
             })
             .collect()
     }
@@ -231,16 +249,28 @@ impl Core {
         Ok(())
     }
 
-    fn run_callbacks<O: Owner>(&mut self, owner: &mut O, env: &mut O::Env<'_>, k: usize, enter: bool) -> Result<(), Error> {
+    fn run_callbacks<O: Owner>(
+        &mut self,
+        owner: &mut O,
+        env: &mut O::Env<'_>,
+        k: usize,
+        enter: bool,
+    ) -> Result<(), Error> {
         let g = self.graph.clone();
         let c = cluster_of(&g, &self.levels, k).ok_or_else(|| Error::Data("level without machine".into()))?;
-        let st = c.state(self.levels[k].current).ok_or_else(|| Error::Data("no current state".into()))?;
+        let st = c
+            .state(self.levels[k].current)
+            .ok_or_else(|| Error::Data("no current state".into()))?;
         for (i, p) in st.processes.iter().enumerate() {
             let mem = self.mem.entry((st.unique_id, i)).or_default();
             if enter {
                 *mem = ProcMem::default();
             }
-            let at = ProcAt { graph: &self.path, state_name: &st.name, index: i };
+            let at = ProcAt {
+                graph: &self.path,
+                state_name: &st.name,
+                index: i,
+            };
             if enter {
                 owner.update(env, p, mem, at)?;
             } else {
@@ -267,7 +297,8 @@ impl Core {
                         self.path, self.levels[k].current
                     )));
                 }
-                let c = cluster_of(&g, &self.levels, k).ok_or_else(|| Error::Data("level without machine".into()))?;
+                let c = cluster_of(&g, &self.levels, k)
+                    .ok_or_else(|| Error::Data("level without machine".into()))?;
                 let setting = c.state(self.levels[k].current).map(|s| s.setting).unwrap_or(0);
                 if setting & 1 == 0 {
                     self.check_transitions(owner, env, k)?;
@@ -299,7 +330,8 @@ impl Core {
                 }
                 self.levels[k].go = false;
                 self.run_callbacks(owner, env, k, false)?;
-                let c = cluster_of(&g, &self.levels, k).ok_or_else(|| Error::Data("level without machine".into()))?;
+                let c = cluster_of(&g, &self.levels, k)
+                    .ok_or_else(|| Error::Data("level without machine".into()))?;
                 let setting = c.state(self.levels[k].current).map(|s| s.setting).unwrap_or(0);
                 if setting & 1 != 0 {
                     self.check_transitions(owner, env, k)?;
@@ -337,7 +369,8 @@ mod tests {
             Err(Error::Unimplemented(v.property.to_string()))
         }
         fn update(&mut self, _: &mut (), p: &Process, _: &mut ProcMem, _: ProcAt) -> Result<(), Error> {
-            self.entered.push(String::from_utf8_lossy(&p.container).into_owned());
+            self.entered
+                .push(String::from_utf8_lossy(&p.container).into_owned());
             Ok(())
         }
         fn state(&mut self, _: &mut (), _: &Process, _: &mut ProcMem, _: ProcAt) -> Result<(), Error> {
@@ -356,9 +389,18 @@ mod tests {
             from_all,
             links: links
                 .iter()
-                .map(|&(d, c)| Link { name: vec![], destination: d, enabled: true, condition: c })
+                .map(|&(d, c)| Link {
+                    name: vec![],
+                    destination: d,
+                    enabled: true,
+                    condition: c,
+                })
                 .collect(),
-            processes: vec![Process { container: format!("enter{id}").into_bytes(), category: vec![], parameter: None }],
+            processes: vec![Process {
+                container: format!("enter{id}").into_bytes(),
+                category: vec![],
+                parameter: None,
+            }],
             subcluster: None,
         }
     }
@@ -366,27 +408,47 @@ mod tests {
     fn graph(states: Vec<State>) -> Arc<Graph> {
         // Condition 0: an operation without operands (true, 0x0117c040).
         let empty = Expression {
-            record: Record { class_hash: 0, class_name: Some("rAIConditionTree::OperationNode"), fields: vec![] },
+            record: Record {
+                class_hash: 0,
+                class_name: Some("rAIConditionTree::OperationNode"),
+                fields: vec![],
+            },
             operator: Some(0),
             children: vec![],
         };
         Arc::new(Graph {
             owner: b"test".to_vec(),
             attribute: 0,
-            root: Some(Cluster { id: 0, owner_node_unique_id: 0, initial_state: 0, states }),
-            conditions: vec![Condition { id: 0, name: vec![], root: Some(empty) }],
+            root: Some(Cluster {
+                id: 0,
+                owner_node_unique_id: 0,
+                initial_state: 0,
+                states,
+            }),
+            conditions: vec![Condition {
+                id: 0,
+                name: vec![],
+                root: Some(empty),
+            }],
         })
     }
 
     #[test]
     fn transitions_wait_one_frame_and_absent_conditions_are_false() {
         // 0 -> 1 through condition 0 (true); 1 -> 2 through condition 9 (absent).
-        let g = graph(vec![state(0, 0, &[(1, 0)], None), state(1, 0, &[(2, 9)], None), state(2, 0, &[], None)]);
+        let g = graph(vec![
+            state(0, 0, &[(1, 0)], None),
+            state(1, 0, &[(2, 9)], None),
+            state(2, 0, &[], None),
+        ]);
         let mut core = Core::new("t", g).unwrap();
         let mut o = Log::default();
         core.step(&mut o, &mut ()).unwrap();
         // The first check after a level starts is skipped.
-        assert_eq!((core.current_states(), o.entered.clone()), (vec![0], vec!["enter0".to_string()]));
+        assert_eq!(
+            (core.current_states(), o.entered.clone()),
+            (vec![0], vec!["enter0".to_string()])
+        );
         core.step(&mut o, &mut ()).unwrap();
         assert_eq!(core.current_states(), [1]);
         for _ in 0..3 {
@@ -400,7 +462,11 @@ mod tests {
     fn from_all_wins_and_rerun_states_are_bounded() {
         // State 2 can be entered from anywhere (condition 0); state 1 has
         // mSetting 2 (rerun in the same frame) and no true link.
-        let g = graph(vec![state(0, 0, &[(1, 0)], None), state(1, 2, &[(0, 9)], None), state(2, 0, &[], Some(0))]);
+        let g = graph(vec![
+            state(0, 0, &[(1, 0)], None),
+            state(1, 2, &[(0, 9)], None),
+            state(2, 0, &[], Some(0)),
+        ]);
         let mut core = Core::new("t", g).unwrap();
         let mut o = Log::default();
         core.step(&mut o, &mut ()).unwrap();
@@ -410,6 +476,9 @@ mod tests {
         let g = graph(vec![state(0, 2, &[(1, 9)], None)]);
         let mut core = Core::new("t", g).unwrap();
         let e = core.step(&mut o, &mut ()).unwrap_err();
-        assert!(matches!(e, Error::Data(ref s) if s.contains("without a transition")), "{e}");
+        assert!(
+            matches!(e, Error::Data(ref s) if s.contains("without a transition")),
+            "{e}"
+        );
     }
 }

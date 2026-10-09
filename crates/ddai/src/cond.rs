@@ -173,17 +173,30 @@ pub fn value(e: &Expression, vars: &dyn Vars) -> Result<Option<Value>, Error> {
         Some("rAIConditionTree::ConstS32Node") => Ok(r.s("mValue").map(Value::Int)),
         Some("rAIConditionTree::ConstF32Node") => Ok(r.f("mValue").map(Value::Float)),
         Some("rAIConditionTree::VariableNode") => {
-            let info = r.object("mVariable").ok_or_else(|| Error::Data("variable node without info".into()))?;
+            let info = r
+                .object("mVariable")
+                .ok_or_else(|| Error::Data("variable node without info".into()))?;
             let property = info.text("mPropertyName").unwrap_or_default();
             if r.b("mIsDynamicIndex").unwrap_or(false) || r.b("mUseEnumIndex").unwrap_or(false) {
-                return Err(Error::Unimplemented(format!("dynamic/enum variable index for {property}")));
+                return Err(Error::Unimplemented(format!(
+                    "dynamic/enum variable index for {property}"
+                )));
             }
             if r.b("mIsBitNo").unwrap_or(false) {
                 return Err(Error::Unimplemented(format!("bit-number variable {property}")));
             }
             let owner = info.text("mOwnerName").unwrap_or_default();
-            let index = if r.b("mIsArray").unwrap_or(false) { r.u("mIndex").map(|v| v as u32) } else { None };
-            vars.var(&Var { owner: &owner, property: &property, index }).map(Some)
+            let index = if r.b("mIsArray").unwrap_or(false) {
+                r.u("mIndex").map(|v| v as u32)
+            } else {
+                None
+            };
+            vars.var(&Var {
+                owner: &owner,
+                property: &property,
+                index,
+            })
+            .map(Some)
         }
         other => Err(Error::Unimplemented(format!("condition node {other:?}"))),
     }

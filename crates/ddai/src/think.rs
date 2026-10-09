@@ -25,7 +25,10 @@ pub struct Time {
 
 impl Default for Time {
     fn default() -> Self {
-        Time { delta: 1.0, fps: 30.0 }
+        Time {
+            delta: 1.0,
+            fps: 30.0,
+        }
     }
 }
 
@@ -159,7 +162,11 @@ pub struct Thinker {
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     // SSE differences, then x87 squares, sum and FSQRT, read back as f32.
-    let d = [f64::from(a[0] - b[0]), f64::from(a[1] - b[1]), f64::from(a[2] - b[2])];
+    let d = [
+        f64::from(a[0] - b[0]),
+        f64::from(a[1] - b[1]),
+        f64::from(a[2] - b[2]),
+    ];
     (d[1] * d[1] + d[0] * d[0] + d[2] * d[2]).sqrt() as f32
 }
 
@@ -190,7 +197,8 @@ impl ThinkFields {
 }
 
 fn idx(v: &Var) -> Result<u32, Error> {
-    v.index.ok_or_else(|| Error::Data(format!("{} read without an index", v.property)))
+    v.index
+        .ok_or_else(|| Error::Data(format!("{} read without an index", v.property)))
 }
 
 impl Owner for ThinkFields {
@@ -252,7 +260,13 @@ impl Owner for ThinkFields {
         })
     }
 
-    fn update(&mut self, env: &mut Self::Env<'_>, p: &Process, _mem: &mut ProcMem, at: ProcAt) -> Result<(), Error> {
+    fn update(
+        &mut self,
+        env: &mut Self::Env<'_>,
+        p: &Process,
+        _mem: &mut ProcMem,
+        at: ProcAt,
+    ) -> Result<(), Error> {
         let name = String::from_utf8_lossy(&p.container);
         let par = || {
             p.parameter
@@ -262,7 +276,9 @@ impl Owner for ThinkFields {
         match name.as_ref() {
             // Translated from 0x005a8950 (DDDA.exe 2017-12-13 Steam).
             "CtrlAction" => {
-                let action = par()?.s("アクション番号").ok_or_else(|| Error::Data("CtrlAction number".into()))?;
+                let action = par()?
+                    .s("アクション番号")
+                    .ok_or_else(|| Error::Data("CtrlAction number".into()))?;
                 self.sys_condition &= 0x9fff_ffff;
                 if env.inputs.actor.is_some() {
                     env.requests.push(Request::Action { action });
@@ -271,7 +287,9 @@ impl Owner for ThinkFields {
             // Translated from 0x005a8890 (DDDA.exe 2017-12-13 Steam).
             "CtrlMotion" => {
                 let r = par()?;
-                let motion = r.u("モーション番号").ok_or_else(|| Error::Data("CtrlMotion number".into()))?;
+                let motion = r
+                    .u("モーション番号")
+                    .ok_or_else(|| Error::Data("CtrlMotion number".into()))?;
                 let on = |flag: &str| r.b(flag).unwrap_or(false);
                 self.sys_condition &= 0x9fff_ffff;
                 env.requests.push(Request::Motion {
@@ -287,7 +305,9 @@ impl Owner for ThinkFields {
             "SearchSetTarget" | "CtrlThinkTbl" => self.sys_condition &= 0x9fff_ffff,
             // Translated from 0x005a9170 (DDDA.exe 2017-12-13 Steam).
             "SetEscapePos" => {
-                let mut pos = par()?.vec3("逃走ポイント座標").ok_or_else(|| Error::Data("SetEscapePos point".into()))?;
+                let mut pos = par()?
+                    .vec3("逃走ポイント座標")
+                    .ok_or_else(|| Error::Data("SetEscapePos point".into()))?;
                 self.sys_condition &= 0x9fff_ffff;
                 if env.inputs.world_offset_on {
                     for (p, o) in pos.iter_mut().zip(env.inputs.world_offset) {
@@ -298,7 +318,9 @@ impl Owner for ThinkFields {
             }
             // Translated from 0x005a9210 (DDDA.exe 2017-12-13 Steam).
             "SetFreeFlg" => {
-                let bits = par()?.u("FreeCondition").ok_or_else(|| Error::Data("SetFreeFlg bits".into()))? as u32;
+                let bits = par()?
+                    .u("FreeCondition")
+                    .ok_or_else(|| Error::Data("SetFreeFlg bits".into()))? as u32;
                 env.requests.push(Request::FreeCondition { bits });
             }
             // Translated from 0x007a9de0 (DDDA.exe 2017-12-13 Steam): Type 0
@@ -322,7 +344,9 @@ impl Owner for ThinkFields {
             }
             // Translated from 0x007aaee0 (DDDA.exe 2017-12-13 Steam).
             "Set Check Pos" => {
-                self.check_pos = par()?.vec3("Vec").ok_or_else(|| Error::Data("Set Check Pos vector".into()))?;
+                self.check_pos = par()?
+                    .vec3("Vec")
+                    .ok_or_else(|| Error::Data("Set Check Pos vector".into()))?;
             }
             // Translated from 0x007ab200 (DDDA.exe 2017-12-13 Steam), as a request.
             "Set Kill Owner" => env.requests.push(Request::KillOwner),
@@ -339,7 +363,13 @@ impl Owner for ThinkFields {
         Ok(())
     }
 
-    fn state(&mut self, env: &mut Self::Env<'_>, p: &Process, _mem: &mut ProcMem, at: ProcAt) -> Result<(), Error> {
+    fn state(
+        &mut self,
+        env: &mut Self::Env<'_>,
+        p: &Process,
+        _mem: &mut ProcMem,
+        at: ProcAt,
+    ) -> Result<(), Error> {
         let name = String::from_utf8_lossy(&p.container);
         match name.as_ref() {
             "CtrlAction" | "CtrlMotion" => self.request_state(env.inputs),
@@ -347,7 +377,10 @@ impl Owner for ThinkFields {
             // class name only has to name a class (0x00cf5870 looks it up);
             // an empty one is treated as absent.
             "CtrlThinkTbl" => {
-                let r = p.parameter.as_ref().ok_or_else(|| Error::Data("CtrlThinkTbl without parameter".into()))?;
+                let r = p
+                    .parameter
+                    .as_ref()
+                    .ok_or_else(|| Error::Data("CtrlThinkTbl without parameter".into()))?;
                 let class = r.text("DTI名").unwrap_or_default();
                 if !class.is_empty() && env.inputs.actor.is_some() {
                     env.requests.push(Request::ThinkTable {
@@ -386,8 +419,13 @@ impl ThinkFields {
     /// traced for group 1; groups 0 and 2..4 are assumed to use it too.
     // Translated from 0x005a8aa0 (DDDA.exe 2017-12-13 Steam), selection part.
     fn search(&mut self, env: &mut Env, p: &Process) -> Result<(), Error> {
-        let r = p.parameter.as_ref().ok_or_else(|| Error::Data("SearchSetTarget without parameter".into()))?;
-        if r.b("LayoutSetでの[Group][ID]の指定を使用するか？").unwrap_or(false) {
+        let r = p
+            .parameter
+            .as_ref()
+            .ok_or_else(|| Error::Data("SearchSetTarget without parameter".into()))?;
+        if r.b("LayoutSetでの[Group][ID]の指定を使用するか？")
+            .unwrap_or(false)
+        {
             return Err(Error::Unimplemented("SearchSetTarget by layout group/id".into()));
         }
         let group = r.u("対象グループ").unwrap_or(0);
@@ -439,7 +477,10 @@ impl ThinkFields {
 
 impl Thinker {
     pub fn new(path: &str, graph: Arc<Graph>) -> Result<Self, Error> {
-        Ok(Thinker { core: Core::new(path, graph)?, fields: ThinkFields::default() })
+        Ok(Thinker {
+            core: Core::new(path, graph)?,
+            fields: ThinkFields::default(),
+        })
     }
 
     /// Restart the graph from its initial state (`cBaseFSM` vf08 0x00749740
@@ -477,7 +518,10 @@ impl Thinker {
             f.countdown_a5 -= 1;
         }
         let mut requests = vec![];
-        let mut env = Env { inputs, requests: &mut requests };
+        let mut env = Env {
+            inputs,
+            requests: &mut requests,
+        };
         self.core.step(&mut self.fields, &mut env)?;
         let f = &mut self.fields;
         let step = inputs.time.delta / inputs.time.fps;

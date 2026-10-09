@@ -278,13 +278,28 @@ fn long_run_stumbles_after_240_frames() {
 #[test]
 fn turns_to_face_the_target_first() {
     let Some(e) = exe() else { return };
-    // 0x017dac78 rows 4..7 come before the taunt and the attacks.
-    for (a, want) in [(90.0, 20), (-100.0, 18), (170.0, 21), (-170.0, 19)] {
+    // 0x017dac78 rows 4..7 come before the taunt and the attacks. They pick
+    // 18..21, but combat table 1 row 12 has set think state bit 2, so the
+    // unit's mode (vf108 0x008d1240) is 2 and 0x008d0fb0 moves the turns to
+    // 26..29 (cEm0100ActTurn90 / Turn180 again).
+    for (a, want) in [(90.0, 28), (-100.0, 26), (170.0, 29), (-170.0, 27)] {
         let mut d = goblin(MELEE, target(100.0, a, 0.0));
         let mut u = Unit::new(&[], 10);
         let r = run(&mut d, &mut u, &e.tables, 3, 10.0);
         assert_eq!(r, [None, None, Some(want)], "angle {a}");
+        assert_eq!(d.mgr.trace.last().unwrap().1, want - 8, "the table's own pick");
+        assert_eq!(em0100::mode(d.mgr.state, false), 2);
     }
+    let names: Vec<&str> = (26..30).map(|i| e.classes[i].as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "cEm0100ActTurn90",
+            "cEm0100ActTurn180",
+            "cEm0100ActTurn90",
+            "cEm0100ActTurn180"
+        ]
+    );
 }
 
 #[test]
