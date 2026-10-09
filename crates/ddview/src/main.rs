@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod movie;
 mod stream;
 mod event;
 mod character;
@@ -107,6 +108,8 @@ struct Args {
     cam_pitch: Option<f32>,
     /// Start at the viewer pause menu (also useful with --shot).
     paused: bool,
+    /// `--movie <name>`: play one of the game's movies (`st100ev00`, `title_A`, ...).
+    movie: Option<String>,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -154,6 +157,7 @@ fn args() -> Args {
         kit: None,
         cam_pitch: None,
         paused: false,
+        movie: None,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -166,6 +170,7 @@ fn args() -> Args {
     };
     while let Some(k) = it.next() {
         if k == "--unattended" { a.unattended = true; continue; }
+        if k == "--movie" { a.movie = it.next(); continue; }
         if k == "--paused" {
             a.play = true;
             a.paused = true;
@@ -580,8 +585,9 @@ fn main() {
         .init_resource::<play::Hud>()
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
+        .init_resource::<movie::MovieFinished>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -601,6 +607,13 @@ fn setup(
     mut sky_materials: ResMut<Assets<sky::SkyMaterial>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
+    if let Some(name) = &args.movie {
+        commands.spawn(Camera2d);
+        if let Err(e) = movie::start(&mut commands, &mut images, &movie::path(&args.native_pc, name)) {
+            error!("movie: {e}");
+        }
+        return;
+    }
     let t = std::time::Instant::now();
     // Kept for the whole run: the field streamer loads cells from them later.
     let vfs: &'static ddvfs::Vfs = Box::leak(Box::new(ddvfs::Vfs::open(&args.native_pc).expect("open nativePC")));
