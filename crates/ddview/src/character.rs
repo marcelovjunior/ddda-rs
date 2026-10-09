@@ -300,6 +300,7 @@ pub fn spawn_assembled_hands(
             Transform::from_translation(translation).with_scale(Vec3::splat(UNIT)),
             Visibility::default(),
             Name::new(model_path.to_string()),
+            crate::stage::transparent_sort::ModelSortCenter(Vec3::from_slice(&model.sphere[..3])),
         ))
         .id();
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
@@ -485,7 +486,10 @@ fn spawn_meshes(
     let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
+    let mut bound_offset = 0;
     for m in &model.meshes {
+        let first_bound = model.weight_bounds.get(bound_offset..bound_offset + 144);
+        bound_offset += usize::from(m.weight_bound_count) * 144;
         // uModel::vf26 0x00ea5320: the part bit, the disp flag, the LOD
         // bit (LOD 0 here) and the pass mask: draw_mode & the pass's mask
         // (0x00fedb80 stores it at +0x16a). The scene pass "Common" pushes
@@ -598,6 +602,23 @@ fn spawn_meshes(
                 joints: joints.to_vec(),
             },
         ));
+        // 0x00ffc350 uses the first weight bound's bone-space sphere center
+        // when primitive flag bit2 selects per-primitive transparent sorting.
+        let bound = first_bound.and_then(|bytes| {
+            let bone = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+            let xyz = std::array::from_fn::<_, 3, _>(|i| {
+                f32::from_le_bytes(bytes[16 + i * 4..20 + i * 4].try_into().unwrap())
+            });
+            Some((*joints.get(bone)?, Vec3::from(xyz)))
+        });
+        if m.flags & 4 == 0 || bound.is_some() {
+            e.insert(crate::stage::transparent_sort::PrimitiveSort {
+                model: root,
+                radius_cm: model.sphere[3],
+                priority: m.alpha_priority,
+                bound: if m.flags & 4 != 0 { bound } else { None },
+            });
+        }
         match material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h)),
             PartMaterial::Dd(slot) => e.insert(PendingDd(slot)),

@@ -449,6 +449,32 @@ for blended materials. Blended alpha tests also retain the MRL reference
 and comparison (0x0112e4d0 / 0x00fee320). This corrects a material-state
 mismatch; it is not proof that all facial visibility defects are solved.
 
+### Transparent primitive order
+
+`uBaseModel::vf26` (0x00ea5320) and skinned `uModel::vf26`
+(0x00ffc350) sort passes 0x0e/0x10 with the key
+`(32767 - clamp(trunc(depth_cm), 0, 32767)) * 4096 + alpha_priority`.
+Primitive flag bit2 selects the first weight-bound center, transformed
+by its bone for skinned models. With that bit clear, all primitives use
+the shared model point plus the current model's sphere radius.
+
+The point comes from `uBaseModel::vf11` (0x00ea3130), calling 0x00ea1f40:
+start with the model sphere center at +0x160; follow parent +0x30 to the
+outermost ancestor and use its vf12 sphere center if available.
+0x00ea3d00 transforms the MOD sphere center and scales its radius by the
+largest model scale; the radius lives at +0x16c. This is a radius term,
+not an arbitrary sorting offset. The additional integer model bias at
++0x154 is not imported yet (viewer assumes zero).
+
+The viewer extracts these points/radii and stably sorts character
+transparent items after Bevy's normal phase sort, retaining exact key
+precision through an f64 comparator. It changes ordering only, not GPU
+depth. Untagged scenery retains its existing distance. The relevant
+elder/Quina base and hair primitives all have bit2 clear; hair104 uses
+priorities 0..8. Bevy previously used each mesh's rest AABB center and
+ignored those priorities. Held-frame comparisons show changed hair
+compositing; ear holes and unclear eyebrows remain unresolved.
+
 ## Open
 
 - Morphs not translated:
