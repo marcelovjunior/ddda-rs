@@ -140,6 +140,15 @@ impl Default for OpeningWorld {
 }
 
 impl StoryWorld for OpeningWorld {
+    fn observe_npc_intel(&mut self, stage: u32, target: Target, present: bool) {
+        let Some(facts) = &mut self.encounters else { return };
+        let mut unit = facts.unit(stage, &target);
+        unit.present = present;
+        unit.apply_fsm_ready = present;
+        if present { unit.layout_loaded = true; }
+        if !present { unit.npc = None; }
+        facts.report_unit(stage, target, unit);
+    }
     fn observe_fight(&mut self, fight: Option<&ddenemyrt::fight::Fight>) {
         let Some(facts) = &mut self.encounters else { return };
         for (&(stage, target), &owner) in &self.enemy_bindings {
@@ -237,8 +246,8 @@ impl ddstory::Host for OpeningWorld {
     fn npc_unit(&self, n: u32) -> bool {
         self.actor_host().npc_unit(n)
     }
-    fn applied_script_finished(&self, s: u32, t: &Target) -> bool {
-        self.actor_host().applied_script_finished(s, t)
+    fn apply_fsm_ready(&self, s: u32, t: &Target) -> bool {
+        self.actor_host().apply_fsm_ready(s, t)
     }
     fn unit_hp(&self, s: u32, t: &Target, p: bool) -> Option<f32> {
         self.actor_host().unit_hp(s, t, p)

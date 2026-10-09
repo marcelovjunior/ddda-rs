@@ -10,6 +10,42 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn npc_controller_observation_is_explicit_and_bound_to_placement() {
+    let mut host = Host::new(
+        ddsim::Sim::new(Default::default()),
+        Some(Story::new_game(ddhost::data::NoStoryData)),
+        ScriptedHost::default(), Box::new(Void),
+    );
+    let target = ddstory::Target { kind: 5, group: 1, index: 0 };
+    host.observe_story_npc_normal_controller(200, target, Some(true));
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None);
+    host.bind_story_npc(200, target, 2);
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None);
+    // Original allocation precedes graph load: report actual creation,
+    // without requiring or manufacturing a loaded daily action graph.
+    host.observe_story_npc_normal_controller(200, target, Some(true));
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), Some(true));
+    assert_eq!(host.story_npc_normal_graph_present(2), None);
+    assert_eq!(host.story_npc_apply_fsm_ready(100, target), None);
+    host.bind_story_npc(200, target, 3);
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None);
+    host.observe_story_npc_normal_controller(200, target, Some(false));
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), Some(false));
+    host.observe_story_npc_normal_controller(200, target, None);
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None);
+    host.observe_story_npc_normal_controller(200, target, Some(true));
+    host.unbind_story_npc(200, target);
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None);
+    host.bind_story_npc(200, target, 2);
+    host.observe_story_npc_normal_controller(200, target, Some(true));
+    host.story.as_mut().unwrap().stage.stage_no = 100;
+    host.story.as_mut().unwrap().world.stage_no = 100;
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None,
+        "stage transition invalidates reports even without NPC data loaded");
+}
+
+#[test]
 fn applied_npc_host_requires_binding_and_real_talk_observation() {
     use ddhost::ddnpcrt::schedule::Request as NpcRequest;
     use ddstory::Host as StoryHost;
@@ -76,15 +112,51 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
     assert!(host.story.as_ref().unwrap().world.gsf.get(381));
     assert_eq!(finishes, 1);
     assert!(host.story_npc_action(2).unwrap().3);
+    assert_eq!(host.story_npc_apply_fsm_ready(200, target), None,
+        "Finish cannot synthesize an allocation observation");
     // The following frame frees the inactive applied wrapper; the normal
     // graph is restored after this frame's normal-graph phase.
     host.tick(&Default::default()).unwrap();
     assert_eq!(host.npcs.npcs[&2].controller.as_ref().unwrap().path, normal_path);
     assert!(host.npcs.npcs[&2].action.is_none(), "restoration must not step the normal graph early");
     assert!(
-        !host.world.applied_script_finished(200, &target),
+        !host.world.apply_fsm_ready(200, &target),
         "graph Finish is not parent ApplyFSM readiness"
     );
+    host.bind_story_npc(200, target, 3);
+    assert!(host.story_npc_action(2).is_none(),
+        "replacement binding must retire the previous actor action");
+    assert!(host.story_npc_action(3).is_none(),
+        "replacement binding alone must not apply a graph to the new actor");
+}
+
+#[test]
+fn replacing_waiting_npc_retires_action_before_talk_can_advance_it() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ScriptedHost::default(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(
+        ddhost::ddnpcrt::InstallData::open(native, "eng").unwrap()));
+    let target = ddstory::Target { kind: 5, group: 1, index: 0 };
+    host.bind_story_npc(200, target, 1);
+    host.apply_story_npc(200, target, r"ai\fsm\npc\st200\quest\q0002_n001_ai");
+    for _ in 0..300 { host.tick(&Default::default()).unwrap(); }
+    assert!(!host.story_npc_action(1).unwrap().3, "replace while still waiting");
+    host.bind_story_npc(200, target, 304);
+    assert!(host.story_npc_action(1).is_none());
+    assert!(host.story_npc_action(304).is_none());
+    host.observe_story_npc_talk_end(1);
+    for _ in 0..600 {
+        let out = host.tick(&Default::default()).unwrap();
+        assert!(out.npc_requests.is_empty(), "retired graph cannot emit actor requests");
+        assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
+    }
 }
 
 #[test]
@@ -161,7 +233,7 @@ fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
     };
     let mut world = ddhost::opening::OpeningWorld::new();
     // Include a callback already queued before activation.
-    world.handle(200, &[camera.clone()]);
+    world.handle(200, std::slice::from_ref(&camera));
     world.handle(
         200,
         &[ddstory::Request::JumpArea {
@@ -241,7 +313,7 @@ fn live_encounters_never_complete_applied_scripts_or_enemies_on_a_timer() {
             .iter()
             .any(|e| matches!(e, ddstory::HostEvent::SetGsf { no: 381, value: true })));
         assert!(!world.enemy_check(200, &enemy, 3));
-        assert!(!world.applied_script_finished(200, &npc));
+        assert!(!world.apply_fsm_ready(200, &npc));
         assert!(!world.unit_exists(200, &enemy));
     }
     world.report(ddstory::HostEvent::SetGsf { no: 381, value: true });

@@ -4,6 +4,9 @@
 //! The entrance FSM is interpreted by ddai; movement and attack action
 //! implementations must supply its completion and motion feedback.
 
+// Preserve the exact single-precision constants of the cited exe routines.
+#![allow(clippy::approx_constant)]
+
 use crate::combat::{Attacker, Fighter, Victim};
 use ddai::{Error, thinktbl::Tables};
 use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool};
@@ -485,8 +488,9 @@ impl Dragon {
     /// Phase 91 action update (0x00a6bb40/0x00a6be00), yaw rotator
     /// (0x0084cc00), velocity integration
     /// (0x0084ccc0), phase 92 motion/root travel (0x010629f0/0x0105b740),
-    /// then phase 93 collision flags/volumes. DDDA.exe 2017-12-13 Steam.
+    /// then phase 93 collision flags. DDDA.exe 2017-12-13 Steam.
     /// The host must consume returned effects before advancing other actors.
+    /// Volumes retain the previous pass-C snapshot until [`Self::finish_pass_c`].
     pub fn step(
         &mut self,
         data: &DragonData,
@@ -552,8 +556,8 @@ impl Dragon {
             root.delta_once(self.frame, input.motion_step)
         };
         let travel = transform_root_translation(delta, input.root_translation_transform);
-        for axis in 0..3 {
-            self.pos[axis] += travel[axis];
+        for (position, displacement) in self.pos.iter_mut().zip(travel) {
+            *position += displacement;
         }
         let next = self.frame + input.motion_step;
         let last = motion.frame_count.saturating_sub(1) as f32;
@@ -566,10 +570,28 @@ impl Dragon {
         if let Victim::Enemy { rates, .. } = &mut self.fighter.victim {
             sync_collision_flags(rates, input.controller_flag_c, input.actor_flags);
         }
-        let pose = data.body.pose(id, self.frame, self.pos, self.yaw);
-        let acts = data.body.activations(id, self.frame);
-        (self.fighter.attacks, self.fighter.hurts) = data.body.volumes(&acts, &pose, self.fighter.owner);
         Ok(effects)
+    }
+
+    /// Final pass-C activation boundary, after authoritative terrain correction
+    /// and action vf07/phase97 (uObjModel::vf09 0x00886530). The host supplies
+    /// the resolved joint/model pose: this prefix cannot infer constraints,
+    /// blend layers or the original's cached-matrix lifetime. Never invoke
+    /// this during phase93 merely to obtain an early volume snapshot.
+    pub fn finish_pass_c(
+        &mut self,
+        data: &DragonData,
+        resolved_pose: &crate::body::Posed,
+    ) -> Result<(), DragonError> {
+        let action = self.action.ok_or(DragonError::NoAction)?;
+        let id = crate::body::MotionId::new(0, action.motion());
+        if data.body.frames(id) == 0 {
+            return Err(DragonError::MissingMotion(action.motion()));
+        }
+        let acts = data.body.activations(id, self.frame);
+        (self.fighter.attacks, self.fighter.hurts) =
+            data.body.volumes(&acts, resolved_pose, self.fighter.owner);
+        Ok(())
     }
 }
 

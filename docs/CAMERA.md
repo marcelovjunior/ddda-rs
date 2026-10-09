@@ -167,3 +167,143 @@ Open: +0x18 metadata semantics; user-data application meaning; final
 `uOfsMotionCamera` actor-adjusted pose; original playback comparison.
 Next action: integrate the sampler with an event-player timeline and trace
 the st200 ev10 adjustment targets before a recorded pose comparison.
+
+## Follow camera: near plane and actor fading
+
+Read-only exe trace, 2026-10-09, camera-near:
+
+- `uCameraGame::vf22` **0x007dc8a0** writes **96 cm** to `mNearPlane`
+  (+0x34), at **0x007dce13**. Its projection consumer **0x007dc810** uses
+  that field directly. No wall-dependent near-plane change was found in
+  the normal update **0x007dcf30**; this is not a claim that every camera
+  implementation uses the same near plane.
+- **0x0088bdc0**, called by `uCharacterBase::vf97` **0x0084c800**, computes
+  near-camera opacity. It selects semantic joint **1** through
+  `uModel::vf22` **0x00ff9a20**; missing IDs use the model matrix.
+  Normal distance uses all three axes, with a separate horizontal test.
+- Threshold globals **0x01875de4..0x01875dfc** are read from the installed
+  exe: ordinary inner/outer 64/74 cm, stage 100 non-pawn 80/90 cm
+  (90 is the code constant at **0x01516f38**), pawn 130/140 cm,
+  special camera 135/160 cm.
+  The special camera also changes the distance reference and is not
+  implemented by the viewer adapter.
+- The four states live at actor +0x2520, timer +0x251c. Visible enters
+  fading-out only when squared 3D distance is **strictly below 40000** and
+  squared horizontal distance is **strictly below inner squared**. The
+  entry frame remains opaque. Fading-out advances by actor delta time,
+  clamps the timer at four frames and returns `1 - timer/4`. Hidden
+  enters fading-in when either distance is strictly above its outer
+  threshold (200 cm in 3D); that transition frame remains transparent.
+  Fading-in returns `timer/4` and changes to visible at five frames.
+  Thus its source value can exceed one; the rendering adapter clamps it.
+  Changing distance during an in-progress fade does not reverse it.
+- The resulting multiplier is combined with actor +0x2510 and stored at
+  +0x2514. `uPlayerBase::vf11` **0x00b6a070** copies it to the reflected
+  `uBaseModel.mTransparency` +0x158 and sets model flag 0x40000000 below
+  one. The source has additional global bypasses and an aiming-mode pawn
+  attenuation cone, which remain unimplemented.
+
+`mtcamera::fade` implements the ordinary four-state rule with explicit
+distance/threshold inputs and caller-supplied bypass. The viewer uses
+current morphed joint positions after transform propagation, per-view and
+per-actor state, and private material clones for the PlayState Arisen and
+pawns. It currently supports the process's single followed camera;
+simultaneous views require per-view draw material selection. NPCs outside
+PlayState, special cameras and the original global bypass flags are not
+covered. The renderer approximates model transparency with alpha blending,
+restoring authored alpha mode/depth state afterward. Alpha-tested parts,
+sorting and shadows still require an original-frame comparison.
+
+### Collision followups found during this trace
+
+**0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
+or sweep result. It does not continue to the next surface. **0x007c6f90**
+resolves the collision result's material flag word for stage/static hits.
+The sphere wrapper **0x010fe5e0** calls **0x010fdea0**, which supplies the
+target as the start and `near-plane-centre - target` as displacement.
+Thus this is a sweep outward from target toward the candidate centre,
+not a search for the first clear point moving inward. **0x010fd710**
+applies a 0.1 cm contact-normal offset; initial overlap has a separate
+penetration response. The followup replaces bisection with an outward
+nearest-contact cast and applies that response. Contact geometry reuses
+`ddsim::sweep` conservative advancement, already used for character
+collision. It is a geometric replacement for the original GJK callbacks;
+degenerate contacts, tied contacts and collision-category prefilters have
+not been compared. Ray and sweep both reject bit0x10 only after selecting
+the nearest result, preserving the source's no-search-past behavior.
+
+Field stage 100 already includes layout-object collision through
+`Terrain::add_scenery_cells`. Nonfield loading uses only the stage merged
+SBC in `ddhost::install::stage_collision`. The camera-near followup now
+preserves its authored material record and triangle attribute, matching
+the field loader (previously these were discarded by `Terrain::add`).
+An installed regression verifies unchanged triangle count and 100 surface
+casts against the actual Cassardis SBC metadata, including nonzero flags.
+`Ground::ray_with_flags` carries this flag word to the camera hit filter.
+Whether the reported Cassardis porch pillar
+is represented in that merged SBC remains to be checked; no new scenery
+collision or guessed near-plane reduction is introduced here.
+
+### Actor collision offset and its smoothing (source traced, not implemented)
+
+The camera +0xB98 offset in **0x007e1400** is fed by actor collision,
+rather than a wall-dependent near-plane adjustment. The producer
+**0x00888750** selects an actor's `cObjCollision` entries through
+**0x00773340** (collection selector 1, entry flag mask 0x10). It only
+considers shape types 0 (capsule) and 1 (sphere), with radius strictly
+greater than **32 cm** (constant **0x01517928**). Actor eligibility has
+additional state/type gates; this is not a query against every visible
+actor or a replacement for the stage SBC query.
+
+The entry mask 0x10 is the authored group's **mIsObjAdj** flag: reflection
+**0x00ccd510** places it at group +0x0E, and **0x0076fab0** translates it
+into entry +0x1C0 bit0x10. Existing `ddcombat::ObjCollision` already reads
+these groups; `ddcombat::volumes::build_volume` supplies the source-backed
+joint placement. Integration therefore needs the live selected entries
+and actor eligibility, rather than a new collision resource parser.
+
+The initial overlap gate tests these shapes against a capsule from the
+desired eye (+0x310) to the current eye (+0x40), radius read from installed
+global **0x01875dec** (80 cm). Once any eligible shape overlaps, the
+producer starts a **30 cm** sphere (constant **0x014ea160**) at
+`desired_target + normalize(desired_eye - desired_target) * 32`, and casts
+it with displacement `desired_eye - desired_target`. Sphere and capsule
+queries are **0x00d62bb0** and **0x00d62e90** respectively. For each hit,
+it measures the distance between the returned contact position and the
+desired eye, then submits that nonnegative distance to **0x00421d60**.
+The latter retains the greatest absolute input at `sCameraExt +0xD14`;
+**0x00420910** clears the accumulator each frame. These are collider
+contacts, not rendered triangle intersections.
+
+Normal camera update **0x007dcf30** smooths that accumulator through the
+scalar object at +0xB94, coefficient 0.1, output +0xB98. Constructor
+**0x007dc200** selects vtable **0x01599174**; the destructor's different
+vtable must not be used to identify these methods. **0x007bc800** and
+methods **0x007bc910..0x007bc960** give this update for each time chunk
+`h = min(remaining_frames, 1.1)`:
+
+```text
+k = min(k, 1)
+damping = min(2 * sqrt(k), 1)
+acceleration = -k * (value - target) - damping * velocity
+velocity = velocity * h + acceleration * h
+value += velocity
+```
+
+Negative delta snaps the value to the target without resetting velocity;
+zero delta leaves both unchanged. The unusual multiplication of the old
+velocity by the chunk length is present in the source and should not be
+silently replaced with a conventional spring integrator. Inactive normal
+player camera mode clears +0xB98 directly. **0x007e1400** applies the
+offset before its stage sweep, under its active-camera and transition
+gates, moving the eye toward the target and potentially moving the target
+as well when the remaining distance is small.
+
+This path is not wired into the viewer: it needs the selected, animated
+actor sphere/capsule entries and their source eligibility state. Using
+render bounds or an invented generic actor radius would not reproduce it.
+Next action: expose the authored actor collision entries to a per-view
+camera query, then translate and regression-test the offset/accumulator
+and scalar smoother together. No live/original comparison was performed
+for this trace. Ghidra drops part of the producer as unreachable; the
+shape loop and contact accumulator were checked against disassembly.

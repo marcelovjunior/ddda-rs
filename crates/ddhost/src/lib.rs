@@ -20,6 +20,7 @@ pub mod input;
 pub mod install;
 pub mod lock;
 pub mod npcs;
+pub mod npc_placements;
 pub mod opening;
 pub mod player;
 pub mod prologue;

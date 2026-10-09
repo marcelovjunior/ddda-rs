@@ -2393,6 +2393,7 @@ dependencies = [
  "mtarc",
  "mtfsm",
  "mtlmt",
+ "mtlot",
  "mtsbc",
  "mtxfs",
 ]
@@ -2415,6 +2416,7 @@ dependencies = [
 name = "ddlook"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "dditem",
  "ddnpc",
  "ddpawn",
@@ -2464,6 +2466,7 @@ name = "ddnpcrt"
 version = "0.1.0"
 dependencies = [
  "ddai",
+ "ddexe",
  "ddnpc",
  "ddstory",
  "ddvfs",
@@ -2647,6 +2650,7 @@ dependencies = [
  "ddvfs",
  "ddworld",
  "mtarc",
+ "mtcamera",
  "mtgmd",
  "mtgui",
  "mtlmt",

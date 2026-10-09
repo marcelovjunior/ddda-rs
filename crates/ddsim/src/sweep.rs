@@ -245,7 +245,7 @@ fn seg_seg(p1: V3, q1: V3, p2: V3, q2: V3) -> (f32, V3, V3) {
 }
 
 /// Closest point on a triangle (Ericson 5.1.5).
-fn closest_on_triangle(p: V3, t: &Tri) -> V3 {
+pub fn closest_on_triangle(p: V3, t: &Tri) -> V3 {
     let [a, b, c] = *t;
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
     let (d1, d2) = (dot(ab, ap), dot(ac, ap));
@@ -359,6 +359,14 @@ fn first_contact(a: V3, b: V3, r: f32, m: V3, t: &Tri) -> Option<(f32, V3, f32)>
         }
     }
     None
+}
+
+/// Sphere contact using the same geometric replacement as the character
+/// capsule: `(fraction, surface-to-sphere normal, negative initial gap)`.
+/// This exposes geometry only, without character slide/grounding rules.
+/// The original's convex callback machinery is not reproduced here.
+pub fn sphere_contact(center: V3, radius: f32, motion: V3, triangle: &Tri) -> Option<(f32, V3, f32)> {
+    first_contact(center, center, radius, motion, triangle)
 }
 
 /// The result of a sweep.

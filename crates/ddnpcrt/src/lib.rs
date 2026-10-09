@@ -6,10 +6,11 @@
 //! Rules are traced from DDDA.exe (2017-12-13 Steam), addresses in the
 //! modules. The NPC graphs run on the shared AI core (`ddai::core`).
 
+pub mod guard;
 pub mod schedule;
 pub mod talk;
 
-use ddai::Error;
+pub use ddai::Error;
 use ddnpc::MessageSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -211,6 +212,23 @@ impl NpcRuntime {
         .filter(|&c| set.set.by_number(c).is_some())
         .ok_or(TalkError::Silent)?;
         self.start(player, npc, set, conversation, w)
+    }
+
+    /// Start an authored conversation from an explicitly loaded resource.
+    /// Guard routing uses 0x00bb47d0 -> 0x00455990. The caller must first
+    /// establish actor eligibility, reservation and activation; this API
+    /// neither decides those conditions nor synthesizes actor TalkEnd.
+    pub fn talk_authored(
+        &mut self, story: &Story, player: PlayerId, npc: u32,
+        set: Arc<TalkSet>, conversation: i32,
+    ) -> Result<Vec<TalkEvent>, TalkError> {
+        if let Some(other) = self.talking_to(npc) {
+            if other != player { return Err(TalkError::Busy(other)); }
+        }
+        if set.set.by_number(conversation).is_none() {
+            return Err(TalkError::Silent);
+        }
+        self.start(player, npc, set, conversation, story.world)
     }
 
     /// Show a shop NPC's menu again after its screen closed (kinds 1/2).

@@ -190,9 +190,11 @@ pub trait Host {
     fn npc_intel(&self, stage: u32, t: &Target) -> Option<NpcIntel>;
     /// An active NPC unit with this id exists (IsNpcUnit, 0x00476400).
     fn npc_unit(&self, npc: u32) -> bool;
-    /// The script given by ApplyFSM to this target has finished (or the
-    /// target is gone; 0x005c8460).
-    fn applied_script_finished(&self, stage: u32, t: &Target) -> bool;
+    /// ApplyFSM target readiness (0x005c8460), not applied-action Finish.
+    /// Character actors require their normal consideration controller; NPC
+    /// intel checks the same pointer directly. Missing party members and
+    /// persistently killed enemies are the explicit absent-target cases.
+    fn apply_fsm_ready(&self, stage: u32, t: &Target) -> bool;
     /// HP of a target (CheckHp 0x005c9250): absolute, or percent of max.
     fn unit_hp(&self, stage: u32, t: &Target, percent: bool) -> Option<f32>;
     /// Whether tutorials are on (option word 0x018fa4f8 +0x20e774 & 0x800,
