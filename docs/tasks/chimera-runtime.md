@@ -124,6 +124,10 @@ The additive `EnemyHitPolicy` observer runs after each local and mirrored hit,
 before the next one. Twenty-one chimera integration tests pass, including
 accepted versus priority-blocked child death with identical zero HP and the
 resulting difference in the later body modifier. No live host wiring yet.
+`ThinkInitialization` reads body/child controller roots with the shared walker,
+preserving selected current versus fallback default/base and manager lock/scale
+initialization. Its installed test and 15 ddai library tests pass. The Wait
+action prefix and unit-specific think/action stepping remain next.
 
 No host combat actor, placement kill, story progression or original-game
 comparison is claimed by this checkpoint. Next: the child-00 collision-link
