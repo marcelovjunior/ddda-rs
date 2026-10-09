@@ -26,7 +26,7 @@ use ddstory::data::Data;
 use ddstory::event::{EventConfig, EventFrame, EventPlayer};
 
 use crate::character::{self, Playback, RMOTIONLIST};
-use crate::stage::{self, Loader, PartMaterial, PendingLayer, UNIT};
+use crate::stage::{self, Loader, PartMaterial, PendingDd, UNIT};
 
 #[derive(Clone)]
 struct EventArgs {
@@ -151,7 +151,7 @@ fn spawn_parts(commands: &mut Commands, parts: &[stage::Part], transform: Transf
         let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
         match &p.material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
-            PartMaterial::Layer(slot) => e.insert(PendingLayer(slot.clone())),
+            PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
         };
     }
 }
