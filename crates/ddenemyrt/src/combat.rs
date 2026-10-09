@@ -89,7 +89,9 @@ pub struct HitEvent {
     pub region: u32,
     /// Hits merged into this one (`HitInfo`+0xD0).
     pub hits: u32,
-    /// HP taken.
+    /// Valued damage before HP floors, no-HP flags and clamping; this need
+    /// not equal the observed HP difference. A linked hit without the
+    /// mapped region's LINK_HP attribute reports zero here.
     pub total: f32,
     /// Stagger / knockdown of the hit region.
     pub reaction: Reaction,
@@ -105,6 +107,8 @@ pub struct HitEvent {
 ///
 /// `source` retains attacker, original hurt region and merged hit count.
 /// The result names the linked victim and its main-pool reaction/death.
+/// Its total is the carried value when LINK_HP is present, even when a
+/// no-HP flag or no-death floor prevents some or all HP loss.
 /// `status_rates` are this collision's +0xd28/+0xd2c, not damage multipliers.
 /// This does not collect contacts, alter history, or walk further links.
 // Translated from 0x0076b7e0 and the mirrored branch of 0x0076db10

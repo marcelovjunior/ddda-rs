@@ -124,6 +124,9 @@ the existing source event, and the destination status rates. It applies
 break and status to the main pool even when the mapped pool is absent,
 resolves frozen cancellation, then conditionally applies the carried total
 to main HP. It never mutates the mapped non-main pool or calls mitigation.
+As in the ordinary hit pass, event total is valued damage, not observed HP
+loss after no-HP flags, floors or clamping. Missing LINK_HP reports zero;
+present LINK_HP preserves the carried total even when HP loss is prevented.
 It does not collect contacts, assign links, walk chains, or emit story facts.
 These remain host integration work.
 

@@ -403,6 +403,12 @@ mod linked_hits {
         let (actual, valued) = resolve_enemy_hit_valued(hit(), &def, &mut new, 1, &rates, &game, 1.0);
         assert_eq!(actual, expected);
         assert_eq!(old, new);
+        // Synthetic hit: (60 physical - 20 defence) * 0.5 region-class
+        // scaling = 20, propagated from pool 1 to main through LINK_HP.
+        assert_eq!(valued.hit.phys, 20.0);
+        assert_eq!(valued.hit.mag, 0.0);
+        assert_eq!(actual.total, 20.0);
+        assert_eq!(new.iter().map(|r| r.hp).collect::<Vec<_>>(), [80.0, 80.0]);
         assert_eq!(valued.total, actual.total);
         assert!(valued.hit.phys < hit().phys);
         assert_eq!(valued.total, valued.hit.phys + valued.hit.mag);
