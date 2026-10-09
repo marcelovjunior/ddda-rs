@@ -250,7 +250,7 @@ def cmd_claim(a):
     append({'type': 'claim', 'agent': a.agent, 'area': a.area, 'paths': [norm(p) for p in a.path or []],
             'note': a.note or ''})
     if hits:
-        owners = ','.join(sorted({h[0] for h in hits}) | {HEAD})
+        owners = ','.join(sorted({h[0] for h in hits} | {HEAD}))
         append({'type': 'msg', 'agent': a.agent, 'to': owners, 'kind': 'conflict',
                 'text': f'I claimed {a.area} with --force although it overlaps your claim(s): '
                         + '; '.join(f'{h[1]} ({", ".join(h[3])})' for h in hits)})
