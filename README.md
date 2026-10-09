@@ -64,6 +64,8 @@ you and fights it.
 |---|---|
 | Light attack | J or left mouse button |
 | Heavy attack | K or middle mouse button |
+| Skills | 1-6 (P2: Numpad 4-9), the save's skill slots; implemented: Broad Cut, Tusk Toss, Ingle, Levin |
+| Use item | U (P2: Numpad 0), the first useful restorative in the save's bag |
 
 The Arisen fights with the kit of the save's primary weapon: a staff plays
 the Mage's, anything else the Fighter's sword. `--kit fighter|mage`
