@@ -678,3 +678,24 @@ handler 0x00853260 decreases it toward zero and restores one when removed;
 selector then chooses common 0x03000060 (break variant one). Its separate
 +0x5cb4 condition chooses 0x0300005f and remains semantically unresolved,
 so automatic harpy death dispatch is still pending.
+
+## Prologue chimera: initial source survey
+
+The stage-380 progression gate needs a real persistent kill of placement
+group 10/index 0 (opening-prologue survey), so em5200 cannot be substituted
+with a timer or a zero-HP generic actor. The DTI registry separates uEm5200
+from uEm5200_00 and uEm5200_01, each with its own action/death classes.
+The body think-table array is 0x016cd234; its death callback is 0x009a4dc0.
+That callback sets a bit in actor+0x2e38 and tests it with +0x2e34 before
+calling common enemy death. The masks' part-state meanings remain unresolved.
+It then selects local action 0x3a or 0x52..0x58 according to current mode,
+motion and another actor flag. This is more than one ordinary death action.
+
+cEm5200ActDie entry 0x009aec20 selects internal states by its action variant,
+uses motions 0x239/0x23b/0x23c/0x2b8, initializes a 180-motion-frame timer,
+and references child units at body+0x72e0/+0x72e4. Update 0x009aef20 waits
+for the initial motion, transitions to a death motion, counts down the timer
+and enters cleanup through 0x00aad0c0. Child death, damage routing and the
+persistent placement-kill writer still need tracing before implementation.
+This survey is source evidence only; no chimera runtime or original-game
+comparison is claimed.
