@@ -289,3 +289,91 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   The current installed controller regression's NPC 2 is deliberately a
   daily-graph suspension fixture, not a claim that its actor owns q2 talk.
   Scope extension for ddexe dependency is proposed on board #2328.
+
+- Replacement regression now changes identity while the old applied graph is
+  actively waiting for talk. A later old-actor TalkEnd cannot emit movement,
+  Finish or GSF381 during 600 further frames. All nine host story_pawns tests
+  pass; the separate normal-controller restoration regression remains intact.
+
+### Guard resource checkpoint (codex-31)
+
+- Added typed per-NPC loaded-resource selection from 0x00bb47d0 and
+  0x00baddf0: quest keys, base key -2, override key -1 only when the
+  authored conversation exists. Missing quest resources do not fall back.
+- Quest preload lists now read 0x0163cdf0 through ddexe from the player's
+  installed executable (0x00bace50), plus generic authored talk-set loading
+  and a per-seat authored conversation start preserving the NPC lock.
+- All ten ddnpcrt tests and touched-crate clippy pass, including installed
+  NPCs 1/304 q2 resource loading, NPC2 preload exclusion, fallback selection
+  and two-seat isolation. No actor eligibility, activation, TalkEnd cleanup
+  or full q2 route is inferred from loading or closing text.
+- Remaining: real controller lifecycle, actor/Guard adapter and frozen NPC
+  variable providers. FreeFlag getter 0x007abda0 uses independent 128-bit
+  storage at +0xbc; Hit getter 0x007ab860 reads actor vf180 word bit7;
+  NpcGoodsHaving 0x007ac320 tests actor pointers +0x6f44/+0x6f48 after
+  NPC-owner validation. These variables are traced but not yet translated.
+
+### Frozen NPC variable checkpoint
+
+- Added FreeFlag for both action and daily consideration graphs: four private
+  words initialized by 0x007a74f0, index-limited getter 0x007abda0 and
+  setter 0x007abdd0. It is independent of the FreeCondition word.
+- Hit (flag) and NpcGoodsHaving use explicit actor observations with the
+  sourced predicates above. Intel-only owners return false; actor adapters
+  must provide their current flags/goods, not infer them from movement.
+- Twelve ddnpcrt tests and touched-crate release clippy pass, including
+  128-bit boundaries, owner/flag/goods cases, installed schedules and q2.
+  The baseline viewer remains the earlier executable and still freezes
+  seven NPCs; rebuilt viewer comparison is pending. Other unsupported
+  variables may still stop schedules; no full NPC behavior claim.
+
+### Tutorial route integration baseline (2026-10-09, codex-31)
+
+- Ran the 87843ee viewer plus codex-29's opt-in diagnostics at 1920x1080,
+  unattended. Intro run loaded st100ev00 (109.6 s movie), skipped after
+  2.4 s by unattended policy, auto-confirmed edit and reached stage200 /
+  SceNo1100. It saved a screenshot and exited; not a full movie acceptance.
+- Separate existing demo completed in about 224 wall seconds: Fighter class
+  select, ev10, Quina talk, collision-planned walk, ev15, then stage200 /
+  SceNo1400, GSF372/381 true, q1 words [18000000,0,3], q2 booted.
+  Seven step screenshots retained privately. Both processes exited.
+- This is not the requested end-to-end tutorial. Main skips intro when
+  demo is enabled; prepare fast-forwards beach dragon loss before rendering;
+  the vocation menu remains the labelled two-choice stub; opening setup
+  passes literal None fight data and no pawn/goblins. GSF381 still comes
+  from the scripted actor stand-in, not the new Guard actor adapter. Demo
+  ends before the actual Cassardis exit and the goblin rescue encounter.
+- Baseline also reproduced seven NPC schedule freezes from the missing
+  variables now translated in18f1466. New viewer validation is pending.
+  Concurrent builds exclude performance acceptance; no original-game
+  comparison claimed. Logs/captures: E:/ddda-re/notes/opening-route-codex31.
+- Next action: resolve actual NPC layout targets and own intel/controller
+  lifetimes, then connect guarded dialogue and sourced actor cleanup. Keep
+  fight data and spawned enemies authoritative in the host, not a second
+  independent viewer Fight.
+
+### NPC placement / controller lifetime checkpoint
+
+- Added generic _n layout candidate reading through existing GPL/LOT readers.
+  cLayoutSetNpc vf12 (vtable01593f30) resolves to75faa0 shared gate.
+  Record identity uses SetInfo+4 -> intel5c8 (7624d0), while mNpcId
+  goes to intel3e4 (7a32f0); they are never interchangeable.
+- Installed checks establish stage200 group1 record0 is NPC39, not NPC1.
+  Stage100 group4 record0 is NPC304. Earlier q2 graph tests using target
+  group1/NPC2 were fixtures; actual first-pawn script target is still being
+  resolved. No production binding hardcodes those fixture identities.
+- Npc::intel owns consideration/action fields without requiring a loaded
+  daily graph (bbd930 before bbdaa0). Explicit load_story_npc_intel creates
+  that lifetime, retains allocation after graph-load failure, invalidates
+  replacement/unload, and reports actual presence/readiness to live worlds.
+  HP, body presence and NPC life are deliberately not inferred.
+- Candidate loading is not materialization: 762000 name-family selection,
+  persistent-life checks and archive readiness remain adapter prerequisites.
+  The API is not yet invoked from viewer startup; GSF381 remains fixture.
+- Unsupported host graphs now halt their graph execution and retain the
+  controller owner, instead of deleting it. This is port error recovery,
+  not an original completion. A synthetic error regression covers it.
+- Passed: placement/lifecycle3, story_pawns9, host NPC2, ddnpcrt12 tests.
+  Targeted host/NPC clippy has no new warnings with the pre-existing
+  install.rs chunks_exact lint allowed; broad all-target checks also find
+  the pre-existing replay.rs modulo lint. Viewer release build is queued.

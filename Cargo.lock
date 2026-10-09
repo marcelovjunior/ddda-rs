@@ -2393,6 +2393,7 @@ dependencies = [
  "mtarc",
  "mtfsm",
  "mtlmt",
+ "mtlot",
  "mtsbc",
  "mtxfs",
 ]
@@ -2465,6 +2466,7 @@ name = "ddnpcrt"
 version = "0.1.0"
 dependencies = [
  "ddai",
+ "ddexe",
  "ddnpc",
  "ddstory",
  "ddvfs",

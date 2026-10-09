@@ -53,7 +53,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         match self.npcs.step(&*data, &story.world, self.clock.seconds(), &[]) {
             Ok(r) => Ok(r),
             Err(_) => {
-                // find the NPCs that fail on their own and drop them
+                // find the NPCs that fail on their own and halt their graphs
                 let clock = ddnpcrt::schedule::Clock {
                     hour: story.world.hour,
                     minute: story.world.minute,
@@ -66,10 +66,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     match npc.step(&*data, clock) {
                         Ok(r) => out.extend(r),
                         Err(e) => {
-                            if let Some(n) = self.npcs.npcs.remove(&id) {
+                            if let Some(n) = self.npcs.npcs.get_mut(&id) {
                                 if let Some(p) = n.position() {
                                     self.npc_parked.insert(id, p);
                                 }
+                                // An unsupported port graph is not original
+                                // intel/controller destruction. Retain its
+                                // owner state for placement and ApplyFSM.
+                                n.halt_graphs();
                             }
                             self.npc_errors.push((id, e.to_string()));
                         }
