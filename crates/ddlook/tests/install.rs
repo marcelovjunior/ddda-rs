@@ -122,6 +122,7 @@ fn saved_arisen_and_pawns_are_dressed() {
             l.look.parts.len(),
             (0..200).filter(|&p| !l.look.mask.visible(p)).count()
         );
+        eprintln!("  hidden {:?}", (0..200).filter(|&p| !l.look.mask.visible(p)).collect::<Vec<_>>());
         let f = |n: &str| l.edit.iter().find(|(k, _)| k == n).map(|(_, v)| *v);
         eprintln!(
             "  gender {:?} hair {:?} beard {:?} face base {:?} parts {:?}",

@@ -353,7 +353,8 @@ fn clamps(c: &mut Ctrl) {
     c.set(0x5c8, z / c.f(0x2c8));
     c.set(0x5c0, x / c.f(0x2c0));
     // Slot 10's offset: (0, slot 11's offset y / 2, 0).
-    let v = (88.0 - c.f(0x694) * -1.0) * 0.5 - 44.0;
+    // The exe computes (88 - y x -1) x 0.5 - 44.
+    let v = (88.0 + c.f(0x694)) * 0.5 - 44.0;
     c.set3(0x630, [0.0, v, 0.0]);
     let x = clamp(c.f(0x680) * c.f(0x5c0), lo7, s * 1.35);
     let z = clamp(c.f(0x688) * c.f(0x5c8), lo7, hi13);

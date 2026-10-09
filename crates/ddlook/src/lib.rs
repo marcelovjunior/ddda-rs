@@ -576,15 +576,22 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         p.hair = false;
         p.beard = true;
     }
-    // 0x008449b0: parts 0-199 on; the player hides part 17, a pawn part 16
-    // (NPC ids pick by 0x00ba7150, not translated).
+    // 0x008449b0: parts 0-199 on; the player ANDs word 0 with 0x7ffdffff
+    // (hides parts 17 and 31), a pawn with 0x7ffeffff (16 and 31) (NPC
+    // ids pick by 0x00ba7150, not translated).
     let mut mask = PartMask::default();
     for p in 0..200 {
         mask.set(p, true);
     }
     match unit {
-        Unit::Player => mask.set(17, false),
-        Unit::Pawn => mask.set(16, false),
+        Unit::Player => {
+            mask.set(17, false);
+            mask.set(31, false);
+        }
+        Unit::Pawn => {
+            mask.set(16, false);
+            mask.set(31, false);
+        }
         Unit::Npc => {}
     }
     // 0x00bc1060 for every piece: the parts-off records of its models

@@ -18,8 +18,10 @@
 //! looks; with `--save DDDA.sav` the player actor (and pawn actors) wear
 //! the save's Arisen and pawns, else the base Arisen body.
 //!
-//! `ddview <nativePC> --lineup DDDA.sav [--shot out.png]` shows the save's
-//! Arisen and party pawns side by side in the rest pose.
+//! `ddview <nativePC> --lineup DDDA.sav[,npc:N...] [--pose <rMotionList>[:slot]]
+//! [--start-frame F] [--shot out.png]` shows the save's Arisen and party
+//! pawns (and NPCs) side by side, in the rest pose or held at frame F of
+//! the given motion (e.g. `motion\pl\m\m00\m0000_co\m0000_co:0`).
 //!
 //! *Not shown yet:* stage lighting and effects, body and face morphs,
 //! skin and eye colours, IK. The camera's actor-joint adjustments are
@@ -53,6 +55,8 @@ struct EventArgs {
     save: Option<PathBuf>,
     /// `--lineup` entries: `npc:N` or a save file.
     lineup: Vec<String>,
+    /// `--pose list[:slot]`: the lineup's motion (default: rest pose).
+    pose: Option<(String, usize)>,
 }
 
 fn parse_args() -> Option<EventArgs> {
@@ -79,6 +83,7 @@ fn parse_args() -> Option<EventArgs> {
         shot_delay: 10.0,
         save: None,
         lineup: lineup_arg.iter().flat_map(|v| v.split(',')).map(str::to_string).collect(),
+        pose: None,
     };
     if !lineup {
         // `--event N --lineup save` (the head smoke run): use the save.
@@ -98,6 +103,13 @@ fn parse_args() -> Option<EventArgs> {
             "--hour" => a.hour = val().parse().unwrap(),
             "--start-frame" => a.start_frame = val().parse().unwrap(),
             "--hold" => a.hold = true,
+            "--pose" => {
+                let v = val();
+                a.pose = Some(match v.rsplit_once(':') {
+                    Some((l, n)) if n.parse::<usize>().is_ok() => (l.to_string(), n.parse().unwrap()),
+                    _ => (v, 0),
+                });
+            }
             "--shot" => a.shot = Some(PathBuf::from(val())),
             "--shot-delay" => a.shot_delay = val().parse().unwrap(),
             "--size" => {
@@ -417,6 +429,7 @@ fn spawn_look(
         bindposes,
         &look.base,
         look.skin_color,
+        look.body.as_ref(),
         &parts,
         &move |g| mask.visible(g),
         motion_path,
@@ -488,6 +501,7 @@ fn setup_lineup(
     for (i, s) in looks.iter().enumerate() {
         // 90 cm apart, centred; empty motion: the rest pose.
         let x = (i as f32 - (n - 1.0) * 0.5) * 0.9;
+        let (motion, slot) = args.pose.as_ref().map_or(("", 0), |(l, n)| (l.as_str(), *n));
         match spawn_look(
             &mut commands,
             &mut loader,
@@ -496,10 +510,10 @@ fn setup_lineup(
             &mut images,
             &mut bindposes,
             &s.1,
-            "",
-            0,
+            motion,
+            slot,
             Vec3::new(x, 0.0, 0.0),
-            Some(0.0),
+            Some(args.start_frame as f32),
         ) {
             Ok(_) => info!("{}: {} parts, base {}", s.0, s.1.parts.len(), s.1.base),
             Err(e) => error!("{}: {e}", s.0),

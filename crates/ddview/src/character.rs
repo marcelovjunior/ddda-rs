@@ -40,6 +40,80 @@ pub struct Playback {
     /// The fade in progress: the frozen local pose (rotation, translation,
     /// scale) by joint entity.
     pub blend: Option<(mtlmt::blend::Interpolation, Vec<(Entity, Quat, Vec3, Vec3)>)>,
+    /// Body morph (ddlook::morph), applied after the motion by
+    /// [`apply_morph`].
+    pub morph: Option<Morph>,
+}
+
+/// The base skeleton with its body morph.
+pub struct Morph {
+    /// Base-model bones in file order (parents first): entity and parent
+    /// index.
+    pub bones: Vec<(Entity, Option<usize>)>,
+    /// Per bone: uCnsEdit type, scale, child scale, offset.
+    pub joint: Vec<Option<(u32, Vec3, Vec3, Vec3)>>,
+    /// uModel +0x60.
+    pub model_scale: Vec3,
+    /// The unmorphed local transforms of the last frame: the motion only
+    /// writes the channels it keys, so the rest must come from here.
+    pub base: Vec<Transform>,
+    /// Rigid attachments (sheathed weapons): anchor entity under the root,
+    /// bone index, local matrix (uCnsAttach mode 1).
+    pub attach: Vec<(Entity, usize, Mat4)>,
+}
+
+/// The morph pass (uCnsEdit::vf24 0x00860ac0 on world matrices, parents
+/// first, so children follow their morphed parents): world = parent world
+/// x local, then `world x Translate(offset) x Scale(k)` (column vectors).
+/// k is the scale for types 0 and 9; for type 0xb it is scale x child
+/// divided by the world axis lengths, so those joints end at an absolute
+/// size whatever their parents did (0x0086d180). The model scale is the
+/// skeleton's root. The result goes back into the local transforms (shear
+/// from non-uniform parent scales is dropped by the TRS decomposition).
+fn apply_morph(m: &mut Morph, joints: &mut Query<&mut Transform>) {
+    let n = m.bones.len();
+    let root = Mat4::from_scale(m.model_scale);
+    let mut world: Vec<Mat4> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (e, parent) = m.bones[i];
+        let local = joints.get(e).copied().unwrap_or_default();
+        m.base[i] = local;
+        let pw = parent.map_or(root, |p| world[p]);
+        let mut w = pw * local.to_matrix();
+        if let Some((kind, s, c, t)) = m.joint[i] {
+            let k = if kind == 0xb {
+                let len = Vec3::new(w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length());
+                s * c / len.max(Vec3::splat(1.192_092_9e-7))
+            } else {
+                s
+            };
+            w = w * Mat4::from_translation(t) * Mat4::from_scale(k);
+        }
+        world.push(w);
+    }
+    for i in 0..n {
+        let (e, parent) = m.bones[i];
+        // Root bones hang under the entity root, which has no model scale:
+        // their local is the world matrix itself.
+        let local = parent.map_or(world[i], |p| world[p].inverse() * world[i]);
+        if let Ok(mut tr) = joints.get_mut(e) {
+            *tr = Transform::from_matrix(local);
+        }
+    }
+    // uCnsAttach::vf24 (0x00859bb0, +0xac clear): the joint's world rows
+    // are normalised before the attach matrix goes on them, so weapons
+    // keep their size and offset whatever the joint's scale.
+    for &(a, i, local) in &m.attach {
+        let w = world[i];
+        let unit = |v: Vec4| {
+            let l = v.length();
+            if l > 1.192_092_9e-7 { v / l } else { v }
+        };
+        let n = Mat4::from_cols(unit(w.x_axis), unit(w.y_axis), unit(w.z_axis), w.w_axis);
+        if let Ok(mut tr) = joints.get_mut(a) {
+            *tr = Transform::from_matrix(n * local);
+        }
+    }
 }
 
 impl Playback {
@@ -88,6 +162,7 @@ pub fn spawn(
         bindposes,
         model_path,
         None,
+        None,
         &[],
         &|_| true,
         motion_path,
@@ -112,6 +187,7 @@ pub fn spawn_assembled(
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     model_path: &str,
     base_tint: Option<[f32; 3]>,
+    body: Option<&ddlook::morph::BodyMorph>,
     parts: &[ExtraPart],
     visible: &dyn Fn(u16) -> bool,
     motion_path: &str,
@@ -144,7 +220,8 @@ pub fn spawn_assembled(
             .ok_or_else(|| format!("{motion_path}: slot {slot} is empty or missing"))?
     };
 
-    // Root in game units (cm), scaled to viewer units (m).
+    // Root in game units (cm), scaled to viewer units (m). The body
+    // morph's model scale sits at the skeleton's root (apply_morph).
     let root = commands
         .spawn((
             Transform::from_translation(translation).with_scale(Vec3::splat(UNIT)),
@@ -154,6 +231,7 @@ pub fn spawn_assembled(
         .id();
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
+    let mut attach = vec![];
     spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint);
     for part in parts {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
@@ -172,22 +250,19 @@ pub fn spawn_assembled(
         };
         let joints = match part.attach {
             Some((joint, rot, pos)) => {
-                let Some(&parent) = joints_by_id.get(&joint) else {
+                let Some(bone) = model.bones.iter().position(|b| b.anim_map_index == joint) else {
                     warn!("{}: joint {joint} missing", part.path);
                     continue;
                 };
                 let r = rot.map(f32::to_radians);
-                let anchor = commands
-                    .spawn((
-                        // uCnsAttach (0x00859bb0, attach mode 1) builds the row-vector
-                        // matrix Rx * Ry * Rz from degrees: X first, then Y,
-                        // then Z, i.e. Rz * Ry * Rx for column vectors.
-                        Transform::from_translation(Vec3::from(pos)).with_rotation(Quat::from_euler(EulerRot::ZYX, r[2], r[1], r[0])),
-                        Visibility::default(),
-                        Name::new(format!("attach {}", part.path)),
-                    ))
-                    .id();
-                commands.entity(parent).add_child(anchor);
+                // uCnsAttach (0x00859bb0, attach mode 1) builds the row-vector
+                // matrix Rx * Ry * Rz from degrees: X first, then Y, then Z,
+                // i.e. Rz * Ry * Rx for column vectors. The anchor hangs
+                // under the root; apply_morph places it on the joint.
+                let local = Transform::from_translation(Vec3::from(pos)).with_rotation(Quat::from_euler(EulerRot::ZYX, r[2], r[1], r[0]));
+                let anchor = commands.spawn((local, Visibility::default(), Name::new(format!("attach {}", part.path)))).id();
+                commands.entity(root).add_child(anchor);
+                attach.push((anchor, bone, local.to_matrix()));
                 // Its own joints: weapon bone ids (0, 1, 2) are not body joints.
                 bind_skeleton(commands, &pm, anchor, &mut HashMap::new())
             }
@@ -197,12 +272,38 @@ pub fn spawn_assembled(
         let vis: &dyn Fn(u16) -> bool = if part.attach.is_some() { &all } else { visible };
         spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint);
     }
+    // Every assembled character runs the morph pass (it also places the
+    // attachments); without edit data it is the identity.
+    let morph = Some({
+        let bones: Vec<(Entity, Option<usize>)> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let p = usize::from(x.parent);
+                (joint_entities[i], (x.parent != 255 && p < i).then_some(p))
+            })
+            .collect();
+        let joint = model
+            .bones
+            .iter()
+            .map(|x| {
+                body?.joints.iter().find(|(id, _)| *id == x.anim_map_index).map(|(_, m)| {
+                    (m.kind, Vec3::from(m.scale), Vec3::from(m.child), Vec3::from(m.offset))
+                })
+            })
+            .collect();
+        let base = model.bones.iter().map(|x| Transform::from_matrix(Mat4::from_cols_array(&x.local))).collect();
+        let model_scale = body.map_or(Vec3::ONE, |b| Vec3::from(b.model_scale));
+        Morph { bones, joint, model_scale, base, attach }
+    });
     commands.entity(root).insert(Playback {
         motion,
         joints: joints_by_id,
         hold_frame,
         blend_request: None,
         blend: None,
+        morph,
     });
     Ok(root)
 }
@@ -283,7 +384,13 @@ fn spawn_meshes(
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, Handle<StandardMaterial>> = HashMap::new();
     for m in &model.meshes {
-        if m.lod & 1 == 0 || !visible(m.group) {
+        // uModel::vf26 0x00ea5320: the part bit, the disp flag, the LOD
+        // bit (LOD 0 here) and the pass mask: draw_mode & the pass's mask
+        // (0x00fedb80 stores it at +0x16a). The scene pass "Common" pushes
+        // 1 (0x00daf0a8); ShadowCast pushes 8 or 0x200 (0x00ede86c), so
+        // the low-poly shadow bodies (draw_mode 0xe6c8) and the outline
+        // and velocity shells (0x1020) never draw in colour.
+        if m.draw_mode & 1 == 0 || m.flags & 1 == 0 || m.lod & 1 == 0 || !visible(m.group) {
             continue;
         }
         let Some(layout) = mfx.layout(m.vertex_format) else {
@@ -420,6 +527,15 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
                 p.blend = None;
             }
         }
+        // Morphed skeletons start each frame from the unmorphed locals, so
+        // channels the motion does not key are not morphed twice.
+        if let Some(m) = &p.morph {
+            for (i, &(e, _)) in m.bones.iter().enumerate() {
+                if let Ok(mut tr) = joints.get_mut(e) {
+                    *tr = m.base[i];
+                }
+            }
+        }
         let n = p.motion.frame_count.max(1) as f32;
         let frame = p.hold_frame.unwrap_or((time.elapsed_secs() * MOTION_FPS) % n);
         for t in &p.motion.tracks {
@@ -446,6 +562,9 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
                 tr.translation = Vec3::from(mix_vector(tr.translation.to_array(), t.to_array(), b.weight));
                 tr.scale = Vec3::from(mix_vector(tr.scale.to_array(), s.to_array(), b.weight));
             }
+        }
+        if let Some(m) = &mut p.morph {
+            apply_morph(m, &mut joints);
         }
     }
 }
