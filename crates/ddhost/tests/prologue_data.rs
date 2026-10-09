@@ -2,6 +2,100 @@
 use ddstory::data::{Data, InstallData};
 use std::collections::BTreeSet;
 
+fn find_enemy_check(cluster: &mtfsm::Cluster) -> Option<&mtfsm::Process> {
+    for state in &cluster.states {
+        if let Some(process) = state.processes.iter().find(|p| p.container == b"EnemyCheck") {
+            return Some(process);
+        }
+        if let Some(found) = state.subcluster.as_deref().and_then(find_enemy_check) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Exercise the actual installed final-encounter order with explicit host
+/// facts. This is not a fight or route acceptance test: only reporting the
+/// kill record satisfies this gate; elapsed time, absence and zero HP do not.
+#[test]
+fn installed_chimera_gate_waits_for_a_recorded_kill() {
+    use ddstory::encounter::{EncounterFacts, UnitFacts};
+    use ddstory::script::{Dispatch, OrderCtx, Owner, ProcMem};
+    let root = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+    if !root.is_dir() {
+        eprintln!("SKIP: DDDA install absent");
+        return;
+    }
+    let data = InstallData::open(&root, None).unwrap();
+    let path = r"scr\st380\fsm\fix\set_03";
+    let graph = data.fsm(path).unwrap();
+    let process = find_enemy_check(graph.root.as_ref().unwrap()).unwrap();
+    let mut host = EncounterFacts::default();
+    let target = ddstory::Target {
+        kind: 2,
+        group: 10,
+        index: 0,
+    };
+    let mut world = ddstory::World::default();
+    let mut stage = ddstory::story::StageState {
+        stage_no: 380,
+        ..Default::default()
+    };
+    let mut owner = Owner::default();
+    let mut memory = ProcMem::default();
+    let mut requests = vec![];
+    let mut commands = vec![];
+    let mut run = |host: &EncounterFacts| {
+        let mut env = ddstory::Env {
+            world: &mut world,
+            stage: &mut stage,
+            host,
+            time: Default::default(),
+            out: &mut requests,
+            cmds: &mut commands,
+            events: None,
+        };
+        let mut context = OrderCtx {
+            script: path,
+            owner: &mut owner,
+            mem: &mut memory,
+            env: &mut env,
+            state_name: b"installed chimera gate",
+        };
+        ddstory::orders::Orders::state(&mut context, process).unwrap();
+        (owner.free_flags, owner.free_ins[0])
+    };
+    for _ in 0..1200 {
+        assert_eq!(run(&host), (0, 0));
+    }
+    host.report_unit(
+        380,
+        target,
+        UnitFacts {
+            present: true,
+            hp: Some(0.0),
+            max_hp: Some(100.0),
+            ..Default::default()
+        },
+    );
+    assert_eq!(run(&host), (0, 0));
+    host.report_unit(
+        380,
+        target,
+        UnitFacts {
+            killed: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(run(&host), (1, 1));
+    assert!(
+        requests.is_empty(),
+        "checking defeat does not create combat or presentation outcomes"
+    );
+}
+
 #[test]
 fn stage_380_scripts_and_enemy_layouts() {
     let root = std::env::var_os("DDDA_NATIVE_PC")
@@ -12,6 +106,11 @@ fn stage_380_scripts_and_enemy_layouts() {
         return;
     }
     let data = InstallData::open(&root, None).unwrap();
+    // New game 0x00445be1 sets stage-index12's first layout bit.
+    // The layout permission alone does not override the group's separate
+    // disabled bit; scripted placement activation is still required.
+    let initial = ddstory::Story::new_game(InstallData::open(&root, None).unwrap());
+    assert!(initial.world.lot(380, 0));
     let scripts = data.stage_scripts(380).unwrap();
     let startup: Vec<_> = scripts.iter().filter(|p| p.contains("fsm\\fix")).collect();
     assert!(!startup.is_empty());
@@ -21,6 +120,18 @@ fn stage_380_scripts_and_enemy_layouts() {
     }
     let vfs = ddvfs::Vfs::open(&root).unwrap();
     let list = ddhost::spawns::group_list(&vfs, 380).unwrap();
+    let (scene, hour, flag) = ddhost::spawns::world_inputs(&initial.world, 380);
+    assert_eq!(
+        ddspawn::gate(
+            list.group(0).unwrap(),
+            &ddspawn::World {
+                scene,
+                hour,
+                flag: &flag
+            }
+        ),
+        ddspawn::Gate::Disabled
+    );
     let cells: BTreeSet<_> = list
         .groups
         .iter()
