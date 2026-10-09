@@ -273,6 +273,12 @@ fn main() {
     }
     let args = args();
     let size = args.size;
+    // Without the sky dome (not done), the background takes the fog colour
+    // under --light: what full fog fades to at the horizon.
+    let clear = match &args.light {
+        Some(l) => Color::linear_rgb(l.fog_color.x, l.fog_color.y, l.fog_color.z),
+        None => Color::srgb(0.55, 0.68, 0.85),
+    };
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -285,7 +291,7 @@ fn main() {
         .add_plugins(stage::ShadingPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
-        .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
+        .insert_resource(ClearColor(clear))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 250.0,

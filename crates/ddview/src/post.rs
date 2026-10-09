@@ -124,7 +124,7 @@ fn vignette_alpha(vfs: &Vfs, path: &str) -> Option<Vec<f32>> {
     let data = t.surfaces.first()?.data;
     let mut alpha = vec![0f32; w * h];
     let bw = w.div_ceil(4);
-    for (bi, blk) in data.chunks_exact(16).enumerate().take(bw * h.div_ceil(4)) {
+    for (bi, blk) in data.as_chunks::<16>().0.iter().enumerate().take(bw * h.div_ceil(4)) {
         let (a0, a1) = (blk[0] as f32, blk[1] as f32);
         let pal: [f32; 8] = if blk[0] > blk[1] {
             std::array::from_fn(|i| match i {

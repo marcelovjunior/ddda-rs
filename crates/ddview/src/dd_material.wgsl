@@ -49,14 +49,20 @@ struct DdParams {
     fog_color: vec4<f32>,
     // x: fog start (cm), y: 1 / (end - start) (1/cm), z: cm per viewer unit
     fog_range: vec4<f32>,
+    // xyz: fReflectiveColor, w: Fresnel F0
+    reflect: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
 const FLAG_DD_LIGHTING: u32 = 2u;
+const FLAG_REFLECT: u32 = 4u;
+const FLAG_SPEC_MAP: u32 = 8u;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> dd: DdParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var transparency_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var transparency_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var spec_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var spec_sampler: sampler;
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
@@ -165,6 +171,24 @@ fn fragment(
         }
         let light = sh_irradiance(n) + dd.sun_color.rgb * max(dot(n, dd.sun_dir.xyz), 0.0) * shadow;
         var color = pbr_input.material.base_color.rgb * light;
+        if ((dd.flags & FLAG_REFLECT) != 0u) {
+            // Environment reflection as in the stage shaders (e.g. file
+            // offset 0x88068C): env * fReflectiveColor * specular map G *
+            // mean ambient * Schlick Fresnel lerp(F0, 1, (1 - N.V)^5). The
+            // env is a run-time render (sky cube / planar water reflection);
+            // the fog colour stands in for it here (*not traced*).
+            var mask = 1.0;
+            if ((dd.flags & FLAG_SPEC_MAP) != 0u) {
+#ifdef VERTEX_UVS_A
+                mask = textureSample(spec_texture, spec_sampler, in.uv).g;
+#endif
+            }
+            let sh = sh_irradiance(n);
+            let ambient = (sh.r + sh.g + sh.b) / 3.0;
+            let nv = clamp(dot(n, pbr_input.V), 0.0, 1.0);
+            let fres = mix(dd.reflect.w, 1.0, pow(1.0 - nv, 5.0));
+            color += dd.fog_color.rgb * dd.reflect.rgb * mask * ambient * fres;
+        }
         // Linear fog on view depth in game units (cm).
         let depth = -view_z * dd.fog_range.z;
         let f = clamp((depth - dd.fog_range.x) * dd.fog_range.y, 0.0, 1.0) * dd.fog_color.w;

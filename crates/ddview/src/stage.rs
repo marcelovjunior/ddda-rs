@@ -100,10 +100,14 @@ pub struct DdParams {
     pub sun_color: Vec4,
     pub fog_color: Vec4,
     pub fog_range: Vec4,
+    /// xyz: fReflectiveColor, w: Fresnel F0 (FReflect* materials).
+    pub reflect: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
 const FLAG_DD_LIGHTING: u32 = 2;
+const FLAG_REFLECT: u32 = 4;
+const FLAG_SPEC_MAP: u32 = 8;
 
 impl DdParams {
     fn with_lighting(mut self, l: &StageLighting) -> Self {
@@ -135,6 +139,10 @@ pub struct DdExt {
     #[texture(101)]
     #[sampler(102)]
     pub map: Option<Handle<Image>>,
+    /// `tSpecularMap` (FSpecularMap), its G channel masks the reflection.
+    #[texture(103)]
+    #[sampler(104)]
+    pub spec: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for DdExt {
@@ -570,6 +578,11 @@ impl Loader<'_> {
             AlphaMode::Blend
         } else if let Some(cutoff) = test {
             AlphaMode::Mask(cutoff)
+        } else if s.blends_alpha() && s.feature("FTransparency") == Some("FTransparencyVolume") {
+            // DDMaterialWater: the original fades by water depth over
+            // fTransparencyVolume (not done); blended at fTransparency.
+            sm.base_color.set_alpha(s.transparency);
+            AlphaMode::Blend
         } else {
             // Alpha computed but neither tested nor blended: no effect.
             AlphaMode::Opaque
@@ -583,6 +596,23 @@ impl Loader<'_> {
         }
         let mut params = DdParams::default();
         let mut map = None;
+        let mut spec = None;
+        if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {
+            // Reflection of the sky render (DDCube0_CM) or of the planar
+            // water reflection; both are run-time render targets, see the
+            // shader for the stand-in.
+            params.flags |= FLAG_REFLECT;
+            let f0 = if s.feature("FFresnel") == Some("FFresnelSchlick") { s.fresnel } else { 1.0 };
+            params.reflect = Vec3::from(s.reflective_color).extend(f0);
+            if s.feature("FSpecular") == Some("FSpecularMap") {
+                if let Some(p) = s.textures.get("tSpecularMap") {
+                    spec = self.texture(p, images);
+                    if spec.is_some() {
+                        params.flags |= FLAG_SPEC_MAP;
+                    }
+                }
+            }
+        }
         if let AlphaSource::Map { texture, channel, .. } = &s.alpha {
             if let Some(h) = self.texture(texture, images) {
                 params.flags |= FLAG_MAP;
@@ -593,7 +623,7 @@ impl Loader<'_> {
         PartMaterial::Dd(Arc::new(DdSlot {
             material: DdMaterial {
                 base: sm,
-                extension: DdExt { params, map },
+                extension: DdExt { params, map, spec },
             },
             handle: OnceLock::new(),
         }))
@@ -812,11 +842,17 @@ impl Loader<'_> {
             let Some(parts) = self.model(p, meshes, materials, images) else {
                 continue;
             };
+            // The water models' own materials (MaterialStdEst sea,
+            // DDMaterialWater rivers and lakes); the placeholder is only
+            // used for parts without one.
             let parts: Vec<Part> = parts
                 .into_iter()
-                .map(|q| Part {
-                    material: PartMaterial::Standard(water.clone()),
-                    ..q
+                .map(|q| match q.material {
+                    PartMaterial::Dd(_) => q,
+                    _ => Part {
+                        material: PartMaterial::Standard(water.clone()),
+                        ..q
+                    },
                 })
                 .collect();
             self.stats.water_models += 1;
