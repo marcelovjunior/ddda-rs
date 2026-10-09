@@ -92,6 +92,35 @@ a separate pass: 0x00446860 scans 12 valid equipped slots, resolves each item
 through 0x00459340 and calls 0x00442fe0/0x00442d50 after resetting its output
 fields. Consumers and derived formulas still require tracing.
 
+Equipment consumer follow-up: `0x00b87450` sums exactly nine equipped slots,
+selected by the installed nine-word table at `0x015ea2a8` (slots 2 through
+10 in this build), rather than all twelve saved slots. Arisen and pawn bags
+are selected separately by actor flags and pawn index. Physical/magick
+defence use `0x0045a1b0/0x0045a270`; slash/strike percentages start at 100
+and subtract `0x0045a330/0x0045a3d0`. Element and status resistances start
+at zero and accumulate their item getters. `0x00b87940` then adds the two
+accessory bonus blocks at active-info +0x640/+0x6a0. Element/status sums
+are capped above at 100; negative resistance values are not generically
+clamped away. This is distinct from the twelve-slot equipment setup pass.
+
+Weapon attack getter `0x004599a0` and defence getter `0x0045a1b0` decode
+enhancement from the equipped item's flags when their level argument is
+negative: bits 0x400, 0x200, 0x40, 0x20, 0x10 and 0x08 select levels
+6 down to 1 in that priority order. Both call `0x0045b620`, which selects
+the installed `rItemLevelParam` row by item kind and level-up type. Reuse
+`dditem::lvparam` for those resources; raw `Item::attack()` alone does not
+represent an enhanced saved weapon. The decompiler omits that helper's
+floating-point result operations, so disassembly is required before
+translating its add/multiply semantics. No enhancement formula was ported
+by this survey.
+
+Existing combat types already separate saved base attack/defence from
+weapon attack and equipment defence (`PlayerAttacker`, `PlayerDefender`).
+`ArisenData::load` currently fills them from a level-table row and one
+weapon, leaving armour contributions at defaults. A saved-record constructor
+must supply the preserved base values and the sourced equipment aggregation;
+reusing the existing kit constructor would lose both saved growth and gear.
+
 Next: bind these active values to the existing combat representation, then
 trace the Mage virtual-pad decisions and motion/resource selection. Record
 recruitment/prologue setup already exist; body/stat/inventory conversion and
