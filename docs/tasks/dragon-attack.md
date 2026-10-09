@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/dragon-attack`
 - **Board area:** `story/dragon-attack`
-- **Status:** open
+- **Status:** in progress (source-backed AI bridge checkpoint)
 
 Part of the opening slice. Read `docs/OPENING_SLICE.md` first,
 especially its rule: build the system, not the step.
@@ -35,4 +35,51 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
 
 ## Results
 
-(filled in by the agent)
+### AI bridge checkpoint (2026-10-09, codex-25)
+
+- Implemented general `cAILevelAbstractFSM` processes `CtrlActionEx`
+  (0x005a89e0), `SetTargetPos` (0x005a90e0), and `cThinkFSM` world writes
+  `Set GSFFlag` (0x007aad10), `Set QuestFlag` (0x007aad90), `Set LotFlag`
+  (0x007ab650). Extended actions preserve every signed, unsigned and float
+  argument; world writes emit host requests with the original bounds.
+- Added motion feedback getters (0x007ab900 / 0x007ab8c0), including the
+  two-frame state-change suppression of Motion Frame.
+- Installed `AI\FSM\Enemy\st200\quest\Dragon_OP` runs its eleven states
+  against explicit synthetic action, motion and area feedback. It sets
+  quest bits 1, 20, 21, 5 through its own processes and ends with Kill,
+  not Finish. No fixed-delay quest-bit injection is used in this test.
+- Tested: `cargo test -p ddai`, 32 tests pass, including three new tests
+  for the installed FSM, argument preservation/offset, and flag bounds.
+  This validates the interpreter bridge, **not** simulated dragon actions
+  or a comparison against the running original.
+- Recovery after the loose SATA cable: worktree `git fsck --no-dangling`
+  passed; source edits were intact and the complete AI test suite passed.
+
+### Encounter evidence and remaining work
+
+- `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
+  `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
+  EnemyCheck target is kind 2, group 0, index 1.
+- `uEm5800` initialization 0x00a49f00 selects think root 0x01699518 for
+  sequence 4. Bulk table records must be loaded from the installed exe.
+- Previously untraced GSF 379 writer: `aStage200::vf12` 0x0051ccc0. Once
+  GSF 378 enables its dragon branch, it captures the first life-region HP
+  once, then sets GSF 379 only after HP is strictly below that baseline
+  minus 4.0. Independently, a valid Arisen with region HP <= 1 (or no life
+  region) and positive effective maximum HP sets the flag. The maximum
+  getter is 0x00b845d0 -> 0x00782040. This is original stage-specific code,
+  not a timeout or an invented quest rule.
+- Implemented that check in `ddstory/src/dragon.rs` with explicit actor
+  snapshots and persistent baseline capture. The co-op extension lets any
+  valid Arisen satisfy the low-life branch. Three pure regression tests
+  pass (compiled directly with `rustc --test` while the shared Cargo target
+  was allocated elsewhere), including strict threshold, missing actors,
+  missing regions, independent player branch and unordered float inputs.
+  The module export and host tick remain coordinated integration work.
+- Still required: stage-gate integration; actual dragon movement/actions,
+  table callbacks, combat volumes and actor feedback; host-owned encounter
+  facts and flag request application; playable ev00 -> fight -> ev01 ->
+  ev05 acceptance and original-state comparison. Existing ScriptedHost
+  opening shortcuts have not yet been replaced.
+- Next action: test and integrate the sourced stage gate, then load the
+  sequence-4 table and trace the reachable dragon actions.
