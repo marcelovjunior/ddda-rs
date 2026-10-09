@@ -176,7 +176,15 @@ Read-only exe trace, 2026-10-09, camera-near:
   (+0x34), at **0x007dce13**. Its projection consumer **0x007dc810** uses
   that field directly. No wall-dependent near-plane change was found in
   the normal update **0x007dcf30**; this is not a claim that every camera
-  implementation uses the same near plane.
+  implementation uses the same near plane. **Correction from camera-feel:**
+  this is the child camera, not the active rendering/collision camera.
+  `uCameraCtrl` inherits **16 cm** from `uCamera::ctor` **0x01128740**
+  through **0x007d3a80 / 0x007d6cd0**. Its update **0x007d7210** copies
+  the child eye/target/FOV, but not its near field. **0x007de570** reads
+  `sCamera+0xce0` (the controller). A paused and 40-frame unpaused
+  Cassardis sample both show controller near 16, child near 96, with
+  identical eye and target. Follow-camera collision and projection now
+  use 16 cm, giving a 20.8 cm aligned sphere rather than 124.8 cm.
 - **0x0088bdc0**, called by `uCharacterBase::vf97` **0x0084c800**, computes
   near-camera opacity. It selects semantic joint **1** through
   `uModel::vf22` **0x00ff9a20**; missing IDs use the model matrix.

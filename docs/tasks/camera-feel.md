@@ -66,3 +66,16 @@ tests pass, including the new wall/roof regression; release build passes
 with three existing warnings. This is source-verified and tested, not yet
 matched at the two requested original-game spots. Filter/active-camera
 near-plane investigation and live comparison continue.
+
+Second checkpoint: the original was found already in Cassardis stage200
+(PID23408). Active `uCameraCtrl` near is **16 cm**, while its child
+`uCameraGame` near is 96. The sphere query reads the active controller.
+Constructor **0x01128740** sets 16, inherited by controller through
+**0x007d3a80 / 0x007d6cd0**; **0x007d7210** copies child pose/FOV but
+not near. Paused and 40-frame unpaused readings agree; original feet
+(3376.76,-163.44,-2168.54), target height about134.52 cm, distance230 cm.
+Private captures/readings: `E:/ddda-re/notes/camera-feel-codex33`. Save
+backup made before unpausing; no movement/save writes; pause and bgOff
+restored. Follow collision and projection now use16. Seven camera-filtered
+release tests pass, including clear sidewall/roof that the old radius
+wrongly hit. Updated release build and exact live wall/roof tests pending.
