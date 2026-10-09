@@ -136,7 +136,7 @@ three remaining presses (+0x280) and zero submitted shots (+0x284).
 Its update (`0x005570d0`) has its own state machine, rather than the sword
 combo template. In state 2 it submits through `0x00536940` (owner input
 object +0x30), increments the shot count, decrements remaining presses,
-and uses a 90-frame wait between submissions. Subsequent submissions
+and arms a 90-frame timeout for the next action acknowledgment. Subsequent submissions
 check the actual `cPlActWpnWandShot` action and its +0x84 shot count;
 time passing alone does not acknowledge a shot. `uCmc::vf200`
 (`0x00b537d0`) copies that input word to actor +0x32f0 before the common
