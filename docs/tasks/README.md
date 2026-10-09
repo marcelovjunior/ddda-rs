@@ -130,3 +130,5 @@ Codex lane: see `docs/CODEX.md`.
 | [think-tables](think-tables.md) | Goblin combat think table: approach/attack choice, cooldowns | core | claude-9 | merged 2026-10-09 |
 | [m4-goblin-fight](m4-goblin-fight.md) | Headless goblin vs Arisen fight in ddhost (M4 slice) | core | claude-1 | merged 2026-10-09 |
 | [player-attacks](player-attacks.md) | Arisen attack actions from input (sword, staff), push-out | core | claude-1 | merged 2026-10-09 |
+| [play-from-save](play-from-save.md) | --play from the save: dressed party, lit world, attacks, pawn, goblin, co-op | core | claude-7 | assigned |
+| [land-fix](land-fix.md) | Body sinking under higher ground (seen in co-op run) | core | claude-1 | assigned |
