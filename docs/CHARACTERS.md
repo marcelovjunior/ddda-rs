@@ -464,7 +464,8 @@ outermost ancestor and use its vf12 sphere center if available.
 0x00ea3d00 transforms the MOD sphere center and scales its radius by the
 largest model scale; the radius lives at +0x16c. This is a radius term,
 not an arbitrary sorting offset. The additional integer model bias at
-+0x154 is not imported yet (viewer assumes zero).
++0x154 defaults to zero in constructor 0x00ea3490. Runtime overrides
+are not imported yet.
 
 The viewer extracts these points/radii and stably sorts character
 transparent items after Bevy's normal phase sort, retaining exact key

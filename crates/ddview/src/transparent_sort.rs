@@ -72,8 +72,8 @@ fn sort_primitives(
         phase.items.sort_by(|_, a, _, b| {
             let key = |item: &Transparent3d| {
                 if let Some(&(point, radius, priority)) = samples.0.get(&item.entity.1) {
-                    // Unresolved: runtime +0x154 model sort-bias overrides are
-                    // not imported; the viewer currently assumes zero.
+                    // Constructor 0x00ea3490 initializes +0x154 bias to zero.
+                    // Unresolved: runtime overrides are not imported.
                     let depth_cm = (-range.distance(&point) + radius) / super::UNIT;
                     f64::from(packed_key(depth_cm, priority)) / 4096.0 - 32767.0
                 } else {

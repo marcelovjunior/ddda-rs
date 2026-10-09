@@ -488,7 +488,9 @@ fn spawn_meshes(
     let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
     let mut bound_offset = 0;
     for m in &model.meshes {
-        let first_bound = model.weight_bounds.get(bound_offset..bound_offset + 144);
+        let first_bound = (m.weight_bound_count > 0)
+            .then(|| model.weight_bounds.get(bound_offset..bound_offset + 144))
+            .flatten();
         bound_offset += usize::from(m.weight_bound_count) * 144;
         // uModel::vf26 0x00ea5320: the part bit, the disp flag, the LOD
         // bit (LOD 0 here) and the pass mask: draw_mode & the pass's mask

@@ -150,7 +150,9 @@ primitive sort bit2 is clear, or the first weight-bound bone-space center
 when set. It then clamps/truncates centimetre depth and appends authored
 alpha priority. Sources: 0x00ea3130 -> 0x00ea1f40, 0x00ea3d00,
 0x00ea5320 and 0x00ffc350. Details in CHARACTERS.md. Runtime model bias
-+0x154 remains unimported and is explicitly assumed zero.
++0x154 uses the constructor's zero default (0x00ea3490); runtime overrides
+remain unimported. Review also guards zero-count weight-bound records
+from borrowing the next primitive's bound.
 
 `cargo test --release -p ddview`: 21 pass after current main integration;
 release build passes. The new regression covers clamp, truncation,
