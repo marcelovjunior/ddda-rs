@@ -26,6 +26,35 @@ fn table() -> StatusTable {
 }
 
 #[test]
+fn item_cures_remove_stacks_without_removing_other_statuses() {
+    let t = table();
+    let mut s = Statuses::default();
+    s.add(kind::POISON, &t);
+    s.add(kind::SLOW, &t);
+    s.add(kind::ATTACK_DOWN, &t);
+    s.add(kind::ATTACK_DOWN, &t);
+    assert_eq!(s.cure_item((1 << kind::POISON) | (1 << kind::ATTACK_DOWN), false),
+        vec![kind::POISON, kind::ATTACK_DOWN]);
+    assert_eq!(s.mask(), 1 << kind::SLOW);
+    let mut possessed = s.works[0];
+    possessed.kind = kind::POSSESSED;
+    s.works.push(possessed);
+    assert!(s.cure_item(1 << kind::POSSESSED, false).is_empty());
+    assert_eq!(s.cure_item(1 << kind::POSSESSED, true), vec![kind::POSSESSED]);
+}
+
+#[test]
+fn item_healing_recovers_wounded_hp_but_does_not_revive() {
+    let (mut hp, mut recoverable) = (100.0, 120.0);
+    assert_eq!(recover_item_hp(&mut hp, &mut recoverable, 300.0, 150.0), 150.0);
+    assert_eq!((hp, recoverable), (250.0, 250.0));
+    assert_eq!(recover_item_hp(&mut hp, &mut recoverable, 300.0, 150.0), 50.0);
+    assert_eq!(recoverable, 300.0);
+    hp = 0.0;
+    assert_eq!(recover_item_hp(&mut hp, &mut recoverable, 300.0, 150.0), 0.0);
+}
+
+#[test]
 fn add_refreshes_ticks_and_wears_off() {
     let t = table();
     let mut s = Statuses::default();

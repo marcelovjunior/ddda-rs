@@ -10,6 +10,8 @@
 //! | jump (twice: double jump) | Space | Enter |
 //! | light attack | J or left mouse | Numpad 1 |
 //! | heavy attack | K or middle mouse | Numpad 2 |
+//! | equipped skill slots | 1-6 | Numpad 4-9 |
+//! | quick-use saved restorative | U | Numpad 0 |
 //!
 //! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
@@ -58,6 +60,7 @@ struct ViewBank {
 /// as ddsim does (`Sim::motion_for`: the weapon's first).
 #[derive(Default)]
 pub struct ViewMotions {
+    skills: crate::skills::Motions,
     common: HashMap<u8, ViewBank>,
     weapon: HashMap<Weapon, HashMap<u8, ViewBank>>,
 }
@@ -160,7 +163,7 @@ pub struct PlayState {
     /// jumps and P2 sprints; with one, P1 closes in and attacks it.
     pub demo: bool,
     /// Motion each character's Playback currently shows.
-    shown: HashMap<PlayerId, u16>,
+    shown: HashMap<PlayerId, (Option<u32>, u16)>,
     /// Whether each character has an Arisen to show (network sessions
     /// spawn characters for every seat up front).
     pub visible: HashMap<Entity, bool>,
@@ -216,7 +219,10 @@ pub fn setup(
     data: Option<std::sync::Arc<FightData>>,
 ) -> Result<PlayState, String> {
     let mut sim = ddhost::install::sim(loader.vfs)?;
-    let motions = ViewMotions::load(loader.vfs)?;
+    let mut motions = ViewMotions::load(loader.vfs)?;
+    if let Some(data) = data.as_deref() {
+        motions.skills = crate::skills::Motions::load(loader.vfs, data);
+    }
     info!("ground speeds: {:?}", sim.move_param);
     let mut fight = data.clone().map(Fight::new);
     let mut entities = HashMap::new();
@@ -446,6 +452,7 @@ pub fn step(
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
     net: Option<Res<crate::net::NetRes>>,
+    items: Option<ResMut<crate::items::QuickItems>>,
     opening: Option<Res<crate::opening::OpeningRes>>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
@@ -465,6 +472,22 @@ pub fn step(
     if net.is_some() || opening.is_some() {
         return;
     }
+    if let Some(mut items) = items {
+        let seats = st.locals.clone();
+        for (index, key) in [KeyCode::KeyU, KeyCode::Numpad0].into_iter().enumerate() {
+            if keys.just_pressed(key) {
+                if let Some(&seat) = seats.get(index) {
+                    let st = &mut *st;
+                    if let Some(fight) = st.fight.as_mut() {
+                        match items.use_next(seat, &mut st.sim, fight) {
+                            Ok(item) => info!("quick-use: seat {seat} used item {item}"),
+                            Err(e) => info!("quick-use: seat {seat}: {e}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
     if keys.just_pressed(KeyCode::F2) {
         for p in &mut st.sim.players {
             p.relaxed = !p.relaxed;
@@ -476,6 +499,7 @@ pub fn step(
     let cam_yaw = st.cam_yaw;
     let mut local = HashMap::new();
     let locals = st.locals.clone();
+    if crate::skills::keys(&mut st.sim, &locals, &keys) { st.demo = false; }
     if let Some(&p1) = locals.first() {
         local.insert(p1, p1_input(&keys, &buttons, cam_yaw));
     }
@@ -632,17 +656,23 @@ pub fn show(
         };
         tr.translation = (Vec3::from(p.position) - st.origin) * UNIT;
         tr.rotation = Quat::from_rotation_y(p.yaw);
-        let id = p.state.motion_id();
+        let active = st.sim.player(p.id).and_then(|p| p.skills.active);
+        let id = active.map_or_else(|| p.state.motion_id(), |a| a.motion);
+        let key = (active.map(|a| a.id), id);
         let weapon = state_weapon(p.state, p.weapon);
-        let found = st.motions.get(weapon, id);
-        if st.shown.get(&p.id) != Some(&id) {
+        let found = if let Some(active) = active {
+            st.motions.skills.get(active.id, id)
+        } else {
+            st.motions.get(weapon, id)
+        };
+        if st.shown.get(&p.id) != Some(&key) {
             if let Some((m, default)) = found {
                 // the first motion of a model does not blend (uModel::vf30)
                 let frames = if st.shown.contains_key(&p.id) { interpolation_frames(default, id) } else { 0.0 };
                 debug!("player {}: motion {:#x}, blend {frames} frames", p.id, id);
                 pb.change_motion(m.clone(), frames);
             }
-            st.shown.insert(p.id, id);
+            st.shown.insert(p.id, key);
         }
         let shown = found.map_or(p.frame, |(m, _)| display_frame(m, p.frame));
         pb.hold_frame = Some(shown);
@@ -650,7 +680,7 @@ pub fn show(
         // them while uPlayer +0x273C has 0x200 and 0x400 / 0x800,
         // uPlayerBase::vf93 0x00B63F70; the writers of those bits are not
         // traced, so the attack states stand for them).
-        pb.drawn = matches!(p.state, ddsim::State::Attack { .. } | ddsim::State::Shot { .. });
+        pb.drawn = active.is_some() || matches!(p.state, ddsim::State::Attack { .. } | ddsim::State::Shot { .. });
     }
     // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {

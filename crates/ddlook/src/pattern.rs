@@ -9,6 +9,31 @@
 
 use crate::{Error, Source};
 
+fn eyebrow_record(scale: &[mtxfs::Value], texture: &[mtxfs::Value]) -> Result<([f32; 2], u32), Error> {
+    let scale = match scale.first() {
+        Some(mtxfs::Value::F(f)) if f.len() >= 2 => [f[0] as f32, f[1] as f32],
+        _ => return Err(Error::Data("editPattern: malformed eyebrow scale".into())),
+    };
+    let texture = match texture.first() {
+        Some(mtxfs::Value::U(v)) => *v as u32,
+        Some(mtxfs::Value::S(v)) => *v as u32,
+        _ => return Err(Error::Data("editPattern: malformed eyebrow texture".into())),
+    };
+    Ok((scale, texture))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn malformed_brow_rows_fail_instead_of_shifting_preset_indices() {
+        use mtxfs::Value::{F, U};
+        assert_eq!(super::eyebrow_record(&[F(vec![0.25, 0.5])], &[U(2)]).unwrap(), ([0.25, 0.5], 2));
+        assert!(super::eyebrow_record(&[], &[U(2)]).is_err());
+        assert!(super::eyebrow_record(&[F(vec![1.0])], &[U(2)]).is_err());
+        assert!(super::eyebrow_record(&[F(vec![1.0, 1.0])], &[]).is_err());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditPattern {
     /// RGBA by pallet (0 hair, 1 skin, 2 eyes and makeup).
@@ -51,23 +76,16 @@ impl EditPattern {
                 })
                 .collect()
         };
-        let eyebrows = |name: &str| -> Vec<([f32; 2], u32)> {
-            x.get(root, name).unwrap_or(&[]).iter().filter_map(|v| {
-                let mtxfs::Value::Object(Some(o)) = v else { return None };
-                let scale = match x.get(o, "mScale")?.first()? {
-                    mtxfs::Value::F(f) if f.len() >= 2 => [f[0] as f32, f[1] as f32],
-                    _ => return None,
+        let eyebrows = |name: &str| -> Result<Vec<([f32; 2], u32)>, Error> {
+            x.get(root, name).unwrap_or(&[]).iter().map(|v| {
+                let mtxfs::Value::Object(Some(o)) = v else {
+                    return Err(Error::Data(format!("editPattern: malformed {name} row")));
                 };
-                let texture = match x.get(o, "mTexNo")?.first()? {
-                    mtxfs::Value::U(v) => *v as u32,
-                    mtxfs::Value::S(v) => *v as u32,
-                    _ => return None,
-                };
-                Some((scale, texture))
+                eyebrow_record(x.get(o, "mScale").unwrap_or(&[]), x.get(o, "mTexNo").unwrap_or(&[]))
             }).collect()
         };
         let p = EditPattern { pallets, hair_id: s8s("mHairId"), beard_id: s8s("mBeardId"),
-            eyebrows: eyebrows("mEyebrow"), fixed_eyebrows: eyebrows("mEyebrowFix") };
+            eyebrows: eyebrows("mEyebrow")?, fixed_eyebrows: eyebrows("mEyebrowFix")? };
         if p.pallets.len() != 3 || p.hair_id.len() != 64 || p.beard_id.len() != 48 {
             return Err(Error::Data(format!(
                 "editPattern: {} pallets, {} hair ids, {} beard ids",

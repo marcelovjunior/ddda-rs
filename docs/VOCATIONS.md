@@ -962,3 +962,68 @@ and the World mirror; the live level-7 Mage values (#722).
    `PlStamina_*` rows into skill actions; trace the magick and bow costs.
 5. **Level-3 skills from equipment** (with claude-6): item flag bit 29 and
    skill ids in item data.
+
+## Equipped skill runtime
+
+`ddskill::magic` reads `rMagicActParamList` (`map\0`, version 4) from the
+installation. Loader 0x00CC71A0 allocates 0x490-byte objects; 0x00825F80,
+0x00826E90 and 0x008253C0 define the serialized order (769 bytes for a
+three-level record). All four installed lists parse: staff 30, shield 15,
+human staff 32, NPC staff 2. Truncated and trailing files are rejected.
+This closes the earlier unknown about staff stamina: level fields +0xE4
+(chant frames) and +0xE8 (signed stamina change) are consumed by 0x00B49B60
+and 0x00B47890. Disassembly identifies Articulacy as augment 81 and
+Conservation as 82. Both unequipped values are read from PlAbilityParam.
+
+The initial supported actions are base-level Broad Cut (41), Tusk Toss
+(43), Ingle (210) and Levin (212). Sword vf06s 0x00B3E290/0x00B3E9A0
+select motions 0x73A/0x740. The equipped skill's own list replaces bank 7
+(0x00AC65A0); per-character banks prevent one player changing another's
+animation. Sword costs use PlStamina_Sword and Proficiency's resource
+value. 0x00B60F10 triggers on the **falling** edge of event group 1 bit 30,
+not action entry or its rising edge. Regression tests distinguish these.
+
+The base spell path follows chant/release/end phases at 0x00B456C0,
+0x00B45DD0 and 0x00B47890. Ingle/Levin select shell groups through action
+record parameters and the runtime magic list. The current checkpoint
+loads four motion banks and runs all four actions headlessly, charging
+once and keeping a second player independent. Fight integration damages
+installed goblins with all four actions. Ingle creates its hit child;
+Levin produces its delayed strikes, with each shell's damage attributed
+to the casting seat. Broad Cut/Tusk Toss use push-out ranks 15/14 from
+their constructors (0x00B3E0E0/0x00B3E7D0). The Tusk Toss test places its
+target from the installed attack geometry: a target 100 cm straight
+ahead is still missed, and original movement/targeting is not validated.
+No live comparison is claimed.
+
+Shell checkpoint: `skills::spells` loads Ingle's speed shell and hit child,
+and Levin's three delayed lightning shells. C12F70/C12D60 provide the
+speed, distance and impact-child transitions; BF7A20/BF7CD0 give lightning
+jitter and lifetime. Collision phases use distance for speed shells
+(C13290), elapsed time otherwise (BD95B0); BD8B90 selects the sequence.
+Tests verify the installed collision sequences yield volumes, the speed
+ramp, impact child, lightning delays and expiry. The spawn origin uses the
+posed chant-ball joint and offset from the magic data (B4A090), not a
+fixed height. The deterministic RNG is a co-op adapter: the original RNG
+algorithm is unresolved. Target selection is supplied by the host; free
+aim/lock selection and wall impacts remain incomplete.
+
+Runtime limits: only the base action level is executed; equipped augments,
+weapon-level cost penalties, higher skill levels, held release/cancel
+windows, sustained Anodyne healing and chant sharing are not connected.
+Until cancel arbitration is traced, a skill key does not interrupt a
+basic attack or staff shot. A host-forced state change clears the skill
+sidecar. Skill input is per player but absent from the LAN wire protocol.
+Shell visual effects/audio and world-wall impacts are not implemented.
+
+Offline `ddview --play` binds slots 1–6 to the digit keys for P1 and
+Numpad 4–9 for P2. `--save` reads the Arisen's six `mWeaponSkill` slots
+from the manual save; unsupported IDs remain in place and do nothing.
+Extra local seats do not inherit the saved Arisen's skills. Without a
+save, preview slots 1/2 contain Broad Cut/Tusk Toss (`--kit fighter`) or
+Ingle/Levin (`--kit mage`). These preview slots are not progression
+unlocks. The animation cache includes skill ID, so shared motion numbers
+cannot select another spell's bank. Keys are inactive in pause, opening
+and network sessions. Regression checks send these actual key bindings
+through each installed action, verify its animation exists and charge
+once; separate Fight tests check damage and casting-seat attribution.
