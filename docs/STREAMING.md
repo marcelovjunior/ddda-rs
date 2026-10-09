@@ -51,8 +51,9 @@ have completed its loading state before its dependent cell is constructed.
 back to +0x40 when the former is the zero vector, and subtracts the world
 absolute offset. It calls `0x005075d0`, also called directly by loaders.
 Its hidden EDI argument selects model/collision/layout fields: the
-decompiler's displayed signature omits it. A port must recover caller
-registers, not copy that signature.
+decompiler's displayed signature omits it. Call-site assembly sets EDI to
+0 at `0x00c5f189`/`0x00c5f374`, 1 at `0x00c5f7f7`/`0x00c5fa04`, and 2 at
+`0x00c6067e`/`0x00c608d0`, for retention/construction respectively.
 
 The predicate compares horizontal distance to the cell centre against a
 base term plus an angular correction. The base term is
@@ -65,11 +66,16 @@ meaning of that setting is not established here.
 
 For the default widths and multiplier 1, the base terms are 20000,
 approximately 15151.5, and 12500 units. **These are not the final radii.**
-The angular term multiplies `(sqrt(2)-1)*cell_width_x` by the absolute
-output of `0x012f0906(2 * 0x012f161f(t))`; `t` is a clamped Z component
+The angular term is `abs(sin(2*acos(t))) * (sqrt(2)-1)*cell_width_x`;
+`t` is a clamped Z component
 of the normalized difference between normalized player and cell-centre
-directions in the fixed stage frame. The exact library-function identities
-and numerical edge behavior remain unverified. The final comparison is
+directions in the fixed stage frame. The helpers are acos at `0x012f161f`
+and sin at `0x012f0906`: their assembly uses the pi/2-minus-input small
+argument path and 0/pi endpoints (`0x012f199c..0x012f19fb`, split constants
+at `0x0144ea60`/`0x0144ea80`), and sine's small-input identity and
+sin/cos reconstruction table (`0x012f0a06`, `0x0144b410`). Both normalize
+only when magnitude >=2^-23. Exact library approximation/rounding at
+threshold boundaries remains unverified. The final comparison is
 strict: equality rejects (`0x0050790d..0x00507925`).
 
 An apparent night alternative in the decompilation must not be "fixed":
@@ -169,7 +175,9 @@ fan-out to every cached transform is not ported or exhaustively traced.
 Read-only `research/ddda-oracle/client.py` `info`/`read` operations under
 head's board authorization #1292, 2026-10-09 15:12:05 UTC, PID 8300,
 frame counter 4091325. Head reported the game paused at a tutorial popup;
-it was left untouched. The probe was already installed. Raw bytes and
+it was left untouched. Later passive reads found a small position change,
+so these sequential reads are not claimed to be an atomic frozen snapshot.
+The probe was already installed. Raw bytes and
 addresses stay in private temporary files, not the repository.
 
 Stage 100 reported widths `(5,5,5,5,3,3)`, descriptor values as above,
@@ -182,9 +190,20 @@ The terrain list contained all nine combinations N=48..50, M=57..59;
 positions were `(N-49)*10000, 0, (M-58)*10000`. All wrappers had status 2.
 The collision list had eight of those cells (missing N=50/M=59), status 3.
 The layout list had six: (48,58), (49,57), (49,58), (49,59), (50,58),
-(48,57), all status 3. These are observed resident sets, **not predictions
-of a fully reconstructed distance predicate**. Paused-state history can
-matter. No boundary crossing, fade duration or spawn transition was tested.
+(48,57), all status 3. A private Python evaluation of the traced formula
+at the recorded position selected **exactly the eight collision and six
+layout cells**, with no extra or missing cells. A later passive read found
+the multiplier setting =1, hour=4, and actor+0xe0 equal to +0x40.
+
+The same calculation selected 13 model candidates, four more than the
+resident set. Two additional cells (N47/M57 and N47/M58) have no installed
+cell archive; the other two (N48/M56 and N49/M56) do. A passive follow-up
+of the controller's main archive list (+0x108 count/+0x114 pointer) found
+eight entries matching the collision set. This supports the need to account
+for archive dependencies and residency history, but does not fully explain
+the terrain-model discrepancy. No boundary crossing, fade duration or
+spawn transition was tested. The numerical check used host double precision,
+not a bit-exact emulator of the original SSE library.
 
 The older snapshot in [ORACLE.md](ORACLE.md) also agrees: indices 22/23
 plus filename offsets 30/40 give 52n/63m; absolute offset is
@@ -204,10 +223,10 @@ Use distinct desired/resident/retiring states and retain dependencies until
 replacement resources are ready. Separate the measured original policy
 from client quality settings. Read grid/region/landmark tables from the
 player's installed exe and layouts from their archives. Do not implement
-the unresolved angular expression with a guessed circle.
+the angular expression as a plain circle.
 
-Next: identify and independently evaluate `0x012f161f`/`0x012f0906`, recover
-all call-site kind arguments, and compare predicted residency to a stable
-passive snapshot. Then trace `mDrawDistance` to its consumers and record
+Next: resolve the remaining terrain archive/residency discrepancy and
+compare threshold boundaries with recorded ordinary movement. Trace
+`mDrawDistance` to its consumers and record
 ordinary boundary crossings when the maintainer supplies them. The brief's
 full per-class distance and transition-comparison gate remains open.

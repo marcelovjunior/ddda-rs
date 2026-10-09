@@ -51,14 +51,20 @@ operations were info/read only; live/game claim released. Scratch and raw
 data remain in OS TEMP. No engine/reader code or game data was committed;
 no build needed; git diff --check passed.
 
-The full done-when is **not yet met**. The distance predicate's library
-wrappers and complete caller-kind register arguments require independent
-evaluation; individual scenery/enemy/NPC drawing/sleep/despawn distance
+Follow-up assembly identified acos/sin and EDI kind 0/1/2 at all six
+model/collision/layout retention/construction call sites. A private Python
+formula evaluation exactly reproduced the eight collision and six layout
+cells. It selected 13 model candidates versus nine resident models: two
+extra candidates lack installed archives; two have archives. A later
+passive archive-list read found eight entries matching the collision set.
+This discrepancy remains open rather than treating desired candidates as
+resident models. Original SSE threshold rounding was not emulated.
+
+The full done-when is **not yet met**. Individual scenery/enemy/NPC drawing/sleep/despawn distance
 consumers remain unresolved. Group activation has authored shape gates
 (`0x00cc5670`), so no universal class radius is claimed. No moving live
 comparison was requested or performed. The doc ends with an N-player
 interest/residency and per-view floating-origin design proposal.
 
-Next action: resolve `0x012f161f`/`0x012f0906` and compare predicted cell
-residency with a stable passive snapshot, then trace per-class distance
+Next action: resolve the terrain archive/residency discrepancy, then trace per-class distance
 consumers and obtain maintainer-provided ordinary crossing observations.
