@@ -1,7 +1,7 @@
 # opening-perf: Frame rate in Cassardis and on the field
 
 - **Owner:** codex lane
-- **Branch:** `task/opening-perf`
+- **Branch:** `task/opening-perf` (merged diagnostics), `task/opening-perf-route` (continued measurement)
 - **Board area:** `render/perf`
 - **Status:** in progress (codex-29)
 
@@ -133,3 +133,29 @@ but overlapped a build and cannot establish acceptance timing. Its route
 still ends at q2 boot; it does not walk into the field. Next measurement
 must isolate the final-window field spikes and provide a deterministic
 street/field walk before optimization or a completed gate can be claimed.
+
+### Route harness follow-up (head assignment #2535)
+
+`--perf-route --size 1920x1080` selects the opening demo, skips the intro,
+enables diagnostics and unattended operation, and rejects screenshot
+options. The existing room/Quina/q2 route continues to the installed
+stage200 door entry (task 2, record 0), turns to its authored interaction
+angle, and supplies player interaction input. It uses the existing actual
+JumpArea handoff. In stage100 it walks toward the installed
+`q0002_event1` scenario volume until the simulated player crosses a cell
+boundary, then waits 30 seconds and exits. Failure to complete within
+600 seconds exits with an error. No new placement or quest/NPC callback
+shortcut is added; the pre-existing opening actor stand-ins remain a
+separate route-fidelity limitation.
+
+Unattended runs now use Bevy's continuous update mode. The local
+bevy_winit 0.19.1 default (`WinitSettings::game`) otherwise uses a
+60-Hz low-power update policy while unfocused. `--perf` reports the
+number of unfocused frames per window. Earlier baselines did not record
+focus state, so this is a removed measurement confound, **not yet an
+attribution of their hitches**. Ordinary interactive update policy is
+unchanged.
+
+Release build and targeted clippy passed (existing warnings only). The
+first bounded route run is in progress; its timing overlaps builds and
+is for functional validation only. No new performance acceptance claim.

@@ -75,6 +75,9 @@ enum Step {
     TalkQuina,
     WalkOut,
     Q0002Event,
+    Gate,
+    FieldWalk,
+    FieldSettle,
     Done,
 }
 
@@ -87,6 +90,8 @@ struct Demo {
     press: bool,
     last_talk: f32,
     talked: bool,
+    perf_route: bool,
+    field_cell: Option<(i32, i32)>,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -261,6 +266,8 @@ pub fn prepare(
             press: false,
             last_talk: 0.0,
             talked: false,
+            perf_route: false,
+            field_cell: None,
         }),
         shots,
         shot_queue: vec![],
@@ -282,6 +289,14 @@ pub fn prepare(
 }
 
 impl Session {
+    /// Viewer benchmark driver only: uses normal player inputs and actual
+    /// stage callbacks, not scripted placement or quest completion.
+    pub fn enable_perf_route(&mut self) {
+        if let Some(demo) = &mut self.demo {
+            demo.perf_route = true;
+        }
+        self.shots = None;
+    }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
         // Opening interaction currently routes E only to host seat 0.
@@ -588,6 +603,10 @@ pub fn step(
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
+    if args.perf_route && now > 600.0 {
+        s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
+        return;
+    }
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         if let Some(terrain) = streamer.take_terrain() {
@@ -1198,7 +1217,17 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Step::TalkQuina => s.npcs.get(&2).map(|n| n.1),
         Step::WalkOut => place("cassardis: 1300"),
         Step::Q0002Event => place("cassardis: q0002 event"),
-        Step::Done => None,
+        // Installed st200_door entry 0 is the stage100/start2 gate.
+        // Coordinates and angle are read from that scenario at runtime.
+        Step::Gate if s.world().stage_no == 200 => benchmark_place(s, 2, 0).map(|v| v.0),
+        // Walk toward the authored q2 field event volume; stop once the
+        // actual simulated position crosses a cell, before claiming any
+        // encounter outcome. No fixture NPC or quest state is changed.
+        Step::FieldWalk => s.host.story.as_ref().and_then(|story| {
+            let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
+            benchmark_place(s, 4, n as u32).map(|v| v.0)
+        }),
+        Step::Gate | Step::FieldSettle | Step::Done => None,
     };
     if (now % 2.0) < 0.04 {
         info!(
@@ -1259,16 +1288,20 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
                 camera_yaw: flat.x.atan2(flat.z),
                 ..Default::default()
             };
-            if step == Step::WeaponTable {
+            if step == Step::WeaponTable || step == Step::Gate {
                 d.press = !d.press;
                 input.interact = d.press;
-                face = route
+                face = if step == Step::Gate {
+                    // Reproduce a player turning toward the authored door
+                    // interaction angle while standing in its volume.
+                    benchmark_place_from_scenarios(&s.host.story.as_ref().unwrap().stage.scenarios, 2, 0).map(|v| v.1)
+                } else { route
                     .iter()
                     .find(|w| w.name == "cassardis: weapon table")
                     .and_then(|w| {
                         w.place(&s.host.story.as_ref()?.stage.scenarios)
                             .map(|(_, yaw)| yaw)
-                    });
+                    }) };
             }
         }
     }
@@ -1291,7 +1324,19 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         }
         Step::WalkOut if w.sce_no >= 1400 || quests.contains(&2) => next = Some(Step::Q0002Event),
         Step::WalkOut if w.sce_no >= 1300 && now - d.since > 6.0 => next = Some(Step::Q0002Event),
-        Step::Q0002Event if quests.contains(&2) => next = Some(Step::Done),
+        Step::Q0002Event if quests.contains(&2) => {
+            next = Some(if d.perf_route { Step::Gate } else { Step::Done });
+        }
+        Step::Gate if w.stage_no == 100 => {
+            d.field_cell = Some(benchmark_cell(p));
+            info!("perf route: entered field at {p:?}, cell {:?}", d.field_cell);
+            next = Some(Step::FieldWalk);
+        }
+        Step::FieldWalk if d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)) => {
+            info!("perf route: walked cell boundary {:?} -> {:?} at {p:?}; settling 30 seconds without screenshots", d.field_cell, benchmark_cell(p));
+            next = Some(Step::FieldSettle);
+        }
+        Step::FieldSettle if now - d.since >= 30.0 => next = Some(Step::Done),
         _ => {}
     }
     let talk_due = step == Step::TalkQuina
@@ -1344,6 +1389,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Some(Step::TalkQuina) => s.shot("4-control"),
         Some(Step::Done) => {
             let w = s.world();
+            let stage_no = w.stage_no;
             info!(
                 "opening demo: done: SceNo {}, GSF 372 {}, GSF 381 {}, q0001 bits {:08x?}, q0002 booted {}",
                 w.sce_no,
@@ -1352,21 +1398,41 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
                 w.quest_bits(1).map(|b| b.words()),
                 quests.contains(&2)
             );
-            let valid = w.sce_no == 1400
+            let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+                w.stage_no == 100 && s.demo.as_ref().and_then(|d| d.field_cell).is_some_and(|cell| cell != benchmark_cell(p))
+            } else { w.sce_no == 1400
                 && w.gsf.get(372)
                 && w.gsf.get(381)
                 && quests.contains(&2)
                 && w.quest_bits(1)
-                    .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]);
+                    .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]) };
             if !valid {
                 s.failure = Some("opening endpoint flag/SceNo check failed".into());
             }
             s.shot("7-q0002");
-            s.quit_at = s.shots.as_ref().map(|_| now + 3.0);
+            s.quit_at = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+                info!("perf route: complete without screenshots, stage {stage_no}, position {p:?}");
+                Some(now + 1.0)
+            } else { s.shots.as_ref().map(|_| now + 3.0) };
         }
         _ => {}
     }
     input
+}
+
+fn benchmark_cell(p: Vec3) -> (i32, i32) {
+    (50 + (p.z / 10_000.0).floor() as i32, 50 + (p.x / 10_000.0).floor() as i32)
+}
+
+fn benchmark_place(s: &Session, task: u32, no: u32) -> Option<(Vec3, f32)> {
+    benchmark_place_from_scenarios(&s.host.story.as_ref()?.stage.scenarios, task, no)
+}
+
+fn benchmark_place_from_scenarios(sc: &ddstory::scenario::Scenarios, task: u32, no: u32) -> Option<(Vec3, f32)> {
+    ddstory::route::Waypoint {
+        name: "performance route", stage: 0, entry: (task, no), until: None,
+        interact: true, npcs: vec![],
+    }.place(sc).map(|(p, yaw)| (Vec3::from(p), yaw))
 }
 
 impl Session {
