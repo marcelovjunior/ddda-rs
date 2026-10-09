@@ -3,7 +3,7 @@
 - **Owner:** claude-9
 - **Branch:** `task/progression`
 - **Board area:** `player/progression`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -40,4 +40,46 @@ changes there on the board.
 
 ## Results
 
-(filled in by the agent)
+claude-9, branch `task/progression`. Details: `docs/VOCATIONS.md`,
+"Progression runtime (`crates/ddprogress`)".
+
+**Built:** `crates/ddprogress` (host-owned, characters by id, party roles
+name their player):
+- `Tables::load(vfs, exe)`: level, rank, exp, augment tables,
+  `rSkillList`, the exe's skill records, `param\game`, `param\dlc`.
+- `Character`: award (0x00782d10 with Weal and discipline gear), `step`
+  (one level-up then one rank-up per frame, vf90), augment values
+  (0x00783340).
+- `learn`: check / learn (0x006fd540, 0x006fdb40, 0x006fdc30, confirm
+  0x00702b94, pay 0x006fc758), `equip_augment`, `equip_skill`,
+  `active_skills`.
+- `change`: check / change (0x00675780, 0x00675e8a, 0x00671b70,
+  0x00672c10, 0x00675da0, 0x00673740, 0x00780840), starting items.
+- `Progression::award` (0x00443470 / 0x004437d0) by role; `sync_to_world`
+  / `sync_from_world` with `ddstory::World` (`gsf` 540..554,
+  `player_job`).
+
+**Newly traced:** pawn catch-up `k` = `param\game`[0] = 0.7; discipline
+gear: Asura Armor (item 0x361) x `param\dlc`[7] = 2, Ring of Perseverance
+(0x47f) x `param\dlc`[0x1c] = 1.5 per ring; learn confirm needs cost <=
+discipline (0x00702b94); a vocation is selectable when not current and
+affordable (0x00675e8a); the party share's exact precision (x87 then SSE)
+and the hired pawn's Rift Crystals from the untruncated share.
+
+**Co-op design (not from the exe):** roles instead of slot numbers (P2's
+Arisen in slot 3 earns experience; the main pawn catches up toward its
+owner); vocation flags kept per character and mirrored into `World` for
+player 0. One player reproduces the original layout exactly.
+
+**Tested:** `cargo test -p ddprogress`: 2 unit + 6 install tests (skip
+without the game or exe): level 1-10 run with a vocation change at 10 and
+level 11 on the new vocation's row; learning and equipping; Mystic Knight
+change keeping shared skills; first choice; pawn limits; two players with
+the main pawn and a hired pawn sharing an award; single-player layout and
+World mirror; live level-7 Mage values and discipline bands (#722).
+`ddskill` unchanged. Clippy clean for `ddprogress`.
+
+**Guessed / open:** refusing duplicate augments; filling active slots from
+the weapon sets; how the save marks starting skills; crediting a hired
+pawn's Rift Crystals to its owner (Rift code); none of the state-changing
+paths has been compared live yet.
