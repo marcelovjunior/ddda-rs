@@ -1,0 +1,457 @@
+//! The host: one session's world, players and systems, stepped in the
+//! original's frame order (docs/FRAME.md, docs/adr/0002-game-host.md).
+
+use crate::clock::FrameClock;
+use crate::hash::StateHasher;
+use crate::input::{Edges, FrameInputs};
+use crate::lock::{InteractionLocks, LockError};
+use crate::systems::SystemData;
+use crate::player::{Control, Party, PlayerId, ProfileId, Roster};
+use crate::save::{self, Owner, SaveFile};
+use ddsim::{Ground, Sim};
+use ddstory::data::Data;
+use ddstory::{HostEvent, NpcUnit, Request, Story};
+use std::collections::BTreeSet;
+
+/// Everything the story asks of the rest of the game: the actors (NPCs,
+/// enemies, objects) and the presentation (cutscenes, cameras, messages,
+/// menus). Until those systems exist in headless crates, a stand-in
+/// answers (`ddstory::scripted::ScriptedHost`).
+pub trait StoryWorld: ddstory::Host {
+    /// Perform this frame's requests (stage `stage` is loaded).
+    fn handle(&mut self, stage: u32, requests: &[Request]);
+    /// Completions and facts due this frame, in the order they happened.
+    fn events(&mut self) -> Vec<HostEvent>;
+    /// NPC units on the stage, for trigger volumes that detect NPCs.
+    fn npcs(&self) -> Vec<NpcUnit> {
+        vec![]
+    }
+}
+
+impl StoryWorld for ddstory::scripted::ScriptedHost {
+    fn handle(&mut self, stage: u32, requests: &[Request]) {
+        ddstory::scripted::ScriptedHost::handle(self, stage, requests)
+    }
+    fn events(&mut self) -> Vec<HostEvent> {
+        ddstory::scripted::ScriptedHost::events(self)
+    }
+}
+
+#[derive(Debug)]
+pub enum HostError {
+    Story(ddstory::Error),
+    /// Input for a seat that is not in the roster.
+    UnknownPlayer(PlayerId),
+    Save(String),
+    /// Another Arisen holds the NPC (the interaction lock).
+    Lock(LockError),
+    Economy(ddeconomy::Error),
+    Rift(String),
+    /// A system's game data was not given to the host.
+    NoData(&'static str),
+    /// Saving needs every interaction closed (shops, the Rift room).
+    Busy,
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostError::Story(e) => write!(f, "story: {e}"),
+            HostError::UnknownPlayer(p) => write!(f, "input for unseated player {p}"),
+            HostError::Save(e) => write!(f, "save: {e}"),
+            HostError::Lock(e) => write!(f, "interaction lock: {e:?}"),
+            HostError::Economy(e) => write!(f, "economy: {e:?}"),
+            HostError::Rift(e) => write!(f, "rift: {e}"),
+            HostError::NoData(what) => write!(f, "no {what} data"),
+            HostError::Busy => write!(f, "an interaction is open"),
+        }
+    }
+}
+
+impl std::error::Error for HostError {}
+
+impl From<ddstory::Error> for HostError {
+    fn from(e: ddstory::Error) -> Self {
+        HostError::Story(e)
+    }
+}
+
+/// What one frame produced for the views.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrameReport {
+    pub frame: u64,
+    /// The story's requests, in order. `OpenMenu { player, .. }` carries a
+    /// seat index into the roster (seat order).
+    pub requests: Vec<Request>,
+    /// The Arisen whose interact press reached the story this frame.
+    pub interact: Option<PlayerId>,
+}
+
+pub struct Host<D: Data, W: StoryWorld> {
+    /// Frames run so far.
+    pub frame: u64,
+    pub clock: FrameClock,
+    pub roster: Roster,
+    pub party: Party,
+    /// Movement of every Arisen (ddsim; the `Player` move line).
+    pub sim: Sim,
+    /// The session's story (ddstory; the `Pre Process` move line). `None`
+    /// runs movement only.
+    pub story: Option<Story<D>>,
+    /// The actors and presentation the story talks to.
+    pub world: W,
+    pub ground: Box<dyn Ground>,
+    pub locks: InteractionLocks,
+    /// Wallets, bags, shops (ddeconomy).
+    pub economy: ddeconomy::Economy,
+    /// Levels, skills, vocations (ddprogress).
+    pub progression: ddprogress::Progression,
+    /// The Rift: party pawns, pawn log, the room (ddrift).
+    pub rift: ddrift::Rift,
+    /// The systems' game data, when the host has it.
+    pub data: SystemData,
+    /// The seat that hired the pawn in each hired slot (Rift party slots
+    /// 1 and 2).
+    pub(crate) hired_by: [Option<PlayerId>; 2],
+    /// Seats standing at a Riftstone; the room is open while any do.
+    pub(crate) rift_visitors: BTreeSet<PlayerId>,
+    edges: Edges,
+    /// The interact press made last frame, for this frame's scenarios.
+    scenario_press: Option<PlayerId>,
+    /// The story's stage is not loaded yet: ask the world to load it.
+    boot: bool,
+    /// Running hash of every request emitted, for replay checks.
+    request_log: StateHasher,
+    /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
+    /// `None` runs without combat.
+    pub fight: Option<ddenemyrt::fight::Fight>,
+}
+
+impl<D: Data, W: StoryWorld> Host<D, W> {
+    pub fn new(sim: Sim, story: Option<Story<D>>, world: W, ground: Box<dyn Ground>) -> Self {
+        Host {
+            frame: 0,
+            clock: FrameClock::default(),
+            roster: Roster::default(),
+            party: Party::default(),
+            sim,
+            story,
+            world,
+            ground,
+            locks: InteractionLocks::default(),
+            economy: ddeconomy::Economy::default(),
+            progression: ddprogress::Progression::new(),
+            rift: ddrift::Rift::new(1, ddrift::PawnLog::default()),
+            data: SystemData::default(),
+            hired_by: [None; 2],
+            rift_visitors: BTreeSet::new(),
+            edges: Edges::default(),
+            scenario_press: None,
+            boot: true,
+            request_log: StateHasher::default(),
+            fight: None,
+        }
+    }
+
+    /// Seats an Arisen and places it in the world. `None` when the roster
+    /// is full or the profile is already seated.
+    pub fn join(&mut self, profile: ProfileId, control: Control, pos: [f32; 3], yaw: f32) -> Option<PlayerId> {
+        let id = self.roster.join(profile, control)?;
+        self.sim.add_player(id, pos, yaw);
+        self.economy.wallet(id);
+        self.rift.party.reserved = [false, self.roster.len() >= 2];
+        self.refresh_party();
+        Some(id)
+    }
+
+    /// Unseats an Arisen: its body leaves the world and its locks go.
+    pub fn leave(&mut self, id: PlayerId) {
+        if self.roster.leave(id).is_some() {
+            self.sim.players.retain(|p| p.id != id);
+            self.locks.release_all(id);
+            self.economy.close_all(id);
+            self.rift_leave(id);
+            self.rift.party.reserved = [false, self.roster.len() >= 2];
+            self.refresh_party();
+        }
+    }
+
+    /// One host frame, in the original's order. The steps are those of
+    /// `sBbsRpgMain::vf06` (0x0041DD60) in docs/FRAME.md section 2; section
+    /// 7 maps them to the host. Systems that do not exist yet are named
+    /// where they will go.
+    pub fn tick(&mut self, inputs: &FrameInputs) -> Result<FrameReport, HostError> {
+        if let Some(&p) = inputs.keys().find(|p| self.roster.seat(**p).is_none()) {
+            return Err(HostError::UnknownPlayer(p));
+        }
+        self.frame += 1;
+        // Step 6, sMain::vf06 (0x00DBFA90): the step. Constant here.
+        let time = self.clock.story_time();
+        // Steps 18-20, sGameSys::vf06 then sAreaExt::vf06: the managers of
+        // aGameMain (sQuestManager's QCT), aStage's mode (events) and
+        // sScenario, then (step 36, line 0) the story scripts. ddstory runs
+        // all of them in one tick; the world's completions since the last
+        // frame come first. The story sees every Arisen where the last frame
+        // left them: line 10 has not moved yet.
+        let events = self.world.events();
+        // Step 20, aGameMain's managers: sNpcManager::vf06 (0x00475AD0)
+        // restocks the shops once per new day, before sQuestManager.
+        // `blocked` is sGameSys +0xB8844 bit 0x80000, not modelled (false).
+        if let Some(story) = &self.story {
+            self.economy.update(story.world.day, false);
+        }
+        let mut requests = vec![];
+        // The scenario prompt reads sScenario +0x108, which the player's move
+        // (line 10, uPlayerBase vf204 0x00B6EAC0) set during the last frame:
+        // a press reaches the story one frame after it was made.
+        let interact = self.scenario_press.take();
+        if let Some(story) = self.story.as_mut() {
+            let seats: Vec<PlayerId> = self.roster.ids().collect();
+            let players = seats
+                .iter()
+                .map(|&id| {
+                    let p = self.sim.player(id).expect("seated players have a body");
+                    // Yaw convention: ddsim's 0 faces +Z, like uCoord mAngle.y
+                    // (assumed, not traced).
+                    ddstory::Player { pos: p.position, yaw: p.yaw }
+                })
+                .collect();
+            let story_inputs = ddstory::Inputs {
+                time,
+                players,
+                npcs: self.world.npcs(),
+                interact: interact.and_then(|p| seats.iter().position(|&s| s == p)),
+                events,
+                ..Default::default()
+            };
+            requests = story.tick(&story_inputs, &self.world)?;
+            // New game (0x00445AB0) and load only name the stage; the host
+            // loads it and reports StageLoaded (ddstory's contract).
+            if self.boot && story.stage.stage_no == 0 {
+                requests.push(Request::JumpArea { stage: story.world.stage_no, pos: story.world.start_pos, fade: 0 });
+            }
+            self.boot = false;
+        }
+        // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
+        // sMouse): this frame's inputs, before anything moves.
+        let presses = self.edges.interact_presses(inputs);
+        // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
+        // from the volumes the fight switched on last frame, damage applied,
+        // before anyone moves (FRAME.md 5.1).
+        let step = self.clock.seconds() * ddsim::MOTION_FPS;
+        if let Some(f) = self.fight.as_mut() {
+            f.hits(step);
+        }
+        // Step 36, pass A, line 10 "Player": the Arisen (and later the
+        // pawns) move: one Sim::step is one engine frame.
+        let sim_inputs = inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
+        self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        // Line 10 continued (fight): scripted attacks advance and move their
+        // Arisen; line 15: the enemies think, act and move; step 38: the
+        // push-out between characters; pass C (step 42): poses and the hit
+        // volumes for the next frame.
+        if let Some(f) = self.fight.as_mut() {
+            f.players_moved(&mut self.sim, self.ground.as_ref(), step);
+            f.enemies(&self.sim, self.ground.as_ref(), step);
+            f.push_out(&mut self.sim);
+            f.volumes(&self.sim);
+        }
+        // Same line, phase 90 of each character: at most one level-up
+        // (0x00B5BD20) and one rank-up (0x00B5C230) per frame. The original
+        // keeps the vocation in sGameSys, so it is mirrored into the story
+        // world.
+        if let Some(t) = self.data.tables.as_deref() {
+            self.progression.step(t);
+            if let Some(story) = self.story.as_mut() {
+                self.progression.sync_to_world(&mut story.world);
+            }
+        }
+        // One prompt slot: the lowest seat that pressed takes it.
+        self.scenario_press = presses.first().copied();
+        // Pass A line 15 (enemies, NPCs), steps 37-42 (push-out, AI senses,
+        // hit volumes), 51-53 (cameras, sound, weather): not composed yet.
+        // The world performs the story's requests (actors, presentation).
+        let stage = self.story.as_ref().map_or(0, |s| s.stage.stage_no);
+        self.world.handle(stage, &requests);
+        for r in &requests {
+            self.request_log.debug(r);
+        }
+        Ok(FrameReport { frame: self.frame, requests, interact })
+    }
+
+    /// A hash of the whole simulated state, for replays.
+    ///
+    /// It covers everything [`Host::saved_hash`] covers, plus what a save
+    /// does not keep:
+    /// - every field of every body;
+    /// - the story's stage, quests and script states;
+    /// - open interactions and pending presses;
+    /// - the requests emitted so far.
+    ///
+    /// Equal hashes after the same inputs are the replay property.
+    pub fn state_hash(&self) -> u64 {
+        let mut h = StateHasher::default();
+        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press);
+        for p in &self.sim.players {
+            h.debug(p);
+        }
+        if let Some(s) = &self.story {
+            h.u64(s.frame).debug(&s.stage).debug(&s.script_states());
+            for q in &s.quests {
+                h.u64(q.id as u64).u64(q.flags as u64).debug(&q.log);
+            }
+        }
+        h.debug(&self.rift.room).debug(&self.rift_visitors);
+        if let Some(f) = &self.fight {
+            h.debug(&f.digest());
+        }
+        h.u64(self.request_log.finish());
+        h.finish()
+    }
+
+    /// A hash of exactly what [`Host::save`] keeps:
+    /// - the frame;
+    /// - the seats and the party;
+    /// - each Arisen's place;
+    /// - the story world;
+    /// - the economy and progression;
+    /// - the Rift, except its stock, which a load rebuilds as the original
+    ///   does.
+    ///
+    /// Equal before a save and after its load.
+    pub fn saved_hash(&self) -> u64 {
+        let mut h = StateHasher::default();
+        h.u64(self.frame).debug(&self.roster).debug(&self.party).debug(&self.hired_by);
+        for p in &self.sim.players {
+            h.debug(&(p.id, p.position, p.yaw));
+        }
+        if let Some(s) = &self.story {
+            h.bytes(&s.world.save());
+        }
+        h.debug(&self.economy).debug(&self.progression);
+        h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
+        h.finish()
+    }
+
+    /// Whether any interaction is open: an NPC lock, a shop session or the
+    /// Rift room.
+    pub fn interacting(&self) -> bool {
+        self.locks.iter().next().is_some() || self.economy.sessions_open() || self.rift.visit_open()
+    }
+
+    /// The session's save (ADR 0002 section 6):
+    /// - `HOST`: the frame count, the seats with their profiles, and who
+    ///   hired each pawn;
+    /// - `WRLD`: the story world;
+    /// - `PLCE`: each Arisen's place, by profile;
+    /// - `ECON`, `PROG`: shared parts, and per-seat parts filed by profile;
+    /// - `RIFT`: the shared Rift.
+    ///
+    /// Refused while an interaction is open, as the original cannot save in
+    /// a shop or at a Riftstone.
+    pub fn save(&self) -> Result<SaveFile, HostError> {
+        if self.interacting() {
+            return Err(HostError::Busy);
+        }
+        let mut f = SaveFile::default();
+        let mut w = ddid::Writer::new();
+        w.u8(1).u64(self.frame).len(self.roster.len());
+        for seat in self.roster.seats() {
+            w.u8(seat.id).u64(seat.profile.0);
+        }
+        for h in self.hired_by {
+            w.bool(h.is_some()).u8(h.unwrap_or(0));
+        }
+        f.put(save::TAG_HOST, Owner::Shared, w.finish());
+        if let Some(s) = &self.story {
+            f.put(save::TAG_WORLD, Owner::Shared, s.world.save());
+        }
+        for seat in self.roster.seats() {
+            if let Some(p) = self.sim.player(seat.id) {
+                f.put(save::TAG_PLACE, Owner::Profile(seat.profile), save::place_bytes(p.position, p.yaw));
+            }
+        }
+        let profile = |p: PlayerId| self.roster.seat(p).map(|s| s.profile);
+        for (tag, parts) in [(save::TAG_ECON, self.economy.save()), (save::TAG_PROG, self.progression.save())] {
+            f.put(tag, Owner::Shared, parts.shared);
+            for (seat, bytes) in parts.players {
+                if let Some(pr) = profile(seat) {
+                    f.put(tag, Owner::Profile(pr), bytes);
+                }
+            }
+        }
+        f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
+        Ok(f)
+    }
+
+    /// Restores what [`Host::save`] wrote into this host.
+    ///
+    /// The roster must already be seated with the save's profiles, though
+    /// seats may differ. Profiles of the save that are not seated now are
+    /// left out. Seated profiles without chunks keep what they have. The
+    /// Rift's stock starts empty until [`Host::refill_rift`], as on the
+    /// original's load.
+    pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
+        let err = HostError::Save;
+        // Old seat -> profile, from HOST; then -> the seat it has now.
+        let mut old: Vec<(PlayerId, ProfileId)> = vec![];
+        let mut hired_old = [None; 2];
+        if let Some(b) = f.get(save::TAG_HOST, Owner::Shared) {
+            let mut r = ddid::Reader::new(b);
+            r.version("HOST", 1).map_err(err)?;
+            self.frame = r.u64().map_err(err)?;
+            for _ in 0..r.len(9).map_err(err)? {
+                old.push((r.u8().map_err(err)?, ProfileId(r.u64().map_err(err)?)));
+            }
+            for h in &mut hired_old {
+                let (some, seat) = (r.bool().map_err(err)?, r.u8().map_err(err)?);
+                *h = some.then_some(seat);
+            }
+            r.end().map_err(err)?;
+        }
+        let roster = self.roster.clone();
+        let seat_now = |s: PlayerId| -> Option<PlayerId> {
+            let p = old.iter().find(|(o, _)| *o == s)?.1;
+            roster.seats().iter().find(|x| x.profile == p).map(|x| x.id)
+        };
+        if let Some(b) = f.get(save::TAG_WORLD, Owner::Shared) {
+            let world = ddstory::World::load(b).map_err(HostError::Save)?;
+            self.story = Some(Story::from_world(data, world));
+            self.boot = true;
+        }
+        for seat in self.roster.seats() {
+            if let Some((pos, yaw)) = f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).and_then(save::place_from) {
+                if let Some(p) = self.sim.player_mut(seat.id) {
+                    p.position = pos;
+                    p.yaw = yaw;
+                    p.drop_from = pos[1];
+                }
+            }
+        }
+        let parts = |tag: [u8; 4]| -> Option<ddid::Parts> {
+            let shared = f.get(tag, Owner::Shared)?.to_vec();
+            let players = roster
+                .seats()
+                .iter()
+                .filter_map(|s| Some((s.id, f.get(tag, Owner::Profile(s.profile))?.to_vec())))
+                .collect();
+            Some(ddid::Parts { shared, players })
+        };
+        if let Some(p) = parts(save::TAG_ECON) {
+            self.economy = ddeconomy::Economy::load(&p).map_err(err)?;
+        }
+        if let Some(p) = parts(save::TAG_PROG) {
+            self.progression = ddprogress::Progression::load(&p, &seat_now).map_err(err)?;
+        }
+        if let Some(p) = parts(save::TAG_RIFT) {
+            self.rift = ddrift::Rift::load(&p).map_err(err)?;
+            self.rift.party.reserved = [false, self.roster.len() >= 2];
+        }
+        self.hired_by = hired_old.map(|h| h.map(|s| seat_now(s).unwrap_or(0)));
+        for s in self.roster.ids().collect::<Vec<_>>() {
+            self.economy.wallet(s);
+        }
+        self.refresh_party();
+        Ok(())
+    }
+}

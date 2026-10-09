@@ -150,6 +150,7 @@ pub fn input_of(keys: u32, cam_yaw: f32) -> Input {
         sprint: keys & KEY_SPRINT != 0,
         jump: keys & KEY_JUMP != 0,
         camera_yaw: cam_yaw,
+        ..Default::default()
     }
 }
 

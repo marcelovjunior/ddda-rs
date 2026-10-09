@@ -100,18 +100,33 @@ Codex lane: see `docs/CODEX.md`.
 | [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | assigned |
 | [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | assigned |
 | [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
-| [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | assigned |
+| [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | merged 2026-10-09 |
 | [m2-fixes](m2-fixes.md) | Close the M2 acceptance mismatches (speed, stop, stamina, slopes) | core | claude-1 | merged 2026-10-09 |
 | [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | merged 2026-10-09 |
 | [combat-damage](combat-damage.md) | Damage rules as pure functions; hit-group activation trace | research + core | claude-8 | merged 2026-10-09 |
 | [ddexe](ddexe.md) | One reader for tables in the installed exe; port ddskill/ddpawn | core | claude-9 | merged 2026-10-09 |
-| [event-player](event-player.md) | Play st200 ev10: cameras, actors, subtitles; return control | core | claude-7 | assigned |
+| [event-player](event-player.md) | Play st200 ev10: cameras, actors, subtitles; return control | core | claude-7 | merged 2026-10-09 |
 | [rift-sim](rift-sim.md) | The Rift as a host-owned system (summon, hire, dismiss) | core | claude-5 | merged 2026-10-09 |
 | [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | merged 2026-10-09 |
 | [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | merged 2026-10-09 |
-| [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
-| [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | assigned |
-| [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | assigned |
-| [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-5 | assigned |
-| [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | assigned |
-| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | assigned |
+| [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | merged 2026-10-09 |
+| [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | merged 2026-10-09 |
+| [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | merged 2026-10-09 |
+| [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-9 | back to claude (codex idle) |
+| [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | merged 2026-10-09 |
+| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | codex-1 | reassigned (WIP on branch) |
+| [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | codex-1 | reassigned (WIP on branch) |
+| [story-order](story-order.md) | ddstory in the traced frame order + state accessor | core | claude-7 | merged 2026-10-09 |
+| [host-integration](host-integration.md) | One player identity, per-crate save chunks, wire economy/progress/rift into ddhost | core | claude-10 | merged 2026-10-09 |
+| [m1-finish](m1-finish.md) | Post-processing chain, sky, water, distant terrain (M1 gate) | core | claude-3 | merged 2026-10-09 |
+| [event-polish](event-polish.md) | Event cameras follow actors, NPC actors, script gate | core | claude-7 | merged 2026-10-09 |
+| [m3-lan](m3-lan.md) | LAN co-op: ddnet over ddhost, host/join in ddview (M3) | core | claude-10 | assigned |
+| [character-assembly](character-assembly.md) | One skeleton, part masks, morphs/colours, equipment models | core | claude-7 | merged 2026-10-09 |
+| [character-polish](character-polish.md) | Skin gaps, morphs, colours, weapons | core | claude-7 | merged 2026-10-09 |
+| [m1-gate](m1-gate.md) | Distance fog, horizon backdrop, floating chunks, white shapes; M1 gate write-up | core | claude-3 | merged 2026-10-09 |
+| [character-morphs](character-morphs.md) | Face/body morphs from edit data; skin patches; shield placement | core | claude-7 | merged 2026-10-09 |
+| [m1-night-water](m1-night-water.md) | Water reflections, clouds/stars/moon, night point lights, DoF | core | claude-3 | merged 2026-10-09 |
+| [m2-sweep](m2-sweep.md) | Character capsule sweep-and-slide (last 4 M2 rows) | core | claude-1 | merged 2026-10-09 |
+| [think-tables](think-tables.md) | Goblin combat think table: approach/attack choice, cooldowns | core | claude-9 | merged 2026-10-09 |
+| [m4-goblin-fight](m4-goblin-fight.md) | Headless goblin vs Arisen fight in ddhost (M4 slice) | core | claude-1 | merged 2026-10-09 |
+| [player-attacks](player-attacks.md) | Arisen attack actions from input (sword, staff), push-out | core | claude-1 | merged 2026-10-09 |

@@ -15,7 +15,7 @@ use mtfsm::{Process, Record};
 
 pub struct Orders;
 
-fn rec<'a>(p: &'a Process) -> Result<&'a Record, Error> {
+fn rec(p: &Process) -> Result<&Record, Error> {
     p.parameter.as_ref().ok_or_else(|| Error::Data(format!("{} without parameters", name(p))))
 }
 

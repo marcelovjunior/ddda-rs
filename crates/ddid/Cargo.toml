@@ -1,0 +1,9 @@
+[package]
+name = "ddid"
+version = "0.1.0"
+description = "Session identities (seat, profile) and the save-chunk codec shared by the host-owned systems"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

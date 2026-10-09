@@ -108,12 +108,43 @@ Reference comparison (2026-10-08, private `E:\ddda-re\shots\refs`):
   a ring of distant `fmfore` cell models are drawn. Water material is a
   placeholder.
 
-Missing for the M1 gate:
-- The castle seen in ref001 (not in the cell layouts; source not found).
-- Terrain layer blending (only the base albedo is drawn); the water and
-  stage lighting shaders (sun and ambient are placeholders); fog.
-- Euler order of layout angles is assumed XYZ (consistent so far, not
-  traced in the exe).
+M1 gate comparison (2026-10-09, branch task/m1-gate; side-by-sides in
+the private `E:\ddda-re\shots`, rendered with `ddview --ref`):
+- Since the list above: terrain layers, the original's lighting (SH,
+  sun with shadow map, linear fog), the stage filter chain (vignette and
+  tone curve), the Rayleigh/Mie sky dome, water materials, the castle and
+  the other `uFmSetBase` landmarks, the far cell terrain, the stage
+  low models (`st100_all00` and the area backdrops: the horizon mountains)
+  and the primitives' pass and LOD rules are drawn ([SHADING.md](SHADING.md)).
+- Without `--light` the lighting, fog and sky come from the game data for
+  a clock and weather (`--clock`, `--weather`; default 12:00, fine).
+  The sun light colour reproduces the four live day reads within 1 %.
+- ref001 (castle view, clock unknown, at 12:00 fine): mean colour of the
+  frame (8-bit sRGB) ref (97,103,103) / ours (100,107,107); distant
+  mountain (106,142,186) / (104,140,185); mid ground (110,127,139) /
+  (110,129,142). The haze, the horizon mountains and the cypresses match.
+- ref002 (coast cliff, 12:00 fine): frame (98,106,108) / (113,120,121);
+  the party, the HUD and the event chest are not drawn.
+- ref004 / ref005 (coast with a tree, 12:00 fine): frame (80,92,89) /
+  (113,122,111) and (105,116,119) / (119,129,130). The original's clock
+  is unknown; its tree shadow shows a lower sun than 12:00.
+- refs-lit 12:21 and 17:45 (live lighting, cloudy weather found from the
+  fog): ground (30,39,40) / (31,40,41) and (26,34,34) / (25,34,35); a
+  second ground box matches to the level.
+- Night and water (2026-10-09, branch task/m1-night-water): the sea is
+  unlit forward with the environment cubes (traced shaders), the cloud
+  domes of the weather turn the horizon blue under the fog, the sky spot
+  light lights the ground at night, and the stage DOF is drawn. At 12:00
+  fine: sea ref / ours ref001 (63,78,96) / (48,62,77), ref004 (56,68,78) /
+  (44,55,62) (was (74,97,116)); horizon ref004 (142,166,189) /
+  (134,153,169) (was (184,184,184)), ref002 (138,160,183) / (129,146,163);
+  refs-lit 23:04 ground (5,9,11) / (5,13,14) (was (1,4,5)); the day
+  captures are unchanged (within 1-2 levels).
+- Gaps: stars and the moon; night point lights (lamps, lantern) and the
+  moon light; the water's normal maps and the foam effect; characters and
+  event objects. Captures with the clock and weather recorded (sea and
+  sky in view, a lamp-lit night) would let refs 001-005 be compared at
+  their real time.
 
 **Started: M2** (Walk), alongside the M1 shading gaps, at the maintainer's
 request (2026-10-08). See [ANIMATION.md](ANIMATION.md).
@@ -205,3 +236,48 @@ moves such as the dagger double jump.
 **Next action:** finish the M1 shading gate and the M2 gate. That means
 recorded paths, speeds, jump arcs and stamina through the oracle against
 `ddsim`, as an automated acceptance test.
+
+## Batch 2026-10-09 (morning)
+
+**M1 (look):** blended terrain layers, lighting from the game data by
+time and weather, the sky's scatter shaders, the stage's tone curve and
+vignette, water materials and reflections, the backdrop models, the far
+ring, foliage billboards, depth of field.
+- ref001 is within 3-4% of mean colour.
+- The day captures are within 1-3 levels.
+- Open: stars, moon, lamp lights (they need a Cassardis night capture,
+  waiting on the maintainer), the Bluemoon Tower detail.
+
+See SHADING.md and the M1 section above.
+
+**M2 (walk):** acceptance replay (`ddaccept`) at 40 of 44 rows, up from 16.
+- Done: velocity from data, the motion speed rate, stamina, the sprint
+  stop, falls, landing holds, load and body classes, and the
+  `cScrAdjust` capsule sweep and slide.
+- Open: the drop path after frame 195. It needs a live trace, and the
+  game is paused on the maintainer's fight.
+
+**M3 (together):** `ddhost` (FRAME.md, ADR 0002), with economy, Rift and
+progression wired in, and two-player save/load with stable hashes. `ddnet`
+LAN co-op passes loopback tests under 10% loss and 40 ± 20 ms (prediction
+error ≤ 5.7 cm). `ddview --host/--join` is in progress (claude-10).
+
+**M4 (fight):** `ddcombat` covers hit volumes on joints, the exact shape
+tests, hit history, the damage formulas and region pools; the goblin's
+first swing hits exactly once, on frame 45. `ddai` runs the goblin's FSM.
+The think tables are in progress (claude-9). Status effects: build-up
+only.
+
+**M5/M6 groundwork:**
+- `ddstory` runs the opening (q0000 → q0002) in the traced frame order.
+- The event player plays st200 ev10 with its cameras, subtitles and NPC
+  outfits.
+- Characters are assembled from the save: one skeleton, part masks,
+  morphs checked bit for bit against the exe, weapons.
+- `ddeconomy`, `ddrift` and `ddprogress` runtimes exist.
+
+**Next actions:**
+- the M3 GUI join test;
+- the M4 think tables;
+- play from the save in `--play`, once claude-10 releases `play.rs`;
+- the live trace for the drop path.

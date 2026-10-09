@@ -1,0 +1,23 @@
+[package]
+name = "ddenemyrt"
+version = "0.1.0"
+description = "Headless enemy runtime and fight pass: enemy units driven by ddai, posed skeletons, hit volumes and damage (ddcombat)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddai = { path = "../ddai" }
+ddcombat = { path = "../ddcombat" }
+ddenemy = { path = "../ddenemy" }
+ddexe = { path = "../ddexe" }
+ddparam = { path = "../ddparam" }
+dditem = { path = "../dditem" }
+ddsim = { path = "../ddsim" }
+ddskill = { path = "../ddskill" }
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+mtfsm = { path = "../mtfsm" }
+mtlmt = { path = "../mtlmt" }
+mtmod = { path = "../mtmod" }
+mtxfs = { path = "../mtxfs" }

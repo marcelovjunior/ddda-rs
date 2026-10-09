@@ -97,6 +97,9 @@ pub struct Trace {
     pub boots: Vec<u32>,
     /// Requests the story made (frame, request).
     pub requests: Vec<(u64, crate::Request)>,
+    /// Events played for real (`ScriptedHost::play_rows`): row, the frame
+    /// it started, and every frame it showed.
+    pub events: Vec<(usize, u64, Vec<crate::event::EventFrame>)>,
     pub frames: u64,
 }
 
@@ -117,7 +120,19 @@ pub fn run<D: crate::data::Data>(
     let mut at_step = 0;
     let mut boot = vec![HostEvent::StageLoaded { stage: story.world.stage_no }];
     let mut known: Vec<u32> = vec![];
+    let mut player: Option<crate::event::EventPlayer> = None;
     for frame in 0..max_frames {
+        if let Some(p) = &mut player {
+            let f = p.step(1.0)?;
+            let done = f.finished;
+            if let Some(e) = t.events.last_mut() {
+                e.2.push(f);
+            }
+            if done {
+                player = None;
+                host.event_done();
+            }
+        }
         t.frames = frame;
         let wp = route.get(step);
         let mut events = host.events();
@@ -140,6 +155,16 @@ pub fn run<D: crate::data::Data>(
         };
         let reqs = story.tick(&inputs, &*host)?;
         host.handle(story.stage.stage_no, &reqs);
+        if let Some(row) = host.awaiting.take() {
+            let cfg = crate::event::EventConfig {
+                language: host.language,
+                sex: story.world.player_sex,
+                hour: story.world.hour,
+                stage: story.stage.stage_no,
+            };
+            player = Some(crate::event::EventPlayer::open(&story.data, row, cfg)?);
+            t.events.push((row, frame, vec![]));
+        }
         t.requests.extend(reqs.into_iter().map(|r| (frame, r)));
         if t.sce_ladder.last() != Some(&story.world.sce_no) {
             t.sce_ladder.push(story.world.sce_no);

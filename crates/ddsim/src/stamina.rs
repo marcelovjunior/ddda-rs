@@ -135,9 +135,106 @@ pub fn step(stamina: f32, max: f32, recovery: f32, drain: f32, dt: f32) -> (f32,
     (s, out)
 }
 
+/// The weight tables (`rPlWeight`, docs/PARAMS.md): body-weight class
+/// boundaries and, per body class, the carried-weight boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeightTables {
+    /// `param\pl\weight\pleditweight`: 5 rows (24, 50, 70, 90, 110).
+    pub edit: Vec<f32>,
+    /// `pltotalweightss` .. `pltotalweightll`, indexed by body class: 6 rows.
+    pub total: Vec<Vec<f32>>,
+}
+
+impl WeightTables {
+    /// The tables as shipped (docs/PARAMS.md, rPlWeight).
+    pub fn shipped() -> Self {
+        WeightTables {
+            edit: vec![24.0, 50.0, 70.0, 90.0, 110.0],
+            total: vec![
+                vec![0.0, 34.0, 44.0, 54.0, 59.0, 64.0],
+                vec![0.0, 60.0, 80.0, 90.0, 95.0, 100.0],
+                vec![0.0, 85.0, 95.0, 115.0, 125.0, 135.0],
+                vec![0.0, 110.0, 130.0, 145.0, 155.0, 165.0],
+                vec![0.0, 130.0, 155.0, 180.0, 195.0, 210.0],
+            ],
+        }
+    }
+
+    /// Body class 0..4 (SS..LL) from the body weight: a boundary row's
+    /// weight belongs to the higher class; M (2) without a table.
+    // Translated from 0x00B81120 (DDDA.exe 2017-12-13 Steam)
+    pub fn body_class(&self, body_weight: f32) -> usize {
+        let e = &self.edit;
+        if e.len() < 5 {
+            return 2;
+        }
+        if e[4] <= body_weight {
+            4
+        } else if e[3] <= body_weight {
+            3
+        } else if body_weight < e[2] {
+            if body_weight < e[1] {
+                0
+            } else {
+                1
+            }
+        } else {
+            2
+        }
+    }
+
+    /// Load class 1..5 from the total (body plus carried) weight: the body
+    /// class's carried-weight rows 1..4, each raised by `capacity` (the
+    /// ability adjustment of 0x00B7E710, 0 without abilities) and by the
+    /// body's weight above its class's boundary; 3 without a table.
+    // Translated from 0x00B81270 (DDDA.exe 2017-12-13 Steam)
+    pub fn load_class(&self, body_weight: f32, total_weight: f32, capacity: f32) -> usize {
+        let body = self.body_class(body_weight);
+        let (Some(t), Some(&edit)) = (self.total.get(body), self.edit.get(body)) else {
+            return 3;
+        };
+        if t.len() < 5 {
+            return 3;
+        }
+        let over = body_weight - edit;
+        let at = |k: usize| t[k] + capacity + over;
+        if at(4) <= total_weight {
+            5
+        } else if at(3) <= total_weight {
+            4
+        } else if at(2) <= total_weight {
+            3
+        } else if total_weight < at(1) {
+            1
+        } else {
+            2
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weight_classes_from_the_shipped_tables() {
+        let w = WeightTables::shipped();
+        // boundaries 50, 70, 90, 110 belong to the higher class
+        assert_eq!(w.body_class(49.9), 0);
+        assert_eq!(w.body_class(50.0), 1);
+        assert_eq!(w.body_class(69.0), 1);
+        assert_eq!(w.body_class(70.0), 2);
+        assert_eq!(w.body_class(76.0), 2);
+        assert_eq!(w.body_class(110.0), 4);
+        // body 60 (class S, 10 over its boundary): carried rows 60, 80, 90, 95 + 10
+        assert_eq!(w.load_class(60.0, 69.9, 0.0), 1);
+        assert_eq!(w.load_class(60.0, 70.0, 0.0), 2);
+        assert_eq!(w.load_class(60.0, 90.0, 0.0), 3);
+        assert_eq!(w.load_class(60.0, 100.0, 0.0), 4);
+        assert_eq!(w.load_class(60.0, 105.0, 0.0), 5);
+        // an ability's capacity raises every boundary
+        assert_eq!(w.load_class(60.0, 75.0, 10.0), 1);
+    }
 
     #[test]
     fn shipped_rows_give_the_recorded_rates() {

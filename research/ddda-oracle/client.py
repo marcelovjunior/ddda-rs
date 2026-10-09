@@ -18,6 +18,7 @@ CLI:
 Numbers may be decimal or 0x-hex. Float arguments: f:1.5.
 Everything goes through the DLL; nothing here touches the window or input.
 """
+import builtins
 import json
 import os
 import socket
@@ -107,7 +108,7 @@ class Oracle:
     def call(self, addr, *args, this=None, conv=None, float=False, edx=None, timeout_ms=10000):
         """Calls a game function on the main thread. Args: ints, or floats
         (sent as f32 bit patterns). Returns the reply (eax, edx[, st0])."""
-        a = [{'f': x} if isinstance(x, float) else x for x in args]
+        a = [{'f': x} if isinstance(x, builtins.float) else x for x in args]
         kw = dict(addr=addr, args=a, float=float, timeout_ms=timeout_ms)
         if this is not None:
             kw['this'] = this
