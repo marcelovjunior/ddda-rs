@@ -19,6 +19,9 @@ const BUCKET: f32 = 400.0;
 
 pub struct Terrain {
     tris: Vec<[[f32; 3]; 3]>,
+    /// Per triangle: its collision material's flag word (the material
+    /// record's first word; 0 for render terrain).
+    flags: Vec<u32>,
     grid: HashMap<(i32, i32), Vec<u32>>,
     pub cells: usize,
 }
@@ -42,6 +45,13 @@ fn euler_xyz(a: [f32; 3]) -> [[f32; 3]; 3] {
         r
     };
     mul(mul(rx, ry), rz)
+}
+
+/// The flag word of a collision triangle's material (the first of its
+/// record's eight words, e.g. 0x2000 or 0x2 for the ground sCollision
+/// counts as wall whatever its slope, `sCollision` +0x4C).
+fn material_flags(c: &mtsbc::Collision, t: &mtsbc::Triangle) -> u32 {
+    c.materials.get(usize::from(t.material)).map_or(0, |m| m[0])
 }
 
 fn bucket(x: f32, z: f32) -> (i32, i32) {
@@ -112,6 +122,7 @@ impl Terrain {
     pub fn empty() -> Self {
         Terrain {
             tris: Vec::new(),
+            flags: Vec::new(),
             grid: HashMap::new(),
             cells: 0,
         }
@@ -172,8 +183,11 @@ impl Terrain {
                         continue;
                     };
                     let Ok(c) = mtsbc::parse(&bytes) else { continue };
-                    for (p, _) in c.world_triangles() {
-                        t.add(p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]));
+                    for (p, tri) in c.world_triangles() {
+                        t.add_flagged(
+                            p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]),
+                            material_flags(&c, tri),
+                        );
                     }
                     any = true;
                 }
@@ -223,15 +237,20 @@ impl Terrain {
                             continue;
                         };
                         let Ok(c) = mtsbc::parse(&cb) else { continue };
-                        for (tri, _) in c.world_triangles() {
-                            self.add(tri.map(|q| {
-                                let s = [q[0] * pl.scale[0], q[1] * pl.scale[1], q[2] * pl.scale[2]];
-                                let mut w = [0.0f32; 3];
-                                for (i, wi) in w.iter_mut().enumerate() {
-                                    *wi = m[i][0] * s[0] + m[i][1] * s[1] + m[i][2] * s[2] + pl.position[i];
-                                }
-                                w
-                            }));
+                        for (tri, rec) in c.world_triangles() {
+                            let flags = material_flags(&c, rec);
+                            self.add_flagged(
+                                tri.map(|q| {
+                                    let s = [q[0] * pl.scale[0], q[1] * pl.scale[1], q[2] * pl.scale[2]];
+                                    let mut w = [0.0f32; 3];
+                                    for (i, wi) in w.iter_mut().enumerate() {
+                                        *wi =
+                                            m[i][0] * s[0] + m[i][1] * s[1] + m[i][2] * s[2] + pl.position[i];
+                                    }
+                                    w
+                                }),
+                                flags,
+                            );
                         }
                     }
                     instances += 1;
@@ -242,6 +261,11 @@ impl Terrain {
     }
 
     pub fn add(&mut self, p: [[f32; 3]; 3]) {
+        self.add_flagged(p, 0);
+    }
+
+    /// Adds a triangle whose collision material has the flag word `flags`.
+    pub fn add_flagged(&mut self, p: [[f32; 3]; 3], flags: u32) {
         let id = self.tris.len() as u32;
         let (minx, maxx) = (
             p[0][0].min(p[1][0]).min(p[2][0]),
@@ -258,6 +282,7 @@ impl Terrain {
             }
         }
         self.tris.push(p);
+        self.flags.push(flags);
     }
 
     pub fn triangles(&self) -> usize {
@@ -394,6 +419,33 @@ impl ddsim_ground::Ground for Terrain {
         })
     }
 
+    /// The triangles whose bounding boxes meet the box `lo`-`hi`.
+    fn triangles_in(&self, lo: [f32; 3], hi: [f32; 3], out: &mut Vec<ddsim::sweep::Face>) -> bool {
+        let (b0, b1) = (bucket(lo[0], lo[2]), bucket(hi[0], hi[2]));
+        let mut seen = std::collections::HashSet::new();
+        for bx in b0.0..=b1.0 {
+            for bz in b0.1..=b1.1 {
+                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let t = &self.tris[id as usize];
+                    let inside = (0..3).all(|k| {
+                        let (a, b) = (
+                            t[0][k].min(t[1][k]).min(t[2][k]),
+                            t[0][k].max(t[1][k]).max(t[2][k]),
+                        );
+                        b >= lo[k] && a <= hi[k]
+                    });
+                    if inside {
+                        out.push((*t, self.flags[id as usize]));
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Any triangle closer than `radius` to `center`.
     fn sphere(&self, center: [f32; 3], radius: f32) -> bool {
         let (b0, b1) = (
@@ -436,6 +488,24 @@ mod tests {
         assert_eq!(t.height(2000.0, 300.0, 1e9), None);
         // below_y excludes surfaces above it
         assert_eq!(t.height(500.0, 300.0, 10.0), None);
+    }
+
+    #[test]
+    fn triangles_in_a_box_carry_their_material_flags() {
+        let mut t = Terrain::empty();
+        t.add_flagged([[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 0.0, 1000.0]], 0x2000);
+        t.add_flagged(
+            [[5000.0, 0.0, 0.0], [6000.0, 0.0, 0.0], [5000.0, 0.0, 1000.0]],
+            0x1,
+        );
+        let mut out = Vec::new();
+        assert!(t.triangles_in([100.0, -10.0, 100.0], [200.0, 10.0, 200.0], &mut out));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1, 0x2000);
+        // above the triangle's box: nothing
+        out.clear();
+        t.triangles_in([100.0, 50.0, 100.0], [200.0, 60.0, 200.0], &mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

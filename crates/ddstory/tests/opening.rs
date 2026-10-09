@@ -95,3 +95,86 @@ fn opening_from_new_game_to_q0002() {
     // The world survives a save round trip.
     assert_eq!(&World::load(&w.save()).unwrap(), w);
 }
+
+/// `Story::script_states` / `Script::state_path`: the same inputs give the
+/// same snapshots (what ddhost's replay hash relies on), and the snapshot
+/// follows the scripts as they move.
+#[test]
+fn script_states_replay() {
+    let run = |waypoints: usize| {
+        let data = install()?;
+        let mut story = Story::new_game(data);
+        let mut host = ScriptedHost::opening();
+        let route = ddstory::route::opening();
+        ddstory::route::run(&mut story, &mut host, &route[..waypoints], 240, 10_000, |_| true).unwrap();
+        Some(story)
+    };
+    let (Some(a), Some(b), Some(start)) = (run(3), run(3), run(0)) else { return };
+    let sa = a.script_states();
+    assert!(!sa.is_empty());
+    assert_eq!(sa, b.script_states());
+    // Stage scripts first, in creation order, then quest scripts.
+    let n = a.tasks.len();
+    for (s, t) in sa.iter().zip(&a.tasks) {
+        assert_eq!(s.path, t.path);
+        assert_eq!(s.states, t.state_path());
+        assert_eq!(s.states, t.current_states());
+        assert!(!s.states.is_empty());
+    }
+    let quest_paths: Vec<&str> = a.quests.iter().filter_map(|q| q.script.as_ref()).map(|s| s.path.as_str()).collect();
+    assert_eq!(sa[n..].iter().map(|s| s.path.as_str()).collect::<Vec<_>>(), quest_paths);
+    // The snapshot moves with the scripts: a script that runs at the
+    // first frame is in another state three waypoints later.
+    let s0 = start.script_states();
+    assert!(s0.iter().any(|x| sa.iter().any(|y| y.path == x.path && y.states != x.states)));
+    assert!(sa.iter().all(|s| s.cnt_fsm > 0.0));
+}
+
+/// The script gate 0x0044d430: while a stop flag is reported, no script
+/// moves (their timers stand still) and no QCT row fires; afterwards they
+/// run on.
+#[test]
+fn script_gate_stops_scripts() {
+    use ddstory::story::{script_gate, GameFlags};
+    use ddstory::{HostEvent, Inputs};
+    // The gate's conditions.
+    let none = GameFlags::default();
+    assert!(!script_gate(200, &none));
+    for f in [
+        GameFlags { b883c: 0x0800_0000, ..none },
+        GameFlags { b8848: 0x1000_0000, ..none },
+        GameFlags { b8848: 0x0800_0000, ..none },
+        GameFlags { b8848: 0x0400_0000, ..none },
+        GameFlags { b8844: 0x0080_0000, ..none },
+        GameFlags { s54: 1, ..none },
+    ] {
+        assert!(script_gate(200, &f), "{f:?}");
+    }
+    assert!(!script_gate(200, &GameFlags { b8844: 0x0040_0000, b8848: 0x0200_0000, ..none }));
+    for s in [801, 802, 803, 804] {
+        assert!(script_gate(s, &none));
+    }
+    assert!(!script_gate(800, &none) && !script_gate(805, &none));
+
+    let Some(data) = install() else { return };
+    let mut story = Story::new_game(data);
+    let mut host = ScriptedHost::opening();
+    let route = ddstory::route::opening();
+    ddstory::route::run(&mut story, &mut host, &route[..3], 240, 10_000, |_| true).unwrap();
+    let tick = |story: &mut Story<InstallData>, events: Vec<HostEvent>| {
+        story.tick(&Inputs { events, ..Default::default() }, &host).unwrap()
+    };
+    let before = story.script_states();
+    let world = story.world.clone();
+    let stop = GameFlags { b8844: 0x0080_0000, ..GameFlags::default() };
+    tick(&mut story, vec![HostEvent::GameFlags(stop)]);
+    for _ in 0..120 {
+        tick(&mut story, vec![]);
+    }
+    assert_eq!(story.script_states(), before, "scripts moved while gated");
+    assert_eq!(story.world, world);
+    tick(&mut story, vec![HostEvent::GameFlags(GameFlags::default())]);
+    tick(&mut story, vec![]);
+    let after = story.script_states();
+    assert!(after.iter().zip(&before).any(|(a, b)| a.cnt_fsm > b.cnt_fsm));
+}

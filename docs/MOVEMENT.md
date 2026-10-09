@@ -52,11 +52,25 @@ How `ddsim` moves an Arisen, and where each rule comes from. Code:
   give 1.15 (walk 1.06). The velocity is per frame of that time, so walk,
   run and sprint move and animate 1.15x faster than game time. The traces
   show exactly 1.15 x sMain's delta, two frames after the action changes
-  (the stamina update follows the actions; the lag is not modelled).
-- **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2)
-  (the velocity with its component along the ground normal removed). This
-  fits the traces within 0.5% over slopes -0.25..0.29 (`ddsim::along_ground`;
-  *measured*, the engine code is not traced).
+  (the stamina update writes +0xEE4 after the actions). ddsim keeps the
+  same lag: one `Sim::step` is one engine frame, and the factor a step ends
+  with applies two steps later (`Player::unit_rate`). The unit time drives
+  the player's actions, motion frames and physics; stamina runs in game
+  time.
+- **Start frames** (`0x00B80260`, called by `cPlActWalk::vf05` 0x00AC9FB0
+  and `cPlActRun::vf05` 0x00ACA390). Coming from a walk or run motion (3,
+  4, 0x54, 0x55; list at 0x018763D0) the new motion is phase-synced:
+  `(step + old frame) x new_last / old_last`, wrapped once, truncated.
+  Otherwise it starts on the action's frame: field walk 18, town walk 0,
+  run 20 when the feet test `0x00AC5FB0` (two joints along the facing)
+  returns false, else 0, 17, 0. ddsim has no skeleton and takes the false
+  branch (*placeholder*); the run trace starts on frame 20.
+- **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2).
+  This is the scenery sweep's floor slide (below): the move's horizontal
+  part loses its component along the floor normal's horizontal part. It
+  fits the traces within 0.5% over slopes -0.25..0.29, the sprint stop
+  included. Without collision triangles ddsim projects the step with
+  `ddsim::along_ground` instead.
 
 **Recorded** (read-only, uPlayer at ~200 Hz; mage, start area, town variant;
 the acceptance traces of docs/ACCEPTANCE.md confirm the speeds):
@@ -149,7 +163,11 @@ yaw (+0x257C) to adjust 0xF1 (22.5) x the motion's curve 9 x uPlayer
 +0x68 x +0x29A8 (both 1.0 in the recordings), and ends with the motion.
 Curve 9 of motion 21 is linear 1.0 at frame 0, 0.5 at 5, 0 from 25: 196.9
 cm in all, recorded 198.1. The stop runs in game time (unit delta 1.0).
-A run stops at once (recorded 0 cm, as ddsim).
+A run stops at once (recorded 0 cm, as ddsim). A released sprint moves one
+more frame at sprint speed: `cPlActDash::vf06` (0x00ACAF80) sets the
+frame's velocity before it requests action 3 for a released stick (+0x32C0
+== 0), so the stop starts a frame later (recorded: action 3 one frame after
+the release).
 
 **Motion curves and events** (`mtlmt`). `0x010571C0(k)` returns curve k
 of the playing motion: the LMT's float block, `(flags >> 16) & 0x1F`
@@ -176,20 +194,301 @@ Per player: stamina, maximum, body and load class (default 1).
   recorded 0.618 s hold after a sprint.
 - Drain (`0x00B81920`, actions 5 / 0x7D): `-(Dash[load].mStamina /
   mFrame)` = -1.5 per frame (-45/s). Running costs nothing.
+- Classes (`ddsim::WeightTables`, `Sim::set_weights`): body class from the
+  body weight against `pleditweight` (0x00B81120: 50, 70, 90, 110; a
+  boundary belongs to the higher class); load class 1-5 from the total
+  weight against the body class's `pltotalweight*` rows 1-4, each raised by
+  the carrying abilities' adjustment (0x00B7E710) and by the body weight
+  above its class boundary (0x00B81270). The host passes the weights (no
+  inventory yet); without them both classes stay 1, the recorded
+  character's.
 - Not modelled: status and equipment modifiers, recovery debt, the cap's
-  derivation (the recorded 640 is the default), what happens when stamina
-  runs out (`cPlActTired`), the classes' selection from weights.
+  derivation (the recorded 640 is the default), and running out:
+  `cPlActTired` (vf05 0x00ACB8D0, vf06 0x00ACBAF0, vf08 0x00ACC3E0) is a
+  five-phase action (motions 0x58, 0x59, 0x5E, 0x5F) with a staggering
+  speed blended from adjust 0x102 by a motion curve, timers adjust
+  0x9C / 0x9D and a recovery debt (+0x4CE4 / +0x4CE8 / +0x4CEC) that the
+  recovery then follows; its entry from the stamina update is not traced.
+  ddsim only flags `ran_out`.
 
-**Falling off.** `0x00B6E5C0` enters `cPlActFall` when the action allows
-falls (uPlayer +0x35E8 bit 0), the character is not grounded (+0x1ED0)
-and the ground cast from 100 cm above the feet (`0x0084FEA0`) is more than
-30 cm below them. ddsim follows ground within 30 cm (`STEP_DOWN`) only if
-it is a floor (up component of the normal >= 0.7, *assumed* stand-in for
-the grounded flag); steeper ground is never walked, so slopes are fallen
-down whatever the step size, and steep ground under a fall holds the
-character up without landing (the original stays in action 13 on the
-drop route's steep edge). A fall's starting horizontal speed is the last
-step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
+**Landing hold.** Landings and the sprint stop give way to the stick only
+when the playing motion's event group 0 has bit 0x10000 at the current
+frame. `cPlActWpnShieldGuardJumpLand::vf06` (0x00B36140) cancels on
+exactly "stick held (+0x32C0) and layer-0 group-0 word +0x490 & 0x10000";
+landing motions 12 and 15 set it from frame 3, the sprint stop (21) from
+frame 18. The traces hold a landing about 3.3 game frames with the stick
+held. That `cPlActLand` uses the same bit is *assumed*.
+
+**Falling off and landing.** `0x00B6E5C0` enters `cPlActFall` when the
+action allows falls (uPlayer +0x35E8 bit 0), the character is not grounded
+(+0x1ED0) and the ground cast from 100 cm above the feet (`0x0084FEA0`) is
+more than 30 cm below them (`FALL_CHECK_UP`, `STEP_DOWN`). It lands
+(action 14) when the action allows landing (+0x35E8 bit 1, set by
+`cPlActFall::vf05`) and the character is grounded. The grounded flag comes
+from the scenery sweep (below). A fall's starting horizontal speed is the
+last step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
+`cPlActLand::vf05` (0x00ACD2C0) plays the moving landing (motion 12) only
+when the stick is held within 45 degrees of the facing (the rotator's
+target yaw +0x2578 against the stick angle +0x32C4); otherwise the
+standing one (15).
+
+**Scenery collision** (`crates/ddsim/src/sweep.rs`). The character is moved
+by `cScrAdjust` (uObjModel +0x19C0, properties from its vf03 0x0079DB30).
+Each frame `0x0079E200` sweeps its capsule from the old to the new position
+(`0x010B4960` -> `0x010B4560` -> `0x010B2E20` -> `0x010B0CA0`) and stores
+the result bits at +0x1A8.
+
+- *Capsule.* From `collision\pl\m0001` group 109 (`mIsScrAdj`, a sphere of
+  radius 35 at the model origin); read live (claude-4, board #931): 35 to
+  145 cm above the feet, radius 35 (`PLAYER_CAPSULE`).
+- *Ground check.* On the ground (`mIsGroundCheck`, set while uPlayer
+  +0x273C bit 0 is, `uPlayerBase::vf93` 0x00B63F70) the target sinks by
+  `mGroundCheckOffset` (adjust 0x7E, -20, written by `uPlayerBase::vf90`
+  0x00B61A20) x the unit delta (`GROUND_CHECK_DROP`). In the air the query
+  carries flag 0x40000000 instead (`0x00DE4B70`).
+- *The loop* (`0x010B0CA0`, at most `sCollision::Param` +0x44 = 10 moves):
+  find the first contact along the move; stand at the contact backed off
+  0.01 along the move, then 0.1 off the surface along its normal (+0x200,
+  from Param +0x4C); categorize the contact; on the ground a wall or ceiling
+  contact drops a rest shorter than sqrt 5 that has not advanced along the
+  move (sCollision +0x18C = 5, +0x188 = 15, +0x190 = 0.001, +0x194 = 1e-5);
+  slide the rest (`0x010AFC60`); go on while the rest is longer than
+  sqrt 1e-5. The first contact also reads the axis check (below).
+- *Categories* (`0x00DEFD00`, `0x00DEF0C0`). A triangle whose material flag
+  word (the sbc material record's first word, kept per triangle by
+  `ddworld`) meets sCollision +0x44 (0) is a floor, +0x48 (0x80000000) a
+  steep slope, +0x4C (0x2002, set by the game's sCollision 0x00422D00) a
+  wall; otherwise the contact normal decides: y above sin 45 is a floor,
+  at or below sin 45 a wall, and below sin -10 a ceiling. The game sets
+  both the floor and the wall angle to 45 degrees (`0x00FB37F0`,
+  `0x00FB3840` from 0x00422D00; the base constructor 0x00DF02B0 sets 60,
+  80, -10), so there is no slope category by normal. Much of the stage's
+  rock has flag 0x2000: it is a wall whatever its slope (the drop route's
+  strip, on which the original keeps falling).
+- *Slide* (`0x010AFC60`, player query: Param +0xB0 = 0, +0xB4 = 1 on the
+  ground and 0 in the air, +0xB5 = 0). Floor: anything but a move straight
+  down keeps its horizontal part minus its component along the normal's
+  horizontal part, and the matching rise (the slope law above); straight
+  down stops, and a contact within the first 0.0625 of the move
+  (sCollision +0x50) is undone, so standing on a slope does not creep.
+  Slope and ceiling: projected onto the plane. Wall: projected onto the
+  plane; on the ground a slide going up keeps only its horizontal
+  component along the wall; then (flag 0x80000000) if the slide keeps less
+  than 0.1 (Param +0x68) of the move's horizontal direction, or of the
+  rest's, it runs down (or up) the wall by what is left to the target
+  height, along the crease with the previous wall when this contact came
+  within the first 0.1 of the move.
+- *Axis check* (`mAxisCheckType` 2, `mAxisCheckSphereRadius` 15; callback
+  `0x011C5E90`): a sphere of radius 15 cast from the capsule's lower centre
+  at the old position down by 35 x sqrt 2, in the air plus the move's
+  drop. Its category is the nearest upward-facing triangle's (a tie goes to
+  the steeper one). At the first contact of the sweep (`0x010B0CA0`) no hit
+  sets result bit 0x400 and switches the query to group 2 (floors count as
+  slopes); a hit that is not a floor switches to group 2 only. The result
+  is the categories met | 0x400 | the axis category << 20.
+- *Grounded* (`uObjModel::vf90` 0x00885E30): not when the axis check is on
+  and 0x400 is set; else floor or slope met (on the ground also the axis
+  floor bit 0x100000). `Swept::grounded`.
+- *Narrowphase.* The original's per-triangle callbacks (GJK raycast
+  `0x00D7FB00`, sphere-triangle `0x00D631E0` via `0x01166220`) are replaced
+  by exact capsule-triangle distance with conservative advancement; like
+  the original, a triangle facing along the move is skipped unless the
+  capsule already overlaps it. Not translated: the per-edge flags (sbc
+  triangle bytes +0x18..+0x1A, 4 = inactive edge whose contacts count only
+  on the face; `mtsbc` does not read them), the depenetration retries
+  (+0x1F0 below -0.0625, `0x010B2A60`, `0x010FEA30`), moving colliders
+  (`0x010B3000`), the second axis check (+0x298) and the ceiling follow-up
+  (`0x010FEA80`, `mIsCellingAdjust`).
+- ddsim uses the sweep when the ground provides triangles
+  (`Ground::triangles_in`, `ddworld::Terrain`); test grounds without them
+  keep the older point-and-cylinder rules (`wall_slide`, `STEP_UP`).
+- The original sweeps once per engine frame; ddsim sweeps every `TICK`
+  (a quarter motion frame), so the ground check's drop and the
+  length-dependent thresholds (the stall rule, the 0.0625 undo, the crease)
+  apply to quarter-frame moves.
+
+### Bodies lost below the ground (`Sim::record_safe`, `lost`, `warp_to_safe`)
+
+**#1149.** In a two-window demo (stage 100 by 58m50n), a body sank under
+the single-layer ground and fell without end. The cause was the build's
+ddsim, which branched before the capsule sweep (f892a7e). Its air move
+looked for landing ground only below the body (`height(next, y + 1)`).
+So a jump coming down into ground rising ahead passed under the surface,
+and nothing below it ever stopped the fall.
+
+Replaying the demo's inputs headlessly reproduces it:
+
+| ddsim | Result |
+|---|---|
+| that build's | loses bodies within seconds |
+| main's | lost none in 4,500 random 60-second demo runs (walk or run, jumps and double jumps every 2-5 s, any camera) |
+
+Main uses the sweep whenever the ground provides triangles, as
+`ddworld::Terrain` does. The regression test is
+`ddworld/tests/land.rs::demo_jumps_onto_higher_ground_stay_on_it`: two
+such runs, which the old build loses at frames 641 and 130.
+
+The point rules that test grounds without triangles still use now look a
+step (`STEP_UP`) above the body:
+- coming down, the body lands on rising ground;
+- going up, it is held back from it.
+
+Test: `jumps_into_rising_ground_land_on_it`.
+
+**What the original does with a lost body** (traced). It has no kill
+height. Instead it keeps a ring of safe positions and warps the body back
+to one of them.
+
+- **The ring.** `0x00B62980` keeps 4 safe positions, newest first, at
+  uPlayerBase +0x4A60, for the Arisen and pawns, every frame. It pushes the
+  position in front when all of these hold:
+  - the body is on the ground in the wait, walk, run or sprint (and a few
+    other actions);
+  - the position is at least 100 from the newest slot;
+  - there is ground within 50 under the feet;
+  - it is not in water, not latched in a kill zone, and the ground has no
+    attribute bits 0x80800.
+
+  Spawning and the stage-start placement seed all four slots (`0x00B628A0`).
+- **The check.** `0x00B63520`, from `uPlayerBase::vf90`, flags a body as
+  lost:
+  - in the air after a fall of more than 20,000 (uPlayer +0x207C, not on
+    stage 0x259);
+  - after 90 frames in the air without moving down (+0x4AA4, which restarts
+    whenever it moves down; climbing and some actions and flags stop it);
+  - when a slope slide stalls (+0x4AA8, `cPlActSlopeSlide::vf08`).
+- **The warp.** `0x00B62D20` picks the destination:
+  - the second newest slot, if the body is within 200 of the newest and the
+    two slots are that close;
+  - else the newest, if the body is within 200 of it;
+  - else the first slot with ground from 100 above to 50 below it, at the
+    higher of the two heights.
+
+  It sets velocity (0, -2, 0), requests action 0 (the wait) and starts the
+  fall measurement afresh. Pawns and NPCs are warped at once. The Arisen
+  goes through stage mode 0x27 (`0x005149E0`): a 15-frame fade, then the
+  same warp.
+- **Fall damage, not a warp.** Falls from 10 m up are ordinary HP damage
+  through `cPlActDmgGround` (action 0x19, `0x00B78A00` / `0x00B78BF0`):
+  `200 + 0.8 x (drop - 1000)`, halved with Resilience; the threshold is
+  15 m with Grace. Enough of it kills.
+- **Kill surfaces.** Surfaces with attribute bits 0x80800 (`0x008542C0` ->
+  `0x008559A0`) kill on contact: game over for the Arisen. That they are
+  deep water or the abyss is inferred.
+
+**ddsim models:**
+- the ring: the wait, walk, run and sprint, 100 apart, with ground within
+  50 above or below the feet (the original reads the body's last ground
+  hit);
+- the 20,000 fall and the 90-frame stuck check in `Air`, `SecondJump` and
+  `Fall`;
+- the warp, done at once. `Player::warps` counts warps, so a host can show
+  the fade.
+
+Not modelled: fall damage, kill surfaces and water, the slope-slide stall,
+and the check's action and status exemptions.
+
+Tests:
+- `a_body_falling_200_m_is_warped_back_to_safe_ground`
+- `a_body_stuck_in_the_air_is_warped_back`
+
+### Attacks (`ddsim::attack`)
+
+The light and heavy buttons (`ddsim::Input::light` / `heavy`, held; a
+press is the rising edge) start the weapon's basic attacks. Weapons with
+attacks: the sword (and mace) and the staff (`ddsim::Weapon`, the
+categories of `ddskill::vocation::WeaponCategory`); the host gives each
+player its weapon and the weapon banks' motions (`Sim::weapon_motions`,
+banks 6 and 7 = the category's `_co` and `_at` lists, as table
+0x0163DF8C binds them).
+
+**Transition lists.** A press becomes command bits (key-config 0x17 light,
+0x18 heavy, `0x00B52A00`; pressed edges at uPlayer +0x32E0).
+`uPlayerBase::vf136` (0x00B6D510) -> vf203 (0x00B6EA70) -> `0x00ABA690`
+scans the weapon's skill lists, the basic-attack list of the primary
+category (array 0x014F8DCC) and the default list, first match wins. A
+record is (action, current action or -1, command, press / hold / release,
+ground 0x301 / air 0x302, check, slot). The ground rows used:
+
+| Weapon | Press | Current action | Action | Check |
+|---|---|---|---|---|
+| sword (list 0x014F83B8) | light | S1_1 | S1_2 `0x01010001` | 22 |
+| | light | S1_2 | S1_3 `0x01010002` | 22 |
+| | light | any other | S1_1 `0x01010000` | |
+| | heavy | any | LandL `0x01010004` | |
+| staff (list 0x014F8898) | light | any | WandShot `0x01070021` | |
+| | heavy | Strike1 | WandStrike2 `0x0107001F` | 22 |
+| | heavy | any other | WandStrike1 `0x0107001E` | |
+
+Left out: S1_1 -> S1_2_1 (check 24, an ability bit not identified), LandL's
+follow-up `0x0101000D` (a learned ability), the air rows (AirS, AirL,
+WandAirStrike, the air WandShot), skills.
+
+**Cancel slots (the combo windows).** The cancel object at uPlayer +0x2588
+has 7 slots on motion layer 0, event group 0 (`0x00827F50`): slot `i` is in
+state 1 (buffer) while bit `0x11 + 2i` is set, else 2 (execute) while bit
+`0x10 + 2i` is (`0x00828030`). Slot 0 is the stick's (bit 0x10, the
+landing's move cancel above), slot 1 the attacks'. A matched press is kept
+in its slot (uPlayer +0x38B8[slot]) while the slot is non-zero and stamina
+is above 0 (`0x00ABAAC0`), dropped when the slot falls to 0, and started
+when the slot executes (vf136's loop 0x00B6DC10). Idle, walk and run
+motions execute slot 1 throughout (`0x15450000`), so a press from them
+starts at once; a landing buffers for its first frames.
+
+**Sequence counters** (`0x0082B400`, reset with each motion by vf36):
+uPlayer +0x361C counts the motion's frames with group 0 bit 31, +0x365C
+those with bit 30. Check 22 needs +0x361C == 0: bit 31 closes the chain,
+and a later light press restarts at S1_1. An attack ends when +0x365C >= 1
+or its motion ends (`0x01057100`); ddsim then returns to the wait
+(*assumed*: where the end flag action +0x50 is read is not traced). The
+stick cancels an attack where slot 0 executes.
+
+Windows of the shipped motions (group 0, motion frames):
+
+| Action | Motion | Slot 1 buffers | executes | bit 31 | bit 30 | Frames |
+|---|---|---|---|---|---|---|
+| S1_1 | `m0001_at` 0 | 8..13 | 13.. | 30 | 34 | 44 |
+| S1_2 | `m0001_at` 1 | 9..14 | 14.. | 19 | 27 | 45 |
+| S1_3 | `m0001_at` 2 | 25..30 | 30.. | | 49 | 61 |
+| LandL | `m0001_at` 19 (0x713) | 27..32 | 32.. | 22 | 54 | 59 |
+| WandStrike1 | `m0007_at` 35 (0x723) | 20..25 | 25.. | 40 | | 69 |
+| WandStrike2 | `m0007_at` 36 (0x724) | 28..33 | 33.. | | | 61 |
+
+So S1_1 chains into S1_2 from a press on frames 8..29, S1_2 into S1_3 from
+one on 9..18, Strike1 into Strike2 from one on 20..39; a press while slot 1
+is closed (before the buffer) is lost.
+
+**Each strike's vf05** (S1_1 0x00B3C570, S1_2 0x00B3C7B0, S1_3 0x00B3CA00,
+LandL 0x00B3D410, Strike1 0x00B51070, Strike2 0x00B51270) plays its motion
+in bank 7 (force 1, interpolation -1 = the bank's default, frame 0, rate
+1), zeroes the velocity (the strike moves by its root track: S1_1 190 cm
+ahead), turns toward the target at `m_pl000_00[0xAE]` = 45 degrees a frame
+(`0x00B791D0`, `0x007975D0`), charges its stamina and sets push rank 14.
+The sword's alternative motions 0x7C8.. (uPlayer +0x206D bit 3 or +0x206E
+& 0x18) are not modelled.
+
+**WandShot** (`cPlActWpnWandShot`, variant 0 of the table at 0x014F70E8,
+0x60 bytes a variant): start motion 0x70A, loop 0x70B, end 0x70C (layer 1
+aim poses 0x710 / 0x70D etc. not modelled), push rank 13. Its vf06
+(0x00B4F190): phase 0 plays the start to its end; phase 1 (`0x00B4F610`)
+fires a volley of 1 shell when the loop reaches frame 2 and charges its
+stamina; a light press before 5 volleys restarts the loop once it reaches
+frame 7 (another volley); at the loop's end (*assumed*: its end flag rises
+at the last frame although it loops) the end motion plays (phase 3), then
+the wait. The turn motions for an aim beyond 90 degrees (phase 2) are not
+modelled. The shells are the fight's (COMBAT.md 9.3).
+
+**Stamina.** Each strike's vf05 calls `0x00B81E30(-m_pl000_00[id], 1, 0)`:
+id 0x1B8 (80) for the sword, 0x1BB (30) for the staff strikes and each
+WandShot volley. Mode 1 of the modifier `0x00B82060` makes the cost 0
+unless the equipped weapons' level (item +0x66) is above the Arisen's
+(cPlayerInfo +0x700) by `m_pl000_00[0x1AE..0x1B0]` = 15 / 20 / 25 or more
+(`0x00B82360`, tiers 1-3), when it is multiplied by `[0x1B4..0x1B6]` = 1,
+1.5, 2 (`ddsim::attack::attack_cost`; the level gap is
+`Player::weapon_level_gap`). So a level-1 Arisen's starting weapons (levels
+1 and 3) attack for free. Not modelled: the modifier's augment and status
+factors (+0x3EF0, +0x3EF8) and the exemptions of `0x00B81E30` (game and
+stage flags, actor +0x26A4, +0x4CF0, +0x31EA).
 
 ## Assumptions and placeholders
 
@@ -201,9 +500,7 @@ step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
   stores at 0x00B6B3D6 / 0x00B6B477 / 0x00B6B4D1 in 0x00B6B350, via
   player +0x2E54 -> object +4 -> owner; 0x0081C170 derives a horizontal
   scale from character customization. 0.847 is not reproduced yet.
-- Open from the blend brief (claude-2), not applied: walk/run start frames
-  are phase-synced (0x00B80260; start frames 18 / 20 / 17 / 0 otherwise).
-  The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
+- The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
   every trace (|velocity| = 10.165 exactly); the 1.15 is the unit time.
 - Town or field is a per-player flag set by the host. `--play` starts in
   town mode (as recorded); F2 toggles it.
@@ -235,15 +532,13 @@ step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
 - Double jump: the original allows it for dagger vocations; `--play` gives
   it to both players.
 - No animation blending: states switch motions immediately.
-- The character's collision shape is a placeholder cylinder (radius 35,
-  `BODY_RADIUS`) tested from 60 cm above the feet. On the drop route the
-  original stands 34 cm above the ground under its origin: it rests on the
-  strip's edge 15-20 cm away (the strip top is at 40254 cm, its origin
-  over the steep face at 40219), so its collider has a radius there. No
-  placed scenery seems missing: no instance in the cell's layouts (`_s00`,
-  `_p*`, `_e*`, `_t*`, any Euler order) has collision under that point.
-  After landing, the original slides along a wall and frees itself at
-  frame 195; ddsim keeps sliding (path gap 113 cm). Tracing the character collider (shape, radius, slide) is the next
-  step.
-- A landing (`cPlActLand`) is cancelled at once by the stick here; in the
-  traces it lasts about 0.1 s with the stick held (not traced).
+- **Scenery collision, open points.** The sweep (above) is translated, its
+  narrowphase replaced by exact geometry. The query's check filter
+  (`mCheckFilter` +0x198, Param +0x04 / +0x0C) is not applied: every
+  collision triangle is met. On the drop route the original slides along a
+  rock's edge at the same 0.45 cm/frame as ddsim from frame 90, then at
+  frame 195 moves along the same wall at 2.2 cm/frame; ddsim keeps
+  crawling. The crease rule gives that direction and slope but not the
+  speed; the cause is not found (live trace asked of claude-4, board
+  #1090). The old rules for grounds without triangles (`wall_slide`, step
+  up 60 cm, `BODY_HEIGHT`, `BODY_RADIUS`) are *placeholders*.

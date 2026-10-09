@@ -60,16 +60,22 @@ The row is sampled right after each sMain::vf06 (the oracle's `trace`).
 
 `ddaccept::new_sim` configures ddsim exactly as the viewer's `--play` does:
 
-- `m0000_co` and `m0004_co` root motions;
+- `m0000_co` and `m0004_co` root motions, with their curves and events
+  (`mtlmt::MotionList::curves` / `events`);
 - `pljumpparam` rows 0 and 9;
-- the `m_pl000_00` ground speeds and ledge parameters.
+- the `m_pl000_00` ground speeds, fall speed cap and ledge parameters.
 
 The world is `ddworld::Terrain::load_collision` plus `add_scenery` over the
 3x3 cells around the start cell.
 
-Each frame steps ddsim by `dt_main / 30` seconds of game time. That is
-sMain's `mDeltaTime`: the player's own delta is scaled by its motion rate,
-see mismatch 1.
+Each frame is one `Sim::step` of `dt_main / 30` seconds of game time
+(sMain's `mDeltaTime`); ddsim scales the player's own time itself
+(`Player::unit_rate`, two frames behind the action, as in the traces).
+
+The player starts from the first frame's pose and stamina (taken as the
+maximum too); a route that starts in the air (action 13) starts falling
+with the recorded velocity. The recorder's Ctrl bit is not mapped to
+walking: the original runs with it held (drop route).
 
 The town or field variant (`Player::relaxed`) is not read from the
 original yet. The replay takes it from the recorded run velocity: 10.165
@@ -105,125 +111,94 @@ Tolerances are ours, set for M2, not the game's (`ddaccept::tol`):
 
 "Not modelled" means ddsim has no counterpart, so the row fails.
 
+Current output (task/m2-sweep; history: 16 of 44 at recording, 40 after
+m2-fixes and m2-finish):
+
 | route | quantity | original | ours | difference | tolerance | ok |
-|---|---|---|---|---|---|---|
-| run | path length | 1096.067 | 970.811 | -125.256 | 30 cm | **no** |
-| run | max path gap (frame 195) | 0.000 | 124.177 | +124.177 | 30 cm | **no** |
-| run | final position gap | 0.000 | 124.177 | +124.177 | 30 cm | **no** |
-| run | final height | -152.648 | -138.133 | +14.516 | 5 cm | **no** |
-| run | speed, frames 69..196 | 341.559 | 302.215 | -39.343 | 10 cm/s | **no** |
+| drop | path length | 402.831 | 290.838 | -111.993 | 30 cm | **no** |
+| drop | max path gap (frame 290) | 0.000 | 95.920 | +95.920 | 30 cm | **no** |
+| drop | final position gap | 0.000 | 95.920 | +95.920 | 30 cm | **no** |
+| drop | final height | -317.570 | -306.621 | +10.949 | 5 cm | **no** |
+| drop | fall start | 0.010 | 0.010 | +0.000 | 0.067 s | yes |
+| drop | fall time | 0.623 | 0.623 | +0.000 | 0.067 s | yes |
+| drop | drop height | 287.355 | 287.574 | +0.219 | 5 cm | yes |
+| drop | stopping distance after release | 0.000 | 0.000 | +0.000 | 20 cm | yes |
+| run | path length | 1096.067 | 1098.503 | +2.436 | 30 cm | yes |
+| run | max path gap (frame 191) | 0.000 | 7.831 | +7.831 | 30 cm | yes |
+| run | final position gap | 0.000 | 6.686 | +6.686 | 30 cm | yes |
+| run | final height | -152.648 | -153.582 | -0.934 | 5 cm | yes |
+| run | speed, frames 69..196 | 341.559 | 342.612 | +1.053 | 10 cm/s | yes |
 | run | stopping distance after release | 0.000 | 0.000 | +0.000 | 20 cm | yes |
-| run | stamina rate, frames 69..196 | 0.000 | not modelled | - | 1 /s | **no** |
-| sprint_stop | path length | 3292.847 | 2798.442 | -494.405 | 30 cm | **no** |
-| sprint_stop | max path gap (frame 354) | 0.000 | 494.390 | +494.390 | 30 cm | **no** |
-| sprint_stop | final position gap | 0.000 | 494.390 | +494.390 | 30 cm | **no** |
-| sprint_stop | final height | 640.543 | 517.395 | -123.148 | 5 cm | **no** |
-| sprint_stop | speed, frames 80..307 | 746.769 | 670.754 | -76.014 | 10 cm/s | **no** |
-| sprint_stop | stopping distance after release | 198.061 | 0.000 | -198.061 | 20 cm | **no** |
-| sprint_stop | stamina hold after sprint | 0.618 | not modelled | - | 0.067 s | **no** |
-| sprint_stop | stamina recovery rate (idle) | 48.750 | not modelled | - | 1 /s | **no** |
-| sprint_stop | stamina rate, frames 80..307 | -45.000 | not modelled | - | 1 /s | **no** |
-| standing_jump | path length | 0.019 | 0.000 | -0.019 | 30 cm | yes |
-| standing_jump | max path gap (frame 72) | 0.000 | 0.019 | +0.019 | 30 cm | yes |
-| standing_jump | final position gap | 0.000 | 0.019 | +0.019 | 30 cm | yes |
-| standing_jump | final height | 0.000 | -0.551 | -0.551 | 5 cm | yes |
-| standing_jump | jump apex | 93.449 | 92.625 | -0.824 | 5 cm | yes |
-| standing_jump | takeoff after press | 0.120 | 0.108 | -0.012 | 0.067 s | yes |
-| standing_jump | airtime | 0.638 | 0.639 | +0.001 | 0.067 s | yes |
-| standing_jump | landing after press | 0.758 | 0.747 | -0.011 | 0.067 s | yes |
-| standing_jump | jump distance (press to landing) | 0.019 | 0.000 | -0.019 | 30 cm | yes |
-| running_jump | path length | 722.416 | 686.885 | -35.531 | 30 cm | **no** |
-| running_jump | max path gap (frame 86) | 0.000 | 36.293 | +36.293 | 30 cm | **no** |
-| running_jump | final position gap | 0.000 | 35.631 | +35.631 | 30 cm | **no** |
-| running_jump | final height | -106.855 | -101.703 | +5.152 | 5 cm | **no** |
-| running_jump | speed, frames 41..77 | 335.761 | 300.518 | -35.243 | 10 cm/s | **no** |
+| run | stamina rate, frames 69..196 | 0.000 | 0.000 | +0.000 | 1 /s | yes |
+| running_jump | path length | 722.416 | 729.430 | +7.015 | 30 cm | yes |
+| running_jump | max path gap (frame 183) | 0.000 | 8.797 | +8.797 | 30 cm | yes |
+| running_jump | final position gap | 0.000 | 7.028 | +7.028 | 30 cm | yes |
+| running_jump | final height | -106.855 | -107.766 | -0.910 | 5 cm | yes |
+| running_jump | speed, frames 41..77 | 335.761 | 341.139 | +5.378 | 10 cm/s | yes |
 | running_jump | jump apex | 93.461 | 92.625 | -0.836 | 5 cm | yes |
 | running_jump | takeoff after press | 0.116 | 0.116 | +0.000 | 0.067 s | yes |
 | running_jump | airtime | 0.704 | 0.714 | +0.010 | 0.067 s | yes |
 | running_jump | landing after press | 0.820 | 0.830 | +0.010 | 0.067 s | yes |
-| running_jump | jump distance (press to landing) | 316.589 | 321.022 | +4.433 | 30 cm | yes |
-| running_jump | stamina rate, frames 41..77 | 0.000 | not modelled | - | 1 /s | **no** |
-| drop | path length | 402.831 | 183.184 | -219.647 | 30 cm | **no** |
-| drop | max path gap (frame 290) | 0.000 | 203.521 | +203.521 | 30 cm | **no** |
-| drop | final position gap | 0.000 | 203.521 | +203.521 | 30 cm | **no** |
-| drop | final height | -317.570 | -291.344 | +26.227 | 5 cm | **no** |
-| drop | fall start | 0.010 | not modelled | - | 0.067 s | **no** |
-| drop | fall time | 0.623 | not modelled | - | 0.067 s | **no** |
-| drop | drop height | 287.355 | not modelled | - | 5 cm | **no** |
-| drop | stopping distance after release | 0.000 | 0.000 | +0.000 | 20 cm | yes |
+| running_jump | jump distance (press to landing) | 316.589 | 320.953 | +4.364 | 30 cm | yes |
+| running_jump | stamina rate, frames 41..77 | 0.000 | 0.000 | +0.000 | 1 /s | yes |
+| sprint_stop | path length | 3292.847 | 3276.819 | -16.029 | 30 cm | yes |
+| sprint_stop | max path gap (frame 354) | 0.000 | 16.091 | +16.091 | 30 cm | yes |
+| sprint_stop | final position gap | 0.000 | 16.091 | +16.091 | 30 cm | yes |
+| sprint_stop | final height | 640.543 | 635.941 | -4.602 | 5 cm | yes |
+| sprint_stop | speed, frames 80..307 | 746.769 | 745.201 | -1.567 | 10 cm/s | yes |
+| sprint_stop | stopping distance after release | 198.061 | 187.786 | -10.275 | 20 cm | yes |
+| sprint_stop | stamina hold after sprint | 0.618 | 0.627 | +0.009 | 0.067 s | yes |
+| sprint_stop | stamina recovery rate (idle) | 48.750 | 48.803 | +0.053 | 1 /s | yes |
+| sprint_stop | stamina rate, frames 80..307 | -45.000 | -44.717 | +0.283 | 1 /s | yes |
+| standing_jump | path length | 0.019 | 0.000 | -0.019 | 30 cm | yes |
+| standing_jump | max path gap (frame 72) | 0.000 | 0.019 | +0.019 | 30 cm | yes |
+| standing_jump | final position gap | 0.000 | 0.019 | +0.019 | 30 cm | yes |
+| standing_jump | final height | 0.000 | 0.000 | +0.000 | 5 cm | yes |
+| standing_jump | jump apex | 93.449 | 92.625 | -0.824 | 5 cm | yes |
+| standing_jump | takeoff after press | 0.120 | 0.108 | -0.012 | 0.067 s | yes |
+| standing_jump | airtime | 0.638 | 0.650 | +0.012 | 0.067 s | yes |
+| standing_jump | landing after press | 0.758 | 0.758 | +0.000 | 0.067 s | yes |
+| standing_jump | jump distance (press to landing) | 0.019 | 0.000 | -0.019 | 30 cm | yes |
 
-16 of 44 quantities pass. **Jumps match**: apex, takeoff, airtime, landing
-and jump distance are within tolerance for both the standing and the
-running jump. Ground movement, the sprint stop, slopes and stamina do not.
+**40 of 44 quantities pass.** Runs, sprints, the sprint stop, jumps,
+stamina, the drop's fall (now on the rock it slides off, within about 1 cm
+for 60 frames) and its landing match. The four failing rows are the drop
+route's path after frame 195.
 
-## Mismatches
+## Remaining mismatch
 
-1. **Ground speed is 15% low** (run -39.3 cm/s, sprint -76.0 cm/s, and the
-   path gaps that follow from it).
-   - In the original, while the action is run (2), sprint start (125) or
-     sprint (5), the player's own `cUnit.mDeltaTime` (+0x14) is exactly
-     **1.15 x** sMain's in every frame of every trace. In jumps, landings,
-     the stop and idle it is 1.0.
-   - Each frame's horizontal step is |velocity +0x2530| x that player
-     delta. Medians are 0.983 on the downhill run and 0.957 on the uphill
-     sprint, consistent with the speed applying along the ground (*not
-     verified in the exe*).
-   - So the original moves at the parameter speed x 1.15 in game time:
-     run 10.165 x 1.15 x 30 = 350.7 cm/s.
-   - ddsim applies `LOCOMOTION_RATE` (1.15) to the motion frame only,
-     moving by `speed x dt`.
-   - Applying the factor to ddsim's run speed gives 302.2 x 1.15 = 347.5
-     against 341.6 measured. That residual and the sprint's (771 against
-     747) are within what the different paths over sloped ground explain,
-     but not proven.
-   - Where the unit delta is scaled (the writer of +0x14 for the player) is
-     not traced.
-2. **No stop after a sprint.**
-   - The original enters action 3 on release and keeps moving for 0.98 s
-     (56 frames, median velocity 6.2 cm/frame), stopping 198.1 cm further
-     on.
-   - ddsim goes to `Wait` at once: 0 cm.
-   - After a plain run the original also stops at once (0 cm), as ddsim
-     does.
-3. **Stamina is not modelled in ddsim.** The original, in game time:
-   - sprint start and sprint spend exactly **-45.000/s** (1.5 per 30 fps
-     frame);
-   - during the stop (action 3) stamina recovers at +19.29/s, partly;
-   - after a **0.618 s** hold, idle recovery is exactly **+48.750/s**
-     (1.625 per frame);
-   - running costs nothing.
+**The drop route's path after frame 195** (path length, gaps, final
+height). With the scenery sweep translated (docs/MOVEMENT.md, Scenery
+collision) the route matches until then: the fall slides off the strip,
+whose rock has material flag 0x2000 and so counts as wall; the landing is
+the standing one in place; the run hits the same rock edge and crawls
+along it at the original's 0.45 cm/frame. At frame 195 the original moves
+on along that edge at 2.2 cm/frame, ddsim keeps crawling and ends 96 cm
+off. The original's direction and slope are those of the crease of the
+edge with the ground (the wall rule's crease branch), its speed is not;
+what starts it is not found in the exe. Candidates not translated: the
+per-edge flags of the sbc triangles, the check filter, the per-frame
+(rather than per quarter frame) sweep. A live trace of `0x010AFC60` for
+frames 190-200 would settle it (asked of claude-4, board #1090).
 
-   These agree with `docs/STAMINA.md` (Dash row 1, RecoverNormal body 1,
-   and the 0.59-0.61 s hold). `ddparam::stamina` has the arithmetic
-   fragments, but ddsim has no stamina state.
-4. **Steep slopes are walked down instead of fallen from.**
-   - On the drop route the original falls (action 13) from frame 0, 287.4 cm
-     in 0.623 s, then lands (14).
-   - ddsim instead steps 34 cm down at frame 4, then walks down the slope
-     to the same lower ground and never enters `Fall`. `ground_move`
-     accepts any descent up to `STEP_DOWN` (50 cm) per quarter-frame step,
-     so it has no slope limit.
-   - The fall itself therefore cannot be compared yet: fall time and drop
-     height are "not modelled" in this run.
-5. **Collision difference at the drop.** The original stood on a surface
-   at y 40253.3. Under the same point ddsim's ground (stage collision plus
-   placed scenery) is 34 cm lower. That is placed scenery the original has
-   and ddworld either misses or places differently; not investigated.
+Fixed since the first run (docs/MOVEMENT.md has the sources): the unit
+time factor (stamina rows' motion speed, two frames late), slope
+projection (now the sweep's floor slide), the sprint stop and motion
+curves (the stop starts a frame after the release), stamina with motion
+events, the fall and landing on the scenery sweep's grounded flag, the
+landing hold (event bit 0x10000), the landing variant (standing unless the
+stick is within 45 degrees of the facing), walk/run start frames.
 
 Not compared yet:
 - ledge grabs: still needs a clean ledge, see the oracle brief;
-- walking: covered only by the drop route;
+- walking: no route walks (Ctrl runs in the original);
 - the town (relaxed) run against the field run: only the relaxed run was
   recorded, because the area attribute is not read;
-- turning: every route keeps one direction.
+- turning: every route keeps one direction;
+- running out of stamina (`cPlActTired`, not modelled).
 
 ## Next
 
-Head assigns the fixes, which are outside this brief's scope:
-- the locomotion delta factor;
-- the sprint-stop action;
-- a slope limit or slide-to-fall rule;
-- stamina in ddsim.
-
-After each fix, re-run `cargo test -p ddaccept -- --nocapture`. Add routes
-(ledge, turn, field run) by recording them with `routes.py`.
+- Trace the drop route's frame-195 change live (`0x010AFC60` per call), or
+  record a route along a wall; read the sbc edge flags in `mtsbc`.
+- Record a turn, a field run, a walk (find the walk key) and a ledge grab.

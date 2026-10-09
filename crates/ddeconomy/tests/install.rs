@@ -1,6 +1,6 @@
 //! Sessions against the shipped data (skips without an install; set
 //! DDDA_NATIVE_PC for another one).
-use ddeconomy::inventory::{BuyBack, Owner};
+use ddeconomy::inventory::{BuyBack, Owner, PlayerId};
 use ddeconomy::*;
 use dditem::rules::Currency;
 use std::collections::BTreeMap;
@@ -48,7 +48,7 @@ fn catalog() -> Option<Catalog> {
     })
 }
 
-fn party(p: usize) -> Party {
+fn party(p: PlayerId) -> Party {
     Party {
         members: vec![Member {
             owner: Owner::Arisen(p),

@@ -51,9 +51,7 @@ impl Ctrl {
     /// fired; then the per-frame fired marks are cleared (0x00cd7990).
     // Translated from 0x007922f0 (DDDA.exe 2017-12-13 Steam).
     pub fn frame(&mut self, env: &mut Env, quest: u32) -> Result<(), Error> {
-        if env.world.active_quest == -1 {
-            self.pass(env, quest, 0, false)?;
-        } else if !self.pass(env, quest, 0, true)? {
+        if env.world.active_quest == -1 || !self.pass(env, quest, 0, true)? {
             self.pass(env, quest, 0, false)?;
         }
         self.fired.iter_mut().for_each(|f| *f = false);

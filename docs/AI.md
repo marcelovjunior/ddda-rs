@@ -3,9 +3,11 @@
 Evidence checked 2026-10-09 against the player's installed archives and the
 2017-12-13 Steam executable (identity in METHODOLOGY.md). Addresses below are
 virtual addresses in the unpacked analysis copy. Ghidra was read-only.
-Implemented: the headless graph reader and dump command. Tested: the entire
-installed rAIFSM corpus and synthetic regressions. **No AI simulation has
-been implemented or compared with a running original game.**
+Implemented: the headless graph reader and dump command (`mtfsm`), and a
+headless interpreter for enemy FSMs (`ddai`, section "Runtime"). Tested:
+the entire installed rAIFSM corpus, synthetic regressions, and the goblin
+FSMs from synthetic inputs. **Nothing has been compared with a running
+original game yet.**
 
 ## Corpus and locations
 
@@ -215,10 +217,292 @@ The ordered chain is 1 -> 2 -> 4 -> 3 -> 0. Callback disassembly ties the
 mask to a real engine flag; exact action identities and behavior remain
 unverified against the original.
 
+## Runtime (`crates/ddai`)
+
+Enemy and script FSMs run on one core owned by a `cBaseFSM` subclass:
+`cAIObject -> cBaseFSM -> cFSMOrder` (quest and stage scripts, `ddstory`)
+and `cAIObject -> cBaseFSM -> cThinkFSM -> cAIConsiderFSM ->
+cAILevelAbstractFSM` (enemies). `ddai` holds the shared core and the enemy
+owner; `ddstory` may move its cFSMOrder owner onto the core later (agreed
+with claude-7, board #957).
+
+- `ddai::cond`: condition trees (0x0117c040, operators 0x0117bd30 and their
+  typed routines), ported from `ddstory::cond`. An operation without
+  operands is true: 0x0117c040 leaves its result word at 1 (checked in the
+  disassembly). Bit-number and dynamic or enum indices are explicit errors.
+- `ddai::core`: the level stepper 0x00e092a0 with 0x00e06710 / 0x00e05800,
+  ported from `ddstory::script` and generic over an `Owner` (state-change
+  hook, variable lookup, update/state process callbacks). Checked again in
+  0x00e092a0: a state with `mSetting` bit 2 reruns its level in the same
+  frame until a transition fires (bit 4: also after a transition), so such a
+  state with no true link would hang the original; the port stops after 1000
+  reruns with an error. `mFSMAttribute` bit 2 makes 0x00e09750 create
+  per-cluster work memory (0x00e06e00 / 0x00e087e0), which only matters for
+  sub-machines; graphs with both are refused. The core attribute is 3
+  (0x00e05797) and the cluster timer (+0x18 / +0x1c) is not armed by any
+  implemented process.
+- `ddai::think::Thinker`: the `cThinkFSM` owner. Fields and properties from
+  vf03 0x007a82d0 (SysCondition +0x68, FreeCondition +0x70, Timer[0..3]
+  +0x78, RandomTimer +0x88, Check Pos vector +0x90, ...). `frame()` is vf06
+  0x007a9cb0: countdowns +0xa8 / +0xa5, the core step, then the running
+  timers (run mask +0x74) gain `delta / fps` and RandomTimer counts down.
+  The state-change hook is vf05 0x007a9da0 (clears SysCondition and the
+  request arm byte +0x6c, sets +0xa8 = 2, clears +0xac..+0xb8; FreeCondition
+  and the timers survive). The enemy's `cAICtrl` (unit +0x2E64) calls vf06
+  every frame from the character's think (docs/FRAME.md, phase 90).
+
+Variables implemented (getter addresses): SysCondition, FreeCondition,
+Timer[0..3], RandomTimer, Attack (flag), Motion Loop Cnt, Check Target
+Distance, ActionEx Fail Time, My AreaHit No (fields); Check Pos Length
+0x007aba80 (actor +0xe0 to the check point plus sWorldOffset, x87 sqrt, 0
+without an actor); Check Player Distance 0x007abe20 (to sPlayerManager
++0x99c, the first party slot); FSMFlag 0x007abcd0 -> 0x004b2810 (the
+current stage's FSM flag word, MSB-first); FSMAreaStayFlag 0x005bae00
+(sGameSys +0xb884c); SceNo 0x005baf00. Any other property is an error.
+
+Processes implemented, with the callbacks registered by 0x005a8470
+(`cAILevelAbstractFSM`), 0x007a74f0 (`cThinkFSM`) and the constructor 0x007495f0
+(`cBaseFSM`):
+
+| Process | update (entry) | state (each frame) | Effect here |
+|---|---|---|---|
+| CtrlAction | 0x005a8950 | 0x005a8990 | clear SysCondition 0x60000000; request `Action`; arm, then 0x20000000 when the actor's action +0x50 is set |
+| CtrlMotion | 0x005a8890 | 0x005a8990 | same, request `Motion` with the enabled options |
+| CtrlThinkTbl | 0x005a8a90 | 0x005a9240 | clear; each frame request `ThinkTable` (table, mode, class) and set 0x20000000 |
+| SearchSetTarget | 0x005a8a90 | 0x005a8aa0 | nearest live candidate strictly within range: request `Target`, 0x20000000; none: 0x40000000 |
+| SetEscapePos | 0x005a9170 | stub 0x007497f0 | request `EscapePos` (+ world offset when active) |
+| SetFreeFlg | 0x005a9210 | stub | request `FreeCondition` (OR into the actor's FSM, unit +0x2e64 -> +0x4c) |
+| Timer | 0x007a9de0 | none | Type 0 start from 0, 1 stop, 2 zero, 3 resume |
+| Set Check Pos | 0x007aaee0 | none | store the check vector |
+| Set Kill Owner | 0x007ab200 | none | request `KillOwner` |
+| Finish / Kill | stub | 0x007497e0 / 0x00749800 | SysCondition bit 0 / 0x10 |
+
+Every other process name is an error naming the process and state. Over the
+35 goblin graphs (`gob`, `em0100`, `em0101` paths) 32 run 300 idle frames;
+the rest stop at `Check Area Hit` and `Set QuestFlag`.
+
+What the FSMs are: the enemy graphs are short scripts that configure the
+native AI and then Finish. Combat itself runs in the think tables
+(`CtrlThinkTbl`, e.g. table 22 of `uEm0100`), which are code, not graph
+data. Example, q0007_gate2goblin0000_ai, from synthetic inputs (test
+`gate_goblin_idle_approach_notice`): s0000 -> "6秒後" (Timer[0] runs; after
+6 s, frame ~183) -> "フリーフラグ0on" (FreeCondition 1) -> Finish; restarted
+far from gate point B: s0000 -> "ポジションチェック" -> "ダッシュ"
+(EscapePos B, ThinkTable 22) -> Finish; at point B: FreeCondition 2 ->
+Finish; restarted with FreeCondition 3 at point A: "ポジションチェック" ->
+"発見～威嚇吠え" (found, threat roar: Action 72) -> Finish. The restart is
+the unit's own (next section); the test uses `Thinker::controlled_frame`
+or restarts by hand.
+
+Assumptions marked in the code: actor +0xe0 is a world-space position
+(**guessed** from the getters adding sWorldOffset); the target-search
+comparison traced for group 1 is used for every group, and group membership
+comes from the host; SetFreeFlg targets the actor's own FSM in the tests.
+
+## Think tables (`ddai::thinktbl`)
+
+The enemy FSMs hand combat to the unit's built-in think. CtrlThinkTbl
+(0x005a9240) gets the unit's `cThinkMgr` (uEm vf 0x2f4, uEm0100 0x008c7770:
+unit +0x6150) and a table (vf 0x2f8, 0x008eaf00: `0x017ebf78[index]`, 31
+tables in `.data`). The unit runs the table from its own think: uEm0100
+vf136 -> 0x008d2360, which first serves forced actions (damage, grabs),
+then, when the current action's record +0x50 is set or unit +0x7360,
+fills the target slots (0x008d2930), reloads the default table
+(0x008b80a0), runs the interpreter 0x008b81a0, rewrites the result
+(0x008d0fb0) and requests it as an action (vf132 0x008d11e0) if it differs
+from the current one or +0x6ff5 is set.
+
+**Records** (`cThinkMgrAct`, 0xa0 bytes; read at run time from the exe by
+`Tables::read`, 1062 records reachable from the 31 tables). Kind 1 records
+form AND chains (condition 0x008b9500 on each; code 9 ends a chain; then
+each runs as a command, 0x008ba2a0). Kind 0 rows are tried against the
+current target by 0x008b8bb0:
+- +0x08 flags: 1 end (pop a call or finish), 2 needs target +0x60 bit 0,
+  8 resume here next think, 0x10/0x20/0x40/0x80 compare +0x84 with
+  +0xe84, 0x100 sets +0x1210, 0x200 jump to the base table, 0x400 needs
+  +0x1211, 0x2000 call (else a jump), 0x4000 locks the table against the
+  default reload, 0x8000 delay +0x80 frames, 0x80000 pop a call at the
+  next row, 0x100000/0x200000 take a return, 0x400000 random block start,
+  0x40000000 block end, 0x4000000 sets +0x120f, 0x80000000 only when
+  resuming.
+- +0x0c: bit 31 not the last result again, 0x10 re-request the action.
+- +0x10 / +0x14: think flags required set / clear (0x008bbd30).
+- +0x18/+0x1c distance [min, max), +0x20/+0x24 angle (degrees, wraps when
+  min > max, 45..-45 is the back arc), +0x28/+0x2c height; FLT_MAX is no
+  limit; scaled by +0x44 when +0x48 (min side by min(scale, 1)).
+- +0x30 result: an action id, -1 none (continue), -2 return, -6 switch
+  table without an action; +0x34 the jump/call/switch table.
+- +0x38, +0x44, +0x50, +0x5c: four (op, a, b) triples. Op low 16 bits 1:
+  unit check callback `a` (think +0x4c; uEm0100 0x008ea7a0 -> 0x008ea7e0
+  below 1000, uEm 0x008ab100 from 1000), op high 16 bits 1 negates. Op 2:
+  unit set callback (+0x50, 0x008ac270 -> 0x008abfa0) on commit. Op low
+  byte 3: VM condition `op >> 20` as a check and VM command
+  `(op >> 8) & 0xfff` on commit (0x2f03003 = "timer a free" + "start
+  timer a at b frames").
+- +0x68 / +0x70: per-think (+0x1250) / persistent (+0x124c) state bits,
+  high dword require/forbid, low dword set/clear.
+- +0x78: four byte rules for the think bytes +0x60..+0x63 (0x008b7ff0,
+  0x008b8070).
+- +0x80..+0x9c: copied to the think's +0x24..+0x40; +0x88 is the random
+  weight in percent.
+
+**Random blocks**: the first row with 0x400000 rolls `rand * 2^-32 * 100`
+(0x00d00690); each row passes when the roll is in [sum, sum + weight).
+A row with both flags is a single "weight percent" chance.
+
+**Timers** (32 at +0xfac: two ids, a time in frames, flags): commands 0x30
+(start counting down), 0x49/0x4a (count up), 0x32 (keyed by the row's
+action, the per-action cooldown), 0x4d (stop); conditions 0x2f / 0x31
+(free), 0x50..0x53 (compare the time). Ticked by the unit's delta
+(0x008b7930 from uEm0100 vf08). A timer at 0 still counts as running.
+
+**Inputs the unit supplies** (host side in `ddai`):
+- target slots, 23 `cThinkMgrTargetData` (0x90 bytes) at +0x80, measured
+  by 0x008b6de0 (`Slot::measure`: XZ distance, height difference, bearing
+  `atan2(dx, dz) - yaw` in degrees). uEm0100 fills slot 0 with its target
+  (grab target, else +0x60c4, else the sensor's pick 0x00ab52e0, else
+  player 0), slot 1 with the escape point (SetEscapePos -> vf186
+  0x008c75d0 -> +0x60e0), slots 2..4 from +0x5f40 / +0x6140 / +0x5fb4
+  (0x008d2930);
+- 32 think flags (unit +0x6154..), written by 0x008d1280 and 0x008d2930;
+  flags 0..2 are the unit's alert state (0x008d1280, values 0/1/2; flag 2
+  sends the default table into combat table 1). Other flags used by the
+  melee rows (3, 8, 20, 21, 29) are not traced;
+- the check/set callbacks. Ported: ids that read only the current action
+  (0, 2..6, 12: walking, running, dashing, sitting, lying, guarding) and
+  the chances 10/11. The rest read the world (paths 1002/1003/1016/1017 in
+  0x008ab3b0 / 0x008ab5b0 / unit +0x5ca0, target state 16, ...) and are
+  the host's.
+
+**Goblin (uEm0100) tables**: default table 0x017e0858 (tables 0 and 2).
+With alert flag 2 it switches to table 1 (0x017db5d8), which sets state
+bit 2 (vf108 mode 2: 0x008d0fb0 then maps Wait 0 -> 1, turns 18..21 ->
+26..29, PutWeapon 30 -> 31) and goes to 0x017dac78: turn to face (75..150
+and 150..180 degrees each side), a 50/50 taunt (71 FindFinger / 72
+ThreatHowl, 0x017da138), then 0x017d95f8 -> 0x017d9058 by range: under 300
+(height +-150) 0x017d8798, under 700 0x017d8bf8, else 0x017d3838. Close
+range with the melee flags: 0x017cccb8, 30% 104 NAttack12, else 50/50 101
+NAttack1 / 102 NAttack2 (0x017cc7b8 adds 109 Swing, 106 LAttackV, 107
+LAttackH, 105 NAttack123 under flags 10/16). Mid range 0x017d0098: 40% 108
+JumpAttack at 350..450 within 15 degrees, 111 Thrust / 110 SwMove with
+other flags. Approach: 0x017cb9f8 dashes (13 DashTrace) under 2000, else
+runs (9 RunTrace); running counts timers 3/4 up and stumbles (11) after
+240 frames, or after 80 with chance 10. A downed target is kicked (112,
+0x017cbef8) with a 900-frame cooldown on timer 13 when flag 29 is set.
+Action ids name classes through the unit's action table 0x018335d0
+(0x44-byte records, DTI at +0x28, 237 entries).
+
+Table 22 (0x017e7798, the gate goblin's "dash" state) selects slot 1 (the
+escape point), queries a path every 30 frames (set 1002, timer 6), checks
+special moves (0x017c68b8, callbacks 1009..1013, 1025, 1027, 13), then
+dashes (13) when the point is within +-100 degrees, otherwise stops
+(WalkEnd 7 / RunEnd 10 / DashEnd 15) or turns (18..21) via 0x017c6e58.
+
+Tests (`tests/think_tables.rs`, the exe's tables with synthetic units)
+cover table 22, the taunt, close-range attack odds, the jump attack, the
+approach, the run stumble, the turns and the kick cooldown; the
+interpreter's own tests use synthetic records. Not ported: the slot
+orderings (0x008b71a0, commands 0x40..0x42), point targets (0x5c..0x60),
+commands 0x4e/0x4f/0x61/0x63/0x64/0x7a/0x7b and conditions 0x37..0x3e;
+they are errors when reached (the goblin tables do not reach them). The
+live comparison (a goblin fight's action ids per frame) is queued with
+claude-4 (board #1096).
+
+## FSM finish and restart
+
+`cAICtrl` (unit +0x2e64) embeds a `cAIFSMCtrl` at +0x44 (vtable
+0x0157836c): +4 active, +5 finished, +8 the FSM. Its per-frame 0x0059f440
+(cAICtrl mode +0x14 == 1, via 0x0059e070) runs the FSM; when the frame ends
+with SysCondition bit 0 (Finish) it rewinds the FSM to its start state
+(`cAIFSM` vf06 0x00e098a0 -> 0x00e09250: empty every layer's stack, push
+the node at resource +0x84, force a state entry) and sets finished. Nothing
+is unloaded and SysCondition stays set. 0x00aa78b0, the first call in
+`uEnemy::vf90` 0x00aa96e0, clears finished once the unit has a current
+action (+0x2dd4 != -1) whose record has +0x50 set (the same byte that
+lets the think run); it is the only store that clears it (scan of .text).
+The same frame's FSM update then enters the start state, whose entry hook
+(`cThinkFSM` vf05 0x007a9da0, via 0x00749820) clears SysCondition;
+FreeCondition and the timers carry over. So a finished enemy FSM restarts
+by itself as soon as its action allows (`Thinker::controlled_frame`, test
+`finished_fsm_restarts_when_the_action_allows`). Guessed: that resource
++0x84 is the initial state and that the hook's `this` is the FSM.
+
+A second path reloads an FSM by name: `cLinkUnitFSM` slot +0x20 0x00764f20
+queues `cScenarioArg_SetFSM` (callback 0x00765070), which loads through
+0x005a1370 / 0x00aad8f0 / 0x00bb45e0 -> `cBaseFSM::setupFSM` 0x00749740
+and sets SysCondition 0, active 1; a reload after a Finish still waits for
+0x00aa78b0. Kill (bit 0x10), 0x00e095c0 and `uEnemy::vf72` stop and unload
+instead. `sAICtrlManager` requests (0x00412910) are not involved.
+
+## The goblin unit (`ddenemyrt::goblin`)
+
+The unit side that runs the think and plays the actions (DDDA.exe
+2017-12-13 Steam; traced statically, not compared live).
+
+**Frame.** `uObjModel::vf08` runs vf90, vf91, vf92. In vf90
+(`uEnemy::vf90` 0x00AA96E0 -> `uEm0100::vf136` 0x008D2280 ->
+0x008D2360) the pending forced actions are served first (death +0x5B58,
+then damage +0x5B74, ...), otherwise the think table runs when the
+current action's done byte (+0x50) is set (or unit +0x7360), and its
+result is requested only if it differs from the current action (or
++0x6FF5). In vf91 (`uCharacterBase::vf91` 0x0084BF60) the action manager
+(0x007F1EA0) switches actions (old vf08, new vf05) and runs the current
+vf06, so a requested action starts and updates in the same frame. The
+hit callbacks (vf70/71/72) fill the pending slots that the next frame's
+vf90 serves.
+
+**Action ids.** Bits 24..31 pick an action bank, bits 0..15 the record
+(`0x007F1EA0`): bank 0 the goblin's (0x018335F8, 237 records),
+`uEnemy::vf05` (0x00AA8830) adds bank 1 (0x018635D0), 2 and 3 (0x01864B98,
+the common damage and death actions).
+
+**Motions.** Ids are bank `(id >> 8) & 0xF`, slot `id & 0xFF`
+(0x00AB4900, with fallbacks for missing damage motions). Banks
+(`uEm0100::vf05` 0x008CDC80, bound in load order by 0x008892B0): 0
+`e0100_co`, 1 `e0100_at`, 2 `e0100_dm`, 3 `e0100_ex`, 4 `e0100_pl`.
+
+| Action | Class, vf05 / vf06 | Motion | Moves | Done |
+|---|---|---|---|---|
+| 0 | Wait 0x008D4A10 / 0x008D4B90 | 0x0A (random start 0..179 on the first entry), idle variants 0x0F / 0x0B / 0x0C | no | every frame |
+| 1 | WaitAtck 0x008D4DD0 / 0x008D5000 | 0 and 1..4 in two phases | no | every frame |
+| 13 | DashTrace 0x008D6920 / 0x008D69B0 | 0x2C, then loop 0x2D | root travel; turns to its goal at 120 deg/s (+0x6008, ctor 0x008CD5B0) | once looping |
+| 26-29 | Turn90 / Turn180 0x008D6E90 / 0x008D7190, vf06 0x008D6FA0 | 0x35..0x38 (0x39..0x3C outside combat mode) | 90 or 180 degrees over the motion | motion end |
+| 101 | NAttack1 0x008DD200 / 0x008DC820 | 0x101 | root travel; tracks 3 deg/frame to frame 42 | motion end |
+| 102 | NAttack2 0x008DCA10 / 0x008DCAC0 | 0x102 | tracks to frame 31 | motion end |
+| 104 | NAttack12 vf06 0x008DCF60 | 0x101, at frame 59 0x102 from frame 16 | as above | motion end |
+| 0x7A..0x7F | cEmActDmgShrink 0x0089F2D0 / 0x0089F420 | 0x200, 0x205, 0x204 front; 0x202, 0x208, 0x207 back | root travel (no knockback data) | motion end |
+| 0x80 / 0x81 | cEmActActingDie 0x008A66E0 / 0x008A6930 | 0x239 / 0x23A | root travel | never |
+
+**Hit reactions.** Stagger (`uEm0100::vf70` 0x008D3DA0 -> `uEnemy::vf70`
+0x00AABAE0): with unit +0x2360 bit 0 (set by every standing action and
+the attacks), the goblin's light set: 50% 0x7A, else 50% 0x7C, else 0x7B
+(front, attacker within 90 degrees), 0x7D / 0x7F / 0x7E behind; without
+it, bank 3 record 8 (0x3000008, the same class and motion 0x200). Death
+(`uEm0100::vf72` 0x008D4080): the special deaths (break, gauge, burning,
+poison) fall through to `cEmActActingDie` 0x80 front / 0x81 back, or the
+knockdown deaths 199 / 227 when a knockdown is pending.
+
+**Host answers** (*placeholders*, marked in the code): the think flags
+2, 3, 8, 20 (alert and melee) are set while the goblin has a live
+target; path check 1017 answers true (open ground); DashTrace's goal is
+the target itself (the game steers toward the next point of its AI path,
++0x5C80 from 0x008AB5B0); the rand is a seeded generator.
+
+**FSM.** A goblin may carry a quest FSM (`Thinker::controlled_frame`):
+its `Action` requests become forced actions, `ThinkTable` hands the
+built-in table to the think, `EscapePos` fills think slot 1, free flags go
+back to the FSM. Test: q0002_goburin's action 1 (WaitAtck) comes first,
+then the tables taunt (71), dash (13) and attack.
+
 ## Next step
 
-Trace owner binding and variable-property lookup for one enemy or pawn route,
-then translate only that route's necessary callbacks into headless,
-per-entity simulation with an original-game oracle. Cover null operands,
-type coercions, process lifecycle and external transitions before treating
-this structural graph as an executable AI implementation.
+- Compare a live goblin fight with `ddai::thinktbl` (board #1096, claude-4),
+  then pin the melee think flags (3, 8, 20, 21, 29) and the world callbacks
+  (paths 1002/1003/1016/1017, 9, 16, 17, 20) to their unit writers.
+- A second table set: each enemy family has its own array behind uEm vf
+  0x2f8, e.g. uEm0700 0x01751f3c, uEm2000 family 0x01751f08, uEm5100
+  0x017218a0, uEm5200 0x016cd234, uEm5400 0x016a12bc, uEm5500 0x016af8f0,
+  uEm6000 0x0166f760, uEm8300 0x0165d670; the interpreter is shared, the
+  unit sides (callbacks, result rewrite, action table) are per family.
+- The two missing goblin FSM processes (`Check Area Hit` 0x007aafd0, `Set
+  QuestFlag` 0x007aad90).

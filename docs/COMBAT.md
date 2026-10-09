@@ -669,8 +669,128 @@ window).
 Not implemented: timed statuses and their effects, the species- and
 player-specific multipliers listed in sections 4 and 5.2 (the functions
 take the core inputs and say what they omit), the special enemy case of
-0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard,
-volume placement on joints and the shape tests.
+0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard.
+
+### 9.1 A fight in the host (`ddenemyrt`, `mtlmt::pose`)
+
+The first M4 slice runs the pipeline end to end, headless:
+
+- **Posing.** `mtlmt::pose::Skeleton` composes a model's rest skeleton
+  (`mtmod` bones) with a motion sampled at a frame (row vectors,
+  `world = local x parent world`, ANIMATION.md); `ddenemyrt::body` places
+  the model by position and yaw and hands the joint world matrices to
+  `ddcombat::volumes` as its `Pose`. Root travel (joint 255) moves the
+  unit and does not pose.
+- **Activation.** Each body's motion events switch its sequences on per
+  frame (2.1); its collision files are the body file plus the paired
+  attack file (goblin `e0100` + `e0100_00`; Arisen `m0000`, and `m0001` +
+  `m0001_00_lv1` for the sword, `m0007` + `m0007_00` for the staff).
+- **Frame order** (FRAME.md 5.1-5.7): `Host::tick` runs the hit pass on
+  the volumes placed last frame, then the Arisen move and attack (ddsim:
+  `ddsim::attack`, MOVEMENT.md "Attacks"), their new attacks free their
+  hit history and the staff's volleys fire shells, then the enemies
+  (think, action, motion, root
+  travel), the character push-out, and pass C (poses, volumes for the next
+  frame).
+- **Hit pass** (`ddenemyrt::combat`): each victim's contacts against
+  everyone's attack volumes, the history, the attacker's value (enemy or
+  player), the merge, then the enemy pools (`resolve_enemy_hit`) or the
+  player curve (`player_mitigate`; the player's own region scaling is not
+  applied). Stagger and death go to the enemy as forced actions.
+- **The Arisen's attacks** come from its input through ddsim's attack
+  actions; the fight poses the Arisen from ddsim's state (bank 7 is the
+  kit's weapon `_at` list: a level-1 Fighter with an Iron Sword or a
+  level-1 Mage with the starting staff, `ddenemyrt::fight::Kit`). S1_1 is
+  motion 0 of `motion\pl\m\m00\m0001_at\m0001_at`: its events switch on
+  `collision\pl\m0001` sequences 1 and 2 (groups 1 and 2, attacks 1 and
+  2, relation 1) on frames 6..10; the motion carries a root travel of
+  190 cm.
+
+Results (tests `ddenemyrt/tests/attacks.rs`, `ddhost/tests/goblin.rs`):
+- a sword light combo S1_1 -> S1_2 -> S1_3 against a standing goblin: S1_2
+  starts on S1_1's frame 13 and S1_3 on S1_2's frame 14 (slot 1 executing),
+  and each hits once from inside its hit window: **105** (motion frame 6,
+  the worked example), 85, 145; the heavy attack LandL hits for 125; the
+  staff's WandStrike1 -> WandStrike2 (Strike2 from Strike1's frame 25) for
+  49 and 69; each WandShot volley's shell for 27;
+- a goblin that closes in on a standing level-1 Fighter hits only from
+  volumes placed inside its windows: NAttack1 (`e0100_at` motion 1,
+  frames 45..48) deals **111.1** (200 x 100 / 180), NAttack2 (motion 2,
+  frames 34..37, attack 0.7) 97.2;
+- ten light attacks (S1_1, pressed from the wait) of 105 kill the goblin
+  (HP 1000); it flinches at the first nine (front or back: the lunge
+  carries the Arisen around it) and plays its death after the tenth;
+- the fight replays bit for bit (`Host::state_hash`).
+
+Placeholders in the slice (marked in the code):
+- the Arisen's attack target (`0x00B79090`, not traced) is the nearest
+  live goblin;
+- the history's relation hold (attacker flag +0x1EC1) is taken as
+  released when the attacker starts its next attack;
+- the goblin stands on the ground height under it (its own scenery sweep,
+  capsule r44 from 44 to 106 cm, is not run);
+- the rand of the think and of the actions is a seeded xorshift, not the
+  game's global rand (0x00d00690);
+- the critical roll (only critical-capable weapons read it) is seeded the
+  same way.
+
+### 9.2 Character push-out (`ddenemyrt::pushout`, traced)
+
+`0x004797E0` (step 38, after both move lines) walks the collision
+manager's contacts between characters' push-out volumes (groups with
+`mIsObjAdj`, switched on by the motions like the hit volumes; Arisen
+`m0000` group 2, a capsule r35 from the model origin to joint 13; goblin
+`e0100` group 0, spheres r35 on joints 1 and 2 and r22 on the head). Each
+contact carries a point, a normal (+0x690) and a depth (+0x6A0), stored by
+0x00773D30. Per pair:
+- characters in an ignore zone (0x00779B10), non-character units, pairs
+  0x00478F50 excludes and coincident positions are skipped;
+- the **higher push rank** (actor +0x1DF0, the collision's +0xD10) gives
+  way. On equal ranks the pair's first one does, unless it is the Arisen
+  (+0x206D bit 1, `uPlayer` ctor 0x00B55900) and the other a pawn (bit 2,
+  `uCmc` 0x00B53220) or an NPC (bit 3, `uNpc` 0x00BAB3A0); two pawns share
+  it by halves (factors 0.5 from 0x01539D10) when the manager's flag
+  +0x9C528 is set. A rank of 0 never moves;
+- 0x0076D420 records the push on the pushed collision, keeping the
+  deepest of the frame (depth +0x8C8, direction +0x890); 0x0076D6B0 applies
+  it in pass C (`uObjModel::vf09`, before the scenery sweep): x and z move
+  by depth x direction, y does not.
+
+Ranks are written every frame: the Arisen's actions set theirs
+(`cPlActWait` 13, `cPlActWalk` 14, run, sprint, jumps, falls, landings 15,
+ledge actions 0, sword ground attacks and staff strikes 14, WandShot 13;
+`ddsim::State::push_rank`); an
+enemy's is `cCharParamEnemy` +0xD4 `OBJ補正サイズ` (goblin 13), plus 1 while
+its action sets +0x2360 bits 0x104 (attacks, walks), else plus 2 for 0x18
+(runs, dashes) (`uEnemy::vf90` 0x00AA96E0). So a waiting or attacking
+Arisen gives way to a goblin of the same rank listed after it, and a
+dashing goblin (15) gives way to a waiting Arisen (13).
+
+Not traced: the shape routines' exact contact normal and depth (the
+closest-point direction and the overlap are used), the pair order of the
+manager's list (the fight lists the Arisen first), and the manager flag.
+
+### 9.3 The staff's shells (`ddenemyrt::shell`)
+
+WandShot (MOVEMENT.md "Attacks") fires one shell per volley (`0x00B4FA00`);
+the shell, not the staff, carries the hit. It comes from list uPlayer
++0x35BC, group 0, index 0 (the variant's +0x40 / +0x44; elemental
+enchantments, actor +0x26A0, pick indices 4-8). `vf198` (0x00B5BA20) loads
+the list from `param\shl_param_07` for the Arisen and pawns (actor +0x206D
+& 6), else `param\shl_param_07_he`. Entry 0 is a `cShlParamHoming`:
+collision sequence `seq_0` = 1 of the list's `mCollisionPath`
+`collision\pl\m0007` (group 1, a 20 cm sphere on the shell, attack 1 of
+`m0007_00`), speed `spd` 90 cm a frame changing by `spdAccel` -0.5 toward
+`spdMax` 80, `dieDist` 2000 cm. In the fight each shell is a fighter of its
+own (owner ids from 1000; `Fight::shooters` maps them to the Arisen) with
+the shooter's attack values, so its hit is valued like the Arisen's.
+
+*Placeholders* (the shell actions `cShlAct*` are not traced): the spawn
+point (the staff joint in the original) is 130 cm up and 40 cm ahead of the
+Arisen's feet; the homing (`hmg*` / `hm*`) is a straight flight at the
+middle of the target's hurt volumes, re-aimed every frame and stopping on
+it; the shell dies on its first hit (`dieFlag` 7 is *assumed* to include
+hits); `colTimer_0` and the later sequences are not used.
 
 ## 10. What is still unknown
 
