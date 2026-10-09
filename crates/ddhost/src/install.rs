@@ -21,7 +21,9 @@ pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
 pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 
 /// Motion banks ddsim uses, by bank number (`motion id >> 8`).
-pub const BANKS: [(u16, &str); 2] = [(0, MOTIONS), (6, DAGGER_MOTIONS)];
+/// The damage motions (bank 1 of the common bank table 0x014F1D30).
+pub const DAMAGE_MOTIONS: &str = r"motion\pl\m\m00\m0000_dm\m0000_dm";
+pub const BANKS: [(u16, &str); 3] = [(0, MOTIONS), (1, DAMAGE_MOTIONS), (6, DAGGER_MOTIONS)];
 
 /// The floats of an `rAdjustParam` (`ajp\0`, count at +8, floats from +12).
 pub fn adjust_table(vfs: &ddvfs::Vfs, path: &str) -> Result<Vec<f32>, String> {

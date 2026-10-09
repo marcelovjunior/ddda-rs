@@ -178,7 +178,7 @@ pub struct PlayState {
     acc: f32,
     /// Players' and goblins' (position, yaw) before the last fixed frame,
     /// for drawing between frames.
-    prev: HashMap<PlayerId, ([f32; 3], f32, ddsim::State, f32)>,
+    prev: Between,
     prev_goblins: Vec<([f32; 3], f32)>,
     /// Local Arisen seats (P1, P2).
     pub locals: Vec<PlayerId>,
@@ -320,7 +320,7 @@ pub fn setup(
         goblins,
         fight_data: data,
         acc: 0.0,
-        prev: HashMap::new(),
+        prev: Between::default(),
         prev_goblins: Vec::new(),
         locals,
         hp_max,
@@ -428,6 +428,14 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
     }
     st.sim.step(1.0 / ddsim::MOTION_FPS, &inputs, &st.terrain);
     if let Some(f) = st.fight.as_mut() {
+        // hard landings' damage (ddsim queues it, the fight owns HP)
+        for p in &mut st.sim.players {
+            if p.fall_damage > 0.0 {
+                let taken = f.fall_damage(p.id, p.fall_damage);
+                info!("play: seat {} fell: {taken:.0} HP", p.id);
+                p.fall_damage = 0.0;
+            }
+        }
         f.players_moved(&mut st.sim, &st.terrain, step);
         f.enemies(&st.sim, &st.terrain, step);
         f.push_out(&mut st.sim);
@@ -544,7 +552,7 @@ pub fn step(
                 }
             }
         }
-        st.prev = st.sim.players.iter().map(|p| (p.id, (p.position, p.yaw, p.state, p.frame))).collect();
+        st.prev.snapshot(&st.sim);
         st.prev_goblins = st.fight.as_ref().map_or_else(Vec::new, |f| f.goblins.iter().map(|g| (g.pos, g.yaw)).collect());
         fixed_frame(st, &local);
         pending.clear();
@@ -554,27 +562,42 @@ pub fn step(
     // any frame rate (*viewer choice*: the original steps once per drawn
     // frame with the frame's delta).
     let alpha = (st.acc / frame).clamp(0.0, 1.0);
-    let shown: Vec<Shown> = st
-        .sim
-        .players
-        .iter()
-        .map(|p| {
-            let mut s = Shown::of(p);
-            if let Some(&(pos, yaw, state, frame)) = st.prev.get(&p.id) {
-                (s.position, s.yaw) = between(pos, yaw, p.position, p.yaw, alpha);
-                // the pose too, within one motion (not across a loop's wrap)
-                if state == p.state && p.frame >= frame {
-                    s.frame = frame + (p.frame - frame) * alpha;
-                }
-            }
-            s
-        })
-        .collect();
+    let shown = st.prev.shown(&st.sim, alpha);
     show(st, &shown, &mut roots, &mut cams);
     let fight = st.fight.take();
     show_goblins(st, fight.as_ref(), &mut roots, alpha);
     hud.rows = hud_rows(st, &st.sim, fight.as_ref(), None);
     st.fight = fight;
+}
+
+/// The players as they were before the last fixed frame, so the screen can
+/// be drawn between it and the current one. Every fixed-step loop (play,
+/// the opening, a network session) snapshots before stepping and draws
+/// `shown(sim, acc / frame)`.
+#[derive(Default)]
+pub struct Between(HashMap<PlayerId, ([f32; 3], f32, ddsim::State, f32)>);
+
+impl Between {
+    pub fn snapshot(&mut self, sim: &Sim) {
+        self.0 = sim.players.iter().map(|p| (p.id, (p.position, p.yaw, p.state, p.frame))).collect();
+    }
+
+    pub fn shown(&self, sim: &Sim, alpha: f32) -> Vec<Shown> {
+        sim.players
+            .iter()
+            .map(|p| {
+                let mut s = Shown::of(p);
+                if let Some(&(pos, yaw, state, frame)) = self.0.get(&p.id) {
+                    (s.position, s.yaw) = between(pos, yaw, p.position, p.yaw, alpha);
+                    // the pose too, within one motion (not across a loop's wrap)
+                    if state == p.state && p.frame >= frame {
+                        s.frame = frame + (p.frame - frame) * alpha;
+                    }
+                }
+                s
+            })
+            .collect()
+    }
 }
 
 /// A body drawn `alpha` of the way from its previous fixed frame to the

@@ -130,7 +130,20 @@ pub struct MoveParam {
     /// (adjust 3 in degrees; `uPlayerBase::vf90` 0x00B61A20 stores it at
     /// uPlayer +0x2584 for the rotator 0x007975D0).
     pub turn: f32,
+    /// A landing this far (cm) below the fall's start is a hard landing
+    /// with damage (adjust 0x55 = -1000, compared with the signed drop by
+    /// `0x00B78A00`; 0x1DC = -1500 with the Grace augment, not modelled).
+    pub hard_landing: f32,
+    /// Its damage: `base + rate x (drop - hard_landing)` (adjust 0x56 = 200,
+    /// 0x57 = 80 percent; `0x00B78BF0`).
+    pub fall_damage_base: f32,
+    pub fall_damage_rate: f32,
 }
+
+/// Indices of the hard landing's threshold and damage in `rAdjustParam`.
+pub const ADJUST_HARD_LANDING: usize = 0x55;
+pub const ADJUST_FALL_DAMAGE_BASE: usize = 0x56;
+pub const ADJUST_FALL_DAMAGE_RATE: usize = 0x57;
 
 /// Index of the model's turn rate (degrees per frame) in the `rAdjustParam` table.
 pub const ADJUST_TURN_RATE: usize = 3;
@@ -151,6 +164,9 @@ impl MoveParam {
             sprint: get(ADJUST_SPRINT)?,
             fall_max: get(ADJUST_FALL_MAX)?,
             turn: get(ADJUST_TURN_RATE)?.to_radians(),
+            hard_landing: -get(ADJUST_HARD_LANDING)?,
+            fall_damage_base: get(ADJUST_FALL_DAMAGE_BASE)?,
+            fall_damage_rate: get(ADJUST_FALL_DAMAGE_RATE)? / 100.0,
         })
     }
 }
@@ -164,6 +180,9 @@ pub const MOVE_SHIPPED: MoveParam = MoveParam {
     sprint: 22.5,
     fall_max: 7.0,
     turn: 22.5 * std::f32::consts::PI / 180.0,
+    hard_landing: 1000.0,
+    fall_damage_base: 200.0,
+    fall_damage_rate: 0.8,
 };
 
 /// Simulation step in motion frames: 120 steps per second. Per-frame values
@@ -238,6 +257,9 @@ pub enum State {
     },
     /// The sprint jump's landing (`cPlActDashJumpLand`, action 0x0C).
     SprintJumpLand,
+    /// The landing after a fall of `MoveParam::hard_landing` or more:
+    /// `cPlActDmgGround` (action 0x19) variant 3, motion 0x107.
+    HardLanding,
     /// Taking hold of a ledge (`cPlCliffHangBegin`, action 0x34).
     /// `braced`: the short-bodied hang of `ledge::foot_point`.
     LedgeGrab {
@@ -319,6 +341,8 @@ impl State {
             State::Land { .. } => 12,
             // cPlActDashJumpLand::vf06
             State::SprintJumpLand => 0x18,
+            // cPlActDmgGround::vf05 (0x00AD2630): bank 1 = m0000_dm
+            State::HardLanding => 0x107,
             // cPlCliffHangBegin::vf06
             State::LedgeGrab {
                 phase: GrabPhase::Rise,
@@ -418,6 +442,8 @@ pub struct Player {
     /// Movement heading (uPlayer +0x2654): follows the stick at once while
     /// it is held; the facing turns toward it at `MoveParam::turn`.
     pub heading: f32,
+    /// Fall damage not yet taken by the host (HP), from hard landings.
+    pub fall_damage: f32,
     pub state: State,
     /// Frame within the current state's motion.
     pub frame: f32,
@@ -875,6 +901,7 @@ impl Sim {
             position,
             yaw,
             heading: yaw,
+            fall_damage: 0.0,
             state: State::Wait,
             frame: 0.0,
             velocity: [0.0; 3],
@@ -1289,6 +1316,14 @@ impl Sim {
                 }
                 self.attack_frame(i, light, ground, dt);
             }
+            State::HardLanding => {
+                // cPlActDmgGround::vf06: the motion plays out, then the wait
+                // (*assumed*: its end handling is not traced)
+                self.ground_move(i, state, ground, dt);
+                if self.players[i].state == state && self.players[i].frame >= self.period_of(state.motion_id()) {
+                    Self::set_state(&mut self.players[i], State::Wait);
+                }
+            }
             State::LedgeClimb { .. } => {
                 let len = self.period_of(state.motion_id());
                 // cPlCliffHangClimb::vf06 (0x00ADDC00): the target rises by
@@ -1504,6 +1539,20 @@ impl Sim {
             State::Shot { phase } => self.shot_frame(i, phase, light),
             _ => {}
         }
+    }
+
+    /// The landing for a fall: from `hard_landing` below the fall's start
+    /// (`Player::drop_from`) `0x00B6E5C0` requests `cPlActDmgGround`
+    /// variant 3 instead of `cPlActLand`, and the fall damage is queued.
+    // Translated from 0x00B6E5C0, 0x00B78A00 and 0x00B78BF0 (DDDA.exe
+    // 2017-12-13 Steam).
+    fn hard_landing(mp: &MoveParam, p: &mut Player, land: State) -> State {
+        let drop = p.drop_from - p.position[1];
+        if drop < mp.hard_landing {
+            return land;
+        }
+        p.fall_damage += mp.fall_damage_base + mp.fall_damage_rate * (drop - mp.hard_landing);
+        State::HardLanding
     }
 
     /// One frame of an air attack.
@@ -2127,6 +2176,7 @@ impl Sim {
                 };
                 p.position = r.position;
                 p.velocity = [0.0; 3];
+                let land = Self::hard_landing(&self.move_param, p, land);
                 Self::set_state(p, land);
             } else {
                 p.position = r.position;
@@ -2184,6 +2234,7 @@ impl Sim {
                 };
                 p.position = [next[0], g, next[2]];
                 p.velocity = [0.0; 3];
+                let land = Self::hard_landing(&self.move_param, p, land);
                 Self::set_state(p, land);
             }
             _ => p.position = next,
@@ -3335,6 +3386,42 @@ mod tests {
     }
 
     #[test]
+    fn a_fall_from_ten_metres_lands_hard_with_damage() {
+        let mut s = sim();
+        s.motions.insert(0x107, RootMotion::none(20));
+        s.motions.insert(7, RootMotion::none(30));
+        let none = HashMap::new();
+        for (top, hard) in [(1200.0, true), (900.0, false)] {
+            let p = s.player_mut(0).unwrap();
+            p.position = [0.0, top, 0.0];
+            p.drop_from = top;
+            p.velocity = [0.0; 3];
+            p.fall_damage = 0.0;
+            p.state = State::Fall;
+            let mut landed = None;
+            for _ in 0..200 {
+                frames(&mut s, 1, &none, &Flat(0.0));
+                let st = s.player(0).unwrap().state;
+                if st != State::Fall {
+                    landed = Some(st);
+                    break;
+                }
+            }
+            let p = s.player(0).unwrap();
+            if hard {
+                // 200 + 0.8 x (1200 - 1000)
+                assert_eq!(landed, Some(State::HardLanding));
+                assert!((p.fall_damage - 360.0).abs() < 1.0, "{}", p.fall_damage);
+                frames(&mut s, 25, &none, &Flat(0.0));
+                assert_eq!(s.player(0).unwrap().state, State::Wait);
+            } else {
+                assert!(matches!(landed, Some(State::Land { .. })), "{landed:?}");
+                assert_eq!(p.fall_damage, 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn relaxed_run_uses_the_town_motion_and_speed() {
         let mut s = sim();
         s.player_mut(0).unwrap().relaxed = true;
@@ -3385,6 +3472,9 @@ mod tests {
         t[ADJUST_SPRINT] = 22.5;
         t[ADJUST_FALL_MAX] = 7.0;
         t[ADJUST_TURN_RATE] = 22.5;
+        t[ADJUST_HARD_LANDING] = -1000.0;
+        t[ADJUST_FALL_DAMAGE_BASE] = 200.0;
+        t[ADJUST_FALL_DAMAGE_RATE] = 80.0;
         assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
         assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
     }

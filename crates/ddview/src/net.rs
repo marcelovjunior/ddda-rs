@@ -83,6 +83,8 @@ struct Session {
     start: Instant,
     /// Seconds not yet stepped.
     acc: f32,
+    /// The host's players before its last frame, to draw between frames.
+    between: play::Between,
     log_seen: usize,
     vfs: ddvfs::Vfs,
     mfx: mtshader::ShaderPackage,
@@ -319,6 +321,7 @@ pub fn setup(
         side,
         start: Instant::now(),
         acc: 0.0,
+        between: play::Between::default(),
         log_seen: 0,
         vfs: own,
         mfx,
@@ -532,6 +535,7 @@ pub fn step(
             server.pump(now);
             while s.acc >= frame {
                 s.acc -= frame;
+                s.between.snapshot(&server.host.sim);
                 // As --play: the start area's relaxed run, a dagger's
                 // second jump (docs/MOVEMENT.md).
                 for p in &mut server.host.sim.players {
@@ -569,7 +573,7 @@ pub fn step(
             }
             s.log_seen = server.log.len();
             looks = server.looks().clone();
-            server.host.sim.players.iter().map(Shown::of).collect()
+            s.between.shown(&server.host.sim, (s.acc / frame).clamp(0.0, 1.0))
         }
         Side::Joining(_) => vec![],
         Side::Guest { client, newest, told } => {

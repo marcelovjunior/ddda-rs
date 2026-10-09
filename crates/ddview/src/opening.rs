@@ -137,6 +137,8 @@ pub struct Session {
     guest_control_shot: bool,
     guest_npcs: HashMap<u32, [f32; 3]>,
     acc: f32,
+    /// The party before the last host frame, to draw between frames.
+    between: play::Between,
     cut: Option<Cut>,
     talk: Option<TalkView>,
     /// Start positions of the stage: position, angle, member offsets.
@@ -243,6 +245,7 @@ pub fn prepare(
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
         acc: 0.0,
+        between: play::Between::default(),
         cut: None,
         talk: None,
         starts,
@@ -698,6 +701,7 @@ pub fn step(
             .is_some_and(|story| story.quest(2).is_some())
     {
         s.acc -= frame;
+        s.between.snapshot(&s.host.sim);
         s.pending_input = PlayerInput::default();
         // the NPCs where the view shows them, for volumes that detect NPCs
         s.host.world.npcs = s
@@ -809,7 +813,7 @@ pub fn step(
         }
     }
     // The party; during a cutscene the camera belongs to the event.
-    let bodies: Vec<Shown> = s.host.sim.players.iter().map(Shown::of).collect();
+    let bodies: Vec<Shown> = s.between.shown(&s.host.sim, (s.acc / frame).clamp(0.0, 1.0));
     let follow = st.follow;
     if s.cut.is_some() {
         st.follow = u8::MAX;

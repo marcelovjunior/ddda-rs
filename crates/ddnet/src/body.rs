@@ -135,6 +135,7 @@ fn state(w: &mut Writer, s: State) {
         State::Fall => (9, false, false),
         State::Land { standing } => (10, standing, false),
         State::SprintJumpLand => (11, false, false),
+        State::HardLanding => (17, false, false),
         State::LedgeGrab { braced, phase } => {
             let p = match phase {
                 GrabPhase::Reach => 0,
@@ -232,6 +233,7 @@ fn read_state(r: &mut Reader) -> Result<State> {
         9 => State::Fall,
         10 => State::Land { standing: a },
         11 => State::SprintJumpLand,
+        17 => State::HardLanding,
         13 => State::LedgeHang { braced: a },
         14 => State::LedgeClimb { braced: a },
         t => return Err(format!("state tag {t}")),
