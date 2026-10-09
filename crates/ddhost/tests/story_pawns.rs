@@ -42,8 +42,11 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
     for _ in 0..10 {
         assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty());
     }
-    assert!(host.story_npc_action(1).is_none());
-    host.bind_story_npc(200, target, 1);
+    assert!(host.story_npc_action(2).is_none());
+    // Use an existing daily controller to verify host exclusion/restoration.
+    assert!(host.spawn_npc(2, 1).unwrap());
+    let normal_path = host.npcs.npcs[&2].controller.as_ref().unwrap().path.clone();
+    host.bind_story_npc(200, target, 2);
     let mut guard_seen = false;
     for _ in 0..300 {
         guard_seen |= host
@@ -53,10 +56,11 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
             .iter()
             .any(|r| matches!(r, NpcRequest::Guard { config, .. } if config.kind == 1));
         assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
+        assert!(!host.npcs.npcs.contains_key(&2), "normal controller must remain paused");
     }
     assert!(guard_seen);
-    assert_eq!(host.story_npc_normal_graph_present(1), Some(false));
-    host.observe_story_npc_talk_end(1);
+    assert_eq!(host.story_npc_normal_graph_present(2), Some(true));
+    host.observe_story_npc_talk_end(2);
     let mut finishes = 0;
     for _ in 0..600 {
         for request in host.tick(&Default::default()).unwrap().npc_requests {
@@ -66,10 +70,17 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
                 _ => {}
             }
         }
+        assert!(!host.npcs.npcs.contains_key(&2));
+        if finishes != 0 { break; }
     }
     assert!(host.story.as_ref().unwrap().world.gsf.get(381));
     assert_eq!(finishes, 1);
-    assert!(host.story_npc_action(1).unwrap().3);
+    assert!(host.story_npc_action(2).unwrap().3);
+    // The following frame frees the inactive applied wrapper; the normal
+    // graph is restored after this frame's normal-graph phase.
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.npcs.npcs[&2].controller.as_ref().unwrap().path, normal_path);
+    assert!(host.npcs.npcs[&2].action.is_none(), "restoration must not step the normal graph early");
     assert!(
         !host.world.applied_script_finished(200, &target),
         "graph Finish is not parent ApplyFSM readiness"

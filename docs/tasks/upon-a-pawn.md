@@ -175,3 +175,8 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Still pending: live NPC placement, guard eligibility/talk presentation,
   actual NPC movement, parent ApplyFSM pointer-lifecycle predicate, viewer
   actor integration and original comparison. Thus q0002 is still incomplete.
+
+- Follow-up verification: release viewer check passes with the new NPC request
+  variants. The installed host regression now retains a real daily graph,
+  proves it remains suspended throughout the applied action, and verifies
+  restoration without an early normal-graph step on the cleanup frame.
