@@ -102,3 +102,4 @@ Codex lane: see `docs/CODEX.md`.
 | [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
 | [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | assigned |
 | [m2-fixes](m2-fixes.md) | Close the M2 acceptance mismatches (speed, stop, stamina, slopes) | core | claude-1 | assigned |
+| [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | assigned |
