@@ -144,3 +144,11 @@ Codex lane: see `docs/CODEX.md`.
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | merged 2026-10-09 |
 | [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | merged 2026-10-09 |
 | [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | assigned (5) |
+| [movement-feel](movement-feel.md) | Opening slice: turning, locomotion blending, air attacks, falls (playtest) | core | codex-1 | assigned (slice 1) |
+| [dragon-attack](dragon-attack.md) | Opening slice: the dragon attack on Cassardis | core | codex-1 | assigned (slice 2) |
+| [upon-a-pawn](upon-a-pawn.md) | Opening slice: q0002, first pawn, goblins | core | codex-1 | assigned (slice 3) |
+| [opening-prologue](opening-prologue.md) | Opening slice: the playable prologue (stage 380) | core | codex-1 | assigned (slice 4) |
+| [chara-creation-ui](chara-creation-ui.md) | Opening slice: character creation (stage 801) | core | codex-1 | assigned (slice 5) |
+| [opening-movie](opening-movie.md) | Opening slice: WMV movie playback | core | codex-1 | assigned (slice 6) |
+| [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | assigned (slice 7) |
+| [skill-vfx](skill-vfx.md) | Opening slice: effects for attacks, skills, hits | core | codex-1 | assigned (slice 8) |
