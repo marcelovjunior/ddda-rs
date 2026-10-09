@@ -18,11 +18,25 @@
 //!    0x44, 0x90, 0x96, 0x99. uCnsEdit::vf24 0x00860ac0 applies each as
 //!    `local' = C x local` (row vectors): C scales the joint's axes and
 //!    adds the offset in the joint's own space. Types 0xb (ids 2, 3, 4, 6,
-//!    10; 0x0086d180) also take the child scale, type 9 (8, 12;
-//!    0x00867b70) and the default the scale only; type 0xc (0x96, 0x99;
+//!    10; 0x0086d180) also take the child scale. Type 9 (8, 12;
+//!    0x00867b70) cancels inherited axis length; type 0xc (0x96, 0x99;
 //!    0x00868000) is approximated as a plain scale.
 
 use crate::Error;
+
+/// Human-edit hand constraints (joint IDs 8 and 12) have kind 9 and
+/// ignore model scale (+0xb0 = 1), set by 0x0081c330. They cancel the
+/// current world axis lengths before applying their authored scale.
+/// Rotation is zero for these human-edit constraints. This is not the
+/// general type-9 matrix rule for arbitrary rotated constraints.
+// Translated from 0x00867b70 and 0x00860ac0 (DDDA.exe 2017-12-13 Steam).
+pub fn hand_axis_factors(scale: [f32; 3], world_axis_lengths: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| {
+        let length = world_axis_lengths[i];
+        let compensation = if length > f32::EPSILON { 1.0 / length } else { 1.0 };
+        compensation * scale[i]
+    })
+}
 
 /// One rHumanEdit (version 0x13).
 #[derive(Debug, Clone, PartialEq)]
@@ -566,6 +580,23 @@ fn joints(c: &Ctrl, present: &dyn Fn(u8) -> bool) -> BodyMorph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hand_size_cancels_nonuniform_inherited_scale() {
+        let inherited = [2.0, 0.5, 4.0];
+        let authored = [1.25, 0.75, 1.5];
+        let factors = hand_axis_factors(authored, inherited);
+        assert_eq!(std::array::from_fn::<_, 3, _>(|i| factors[i] * inherited[i]), authored);
+        assert_ne!(std::array::from_fn::<_, 3, _>(|i| authored[i] * inherited[i]), authored);
+    }
+
+    #[test]
+    fn hand_axis_cancellation_preserves_source_degenerate_boundary() {
+        let authored = [2.0, 3.0, 4.0];
+        assert_eq!(hand_axis_factors(authored, [0.0, f32::EPSILON, f32::EPSILON / 2.0]), authored);
+        assert_eq!(hand_axis_factors([1.0; 3], [2.0 * f32::EPSILON; 3]),
+            [1.0 / (2.0 * f32::EPSILON); 3]);
+    }
 
     #[test]
     fn measurements_use_world_joint_ids_and_preserve_height_distance_order() {

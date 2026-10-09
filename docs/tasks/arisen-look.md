@@ -86,3 +86,17 @@ checks 37 authored scales, zero bust, finite computed scales and their
 binding to the base skeleton. Both appearance integration tests and strict
 ddlook clippy pass. Release viewer build passed; no original
 NPC comparison is claimed.
+
+### Hand constraint scale follow-up
+
+Human-edit hand joints 8/12 use constraint kind 9 and explicitly set
+ignore-model-scale (+0xb0) in `0x0081c330`. `0x00867b70` cancels the
+incoming world axis lengths before `0x00860ac0` applies the authored
+scale. The viewer previously treated kind 9 as a plain multiplicative
+scale. The human-hand path now uses that compensation, retaining the
+source's strict epsilon boundary (a degenerate axis keeps factor one,
+rather than dividing by a clamped epsilon). Two regressions and strict
+ddlook clippy pass. Release viewer verification is pending the shared
+build slot; no original hand comparison is claimed. General rotated
+type-9 constraints, type-0xc constraints and the independent fresh-model
+body-measurement pipeline remain separate work.
