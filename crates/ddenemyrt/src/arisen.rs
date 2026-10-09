@@ -1,16 +1,15 @@
 //! The Arisen's side of a fight: its body (the male base skeleton `m000`,
 //! its motions and collision), its attack and defence values from the
-//! level and weapon tables, and a scripted light attack.
+//! level and weapon tables, and its weapon's motions for ddsim.
 //!
-//! The Arisen moves in `ddsim`; the fight poses it from ddsim's state (the
-//! motion of `State::motion_id` in bank `m0000_co`) or, while a scripted
-//! attack plays, from the attack motion. Attack input and the attack
-//! actions (`cPlAct*` for weapons) are not modelled yet: the attack is
-//! started by the host (a script), plays its motion once and moves the
-//! Arisen by the motion's root travel.
+//! The Arisen moves and attacks in `ddsim` (`ddsim::attack`); the fight
+//! poses it from ddsim's state: the motion of `State::motion_id`, bank 0
+//! `m0000_co` or, for the attacks, bank 7, the weapon's `_at` list.
 
 use crate::body::{load, Body, MotionId};
 use ddcombat::damage::{PlayerAttacker, PlayerDefender};
+use ddskill::vocation::WeaponCategory;
+use std::collections::HashMap;
 
 /// Bank of the common motions (`motion\pl\m\m00\m0000_co\m0000_co`), the
 /// one ddsim's motion ids address.
@@ -23,17 +22,11 @@ pub const WEAPON_CO_BANK: u8 = 6;
 pub const WEAPON_AT_BANK: u8 = 7;
 /// The sword's attack list `motion\pl\m\m00\m0001_at\m0001_at`.
 pub const SWORD_BANK: u8 = WEAPON_AT_BANK;
-/// The light sword attack: motion 0 of `m0001_at`. Its collision events
-/// switch on `collision\pl\m0001` sequences 1 and 2 (groups 1 and 2,
-/// attacks 1 and 2 of `m0001_00_lv1`, relation 1) on frames 6..10; attack
-/// 1 is COMBAT.md's worked example. Found by scanning every player motion
-/// list's events for those sequences: only this motion and m0001_at
-/// motions 200, 203 and 205 use them.
+/// The light sword attack (S1_1): motion 0 of `m0001_at`. Its collision
+/// events switch on `collision\pl\m0001` sequences 1 and 2 (groups 1 and
+/// 2, attacks 1 and 2 of `m0001_00_lv1`, relation 1) on frames 6..10;
+/// attack 1 is COMBAT.md's worked example.
 pub const SWORD_ATTACK_1: MotionId = MotionId::new(SWORD_BANK, 0);
-
-/// The push rank the sword's ground attacks write (actor +0x1DF0 = 14,
-/// `cPlActWpnSwordAtckLandS1_1` 0x00B3C795 and the rest of the chain).
-pub const SWORD_PUSH_RANK: u32 = 14;
 
 /// `param\pl\level\lvfighter` row of a level-1 Fighter (COMBAT.md 8).
 pub const FIGHTER_LEVEL_ROW: usize = 1;
@@ -53,6 +46,13 @@ pub struct ArisenData {
     pub attacker: PlayerAttacker,
     pub defender: PlayerDefender,
     pub hp_max: f32,
+    /// The weapon's category (`ddskill`): its motion banks and its
+    /// transition list in ddsim.
+    pub category: WeaponCategory,
+    /// The level row (the Arisen's level) and the weapon's level (item
+    /// +0x66, the value `0x00B82360` compares with cPlayerInfo +0x700).
+    pub level: u32,
+    pub weapon_level: u32,
 }
 
 impl ArisenData {
@@ -63,7 +63,7 @@ impl ArisenData {
             r"param\pl\level\lvfighter",
             FIGHTER_LEVEL_ROW,
             IRON_SWORD,
-            ["m0001_co", "m0001_at"],
+            WeaponCategory::Sword,
             // the sword: groups in m0001, attacks in m0001_00_lv1 (the `lv`
             // selector is *unknown*; lv1 as in COMBAT.md 8)
             (r"collision\pl\m0001", r"collision\pl\m0001_00_lv1"),
@@ -77,7 +77,7 @@ impl ArisenData {
             r"param\pl\level\lvmagicuser",
             MAGE_LEVEL_ROW,
             MAGE_STAFF,
-            ["m0007_co", "m0007_at"],
+            WeaponCategory::Staff,
             (r"collision\pl\m0007", r"collision\pl\m0007_00"),
         )
     }
@@ -87,13 +87,17 @@ impl ArisenData {
         level_path: &str,
         row: usize,
         weapon: u32,
-        lists: [&str; 2],
+        category: WeaponCategory,
         weapon_collision: (&str, &str),
     ) -> Result<Self, String> {
         let skeleton = load::skeleton(vfs, r"model\pl\m\m_base\m000\m000")?;
         let mut banks = vec![None; usize::from(WEAPON_AT_BANK) + 1];
         banks[usize::from(COMMON_BANK)] = Some(load::bank(vfs, r"motion\pl\m\m00\m0000_co\m0000_co")?);
-        for (bank, name) in [WEAPON_CO_BANK, WEAPON_AT_BANK].into_iter().zip(lists) {
+        // the category's lists bound at 0x600 and 0x700 (table 0x0163DF8C)
+        for (bank, name) in [WEAPON_CO_BANK, WEAPON_AT_BANK]
+            .into_iter()
+            .zip(category.motion_banks())
+        {
             banks[usize::from(bank)] = Some(load::bank(vfs, &format!(r"motion\pl\m\m00\{name}\{name}"))?);
         }
         let collision = vec![
@@ -129,28 +133,53 @@ impl ArisenData {
             attacker,
             defender,
             hp_max: f32::from(lv.hp_max),
+            category,
+            level: row as u32,
+            weapon_level: u32::from(u16::from_le_bytes([w.raw[0x66], w.raw[0x67]])),
         })
     }
-}
 
-/// A scripted attack in progress.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Swing {
-    pub motion: MotionId,
-    pub frame: f32,
-}
-
-/// Plays a scripted attack: advances it by `step` motion frames and
-/// returns the root travel over the step in model space (x, y, z), or
-/// None when the motion ended (frame past its last).
-pub fn advance(body: &Body, swing: &mut Swing, step: f32) -> Option<[f32; 3]> {
-    let frames = body.frames(swing.motion) as f32;
-    if swing.frame >= frames - 1.0 {
-        return None;
+    /// The weapon as ddsim knows it.
+    pub fn weapon(&self) -> ddsim::Weapon {
+        match self.category {
+            WeaponCategory::Sword | WeaponCategory::Mace => ddsim::Weapon::Sword,
+            WeaponCategory::Staff => ddsim::Weapon::Staff,
+            _ => ddsim::Weapon::None,
+        }
     }
-    let d = body
-        .root_motion(swing.motion)
-        .map_or([0.0; 3], |r| r.delta_once(swing.frame, step));
-    swing.frame += step;
-    Some(d)
+
+    /// How far the weapon's level is above the Arisen's (`0x00B82360`).
+    pub fn weapon_level_gap(&self) -> i32 {
+        self.weapon_level as i32 - self.level as i32
+    }
+
+    /// The weapon banks' motions for ddsim (`bank << 8 | slot`), with their
+    /// root tracks, curves and events.
+    pub fn sim_motions(&self) -> HashMap<u16, ddsim::RootMotion> {
+        let mut out = HashMap::new();
+        for bank in [WEAPON_CO_BANK, WEAPON_AT_BANK] {
+            let Some(b) = self.body.banks.get(usize::from(bank)).and_then(Option::as_ref) else {
+                continue;
+            };
+            for (slot, m) in b.list.motions.iter().enumerate() {
+                let Some(m) = m else { continue };
+                let root = ddsim::RootMotion::from_motion(m)
+                    .with_curves(b.list.curves[slot].clone())
+                    .with_events(b.list.events[slot].clone());
+                out.insert(u16::from(bank) << 8 | slot as u16, root);
+            }
+        }
+        out
+    }
+
+    /// Puts the weapon into `sim` for player `id`: its motions (once per
+    /// weapon), the player's weapon and its level gap.
+    pub fn equip(&self, sim: &mut ddsim::Sim, id: ddsim::PlayerId) {
+        let w = self.weapon();
+        sim.weapon_motions.entry(w).or_insert_with(|| self.sim_motions());
+        if let Some(p) = sim.player_mut(id) {
+            p.weapon = w;
+            p.weapon_level_gap = self.weapon_level_gap();
+        }
+    }
 }

@@ -14,6 +14,7 @@ ddexe = { path = "../ddexe" }
 ddparam = { path = "../ddparam" }
 dditem = { path = "../dditem" }
 ddsim = { path = "../ddsim" }
+ddskill = { path = "../ddskill" }
 ddvfs = { path = "../ddvfs" }
 mtarc = { path = "../mtarc" }
 mtfsm = { path = "../mtfsm" }

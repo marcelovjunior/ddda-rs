@@ -1,8 +1,8 @@
 //! M4's first slice, headless: one goblin against one Arisen in the host
 //! (docs/tasks/m4-goblin-fight.md). The goblin is driven by its think
 //! tables (ddai), plays its actions' motions with their root travel, and
-//! hits with the volumes its motions switch on; the Arisen swings the
-//! Fighter's sword attack 1 on a script. Hits, damage, pools and death
+//! hits with the volumes its motions switch on; the Arisen presses light
+//! attack (the Fighter's sword, S1_1 from the wait). Hits, damage, pools and death
 //! come from ddcombat, in the frame order of docs/FRAME.md. Skipped
 //! without the install.
 
@@ -59,8 +59,8 @@ struct Run {
 }
 
 /// The Arisen stands at the origin facing +z; the goblin starts 6 m ahead,
-/// facing it. With `swing`, the Arisen turns to the goblin and swings
-/// sword attack 1 whenever it is free and the goblin is within 2.5 m.
+/// facing it. With `swing`, the Arisen presses light attack whenever it
+/// waits and the goblin is within 2.5 m (the attack turns it to the goblin).
 fn fight(frames: u64, swing: bool) -> Run {
     let data = data().unwrap();
     let mut h = Host::new(
@@ -72,8 +72,10 @@ fn fight(frames: u64, swing: bool) -> Run {
     assert_eq!(h.join(ProfileId(1), Control::Local, [0.0; 3], 0.0), Some(0));
     let mut f = Fight::new(data);
     f.add_arisen(0);
+    f.equip(&mut h.sim, 0);
     f.add_goblin([0.0, 0.0, 600.0], std::f32::consts::PI);
     h.fight = Some(f);
+    let mut press = false;
     let mut run = Run {
         hits: vec![],
         actions: vec![],
@@ -83,7 +85,16 @@ fn fight(frames: u64, swing: bool) -> Run {
     };
     for _ in 0..frames {
         let mut inputs = FrameInputs::new();
-        inputs.insert(0, PlayerInput::default());
+        inputs.insert(
+            0,
+            PlayerInput {
+                sim: ddsim::Input {
+                    light: press,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
         let r = h.tick(&inputs).unwrap();
         let arisen = h.sim.player(0).unwrap().position;
         let f = h.fight.as_ref().unwrap();
@@ -91,11 +102,8 @@ fn fight(frames: u64, swing: bool) -> Run {
         let g = &f.goblins[0];
         run.goblin_motion.push((g.motion, g.frame));
         let d = ((g.pos[0] - arisen[0]).powi(2) + (g.pos[2] - arisen[2]).powi(2)).sqrt();
-        if swing && d < 250.0 && !g.dead() && f.arisen[&0].swing.is_none() {
-            let yaw = (g.pos[0] - arisen[0]).atan2(g.pos[2] - arisen[2]);
-            h.sim.player_mut(0).unwrap().yaw = yaw;
-            h.fight.as_mut().unwrap().attack(0);
-        }
+        let waits = h.sim.player(0).unwrap().state == ddsim::State::Wait;
+        press = swing && d < 250.0 && !g.dead() && waits && !press;
         run.hashes.push(h.state_hash());
     }
     let g = &h.fight.as_ref().unwrap().goblins[0];
@@ -151,7 +159,7 @@ fn the_goblin_approaches_and_its_hits_land_in_the_windows() {
     assert!((first.total - 200.0 * 100.0 / 180.0).abs() < 1e-3, "{first:?}");
 }
 
-/// The Arisen's sword attack 1 deals the worked example's 105 per hit; the
+/// The Arisen's light attack S1_1 deals the worked example's 105 per hit; the
 /// goblin flinches at each and dies on the tenth (HP 1000).
 #[test]
 fn ten_sword_hits_kill_the_goblin() {
@@ -172,14 +180,23 @@ fn ten_sword_hits_kill_the_goblin() {
     assert!(on_goblin[..9].iter().all(|e| !e.killed));
     assert!(on_goblin[9].killed);
     assert!(r.goblin_hp <= 0.0);
-    // every hit but the last made it flinch; the last one plays its death
+    // every hit but the last made it flinch (front or back: the attack's
+    // lunge carries the Arisen around the goblin); the last one plays its
+    // death
     let a: Vec<i32> = r.actions.iter().map(|x| x.1).collect();
     let flinches = a
         .iter()
-        .filter(|x| action::SHRINK_FRONT.contains(x) || **x == action::SHRINK_PLAIN_FRONT)
+        .filter(|x| {
+            action::SHRINK_FRONT.contains(x)
+                || action::SHRINK_BACK.contains(x)
+                || [action::SHRINK_PLAIN_FRONT, action::SHRINK_PLAIN_BACK].contains(x)
+        })
         .count();
     assert_eq!(flinches, 9, "{a:?}");
-    assert_eq!(a.last(), Some(&action::DIE_FRONT), "{a:?}");
+    assert!(
+        [action::DIE_FRONT, action::DIE_BACK].contains(a.last().unwrap()),
+        "{a:?}"
+    );
 }
 
 /// The same inputs give the same fight, frame by frame.
