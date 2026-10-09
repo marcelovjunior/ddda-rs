@@ -1,0 +1,102 @@
+# Chimera runtime evidence
+
+All addresses refer to DDDA.exe 2017-12-13 Steam. This is an incremental
+source translation, not a playable encounter or an original-game comparison.
+
+## Ownership and death
+
+`uEm5200::vf33` (`0x009a0880`) creates child units at body +0x72e0 and
++0x72e4, writes their parent pointers at +0x7278 and +0x72c0 respectively,
+and copies the body's scale to each. The classes are `uEm5200_00` and
+`uEm5200_01`. Calls to `0x00478d80` create `sObjCollision::cObjAdjIgnore`
+records for body/child pairs; these are collision-adjustment exclusions,
+not persistent placement-key assignments. Anatomical names and complete
+collision-to-life routing still need confirmation.
+
+Death selectors `0x009a4dc0`, `0x009b46b0`, and `0x009bd060` require a
+damage context and a not-dead actor. They set bit 2 at +0x2e38 and accept
+only when no lower bit is set in either +0x2e34 or +0x2e38. These are
+common action-priority masks, not part-state masks. Blocked requests remain
+pending. Accepted callbacks call common `uEnemy::vf72` before selecting
+the family action.
+
+The body chooses 0x57 during action 0x89, otherwise 0x3a when byte +0x1ed0
+is zero. With that byte set, motions 0x212/0x213/0x227/0x228/0x239 map to
+0x55/0x56/0x53/0x54/0x52; the fallback is 0x58. The byte's semantic name
+is not yet established by this work.
+
+Child 00 selects 0x32, calls parent reaction `0x009a5880`, and clears bit 1
+of its first collision object. Child 01 selects 0x38, copies the impact
+position, calls parent reaction `0x009a5a00`, and clears bit 1 of its first
+three collision objects through `0x009bd850`. Child 01 additionally rejects
+death when mode +0x72c4 is nonzero, action is 0x35/0x36, or its existing
+parent reports dead. Its other modes instantiate detached/remnant behavior;
+they must not become extra encounter kills.
+
+Parent reaction selectors request priority 11 or 12 according to +0x1ed0.
+The body's pending death at priority 2 therefore suppresses those reactions.
+The action depends on which child died, current motion, and, in fallback
+cases, the sign returned by `0x0099e7d0`. The typed selectors retain this
+unresolved geometric result as an explicit input. The additional Unit01
+notification through `0x0099e9b0` is not implemented.
+
+Common death `0x00aab3b0` passes actor placement keys +0x20ec/+0x20f0 to
+`0x004a7910` -> `0x004a7ad0` -> `0x0049f5d0`. The writer requires an
+active manager, valid layout group and nonnegative placement index. A
+child's placement identity cannot be replaced by its parent's. Cleanup
+`0x00aad0c0` queues linked-object message 4 and does not produce this fact.
+The stage-380 group-10/index-0 story condition must consume only the body's
+accepted, correctly bound persistent death.
+
+## Actions and damage leads
+
+The installed action tables use 0x44-byte records with DTI at **+0**,
+different from the goblin table's +0x28. Initialization `0x009a0880`,
+`0x009b0f50`, and `0x009b8f10` registers:
+
+| Actor | Table | Count |
+|---|---|---|
+| body | 0x0184bcd8 | 142 |
+| child 00 | 0x0184ec00 | 85 |
+| child 01 | 0x01850630 | 90 |
+
+These are runtime-read bulk records, not constants to copy into the repo.
+Body action 0x3a is `cEm5200ActFall` variant 1, **not** `cEm5200ActDie`.
+Fall entry/update (`0x009ad030`/`0x009ad270`) start motion 0x2b7 and wait
+for the source's contact/displacement condition before requesting action
+0x57. Treating 0x3a as an immediate standard death motion skips this path.
+Actions 0x52..0x58 use `cEm5200ActDie` variants 0..6. Entry/update
+`0x009aec20`/`0x009aef20` drive motions 0x239/0x23b/0x23c/0x2b8 and a
+180-unit cleanup timer. The timer runs after accepted death and must never
+be used to advance the prologue by itself.
+
+Body damage callback `0x009a44f0` scales HitInfo +0x78 only when actor
++0x7406 is zero and HitInfo +0x68 equals 1. The multiplier comes from
+actor +0x7268 while child 00 is alive, or +0x726c otherwise. They are
+loaded parameters, not values to invent. Body post-hit `0x009a4560` maps
+HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
+values to pool 0 for visual damage. Child post-hit callbacks
+`0x009b42f0`/`0x009bcb80` select pool 1 for hit kinds 4/6 respectively.
+These are post-hit visual consumers; they alone do not establish the full
+damage-routing algorithm.
+
+Child think roots depend on the parent's +0x5c14 and +0x5c18 == 2:
+child 00 uses 0x016fe6e8 or 0x016ff368; child 01 uses 0x016f8ee8 or
+0x016f9a28. Body array 0x016cd234 and fallback 0x0170f060 are selected
+by `0x009a0880`. Read records through the shared table walker.
+
+## Implemented and tested
+
+Isolated `ddenemyrt::chimera` source primitives select body/child death and
+parent reactions, preserving the masks and early-return behavior. Five
+regressions pass: all arbitration bits in both masks, missing damage and
+dead-state rejection, body motion overrides, child-01 guards, and the two
+parent reaction families (including zero/negative/missing impact side).
+The integration test includes the module by path pending the shared
+`lib.rs` owner's export. No game observation was performed.
+
+Still open: installed resources and spawn binding; complete damage routing;
+child anatomical mapping; action execution, root movement and collision;
+think driver and N-Arisen fight integration; story/live acceptance.
+Next action: load the three action/resource sets and trace the life-pool
+writer before binding combat death to the stage-380 placement.
