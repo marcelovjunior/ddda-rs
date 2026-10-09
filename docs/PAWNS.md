@@ -80,7 +80,7 @@ Each file holds `mQuality` and an `MtArray` of 900
 | `mRomPawnWeightType` | +0x58 | row of `PlStaminaMax` for base stamina |
 | `mRomPawnJob` | +0x59 | vocation: 1 Fighter, 2 Strider, 3 Mage, 7 Warrior, 8 Ranger, 9 Sorcerer (counts 6722/6831/6757/3169/3111/3110) |
 | `mRomPawnAiNo` (s16) | +0x5a | row of `AI\preset_study` copied into the knowledge block (+0x684) |
-| `mRomPawnCharaNo` (s16) | +0x5c | entry of `AI\preset_charainfo` (inclinations), applied by `0x00ca7320` |
+| `mRomPawnCharaNo` (s16) | +0x5c | entry of `AI\preset_charainfo` (inclinations, `0x00ca7220`); also seeds `mUseSceneTalk` (`0x00ca7320`) |
 | `mRomPawnNameNo` | +0x5e | index into the name lists |
 | `mRomPawnJobLevel[6]` | +0x5f | job levels for vocations 1,2,3,7,8,9 |
 | `mRomPawnNormalSkill[5]` | +0x65 | core skills; each is set only if its `rSkillList` level requirement is met by the current vocation's job level |
