@@ -65,8 +65,9 @@ and the tests/docs commit):
 - **Not done:** chatter (not reached); the staff pawn (`cCmcMagicUserCombo`
   not analysed; a Mage pawn takes no battle goal); skills; the goblin's
   `rAIEnemyActionParameter`; the battle flag's writer and goal
-  pre-emption. Live check not requested yet (pawn action ids during a
-  goblin fight would compare directly with `Pawn::history`).
+  pre-emption. Live check requested from claude-4 (board): the main pawn's
+  actions, pad and goal during a goblin fight, to compare with
+  `Pawn::history`.
 - **Implied runtime briefs:** the staff and skill interfaces; support
   goals (0x10 / 0x44) and the enemy action parameters; party commands
   from player input; chatter (0x00CA7320).
