@@ -69,8 +69,9 @@ The Arisen fights with the kit of the save's primary weapon: a staff plays
 the Mage's, anything else the Fighter's sword. `--kit fighter|mage`
 overrides it.
 
-The bars at the top left are a viewer overlay, not the game's GUI: HP and
-stamina, the pawn's HP, and the nearest goblin's HP.
+The HUD is the game's own, built from its GUI data: the health and stamina
+bars, the pawn's bar and the action prompts. Not yet shown: pawn names and
+icons, hired pawns, status icons and the minimap.
 
 Offline, the viewer menu pauses simulation and animation. In a network
 session it stops only your controls: networking and the shared world
