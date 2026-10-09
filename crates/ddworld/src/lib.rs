@@ -30,6 +30,7 @@ const RLAYOUT: u32 = 0x1530_2EF4;
 /// Side of a grid bucket, cm.
 const BUCKET: f32 = 400.0;
 
+#[derive(Clone)]
 pub struct Terrain {
     tris: Vec<[[f32; 3]; 3]>,
     /// Per triangle: its collision material's flag word (the material

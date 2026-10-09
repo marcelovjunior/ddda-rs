@@ -457,7 +457,13 @@ pub fn setup(
         goblins: 0,
         kits: HashMap::new(),
     };
-    let terrain = ddworld::Terrain::empty();
+    // The view's own copy of the stage collision: the follow camera pulls in
+    // against it (play::follow_camera). The host keeps its own for the
+    // simulation.
+    let terrain = ddhost::install::stage_collision(vfs, STAGE).unwrap_or_else(|e| {
+        warn!("opening: no collision for the camera: {e}");
+        ddworld::Terrain::empty()
+    });
     let mut st = match play::setup(
         commands,
         loader,
@@ -584,6 +590,8 @@ pub fn step(
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         if let Some(terrain) = streamer.take_terrain() {
+            // the camera's copy too (play::follow_camera)
+            st.terrain = terrain.clone();
             s.host.ground = Box::new(terrain);
         }
     }
@@ -713,6 +721,7 @@ pub fn step(
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
     while s.acc >= frame {
+        let _timing = crate::perf::Section::start("opening host frame");
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
         s.pending_input = PlayerInput::default();
@@ -755,6 +764,7 @@ pub fn step(
                         let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
                             &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
                             *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        st.terrain = terrain.clone();
                         s.host.ground = Box::new(terrain);
                         s.starts = starts.entries.iter().map(|e| (
                             [e.position[0], e.position[1], e.position[2]], e.angle,
