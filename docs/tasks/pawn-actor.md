@@ -1,9 +1,9 @@
 # pawn-actor: Saved and story pawns as active characters
 
-- **Owner:** Codex lane; staffing via head
+- **Owner:** codex-1 (head assignment #2233)
 - **Branch:** `task/pawn-actor`
 - **Board area:** `fight/pawn-actor`
-- **Status:** open; brief and source trace authorized by head #2131
+- **Status:** partial implementation; baseline record/equipment adapter ready for review
 
 ## Goal
 
@@ -76,7 +76,30 @@ files stay outside the repository.
 
 ## Results
 
-Source survey only; no active actor implementation in this branch.
+Implemented in `ddenemyrt::pawn_actor`: an owned saved-record snapshot per
+host actor ID, active equipment-slot resolution, enhanced main/offhand
+weapon values, armour defence and signed slash/strike/element resistance,
+and the defence/element contributions of both accessory instance blocks.
+Baseline `PlayerAttacker`/`PlayerDefender` inputs retain saved growth.
+No level-1 kit is substituted. Data comes from the installed item tables,
+enhancement resources and nine-slot defence selector in the executable.
+
+Tested: two synthetic regressions cover slot replacement, enhancement
+replacement, accessory write ordering, unavailable-item observations,
+signed resistance/capping and independent actor records. One installed
+regression loads all story records 10..14, verifies their saved fields and
+equipment conversion, and retains Rook's Mage level 6. All three pass in
+release mode. This is not an original-game comparison or a playable pawn.
+
+The item exclusion predicate `0x004647e0` is an explicit caller input;
+the installed fixture enables its starting gear and does not validate the
+general exclusion predicate. Body/motion construction, AI, active status
+modifiers, augments, special equipment skills, inventory-bag attachment and
+host integration remain unimplemented here. Accessory fields for other
+consumers are retained but not applied to HP/stamina/attack. These APIs
+provide baseline values, not fully modified combat actors.
+
+Source survey:
 0x00447390 runs edit conversion 0x00780fa0, parameter conversion 0x00446a30,
 equipment effects 0x00446860 and skill refresh 0x00780350, then copies pawn
 type, knowledge and inclination records into the active pawn-info record.
@@ -92,7 +115,73 @@ a separate pass: 0x00446860 scans 12 valid equipped slots, resolves each item
 through 0x00459340 and calls 0x00442fe0/0x00442d50 after resetting its output
 fields. Consumers and derived formulas still require tracing.
 
+Equipment consumer follow-up: `0x00b87450` sums exactly nine equipped slots,
+selected by the installed nine-word table at `0x015ea2a8` (slots 2 through
+10 in this build), rather than all twelve saved slots. Arisen and pawn bags
+are selected separately by actor flags and pawn index. Physical/magick
+defence use `0x0045a1b0/0x0045a270`; slash/strike percentages start at 100
+and subtract `0x0045a330/0x0045a3d0`. Element and status resistances start
+at zero and accumulate their item getters. `0x00b87940` then adds the two
+accessory bonus blocks at active-info +0x640/+0x6a0. Element/status sums
+are capped above at 100; negative resistance values are not generically
+clamped away. This is distinct from the twelve-slot equipment setup pass.
+
+Weapon attack getter `0x004599a0` and defence getter `0x0045a1b0` decode
+enhancement from the equipped item's flags when their level argument is
+negative: bits 0x400, 0x200, 0x40, 0x20, 0x10 and 0x08 select levels
+6 down to 1 in that priority order. Both call `0x0045b620`, which selects
+the installed `rItemLevelParam` row by item kind and level-up type. Reuse
+`dditem::lvparam` for those resources; raw `Item::attack()` alone does not
+represent an enhanced saved weapon. The decompiler omits that helper's
+floating-point result operations. Disassembly at `0x0045b6b5..0x0045b747`
+resolves them: XMM1 retains the original base, while each matching entry
+replaces XMM0 with `base * rate` (`0x0045b720`) or `base + rate`
+(`0x0045b72b`, direct flag). The last matching entry across levels 1 through
+the requested level wins; these changes do not compound. The getter
+`0x00cbf910` writes only XMM0, preserving XMM1. No match, missing row or
+unsupported item kind keeps the base. A level above 6 returns the original
+base at `0x0045b744`, and invalid/unavailable items return zero earlier.
+No enhancement formula was ported by this survey. The existing
+`dditem::forge::level_stat` and `level_table` already implement this rule,
+with `tests_forge::level_stats` covering replacement rather than
+compounding. `dditem::rules::instance_level` already decodes the equipped
+flags. Reuse these APIs rather than adding another enhancement calculator.
+
+Existing combat types already separate saved base attack/defence from
+weapon attack and equipment defence (`PlayerAttacker`, `PlayerDefender`).
+`ArisenData::load` currently fills them from a level-table row and one
+weapon, leaving armour contributions at defaults. A saved-record constructor
+must supply the preserved base values and the sourced equipment aggregation;
+reusing the existing kit constructor would lose both saved growth and gear.
+
+Staff input lead: `cCmcMagicUserCombo::vf17` (`0x00557040`) initializes
+three remaining presses (+0x280) and zero submitted shots (+0x284).
+Its update (`0x005570d0`) has its own state machine, rather than the sword
+combo template. In state 2 it submits through `0x00536940` (owner input
+object +0x30), increments the shot count, decrements remaining presses,
+and arms a 90-frame timeout for the next action acknowledgment. Subsequent submissions
+check the actual `cPlActWpnWandShot` action and its +0x84 shot count;
+time passing alone does not acknowledge a shot. `uCmc::vf200`
+(`0x00b537d0`) copies that input word to actor +0x32f0 before the common
+player pipeline. The alternate state 3 sets actor input mask 0x810000;
+its selection predicate and exact command meaning still need tracing.
+Final state 4 waits for actor +0x2650 == 0 and cancel slot +0x25a4 == 2
+before returning completion. Aim updater `0x005575e0` writes the target
+at +0x2fa0 with stage-coordinate conversion. A Mage adapter therefore
+needs shot-count, action, cancel-slot and target observations; replacing
+the weapon goal number in the sword-only driver is insufficient.
+
+The staff combo's range request is command **0xb4**, proven by ECX at
+`0x00557075` before `0x00542620`. Selector `0x0047ed00` maps commands
+0xb4..0xf9 to the bank at `sPlayerManager +0x8e0`, so this combo reads
+record zero. Resource initialization `0x0047e2b0` loads the nine ordered
+`AIPlayerActionParameter` paths into +0x8d0 onward, identifying +0x8e0 as
+`AI\\AIPlayerActionParameter\\AIPlActParamWand`. It also proves the existing
+sword bank at +0x8d4, whose `plact.rs` comment still labels the resource
+binding guessed. The tier selector remains the pawn skill-state query
+`0x00780ba0`; do not assume every saved pawn uses tier zero.
+
 Next: bind these active values to the existing combat representation, then
 trace the Mage virtual-pad decisions and motion/resource selection. Record
-recruitment/prologue setup already exist; body/stat/inventory conversion and
-Mage pawn inputs remain incomplete and untested by this source-only survey.
+recruitment/prologue setup and the tested baseline stat/equipment adapter
+exist; body/inventory/host integration and Mage pawn inputs remain incomplete.
