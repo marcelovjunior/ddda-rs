@@ -55,6 +55,10 @@ pub trait Host {
 pub struct Slot {
     /// +0x70 bit 0.
     pub valid: bool,
+    /// +0x70 bit 1, required by masked target selection commands.
+    pub selectable: bool,
+    /// +0x68 mask tested by 0x008bc3b0 (commands 0x41/0x42).
+    pub selection_mask: u32,
     /// +0x10: the thinker's position at measurement.
     pub self_pos: [f32; 3],
     /// +0x20: the target's position.
@@ -93,6 +97,8 @@ impl Default for Slot {
     fn default() -> Self {
         Slot {
             valid: false,
+            selectable: false,
+            selection_mask: 0,
             self_pos: [0.0; 3],
             pos: [0.0; 3],
             radius: 0.0,
@@ -229,6 +235,8 @@ pub struct ThinkMgr {
     /// +0xde4 / +0xe44: selected-slot history and its length.
     pub history: [u32; SLOTS],
     pub history_len: u32,
+    /// +0xd8b first eight slots ordered by 3D distance at think entry.
+    distance_order: [u8; 8],
     /// +0xe40: the current target slot.
     pub cur: u32,
     /// +0xe4c / +0xe50: target kind / id.
@@ -439,6 +447,7 @@ impl ThinkMgr {
             slots: [Slot::default(); SLOTS],
             history: [0; SLOTS],
             history_len: 0,
+            distance_order: [0, 1, 2, 3, 4, 5, 6, 7],
             cur: 0,
             kind: 0,
             kind_id: 0,
@@ -1017,6 +1026,19 @@ impl ThinkMgr {
                 }
                 self.select(b)
             }
+            // 0x008ba2a0 case 0x42, 0x008bc3b0 and 0x008bc410.
+            0x42 => {
+                if !*bd {
+                    *bd = true;
+                    self.history = [SLOTS as u32; SLOTS];
+                    self.history_len = 0;
+                }
+                let pick = self.distance_order.iter().copied().find(|&index| {
+                    let slot = &self.slots[usize::from(index)];
+                    slot.valid && slot.selectable && slot.selection_mask & b != 0
+                });
+                pick.is_some_and(|index| self.select(u32::from(index)))
+            }
             7 => {
                 self.explicit = false;
                 true
@@ -1135,6 +1157,17 @@ impl ThinkMgr {
                 }
                 true
             }
+            // 0x008ba2a0 case 0x4f -> 0x008b76e0: reset all timers,
+            // preserving flags outside the low three bits.
+            0x4f => {
+                for timer in &mut self.timers {
+                    timer.id_a = -1;
+                    timer.id_b = -1;
+                    timer.time = 0.0;
+                    timer.flags = timer.flags & !6 | 1;
+                }
+                true
+            }
             0x62 => {
                 if let Some(s) = self.slots.get_mut(a as usize) {
                     *s = Slot::default();
@@ -1210,7 +1243,7 @@ impl ThinkMgr {
                 self.f1210 = false;
                 true
             }
-            0x40..=0x42 | 0x4e | 0x4f | 0x5c..=0x61 | 0x63 | 0x64 | 0x7a | 0x7b => {
+            0x40 | 0x41 | 0x4e | 0x5c..=0x61 | 0x63 | 0x64 | 0x7a | 0x7b => {
                 return Err(Error::Unimplemented(format!(
                     "think command {code:#x} at {:#010x}",
                     rec.va
@@ -1529,7 +1562,18 @@ impl ThinkMgr {
         for t in &mut self.timers {
             t.flags |= 1;
         }
-        // 0x008b71a0 orders slots 0..7 for commands 0x40..0x42 (not ported).
+        // 0x008b71a0 second stable bubble sort, called with EDX=think+0x70.
+        // Invalid slots move behind valid slots; equal distances retain order.
+        self.distance_order = [0, 1, 2, 3, 4, 5, 6, 7];
+        for pass in 0..7 {
+            for j in ((pass + 1)..8).rev() {
+                let left = self.slots[usize::from(self.distance_order[j - 1])];
+                let right = self.slots[usize::from(self.distance_order[j])];
+                if (right.dist3 < left.dist3 || !left.valid) && right.valid {
+                    self.distance_order.swap(j - 1, j);
+                }
+            }
+        }
         for s in &mut self.slots {
             s.x80 = 1;
         }
@@ -1894,6 +1938,73 @@ mod tests {
     }
 
     const T: u32 = 0x1000;
+
+    #[test]
+    fn masked_selection_uses_nearest_eligible_slot_and_stable_ties() {
+        let table = Tables::from_records(vec![T], [row(T, 0, 1), end(T + 0xa0)]);
+        let mut m = mgr(T, at(1.0, 0.0));
+        for (index, distance, mask, selectable) in [
+            (0, 1.0, 4, false),
+            (1, 9.0, 4, true),
+            (2, 5.0, 2, true),
+            (3, 9.0, 4, true),
+        ] {
+            m.slots[index] = Slot {
+                valid: true,
+                dist3: distance,
+                selection_mask: mask,
+                selectable,
+                ..Slot::default()
+            };
+        }
+        let mut host = Fixed { roll: 0 };
+        m.think(&table, &mut host).unwrap();
+        let mut reset = false;
+        m.command(&mut host, &row(T, 0, 1), 0x42, 0, 0, 4, &mut reset, true)
+            .unwrap();
+        assert_eq!(
+            m.cur, 1,
+            "nearer unselectable and wrong-mask slots excluded; equal ties stable"
+        );
+        assert_eq!(&m.history[..m.history_len as usize], &[1]);
+        m.command(&mut host, &row(T, 0, 1), 0x42, 0, 0, 2, &mut reset, true)
+            .unwrap();
+        assert_eq!(m.cur, 2);
+        assert_eq!(&m.history[..m.history_len as usize], &[1, 2]);
+    }
+
+    #[test]
+    fn timer_reset_command_clears_ids_times_but_preserves_high_flags() {
+        let mut m = ThinkMgr::new();
+        m.timers.fill(Timer {
+            id_a: 5,
+            id_b: 7,
+            time: 123.0,
+            flags: 0x86,
+        });
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 0),
+            0x4f,
+            0,
+            0,
+            0,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        for timer in m.timers {
+            assert_eq!(
+                timer,
+                Timer {
+                    id_a: -1,
+                    id_b: -1,
+                    time: 0.0,
+                    flags: 0x81
+                }
+            );
+        }
+    }
 
     #[test]
     fn distance_min_inclusive_max_exclusive() {

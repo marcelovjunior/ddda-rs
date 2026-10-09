@@ -16,8 +16,10 @@
 //! targets are picked from the host's list of Arisen.
 
 pub mod arisen;
+pub mod beast;
 pub mod body;
 pub mod combat;
+mod enemy_stats;
 pub mod fight;
 pub mod goblin;
 pub mod pawn;

@@ -18,7 +18,7 @@ use crate::combat::{Attacker, Fighter, Victim};
 use ddai::thinktbl::em0100::{self, Driver};
 use ddai::thinktbl::{Host as ThinkHost, Slot, Tables};
 use ddai::Error;
-use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool, Resist};
+use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool};
 use ddcombat::volumes::HitHistory;
 use std::sync::Arc;
 
@@ -59,52 +59,7 @@ impl GoblinData {
             r"collision\em\e01\e0100\e0100",
             Some(r"collision\em\e01\e0100\e0100_00"),
         )?];
-        let gob = ddenemy::EnemyData::load(vfs, ddenemy::EnemyId::parse("em0100")?)?;
-        let stats = &gob.common.as_ref().ok_or("em0100: no common params")?.1;
-        let rst = gob.regions.as_ref().ok_or("em0100: no region status")?;
-        let region = rst
-            .regions
-            .iter()
-            .find(|r| r.kind == 0)
-            .ok_or("em0100: no region type 0")?;
-        let res = |k: &str| stats.resistances.get(k).copied().unwrap_or(1.0);
-        let resist = Resist {
-            element: [res("耐炎"), res("耐氷"), res("耐雷"), res("耐聖"), res("耐魔")],
-            slash: res("耐斬"),
-            strike: res("耐打"),
-        };
-        let regions = region
-            .elements
-            .iter()
-            .map(|e| {
-                let mut r = RegionPool::from_element(
-                    e.id,
-                    e.hp_max,
-                    e.dp_max,
-                    e.dp_speed,
-                    e.bp_max,
-                    e.bp_speed,
-                    e.damage_adjustment,
-                    e.hit_stop_adjustment,
-                    e.attributes,
-                    e.surface,
-                    e.dp_reset_timer_max,
-                    e.bp_reset_timer_max,
-                );
-                r.resist = resist;
-                // status thresholds (0x00770FD0), memory order of
-                // cCharParamEnemy +0x54..+0xA0; absent labels keep 999
-                let th = |k: &str| stats.resistances.get(k).copied().unwrap_or(999.0);
-                r.status = ddcombat::status::StatusPools::from_char_param([
-                    th("耐毒"), th("耐のろま"), th("耐暗闇"), th("耐睡眠"), th("耐油まみれ"),
-                    th("耐ずぶ濡れ"), th("耐敵化"), th("耐沈黙"), th("耐スキル封印"), th("耐呪い"),
-                    th("耐氷漬け"), th("耐延焼"), th("耐落雷"), th("耐久聖"), th("耐久魔"),
-                    th("耐石化"), th("耐攻撃力ダウン"), th("耐防御力ダウン"), th("耐魔法攻撃力ダウン"),
-                    th("耐魔法防御力ダウン"),
-                ]);
-                r
-            })
-            .collect();
+        let stats = crate::enemy_stats::load(vfs, "em0100")?;
         Ok(GoblinData {
             // the unit's scale (owner +0x60..+0x68) is *assumed* 1 for a
             // standard goblin
@@ -116,16 +71,10 @@ impl GoblinData {
             },
             tables: Arc::new(Tables::read(exe).map_err(|e| e.to_string())?),
             classes: em0100::action_classes(exe).map_err(|e| e.to_string())?,
-            attacker: EnemyAttacker::new(stats.attack, stats.magic_attack),
-            defender: EnemyDefender::new(stats.defense, stats.magic_defense),
-            regions,
-            obj_size: {
-                let x = &gob.common.as_ref().ok_or("em0100: no common params")?.0.object;
-                match x.get(&x.root, "OBJ補正サイズ") {
-                    Some([mtxfs::Value::U(v)]) => *v as u32,
-                    _ => return Err("em0100: no OBJ補正サイズ".into()),
-                }
-            },
+            attacker: stats.attacker,
+            defender: stats.defender,
+            regions: stats.regions,
+            obj_size: stats.obj_size,
         })
     }
 }

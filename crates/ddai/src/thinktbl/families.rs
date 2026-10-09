@@ -8,6 +8,13 @@ pub enum Family {
     Harpy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Action {
+    pub class: String,
+    /// Registration word +4, passed to action vf13 by 0x007f1ea0.
+    pub variant: u32,
+}
+
 impl Family {
     /// Constructor defaults: uEmWolfBase::vf33 0x008f06f0 and
     /// uEm0600::vf33 0x0093cbd0 (2017-12-13 Steam).
@@ -32,8 +39,12 @@ impl Family {
 
     /// Action registration 0x008f06f0 / 0x0093a6d0 calls 0x007f19c0
     /// with EDI counts 113 / 76 and a pointer to the DTI field. That
-    /// field advances by 0x44 bytes per action; it is not the record base.
+    /// field begins the 0x44-byte registration record.
     pub fn action_classes(self, exe: &ddexe::Exe<'_>) -> Result<Vec<String>, Error> {
+        Ok(self.actions(exe)?.into_iter().map(|a| a.class).collect())
+    }
+
+    pub fn actions(self, exe: &ddexe::Exe<'_>) -> Result<Vec<Action>, Error> {
         let (first_dti, count) = match self {
             Self::Wolf => (0x0183_86b0, 113),
             Self::Harpy => (0x0184_1370, 76),
@@ -42,10 +53,11 @@ impl Family {
         (0..count)
             .map(|i| {
                 let dti = exe.u32(first_dti + i * 0x44).map_err(|e| Error::Data(e.0))?;
-                names
-                    .get(&dti)
-                    .cloned()
-                    .ok_or_else(|| Error::Data(format!("{self:?} action {i}: no class for DTI {dti:#010x}")))
+                let class = names.get(&dti).cloned().ok_or_else(|| {
+                    Error::Data(format!("{self:?} action {i}: no class for DTI {dti:#010x}"))
+                })?;
+                let variant = exe.u32(first_dti + i * 0x44 + 4).map_err(|e| Error::Data(e.0))?;
+                Ok(Action { class, variant })
             })
             .collect()
     }
@@ -58,6 +70,33 @@ impl Family {
 pub struct HarpyChecks {
     pub state: u32,
     pub value_5860: f32,
+}
+
+/// Wolf-local checks. Sensor/joint/line-of-sight queries remain host work.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WolfChecks {
+    /// Living same-class sensor results counted by 0x008a9f00; excludes
+    /// the querying wolf, which check 0 explicitly adds back.
+    pub living_packmates: u32,
+    pub subtype: u8,
+    pub motion: u16,
+    /// Unit +0x604e, consumed once by check 6.
+    pub pending_notice: bool,
+}
+
+impl WolfChecks {
+    // Translated from 0x008f7440 (DDDA.exe 2017-12-13 Steam).
+    pub fn check(&mut self, id: u32, arg: u32) -> Option<bool> {
+        match id {
+            0 => Some(self.living_packmates.wrapping_add(1) <= arg),
+            2 => Some(u32::from(self.subtype) == arg),
+            4 => Some(u32::from(self.motion) == arg),
+            6 => Some(std::mem::take(&mut self.pending_notice)),
+            7 => Some(matches!(self.subtype, 10 | 0x91)),
+            1 | 3 | 5 | 1000.. => None,
+            _ => Some(false),
+        }
+    }
 }
 
 impl HarpyChecks {
@@ -86,6 +125,26 @@ impl HarpyChecks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wolf_pack_query_counts_self_and_notice_is_consumed() {
+        let mut wolf = WolfChecks {
+            living_packmates: 2,
+            subtype: 8,
+            motion: 0x101,
+            pending_notice: true,
+        };
+        assert_eq!(wolf.check(0, 2), Some(false));
+        assert_eq!(wolf.check(0, 3), Some(true));
+        assert_eq!(wolf.check(2, 8), Some(true));
+        assert_eq!(wolf.check(4, 0x101), Some(true));
+        assert_eq!(wolf.check(6, 0), Some(true));
+        assert_eq!(wolf.check(6, 0), Some(false));
+        assert_eq!(wolf.check(7, 0), Some(false));
+        wolf.subtype = 10;
+        assert_eq!(wolf.check(7, 0), Some(true));
+        assert_eq!(wolf.check(3, 0), None);
+    }
 
     #[test]
     fn harpy_state_and_unsigned_threshold_callbacks() {

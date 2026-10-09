@@ -520,7 +520,8 @@ The indexed placement override arrays are not yet exposed by this API.
 Action registration calls `0x007f19c0` with 113 wolf and 76 harpy entries
 (EDI verified in assembly at `0x008f0747` and `0x0093a754`). Its input
 points to the DTI field, at `0x018386b0` / `0x01841370`, and advances by
-0x44. It does not point 0x28 bytes before that field. Action records and
+0x44. The registration begins at that field; action creation `0x007f1ea0`
+passes word +4 as the variant to vf13. Action records and
 class names are read from the installed exe, not embedded.
 
 Harpy callbacks `0x0093bd60` / `0x0093bda0` are translated and tested:
@@ -533,3 +534,29 @@ Installed-data tests parse both graphs and all registered classes, and
 verify that parameterizing the walker preserves the goblin roots and its
 grabbed graph. This is table/callback support only; flight, action phases,
 combat integration and original-game comparisons are not yet complete.
+
+
+The family tables additionally reach common think commands that the goblin
+slice did not implement. Command 0x4f resets timer IDs/time and preserves
+high flags (`0x008b76e0`); command 0x42 selects the nearest eligible masked
+slot (`0x008bc3b0`, `0x008bc410`). Its stable distance ordering is the
+second sort in `0x008b71a0`, called with EDX = think +0x70. Tests cover
+selection masks, equal-distance order, nonselectable targets and timer flags.
+Wolf local check 0 counts living same-class sensor results plus the querying
+wolf (`0x008a9f00`, `0x008f7440`); it is a pack-size check. Sensor collection
+itself is still host work. Check 6 consumes the pending-notice byte once.
+
+The installed family bodies now load their own model/skeleton, three
+co/at/dm motion banks and collision resource. Unlike em0100, both resource
+lists register one rObjCollision for body and attacks, with no `_00` file.
+An installed-data test confirms attack and hurt activations in the wolf
+bite strike and harpy air-attack motions. Shared enemy status/stat loading
+is factored without changing the goblin path. Actor scale 1 remains unverified.
+
+Sourced action primitives cover the wolf bite sequence 0x100 -> 0x101 ->
+0x102 (`0x008fe340`, `0x008fe390`) and harpy vertical distance damping
+(`0x00937e10`); these have regression tests. A synthetic graph probe now
+reaches wolf Howling/AttackRun/TraceDash and harpy GroundToHover. This is
+not a fight acceptance: the harpy also reaches generated-point command
+0x5f, and host sensing, remaining actions, death and presentation integration
+are still in progress.
