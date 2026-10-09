@@ -82,3 +82,5 @@ Codex lane: see `docs/CODEX.md`.
 | [map-travel-links](map-travel-links.md) | World map, landmarks, fast travel | reader + exe | codex-1 | merged 2026-10-09 |
 | [sound-resources](sound-resources.md) | Sound banks, requests, streams | reader | codex-1 | assigned (5) |
 | [effect-links](effect-links.md) | Effect lists, motion-to-effect links | reader | codex-1 | assigned (6) |
+| [combat-rules](combat-rules.md) | Damage formula, resistances, stagger, hit detection | research | claude-8 | assigned |
+| [vocations-skills](vocations-skills.md) | Vocations, skills, augments, level growth | research | claude-9 | assigned |
