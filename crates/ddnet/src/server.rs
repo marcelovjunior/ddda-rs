@@ -5,6 +5,7 @@
 //! [`Server::step`] once per host frame with the host's own seats' input.
 
 use crate::body::Body;
+use crate::mirror::{self, LookData, Spot};
 use crate::link::Link;
 use crate::proto::{Inputs, Snapshot, ToClient, ToHost, PROTOCOL};
 use crate::transport::Transport;
@@ -29,6 +30,8 @@ pub struct ServerConfig {
     /// Where joining Arisen appear (stage frame, cm); seat `n` stands
     /// `150 * n` cm along x.
     pub spawn: [f32; 3],
+    /// The host's spot, sent in Welcome so a guest loads the same world.
+    pub spot: Option<Spot>,
 }
 
 struct Remote {
@@ -52,14 +55,40 @@ pub struct Server<D: Data, W: StoryWorld, T: Transport> {
     pub transport: T,
     pub config: ServerConfig,
     clients: BTreeMap<SocketAddr, Remote>,
-    history: VecDeque<(u64, Vec<Body>)>,
+    /// Snapshots sent, as delta baselines (`cmd_newest` unset).
+    history: VecDeque<Snapshot>,
+    /// Looks by seat (the host's own, pawns', and joined guests').
+    looks: BTreeMap<PlayerId, LookData>,
     /// Join, refusal and leave notes, for logs.
     pub log: Vec<String>,
 }
 
 impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
     pub fn new(host: Host<D, W>, transport: T, config: ServerConfig) -> Self {
-        Server { host, transport, config, clients: BTreeMap::new(), history: VecDeque::new(), log: vec![] }
+        Server {
+            host,
+            transport,
+            config,
+            clients: BTreeMap::new(),
+            history: VecDeque::new(),
+            looks: BTreeMap::new(),
+            log: vec![],
+        }
+    }
+
+    /// Sets the look of a seat (the host's Arisen, a pawn's seat) and tells
+    /// every guest.
+    pub fn set_look(&mut self, seat: PlayerId, look: LookData) {
+        let m = ToClient::Look { seat, look: look.clone() }.encode();
+        for r in self.clients.values_mut().filter(|r| r.seat.is_some()) {
+            r.link.send_reliable(m.clone());
+        }
+        self.looks.insert(seat, look);
+    }
+
+    /// The looks known, by seat.
+    pub fn looks(&self) -> &BTreeMap<PlayerId, LookData> {
+        &self.looks
     }
 
     /// Seats of the clients, with their misses (frames run on a repeated
@@ -94,7 +123,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
             let Ok(d) = r.link.receive(&bytes, now) else { continue };
             for m in d.reliable {
                 match ToHost::decode(&m) {
-                    Ok(ToHost::Hello { protocol, build, data, profile }) => self.hello(from, protocol, build, data, profile),
+                    Ok(ToHost::Hello { protocol, build, data, profile, look }) => self.hello(from, protocol, build, data, profile, look),
                     Ok(ToHost::Bye) => self.drop_client(from, "left"),
                     Err(_) => {}
                 }
@@ -127,7 +156,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         }
     }
 
-    fn hello(&mut self, from: SocketAddr, protocol: u16, build: u32, data: u64, profile: u64) {
+    fn hello(&mut self, from: SocketAddr, protocol: u16, build: u32, data: u64, profile: u64, look: Option<LookData>) {
         let Some(r) = self.clients.get(&from) else { return };
         if r.seat.is_some() {
             return;
@@ -160,17 +189,27 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
             Some(seat) => {
                 r.seat = Some(seat);
                 r.profile = profile;
-                let welcome = ToClient::Welcome { seat, frame: self.host.frame, delta: self.host.clock.delta };
+                let welcome = ToClient::Welcome { seat, frame: self.host.frame, delta: self.host.clock.delta, spot: self.config.spot };
                 r.link.send_reliable(welcome.encode());
                 for s in self.host.roster.seats() {
                     r.link.send_reliable(ToClient::Joined { seat: s.id, profile: s.profile.0 }.encode());
                 }
+                for (&s, l) in &self.looks {
+                    r.link.send_reliable(ToClient::Look { seat: s, look: l.clone() }.encode());
+                }
                 self.log.push(format!("{from}: joined as seat {seat}"));
                 let joined = ToClient::Joined { seat, profile }.encode();
+                let look_msg = look.as_ref().map(|l| ToClient::Look { seat, look: l.clone() }.encode());
                 for (a, o) in self.clients.iter_mut() {
                     if *a != from && o.seat.is_some() {
                         o.link.send_reliable(joined.clone());
+                        if let Some(m) = &look_msg {
+                            o.link.send_reliable(m.clone());
+                        }
                     }
+                }
+                if let Some(l) = look {
+                    self.looks.insert(seat, l);
                 }
             }
         }
@@ -180,6 +219,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         let Some(r) = self.clients.remove(&addr) else { return };
         if let Some(seat) = r.seat {
             self.host.leave(seat);
+            self.looks.remove(&seat);
             self.log.push(format!("{addr}: seat {seat} {why}"));
             let left = ToClient::Left { seat }.encode();
             for o in self.clients.values_mut() {
@@ -206,7 +246,8 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         }
         let report = self.host.tick(&inputs)?;
         let bodies: Vec<Body> = self.host.sim.players.iter().map(Body::of).collect();
-        self.history.push_back((report.frame, bodies.clone()));
+        let (vitals, enemies) = mirror::from_fight(self.host.fight.as_ref());
+        self.history.push_back(Snapshot { frame: report.frame, base: None, cmd_newest: None, bodies, vitals, enemies });
         if self.history.len() > HISTORY {
             self.history.pop_front();
         }
@@ -215,9 +256,10 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
                 r.link.send_reliable(ToClient::Story { frame: report.frame, text: format!("{q:?}") }.encode());
             }
             let payload = r.seat.map(|_| {
-                let base = r.snapshot_ack.and_then(|a| self.history.iter().find(|(f, _)| *f == a));
-                let snap = Snapshot { frame: report.frame, base: base.map(|b| b.0), cmd_newest: r.newest_cmd, bodies: bodies.clone() };
-                snap.encode(base.map_or(&[][..], |b| &b.1))
+                let base = r.snapshot_ack.and_then(|a| self.history.iter().find(|s| s.frame == a));
+                let now = self.history.back().expect("pushed above");
+                let snap = Snapshot { base: base.map(|b| b.frame), cmd_newest: r.newest_cmd, ..now.clone() };
+                snap.encode(base)
             });
             let p = r.link.packet(payload.as_deref(), now);
             self.transport.send(*addr, &p, now);
@@ -227,6 +269,6 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
 
     /// Hash of the bodies the host sent for `frame`, while it is kept.
     pub fn hash_at(&self, frame: u64) -> Option<u64> {
-        self.history.iter().find(|(f, _)| *f == frame).map(|(_, b)| crate::bodies_hash(b))
+        self.history.iter().find(|s| s.frame == frame).map(crate::snapshot_hash)
     }
 }
