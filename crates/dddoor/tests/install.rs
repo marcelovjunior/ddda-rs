@@ -13,6 +13,8 @@ fn installed_cassardis_door_candidates_and_authored_motions() {
     let candidates = placement::candidates(&vfs, &families, 200, &groups, &[(0,0)], &world).unwrap();
     let doorway = candidates.doors.iter().find(|d| d.id.group == 18 && d.id.record == 2).unwrap();
     assert_eq!(doorway.object, 7121);
+    eprintln!("Doorway controls: {:?}", doorway.record.fields.iter().filter(|(n,_)|
+        ["mFree00","mFree01","mAngleType","mFlag","mCheckAngle","mCheckRange"].contains(n)).collect::<Vec<_>>());
     assert!(doorway.transform.position.iter().all(|v| v.is_finite()));
     let mut checked = std::collections::BTreeSet::new();
     for door in &candidates.doors {

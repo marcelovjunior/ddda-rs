@@ -5,4 +5,5 @@
 //! caller inputs; an arbitrary distance check is not an opening request.
 
 pub mod placement;
+pub mod policy;
 pub mod runtime;
