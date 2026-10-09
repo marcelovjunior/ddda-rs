@@ -118,7 +118,11 @@ the requested level wins; these changes do not compound. The getter
 `0x00cbf910` writes only XMM0, preserving XMM1. No match, missing row or
 unsupported item kind keeps the base. A level above 6 returns the original
 base at `0x0045b744`, and invalid/unavailable items return zero earlier.
-No enhancement formula was ported by this survey.
+No enhancement formula was ported by this survey. The existing
+`dditem::forge::level_stat` and `level_table` already implement this rule,
+with `tests_forge::level_stats` covering replacement rather than
+compounding. `dditem::rules::instance_level` already decodes the equipped
+flags. Reuse these APIs rather than adding another enhancement calculator.
 
 Existing combat types already separate saved base attack/defence from
 weapon attack and equipment defence (`PlayerAttacker`, `PlayerDefender`).
