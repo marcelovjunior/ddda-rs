@@ -15,10 +15,14 @@ use ddcombat::damage::{PlayerAttacker, PlayerDefender};
 /// Bank of the common motions (`motion\pl\m\m00\m0000_co\m0000_co`), the
 /// one ddsim's motion ids address.
 pub const COMMON_BANK: u8 = 0;
-/// This crate's bank number for the sword attack list
-/// `motion\pl\m\m00\m0001_at\m0001_at` (the game's own bank number for it
-/// is *not traced*).
-pub const SWORD_BANK: u8 = 0x20;
+/// The weapon banks: a primary weapon's lists are bound at bank keys 0x600
+/// (`m000N_co`) and 0x700 (`m000N_at`) (table 0x0163DF8C,
+/// `ddskill::vocation::WeaponCategory::motion_banks`), so motion 0x700 is
+/// slot 0 of the weapon's attack list.
+pub const WEAPON_CO_BANK: u8 = 6;
+pub const WEAPON_AT_BANK: u8 = 7;
+/// The sword's attack list `motion\pl\m\m00\m0001_at\m0001_at`.
+pub const SWORD_BANK: u8 = WEAPON_AT_BANK;
 /// The light sword attack: motion 0 of `m0001_at`. Its collision events
 /// switch on `collision\pl\m0001` sequences 1 and 2 (groups 1 and 2,
 /// attacks 1 and 2 of `m0001_00_lv1`, relation 1) on frames 6..10; attack
@@ -36,6 +40,11 @@ pub const FIGHTER_LEVEL_ROW: usize = 1;
 /// The Iron Sword, item 301 (COMBAT.md 8; the Fighter actually starts with
 /// the Rusted Sword, 0x141).
 pub const IRON_SWORD: u32 = 301;
+/// `param\pl\level\lvmagicuser` row of a level-1 Mage.
+pub const MAGE_LEVEL_ROW: usize = 1;
+/// The Mage's starting staff, item 0x1AA (first-choice equipment,
+/// 0x00673740; `ddprogress::change::starting_items`).
+pub const MAGE_STAFF: u32 = 0x1aa;
 
 /// The Arisen's data for the fight.
 #[derive(Debug, Clone)]
@@ -49,31 +58,65 @@ pub struct ArisenData {
 impl ArisenData {
     /// A level-1 Fighter with an Iron Sword, from the install.
     pub fn fighter(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        Self::load(
+            vfs,
+            r"param\pl\level\lvfighter",
+            FIGHTER_LEVEL_ROW,
+            IRON_SWORD,
+            ["m0001_co", "m0001_at"],
+            // the sword: groups in m0001, attacks in m0001_00_lv1 (the `lv`
+            // selector is *unknown*; lv1 as in COMBAT.md 8)
+            (r"collision\pl\m0001", r"collision\pl\m0001_00_lv1"),
+        )
+    }
+
+    /// A level-1 Mage with the starting staff, from the install.
+    pub fn mage(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        Self::load(
+            vfs,
+            r"param\pl\level\lvmagicuser",
+            MAGE_LEVEL_ROW,
+            MAGE_STAFF,
+            ["m0007_co", "m0007_at"],
+            (r"collision\pl\m0007", r"collision\pl\m0007_00"),
+        )
+    }
+
+    fn load(
+        vfs: &ddvfs::Vfs,
+        level_path: &str,
+        row: usize,
+        weapon: u32,
+        lists: [&str; 2],
+        weapon_collision: (&str, &str),
+    ) -> Result<Self, String> {
         let skeleton = load::skeleton(vfs, r"model\pl\m\m_base\m000\m000")?;
-        let mut banks = vec![None; usize::from(SWORD_BANK) + 1];
+        let mut banks = vec![None; usize::from(WEAPON_AT_BANK) + 1];
         banks[usize::from(COMMON_BANK)] = Some(load::bank(vfs, r"motion\pl\m\m00\m0000_co\m0000_co")?);
-        banks[usize::from(SWORD_BANK)] = Some(load::bank(vfs, r"motion\pl\m\m00\m0001_at\m0001_at")?);
+        for (bank, name) in [WEAPON_CO_BANK, WEAPON_AT_BANK].into_iter().zip(lists) {
+            banks[usize::from(bank)] = Some(load::bank(vfs, &format!(r"motion\pl\m\m00\{name}\{name}"))?);
+        }
         let collision = vec![
             // the body (hurt group 1: head and torso) keeps its own attacks
             load::collision(vfs, r"collision\pl\m0000", None)?,
-            // the sword: groups in m0001, attacks in m0001_00_lv1 (the
-            // `lv` selector is *unknown*; lv1 as in COMBAT.md 8)
-            load::collision(vfs, r"collision\pl\m0001", Some(r"collision\pl\m0001_00_lv1"))?,
+            load::collision(vfs, weapon_collision.0, Some(weapon_collision.1))?,
         ];
-        let level = ddparam::Level::from_bytes(&load::read(vfs, r"param\pl\level\lvfighter", "rPlLevel")?)
-            .map_err(|e| format!("lvfighter: {e:?}"))?;
+        let level = ddparam::Level::from_bytes(&load::read(vfs, level_path, "rPlLevel")?)
+            .map_err(|e| format!("{level_path}: {e:?}"))?;
         let lv = level
             .entries
-            .get(FIGHTER_LEVEL_ROW)
-            .ok_or("lvfighter: no row 1")?;
+            .get(row)
+            .ok_or_else(|| format!("{level_path}: no row {row}"))?;
         let items = dditem::itl::ItemList::parse(&load::read(vfs, r"etc\item\itemList", "rItemList")?)
             .map_err(|e| format!("itemList: {e:?}"))?;
-        let sword = items.get(IRON_SWORD).ok_or("itemList: no Iron Sword")?;
+        let w = items
+            .get(weapon)
+            .ok_or_else(|| format!("itemList: no item {weapon:#x}"))?;
         let attacker = PlayerAttacker::new(
             f32::from(lv.attack),
             f32::from(lv.magic_attack),
-            sword.attack() as f32,
-            sword.magic_attack() as f32,
+            w.attack() as f32,
+            w.magic_attack() as f32,
         );
         let defender = PlayerDefender::new(f32::from(lv.defend), f32::from(lv.magic_defend));
         Ok(ArisenData {

@@ -141,3 +141,11 @@ fn sword_attack_1_hits_a_goblin_once_for_105() {
     assert!(e.reaction.stagger);
     assert_eq!(fighters[1].victim.hp(), 895.0);
 }
+
+#[test]
+fn a_level_1_mage_loads() {
+    let Some(vfs) = vfs() else { return };
+    let m = ArisenData::mage(&vfs).unwrap();
+    assert!(m.body.motion(MotionId::new(arisen::WEAPON_AT_BANK, 35)).is_some());
+    eprintln!("mage attack {:?} hp {}", m.attacker.base_attack, m.hp_max);
+}
