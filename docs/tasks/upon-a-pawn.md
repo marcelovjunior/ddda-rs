@@ -412,3 +412,19 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   0x00bbdaa0 starts that authored script before attempting the independent
   daily controller graph. The current host placement API still only retains
   authored_action metadata: script lifetime integration is the next action.
+
+### Initial authored-script lifetime checkpoint
+
+- load_story_npc_intel now queues nonempty placement FSMPath through the
+  existing applied-script owner. Source0x00bbdaa0 calls0x0059e260 before
+  normal daily graph loading; that function allocates cAIFSMCtrl with the
+  cAIActionFSMDemo wrapper. The independent daily owner remains suspended
+  and available for restoration by the existing Finish path.
+- Already queued explicit ApplyFSM supersedes the initial placement default.
+  Regression covers both initial script startup and explicit replacement,
+  proves the suspended unsupported daily graph is not stepped, and verifies
+  unload does not resurrect either owner. Placement5/story_pawns9 pass;
+  targeted host clippy passes with the documented pre-existing lint allowed.
+- This API is still not called automatically by the viewer. Next action is
+  materialization adapter integration, followed by real Guard interaction;
+  no route-completion or original-game comparison claim.

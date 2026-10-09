@@ -27,8 +27,8 @@ pub struct StoryNpcs {
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Create an intel after the placement adapter has resolved the
-    /// 0x00762000 materialization prerequisites (name family, persistent
-    /// life and archive readiness). Reading Candidates alone is not enough.
+    /// 0x00762000 materialization prerequisites (name family, intel-pool
+    /// capacity and archive readiness). Reading Candidates alone is not enough.
     /// 0x00bbd930 allocates normal controller state before daily graph load.
     /// A graph load failure is returned as a diagnostic while retaining
     /// that controller; it cannot be mistaken for an absent intel.
@@ -66,6 +66,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         self.npcs.npcs.insert(npc, normal);
         self.bind_story_npc(key.0, key.1, npc);
+        // 0x00bbdaa0 starts the placement FSM through 0x0059e260 before
+        // the independent daily graph runs. A queued explicit ApplyFSM is
+        // a later command and supersedes this initial placement default.
+        if !placement.authored_action.is_empty() {
+            self.story_npcs.pending.entry(key).or_insert_with(|| placement.authored_action.clone());
+        }
         self.story_npcs.intels.insert(key, placement);
         self.observe_story_npc_normal_controller(key.0, key.1, Some(true));
         self.world.observe_npc_intel(key.0, key.1, true);
