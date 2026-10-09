@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 
 pub mod attack;
+pub mod skills;
 pub mod ledge;
 pub mod stamina;
 pub mod sweep;
@@ -458,8 +459,17 @@ pub struct Player {
     pub volleys_fired: u32,
     /// The playing WandShot's state.
     pub shot: attack::ShotState,
+    pub skills: skills::Skills,
     light_held: bool,
     heavy_held: bool,
+}
+
+impl Player {
+    /// The active skill selects a per-character bank; ordinary actions keep
+    /// their existing motion IDs.
+    pub fn motion_id(&self) -> u16 {
+        self.skills.active.map_or_else(|| self.state.motion_id(), |a| a.motion)
+    }
 }
 
 /// A held ledge and the points the hang and climb move between.
@@ -750,6 +760,7 @@ pub struct Sim {
     /// lists); a player's weapon motions are looked up here before
     /// [`Sim::motions`].
     pub weapon_motions: HashMap<Weapon, HashMap<u16, RootMotion>>,
+    pub skill_definitions: HashMap<u32, skills::Definition>,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -799,6 +810,7 @@ impl Sim {
             sweep_param: sweep::SweepParam::default(),
             attack_param: ATTACK_SHIPPED,
             weapon_motions: HashMap::new(),
+            skill_definitions: HashMap::new(),
             pending: 0.0,
         }
     }
@@ -839,6 +851,7 @@ impl Sim {
             attacks_started: 0,
             volleys_fired: 0,
             shot: attack::ShotState::default(),
+            skills: skills::Skills::default(),
             light_held: false,
             heavy_held: false,
         });
@@ -879,7 +892,8 @@ impl Sim {
     /// The motion player `i` is playing.
     fn playing(&self, i: usize) -> Option<&RootMotion> {
         let p = &self.players[i];
-        self.motion_for(p.weapon, p.state.motion_id())
+        p.skills.active.and_then(|a| self.skill_definitions.get(&a.id)?.motions.get(&a.motion))
+            .or_else(|| self.motion_for(p.weapon, p.state.motion_id()))
     }
 
     /// Advances every player by `dt` seconds, in steps of `TICK` motion frames.
@@ -919,7 +933,9 @@ impl Sim {
         // the player's own time (cUnit +0x14) for its actions and physics;
         // stamina runs in game time (0x00B81450 uses sMain's delta)
         let unit_dt = dt * self.players[i].unit_rate;
-        self.frame_states(i, input, ground, unit_dt);
+        if !self.skill_frame(i, ground, unit_dt) {
+            self.frame_states(i, input, ground, unit_dt);
+        }
         self.stamina_step(i, state0, frame0, dt);
         // uPlayerBase::vf90: the safe ring, then the lost-body check
         self.record_safe(i, ground);
@@ -1632,13 +1648,12 @@ impl Sim {
     fn stamina_step(&mut self, i: usize, state0: State, frame0: f32, dt: f32) {
         let t = &self.stamina_tables;
         let p = &self.players[i];
-        let id = p.state.motion_id();
         let (from, to) = if p.state == state0 && p.frame >= frame0 {
             (frame0 as i32, p.frame as i32)
         } else {
             (p.frame as i32, p.frame as i32)
         };
-        let suppressed = self.motion_for(p.weapon, id).is_some_and(|m| {
+        let suppressed = self.playing(i).is_some_and(|m| {
             m.event_bits(stamina::RECOVERY_SUPPRESS_GROUP, from, to) & stamina::RECOVERY_SUPPRESS_BIT != 0
         });
         let recovery = if suppressed {
@@ -1758,9 +1773,8 @@ impl Sim {
         let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
         let weapon = self.players[i].weapon;
-        let period = self
-            .motion_for(weapon, state.motion_id())
-            .map_or(30.0, RootMotion::period);
+        let period = self.playing(i).map_or(30.0, RootMotion::period);
+        let looping = state.looping() && self.players[i].skills.active.is_none();
         let p = &mut self.players[i];
         let mut target = p.position;
         if let Some(v) = speed {
@@ -1778,10 +1792,11 @@ impl Sim {
             target[2] += step[1];
             p.speed = v;
             let f = p.frame + dt;
-            p.frame = if state.looping() { f.rem_euclid(period) } else { f };
-        } else if let Some(m) = lookup(&self.motions, &self.weapon_motions, weapon, state.motion_id()) {
+            p.frame = if looping { f.rem_euclid(period) } else { f };
+        } else if let Some(m) = p.skills.active.and_then(|a| self.skill_definitions.get(&a.id)?.motions.get(&a.motion))
+            .or_else(|| lookup(&self.motions, &self.weapon_motions, weapon, state.motion_id())) {
             p.speed = 0.0;
-            let d = if state.looping() {
+            let d = if looping {
                 m.delta(p.frame, dt)
             } else {
                 m.delta_once(p.frame, dt)
@@ -1789,7 +1804,7 @@ impl Sim {
             let (s, c) = p.yaw.sin_cos();
             target[0] += d[0] * c + d[2] * s;
             target[2] += -d[0] * s + d[2] * c;
-            p.frame = if state.looping() {
+            p.frame = if looping {
                 (p.frame + dt).rem_euclid(m.period())
             } else {
                 p.frame + dt

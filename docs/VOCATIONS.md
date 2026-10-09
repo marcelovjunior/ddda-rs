@@ -962,3 +962,31 @@ and the World mirror; the live level-7 Mage values (#722).
    `PlStamina_*` rows into skill actions; trace the magick and bow costs.
 5. **Level-3 skills from equipment** (with claude-6): item flag bit 29 and
    skill ids in item data.
+
+## Equipped skill runtime (in progress)
+
+`ddskill::magic` reads `rMagicActParamList` (`map\0`, version 4) from the
+installation. Loader 0x00CC71A0 allocates 0x490-byte objects; 0x00825F80,
+0x00826E90 and 0x008253C0 define the serialized order (769 bytes for a
+three-level record). All four installed lists parse: staff 30, shield 15,
+human staff 32, NPC staff 2. Truncated and trailing files are rejected.
+This closes the earlier unknown about staff stamina: level fields +0xE4
+(chant frames) and +0xE8 (signed stamina change) are consumed by 0x00B49B60
+and 0x00B47890. Disassembly identifies Articulacy as augment 81 and
+Conservation as 82. Both unequipped values are read from PlAbilityParam.
+
+The initial supported actions are base-level Broad Cut (41), Tusk Toss
+(43), Ingle (210) and Levin (212). Sword vf06s 0x00B3E290/0x00B3E9A0
+select motions 0x73A/0x740. The equipped skill's own list replaces bank 7
+(0x00AC65A0); per-character banks prevent one player changing another's
+animation. Sword costs use PlStamina_Sword and Proficiency's resource
+value. 0x00B60F10 triggers on the **falling** edge of event group 1 bit 30,
+not action entry or its rising edge. Regression tests distinguish these.
+
+The base spell path follows chant/release/end phases at 0x00B456C0,
+0x00B45DD0 and 0x00B47890. Ingle/Levin select shell groups through action
+record parameters and the runtime magic list. The current checkpoint
+loads four motion banks and runs all four actions headlessly, charging
+once and keeping a second player independent. Damage, viewer keys,
+higher levels, manual targeting, chant sharing and LAN skill activation
+are not implemented at this checkpoint. No live comparison is claimed.

@@ -23,3 +23,5 @@ pub mod goblin;
 pub mod pawn;
 pub mod pushout;
 pub mod shell;
+
+pub mod skills;
