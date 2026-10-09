@@ -82,6 +82,13 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   flags. Both installed-resource and boundary/high-bit preservation tests
   pass. The binder 0x008892b0 selects flag bit 0 and passes per-class
   indices to `uObjModel::vf79` 0x00889510.
+- Added `DragonAiData::load_body` using those bound resources and a
+  caller-supplied actor scale. It loads the skeleton, five motion banks
+  and three collision files; existing combat volume activation filters
+  by each file's resource ID. The installed regression checks that all
+  eight motion IDs selected by the six entrance actions are available.
+  Codex-1 independently ran all three dragon tests, passing. This is
+  body-data loading, not yet action stepping or an original-game comparison.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's

@@ -50,6 +50,39 @@ pub struct DragonAiData {
 }
 
 impl DragonAiData {
+    /// Binds the model, motion lists and collision resources selected by
+    /// the initialized descriptor table. Scale belongs to the actor's
+    /// placement; it is deliberately supplied by the caller.
+    ///
+    /// Translated from 0x008892b0 / 0x00889510 (DDDA.exe 2017-12-13 Steam):
+    /// bit 0 enables binding, motion banks advance in descriptor order.
+    /// Collision activations select the loaded file by its resource ID.
+    pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
+        use crate::body::{Body, load};
+        let bound: Vec<_> = self.resources.iter().filter(|r| r.flags & 1 != 0).collect();
+        let models: Vec<_> = bound.iter().filter(|r| r.class == "rModel").collect();
+        if models.len() != 1 {
+            return Err(format!("dragon: expected one bound model, got {}", models.len()));
+        }
+        let skeleton = load::skeleton(vfs, &models[0].path)?;
+        let banks = bound
+            .iter()
+            .filter(|r| r.class == "rMotionList")
+            .map(|r| load::bank(vfs, &r.path).map(Some))
+            .collect::<Result<_, _>>()?;
+        let collision = bound
+            .iter()
+            .filter(|r| r.class == "rObjCollision")
+            .map(|r| load::collision(vfs, &r.path, None))
+            .collect::<Result<_, _>>()?;
+        Ok(Body {
+            skeleton,
+            banks,
+            collision,
+            scale,
+        })
+    }
+
     /// Reads the Cassardis sequence's reachable think records and dragon
     /// action class names. No bulk game records are compiled into the port.
     pub fn opening(exe: &ddexe::Exe<'_>) -> Result<Self, Error> {
