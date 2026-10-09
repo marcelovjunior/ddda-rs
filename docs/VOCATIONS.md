@@ -20,7 +20,9 @@ vocation-rank thresholds. Everything else is static analysis.
 - Learning costs live in one resource, `etc\skill\skill` (`rSkillList`,
   magic `skl\0`): 18 core skills, 131 weapon skills x 2 levels, 78 augments.
   Which vocation and weapon a skill belongs to, its action id and its name
-  come from static tables in the exe.
+  come from static tables in the exe; `ddskill::catalogue` reads them at run
+  time from the player's DDDA.exe and resolves every skill to its action
+  class and motion list.
 - Level growth: each level adds the `rPlLevel` row of the vocation held *at
   that moment*; changing vocation never recomputes stats. The experience
   curve and the discipline conversion are translated and match the running
@@ -184,6 +186,194 @@ Staff, magick shield and bow skills have no row (0); their costs are elsewhere
   cannot use and, except for Mage and Sorcerer, staff slots 3..5 ("Mystic
   Knights and Magick Archers may only enable three skills.",
   `shop_guild_eng` 105).
+
+### Action ids, action classes and motions (traced)
+
+An action id is `group << 24 | weapon << 16 | index`. The player's action
+controller (`uPlayer`+0x2db8) keeps one record table per group; the record
+is selected by `index` alone (0x007f19c0 stores pointers `table + i * 0x44`,
+0x007f2020 overrides single entries from `-1`-terminated lists). The
+`weapon` byte only labels the id.
+
+- Group 0, common actions: 0x01866c48, 0x103 records (`uPlayerBase::vf197`
+  0x00b60870). Per-weapon override lists (0x0186f488, 0x0186f140,
+  0x0186c330, 0x01870118) only replace ids 0x2b..0x2e (holding and
+  sheathing the weapon while jumping or falling).
+- Group 1, primary weapon (0x00b610f0, jump table 0x00b611bc by weapon
+  category): unarmed 0x0186f2a8 (7), sword and mace 0x0186e3f8 (50),
+  longsword and warhammer 0x0186c498 (59), dagger 0x0186b1e8 (65), staff
+  and archistaff 0x0186f5f0 (42).
+- Group 2, secondary weapon (0x00b611e0): shield 0x0186dd10 (26), magick
+  shield 0x0186d448 (33), bow, longbow and magick bow 0x0186b118 (3).
+
+A record (0x44 bytes) is the `MtDTI*` of the action class followed by 16
+parameter words. The class name comes from the class's `MtDTI` constructor
+call (`push name; mov ecx, dti; call 0x00cf5780`). For a weapon skill word 0
+is the skill id: the action's vf05 copies it to action+0x54 (e.g.
+`cPlActWpnDaggerCstmHyakuretsu::vf05` 0x00b23d50) and passes it to
+0x00ac63c0 (level effects) and 0x00ac65a0, which plays the skill's motion
+list on layer 7 (main slots) or 9 (sub slots). Exceptions: Gouge (58) runs
+`cPlActEnemyClimb` (word 0 = 0xd) and Arc of Might (109)
+`cPlActWpnGSwordChargeAtckWait`; all bow skills share `cPlActWpnBow` (word 0
+= 0 for the bow, 1 for the longbow) or `cPlActWpnMagicBow` (word 0 = 2). For
+core-skill and normal-attack records word 0 is often a value shaped like a
+motion id (bank << 8 | slot, e.g. 0x70d), **guessed**.
+
+Motions of weapon skills: `uPlayer`+0x4c2c points to 0x0163dfc0 (13
+pointers, one per weapon category; 0x00b5876b). Each list holds
+`(bank key, path)` pairs indexed by `skill id - first weapon skill`;
+0x00b5b400 loads the `rMotionList` of each of the six active skills into
+`uPlayer`+0x4c38 / +0x4c44 when weapons or skills change. Every path exists
+in the install (test `motion_lists_exist`). Several skills share a list
+(the Mystic Knight sigils 50, 52, 54 share `m0001_at_10`; 161 and 163
+share `m0005_at_11`; 220-221 share `m0007_at_10`, the boons 222-226
+`m0007_at_12`; magick-shield skills 310-314 and 315-319 share one list
+each; all bow, longbow and magick-bow skills use the weapon's single `_at`
+list).
+
+`ddskill::catalogue` reads all of this from the player's DDDA.exe; the
+table below is its output for the English text (`catalogue_dump`).
+
+| Id | Skill (level 1) | Action id | Action class | Param | Motion list (bank) |
+|---:|---|---|---|---|---|
+| 30 | Dire Onslaught | 0x0101000a | `cPlActWpnSwordAtckLandS1_2_1` | 0x0 | - |
+| 31 | Takedown | 0x0101000d | `cPlActWpnSwordAtckLandL_1` | 0x0 | - |
+| 90 | Devastate | 0x01030013 | `cPlActWpnGSwordAtckLandL1_2` | 0x0 | - |
+| 91 | Eviscerate | 0x01030014 | `cPlActWpnGSwordAtckLandS1_2_1` | 0x0 | - |
+| 140 | Engrave | 0x01050011 | `cPlActWpnDaggerAtckLandS` | 0x70d | - |
+| 141 | Roundelay | 0x01050015 | `cPlActWpnDaggerAtckLandL2` | 0x0 | - |
+| 142 | Double Vault | 0x01050016 | `cPlActWpnDaggerJumpSecond` | 0x0 | - |
+| 40 | Blink Strike | 0x0101001e | `cPlActWpnSwordCstmStinger` | 0x28 | `m0001_at_00` (0x700) |
+| 41 | Broad Cut | 0x0101001f | `cPlActWpnSwordCstmIchidoriKiri` | 0x29 | `m0001_at_01` (0x700) |
+| 42 | Downthrust | 0x01010020 | `cPlActWpnSwordChokkaIttenTsuki` | 0x2a | `m0001_at_02` (0x700) |
+| 43 | Tusk Toss | 0x01010021 | `cPlActWpnSwordCstmKiriAge` | 0x2b | `m0001_at_03` (0x700) |
+| 44 | Compass Slash | 0x01010022 | `cPlActWpnSwordCstmEscAtck` | 0x2c | `m0001_at_04` (0x700) |
+| 45 | Skyward Lash | 0x01010023 | `cPlActWpnSwordCstmTsuigekiKiri` | 0x2d | `m0001_at_05` (0x700) |
+| 46 | Flesh Skewer | 0x01010024 | `cPlActWpnSwordCstmStab` | 0x2e | `m0001_at_06` (0x700) |
+| 47 | Hindsight Slash | 0x01010025 | `cPlActWpnSwordCstmKaihiKiri` | 0x2f | `m0001_at_07` (0x700) |
+| 48 | Stone Will | 0x01010026 | `cPlActWpnSwordCstmGoutaiJutsu` | 0x30 | `m0001_at_08` (0x700) |
+| 49 | Legion's Bite | 0x01010027 | `cPlActWpnSwordCstmGokuRanbuKiri` | 0x31 | `m0001_at_09` (0x700) |
+| 50 | Perilous Sigil | 0x01010028 | `cPlActWpnSwordCstmMadouBase` | 0x32 | `m0001_at_10` (0x700) |
+| 51 | Magick Cannon | 0x01010029 | `cPlActWpnSwordCstmMadouBase` | 0x33 | `m0001_at_11` (0x700) |
+| 52 | Funnel Sigil | 0x0101002a | `cPlActWpnSwordCstmMadouBase` | 0x34 | `m0001_at_10` (0x700) |
+| 53 | Sky Dance | 0x0101002b | `cPlActWpnSwordCstmMadouKuujinKiri` | 0x35 | `m0001_at_13` (0x700) |
+| 54 | Stone Grove | 0x0101002c | `cPlActWpnSwordCstmMadouBase` | 0x36 | `m0001_at_10` (0x700) |
+| 55 | Intimate Strike | 0x0101002d | `cPlActWpnSwordCstmHensokuNidanTsuki` | 0x37 | `m0001_at_15` (0x700) |
+| 56 | Windmill Slash | 0x0101002e | `cPlActWpnSwordCstmBrandish` | 0x38 | `m0001_at_16` (0x700) |
+| 57 | Powder Charge | 0x0101002f | `cPlActWpnSwordCstmKaenKibakuJutsu` | 0x39 | `m0001_at_17` (0x700) |
+| 58 | Gouge | 0x01010030 | `cPlActEnemyClimb` | 0xd | `m0001_at_18` (0x700) |
+| 59 | Clarity | 0x01010031 | `cPlActWpnSwordCstmZangekiAnsatsu` | 0x3b | `m0001_at_19` (0x700) |
+| 100 | Upward Strike | 0x01030028 | `cPlActWpnGSwordHangetsu` | 0x64 | `m0003_at_00` (0x700) |
+| 101 | Pommel Strike | 0x01030029 | `cPlActWpnGSwordCstmTsukaTsuki` | 0x65 | `m0003_at_01` (0x700) |
+| 102 | Savage Lunge | 0x0103002a | `cPlActWpnGSwordCstmOshikomiTosshin` | 0x66 | `m0003_at_02` (0x700) |
+| 103 | Escape Slash | 0x0103002b | `cPlActWpnGSwordCstmKaihiKiri` | 0x67 | `m0003_at_03` (0x700) |
+| 104 | Savage Lash | 0x0103002c | `cPlActWpnGSwordCstmHakaiKiri` | 0x68 | `m0003_at_04` (0x700) |
+| 105 | Ladder Blade | 0x0103002d | `cPlActWpnGSwordCstmDaikenToujinJutsu` | 0x69 | `m0003_at_05` (0x700) |
+| 106 | Spark Slash | 0x0103002e | `cPlActWpnGSwordCstmHanniSukuiKiri` | 0x6a | `m0003_at_06` (0x700) |
+| 107 | Act Of Atonement | 0x0103002f | `cPlActWpnGSwordCstmUramiNoKen` | 0x6b | `m0003_at_07` (0x700) |
+| 108 | Battle Cry | 0x01030030 | `cPlActWpnGSwordCstmBanseiChouhatsu` | 0x6c | `m0003_at_08` (0x700) |
+| 109 | Arc Of Might | 0x01030031 | `cPlActWpnGSwordChargeAtckWait` | 0x0 | `m0003_at_09` (0x700) |
+| 150 | Biting Wind | 0x01050028 | `cPlActWpnDaggerRensaKiriNige` | 0x96 | `m0005_at_00` (0x700) |
+| 151 | Toss And Trigger | 0x01050029 | `cPlActWpnDaggerCstmRensaAgoKudaki` | 0x97 | `m0005_at_01` (0x700) |
+| 152 | Scarlet Kisses | 0x0105002a | `cPlActWpnDaggerCstmHyakuretsu` | 0x98 | `m0005_at_02` (0x700) |
+| 153 | Dazzle Hold | 0x0105002b | `cPlActWpnDaggerFuuatsu` | 0x99 | `m0005_at_03` (0x700) |
+| 154 | Sprint | 0x0105002c | `cPlActWpnDaggerCstmShissou` | 0x9a | `m0005_at_04` (0x700) |
+| 155 | Helm Splitter | 0x0105002d | `cPlActWpnDaggerCstmKaitenRakkaKiri` | 0x9b | `m0005_at_05` (0x700) |
+| 156 | Ensnare | 0x0105002e | `cPlActWpnDaggerCstmHikiyoseKiri` | 0x9c | `m0005_at_06` (0x700) |
+| 157 | Pilfer | 0x0105002f | `cPlActWpnDaggerCstmShundatsu` | 0x9d | `m0005_at_07` (0x700) |
+| 158 | Reset | 0x01050030 | `cPlActWpnDaggerCstmKyouseiFootwork` | 0x9e | `m0005_at_08` (0x700) |
+| 159 | Stepping Stone | 0x01050031 | `cPlActWpnDaggerCstmKeriTobi` | 0x9f | `m0005_at_09` (0x700) |
+| 160 | Sunburst | 0x01050032 | `cPlActWpnDaggerCstmMadouKyuushuuKiri` | 0xa0 | `m0005_at_10` (0x700) |
+| 161 | Shadowpin | 0x01050033 | `cPlActWpnDaggerCstmMadouBase` | 0xa1 | `m0005_at_11` (0x700) |
+| 162 | Scension | 0x01050034 | `cPlActWpnDaggerCstmMadouBase` | 0xa2 | `m0005_at_12` (0x700) |
+| 163 | Magick Rebuffer | 0x01050035 | `cPlActWpnDaggerCstmMadouBase` | 0xa3 | `m0005_at_11` (0x700) |
+| 164 | Wind Harness | 0x01050036 | `cPlActWpnDaggerCstmMadouKakusei` | 0xa4 | `m0005_at_14` (0x700) |
+| 165 | Back Kick | 0x01050037 | `cPlActWpnDaggerCstmShuntouKiri` | 0xa5 | `m0005_at_15` (0x700) |
+| 166 | Spiderbite | 0x01050038 | `cPlActWpnDaggerCstmDokubariTsuki` | 0xa6 | `m0005_at_16` (0x700) |
+| 167 | Backfire | 0x01050039 | `cPlActWpnDaggerCstmMadouNensyou` | 0xa7 | `m0005_at_17` (0x700) |
+| 168 | Stealth | 0x0105003a | `cPlActWpnDaggerCstmToumei` | 0xa8 | `m0005_at_18` (0x700) |
+| 169 | Easy Kill | 0x0105003b | `cPlActAssassinStart` | 0xa9 | `m0005_at_19` (0x700) |
+| 210 | Ingle | 0x01070000 | `cPlActWpnWandBase` | 0xd2 | `m0007_at_00` (0x700) |
+| 211 | Frazil | 0x01070001 | `cPlActWpnWandBase` | 0xd3 | `m0007_at_01` (0x700) |
+| 212 | Levin | 0x01070002 | `cPlActWpnWandBase` | 0xd4 | `m0007_at_02` (0x700) |
+| 213 | Comestion | 0x01070003 | `cPlActWpnWandBase` | 0xd5 | `m0007_at_03` (0x700) |
+| 214 | Frigor | 0x01070004 | `cPlActWpnWandBase` | 0xd6 | `m0007_at_04` (0x700) |
+| 215 | Brontide | 0x01070005 | `cPlActWpnWandWhip` | 0xd7 | `m0007_at_05` (0x700) |
+| 216 | Grapnel | 0x01070006 | `cPlActWpnWandBase` | 0xd8 | `m0007_at_06` (0x700) |
+| 217 | Silentium | 0x01070007 | `cPlActWpnWandBase` | 0xd9 | `m0007_at_07` (0x700) |
+| 218 | Blearing | 0x01070008 | `cPlActWpnWandBase` | 0xda | `m0007_at_08` (0x700) |
+| 219 | Lassitude | 0x01070009 | `cPlActWpnWandBase` | 0xdb | `m0007_at_09` (0x700) |
+| 220 | Anodyne | 0x0107000a | `cPlActWpnWandBase` | 0xdc | `m0007_at_10` (0x700) |
+| 221 | Halidom | 0x0107000b | `cPlActWpnWandBase` | 0xdd | `m0007_at_10` (0x700) |
+| 222 | Fire Boon | 0x0107000c | `cPlActWpnWandBase` | 0xde | `m0007_at_12` (0x700) |
+| 223 | Ice Boon | 0x0107000d | `cPlActWpnWandBase` | 0xdf | `m0007_at_12` (0x700) |
+| 224 | Thunder Boon | 0x0107000e | `cPlActWpnWandBase` | 0xe0 | `m0007_at_12` (0x700) |
+| 225 | Holy Boon | 0x0107000f | `cPlActWpnWandBase` | 0xe1 | `m0007_at_12` (0x700) |
+| 226 | Dark Boon | 0x01070010 | `cPlActWpnWandBase` | 0xe2 | `m0007_at_12` (0x700) |
+| 227 | Bolide | 0x01070011 | `cPlActWpnWandBase` | 0xe3 | `m0007_at_17` (0x700) |
+| 228 | Gicel | 0x01070012 | `cPlActWpnWandBase` | 0xe4 | `m0007_at_18` (0x700) |
+| 229 | Fulmination | 0x01070013 | `cPlActWpnWandThunderSpark` | 0xe5 | `m0007_at_19` (0x700) |
+| 230 | Seism | 0x01070014 | `cPlActWpnWandBase` | 0xe6 | `m0007_at_20` (0x700) |
+| 231 | Maelstrom | 0x01070015 | `cPlActWpnWandBase` | 0xe7 | `m0007_at_21` (0x700) |
+| 232 | Exequy | 0x01070016 | `cPlActWpnWandBase` | 0xe8 | `m0007_at_22` (0x700) |
+| 233 | Petrifaction | 0x01070017 | `cPlActWpnWandBase` | 0xe9 | `m0007_at_23` (0x700) |
+| 234 | Miasma | 0x01070018 | `cPlActWpnWandBase` | 0xea | `m0007_at_24` (0x700) |
+| 235 | Perdition | 0x01070019 | `cPlActWpnWandBase` | 0xeb | `m0007_at_25` (0x700) |
+| 236 | Sopor | 0x0107001a | `cPlActWpnWandBase` | 0xec | `m0007_at_26` (0x700) |
+| 237 | Voidspell | 0x0107001b | `cPlActWpnWandBase` | 0xed | `m0007_at_27` (0x700) |
+| 238 | Spellscreen | 0x0107001c | `cPlActWpnWandBase` | 0xee | `m0007_at_28` (0x700) |
+| 239 | Necromancy | 0x0107001d | `cPlActWpnWandBase` | 0xef | `m0007_at_29` (0x700) |
+| 270 | Shield Strike | 0x02020010 | `cPlActWpnShieldCstmAtck` | 0x10e | `m0002_at_00` (0x900) |
+| 271 | Springboard | 0x02020011 | `cPlActWpnShieldCstmCatapult` | 0x10f | `m0002_at_01` (0x900) |
+| 272 | Shield Summons | 0x02020012 | `cPlActWpnShieldCstmProvoke` | 0x110 | `m0002_at_02` (0x900) |
+| 273 | Cymbal Attack | 0x02020013 | `cPlActWpnShieldCstmRengeki` | 0x111 | `m0002_at_03` (0x900) |
+| 274 | Sheltered Spike | 0x02020014 | `cPlActWpnShieldCstmBougyoKengeki` | 0x112 | `m0002_at_04` (0x900) |
+| 275 | Perfect Defense | 0x02020015 | `cPlActWpnShieldCstmKyuukyokuBougyo` | 0x113 | `m0002_at_05` (0x900) |
+| 276 | Moving Castle | 0x02020016 | `cPlActWpnShieldCstmBougyoFumikomi` | 0x114 | `m0002_at_06` (0x900) |
+| 277 | Flight Response | 0x02020017 | `cPlActWpnShieldCstmBougyoShouhi` | 0x115 | `m0002_at_07` (0x900) |
+| 278 | Staredown | 0x02020019 | `cPlActWpnShieldCstmKarayaburi` | 0x116 | `m0002_at_08` (0x900) |
+| 310 | Firecounter | 0x02080010 | `cPlActWpnMagicShieldBase` | 0x136 | `m0009_at_00` (0x900) |
+| 311 | Icecounter | 0x02080011 | `cPlActWpnMagicShieldBase` | 0x137 | `m0009_at_00` (0x900) |
+| 312 | Thundercounter | 0x02080012 | `cPlActWpnMagicShieldBase` | 0x138 | `m0009_at_00` (0x900) |
+| 313 | Holycounter | 0x02080013 | `cPlActWpnMagicShieldBase` | 0x139 | `m0009_at_00` (0x900) |
+| 314 | Darkcounter | 0x02080014 | `cPlActWpnMagicShieldBase` | 0x13a | `m0009_at_00` (0x900) |
+| 315 | Fire Enchanter | 0x02080015 | `cPlActWpnMagicShieldBase` | 0x13b | `m0009_at_05` (0x900) |
+| 316 | Ice Enchanter | 0x02080016 | `cPlActWpnMagicShieldBase` | 0x13c | `m0009_at_05` (0x900) |
+| 317 | Thunder Enchanter | 0x02080017 | `cPlActWpnMagicShieldBase` | 0x13d | `m0009_at_05` (0x900) |
+| 318 | Holy Enchanter | 0x02080018 | `cPlActWpnMagicShieldBase` | 0x13e | `m0009_at_05` (0x900) |
+| 319 | Dark Enchanter | 0x02080019 | `cPlActWpnMagicShieldBase` | 0x13f | `m0009_at_05` (0x900) |
+| 320 | Holy Glare | 0x0208001a | `cPlActWpnMagicShieldBase` | 0x140 | `m0009_at_10` (0x900) |
+| 321 | Dark Anguish | 0x0208001b | `cPlActWpnMagicShieldBase` | 0x141 | `m0009_at_11` (0x900) |
+| 322 | Holy Wall | 0x0208001c | `cPlActWpnMagicShieldBase` | 0x142 | `m0009_at_12` (0x900) |
+| 323 | Demonspite | 0x0208001d | `cPlActWpnMagicShieldBase` | 0x143 | `m0009_at_13` (0x900) |
+| 324 | Holy Aid | 0x0208001e | `cPlActWpnMagicShieldBase` | 0x144 | `m0009_at_14` (0x900) |
+| 350 | Threefold Arrow | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 351 | Triad Shot | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 352 | Full Bend | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 353 | Cloudburst Volley | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 354 | Splinter Dart | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 355 | Whistle Dart | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 356 | Keen Sight | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 357 | Puncture Dart | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 358 | Blunting Arrow | 0x02060000 | `cPlActWpnBow` | 0x0 | `m0006_at` (0x900) |
+| 359 | Threefold Bolt | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 360 | Seeker Bolt | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 361 | Explosive Bolt | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 362 | Ricochet Seeker | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 363 | Magickal Flare | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 364 | Funnel Trail | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 365 | Ward Arrow | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 366 | Bracer Arrow | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 367 | Sacrificial Bolt | 0x02060001 | `cPlActWpnMagicBow` | 0x2 | `m0010_at` (0x900) |
+| 400 | Sixfold Arrow | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 401 | Heptad Shot | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 402 | Dire Arrow | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 403 | Foot Binder | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 404 | Invasive Arrow | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 405 | Flying Din | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 406 | Meteor Shot | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 407 | Whirling Arrow | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
+| 408 | Gamble Draw | 0x02060002 | `cPlActWpnBow` | 0x1 | `m0008_at` (0x900) |
 
 ## Skill and augment tables (data + traced)
 
@@ -654,11 +844,25 @@ outside Mage and Sorcerer.
 - `vocation`: ids, names (labels), weapon categories, skill ranges, stamina
   tables, motion banks, change cost, unlock flags, offered lists. Tests:
   masks against the exe table values, costs, lists; install: names.
-- Example: `cargo run -p ddskill --example skill_dump -- <nativePC>`.
+- `exe::Exe`: read-only access to the player's DDDA.exe (PE timestamp
+  check, VA to file offset, strings, class names from `MtDTI` constructor
+  calls). The tables are the same bytes in the installed Steam exe and the
+  unpacked analysis copy. Nothing from the exe is committed.
+- `catalogue`: `ExeTables::from_exe` (skill records, text table, augment
+  names, action tables, motion lists) and `Catalogue::build`, which joins
+  them with `rSkillList` and the text into `Skill` (levels with names,
+  commands, costs and ranks; vocations; weapons; action id, class and
+  parameter; motion list) and `Augment` (name, description, vocation, cost,
+  rank). Tests: synthetic PE (build check, reads, class names); install
+  (`DDDA_NATIVE_PC`, `DDDA_EXE`, skipped when absent): 18 core + 131
+  weapon skills and 78 augments resolve, every name rebuilt from the text,
+  58 weapon skills with a level 3, vocations consistent with their weapons,
+  action parameter = skill id outside the listed exceptions, every motion
+  list exists.
+- Examples: `cargo run -p ddskill --example skill_dump -- <nativePC>`;
+  `cargo run -p ddskill --example catalogue_dump -- <nativePC> [DDDA.exe] [lang]`.
 
-`cargo test -p ddskill`: 14 unit + 5 install tests pass; clippy clean.
-Not done: the exe skill table, text table and augment-name table are
-documented here but not embedded in Rust (see the open decision below).
+`cargo test -p ddskill`: 16 unit + 9 install tests pass; clippy clean.
 
 ## Open questions
 
@@ -671,9 +875,9 @@ documented here but not embedded in Rust (see the open decision below).
    and the item ids 0x361 / 0x47f that scale discipline (claude-6).
 4. Parameter objects at sGameSys+0xb8754 (pawn catch-up `k`) and +0xb875c
    (item factors): resource and values.
-5. Skill action ids to motions: the `cPlActWpn*` classes (e.g.
-   `cPlActWpnDaggerCstmHyakuretsu`) are not yet linked to action ids; motion
-   choice is in each action's vf05 (ANIMATION.md request path). claude-8.
+5. Inside each action class, which motion of its list plays when (the
+   classes' vf05/vf06, ANIMATION.md request path), and what core-skill
+   record word 0 means. claude-8.
 6. Stamina for staff, magick-shield and bow skills, and the core-skill
    stamina tables (rows below the weapon-skill range) are not traced.
 7. Skill table fields +0x14 and +0x18, text-table field +8 and flags.
@@ -687,13 +891,7 @@ documented here but not embedded in Rust (see the open decision below).
    rank checks once per simulation step in update order after stamina, as
    in vf90; host-authoritative award distribution with `party_share`.
    Done when a scripted award sequence matches the oracle's values.
-2. **Skill catalogue** (reader + exe): decide how the 430-record skill table,
-   the 149-record text table and the 115-entry augment-name table reach
-   Rust. Options: (a) a hand-checked generated `const` table with addresses
-   (exe constants, like the band table already in `growth`), or (b) a
-   loader that reads them from the player's own DDDA.exe at startup (needs
-   the SteamStub-unpacked image, so not viable for players). Recommend (a)
-   with a test that re-derives names from the GMD files. Head to decide.
+2. **Skill catalogue**: done (`ddskill::catalogue`, brief skill-catalogue).
 3. **Learn and change screens** (core rules, no GUI): `learn(skill)`,
    `equip_augment`, `change_vocation` implementing the visibility, cost,
    flag and slot-filter rules above, with per-character learn bitsets.
