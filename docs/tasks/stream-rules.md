@@ -102,3 +102,13 @@ update gate (`0x00c55380`) compares 3D distance to radius +0x430;
 are initialized at `0x0044d770`. Stage100 2500/100000 and size cutoff300
 were passively confirmed at 15:37:57 UTC. Other scenery subclasses and
 actual construction/destruction transitions remain open. No process writes.
+
+NPC lifecycle now traced: Intel vf08 -> `0x00bbea90`; no-actor creation
+eligibility `0x00bc0eb0` rejects mode2 except special cases, then archive
+readiness/construction budget gate `0x00bbe070`. Existing mode2 actor
+removal can be deferred by actor state/attached work, otherwise
+`0x00bbe670` removes the physical actor and keeps Intel behavior. Separate
+`0x00472320` queues Intel removal for group/availability causes. Passive
+aggregate 15:40:03 UTC:3 mode0 with actors,27 mode2 without. Budget names
+and initialization resolved: draw12/24/36 by quality, move0 (`0x00471c10`).
+Still not a recorded threshold transition; full exceptions remain unported.

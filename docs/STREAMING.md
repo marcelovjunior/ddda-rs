@@ -251,9 +251,42 @@ The full queue priority/exception logic is not translated here.
 `uNpc::vf08` (`0x00baf4f0`) reads this Intel mode through actor+0x5854;
 modes greater than 1 skip its full update. Without Intel it uses the
 character mode. These are update gates, distinct from layout construction
-and eventual destruction. Other scenery subclasses and the complete NPC creation/removal lifecycle
+and eventual destruction. Other scenery subclasses and the full NPC lifecycle exception set
 remain open; the 3-by-3 layout
 window is not an enemy/NPC spawn guarantee.
+
+The manager budget fields are reflected as `mDrawMax` (+0x16dc) and
+`mMoveMax` (+0x16e0), with `mManagementMode` at +0x16e4
+(`0x00471a70`). Initialization `0x00471c10` sets draw budget to 12/24/36
+for quality 1/2/3, move budget to 0, and management mode to 0.
+
+### NPC physical actor lifecycle
+
+The mode feeds construction/removal, not just update suppression.
+`uNpcIntel::vf08` calls `0x00bbea90`. With no actor at Intel+0xf8,
+`0x00bc0eb0` normally rejects mode 2; NPC 990 and the selected game-system
+Intel bypass that check, and stage-100/story flags add other exclusions.
+The accepted path requests the NPC archives, waits on +0xfc resource
+state, checks `0x00bbef40`, and acquires a shared construction-budget slot
+before calling `0x00bbe070`. That function obtains the physical actor,
+links actor+0x5854 back to Intel, transfers its persistent parameters and
+near distance, sets position, and attaches the Intel behavior state.
+Thus distance eligibility alone is not immediate physical construction.
+
+With an existing actor, `0x00bbea90` checks mode 2. Actor state +0x5824
+values 1/2 and attached work checked by `0x00bade80` can defer removal;
+otherwise `0x00bbe670` detaches its Intel/behavior links, requests removal
+through the character manager, clears Intel+0xf8, and resumes Intel's
+lightweight behavior/navigation state. `0x00472320` is a distinct path
+that queues removal of the Intel itself, marks +0x4e9 and requests any
+physical actor's removal. It is reached for group invalidation and some
+availability conditions, not simply every crossing of near/far.
+
+A passive registered-list aggregate at 2026-10-09 15:40:03 UTC found
+3 Intel entries in mode 0 with physical actors and 27 in mode 2 without
+actors. This agrees with the traced lifecycle but is a sequential snapshot,
+not an observed disappearance or reappearance transition. The complete
+story/attachment exceptions and construction-rate budget are not ported.
 
 A second passive observation at 2026-10-09 15:33:38 UTC found 30 Intel
 entries registered with the manager. The first four registered entries
