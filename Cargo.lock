@@ -3528,6 +3528,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtgui"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtgmd",
+]
+
+[[package]]
 name = "mtlmt"
 version = "0.1.0"
 
