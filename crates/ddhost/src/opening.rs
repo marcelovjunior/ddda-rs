@@ -20,6 +20,13 @@ pub struct OpeningWorld {
     /// Answers everything the view does not (timings, host-run AI,
     /// enemies, placements).
     pub inner: ScriptedHost,
+    /// Real placement/combat facts when the caller has connected those
+    /// systems. In this mode absent reports stay absent: the scripted
+    /// host never supplies enemy deaths or applied-script completion.
+    pub encounters: Option<ddstory::encounter::EncounterFacts>,
+    /// Explicit placement-to-fight bindings supplied by the layout
+    /// adapter. Target index is not guessed from a layout record id.
+    enemy_bindings: std::collections::HashMap<(u32, Target), u32>,
     /// NPC units for the scenario volumes that detect NPCs.
     pub npcs: Vec<NpcUnit>,
     /// Menus wait for the view ([`OpeningWorld::close_menu`]) instead of
@@ -38,6 +45,8 @@ impl OpeningWorld {
     pub fn new() -> Self {
         OpeningWorld {
             inner: ScriptedHost::opening(),
+            encounters: None,
+            enemy_bindings: Default::default(),
             npcs: vec![],
             manual_menus: false,
             menu: None,
@@ -50,6 +59,43 @@ impl OpeningWorld {
     pub fn live(&mut self, rows: impl IntoIterator<Item = usize>) {
         self.inner.play_rows.extend(rows);
         self.manual_menus = true;
+    }
+
+    /// Enable authoritative actor observations independently of the
+    /// presentation adapter. Call before dispatching actor requests.
+    pub fn enable_live_encounters(&mut self) -> &mut ddstory::encounter::EncounterFacts {
+        self.encounters.get_or_insert_with(Default::default)
+    }
+
+    /// Report an actual host-system completion (AI, dialogue, UI).
+    pub fn report(&mut self, event: HostEvent) {
+        self.pending.push(event);
+    }
+
+    /// Bind one resolved goblin placement to its authoritative combat id.
+    /// Loading/kill-record facts are reported separately through encounters.
+    pub fn bind_goblin(&mut self, stage: u32, target: Target, owner: u32) {
+        assert_eq!(target.kind, 2, "enemy binding requires an enemy target");
+        self.enemy_bindings.insert((stage, target), owner);
+    }
+
+    /// Forget an actor binding on unload without declaring it dead.
+    pub fn unbind_enemy(&mut self, stage: u32, target: Target) {
+        self.enemy_bindings.remove(&(stage, target));
+        if let Some(facts) = &mut self.encounters {
+            let mut unit = facts.unit(stage, &target);
+            unit.present = false;
+            unit.hp = None;
+            unit.max_hp = None;
+            facts.report_unit(stage, target, unit);
+        }
+    }
+
+    fn actor_host(&self) -> &dyn ddstory::Host {
+        match &self.encounters {
+            Some(facts) => facts,
+            None => &self.inner,
+        }
     }
 
     /// The view finished playing the awaited cutscene.
@@ -76,14 +122,41 @@ impl Default for OpeningWorld {
 }
 
 impl StoryWorld for OpeningWorld {
+    fn observe_fight(&mut self, fight: Option<&ddenemyrt::fight::Fight>) {
+        let Some(facts) = &mut self.encounters else { return };
+        for (&(stage, target), &owner) in &self.enemy_bindings {
+            let mut unit = facts.unit(stage, &target);
+            let goblin = fight.and_then(|f| f.goblins.iter().find(|g| g.fighter.owner == owner));
+            unit.present = goblin.is_some();
+            let pool = goblin.and_then(|g| match &g.fighter.victim {
+                ddenemyrt::combat::Victim::Enemy { regions, .. } => regions.iter().find(|r| r.id == 0),
+                _ => None,
+            });
+            unit.hp = pool.map(|p| p.hp);
+            unit.max_hp = pool.map(|p| p.hp_max);
+            // Persistent death is a placement-system fact; never infer it
+            // from unloading, absence, an empty region list, or a timer.
+            facts.report_unit(stage, target, unit);
+        }
+    }
     fn handle(&mut self, stage: u32, requests: &[Request]) {
-        if !self.manual_menus {
+        if !self.manual_menus && self.encounters.is_none() {
             return self.inner.handle(stage, requests);
         }
         let mut rest = Vec::with_capacity(requests.len());
         for r in requests {
             match r {
-                Request::OpenMenu { menu, player } => self.menu = Some((*menu, *player)),
+                Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
+                Request::Placement { .. }
+                | Request::Group { .. }
+                | Request::ApplyScript { .. }
+                | Request::NpcLife { .. }
+                    if self.encounters.is_some() =>
+                {
+                    // The caller receives these in FrameReport and
+                    // performs them through its actor adapters. Never
+                    // acknowledge them through ScriptedHost's timers.
+                }
                 other => rest.push(other.clone()),
             }
         }
@@ -100,50 +173,58 @@ impl StoryWorld for OpeningWorld {
 }
 
 impl ddstory::Host for OpeningWorld {
+    fn dragon_challenge_actors(
+        &self,
+    ) -> (
+        Option<ddstory::dragon::ChallengeDragon>,
+        Vec<ddstory::dragon::ChallengePlayer>,
+    ) {
+        self.actor_host().dragon_challenge_actors()
+    }
     fn layout_loaded(&self, s: u32, t: &Target) -> bool {
-        self.inner.layout_loaded(s, t)
+        self.actor_host().layout_loaded(s, t)
     }
     fn unit_exists(&self, s: u32, t: &Target) -> bool {
-        self.inner.unit_exists(s, t)
+        self.actor_host().unit_exists(s, t)
     }
     fn group_loaded(&self, s: u32, k: u32, g: u32) -> bool {
-        self.inner.group_loaded(s, k, g)
+        self.actor_host().group_loaded(s, k, g)
     }
     fn enemy_group_done(&self, s: u32, g: u32) -> bool {
-        self.inner.enemy_group_done(s, g)
+        self.actor_host().enemy_group_done(s, g)
     }
     fn enemy_group_active(&self, s: u32, g: u32) -> bool {
-        self.inner.enemy_group_active(s, g)
+        self.actor_host().enemy_group_active(s, g)
     }
     fn enemy_check(&self, s: u32, t: &Target, f: u32) -> bool {
-        self.inner.enemy_check(s, t, f)
+        self.actor_host().enemy_check(s, t, f)
     }
     fn npc_intel(&self, s: u32, t: &Target) -> Option<NpcIntel> {
-        self.inner.npc_intel(s, t)
+        self.actor_host().npc_intel(s, t)
     }
     fn npc_unit(&self, n: u32) -> bool {
-        self.inner.npc_unit(n)
+        self.actor_host().npc_unit(n)
     }
     fn applied_script_finished(&self, s: u32, t: &Target) -> bool {
-        self.inner.applied_script_finished(s, t)
+        self.actor_host().applied_script_finished(s, t)
     }
     fn unit_hp(&self, s: u32, t: &Target, p: bool) -> Option<f32> {
-        self.inner.unit_hp(s, t, p)
+        self.actor_host().unit_hp(s, t, p)
     }
     fn tutorials_enabled(&self) -> bool {
-        self.inner.tutorials_enabled()
+        self.actor_host().tutorials_enabled()
     }
     fn pl_check(&self, k: u32) -> i32 {
-        self.inner.pl_check(k)
+        self.actor_host().pl_check(k)
     }
     fn player_damaged(&self) -> bool {
-        self.inner.player_damaged()
+        self.actor_host().player_damaged()
     }
     fn pawn_lost(&self) -> bool {
-        self.inner.pawn_lost()
+        self.actor_host().pawn_lost()
     }
     fn has_item(&self, i: u32, c: u32) -> bool {
-        self.inner.has_item(i, c)
+        self.actor_host().has_item(i, c)
     }
 }
 

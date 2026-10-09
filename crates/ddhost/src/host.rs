@@ -18,6 +18,9 @@ use std::collections::BTreeSet;
 /// menus). Until those systems exist in headless crates, a stand-in
 /// answers (`ddstory::scripted::ScriptedHost`).
 pub trait StoryWorld: ddstory::Host {
+    /// Observe combat at the beginning of the story phase, before this
+    /// frame's hit pass. Implementations bind actors to placement keys.
+    fn observe_fight(&mut self, _fight: Option<&ddenemyrt::fight::Fight>) {}
     /// Perform this frame's requests (stage `stage` is loaded).
     fn handle(&mut self, stage: u32, requests: &[Request]);
     /// Completions and facts due this frame, in the order they happened.
@@ -212,6 +215,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // all of them in one tick; the world's completions since the last
         // frame come first. The story sees every Arisen where the last frame
         // left them: line 10 has not moved yet.
+        self.world.observe_fight(self.fight.as_ref());
         let events = self.world.events();
         // Step 20, aGameMain's managers: sNpcManager::vf06 (0x00475AD0)
         // restocks the shops once per new day, before sQuestManager.
