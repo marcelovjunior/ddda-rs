@@ -15,7 +15,10 @@
 //! `AI\preset_study`, which the pawn builder `0x00795610` reads; those are
 //! not typed here.
 
+pub mod builder;
+pub mod cmc;
 pub mod rift;
+pub mod tables;
 
 pub use ddsave::pawn::{RomPawnId, NORA_LEVEL_BANDS};
 use mtxfs::{Object, Value, Xfs};
@@ -105,6 +108,8 @@ impl EditId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoraPawn {
     pub edit: EditId,
+    /// The complete appearance (`mRomPawnEdit`), copied whole by the builder.
+    pub edit_full: cmc::Edit,
     /// `mRomPawnWeightType`: row of `PlStaminaMax` used for base stamina
     /// (`0x00795610` indexes the stamina table with it).
     pub weight_type: u8,
@@ -131,6 +136,7 @@ impl NoraPawn {
         let small = |name: &str| -> Result<Vec<i64>, String> { ints(x, o, name) };
         Ok(NoraPawn {
             edit: EditId::read(x, object(x, o, "mRomPawnEdit")?)?,
+            edit_full: read_edit(x, object(x, o, "mRomPawnEdit")?)?,
             weight_type: int(x, o, "mRomPawnWeightType")? as u8,
             job: int(x, o, "mRomPawnJob")? as u8,
             ai_no: int(x, o, "mRomPawnAiNo")? as i16,
@@ -143,6 +149,17 @@ impl NoraPawn {
             equip_item_id: small("mRomPawnEquipItemId")?.into_iter().map(|v| v as i16).collect(),
         })
     }
+}
+
+fn read_edit(x: &Xfs, o: &Object) -> Result<cmc::Edit, String> {
+    let mut e = cmc::Edit { name: [0; 25], nickname: int(x, o, "mNickname")? as u32, fields: [0; 41] };
+    for (i, b) in ints(x, o, "(u8*)mNameStr")?.iter().take(25).enumerate() {
+        e.name[i] = *b as u8;
+    }
+    for (i, f) in cmc::EDIT_U8_FIELDS.iter().enumerate() {
+        e.fields[i] = int(x, o, f)? as u8;
+    }
+    Ok(e)
 }
 
 /// One `romNoraPawnNN` file.
@@ -182,10 +199,12 @@ pub struct RomPawn {
 }
 
 /// `etc\editPattern\romPawnInfo`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RomPawnInfo {
     pub quality: i64,
     pub pawns: Vec<RomPawn>,
+    /// The complete records, for the story stock builder.
+    pub records: Vec<cmc::Cmc>,
 }
 
 impl RomPawnInfo {
@@ -197,6 +216,7 @@ impl RomPawnInfo {
         if names.len() != cmcs.len() {
             return Err(err("mNameNoArray and mSaveDataCmcArray differ in length"));
         }
+        let records = cmcs.iter().map(|c| cmc::Cmc::from_xfs(&x, c)).collect::<Result<Vec<_>, _>>()?;
         let pawns = cmcs
             .into_iter()
             .zip(names)
@@ -210,7 +230,7 @@ impl RomPawnInfo {
                 })
             })
             .collect::<Result<_, String>>()?;
-        Ok(RomPawnInfo { quality: int(&x, root, "mQuality")?, pawns })
+        Ok(RomPawnInfo { quality: int(&x, root, "mQuality")?, pawns, records })
     }
 }
 

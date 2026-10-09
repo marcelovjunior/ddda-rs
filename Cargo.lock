@@ -2334,6 +2334,8 @@ dependencies = [
 name = "ddpawn"
 version = "0.1.0"
 dependencies = [
+ "ddnpc",
+ "ddparam",
  "ddsave",
  "ddvfs",
  "mtarc",
