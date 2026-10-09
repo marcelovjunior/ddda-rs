@@ -187,7 +187,13 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   is that controller's +0x4c. Applied loading `0x00bb45e0` retains it and
   uses the separate +0x58 wrapper. Actor detach `0x00bbe670` clears the
   actor/controller link. The parent check `0x005c8460` counts a present
-  NPC-derived actor with nonnull +0x4c as ready, independently of applied
+  uCharacterBase-derived actor with nonnull +0x4c as ready, independently of applied
   Finish. Existing Host::applied_script_finished naming is misleading;
   a shared API correction and actor-type observation adapter are proposed,
   not implemented. No action-Finish shortcut should feed that predicate.
+- DTI registry cross-check: the other present-target branch is uNpcIntel,
+  and tests intel+0x15c directly, the same retained normal FSM pointer.
+  Therefore body-loaded and intel-only NPC observations require distinct
+  target resolution but share this pointer predicate; graph completion is
+  neither. Controller allocation occurs before the daily graph load, so
+  missing graph data alone cannot establish an absent original controller.
