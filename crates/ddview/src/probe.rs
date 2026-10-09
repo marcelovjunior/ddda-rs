@@ -2,7 +2,7 @@
 //! which keeps the meshes the ray needs in main memory): F8 toggles a
 //! crosshair, F9 casts a ray from the centre of the screen and logs every
 //! surface it crosses near the first hit (name, distance, material
-//! settings). Surfaces within a few millimetres of each other are what
+//! settings), passing through characters. Surfaces within a few millimetres of each other are what
 //! z-fighting is made of, so the log names the culprits.
 
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
@@ -27,6 +27,7 @@ pub fn update(
     crosshairs: Query<Entity, With<Crosshair>>,
     mut ray_cast: MeshRayCast,
     names: Query<&Name>,
+    skinned: Query<(), With<bevy::mesh::skinning::SkinnedMesh>>,
     parents: Query<&ChildOf>,
     dd: Query<&MeshMaterial3d<DdMaterial>>,
     standard: Query<&MeshMaterial3d<StandardMaterial>>,
@@ -67,7 +68,13 @@ pub fn update(
     let centre = Vec2::new(window.width(), window.height()) * 0.5;
     let Ok(ray) = cam.viewport_to_world(at, centre) else { return };
     *count += 1;
-    let settings = MeshRayCastSettings::default().with_visibility(RayCastVisibility::VisibleInView).never_early_exit();
+    // characters (skinned) are passed through: the follow camera keeps the
+    // Arisen in the middle of the screen
+    let not_character = |e: Entity| !skinned.contains(e);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::VisibleInView)
+        .with_filter(&not_character)
+        .never_early_exit();
     let hits = ray_cast.cast_ray(ray, &settings);
     let Some(first) = hits.first().map(|(_, h)| h.distance) else {
         info!("probe #{}: nothing under the crosshair (was ddview started with --probe?)", *count);
