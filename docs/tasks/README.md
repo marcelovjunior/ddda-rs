@@ -154,3 +154,4 @@ Codex lane: see `docs/CODEX.md`.
 | [skill-vfx](skill-vfx.md) | Opening slice: effects for attacks, skills, hits | core | codex-1 | assigned (slice 8) |
 | [pawn-actor](pawn-actor.md) | Saved/story pawns as active actors (Rook, prologue companions, Mage input) | core | codex-1 | merged 2026-10-09 |
 | [camera-collision](camera-collision.md) | Follow camera collision as the original (clipping into walls) | core | codex-1 | assigned |
+| [character-shadows](character-shadows.md) | Shadows under characters indoors (uAmbientShadow?) | core | codex-1 | assigned |
