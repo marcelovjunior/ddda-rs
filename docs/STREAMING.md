@@ -381,8 +381,9 @@ from client quality settings. Read grid/region/landmark tables from the
 player's installed exe and layouts from their archives. Do not implement
 the angular expression as a plain circle.
 
-Next: resolve the remaining terrain archive/residency discrepancy and
-compare threshold boundaries with recorded ordinary movement. Trace remaining scenery subclasses and physical NPC
-creation/removal, then record ordinary boundary crossings under the
-current live-session safety protocol. The brief's
-full per-class distance and transition-comparison gate remains open.
+Next: compare a selected threshold boundary under the current live-session
+safety protocol, including physical actor residency and archive dependencies.
+Other scenery subclasses, NPC construction-rate limits and full policy
+exceptions remain to be traced. The terrain pattern has a compatible
+traced explanation, but its actual construction history was not recorded.
+The brief's transition-comparison gate remains open.

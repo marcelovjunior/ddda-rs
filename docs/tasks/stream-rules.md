@@ -31,84 +31,71 @@ to `head`.
 
 ## Results
 
-`docs/STREAMING.md` records the traced stage-100 pipeline, default 5-by-5
-model/collision and 3-by-3 layout candidate windows (`0x004fdf60`,
-`0x00507440`, `0x00c5f070`, `0x00c5f680`, `0x00c60510`), additional distance
-filter (`0x005075d0`), model fade and layout retirement states, regional
-coarse-model variants, and 15 distance-selected landmark records
-(`0x00c61bd0`, installed-exe table `0x01873550`, stride 0x40; aggregate
-threshold range 20000..43000). The origin indices and exact recentering
-formula are resolved (`0x004c66b0`, verified CVTTSS2SI truncation).
+`docs/STREAMING.md` records the stage-100 grid windows, angular distance
+predicate, initial filter bypass, archive dependencies, fade/retirement
+states, coarse terrain and landmark selection, class update/lifetime gates,
+and exact floating-origin recentering formula. It ends with a proposed
+N-player core/view design. This is research and an aggregate survey CLI,
+not an implemented engine system.
 
-Passive snapshot obtained with head #1292 authorization, 2026-10-09
-15:12:05 UTC, PID 8300, frame 4091325: stage100, grid indices N19/M18,
-absolute offset (+10000,0,-80000), nine models/eight collision/six layouts.
-Python checks passed for origin reconstruction, all six live widths, all
-nine model placements and existence of their nine installed cell archives.
-Older ORACLE.md indices22/23 also resolve to its recorded 63m52n cell.
-Head reported a paused tutorial, but subsequent positions differed: these
-were sequential non-atomic reads, not a boundary-crossing comparison. Probe
-operations were info/read only; live/game claim released. Scratch and raw
-data remain in OS TEMP. The initial batch committed no engine/reader code or game data; git diff --check passed.
+Traced evidence:
 
-Follow-up assembly identified acos/sin and EDI kind 0/1/2 at all six
-model/collision/layout retention/construction call sites. A private Python
-formula evaluation exactly reproduced the eight collision and six layout
-cells. It selected 13 model candidates versus nine resident models: two
-extra candidates lack installed archives; two have archives. A later
-passive archive-list read found eight entries matching the collision set.
-This discrepancy remains open rather than treating desired candidates as
-resident models. Original SSE threshold rounding was not emulated.
+- Default model/collision windows 5-by-5, layout 3-by-3 (`0x004fdf60`,
+  `0x00507440`); additional distance filter `0x005075d0`, with acos/sin
+  and hidden EDI kind verified in assembly. Construction bypasses this
+  filter until controller +0x4d is enabled after its first valid update
+  (`0x00c5bc92`, `0x00c5cb76`).
+- Main archive presence/readiness `0x00c5dda0` constrains construction;
+  existing model retention does not require that presence. This permits
+  the observed nine-model/eight-archive pattern. Actual history unrecorded.
+- Origin indices +0x2c/+0x30 and recentering `0x004c66b0`, including
+  CVTTSS2SI truncation, resolved. Landmark table has 15 records and
+  thresholds20000..43000 (`0x00c61bd0`); bulk data stays installed.
+- Enemy near/far update classifier `0x00853dc0`, class table/quality
+  initialization `0x00aa8830`, and common placement override `0x0079f230`.
+  Goblin example4000/24000 at quality1 without override.
+- Scenery uOmSetBase gate `0x00c55380`, size selection `0x00c556c0`,
+  stage-category parameters `0x0044d770`; stage100 radii2500/100000,
+  size cutoff300 before quality scaling of radii.
+- NPC placement consumer `0x007a32f0`, default5000/25000 `0x00bbc4e0`,
+  manager visibility/priority/budgets `0x00472ad0`/`0x00473180`.
+  Physical actor creation/removal `0x00bbea90`/`0x00bbe070`/`0x00bbe670`
+  preserves Intel while inactive; separate Intel removal `0x00472320`.
+  Draw budget12/24/36 by quality, move0 (`0x00471c10`).
 
-The full done-when is **not yet met**. Individual scenery distances and the complete actor creation/removal
-lifecycle remain unresolved. Group activation has authored shape gates
-(`0x00cc5670`), so no universal class radius is claimed. Scripted movement checks are now authorized under the updated safety
-protocol, but none have been performed. The doc ends with an N-player
-interest/residency and per-view floating-origin design proposal.
+Passive comparisons (2026-10-09, existing oracle, board-authorized live
+claims released after each batch; sequential non-atomic reads):
 
-Next action: resolve the terrain archive/residency discrepancy, then trace per-class distance
-consumers and obtain a safe scripted or recorded ordinary crossing comparison.
+- 15:12:05 UTC, PID8300, frame4091325: stage100 gridN19/M18,
+  absolute offset(+10000,0,-80000), nine models/eight collision/six layouts.
+  Python checks passed origin reconstruction, six widths, nine model
+  placements and nine archive existence checks. Older ORACLE snapshot
+  also maps to its documented filename cell.
+- Host-double predicate evaluation exactly selects the eight collision
+  and six layout cells. Model formula selects13; all four extra candidates
+  lack entries in the observed main archive list (two also lack files).
+  Original SSE rounding and construction history were not reproduced.
+- 15:33:38: four registered Intel entries confirm5000/25000/-1;
+  manager budgets12/0. No enemy live match was validated.
+- 15:37:57: scenery parameters confirm2500/100000/300.
+- 15:40:03: registered Intel aggregate3 mode0 with actors,27 mode2
+  without actors, consistent with the lifecycle trace.
 
-Further trace resolves enemy near/far update modes (`0x00853dc0`,
-`0x00aa8830`) and the NPC placement draw-distance consumer (`0x007a32f0`)
-into Intel thresholds, default 5000/25000 (`0x00bbc4e0`). Manager visibility,
-priority and active budgets intervene; full policy exceptions remain open.
-A passive registered-list read found 30 Intel entries; four sampled entries
-match 5000/25000/-1, with manager budgets 12/0. No enemy live match was
-validated. No original process control or writes occurred.
+`ddtool stream-survey <nativePC>` uses the existing GPL reader. Actual
+installed corpus run passed:199 lists,3925 groups,838 spatial-enabled,
+1525 cylinders, radius range50..44525.98. These authored region sizes
+are not universal spawn radii. Shared hooks add ddspawn dependency only.
+`cargo test -p ddtool` passed with zero unit tests; the corpus run is the
+substantive survey check. `git diff --check` passed. No Bevy build.
 
-Added `ddtool stream-survey <nativePC>` using the existing GPL reader.
-Actual corpus run passed: 199 lists, 3925 groups; 838 spatial-enabled
-across suffix e/t, 1525 cylinders, radius range 50..44525.98. Reports are
-aggregates only. Shared ddtool hookup adds ddspawn as a dependency; no
-engine code or private exports. Full brief remains partial, with threshold
-movement comparisons and terrain residency discrepancy still open.
+The full acceptance gate remains **partial**: no threshold movement or
+creation/removal transition was recorded, and the full class exception
+set is not exhausted. Other scenery subclasses, exact NPC construction
+rate limits, and terrain construction history remain open. Scripted
+movement is authorized under the current safety protocol but has not been
+performed. No CUA, original-game input/call/write/injection, install change,
+or private/raw data commit occurred. Scratch remains in OS TEMP.
 
-Initialization qualification: controller +0x4d begins 0 (`0x00c5bc92`)
-and becomes 1 after the first valid update (`0x00c5cb76`). Archive and
-model/collision/layout construction bypass their additional distance filter
-until then; retention does not share this bypass. `0x00c5dda0` rejects
-all four extra model candidates absent from the observed archive list,
-while existing model retention has no matching archive-presence check.
-This explains a permitted nine-model/eight-archive residence pattern, but
-its construction history and boundary transitions remain unobserved.
-Validation: cargo test -p ddtool passed (zero unit tests); the actual
-installed corpus CLI run is the substantive survey check. diff --check passed.
-
-Further class closure: `cSetInfoCoord::vf08` (`0x0079f230`) writes
-mDrawDistance to the character override +0x2994. Scenery `uOmSetBase`
-update gate (`0x00c55380`) compares 3D distance to radius +0x430;
-`0x00c556c0` selects by size field +0x16c. Stage-category radius constants
-are initialized at `0x0044d770`. Stage100 2500/100000 and size cutoff300
-were passively confirmed at 15:37:57 UTC. Other scenery subclasses and
-actual construction/destruction transitions remain open. No process writes.
-
-NPC lifecycle now traced: Intel vf08 -> `0x00bbea90`; no-actor creation
-eligibility `0x00bc0eb0` rejects mode2 except special cases, then archive
-readiness/construction budget gate `0x00bbe070`. Existing mode2 actor
-removal can be deferred by actor state/attached work, otherwise
-`0x00bbe670` removes the physical actor and keeps Intel behavior. Separate
-`0x00472320` queues Intel removal for group/availability causes. Passive
-aggregate 15:40:03 UTC:3 mode0 with actors,27 mode2 without. Budget names
-and initialization resolved: draw12/24/36 by quality, move0 (`0x00471c10`).
-Still not a recorded threshold transition; full exceptions remain unported.
+Next action: compare a narrowly selected distance boundary under the
+current live-session safety protocol, then extend the scenery subclass
+trace only where that comparison exposes a missing policy.
