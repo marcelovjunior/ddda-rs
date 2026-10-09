@@ -69,7 +69,7 @@ Implemented, with visual acceptance still open:
   Results approved on board #1385/#1401/#1410.
 
 Validation so far: release build succeeds; 21 ddlook tests, 9 mtcamera
-tests, 3 ddstory event tests and 16 ddview tests pass. Additional
+tests, 3 ddstory event tests and 17 ddview tests pass. Additional
 installed-material regression verifies the brow group, NPC mask selection,
 alpha blending and zero authored depth bias. Release target reused from
 viewer-controls. Unattended safeguards 41c9fe4 and yaw af425c8 merged
@@ -113,3 +113,31 @@ Bounded diagnostic captures (also exit0, 45-second limit) isolate:
 Review follow-up: malformed eyebrow preset rows now return an error,
 rather than shifting later preset indices through filtering (regression).
 Fixed preset offsets were verified against instructions 0x00781b13..93.
+
+### Authored depth-state follow-up (head #1660)
+
+The material pipeline now keys on the MRL depth-test/write/comparison
+bits, independently of blending. `DSZTestWrite` retains writes for
+`BSBlendAlpha` (hair104); `DSZTest` leaves writes off (brow overlay).
+LessEqual becomes GreaterEqual in reverse Z. Alpha testing on blended
+materials also keeps the authored comparison/reference. Existing opaque
+mask handling is unchanged. Unit coverage checks reversed comparisons
+and reads the installed named DSZTest/DSZTestWrite states.
+
+`cargo test --release -p ddview`: 17 pass; release build passes. Timed
+frame800 and frame1200 runs exit0 without shader warnings/errors after
+correcting a WGSL reserved identifier caught by the first GPU run.
+Private `cutscene{800,1200}-depth.png` compares against the earlier
+same-frame captures: hair compositing changes (79,523 changed pixels at
+frame1200), but the ear hole and unclear brows remain. This state fix
+does not meet the visual acceptance gate or prove original parity.
+
+Further eliminated causes: actual post-propagation blended skin matrices
+all have positive determinants. Quina's brow has 315/368 camera-facing
+triangles under both four- and eight-weight skinning, with zero position
+difference. Face detail camera-facing counts also stay equal; maximum
+four/eight displacement is 0.055 cm for Quina and 0.013 cm for the elder.
+Both brow layouts map UV_Primary to the first TexCoord, as the renderer
+uses. Hair104's six MRL copies and hair105's nine copies are identical.
+The primitive sort flag/alpha priority and original per-mesh sort center
+remain candidates; no unsupported sort bias or culling override added.

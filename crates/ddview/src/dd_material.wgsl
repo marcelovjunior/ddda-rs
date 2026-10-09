@@ -42,8 +42,8 @@
 struct DdParams {
     flags: u32,
     map_channel: u32,
-    pad0: u32,
-    pad1: u32,
+    alpha_compare: u32,
+    alpha_reference: u32,
     sh: array<vec4<f32>, 7>,
     // xyz: direction to the light (unit), w unused
     sun_dir: vec4<f32>,
@@ -91,6 +91,7 @@ const FLAG_CONST_LIGHT: u32 = 512u;
 const FLAG_ALBEDO_ADD: u32 = 1024u;
 // The character pixel shaders' specular and environment terms.
 const FLAG_CHARACTER: u32 = 2048u;
+const FLAG_ALPHA_TEST: u32 = 4096u;
 
 struct SkyEnvParams {
     cb: array<vec4<f32>, 11>,
@@ -210,6 +211,24 @@ fn fragment(
     }
 
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    // rMaterial::vf09 0x0112e4d0 / draw 0x00fee320: alpha testing
+    // remains enabled independently of blending and depth writes.
+    if ((dd.flags & FLAG_ALPHA_TEST) != 0u) {
+        let a = pbr_input.material.base_color.a;
+        let r = f32(dd.alpha_reference) / 255.0;
+        var alpha_passes = true;
+        switch dd.alpha_compare {
+            case 0u: { alpha_passes = false; }
+            case 1u: { alpha_passes = a < r; }
+            case 2u: { alpha_passes = a == r; }
+            case 3u: { alpha_passes = a <= r; }
+            case 4u: { alpha_passes = a > r; }
+            case 5u: { alpha_passes = a != r; }
+            case 6u: { alpha_passes = a >= r; }
+            default: {}
+        }
+        if (!alpha_passes) { discard; }
+    }
 
     var out: FragmentOutput;
     if ((dd.flags & FLAG_DD_LIGHTING) != 0u) {
