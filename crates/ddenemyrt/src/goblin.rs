@@ -153,7 +153,16 @@ pub struct Target {
 }
 
 /// One goblin.
-#[derive(Debug, Clone)]
+/// The goblin's FSM (`cAICtrl` +0x2E64), when it has one.
+pub struct Fsm(pub ddai::think::Thinker);
+
+impl std::fmt::Debug for Fsm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Fsm({:?})", self.0.current_names())
+    }
+}
+
+#[derive(Debug)]
 pub struct Goblin {
     pub pos: [f32; 3],
     pub yaw: f32,
@@ -183,6 +192,11 @@ pub struct Goblin {
     pub log: Vec<(u32, i32)>,
     /// Frames stepped.
     pub frames: u32,
+    /// The unit's FSM (a quest's `rAIFSM`); enemies without one fight on
+    /// their think tables alone.
+    pub fsm: Option<Fsm>,
+    /// Why the FSM stopped, if it did.
+    pub fsm_error: Option<String>,
 }
 
 impl Goblin {
@@ -220,6 +234,8 @@ impl Goblin {
             },
             log: vec![],
             frames: 0,
+            fsm: None,
+            fsm_error: None,
         }
     }
 
@@ -512,8 +528,12 @@ impl Goblin {
             .min_by(|a, b| dist2(a.pos, self.pos).total_cmp(&dist2(b.pos, self.pos)))
             .copied();
         self.target = target.map(|t| t.id);
-        // phase 90: the think (0x008D2360): forced actions first, then the
-        // table when the current action allows (its done byte)
+        // phase 90: the AI controller runs the FSM (0x0059f440, restarting a
+        // finished one once the action allows, `controlled_frame`), then
+        // the unit's think (0x008D2360)
+        self.run_fsm(data, targets);
+        // the think: forced actions first, then the table when the current
+        // action allows (its done byte)
         if let Some(a) = self.pending.take() {
             self.driver.mgr.reset_to_base();
             self.start(data, a);
@@ -536,6 +556,51 @@ impl Goblin {
         // capsule r44 from 44 to 106 cm, is *not run*: the height under it)
         if let Some(h) = ground.height(self.pos[0], self.pos[2], self.pos[1] + ddsim::STEP_UP) {
             self.pos[1] = h;
+        }
+    }
+
+    /// The FSM's frame and its requests: an action becomes a forced action
+    /// for the think; a think table is handed to the unit's `cThinkMgr`
+    /// (CtrlThinkTbl 0x005a9240 -> vf 0x2f8: built-in table `index`); an
+    /// escape point fills think slot 1 (vf186 0x008c75d0); free flags go to
+    /// the FSM itself. An FSM error stops the FSM (logged in `fsm_error`).
+    fn run_fsm(&mut self, data: &GoblinData, targets: &[Target]) {
+        let Some(Fsm(t)) = self.fsm.as_mut() else { return };
+        let inputs = ddai::think::Inputs {
+            actor: Some(ddai::think::Actor {
+                pos: self.pos,
+                world_pos: self.pos,
+                action_done: self.done,
+            }),
+            players: targets.iter().map(|t| t.pos).collect(),
+            ..Default::default()
+        };
+        let requests = match t.controlled_frame(&inputs) {
+            Ok(r) => r,
+            Err(e) => {
+                self.fsm_error = Some(e.to_string());
+                self.fsm = None;
+                return;
+            }
+        };
+        for r in requests {
+            match r {
+                ddai::think::Request::Action { action } => self.pending = Some(action as i32),
+                ddai::think::Request::ThinkTable { table, .. } => {
+                    if let Some(root) = data.tables.root(table as u32) {
+                        self.driver.mgr.request_table(root);
+                    }
+                }
+                ddai::think::Request::EscapePos { pos } => {
+                    self.driver.mgr.slots[1] = Slot::measure(self.pos, self.yaw, pos, 0.0, 0);
+                }
+                ddai::think::Request::FreeCondition { bits } => {
+                    if let Some(Fsm(t)) = self.fsm.as_mut() {
+                        t.or_free_condition(bits);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -631,9 +696,10 @@ impl Goblin {
                 || a == action::SHRINK_PLAIN_BACK)
                 // cEmActDmgShrink on the ground, no knockback data: done at
                 // the motion's end (0x0089F420)
-                && self.motion_ended => {
-                    self.done = true;
-                }
+                && self.motion_ended =>
+            {
+                self.done = true;
+            }
             // cEmActActingDie never sets its done byte (0x008A6930); an
             // action not played here stands
             _ => {}

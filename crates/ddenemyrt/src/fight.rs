@@ -50,7 +50,7 @@ pub struct ArisenFighter {
 }
 
 /// The fight's state.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Fight {
     pub data: Arc<FightData>,
     /// By seat.
@@ -112,6 +112,22 @@ impl Fight {
         let owner = ENEMY_OWNER_BASE + self.goblins.len() as u32;
         self.goblins.push(Goblin::new(&self.data.goblin, owner, pos, yaw));
         owner
+    }
+
+    /// Adds a goblin run by the FSM `path` (an `rAIFSM` of the install).
+    pub fn add_goblin_with_fsm(
+        &mut self,
+        vfs: &ddvfs::Vfs,
+        path: &str,
+        pos: [f32; 3],
+        yaw: f32,
+    ) -> Result<u32, String> {
+        let b = crate::body::load::read(vfs, path, "rAIFSM")?;
+        let graph = mtfsm::Graph::parse(&b).map_err(|e| format!("{path}: {e:?}"))?;
+        let t = ddai::think::Thinker::new(path, Arc::new(graph)).map_err(|e| e.to_string())?;
+        let owner = self.add_goblin(pos, yaw);
+        self.goblins.last_mut().expect("just added").fsm = Some(crate::goblin::Fsm(t));
+        Ok(owner)
     }
 
     /// Starts the scripted sword attack 1 for seat `seat` (ignored while one

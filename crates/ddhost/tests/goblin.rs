@@ -192,3 +192,42 @@ fn the_fight_replays() {
     let b = fight(500, true).hashes;
     assert_eq!(a, b);
 }
+
+/// A goblin with a quest FSM (q0002_goburin: one CtrlAction, action 1):
+/// the FSM's action comes first (WaitAtck, served as a forced action), then
+/// the think tables take over and fight.
+#[test]
+fn an_fsm_goblin_hands_over_to_its_think_tables() {
+    let Some(data) = data() else { return };
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let mut h = Host::new(
+        Sim::new(HashMap::new()),
+        None::<ddstory::Story<NoStoryData>>,
+        ScriptedHost::default(),
+        Box::new(Flat),
+    );
+    h.join(ProfileId(1), Control::Local, [0.0; 3], 0.0);
+    let mut f = Fight::new(data);
+    f.add_arisen(0);
+    f.add_goblin_with_fsm(
+        &vfs,
+        r"ai\fsm\enemy\st100\quest\q0002_goburin",
+        [0.0, 0.0, 600.0],
+        std::f32::consts::PI,
+    )
+    .unwrap();
+    h.fight = Some(f);
+    for _ in 0..300 {
+        let mut inputs = FrameInputs::new();
+        inputs.insert(0, PlayerInput::default());
+        h.tick(&inputs).unwrap();
+    }
+    let g = &h.fight.as_ref().unwrap().goblins[0];
+    assert!(g.fsm_error.is_none(), "{:?}", g.fsm_error);
+    let a: Vec<i32> = g.log.iter().map(|x| x.1).collect();
+    assert_eq!(&a[..3], [action::WAIT_ATCK, 71, action::DASH_TRACE], "{a:?}");
+    assert!(a.contains(&action::N_ATTACK1), "{a:?}");
+}
