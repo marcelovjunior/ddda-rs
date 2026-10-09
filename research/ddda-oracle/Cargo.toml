@@ -1,0 +1,30 @@
+# Separate workspace: everything here is 32-bit (i686-pc-windows-msvc),
+# see .cargo/config.toml. Kept out of the main 64-bit workspace.
+[workspace]
+resolver = "2"
+members = ["probe", "inject", "ledges"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 2
+debug = false
+incremental = false
+codegen-units = 4

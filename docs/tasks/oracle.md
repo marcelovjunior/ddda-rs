@@ -3,7 +3,7 @@
 - **Owner:** claude lane
 - **Branch:** `task/oracle`
 - **Board area:** `live/game` (exclusive: the only agent that touches the running game)
-- **Status:** open
+- **Status:** review (claude-4, 2026-10-09)
 
 ## Goal
 
@@ -98,4 +98,95 @@ So the probe must run inside the process.
 
 ## Results
 
-(filled in by the agent)
+Built `research/ddda-oracle`, a 32-bit workspace of its own:
+- `probe`: the DLL;
+- `inject`: the injector;
+- `client.py`, `recipes.py`.
+
+`docs/ORACLE.md` documents the commands, the mechanisms and every address.
+The save was backed up to `E:\ddda-re\save-backups\20261009-004419` before
+the first injection.
+
+**Done-when checklist.** Everything below was done from scripts, without
+touching the keyboard or the window.
+- Inject: `client.py inject` (LoadLibraryW via CreateRemoteThread, on a temp
+  copy of the DLL).
+- Keep it updating unfocused: the window really lost focus while the probe
+  was loaded. The game ran 205 frames in 3 s (68 fps), and the capture shows
+  the pawns moving.
+- Capture a frame: 1920x1080 PNG from the back buffer in the `Present`
+  hook. It shows the game and its menus.
+- Teleport: read `uPlayer.mPos` (+0x40), wrote x + 200 cm on the main
+  thread, and read it back over 100+ frames. It held (y settled 2 cm onto
+  the ground), and the before/after captures show the move.
+- Unload: `client.py unload` with the game running. The module is gone, and
+  an external read confirmed every patched byte, the `Present` slot, the
+  sBbsRpgMain vtable pointer and `sApp+0x20` back to their original values.
+  The probe was then re-injected and stays loaded for live checks.
+
+**Also verified:**
+- Guarded `call` of game functions on the main thread (the GameHour getter
+  returns the field). Access violations in game code and in the probe's own
+  copy are recovered.
+- Keyboard injection, focused and inactive: Esc toggles the Pause Menu,
+  and W walks.
+- A heap scan for vtables takes about 2 s.
+
+**Addresses found (evidence in ORACLE.md):**
+- Main loop `0x00df0d20`; window procedure `0x00df1550`.
+- Focus flag `sApp+0x2566`. Dormant background switch `sApp+0x20`, where
+  sApp is at `0x018d0f50`.
+- Per-frame call: sBbsRpgMain vf06 `0x0041dd60`; inactive idle vf11
+  `0x0041dd20`.
+- Cursor clip and mouse-acceleration routine `0x00e04d60`, called at
+  `0x00e04f66`.
+- Keyboard: reader `0x00df3ef0`, VK bitmap at `sKeyboard+0x120`. Input
+  focus gates at `0x00409f4b`, `0x0040a0be`, `0x0040a0ce`, `0x0040a290`,
+  `0x00df412f`.
+- Singletons:
+
+  | Global | Class |
+  | --- | --- |
+  | `0x018fa4bc` | sGameSys |
+  | `0x018fa4ec` | sPlayerManager |
+  | `0x018fa4e8` | sPawnManager |
+  | `0x018fa528` | sWorldOffset |
+  | `0x018d099c` | sArea |
+  | `0x018fa520` | sWeatherManager |
+  | `0x018d0b6c` | sCamera |
+  | `0x018d09e0` | sUnit |
+  | `0x018d08f4` | sRender |
+
+  The device is at `sRender+0x98`.
+- Party: `sPlayerManager+0x99c` holds [uPlayer, 3 x uCmc]. `obj+0x3dec`
+  points at the character record in sGameSys, which has the level at
+  `+0x700` and the name at `+0x70c`.
+- Area stack `sArea+0x382c` (`[2]` = aStage100). The origin cell comes from
+  `sWorldOffset+0x50`.
+- Clock: `sGameSys+0xb876c` hour, `+0xb8770` minute.
+
+**Unknown or unverified:**
+- The talk-to-NPC recipe: no NPC was nearby.
+- Whether background running stays silent (expected from the code).
+- Pad and mouse injection are not built.
+- The meaning of `sWorldOffset+0x2c` and `+0x30`.
+- Which party slot is the main pawn.
+- Teleports over long distances or across cells are untested.
+
+**Added while serving requests:**
+- `trace`: per-frame logging driven by a key script. Used for claude-2's
+  run-to-jump blend data: `uPlayer+0x3c0` holds the blend length in 30 fps
+  frames (5, 3, 0, 2 and 15 seen), `+0x3c4` counts down by
+  `sMain.mDeltaTime`, and `+0x3ec`/`+0x3f0` read 0 throughout.
+- `ddda-ledges`: finds steps in the stage collision.
+- A section in ORACLE.md on how to ask for a live check.
+
+**Live checks served:**
+- claude-5: pawn stock IDs.
+- claude-7: story flags.
+- claude-2: blend trace.
+- claude-1's ledge test is pending a known clean ledge; the first attempt
+  hit a hut and was inconclusive.
+
+**Next step:** serve live checks for the other briefs, then verify the talk
+recipe in a town.
