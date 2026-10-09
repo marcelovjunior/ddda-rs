@@ -142,5 +142,5 @@ Codex lane: see `docs/CODEX.md`.
 | [enemy-families](enemy-families.md) | Wolves and harpies: think tables, actions, flight | core | codex-1 | assigned (1) |
 | [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | merged 2026-10-09 |
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | merged 2026-10-09 |
-| [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | assigned (4) |
+| [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | merged 2026-10-09 |
 | [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | assigned (5) |

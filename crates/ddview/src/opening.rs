@@ -278,6 +278,22 @@ pub fn prepare(
 }
 
 impl Session {
+    /// Presentation query using the same rendered positions and range as E.
+    pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
+        // Opening interaction currently routes E only to host seat 0.
+        if seat != 0 || self.cut.is_some() || self.talk.is_some() {
+            return false;
+        }
+        let Some(player) = self.host.sim.player(seat) else { return false; };
+        self.npcs.values().any(|(_, at, _)| {
+            (at.x - player.position[0]).hypot(at.z - player.position[2]) <= TALK_RANGE
+        })
+    }
+
+    pub fn event_active(&self) -> bool {
+        self.cut.is_some()
+    }
+
     /// Seats at start position `n` (seat k > 0 at member offset k - 1).
     fn place_party(&mut self, n: u32) {
         let Some((pos, yaw, offs)) = self.starts.get(n as usize).cloned() else {

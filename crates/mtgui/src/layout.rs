@@ -136,16 +136,25 @@ impl<'a> Gui<'a> {
                         continue;
                     }
                     let name_offset = word(tracks, t + 8)?;
-                    let name = crate::text_at(self.section(0xf0).unwrap().bytes, name_offset)?;
+                    let name = crate::text_at(
+                        self.section(0xf0).ok_or("missing string pool")?.bytes,
+                        name_offset,
+                    )?;
                     let key = word(tracks, t + 12)? as usize;
                     let value = word(tracks, t + 16)? as usize;
                     for k in 0..((flags >> 8) & 65535) as usize {
-                        let frame = word(self.section(0xf4).unwrap().bytes, (key + k) * 8)? & 0xffffff;
+                        let frame = word(
+                            self.section(0xf4).ok_or("missing key table")?.bytes,
+                            (key + k) * 8,
+                        )? & 0xffffff;
                         if flags & 255 == 7 && name == "Texture" {
-                            let value = word(self.section(0xfc).unwrap().bytes, value + k * 4)?;
+                            let value = word(
+                                self.section(0xfc).ok_or("missing integer pool")?.bytes,
+                                value + k * 4,
+                            )?;
                             texture_keys.push((frame, value));
                         } else if flags & 255 == 4 {
-                            let values = self.section(0x100).unwrap().bytes;
+                            let values = self.section(0x100).ok_or("missing vector pool")?.bytes;
                             let mut vector = [0.0; 4];
                             for (i, x) in vector.iter_mut().enumerate() {
                                 *x = f32::from_bits(word(values, value + k * 16 + i * 4)?);

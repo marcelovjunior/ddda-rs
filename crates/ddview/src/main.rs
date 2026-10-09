@@ -579,7 +579,7 @@ fn main() {
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud, hud::update).chain())
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
 }
@@ -652,7 +652,6 @@ fn setup(
             opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, if args.join.is_some() { vec![None, arisen] } else { vec![arisen] }, args.demo)
         {
             commands.insert_resource(state);
-            play::spawn_hud(&mut commands);
             if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
         }
         commands.insert_resource(res);
@@ -791,7 +790,6 @@ fn setup(
                     }
                 }
                 commands.insert_resource(state);
-                play::spawn_hud(&mut commands);
                 if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
             }
             Err(e) => error!("play: {e}"),
