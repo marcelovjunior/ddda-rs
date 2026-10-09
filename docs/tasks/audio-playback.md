@@ -61,10 +61,15 @@ A bounded two-seat offline demo resolved player and soil cues (15,360 and
 33,920 samples), saved a screenshot and exited. Other surface cues were
 rejected as non-ordinary requests, so footstep coverage remains partial.
 
+Random sound selection now follows the installed DNRS tables and sourced
+weighted/repeat rules. All 368 maps parse; seven viewer audio tests pass,
+including repeated soil cues producing multiple decoded variants. The viewer
+uses an isolated presentation RNG with a provisional seed and bounded retries.
+
 Not complete: opening/LAN motion sampling, upper motion layers, clothing and
 motion voices, offhand equipment, cached-floor requests, field BGM, original mixer
 priority/groups, runtime program overrides, gain/pitch/delay/spatial sends,
-random requests and multi-request chains. Audible playback and original-game
+nested random/control requests and multi-request chains. Audible playback and original-game
 comparison have not been verified. Unknown player sound selectors accept only
 requests invariant between the two sourced alternatives; all 18 installed
 surface requests qualify. Details and evidence are in docs/SOUND.md.
