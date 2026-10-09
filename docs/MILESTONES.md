@@ -4,18 +4,44 @@ Each milestone is a route the players can actually do, with a gate checked
 against the original game. Co-op comes early (M3) on purpose: it validates
 the architecture before many systems are built on it.
 
-| # | Route | Gate |
+| # | Route | Gate (checked against the original) |
 | --- | --- | --- |
-| **M0** | Foundation: tooling, exe identity, DTI class registry labelled in Ghidra, `.arc` reader, data inventory | Every `.arc` in nativePC opens and lists entries; DTI names applied to the Ghidra project |
-| **M1** | Look: load one area (Cassardis) and fly a free camera through it | Screenshot comparison against the original at fixed camera poses |
-| **M2** | Walk: an Arisen with skeleton and animations, movement, collision and the third-person camera | Walk a fixed path; positions and timing match a recording within tolerance |
-| **M3** | Together: host and client on LAN, two Arisen walking Cassardis | Both see each other move smoothly; client input is applied by the host |
-| **M4** | Fight: one enemy type, basic combat, the main pawn following and fighting | Damage numbers and enemy behaviour match the original for a scripted fight |
-| **M5+** | NPCs, dialogue with the interaction lock, quests, the opening, then outward through the campaign | Per-route |
+| **M0** | Foundation: tooling, exe identity, DTI registry in Ghidra, `.arc` reader, data inventory | Every `.arc` opens; DTI names applied (**passed** 2026-10-08) |
+| **M1** | Look: Cassardis and its surroundings render like the original (terrain layers, lighting, water, fog, sky, weather, time of day) | Screenshot comparison at recorded camera poses, morning/noon/night |
+| **M2** | Walk: the Arisen moves, animates, collides, climbs and spends stamina like the original | Recorded paths, speeds, jump arcs and stamina curves match within tolerance |
+| **M3** | Together: LAN host and client, two Arisen in Cassardis, shared main pawn | Both see each other move smoothly; client input applied by the host |
+| **M4** | Fight: melee and magic, one enemy family (goblins), status effects, the main pawn fighting and talking | Damage, stagger, AI choices and pawn chatter match a recorded fight |
+| **M5** | The opening: character creation, the prologue, the Cassardis dragon attack, the first quests | The route plays through; quest and flag state matches the original's save after each step |
+| **M6** | Gran Soren and the core loop: shops, forging, inns and storage, the Rift and hiring pawns, notice-board quests, NPC schedules, day/night, fast travel | Shop stock and prices, Rift costs, schedules and quest flags match the original |
+| **M7** | Gransys: every region, enemy, vocation, skill and augment; streaming and loading screens | Every area loads; spawn tables and stats match the data and recordings |
+| **M8** | The campaign: every main and side quest, both endings, the post-game Everfall | Full playthrough; save state comparable with the original at each chapter |
+| **M9** | Bitterblack Isle (Dark Arisen) | Full Bitterblack run |
+| **M10** | Release quality: settings, saves, performance, FPS unlock, co-op polish | Stable sessions; no regressions on the acceptance routes |
+
+Research runs ahead of the active milestone. The systems are broken down in
+[ROADMAP.md](ROADMAP.md), work items in [tasks/](tasks/README.md), and the
+multi-agent process in [BOARD.md](BOARD.md). The original game is observed
+through the in-process oracle ([tasks/oracle.md](tasks/oracle.md)) and the
+reference recordings in `E:\ddda-re` (private).
+
+### Research documents
+
+| Topic | Doc | Status |
+|---|---|---|
+| Formats | FORMATS.md, TEXT.md, PARAMS.md, ENEMIES.md, SURVEY.md | merged |
+| World | WORLD.md | merged |
+| Movement, animation | MOVEMENT.md, ANIMATION.md | merged; ledge and blend in progress |
+| Shading | SHADING.md | in progress (claude-3) |
+| Pawns and the Rift | PAWNS.md | in progress (claude-5) |
+| Shops and economy | SHOPS.md | in progress (claude-6) |
+| Events, cutscenes, quests | EVENTS.md, QUESTS.md | in progress (claude-7) |
+| AI | AI.md | in progress (codex-5) |
+| Weather, NPCs, GUI, map, sound, effects | WEATHER/NPCS/GUI/MAP/SOUND/EFFECTS.md | assigned to the Codex lane |
+| Live oracle | ORACLE.md | in progress (claude-4) |
 
 ## Status
 
-**Active: M0** (started 2026-10-08)
+**Done: M0** (2026-10-08)
 
 Done:
 - JDK 21 (Temurin 21.0.12) installed; Ghidra 12.1.4 runs headless.
