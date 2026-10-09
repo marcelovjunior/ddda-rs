@@ -13,7 +13,8 @@
 //! data at the new clock (`stage::data_lighting`: the sky scheduler's light
 //! units at the sun, and the weather's fog) and written into every lit
 //! material. The original evaluates its scheduler every frame; once a
-//! game minute (2 real seconds) is the *viewer's* step. The sky dome's
+//! game minute (2 real seconds) is the *viewer's* step, and the materials
+//! are relit 64 a frame (all at once stalls a frame for ~400 ms). The sky dome's
 //! constants (`CBSky`, `mtweather::sky::constants` at the new sun) are
 //! renewed with it, for the dome and the materials that reflect it. Not
 //! updated yet: the cloud domes' light, the environment cube tint and the
@@ -42,12 +43,19 @@ pub struct GameClock {
     /// The minute the lighting was last built for.
     lit_minute: u32,
     sky: Option<crate::sky::StageSky>,
+    /// Materials still to relight, a few per frame (a whole pass at once
+    /// re-prepares thousands of materials in one frame: 400 ms hitches).
+    pending: Vec<AssetId<DdMaterial>>,
+    sky_cb: Option<[Vec4; 11]>,
 }
+
+/// Materials relit per frame.
+const RELIGHT_PER_FRAME: usize = 64;
 
 impl GameClock {
     pub fn new(vfs: &'static ddvfs::Vfs, stage: u32, weather: usize, ms: u32) -> Self {
         let sky = crate::sky::StageSky::load(vfs, stage, weather);
-        GameClock { ms: ms % DAY_MS, days: 0, vfs, stage, weather, lit_minute: ms / 60_000, sky }
+        GameClock { ms: ms % DAY_MS, days: 0, vfs, stage, weather, lit_minute: ms / 60_000, sky, pending: Vec::new(), sky_cb: None }
     }
 
     /// One frame of `seconds` real time.
@@ -84,32 +92,41 @@ pub fn update(
         return;
     }
     c.step(time.delta_secs());
+    let c = &mut *c;
     let minute = c.ms / 60_000;
-    if minute == c.lit_minute {
-        return;
-    }
-    c.lit_minute = minute;
-    let Some(mut l) = crate::stage::data_lighting(c.vfs, c.stage, c.ms, c.weather) else { return };
-    // keep the night spot light the start set up (it follows the player)
-    l.spot = lighting.spot;
-    *lighting = l;
-    let sky_cb = c.sky.as_ref().map(|sky| {
-        let sun = mtweather::sky::sun_direction(&sky.sky, c.ms);
-        let cb = mtweather::sky::constants(&sky.sky, &sky.inputs, sun);
-        std::array::from_fn::<Vec4, 11, _>(|i| Vec4::from_slice(&cb[4 * i..4 * i + 4]))
-    });
-    for (_, m) in materials.iter_mut() {
-        m.extension.params = m.extension.params.relit(&lighting);
-        if let Some(cb) = sky_cb {
-            m.extension.set_sky_cb(cb);
+    if minute != c.lit_minute {
+        c.lit_minute = minute;
+        if let Some(mut l) = crate::stage::data_lighting(c.vfs, c.stage, c.ms, c.weather) {
+            // keep the night spot light the start set up (it follows the player)
+            l.spot = lighting.spot;
+            *lighting = l;
+            c.sky_cb = c.sky.as_ref().map(|sky| {
+                let sun = mtweather::sky::sun_direction(&sky.sky, c.ms);
+                let cb = mtweather::sky::constants(&sky.sky, &sky.inputs, sun);
+                std::array::from_fn::<Vec4, 11, _>(|i| Vec4::from_slice(&cb[4 * i..4 * i + 4]))
+            });
+            // the dome is one material: at once
+            if let Some(cb) = c.sky_cb {
+                for (_, m) in skies.iter_mut() {
+                    m.params.cb = cb;
+                }
+                if let Some(env) = env.as_mut() {
+                    env.params.cb = cb;
+                }
+            }
+            // a new pass (an unfinished one continues with the new values)
+            if c.pending.is_empty() {
+                c.pending = materials.ids().collect();
+            }
         }
     }
-    if let Some(cb) = sky_cb {
-        for (_, m) in skies.iter_mut() {
-            m.params.cb = cb;
-        }
-        if let Some(env) = env.as_mut() {
-            env.params.cb = cb;
+    for _ in 0..RELIGHT_PER_FRAME {
+        let Some(id) = c.pending.pop() else { break };
+        if let Some(mut m) = materials.get_mut(id) {
+            m.extension.params = m.extension.params.relit(&lighting);
+            if let Some(cb) = c.sky_cb {
+                m.extension.set_sky_cb(cb);
+            }
         }
     }
 }

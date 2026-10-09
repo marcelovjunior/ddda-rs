@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod perf;
 mod clock;
 mod intro;
 mod charaedit;
@@ -120,6 +121,8 @@ struct Args {
     /// The lighting was built from the data at `clock_ms` (not a capture),
     /// so the clock may advance it (clock.rs).
     light_from_data: bool,
+    /// `--perf`: log frame-time statistics (perf.rs).
+    perf: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -171,6 +174,7 @@ fn args() -> Args {
         charaedit: None,
         skip_intro: false,
         light_from_data: false,
+        perf: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -186,6 +190,7 @@ fn args() -> Args {
         if k == "--movie" { a.movie = it.next(); continue; }
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
         if k == "--skip-intro" { a.skip_intro = true; continue; }
+        if k == "--perf" { a.perf = true; continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
             a.play = true;
@@ -605,7 +610,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, perf::update, clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -631,6 +636,9 @@ fn setup(
             error!("movie: {e}");
         }
         return;
+    }
+    if args.perf {
+        commands.insert_resource(perf::Perf::default());
     }
     let t = std::time::Instant::now();
     // Kept for the whole run: the field streamer loads cells from them later.
