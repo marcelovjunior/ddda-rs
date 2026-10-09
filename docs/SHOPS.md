@@ -217,11 +217,18 @@ Idol / Gold Idol Forgery 70%, Silver 80%, Bronze 90% (the forgeries count);
 Caxton and Camellia also Badge of Merit 92% and Wyrm Hunt License 95%;
 Fournival 90% under GSF 0x20d. All default rates are 100.
 
-`price = base_buy * rate / 100` (u32, `0x006e14b0`). The buy list can be
-rebuilt with a "special" flag (`0x006e86c0`: buy mode and an item in the
-cart with category kind 0); then items 66 (Ferrystone) and 155 (Wakestone
-Shard) are a further 50% off. What this flag represents in play is
-**unknown**; a live check is needed.
+`price = base_buy * rate / 100` (u32, `0x006e14b0`). At the **Rarities
+shop** (Fournival, `mShopType` 7) items 66 (Ferrystone) and 155 (Wakestone
+Shard) are a further 50% off. The "special" argument of the stock builders
+is the screen's byte `+0x2d4`, set to 1 only by the uGUIShopRarities
+constructor (`0x006eb730`: `MOV EBX,1` ... `MOV [EDI+0x2d4],BL` in both the
+buy and the sell branch); every other shop constructor writes 0. Ghidra's
+decompile of these constructors shows a constant 0, so read the
+disassembly. `0x006e86c0` is a different thing: it tells the confirmation
+box (`uGUIShopCheckItem`, `+0x2d4` of the child) that the cart holds
+equipment (category kind 0); after the purchase the shop then offers to
+equip it (`0x006e6640`, state `0x006e70d0`), and from story progress 1100
+on sets bit 31 of sGameSys+0xac918.
 
 `0x004621e0` returns `trunc(buy * 1.5)` for another caller
 (`0x00b9e0a0`, NPC code, not a shop screen; purpose untraced).
@@ -229,17 +236,31 @@ Shard) are a further 50% off. What this flag represents in play is
 ### Sell
 
 `price = trunc(base_sell * F)` (x87, truncating, `0x006e1a02..0x006e1a32`),
-then `* P[level] / 100`, then, with the "special" flag and the item tagged 4
-in the per-item byte list at `0x017f1ae0`, `* 120 / 100`.
+then `* P[level] / 100`, then, at the Rarities shop and for a **rarity**,
+`* 120 / 100`.
 
 - `P` = 100, 110, 120, 145, 270, 320, 370 for enhancement levels 0..6
   (`0x0158640c`).
 - `F` (`0x0044b1f0`) = product over the 4 party slots of `mFVal0` (slot has
   augment 0x54, or a u16 at its bag `+0x1142` is non-zero) or `mFVal1`
   (otherwise or absent) of `plAbilityParam[0x54]`: 1.15 / 1.0. Augment 0x54
-  is probably Suasion ("Enables you to negotiate higher prices for items
-  and equipment you sell", abilityName index 64): **guessed** mapping
-  (id = index + 20), not traced.
+  is **Suasion** ("Enables you to negotiate higher prices for items and
+  equipment you sell"): the skill screens map augment ids to
+  `abilityName` messages through the table at `0x015214a0` (2 bytes per
+  id, byte 0 = message index, 255 = none; read at `0x006f641e`,
+  `0x006ff129`), and entry 0x54 is 64 = Suasion. `dditem::forge::
+  AUGMENT_NAME_INDEX` holds the 115 entries (one per `plAbilityParam`
+  record). Ids 7-9, 17-19, ... (every id with byte 1 = 13) have no name;
+  Sinew (1, 95), Radiance (75, 90) and Suasion (84, 91) appear twice. The
+  bag u16 at `+0x1142` has no other reader or writer found; still
+  **unknown**. Live (claude-4, #633): all four party members had no
+  augments and the u16 was 0, so F = 1.0 for that save.
+- Rarities: items whose effect-tag list contains tag 4. The lists are in the
+  exe (`0x017f1ae0`, one byte list per item, 0xff-terminated, 855 items
+  have one); each tag is a message of `id\message\item\item_ability_<lang>`
+  shown in the item detail (`0x006076f0`); tag 4 is "A rarity.". 62 items
+  carry it (`dditem::rules::RARITY_ITEMS`): curios such as Fuligin Ore,
+  Argence, Antique Panoply and most monster parts and gems from 1206 on.
 
 Sellable count per bag slot (`0x006e17c0`): `num`, minus 1 when flag bit 1
 of the slot (+0x20) is set, minus 2 when bits 1 and 2 are both set (copies
@@ -265,7 +286,7 @@ Offers (`0x006f3350`):
 - normal screen (mode 2): targets 1-3 only; an item at 4+ gets nothing;
 - extended screen (mode 3): also 5 and 6, but only from level 4+, one step
   at a time;
-- level 4 is never bought (dragonforging is elsewhere, **untraced**);
+- level 4 is never bought (dragonforging, below);
 - targets 1-3 cost gold, 5-6 Rift Crystals;
 - cost row index: target-1 for 1-3, target-2 for 5-6;
 - materials (`0x006f3230`) are counted across the screen's owner list
@@ -275,10 +296,69 @@ Offers (`0x006f3350`):
 Example (data, Iron Sword): 70 G; 220 G + 1 Cassardite; 690 G + 4 Hunk of
 Ore; (level 5) 4,000 RC + 3 Lava Rock; (level 6) 5,000 RC + 5 Cyclops Fang.
 
-New stats per level: `rItemLevelParam` row `mLevelUpType` of the table
-chosen by `mKind` (7-18 weapons, 19-24 and 27 armour, 25 accessories),
-walked by `0x0045b620` (Riftstone's description, confirmed by the callers in
-`0x006f04b0`).
+### Commit (traced)
+
+`0x006f29f0` (upgrade screen state machine) waits until a timer
+(`+0x604`, advanced by the frame delta at `[0x018d0b28]+0x70`) reaches 90,
+then:
+1. pays (`0x006f3520`): materials first for targets above 1
+   (`0x006f35f0`), then gold for targets below 4 (subtracted inline,
+   clamped at 0, no adventure-log entry) or Rift Crystals (`0x004433f0`);
+2. materials (`0x006f35f0`) come from the screen's bag owners from the
+   second-to-last down to the first, then storage (`0x00458780`), one less
+   for a stack whose slot flag bit 1 or 8 is set; consumed Wyrmking's Rings
+   (item 229) are added to the Black Cat buy-back list (`0x00461f30`);
+3. applies the level (`0x004612c0`): removes **one** copy from the stack
+   and re-adds it with the new level packed in the low 4 bits of its
+   instance parameter (`0x0045e680`; re-equipped through `0x0045edb0` if it
+   was in use), so enhancing a stack of N enhances one item;
+4. counts it in the play statistics (`0x0044b960` for category type 5,
+   `0x0044b9a0` otherwise).
+
+### Stats per level (traced, `0x0045b620`)
+
+Stats are not stored on the item; every getter recomputes them from the
+base value. The table is chosen by `mKind` (7-18 weapons `+0x12c`, 19-24
+and 27 armour `+0x130`, 25 accessories `+0x134`), the row by
+`mLevelUpType`. For levels 1..L, every entry whose kind equals the stat
+sets the value to `base * rate`, or `base + rate` when direct (single
+precision; the base stays the base, so each level replaces rather than
+stacks); the last match wins; no match leaves the base; L > 6 returns the
+base. Entry offsets (`0x00cbf8b0`, `0x00cbf910`, `0x00cbf990`) follow the
+2/4/6/8/8/8 grouping. Stat kinds confirmed from the preview `0x006f04b0`:
+0 strength (`+0x00` bits 0-10), 1 magick (bits 11-21), 3 / 4 (`+0x08`
+bits 0-9 / 10-19), 8 (`+0x0c` bits 20-29), 9-11 (`+0x10`), 12 (`+0x38`
+bits 22-31). Data check (install test): Iron Sword strength 50 → 66, 82,
+98, 210, 560, 700 at levels 1-6.
+
+### Dragonforging (traced)
+
+Level 4 is set only by `0x0045cb30` (`PUSH 4` before `0x004612c0`), called
+from:
+- `uEnemy::vf72` (`0x00aab3b0`, the death handler) with the dead enemy's
+  kind byte (`cUnit.mUnitParam` byte 1, `+0x2d`, set by each `uEmNNNN`
+  constructor), except kind 0x5a;
+- a scenario command (`0x0078fbb0`, command 0x17) with kind 0x5a, The
+  Dragon: 100% for every eligible item.
+
+For each of the Arisen's 9 equipped slots (`sItemManager+0x3d0`, the
+player only; pawns are not rolled) holding an item below level 4:
+`chance = table[kind][level]` (`0x0045ce50`, tables `0x01539d34..`), then
+the item is dragonforged when `chance + slot byte +0x15 > rand() % 100`
+(signed; shared generator `0x018d017c`). A stack is skipped when the bag
+and storage are full.
+
+| Kind | Enemy (factory class, game text) | Level 0 / 1 / 2 / 3 |
+|---|---|---|
+| 0x5a | The Dragon (`uEm5800`) | 100 (scenario command only) |
+| 0x5b | The Ur-Dragon (`uEm5801`) | 100; 0 / 2 / 10 / 30 when `[0x018fa504]+0x15a4c` or `sGameSys+0xb8824` is set |
+| 0x5c-0x5e | Drakes, Wyrms, Wyverns (`uEm5900`-`5902`) | 0 / 2 / 6 / 18 |
+| 0xb1, 0xb2 | Dire Drakes, Dire Wyrms (`uEm5903`, `uEm5904`; 0xb3 unused) | 5 / 15 / 25 / 40 |
+| 0xb4 | Cursed Dragons (`uEm5906`) | 40 / 55 / 65 / 75 |
+
+Successes count in sGameSys+0xb88dc (weapon slots 0-1) or +0xb88e0 (armour
+slots 2-8), capped at 9,999. The two Ur-Dragon flags are not named yet
+(likely the online / offline distinction; **guessed**).
 
 ## 6. Stock and restock (traced)
 
@@ -328,25 +408,59 @@ Storage: owner 4 of every shop list (`0x006e0ff0`), 7,000 item slots
 `playerGameData.mStorageItemCount` / `mStorageItem`. The storage screen
 (`uGUIStorage`) itself was not traced.
 
-## 8. Bitterblack curse conversion (data + loader)
+## 8. Bitterblack curse purification (traced)
 
-`rItemCurseCnv`: 30 levels, each a weighted list (weights sum to 100) of up
-to 20 items, e.g. level 9: Dread Aspis 17, Devilsbane 17, Bitter End 18,
-Devil's Nail 18, Diabolic Shield 15, Virge of Madness 15. The loader stores
-running sums. Which level a cursed item rolls and how the seed
-(`sItemManager.mItemCurseRandSeedTbl`, `+0x5b04`) is used are **untraced**
-(lead: `uGUIRemoveCurse`, `0x004f3520`).
+Cursed items are 0x6a5-0x6b0: Bitterblack Novelty, Gear, Weapon and Armor,
+Lv.1-3 each. `rItemCurseCnv` has 30 rows of up to 20 weighted items (every
+row sums to 100; the loader keeps running sums).
+
+- **List and cost** (`uGUIRemoveCurse::vf05`, `0x004ee720`): over the 5
+  owners, slots holding a cursed item, not in use (flag bits 1, 8 clear),
+  not a forgery (item flag bit 17) and not item 286. Cost per item = its
+  **buy price, paid in Rift Crystals** (Novelty Lv.1 300 RC ... Weapon Lv.3
+  28,800 RC).
+- **Roll** (`0x004f3390` → `0x004644d0`), done for every unit when the list
+  is confirmed: `seed = sItemManager word +0x4070 + item*4` (for 0x6a5 this
+  is `mItemCurseRandSeedTbl`, +0x5b04); the seed is then incremented, so
+  results are fixed per save and item.
+  - Row = `item - 0x6a5` (Novelty: rows 0-2). For Gear/Weapon/Armor
+    (0x6a8-0x6b0) add a vocation offset: a generator seeded with
+    `seed + 0x15` picks the main pawn's vocation if its first value is odd,
+    else the Arisen's (`sGameSys+0xa7ec0+0x10` / `+0xa76d0+0x10`); Fighter and
+    Warrior +0, Strider and Ranger +9, Mage and Sorcerer +18; Mystic Knight
+    (Fighter or Mage), Assassin (Fighter or Strider) and Magick Archer
+    (Strider or Mage) choose with the low bit of a generator seeded with
+    `seed + 0x28`. A row past the table reads row 0.
+  - Item: `d = next(seed) % row total`; the first slot (from 0) with an item
+    and running sum `>= d` wins; otherwise item 0x6a5.
+- **Generator**: an xorshift128 object (`0x00d006c0` seed: the standard
+  start words 123456789 / 362436069 / 521288629 / 88675123, then 100
+  chained steps mixing `seed ^ 0xac9365`; `0x00d00690` next). Translated in
+  `dditem::rng` and checked against an instruction-level emulation of the
+  two functions.
+- **Commit** (`0x004f3520`): per unit removes one cursed item, spends the RC
+  cost, adds the rolled item.
+
+`rItemRandParam` (24 records of 7 u32) has no reader in this path; its
+consumer is still **unknown**.
 
 ## 9. Unknown
 
-- What the buy/sell "special" flag (`0x006e86c0`) means in play; the
-  tag-4 item list at `0x017f1ae0`.
-- Augment id 0x54 → Suasion (guessed mapping); the second `F` condition
-  (bag u16 at `+0x1142`).
-- Dragonforging (level 4), the enhancement commit (payment, flag update),
-  and which dialogue opens mode 3.
-- Curse purification roll; `rItemRandParam` meaning.
-- The buy/sell transaction itself (cart → bag, `cSAVE_DATA_NPC.mBuyAndSellCnt`).
+- The second `F` condition (bag u16 at `+0x1142`); byte 1 of the augment
+  table (values 0-12).
+- The two Ur-Dragon flags; the slot byte `+0x15` added to the dragonforge
+  chance.
+- Which dialogue opens the extended enhance screen (mode 3).
+- `rItemRandParam` meaning.
+- `cSAVE_DATA_NPC.mBuyAndSellCnt`. The transaction itself is traced
+  (`0x006e6640`): buying adds the items (`0x0045e680`), removes bought
+  buy-back entries (`0x00462070`) and lowers the stock (`0x00477a40`,
+  `-count`); selling removes the items (`0x004588c0`), adds them to the
+  buy-back list (`0x00461f30`) and **raises the shop's stock of that item
+  by the count** (`0x00477a40`, `+count`, capped 999, only if the shop
+  lists it). NPC 398 (Alon) buying item 205 also calls `0x00462270`.
+- **Live**: no buy or sell has been compared yet (queued at claude-4; the
+  party is not at a shop).
 - Inn answer `+0xf4`; the second inn path in handler 14.
 - `0x004621e0` (buy x 1.5) caller.
 
@@ -358,13 +472,12 @@ running sums. Which level a cursed item rolls and how the seed
    on the day counter. N players: each player has a wallet and bags; stock
    is world state owned by the host. Done when the dditem rules drive a
    scripted buy/sell/restock test and match oracle readings for 3 shops.
-2. **enhance**: upgrade offers, cost rows, material counting across party
-   bags and storage, level flags, stat recompute through
-   `rItemLevelParam`; trace the commit function and dragonforging first.
-3. **shop-live-check** (claude-4 oracle): read stock, rates and prices
-   with and without an idol, with Suasion, and across a day change; decode
-   the "special" flag.
+2. **enhance**: done (research and translations in `dditem::forge`);
+   runtime use belongs to economy-core.
+3. **shop-live-check** (claude-4 oracle): one buy and one sell at any shop
+   (queued), then prices with an idol, with Suasion, and across a day
+   change.
 4. **inn-storage**: rest price/time (with events-quests for the clock),
    storage capacity, buy-to-storage routing.
-5. **curse-purify**: trace `0x004f3520` and the seed table; implement the
-   weighted roll from `rItemCurseCnv`.
+5. **curse-purify**: done (`dditem::forge::curse_roll`, `dditem::rng`); the
+   runtime needs the per-item seed table in the save.
