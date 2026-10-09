@@ -32,6 +32,8 @@ mod net;
 mod opening;
 mod play;
 mod items;
+mod skills;
+mod hud;
 mod pause;
 mod sky;
 mod stage;
@@ -577,7 +579,7 @@ fn main() {
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud).chain())
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud, hud::update).chain())
 
         .run();
 }
@@ -651,6 +653,7 @@ fn setup(
         {
             commands.insert_resource(state);
             play::spawn_hud(&mut commands);
+            if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
         }
         commands.insert_resource(res);
         spawn_camera_and_light(&mut commands, &args, None);
@@ -757,6 +760,8 @@ fn setup(
             Ok(mut state) => {
                 state.demo = args.demo;
                 if args.host.is_none() && args.join.is_none() {
+                    skills::equip(&mut state.sim, &state.locals, args.save_xml.as_deref().map(String::as_str));
+                    info!("skills: slots 1-6 (P1), Numpad4-9 (P2); base-level supported actions");
                     if let Some(xml) = args.save_xml.as_deref() {
                         match items::QuickItems::load(&vfs, xml, &state.locals) {
                             Ok(items) => {
@@ -787,6 +792,7 @@ fn setup(
                 }
                 commands.insert_resource(state);
                 play::spawn_hud(&mut commands);
+                if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
             }
             Err(e) => error!("play: {e}"),
         }
