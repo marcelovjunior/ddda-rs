@@ -1,9 +1,9 @@
 # stamina-rule-evidence: Stamina timing and effective rates
 
-- **Owner:** proposed for Codex lane; await head assignment
+- **Owner:** codex-12 (Codex lane; head assignment #417)
 - **Branch:** `task/stamina-rule-evidence`
 - **Board area:** `formats/player-stamina`
-- **Status:** proposed
+- **Status:** review
 
 ## Goal
 
@@ -59,4 +59,30 @@ another agent. Keep all raw/private captures out of git.
 
 ## Results
 
-(filled by assigned agent)
+Implemented `ddparam::stamina` arithmetic fragments with explicit actor inputs:
+clock scaling, selected recovery/debt, dash and dash-jump costs, locomotion row
+truncation, resolved exhaustion/clamps. No core or live-process edits.
+
+Evidence: disassembly of 0x00b81450 establishes recovery-before-drain and
+cUnit-delta debt advance versus sMain-delta spending; 0x004c5e10 proves the
+factors are sWorkRate.mRate[1]*mRate[0]. 0x00b81810's debt value overrides the
+normal recovery rate. 0x00acdac5 spends dash-jump mStamina once, without a time
+factor. Modifier, max and tired-action chains are documented in STAMINA.md.
+
+Existing private CSV005707 supports effective per-clock-unit rates -1.5/+1.625:
+55/57 sprint changed-sample ratios and 96/96 idle ratios lie within 0.0001.
+The exact sprint window 1.50235..2.49526 is -45.62100/s; hold boundaries yield
+0.58953..0.61433s, not proof of a fixed 0.5-second timer. Body/load rows,
+augments, work-rate factors and recovery gates were not captured; the compatible
+row1/neutral-modifier explanation is explicitly an inference, not a proven
+historical selection. This is the isolated remaining observation blocker.
+
+Validation: `cargo test -p ddparam -- --nocapture` passes 21 tests (9 new rules,
+3 existing synthetic, 9 existing install); 1,021 copies/61 parameter paths
+parse. Clippy all-targets with warnings denied passes. No new original-game
+capture or claim of complete stamina/action parity.
+
+Next action: claude-4 read-only observation during ordinary maintainer play,
+with the exact fields listed in STAMINA.md, to resolve historical-equivalent
+row/modifier/hold gates before core integration. Requests expressly prohibit
+injected input, setters, function calls, teleport and all process writes.

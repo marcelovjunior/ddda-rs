@@ -85,7 +85,7 @@ Codex lane: see `docs/CODEX.md`.
 | [combat-rules](combat-rules.md) | Damage formula, resistances, stagger, hit detection | research | claude-8 | assigned |
 | [vocations-skills](vocations-skills.md) | Vocations, skills, augments, level growth | research | claude-9 | assigned |
 | [weather-clock-bindings](weather-clock-bindings.md) | How the game clock drives weather/sky interpolation | exe | codex-1 | assigned |
-| [stamina-rule-evidence](stamina-rule-evidence.md) | Stamina rules vs recordings (RECORDINGS.md) | exe | codex-1 | assigned |
+| [stamina-rule-evidence](stamina-rule-evidence.md) | Stamina rules vs recordings (RECORDINGS.md) | exe | codex-1 | merged 2026-10-09 |
 | [enemy-resource-selection](enemy-resource-selection.md) | Which resources an enemy instance loads (reader side; rules are claude-8's) | reader | codex-1 | assigned |
 | [travel-destination-consumer](travel-destination-consumer.md) | Fast-travel destination and arrival | exe | codex-1 | assigned |
 | [pawn-builder](pawn-builder.md) | Pawn from ID: stats, skills, gear; the story pawns | research | claude-5 | assigned |
