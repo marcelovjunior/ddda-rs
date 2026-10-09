@@ -15,8 +15,10 @@ pub mod cond;
 pub mod data;
 pub mod event;
 pub mod exe;
+pub mod encounter;
 pub mod look;
 pub mod orders;
+pub mod prologue;
 pub mod qct;
 pub mod route;
 pub mod scenario;
@@ -198,6 +200,10 @@ pub trait Host {
 /// routine that produces it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    /// Recruit a built-in story pawn into a party pawn slot (0 main,
+    /// 1/2 hired). Event setup 0x0050c290, case 0x17, calls 0x00440190
+    /// before PlayEvent. The host reads the record from its story stock.
+    StoryPawn { stock: u32, slot: u32 },
     /// Play cutscene `row` of the exe's event table (stage, event); see
     /// EVENTS.md. Answer with [`HostEvent::EventFinished`].
     PlayEvent { row: usize, stage: u32, event: u32 },
