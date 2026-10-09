@@ -281,7 +281,10 @@ returns true or motion is 0x282, 0x283, 0x284, or 0x28C..0x28F. The
 existing `ddenemyrt::Body::push_volumes` builds activated authored
 object-adjustment groups, but does not represent all these callback
 gates or runtime-created entries. It is therefore a partial foundation,
-not yet an exact collection-1 provider.
+not yet an exact collection-1 provider. **0x0076b2c0**, called by actor
+virtual-slot9 paths, clears collection1's count; a provider must preserve
+the selected posed entries at the camera's phase rather than rebuilding
+an arbitrary set from a later motion frame.
 
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
@@ -325,13 +328,16 @@ not remaining eye-to-target distance. For the producer's positive offsets
 the target therefore normally moves by the same shift as the eye.
 
 `mtcamera::actor_offset` implements the query construction, per-frame
-maximum accumulator and scalar smoother independently per view. Its
+maximum accumulator, scalar smoother and pre-stage-sweep pose shift
+independently per view. Its
 `EligibleEntryProvider` boundary explicitly requires the actor gate,
 selected active entries and broad/narrow collision tests; there is no
-default provider that silently substitutes all hurt volumes. Three unit
+default provider that silently substitutes all hurt volumes. Four unit
 regressions cover query start/displacement and contact reduction,
 max/tie/reset behavior, and time chunking plus velocity preservation on
-snap/bypass. Targeted mtcamera tests and clippy pass. Geometry-provider
+snap/bypass, and the strict pose-shift gates/shift-length condition.
+The full mtcamera library's six tests (including two fade tests) passed
+independent lane review; targeted clippy passes. Geometry-provider
 correctness is not established by these synthetic contact fixtures.
 This path is not wired into the
 viewer: it needs the selected, animated

@@ -108,6 +108,33 @@ impl ActorOffset {
         self.value
     }
 
+    /// Apply the source pose shift before the stage sweep (0x007e1400).
+    /// `allowed` combines the active-camera check and source transition
+    /// gate (+0x520 <= +0x51C or byte +0x280 == 0). Eye and target must be
+    /// distinct. Returns whether the source marks an actor offset active.
+    pub fn shift_pose(&self, eye: &mut [f32; 3], target: &mut [f32; 3], allowed: bool) -> bool {
+        if !allowed || self.value.abs() <= 0.1 {
+            return false;
+        }
+        let toward: [f32; 3] = std::array::from_fn(|i| target[i] - eye[i]);
+        let length = toward.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(length > 0.0, "camera eye and target must be distinct");
+        let scale = self.value / length;
+        let shift: [f32; 3] = toward.map(|v| v * scale);
+        for i in 0..3 {
+            eye[i] += shift[i];
+        }
+        let shift_length = shift.iter().map(|v| v * v).sum::<f32>().sqrt();
+        // 0x007e19da..0x007e1a5b compares SHIFT length, not view length.
+        if shift_length - 16.0 < self.value {
+            let scale = self.value / shift_length;
+            for i in 0..3 {
+                target[i] += shift[i] * scale;
+            }
+        }
+        true
+    }
+
     /// Translated from 0x007dcf30 and 0x007bc800, with virtual methods
     /// 0x007bc910..0x007bc960 (vtable 0x01599174).
     /// `normal_camera` is the source's 0x00421ce0 selection result.
@@ -205,5 +232,26 @@ mod tests {
         let mut contacts = Contacts::default();
         contacts.query_actor(&SelectedContacts, &query);
         assert_eq!(contacts.take(), 60.0);
+    }
+
+    #[test]
+    fn pose_shift_uses_shift_length_and_strict_gate() {
+        let mut offset = ActorOffset::default();
+        let (mut eye, mut target) = ([0.0, 0.0, -200.0], [0.0; 3]);
+        offset.step(0.1, -1.0, true);
+        assert!(!offset.shift_pose(&mut eye, &mut target, true));
+        offset.step(20.0, -1.0, true);
+        assert!(!offset.shift_pose(&mut eye, &mut target, false));
+        assert!(offset.shift_pose(&mut eye, &mut target, true));
+        assert_eq!(eye, [0.0, 0.0, -180.0]);
+        assert_eq!(target, [0.0, 0.0, 20.0]);
+
+        // Signed input is supported by the accumulator, though the actor
+        // contact producer supplies nonnegative distances. At -8 exactly,
+        // abs(shift)-16 == offset and the target stays fixed.
+        offset.step(-8.0, -1.0, true);
+        assert!(offset.shift_pose(&mut eye, &mut target, true));
+        assert_eq!(eye, [0.0, 0.0, -188.0]);
+        assert_eq!(target, [0.0, 0.0, 20.0]);
     }
 }

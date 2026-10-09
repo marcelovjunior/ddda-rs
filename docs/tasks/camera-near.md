@@ -108,3 +108,11 @@ partial provider foundation, but source collection1 includes activation,
 owner vf64 filtering and runtime-created entries; no default or viewer
 hook is supplied. CAMERA.md records these gates and unresolved actor
 enum semantics. No new rendered/original comparison.
+
+Pose-shift followup: added the exact 0x007e1400 pre-stage-sweep eye/target
+translation with strict 0.1 threshold and caller-supplied transition gate.
+Disassembly proves the target condition uses displacement length, not
+remaining view length. A fourth actor-offset regression covers that rule
+and its signed boundary. Independent lane review passed all six mtcamera
+library tests (four offset, two fade); targeted clippy passes. Provider
+and viewer integration remain explicitly absent pending complete gates.
