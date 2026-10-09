@@ -60,11 +60,15 @@ fn bounds(vfs: &ddvfs::Vfs, pattern: &ddlook::pattern::EditPattern) -> Vec<(Vec<
     let upto = |n: usize| (0..n as u32).collect::<Vec<u32>>();
     // The preset numbers NNN under 100 with an edit\parts\<part>\<part>_NNN
     // (0x00780fa0 adds 100 for a female; the sets are not contiguous).
-    let presets = |part: &str| {
+    let files = |part: &str, class: &str| {
         (0..100u32)
-            .filter(|n| vfs.locate(&format!("edit\\parts\\{part}\\{part}_{n:03}"), mtarc::type_hash("rHumanPartsEdit")).is_some())
+            .filter(|n| vfs.locate(&format!("edit\\parts\\{part}\\{part}_{n:03}"), mtarc::type_hash(class)).is_some())
             .collect::<Vec<u32>>()
     };
+    let presets = |part: &str| files(part, "rHumanPartsEdit");
+    // the face fields index edit\parts\<base|eyeblow|eye|nose|mouth|ear>
+    // (rFacePartsEdit, 0x00780fa0; CHARACTERS.md)
+    let face = |part: &str| files(part, "rFacePartsEdit");
     EDIT_U8_FIELDS
         .iter()
         .map(|f| match *f {
@@ -74,6 +78,12 @@ fn bounds(vfs: &ddvfs::Vfs, pattern: &ddlook::pattern::EditPattern) -> Vec<(Vec<
             "mHumanHead" => (presets("head"), "head presets"),
             "mHumanArm" => (presets("arm"), "arm presets"),
             "mHumanLeg" => (presets("leg"), "leg presets"),
+            "mFaceBase" => (face("base"), "face base presets"),
+            "mFaceEyebrow" => (face("eyeblow"), "eyebrow presets"),
+            "mFaceEye" => (face("eye"), "eye presets"),
+            "mFaceNose" => (face("nose"), "nose presets"),
+            "mFaceMouth" => (face("mouth"), "mouth presets"),
+            "mFaceEar" => (face("ear"), "ear presets"),
             "mHairNo" => (upto(pattern.hair_id.len()), "editPattern mHairId"),
             "mBeardNo" => (upto(pattern.beard_id.len()), "editPattern mBeardId"),
             "mColorHair" | "mColorBeard" | "mColorEyebrow" => (upto(pattern.pallets[0].len()), "hair pallet"),
