@@ -45,8 +45,8 @@ sequence entries (`cargo test -p ddcombat --release --test install`).
   `ATTACK_FLAGS` for the file order and memory offsets. The ones the
   damage code reads are listed with their consumers in sections 3 to 6.
 - **SeqIndex**: `mNo`, `mModelID`, `mGroupNo`, `mAttackNo`, `mRelation`:
-  ties a collision sequence number (driven by the motion, *unknown* how:
-  the motion-event side is not traced) to a hit group and an attack.
+  ties a collision sequence number (switched on by the motion's event
+  bits, section 2.1) to a hit group and an attack.
 
 Files come in pairs: the model's own file holds the groups and the
 sequence index, a second file holds the attack table. Goblin:
@@ -174,10 +174,12 @@ used by combat (values are this install's):
 
 ## 2. The hit pipeline (one frame)
 
+0. **Activation** (section 2.1): the motions playing on the model switch
+   collision sequence entries on for this frame; each active entry places
+   its group's nodes as volumes carrying its attack.
 1. **Hit detection** (`cObjCollision`, `FUN_0076B7E0`, called from the
    collision manager's update `FUN_00479230`): pairs of attack volumes
-   (groups with `mIsAttack`, active per the sequence index) and hurt
-   volumes (`mIsDamage`) are found. The shape tests are most likely
+   (groups with `mIsAttack`) and hurt volumes (`mIsDamage`) are found. The shape tests are most likely
    `FUN_00771370` / `FUN_007725C0` (large geometry routines next to it;
    *not read*). Each pair gives a node-hit
    record carrying a **copy of the attacker's `Attack` block** (copied by
@@ -194,13 +196,18 @@ used by combat (values are this install's):
    `HitInfo+0x74` += physical attack, `+0x78` += magick attack,
    `+0xB8[mElement]` += `mElementRate`, `+0x104` += `mShrinkAttack`,
    `+0x10C` += `mBlowAttack`, `+0x13C` += `mStaminaAttack`, and
-   **`+0xD0` counts the merged hits**. The strongest hit's element and
-   knockback parameters are kept (the loop tracks the maximum physical,
-   magick, shrink and blow values; `FUN_00776980`, `FUN_00776A80`).
-   A further hit in the same frame is **not merged** if it shares one of
-   the four `mIsSameFrameNoHit00..03` bits with a hit already merged
-   (`(merged & bits) == 0` test in `FUN_0076B7E0`; the bits travel as
-   DamageInfo+0x21E bits 5..7 and +0x21F bit 0).
+   **`+0xD0` counts the merged hits**. The loop tracks the largest
+   physical, magick, stagger and knockdown values: the strongest physical
+   hit's `mSwordRate`/`mHitRate`, the strongest magick hit's element, the
+   strongest stagger hit's `mShrinkType` and trajectory (`FUN_00776980`)
+   and the strongest knockdown hit's `mBlowType` and trajectory
+   (`FUN_00776A80`) replace the merged ones. A later hit's element
+   build-up is added to the slot of the element the merge holds at that
+   moment (`[0x6F8 + element*4] += rate` before the element update). The
+   status build-ups add up (`FUN_00776810`). A further hit is **not
+   merged** if it shares one of the four `mIsSameFrameNoHit00..03` bits
+   with the first hit (`(first & bits) == 0` in `FUN_0076B7E0`; the bits
+   travel as DamageInfo+0x21E bits 5..7 and +0x21F bit 0).
 4. **Mitigation** (`FUN_0076DB10` → victim vf68 through +0xC8C): the
    victim's class subtracts defence and applies resistances (section 5).
 5. **Region scaling and application** (`FUN_0076DB10`, section 6): rates,
@@ -209,6 +216,51 @@ used by combat (values are this install's):
 6. Pools emptied raise flags in RegionStatus+0x110 (bit 0 dead, bit 1
    staggered, bit 2 knocked down, bits 3.. statuses); `FUN_0076E7C0` calls
    vf72 (main pool) or vf75 (part pool) on death.
+
+### 2.1 Which frames switch hit volumes on (traced)
+
+Hit timing lives in the **motion data**, not in per-action code:
+
+- Every motion of an `rMotionList` has an event block of four 72-byte
+  groups `{u16 remap[32], u32 count, u32 list}` with `count` run-length
+  events `{u32 bits, u32 frames}` (Riftstone's LMT notes; offsets are file
+  offsets). **Group 0 is collision.**
+- Each frame, `FUN_0076F430` (for `uActorModel` owners; called from
+  `FUN_0076F2D0`) walks the model's 8 motion layers (uModel+0x380, stride
+  0x140). For each layer it calls `FUN_01057060(group 0, f, f)` with
+  `f` = the layer's current frame truncated to an integer
+  (`CVTTSS2SI` at 0x0076F49D): the OR of the bits of the event run that
+  contains `f`.
+- For each set bit `i` in 0..15 it reads `remap[i]`:
+  `remap / 1000` is an `rObjCollision.mResourceID`, `remap % 1000` an
+  index into that file's `SeqIndex` table. The collision keeps up to 8
+  body files (+0xC3C) and their attack files (+0xC5C, same slot).
+- `FUN_0076F660` -> `FUN_0076F740` -> `FUN_0076F7A0` per node of the
+  entry's group `mGroupNo`: the group's kind bits must meet the pass's
+  mask (+0xD44) and the node is registered with the entry's attack
+  `mAttackNo`, taken from the body file's attack table or, when that is
+  empty (goblins), from the paired attack file (`e0100_00`).
+  `FUN_0076FAB0` copies the attack and stores the entry's `mNo`,
+  `mModelID` and **`mRelation`** (entry+0x190); the hit-history key at
+  entry+0x178 is `(seq mNo << 8 | group mNo) << 16 | entry+0x184`.
+- Passes: `uObjModel::vf93` -> `FUN_0076B470` runs the activation with
+  mask 0x18 (hang / object push-out), `uObjModel::vf09` -> `FUN_0076B300`
+  (mask 0x180, the notice groups) and `FUN_0076B660` (mask 0x7FFFFE6F:
+  attack, hurt and the rest). Volumes are rebuilt every frame: the hit
+  loop frees last frame's entries first.
+
+Goblin example (`motion\em\e01\e0100_at\e0100_at`, motion 1): sequences
+0 and 1 (hurt volumes, scenery push-out) are on for the whole motion;
+sequence 2 (group 2, attack 0: `mAttackRate` 0.8 strike) is on for
+**frames 45..48**, the swing's hit window. Read any list with
+`cargo run -p ddcombat --example lmt_hits -- <nativePC> <motion list>`.
+
+Gaps: what reads group-0 bits 16..31 (set in 2,963 of 9,158 motions; the
+loop above stops at bit 15) and groups 1..3; how `mRelation` and the
+history key are consumed (`FUN_0076EAF0` matches history entries by
+victim and the key's low 16 bits, `FUN_0076EB60` records them; the
+multi-hit rule they implement is not read to the end); the non-actor
+path of `FUN_0076F2D0` (16 entries per bit of +0xD3C).
 
 ## 3. The attacker's value
 
@@ -341,9 +393,19 @@ total = phys + mag                                   # HitInfo+0x7C
 surface 1/2/3 to 0/1/2). Class 0 is a weak point (x1.25), 1 normal, 2
 hard (x0.75), 3 x0.4, 4 immune.
 
+- **Minimum damage** (`FUN_00775C70`, before the total): a part the hit
+  has (physical when `mSwordRate`/`mHitRate` give a positive share,
+  magick when the magick attack is positive) that mitigation brought to
+  <= 0 deals the attacker object's +0x14 value instead (1.0 when there is
+  no attacker; +0x14 is `cUnit.mDeltaTime` if that object is the unit,
+  *not confirmed*). If no part dealt real damage, the stagger and
+  knockdown damage are dropped unless the attack has
+  `mIsNoDamageNoResetShrink` / `mIsNoDamageNoResetBlow` (table at
+  0x015947A8).
 - **HP** (`FUN_00776F50`): `R.HP -= total` unless `mAttr` & 1 or the
-  collision is invulnerable (+0xCFC bit 0). With `mAttr` & 0x20 (or
-  +0xCFC bit 1) HP stays >= 1. At HP <= 0: HP = 0, dead flag.
+  collision is invulnerable (+0xCFC bit 0). With `mAttr` & 0x20, +0xCFC
+  bit 1, or an `mIsNoDeath` attack on the main pool, HP stays >= 1. At
+  HP <= 0: HP = 0, dead flag.
 - **Stagger** (`FUN_00777110`): only if `mShrinkType` != 0:
   `R.DP -= shrink * R+0x4C * coll+0xD24`; DP <= 0 sets flag 2 (the victim
   flinches) and DP = 0 (or 1 with `mAttr` & 0x40). `mIsForceShrink` /
@@ -356,8 +418,15 @@ hard (x0.75), 3 x0.4, 4 immune.
   `cUnit.mDeltaTime` +0x14, i.e. in 1/30-s frames): `DP += mDPSpeed*dt`
   up to max, `BP += mBPSpeed*dt`; a running refill timer (+0x38 / +0x44)
   that passes `mDPResetTimerMax` / `mBPResetTimerMax` refills the pool
-  at once. What starts that timer (+0x34 / +0x40) is *unknown* (likely the
-  stagger itself).
+  at once.
+- **Reaction** (`FUN_0076E340`, after HP): each triggered status calls
+  vf74 (+0xC9C) with its index and resets its build-up. A knockdown calls
+  vf71 (+0xC88), refills DP, stops the DP timer, starts the BP timer and
+  sets BP = 0; otherwise a stagger calls vf70 (+0xC84), starts the DP
+  timer and sets DP = 0. Status 11 (`耐氷漬け`, frozen) cancels both and
+  refills DP and BP. So after a flinch DP regrows by `mDPSpeed` per frame
+  and is refilled when the timer passes `mDPResetTimerMax` (goblin: 0.3
+  per frame, refill after 75 frames).
 
 The motion played on a flinch or knockdown (`mShrinkType` 1/2,
 `mBlowType` 0..3, the knockback `mDistanceZ`.. fields used by
@@ -438,14 +507,47 @@ D = 0.5*equipDef + `mBasicDefend`; e.g. `mBasicDefend` 80, no armour:
 200 * 100/180 = 111.1, times e (5.2): **111.1** if player+0x273C bit 1 is
 set, else 133.3 (122.2 with augment 40). Unresolved until measured.
 
-Both are predictions from the traced code, not yet measured (board #698
-asks claude-4 to measure the first).
+Both are predictions from the traced code, not yet measured. The first
+is the regression test of `ddcombat::damage` (synthetic
+`tests/damage.rs` and, from the installed files,
+`tests/install.rs::worked_example_from_install`: 105). The live goblin,
+head and magick checks are queued with claude-4 (board #698, #831).
 
-## 9. What is still unknown
+## 9. Implementation (`ddcombat`)
 
-- The motion side of hit timing: which motion frames switch a sequence
-  index entry on (LMT collision events; codex-10's effect-links work
-  traced motion links), and how `mRelation` is used.
+`ddcombat::damage` holds the rules above as pure functions, each with its
+source address: `enemy_attack` (0x0088B530), `player_attack` and
+`critical_multiplier` (0x0088AA20), `merge_frame` (0x0076B7E0),
+`enemy_mitigate` (0x00AAA490), `player_mitigate` and `defence_curve`
+(0x00B7AD90, 0x00B83EE0), `scale_for_region` and `resolve_enemy_hit`
+(0x0076DB10), `min_damage_rule` (0x00775C70), `apply_hp` (0x00776F50),
+`apply_break` (0x00777110), `resolve_reaction` (0x0076E340),
+`tick_region` and `region_class` (0x007781A0). Inputs are plain values
+(attacker, victim, region pools, `Adjust` tables), so any number of
+players and pawns resolve independently. `ddcombat::events` reads the
+LMT event groups and translates 0x01057060 / 0x0076F430
+(`activations(motion, frame)`).
+
+Tests: `tests/damage.rs` (8 synthetic cases: the worked example, head
+link, per-hit defence and same-frame exclusion, critical roll and magick
+part, enemy attack vs player curve, element on magick only and
+`mIsNoCalcEnemyDefence`, minimum damage, regeneration/refill and
+classes) and `tests/install.rs` (`worked_example_from_install` builds the
+example from `collision\pl\m0001_00_lv1`, `lvfighter`, `em0100`,
+`param\game` and `param\dlc` and gets 105; `motion_collision_events`
+reads all 1,032 motion lists and checks the goblin's frame 45..48
+window).
+
+Not implemented: status build-up and timed statuses, the species- and
+player-specific multipliers listed in sections 4 and 5.2 (the functions
+take the core inputs and say what they omit), the special enemy case of
+0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard,
+volume placement on joints and the shape tests.
+
+## 10. What is still unknown
+
+- Hit timing: traced (2.1) except group-0 bits 16..31, event groups
+  1..3, and how `mRelation` / the hit history limit repeated hits.
 - Hurt/hit shape tests in detail (`FUN_00771370`, `FUN_007725C0`) and
   `mHitPrio` ordering. Riftstone's shape table is taken as is.
 - What sets: collision mode +0xD14, P+0x144 (crit-capable), P+0x7C/+0x80,
@@ -458,7 +560,7 @@ asks claude-4 to measure the first).
   and boss-specific vf68 overrides, the experience award (`mExpRate`).
 - No live measurement yet.
 
-## 10. Proposed implementation briefs
+## 11. Proposed implementation briefs
 
 1. **combat-hit-volumes** (core, `crates/ddcombat` + a sim crate): place
    group nodes from joints each tick (shapes 0/1/4), activate attack

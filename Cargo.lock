@@ -2285,6 +2285,7 @@ name = "ddcombat"
 version = "0.1.0"
 dependencies = [
  "ddenemy",
+ "ddparam",
  "ddvfs",
  "mtarc",
 ]

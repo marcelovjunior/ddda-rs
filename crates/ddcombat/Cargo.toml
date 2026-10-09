@@ -11,3 +11,4 @@ publish.workspace = true
 mtarc = { path = "../mtarc" }
 ddvfs = { path = "../ddvfs" }
 ddenemy = { path = "../ddenemy" }
+ddparam = { path = "../ddparam" }
