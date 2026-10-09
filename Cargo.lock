@@ -2647,6 +2647,7 @@ dependencies = [
  "ddvfs",
  "ddworld",
  "mtarc",
+ "mtcamera",
  "mtgmd",
  "mtgui",
  "mtlmt",

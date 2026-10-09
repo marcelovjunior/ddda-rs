@@ -619,6 +619,7 @@ fn main() {
         .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain())
 
+        .add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate))
         .run();
 }
 

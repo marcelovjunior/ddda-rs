@@ -250,6 +250,21 @@ fn albedo_add(s: &Shading) -> Option<Vec4> {
 /// swing billboards and (with [`StageLighting`]) its lighting and fog.
 pub type DdMaterial = ExtendedMaterial<StandardMaterial, DdExt>;
 
+/// Viewer adapter for uBaseModel's separate opacity. Preserve the authored
+/// material state so leaving a near-camera fade restores masked/opaque parts.
+/// Alpha blending replaces the original model-transparency render path; its
+/// exact ordering and shadow treatment have not been compared.
+pub(crate) fn character_opacity(m: &mut DdMaterial, alpha: f32,
+    authored: (f32, AlphaMode, Option<u8>, u32)) {
+    let (base_alpha, mode, depth, flags) = authored;
+    m.base.base_color.set_alpha(base_alpha * alpha.min(1.0));
+    m.base.alpha_mode = if alpha < 1.0 { AlphaMode::Blend } else { mode };
+    m.extension.depth = if alpha < 1.0 { depth.map(|d| d & !2) } else { depth };
+    // Do not overwrite lighting/sky flags updated by the stage systems.
+    m.extension.params.flags = (m.extension.params.flags & !FLAG_BLENDED)
+        | if alpha < 1.0 { FLAG_BLENDED } else { flags & FLAG_BLENDED };
+}
+
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 #[bind_group_data(DdPipelineKey)]
 pub struct DdExt {
