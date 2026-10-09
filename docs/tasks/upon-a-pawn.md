@@ -457,3 +457,25 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   stage set, duplicate rejection and external-owner conflict without partial
   retirement. Placement6/story_pawns9 pass; targeted clippy passes with the
   previously documented lint allowed. Release build pending shared target.
+
+### Guard arbitration and actor completion observations
+
+- DialogueSlot translates candidate reservation0x0043dd80 and promotion
+  0x0043ded0 while tracking the interacting PlayerId alongside actor lifetime.
+  Reservation success can leave another candidate unchanged; promotion rejects
+  that mismatch. Same-actor seat ownership is an explicit co-op extension.
+  Matching-owner clear follows0x0043dfd0; retirement invalidates only the
+  removed lifetime. Original helper audio/global side effects are not ported.
+- TalkEndObservation translates both independent branches of uNpc::vf111
+  0x00bb3290. Pending actor+0x586a must equal1 and requires enabled controller
+  and game flag0x100000 clear; only that branch consumes pending. Separately,
+  actual talk action0x03000041 with an empty active-dialogue slot also emits
+  the frame's observation. Earlier completion prose omitted this second
+  branch. Unknown observations cannot satisfy either branch.
+- These contracts accept actual actor observations; UI End never calls them
+  implicitly. They do not implement spatial/global eligibility, actor talk
+  action transitions, or the exit helper's controller reenable side effects.
+- Two new regressions cover competing seats/actors, candidate success versus
+  activation, lifetime retirement, blocked pending exit and both completion
+  branches. All four Guard release tests pass; ddnpcrt clippy --no-deps
+  -Dwarnings passes. Latest viewer release build is running.
