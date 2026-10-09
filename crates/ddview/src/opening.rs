@@ -917,6 +917,7 @@ pub fn cutscene(
     windows: Query<&Window>,
     mut exit: MessageWriter<AppExit>,
     mut gameplay_projection: Local<GameplayProjection>,
+    mut voices: Local<Option<mtsound::voice::EventVoices>>,
 ) {
     let Some(res) = res else { return };
     let mut guard = res.0.lock().unwrap();
@@ -929,6 +930,12 @@ pub fn cutscene(
     if pause.paused && args.host.is_none() && args.join.is_none() {
         return;
     }
+    let voices = *voices.get_or_insert_with(|| {
+        args.save_xml.as_deref().and_then(|xml| {
+            crate::audio::voices_from_save_xml(xml, "mPlayerDataManual")
+                .map_err(|e| warn!("opening voice context unavailable: {e}")).ok()
+        }).unwrap_or_default()
+    });
     let aspect = windows
         .single()
         .map(|w| w.width() / w.height().max(1.0))
@@ -941,7 +948,7 @@ pub fn cutscene(
             c.acc -= 1.0;
             match c.player.step(1.0) {
                 Ok(f) => {
-                    crate::audio::cues(&mut commands, &f);
+                    crate::audio::cues_with_voices(&mut commands, &f, voices);
                     c.last = f;
                 },
                 Err(e) => {

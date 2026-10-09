@@ -225,8 +225,8 @@ self-terminating key and a chain to another request.
 The viewer now plays unconditional event SE cues through that checked path,
 following the request's package reference and decoding its base program and
 variation. Effects are separate one-shots and may overlap; stream-unit
-replacement applies only to streams. Conditional cues are skipped rather than
-playing all alternatives. Runtime overrides, original priority/group limits,
+replacement applies only to streams. Conditional cues require the explicit
+actor context described below. Runtime overrides, original priority/group limits,
 gain/pitch/delay and spatial processing remain unimplemented. Fifteen mtsound
 unit tests and the installed ev10 stream/ADPCM regression pass; the ev10 SE
 request is confirmed to be an ordinary terminal play. Audible comparison is
@@ -246,9 +246,9 @@ field is zero, plus `(voice / 3) & 1`. No sex-code inversion is inferred.
 `mtsound::voice::EventVoices` translates this gate with explicit optional
 actor records. Two regressions cover all four groups, voice division/parity
 boundaries, invalid conditions and absent records. `audio::cues_with_voices`
-accepts this per-event context; the existing context-free adapter suppresses
-conditional cues. Event owners still need to supply the correct records from
-their save/character-creation state. Stable context during an event is assumed;
+accepts this per-event context; an empty context suppresses conditional cues.
+Both event callers supply saved records when available. Character-creation
+state without a save remains unavailable. Stable context during an event is assumed;
 changing conditions during a held call flag needs the original gate/edge order.
 
 The save conversion is confirmed at 0x00780fa0: cPlayerInfo+0xc receives
@@ -258,4 +258,14 @@ for an invalid voice (the original retains prior state, which is unavailable
 to a fresh reader). `audio::voices_from_save_xml` reads the chosen save slot's
 Arisen and first pawn separately. It does not substitute either for the
 distinct edit-record condition group. Three voice regressions and all five
-viewer audio regressions pass. The viewer's event callers still need the hook.
+viewer audio regressions pass.
+
+The standalone event and opening callers now use this context with --save;
+no-save opening keeps it empty. Standalone events choose the saved actor's
+sex-specific scheduler unless --sex was explicitly requested. A bounded
+event-22 run from frame 510 with a private save reached both authored female
+voice alternatives at frame 514 and resolved only the selected f1 package
+(40,320 decoded samples). It saved a screenshot and exited without logged
+decoder or audio-device errors. The release build and all 32 enabled viewer
+tests pass (one installed HUD test ignored). This verifies cue selection and
+playback submission, not audible fidelity or an original-game comparison.

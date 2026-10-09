@@ -22,13 +22,9 @@ struct AudioState {
     failed: HashSet<String>,
 }
 
-/// Deferred so event systems need no knowledge of the mixer or device.
-pub fn cues(commands: &mut Commands, frame: &ddstory::event::EventFrame) {
-    cues_with_voices(commands, frame, mtsound::voice::EventVoices::default());
-}
-
 /// Event owners supply their selected player/edit/pawn records. The default
-/// adapter deliberately suppresses conditional cues when those are unknown.
+/// context suppresses conditional cues when those are unknown. Queuing is
+/// deferred so event systems need no knowledge of the mixer or device.
 pub fn cues_with_voices(commands: &mut Commands, frame: &ddstory::event::EventFrame,
     voices: mtsound::voice::EventVoices) {
     if frame.cues.is_empty() { return; }
