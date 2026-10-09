@@ -476,7 +476,12 @@ fn skin(raw: &[u8], at: usize, layout: &InputLayout) -> std::result::Result<([u1
     for e in layout.elements.iter().filter(|e| e.name == "Joint") {
         for c in 0..e.count as usize {
             if nj < 8 {
-                joints[nj] = read_component(raw, at + e.offset as usize, e.ty, c)? as u16;
+                let v = read_component(raw, at + e.offset as usize, e.ty, c)? as u16;
+                // Element type 4 (only in IASkinBridge2wt, 0xDB7DA014) holds a
+                // joint index in the low byte of each 16-bit component; the
+                // high byte is not an index (0x80 in the data). Albam (MIT,
+                // engines/mtfw/mesh.py) reads bytes 0 and 2 for this format.
+                joints[nj] = if e.ty == ElementType::Unk4 { v & 0xFF } else { v };
                 nj += 1;
             }
         }

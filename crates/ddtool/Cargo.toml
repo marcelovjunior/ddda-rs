@@ -14,3 +14,4 @@ mtmod = { path = "../mtmod" }
 mtmrl = { path = "../mtmrl" }
 mtxfs = { path = "../mtxfs" }
 mtlot = { path = "../mtlot" }
+mtlmt = { path = "../mtlmt" }

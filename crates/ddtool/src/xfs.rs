@@ -212,3 +212,79 @@ pub fn lot_scan(dir: &Path) -> Result<(), String> {
         Err(format!("{} layouts failed", walk.failures.len()))
     }
 }
+
+/// `lmt-scan`: every rMotionList through `mtlmt`, with two value checks:
+/// each keyed track's last key starts on frame count - 1 or earlier and its
+/// deltas cover the motion (Riftstone: "key frame spans = frame count - 1"),
+/// and rotation keys are unit quaternions.
+pub fn lmt_scan(dir: &Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    let started = std::time::Instant::now();
+    let motions = AtomicU64::new(0);
+    let tracks = AtomicU64::new(0);
+    let keys = AtomicU64::new(0);
+    let span_bad = AtomicU64::new(0);
+    let rot_keys = AtomicU64::new(0);
+    let rot_off = AtomicU64::new(0);
+    let codecs = Mutex::new(BTreeMap::<u8, u64>::new());
+    let walk = scan::for_each_resource(dir, mtarc::type_hash("rMotionList"), |_, e, bytes| {
+        let l = mtlmt::parse(bytes).map_err(|err| format!("{}: {err}", e.path))?;
+        let mut local = BTreeMap::<u8, u64>::new();
+        for m in l.motions.iter().flatten() {
+            motions.fetch_add(1, Relaxed);
+            for t in &m.tracks {
+                tracks.fetch_add(1, Relaxed);
+                *local.entry(t.codec).or_default() += 1;
+                keys.fetch_add(t.keys.len() as u64, Relaxed);
+                // codecs 1/2 hold one key per frame; others carry deltas
+                if t.keys.len() > 1 && m.frame_count > 0 && t.keys.last().unwrap().frame >= m.frame_count {
+                    span_bad.fetch_add(1, Relaxed);
+                }
+                if t.usage.is_rotation() && !matches!(t.codec, 7 | 15) {
+                    for k in &t.keys {
+                        rot_keys.fetch_add(1, Relaxed);
+                        let n = k.value.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if (n - 1.0).abs() > 0.05 {
+                            rot_off.fetch_add(1, Relaxed);
+                        }
+                    }
+                }
+            }
+        }
+        let mut c = codecs.lock().unwrap();
+        for (k, v) in local {
+            *c.entry(k).or_default() += v;
+        }
+        Ok(())
+    })?;
+    println!(
+        "rMotionList: {} parsed, {} failed",
+        walk.visited - walk.failures.len(),
+        walk.failures.len()
+    );
+    println!(
+        "motions {}  tracks {}  keys {}",
+        motions.load(Relaxed),
+        tracks.load(Relaxed),
+        keys.load(Relaxed)
+    );
+    println!(
+        "tracks whose keys start past the last frame: {}",
+        span_bad.load(Relaxed)
+    );
+    println!(
+        "rotation keys (codecs other than 7/15): {}, off unit length by > 0.05: {}",
+        rot_keys.load(Relaxed),
+        rot_off.load(Relaxed)
+    );
+    println!("tracks per codec: {:?}", codecs.into_inner().unwrap());
+    println!("elapsed {:.1} s", started.elapsed().as_secs_f64());
+    for f in walk.failures.iter().take(10) {
+        println!("FAIL {f}");
+    }
+    if walk.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} motion lists failed", walk.failures.len()))
+    }
+}
