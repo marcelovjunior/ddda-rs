@@ -2392,6 +2392,7 @@ name = "ddprogress"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddparam",
  "ddskill",
  "ddstory",

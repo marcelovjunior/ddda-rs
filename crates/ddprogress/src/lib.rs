@@ -17,6 +17,7 @@ pub mod change;
 pub mod character;
 pub mod learn;
 pub mod party;
+pub mod save;
 pub mod tables;
 
 pub use character::Character;
