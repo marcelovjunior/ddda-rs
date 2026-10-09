@@ -21,6 +21,7 @@ pub mod install;
 pub mod lock;
 pub mod player;
 pub mod save;
+pub mod systems;
 
 pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};

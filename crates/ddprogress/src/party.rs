@@ -6,8 +6,8 @@ use ddskill::vocation::Vocation;
 
 /// Index of a character in [`Progression::characters`].
 pub type CharId = usize;
-/// A player of the session (0 = host).
-pub type PlayerId = u8;
+/// A player of the session: the seat, 0 = host (`ddid::PlayerId`).
+pub use ddid::PlayerId;
 
 /// What a party slot does with an experience award.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +61,7 @@ pub struct Share {
 /// [`CharId`]; the party holds up to four of them in the original's slot
 /// order (co-op: P1 Arisen, main pawn, hired pawn, P2 Arisen,
 /// docs/COOP_DESIGN.md).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Progression {
     pub characters: Vec<Character>,
     pub party: [Option<Member>; 4],

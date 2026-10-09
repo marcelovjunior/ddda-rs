@@ -2294,6 +2294,7 @@ dependencies = [
 name = "ddeconomy"
 version = "0.1.0"
 dependencies = [
+ "ddid",
  "dditem",
  "ddstory",
  "ddvfs",
@@ -2319,8 +2320,16 @@ version = "0.1.0"
 name = "ddhost"
 version = "0.1.0"
 dependencies = [
+ "ddeconomy",
+ "ddexe",
+ "ddid",
+ "dditem",
+ "ddpawn",
+ "ddprogress",
  "ddquest",
+ "ddrift",
  "ddsim",
+ "ddskill",
  "ddstory",
  "ddvfs",
  "mtarc",
@@ -2328,6 +2337,10 @@ dependencies = [
  "mtlmt",
  "mtxfs",
 ]
+
+[[package]]
+name = "ddid"
+version = "0.1.0"
 
 [[package]]
 name = "dditem"
@@ -2387,6 +2400,7 @@ name = "ddprogress"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddparam",
  "ddskill",
  "ddstory",
@@ -2410,6 +2424,7 @@ name = "ddrift"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddnpc",
  "ddparam",
  "ddpawn",

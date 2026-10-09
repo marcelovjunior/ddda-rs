@@ -7,9 +7,8 @@ use ddpawn::cmc::Cmc;
 use ddpawn::rift::{self as rules, PawnRng, POOL_FIRST_STOCK_SLOT, POOL_SLOTS};
 use ddpawn::RomPawnId;
 
-/// A player in the session (0 = host).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PlayerId(pub u8);
+/// A player in the session: the seat, 0 = host (`ddid::PlayerId`).
+pub use ddid::PlayerId;
 
 /// What the Rift needs to know about the Arisen who acts: level and the
 /// Rift Crystal balance (`cSAVE_DATA_PARAM.OnlinePoint` /
@@ -187,6 +186,7 @@ pub enum HireError {
     Locked(PlayerId),
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rift {
     /// The pawn stock (`mCmcStock`); not saved, rebuilt on load.
     pub stock: Vec<Cmc>,
@@ -609,7 +609,7 @@ mod tests {
     }
 
     fn arisen(id: u8, level: u32, rc: i32) -> Arisen {
-        Arisen { id: PlayerId(id), level, rift_crystals: rc }
+        Arisen { id: id, level, rift_crystals: rc }
     }
 
     #[test]
@@ -618,10 +618,10 @@ mod tests {
         rift.open_room();
         let mut rows: Vec<Row> = (0..6).map(|i| row(0x1000_0000 + i, 10)).collect();
         for r in rows.iter_mut().take(5) {
-            rift.summon(PlayerId(0), r).unwrap();
+            rift.summon(0, r).unwrap();
         }
-        assert_eq!(rift.summon(PlayerId(0), &mut rows[5]), Err(SummonError::RoomFull));
-        assert_eq!(rift.summon(PlayerId(0), &mut rows[0]), Err(SummonError::RoomFull));
+        assert_eq!(rift.summon(0, &mut rows[5]), Err(SummonError::RoomFull));
+        assert_eq!(rift.summon(0, &mut rows[0]), Err(SummonError::RoomFull));
         let mut p1 = arisen(0, 7, 100);
         // (10+7)*(10-7)^2 + 18 = 171 > 100.
         assert_eq!(rift.hire(&mut p1, 0, 0), Err(HireError::NotEnoughCrystals { cost: 171 }));
@@ -644,7 +644,7 @@ mod tests {
         // A pawn at or below the Arisen's level is free.
         let mut p_hi = arisen(0, 50, 0);
         rift.release(2, 6000, true);
-        rift.summon(PlayerId(0), &mut rows[5]).unwrap();
+        rift.summon(0, &mut rows[5]).unwrap();
         let i = rift.room.as_ref().unwrap().slots.iter().position(|s| s.state == RoomState::Present).unwrap();
         assert_eq!(rift.hire(&mut p_hi, i, 6000), Ok(2));
         assert_eq!(p_hi.rift_crystals, 0);
@@ -656,14 +656,14 @@ mod tests {
         assert_eq!(rift.party.hire_capacity(), 1);
         rift.open_room();
         let mut rows: Vec<Row> = (0..2).map(|i| row(0x1000_0000 + i, 10)).collect();
-        rift.summon(PlayerId(0), &mut rows[0]).unwrap();
-        rift.summon(PlayerId(1), &mut rows[1]).unwrap();
+        rift.summon(0, &mut rows[0]).unwrap();
+        rift.summon(1, &mut rows[1]).unwrap();
         let mut p1 = arisen(0, 7, 1000);
         let mut p2 = arisen(1, 20, 0);
-        rift.talk(PlayerId(0), 0).unwrap();
-        assert_eq!(rift.talk(PlayerId(1), 0), Err(HireError::Locked(PlayerId(0))));
-        assert_eq!(rift.hire(&mut p2, 0, 0), Err(HireError::Locked(PlayerId(0))));
-        rift.stop_talking(PlayerId(0), 0);
+        rift.talk(0, 0).unwrap();
+        assert_eq!(rift.talk(1, 0), Err(HireError::Locked(0)));
+        assert_eq!(rift.hire(&mut p2, 0, 0), Err(HireError::Locked(0)));
+        rift.stop_talking(0, 0);
         // P2 (level 20) pays nothing for a level-10 pawn; P1 would pay 171.
         assert_eq!(rift.hire(&mut p2, 0, 0), Ok(1));
         assert_eq!((p1.rift_crystals, p2.rift_crystals), (1000, 0));

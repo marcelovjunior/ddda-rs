@@ -11,7 +11,7 @@
 //! `magic[4] version:u32 count:u32` then per chunk
 //! `tag[4] owner:u8 (0 shared, 1 profile) [profile:u64] len:u32 bytes`.
 
-use crate::player::ProfileId;
+pub use ddid::ProfileId;
 
 pub const MAGIC: &[u8; 4] = b"DDHS";
 pub const VERSION: u32 = 1;
@@ -20,6 +20,14 @@ pub const VERSION: u32 = 1;
 pub const TAG_WORLD: [u8; 4] = *b"WRLD";
 /// One Arisen's place in the world: stage-frame position and facing.
 pub const TAG_PLACE: [u8; 4] = *b"PLCE";
+/// The host's own state: frame count, seats with profiles, hirers.
+pub const TAG_HOST: [u8; 4] = *b"HOST";
+/// `ddeconomy::Economy::save` parts.
+pub const TAG_ECON: [u8; 4] = *b"ECON";
+/// `ddprogress::Progression::save` parts.
+pub const TAG_PROG: [u8; 4] = *b"PROG";
+/// `ddrift::Rift::save` (shared only).
+pub const TAG_RIFT: [u8; 4] = *b"RIFT";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
