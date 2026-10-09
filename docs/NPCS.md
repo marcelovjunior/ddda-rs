@@ -209,14 +209,137 @@ the morning schedule selects conversation 7 or 76, or that either line was
 observed in a live interaction. Conversation eligibility and choice/jump
 execution remain separate work with the quest/event lane.
 
+## Talking (traced)
+
+### Which conversation plays
+
+A plain talk (`0x00bb4830`, general branch) asks the chooser for the
+current story band (`sGameSys+0x3c`, `World::sce_band`), falls back to
+conversation **6** when it finds none, and shows that row of the NPC's base
+talk set (`0x00455990`). Special cases not translated: NPCs 0x1f9 and 0x200
+under sGameSys `+0xb8844` bit 0x40000 (random 12/15 and 13/15).
+
+The chooser `0x00bb8cf0(band)` works on the base set (the NPC's message
+set with `+0x10 == -1`, else `-2`) and the NPC's record in `sNpcManager`
+(0x110 bytes per NPC): two 128-bit memories at `+0x898` (said once, type 1)
+and `+0x8a8` (said), the last conversation at `+0x8ba`, and one sequence
+counter per band at `+0x8c8` (all reset to -1 by `sNpcManager::vf10`,
+0x00475c80). Rows are tried in order:
+- a row numbered 128 or more is always a candidate; a lower one only when
+  neither memory bit is set or it is the last conversation said;
+- `mSeason` must equal the band;
+- conditions, each only when set: quest flag (`mQuestNo` and
+  `mQuestFlgNo`), `mGsfFlgNo` (below 0x600), affinity within
+  `mFriend..=mFriendMax`; all must hold;
+- with conditions, the band counter first drops to the row's
+  `mSeasonSequence` if higher; with or without, the row wins when the
+  counter is below its sequence.
+
+With no winner, a counter of 0 or more drops by one and the band is tried
+again; then bands above 1 fall back to the band below. The winner sets the
+"once" bit for sequence type 1, and for any type but 2 the "said" bit, the
+last conversation and the counter. The effect is a story told in order per
+band, repeating its last line, with flagged rows slotted in when their
+flags come up. Quina (install test): band 1 gives 76 "You should be abed.
+I wish you would not strain yourself so.", 13, 90, ...; band 2 gives 20,
+18, 21, then 21 again until quest 52 flag 94 is set, then 22 "Benita told
+me of the flowers you gathered for the wounded.". Not translated: the
+stage-200 case for placement id 995 (returns 300 or 11).
+
+A shop NPC (one with a shop list) opens its **menu conversation** instead
+(`0x00b9ddc0`): 100 for most keepers, 110 when sGameSys `+0xb8840` bit
+0x8000000 is set (the menus with an equipment option), Olra/Barroch 102,
+Devyn 110 (100 with a ready pawn), NPC 400 120/130, nothing for Olra on
+stage 200. Kinds 1 and 2 (105 / 106 for most keepers; Caxton: "Take proper
+care of that." / "Good, good.") follow a closed shop screen; that kind 1 is
+"after buying" and 2 "after selling" is **inferred** from those lines.
+
+### Lines, choices and commands
+
+A conversation's lines are its `mMsgTbl` slots, each a GMD index in the
+NPC's talk file (`id/npc_wind/npc_base_talk/nNNN_<lang>`), left out when the
+slot's `mGfsFlgNo_msg` names a clear flag (`0x00cc9ca0`). Its choices are
+`mSelMsgTbl` (GMD indices); a choice whose `mSelMsgJump` is set continues
+with that conversation (Caxton's "Never mind" → 104 "Come again.").
+
+Commands come from **markup in the line text**. `sGUIExt::vf16`
+(0x0044f950) handles each tag; command tags set sIdMessage `+0xe4` and
+`+0xdc`, and when the message closes `sIdMessage::vf06` (0x00455280) runs
+handler `+0x44 + n*4` (table built by 0x00454f80). Tags: `GSKL` 1, `GILD` 2,
+`STRG` 3, `SHOP` 4, `TENT` 5, `JUNK` 6, `UPGR` 7, `GV_F` 8, `EQSH` 9,
+`BABA` 10, `EQUG` 11, `RMSH` 12, `EQRM` 13, `CHK` 14, `EQJK` 15, `RMVC` 16,
+`UPG2` 17, `GSK2` 18; `<FUNC n>` names handler n; `<INN>` starts a free
+rest at once (0x005188b0). Caxton's menu line is `<UPGR>They're
+masterworks, all. You can't go wrong.`.
+
+The menu handlers read the chosen option (sIdMessage window `+0x38c`) and
+open GUI 7 in a mode (SHOPS.md): `SHOP` buy/sell; `JUNK`, `RMSH` buy;
+`UPGR` buy/sell/enhance; `EQSH` buy/sell/equipment; `EQUG`
+buy/sell/enhance/equipment; `EQRM` buy/equipment; `EQJK` buy/–/equipment;
+`UPG2` the level 5-6 upgrade screen. Handler 0 is the paid inn rest and 14
+its price check; a handler's return value is the next conversation (the
+inn returns 102 / 104).
+
+### How a script's `Message` id picks its line
+
+(claude-7's open question.) `Message` type 2 (0x005c5bc0) passes
+`mMesId` and `mQuestNo` to 0x004560d0, which finds a **message set** for
+the quest: first the quest object's three message-set lists (0x004846c0;
+entries 1.. tested with 0x004575f0, then entry 0 by row lookup), else any
+active NPC whose set is tagged with that quest and holds row `mMesId`.
+The set then shows **conversation number `mMesId`** (0x00455a50), i.e. an
+MSS row, not a GMD index; its lines are that row's `mMsgTbl` entries in
+the set's GMD. Type 3 uses the current area's set (`aStage+0xa10`). The
+quest object's sets are presumably the `q%04d_n%03d` quest talk files
+`uNpc::vf32` loads; that link is not traced.
+
+## Runtime: `crates/ddnpcrt`
+
+Host-owned, inputs → state → requests, N players.
+
+- **Schedules** (`schedule`): `NpcRuntime::spawn` starts the controller
+  from `schedule_path`; each frame the controller and the action graph it
+  loads run on the shared AI core (`ddai::core`) with an NPC owner:
+  `SysCondition` (bit 2 = the interface is done, set by `SetInterface`'s
+  state callback 0x00533a90; cleared on a state change, **guessed**),
+  `FreeCondition` (`Set FreeCondition`), `GameHour`, `GlobalTime`.
+  Interfaces become requests: `Goto` (point, run, route), `Wait` (seconds,
+  facing), `Motion`, `Place` (`SetInitPosNpc`, `DemoSetPos`). The host's
+  actor layer reports done; until a headless NPC mover exists, the host
+  completes moves at once, so an NPC stands at each route point it is sent
+  to. NPC graphs set `mFSMAttribute` bit 2 (per-cluster work memory,
+  0x00e09750) and have sub-machines, which `ddai` does not port yet; the
+  runtime clears the bit, so sub-machines restart on entry (**guessed**).
+- **Talking** (`talk`, `NpcRuntime::talk/talk_next/talk_choose`): the
+  chooser and menus above; events `Line`, `Choices`, `Action` (shop mode,
+  inn, other handler), `End`. One talk per NPC: a second Arisen gets
+  `Busy`. Talk memory is world state (`NpcRuntime::memory`), not yet in a
+  save chunk.
+- **Host** (`ddhost::npcs`): `Host::talk` takes the interaction lock;
+  a shop command opens the `ddeconomy` session (`open_shop` for buy/sell,
+  `open_upgrade` for the upgrade screens) and the lock stays with it until
+  `close_shop` / `close_shop_talk` (which plays the after-screen line);
+  any other ending frees the NPC; `leave` aborts a seat's talk. NPC
+  schedules step in the tick (pass A line 15) and their requests go out in
+  `FrameReport::npc_requests`.
+
+Tests: `cargo test -p ddnpcrt` (4 synthetic: chooser order and flags,
+affinity/GSF, menus/tags/actions, a talk session with the lock; 3 install:
+Quina's position across a day, Quina's talks by band and quest flag,
+Caxton's menu) and `cargo test -p ddhost --test npcs` (talk → shop session
+under the lock with two players; Quina's schedule in the host tick).
+
 ## Remaining work
 
-Untraced or unimplemented: the full NPC manager spawn/priority policy,
-quest/daily FSM arbitration, action routes and navigation, conversation
-eligibility and choices, MSL global serial consumers, localization name
-exceptions, and live comparisons. The stored field `mLikeItem` is retained
-as a number; it is not treated as an equipment/item id.
+- Not compared live: a Quina talk, the 06:00 schedule switch, Caxton's
+  menu.
+- Not implemented: quest talk sets and quest/daily FSM arbitration, NPC
+  locomotion (walk speed, navigation), the per-cluster work memory, the
+  inn and equipment handlers in the host, the other command handlers
+  (storage, guild, Rift shop), talk memory in the save, MSL serial
+  consumers.
+- The stored field `mLikeItem` is retained as a number; it is not an item id.
 
-Next action: record one Quina interaction and a 06:00 schedule transition,
-logging the selected controller, MSS conversation number and GMD index,
-then compare those against the checked data chain.
+Next action: record one Quina interaction and a 06:00 schedule
+transition, logging the selected controller, conversation number and GMD
+index, and compare with the runtime.
