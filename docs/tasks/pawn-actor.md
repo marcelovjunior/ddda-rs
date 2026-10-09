@@ -91,9 +91,12 @@ regression loads all story records 10..14, verifies their saved fields and
 equipment conversion, and retains Rook's Mage level 6. All four pass in
 release mode. This is not an original-game comparison or a playable pawn.
 
-The item exclusion predicate `0x004647e0` is an explicit caller input;
-the installed fixture enables its starting gear and does not validate the
-general exclusion predicate. Body/motion construction, AI, active status
+The item exclusion predicate `0x004647e0` is now read by `ItemExclusions`
+from the installed executable's seven compressed switch maps and jump
+tables. `convert_installed` uses it; the explicit callback remains available
+for controlled observations/tests. The installed regression covers signed
+IDs, range endpoints, gaps, direct equality branches and the final fallback,
+then uses this predicate for story stock 10..14. Body/motion construction, AI, active status
 modifiers, augments, special equipment skills, inventory-bag attachment and
 host integration remain unimplemented here. Accessory fields for other
 consumers are retained but not applied to HP/stamina/attack. These APIs
