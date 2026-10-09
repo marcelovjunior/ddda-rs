@@ -30,8 +30,8 @@ pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
 pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 
 /// Every motion the controller uses (ddsim::State::motion_id).
-const USED_MOTIONS: [u16; 24] = [
-    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611,
+const USED_MOTIONS: [u16; 25] = [
+    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611,
 ];
 
 /// Motion list of a bank: 0 is the common set; 6 is the equipped weapon
@@ -150,7 +150,14 @@ pub fn setup(
             .cloned()
             .flatten()
             .ok_or(format!("{path}: slot {slot} missing"))?;
-        roots.insert(id, RootMotion::from_motion(&m));
+        // curves drive the sprint stop, sprint ramp and ledge climb; events
+        // drive the stamina hold (as ddaccept::new_sim)
+        roots.insert(
+            id,
+            RootMotion::from_motion(&m)
+                .with_curves(lists[&bank].curves[slot].clone())
+                .with_events(lists[&bank].events[slot].clone()),
+        );
         motions.insert(id, m);
     }
     let mut sim = Sim::new(roots);
