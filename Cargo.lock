@@ -2319,6 +2319,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddquest"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtgmd",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddsave"
 version = "0.1.0"
 dependencies = [
