@@ -29,6 +29,7 @@
 mod event;
 mod character;
 mod net;
+mod opening;
 mod play;
 mod pause;
 mod sky;
@@ -89,6 +90,10 @@ struct Args {
     goblins: usize,
     /// `--players` was given.
     players_given: bool,
+    /// `--opening`: the Cassardis story slice (opening.rs).
+    opening: bool,
+    /// `--shots <dir>`: the opening's step screenshots.
+    shots: Option<PathBuf>,
     /// `--kit fighter|mage`: the local Arisen's fight kit instead of the
     /// save weapon's.
     kit: Option<play::Kit>,
@@ -137,6 +142,8 @@ fn args() -> Args {
         save_xml: None,
         goblins: 0,
         players_given: false,
+        opening: false,
+        shots: None,
         kit: None,
         cam_pitch: None,
         paused: false,
@@ -158,6 +165,11 @@ fn args() -> Args {
         if k == "--play" || k == "--demo" {
             a.play = true;
             a.demo |= k == "--demo";
+            continue;
+        }
+        if k == "--opening" {
+            a.opening = true;
+            a.play = true;
             continue;
         }
         if k == "--goblin" {
@@ -201,6 +213,7 @@ fn args() -> Args {
             "--motion" => a.motion = Some(v),
             "--slot" => a.slot = v.parse().unwrap(),
             "--frame" => a.frame = Some(v.parse().unwrap()),
+            "--shots" => a.shots = Some(PathBuf::from(v)),
             "--players" => {
                 a.players = v.parse().unwrap();
                 a.players_given = true;
@@ -508,6 +521,24 @@ fn main() {
     }
     let mut args = args();
     args = net::prejoin(args);
+    // --opening: the host walks to q0001 before the window opens; the
+    // stage, clock and camera start come from it.
+    let session = args.opening.then(|| {
+        let exe = args.native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default();
+        let s = opening::prepare(&args.native_pc, &exe, 1, args.demo, args.shots.clone())
+            .unwrap_or_else(|e| panic!("--opening: {e}"));
+        let w = &s.host.story.as_ref().unwrap().world;
+        args.stage = opening::STAGE;
+        args.cell = (50, 50);
+        args.clock_ms.get_or_insert((w.hour * 3600 + w.minute * 60) * 1000);
+        args.weather.get_or_insert(0);
+        let p = Vec3::from(s.host.sim.player(0).map(|p| p.position).unwrap_or([0.0; 3]));
+        args.spawn = p;
+        args.player = Some(p);
+        args.pos = p + Vec3::new(0.0, 250.0, -300.0);
+        args.look = p + Vec3::Y * 140.0;
+        s
+    });
     resolve_lighting(&mut args);
     let size = args.size;
     // Under --light the sky dome (sky.rs) covers the background; where a
@@ -537,16 +568,23 @@ fn main() {
             ..default()
         })
         .init_resource::<play::Hud>()
+        .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step,
-            character::animate.run_if(pause::animate_world), play::update_hud).chain())
+        .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
+            character::animate.run_if(|pause: Res<pause::PauseState>, args: Res<Args>| !pause.paused || args.host.is_some() || args.join.is_some()), play::update_hud).chain())
+
         .run();
 }
+
+/// The opening session until setup moves it into its resource.
+#[derive(Resource)]
+struct OpeningSlot(std::sync::Mutex<Option<opening::Session>>);
 
 fn setup(
     mut commands: Commands,
     args: Res<Args>,
+    slot: Res<OpeningSlot>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -592,6 +630,24 @@ fn setup(
             Ok(_) => info!("character {model} motion {motion} slot {}", args.slot),
             Err(e) => error!("character: {e}"),
         }
+        spawn_camera_and_light(&mut commands, &args, None);
+        return;
+    }
+    if let Some(session) = slot.0.lock().unwrap().take() {
+        let res = opening::OpeningRes(std::sync::Mutex::new(session));
+        // seat 0 wears the save's Arisen, else a stand-in
+        let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(&vfs, x, "mPlayerDataManual").ok());
+        let arisen = saved
+            .as_ref()
+            .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
+            .or_else(|| ddlook::save::template_look(&vfs, 0).ok());
+        if let Some(state) =
+            opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, vec![arisen], args.demo)
+        {
+            commands.insert_resource(state);
+            play::spawn_hud(&mut commands);
+        }
+        commands.insert_resource(res);
         spawn_camera_and_light(&mut commands, &args, None);
         return;
     }

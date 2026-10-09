@@ -26,6 +26,10 @@ mtxfs = { path = "../mtxfs" }
 mtlmt = { path = "../mtlmt" }
 mtarc = { path = "../mtarc" }
 ddvfs = { path = "../ddvfs" }
+ddworld = { path = "../ddworld" }
+mtsbc = { path = "../mtsbc" }
+ddmap = { path = "../ddmap" }
+ddnpc = { path = "../ddnpc" }
 
 [dev-dependencies]
 ddsave = { path = "../ddsave" }

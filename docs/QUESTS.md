@@ -768,3 +768,43 @@ The test asserts:
 5. **lcm-camera** (reader): rCameraList v3 reader with an install test.
 6. **quest-ui** (thin): quest log (entry rule), banners, markers, rewards
    from rQuestReward.
+
+## Playable Cassardis slice (`--play --opening`)
+
+`ddhost::opening::OpeningWorld` carries the opening story under the host.
+The initial prologue is fast-forwarded with the existing `ScriptedHost`
+stand-ins, then Cassardis event rows 22 and 23 wait for actual viewer
+playback. This is not a playable prologue or the complete M5 gate.
+The vocation screen is explicitly a viewer stub (1 Fighter, 2 Mage).
+
+The fast-forward result retains the last `Request::PlaceParty`, including
+its stage. Event completion (`ddstory::Story::event_end`, translated from
+0x0050c7a0) emits that request separately from `World.start_pos`, which is
+the area-entry selector. For st200 ev05 the request names start row 2;
+using the stale area-entry row 0 had put the viewer outside the bedroom.
+The viewer now reads the selected pose from the installed `rStartPos`.
+After ev10 the same request path places the party at row 12.
+
+The host runs schedules and owns NPC conversation locks. The viewer
+shows the selected conversation text from the installed messages. The
+current schedule runtime explicitly parks NPCs at their last position
+when it encounters an untranslated schedule variable. Stage NPC presence
+is still an over-inclusive controller lookup, not fully gated placement
+layouts. Cosmetic NPC walking uses a labelled viewer speed, not a
+validated original movement rule.
+
+Protocol 3 adds NPC positions and typed `ToClient::PlayEvent { frame,
+row }`. A network opening wraps this same story host in `ddnet::Server`;
+its guest consumes snapshots and event starts rather than advancing the
+story. While waiting for the authoritative playback to finish, the server
+suppresses player input. A late join during a cutscene receives its
+original start frame and catches up locally. The guest's NPC/event views
+use its own install. Guest dialogue/menu controls are not implemented in
+this slice; host dialogue uses the existing N-seat interaction lock.
+
+The demo's motion is scripted input toward the scenario volumes read
+from the install. It reports blocked paths and never teleports through
+an obstacle. It stops at q0002 boot, before that quest's currently
+untranslated QCT judgment type 18. The displayed completion boundary is
+intentional; it is not a claim that q0002 is playable. No new comparison
+against the original save or original visual sequence has been made.
