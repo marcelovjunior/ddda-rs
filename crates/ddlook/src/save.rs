@@ -11,7 +11,8 @@
 //! - hair `0x0f000000 | mHairNo`, beard `0x10000000 | mBeardNo`: the
 //!   `h_parts` armour-table ids are 0x0f0000NN (hair) and 0x100000NN
 //!   (beard), and NPC edits use the same form (st200 n001: hair 104 ->
-//!   0x0f000068).
+//!   0x0f000068);
+//! - the beard only for male characters (*guessed*).
 
 use crate::{dressed_look, Error, Look, Outfit, Source, Tables, Unit};
 use ddsave::xml::Node;
@@ -82,7 +83,13 @@ fn character<S: Source + ?Sized>(
         }
     }
     let hair = field(&f, "mHairNo").map_or(-1, |h| (0x0f00_0000 | h) as i32);
-    let beard = field(&f, "mBeardNo").map_or(-1, |b| (0x1000_0000 | b) as i32);
+    // *Guessed*: only male characters wear the beard model. Female records
+    // carry a beard number too (23 in the maintainer's save); the
+    // record -> runtime conversion that would decide it is not traced.
+    let beard = match field(&f, "mBeardNo") {
+        Some(b) if sex == 0 => (0x1000_0000 | b) as i32,
+        _ => -1,
+    };
     let look = dressed_look(t, unit, sex, &Outfit { pieces, hair, beard }, None);
     Some(SavedLook { who, look, items: eq, edit: f })
 }

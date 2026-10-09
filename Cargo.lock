@@ -2362,6 +2362,7 @@ dependencies = [
  "ddvfs",
  "mtarc",
  "mtmod",
+ "mtshader",
 ]
 
 [[package]]
@@ -2521,6 +2522,8 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddlook",
+ "ddsave",
  "ddsim",
  "ddstory",
  "ddvfs",

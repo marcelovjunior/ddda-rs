@@ -110,6 +110,15 @@ fn saved_arisen_and_pawns_are_dressed() {
             l.look.parts.len(),
             (0..200).filter(|&p| !l.look.mask.visible(p)).count()
         );
+        let f = |n: &str| l.edit.iter().find(|(k, _)| k == n).map(|(_, v)| *v);
+        eprintln!(
+            "  gender {:?} hair {:?} beard {:?} face base {:?} parts {:?}",
+            f("mGender"),
+            f("mHairNo"),
+            f("mBeardNo"),
+            f("mFaceBase"),
+            l.look.parts.iter().map(|p| p.path.rsplit(char::from(92)).next().unwrap_or("")).collect::<Vec<_>>()
+        );
         // Dressed: at least one equipment model besides hair, all present.
         assert!(l.look.parts.iter().any(|p| !p.hair), "{} wears nothing", l.who);
         for p in &l.look.parts {

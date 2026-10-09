@@ -13,14 +13,18 @@
 //! freezes it there (for screenshots). Without `--exe` the exe is looked
 //! for next to `nativePC`.
 //!
-//! NPC actors wear their event looks (`ddstory::look`: base body by sex,
-//! the NPC armour set, hair and beard); the player and pawns use the base
-//! Arisen body, since their looks are the players' own.
+//! Characters are assembled by `ddlook` and `character::spawn_assembled`:
+//! one skeleton, the part mask, hair colour. NPC actors wear their event
+//! looks; with `--save DDDA.sav` the player actor (and pawn actors) wear
+//! the save's Arisen and pawns, else the base Arisen body.
+//!
+//! `ddview <nativePC> --lineup DDDA.sav [--shot out.png]` shows the save's
+//! Arisen and party pawns side by side in the rest pose.
 //!
 //! *Not shown yet:* stage lighting and effects, body and face morphs,
-//! colours, the part on/off masks, IK. The camera's actor-joint
-//! adjustments are applied with zero displacement: the viewer has no IK
-//! or body morphs, so every joint sits where its local pose puts it.
+//! skin and eye colours, IK. The camera's actor-joint adjustments are
+//! applied with zero displacement: the viewer has no IK or body morphs, so
+//! every joint sits where its local pose puts it.
 
 use std::path::PathBuf;
 
@@ -46,16 +50,18 @@ struct EventArgs {
     size: (u32, u32),
     shot: Option<PathBuf>,
     shot_delay: f32,
+    save: Option<PathBuf>,
 }
 
 fn parse_args() -> Option<EventArgs> {
     let all: Vec<String> = std::env::args().skip(1).collect();
-    let i = all.iter().position(|a| a == "--event")?;
+    let i = all.iter().position(|a| a == "--event" || a == "--lineup")?;
+    let lineup = all[i] == "--lineup";
     let native_pc = PathBuf::from(all.first().expect("usage: ddview <nativePC> --event <row>"));
     let mut a = EventArgs {
         exe: native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default(),
         native_pc,
-        row: all.get(i + 1).and_then(|s| s.parse().ok()).expect("--event needs a row number"),
+        row: if lineup { usize::MAX } else { all.get(i + 1).and_then(|s| s.parse().ok()).expect("--event needs a row number") },
         language: 1,
         sex: 0,
         hour: 8,
@@ -64,14 +70,16 @@ fn parse_args() -> Option<EventArgs> {
         size: (1600, 900),
         shot: None,
         shot_delay: 10.0,
+        save: lineup.then(|| PathBuf::from(all.get(i + 1).expect("--lineup needs a save file"))),
     };
     let mut it = all.iter().skip(1);
     while let Some(k) = it.next() {
         let mut val = || it.next().unwrap_or_else(|| panic!("{k} needs a value")).clone();
         match k.as_str() {
-            "--event" => {
+            "--event" | "--lineup" => {
                 val();
             }
+            "--save" => a.save = Some(PathBuf::from(val())),
             "--exe" => a.exe = PathBuf::from(val()),
             "--lang" => a.language = val().parse().unwrap(),
             "--sex" => a.sex = val().parse().unwrap(),
@@ -95,31 +103,37 @@ fn parse_args() -> Option<EventArgs> {
 /// false otherwise (the caller goes on with its own modes).
 pub fn run_if_requested() -> bool {
     let Some(args) = parse_args() else { return false };
+    if args.row == usize::MAX {
+        run_lineup(args);
+        return true;
+    }
     let data = ddstory::data::InstallData::open(&args.native_pc, Some(&args.exe)).expect("open install");
     let stage_no = data.event_table().and_then(|t| t.rows.get(args.row)).map(|r| r.stage as u32).unwrap_or(0);
     let cfg = EventConfig { language: args.language, sex: args.sex, hour: args.hour, stage: stage_no };
     let mut player = EventPlayer::open(&data, args.row, cfg).expect("open event");
-    // Actor looks: NPCs from their edit data, everyone else the base body.
+    // Actor looks: NPCs from their edit data; the player and pawns from
+    // the save when one is given, else the base body.
     let mut looks = std::collections::HashMap::new();
     {
+        let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
+        let saved = args.save.as_ref().map(|p| saved_looks(&vfs, p)).unwrap_or_default();
         let mut probe = EventPlayer::open(&data, args.row, cfg).expect("open event");
         let f = probe.step(1.0).expect("event step");
         for a in &f.actors {
-            let models = if a.unit_type == 2 {
-                match ddstory::look::npc_look(&data, a.unit_no as u32, a.unit_no as u32, args.row as u32) {
-                    Ok(l) => {
-                        println!("{}: NPC {} {} set {:#x} models {:?}", a.name, l.npc, l.edit_path, l.armor_set, l.models);
-                        std::iter::once(l.base.clone()).chain(l.models.iter().map(|(_, p)| p.clone())).collect()
-                    }
+            let look = match a.unit_type {
+                2 => match ddlook::npc_look(&vfs, a.unit_no as u32, a.unit_no as u32, args.row as u32) {
+                    Ok(l) => Some(l.look),
                     Err(e) => {
                         eprintln!("{}: look: {e}", a.name);
-                        vec![crate::play::BODY.to_string()]
+                        None
                     }
-                }
-            } else {
-                vec![crate::play::BODY.to_string()]
+                },
+                0 => saved.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()),
+                _ => saved.iter().find(|s| s.who == format!("pawn{}", a.unit_no)).map(|s| s.look.clone()),
             };
-            looks.insert(a.name.clone(), models);
+            if let Some(l) = look {
+                looks.insert(a.name.clone(), l);
+            }
         }
     }
     // Frames 0..=start_frame, so the first shown frame has its actors.
@@ -155,8 +169,8 @@ struct Playing {
     last: EventFrame,
     stage: u32,
     args: EventArgs,
-    /// Model paths per actor name, base body first.
-    looks: std::collections::HashMap<String, Vec<String>>,
+    /// Looks per actor name (absent: the base Arisen body).
+    looks: std::collections::HashMap<String, ddlook::Look>,
 }
 
 /// One actor of the timeline and its motion list.
@@ -268,26 +282,39 @@ fn setup(
             error!("{}: {list_path} has no motions", a.name);
             continue;
         };
-        let models = playing.looks.get(&a.name).cloned().unwrap_or_else(|| vec![crate::play::BODY.to_string()]);
-        for model in &models {
-            match character::spawn(
+        let r = match playing.looks.get(&a.name) {
+            Some(look) => spawn_look(
                 &mut commands,
                 &mut loader,
                 &mut meshes,
                 &mut materials,
                 &mut images,
                 &mut bindposes,
-                model,
+                look,
                 &list_path,
                 slot,
                 Vec3::ZERO,
                 Some(a.motion_frame),
-            ) {
-                Ok(root) => {
-                    commands.entity(root).insert(Actor { name: a.name.clone(), motions: motions.clone(), shown: a.motion_no });
-                }
-                Err(e) => error!("{} {model}: {e}", a.name),
+            ),
+            None => character::spawn(
+                &mut commands,
+                &mut loader,
+                &mut meshes,
+                &mut materials,
+                &mut images,
+                &mut bindposes,
+                crate::play::BODY,
+                &list_path,
+                slot,
+                Vec3::ZERO,
+                Some(a.motion_frame),
+            ),
+        };
+        match r {
+            Ok(root) => {
+                commands.entity(root).insert(Actor { name: a.name.clone(), motions, shown: a.motion_no });
             }
+            Err(e) => error!("{}: {e}", a.name),
         }
     }
 
@@ -321,6 +348,151 @@ fn setup(
         Node { position_type: PositionType::Absolute, top: Val::Px(8.0), left: Val::Px(8.0), ..default() },
         children![(Text::new(""), TextFont::from_font_size(16.0), TextColor(Color::srgb(0.8, 0.8, 0.8)), InfoText)],
     ));
+}
+
+/// The save's Arisen and party pawns (slot `mPlayerDataManual`).
+fn saved_looks(vfs: &ddvfs::Vfs, path: &std::path::Path) -> Vec<ddlook::save::SavedLook> {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let save = ddsave::SaveFile::parse(&bytes).expect("save file");
+    ddlook::save::save_looks(vfs, &save.xml, "mPlayerDataManual").expect("save looks")
+}
+
+/// One character from a look: base body skeleton, parts, mask, hair tint.
+#[allow(clippy::too_many_arguments)]
+fn spawn_look(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+    look: &ddlook::Look,
+    motion_path: &str,
+    slot: usize,
+    at: Vec3,
+    hold: Option<f32>,
+) -> Result<Entity, String> {
+    let parts: Vec<character::ExtraPart> = look
+        .parts
+        .iter()
+        .map(|p| character::ExtraPart { path: p.path.clone(), tint: if p.hair { look.hair_color } else { None } })
+        .collect();
+    let mask = look.mask;
+    character::spawn_assembled(
+        commands,
+        loader,
+        meshes,
+        materials,
+        images,
+        bindposes,
+        &look.base,
+        &parts,
+        &move |g| mask.visible(g),
+        motion_path,
+        slot,
+        at,
+        hold,
+    )
+}
+
+/// `--lineup`: the save's Arisen and pawns side by side, rest pose.
+fn run_lineup(args: EventArgs) {
+    let size = args.size;
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "ddview lineup".into(),
+                resolution: WindowResolution::new(size.0, size.1),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(stage::ShadingPlugin)
+        .insert_resource(ClearColor(Color::srgb(0.35, 0.38, 0.42)))
+        .insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 400.0, ..default() })
+        .insert_resource(Lineup(args))
+        .add_systems(Startup, setup_lineup)
+        .add_systems(Update, (character::animate, lineup_shot).chain())
+        .run();
+}
+
+#[derive(Resource)]
+struct Lineup(EventArgs);
+
+fn setup_lineup(
+    mut commands: Commands,
+    lineup: Res<Lineup>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
+) {
+    let args = &lineup.0;
+    let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
+    let mfx_path = args.native_pc.join("usershader").join("BbsShaderPackage.mfx");
+    let mfx = mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx");
+    let mut loader = Loader {
+        vfs: &vfs,
+        mfx: &mfx,
+        textures: Default::default(),
+        models: Default::default(),
+        model_names: Default::default(),
+        water: None,
+        stats: Default::default(),
+    };
+    loader.index_models();
+    let looks = saved_looks(&vfs, args.save.as_ref().unwrap());
+    let n = looks.len() as f32;
+    for (i, s) in looks.iter().enumerate() {
+        // 90 cm apart, centred; empty motion: the rest pose.
+        let x = (i as f32 - (n - 1.0) * 0.5) * 0.9;
+        match spawn_look(
+            &mut commands,
+            &mut loader,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            &mut bindposes,
+            &s.look,
+            "",
+            0,
+            Vec3::new(x, 0.0, 0.0),
+            Some(0.0),
+        ) {
+            Ok(_) => info!("{}: {} parts, base {}", s.who, s.look.parts.len(), s.look.base),
+            Err(e) => error!("{}: {e}", s.who),
+        }
+    }
+    commands.spawn((
+        DirectionalLight { illuminance: 6_000.0, ..default() },
+        Transform::default().looking_to(Vec3::new(-0.3, -0.6, -1.0), Vec3::Y),
+    ));
+    commands.spawn((
+        Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection { fov: 35f32.to_radians(), near: 0.05, far: 100.0, ..default() }),
+        Transform::from_xyz(0.0, 1.1, 4.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
+    ));
+}
+
+fn lineup_shot(
+    mut commands: Commands,
+    lineup: Res<Lineup>,
+    time: Res<Time>,
+    mut taken: Local<Option<f32>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(path) = &lineup.0.shot else { return };
+    let now = time.elapsed_secs();
+    match *taken {
+        None if now >= lineup.0.shot_delay => {
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.clone()));
+            *taken = Some(now);
+        }
+        Some(t) if now >= t + 1.0 => {
+            exit.write(AppExit::Success);
+        }
+        _ => {}
+    }
 }
 
 /// The motion slot to show: the requested one if the list has it, else the

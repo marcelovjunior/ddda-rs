@@ -8,6 +8,8 @@ fn main() {
     let v = ddvfs::Vfs::open(&a[1]).unwrap();
     match a[2].as_str() {
         "model" => {
+            let np = std::path::Path::new(&a[1]);
+            let mfx = mtshader::ShaderPackage::parse(&std::fs::read(np.join("usershader").join("BbsShaderPackage.mfx")).unwrap()).unwrap();
             for p in &a[3..] {
                 let b = v.read(p, mtarc::type_hash("rModel")).unwrap();
                 let m = mtmod::parse(&b).unwrap();
@@ -22,6 +24,25 @@ fn main() {
                     }
                 }
                 println!("  groups (mesh count, lods): {groups:?}");
+                for me in &m.meshes {
+                    let lay = mfx.layout(me.vertex_format);
+                    let d = lay.map(|l| m.decode(me, l));
+                    let (np_, nj) = match &d {
+                        Some(Ok(v)) => (v.positions.len(), v.joints.len()),
+                        _ => (0, 0),
+                    };
+                    println!(
+                        "  mesh group {} lod {} verts {} decoded {} joints {} bone_start {} weights {} layout {:?}",
+                        me.group,
+                        me.lod,
+                        me.vertex_count,
+                        np_,
+                        nj,
+                        me.bone_start,
+                        me.max_weights(),
+                        lay.map(|l| l.name.clone())
+                    );
+                }
             }
         }
         "npc" => {

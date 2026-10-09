@@ -51,6 +51,14 @@ impl Playback {
     }
 }
 
+/// One model of a character beyond the base body (outfit, hair, beard,
+/// equipment), with an optional colour multiplied into its materials.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtraPart {
+    pub path: String,
+    pub tint: Option<[f32; 3]>,
+}
+
 /// Spawns `model_path` with its skeleton at `translation` (viewer units),
 /// playing `slot` of `motion_path`. Returns the root entity.
 #[allow(clippy::too_many_arguments)]
@@ -62,6 +70,44 @@ pub fn spawn(
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     model_path: &str,
+    motion_path: &str,
+    slot: usize,
+    translation: Vec3,
+    hold_frame: Option<f32>,
+) -> Result<Entity, String> {
+    spawn_assembled(
+        commands,
+        loader,
+        meshes,
+        materials,
+        images,
+        bindposes,
+        model_path,
+        &[],
+        &|_| true,
+        motion_path,
+        slot,
+        translation,
+        hold_frame,
+    )
+}
+
+/// Spawns one character: the base body's skeleton, shared by every part
+/// (each part's bones bind to the base joints of the same joint id, the
+/// way MT parts reuse the main model's joint matrices; joints a part adds
+/// hang under their parent), with only the meshes whose part group
+/// `visible` accepts (the character's part mask, ddlook::PartMask).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_assembled(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    model_path: &str,
+    parts: &[ExtraPart],
+    visible: &dyn Fn(u16) -> bool,
     motion_path: &str,
     slot: usize,
     translation: Vec3,
@@ -100,8 +146,52 @@ pub fn spawn(
             Name::new(model_path.to_string()),
         ))
         .id();
-    let mut joint_entities = Vec::with_capacity(model.bones.len());
+    let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
+    let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
+    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, None);
+    for part in parts {
+        let pb = match loader.vfs.read(&part.path, RMODEL) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("{}: {e}", part.path);
+                continue;
+            }
+        };
+        let pm = match mtmod::parse(&pb) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("{}: {e}", part.path);
+                continue;
+            }
+        };
+        let joints = bind_skeleton(commands, &pm, root, &mut joints_by_id);
+        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, visible, part.tint);
+    }
+    commands.entity(root).insert(Playback {
+        motion,
+        joints: joints_by_id,
+        hold_frame,
+        blend_request: None,
+        blend: None,
+    });
+    Ok(root)
+}
+
+/// The joint entity of every bone of `model`: an existing joint with the
+/// same id, else a new one under the bone's parent (or the root) with the
+/// bone's rest transform.
+fn bind_skeleton(
+    commands: &mut Commands,
+    model: &mtmod::Model,
+    root: Entity,
+    joints_by_id: &mut HashMap<u8, Entity>,
+) -> Vec<Entity> {
+    let mut out = Vec::with_capacity(model.bones.len());
     for (i, b) in model.bones.iter().enumerate() {
+        if let Some(&e) = joints_by_id.get(&b.anim_map_index) {
+            out.push(e);
+            continue;
+        }
         let local = Mat4::from_cols_array(&b.local);
         let e = commands
             .spawn((
@@ -112,18 +202,39 @@ pub fn spawn(
             .id();
         let parent = usize::from(b.parent);
         if b.parent != 255 && parent < i {
-            commands.entity(joint_entities[parent]).add_child(e);
+            commands.entity(out[parent]).add_child(e);
         } else {
             commands.entity(root).add_child(e);
         }
-        joint_entities.push(e);
+        joints_by_id.insert(b.anim_map_index, e);
+        out.push(e);
     }
+    out
+}
+
+/// Spawns the skinned meshes of one model on `joints` (one per bone).
+#[allow(clippy::too_many_arguments)]
+fn spawn_meshes(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    model: &mtmod::Model,
+    model_path: &str,
+    joints: &[Entity],
+    root: Entity,
+    visible: &dyn Fn(u16) -> bool,
+    tint: Option<[f32; 3]>,
+) {
     // Inverse binds from the rest pose (world = parent world x local in
     // column-vector form). The stored `inverse_bind` matrices are not used:
     // they carry a uniform scale (270.48 on the male body) and a translation
     // from the model's bounding-box minimum, i.e. they map into the
     // quantised vertex space, while mtmod already returns positions in
-    // model space (cm).
+    // model space (cm). A part's rest pose is its own (its bones carry the
+    // same joint ids as the base body's).
     let mut world: Vec<Mat4> = Vec::with_capacity(model.bones.len());
     for (i, b) in model.bones.iter().enumerate() {
         let local = Mat4::from_cols_array(&b.local);
@@ -136,19 +247,13 @@ pub fn spawn(
     }
     let inverse: Vec<Mat4> = world.iter().map(Mat4::inverse).collect();
     let bindposes_handle = bindposes.add(SkinnedMeshInverseBindposes::from(inverse));
-    let joints_by_id: HashMap<u8, Entity> = model
-        .bones
-        .iter()
-        .zip(&joint_entities)
-        .map(|(b, e)| (b.anim_map_index, *e))
-        .collect();
 
     let mrl_bytes = loader.vfs.read(model_path, RMATERIAL).ok();
     let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, Handle<StandardMaterial>> = HashMap::new();
     for m in &model.meshes {
-        if m.lod & 1 == 0 {
+        if m.lod & 1 == 0 || !visible(m.group) {
             continue;
         }
         let Some(layout) = mfx.layout(m.vertex_format) else {
@@ -205,6 +310,11 @@ pub fn spawn(
                     reflectance: 0.3,
                     ..default()
                 };
+                // *Approximation*: the edit's hair colour multiplies the
+                // albedo (the original sets a material constant, 0x008438f0).
+                if let Some(c) = tint {
+                    sm.base_color = Color::srgb(c[0], c[1], c[2]);
+                }
                 if let Some(mat) = mrl.as_ref().and_then(|l| l.by_name(&name)) {
                     for c in &mat.commands {
                         if c.kind == mtmrl::CommandKind::Texture
@@ -226,20 +336,12 @@ pub fn spawn(
                 MeshMaterial3d(material),
                 SkinnedMesh {
                     inverse_bindposes: bindposes_handle.clone(),
-                    joints: joint_entities.clone(),
+                    joints: joints.to_vec(),
                 },
             ))
             .id();
         commands.entity(root).add_child(e);
     }
-    commands.entity(root).insert(Playback {
-        motion,
-        joints: joints_by_id,
-        hold_frame,
-        blend_request: None,
-        blend: None,
-    });
-    Ok(root)
 }
 
 /// Samples each playing motion and writes its joints' local transforms,
