@@ -13,6 +13,120 @@ pub enum Unit {
     Child01,
 }
 
+/// Loaded `cCharParamEm5200` +8/+0xc values (actor +0x7268/+0x726c).
+/// Reflected labels identify the lion-head magick bonuses. No defaults are
+/// supplied: the values belong to the installed specific-parameter resource.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyDamageBonus {
+    pub child00_alive: f32,
+    pub child00_missing_or_dead: f32,
+}
+
+impl BodyDamageBonus {
+    /// Reflection 0x0074ec30 maps these labels to +8/+0xc; initialization
+    /// 0x009a0918 copies the specific resource to actor +0x7260 via 0x00756990.
+    pub fn from_object(object: &mtxfs::Xfs) -> Result<Self, String> {
+        let read = |name| match object.get(&object.root, name) {
+            Some([mtxfs::Value::F(values)]) if values.len() == 1 => Ok(values[0] as f32),
+            _ => Err(format!("chimera specific parameters: missing scalar {name}")),
+        };
+        Ok(Self {
+            child00_alive: read("ライオン頭部のみへの魔法ダメージボーナス（２頭時のみ）")?,
+            child00_missing_or_dead: read("ライオン頭部のみへの魔法ダメージボーナス（１頭時のみ）")?,
+        })
+    }
+
+    /// Apply after common enemy mitigation and before region/rate scaling.
+    /// `suppressed` is actor byte +0x7406; its broader meaning is unresolved.
+    /// `resolved_pool_id` is HitInfo +0x68, filled from resolved region +4 by
+    /// 0x0076db10, rather than the hurt-region index at HitInfo +0x6c.
+    /// `child00_alive` means child exists and vf117 (0x004c7590) returns
+    /// zero from actor +0x5bd0. HP alone does not establish that observation.
+    // Translated from 0x009a44f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn apply(
+        &self,
+        hit: &mut ddcombat::damage::MergedHit,
+        resolved_pool_id: u32,
+        suppressed: bool,
+        child00_alive: bool,
+    ) {
+        if !suppressed && resolved_pool_id == 1 {
+            hit.mag *= if child00_alive {
+                self.child00_alive
+            } else {
+                self.child00_missing_or_dead
+            };
+        }
+    }
+}
+
+/// One unit's installed body and combat parameters. Body and children each
+/// retain their own pools; this does not infer links or parent kill identity.
+#[derive(Debug, Clone)]
+pub struct ChimeraData {
+    pub catalogue: Catalogue,
+    pub body: crate::body::Body,
+    pub attacker: ddcombat::damage::EnemyAttacker,
+    pub defender: ddcombat::damage::EnemyDefender,
+    pub regions: Vec<ddcombat::damage::RegionPool>,
+    pub obj_size: u32,
+    /// The body-only post-mitigation override; children do not inherit it.
+    pub damage_bonus: Option<BodyDamageBonus>,
+}
+
+impl ChimeraData {
+    /// Scale comes from the owning placement (children copy their parent's
+    /// scale in 0x009a0880), rather than a chosen constructor default.
+    pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>, unit: Unit, scale: f32) -> Result<Self, String> {
+        let catalogue = Catalogue::read(exe, unit)?;
+        let body = catalogue.load_body(vfs, scale)?;
+        let common = catalogue.unique_bound("rPropParam", |r| r.path.ends_with("_cmn"))?;
+        let region = catalogue.unique_bound("rRegionStatus", |_| true)?;
+        // Initializers 0x009a0bd1, 0x009b1118 and 0x009b909c select kind 0.
+        let stats = crate::enemy_stats::load_paths(vfs, &common.path, &region.path)?;
+        let damage_bonus = if unit == Unit::Body {
+            let parameters = ddenemy::EnemyData::load(vfs, ddenemy::EnemyId::parse("em5200")?)?;
+            let specific = parameters
+                .specific
+                .ok_or("chimera: missing charparam/em/em5200 specific parameters")?;
+            Some(BodyDamageBonus::from_object(&specific.object)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            catalogue,
+            body,
+            attacker: stats.attacker,
+            defender: stats.defender,
+            regions: stats.regions,
+            obj_size: stats.obj_size,
+            damage_bonus,
+        })
+    }
+
+    /// Instantiate independent combat state for an explicit owner. Collision
+    /// rates/flags are caller-supplied until the unit's initialization and
+    /// action-specific flag writes are fully translated.
+    pub fn fighter(&self, owner: u32, rates: ddcombat::damage::CollisionRates) -> crate::combat::Fighter {
+        use crate::combat::{Attacker, Fighter, Victim};
+        Fighter {
+            owner,
+            attacker: Attacker::Enemy(self.attacker),
+            victim: Victim::Enemy {
+                defender: self.defender,
+                regions: self.regions.clone(),
+                rates,
+            },
+            attacks: Vec::new(),
+            hurts: Vec::new(),
+            history: Default::default(),
+            statuses: Default::default(),
+            dots: Default::default(),
+            pools: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionRecord {
     pub class: String,
@@ -43,6 +157,48 @@ pub struct Catalogue {
 }
 
 impl Catalogue {
+    fn unique_bound(
+        &self,
+        class: &str,
+        select: impl Fn(&ResourceRequest) -> bool,
+    ) -> Result<&ResourceRequest, String> {
+        let mut matches = self
+            .resources
+            .iter()
+            .filter(|r| r.flags & 1 != 0 && r.class == class && select(r));
+        let selected = matches
+            .next()
+            .ok_or_else(|| format!("chimera {:?}: missing bound {class}", self.unit))?;
+        if matches.next().is_some() {
+            return Err(format!("chimera {:?}: ambiguous bound {class}", self.unit));
+        }
+        Ok(selected)
+    }
+
+    /// Translated from 0x008892b0 / 0x00889510 (DDDA.exe 2017-12-13 Steam):
+    /// only bit-zero resources bind; motion-bank order follows descriptors.
+    /// Collision event activations resolve the files by their resource IDs.
+    pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
+        use crate::body::{load, Body};
+        let model = self.unique_bound("rModel", |_| true)?;
+        let skeleton = load::skeleton(vfs, &model.path)?;
+        let bound = || self.resources.iter().filter(|r| r.flags & 1 != 0);
+        let banks = bound()
+            .filter(|r| r.class == "rMotionList")
+            .map(|r| load::bank(vfs, &r.path).map(Some))
+            .collect::<Result<_, _>>()?;
+        let collision = bound()
+            .filter(|r| r.class == "rObjCollision")
+            .map(|r| load::collision(vfs, &r.path, None))
+            .collect::<Result<_, _>>()?;
+        Ok(Body {
+            skeleton,
+            banks,
+            collision,
+            scale,
+        })
+    }
+
     /// Read bulk records from the supported installed exe. Class identities
     /// come from its own DTI registrations, never a copied class-name table.
     pub fn read(exe: &ddexe::Exe<'_>, unit: Unit) -> Result<Self, String> {
@@ -291,4 +447,35 @@ pub fn parent_reaction(
         }
     };
     Some(base + if child == Child::Unit00 { 0 } else { 5 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resource_initializers_preserve_upper_flags_and_binding_exceptions() {
+        for (unit, index, bound) in [
+            (Unit::Body, 0, true),
+            (Unit::Body, 1, false),
+            (Unit::Body, 39, true),
+            (Unit::Body, 40, false),
+            (Unit::Body, 55, false),
+            (Unit::Body, 56, true),
+            (Unit::Body, 57, false),
+            (Unit::Body, 85, true),
+            (Unit::Child00, 25, true),
+            (Unit::Child00, 26, false),
+            (Unit::Child00, 31, false),
+            (Unit::Child00, 32, true),
+            (Unit::Child00, 33, true),
+            (Unit::Child01, 0, true),
+            (Unit::Child01, 26, true),
+        ] {
+            for stored in [0, 7, 0xffff_ffff, 0x1234_5678] {
+                let flags = initialized_resource_flags(unit, index, stored);
+                assert_eq!(flags & !7, stored & !7);
+                assert_eq!(flags & 7, if bound { 3 } else { 2 });
+            }
+        }
+    }
 }

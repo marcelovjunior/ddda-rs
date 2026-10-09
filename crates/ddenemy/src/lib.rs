@@ -98,6 +98,16 @@ pub struct CommonStats {
     pub resistances: BTreeMap<String, f32>,
 }
 impl CommonStats {
+    /// Read an explicitly selected common-parameter resource. This also
+    /// supports child-unit paths, without widening the em#### identity type.
+    /// The original reflected object is retained for additional parameters.
+    pub fn load(vfs: &ddvfs::Vfs, path: &str) -> Result<(mtprp::PropParam, Self), String> {
+        let bytes = vfs.read(path, mtarc::type_hash("rPropParam"))?;
+        let prop = mtprp::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        let stats = Self::from_prop(&prop).map_err(|e| format!("{path}: {e}"))?;
+        Ok((prop, stats))
+    }
+
     /// Common class 0x7e509fe9 only; other PRP classes are not enemy stats.
     pub fn from_prop(prop: &mtprp::PropParam) -> Result<Self, String> {
         if prop.class_hash != 0x7e50_9fe9 {

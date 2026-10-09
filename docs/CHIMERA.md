@@ -88,8 +88,29 @@ be used to advance the prologue by itself.
 
 Body damage callback `0x009a44f0` scales HitInfo +0x78 only when actor
 +0x7406 is zero and HitInfo +0x68 equals 1. The multiplier comes from
-actor +0x7268 while child 00 is alive, or +0x726c otherwise. They are
-loaded parameters, not values to invent. Body post-hit `0x009a4560` maps
+actor +0x7268 while child 00 is alive, or +0x726c otherwise. The guard's
+HitInfo +0x68 is the resolved pool **ID**: `0x0076db10` writes it from
+the resolved region's +4, after mapping raw HitInfo +0x6c via `0x00770f00`.
+`0x009a0918` copies `charparam/em/em5200` into actor +0x7260 through
+`0x00756990`. Reflection `0x0074ec30` identifies +8/+0xc as lion-head-only
+magick bonuses (two heads / one head), with labels at `0x0158eb70` and
+`0x0158ebc8`. `BodyDamageBonus` loads both values from that resource and
+implements the guarded post-mitigation modifier. A synthetic regression
+covers liveness, suppression and pool IDs, preserving every other hit field;
+the installed constructor loads it only for the body. The combat-pass hook
+is now available through the configured combat pass. Its child state remains
+an explicit actor observation: vf117 `0x004c7590` reads byte +0x5bd0, not HP.
+Child-00 vf34 (write at `0x009b18eb`) can initialize
+that marker for an already-empty pool. Combat death calls common vf72
+`0x00aab3b0`: its vtable +0x1dc dispatch at `0x00aab4c0` invokes vf119
+`0x00ab37d0`, whose first write sets +0x5bd0 to one. The persistent-kill
+call at `0x00aab4e4` follows. Body and child-00 use this same vf119.
+Vf118 `0x00ab3790` separately tests marker != 1 and main HP <= 0, making
+pending HP depletion and accepted death observably distinct. The host must
+apply accepted death synchronously after each local/linked result before
+later modifiers; the immediate policy observer provides this ordering,
+while the HP snapshot alone cannot establish acceptance.
+Body post-hit `0x009a4560` maps
 HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
 values to pool 0 for visual damage. Child post-hit callbacks
 `0x009b42f0`/`0x009bcb80` select pool 1 for hit kinds 4/6 respectively.
@@ -116,6 +137,62 @@ again and mitigate twice. Child 01's initialization does not install this
 link; its lifecycle and any later link writer still need tracing. Existing
 within-actor region propagation is not this cross-actor relay.
 
+The mirrored branch is now implemented as a separate combat helper, fed a
+`ValuedEnemyHit` retained by `resolve_enemy_hit_valued`. The legacy
+`resolve_enemy_hit` API delegates to that function and retains its old
+return type. The helper receives a host-resolved optional destination pool,
+the existing source event, and the destination status rates. It applies
+break and status to the main pool even when the mapped pool is absent,
+resolves frozen cancellation, then conditionally applies the carried total
+to main HP. It never mutates the mapped non-main pool or calls mitigation.
+As in the ordinary hit pass, event total is valued damage, not observed HP
+loss after no-HP flags, floors or clamping. Missing LINK_HP reports zero;
+present LINK_HP preserves the carried total even when HP loss is prevented.
+The additive `hit_pass_configured` now collects normal contacts and accepts
+explicit per-owner `EnemyCollisionConfig`: installed hit-to-pool IDs, optional
+mirror region remap, an ordered complete linked-owner chain, and two status
+rates. It retains the valued local payload and immediately applies linked
+hits before the next local victim. Destination defense, HP scaling and the
+post-mitigation callback are not run a second time. The host still supplies
+the actual child/body identities and chain; this emits no story facts.
+
+`resolve_enemy_hit_valued_with` supplies a hook immediately after common
+mitigation, passing the resolved pool ID. The configured host hook also sees
+current `CombatOwnerState::has_hp`, refreshed after earlier local/linked hits.
+That snapshot is an HP observation, **not** the original actor death marker.
+The regression policy uses HP to exercise ordering only; real body bonus
+policy must use the actor +0x5bd0 observation. Legacy public wrappers retain
+their previous signatures and behavior.
+
+`EnemyHitPolicy` and `hit_pass_configured_with_policy` add `after_hit` to the
+post-mitigation hook. Execution is local hit, local observer, each linked hit
+and its observer, then the next local victim. Both callbacks remain exclusive
+to configured enemies. Actor state is owned by the caller policy, allowing
+the observer to run the sourced death selector and retain accepted markers
+before a later modifier. A regression gives child 00 identical zero HP in
+two runs but blocks priority acceptance in one: the later body's loaded-rule
+modifier sees the different accepted state. This is a synthetic policy test;
+the host's action, placement and persistence integration is still absent.
+
+Configured validation rejects missing/duplicate owner bindings, invalid
+chains and unmapped ordinary hurt regions before changing HP, history or RNG.
+Ordinary missing mapping is deliberately unsupported: `0x0076db10` skips
+local valuation and may retain an earlier HitInfo +0x7c value that `MergedHit`
+does not represent. No guessed total or main-pool fallback is used. Missing
+**mirrored** mapping retains sourced main status/break processing without HP.
+Synthetic regressions exercise nonidentity maps/remaps, three simultaneous
+owners, immediate event order, hook timing, legacy equivalence, and atomic
+rejection. This does not establish a live chimera encounter.
+
+`cEm5200_01ActDie` entry `0x009c0d40`, variant 10, has a separate prologue
+side effect: at `0x009c0ead..0x009c0ef0` it tests its parent's packed
+placement for stage 380/group 10/index 0, then passes GSF **705** (`0x2c1`)
+to `0x00401280`. This is child death, not the body's persistent-kill bit.
+The same variant calls `0x009b9af0` to create a detached child-01 unit in
+mode 1 and copies its impact pose. Neither fact authorizes treating that
+remnant as a new layout enemy. The flag side effect is traced only, not yet
+emitted by the host.
+
 Child think roots depend on the parent's +0x5c14 and +0x5c18 == 2:
 child 00 uses 0x016fe6e8 or 0x016ff368; child 01 uses 0x016f8ee8 or
 0x016f9a28. Body array 0x016cd234 and fallback 0x0170f060 are selected
@@ -128,16 +205,29 @@ parent reactions, preserving the masks and early-return behavior. Five
 regressions pass: all arbitration bits in both masks, missing damage and
 dead-state rejection, body motion overrides, child-01 guards, and the two
 parent reaction families (including zero/negative/missing impact side).
-Seven regressions pass in total. The installed catalogue regression resolves every action DTI,
+The installed catalogue regression resolves every action DTI,
 checks the sourced death/fall variants, locates all referenced model,
 motion and object-collision resources, and parses all requested region files.
 It also verifies all mapped pool IDs, shuffled pool order and missing-region
 rejection. A CRT regression pins binding exceptions and upper-bit preservation.
-The integration test includes the module by path pending the shared
-`lib.rs` owner's export. No game observation was performed.
+Five linked-hit regressions cover the unchanged ordinary resolver, distinct
+carried total, no repeated mitigation, untouched mapped pool, missing mapping,
+attribute-8 gate, no-death floor, break guards, physical/magick status rates,
+frozen cancellation and attacker identities 0, 1 and 37. These are synthetic
+contract checks; they do not constitute a two-player chimera fight.
+The module is exported through the agreed `lib.rs` hook. `ChimeraData::load`
+constructs each unit's skeleton, ordered motion banks, bound collision files
+and common/region combat values from its installed resource bindings.
+Kind zero is selected by all three initializers (0x009a0bd1, 0x009b1118,
+0x009b909c). The common-stat loader accepts explicit child resource paths
+without widening the `EnemyId` type. Installed regressions check legacy
+common-stat equivalence, kind-zero pools, missing paths, bank ordering and
+independent owner pools. Scale and collision rates/flags remain explicit
+caller inputs; this constructor does not claim an initialization policy.
+No game observation was performed.
 
-Still open: assembling loaded resources into combat actors and spawn binding; complete damage routing;
+Still open: spawn binding and initialization flags; complete damage routing;
 child anatomical mapping; action execution, root movement and collision;
 think driver and N-Arisen fight integration; story/live acceptance.
-Next action: load the three action/resource sets and trace the life-pool
-writer before binding combat death to the stage-380 placement.
+Next action: connect the sourced child-00 linked-hit contract to the host's
+combat pass before binding combat death to the stage-380 placement.
