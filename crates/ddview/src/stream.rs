@@ -201,6 +201,10 @@ impl Streamer {
         let mut out: HashSet<StreamCell> = models.iter().map(|&c| cell(c, CellPart::Model)).collect();
         out.extend(self.grid.wanted(Kind::Layout, pos, self.quality).into_iter().map(|c| cell(c, CellPart::Layout)));
         let (m0, n0) = self.grid.name(self.grid.index(pos));
+        // the low models for the focus's cell (0x00c5d7a0)
+        for (slot, high) in self.loader.low_models_for((m0, n0)) {
+            out.insert(cell((slot, i32::from(high)), CellPart::Low));
+        }
         for m in m0 - self.far..=m0 + self.far {
             for n in n0 - self.far..=n0 + self.far {
                 if !models.contains(&(m, n)) {
@@ -275,9 +279,15 @@ pub fn update(
     if missing.is_empty() {
         return;
     }
-    // nearest first; models and layouts before the distant ring
+    // nearest first; models and layouts, then the low models, then the
+    // distant ring
     let (m0, n0) = s.grid.name(s.grid.index(pos));
-    missing.sort_by_key(|t| (t.part == CellPart::Far, (t.m - m0).abs().max((t.n - n0).abs())));
+    let rank = |p: CellPart| match p {
+        CellPart::Model | CellPart::Layout => 0,
+        CellPart::Low => 1,
+        CellPart::Far => 2,
+    };
+    missing.sort_by_key(|t| (rank(t.part), (t.m - m0).abs().max((t.n - n0).abs())));
     s.loader.lod_eye = Some((Vec3::from(pos) - s.origin_stage()) * UNIT);
     let start = Instant::now();
     for t in missing {
@@ -285,6 +295,7 @@ pub fn update(
             break;
         }
         let offset = s.offset((t.m, t.n));
+        let origin = s.origin;
         s.loader.tag = Some(t);
         let (stage, l) = (s.stage, &mut s.loader);
         match t.part {
@@ -296,6 +307,9 @@ pub fn update(
             }
             CellPart::Far => {
                 l.spawn_far_cell(&mut commands, &mut meshes, &mut materials, &mut images, stage, t.m, t.n, offset);
+            }
+            CellPart::Low => {
+                l.spawn_low_model(&mut commands, &mut meshes, &mut materials, &mut images, origin, t.m, t.n == 1);
             }
         }
         s.loader.tag = None;

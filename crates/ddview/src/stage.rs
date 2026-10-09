@@ -612,6 +612,9 @@ pub enum CellPart {
     Layout,
     /// The viewer's distant stand-in (terrain plus `fmfore`).
     Far,
+    /// A stage-100 low model: `m` is the slot (-1 for `st100_all00`), `n`
+    /// is 1 for the `_h` variant.
+    Low,
 }
 
 pub struct Loader<'a> {
@@ -1360,6 +1363,41 @@ impl Loader<'_> {
             n += 1;
         }
         n
+    }
+
+    /// The low models for the player's cell `(m, n)`: `(-1, false)` for the
+    /// backdrop, then each area slot with whether it uses `_h`
+    /// (see [`Loader::spawn_low_models`]).
+    pub fn low_models_for(&self, cell: (i32, i32)) -> Vec<(i32, bool)> {
+        let high = low_model_high_slots(cell);
+        let mut out = vec![(-1, false)];
+        out.extend((0..LOW_MODEL_NUMBERS.len()).map(|i| (i as i32, high[i] || self.view_range >= 2)));
+        out
+    }
+
+    /// One low model (`slot` -1 is the backdrop) for a viewer whose origin
+    /// cell is `origin`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_low_model(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        origin: (i32, i32),
+        slot: i32,
+        high: bool,
+    ) -> bool {
+        let path = match usize::try_from(slot).ok().and_then(|i| LOW_MODEL_NUMBERS.get(i)) {
+            Some(n) => format!("scr\\st100\\model\\st100_area{n:02}_{}", if high { "h" } else { "l" }),
+            None => "scr\\st100\\model\\st100_all00".to_string(),
+        };
+        let shift = -Vec3::new((origin.1 - 50) as f32 * 10000.0, 0.0, (origin.0 - 50) as f32 * 10000.0);
+        let Some(parts) = self.model(&path, meshes, materials, images) else {
+            return false;
+        };
+        self.spawn_parts(commands, &parts, Transform::from_translation(shift * UNIT), &path);
+        true
     }
 
     /// The stage-100 low models (`uStageLowMdl`, created by the split

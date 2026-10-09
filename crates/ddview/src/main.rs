@@ -764,8 +764,11 @@ fn setup(
         let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
         let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
         info!("landmarks {n}");
-        let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
-        info!("low models {n}");
+        // with field streaming (--play offline) the streamer keeps them by cell
+        if !(args.play && args.host.is_none() && args.join.is_none()) {
+            let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
+            info!("low models {n}");
+        }
     }
     loader.spawn_water(
         &mut commands,
