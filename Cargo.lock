@@ -2284,6 +2284,7 @@ dependencies = [
  "mtlot",
  "mtmod",
  "mtmrl",
+ "mtsbc",
  "mtshader",
  "mttex",
  "mtxfs",
@@ -2319,6 +2320,7 @@ dependencies = [
  "ddsim",
  "ddvfs",
  "mtmod",
+ "mtsbc",
  "mtshader",
 ]
 
@@ -3509,6 +3511,10 @@ dependencies = [
 
 [[package]]
 name = "mtmrl"
+version = "0.1.0"
+
+[[package]]
+name = "mtsbc"
 version = "0.1.0"
 
 [[package]]

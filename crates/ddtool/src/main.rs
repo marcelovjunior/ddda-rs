@@ -29,7 +29,8 @@ const USAGE: &str = "usage:
   ddtool xfs-scan <nativePC dir>
   ddtool xfs-dump <file.arc> <entry path>
   ddtool lot-scan <nativePC dir>
-  ddtool lmt-scan <nativePC dir>";
+  ddtool lmt-scan <nativePC dir>
+  ddtool sbc-scan <nativePC dir>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -46,6 +47,7 @@ fn main() -> ExitCode {
         ["xfs-dump", arc, entry] => xfs::xfs_dump(Path::new(arc), entry),
         ["lot-scan", dir] => xfs::lot_scan(Path::new(dir)),
         ["lmt-scan", dir] => xfs::lmt_scan(Path::new(dir)),
+        ["sbc-scan", dir] => xfs::sbc_scan(Path::new(dir)),
         _ => Err(USAGE.to_string()),
     };
     match result {

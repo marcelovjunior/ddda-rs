@@ -55,6 +55,14 @@ read from the running Steam game (read-only memory access, see
   in our render, which supports the layout frame and the Euler order assumption so far.
 - No mirroring: sea and land sides match in every reference.
 
+**Collision (data):**
+- Each cell has two collision meshes, `scr\st100\collision\m<A/10*10>\marge\st100h_<A>m<B>n_mrg00`
+  and `st100e_..._mrg00` (`mtsbc`), cell-local like the terrain model. `ddtool sbc-scan`: all
+  7,362 `rCollision` entries parse, 3.28 M triangles, every stored normal matches its corners.
+- The recorded feet of the four verified references lie on this collision within 0.25-1.04 cm.
+- Placed objects (rocks, trees) have their own collision, not loaded yet: ref007's player stood
+  on a rock 1.7 m above the cell collision.
+
 ## Live object access
 
 **Addressing:**

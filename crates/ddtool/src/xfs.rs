@@ -288,3 +288,56 @@ pub fn lmt_scan(dir: &Path) -> Result<(), String> {
         Err(format!("{} motion lists failed", walk.failures.len()))
     }
 }
+
+/// `sbc-scan`: every rCollision through `mtsbc`, checking that each stored
+/// triangle normal matches its corners' own (dot > 0.99).
+pub fn sbc_scan(dir: &Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    let started = std::time::Instant::now();
+    let tris = AtomicU64::new(0);
+    let bad_normals = AtomicU64::new(0);
+    let degenerate = AtomicU64::new(0);
+    let walk = scan::for_each_resource(dir, mtarc::type_hash("rCollision"), |_, e, bytes| {
+        let c = mtsbc::parse(bytes).map_err(|err| format!("{}: {err}", e.path))?;
+        for (p, t) in c.world_triangles() {
+            tris.fetch_add(1, Relaxed);
+            let u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+            let v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len < 1e-6 {
+                degenerate.fetch_add(1, Relaxed);
+                continue;
+            }
+            let dot = (n[0] * t.normal[0] + n[1] * t.normal[1] + n[2] * t.normal[2]) / len;
+            if dot.abs() < 0.99 {
+                bad_normals.fetch_add(1, Relaxed);
+            }
+        }
+        Ok(())
+    })?;
+    println!(
+        "rCollision: {} parsed, {} failed",
+        walk.visited - walk.failures.len(),
+        walk.failures.len()
+    );
+    println!(
+        "triangles {}  stored normal != corners' (|dot| < 0.99): {}  degenerate: {}",
+        tris.load(Relaxed),
+        bad_normals.load(Relaxed),
+        degenerate.load(Relaxed)
+    );
+    println!("elapsed {:.1} s", started.elapsed().as_secs_f64());
+    for f in walk.failures.iter().take(10) {
+        println!("FAIL {f}");
+    }
+    if walk.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} collision files failed", walk.failures.len()))
+    }
+}

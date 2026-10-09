@@ -12,6 +12,7 @@ use ddvfs::Vfs;
 use mtshader::ShaderPackage;
 
 const RMODEL: u32 = 0x58A1_5856;
+const RCOLLISION: u32 = 0x51FC_779F;
 /// Side of a grid bucket, cm.
 const BUCKET: f32 = 400.0;
 
@@ -64,6 +65,36 @@ impl Terrain {
                     }
                 }
                 t.cells += 1;
+            }
+        }
+        t
+    }
+
+    /// Loads the cells' collision meshes (`st<S>h_` and `st<S>e_<A>m<B>n_mrg00`,
+    /// cell-local like the terrain model) instead of the render terrain.
+    pub fn load_collision(vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> Self {
+        let mut t = Terrain::empty();
+        for a in a0 - radius..=a0 + radius {
+            for b in b0 - radius..=b0 + radius {
+                let off = [(b - 50) as f32 * 10000.0, 0.0, (a - 50) as f32 * 10000.0];
+                let mut any = false;
+                for kind in ["h", "e"] {
+                    let path = format!(
+                        r"scr\st{stage}\collision\m{}\marge\st{stage}{kind}_{a}m{b}n_mrg00",
+                        a / 10 * 10
+                    );
+                    let Ok(bytes) = vfs.read(&path, RCOLLISION) else {
+                        continue;
+                    };
+                    let Ok(c) = mtsbc::parse(&bytes) else { continue };
+                    for (p, _) in c.world_triangles() {
+                        t.add(p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]));
+                    }
+                    any = true;
+                }
+                if any {
+                    t.cells += 1;
+                }
             }
         }
         t

@@ -118,5 +118,11 @@ Not yet: wall/object collision (SBC), turning rate, walk/run thresholds,
 blending between motions (the original blends; we switch), the other
 motion banks, a dressed Arisen.
 
-Next action: collision (rCollision/SBC reader, then ground and walls from
-it instead of the render terrain).
+- `mtsbc` reads every collision mesh (7,362 files, 3.28 M triangles, all
+  normals consistent). `--play` now stands on the cells' collision meshes
+  (within 1 cm of the references) and is blocked by faces higher than a
+  step (STEP_UP 60 cm, placeholder).
+
+Next action: object collision for placed scenery (rocks, trees), then a
+dressed Arisen (face, hair, equipment) so the two players look like the
+game's characters.

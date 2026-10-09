@@ -139,6 +139,10 @@ pub trait Ground {
 /// original's input thresholds are traced.
 pub const WALK_THRESHOLD: f32 = 0.2;
 
+/// Highest step the feet climb in one move, cm. *Placeholder* until the
+/// original's character-controller values are traced.
+pub const STEP_UP: f32 = 60.0;
+
 pub struct Sim {
     pub players: Vec<Player>,
     pub motions: HashMap<Action, RootMotion>,
@@ -189,17 +193,26 @@ impl Sim {
                 p.yaw = input.camera_yaw + local;
             }
             let dt_frames = dt * MOTION_FPS;
+            let mut target = p.position;
             if let Some(m) = self.motions.get(&action) {
                 let d = m.delta(p.frame, dt_frames);
                 let (s, c) = p.yaw.sin_cos();
                 // model +Z is forward; rotate by yaw about +Y
-                p.position[0] += d[0] * c + d[2] * s;
-                p.position[2] += -d[0] * s + d[2] * c;
+                target[0] += d[0] * c + d[2] * s;
+                target[2] += -d[0] * s + d[2] * c;
                 let n = m.frame_count.max(1) as f32;
                 p.frame = (p.frame + dt_frames) % n;
             }
-            if let Some(h) = ground.height(p.position[0], p.position[2], p.position[1] + 100.0) {
-                p.position[1] = h;
+            // Accept the move if there is ground no higher than a step above
+            // the feet; otherwise (a wall or cliff face) stay put. Stepping
+            // off a ledge snaps down to the lower ground (no falling yet).
+            match ground.height(target[0], target[2], p.position[1] + STEP_UP) {
+                Some(h) => p.position = [target[0], h, target[2]],
+                None => {
+                    if let Some(h) = ground.height(p.position[0], p.position[2], p.position[1] + STEP_UP) {
+                        p.position[1] = h;
+                    }
+                }
             }
         }
     }
@@ -294,6 +307,36 @@ mod tests {
             "{:?}",
             p.position
         );
+    }
+
+    /// Ground with a wall: x < 100 is at y 0, x >= 100 is 500 cm higher.
+    struct Wall;
+    impl Ground for Wall {
+        fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+            let h = if x < 100.0 { 0.0 } else { 500.0 };
+            (h <= below_y).then_some(h)
+        }
+    }
+
+    #[test]
+    fn walls_block_and_steps_climb() {
+        let mut s = sim();
+        let mut inputs = HashMap::new();
+        // walk along +X (camera turned 90 degrees) for 2 seconds: would reach x = 600
+        inputs.insert(
+            0,
+            Input {
+                stick: [0.0, 1.0],
+                run: false,
+                camera_yaw: std::f32::consts::FRAC_PI_2,
+            },
+        );
+        for _ in 0..60 {
+            s.step(1.0 / 30.0, &inputs, &Wall);
+        }
+        let p = s.player(0).unwrap();
+        assert!(p.position[0] < 100.0, "walked through the wall: {:?}", p.position);
+        assert_eq!(p.position[1], 0.0);
     }
 
     #[test]

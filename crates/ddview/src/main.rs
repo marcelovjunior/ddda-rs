@@ -292,7 +292,8 @@ fn setup(
     if args.play {
         // Stage frame (cm) of the viewer origin: cell (a0, b0) relative to 50m50n.
         let origin = Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
-        let terrain = ddworld::Terrain::load(&vfs, &mfx, args.stage, a0, b0, args.radius);
+        // Ground and walls from the cells' collision meshes (st<S>h_/e_..._mrg00).
+        let terrain = ddworld::Terrain::load_collision(&vfs, args.stage, a0, b0, args.radius);
         info!(
             "terrain {} cells {} triangles",
             terrain.cells,
