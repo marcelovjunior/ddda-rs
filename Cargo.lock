@@ -2281,6 +2281,7 @@ version = "0.1.0"
 dependencies = [
  "ddvfs",
  "mtarc",
+ "mtgmd",
  "mtlmt",
  "mtlot",
  "mtmod",
@@ -3496,6 +3497,14 @@ name = "mtarc"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "mtgmd"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
 ]
 
 [[package]]

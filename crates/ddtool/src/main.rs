@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use mtarc::{decode_payload, Archive};
 
 mod model;
+mod msg_dump;
 mod scan;
 mod tex;
 mod xfs;
@@ -19,6 +20,7 @@ mod xfs;
 use scan::find_arcs;
 
 const USAGE: &str = "usage:
+  ddtool msg-dump <nativePC dir> <resource path>
   ddtool arc-ls <file.arc>
   ddtool arc-scan <nativePC dir> [--inflate]
   ddtool tex-scan <nativePC dir>
@@ -36,6 +38,7 @@ const USAGE: &str = "usage:
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["msg-dump", dir, path] => msg_dump::msg_dump(Path::new(dir), path),
         ["arc-ls", file] => arc_ls(Path::new(file)),
         ["arc-scan", dir] => arc_scan(Path::new(dir), false),
         ["arc-scan", dir, "--inflate"] => arc_scan(Path::new(dir), true),

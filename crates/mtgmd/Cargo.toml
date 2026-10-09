@@ -1,0 +1,11 @@
+[package]
+name = "mtgmd"
+version = "0.1.0"
+description = "Reader for Dragon's Dogma: Dark Arisen GMD 1.2.1 message resources"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }

@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/text`
 - **Board area:** `formats/text`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -53,4 +53,29 @@ reader is usable: the enemy-data and asset-survey agents want it.
 
 ## Results
 
-(filled in by the agent)
+Implemented `mtgmd` (borrowed UTF-8 messages, ordered labels and zero-based
+lookup), `ddtool msg-dump` in its own module, and `docs/TEXT.md` with binary
+layout, language counts, file index, executable evidence and boundaries.
+
+Verified 2026-10-09: `cargo test -p mtgmd -- --nocapture` passes 3 synthetic
+tests and 1 install test. All 16,338 archive instances / 8,488 paths / 7,954
+distinct payloads parse with zero failures; distinct payloads contain
+305,099 messages and 93,846 labels. Value checks include item index 0
+`Airtight Flask` and label `e0100_goblin` -> index 0 -> `Goblins`. CLI smoke
+test prints all 112 enemy messages with their 111 labels.
+
+Evidence: GMD loader `0x00dde1c0`, label-array accessor `0x00dde560`, exact
+first-match label lookup `0x00dde580`, message lookup `0x00dde5f0` (DDDA.exe
+2017-12-13 Steam). Read-only data matches the Riftstone format notes;
+no game assets or reference code are committed. Other candidates surveyed:
+six `rGUIFont` instances (three paths, GFD), one `rTalkMotion` (tmd v16;
+loader `0x00ce8fd0` reads motion records).
+
+Implemented and data/exe-tested; not compared in-game. Unknowns: engine
+archive precedence, resource selection from higher-level scenario/FSM IDs,
+markup rendering, and the invalid-index fallback pointer's contents.
+Enemy label prefixes are not a reliable universal model-ID mapping.
+Next action: trace one NPC interaction's text selection and rendering.
+
+Shared manifest/lock additions and minimal main.rs hookup are explicitly
+authorized by head on board #65 / codex-1 #67; head resolves merge hooks.
