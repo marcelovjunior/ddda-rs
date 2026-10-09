@@ -83,3 +83,93 @@ impl crate::InstallData {
 pub fn quest_path(npc: u32, quest: u16) -> String {
     format!(r"id\npc_wind\npc_quest_talk\q{quest:04}_n{npc:03}")
 }
+
+/// A resolved actor lifetime and interacting seat. `actor` must change on
+/// replacement even when the NPC id is reused. Seat ownership is the co-op
+/// extension of the original's single actor pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogueOwner {
+    pub actor: u64,
+    pub player: crate::PlayerId,
+}
+
+/// The original shared candidate/active dialogue slots, with seat ownership.
+/// Callers arbitrate eligible seats in stable order; eligibility and resource
+/// availability are separate observations, not inferred here.
+#[derive(Debug, Default)]
+pub struct DialogueSlot {
+    reserved: Option<DialogueOwner>,
+    active: Option<DialogueOwner>,
+}
+
+impl DialogueSlot {
+    pub fn reserved(&self) -> Option<DialogueOwner> { self.reserved }
+    pub fn active(&self) -> Option<DialogueOwner> { self.active }
+
+    /// Translated from 0x0043dd80 (DDDA.exe 2017-12-13 Steam).
+    /// Success does not imply this owner acquired the candidate: an existing
+    /// reservation is retained. Promotion must separately check ownership.
+    pub fn reserve(&mut self, owner: DialogueOwner, actor_status: Option<u32>) -> bool {
+        if self.active.is_some() || owner.actor == 0
+            || !actor_status.is_some_and(|status| matches!(status & 7, 1 | 2)) {
+            return false;
+        }
+        self.reserved.get_or_insert(owner);
+        true
+    }
+
+    /// Translated from 0x0043ded0 (DDDA.exe 2017-12-13 Steam).
+    /// The seat comparison prevents another co-op seat taking a reservation
+    /// for the same actor. No reservation is required when both slots are free.
+    pub fn activate(&mut self, owner: DialogueOwner, actor_status: Option<u32>) -> bool {
+        if owner.actor == 0 || !actor_status.is_some_and(|s| matches!(s & 7, 1 | 2))
+            || self.reserved.is_some_and(|reserved| reserved != owner) || self.active.is_some() {
+            return false;
+        }
+        self.active = Some(owner);
+        self.reserved = None;
+        true
+    }
+
+    /// Matching-owner portion of 0x0043dfd0. The actor cleanup adapter calls
+    /// this after real exit; a text/UI End event does not call it implicitly.
+    /// Audio/global side effects of the original helper are not implemented.
+    pub fn clear_active(&mut self, owner: DialogueOwner) -> bool {
+        if self.active != Some(owner) { return false; }
+        self.active = None;
+        true
+    }
+
+    /// Actor destruction/replacement invalidates only that lifetime. This
+    /// host lifecycle hook is independent of successful dialogue completion.
+    pub fn retire(&mut self, actor: u64) {
+        if self.reserved.is_some_and(|owner| owner.actor == actor) { self.reserved = None; }
+        if self.active.is_some_and(|owner| owner.actor == actor) { self.active = None; }
+    }
+}
+
+/// Real actor observations read by uNpc::vf111. Unknown observations cannot
+/// satisfy a branch. This carries no UI completion event.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TalkEndObservation {
+    /// Actor+0x586a, written by the actual talk-exit helper 0x00bb41c0.
+    pub pending_exit: u8,
+    /// None covers absent controller or an unavailable observation.
+    pub controller_enabled: Option<bool>,
+    pub game_flags: Option<u32>,
+    pub current_action: Option<u32>,
+    pub active_dialogue_empty: Option<bool>,
+}
+
+impl TalkEndObservation {
+    /// Translated from 0x00bb3290 (DDDA.exe 2017-12-13 Steam).
+    /// The pending branch consumes only value1. A second independent branch
+    /// observes talk action0x03000041 with an empty active dialogue slot.
+    /// Caller forwards this frame's result, not a persistent latched pulse.
+    pub fn take_frame(&mut self) -> bool {
+        let pending = self.pending_exit == 1 && self.controller_enabled == Some(true)
+            && self.game_flags.is_some_and(|flags| flags & 0x10_0000 == 0);
+        if pending { self.pending_exit = 0; }
+        pending || (self.current_action == Some(0x0300_0041) && self.active_dialogue_empty == Some(true))
+    }
+}

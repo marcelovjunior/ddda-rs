@@ -381,3 +381,29 @@ Next action: q0003 trace (road to the Encampment), head.
 
 Briefs queued for the Codex lane: camera-collision follow-ups,
 character-shadows, skill-vfx.
+
+**Batch 2026-10-09 late (head + Codex lane, from the maintainer's playtests):**
+- **Floor shadows:** the original's two `uAmbientShadow` per player body
+  (0x00B565A0), drawn straight down from joints 0x10/0x14 (ankles), 50 cm
+  wide, 1-100 cm deep with both decays (vf11 0x00E7B6F0, 0x00E7AB30);
+  blend state still a viewer choice (shadows.rs).
+- **Camera:** sweep from the target outward to the nearest obstruction
+  (0x010FDEA0, 0.1 cm response, attribute 0x10 ignored), Cassardis
+  collision keeps its flags, the near-camera actor fade (0x0088BDC0
+  thresholds), actor-offset shift traced (codex-30).
+- **"Missing ground" in Cassardis is the original's own hole**, hidden by
+  an auto-closing door (maintainer, in the original). The LOD rule was
+  confirmed live on the field (codex-29: camera eye to the model's world
+  sphere centre, rModel mid/low, ViewRange NORMAL = 1). New brief: doors.
+- **Arisen look:** the omitted cBodyEdit controller (37 joints, sex tables,
+  slender/muscle/bust) and the hand-joint scale rule (codex-1).
+- **Opening route:** dragon pass C, chimera ThinkInitialization, NPC
+  placement/intel lifetime/name families/Guard contracts (codex-1/28/31);
+  the route harness reaches the real gate and the field (codex-29), next
+  blocker the field detection-range rule 0x00443A60 (codex-1).
+- **Perf:** `--perf` render diagnostics; room median 6.9 ms; field spikes
+  up to 55 ms under investigation with the route harness.
+- **Tools:** the probe logs collision distance per hit.
+
+Next: doors (codex-32), field detection rule (codex-1), NPC adapter in the
+opening (codex-31), route perf (codex-29).
