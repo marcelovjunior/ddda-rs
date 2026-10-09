@@ -2316,6 +2316,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddskill"
+version = "0.1.0"
+dependencies = [
+ "ddparam",
+ "ddvfs",
+ "mtarc",
+ "mtgmd",
+]
+
+[[package]]
 name = "ddtool"
 version = "0.1.0"
 dependencies = [
