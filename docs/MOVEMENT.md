@@ -307,6 +307,104 @@ the result bits at +0x1A8.
   length-dependent thresholds (the stall rule, the 0.0625 undo, the crease)
   apply to quarter-frame moves.
 
+### Attacks (`ddsim::attack`)
+
+The light and heavy buttons (`ddsim::Input::light` / `heavy`, held; a
+press is the rising edge) start the weapon's basic attacks. Weapons with
+attacks: the sword (and mace) and the staff (`ddsim::Weapon`, the
+categories of `ddskill::vocation::WeaponCategory`); the host gives each
+player its weapon and the weapon banks' motions (`Sim::weapon_motions`,
+banks 6 and 7 = the category's `_co` and `_at` lists, as table
+0x0163DF8C binds them).
+
+**Transition lists.** A press becomes command bits (key-config 0x17 light,
+0x18 heavy, `0x00B52A00`; pressed edges at uPlayer +0x32E0).
+`uPlayerBase::vf136` (0x00B6D510) -> vf203 (0x00B6EA70) -> `0x00ABA690`
+scans the weapon's skill lists, the basic-attack list of the primary
+category (array 0x014F8DCC) and the default list, first match wins. A
+record is (action, current action or -1, command, press / hold / release,
+ground 0x301 / air 0x302, check, slot). The ground rows used:
+
+| Weapon | Press | Current action | Action | Check |
+|---|---|---|---|---|
+| sword (list 0x014F83B8) | light | S1_1 | S1_2 `0x01010001` | 22 |
+| | light | S1_2 | S1_3 `0x01010002` | 22 |
+| | light | any other | S1_1 `0x01010000` | |
+| | heavy | any | LandL `0x01010004` | |
+| staff (list 0x014F8898) | light | any | WandShot `0x01070021` | |
+| | heavy | Strike1 | WandStrike2 `0x0107001F` | 22 |
+| | heavy | any other | WandStrike1 `0x0107001E` | |
+
+Left out: S1_1 -> S1_2_1 (check 24, an ability bit not identified), LandL's
+follow-up `0x0101000D` (a learned ability), the air rows (AirS, AirL,
+WandAirStrike, the air WandShot), skills.
+
+**Cancel slots (the combo windows).** The cancel object at uPlayer +0x2588
+has 7 slots on motion layer 0, event group 0 (`0x00827F50`): slot `i` is in
+state 1 (buffer) while bit `0x11 + 2i` is set, else 2 (execute) while bit
+`0x10 + 2i` is (`0x00828030`). Slot 0 is the stick's (bit 0x10, the
+landing's move cancel above), slot 1 the attacks'. A matched press is kept
+in its slot (uPlayer +0x38B8[slot]) while the slot is non-zero and stamina
+is above 0 (`0x00ABAAC0`), dropped when the slot falls to 0, and started
+when the slot executes (vf136's loop 0x00B6DC10). Idle, walk and run
+motions execute slot 1 throughout (`0x15450000`), so a press from them
+starts at once; a landing buffers for its first frames.
+
+**Sequence counters** (`0x0082B400`, reset with each motion by vf36):
+uPlayer +0x361C counts the motion's frames with group 0 bit 31, +0x365C
+those with bit 30. Check 22 needs +0x361C == 0: bit 31 closes the chain,
+and a later light press restarts at S1_1. An attack ends when +0x365C >= 1
+or its motion ends (`0x01057100`); ddsim then returns to the wait
+(*assumed*: where the end flag action +0x50 is read is not traced). The
+stick cancels an attack where slot 0 executes.
+
+Windows of the shipped motions (group 0, motion frames):
+
+| Action | Motion | Slot 1 buffers | executes | bit 31 | bit 30 | Frames |
+|---|---|---|---|---|---|---|
+| S1_1 | `m0001_at` 0 | 8..13 | 13.. | 30 | 34 | 44 |
+| S1_2 | `m0001_at` 1 | 9..14 | 14.. | 19 | 27 | 45 |
+| S1_3 | `m0001_at` 2 | 25..30 | 30.. | | 49 | 61 |
+| LandL | `m0001_at` 19 (0x713) | 27..32 | 32.. | 22 | 54 | 59 |
+| WandStrike1 | `m0007_at` 35 (0x723) | 20..25 | 25.. | 40 | | 69 |
+| WandStrike2 | `m0007_at` 36 (0x724) | 28..33 | 33.. | | | 61 |
+
+So S1_1 chains into S1_2 from a press on frames 8..29, S1_2 into S1_3 from
+one on 9..18, Strike1 into Strike2 from one on 20..39; a press while slot 1
+is closed (before the buffer) is lost.
+
+**Each strike's vf05** (S1_1 0x00B3C570, S1_2 0x00B3C7B0, S1_3 0x00B3CA00,
+LandL 0x00B3D410, Strike1 0x00B51070, Strike2 0x00B51270) plays its motion
+in bank 7 (force 1, interpolation -1 = the bank's default, frame 0, rate
+1), zeroes the velocity (the strike moves by its root track: S1_1 190 cm
+ahead), turns toward the target at `m_pl000_00[0xAE]` = 45 degrees a frame
+(`0x00B791D0`, `0x007975D0`), charges its stamina and sets push rank 14.
+The sword's alternative motions 0x7C8.. (uPlayer +0x206D bit 3 or +0x206E
+& 0x18) are not modelled.
+
+**WandShot** (`cPlActWpnWandShot`, variant 0 of the table at 0x014F70E8,
+0x60 bytes a variant): start motion 0x70A, loop 0x70B, end 0x70C (layer 1
+aim poses 0x710 / 0x70D etc. not modelled), push rank 13. Its vf06
+(0x00B4F190): phase 0 plays the start to its end; phase 1 (`0x00B4F610`)
+fires a volley of 1 shell when the loop reaches frame 2 and charges its
+stamina; a light press before 5 volleys restarts the loop once it reaches
+frame 7 (another volley); at the loop's end (*assumed*: its end flag rises
+at the last frame although it loops) the end motion plays (phase 3), then
+the wait. The turn motions for an aim beyond 90 degrees (phase 2) are not
+modelled. The shells are the fight's (COMBAT.md 9.3).
+
+**Stamina.** Each strike's vf05 calls `0x00B81E30(-m_pl000_00[id], 1, 0)`:
+id 0x1B8 (80) for the sword, 0x1BB (30) for the staff strikes and each
+WandShot volley. Mode 1 of the modifier `0x00B82060` makes the cost 0
+unless the equipped weapons' level (item +0x66) is above the Arisen's
+(cPlayerInfo +0x700) by `m_pl000_00[0x1AE..0x1B0]` = 15 / 20 / 25 or more
+(`0x00B82360`, tiers 1-3), when it is multiplied by `[0x1B4..0x1B6]` = 1,
+1.5, 2 (`ddsim::attack::attack_cost`; the level gap is
+`Player::weapon_level_gap`). So a level-1 Arisen's starting weapons (levels
+1 and 3) attack for free. Not modelled: the modifier's augment and status
+factors (+0x3EF0, +0x3EF8) and the exemptions of `0x00B81E30` (game and
+stage flags, actor +0x26A4, +0x4CF0, +0x31EA).
+
 ## Assumptions and placeholders
 
 - 30 frames per second for velocities and physics. The jump timing supports

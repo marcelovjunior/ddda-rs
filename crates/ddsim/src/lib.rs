@@ -33,10 +33,12 @@
 
 use std::collections::HashMap;
 
+pub mod attack;
 pub mod ledge;
 pub mod stamina;
 pub mod sweep;
 
+pub use attack::{Attack, AttackParam, ShotPhase, Weapon, ATTACK_SHIPPED};
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
 pub use stamina::{StaminaRow, StaminaTables, WeightTables};
 
@@ -233,6 +235,14 @@ pub enum State {
     LedgeClimb {
         braced: bool,
     },
+    /// A sword attack or staff strike (`attack`).
+    Attack {
+        attack: Attack,
+    },
+    /// The staff's light attack, `cPlActWpnWandShot` (`attack::shot`).
+    Shot {
+        phase: ShotPhase,
+    },
 }
 
 /// Phases of `cPlCliffHangBegin::vf06` (0x00ADA980).
@@ -247,6 +257,26 @@ pub enum GrabPhase {
 }
 
 impl State {
+    /// The push-out rank the state's action writes to actor +0x1DF0 (the
+    /// character push-out 0x004797E0: the higher rank gives way): 13 for
+    /// `cPlActWait` (0x00AC9E67; 14 while its turn motion plays, not
+    /// modelled), 14 for `cPlActWalk` (0x00ACA205), 15 for the run, the
+    /// sprint and its stop, jumps, falls and landings (0x00ACA5E5,
+    /// 0x00ACAF2F, 0x00ACB671, 0x00ACC68A, 0x00ACD19E, 0x00ACD5A7, ...),
+    /// 0 (never pushed) while on a ledge (`cPlCliffHang*` vf05 0x00ADA908,
+    /// 0x00ADCD7B, 0x00ADDBC0), 14 for the sword attacks and staff strikes
+    /// (S1_1 0x00B3C795, S1_2 0x00B3C9B9, S1_3 0x00B3CC09, LandL 0x00B3D5F6,
+    /// Strike1 0x00B51228, Strike2 0x00B5141B), 13 for WandShot (0x00B4E200).
+    pub fn push_rank(self) -> u32 {
+        match self {
+            State::Wait => 13,
+            State::Walk { .. } | State::Attack { .. } => 14,
+            State::Shot { .. } => attack::shot::PUSH_RANK,
+            State::LedgeGrab { .. } | State::LedgeHang { .. } | State::LedgeClimb { .. } => 0,
+            _ => 15,
+        }
+    }
+
     /// Motion id (`bank << 8 | slot`, bank 0) the original plays.
     pub fn motion_id(self) -> u16 {
         match self {
@@ -290,7 +320,28 @@ impl State {
             // cPlCliffHangClimb::vf05: 0x30 (its variant 1, 0x2C, starts
             // during the grab and is not modelled)
             State::LedgeClimb { .. } => 0x30,
+            // bank 7: the weapon's `_at` list (`Sim::weapon_motions`)
+            State::Attack { attack } => attack.motion(),
+            State::Shot { phase } => phase.motion(),
         }
+    }
+
+    /// Whether the attack transition lists are read in this state: on the
+    /// ground (the lists' 0x301 rows; the air rows are not modelled).
+    pub fn on_ground_for_attacks(self) -> bool {
+        matches!(
+            self,
+            State::Wait
+                | State::Walk { .. }
+                | State::Run { .. }
+                | State::SprintStart
+                | State::Sprint
+                | State::SprintStop
+                | State::Land { .. }
+                | State::SprintJumpLand
+                | State::Attack { .. }
+                | State::Shot { .. }
+        )
     }
 
     /// Whether the motion loops while the state lasts.
@@ -320,6 +371,10 @@ pub struct Input {
     pub sprint: bool,
     /// Jump is held (a press is the rising edge).
     pub jump: bool,
+    /// The light attack button is held (a press is the rising edge).
+    pub light: bool,
+    /// The heavy attack button is held.
+    pub heavy: bool,
     /// Camera yaw (radians, 0 looks along +Z).
     pub camera_yaw: f32,
 }
@@ -374,6 +429,29 @@ pub struct Player {
     /// `uObjModel::vf90` reads it at the next frame's start).
     pub unit_rate: f32,
     rate_queue: [f32; 2],
+    /// The weapon whose basic attacks the player uses (`attack`).
+    pub weapon: Weapon,
+    /// How far the equipped weapons' level is above the player's (item
+    /// +0x66 minus cPlayerInfo +0x700), for the attack cost tier
+    /// (`attack::tier`). Set by the host; 0 by default.
+    pub weapon_level_gap: i32,
+    /// The heading an attack turns to when it starts: the target's
+    /// direction, set by the host (the original takes it from its target,
+    /// `0x00B79090`, whose choice is *not traced*). Without one, the
+    /// stick's direction while it is held.
+    pub attack_heading: Option<f32>,
+    /// The heading the playing attack turns to (`0x007975D0`).
+    turn_to: Option<f32>,
+    /// The request waiting in the attack slot (uPlayer +0x38B8[1]).
+    pub request: Option<attack::Request>,
+    /// Attack actions started so far (each one frees its hit history).
+    pub attacks_started: u32,
+    /// WandShot volleys fired so far (the host spawns their shells).
+    pub volleys_fired: u32,
+    /// The playing WandShot's state.
+    pub shot: attack::ShotState,
+    light_held: bool,
+    heavy_held: bool,
 }
 
 /// A held ledge and the points the hang and climb move between.
@@ -641,6 +719,12 @@ pub struct Sim {
     pub weight_tables: WeightTables,
     /// The capsule sweep's values (`sweep::SweepParam`).
     pub sweep_param: sweep::SweepParam,
+    /// The attacks' values (`attack::AttackParam`).
+    pub attack_param: AttackParam,
+    /// Each weapon's motions by id (banks 6 and 7: its `_co` and `_at`
+    /// lists); a player's weapon motions are looked up here before
+    /// [`Sim::motions`].
+    pub weapon_motions: HashMap<Weapon, HashMap<u16, RootMotion>>,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -654,6 +738,18 @@ fn landing_stands(yaw: f32, steer: Option<f32>) -> bool {
         let d = (yaw - s).rem_euclid(std::f32::consts::TAU);
         d.min(std::f32::consts::TAU - d) > std::f32::consts::FRAC_PI_4
     })
+}
+
+fn lookup<'a>(
+    motions: &'a HashMap<u16, RootMotion>,
+    weapon_motions: &'a HashMap<Weapon, HashMap<u16, RootMotion>>,
+    weapon: Weapon,
+    id: u16,
+) -> Option<&'a RootMotion> {
+    weapon_motions
+        .get(&weapon)
+        .and_then(|m| m.get(&id))
+        .or_else(|| motions.get(&id))
 }
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -676,6 +772,8 @@ impl Sim {
             stamina_tables: StaminaTables::shipped(),
             weight_tables: WeightTables::shipped(),
             sweep_param: sweep::SweepParam::default(),
+            attack_param: ATTACK_SHIPPED,
+            weapon_motions: HashMap::new(),
             pending: 0.0,
         }
     }
@@ -704,6 +802,16 @@ impl Sim {
             ran_out: false,
             unit_rate: 1.0,
             rate_queue: [1.0; 2],
+            weapon: Weapon::None,
+            weapon_level_gap: 0,
+            attack_heading: None,
+            turn_to: None,
+            request: None,
+            attacks_started: 0,
+            volleys_fired: 0,
+            shot: attack::ShotState::default(),
+            light_held: false,
+            heavy_held: false,
         });
     }
 
@@ -731,6 +839,18 @@ impl Sim {
 
     fn period_of(&self, motion: u16) -> f32 {
         self.motions.get(&motion).map_or(30.0, RootMotion::period)
+    }
+
+    /// Motion `id` as `weapon`'s player plays it: from the weapon's motions
+    /// if it has it, else the common ones.
+    pub fn motion_for(&self, weapon: Weapon, id: u16) -> Option<&RootMotion> {
+        lookup(&self.motions, &self.weapon_motions, weapon, id)
+    }
+
+    /// The motion player `i` is playing.
+    fn playing(&self, i: usize) -> Option<&RootMotion> {
+        let p = &self.players[i];
+        self.motion_for(p.weapon, p.state.motion_id())
     }
 
     /// Advances every player by `dt` seconds, in steps of `TICK` motion frames.
@@ -792,7 +912,18 @@ impl Sim {
             p.jump_held = input.jump;
             pr
         };
+        let (light, heavy) = {
+            let p = &mut self.players[i];
+            let pressed = (input.light && !p.light_held, input.heavy && !p.heavy_held);
+            p.light_held = input.light;
+            p.heavy_held = input.heavy;
+            pressed
+        };
         let state = self.players[i].state;
+        // the transition lists come before the default list (the jump)
+        if state.on_ground_for_attacks() && self.attack_input(i, light, heavy, moving.then_some(input_yaw)) {
+            return;
+        }
         match state {
             State::Wait
             | State::Walk { .. }
@@ -1028,6 +1159,17 @@ impl Sim {
                     Self::let_go(p, jn);
                 }
             }
+            State::Attack { .. } | State::Shot { .. } => {
+                if moving && self.attack_move_cancel(i) {
+                    // the stick takes over (slot 0): the ground states run
+                    // this frame
+                    Self::set_state(&mut self.players[i], State::Wait);
+                    self.players[i].turn_to = None;
+                    self.frame_states(i, input, ground, dt);
+                    return;
+                }
+                self.attack_frame(i, light, ground, dt);
+            }
             State::LedgeClimb { .. } => {
                 let len = self.period_of(state.motion_id());
                 // cPlCliffHangClimb::vf06 (0x00ADDC00): the target rises by
@@ -1053,6 +1195,222 @@ impl Sim {
                 if p.frame >= len {
                     p.position = ledge::climb_end(&h.ledge);
                     p.hold = None;
+                    Self::set_state(p, State::Wait);
+                }
+            }
+        }
+    }
+
+    /// The group 0 event word of player `i`'s motion at its frame and whether
+    /// bit 31 has not been seen since the motion started (check 22). A
+    /// motion without event data executes every slot (for hosts without
+    /// motion data).
+    fn attack_events(&self, i: usize) -> (u32, bool) {
+        let f = self.players[i].frame as i32;
+        match self.playing(i) {
+            Some(m) if !m.events.is_empty() => (
+                m.event_bits(0, f, f),
+                m.event_bits(0, 0, f) & attack::CHAIN_CLOSED_BIT == 0,
+            ),
+            _ => (1 << (0x10 + 2 * attack::ATTACK_SLOT), true),
+        }
+    }
+
+    /// Bit 30 seen since the motion started, or the motion at its end: the
+    /// action ends (`0x01057100` and uPlayer +0x365C).
+    fn attack_motion_done(&self, i: usize) -> bool {
+        let p = &self.players[i];
+        let f = p.frame as i32;
+        match self.playing(i) {
+            Some(m) => m.event_bits(0, 0, f) & attack::ACTION_END_BIT != 0 || p.frame >= m.period(),
+            None => p.frame >= 30.0,
+        }
+    }
+
+    /// The stick may cancel the playing attack: slot 0 executes (event group
+    /// 0 bit 0x10 without its buffer bit 0x11). Not without event data.
+    fn attack_move_cancel(&self, i: usize) -> bool {
+        let f = self.players[i].frame as i32;
+        self.playing(i)
+            .is_some_and(|m| !m.events.is_empty() && attack::slot_state(m.event_bits(0, f, f), 0) == 2)
+    }
+
+    /// The attack slot of one frame (`uPlayerBase::vf136`): a light or heavy
+    /// press is matched against the weapon's transition list and kept while
+    /// the slot is open (state 1 or 2) and stamina is above 0; the slot
+    /// dropping to 0 drops it; the slot executing starts it. Returns true
+    /// when an attack started.
+    // Translated from 0x00B6D510 (the request loops at 0x00B6DC10), 0x00ABA690
+    // and 0x00ABAAC0 (DDDA.exe 2017-12-13 Steam).
+    fn attack_input(&mut self, i: usize, light: bool, heavy: bool, stick: Option<f32>) -> bool {
+        if self.players[i].weapon == Weapon::None {
+            return false;
+        }
+        let (word, chain_open) = self.attack_events(i);
+        let slot = attack::slot_state(word, attack::ATTACK_SLOT);
+        let p = &mut self.players[i];
+        if slot == 0 {
+            p.request = None;
+        }
+        let current = match p.state {
+            State::Attack { attack } => Some(attack),
+            _ => None,
+        };
+        if (light || heavy) && slot != 0 && p.stamina > 0.0 {
+            if let Some(r) = attack::next(p.weapon, current, light, heavy, chain_open) {
+                p.request = Some(r);
+            }
+        }
+        if slot == 2 {
+            if let Some(r) = p.request.take() {
+                self.start_attack(i, r, stick);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// An attack action's vf05: its motion from frame 0 (force 1, so the
+    /// same attack restarts), velocity zeroed (it moves by root motion), the
+    /// turn toward its heading, and the stamina of a strike.
+    // Translated from cPlActWpnSwordAtckLandS1_1::vf05 0x00B3C570 (the other
+    // strikes' vf05s do the same with their motion) and
+    // cPlActWpnWandShot::vf05 0x00B4E200 (DDDA.exe 2017-12-13 Steam).
+    fn start_attack(&mut self, i: usize, r: attack::Request, stick: Option<f32>) {
+        let ap = self.attack_param;
+        let p = &mut self.players[i];
+        let cost_id = match r {
+            attack::Request::Attack(a) => {
+                p.state = State::Attack { attack: a };
+                Some(a.cost_id())
+            }
+            attack::Request::Shot => {
+                p.state = State::Shot {
+                    phase: ShotPhase::Start,
+                };
+                None
+            }
+        };
+        p.frame = 0.0;
+        p.velocity = [0.0; 3];
+        p.speed = 0.0;
+        p.turn_to = p.attack_heading.or(stick);
+        p.shot = attack::ShotState::default();
+        p.attacks_started += 1;
+        if let Some(id) = cost_id {
+            Self::spend(p, attack::attack_cost(&ap, ap.cost_of(id), p.weapon_level_gap));
+        }
+    }
+
+    /// Takes `cost` stamina (`0x00B81E30` with a negative amount).
+    fn spend(p: &mut Player, cost: f32) {
+        if cost > 0.0 {
+            let before = p.stamina;
+            p.stamina = (before - cost).clamp(0.0, p.stamina_max);
+            p.ran_out |= before > 0.0 && p.stamina <= 0.0;
+        }
+    }
+
+    /// One frame of an attack action: the turn, the root motion, then its
+    /// vf06 (the end, or WandShot's phases).
+    fn attack_frame(&mut self, i: usize, light: bool, ground: &dyn Ground, dt: f32) {
+        let turn = self.attack_param.turn_deg.to_radians() * dt;
+        {
+            // 0x007975D0: toward the heading at m_pl000_00[0xAE] degrees a
+            // frame (*assumed* per frame; the turn controller is not read)
+            let p = &mut self.players[i];
+            if let Some(h) = p.turn_to {
+                let d = (h - p.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                    - std::f32::consts::PI;
+                if d.abs() <= turn {
+                    p.yaw = h;
+                    p.turn_to = None;
+                } else {
+                    p.yaw += turn.copysign(d);
+                }
+            }
+        }
+        let state = self.players[i].state;
+        self.ground_move(i, state, ground, dt);
+        if self.players[i].state != state {
+            return; // fell
+        }
+        match state {
+            State::Attack { .. } => {
+                // cPlActWpnSwordAtckLandS1_1::vf06 (0x00B3CC20) and the rest:
+                // the action ends; *assumed* back to the wait (where the end
+                // flag action +0x50 is read is not traced)
+                if self.attack_motion_done(i) {
+                    Self::set_state(&mut self.players[i], State::Wait);
+                }
+            }
+            State::Shot { phase } => self.shot_frame(i, phase, light),
+            _ => {}
+        }
+    }
+
+    /// `cPlActWpnWandShot::vf06` (0x00B4F190), ground variant.
+    // Translated from 0x00B4F490 (phase 0), 0x00B4F610 (phase 1) and
+    // 0x00B50590 (phase 3) (DDDA.exe 2017-12-13 Steam).
+    fn shot_frame(&mut self, i: usize, phase: ShotPhase, light: bool) {
+        let done = self.attack_motion_done(i);
+        let cost = attack::attack_cost(
+            &self.attack_param,
+            self.attack_param.staff_cost,
+            self.players[i].weapon_level_gap,
+        );
+        let p = &mut self.players[i];
+        match phase {
+            // the start motion's hold time (+0x30) is -1 in variant 0: it
+            // plays to its end (or bit 30), then the loop
+            ShotPhase::Start => {
+                if done {
+                    Self::set_state(
+                        p,
+                        State::Shot {
+                            phase: ShotPhase::Loop,
+                        },
+                    );
+                }
+            }
+            ShotPhase::Loop => {
+                if !p.shot.fired {
+                    if attack::shot::FIRE_FRAME <= p.frame {
+                        // 0x00B4FA00 per shell (the host spawns them), then the
+                        // volley's stamina
+                        p.shot.fired = true;
+                        p.shot.volleys += 1;
+                        p.volleys_fired += attack::shot::SHELLS;
+                        Self::spend(p, cost);
+                    }
+                } else {
+                    // a light press (uPlayer +0x32E0 bit 0) before 5 volleys
+                    // asks for another; it restarts the loop from frame 7 (an
+                    // aim beyond 90 degrees would play a turn motion first:
+                    // not modelled)
+                    if light && p.shot.volleys < attack::shot::VOLLEYS {
+                        p.shot.refire = true;
+                    }
+                    if p.shot.refire && attack::shot::REFIRE_FRAME <= p.frame {
+                        p.shot.fired = false;
+                        p.shot.refire = false;
+                        p.frame = 0.0;
+                        return;
+                    }
+                }
+                // the loop motion's end: *assumed* its end flag (0x01057100,
+                // motion +6 & 5) rises at its last frame although it loops
+                if done {
+                    Self::set_state(
+                        p,
+                        State::Shot {
+                            phase: ShotPhase::End,
+                        },
+                    );
+                }
+            }
+            ShotPhase::End => {
+                if done {
                     Self::set_state(p, State::Wait);
                 }
             }
@@ -1147,7 +1505,7 @@ impl Sim {
         } else {
             (p.frame as i32, p.frame as i32)
         };
-        let suppressed = self.motions.get(&id).is_some_and(|m| {
+        let suppressed = self.motion_for(p.weapon, id).is_some_and(|m| {
             m.event_bits(stamina::RECOVERY_SUPPRESS_GROUP, from, to) & stamina::RECOVERY_SUPPRESS_BIT != 0
         });
         let recovery = if suppressed {
@@ -1175,7 +1533,7 @@ impl Sim {
     /// Motions without event data allow it.
     fn move_cancel_allowed(&self, i: usize) -> bool {
         let p = &self.players[i];
-        let Some(m) = self.motions.get(&p.state.motion_id()) else {
+        let Some(m) = self.motion_for(p.weapon, p.state.motion_id()) else {
             return true;
         };
         if m.events.is_empty() {
@@ -1266,7 +1624,10 @@ impl Sim {
         let jn = self.jump_normal;
         let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
-        let period = self.period_of(state.motion_id());
+        let weapon = self.players[i].weapon;
+        let period = self
+            .motion_for(weapon, state.motion_id())
+            .map_or(30.0, RootMotion::period);
         let p = &mut self.players[i];
         let mut target = p.position;
         if let Some(v) = speed {
@@ -1285,7 +1646,7 @@ impl Sim {
             p.speed = v;
             let f = p.frame + dt;
             p.frame = if state.looping() { f.rem_euclid(period) } else { f };
-        } else if let Some(m) = self.motions.get(&state.motion_id()) {
+        } else if let Some(m) = lookup(&self.motions, &self.weapon_motions, weapon, state.motion_id()) {
             p.speed = 0.0;
             let d = if state.looping() {
                 m.delta(p.frame, dt)

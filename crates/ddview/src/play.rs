@@ -290,6 +290,7 @@ pub fn step(
             sprint: keys.pressed(KeyCode::ShiftLeft),
             jump: keys.pressed(KeyCode::Space),
             camera_yaw: cam_yaw,
+            ..Default::default()
         },
     );
     inputs.insert(
@@ -306,6 +307,7 @@ pub fn step(
             sprint: keys.pressed(KeyCode::ShiftRight),
             jump: keys.pressed(KeyCode::Enter) || keys.pressed(KeyCode::NumpadEnter),
             camera_yaw: cam_yaw,
+            ..Default::default()
         },
     );
     if st.demo {

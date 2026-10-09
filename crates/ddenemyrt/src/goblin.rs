@@ -33,6 +33,10 @@ pub struct GoblinData {
     pub defender: EnemyDefender,
     /// The region pools a fresh goblin starts with (`rRegionStatus` type 0).
     pub regions: Vec<RegionPool>,
+    /// The push-out rank base: `cCharParamEnemy` +0xD4 `OBJ補正サイズ`
+    /// (the actor copy at +0x5A84 read by `uEnemy::vf90` 0x00AA96E0;
+    /// goblin 13).
+    pub obj_size: u32,
 }
 
 /// Motion banks of the goblin, by the bank number its motion ids carry.
@@ -105,6 +109,13 @@ impl GoblinData {
             attacker: EnemyAttacker::new(stats.attack, stats.magic_attack),
             defender: EnemyDefender::new(stats.defense, stats.magic_defense),
             regions,
+            obj_size: {
+                let x = &gob.common.as_ref().ok_or("em0100: no common params")?.0.object;
+                match x.get(&x.root, "OBJ補正サイズ") {
+                    Some([mtxfs::Value::U(v)]) => *v as u32,
+                    _ => return Err("em0100: no OBJ補正サイズ".into()),
+                }
+            },
         })
     }
 }
@@ -249,6 +260,21 @@ impl Goblin {
             || self.action == action::SHRINK_PLAIN_FRONT
             || self.action == action::SHRINK_PLAIN_BACK;
         !shrink || self.motion_ended
+    }
+
+    /// The push rank (actor +0x1DF0) `uEnemy::vf90` (0x00AA96E0) derives
+    /// from the base and the action's +0x2360 bits: +1 for 0x104 (attacks
+    /// 0x101, walks 5), else +2 for 0x18 (runs 9, dashes 0x11); the other
+    /// goblin actions (waits, turns, flinches, death) add nothing. 0 stays 0.
+    pub fn push_rank(&self, base: u32) -> u32 {
+        if base == 0 {
+            return 0;
+        }
+        match self.action {
+            action::N_ATTACK1 | action::N_ATTACK2 | action::N_ATTACK12 => base + 1,
+            action::DASH_TRACE | action::DASH_TRACE_1 => base + 2,
+            _ => base,
+        }
     }
 
     /// The goblin is in one of its attacks (unit +0x2360 bit 0x100).

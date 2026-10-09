@@ -1,16 +1,22 @@
 //! A fight: the Arisen and the enemies, stepped in the original's frame
 //! order (docs/FRAME.md 5.7). The host calls, each frame:
 //! 1. [`Fight::hits`] before anyone moves (step 33: last frame's volumes);
-//! 2. its player movement (`ddsim::Sim::step`), then [`Fight::players_moved`]
-//!    (the Arisen's scripted attacks advance, phase 91-92 of line 10);
+//! 2. its player movement and attacks (`ddsim::Sim::step`), then
+//!    [`Fight::players_moved`] (new attacks free their hit history; the
+//!    staff's volleys fire their shells, which fly);
 //! 3. [`Fight::enemies`] (line 15: think, action, motion, ground);
-//! 4. [`Fight::volumes`] (pass C: poses and the volumes for the next
+//! 4. [`Fight::push_out`] (step 38);
+//! 5. [`Fight::volumes`] (pass C: poses and the volumes for the next
 //!    frame's hits).
+//!
+//! Each Arisen must be equipped in the sim ([`Fight::equip`]) for its
+//! attacks to play.
 
-use crate::arisen::{self, ArisenData, Swing};
+use crate::arisen::ArisenData;
 use crate::body::MotionId;
 use crate::combat::{hit_pass, Attacker, Fighter, HitEvent, Tables, Victim};
 use crate::goblin::{Goblin, GoblinData, Target};
+use crate::shell::{Shell, ShellParam};
 use ddcombat::volumes::HitHistory;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -18,7 +24,14 @@ use std::sync::Arc;
 /// The data a fight reads.
 #[derive(Debug, Clone)]
 pub struct FightData {
+    /// A level-1 Fighter with an Iron Sword.
     pub arisen: ArisenData,
+    /// A level-1 Mage with the starting staff.
+    pub mage: ArisenData,
+    /// The staff's shell.
+    pub shell: ShellParam,
+    /// The attacks' values from `param\pl\other\m_pl000_00`.
+    pub attack_param: ddsim::AttackParam,
     pub goblin: GoblinData,
     pub tables: Tables,
 }
@@ -32,6 +45,10 @@ impl FightData {
         };
         Ok(FightData {
             arisen: ArisenData::fighter(vfs)?,
+            mage: ArisenData::mage(vfs)?,
+            shell: ShellParam::load(vfs)?,
+            attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
+                .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
             goblin: GoblinData::load(vfs, exe)?,
             tables: Tables {
                 game: adjust(r"param\game")?,
@@ -41,12 +58,24 @@ impl FightData {
     }
 }
 
-/// An Arisen in the fight (the body moves in ddsim).
+/// Which of the fight's Arisen kits a seat uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Kit {
+    Fighter,
+    Mage,
+}
+
+/// The player's tuning table.
+pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
+
+/// An Arisen in the fight (the body moves and attacks in ddsim).
 #[derive(Debug, Clone)]
 pub struct ArisenFighter {
     pub fighter: Fighter,
-    /// The scripted attack playing, if any.
-    pub swing: Option<Swing>,
+    pub kit: Kit,
+    /// ddsim's attack and volley counts last seen.
+    pub attacks_seen: u32,
+    pub volleys_seen: u32,
 }
 
 /// The fight's state.
@@ -61,13 +90,17 @@ pub struct Fight {
     /// Where each fighter stood when its volumes were placed (for the
     /// victims' front / back reactions).
     pub positions: BTreeMap<u32, [f32; 3]>,
+    /// Shells in flight.
+    pub shells: Vec<Shell>,
+    /// The Arisen each shell owner id was fired by (kept after the shell).
+    pub shooters: BTreeMap<u32, u32>,
+    next_shell: u32,
     /// *Placeholder* critical roll (only critical-capable weapons read it).
     roll_seed: u32,
 }
 
-/// The push-out distance between an Arisen and a goblin (35 + 35 cm,
-/// *placeholder*, see [`Fight::push_out`]).
-pub const PUSH_OUT: f32 = 70.0;
+/// Owner ids of shells count from here.
+pub const SHELL_OWNER_BASE: u32 = 1000;
 
 /// Owner ids: seats keep their number, enemies count from here.
 pub const ENEMY_OWNER_BASE: u32 = 100;
@@ -80,13 +113,29 @@ impl Fight {
             goblins: Vec::new(),
             events: Vec::new(),
             positions: BTreeMap::new(),
+            shells: Vec::new(),
+            shooters: BTreeMap::new(),
+            next_shell: SHELL_OWNER_BASE,
             roll_seed: 0x1234_5678,
+        }
+    }
+
+    /// The data of a kit.
+    pub fn kit(&self, kit: Kit) -> &ArisenData {
+        match kit {
+            Kit::Fighter => &self.data.arisen,
+            Kit::Mage => &self.data.mage,
         }
     }
 
     /// Adds seat `seat`'s Arisen (a level-1 Fighter at full HP).
     pub fn add_arisen(&mut self, seat: u8) {
-        let a = &self.data.arisen;
+        self.add_arisen_as(seat, Kit::Fighter);
+    }
+
+    /// Adds seat `seat`'s Arisen with `kit`, at full HP.
+    pub fn add_arisen_as(&mut self, seat: u8, kit: Kit) {
+        let a = self.kit(kit);
         self.arisen.insert(
             seat,
             ArisenFighter {
@@ -102,9 +151,22 @@ impl Fight {
                     hurts: vec![],
                     history: HitHistory::default(),
                 },
-                swing: None,
+                kit,
+                attacks_seen: 0,
+                volleys_seen: 0,
             },
         );
+    }
+
+    /// Gives seat `seat`'s player in `sim` its kit's weapon (motions,
+    /// weapon, level gap) and the sim the attacks' values.
+    /// [`Fight::players_moved`] does it too when the weapon differs, a frame
+    /// late.
+    pub fn equip(&self, sim: &mut ddsim::Sim, seat: u8) {
+        if let Some(a) = self.arisen.get(&seat) {
+            self.kit(a.kit).equip(sim, seat);
+            sim.attack_param = self.data.attack_param;
+        }
     }
 
     /// Adds a goblin; returns its owner id.
@@ -130,20 +192,6 @@ impl Fight {
         Ok(owner)
     }
 
-    /// Starts the scripted sword attack 1 for seat `seat` (ignored while one
-    /// plays or the Arisen is down).
-    pub fn attack(&mut self, seat: u8) {
-        if let Some(a) = self.arisen.get_mut(&seat) {
-            if a.swing.is_none() && !a.fighter.victim.dead() {
-                a.swing = Some(Swing {
-                    motion: arisen::SWORD_ATTACK_1,
-                    frame: 0.0,
-                });
-                self.release(u32::from(seat));
-            }
-        }
-    }
-
     /// A new attack of `attacker` frees its swing's `mRelation` history
     /// entries on every victim (the attacker flag +0x1EC1 of 0x0076ECA0;
     /// *assumed* to be raised when the attacker starts an attack, its
@@ -167,6 +215,8 @@ impl Fight {
     pub fn hits(&mut self, dt: f32) -> &[HitEvent] {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
+        let shell_fighters = self.shell_fighters();
+        fighters.extend(shell_fighters);
         let mut seed = self.roll_seed;
         let mut roll = || {
             seed ^= seed << 13;
@@ -185,6 +235,9 @@ impl Fight {
         for g in &mut self.goblins {
             g.fighter = it.next().expect("one fighter per goblin");
         }
+        // a shell that hit is gone (*placeholder*, see `crate::shell`)
+        let hit: Vec<u32> = self.events.iter().map(|e| e.attacker).collect();
+        self.shells.retain(|s| !hit.contains(&s.owner));
         for e in &self.events {
             let from = self.positions.get(&e.attacker).copied();
             if let Some(g) = self.goblins.iter_mut().find(|g| g.fighter.owner == e.victim) {
@@ -194,27 +247,88 @@ impl Fight {
         &self.events
     }
 
-    /// After the players moved: the scripted attacks advance by `step`
-    /// motion frames and move their Arisen by the root travel.
-    pub fn players_moved(&mut self, sim: &mut ddsim::Sim, ground: &dyn ddsim::Ground, step: f32) {
-        let body = &self.data.arisen.body;
-        for (&seat, a) in &mut self.arisen {
-            let Some(swing) = a.swing.as_mut() else { continue };
+    /// After the players moved (line 10): each Arisen's weapon is put in
+    /// the sim if it is not there yet; a new attack frees its hit history;
+    /// the target heading for the next attack is set (*placeholder* for the
+    /// target choice `0x00B79090`: the nearest live goblin); new WandShot
+    /// volleys fire their shells; the shells fly `step` frames.
+    pub fn players_moved(&mut self, sim: &mut ddsim::Sim, _ground: &dyn ddsim::Ground, step: f32) {
+        let seats: Vec<u8> = self.arisen.keys().copied().collect();
+        for seat in seats {
+            let kit = self.arisen[&seat].kit;
+            let data = self.kit(kit);
+            if sim.player(seat).is_some_and(|p| p.weapon != data.weapon()) {
+                data.equip(sim, seat);
+                sim.attack_param = self.data.attack_param;
+            }
             let Some(p) = sim.player_mut(seat) else { continue };
-            match arisen::advance(body, swing, step) {
-                Some(d) => {
-                    let (s, c) = p.yaw.sin_cos();
-                    p.position[0] += d[0] * c + d[2] * s;
-                    p.position[2] += -d[0] * s + d[2] * c;
-                    if let Some(h) =
-                        ground.height(p.position[0], p.position[2], p.position[1] + ddsim::STEP_UP)
-                    {
-                        p.position[1] = h;
-                    }
-                }
-                None => a.swing = None,
+            let target = nearest_goblin(&self.goblins, p.position);
+            p.attack_heading = target.map(|g| {
+                let q = self.goblins[g].pos;
+                (q[0] - p.position[0]).atan2(q[2] - p.position[2])
+            });
+            let (started, volleys) = (p.attacks_started, p.volleys_fired);
+            let (feet, yaw) = (p.position, p.yaw);
+            let a = self.arisen.get_mut(&seat).expect("seat listed");
+            let new_attack = started != a.attacks_seen;
+            let fired = volleys.saturating_sub(a.volleys_seen);
+            a.attacks_seen = started;
+            a.volleys_seen = volleys;
+            if new_attack {
+                self.release(u32::from(seat));
+            }
+            for _ in 0..fired {
+                let owner = self.next_shell;
+                self.next_shell += 1;
+                let target = target.map(|g| self.goblins[g].fighter.owner);
+                self.shells.push(Shell::fire(
+                    &self.data.shell,
+                    owner,
+                    u32::from(seat),
+                    feet,
+                    yaw,
+                    target,
+                ));
+                self.shooters.insert(owner, u32::from(seat));
             }
         }
+        let param = self.data.shell;
+        let goblins = &self.goblins;
+        self.shells.retain_mut(|s| {
+            let aim = s
+                .target
+                .and_then(|t| goblins.iter().find(|g| g.fighter.owner == t && !g.dead()))
+                .map(aim_point);
+            s.fly(&param, aim, step)
+        });
+    }
+
+    /// The fighters standing for the shells in the hit pass: attack
+    /// volumes only, valued with their shooter's attack.
+    fn shell_fighters(&self) -> Vec<Fighter> {
+        let mage = &self.data.mage;
+        let set = &mage.body.collision[1];
+        self.shells
+            .iter()
+            .map(|s| {
+                let shooter = self
+                    .arisen
+                    .get(&(s.shooter as u8))
+                    .map_or(mage, |a| self.kit(a.kit));
+                Fighter {
+                    owner: s.owner,
+                    attacker: Attacker::Player(shooter.attacker),
+                    victim: Victim::Player {
+                        defender: shooter.defender,
+                        hp: 1.0,
+                        hp_max: 1.0,
+                    },
+                    attacks: s.volumes(set, &self.data.shell),
+                    hurts: vec![],
+                    history: HitHistory::default(),
+                }
+            })
+            .collect()
     }
 
     /// Line 15: the enemies think, act and move.
@@ -245,49 +359,75 @@ impl Fight {
     }
 
     /// Step 38 (`0x004797E0`, after both move lines): characters pushed
-    /// out of each other. *Placeholder*: the routine is not traced; the
-    /// Arisen and each goblin keep their roots `PUSH_OUT` apart
-    /// horizontally (the radii of their push-out volumes, `mIsObjAdj`:
-    /// the Arisen's capsule r35 in `collision\pl\m0000` group 2, the
-    /// goblin's spheres r35 in `e0100` group 0), each moved half the
-    /// overlap.
+    /// out of each other (`crate::pushout`): per pair of overlapping
+    /// push-out volumes the higher rank gives way by the overlap; each
+    /// character keeps its deepest push of the frame (0x0076D420) and moves
+    /// by it horizontally (0x0076D6B0, pass C). Pairs are taken Arisen
+    /// first, then goblins in creation order.
     pub fn push_out(&mut self, sim: &mut ddsim::Sim) {
-        for &seat in self.arisen.keys() {
-            for g in &mut self.goblins {
-                let Some(p) = sim.player_mut(seat) else { continue };
-                let (dx, dz) = (g.pos[0] - p.position[0], g.pos[2] - p.position[2]);
-                let d = (dx * dx + dz * dz).sqrt();
-                if d >= PUSH_OUT {
-                    continue;
+        let gdata = &self.data.goblin;
+        let mut bodies: Vec<crate::pushout::PushBody> = Vec::new();
+        let mut seats = Vec::new();
+        for (&seat, a) in &self.arisen {
+            let Some(p) = sim.player(seat) else { continue };
+            let abody = &self.kit(a.kit).body;
+            let (motion, frame) = arisen_motion(abody, p);
+            let pose = abody.pose(motion, frame, p.position, p.yaw);
+            let acts = abody.activations(motion, frame);
+            bodies.push(crate::pushout::PushBody {
+                rank: p.state.push_rank(),
+                kind: 2,
+                volumes: abody.push_volumes(&acts, &pose),
+            });
+            seats.push(seat);
+        }
+        for g in &self.goblins {
+            let pose = gdata.body.pose(g.motion, g.frame, g.pos, g.yaw);
+            let acts = gdata.body.activations(g.motion, g.frame);
+            bodies.push(crate::pushout::PushBody {
+                rank: g.push_rank(gdata.obj_size),
+                kind: 0,
+                volumes: gdata.body.push_volumes(&acts, &pose),
+            });
+        }
+        // the deepest push per character
+        let mut pushes: Vec<Option<[f32; 2]>> = vec![None; bodies.len()];
+        for i in 0..bodies.len() {
+            for j in i + 1..bodies.len() {
+                if let Some((who, d)) = crate::pushout::push(&bodies[i], &bodies[j]) {
+                    let k = if who == 0 { i } else { j };
+                    let deeper =
+                        pushes[k].is_none_or(|q| d[0] * d[0] + d[1] * d[1] > q[0] * q[0] + q[1] * q[1]);
+                    if deeper {
+                        pushes[k] = Some(d);
+                    }
                 }
-                let (nx, nz) = if d > 1e-3 {
-                    (dx / d, dz / d)
-                } else {
-                    (g.yaw.sin(), g.yaw.cos())
-                };
-                let half = (PUSH_OUT - d) * 0.5;
-                g.pos[0] += nx * half;
-                g.pos[2] += nz * half;
-                p.position[0] -= nx * half;
-                p.position[2] -= nz * half;
+            }
+        }
+        for (k, d) in pushes.into_iter().enumerate() {
+            let Some(d) = d else { continue };
+            if k < seats.len() {
+                if let Some(p) = sim.player_mut(seats[k]) {
+                    p.position[0] += d[0];
+                    p.position[2] += d[1];
+                }
+            } else {
+                let g = &mut self.goblins[k - seats.len()];
+                g.pos[0] += d[0];
+                g.pos[2] += d[1];
             }
         }
     }
 
     /// Pass C: everyone's pose and the volumes for the next frame's hits.
     pub fn volumes(&mut self, sim: &ddsim::Sim) {
-        let body = &self.data.arisen.body;
         for (&seat, a) in &mut self.arisen {
             let Some(p) = sim.player(seat) else { continue };
-            let (motion, frame) = match a.swing {
-                Some(s) => (s.motion, s.frame),
-                None => {
-                    let id = p.state.motion_id();
-                    // ddsim counts a state's frames on; the motion wraps
-                    let m = MotionId::new((id >> 8) as u8, id & 0xff);
-                    (m, body.wrap_frame(m, p.frame))
-                }
+            let body = match a.kit {
+                Kit::Fighter => &self.data.arisen.body,
+                Kit::Mage => &self.data.mage.body,
             };
+            let (motion, frame) = arisen_motion(body, p);
             self.positions.insert(u32::from(seat), p.position);
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
@@ -297,17 +437,72 @@ impl Fight {
             self.positions.insert(g.fighter.owner, g.pos);
             g.volumes(&self.data.goblin);
         }
+        for s in &self.shells {
+            self.positions.insert(s.owner, s.pos);
+        }
     }
 
     /// A hash input of the fight's state, for replays.
     pub fn digest(&self) -> String {
         let mut s = String::new();
         for (seat, a) in &self.arisen {
-            s += &format!("a{seat}:{:?}:{:?};", a.fighter.victim.hp(), a.swing);
+            s += &format!(
+                "a{seat}:{:?}:{}:{};",
+                a.fighter.victim.hp(),
+                a.attacks_seen,
+                a.volleys_seen
+            );
+        }
+        for sh in &self.shells {
+            s += &format!("s{}:{:?}:{};", sh.owner, sh.pos, sh.speed);
         }
         for g in &self.goblins {
             s += &g.digest();
         }
         s
     }
+}
+
+/// The motion an Arisen shows: its ddsim state's motion (bank 0
+/// `m0000_co`, or bank 7 the weapon's `_at` list for the attacks), the
+/// frame wrapped into it.
+fn arisen_motion(body: &crate::body::Body, p: &ddsim::Player) -> (MotionId, f32) {
+    let id = p.state.motion_id();
+    // ddsim counts a state's frames on; the motion wraps
+    let m = MotionId::new((id >> 8) as u8, id & 0xff);
+    (m, body.wrap_frame(m, p.frame))
+}
+
+/// The live goblin nearest to `from` (horizontally).
+fn nearest_goblin(goblins: &[Goblin], from: [f32; 3]) -> Option<usize> {
+    goblins
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| !g.dead())
+        .map(|(i, g)| (i, (g.pos[0] - from[0]).powi(2) + (g.pos[2] - from[2]).powi(2)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// Where a shell aims on a goblin: the middle of its hurt volumes
+/// (*placeholder* for the homing's target point), else 50 cm above its feet.
+fn aim_point(g: &Goblin) -> [f32; 3] {
+    let centers: Vec<[f32; 3]> = g
+        .fighter
+        .hurts
+        .iter()
+        .map(|h| match h.volume {
+            ddcombat::volumes::Volume::Sphere { c, .. } => c,
+            ddcombat::volumes::Volume::Capsule { p0, p1, .. } => [
+                (p0[0] + p1[0]) * 0.5,
+                (p0[1] + p1[1]) * 0.5,
+                (p0[2] + p1[2]) * 0.5,
+            ],
+        })
+        .collect();
+    if centers.is_empty() {
+        return [g.pos[0], g.pos[1] + 50.0, g.pos[2]];
+    }
+    let n = centers.len() as f32;
+    std::array::from_fn(|k| centers.iter().map(|c| c[k]).sum::<f32>() / n)
 }
