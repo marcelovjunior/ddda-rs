@@ -136,4 +136,4 @@ Codex lane: see `docs/CODEX.md`.
 | [net-replication](net-replication.md) | Goblins, HP, looks and join location over LAN | core | claude-10 | merged 2026-10-09 |
 | [character-lighting](character-lighting.md) | Characters lit by stage sun/SH/light buffer; canyon darkness | core | claude-3 | merged 2026-10-09 |
 | [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | claude-7 | assigned |
-| [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | assigned |
+| [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | merged 2026-10-09 |
