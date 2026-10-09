@@ -111,78 +111,83 @@ Tolerances are ours, set for M2, not the game's (`ddaccept::tol`):
 
 "Not modelled" means ddsim has no counterpart, so the row fails.
 
-Current output (task/m2-finish; history: 16 of 44 at recording, 40 after
-m2-fixes):
+Current output (task/m2-sweep; history: 16 of 44 at recording, 40 after
+m2-fixes and m2-finish):
 
 | route | quantity | original | ours | difference | tolerance | ok |
-| drop | path length | 402.831 | 276.541 | -126.291 | 30 cm | **no** |
-| drop | max path gap (frame 290) | 0.000 | 115.525 | +115.525 | 30 cm | **no** |
-| drop | final position gap | 0.000 | 115.525 | +115.525 | 30 cm | **no** |
-| drop | final height | -317.570 | -304.375 | +13.195 | 5 cm | **no** |
+| drop | path length | 402.831 | 290.838 | -111.993 | 30 cm | **no** |
+| drop | max path gap (frame 290) | 0.000 | 95.920 | +95.920 | 30 cm | **no** |
+| drop | final position gap | 0.000 | 95.920 | +95.920 | 30 cm | **no** |
+| drop | final height | -317.570 | -306.621 | +10.949 | 5 cm | **no** |
 | drop | fall start | 0.010 | 0.010 | +0.000 | 0.067 s | yes |
-| drop | fall time | 0.623 | 0.612 | -0.010 | 0.067 s | yes |
-| drop | drop height | 287.355 | 285.055 | -2.301 | 5 cm | yes |
+| drop | fall time | 0.623 | 0.623 | +0.000 | 0.067 s | yes |
+| drop | drop height | 287.355 | 287.574 | +0.219 | 5 cm | yes |
 | drop | stopping distance after release | 0.000 | 0.000 | +0.000 | 20 cm | yes |
-| run | path length | 1096.067 | 1093.221 | -2.846 | 30 cm | yes |
-| run | max path gap (frame 195) | 0.000 | 7.810 | +7.810 | 30 cm | yes |
-| run | final position gap | 0.000 | 7.810 | +7.810 | 30 cm | yes |
-| run | final height | -152.648 | -153.609 | -0.961 | 5 cm | yes |
-| run | speed, frames 69..196 | 341.559 | 340.916 | -0.643 | 10 cm/s | yes |
+| run | path length | 1096.067 | 1098.503 | +2.436 | 30 cm | yes |
+| run | max path gap (frame 191) | 0.000 | 7.831 | +7.831 | 30 cm | yes |
+| run | final position gap | 0.000 | 6.686 | +6.686 | 30 cm | yes |
+| run | final height | -152.648 | -153.582 | -0.934 | 5 cm | yes |
+| run | speed, frames 69..196 | 341.559 | 342.612 | +1.053 | 10 cm/s | yes |
 | run | stopping distance after release | 0.000 | 0.000 | +0.000 | 20 cm | yes |
 | run | stamina rate, frames 69..196 | 0.000 | 0.000 | +0.000 | 1 /s | yes |
-| running_jump | path length | 722.416 | 728.697 | +6.281 | 30 cm | yes |
-| running_jump | max path gap (frame 160) | 0.000 | 8.322 | +8.322 | 30 cm | yes |
-| running_jump | final position gap | 0.000 | 6.280 | +6.280 | 30 cm | yes |
-| running_jump | final height | -106.855 | -108.102 | -1.246 | 5 cm | yes |
-| running_jump | speed, frames 41..77 | 335.761 | 339.482 | +3.721 | 10 cm/s | yes |
+| running_jump | path length | 722.416 | 729.430 | +7.015 | 30 cm | yes |
+| running_jump | max path gap (frame 183) | 0.000 | 8.797 | +8.797 | 30 cm | yes |
+| running_jump | final position gap | 0.000 | 7.028 | +7.028 | 30 cm | yes |
+| running_jump | final height | -106.855 | -107.766 | -0.910 | 5 cm | yes |
+| running_jump | speed, frames 41..77 | 335.761 | 341.139 | +5.378 | 10 cm/s | yes |
 | running_jump | jump apex | 93.461 | 92.625 | -0.836 | 5 cm | yes |
 | running_jump | takeoff after press | 0.116 | 0.116 | +0.000 | 0.067 s | yes |
 | running_jump | airtime | 0.704 | 0.714 | +0.010 | 0.067 s | yes |
 | running_jump | landing after press | 0.820 | 0.830 | +0.010 | 0.067 s | yes |
-| running_jump | jump distance (press to landing) | 316.589 | 321.022 | +4.433 | 30 cm | yes |
+| running_jump | jump distance (press to landing) | 316.589 | 320.953 | +4.364 | 30 cm | yes |
 | running_jump | stamina rate, frames 41..77 | 0.000 | 0.000 | +0.000 | 1 /s | yes |
-| sprint_stop | path length | 3292.847 | 3281.972 | -10.875 | 30 cm | yes |
-| sprint_stop | max path gap (frame 354) | 0.000 | 11.664 | +11.664 | 30 cm | yes |
-| sprint_stop | final position gap | 0.000 | 11.664 | +11.664 | 30 cm | yes |
-| sprint_stop | final height | 640.543 | 636.059 | -4.484 | 5 cm | yes |
-| sprint_stop | speed, frames 80..307 | 746.769 | 747.120 | +0.352 | 10 cm/s | yes |
-| sprint_stop | stopping distance after release | 198.061 | 184.411 | -13.650 | 20 cm | yes |
-| sprint_stop | stamina hold after sprint | 0.618 | 0.605 | -0.013 | 0.067 s | yes |
+| sprint_stop | path length | 3292.847 | 3276.819 | -16.029 | 30 cm | yes |
+| sprint_stop | max path gap (frame 354) | 0.000 | 16.091 | +16.091 | 30 cm | yes |
+| sprint_stop | final position gap | 0.000 | 16.091 | +16.091 | 30 cm | yes |
+| sprint_stop | final height | 640.543 | 635.941 | -4.602 | 5 cm | yes |
+| sprint_stop | speed, frames 80..307 | 746.769 | 745.201 | -1.567 | 10 cm/s | yes |
+| sprint_stop | stopping distance after release | 198.061 | 187.786 | -10.275 | 20 cm | yes |
+| sprint_stop | stamina hold after sprint | 0.618 | 0.627 | +0.009 | 0.067 s | yes |
 | sprint_stop | stamina recovery rate (idle) | 48.750 | 48.803 | +0.053 | 1 /s | yes |
 | sprint_stop | stamina rate, frames 80..307 | -45.000 | -44.717 | +0.283 | 1 /s | yes |
 | standing_jump | path length | 0.019 | 0.000 | -0.019 | 30 cm | yes |
 | standing_jump | max path gap (frame 72) | 0.000 | 0.019 | +0.019 | 30 cm | yes |
 | standing_jump | final position gap | 0.000 | 0.019 | +0.019 | 30 cm | yes |
-| standing_jump | final height | 0.000 | -0.551 | -0.551 | 5 cm | yes |
+| standing_jump | final height | 0.000 | 0.000 | +0.000 | 5 cm | yes |
 | standing_jump | jump apex | 93.449 | 92.625 | -0.824 | 5 cm | yes |
 | standing_jump | takeoff after press | 0.120 | 0.108 | -0.012 | 0.067 s | yes |
-| standing_jump | airtime | 0.638 | 0.639 | +0.001 | 0.067 s | yes |
-| standing_jump | landing after press | 0.758 | 0.747 | -0.011 | 0.067 s | yes |
+| standing_jump | airtime | 0.638 | 0.650 | +0.012 | 0.067 s | yes |
+| standing_jump | landing after press | 0.758 | 0.758 | +0.000 | 0.067 s | yes |
 | standing_jump | jump distance (press to landing) | 0.019 | 0.000 | -0.019 | 30 cm | yes |
 
 **40 of 44 quantities pass.** Runs, sprints, the sprint stop, jumps,
-stamina and the drop's fall match. The four failing rows are the drop
-route's path after the landing.
+stamina, the drop's fall (now on the rock it slides off, within about 1 cm
+for 60 frames) and its landing match. The four failing rows are the drop
+route's path after frame 195.
 
 ## Remaining mismatch
 
-**The drop route's path after landing** (path length, gaps, final height).
-After landing the original slides along a rock wall from frame 85 and
-frees itself at frame 195; ddsim keeps sliding and ends 116 cm off.
-Traced reason: the original moves the character with `cScrAdjust`
-(uObjModel +0x19C0), whose radius 35 comes from `collision\pl\m0001`
-(rObjCollision group 109, `mIsScrAdj`); read live, its capsule runs from
-35 to 145 cm above the feet. The generic MtCollision solver sweeps and
-slides it (0x0079E200 -> 0x010B4960 -> 0x010B3000, GJK/MPR callbacks,
-several iterations). ddsim stands on a point and slides off walls found on
-that capsule from 60 cm up; the solver is not translated
-(docs/MOVEMENT.md).
+**The drop route's path after frame 195** (path length, gaps, final
+height). With the scenery sweep translated (docs/MOVEMENT.md, Scenery
+collision) the route matches until then: the fall slides off the strip,
+whose rock has material flag 0x2000 and so counts as wall; the landing is
+the standing one in place; the run hits the same rock edge and crawls
+along it at the original's 0.45 cm/frame. At frame 195 the original moves
+on along that edge at 2.2 cm/frame, ddsim keeps crawling and ends 96 cm
+off. The original's direction and slope are those of the crease of the
+edge with the ground (the wall rule's crease branch), its speed is not;
+what starts it is not found in the exe. Candidates not translated: the
+per-edge flags of the sbc triangles, the check filter, the per-frame
+(rather than per quarter frame) sweep. A live trace of `0x010AFC60` for
+frames 190-200 would settle it (asked of claude-4, board #1090).
 
 Fixed since the first run (docs/MOVEMENT.md has the sources): the unit
 time factor (stamina rows' motion speed, two frames late), slope
-projection, the sprint stop and motion curves, stamina with motion events,
-the fall condition on steep ground, the landing hold (event bit 0x10000),
-walk/run start frames.
+projection (now the sweep's floor slide), the sprint stop and motion
+curves (the stop starts a frame after the release), stamina with motion
+events, the fall and landing on the scenery sweep's grounded flag, the
+landing hold (event bit 0x10000), the landing variant (standing unless the
+stick is within 45 degrees of the facing), walk/run start frames.
 
 Not compared yet:
 - ledge grabs: still needs a clean ledge, see the oracle brief;
@@ -194,6 +199,6 @@ Not compared yet:
 
 ## Next
 
-- Translate the scenery sweep (`0x010B3000`) or record a route along a
-  wall to pin down its slide.
+- Trace the drop route's frame-195 change live (`0x010AFC60` per call), or
+  record a route along a wall; read the sbc edge flags in `mtsbc`.
 - Record a turn, a field run, a walk (find the walk key) and a ledge grab.

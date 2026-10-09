@@ -35,6 +35,7 @@ use std::collections::HashMap;
 
 pub mod ledge;
 pub mod stamina;
+pub mod sweep;
 
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
 pub use stamina::{StaminaRow, StaminaTables, WeightTables};
@@ -524,7 +525,25 @@ pub trait Ground {
     fn sphere(&self, _center: [f32; 3], _radius: f32) -> bool {
         false
     }
+
+    /// Adds the collision triangles that may lie within the box `lo`-`hi`
+    /// to `out`; false when the world has no triangle data. With triangles
+    /// the character moves by the capsule sweep (`sweep`); without, by the
+    /// older point-and-cylinder rules (`height`, `wall`).
+    fn triangles_in(&self, _lo: [f32; 3], _hi: [f32; 3], _out: &mut Vec<sweep::Face>) -> bool {
+        false
+    }
 }
+
+/// The ground check's drop per frame while on the ground: cScrAdjust's
+/// `mGroundCheckOffset` (adjust 0x7E, -20, written by `uPlayerBase::vf90`)
+/// times the unit delta, added to the move's height by `0x0079E200`. The
+/// sweep then meets the floor, which keeps the character on the ground.
+pub const GROUND_CHECK_DROP: f32 = 20.0;
+
+/// The fall check below the feet: `0x00B6E5C0` falls when the ground cast
+/// from 100 cm above (`0x0084FEA0`, 1000 cm down) is more than 30 cm below.
+pub const FALL_CHECK_UP: f32 = 100.0;
 
 /// The body's radius against scenery, cm: the player's scenery-adjust
 /// volume is a sphere of radius 35 on the model origin (`collision\pl\m0001`,
@@ -620,8 +639,25 @@ pub struct Sim {
     pub ledge_param: LedgeParam,
     pub stamina_tables: StaminaTables,
     pub weight_tables: WeightTables,
+    /// The capsule sweep's values (`sweep::SweepParam`).
+    pub sweep_param: sweep::SweepParam,
     /// Fraction of a frame not yet simulated.
     pending: f32,
+}
+
+/// The landing is the standing one (motion 15) unless the stick points
+/// within 45 degrees of the facing (moving landing, motion 12).
+// Translated from 0x00ACD2C0 (DDDA.exe 2017-12-13 Steam), cPlActLand::vf05:
+// uPlayer +0x32C0 (stick held) and the angle between +0x2578 and +0x32C4
+fn landing_stands(yaw: f32, steer: Option<f32>) -> bool {
+    steer.is_none_or(|s| {
+        let d = (yaw - s).rem_euclid(std::f32::consts::TAU);
+        d.min(std::f32::consts::TAU - d) > std::f32::consts::FRAC_PI_4
+    })
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 fn len2(v: [f32; 2]) -> f32 {
@@ -639,6 +675,7 @@ impl Sim {
             ledge_param: LEDGE_SHIPPED,
             stamina_tables: StaminaTables::shipped(),
             weight_tables: WeightTables::shipped(),
+            sweep_param: sweep::SweepParam::default(),
             pending: 0.0,
         }
     }
@@ -800,6 +837,14 @@ impl Sim {
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
                     self.ground_move(i, state, ground, dt);
+                    return;
+                }
+                if state == State::Sprint && !moving {
+                    // cPlActDash::vf06 (0x00ACAF80) sets the frame's sprint
+                    // velocity before it requests cPlActRunEnd (action 3)
+                    // for a released stick: the stop starts a frame later
+                    self.ground_move(i, state, ground, dt);
+                    Self::set_state(&mut self.players[i], State::SprintStop);
                     return;
                 }
                 let next = if !moving {
@@ -1226,9 +1271,15 @@ impl Sim {
         let mut target = p.position;
         if let Some(v) = speed {
             // velocity along the facing, in the player's own (scaled) time;
-            // the motion only animates
+            // the motion only animates. The capsule sweep's floor slide
+            // projects it onto slopes; without triangles `along_ground` does.
             let (s, c) = p.yaw.sin_cos();
-            let step = along_ground(ground, p.position, [v * dt * s, v * dt * c]);
+            let flat = [v * dt * s, v * dt * c];
+            let step = if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
+                flat
+            } else {
+                along_ground(ground, p.position, flat)
+            };
             target[0] += step[0];
             target[2] += step[1];
             p.speed = v;
@@ -1252,6 +1303,54 @@ impl Sim {
         } else {
             p.speed = 0.0;
             p.frame += dt;
+        }
+        if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
+            // the capsule sweep (0x0079E200): the step plus the ground check's
+            // drop; meeting a floor keeps the character on the ground
+            let motion = [
+                target[0] - p.position[0],
+                target[1] - p.position[1] - GROUND_CHECK_DROP * dt,
+                target[2] - p.position[2],
+            ];
+            let r = sweep::sweep(
+                &self.sweep_param,
+                &sweep::PLAYER_CAPSULE,
+                p.position,
+                motion,
+                true,
+                &|lo, hi, out| {
+                    ground.triangles_in(lo, hi, out);
+                },
+            );
+            if r.grounded() || matches!(state, State::JumpStart { .. }) {
+                p.position = r.position;
+                return;
+            }
+            // not on the ground: 0x00B6E5C0 falls if the ground is more than
+            // STEP_DOWN below, else the next drops bring the feet down
+            let below = ground
+                .height(r.position[0], r.position[2], r.position[1] + FALL_CHECK_UP)
+                .map_or(f32::MAX, |h| r.position[1] - h);
+            if below <= STEP_DOWN {
+                p.position = r.position;
+                return;
+            }
+            let mut v = [
+                (r.position[0] - p.position[0]) / dt,
+                0.0,
+                (r.position[2] - p.position[2]) / dt,
+            ];
+            let hv = len2([v[0], v[2]]);
+            if hv > fall_max {
+                v[0] *= fall_max / hv;
+                v[2] *= fall_max / hv;
+            }
+            p.velocity = v;
+            p.position = r.position;
+            p.jump = jn;
+            p.jumps_left = u8::from(p.double_jump);
+            Self::set_state(p, State::Fall);
+            return;
         }
         let target = wall_slide(ground, p.position, target);
         let under = ground.height(target[0], target[2], p.position[1] + STEP_UP);
@@ -1317,6 +1416,36 @@ impl Sim {
             next[2] += jp.add_move_xz * dt * y.cos();
         }
         p.frame += dt;
+        if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
+            // the capsule sweep in the air (no ground check): the velocity
+            // stays, the collision only moves the character
+            let motion = sub3(next, p.position);
+            let r = sweep::sweep(
+                &self.sweep_param,
+                &sweep::PLAYER_CAPSULE,
+                p.position,
+                motion,
+                false,
+                &|lo, hi, out| {
+                    ground.triangles_in(lo, hi, out);
+                },
+            );
+            if r.grounded() && p.velocity[1] <= 0.0 {
+                let standing =
+                    matches!(p.state, State::Air { standing: true, .. }) || landing_stands(p.yaw, steer);
+                let land = if matches!(p.state, State::Air { sprint: true, .. }) {
+                    State::SprintJumpLand
+                } else {
+                    State::Land { standing }
+                };
+                p.position = r.position;
+                p.velocity = [0.0; 3];
+                Self::set_state(p, land);
+            } else {
+                p.position = r.position;
+            }
+            return;
+        }
         // a wall ahead: nothing to stand on within a step of the body, but
         // ground above it
         let wall = (ground.height(next[0], next[2], p.position[1] + STEP_UP).is_none()
@@ -1345,7 +1474,8 @@ impl Sim {
                 p.position = [next[0], g, next[2]];
             }
             Some(g) if next[1] <= g && p.velocity[1] <= 0.0 => {
-                let standing = matches!(p.state, State::Air { standing: true, .. }) || steer.is_none();
+                let standing =
+                    matches!(p.state, State::Air { standing: true, .. }) || landing_stands(p.yaw, steer);
                 // cPlActDashJump::vf06 (0x00ACDED0) lands into action 0x0C
                 let land = if matches!(p.state, State::Air { sprint: true, .. }) {
                     State::SprintJumpLand
@@ -2073,27 +2203,38 @@ mod tests {
 
     #[test]
     fn releasing_a_sprint_slides_to_a_stop() {
-        let mut s = sim();
-        s.motions
-            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let sprinter = || {
+            let mut s = sim();
+            s.motions
+                .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+            s
+        };
+        let (mut s, mut held) = (sprinter(), sprinter());
         let sprint = Input {
             sprint: true,
             ..fwd()
         };
         let mut inputs = HashMap::from([(0, sprint)]);
         s.step(1.0, &inputs, &Flat(0.0));
+        held.step(1.0, &inputs, &Flat(0.0));
         assert_eq!(s.player(0).unwrap().state, State::Sprint);
         let z0 = s.player(0).unwrap().position[2];
+        // the frame the stick is let go still sprints (cPlActDash::vf06
+        // requests the stop after setting the velocity), as a held one does
+        held.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
         inputs.clear();
         s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
         assert_eq!(s.player(0).unwrap().state, State::SprintStop);
+        let z1 = s.player(0).unwrap().position[2];
+        assert!((z1 - held.player(0).unwrap().position[2]).abs() < 1e-4);
+        assert!(z1 > z0);
         s.step(2.0, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert_eq!(p.state, State::Wait);
         // 22.5 x (5 x 0.75 + 20 x 0.25) = 196.9 cm (recorded: 198.1), plus
         // 2.8 cm from sampling the curve at the start of each quarter frame,
         // plus the stop's first frames still in the sprint's 1.15x time
-        let d = p.position[2] - z0;
+        let d = p.position[2] - z1;
         assert!((d - 196.875 - 2.8125).abs() < 1.0, "{d}");
     }
 
@@ -2337,6 +2478,16 @@ mod tests {
         assert_eq!(p.state, State::Run { relaxed: false });
         // (0.25 + 18.5) x 21 / 37 = 10.64 -> frame 10, plus this quarter frame
         assert!((p.frame - 10.25).abs() < 1e-4, "{}", p.frame);
+    }
+
+    #[test]
+    fn landings_stand_unless_the_stick_points_ahead() {
+        assert!(landing_stands(0.0, None));
+        assert!(!landing_stands(0.0, Some(0.5)));
+        assert!(landing_stands(0.0, Some(1.0)));
+        // across the wrap
+        assert!(!landing_stands(3.0, Some(-3.0)));
+        assert!(landing_stands(1.05, Some(-0.83)));
     }
 
     #[test]

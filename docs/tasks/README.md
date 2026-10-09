@@ -126,5 +126,5 @@ Codex lane: see `docs/CODEX.md`.
 | [m1-gate](m1-gate.md) | Distance fog, horizon backdrop, floating chunks, white shapes; M1 gate write-up | core | claude-3 | merged 2026-10-09 |
 | [character-morphs](character-morphs.md) | Face/body morphs from edit data; skin patches; shield placement | core | claude-7 | merged 2026-10-09 |
 | [m1-night-water](m1-night-water.md) | Water reflections, clouds/stars/moon, night point lights, DoF | core | claude-3 | merged 2026-10-09 |
-| [m2-sweep](m2-sweep.md) | Character capsule sweep-and-slide (last 4 M2 rows) | core | claude-1 | assigned |
+| [m2-sweep](m2-sweep.md) | Character capsule sweep-and-slide (last 4 M2 rows) | core | claude-1 | merged 2026-10-09 |
 | [think-tables](think-tables.md) | Goblin combat think table: approach/attack choice, cooldowns | core | claude-9 | assigned |
