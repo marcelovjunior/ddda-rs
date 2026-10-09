@@ -128,3 +128,41 @@ pub fn tables(vfs: &ddvfs::Vfs, exe: &std::path::Path) -> Result<ddprogress::Tab
     let image = file.image().map_err(|e| e.0)?;
     ddprogress::Tables::load(vfs, &image)
 }
+
+/// The stage collision of a single-model stage (Cassardis and the other
+/// non-grid stages: `scr\stSSS\collision\stSSSh_mrg00`, the half characters
+/// stand on, as `ddworld::Terrain::load_collision` reads it per cell on
+/// st100). The material flag words are not carried (`Terrain::add`).
+pub fn stage_collision(vfs: &ddvfs::Vfs, stage: u32) -> Result<ddworld::Terrain, String> {
+    let path = format!(r"scr\st{stage}\collision\st{stage}h_mrg00");
+    let b = vfs.read(&path, mtarc::type_hash("rCollision"))?;
+    let c = mtsbc::parse(&b).map_err(|e| format!("{path}: {e:?}"))?;
+    let mut t = ddworld::Terrain::empty();
+    for (p, _) in c.world_triangles() {
+        t.add(p);
+    }
+    t.cells = 1;
+    Ok(t)
+}
+
+/// A stage's start positions (`scr\stSSS\etc\stSSS`, rStartPos), which
+/// `PlaceParty { start_pos }` and `JumpArea { pos }` name.
+pub fn start_positions(vfs: &ddvfs::Vfs, stage: u32) -> Result<ddmap::StartPositions, String> {
+    let path = format!(r"scr\st{stage}\etc\st{stage}");
+    let b = vfs.read(&path, mtarc::type_hash("rStartPos"))?;
+    ddmap::StartPositions::parse(&b).map_err(|e| format!("{path}: {e}"))
+}
+
+/// NPC ids whose daily controller exists for `stage` at SceNo `sce`
+/// (`ddnpc::schedule_path` with mUse24Schedule 1, then the install). The
+/// layout flags that gate each placement group are not applied
+/// (*placeholder*: every NPC with a controller is present).
+pub fn stage_npcs(vfs: &ddvfs::Vfs, stage: u32, sce: u32) -> Vec<u32> {
+    let fsm = mtarc::type_hash("rAIFSM");
+    (0..900)
+        .filter(|&id| {
+            ddnpc::schedule_path(stage as i32, sce as i32, id as i32, 1)
+                .is_some_and(|p| vfs.locate(&p.to_ascii_lowercase(), fsm).is_some() || vfs.locate(&p, fsm).is_some())
+        })
+        .collect()
+}

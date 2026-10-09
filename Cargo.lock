@@ -2358,6 +2358,8 @@ dependencies = [
  "ddexe",
  "ddid",
  "dditem",
+ "ddmap",
+ "ddnpc",
  "ddnpcrt",
  "ddpawn",
  "ddprogress",
@@ -2367,9 +2369,11 @@ dependencies = [
  "ddskill",
  "ddstory",
  "ddvfs",
+ "ddworld",
  "mtarc",
  "mtfsm",
  "mtlmt",
+ "mtsbc",
  "mtxfs",
 ]
 
