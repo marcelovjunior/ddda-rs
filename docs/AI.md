@@ -558,5 +558,19 @@ Sourced action primitives cover the wolf bite sequence 0x100 -> 0x101 ->
 (`0x00937e10`); these have regression tests. A synthetic graph probe now
 reaches wolf Howling/AttackRun/TraceDash and harpy GroundToHover. This is
 not a fight acceptance: the harpy also reaches generated-point command
-0x5f, and host sensing, remaining actions, death and presentation integration
-are still in progress.
+0x5f. This generated-point command is now translated from `0x008ba2a0`:
+the row offset rotates by owner yaw plus selected-target bearing, and is
+added to the owner's position. Fixed target slots and the optional +0x58
+host notification are supported; automatic slot 23 allocation remains an
+explicit error until the allocation counter's reset is traced. Regression
+tests cover coordinates, metadata, selection history and missing owners/targets.
+
+Harpy AirAttack's phase-zero approach (`0x009453c0`, `0x00945490`) and
+target-angle interpolation (`0x0093ca10`) now have isolated runtime helpers.
+The approach steers only before frame 30 and beyond 400 cm, switches to
+strike motion 0x102 at frame 8 below 400 cm, and exits after 60 frames when
+moving farther away than its initial range, after 120 frames, or on ground
+contact. Tests pin the strict boundaries, wrapped turns and damping. Ground
+ray results remain supplied by the host. Full host sensing, remaining
+actions, death and presentation integration are still in progress; this is
+not a completed enemy fight or an original-game comparison.

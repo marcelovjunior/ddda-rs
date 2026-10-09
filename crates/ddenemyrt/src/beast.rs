@@ -109,9 +109,158 @@ pub fn flight_height_step(current_y: f32, goal_y: f32, speed: f32, frames: f32) 
     current_y + if delta >= 0.0 { step } else { -step }
 }
 
+/// Harpy target-angle interpolation. The cap is per call, whereas the
+/// proportional term scales with the simulation's 30-Hz frame step.
+// Translated from 0x0093ca10 (DDDA.exe 2017-12-13 Steam).
+pub fn harpy_turn(yaw: f32, goal: f32, cap: f32, divisor: f32, frames: f32) -> f32 {
+    let delta = goal - yaw;
+    let mut wrapped = delta - (delta * 0.159_154_94) as i32 as f32 * 6.283_185_5;
+    if delta < 0.0 {
+        wrapped += 6.283_185_5;
+    }
+    if wrapped >= 3.141_592_7 {
+        wrapped -= 6.283_185_5;
+    }
+    let step = (wrapped / divisor * frames).clamp(-cap, cap);
+    if wrapped.abs() - step.abs() <= 0.0 {
+        goal
+    } else {
+        yaw + step
+    }
+}
+
+/// AirAttack's approach state. The caller supplies the unit's target and
+/// ground-ray result, and advances the selected motion separately.
+#[derive(Debug, Clone, Copy)]
+pub struct HarpyAirAttack {
+    pub elapsed: f32,
+    pub initial_distance: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AirAttackStep {
+    pub yaw: f32,
+    pub position: [f32; 3],
+    /// New motion and starting frame; absent means keep the current one.
+    pub motion: Option<(MotionId, f32)>,
+    pub done: bool,
+}
+
+impl HarpyAirAttack {
+    // Translated from cEm0600ActAirAttack::vf05 0x009453c0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn new(position: [f32; 3], target: [f32; 3]) -> Self {
+        Self {
+            elapsed: 0.0,
+            initial_distance: distance(position, target),
+        }
+    }
+
+    pub fn initial_motion() -> MotionId {
+        MotionId::new(1, 1)
+    }
+
+    // Translated from cEm0600ActAirAttack::vf06 0x00945490, phase byte
+    // +0x70 == 0 (DDDA.exe 2017-12-13 Steam). Other phase values perform
+    // no approach update; the owning action dispatcher guards this call.
+    pub fn approach(
+        &mut self,
+        position: [f32; 3],
+        yaw: f32,
+        target: [f32; 3],
+        height_goal: f32,
+        motion_ended: bool,
+        grounded: bool,
+        frames: f32,
+    ) -> AirAttackStep {
+        let range = distance(position, target);
+        self.elapsed += frames;
+        let mut heading = yaw;
+        if self.elapsed < 30.0 && range > 400.0 {
+            heading = harpy_turn(
+                yaw,
+                (target[0] - position[0]).atan2(target[2] - position[2]),
+                std::f32::consts::FRAC_PI_4,
+                4.0,
+                frames,
+            );
+        }
+        // The original constructs a point 300 cm ahead, then applies
+        // speed-30 distance damping toward that point.
+        let (sin, cos) = heading.sin_cos();
+        let dx = (position[0] + sin * 300.0) - position[0];
+        let dz = (position[2] + cos * 300.0) - position[2];
+        let ahead = (dx * dx + dz * dz).sqrt();
+        let rate = if ahead >= f32::EPSILON {
+            (1.0 / ahead) * ((-1.0 / ahead) * 900.0 * frames + 30.0).max(0.0)
+        } else {
+            0.0
+        };
+        AirAttackStep {
+            yaw: heading,
+            position: [
+                position[0] + rate * dx * frames,
+                flight_height_step(position[1], height_goal, 8.0, frames),
+                position[2] + dz * rate * frames,
+            ],
+            motion: if range < 400.0 {
+                Some((MotionId::new(1, 2), 8.0))
+            } else if motion_ended {
+                Some((MotionId::new(0, 0x2c), 0.0))
+            } else {
+                None
+            },
+            done: (self.elapsed > 60.0 && range > self.initial_distance) || self.elapsed > 120.0 || grounded,
+        }
+    }
+}
+
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harpy_dive_boundaries_and_turn_window() {
+        let target = [0.0, 0.0, 400.0];
+        let mut dive = HarpyAirAttack::new([0.0; 3], target);
+        let out = dive.approach([0.0; 3], 0.0, target, 64.0, false, false, 1.0);
+        for (actual, expected) in out.position.into_iter().zip([0.0, 7.0, 27.0]) {
+            assert!((actual - expected).abs() < 0.00001);
+        }
+        assert_eq!(out.motion, None, "400 cm is outside the strike threshold");
+        let out = dive.approach([0.0, 0.0, 0.01], 0.0, target, 0.0, false, false, 1.0);
+        assert_eq!(out.motion, Some((MotionId::new(1, 2), 8.0)));
+        dive.elapsed = 59.0;
+        assert!(
+            !dive
+                .approach([0.0; 3], 0.0, [0.0, 0.0, 401.0], 0.0, false, false, 1.0)
+                .done
+        );
+        assert!(
+            dive.approach([0.0; 3], 0.0, [0.0, 0.0, 401.0], 0.0, false, false, 1.0)
+                .done
+        );
+        dive.elapsed = 29.0;
+        assert_eq!(
+            dive.approach([0.0; 3], 0.0, [500.0, 0.0, 0.0], 0.0, false, false, 1.0)
+                .yaw,
+            0.0
+        );
+        assert!(dive.approach([0.0; 3], 0.0, target, 0.0, false, true, 1.0).done);
+    }
+
+    #[test]
+    fn harpy_turn_wraps_and_caps_without_overshoot() {
+        let pi = std::f32::consts::PI;
+        let yaw = harpy_turn(pi - 0.1, -pi + 0.1, 1.0, 4.0, 1.0);
+        assert!((yaw - (pi - 0.05)).abs() < 0.00001);
+        assert_eq!(harpy_turn(0.0, 2.0, 0.1, 1.0, 0.5), 0.1);
+        assert_eq!(harpy_turn(0.0, 0.01, 1.0, 1.0, 2.0), 0.01);
+    }
 
     #[test]
     fn bite_waits_for_each_motion_end_and_limits_tracking() {
