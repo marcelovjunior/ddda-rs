@@ -110,9 +110,15 @@ negative: bits 0x400, 0x200, 0x40, 0x20, 0x10 and 0x08 select levels
 the installed `rItemLevelParam` row by item kind and level-up type. Reuse
 `dditem::lvparam` for those resources; raw `Item::attack()` alone does not
 represent an enhanced saved weapon. The decompiler omits that helper's
-floating-point result operations, so disassembly is required before
-translating its add/multiply semantics. No enhancement formula was ported
-by this survey.
+floating-point result operations. Disassembly at `0x0045b6b5..0x0045b747`
+resolves them: XMM1 retains the original base, while each matching entry
+replaces XMM0 with `base * rate` (`0x0045b720`) or `base + rate`
+(`0x0045b72b`, direct flag). The last matching entry across levels 1 through
+the requested level wins; these changes do not compound. The getter
+`0x00cbf910` writes only XMM0, preserving XMM1. No match, missing row or
+unsupported item kind keeps the base. A level above 6 returns the original
+base at `0x0045b744`, and invalid/unavailable items return zero earlier.
+No enhancement formula was ported by this survey.
 
 Existing combat types already separate saved base attack/defence from
 weapon attack and equipment defence (`PlayerAttacker`, `PlayerDefender`).
