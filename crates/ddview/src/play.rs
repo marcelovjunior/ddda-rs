@@ -908,6 +908,40 @@ pub fn saved_spot(xml: &str) -> Option<SavedSpot> {
 mod tests {
     use super::*;
 
+    /// A wall at z = -100 facing +z.
+    struct Wall;
+    impl ddsim::Ground for Wall {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
+            Some(0.0)
+        }
+        fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<ddsim::RayHit> {
+            if to[2] >= -100.0 || from[2] < -100.0 {
+                return None;
+            }
+            let t = (from[2] + 100.0) / (from[2] - to[2]);
+            let p = std::array::from_fn(|k| from[k] + (to[k] - from[k]) * t);
+            Some(ddsim::RayHit { point: p, normal: [0.0, 0.0, 1.0] })
+        }
+    }
+
+    #[test]
+    fn the_follow_camera_keeps_its_distance_and_stops_at_walls() {
+        struct Open;
+        impl ddsim::Ground for Open {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
+                Some(0.0)
+            }
+        }
+        // yaw 0 looks along +z: the eye is behind, at -z
+        let (eye, target) = follow_camera(&Open, Vec3::ZERO, 0.0, 0.0);
+        assert_eq!(target, Vec3::new(0.0, CAMERA_TARGET_HEIGHT, 0.0));
+        assert!((eye - target).length() - CAMERA_DISTANCE < 1e-3);
+        assert!(eye.z < 0.0);
+        // a wall 100 cm behind: the eye stops 5 cm before it
+        let (eye, _) = follow_camera(&Wall, Vec3::ZERO, 0.0, 0.0);
+        assert!((eye.z + 100.0 - CAMERA_MARGIN).abs() < 1e-3, "{eye:?}");
+    }
+
     #[test]
     fn saved_spot_reads_the_manual_slot() {
         let xml = r#"<class name="mPlayerDataManual" type="sSave::playerData">

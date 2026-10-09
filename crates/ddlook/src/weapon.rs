@@ -148,4 +148,15 @@ mod tests {
         assert_eq!(attach_row(0x0400_0001, 1), 2);
         assert_eq!(attach_row(0x0a00_0000, 0), 7);
     }
+
+    #[test]
+    fn drawn_joints() {
+        // sword and shield: the sword to 0x96, the shield stays on its row
+        let w = weapons(0x0100_0000, 0x0800_0002);
+        assert_eq!(w[0].hand, Some(0x96));
+        assert_eq!(w[1].hand, None);
+        // staff and bow: the secondary to 0x99
+        let w = weapons(0x0500_0014, 0x0a00_0000);
+        assert_eq!((w[0].hand, w[1].hand), (Some(0x96), Some(0x99)));
+    }
 }
