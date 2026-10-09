@@ -29,7 +29,9 @@ fn opening_dragon_definitions_are_loaded_from_the_install() {
             .count(),
         3
     );
-    assert!(data.resources.iter().all(|r| !r.path.is_empty() && r.flags == 0));
+    assert!(data.resources.iter().all(|r| !r.path.is_empty()));
+    assert!(data.resources[..49].iter().all(|r| r.flags == 3));
+    assert!(data.resources[49..].iter().all(|r| r.flags == 2));
     assert_eq!(data.resources[4].class, "rModel");
     assert_eq!(data.resources[5].class, "rMotionList");
     assert_eq!(data.resources[44].class, "rRegionStatus");

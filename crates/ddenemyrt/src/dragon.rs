@@ -27,7 +27,19 @@ pub const RESOURCE_COUNT: u32 = 57;
 pub struct DragonResource {
     pub path: String,
     pub class: String,
+    /// Flags after the executable's static initializer has run.
     pub flags: u32,
+}
+
+// Translated from 0x01363d50..0x0136412c (DDDA.exe 2017-12-13 Steam).
+// Startup enables binding for the first 49 descriptors; the remaining
+// effect/sound resources are preload-only. Disk flag words are zero.
+fn initialized_resource_flags(index: u32, disk_flags: u32) -> u32 {
+    if index < 49 {
+        (disk_flags & !4) | 3
+    } else {
+        (disk_flags & !5) | 2
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +83,7 @@ impl DragonAiData {
                     .get(&dti)
                     .cloned()
                     .ok_or_else(|| Error::Data(format!("dragon resource {index}: unknown DTI {dti:#x}")))?,
-                flags: exe.u32(address + 8).map_err(|e| Error::Data(e.0))?,
+                flags: initialized_resource_flags(index, exe.u32(address + 8).map_err(|e| Error::Data(e.0))?),
             });
         }
         Ok(Self {
@@ -79,5 +91,18 @@ impl DragonAiData {
             action_classes,
             resources,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initialized_resource_flags;
+
+    #[test]
+    fn static_initialization_preserves_unrelated_flag_bits() {
+        assert_eq!(initialized_resource_flags(48, 0), 3);
+        assert_eq!(initialized_resource_flags(49, 0), 2);
+        assert_eq!(initialized_resource_flags(48, 0xffff_ffff), 0xffff_fffb);
+        assert_eq!(initialized_resource_flags(49, 0xffff_ffff), 0xffff_fffa);
     }
 }

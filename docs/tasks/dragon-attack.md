@@ -75,6 +75,13 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   five motion lists and three collision resources. Bank binding and body
   construction are separate work; descriptor order is not asserted to be
   a bank index.
+- Follow-up source trace found that flags in the file are uninitialized:
+  static initializer 0x01363d50..0x0136412c enables binding for the first
+  49 descriptors and leaves the final eight preload-only. The reader now
+  translates that initialization rather than exposing misleading zero
+  flags. Both installed-resource and boundary/high-bit preservation tests
+  pass. The binder 0x008892b0 selects flag bit 0 and passes per-class
+  indices to `uObjModel::vf79` 0x00889510.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
