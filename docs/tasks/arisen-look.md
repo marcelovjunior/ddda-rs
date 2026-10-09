@@ -115,3 +115,25 @@ that keeps the initial factor instead of dividing by a clamped length.
 Two regressions and strict ddlook clippy pass. The release viewer build
 passed after the uncontended route benchmark (two existing warnings). No original
 same-record appearance comparison is claimed.
+
+### Fresh-model measurement evaluation trace
+
+The independent `0x00cbbf00` measurement path still needs its own fresh
+model evaluation before feeding body weight/height. Further source review
+establishes that `uModel::vf23` (`0x00ffddb0`) initializes joint translation
+from the bone record's location (+0x0c), converts the supplied rest matrix
+basis directly to a quaternion, and initializes joint scale from the
+constant vector at `0x01629510`. It does not perform the generic matrix
+scale decomposition used by `mtlmt::pose::Skeleton::from_bones`.
+`0x01058a70` blends only existing active motion channels; the fresh model
+has none. The joint pass `0x01054700` chooses an evaluator from model flags
+and invokes each joint constraint after composing that joint. Its ordinary
+evaluator `0x01051b60` composes quaternion/scale/translation and multiplies
+by the already-evaluated parent, or the model transform for a root.
+
+This is source evidence, not a new measurement implementation. A fresh
+measurement adapter must verify the constructor's evaluator flags and
+scale constant, reproduce that initialization and ordered constraint
+pass, then compare unedited/edited joint measurements. Neither the current
+animated renderer pose nor blindly retaining raw local matrices is a
+validated substitute. No animation-wide behavior is changed here.
