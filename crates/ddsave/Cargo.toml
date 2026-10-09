@@ -1,0 +1,15 @@
+[package]
+name = "ddsave"
+version = "0.1.0"
+description = "Read-only reader for Dragon's Dogma: Dark Arisen PC saves (DDDA.sav): header, zlib, property XML, pawn records"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+miniz_oxide.workspace = true
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+mtxfs = { path = "../mtxfs" }

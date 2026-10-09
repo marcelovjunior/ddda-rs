@@ -1,0 +1,15 @@
+[package]
+name = "ddpawn"
+version = "0.1.0"
+description = "Dragon's Dogma: Dark Arisen offline pawn data (rRomNoraPawn, rRomPawnInfo, rRomPawnName) and the offline Rift pool rules"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddsave = { path = "../ddsave" }
+mtxfs = { path = "../mtxfs" }
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }

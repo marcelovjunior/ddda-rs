@@ -73,7 +73,7 @@ Codex lane: see `docs/CODEX.md`.
 | [text](text.md) | Message/text resources reader (dialogue, item names) | reader | codex-2 | merged 2026-10-09 |
 | [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex-1 | merged 2026-10-09 |
 | [oracle](oracle.md) | In-process probe: run unfocused, capture frames, input, calls, teleport | core | claude-4 | assigned |
-| [pawns-rift](pawns-rift.md) | Riftstones, the Rift, recruiting pawns, pawn data | research | claude-5 | assigned |
+| [pawns-rift](pawns-rift.md) | Riftstones, the Rift, recruiting pawns, pawn data | research | claude-5 | merged 2026-10-09 |
 | [shops-economy](shops-economy.md) | Shops, prices, forging, storage | research | claude-6 | assigned |
 | [events-quests](events-quests.md) | Cutscenes, events, quests, story flags | research | claude-7 | assigned |
 | [weather-data](weather-data.md) | Weather, fog and sky readers + clock interpolation | reader + exe | codex-1 | merged 2026-10-09 |
