@@ -617,7 +617,15 @@ selected-action tests, not think-driven fights. The local cEm0200Die action requ
 path is unresolved and remains unsupported rather than inventing a clip.
 This is not the normal wolf death dispatch: uEmWolfBase::vf72 (0x008f6230)
 selects common-bank action 0x03000042 for the ordinary grounded case.
-Its registration and directional variants are being traced separately.
+Bank 3 is registered at 0x01864b98 by 0x00aa8830; record 0x42 names
+cEmActActingDie and its primary motion field +0x14 resolves to 0x239.
+The record copier 0x004c9e50 moves that field to action +4, which
+0x008a66e0 starts if present. The selected-action runner now reads this
+record from the installed executable and plays the installed wolf clip.
+Its valid-owner update (0x008a6930) never sets the action done byte, even
+after animation end. An installed regression checks motion selection,
+deterministic end pose, dead attack suppression and that persistent state.
+Corpse flags/timers and forced selection remain unconnected.
 Harpy corpse removal, status-time integration, target sensing and viewer
 dispatch also remain host work.
 

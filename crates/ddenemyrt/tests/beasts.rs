@@ -120,6 +120,37 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
     }
 }
 
+#[test]
+fn wolf_common_ground_death_uses_installed_record_and_never_completes() {
+    use ddenemyrt::beast::Beast;
+    struct Flat;
+    impl ddsim::Ground for Flat {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+    }
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    if !native.is_dir() { eprintln!("SKIP: no install"); return; }
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let exe = ddexe::ExeFile::next_to(native).unwrap();
+    let data = BeastData::load(&vfs, &exe.image().unwrap(), Family::Wolf).unwrap();
+    assert_eq!(data.common_death_motion, MotionId::new(2, 0x39));
+    let run = || {
+        let mut actor = Beast::new(&data, 310, [0.0; 3], 0.0);
+        if let ddenemyrt::combat::Victim::Enemy { regions, .. } = &mut actor.fighter.victim {
+            regions[0].hp = 0.0;
+        }
+        actor.start_action(&data, 0x0300_0042).unwrap();
+        for _ in 0..data.body.frames(actor.motion) + 10 {
+            actor.step_action(&data, None, &Flat, 1.0);
+            assert!(!actor.done); // 0x008a6930 never completes a valid owner.
+            assert!(actor.fighter.attacks.is_empty());
+        }
+        assert!(actor.motion_ended);
+        assert_eq!(actor.motion, MotionId::new(2, 0x39));
+        (actor.pos, actor.frame)
+    };
+    assert_eq!(run(), run());
+}
+
 /// This is a shared hit/targeting-pipeline check with stationary enemies,
 /// not acceptance of the still-unconnected family think controllers.
 #[test]

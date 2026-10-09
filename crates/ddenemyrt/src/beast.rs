@@ -16,6 +16,8 @@ pub struct BeastData {
     pub regions: Vec<RegionPool>,
     pub obj_size: u32,
     pub wolf: Option<WolfParams>,
+    /// Common bank 3 record 0x42, loaded from the installed executable.
+    pub common_death_motion: MotionId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +60,16 @@ impl BeastData {
         } else {
             None
         };
+        // uEnemy::vf05 0x00aa8830 registers bank 3 at 0x01864b98.
+        // 0x004c9e50 copies record +0x14 to the action's primary motion;
+        // cEmActActingDie::vf05 0x008a66e0 starts it when present.
+        let death_record = 0x0186_4b98 + 0x42 * 0x44;
+        let dti = exe.u32(death_record)?;
+        if exe.class_names().get(&dti).map(String::as_str) != Some("cEmActActingDie") {
+            return Err("unexpected common grounded death action".into());
+        }
+        let death_motion = exe.u32(death_record + 0x14)?;
+        let common_death_motion = MotionId::new(((death_motion >> 8) & 15) as u8, (death_motion & 255) as u16);
         Ok(Self {
             family,
             // Standard em0200/em0600 actor scale is not yet compared live.
@@ -74,6 +86,7 @@ impl BeastData {
             regions: stats.regions,
             obj_size: stats.obj_size,
             wolf,
+            common_death_motion,
         })
     }
 }
@@ -109,6 +122,7 @@ enum ActionPhase {
     Howl,
     Takeoff(HarpyTakeoff),
     GroundDeath,
+    CommonDeath,
 }
 
 impl Beast {
@@ -145,13 +159,16 @@ impl Beast {
         }
     }
 
-    /// Only standard em0200/em0600 forms are handled here. Wolf death
-    /// requests missing motion0x2ff (0x00908660); its no-motion/corpse path
-    /// is unresolved. Alternate harpy forms and flying death are unsupported.
+    /// Only standard em0200/em0600 forms are handled here. The normal wolf
+    /// grounded death uses common bank 3 action 0x42 (0x008f6230). The local
+    /// cEm0200Die, alternate forms and flying deaths remain unsupported.
     pub fn start_action(&mut self, data: &BeastData, id: usize) -> Result<(), String> {
         if self.family != data.family { return Err("mismatched beast family data".into()); }
-        let action = data.actions.get(id).ok_or("family action outside table")?;
-        let (phase, motion) = match (data.family, action.class.as_str(), action.variant) {
+        let (phase, motion) = if data.family == Family::Wolf && id == 0x0300_0042 {
+            (ActionPhase::CommonDeath, data.common_death_motion)
+        } else {
+          let action = data.actions.get(id).ok_or("family action outside table")?;
+          match (data.family, action.class.as_str(), action.variant) {
             (Family::Wolf, "cEm0200Bite", _) => {
                 (ActionPhase::Bite(WolfBite::Windup), WolfBite::Windup.motion())
             }
@@ -170,6 +187,7 @@ impl Beast {
                     data.family, action.class, action.variant
                 ))
             }
+          }
         };
         if data.body.motion(motion).is_none() {
             return Err(format!("missing family motion {motion:?}"));
@@ -243,6 +261,12 @@ impl Beast {
                 // 0x009086f0 / 0x009472c0: animation end hands off to
                 // corpse cleanup. That cleanup remains host work.
                 self.done = self.motion_ended;
+            }
+            ActionPhase::CommonDeath => {
+                // Translated from 0x008a6930 (DDDA.exe 2017-12-13 Steam):
+                // a valid owner never sets the action's done byte. Corpse
+                // flags/timers and forced-action selection remain host work.
+                self.done = false;
             }
             ActionPhase::None => return,
         }
