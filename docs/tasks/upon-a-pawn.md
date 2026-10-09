@@ -440,3 +440,20 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   passes with the documented pre-existing lint allowed. No bulk table copied.
 - This closes name selection as a materialization prerequisite; intel-pool
   lifecycle and the stage100 archive readiness adapter remain separate.
+
+### Materialized-set reconciliation
+
+- Added host reconciliation for the adapter's complete materialized placement
+  set per stage. The adapter must resolve actual loaded cells, group gates,
+  name family, intel-pool admission and archive readiness before calling;
+  passing raw candidates does not meet that contract. No admission or
+  streaming-radius policy is invented by this API.
+- Unchanged owners retain execution state; removed/changed placements retire
+  before new owners load. Duplicate identities, invalid stage/id and external
+  owner conflicts are validated before retirement. Ordering is stable.
+- Added stable story_npc_intels iteration independent of normal/applied graph
+  maps, so presentation can keep actors while their normal graph is suspended.
+- Regression covers reordered snapshots, retained position, removal, empty
+  stage set, duplicate rejection and external-owner conflict without partial
+  retirement. Placement6/story_pawns9 pass; targeted clippy passes with the
+  previously documented lint allowed. Release build pending shared target.

@@ -26,6 +26,64 @@ pub struct StoryNpcs {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Reconcile the adapter's complete materialized NPC set for a stage.
+    /// The caller resolves loaded cells, group gates, name-family selection,
+    /// intel-pool admission and archive readiness first. Raw Candidates are
+    /// not sufficient. Omitted placements are retired; unchanged ones retain
+    /// their graph state. This is host lifecycle composition, not a claim
+    /// that the original's streaming/admission policy has been reproduced.
+    pub fn reconcile_story_npc_intels(
+        &mut self, stage: u32, mut placements: Vec<crate::npc_placements::Placement>,
+    ) -> Result<Vec<(Target, String)>, HostError> {
+        let mut targets = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        for placement in &placements {
+            if placement.stage != stage || placement.target.kind != 5
+                || !(0..900).contains(&placement.npc)
+                || !targets.insert(placement.target) || !ids.insert(placement.npc as u32) {
+                return Err(HostError::Npc("invalid or duplicate materialized NPC placement".into()));
+            }
+        }
+        // Validate external owner conflicts before retiring this stage's set.
+        for (&key, &npc) in &self.story_npcs.bindings {
+            if ids.contains(&npc) && (key.0 != stage
+                || (!self.story_npcs.intels.contains_key(&key)
+                    && !placements.iter().any(|p| p.npc as u32 == npc && p.target == key.1))) {
+                return Err(HostError::Npc("materialized NPC has a conflicting external owner".into()));
+            }
+        }
+        for &npc in &ids {
+            if self.npcs.npcs.contains_key(&npc)
+                && !self.story_npcs.bindings.values().any(|&bound| bound == npc) {
+                return Err(HostError::Npc("NPC graph exists without a matching placement binding".into()));
+            }
+        }
+        let mut retired: Vec<_> = self.story_npcs.intels.iter()
+            .filter(|((owner_stage, _), old)| *owner_stage == stage
+                && !placements.iter().any(|new| new == *old))
+            .map(|(&(stage, target), _)| (stage, target)).collect();
+        retired.sort_by_key(|(stage, target)| (*stage, target.kind, target.group, target.index));
+        for (stage, target) in retired { self.unbind_story_npc(stage, target); }
+        placements.sort_by_key(|p| (p.npc, p.target.kind, p.target.group, p.target.index));
+        let mut diagnostics = Vec::new();
+        for placement in placements {
+            let target = placement.target;
+            if let Some(message) = self.load_story_npc_intel(placement)? {
+                diagnostics.push((target, message));
+            }
+        }
+        Ok(diagnostics)
+    }
+
+    /// Actual placement owners, independent of normal or applied graph state.
+    /// The presentation adapter can retain/draw an actor while its normal
+    /// graph is suspended; graph-map membership is not actor existence.
+    pub fn story_npc_intels(&self) -> impl Iterator<Item = &crate::npc_placements::Placement> {
+        let mut entries: Vec<_> = self.story_npcs.intels.values().collect();
+        entries.sort_by_key(|p| (p.stage, p.target.kind, p.target.group, p.target.index));
+        entries.into_iter()
+    }
+
     /// Create an intel after the placement adapter has resolved the
     /// 0x00762000 materialization prerequisites (name family, intel-pool
     /// capacity and archive readiness). Reading Candidates alone is not enough.

@@ -201,3 +201,35 @@ fn placement_action_suspends_normal_graph_and_later_apply_supersedes_default() {
         assert!(!host.npcs.npcs.contains_key(&1), "unload cannot restore a retired normal owner");
     }
 }
+
+#[test]
+fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    let first = placement(1);
+    let mut second = placement(2);
+    second.target.index = 18;
+    host.reconcile_story_npc_intels(200, vec![second.clone(), first.clone()]).unwrap();
+    host.npcs.npcs.get_mut(&1).unwrap().done(Some([9.0, 8.0, 7.0]));
+    host.reconcile_story_npc_intels(200, vec![first.clone(), second.clone()]).unwrap();
+    assert_eq!(host.npcs.position(1), Some([9.0, 8.0, 7.0]));
+    assert_eq!(host.story_npc_intels().count(), 2);
+    assert!(host.reconcile_story_npc_intels(200, vec![first.clone(), first]).is_err());
+    assert_eq!(host.story_npc_intels().count(), 2, "invalid snapshot cannot retire owners");
+    let external = ddstory::Target { kind: 5, group: 99, index: 0 };
+    host.bind_story_npc(200, external, 3);
+    let mut conflicting = placement(3);
+    conflicting.target.index = 19;
+    assert!(host.reconcile_story_npc_intels(200, vec![conflicting]).is_err());
+    assert_eq!(host.story_npc_intels().count(), 2, "external-owner conflict is validated before retirement");
+    host.unbind_story_npc(200, external);
+    host.reconcile_story_npc_intels(200, vec![second]).unwrap();
+    assert!(!host.npcs.npcs.contains_key(&1));
+    assert!(host.npcs.npcs.contains_key(&2));
+    host.reconcile_story_npc_intels(200, vec![]).unwrap();
+    assert_eq!(host.story_npc_intels().count(), 0);
+    assert!(host.npcs.npcs.is_empty());
+}
