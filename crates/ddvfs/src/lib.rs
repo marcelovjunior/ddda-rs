@@ -80,6 +80,16 @@ impl Vfs {
         self.index.is_empty()
     }
 
+    /// Every resource at `path`, whatever its type: (type hash, locations).
+    pub fn find(&self, path: &str) -> Vec<(u32, &[Location])> {
+        let k = key(path);
+        self.index
+            .iter()
+            .filter(|((p, _), _)| *p == k)
+            .map(|((_, t), l)| (*t, l.as_slice()))
+            .collect()
+    }
+
     /// Lower-case paths of every resource of one type.
     pub fn paths_of_type(&self, type_hash: u32) -> impl Iterator<Item = &str> {
         self.index

@@ -174,7 +174,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
-            brightness: 600.0,
+            brightness: 250.0,
             ..default()
         })
         .add_systems(Startup, setup)
@@ -329,7 +329,7 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
     commands.spawn((
         DirectionalLight {
             illuminance: 12_000.0,
-            shadow_maps_enabled: false,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, 0.0).looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y),

@@ -16,3 +16,4 @@ mtxfs = { path = "../mtxfs" }
 mtlot = { path = "../mtlot" }
 mtlmt = { path = "../mtlmt" }
 mtsbc = { path = "../mtsbc" }
+ddvfs = { path = "../ddvfs" }

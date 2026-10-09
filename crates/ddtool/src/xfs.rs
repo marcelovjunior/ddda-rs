@@ -341,3 +341,29 @@ pub fn sbc_scan(dir: &Path) -> Result<(), String> {
         Err(format!("{} collision files failed", walk.failures.len()))
     }
 }
+
+/// `xfs-get`: dumps the XFS resource at `path` from anywhere in the install.
+pub fn xfs_get(dir: &Path, path: &str) -> Result<(), String> {
+    let vfs = ddvfs::Vfs::open(dir)?;
+    let found = vfs.find(path);
+    if found.is_empty() {
+        return Err(format!("{path}: not in any archive"));
+    }
+    for (t, locs) in found {
+        let bytes = vfs.read_at(&locs[0])?;
+        let Some(payload) = xfs_payload(&bytes) else {
+            println!("{path} ({}): not XFS", mtarc::type_name(t).unwrap_or("?"));
+            continue;
+        };
+        let x = mtxfs::parse(payload).map_err(|e| e.to_string())?;
+        println!(
+            "{path} ({}) in {}",
+            mtarc::type_name(t).unwrap_or("?"),
+            vfs.archives[locs[0].archive].display()
+        );
+        let mut out = String::new();
+        dump(&x, &x.root, 0, &mut out);
+        print!("{out}");
+    }
+    Ok(())
+}

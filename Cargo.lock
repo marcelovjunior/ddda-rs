@@ -2279,6 +2279,7 @@ dependencies = [
 name = "ddtool"
 version = "0.1.0"
 dependencies = [
+ "ddvfs",
  "mtarc",
  "mtlmt",
  "mtlot",
@@ -2305,12 +2306,14 @@ dependencies = [
  "ddsim",
  "ddvfs",
  "ddworld",
+ "mtarc",
  "mtlmt",
  "mtlot",
  "mtmod",
  "mtmrl",
  "mtshader",
  "mttex",
+ "mtxfs",
 ]
 
 [[package]]
