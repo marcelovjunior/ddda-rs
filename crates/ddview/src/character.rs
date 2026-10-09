@@ -860,6 +860,19 @@ pub fn spawn_look(
     // the weapons' drawn joints, by part index (the parts come first)
     let mut hands = vec![None; parts.len() - look.weapons.len()];
     hands.extend(look.weapons.iter().map(|w| w.hand));
+    // cBodyEdit is separate from cHumanEdit. Its joints (0xaa..0xce,
+    // 0x0080ad20) do not overlap the human or face controller joints.
+    // Read bulk body-shape tables from the player's installed executable.
+    let mut body = look.body.clone();
+    if let Some(shape) = &look.body_shape {
+        let file = ddexe::ExeFile::next_to(&loader.vfs.root).map_err(|e| e.to_string())?;
+        let exe = file.image().map_err(|e| e.to_string())?;
+        let tables = ddlook::body::Tables::read(&exe).map_err(|e| e.to_string())?;
+        let extra = tables.joints(look.sex, shape).map_err(|e| e.to_string())?;
+        body.get_or_insert_with(|| ddlook::morph::BodyMorph {
+            model_scale: [1.0; 3], joints: vec![],
+        }).joints.extend(extra);
+    }
     spawn_assembled_hands(
         commands,
         loader,
@@ -870,7 +883,7 @@ pub fn spawn_look(
         &look.base,
         look.skin_color,
         look.eyebrow,
-        look.body.as_ref(),
+        body.as_ref(),
         &look.face,
         &parts,
         &hands,

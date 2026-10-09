@@ -2415,6 +2415,7 @@ dependencies = [
 name = "ddlook"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "dditem",
  "ddnpc",
  "ddpawn",
