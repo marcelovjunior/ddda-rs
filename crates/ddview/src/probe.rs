@@ -2,7 +2,7 @@
 //! which keeps the meshes the ray needs in main memory): F8 toggles a
 //! crosshair, F9 casts a ray from the centre of the screen and logs every
 //! surface it crosses near the first hit (name, distance, material
-//! settings), passing through characters. Surfaces within a few millimetres of each other are what
+//! settings, drawn or hidden), passing through characters. Surfaces within a few millimetres of each other are what
 //! z-fighting is made of, so the log names the culprits.
 
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
@@ -26,7 +26,7 @@ pub fn update(
     windows: Query<&Window, With<PrimaryWindow>>,
     crosshairs: Query<Entity, With<Crosshair>>,
     mut ray_cast: MeshRayCast,
-    names: Query<&Name>,
+    (names, lods, visibility): (Query<&Name>, Query<&crate::event::Lod>, Query<&ViewVisibility>),
     skinned: Query<(), With<bevy::mesh::skinning::SkinnedMesh>>,
     parents: Query<&ChildOf>,
     dd: Query<&MeshMaterial3d<DdMaterial>>,
@@ -72,7 +72,7 @@ pub fn update(
     // Arisen in the middle of the screen
     let not_character = |e: Entity| !skinned.contains(e);
     let settings = MeshRayCastSettings::default()
-        .with_visibility(RayCastVisibility::VisibleInView)
+        .with_visibility(RayCastVisibility::Any)
         .with_filter(&not_character)
         .never_early_exit();
     let hits = ray_cast.cast_ray(ray, &settings);
@@ -99,8 +99,10 @@ pub fn update(
         } else {
             "no material".to_string()
         };
+        let lod = lods.get(*e).map_or("lod all".to_string(), |l| format!("lod mask {:#x} (mid {} low {})", l.mask, l.mid, l.low));
+        let shown = if visibility.get(*e).is_ok_and(|v| v.get()) { "drawn" } else { "HIDDEN" };
         info!(
-            "  {:+.4} m  {name}  ({e:?}) at {:?} cm, normal {:?}, triangle {:?}; {material}",
+            "  {:+.4} m  {shown} {name}  ({e:?}) {lod} at {:?} cm, normal {:?}, triangle {:?}; {material}",
             h.distance - first,
             h.point / UNIT,
             h.normal,

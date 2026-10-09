@@ -233,9 +233,65 @@ pub struct SubtitleText;
 #[derive(Component)]
 pub struct InfoText;
 
-fn spawn_parts(commands: &mut Commands, parts: &[stage::Part], transform: Transform, name: &str) {
+/// The original's per-frame LOD choice for whole-stage models and their
+/// placed objects (`stage::lod_level`, 0x00ea5320): a part is drawn only
+/// while its mask has the level for the camera's distance to its model.
+/// *Assumed:* the model's centre is its parts' bounding-box centre (the
+/// original measures to the model's bounding sphere).
+#[derive(Component)]
+pub struct Lod {
+    pub mask: u8,
+    pub mid: f32,
+    pub low: f32,
+    /// Viewer units.
+    pub centre: Vec3,
+    pub view_range: u32,
+}
+
+/// The centre (model space, viewer units) of a model's parts.
+fn model_centre(parts: &[stage::Part], meshes: &Assets<Mesh>) -> Vec3 {
+    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for p in parts {
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) =
+            meshes.get(&p.mesh).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION))
+        else {
+            continue;
+        };
+        for q in v {
+            lo = lo.min(Vec3::from(*q));
+            hi = hi.max(Vec3::from(*q));
+        }
+    }
+    if lo.x > hi.x { Vec3::ZERO } else { (lo + hi) * 0.5 }
+}
+
+/// Shows each [`Lod`] part only at its level.
+pub fn lod_update(cams: Query<(&Camera, &GlobalTransform), With<Camera3d>>, mut parts: Query<(&Lod, &mut Visibility)>) {
+    let Some((_, cam)) = cams.iter().find(|(c, _)| c.is_active) else { return };
+    let eye = cam.translation();
+    for (l, mut v) in &mut parts {
+        let level = stage::lod_level((eye - l.centre).length() / UNIT, l.mid, l.low, l.view_range);
+        let want = if l.mask & level != 0 { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+}
+
+fn spawn_parts(
+    commands: &mut Commands,
+    parts: &[stage::Part],
+    transform: Transform,
+    name: &str,
+    centre: Vec3,
+    view_range: u32,
+) {
+    let centre = transform.transform_point(centre);
     for p in parts {
         let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string()), stage::StageEntity));
+        if p.lod != 255 {
+            e.insert((Lod { mask: p.lod, mid: p.lod_dist[0], low: p.lod_dist[1], centre, view_range }, Visibility::Hidden));
+        }
         match &p.material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
             PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
@@ -341,10 +397,12 @@ pub fn spawn_stage_models(
     for m in &models {
         if let Some(parts) = loader.model(m, meshes, materials, images) {
             // Converted meshes are already in viewer units (stage.rs).
-            spawn_parts(commands, &parts, Transform::IDENTITY, m);
+            let centre = model_centre(&parts, meshes);
+            spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, loader.view_range);
         }
     }
     let mut placed = 0;
+    let mut centres: std::collections::HashMap<String, Vec3> = Default::default();
     for lot in ["s00", "s10"] {
         let lot_path = format!("scr\\st{s}\\etc\\st{s}_00m00n_{lot}");
         let Ok(bytes) = vfs.read(&lot_path, stage::RLAYOUT) else { continue };
@@ -360,7 +418,8 @@ pub fn spawn_stage_models(
                 rotation: Quat::from_euler(EulerRot::XYZ, p.angle[0], p.angle[1], p.angle[2]),
                 scale: Vec3::from(p.scale),
             };
-            spawn_parts(commands, &parts, t, &p.name);
+            let centre = *centres.entry(path.clone()).or_insert_with(|| model_centre(&parts, meshes));
+            spawn_parts(commands, &parts, t, &p.name, centre, loader.view_range);
             placed += 1;
         }
     }
