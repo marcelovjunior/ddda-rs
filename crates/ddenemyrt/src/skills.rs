@@ -6,6 +6,7 @@ use ddsim::skills::{Definition, Kind};
 use ddskill::catalogue::ExeTables;
 use ddskill::magic::{Magic, MagicList};
 use std::collections::HashMap;
+pub mod spells;
 
 #[derive(Debug, Clone)]
 pub struct SkillData {
@@ -13,6 +14,32 @@ pub struct SkillData {
     pub body: Body,
     pub definition: Definition,
     pub magic: Option<Magic>,
+    pub spell: Option<spells::SpellData>,
+}
+
+impl SkillData {
+    /// Pose at the release event. B47890 emits before changing to its end
+    /// motion; the simulation's release queue is consumed after that change.
+    pub fn release_pose(&self, feet: [f32; 3], yaw: f32) -> crate::body::Posed {
+        let motion = match self.definition.kind {
+            Kind::Spell { release, .. } => release,
+            Kind::Sword { motion } => motion,
+        };
+        let root = &self.definition.motions[&motion];
+        let frame = (0..root.frame_count)
+            .find(|f| {
+                root.event_bits(0, *f as i32, *f as i32)
+                    & (ddsim::attack::CHAIN_CLOSED_BIT | ddsim::attack::ACTION_END_BIT)
+                    != 0
+            })
+            .unwrap_or(root.frame_count.saturating_sub(1));
+        self.body.pose(
+            crate::body::MotionId::new(7, motion & 255),
+            frame as f32,
+            feet,
+            yaw,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -106,6 +133,10 @@ impl SkillSet {
                 let cost = -ddskill::magic::cast_stamina(lv.stamina, ability.entries[82].float_1);
                 (kind, cost, Some(m))
             };
+            let spell_data = spell
+                .as_ref()
+                .map(|m| spells::SpellData::load(vfs, m))
+                .transpose()?;
             out.insert(
                 id,
                 SkillData {
@@ -118,6 +149,7 @@ impl SkillSet {
                         motions,
                     },
                     magic: spell,
+                    spell: spell_data,
                 },
             );
         }

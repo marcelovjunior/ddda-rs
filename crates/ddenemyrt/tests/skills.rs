@@ -49,6 +49,52 @@ fn installed_skill_banks_and_shells() {
         assert_eq!(sim.player(1).unwrap().stamina, initial);
         assert!(sim.player(1).unwrap().skills.active.is_none());
     }
+    let mut spells = ddenemyrt::skills::spells::SpellWorld::default();
+    let mut owner = 1000;
+    let data = skills.0[&210].spell.as_ref().unwrap();
+    spells.fire(
+        data,
+        210,
+        0,
+        &skills.0[&210].release_pose([0.; 3], 0.),
+        Some([0., 100., 500.]),
+        &mut owner,
+    );
+    assert_eq!(spells.shells.len(), 1);
+    assert_eq!(spells.shells[0].speed, 80.);
+    spells.step(&skills, 1.);
+    assert_eq!(spells.shells[0].speed, 94.);
+    assert_eq!(spells.shells[0].distance, 80.);
+    assert!(!spells.shells[0].volumes(data).is_empty());
+    spells.hit(&[1000], &skills, &mut owner);
+    assert_eq!(spells.shells.len(), 1);
+    assert!(spells.shells[0].impact);
+    assert_eq!(spells.shells[0].owner, 1001);
+    assert!(!spells.shells[0].volumes(data).is_empty());
+    spells.step(&skills, 2.);
+    assert!(spells.shells.is_empty());
+    let data = skills.0[&212].spell.as_ref().unwrap();
+    spells.fire(
+        data,
+        212,
+        1,
+        &skills.0[&212].release_pose([0.; 3], 0.),
+        Some([0., 0., 500.]),
+        &mut owner,
+    );
+    assert_eq!(spells.shells.len(), 3);
+    assert_eq!(
+        spells.shells.iter().map(|s| s.delay).collect::<Vec<_>>(),
+        [0., 7., 14.]
+    );
+    assert!(spells.shells[0].volumes(data).is_empty());
+    spells.step(&skills, 1.);
+    assert!(!spells.shells[0].volumes(data).is_empty());
+    assert!(spells.shells[1].volumes(data).is_empty());
+    for _ in 0..20 {
+        spells.step(&skills, 1.);
+    }
+    assert!(spells.shells.is_empty());
 }
 
 struct Flat;

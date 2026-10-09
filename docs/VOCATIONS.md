@@ -990,3 +990,15 @@ loads four motion banks and runs all four actions headlessly, charging
 once and keeping a second player independent. Damage, viewer keys,
 higher levels, manual targeting, chant sharing and LAN skill activation
 are not implemented at this checkpoint. No live comparison is claimed.
+
+Shell checkpoint: `skills::spells` loads Ingle's speed shell and hit child,
+and Levin's three delayed lightning shells. C12F70/C12D60 provide the
+speed, distance and impact-child transitions; BF7A20/BF7CD0 give lightning
+jitter and lifetime. Collision phases use distance for speed shells
+(C13290), elapsed time otherwise (BD95B0); BD8B90 selects the sequence.
+Tests verify the installed collision sequences yield volumes, the speed
+ramp, impact child, lightning delays and expiry. The spawn origin uses the
+posed chant-ball joint and offset from the magic data (B4A090), not a
+fixed height. The deterministic RNG is a co-op adapter: the original RNG
+algorithm is unresolved. Target selection is supplied by the host; free
+aim/lock selection and wall impacts remain incomplete.
