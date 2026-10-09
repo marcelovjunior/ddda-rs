@@ -99,7 +99,13 @@ pub struct MoveParam {
     pub run: f32,
     pub run_relaxed: f32,
     pub sprint: f32,
+    /// Largest horizontal speed a fall starts with (adjust 0xD1, read by
+    /// cPlActFall::vf05 0x00ACCDD0), cm per frame.
+    pub fall_max: f32,
 }
+
+/// Index of the fall's starting speed cap in the `rAdjustParam` table.
+pub const ADJUST_FALL_MAX: usize = 0xD1;
 
 impl MoveParam {
     /// Speeds from the `rAdjustParam` float table: walk and run get
@@ -112,6 +118,7 @@ impl MoveParam {
             run: get(ADJUST_RUN)? * GROUND_SPEED_FACTOR,
             run_relaxed: get(ADJUST_RUN_RELAXED)? * GROUND_SPEED_FACTOR,
             sprint: get(ADJUST_SPRINT)?,
+            fall_max: get(ADJUST_FALL_MAX)?,
         })
     }
 }
@@ -123,6 +130,7 @@ pub const MOVE_SHIPPED: MoveParam = MoveParam {
     run: 15.0 * GROUND_SPEED_FACTOR,
     run_relaxed: 12.0 * GROUND_SPEED_FACTOR,
     sprint: 22.5,
+    fall_max: 7.0,
 };
 
 /// Simulation step in motion frames: 120 steps per second. Per-frame values
@@ -515,6 +523,15 @@ fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// Whether the ground at `at` (a point on it) is a floor: the surface a cast
+/// down through it meets faces up at least `ledge::FLOOR_MIN_NY`. Worlds
+/// without casts count everything as floor.
+fn is_floor(ground: &dyn Ground, at: [f32; 3]) -> bool {
+    ground
+        .ray([at[0], at[1] + 1.0, at[2]], [at[0], at[1] - 1.0, at[2]])
+        .is_none_or(|h| h.normal[1] >= ledge::FLOOR_MIN_NY)
+}
+
 /// The horizontal step `m` (x, z) of a velocity-driven move, projected onto
 /// the ground plane under `feet` and flattened again: on a slope of angle
 /// t along the move it shrinks to m cos^2 t. *Measured*, not traced: in the
@@ -541,8 +558,13 @@ fn along_ground(ground: &dyn Ground, feet: [f32; 3], m: [f32; 2]) -> [f32; 2] {
 pub const MOVE_THRESHOLD: f32 = 0.2;
 /// Highest step the feet climb while on the ground, cm. *Placeholder*.
 pub const STEP_UP: f32 = 60.0;
-/// Drop below the feet that starts a fall instead of following the ground, cm. *Placeholder*.
-pub const STEP_DOWN: f32 = 50.0;
+/// Drop below the feet that starts a fall instead of following the ground,
+/// cm: `0x00B6E5C0` enters cPlActFall when the character is not grounded
+/// and the ground cast from 100 cm above the feet (`0x0084FEA0`) is more
+/// than 30 cm (0x014EA160) below them. Here "grounded" is standing on a
+/// floor triangle (`ledge::FLOOR_MIN_NY`, *assumed*): steeper ground is
+/// never walked on, so a slope is fallen down whatever the step size.
+pub const STEP_DOWN: f32 = 30.0;
 /// Gravity while falling (cm/frame²): the normal jump's. *Placeholder* until
 /// `cPlActFall` is traced.
 pub const FALL_GRAVITY: f32 = -2.0;
@@ -1057,6 +1079,7 @@ impl Sim {
     /// step-down rules.
     fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32) {
         let jn = self.jump_normal;
+        let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
         let rate = self.time_rate(&self.players[i], state);
         let period = self.period_of(state.motion_id());
@@ -1092,15 +1115,27 @@ impl Sim {
             p.frame += dt;
         }
         let target = wall_slide(ground, p.position, target);
-        match ground.height(target[0], target[2], p.position[1] + STEP_UP) {
-            Some(h) if h >= p.position[1] - STEP_DOWN => p.position = [target[0], h, target[2]],
+        let under = ground.height(target[0], target[2], p.position[1] + STEP_UP);
+        let floor = under.is_some_and(|h| is_floor(ground, [target[0], h, target[2]]));
+        match under {
+            Some(h) if h >= p.position[1] - STEP_DOWN && floor => p.position = [target[0], h, target[2]],
+            // steep ground rising ahead: not walked onto
+            Some(h) if h >= p.position[1] => {}
             Some(_) if !matches!(state, State::JumpStart { .. }) => {
-                // walked off an edge: fall, keeping the ground speed (per frame)
-                p.velocity = [
+                // walked off an edge or onto steep ground: fall. cPlActFall::vf05
+                // (0x00ACCDD0) takes the last step as the velocity (per frame),
+                // its horizontal length capped at adjust 0xD1 (7.0)
+                let mut v = [
                     (target[0] - p.position[0]) / dt,
                     0.0,
                     (target[2] - p.position[2]) / dt,
                 ];
+                let hv = len2([v[0], v[2]]);
+                if hv > fall_max {
+                    v[0] *= fall_max / hv;
+                    v[2] *= fall_max / hv;
+                }
+                p.velocity = v;
                 p.position = [target[0], p.position[1], target[2]];
                 p.jump = jn;
                 p.jumps_left = u8::from(p.double_jump);
@@ -1163,8 +1198,13 @@ impl Sim {
             p.velocity[0] = 0.0;
             p.velocity[2] = 0.0;
         }
-        // landing: the ground under the new position, reached on the way down
+        // landing: the ground under the new position, reached on the way down;
+        // steep ground holds the character up without landing (as the
+        // original stays in cPlActFall on a steep edge, docs/ACCEPTANCE.md)
         match ground.height(next[0], next[2], p.position[1].max(next[1]) + 1.0) {
+            Some(g) if next[1] <= g && p.velocity[1] <= 0.0 && !is_floor(ground, [next[0], g, next[2]]) => {
+                p.position = [next[0], g, next[2]];
+            }
             Some(g) if next[1] <= g && p.velocity[1] <= 0.0 => {
                 let standing = matches!(p.state, State::Air { standing: true, .. }) || steer.is_none();
                 // cPlActDashJump::vf06 (0x00ACDED0) lands into action 0x0C
@@ -1970,6 +2010,100 @@ mod tests {
         assert!(p.ran_out);
     }
 
+    /// Flat at y 0 for x < 100, a 3:1 slope (72 degrees) down to y -300 at
+    /// x = 200, flat beyond.
+    struct Steep;
+    impl Steep {
+        fn at(x: f32) -> (f32, [f32; 3]) {
+            if x < 100.0 {
+                (0.0, [0.0, 1.0, 0.0])
+            } else if x < 200.0 {
+                let l = 10f32.sqrt();
+                (-(x - 100.0) * 3.0, [3.0 / l, 1.0 / l, 0.0])
+            } else {
+                (-300.0, [0.0, 1.0, 0.0])
+            }
+        }
+    }
+    impl Ground for Steep {
+        fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+            let h = Self::at(x).0;
+            (h <= below_y).then_some(h)
+        }
+        /// Vertical casts only (what the movement uses).
+        fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<RayHit> {
+            let (h, normal) = Self::at(from[0]);
+            (from[1] >= h && to[1] <= h).then_some(RayHit {
+                point: [from[0], h, from[2]],
+                normal,
+            })
+        }
+    }
+
+    #[test]
+    fn steep_ground_is_fallen_down_not_walked() {
+        let mut s = sim();
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                stick: [0.0, 1.0],
+                camera_yaw: std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            },
+        )]);
+        let mut states = Vec::new();
+        for _ in 0..90 {
+            s.step(1.0 / 30.0, &inputs, &Steep);
+            let p = s.player(0).unwrap();
+            if states.last() != Some(&p.state) {
+                states.push(p.state);
+            }
+            // never stands on the slope
+            if (100.5..199.5).contains(&p.position[0]) {
+                assert!(
+                    !matches!(p.state, State::Run { .. } | State::Land { .. }),
+                    "{p:?}"
+                );
+            }
+        }
+        assert!(states.contains(&State::Fall), "{states:?}");
+        let p = s.player(0).unwrap();
+        assert_eq!(p.position[1], -300.0, "{p:?}");
+    }
+
+    #[test]
+    fn a_fall_starts_at_most_at_the_capped_speed() {
+        // the ground drops 300 cm at x = 100; sprinting off it
+        struct Drop;
+        impl Ground for Drop {
+            fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+                let h = if x < 100.0 { 0.0 } else { -300.0 };
+                (h <= below_y).then_some(h)
+            }
+        }
+        let mut s = sim();
+        s.player_mut(0).unwrap().position = [-200.0, 0.0, 0.0];
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                stick: [0.0, 1.0],
+                sprint: true,
+                camera_yaw: std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            },
+        )]);
+        for _ in 0..240 {
+            s.step(TICK / MOTION_FPS, &inputs, &Drop);
+            let p = s.player(0).unwrap();
+            if p.state == State::Fall {
+                let h = len2([p.velocity[0], p.velocity[2]]);
+                assert!(h <= MOVE_SHIPPED.fall_max + 1e-4, "{p:?}");
+                return;
+            }
+        }
+        panic!("never fell");
+    }
+
     #[test]
     fn a_run_stops_at_once() {
         let mut s = sim();
@@ -2034,6 +2168,7 @@ mod tests {
         t[ADJUST_RUN] = 15.0;
         t[ADJUST_RUN_RELAXED] = 12.0;
         t[ADJUST_SPRINT] = 22.5;
+        t[ADJUST_FALL_MAX] = 7.0;
         assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
         assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
     }

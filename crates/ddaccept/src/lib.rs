@@ -135,13 +135,18 @@ pub fn parse_trace(text: &str) -> Result<Trace, String> {
 
 /// The ddsim input for held keys: a unit stick (screen-right +x, forward +y;
 /// diagonals normalised, *assumed* as for a keyboard in the original).
+///
+/// The recorder's Ctrl bit (`KEY_WALK`) does not make the original walk: in
+/// the `drop` route, recorded with Ctrl held, the original runs (action 2,
+/// |velocity| 10.165 = the relaxed run, unit time x1.15). So it is not
+/// mapped to `Input::walk`.
 pub fn input_of(keys: u32, cam_yaw: f32) -> Input {
     let x = f32::from(u8::from(keys & KEY_D != 0)) - f32::from(u8::from(keys & KEY_A != 0));
     let y = f32::from(u8::from(keys & KEY_W != 0)) - f32::from(u8::from(keys & KEY_S != 0));
     let n = (x * x + y * y).sqrt();
     Input {
         stick: if n > 0.0 { [x / n, y / n] } else { [0.0, 0.0] },
-        walk: keys & KEY_WALK != 0,
+        walk: false,
         sprint: keys & KEY_SPRINT != 0,
         jump: keys & KEY_JUMP != 0,
         camera_yaw: cam_yaw,
@@ -292,8 +297,15 @@ pub fn replay(mut sim: Sim, ground: &dyn ddsim::Ground, t: &Trace) -> Replay {
     // the stamina and its maximum (the maximum is not read from the original)
     p.stamina = f0.stamina;
     p.stamina_max = f0.stamina;
+    // a route that starts in the air (the drop route: action 13 right after
+    // the recorder placed the player) starts our player falling with the
+    // recorded velocity
+    if ORIG_AIR.contains(&f0.action) {
+        p.state = State::Fall;
+        p.velocity = f0.vel;
+    }
     let mut pos = vec![f0.pos];
-    let mut state = vec![State::Wait];
+    let mut state = vec![sim.player(0).unwrap().state];
     let mut stamina = vec![f0.stamina];
     let mut inputs = HashMap::new();
     for f in &t.frames[1..] {
@@ -637,6 +649,7 @@ mod tests {
         let h = std::f32::consts::FRAC_1_SQRT_2;
         assert!((i.stick[0] - h).abs() < 1e-6 && (i.stick[1] - h).abs() < 1e-6);
         assert!(i.sprint && !i.walk && !i.jump);
+        assert!(!input_of(KEY_W | KEY_WALK, 0.0).walk);
         assert_eq!(i.camera_yaw, 1.0);
         assert_eq!(input_of(0, 0.0).stick, [0.0, 0.0]);
     }
