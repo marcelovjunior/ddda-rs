@@ -197,6 +197,15 @@ Child think roots depend on the parent's +0x5c14 and +0x5c18 == 2:
 child 00 uses 0x016fe6e8 or 0x016ff368; child 01 uses 0x016f8ee8 or
 0x016f9a28. Body array 0x016cd234 and fallback 0x0170f060 are selected
 by `0x009a0880`. Read records through the shared table walker.
+`ThinkInitialization` now reads those selected roots with the existing
+`Tables::read_roots` extension. Explicit controller input represents body
++0x5c14/+0x5c18; it is not inferred from a stage or unit name. When enabled,
+the body locks the selected current table but still ends initialization with
+default/base reset to `0x0170f060`. Children retain their selected table as
+current/default/base. The initializer also applies the sourced range-scale
+gate to a fresh shared manager; it supplies no targets, think flags or unit
+action driver. Installed regressions cover disabled and controller 0/1/2
+selection, child special-root gates, manager fallback reset and scale guards.
 
 ## Implemented and tested
 

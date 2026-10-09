@@ -1,7 +1,7 @@
 # opening-perf: Frame rate in Cassardis and on the field
 
 - **Owner:** codex lane
-- **Branch:** `task/opening-perf`
+- **Branch:** `task/opening-perf` (merged diagnostics), `task/opening-perf-route` (continued measurement)
 - **Board area:** `render/perf`
 - **Status:** in progress (codex-29)
 
@@ -133,3 +133,44 @@ but overlapped a build and cannot establish acceptance timing. Its route
 still ends at q2 boot; it does not walk into the field. Next measurement
 must isolate the final-window field spikes and provide a deterministic
 street/field walk before optimization or a completed gate can be claimed.
+
+### Route harness follow-up (head assignment #2535)
+
+`--perf-route --size 1920x1080` selects the opening demo, skips the intro,
+enables diagnostics and unattended operation, and rejects screenshot
+options. The existing room/Quina/q2 route continues to the installed
+stage200 door entry (task 2, record 0), turns to its authored interaction
+angle, and supplies player interaction input. It uses the existing actual
+JumpArea handoff. In stage100 it walks toward the installed
+`q0002_event1` scenario volume until the simulated player crosses a cell
+boundary, then waits 30 seconds and exits. Failure to complete within
+600 seconds exits with an error. No new placement or quest/NPC callback
+shortcut is added; the pre-existing opening actor stand-ins remain a
+separate route-fidelity limitation.
+
+Unattended runs now use Bevy's continuous update mode. The local
+bevy_winit 0.19.1 default (`WinitSettings::game`) otherwise uses a
+60-Hz low-power update policy while unfocused. `--perf` reports the
+number of unfocused frames per window. Earlier baselines did not record
+focus state, so this is a removed measurement confound, **not yet an
+attribution of their hitches**. Ordinary interactive update policy is
+unchanged.
+
+Release build and targeted clippy passed (existing warnings only). The
+first bounded route run walked through the Cassardis gate and loaded
+stage100/start2 at (41337.184, 31001.443, 143614.31), cell (64,54).
+It then correctly stopped with the existing unimplemented stage100
+scenario detection rule. The core owner is implementing that prerequisite
+from cAreaHit::vf07 (0x00742810); no harness bypass is introduced. This run
+overlapped builds and is functional validation only, not acceptance timing.
+
+The run also exposed a harness-only blocking A* search: opening step
+336.6 ms, frame 342.7 ms, yielding a 196-waypoint collision-safe path.
+The demo planner now retains its frontier across frames and yields between
+node expansions after a 1 ms work budget (an individual expansion can
+exceed this budget). While planning it supplies neutral player input,
+never changes player placement. A regression compares one-expansion
+slices against the uninterrupted route around a wall; that and the two
+installed Cassardis door/village navigation tests pass in release mode.
+Live timing of the incremental planner and the completed field cell
+crossing remain pending the core fix. No new performance acceptance claim.

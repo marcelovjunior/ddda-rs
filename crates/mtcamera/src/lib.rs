@@ -5,6 +5,7 @@
 use std::fmt;
 
 pub mod fade;
+pub mod actor_offset;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);

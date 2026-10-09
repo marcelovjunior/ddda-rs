@@ -125,6 +125,8 @@ struct Args {
     light_from_data: bool,
     /// `--perf`: log frame-time statistics (perf.rs).
     perf: bool,
+    /// Script the opening through the gate and a field cell boundary, without captures.
+    perf_route: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -180,6 +182,7 @@ fn args() -> Args {
         skip_intro: false,
         light_from_data: false,
         perf: false,
+        perf_route: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -196,6 +199,7 @@ fn args() -> Args {
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
         if k == "--skip-intro" { a.skip_intro = true; continue; }
         if k == "--perf" { a.perf = true; continue; }
+        if k == "--perf-route" { a.perf_route = true; continue; }
         if k == "--probe" { stage::KEEP_MESHES.store(true, std::sync::atomic::Ordering::Relaxed); continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
@@ -285,6 +289,15 @@ fn args() -> Args {
             "--profile" => a.profile = Some(v.parse().unwrap()),
             _ => panic!("unknown option {k}"),
         }
+    }
+    if a.perf_route {
+        assert!(a.shot.is_none() && a.shots.is_none(), "--perf-route measures without screenshots");
+        a.opening = true;
+        a.demo = true;
+        a.play = true;
+        a.perf = true;
+        a.unattended = true;
+        a.skip_intro = true;
     }
     if let Some(xml) = a.save_xml.clone() {
         apply_saved_spot(&mut a, &xml);
@@ -567,8 +580,9 @@ fn main() {
     // stage, clock and camera start come from it.
     let session = args.opening.then(|| {
         let exe = args.native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default();
-        let s = opening::prepare(&args.native_pc, &exe, 1, args.demo, args.shots.clone())
+        let mut s = opening::prepare(&args.native_pc, &exe, 1, args.demo, args.shots.clone())
             .unwrap_or_else(|e| panic!("--opening: {e}"));
+        if args.perf_route { s.enable_perf_route(); }
         let w = &s.host.story.as_ref().unwrap().world;
         args.stage = opening::STAGE;
         args.cell = (50, 50);
@@ -591,6 +605,7 @@ fn main() {
         None => Color::srgb(0.55, 0.68, 0.85),
     };
     let perf_enabled = args.perf;
+    let unattended = args.unattended;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -623,6 +638,11 @@ fn main() {
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
     // Diagnostics are opt-in: render queries themselves have a cost, so
     // ordinary play must not pay for a profiling run.
+    if unattended {
+        // Keep scripted captures/profiling independent of desktop focus.
+        // Bevy's default game settings throttle unfocused updates to 60 Hz.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    }
     if perf_enabled {
         app.add_plugins((
             bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),

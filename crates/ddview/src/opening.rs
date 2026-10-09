@@ -77,6 +77,9 @@ enum Step {
     TalkQuina,
     WalkOut,
     Q0002Event,
+    Gate,
+    FieldWalk,
+    FieldSettle,
     Done,
 }
 
@@ -89,6 +92,9 @@ struct Demo {
     press: bool,
     last_talk: f32,
     talked: bool,
+    perf_route: bool,
+    field_cell: Option<(i32, i32)>,
+    planning: Option<RoutePlan>,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -283,6 +289,9 @@ pub fn prepare(
             press: false,
             last_talk: 0.0,
             talked: false,
+            perf_route: false,
+            field_cell: None,
+            planning: None,
         }),
         shots,
         shot_queue: vec![],
@@ -374,6 +383,14 @@ impl Session {
         }
     }
 
+    /// Viewer benchmark driver only: uses normal player inputs and actual
+    /// stage callbacks, not scripted placement or quest completion.
+    pub fn enable_perf_route(&mut self) {
+        if let Some(demo) = &mut self.demo {
+            demo.perf_route = true;
+        }
+        self.shots = None;
+    }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
         // Opening interaction currently routes E only to host seat 0.
@@ -698,6 +715,10 @@ pub fn step(
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
+    if args.perf_route && now > 600.0 {
+        s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
+        return;
+    }
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         if let Some(terrain) = streamer.take_terrain() {
@@ -856,6 +877,7 @@ pub fn step(
             inputs.insert(id, if id == 0 { input } else { PlayerInput::default() });
         }
         input.interact = false;
+        s.host.scenario_field_cells = stage_view.streamer.as_ref().and_then(|streamer| streamer.scenario_field_cells());
         let report = match s.host.tick_network(&inputs, network_now) {
             Ok(r) => r,
             Err(e) => {
@@ -1321,7 +1343,17 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Step::TalkQuina => s.npcs.get(&2).map(|n| n.1),
         Step::WalkOut => place("cassardis: 1300"),
         Step::Q0002Event => place("cassardis: q0002 event"),
-        Step::Done => None,
+        // Installed st200_door entry 0 is the stage100/start2 gate.
+        // Coordinates and angle are read from that scenario at runtime.
+        Step::Gate if s.world().stage_no == 200 => benchmark_place(s, 2, 0).map(|v| v.0),
+        // Walk toward the authored q2 field event volume; stop once the
+        // actual simulated position crosses a cell, before claiming any
+        // encounter outcome. No fixture NPC or quest state is changed.
+        Step::FieldWalk => s.host.story.as_ref().and_then(|story| {
+            let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
+            benchmark_place(s, 4, n as u32).map(|v| v.0)
+        }),
+        Step::Gate | Step::FieldSettle | Step::Done => None,
     };
     if (now % 2.0) < 0.04 {
         info!(
@@ -1342,6 +1374,25 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         .map(|q| q.number())
         .collect();
     let d = s.demo.as_mut().unwrap();
+    if let Some(plan) = &mut d.planning {
+        let _timing = crate::perf::Section::start("demo route planning");
+        match plan.advance(
+            s.host.ground.as_ref(),
+            &s.host.sim.sweep_param,
+            std::time::Duration::from_millis(1),
+        ) {
+            Some(path) => {
+                info!(
+                    "opening demo: collision planner finished with {} waypoints",
+                    path.len()
+                );
+                d.path = path.into();
+                d.planning = None;
+                d.check = (now, p);
+            }
+            None => return PlayerInput::default(),
+        }
+    }
     let mut next = None;
     let mut input = PlayerInput::default();
     let mut face = None;
@@ -1371,8 +1422,11 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
             if now - d.check.0 > 3.0 {
                 if (p - d.check.1).length() < 60.0 {
                     if let Some(goal) = target {
-                        d.path = demo_path(&s.host, p, goal).into();
-                        warn!("opening demo: blocked walking to {step:?}; collision planner found {} waypoints (no placement fallback)", d.path.len());
+                        d.planning = Some(RoutePlan::new(p, goal));
+                        warn!(
+                            "opening demo: blocked walking to {step:?}; planning incrementally (no placement fallback)"
+                        );
+                        input = PlayerInput::default();
                     }
                 }
                 d.check = (now, p);
@@ -1382,16 +1436,20 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
                 camera_yaw: flat.x.atan2(flat.z),
                 ..Default::default()
             };
-            if step == Step::WeaponTable {
+            if step == Step::WeaponTable || step == Step::Gate {
                 d.press = !d.press;
                 input.interact = d.press;
-                face = route
+                face = if step == Step::Gate {
+                    // Reproduce a player turning toward the authored door
+                    // interaction angle while standing in its volume.
+                    benchmark_place_from_scenarios(&s.host.story.as_ref().unwrap().stage.scenarios, 2, 0).map(|v| v.1)
+                } else { route
                     .iter()
                     .find(|w| w.name == "cassardis: weapon table")
                     .and_then(|w| {
                         w.place(&s.host.story.as_ref()?.stage.scenarios)
                             .map(|(_, yaw)| yaw)
-                    });
+                    }) };
             }
         }
     }
@@ -1414,7 +1472,19 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         }
         Step::WalkOut if w.sce_no >= 1400 || quests.contains(&2) => next = Some(Step::Q0002Event),
         Step::WalkOut if w.sce_no >= 1300 && now - d.since > 6.0 => next = Some(Step::Q0002Event),
-        Step::Q0002Event if quests.contains(&2) => next = Some(Step::Done),
+        Step::Q0002Event if quests.contains(&2) => {
+            next = Some(if d.perf_route { Step::Gate } else { Step::Done });
+        }
+        Step::Gate if w.stage_no == 100 => {
+            d.field_cell = Some(benchmark_cell(p));
+            info!("perf route: entered field at {p:?}, cell {:?}", d.field_cell);
+            next = Some(Step::FieldWalk);
+        }
+        Step::FieldWalk if d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)) => {
+            info!("perf route: walked cell boundary {:?} -> {:?} at {p:?}; settling 30 seconds without screenshots", d.field_cell, benchmark_cell(p));
+            next = Some(Step::FieldSettle);
+        }
+        Step::FieldSettle if now - d.since >= 30.0 => next = Some(Step::Done),
         _ => {}
     }
     let talk_due = step == Step::TalkQuina
@@ -1433,6 +1503,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         );
         d.step = n;
         d.path.clear();
+        d.planning = None;
         d.since = now;
         d.check = (now, p);
         d.last_talk = 0.0;
@@ -1467,6 +1538,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Some(Step::TalkQuina) => s.shot("4-control"),
         Some(Step::Done) => {
             let w = s.world();
+            let stage_no = w.stage_no;
             info!(
                 "opening demo: done: SceNo {}, GSF 372 {}, GSF 381 {}, q0001 bits {:08x?}, q0002 booted {}",
                 w.sce_no,
@@ -1475,21 +1547,41 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
                 w.quest_bits(1).map(|b| b.words()),
                 quests.contains(&2)
             );
-            let valid = w.sce_no == 1400
+            let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+                w.stage_no == 100 && s.demo.as_ref().and_then(|d| d.field_cell).is_some_and(|cell| cell != benchmark_cell(p))
+            } else { w.sce_no == 1400
                 && w.gsf.get(372)
                 && w.gsf.get(381)
                 && quests.contains(&2)
                 && w.quest_bits(1)
-                    .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]);
+                    .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]) };
             if !valid {
                 s.failure = Some("opening endpoint flag/SceNo check failed".into());
             }
             s.shot("7-q0002");
-            s.quit_at = s.shots.as_ref().map(|_| now + 3.0);
+            s.quit_at = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+                info!("perf route: complete without screenshots, stage {stage_no}, position {p:?}");
+                Some(now + 1.0)
+            } else { s.shots.as_ref().map(|_| now + 3.0) };
         }
         _ => {}
     }
     input
+}
+
+fn benchmark_cell(p: Vec3) -> (i32, i32) {
+    (50 + (p.z / 10_000.0).floor() as i32, 50 + (p.x / 10_000.0).floor() as i32)
+}
+
+fn benchmark_place(s: &Session, task: u32, no: u32) -> Option<(Vec3, f32)> {
+    benchmark_place_from_scenarios(&s.host.story.as_ref()?.stage.scenarios, task, no)
+}
+
+fn benchmark_place_from_scenarios(sc: &ddstory::scenario::Scenarios, task: u32, no: u32) -> Option<(Vec3, f32)> {
+    ddstory::route::Waypoint {
+        name: "performance route", stage: 0, entry: (task, no), until: None,
+        interact: true, npcs: vec![],
+    }.place(sc).map(|(p, yaw)| (Vec3::from(p), yaw))
 }
 
 impl Session {
@@ -1633,13 +1725,6 @@ fn guest_step(
     }
 }
 
-/// Demo navigation only, not a translated NPC/pathfinding rule. An A* search
-/// samples capsule sweeps against the installed collision mesh. Resolution
-/// is the existing player radius. The budget bounds demo work; a failed
-/// search leaves the player where collision put it, never warps it.
-fn demo_path(host: &StoryHost, from: Vec3, target: Vec3) -> Vec<Vec3> {
-    plan_path(host.ground.as_ref(), &host.sim.sweep_param, from, target)
-}
 #[derive(Default)]
 pub(crate) struct GameplayProjection(Option<Projection>);
 impl GameplayProjection {
@@ -1656,83 +1741,136 @@ impl GameplayProjection {
     }
 }
 
+type RouteCell = (i32, i32);
+type RouteNode = (Vec3, f32, RouteCell);
+
+/// Demo navigation only, not a translated NPC/pathfinding rule. An A* search
+/// samples capsule sweeps against the installed collision mesh. Resolution
+/// is the existing player radius. The budget bounds demo work; a failed
+/// search leaves the player where collision put it, never warps it.
+struct RoutePlan {
+    target: Vec3,
+    open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
+    nodes: HashMap<RouteCell, RouteNode>,
+    visited: std::collections::HashSet<(i32, i32)>,
+}
+
+impl RoutePlan {
+    fn new(from: Vec3, target: Vec3) -> Self {
+        Self {
+            target,
+            open: [(
+                std::cmp::Reverse((from.x - target.x).hypot(from.z - target.z) as i32),
+                (0, 0),
+            )]
+            .into(),
+            nodes: [((0, 0), (from, 0.0, (0, 0)))].into(),
+            visited: Default::default(),
+        }
+    }
+
+    /// Benchmark-only work budget. Yield between node expansions so the
+    /// driver itself does not add a hundreds-of-ms hitch to the sample.
+    fn advance(
+        &mut self,
+        ground: &dyn ddsim::Ground,
+        param: &ddsim::sweep::SweepParam,
+        budget: std::time::Duration,
+    ) -> Option<Vec<Vec3>> {
+        use std::cmp::Reverse;
+        let Self {
+            target,
+            open,
+            nodes,
+            visited,
+        } = self;
+        let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
+        let cell = ddsim::BODY_RADIUS;
+        let start = std::time::Instant::now();
+        let mut expanded = false;
+        loop {
+            if expanded && start.elapsed() >= budget {
+                return None;
+            }
+            let Some((_, key)) = open.pop() else {
+                return Some(vec![]);
+            };
+            expanded = true;
+            if !visited.insert(key) {
+                continue;
+            }
+            let (at, cost, _) = nodes[&key];
+            if distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS {
+                let mut path = vec![];
+                let mut k = key;
+                while k != (0, 0) {
+                    let (p, _, parent) = nodes[&k];
+                    path.push(p);
+                    k = parent;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            if visited.len() > 20000 {
+                return Some(vec![]);
+            }
+            for dx in -1..=1i32 {
+                for dz in -1..=1i32 {
+                    if dx == 0 && dz == 0 {
+                        continue;
+                    }
+                    let next = (key.0 + dx, key.1 + dz);
+                    if visited.contains(&next) {
+                        continue;
+                    }
+                    let mx = dx as f32 * cell;
+                    let mz = dz as f32 * cell;
+                    let hit = ddsim::sweep::sweep(
+                        param,
+                        &ddsim::sweep::PLAYER_CAPSULE,
+                        at.to_array(),
+                        [mx, -ddsim::GROUND_CHECK_DROP, mz],
+                        true,
+                        &|lo, hi, out| {
+                            ground.triangles_in(lo, hi, out);
+                        },
+                    );
+                    let mut p = Vec3::from(hit.position);
+                    if !hit.grounded() {
+                        let Some(floor) = ground.height(p.x, p.z, p.y + ddsim::FALL_CHECK_UP) else {
+                            continue;
+                        };
+                        if p.y - floor > ddsim::STEP_DOWN {
+                            continue;
+                        }
+                        p.y = floor;
+                    }
+                    let moved = Vec3::new(p.x - at.x, 0.0, p.z - at.z);
+                    if (moved - Vec3::new(mx, 0.0, mz)).length() > cell * 0.5 {
+                        continue;
+                    }
+                    let g = cost + moved.length();
+                    if nodes.get(&next).is_some_and(|(_, old, _)| *old <= g) {
+                        continue;
+                    }
+                    nodes.insert(next, (p, g, key));
+                    open.push((Reverse((g + distance(p)) as i32), next));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 fn plan_path(
     ground: &dyn ddsim::Ground,
     param: &ddsim::sweep::SweepParam,
     from: Vec3,
     target: Vec3,
 ) -> Vec<Vec3> {
-    use std::cmp::Reverse;
-    use std::collections::{BinaryHeap, HashMap, HashSet};
-    let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
-    let cell = ddsim::BODY_RADIUS;
-    let mut open = BinaryHeap::from([(Reverse(distance(from) as i32), (0i32, 0i32))]);
-    let mut nodes = HashMap::from([((0, 0), (from, 0.0f32, (0, 0)))]);
-    let mut visited = HashSet::new();
-    while let Some((_, key)) = open.pop() {
-        if !visited.insert(key) {
-            continue;
-        }
-        let (at, cost, _) = nodes[&key];
-        if distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS {
-            let mut path = vec![];
-            let mut k = key;
-            while k != (0, 0) {
-                let (p, _, parent) = nodes[&k];
-                path.push(p);
-                k = parent;
-            }
-            path.reverse();
-            return path;
-        }
-        if visited.len() > 20000 {
-            break;
-        }
-        for dx in -1..=1i32 {
-            for dz in -1..=1i32 {
-                if dx == 0 && dz == 0 {
-                    continue;
-                }
-                let next = (key.0 + dx, key.1 + dz);
-                if visited.contains(&next) {
-                    continue;
-                }
-                let mx = dx as f32 * cell;
-                let mz = dz as f32 * cell;
-                let hit = ddsim::sweep::sweep(
-                    param,
-                    &ddsim::sweep::PLAYER_CAPSULE,
-                    at.to_array(),
-                    [mx, -ddsim::GROUND_CHECK_DROP, mz],
-                    true,
-                    &|lo, hi, out| {
-                        ground.triangles_in(lo, hi, out);
-                    },
-                );
-                let mut p = Vec3::from(hit.position);
-                if !hit.grounded() {
-                    let Some(floor) = ground.height(p.x, p.z, p.y + ddsim::FALL_CHECK_UP) else {
-                        continue;
-                    };
-                    if p.y - floor > ddsim::STEP_DOWN {
-                        continue;
-                    }
-                    p.y = floor;
-                }
-                let moved = Vec3::new(p.x - at.x, 0.0, p.z - at.z);
-                if (moved - Vec3::new(mx, 0.0, mz)).length() > cell * 0.5 {
-                    continue;
-                }
-                let g = cost + moved.length();
-                if nodes.get(&next).is_some_and(|(_, old, _)| *old <= g) {
-                    continue;
-                }
-                nodes.insert(next, (p, g, key));
-                open.push((Reverse((g + distance(p)) as i32), next));
-            }
-        }
-    }
-    vec![]
+    RoutePlan::new(from, target)
+        .advance(ground, param, std::time::Duration::MAX)
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -1842,5 +1980,14 @@ mod tests {
         assert!(!path.is_empty());
         assert!(path.iter().any(|p| p.z.abs() > 150.0));
         assert!((path.last().unwrap().x - 400.0).hypot(path.last().unwrap().z) < 150.0);
+        // Yield after every expansion, then verify resumed search retains
+        // the same collision-safe route as one uninterrupted search.
+        let mut plan = RoutePlan::new(Vec3::ZERO, Vec3::new(400.0, 0.0, 0.0));
+        let param = ddsim::sweep::SweepParam::default();
+        assert!(plan.advance(&ground, &param, std::time::Duration::ZERO).is_none());
+        let resumed = (0..100_000)
+            .find_map(|_| plan.advance(&ground, &param, std::time::Duration::ZERO))
+            .expect("incremental search must finish");
+        assert_eq!(resumed, path);
     }
 }

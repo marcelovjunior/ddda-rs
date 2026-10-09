@@ -38,6 +38,9 @@ the offline mode, the multiplier and the Rift Crystal field
 - **The network** is Steam only: Steam Cloud files shared as UGC, found
   through Steam leaderboards. There is no Capcom HTTP server in the client.
   (traced)
+  *Correction (2026-10-09, docs/EXTERNAL.md)*: the client does have a
+  second, Capcom service, `sDDCaProto` to dune.dragonsdogma.com (TCP 12501,
+  with TUS user storage); what it carries is untraced (brief: online-services).
 - **Hiring cost** in Rift Crystals: free at or below the player's level and
   for friends' pawns. Above it, `trunc(m*((L+P)*(L-P)^2 + 18))`, with m = 1.0
   offline. (traced, tested)

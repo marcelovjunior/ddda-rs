@@ -76,6 +76,7 @@ pub struct Streamer {
     present: HashSet<StreamCell>,
     /// The collision and layout cells the current terrain was built from.
     built: Built,
+    completed_collision_cells: Vec<(i32, i32)>,
     terrain: Option<Task<(Built, ddworld::Terrain)>>,
     /// A rebuilt terrain not yet taken by the driver.
     ready: Option<ddworld::Terrain>,
@@ -109,6 +110,7 @@ impl Streamer {
             far,
             present,
             built: (vec![], vec![]),
+            completed_collision_cells: Vec::new(),
             terrain: None,
             ready: None,
             scenery: None,
@@ -125,6 +127,25 @@ impl Streamer {
     /// The newest rebuilt collision, once.
     pub fn take_terrain(&mut self) -> Option<ddworld::Terrain> {
         self.ready.take()
+    }
+
+    /// Actual completed collision rebuild, not desired/pending cells.
+    /// cAreaHit's field exception queries the collision list (+0x7c/+0x88),
+    /// as confirmed by 0x00c5f630 / 0x00c5f680; layout cells differ.
+    pub fn scenario_field_cells(&self) -> Option<ddstory::scenario::LoadedFieldCells> {
+        (self.stage == FIELD).then(|| ddstory::scenario::LoadedFieldCells {
+            origin: self.grid.origin,
+            cell: self.grid.cell,
+            name_offset: self.grid.name_offset,
+            loaded: self.completed_collision_cells.clone(),
+        })
+    }
+
+    /// Layout cells requested by the completed terrain/scenery rebuild.
+    /// Separate from collision admission; this does not prove individual
+    /// layout resources parsed or NPC materialization succeeded.
+    pub fn loaded_layout_cells(&self) -> &[(i32, i32)] {
+        &self.built.1
     }
 
     /// Moves the party's world to `stage`, arriving at `at` (stage frame):
@@ -149,6 +170,7 @@ impl Streamer {
         }
         self.present.clear();
         self.built = (vec![], vec![]);
+        self.completed_collision_cells.clear();
         self.terrain = None;
         self.ready = None;
         self.stage = stage;
@@ -160,6 +182,7 @@ impl Streamer {
             let (collision, layouts) = self.collision_cells(at);
             let index = self.scenery_index();
             let mut t = ddworld::Terrain::load_collision_cells(self.vfs, stage, collision.iter().copied());
+            self.completed_collision_cells = t.parsed_collision_cells().to_vec();
             t.add_scenery_cells(self.vfs, &index, stage, layouts.iter().copied());
             self.built = (collision, layouts);
             info!("stream: entered stage {stage} at {at:?} ({} triangles)", t.triangles());
@@ -251,6 +274,7 @@ pub fn update(
     if let Some(task) = s.terrain.as_mut() {
         if let Some((built, terrain)) = block_on(future::poll_once(task)) {
             info!("stream: collision of {} cells + {} layouts ready ({} triangles)", built.0.len(), built.1.len(), terrain.triangles());
+            s.completed_collision_cells = terrain.parsed_collision_cells().to_vec();
             s.ready = Some(terrain);
             s.built = built;
             s.terrain = None;

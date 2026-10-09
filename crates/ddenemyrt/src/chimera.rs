@@ -13,6 +13,90 @@ pub enum Unit {
     Child01,
 }
 
+/// Initial think-controller state and only the records reachable from it.
+/// Later CtrlThinkTbl switches and the unit-specific think/action driver
+/// remain separate from this initialization prefix.
+#[derive(Debug, Clone)]
+pub struct ThinkInitialization {
+    pub tables: ddai::thinktbl::Tables,
+    pub current: u32,
+    pub default: u32,
+    pub base: u32,
+    /// Manager +0xea4; body explicitly locks its selected controller table.
+    pub lock: bool,
+}
+
+impl ThinkInitialization {
+    /// `controller` is Some(index) only when body +0x5c14 is enabled; the
+    /// index is body +0x5c18. For children a missing parent is None as well.
+    /// Root records are read from the executable, never compiled into Rust.
+    // Translated from 0x009a0880, 0x009b0f50 and 0x009b8f10
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn read(exe: &ddexe::Exe<'_>, unit: Unit, controller: Option<u32>) -> Result<Self, String> {
+        let (current, fallback, lock) = match unit {
+            Unit::Body => {
+                let fallback = 0x0170_f060;
+                let current = if let Some(index) = controller {
+                    let address = index
+                        .checked_mul(4)
+                        .and_then(|offset| 0x016c_d234u32.checked_add(offset))
+                        .ok_or("chimera controller index overflow")?;
+                    exe.u32(address)?
+                } else {
+                    fallback
+                };
+                (current, fallback, controller.is_some())
+            }
+            Unit::Child00 => {
+                let root = if controller == Some(2) {
+                    0x016f_f368
+                } else {
+                    0x016f_e6e8
+                };
+                (root, root, false)
+            }
+            Unit::Child01 => {
+                let root = if controller == Some(2) {
+                    0x016f_9a28
+                } else {
+                    0x016f_8ee8
+                };
+                (root, root, false)
+            }
+        };
+        if exe.section_of(current) != Some(".data") {
+            return Err(format!(
+                "chimera controller root {current:#x} is not in executable data"
+            ));
+        }
+        // Body writes selected defaults in the enabled branch, then always
+        // overwrites +0x6e9c/+0x6ea0 with fallback at the end of initialization.
+        let tables = ddai::thinktbl::Tables::read_roots(exe, vec![current, fallback], &[])
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            tables,
+            current,
+            default: fallback,
+            base: fallback,
+            lock,
+        })
+    }
+
+    /// The caller supplies actor +0x5ae4's range scale. This constructs a
+    /// manager; it does not supply target slots, think flags or action logic.
+    pub fn manager(&self, scale: f32) -> ddai::thinktbl::ThinkMgr {
+        let mut manager = ddai::thinktbl::ThinkMgr::new();
+        manager.table = self.current;
+        manager.root = self.current;
+        manager.default_table = self.default;
+        manager.base_table = self.base;
+        manager.lock = self.lock;
+        manager.scale_on = scale > 0.0 && scale != 1.0;
+        manager.scale = if manager.scale_on { scale } else { 1.0 };
+        manager
+    }
+}
+
 /// Loaded `cCharParamEm5200` +8/+0xc values (actor +0x7268/+0x726c).
 /// Reflected labels identify the lion-head magick bonuses. No defaults are
 /// supplied: the values belong to the installed specific-parameter resource.
