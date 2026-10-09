@@ -106,8 +106,15 @@ fn apply_morph(m: &mut Morph, joints: &mut Query<&mut Transform>) {
         }
         world.push(w);
     }
+    // Only bones under an edit are written back: the TRS decomposition
+    // would garble the others (mirrored bones, shear) for nothing.
+    let mut dirty = vec![false; n];
     for i in 0..n {
         let (e, parent) = m.bones[i];
+        dirty[i] = !m.joint[i].is_empty() || parent.map_or(m.model_scale != Vec3::ONE, |p| dirty[p]);
+        if !dirty[i] {
+            continue;
+        }
         // Root bones hang under the entity root, which has no model scale:
         // their local is the world matrix itself.
         let local = parent.map_or(world[i], |p| world[p].inverse() * world[i]);
@@ -493,7 +500,8 @@ fn spawn_meshes(
                     // culling its back faces opened holes onto the body.
                     let s = mtmrl::shading::describe(mat, list, mfx);
                     if let Some(p) = s.textures.get("tAlbedoMap") {
-                        sm.base_color_texture = loader.texture(p, images);
+                        let p = undummy(loader, p);
+                        sm.base_color_texture = loader.texture(&p, images);
                     }
                     let c: [f32; 3] = std::array::from_fn(|k| s.albedo_color[k] * s.diffuse_color[k]);
                     let alpha = if s.uses_alpha() { s.transparency } else { 1.0 };
@@ -605,5 +613,77 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
         if let Some(m) = &mut p.morph {
             apply_morph(m, &mut joints);
         }
+    }
+}
+
+/// Spawns a `ddlook` look (base body, parts with hair and beard colours,
+/// sheathed weapons, part mask, morphs) playing `slot` of `motion_path`.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_look(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    look: &ddlook::Look,
+    motion_path: &str,
+    slot: usize,
+    at: Vec3,
+    hold: Option<f32>,
+) -> Result<Entity, String> {
+    let mut parts: Vec<ExtraPart> = look
+        .parts
+        .iter()
+        .map(|p| ExtraPart {
+            path: p.path.clone(),
+            tint: if p.hair {
+                look.hair_color
+            } else if p.beard {
+                look.beard_color
+            } else {
+                None
+            },
+            attach: None,
+        })
+        .collect();
+    parts.extend(look.weapons.iter().map(|w| ExtraPart {
+        path: w.path.clone(),
+        tint: None,
+        attach: Some((w.joint, w.rotation, w.offset)),
+    }));
+    let mask = look.mask;
+    spawn_assembled(
+        commands,
+        loader,
+        meshes,
+        materials,
+        images,
+        bindposes,
+        &look.base,
+        look.skin_color,
+        look.body.as_ref(),
+        &look.face,
+        &parts,
+        &move |g| mask.visible(g),
+        motion_path,
+        slot,
+        at,
+        hold,
+    )
+}
+
+/// Enemy materials name 8x8 placeholder maps `d_<name>` (e.g.
+/// `model\em\e01\e0100\d_e0100_all_BM`); the full map `<name>` sits next
+/// to it. The game's swap is not traced (*viewer choice*): use the full
+/// map when the install has it.
+fn undummy(loader: &Loader, path: &str) -> String {
+    let Some((dir, file)) = path.rsplit_once('\\') else { return path.to_string() };
+    let Some(rest) = file.strip_prefix("d_").or_else(|| file.strip_prefix("D_")) else { return path.to_string() };
+    let full = format!("{dir}\\{rest}");
+    if loader.vfs.locate(&full, crate::stage::RTEXTURE).is_some() {
+        full
+    } else {
+        path.to_string()
     }
 }

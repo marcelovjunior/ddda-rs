@@ -9,6 +9,12 @@
 //!
 //! Both step at the host's 30 Hz frame, whatever the render rate. The
 //! camera follows the local seat.
+//!
+//! The host's session carries the fight (`Host::fight`): every seat's
+//! attacks, the main pawn (a sim player outside the roster, so it reaches
+//! guests in the snapshots) and `--goblin`'s goblins. Goblins and HP are
+//! not in the protocol yet: a guest sees the Arisen and the pawn, not the
+//! goblins.
 
 use std::net::ToSocketAddrs;
 use std::path::Path;
@@ -76,7 +82,7 @@ pub fn setup(
     mode: Mode,
     profile: Option<u64>,
     (stage, a0, b0, radius): (u32, i32, i32, i32),
-    spawn: Vec3,
+    (spawn, yaw): (Vec3, f32),
     st: &mut PlayState,
 ) -> Result<(), String> {
     let sim = ddhost::install::sim(vfs)?;
@@ -88,8 +94,26 @@ pub fn setup(
     let side = match mode {
         Mode::Host { port } => {
             let mut host = Host::new(sim, None, ScriptedHost::default(), Box::new(ground));
-            host.join(ProfileId(profile.unwrap_or(1)), Control::Local, spawn.to_array(), 0.0)
+            host.join(ProfileId(profile.unwrap_or(1)), Control::Local, spawn.to_array(), yaw)
                 .ok_or("cannot seat the host")?;
+            // The play state's fight moves into the host: seat 0's kit, the
+            // pawn (its body copied into the host's simulation) and the
+            // goblins.
+            if let Some(mut f) = st.fight.take() {
+                f.equip(&mut host.sim, 0);
+                let pawns: Vec<u8> = f.pawns.keys().copied().collect();
+                for seat in pawns {
+                    if let Some(p) = st.sim.player(seat) {
+                        host.sim.add_player(seat, p.position, p.yaw);
+                        if let Some(q) = host.sim.player_mut(seat) {
+                            q.relaxed = true;
+                        }
+                    }
+                    f.equip(&mut host.sim, seat);
+                }
+                f.volumes(&host.sim);
+                host.fight = Some(f);
+            }
             let udp = ddnet::Udp::bind(&format!("0.0.0.0:{port}")).map_err(|e| format!("bind port {port}: {e}"))?;
             info!("net: hosting on port {port}");
             let config = ddnet::ServerConfig { build, data, spawn: spawn.to_array() };
@@ -115,7 +139,9 @@ pub fn setup(
 }
 
 fn shown(b: &ddnet::Body) -> Shown {
-    Shown { id: b.id, position: b.position, yaw: b.yaw, state: b.state, frame: b.frame }
+    // the protocol does not carry the weapon: attacks pick theirs from
+    // the state (play::show)
+    Shown { id: b.id, position: b.position, yaw: b.yaw, state: b.state, frame: b.frame, weapon: ddsim::Weapon::None }
 }
 
 /// One render frame: step the session at 30 Hz, then show every Arisen.
@@ -130,12 +156,17 @@ pub fn step(
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility>,
+    mut hud: ResMut<play::Hud>,
+    mut demo_press: Local<bool>,
 ) {
     let (Some(mut st), Some(net)) = (state, net) else { return };
     let st = &mut *st;
     play::orbit(st, &buttons, &mouse);
-    let mut input = PlayerInput { sim: play::p1_input(&keys, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) };
-    if st.demo {
+    let mut input = PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) };
+    if st.demo && !st.goblins.is_empty() {
+        // with goblins (host only), the demo's seat 0 fights them; walked
+        // per host frame below
+    } else if st.demo {
         // Unattended: walk in a small circle near the spawn (about 1.3 m
         // radius at the walk speed). No jumps: a jump onto higher ground
         // can sink a body below a single-layer collision surface in ddsim
@@ -164,8 +195,25 @@ pub fn step(
                     p.relaxed = true;
                     p.double_jump = true;
                 }
+                // guests that joined fight too (a Fighter kit each)
+                if let Some(f) = server.host.fight.as_mut() {
+                    let seats: Vec<u8> = server.host.roster.ids().collect();
+                    for seat in seats {
+                        if !f.arisen.contains_key(&seat) {
+                            f.add_arisen(seat);
+                            f.equip(&mut server.host.sim, seat);
+                            info!("net: seat {seat} joins the fight");
+                        }
+                    }
+                }
                 let mut local = FrameInputs::new();
-                local.insert(0, input);
+                let mut i = input;
+                if st.demo && !st.goblins.is_empty() {
+                    let mut press = *demo_press;
+                    i.sim = play::demo_attack(&server.host.sim, server.host.fight.as_ref(), 0, st.cam_yaw, &mut press);
+                    *demo_press = press;
+                }
+                local.insert(0, i);
                 if let Err(e) = server.step(&local, now) {
                     error!("net: host frame: {e}");
                 }
@@ -174,6 +222,15 @@ pub fn step(
                 info!("net: {line}");
             }
             s.log_seen = server.log.len();
+            if let Some(f) = server.host.fight.as_ref() {
+                let dead = f.goblins.iter().filter(|g| g.dead()).count();
+                for e in &f.events {
+                    debug!("net: hit {} -> {}: {:.1}", e.attacker, e.victim, e.total);
+                }
+                if dead > 0 && t_log_dead(dead) {
+                    info!("net: goblins down: {dead} of {}", f.goblins.len());
+                }
+            }
             server.host.sim.players.iter().map(Shown::of).collect()
         }
         Side::Client { client, newest, told } => {
@@ -214,9 +271,33 @@ pub fn step(
         info!("net: t={t:.1}s sees {}", seen.join(", "));
     }
     play::show(st, &bodies, &mut roots, &mut cams);
+    match &s.side {
+        Side::Host(server) => {
+            play::show_goblins(st, server.host.fight.as_ref(), &mut roots);
+            hud.rows = play::hud_rows(st, &server.host.sim, server.host.fight.as_ref(), None);
+        }
+        Side::Client { client, .. } => {
+            // A guest knows its stamina, not its HP (not in the protocol).
+            hud.rows = client
+                .own()
+                .map(|b| vec![("Arisen stamina".to_string(), b.stamina, b.stamina_max, Color::srgb(0.2, 0.65, 0.25))])
+                .unwrap_or_default();
+            // no goblins on a guest
+            for g in &st.goblins {
+                st.visible.insert(g.entity, false);
+            }
+        }
+    }
     for (&e, &on) in &st.visible {
         if let Ok(mut v) = vis.get_mut(e) {
             *v = if on { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
+}
+
+/// Whether a new goblin count is due for the log (once per count).
+fn t_log_dead(dead: usize) -> bool {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static LOGGED: AtomicUsize = AtomicUsize::new(0);
+    LOGGED.fetch_max(dead, Ordering::Relaxed) < dead
 }

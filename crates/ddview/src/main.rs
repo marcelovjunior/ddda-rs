@@ -21,6 +21,10 @@
 //! until they are ready) and exits.
 //!
 //! Controls: WASD move, Q/E down/up, Shift faster, hold right mouse to look.
+//!
+//! `--play [--save DDDA.sav] [--goblin]` plays (play.rs): with a save, at
+//! its spot, clock and weather, with its Arisen and main pawn dressed;
+//! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod event;
 mod character;
@@ -78,6 +82,12 @@ struct Args {
     host: Option<u16>,
     join: Option<String>,
     profile: Option<u64>,
+    /// `--save DDDA.sav`: its XML (`ddsave`), for the party and the spot.
+    save_xml: Option<std::sync::Arc<String>>,
+    /// `--goblin`: goblins to add.
+    goblins: usize,
+    /// `--players` was given.
+    players_given: bool,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -115,6 +125,9 @@ fn args() -> Args {
         host: None,
         join: None,
         profile: None,
+        save_xml: None,
+        goblins: 0,
+        players_given: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -128,6 +141,11 @@ fn args() -> Args {
         if k == "--play" || k == "--demo" {
             a.play = true;
             a.demo |= k == "--demo";
+            continue;
+        }
+        if k == "--goblin" {
+            a.goblins += 1;
+            a.play = true;
             continue;
         }
         let v = it.next().unwrap_or_else(|| panic!("{k} needs a value"));
@@ -166,7 +184,16 @@ fn args() -> Args {
             "--motion" => a.motion = Some(v),
             "--slot" => a.slot = v.parse().unwrap(),
             "--frame" => a.frame = Some(v.parse().unwrap()),
-            "--players" => a.players = v.parse().unwrap(),
+            "--players" => {
+                a.players = v.parse().unwrap();
+                a.players_given = true;
+            }
+            "--save" => {
+                let bytes = std::fs::read(&v).unwrap_or_else(|e| panic!("{v}: {e}"));
+                let save = ddsave::SaveFile::parse(&bytes).unwrap_or_else(|e| panic!("{v}: {e:?}"));
+                a.save_xml = Some(std::sync::Arc::new(save.xml));
+                a.play = true;
+            }
             "--spawn" => a.spawn = parse_vec3(&v),
             "--host" => {
                 a.host = Some(v.parse().unwrap());
@@ -180,7 +207,51 @@ fn args() -> Args {
             _ => panic!("unknown option {k}"),
         }
     }
+    if let Some(xml) = a.save_xml.clone() {
+        apply_saved_spot(&mut a, &xml);
+    }
     a
+}
+
+/// `--save`: the stage, the origin cell around the saved position, the
+/// spawn, the camera start, the clock and the weather (each unless given
+/// on the command line; options after `--save` override it).
+fn apply_saved_spot(a: &mut Args, xml: &str) {
+    let Some(spot) = play::saved_spot(xml) else {
+        eprintln!("--save: no mPlayerDataManual spot; keeping the defaults");
+        return;
+    };
+    a.stage = spot.stage;
+    // the position is in the stage frame (origin at cell 50m50n); its cell
+    // is (A, B) = (50 + z / 10000, 50 + x / 10000) (docs/WORLD.md)
+    let cell = (50 + (spot.pos.z / 10000.0).floor() as i32, 50 + (spot.pos.x / 10000.0).floor() as i32);
+    a.cell = cell;
+    let origin = Vec3::new((cell.1 - 50) as f32 * 10000.0, 0.0, (cell.0 - 50) as f32 * 10000.0);
+    a.spawn = spot.pos - origin;
+    a.player = Some(a.spawn);
+    // the camera starts behind the Arisen
+    let back = Vec3::new(-spot.yaw.sin(), 0.0, -spot.yaw.cos());
+    a.pos = a.spawn + back * 450.0 + Vec3::Y * 220.0;
+    a.look = a.spawn + Vec3::Y * 150.0;
+    a.clock_ms.get_or_insert(spot.clock_ms);
+    if a.weather.is_none() && (spot.weather as usize) < sky::WEATHERS.len() {
+        a.weather = Some(spot.weather as usize);
+    }
+    if !a.players_given {
+        a.players = 1;
+    }
+    eprintln!(
+        "--save: stage {} cell {}m{}n at ({:.0}, {:.0}, {:.0}), clock {:02}:{:02}, weather {}",
+        spot.stage,
+        cell.0,
+        cell.1,
+        spot.pos.x,
+        spot.pos.y,
+        spot.pos.z,
+        spot.clock_ms / 3_600_000,
+        spot.clock_ms / 60_000 % 60,
+        spot.weather
+    );
 }
 
 /// Reads a reference pose (JSON written by the screenshot watcher) and its
@@ -312,7 +383,9 @@ fn lighting_from_units(hemis: &[[f32; 9]], lights: &[[f32; 6]], fog: &mtweather:
 /// from the game data (docs/SHADING.md, "Lighting from the data"): the
 /// sky scheduler's light units at the clock's sun and the weather's fog.
 fn resolve_lighting(args: &mut Args) {
-    if args.character.is_some() || args.play {
+    // --play keeps Bevy's lighting unless a save, a clock or a capture
+    // asks for the game's.
+    if args.character.is_some() || args.play && args.save_xml.is_none() && args.clock_ms.is_none() && args.light.is_none() {
         return;
     }
     let Ok(vfs) = ddvfs::Vfs::open(&args.native_pc) else { return };
@@ -437,8 +510,9 @@ fn main() {
             brightness: 250.0,
             ..default()
         })
+        .init_resource::<play::Hud>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (fly_camera, shot, play::step, net::step, character::animate).chain())
+        .add_systems(Update, (fly_camera, shot, play::step, net::step, character::animate, play::update_hud).chain())
         .run();
 }
 
@@ -571,6 +645,14 @@ fn setup(
             terrain.cells,
             terrain.triangles()
         );
+        let party = party(&vfs, &args, origin);
+        let data = match play::fight_data(&vfs, &args.native_pc) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                error!("play: fight data: {e}");
+                None
+            }
+        };
         match play::setup(
             &mut commands,
             &mut loader,
@@ -580,8 +662,8 @@ fn setup(
             &mut bindposes,
             terrain,
             origin,
-            origin + args.spawn,
-            args.players,
+            party,
+            data,
         ) {
             Ok(mut state) => {
                 state.demo = args.demo;
@@ -593,13 +675,15 @@ fn setup(
                 if let Some(mode) = mode {
                     let place = (args.stage, a0, b0, args.radius);
                     let spawn = origin + args.spawn;
+                    let yaw = args.save_xml.as_deref().and_then(|x| play::saved_spot(x)).map_or(0.0, |s| s.yaw);
                     if let Err(e) =
-                        net::setup(&mut commands, &vfs, &args.native_pc, mode, args.profile, place, spawn, &mut state)
+                        net::setup(&mut commands, &vfs, &args.native_pc, mode, args.profile, place, (spawn, yaw), &mut state)
                     {
                         error!("net: {e}");
                     }
                 }
-                commands.insert_resource(state)
+                commands.insert_resource(state);
+                play::spawn_hud(&mut commands);
             }
             Err(e) => error!("play: {e}"),
         }
@@ -657,6 +741,48 @@ fn setup(
         }
     }
     spawn_camera_and_light(&mut commands, &args, post);
+}
+
+/// Who plays (play.rs): with `--save`, its Arisen (seat 0) and main pawn,
+/// dressed; more seats and the network's other seats are stand-ins
+/// (`ddlook::save::template_look`); without a save every seat is the base
+/// body. A network guest's own seat (1) wears its save.
+fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
+    let saved = args.save_xml.as_deref().map(|xml| {
+        ddlook::save::save_looks(vfs, xml, "mPlayerDataManual").unwrap_or_else(|e| {
+            error!("--save: looks: {e}");
+            vec![]
+        })
+    });
+    let spot = args.save_xml.as_deref().and_then(|x| play::saved_spot(x));
+    let pick = |who: &str| saved.as_ref().and_then(|v| v.iter().find(|s| s.who == who)).map(|s| s.look.clone());
+    let stand_in = |sex: u8| ddlook::save::template_look(vfs, sex).ok();
+    let joining = args.join.is_some();
+    let net = args.host.is_some() || joining;
+    let seats = if net { args.players.max(2) } else { args.players.max(1) };
+    let mut arisen = vec![];
+    let mut kits = std::collections::HashMap::new();
+    for id in 0..seats {
+        // players side by side, 1.5 m apart
+        let pos = origin + args.spawn + Vec3::new(150.0 * f32::from(id), 0.0, 0.0);
+        let own = if joining { id == 1 } else { id == 0 };
+        let look = match (&saved, own) {
+            (Some(_), true) => pick("arisen"),
+            (Some(_), false) => stand_in(0),
+            (None, _) if net && !own => stand_in(0),
+            _ => None,
+        };
+        kits.insert(id, play::kit_of(look.as_ref().filter(|_| own)));
+        arisen.push((id, look, pos, spot.as_ref().map_or(0.0, |s| s.yaw)));
+    }
+    // The main pawn serves seat 0: the host's (or a single player's) save
+    // pawn; a guest sees a stand-in.
+    let pawn = match (&saved, &spot) {
+        (Some(_), Some(s)) if !joining => Some((pick("pawn0"), s.pawn.map_or(s.pos + Vec3::X * 150.0, |p| p.0), s.pawn.map_or(s.yaw, |p| p.1))),
+        _ if joining => Some((stand_in(0), origin + args.spawn + Vec3::X * 300.0, 0.0)),
+        _ => None,
+    };
+    play::Party { arisen, pawn, goblins: if joining { 0 } else { args.goblins }, kits }
 }
 
 /// Sun and camera, shared by the stage and character modes.
