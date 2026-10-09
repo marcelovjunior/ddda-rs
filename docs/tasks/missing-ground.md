@@ -54,4 +54,41 @@ traced live. Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+### Investigation checkpoint (2026-10-09, codex-29)
+
+Not fixed or compared against the original at the reported Cassardis
+location yet. No rendering behaviour changed at this checkpoint.
+
+- **Measured in the original:** a bounded main-pass snapshot of
+  `uBaseModel::vf26` (0x00EA5320) for a loaded field model confirms
+  `param_5` is its world sphere centre and render context +0x184 is the
+  camera eye (within floating-point rounding of the camera unit).
+  The live ViewRange is NORMAL (1), the model's middle/far thresholds
+  are 1000/3000 cm, its LOD override is -1, and its parent is null.
+  The temporary capture hook was restored and verified; the game remains
+  paused with background execution off. Save files were backed up before
+  attaching; no movement, save, or installation modification occurred.
+- **Traced:** 0x00EA1F40 substitutes the outermost parent model's sphere
+  centre when a model has parents. This is a possible general viewer
+  omission, but is not established as this floor's cause.
+- **Original whole-stage setup found:** aStage's 0x00506800 loads the
+  `scr\st200\sdl\st200_s00` scheduler. The installed scheduler creates
+  md06 as `uScrBaseModel`, with a model resource, light group, draw mode,
+  and `mDisableZone=true`; it authors no parent or LOD override for it.
+  Its constructor 0x00C572E0 delegates to 0x00EA3490, whose initial
+  +0x108 bit field gives LOD -1. Its update 0x00C574F0 handles zone
+  visibility, and draw 0x00C579F0 delegates to the normal model draw.
+  The existing comment attributing this to 0x00C25234 was incorrect:
+  that instruction belongs to `uOmSwingInstancing::vf08`, not a stage
+  model constructor. The comment is corrected without asserting that
+  all runtime stage-model writes have been ruled out.
+- **Validated:** the installed scheduler was parsed by the existing
+  `ddquest` `sdl_dump` example (release build passed); independent private
+  byte inspection agreed. Raw captures and exports remain in the private
+  research tree, not in the repository.
+
+**Blocker / next action:** the running original is in a field canyon,
+not Cassardis, and md06 is not loaded. Head has been asked to arrange a
+Cassardis save load with the maintainer. Capture md06's actual draw state
+at the reported camera position before changing the LOD rule; meanwhile
+continue tracing model binding and the authored scheduler's setup.

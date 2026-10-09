@@ -391,9 +391,12 @@ pub fn spawn_stage_models(
     for m in &models {
         if let Some(parts) = loader.model(m, meshes, materials, images) {
             // Converted meshes are already in viewer units (stage.rs).
-            // By distance like any model: `uBaseModel.mLODType` (+0x108 bits
-            // 9-12) is -1 (automatic) from its constructor (0x00c25234 sets
-            // all four bits) and no code sets it for stage models.
+            // Cassardis's st200_s00 scheduler creates uScrBaseModel units.
+            // Its constructor (0x00c572e0) calls uBaseModel's (0x00ea3490),
+            // which defaults mLODType (+0x108 bits 9-12) to -1 (automatic).
+            // That scheduler authors no LOD override or parent for md06.
+            // The missing-ground investigation still needs its live state;
+            // do not infer a general stage-model override from this default.
             let centre = model_centre(&parts, meshes);
             spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, loader.view_range);
         }
