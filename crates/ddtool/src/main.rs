@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use mtarc::{decode_payload, Archive};
 
+mod fsm_dump;
 mod model;
 mod msg_dump;
 mod param_dump;
@@ -38,6 +39,7 @@ const USAGE: &str = "usage:
   ddtool sbc-scan <nativePC dir>
   ddtool xfs-get <nativePC dir> <resource path>
   ddtool survey <nativePC dir> [resource class]";
+  ddtool fsm-dump <nativePC dir> <resource path>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
         ["lot-scan", dir] => xfs::lot_scan(Path::new(dir)),
         ["lmt-scan", dir] => xfs::lmt_scan(Path::new(dir)),
         ["sbc-scan", dir] => xfs::sbc_scan(Path::new(dir)),
+        ["fsm-dump", dir, path] => fsm_dump::run(Path::new(dir), path),
         ["xfs-get", dir, path] => xfs::xfs_get(Path::new(dir), path),
         ["survey", dir] => survey::survey(Path::new(dir), None),
         ["survey", dir, class] => survey::survey(Path::new(dir), Some(class)),
