@@ -102,3 +102,16 @@ two existing viewer warnings remain. No original hand comparison is
 claimed. General rotated
 type-9 constraints, type-0xc constraints and the independent fresh-model
 body-measurement pipeline remain separate work.
+
+### Type-0xb joint-2 exception
+
+`0x0086d180` compensates only the Y axis of semantic joint 2 and retains
+the model's Y scale there. `0x0081c330` leaves +0xb0 clear for joint 2,
+while setting it for the other human type-0xb joints (3/4/6/10), which
+compensate all axes. The renderer previously applied the latter behavior
+to every type-0xb joint. It now retains the semantic joint ID and uses a
+sourced helper for that distinction, including the strict epsilon case
+that keeps the initial factor instead of dividing by a clamped length.
+Two regressions and strict ddlook clippy pass. Release viewer verification
+is deferred until the uncontended route benchmark is over. No original
+same-record appearance comparison is claimed.
