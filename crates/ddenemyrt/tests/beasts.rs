@@ -202,6 +202,21 @@ fn mixed_family_fight_targets_damage_and_owner_ids_are_separate() {
             assert!(hit, "{family:?} not hit");
             assert!(fight.beasts[0].fighter.victim.hp() < initial);
             assert_eq!(fight.beasts[1].fighter.victim.hp(), other);
+            if family == Family::Wolf {
+                if let ddenemyrt::combat::Victim::Enemy { regions, .. } = &mut fight.beasts[0].fighter.victim {
+                    regions[0].hp = 0.0;
+                }
+                for _ in 0..100 {
+                    fight.enemies(&sim, &Flat, 1.0);
+                }
+                let dead = &fight.beasts[0];
+                assert_eq!(dead.action, Some(0x0300_0042));
+                assert_eq!(dead.motion, MotionId::new(2, 0x39));
+                assert!(dead.frame > 0.0, "death must advance rather than restart");
+                assert!(!dead.done);
+                assert!(dead.fighter.attacks.is_empty());
+                assert_eq!(dead.target, None);
+            }
             fight.digest()
         };
         assert_eq!(run(), run());

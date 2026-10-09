@@ -297,6 +297,22 @@ impl Beast {
 
     pub fn dead(&self) -> bool { self.fighter.victim.dead() }
 
+    /// Ordinary em0200 death selection, served before thinking on the next
+    /// enemy update (0x008f6230 -> pending +0x5b58 -> 0x008f3830).
+    /// Only the ordinary path is modeled: knockdown, grab, subtype 0x91 and
+    /// status-specific death overrides remain unported.
+    pub fn begin_standard_wolf_death(&mut self, data: &BeastData) -> Result<(), String> {
+        if self.family != Family::Wolf || !self.dead() {
+            return Err("standard wolf death requires a dead wolf".into());
+        }
+        if !matches!(self.phase, ActionPhase::CommonDeath) {
+            self.start_action(data, 0x0300_0042)?;
+            self.target = None;
+            self.attack_ready = false;
+        }
+        Ok(())
+    }
+
     pub fn volumes(&mut self, data: &BeastData) {
         let pose = data.body.pose(self.motion, self.frame, self.pos, self.yaw);
         let active = data.body.activations(self.motion, self.frame);

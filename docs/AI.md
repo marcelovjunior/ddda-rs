@@ -625,7 +625,12 @@ record from the installed executable and plays the installed wolf clip.
 Its valid-owner update (0x008a6930) never sets the action done byte, even
 after animation end. An installed regression checks motion selection,
 deterministic end pose, dead attack suppression and that persistent state.
-Corpse flags/timers and forced selection remain unconnected.
+The shared Fight dispatches this ordinary wolf death before its next action
+update (pending selection in 0x008f3830), including deaths from the status
+pass. A mixed-family regression verifies the animation advances without
+restarting, clears its captured target and keeps attack volumes empty.
+Special knockdown, grab, subtype and status-death overrides, plus corpse
+flags/timers, remain unconnected. All four installed beast regressions pass.
 Harpy corpse removal, status-time integration, target sensing and viewer
 dispatch also remain host work.
 
@@ -643,10 +648,11 @@ spell/shell targeting. Goblins and beasts allocate from one enemy-owner
 counter; the existing fixed seat/enemy/shell ranges still need a general
 allocator before large populations or high seat IDs are supported. Callers
 explicitly select supported actions and captured target owners. Dead beasts
-stop attacking, but forced reactions and death animation dispatch are pending.
+stop attacking; ordinary wolf death dispatch is connected, while damage
+reactions and harpy/conditional death dispatch are pending.
 An installed-data regression uses two player seats and mixed enemy families,
 checks Ingle damage is attributed to seat 1 and leaves the distant beast
 unhurt, and repeats each family run to compare deterministic digests.
 All 35 ddenemyrt tests pass (one debug probe ignored). This verifies shared
 combat plumbing; autonomous family fights and original-game comparison remain
-open. Next: connect the traced common death action and family think host.
+open. Next: connect the family think host and harpy death selection.

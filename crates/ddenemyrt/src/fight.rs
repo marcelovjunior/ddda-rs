@@ -508,8 +508,12 @@ impl Fight {
             }
         }
         for beast in &mut self.beasts {
-            if beast.dead() { continue; }
             let data = match beast.family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+            if beast.dead() {
+                // Ordinary em0200 pending death precedes the think graph.
+                // Other family/conditional death selection remains unported.
+                if beast.begin_standard_wolf_death(data).is_err() { continue; }
+            }
             let target = beast.target.and_then(|id| targets.iter().find(|t| t.id == id && t.alive)).map(|t| t.pos);
             beast.step_action(data, target, ground, step);
         }

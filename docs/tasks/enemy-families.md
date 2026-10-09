@@ -38,7 +38,11 @@ All 35 ddenemyrt tests pass, including deterministic installed-data action and
 two-seat mixed-family hit tests (one debug probe ignored). Details and source
 addresses are in docs/AI.md.
 
-Not complete: autonomous family think/sensing, forced damage/death dispatch,
+Ordinary wolf death now selects common action 0x03000042, reads its primary
+motion 0x239 from the installed executable and advances it through Fight.
+All four installed beast regressions pass, including end-state persistence.
+
+Not complete: autonomous family think/sensing, forced damage and conditional death dispatch,
 spawn/viewer/network integration and original-game fight comparisons. Normal
 wolf death uses common action 0x03000042 (0x008f6230), distinct from the local
-unsupported cEm0200Die motion. Next: trace that registration and wire death.
+unsupported cEm0200Die motion. Next: family think host and harpy death selection.
