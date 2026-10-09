@@ -80,6 +80,45 @@ impl PawnRng for XorShift128 {
     }
 }
 
+impl XorShift128 {
+    /// A generator seeded the way `0x00d006c0` seeds one (DDDA.exe
+    /// 2017-12-13 Steam; translated, not yet compared with the original):
+    /// fixed start words, then 20 rounds that mix the seed through a small
+    /// scrambler and four xorshift steps.
+    pub fn seeded(seed: u32) -> XorShift128 {
+        fn scramble(u: u32) -> u32 {
+            let u = u ^ (0x65ac_9365u32 >> (u & 3));
+            u ^ (((u >> 1) ^ u) >> 3) ^ (((u << 1) ^ u) << 3)
+        }
+        fn mix(a: u32, prev: u32) -> u32 {
+            let t = (a << 15) ^ a;
+            (((prev >> 17) ^ t) >> 4) ^ prev ^ t
+        }
+        let mut s = [0x075b_cd15u32, 0x159a_55e5, 0x1f12_3bb5, 0x0549_1333];
+        let mut u1 = seed ^ 0x00ac_9365;
+        let mut u3 = s[3];
+        let mut u2 = 0;
+        let mut u4 = 0;
+        for _ in 0..20 {
+            u1 = scramble(u1);
+            u2 = mix(u1, u3);
+            u1 = scramble(u1);
+            u3 = mix(u1, u2);
+            u1 = scramble(u1);
+            u2 = mix(u1, u3);
+            u1 = scramble(u1);
+            u4 = mix(u1, u2);
+            s[0] = u3;
+            u1 = scramble(u1);
+            u3 = mix(u1, u4);
+        }
+        s[1] = u2;
+        s[2] = u4;
+        s[3] = u3;
+        XorShift128 { state: s }
+    }
+}
+
 /// `(level offset, count)` pairs at `0x0150a358`: the offline pool is 25
 /// pawns at the player's level, 16 at +2, 2 at -2, and so on (100 in all;
 /// the table ends with `(0, 99)`).
@@ -289,5 +328,17 @@ mod tests {
         assert_eq!(band_of(0), 0);
         assert_eq!(band_of(171), 32);
         assert_eq!(band_of(250), 0);
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    #[test]
+    fn seeded_print() {
+        for seed in [0x1105u32, 0, 12345] {
+            eprintln!("seeded({seed:#x}) = {:08x?}", XorShift128::seeded(seed).state);
+        }
     }
 }
