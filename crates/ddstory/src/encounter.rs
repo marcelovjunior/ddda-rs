@@ -16,6 +16,8 @@ pub struct UnitFacts {
     pub present: bool,
     /// Persistent placement death bit (0x004a6510), independent of loading.
     pub killed: bool,
+    /// Report HP only after the unit is ready for the CheckHp query
+    /// (0x005c92ce: unit state low bits equal 2 and flag 0x400 set).
     pub hp: Option<f32>,
     pub max_hp: Option<f32>,
     pub npc: Option<NpcIntel>,
@@ -45,6 +47,11 @@ pub struct EncounterFacts {
     pub damaged_this_frame: bool,
     pub lost_pawn: bool,
     pub items: HashMap<u32, u32>,
+    /// Stage-200 adapter's original type-0x5a lookup result. This cannot
+    /// be inferred from a placement id or another enemy family's HP.
+    pub challenge_dragon: Option<crate::dragon::ChallengeDragon>,
+    /// Present, valid Arisen supplied by the session adapter, all seats.
+    pub challenge_players: Vec<crate::dragon::ChallengePlayer>,
 }
 
 impl EncounterFacts {
@@ -66,6 +73,14 @@ impl EncounterFacts {
 }
 
 impl Host for EncounterFacts {
+    fn dragon_challenge_actors(
+        &self,
+    ) -> (
+        Option<crate::dragon::ChallengeDragon>,
+        Vec<crate::dragon::ChallengePlayer>,
+    ) {
+        (self.challenge_dragon, self.challenge_players.clone())
+    }
     fn layout_loaded(&self, stage: u32, target: &Target) -> bool {
         self.unit(stage, target).layout_loaded
     }
@@ -111,6 +126,9 @@ impl Host for EncounterFacts {
             || (target.kind == 1 && !u.present)
             || (target.kind == 2 && u.killed)
     }
+    // Translated from 0x005c9250..0x005c93dc (DDDA.exe 2017-12-13 Steam).
+    // Percent multiplier 100.0 is the scalar at 0x01531ae8. The host
+    // supplies only ready-unit HP; the registry does not inspect actors.
     fn unit_hp(&self, stage: u32, target: &Target, percent: bool) -> Option<f32> {
         let u = self.unit(stage, target);
         if !u.present {

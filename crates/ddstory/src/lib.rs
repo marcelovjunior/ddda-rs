@@ -13,6 +13,7 @@
 
 pub mod cond;
 pub mod data;
+pub mod dragon;
 pub mod event;
 pub mod exe;
 pub mod encounter;
@@ -165,6 +166,13 @@ pub struct NpcIntel {
 /// Facts about units the host owns (party, NPCs, enemies, objects) and
 /// options. Only orders that need them ask.
 pub trait Host {
+    /// Live observations for aStage200's original challenge check
+    /// (0x0051ccc0). The adapter supplies the actual type-0x5a enemy
+    /// lookup result and present, valid Arisen life-region observations.
+    /// Missing integration reports no actors, never an invented death.
+    fn dragon_challenge_actors(&self) -> (Option<dragon::ChallengeDragon>, Vec<dragon::ChallengePlayer>) {
+        (None, vec![])
+    }
     /// The placement's layout set is loaded (0x005cc210).
     fn layout_loaded(&self, stage: u32, t: &Target) -> bool;
     /// The placement resolves to a unit (0x007643d0).
