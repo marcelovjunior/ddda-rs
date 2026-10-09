@@ -69,6 +69,13 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   region) and positive effective maximum HP sets the flag. The maximum
   getter is 0x00b845d0 -> 0x00782040. This is original stage-specific code,
   not a timeout or an invented quest rule.
+- Implemented that check in `ddstory/src/dragon.rs` with explicit actor
+  snapshots and persistent baseline capture. The co-op extension lets any
+  valid Arisen satisfy the low-life branch. Three pure regression tests
+  pass (compiled directly with `rustc --test` while the shared Cargo target
+  was allocated elsewhere), including strict threshold, missing actors,
+  missing regions, independent player branch and unordered float inputs.
+  The module export and host tick remain coordinated integration work.
 - Still required: stage-gate integration; actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->
