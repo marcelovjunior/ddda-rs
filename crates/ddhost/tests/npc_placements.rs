@@ -233,3 +233,28 @@ fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements()
     assert_eq!(host.story_npc_intels().count(), 0);
     assert!(host.npcs.npcs.is_empty());
 }
+
+#[test]
+fn unsupported_applied_owner_does_not_abort_frame_or_restore_normal_as_if_finished() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut first = placement(1);
+    first.authored_action = "healthy".into();
+    let mut second = placement(2);
+    second.target.index = 18;
+    second.authored_action = "broken".into();
+    host.reconcile_story_npc_intels(200, vec![first, second]).unwrap();
+    let report = host.tick(&Default::default()).unwrap();
+    assert_eq!(report.npc_requests.len(), 1, "earlier owner's request survives");
+    for _ in 0..3 { assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty()); }
+    assert_eq!(host.npc_errors.len(), 1);
+    assert_eq!(host.npc_errors[0].0, 2);
+    assert!(!host.story_npc_action(2).unwrap().3, "port error cannot signal Finish");
+    assert_eq!(host.story_npc_normal_graph_present(2), Some(true));
+    assert!(!host.npcs.npcs.contains_key(&2), "normal remains suspended after failure");
+    assert_eq!(host.story_npc_intels().count(), 2, "both materialized owners remain");
+}

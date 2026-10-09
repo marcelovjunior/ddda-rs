@@ -479,3 +479,17 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   activation, lifetime retirement, blocked pending exit and both completion
   branches. All four Guard release tests pass; ddnpcrt clippy --no-deps
   -Dwarnings passes. Latest viewer release build is running.
+
+### Applied graph error isolation
+
+- Unsupported authored/applied graphs now halt in place and report one
+  diagnostic without aborting the whole host frame or publishing Finish.
+  The normal controller remains suspended; the materialized actor stays
+  owned. This is explicit port error recovery, not original completion.
+- halt_graphs also clears an uncommitted Finish bit from a partially processed
+  frame. Regression covers pending completion suppression and two applied
+  owners where the healthy request survives the later owner's failure.
+- Passed ddnpcrt lib7, placement7 and story_pawns9; targeted clippy passed
+  with the documented pre-existing host lint allowed.
+- Viewer release through951b5f0 passed and was copied privately. Current
+  adapter work follows head2565 with codex29's separate route harness hooks.

@@ -501,6 +501,9 @@ impl Npc {
         self.ctrl.load = None;
         self.think.out.clear();
         self.ctrl.out.clear();
+        // A partially processed frame cannot publish a pending completion
+        // after its graph has been stopped for an unsupported operation.
+        self.think.sys &= !1;
     }
 
     pub fn position(&self) -> Option<[f32; 3]> {
@@ -599,4 +602,22 @@ mod variable_tests {
             assert_eq!(value(&f, "cAIActionFSMNpc", "NpcGoodsHaving", None), Value::Bool(goods[0] || goods[1]));
         }
     }
+    #[test]
+    fn halt_discards_uncommitted_finish_without_destroying_owner() {
+        struct Unused;
+        impl Graphs for Unused {
+            fn graph(&self, _: &str) -> Result<Arc<Graph>, Error> {
+                panic!("halted graph must not load data")
+            }
+        }
+        let mut npc = Npc::intel(1);
+        npc.applied = true;
+        npc.think.sys = 1;
+        npc.think.pos = Some([1.0, 2.0, 3.0]);
+        npc.halt_graphs();
+        assert!(npc.step(&Unused, Clock { hour: 12, minute: 0, dt: 0.1 }).unwrap().is_empty());
+        assert!(!npc.applied_finished());
+        assert_eq!(npc.position(), Some([1.0, 2.0, 3.0]));
+    }
+
 }

@@ -304,13 +304,19 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         let mut out = vec![];
-        for applied in self.story_npcs.applied.values_mut() {
-            out.extend(
-                applied
-                    .action
-                    .step(&*data, clock)
-                    .map_err(|e| HostError::Npc(e.to_string()))?,
-            );
+        for (&npc, applied) in &mut self.story_npcs.applied {
+            match applied.action.step(&*data, clock) {
+                Ok(requests) => out.extend(requests),
+                Err(error) => {
+                    if let Some(position) = applied.action.position() {
+                        self.npc_parked.insert(npc, position);
+                    }
+                    // Port failure is neither actor destruction nor Finish.
+                    // Keep the normal owner suspended and report the gap once.
+                    applied.action.halt_graphs();
+                    self.npc_errors.push((npc, format!("applied {}: {error}", applied.path)));
+                }
+            }
         }
         Ok(out)
     }
