@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 bevy = "0.19.1"
 ddvfs = { path = "../ddvfs" }
+ddworld = { path = "../ddworld" }
+ddsim = { path = "../ddsim" }
 mtlmt = { path = "../mtlmt" }
 mtlot = { path = "../mtlot" }
 mtmod = { path = "../mtmod" }

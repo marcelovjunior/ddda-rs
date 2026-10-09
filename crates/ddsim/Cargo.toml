@@ -1,0 +1,10 @@
+[package]
+name = "ddsim"
+version = "0.1.0"
+description = "Headless gameplay simulation (N players, actions, root-motion movement)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtlmt = { path = "../mtlmt" }

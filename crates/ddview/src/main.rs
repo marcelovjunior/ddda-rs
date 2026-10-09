@@ -18,6 +18,7 @@
 //! Controls: WASD move, Q/E down/up, Shift faster, hold right mouse to look.
 
 mod character;
+mod play;
 mod stage;
 
 use std::path::PathBuf;
@@ -47,6 +48,10 @@ struct Args {
     motion: Option<String>,
     slot: usize,
     frame: Option<f32>,
+    play: bool,
+    demo: bool,
+    players: u8,
+    spawn: Vec3,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -73,6 +78,11 @@ fn args() -> Args {
         motion: None,
         slot: 0,
         frame: None,
+        play: false,
+        demo: false,
+        players: 2,
+        // ref001's recorded player position (origin cell 58m50n)
+        spawn: Vec3::new(215.9, 41054.3, 3921.1),
         up: Vec3::Y,
         fov_deg: 45.0,
         near: 10.0,
@@ -80,6 +90,11 @@ fn args() -> Args {
         size: (1600, 900),
     };
     while let Some(k) = it.next() {
+        if k == "--play" || k == "--demo" {
+            a.play = true;
+            a.demo |= k == "--demo";
+            continue;
+        }
         let v = it.next().unwrap_or_else(|| panic!("{k} needs a value"));
         match k.as_str() {
             "--stage" => a.stage = v.parse().unwrap(),
@@ -105,6 +120,8 @@ fn args() -> Args {
             "--motion" => a.motion = Some(v),
             "--slot" => a.slot = v.parse().unwrap(),
             "--frame" => a.frame = Some(v.parse().unwrap()),
+            "--players" => a.players = v.parse().unwrap(),
+            "--spawn" => a.spawn = parse_vec3(&v),
             _ => panic!("unknown option {k}"),
         }
     }
@@ -161,7 +178,7 @@ fn main() {
             ..default()
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (fly_camera, shot, character::animate))
+        .add_systems(Update, (fly_camera, shot, play::step, character::animate).chain())
         .run();
 }
 
@@ -272,6 +289,34 @@ fn setup(
     for m in s.missing.iter().take(10) {
         warn!("{m}");
     }
+    if args.play {
+        // Stage frame (cm) of the viewer origin: cell (a0, b0) relative to 50m50n.
+        let origin = Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
+        let terrain = ddworld::Terrain::load(&vfs, &mfx, args.stage, a0, b0, args.radius);
+        info!(
+            "terrain {} cells {} triangles",
+            terrain.cells,
+            terrain.triangles()
+        );
+        match play::setup(
+            &mut commands,
+            &mut loader,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            &mut bindposes,
+            terrain,
+            origin,
+            origin + args.spawn,
+            args.players,
+        ) {
+            Ok(mut state) => {
+                state.demo = args.demo;
+                commands.insert_resource(state)
+            }
+            Err(e) => error!("play: {e}"),
+        }
+    }
     spawn_camera_and_light(&mut commands, &args);
 }
 
@@ -288,17 +333,23 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
     ));
     let pos = args.pos * stage::UNIT;
     let look = args.look * stage::UNIT;
-    commands.spawn((
-        Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            fov: args.fov_deg.to_radians(),
-            near: args.near * stage::UNIT,
-            far: args.far * stage::UNIT,
-            ..default()
-        }),
-        Transform::from_translation(pos).looking_at(look, args.up),
-        FlyCam,
-    ));
+    let cam = commands
+        .spawn((
+            Camera3d::default(),
+            Projection::Perspective(PerspectiveProjection {
+                fov: args.fov_deg.to_radians(),
+                near: args.near * stage::UNIT,
+                far: args.far * stage::UNIT,
+                ..default()
+            }),
+            Transform::from_translation(pos).looking_at(look, args.up),
+        ))
+        .id();
+    if args.play {
+        commands.entity(cam).insert(play::FollowCam);
+    } else {
+        commands.entity(cam).insert(FlyCam);
+    }
 }
 
 #[derive(Component)]

@@ -1,0 +1,13 @@
+[package]
+name = "ddworld"
+version = "0.1.0"
+description = "World queries over stage data (terrain height), no rendering"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddvfs = { path = "../ddvfs" }
+mtmod = { path = "../mtmod" }
+mtshader = { path = "../mtshader" }
+ddsim = { path = "../ddsim" }

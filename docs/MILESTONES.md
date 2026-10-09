@@ -102,6 +102,21 @@ Done:
   `m0000_co` is a standing idle and slot 3 a walk cycle; correct by eye,
   **not yet compared with the original game**.
 
-Next action: read the player's motion tables (which slot is walk, run,
-idle) from the XFS data and exe instead of guessing, then assemble a
-dressed Arisen (face, hair, equipment) and drive the walk from input.
+- Motion ids from the exe: `cPlActWait` / `cPlActWalk` / `cPlActRun`
+  request motions 0 / 3 / 4 (`bank << 8 | slot`, bank 0 = `m0000_co`),
+  confirming the slots identified by eye; walk starts on frame 0 or 18.
+- Root motion (joint 255) drives movement: walk 198.5 cm / 38 frames,
+  run 423.0 cm / 22 frames (1.57 and 5.77 m/s at the assumed 30 fps).
+- `ddsim` (headless, N players): input -> action (wait/walk/run) ->
+  root-motion movement -> ground height. `ddworld::Terrain` gives ground
+  height from the cell terrain; it matches the four verified references'
+  recorded feet within 1.1 cm.
+- `ddview --play` / `--demo`: two local players (P1 WASD + LShift, P2
+  arrows + RShift), follow camera on P1. Seen working with scripted input.
+
+Not yet: wall/object collision (SBC), turning rate, walk/run thresholds,
+blending between motions (the original blends; we switch), the other
+motion banks, a dressed Arisen.
+
+Next action: collision (rCollision/SBC reader, then ground and walls from
+it instead of the render terrain).

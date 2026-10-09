@@ -2269,6 +2269,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "ddsim"
+version = "0.1.0"
+dependencies = [
+ "mtlmt",
+]
+
+[[package]]
 name = "ddtool"
 version = "0.1.0"
 dependencies = [
@@ -2294,12 +2301,25 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddsim",
  "ddvfs",
+ "ddworld",
+ "mtlmt",
  "mtlot",
  "mtmod",
  "mtmrl",
  "mtshader",
  "mttex",
+]
+
+[[package]]
+name = "ddworld"
+version = "0.1.0"
+dependencies = [
+ "ddsim",
+ "ddvfs",
+ "mtmod",
+ "mtshader",
 ]
 
 [[package]]
