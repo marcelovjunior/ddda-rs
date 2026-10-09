@@ -294,3 +294,21 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   actively waiting for talk. A later old-actor TalkEnd cannot emit movement,
   Finish or GSF381 during 600 further frames. All nine host story_pawns tests
   pass; the separate normal-controller restoration regression remains intact.
+
+### Guard resource checkpoint (codex-31)
+
+- Added typed per-NPC loaded-resource selection from 0x00bb47d0 and
+  0x00baddf0: quest keys, base key -2, override key -1 only when the
+  authored conversation exists. Missing quest resources do not fall back.
+- Quest preload lists now read 0x0163cdf0 through ddexe from the player's
+  installed executable (0x00bace50), plus generic authored talk-set loading
+  and a per-seat authored conversation start preserving the NPC lock.
+- All ten ddnpcrt tests and touched-crate clippy pass, including installed
+  NPCs 1/304 q2 resource loading, NPC2 preload exclusion, fallback selection
+  and two-seat isolation. No actor eligibility, activation, TalkEnd cleanup
+  or full q2 route is inferred from loading or closing text.
+- Remaining: real controller lifecycle, actor/Guard adapter and frozen NPC
+  variable providers. FreeFlag getter 0x007abda0 uses independent 128-bit
+  storage at +0xbc; Hit getter 0x007ab860 reads actor vf180 word bit7;
+  NpcGoodsHaving 0x007ac320 tests actor pointers +0x6f44/+0x6f48 after
+  NPC-owner validation. These variables are traced but not yet translated.
