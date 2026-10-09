@@ -18,8 +18,8 @@ agents ask that agent for live checks.
 | Memory read/write/scan | verified | Reads, main-thread writes, and a vtable scan of the whole heap in about 2 s. |
 | Guarded calls | verified | Game getters return the right values. An access violation in game code (0x00435680 with a bad `this`) and in the probe's own copy (write to 0x10) both came back as errors, and the game kept running. |
 | Teleport | verified | Wrote `uPlayer.mPos.x += 200` on the main thread. The new position held for more than 100 frames (y settled 2 cm onto the ground), and the before/after captures show the move. |
-| Keyboard input | verified (focused) | Esc opens and closes the Pause Menu; W held for 30 frames walks 1.6 m. |
-| Running unfocused | implemented, **not yet observed** | Every time so far, the maintainer or head had the window focused. `research/.../unfocus_test.py`-style polling waits for a natural focus loss. |
+| Keyboard input | verified | Focused: Esc opens and closes the Pause Menu, and W held for 30 frames walks 1.6 m. Inactive (`sApp+0x2566 = 0`): W for 30 frames walks 2.1 m. |
+| Running unfocused | verified | The window really lost focus (foreground false, `sApp+0x2566 = 0`): 205 frames in 3 s (68 fps), and the capture showed the pawns moving. A simulated deactivation (writing `0x2566 = 0` on the main thread, then 1 again) gave 57 fps. |
 | Talk to NPC | implemented, unverified | No NPC was loaded near the player. |
 
 ## Use
@@ -280,7 +280,8 @@ Share). Checked with captures, opening and closing.
 
 ## Open problems
 
-- Running unfocused: implemented as above, but not yet observed (see Status).
+- Sound while running in the background: expected to stay suspended (see
+  above), not checked by ear.
 - Pad and mouse injection are not implemented. XInputGetState is imported at
   IAT `0x0139d40c` (ordinal 2) and DirectInput8Create at `0x0139d038`.
 - The meaning of `sWorldOffset+0x2c` and `+0x30`.
