@@ -1,82 +1,86 @@
 # Roadmap: systems
 
-`MILESTONES.md` orders the work by playable route (M0 foundation, M1 look,
-M2 walk, M3 co-op, M4 fight, M5+ campaign). This file breaks the game into
-systems, so several agents can work in parallel. Each system lists what
-exists, where its evidence lives, and what it depends on. Work items are
-briefs in [`tasks/`](tasks/README.md).
+`MILESTONES.md` orders the work by playable route (M0-M10). This file
+breaks the game into systems: for each, what exists, where its evidence
+lives, and who works on it. The work items are in [`tasks/`](tasks/README.md),
+and coordination happens on the board ([BOARD.md](BOARD.md)).
 
-Status: **done** (compared with the original), **working** (implemented
-and tested, not yet compared), **started**, **researched** (data/exe
-located), **not started**.
-
-Lanes say who should take a system:
-- **core**: touches `ddsim` / `ddview` / `ddworld` internals. Claude's
-  lane (the coordinator merges these).
-- **reader**: a new format reader or data survey in its own crate or
-  doc. Low conflict; good for any agent.
-- **exe**: tracing rules in Ghidra, output a doc section and constants.
+**Status** (updated 2026-10-09):
+- **done:** compared with the original;
+- **working:** implemented and tested, not compared;
+- **researched:** rules and data traced, readers merged, no runtime;
+- **in progress:** a brief is assigned;
+- **not started.**
 
 ## Foundation and world
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| Archives, textures, models, materials | done | - | FORMATS.md; scans over the whole install | - |
-| Map geometry (cells, scenery, water, distant ring) | working | core | WORLD.md; castle in ref001 missing, `_p` layouts unread | - |
-| Shading (terrain blending, lighting, fog, water) | started | core | MRL constant buffers unparsed; MFX feature switches known | map geometry |
-| Collision | working | core | `h` merged meshes + `_h00` scenery (MOVEMENT.md, WORLD.md) | - |
-| Day/night, weather | researched (readers merged) | exe + reader | WEATHER.md: `mtweather` reads WEP/WFP/SKY; clock binding open | shading |
-| Loading screens / streaming | not started | core | cell streaming = `cSplitSbc` / split loader `0x00C5F680` | map geometry |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Archives, textures, models, materials | done | FORMATS.md | - |
+| Map geometry (cells, scenery, water, distant ring) | working | WORLD.md | castle and `_p` layouts |
+| Shading (terrain layers, lighting, fog, water) | in progress | SHADING.md | terrain-shading (claude-3) |
+| Collision (stage `h` meshes, walls, rays) | working | MOVEMENT.md, WORLD.md | - |
+| Weather, sky, fog, time of day | researched | WEATHER.md, WEATHER_CLOCK | runtime after M1 shading |
+| Streaming and loading screens | in progress | GUI.md | stream-rules (codex lane) |
+| Enemy placement and respawn | in progress | - | enemy-placement (codex lane) |
 
 ## The Arisen
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| Movement (walk, run, sprint, jump, fall) | working | core | MOVEMENT.md; speeds from `m_pl000_00`, jump from `pljumpparam` | - |
-| Ledge grab and climb | started | core + exe | placeholder; `cPlCliffHangBegin::vf05` 0x00AD9180 | collision |
-| Turn rate, stop motions | not started | core + exe | recorded ~70°/s; `cPlActRunEnd` | movement |
-| Animation (playback, skinning) | working | core | ANIMATION.md, `mtlmt` | - |
-| Animation blending | working | core | ANIMATION.md: `mtlmt::blend` from `uModel::vf30` chain; start-frame sync open | animation |
-| Stamina | researched | exe + reader | PARAMS.md (`ddparam`, rules 0x00B81450..0x00B81E30); RECORDINGS.md drain 45/s, recovery 49/s | movement |
-| Weight / encumbrance | researched | exe + reader | PARAMS.md: body class 0x00B81120, encumbrance 0x00B81270 | inventory, customization |
-| Character customization (size, weight, effects) | started | exe + reader | speed factor uPlayer+0xDA8 written at 0x00B6B350 from edit records (0x0081C170), PARAMS.md | weight |
-| Dressed Arisen (face, hair, equipment models) | not started | core | equipment models under `model\pl\` | animation |
-| Vocations (classes), levels, skills | researched | reader + exe | `param\pl\level\lv*`, `param\pl\joblevel\joblv*`, per-weapon motion banks (`m000N_co/at`) | combat |
-| Inventory, items | not started | reader | item tables not located yet | - |
-| Status effects | not started | exe + reader | `rStatusParam` (XFS), Riftstone notes | combat |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Movement (walk, run, sprint, jump, fall) | working; partly done | MOVEMENT.md, RECORDINGS.md | m2-acceptance (claude-4) |
+| Ledge grab and climb | working | MOVEMENT.md | live confirmation (claude-4) |
+| Turning, stop motions | researched | MOVEMENT.md, RECORDINGS.md | needs motion curves |
+| Animation playback, skinning | working | ANIMATION.md | - |
+| Animation blending | done (lengths and countdown live-confirmed) | ANIMATION.md | per-joint masks |
+| Stamina | researched (rates live-confirmed) | PARAMS.md, RECORDINGS.md | runtime in ddsim |
+| Weight, encumbrance, body class | researched | PARAMS.md | chara-edit (codex lane) |
+| Character creation and its effects | in progress | - | chara-edit (codex lane) |
+| Dressed Arisen (equipment models) | not started | - | - |
+| Vocations, skills, augments, growth | in progress | - | vocations-skills (claude-9) |
+| Items, inventory, storage | researched | SHOPS.md | economy-core after ddstory |
+| Status effects | researched (readers) | ENEMIES.md | after combat-rules |
 
 ## Combat and creatures
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| Melee combat, hit detection | not started | exe + reader | `rObjCollision` (.ocl) shapes + attack data (Riftstone notes) | animation |
-| Magic (spells) | not started | exe + reader | `mag_item_act_param`, shot/bullet params | combat, vfx |
-| Enemy data (stats) | researched (readers merged) | reader | ENEMIES.md: `mtprp`, `ddenemy`; damage consumer open | - |
-| Enemy AI | researched (FSM reader merged) | exe + reader | AI.md: `mtfsm`, interpreter 0x00E05800/0x00E092A0 | enemy data |
-| Climbing large enemies | not started | exe | grab data location unknown | combat |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Hits, damage, stagger | in progress | - | combat-rules (claude-8) |
+| Enemy data (stats, regions, shells) | researched | ENEMIES.md, ENEMY_RESOURCES.md | - |
+| Enemy AI (FSM graphs, interpreter) | researched | AI.md | runtime after M4 design |
+| Magic, shells | researched (readers) | ENEMIES.md, EFFECTS.md | combat-rules |
+| Climbing large enemies | not started | - | - |
 
 ## Pawns, NPCs, story
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| Pawn AI / scripting (inclinations, chatter) | not started | exe + reader | `rAIFSM`, `sPawnManager` | enemy AI |
-| NPCs (placement, schedules, dialogue) | not started | reader | NPC layouts and message files not surveyed | map geometry |
-| Quests, events, cutscenes | not started | reader + exe | quest XFS, event scripts not surveyed | NPCs |
-| Interaction lock (co-op) | designed | core | COOP_DESIGN.md | NPCs, co-op |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Rift, pawn recruitment, hire costs | researched (pool and costs live-confirmed) | PAWNS.md, RIFT_UI.md | pawn-builder (claude-5); rift-sim later |
+| Pawn data in saves | researched | PAWNS.md, SAVE_PAWNS.md | pawn-knowledge-map (codex lane) |
+| Pawn AI, inclinations, chatter | not started | AI.md | after enemy AI |
+| NPCs: placement, schedules, dialogue links | researched | NPCS.md | - |
+| Quests, story flags, scenario ladder | researched (flags live-confirmed) | QUESTS.md | quest-runtime (claude-7) |
+| Cutscenes (timelines, cameras) | researched | EVENTS.md, CAMERA.md | event-player after quest-runtime |
+| Shops, prices, restock, enhancement | researched (layout live-confirmed) | SHOPS.md | enhance (claude-6) |
+| Interaction lock (co-op) | designed | COOP_DESIGN.md | M3 |
 
 ## Presentation
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| VFX (effects) | not started | reader | effect lists (`rEffectList`, `.efl`) not surveyed | shading |
-| Sound and music | not started | reader | sound banks not surveyed | - |
-| UI, HUD, menus, settings | researched (reader merged) | reader | GUI.md: `mtgui`, node trees of loading/options | - |
-| World map, fast travel (portcrystals, ferrystones) | researched (reader merged) | reader + exe | MAP.md: `ddmap`, travel-item consumer traced | UI |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Visual effects | researched (readers; particle bodies opaque) | EFFECTS.md | - |
+| Sound and music | researched (readers) | SOUND.md | playback later |
+| UI, HUD, menus | researched (readers) | GUI.md, RIFT_UI.md | - |
+| World map, fast travel | researched | MAP.md, TRAVEL.md | teleport runtime later |
+| Game text (all languages) | done (reader) | TEXT.md | - |
 
-## Multiplayer and platform
+## Multiplayer, platform, tooling
 
-| System | Status | Lane | Evidence / notes | Depends on |
-|---|---|---|---|---|
-| Co-op (LAN, host-authoritative) | designed | core | COOP_DESIGN.md; `ddsim` already N-player and fixed-step | movement |
-| FPS unlock | working by design | core | original: `mDeltaTime` = 30/fps (RECORDINGS.md); ours: fixed 120 Hz steps | - |
-| Settings, saves | not started | reader | save format not surveyed | inventory, quests |
+| System | Status | Docs | Next / owner |
+|---|---|---|---|
+| Co-op (LAN, host-authoritative) | designed | COOP_DESIGN.md | M3 |
+| FPS unlock | working by design | RECORDINGS.md (the clock) | - |
+| Saves | researched (read-only reader) | PAWNS.md, SAVE_PAWNS.md | - |
+| Oracle (live probe) | working | ORACLE.md | claude-4 |
+| Reflected field names | working | `research/dti/dti_props.py` | - |
+| Acceptance routes | in progress | - | m2-acceptance (claude-4) |
