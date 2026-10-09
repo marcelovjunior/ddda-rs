@@ -62,6 +62,14 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
     assert_eq!(families.select("MultiNpc_fixture"), Some(true));
     assert_eq!(families.select("Enemy_fixture"), None);
     let vfs = ddvfs::Vfs::open(native).unwrap();
+    let list = npc_placements::group_list(&vfs, 200).unwrap();
+    let loaded = npc_placements::LoadedLayouts::read(&vfs, 200, &list, &[(0, 0)]).unwrap();
+    let flags = |flag: u16| flag == 32;
+    let world = ddspawn::World { scene: 1100, hour: 12, flag: &flags };
+    assert!(loaded.candidates(&world).placements.iter().any(|p|
+        p.target.group == 27 && p.target.index == 0 && p.npc == 1));
+    let absent = npc_placements::LoadedLayouts::read(&vfs, 200, &list, &[]).unwrap();
+    assert!(absent.candidates(&world).placements.is_empty(), "flag cannot load an unobserved cell");
     for (stage, group, npc) in [(200, 1, 39), (200, 27, 1), (100, 4, 304)] {
         let list = npc_placements::group_list(&vfs, stage).unwrap();
         let group = list.groups.iter().find(|g| g.slot == group).unwrap();
@@ -192,12 +200,14 @@ fn placement_action_suspends_normal_graph_and_later_apply_supersedes_default() {
         assert!(host.npcs.npcs[&1].controller.is_some());
         let frame = host.tick(&Default::default()).unwrap();
         assert_eq!(frame.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }]);
+        assert_eq!(host.story_npc_position(1), Some([4.0, 5.0, 6.0]), "committed Place updates host position");
         assert_eq!(host.story_npc_action(1).unwrap().2, "healthy");
         assert_eq!(host.story_npc_normal_graph_present(1), Some(true));
         assert!(!host.npcs.npcs.contains_key(&1), "normal graph is suspended, not stepped alongside authored action");
         assert!(host.npc_errors.is_empty(), "unsupported normal fixture must not execute while suspended");
         host.unbind_story_npc(200, p.target);
         assert!(host.story_npc_action(1).is_none());
+        assert!(host.story_npc_position(1).is_none());
         assert!(!host.npcs.npcs.contains_key(&1), "unload cannot restore a retired normal owner");
     }
 }
@@ -217,6 +227,10 @@ fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements()
     host.reconcile_story_npc_intels(200, vec![first.clone(), second.clone()]).unwrap();
     assert_eq!(host.npcs.position(1), Some([9.0, 8.0, 7.0]));
     assert_eq!(host.story_npc_intels().count(), 2);
+    let before_arrival = host.state_hash();
+    host.story_npc_arrived(1, [7.0, 8.0, 9.0]);
+    assert_eq!(host.story_npc_position(1), Some([7.0, 8.0, 9.0]));
+    assert_ne!(host.state_hash(), before_arrival, "canonical NPC position participates in replay state");
     assert!(host.reconcile_story_npc_intels(200, vec![first.clone(), first]).is_err());
     assert_eq!(host.story_npc_intels().count(), 2, "invalid snapshot cannot retire owners");
     let external = ddstory::Target { kind: 5, group: 99, index: 0 };
