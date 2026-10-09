@@ -148,6 +148,16 @@ at +0x2fa0 with stage-coordinate conversion. A Mage adapter therefore
 needs shot-count, action, cancel-slot and target observations; replacing
 the weapon goal number in the sword-only driver is insufficient.
 
+The staff combo's range request is command **0xb4**, proven by ECX at
+`0x00557075` before `0x00542620`. Selector `0x0047ed00` maps commands
+0xb4..0xf9 to the bank at `sPlayerManager +0x8e0`, so this combo reads
+record zero. Resource initialization `0x0047e2b0` loads the nine ordered
+`AIPlayerActionParameter` paths into +0x8d0 onward, identifying +0x8e0 as
+`AI\\AIPlayerActionParameter\\AIPlActParamWand`. It also proves the existing
+sword bank at +0x8d4, whose `plact.rs` comment still labels the resource
+binding guessed. The tier selector remains the pawn skill-state query
+`0x00780ba0`; do not assume every saved pawn uses tier zero.
+
 Next: bind these active values to the existing combat representation, then
 trace the Mage virtual-pad decisions and motion/resource selection. Record
 recruitment/prologue setup already exist; body/stat/inventory conversion and
