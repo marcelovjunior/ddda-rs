@@ -13,3 +13,8 @@ mtmod = { path = "../mtmod" }
 mtsbc = { path = "../mtsbc" }
 mtshader = { path = "../mtshader" }
 ddsim = { path = "../ddsim" }
+
+[dev-dependencies]
+mtarc = { path = "../mtarc" }
+mtlmt = { path = "../mtlmt" }
+mtxfs = { path = "../mtxfs" }

@@ -4,6 +4,9 @@
 use std::fmt;
 
 pub mod clock;
+pub mod lighting;
+pub mod post;
+pub mod sky;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error(pub String);

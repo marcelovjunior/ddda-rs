@@ -254,3 +254,41 @@ fn single_player_matches_original_layout() {
     p.sync_from_world(&world);
     assert!(p.characters[a].paid[Vocation::Warrior as usize]);
 }
+
+#[test]
+fn save_parts_round_trip_and_seat_change() {
+    let Some(t) = tables() else { return };
+    let mut p = Progression::new();
+    let a0 = p.add(Character::new(t, Vocation::Mage, false));
+    let pawn = p.add(Character::new(t, Vocation::Fighter, true));
+    let a1 = p.add(Character::new(t, Vocation::Strider, false));
+    p.party = [
+        Some(Member { character: a0, role: Role::Arisen(0) }),
+        Some(Member { character: pawn, role: Role::MainPawn { owner: 0 } }),
+        None,
+        Some(Member { character: a1, role: Role::Arisen(1) }),
+    ];
+    p.award(t, Award::new(3000));
+    p.step(t);
+    p.characters[a1].augments[2] = Some(0x5d);
+    p.characters[pawn].rift_crystals = 12;
+    let parts = p.save();
+    assert_eq!(parts.players.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
+    let same = Progression::load(&parts, &|s| Some(s)).unwrap();
+    assert_eq!(same, p);
+    // Next session the guest sits on seat 1 again but the host seat moved
+    // nowhere; with the guest absent its Arisen and slot are left out.
+    let mut alone = parts.clone();
+    alone.players.remove(&1);
+    let q = Progression::load(&alone, &|s| (s == 0).then_some(0)).unwrap();
+    assert_eq!(q.characters.len(), 2);
+    assert_eq!(q.party[3], None);
+    assert_eq!(q.characters[0], p.characters[a0]);
+    // Seats swapped: the old seat 1 is now seat 0 and the other way round.
+    let mut swapped = parts.clone();
+    swapped.players = [(0, parts.players[&1].clone()), (1, parts.players[&0].clone())].into();
+    let s = Progression::load(&swapped, &|x| Some(1 - x)).unwrap();
+    assert_eq!(s.party[0].unwrap().role, Role::Arisen(1));
+    assert_eq!(s.party[3].unwrap().role, Role::Arisen(0));
+    assert_eq!(s.characters[s.party[3].unwrap().character], p.characters[a1]);
+}

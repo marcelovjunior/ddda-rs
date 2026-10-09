@@ -94,7 +94,7 @@ fn single_player_session_from_the_save() {
     }
     let arisen_level: u32 = player.path("mPlCmcEditAndParam/mPl/mParam").unwrap().get("mLevel").unwrap();
     let rc: i32 = player.path("mPlCmcEditAndParam/mPl/mParam").unwrap().get("OnlinePoint").unwrap();
-    let mut p1 = Arisen { id: PlayerId(0), level: arisen_level, rift_crystals: rc };
+    let mut p1 = Arisen { id: 0, level: arisen_level, rift_crystals: rc };
     assert_eq!((p1.level, p1.rift_crystals), (7, 114), "the save the live read was taken from");
 
     // Load: the pool equals the live pool's level multiset.
@@ -130,9 +130,9 @@ fn single_player_session_from_the_save() {
 
     // Summon five, the sixth is refused.
     for r in rows.iter_mut().take(5) {
-        rift.summon(PlayerId(0), r).unwrap();
+        rift.summon(0, r).unwrap();
     }
-    assert_eq!(rift.summon(PlayerId(0), &mut rows[5]), Err(SummonError::RoomFull));
+    assert_eq!(rift.summon(0, &mut rows[5]), Err(SummonError::RoomFull));
     // A pawn standing in the room is flagged in later lists (0x800).
     let summoned = rows[0].online.rom_id;
     rift.log.favorites.push(PawnRef::rom(summoned));
@@ -175,20 +175,20 @@ fn two_player_session() {
     let mut rng = XorShift128::seeded(7);
     rift.refill(&data, 30, 1, &mut rng).unwrap();
     let world = ddstory::World::default();
-    let mut host = Arisen { id: PlayerId(0), level: 30, rift_crystals: 5000 };
-    let mut guest = Arisen { id: PlayerId(1), level: 12, rift_crystals: 20_000 };
+    let mut host = Arisen { id: 0, level: 30, rift_crystals: 5000 };
+    let mut guest = Arisen { id: 1, level: 12, rift_crystals: 20_000 };
     rift.open_room();
     // Each player lists at their own level; costs are per viewer.
     let mut host_rows = rift.list(&data, &world, Category::ByLevel(31), host.level, &mut rng).unwrap();
     let mut guest_rows = rift.list(&data, &world, Category::ByLevel(31), guest.level, &mut rng).unwrap();
     assert_eq!(rift.cost(&host, &host_rows[0].pawn), (61 + 18));
     assert_eq!(rift.cost(&guest, &guest_rows[0].pawn), 43 * 19 * 19 + 18);
-    let h = rift.summon(PlayerId(0), &mut host_rows[0]).unwrap();
-    let g = rift.summon(PlayerId(1), &mut guest_rows[0]).unwrap();
+    let h = rift.summon(0, &mut host_rows[0]).unwrap();
+    let g = rift.summon(1, &mut guest_rows[0]).unwrap();
     // The guest talks to the host's pawn: the host cannot hire it meanwhile.
-    rift.talk(PlayerId(1), h).unwrap();
-    assert_eq!(rift.hire(&mut host, h, 0), Err(HireError::Locked(PlayerId(1))));
-    rift.stop_talking(PlayerId(1), h);
+    rift.talk(1, h).unwrap();
+    assert_eq!(rift.hire(&mut host, h, 0), Err(HireError::Locked(1)));
+    rift.stop_talking(1, h);
     // One hired slot in co-op: the first hire wins, paid by its Arisen.
     assert_eq!(rift.hire(&mut guest, g, 0), Ok(1));
     assert_eq!(guest.rift_crystals, 20_000 - (43 * 19 * 19 + 18));

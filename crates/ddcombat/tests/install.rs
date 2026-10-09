@@ -166,3 +166,56 @@ fn motion_collision_events() {
     assert!(seqs(48.9).contains(&(0, 2)));
     assert!(!seqs(49.0).contains(&(0, 2)));
 }
+
+/// The goal test of the combat-volumes brief from the installed files: the
+/// goblin's first attack motion (`e0100_at` motion 1) against a standing
+/// Arisen (hurt group 1 of `collision\pl\m0000`) gives exactly one hit, on
+/// frame 45, inside the traced distance limit, and none beyond it. The
+/// poses are rigid (every joint at the model root), so the limit is the
+/// rest-pose one: |dz| <= 50 + sqrt(90^2 - 30^2 - 15^2) = 133.52.
+#[test]
+fn goblin_swing_against_arisen_from_install() {
+    use ddcombat::volumes::*;
+    struct Rigid(Vec3);
+    impl Pose for Rigid {
+        fn model_matrix(&self) -> Mat4 {
+            let mut m = IDENTITY;
+            m[3] = [self.0[0], self.0[1], self.0[2], 1.0];
+            m
+        }
+        fn joint_matrix(&self, _id: i32) -> Option<Mat4> {
+            Some(self.model_matrix())
+        }
+    }
+    let Some(root) = native_pc() else { return };
+    let vfs = ddvfs::Vfs::open(root).unwrap();
+    let ocl = |p: &str| ddcombat::ObjCollision::parse(&vfs.read(p, mtarc::type_hash("rObjCollision")).unwrap()).unwrap();
+    let goblin = ocl("collision\\em\\e01\\e0100\\e0100");
+    let goblin_attacks = ocl("collision\\em\\e01\\e0100\\e0100_00");
+    let arisen = ocl("collision\\pl\\m0000");
+    let lmt = vfs.read("motion\\em\\e01\\e0100_at\\e0100_at", mtarc::type_hash("rMotionList")).unwrap();
+    let motions = ddcombat::events::parse_lmt_events(&lmt).unwrap();
+    let swing = motions[1].as_ref().unwrap();
+    let arisen_acts = [ddcombat::events::Activation { resource_id: arisen.resource_id, seq: 1 }];
+
+    let run = |dz: f32| {
+        let mut history = HitHistory::default();
+        let mut frames = Vec::new();
+        for frame in 0..79 {
+            let acts = ddcombat::events::activations(swing, frame as f32);
+            let attacks = attack_volumes(&goblin, Some(&goblin_attacks), &acts, &Rigid([0.0; 3]), 1.0, 1);
+            let hurts = hurt_volumes(&arisen, &arisen_acts, &Rigid([0.0, 0.0, dz]), 1.0, 2);
+            for (ai, _) in resolve_frame(&attacks, &hurts, &mut history, 1.0) {
+                frames.push((frame, attacks[ai].row));
+            }
+        }
+        frames
+    };
+    let hits = run(133.0);
+    assert_eq!(hits.len(), 1, "{:?}", hits.iter().map(|h| h.0).collect::<Vec<_>>());
+    assert_eq!(hits[0].0, 45);
+    let h = ddcombat::damage::enemy_attack(&ddcombat::damage::EnemyAttacker::new(250.0, 80.0), &hits[0].1);
+    let m = ddcombat::damage::merge_frame(&[h]).unwrap();
+    assert_eq!((m.phys, m.hits), (200.0, 1));
+    assert!(run(133.6).is_empty());
+}

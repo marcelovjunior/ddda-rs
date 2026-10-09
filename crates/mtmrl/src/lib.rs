@@ -111,6 +111,44 @@ impl Material<'_> {
         let s = c.value as usize;
         self.command_block.get(s..s + len)
     }
+
+    /// The material's alpha test, from header word `bits[1]`: enable bit
+    /// 20, comparison `(bits[1] >> 21) & 7`, reference byte 1.
+    ///
+    /// `rMaterial::vf09` packs these into the draw material's state word
+    /// (enable at bit 8, comparison at bits 9-11, forced to 7 = Always when
+    /// disabled, reference at bits 14-21); the draw code (FUN_00fee320)
+    /// writes `reference / 255` to `CBROPTest.fAlphaRef` and
+    /// `1.1 / (1 - reference / 255)` to `fAlphaToCoverageScale`. The pixel
+    /// shaders discard when `alpha <= fAlphaRef`, i.e. comparison 4
+    /// (Greater), the value every alpha-tested material in the data uses.
+    // Translated from 0x0112e4d0 (DDDA.exe 2017-12-13 Steam)
+    pub fn alpha_test(&self) -> Option<AlphaTest> {
+        let w = self.bits[1];
+        if (w >> 20) & 1 == 0 {
+            return None;
+        }
+        Some(AlphaTest {
+            compare: ((w >> 21) & 7) as u8,
+            reference: ((w >> 8) & 0xFF) as u8,
+        })
+    }
+}
+
+/// Alpha test of a material (see [`Material::alpha_test`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlphaTest {
+    /// Comparison in D3D order from 0 = Never (4 = Greater: pass if
+    /// alpha > reference).
+    pub compare: u8,
+    /// Reference value in 1/255 steps.
+    pub reference: u8,
+}
+
+impl AlphaTest {
+    pub fn reference_f32(&self) -> f32 {
+        f32::from(self.reference) / 255.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,6 +277,30 @@ pub fn parse(b: &[u8]) -> Result<MaterialList<'_>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_test_from_header_bits() {
+        let mut m = Material {
+            class_hash: 0,
+            name_hash: 0,
+            blend_state: 0,
+            depth_stencil_state: 0,
+            rasterizer_state: 0,
+            bits: [0, 0x8c90_7800],
+            blend_factor: [0.0; 4],
+            commands: vec![],
+            command_block: &[],
+            anim_data: &[],
+        };
+        // Words seen in the data: alpha-tested leaves, ref 0x78, Greater.
+        assert_eq!(m.alpha_test(), Some(AlphaTest { compare: 4, reference: 0x78 }));
+        // Opaque material: enable bit clear, the reference byte is ignored.
+        m.bits[1] = 0x8b80_8000;
+        assert_eq!(m.alpha_test(), None);
+        // Blended terrain overlay: enabled with reference 0.
+        m.bits[1] = 0x8e90_0000;
+        assert_eq!(m.alpha_test().map(|a| a.reference_f32()), Some(0.0));
+    }
 
     #[test]
     fn jamcrc_matches_dti_type_hash() {

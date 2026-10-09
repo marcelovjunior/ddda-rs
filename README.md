@@ -41,6 +41,46 @@ target/release/ddview <path to DDDA>/nativePC --play
 Hold the right mouse button to turn the camera. F2 toggles the town/field
 walk.
 
+## How to play
+
+```
+target/release/ddview <path to DDDA>/nativePC --play --save <path to DDDA.sav> [--goblin]
+```
+
+This starts where the save stands:
+- at its stage, cell and position;
+- lit by its game clock and weather (`--clock HH:MM` and `--weather f|e|r`
+  override them);
+- with the save's Arisen and main pawn, dressed and shaped from the edit
+  data, carrying their sheathed weapons.
+
+`--goblin` puts a goblin 6 m ahead; repeat it for more. The pawn follows
+you and fights it.
+
+| | Player 1 |
+|---|---|
+| Light attack | J or left mouse button |
+| Heavy attack | K or middle mouse button |
+
+The Arisen fights with the kit of the save's primary weapon: a staff plays
+the Mage's, anything else the Fighter's sword. `--kit fighter|mage`
+overrides it.
+
+The bars at the top left are a viewer overlay, not the game's GUI: HP and
+stamina, the pawn's HP, and the nearest goblin's HP.
+
+`--demo` plays by itself: with goblins, the Arisen runs at the nearest one
+and attacks.
+
+**Co-op on a LAN:**
+- One machine hosts: `ddview <nativePC> --host 47810 --save A.sav --goblin`.
+- The other joins: `ddview <nativePC> --join <host address> --save B.sav`.
+- The guest plays its own save's Arisen, or a stand-in without `--save`.
+  Its world must be the host's place: the same save spot, or the same
+  `--stage` / `--cell`.
+- Each side sees the other's Arisen as a stand-in.
+- Goblins and HP are not sent to the guest yet.
+
 `target/release/ddtool` (run it without arguments for usage) inspects the
 install: archives, textures, models, XFS objects, text, parameters, AI
 graphs, sound, effects and more.
