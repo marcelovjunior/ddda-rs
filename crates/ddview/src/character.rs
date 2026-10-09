@@ -185,8 +185,8 @@ pub struct Morph {
 /// One uCnsEdit record (0x00860ac0).
 #[derive(Clone, Copy)]
 pub struct Edit {
-    /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 and 0xc
-    /// approximated as plain.
+    /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 human
+    /// hand absolute size; 0xc remains approximated as plain.
     pub kind: u32,
     pub scale: Vec3,
     pub child: Vec3,
@@ -198,7 +198,8 @@ pub struct Edit {
 /// The morph pass (uCnsEdit::vf24 0x00860ac0 on world matrices, parents
 /// first, so children follow their morphed parents): world = parent world
 /// x local, then `world x Translate(offset) x Scale(k)` (column vectors).
-/// k is the scale for types 0 and 9; for type 0xb it is scale x child
+/// k is the scale for type 0; type 9 human hands cancel inherited axis
+/// lengths (0x00867b70, +0xb0 set by 0x0081c330). For type 0xb it is scale x child
 /// divided by the world axis lengths, so those joints end at an absolute
 /// size whatever their parents did (0x0086d180). The model scale is the
 /// skeleton's root. The result goes back into the local transforms (shear
@@ -217,6 +218,10 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
             let k = if e.kind == 0xb {
                 let len = Vec3::new(w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length());
                 e.scale * e.child / len.max(Vec3::splat(1.192_092_9e-7))
+            } else if e.kind == 9 {
+                Vec3::from_array(ddlook::morph::hand_axis_factors(e.scale.to_array(), [
+                    w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length(),
+                ]))
             } else {
                 e.scale
             };
