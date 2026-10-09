@@ -192,3 +192,6 @@ impl Parameter {
         }
     }
 }
+
+/// Source-backed stamina arithmetic; not a complete action simulation.
+pub mod stamina;
