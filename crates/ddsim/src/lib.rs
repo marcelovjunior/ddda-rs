@@ -86,6 +86,11 @@ pub const SPEED_CURVE: usize = 9;
 /// raises the target.
 pub const CLIMB_POSITION_CURVE: usize = 10;
 
+/// The motion event (group 0, bit 16) that lets the stick cancel an action
+/// into movement (`MoveCancel` in `Sim::move_cancel_allowed`).
+pub const MOVE_CANCEL_GROUP: usize = 0;
+pub const MOVE_CANCEL_BIT: u32 = 0x1_0000;
+
 /// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
 /// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
 /// apply where the area query `0x0043DAC0` reports flag 0x50 (towns and
@@ -727,10 +732,11 @@ impl Sim {
                     return;
                 }
                 // a landing or a sprint stop plays out unless the player moves
+                // and its motion allows moving off (event group 0 bit 0x10000)
                 if matches!(
                     state,
                     State::Land { .. } | State::SprintJumpLand | State::SprintStop
-                ) && !moving
+                ) && (!moving || !self.move_cancel_allowed(i))
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
                     self.ground_move(i, state, ground, dt);
@@ -1046,6 +1052,26 @@ impl Sim {
         let p = &mut self.players[i];
         p.stamina = s;
         p.ran_out |= out;
+    }
+
+    /// Whether the playing motion lets the stick cancel it: event group 0
+    /// bit 0x10000 at the current whole frame. `cPlActWpnShieldGuardJumpLand::vf06`
+    /// (0x00B36140) cancels on exactly "stick held (uPlayer +0x32C0) and
+    /// event word +0x490 (layer 0, group 0) & 0x10000"; the landing motions
+    /// 12 and 15 set it from frame 3, which is the recorded hold (about 3.3
+    /// game frames, docs/ACCEPTANCE.md). That `cPlActLand` and the sprint
+    /// stop use the same bit (through `uPlayerBase::vf136`) is *assumed*.
+    /// Motions without event data allow it.
+    fn move_cancel_allowed(&self, i: usize) -> bool {
+        let p = &self.players[i];
+        let Some(m) = self.motions.get(&p.state.motion_id()) else {
+            return true;
+        };
+        if m.events.is_empty() {
+            return true;
+        }
+        let f = p.frame as i32;
+        m.event_bits(MOVE_CANCEL_GROUP, f, f) & MOVE_CANCEL_BIT != 0
     }
 
     /// Curve `k` of motion `id` at `frame`, or the linear progress over
@@ -2146,6 +2172,31 @@ mod tests {
         assert_eq!(s.progress(0x30, CLIMB_POSITION_CURVE, 20.0, 34.0), 1.0);
         // no curve 9 in this motion: linear over its length
         assert_eq!(s.progress(0x30, SPEED_CURVE, 17.0, 34.0), 0.5);
+    }
+
+    #[test]
+    fn a_landing_holds_the_stick_until_its_motion_allows_moving() {
+        let mut s = sim();
+        // as m0000_co slot 12: group 0 without bit 0x10000 for frames 0-2
+        let run = |bits, frames| mtlmt::EventRun { bits, frames };
+        let events = vec![
+            vec![run(0x2a8a_0003, 3), run(0x1545_0003, 14), run(0, 1)],
+            vec![],
+            vec![],
+            vec![],
+        ];
+        s.motions.insert(12, RootMotion::none(18).with_events(events));
+        s.player_mut(0).unwrap().state = State::Land { standing: false };
+        let inputs = HashMap::from([(0, fwd())]);
+        let mut held = 0.0;
+        while s.player(0).unwrap().state == (State::Land { standing: false }) {
+            s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
+            held += TICK;
+            assert!(held < 10.0);
+        }
+        // released once the motion reaches frame 3
+        assert!((held - 3.0).abs() < 0.3, "{held}");
+        assert!(matches!(s.player(0).unwrap().state, State::Run { .. }));
     }
 
     #[test]
