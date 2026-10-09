@@ -434,7 +434,10 @@ Each row is an `nRim::cPawnInfoList` (0x18 bytes):
   checks the cost first, then releases, then hires).
 
 **Hiring cost** (`0x0043eec0`, translated in `ddpawn::rift::hire_cost`;
-traced, tested). The same formula appears in the list's "Base Cost"
+traced, tested, compared: the original's function, called live on a pawn
+record, gave 171, 3018, 7,959,819, 0 and 15,541 for (P, L) = (7, 10),
+(10, 20), (1, 200), (50, 10), (12, 31), exactly the translation's values,
+board #879). The same formula appears in the list's "Base Cost"
 (`0x0043edf0`) and in the level-select preview (`0x006d0f50`, `0x006d10f0`,
 `0x006d13a0`). With P = player level and L = pawn level:
 
@@ -742,10 +745,10 @@ Save writer `0x0048ed00`, loader `0x0048f080`.
 can hire one pawn. The exe ties the following to "the player"; each needs a
 decision:
 
-- **Pool generation level.** P = the Arisen's level at load. Proposal: the
-  host Arisen, since the pool is host-owned world state.
+- **Pool generation level.** P = the Arisen's level at load. `ddrift`
+  uses the host Arisen's level, since the pool is host-owned world state.
 - **Hiring cost.** It uses the hiring player's level against the pawn's.
-  Proposal: the level of the player who hires.
+  `ddrift` uses the level of the player who hires.
 - **Rift Crystals** are per Arisen (`OnlinePoint` is in each player's
   `cSAVE_DATA_PARAM`). Each player pays from their own balance.
 - **The hired-pawn limit** (uRim+0x40c ≥ 2) becomes 1 in co-op.
@@ -753,6 +756,111 @@ decision:
   per player (an open question in COOP_DESIGN).
 - **Pawn rental between the two players' Riftstones** could reuse the
   `0xFFFFFFFF` + net-id path with a LAN id instead of a Steam one.
+
+## 11. The headless Rift (`crates/ddrift`)
+
+The host owns one `ddrift::Rift` per session. It holds:
+
+- the pawn stock (story pawns and pool);
+- the party's pawn slots (`Party`: main pawn, hired slots 1 and 2);
+- the saved bookkeeping (`PawnLog`: favourites, past summons, pawns that
+  know the main pawn, close friends, history; importable from a save);
+- during a Riftstone visit, the room.
+
+`RiftData` loads every table once: the `ddpawn` readers, the exe tables
+through `ddexe`, and the quest-knowledge table at `.rdata 0x01521e90`.
+
+Each action names the acting player and takes that player's `Arisen`
+(level and Rift Crystals). All are offline semantics, translated with
+citations:
+
+| Call | Exe source | Rules |
+|---|---|---|
+| `refill(level, load_mode, rng)` | `0x0047d330`, `0x007951c0`, `0x00796420` | See below. |
+| `list(world, category, viewer level, rng)` | `0x0047a550`, `0x0047a460`, `0x0047af50` | See below. |
+| `summon(player, row)` | `0x0073bae0` | At most five pawns stand in the room; flagged rows are refused; the row is marked summoned. |
+| `talk` / `stop_talking` | (co-op design) | Locks a room pawn for one player at a time (the NPC interaction lock of COOP_DESIGN). |
+| `hire(arisen, room slot, play time)` | `0x0073c2c0` | See below. |
+| `release(slot, play time, died)` | `0x0073c480`, `0x0043e9b0`, `0x0043ec60` | See below. |
+| `quest_cleared()` | (`cCmcInfo+0x1654`) | Counts a cleared quest for the hired pawns. |
+
+**`refill`:**
+
+1. Favourites with a built-in ID that are neither hired (`0x00447d90`) nor
+   already placed take the first pool slots.
+2. Generated pawns fill the rest around the host's level, or around 5
+   when the load mode is 0.
+3. The story stock is rebuilt.
+
+**`list`:**
+
+- **By level:** 100 pawns at the level. A row still duplicated after 100
+  draws gets level 0 ("no data", `0x0047a7df`). With an active quest
+  (`ddstory::World::active_quest`), pawns that know it move to the front
+  (`0x005d0760`).
+- **Past summons / favourites:** built-in entries only; duplicates are
+  dropped.
+- **Other categories:** `NeedsNetwork` (status 6).
+- **Flags:** rows of pawns standing in the room get 0x800.
+
+**`hire`:**
+
+1. The crystals are checked before the party: code 2, then code 1.
+2. The cost is `hire_cost(hiring Arisen's level, pawn level)`.
+3. The party slot is the one released last in this visit, else 1, else 2.
+4. The crystals are spent, flooring at 0 (`0x004433f0`).
+
+**`release`:**
+
+- The bookkeeping of `0x00448da0` runs:
+  - counters `(time since hire, 1, died, quests)`, plus the favourite's or
+    the past-summons entry's;
+  - the favourite and lent entries are updated;
+  - past summons: re-append, oldest dropped beyond 100;
+  - close friends: top 4 by time together.
+- Then a history entry (`0x0077bf10`, `0x00449380`: evicts the oldest
+  pawn that is not in the lent list).
+- A dying pawn of type 2 (story) stays.
+
+**Co-op choices taken** (§10; documented on the types):
+
+- `Party::new(2)` reserves hired slot 2 for the second Arisen, so a co-op
+  party hires one pawn.
+- The pool is built at the host's level.
+- Each player lists, sees costs, and pays at their own level from their
+  own crystals.
+- The main pawn and the log are shared and host-owned.
+
+**Not modelled:**
+
+- the stage placement of stock pawns (`0x0047ddf0`);
+- the room's eviction path when all seven slots are in use (`0x0073ef10`);
+  `summon` reports `NoSlot`;
+- taking back a released pawn's items (inventory, `0x0045f850`);
+- the network paths;
+- saving the log in this project's own format: it is imported from a
+  DDDA.sav (`PawnLog::from_save`), and its save belongs with the host
+  save design.
+
+**Tests** (`cargo test -p ddrift`):
+
+- 7 unit tests: room cap, hire order and codes, slot reuse, free hires at
+  or below level, co-op slot and lock, story pawn surviving death,
+  close-friend ordering, past-summons FIFO with favourite totals, history
+  eviction.
+- 3 session tests against the install:
+  - **From the private save.** Load the party and log, refill: the pool's
+    level multiset equals the live pool read from the original (#358),
+    with the save's favourite first and the hired favourite skipped. Then:
+    - list at level 10 (100 unique rows, cost 171 each);
+    - summon 5, with the sixth refused;
+    - hire refused for crystals (114 < 171), then for a full party;
+    - release Eloyse (favourite totals, past summons, history);
+    - hire into the freed slot (1000 → 829 crystals).
+  - **A two-player session:** per-viewer costs, the talk lock, one shared
+    hired slot, the guest paying 15,541 at level 12 for a level-31 pawn,
+    and release then hire by the host.
+  - **The knowledge sort** with an active quest.
 
 ## Open questions
 
@@ -762,8 +870,8 @@ unless stated:
 1. Done (#358): the pool after a load follows the level table (§3). Still
    open: a pool built with load mode 0 (new game), which should be centred
    on level 5.
-2. The hire cost of a pawn above the player's level, read from the list's
-   "Base Cost": `(L+P)(L-P)^2+18`.
+2. Done (#879): the cost function itself, called live. Still open: the
+   "Base Cost" the Rift list shows (the GUI path `0x0043edf0`).
 3. Whether the GUI row filter (§4) matches the original's offline results
    (rift-ui).
 4. The xorshift state at `0x018d017c` just before a pool fill (the
@@ -800,7 +908,7 @@ Code still to trace:
    0..19 from `romPawnInfo`, the overrides for slots 10..16, NPC-table
    names). *Done when* slot 14 rebuilds as the saved Rook record
    (`0x2000000E` in a save) field for field.
-3. **rift-sim** (core, headless): sPawnManager/uRim as a host-owned
+3. **rift-sim** (done, `crates/ddrift`, §11): sPawnManager/uRim as a host-owned
    resource: pool refill on load, the category list builder (`0x0047a550`)
    with offline semantics, summon (5 in the room), hire (cost, RC, slot
    choice), dismiss/death bookkeeping (`0x0043ec60`: past summons, close

@@ -2380,6 +2380,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddrift"
+version = "0.1.0"
+dependencies = [
+ "ddexe",
+ "ddnpc",
+ "ddparam",
+ "ddpawn",
+ "ddsave",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "ddsave"
 version = "0.1.0"
 dependencies = [
