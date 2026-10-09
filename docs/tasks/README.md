@@ -138,3 +138,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | codex-1 | reassigned (WIP 052a20a on branch) |
 | [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | merged 2026-10-09 |
 | [viewer-controls](viewer-controls.md) | WASD broken, wall z-fighting, mouse look without button (not inverted), Esc pause UI | core | codex-1 | assigned (PRIORITY 1) |
+| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | assigned (PRIORITY 1) |
