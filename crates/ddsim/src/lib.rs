@@ -81,6 +81,11 @@ pub const SPRINT_RAMP_FRAMES: f32 = 5.0;
 /// `cPlActRunEnd::vf06` 0x00ACB6C0).
 pub const SPEED_CURVE: usize = 9;
 
+/// The motion curve the ledge climb moves the player toward its target by
+/// (`0x010571C0(10)` in `cPlCliffHangClimb::vf06` 0x00ADDC00); curve 9
+/// raises the target.
+pub const CLIMB_POSITION_CURVE: usize = 10;
+
 /// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
 /// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
 /// apply where the area query `0x0043DAC0` reports flag 0x50 (towns and
@@ -814,6 +819,9 @@ impl Sim {
             State::LedgeGrab { braced, phase } => {
                 let len = self.period_of(state.motion_id());
                 let rise_speed = self.ledge_param.rise_speed;
+                // progress: the motion's curve 9 (0x010571C0(9) in
+                // cPlCliffHangBegin::vf06), linear if the motion has none
+                let t = self.progress(state.motion_id(), SPEED_CURVE, self.players[i].frame + dt, len);
                 let p = &mut self.players[i];
                 let Some(h) = p.hold else {
                     Self::let_go(p, jn);
@@ -824,9 +832,6 @@ impl Sim {
                     return;
                 }
                 p.frame += dt;
-                // *Placeholder* progress: the original reads the motion's
-                // curve 9 (0x010571C0), not read by mtlmt yet
-                let t = (p.frame / len).min(1.0);
                 match phase {
                     GrabPhase::Reach => {
                         // *Placeholder* path: the original poses the body by IK
@@ -908,6 +913,14 @@ impl Sim {
             }
             State::LedgeClimb { .. } => {
                 let len = self.period_of(state.motion_id());
+                // cPlCliffHangClimb::vf06 (0x00ADDC00): the target rises by
+                // the motion's curve 9 and the position follows it by curve
+                // 10 (linear if the motion has none)
+                let f = self.players[i].frame + dt;
+                let (t_up, t_pos) = (
+                    self.progress(state.motion_id(), SPEED_CURVE, f, len),
+                    self.progress(state.motion_id(), CLIMB_POSITION_CURVE, f, len),
+                );
                 let p = &mut self.players[i];
                 let Some(h) = p.hold else {
                     Self::let_go(p, jn);
@@ -918,12 +931,8 @@ impl Sim {
                     return;
                 }
                 p.frame += dt;
-                // cPlCliffHangClimb::vf06 (0x00ADDC00). *Placeholder*
-                // progress: the original uses the motion's curves 9 (height)
-                // and 10 (position), not read by mtlmt yet
-                let t = (p.frame / len).min(1.0);
-                let target = ledge::climb_target(ground, &h.ledge, h.wall, h.from_y, t);
-                p.position = ledge::lerp(h.start, target, t);
+                let target = ledge::climb_target(ground, &h.ledge, h.wall, h.from_y, t_up);
+                p.position = ledge::lerp(h.start, target, t_pos);
                 if p.frame >= len {
                     p.position = ledge::climb_end(&h.ledge);
                     p.hold = None;
@@ -1037,6 +1046,15 @@ impl Sim {
         let p = &mut self.players[i];
         p.stamina = s;
         p.ran_out |= out;
+    }
+
+    /// Curve `k` of motion `id` at `frame`, or the linear progress over
+    /// `len` frames when the motion has no such curve.
+    fn progress(&self, id: u16, k: usize, frame: f32, len: f32) -> f32 {
+        self.motions
+            .get(&id)
+            .and_then(|m| m.curve(k, frame))
+            .unwrap_or((frame / len).min(1.0))
     }
 
     /// Ground speed (cm per frame) of a velocity-driven state, or None for
@@ -2102,6 +2120,32 @@ mod tests {
             }
         }
         panic!("never fell");
+    }
+
+    #[test]
+    fn climb_progress_follows_the_motion_curves() {
+        let mut s = sim();
+        // m0000_co slot 48 curve 10: 0 at frame 0, 1 from frame 4
+        let key = |frame: u16, v: f32| mtlmt::CurveKey {
+            interp: 1,
+            frame,
+            value: v.to_bits(),
+            tangent_in: 0.0,
+            tangent_out: 0.0,
+        };
+        let mut c = vec![
+            mtlmt::Curve {
+                kind: 1,
+                keys: Vec::new()
+            };
+            16
+        ];
+        c[CLIMB_POSITION_CURVE].keys = vec![key(0, 0.0), key(4, 1.0)];
+        s.motions.insert(0x30, RootMotion::none(35).with_curves(c));
+        assert_eq!(s.progress(0x30, CLIMB_POSITION_CURVE, 2.0, 34.0), 0.5);
+        assert_eq!(s.progress(0x30, CLIMB_POSITION_CURVE, 20.0, 34.0), 1.0);
+        // no curve 9 in this motion: linear over its length
+        assert_eq!(s.progress(0x30, SPEED_CURVE, 17.0, 34.0), 0.5);
     }
 
     #[test]
