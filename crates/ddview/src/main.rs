@@ -142,7 +142,10 @@ fn args() -> Args {
         stage: 100,
         cell: (58, 50),
         radius: 2,
-        far_cells: 20,
+        // 6 draws the same picture as 20 at the 58m50n overlook (0 pixels
+        // differ by more than 7 levels; the low models and fog cover the rest)
+        // at a 10.9 ms instead of an 18 ms median frame
+        far_cells: 6,
         pos: Vec3::new(205.4, 41019.0 + 170.0, 3542.5),
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
