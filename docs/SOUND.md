@@ -269,3 +269,39 @@ voice alternatives at frame 514 and resolved only the selected f1 package
 decoder or audio-device errors. The release build and all 32 enabled viewer
 tests pass (one installed HUD test ignored). This verifies cue selection and
 playback submission, not audible fidelity or an original-game comparison.
+
+### Fixed-tick player motion sounds
+
+`PlayerMotionSounds` samples LMT page 3 after each offline play simulation
+tick, preserving rising-bit history separately for each actor and layer.
+It uses the authored joint transform, offset and ray margins. Surface queries
+retain both material word one and the separate SBC triangle attribute
+(getter 0x00423be0); the latter selects attribute bank two when bit 1 is set.
+Missing metadata suppresses the request. Fractional frames remain available
+for joint poses while event lookup truncates the wrapped frame.
+
+The player selector at 0x00c736f0 reads sGameSys+0xbe2c1. Its writer,
+sSoundManager::vf06 at 0x004b35c0, depends on actor and combat state; stage
+initialization 0x00501020 resets it. Until those inputs are represented, the
+adapter accepts only requests identical for selectors zero and two. All 18
+installed surface requests satisfy this condition, as do 16 of 17 primary
+common-weapon requests and all 41 primary specific-weapon requests.
+
+Current bindings cover the common player bank, attribute banks loaded from
+the executable and weapon banks from the current Fighter/Mage combat kits.
+The installed regression checks actor/layer independence, held-bit suppression,
+history reset and sword-motion requests decoded into nonzero samples. Six
+viewer audio tests pass. The terrain regression separately verifies nearest
+hit attributes without changing movement flags (six unit tests and one
+installed landing test pass).
+
+This hook currently covers offline players' layer zero. Opening/LAN host
+sampling, upper motion layers, offhand equipment, clothing and motion voices,
+cached-floor requests and motion streams remain unconnected. Ordinary SE
+limitations above still apply; this is not an audible-fidelity comparison.
+
+A bounded two-seat offline `--demo --unattended` run resolved player request
+30 (15,360 samples) and soil request 11 (33,920 samples), saved its screenshot
+and exited. Several other surface requests were explicitly rejected as
+non-ordinary commands. This confirms the fixed-tick-to-playback path, while
+also showing that random/control dispatch still limits footstep coverage.

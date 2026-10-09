@@ -2629,6 +2629,7 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddcombat",
  "ddeconomy",
  "ddexe",
  "ddhost",
