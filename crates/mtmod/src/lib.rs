@@ -347,7 +347,9 @@ impl<'a> Model<'a> {
             .index_buffer
             .get(s..s + m.index_count as usize * 2)
             .ok_or_else(|| "indices past index buffer".to_string())?;
-        raw.chunks_exact(2)
+        raw.as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| {
                 let i = u16::from_le_bytes([c[0], c[1]]);
                 i.checked_sub(m.vertex_start as u16)

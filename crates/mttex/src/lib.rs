@@ -33,55 +33,14 @@ const FOURCC_DXT5: u32 = u32::from_le_bytes(*b"DXT5");
 
 /// TEX format byte -> D3D9 `D3DFORMAT`, copied from DDDA.exe `0x01440698`
 /// (Steam build, see `docs/METHODOLOGY.md`). Index = format byte.
+#[rustfmt::skip]
 pub const FORMAT_TABLE: [u32; 48] = [
-    0,
-    116,
-    113,
-    36,
-    111,
-    115,
-    31,
-    32, // 0x00
-    63,
-    32,
-    26,
-    112,
-    34,
-    64,
-    114,
-    75, // 0x08
-    111,
-    81,
-    28,
-    FOURCC_DXT1,
-    FOURCC_DXT1,
-    FOURCC_DXT3,
-    FOURCC_DXT3,
-    FOURCC_DXT5, // 0x10
-    FOURCC_DXT5,
-    FOURCC_DXT1,
-    FOURCC_DXT1,
-    FOURCC_DXT5,
-    23,
-    25,
-    FOURCC_DXT1,
-    FOURCC_DXT5, // 0x18
-    FOURCC_DXT5,
-    FOURCC_DXT5,
-    22,
-    FOURCC_DXT5,
-    FOURCC_DXT5,
-    FOURCC_DXT5,
-    113,
-    21, // 0x20
-    21,
-    FOURCC_DXT1,
-    FOURCC_DXT5,
-    FOURCC_DXT5,
-    50,
-    32,
-    31,
-    FOURCC_DXT5, // 0x28
+    0, 116, 113, 36, 110, 115, 31, 32, // 0x00..0x07
+    63, 32, 26, 112, 34, 64, 114, 75, // 0x08..0x0f
+    111, 81, 28, FOURCC_DXT1, FOURCC_DXT1, FOURCC_DXT3, FOURCC_DXT3, FOURCC_DXT5, // 0x10..0x17
+    FOURCC_DXT5, FOURCC_DXT1, FOURCC_DXT1, FOURCC_DXT5, 23, 25, FOURCC_DXT1, FOURCC_DXT5, // 0x18..0x1f
+    FOURCC_DXT5, FOURCC_DXT5, 22, FOURCC_DXT5, FOURCC_DXT5, FOURCC_DXT5, 113, 21, // 0x20..0x27
+    21, FOURCC_DXT1, FOURCC_DXT5, FOURCC_DXT5, 50, 32, 31, FOURCC_DXT5, // 0x28..0x2f
 ];
 
 /// The D3D9 surface formats the TEX format table can name.
@@ -104,6 +63,7 @@ pub enum D3dFormat {
     A16B16G16R16,
     Q8W8V8U8,
     V16U16,
+    Q16W16V16U16,
     D24S8,
     R16F,
     G16R16F,
@@ -134,6 +94,7 @@ impl D3dFormat {
             63 => Self::Q8W8V8U8,
             64 => Self::V16U16,
             75 => Self::D24S8,
+            110 => Self::Q16W16V16U16,
             81 => Self::L16,
             111 => Self::R16F,
             112 => Self::G16R16F,
@@ -162,7 +123,7 @@ impl D3dFormat {
             | Self::D24S8
             | Self::G16R16F
             | Self::R32F => (1, 4),
-            Self::A16B16G16R16 | Self::A16B16G16R16F | Self::G32R32F => (1, 8),
+            Self::A16B16G16R16 | Self::Q16W16V16U16 | Self::A16B16G16R16F | Self::G32R32F => (1, 8),
             Self::A32B32G32R32F => (1, 16),
         }
     }
@@ -412,7 +373,7 @@ mod tests {
             off += s;
         }
         for (i, s) in sizes.iter().enumerate() {
-            b.extend(std::iter::repeat(i as u8).take(*s));
+            b.extend(std::iter::repeat_n(i as u8, *s));
         }
         b
     }

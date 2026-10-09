@@ -25,3 +25,5 @@ target/
 *.tex
 *.mod
 *.lmt
+__pycache__/
+*.pyc
