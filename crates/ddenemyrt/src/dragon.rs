@@ -4,7 +4,65 @@
 //! The entrance FSM is interpreted by ddai; movement and attack action
 //! implementations must supply its completion and motion feedback.
 
+use crate::combat::{Attacker, Fighter, Victim};
 use ddai::{Error, thinktbl::Tables};
+use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool};
+
+/// Loaded opening-dragon body and combat parameters. Action stepping is
+/// separate; this type does not manufacture action completion or volumes.
+#[derive(Debug, Clone)]
+pub struct DragonData {
+    pub ai: DragonAiData,
+    pub body: crate::body::Body,
+    pub attacker: EnemyAttacker,
+    pub defender: EnemyDefender,
+    pub regions: Vec<RegionPool>,
+    pub obj_size: u32,
+}
+
+impl DragonData {
+    pub fn opening(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>, scale: f32) -> Result<Self, String> {
+        let ai = DragonAiData::opening(exe).map_err(|e| e.to_string())?;
+        let body = ai.load_body(vfs, scale)?;
+        // 0x00a49f2d clears EAX before 0x00770910 selects region kind 0.
+        // 0x00a49f3d passes charparam\em\em5800_cmn to 0x00aafdb0.
+        // DDDA.exe 2017-12-13 Steam; shared reader keeps bulk values in the install.
+        let stats = crate::enemy_stats::load(vfs, "em5800")?;
+        Ok(Self {
+            ai,
+            body,
+            attacker: stats.attacker,
+            defender: stats.defender,
+            regions: stats.regions,
+            obj_size: stats.obj_size,
+        })
+    }
+
+    /// Constructs the actual fight component with independent owner and pools.
+    /// The sequence-4 initialization branch of 0x00a49f00 sets collision
+    /// +0xCFC bit 0: HP damage is disabled initially. Its clearing transition
+    /// remains untraced; callers must not assume the entrance is damageable.
+    pub fn fighter(&self, owner: u32) -> Fighter {
+        Fighter {
+            owner,
+            attacker: Attacker::Enemy(self.attacker),
+            victim: Victim::Enemy {
+                defender: self.defender,
+                regions: self.regions.clone(),
+                rates: CollisionRates {
+                    flags: 1,
+                    ..Default::default()
+                },
+            },
+            attacks: Vec::new(),
+            hurts: Vec::new(),
+            history: Default::default(),
+            statuses: Default::default(),
+            dots: Default::default(),
+            pools: Default::default(),
+        }
+    }
+}
 
 /// uEm5800 initialization 0x00a49f00, sequence-4 branch: assigns this root
 /// to the think manager's current, default and base table pointers.

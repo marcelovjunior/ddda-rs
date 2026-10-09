@@ -89,6 +89,18 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   eight motion IDs selected by the six entrance actions are available.
   Codex-1 independently ran all three dragon tests, passing. This is
   body-data loading, not yet action stepping or an original-game comparison.
+- Added opening `DragonData` and owner-specific fight-component
+  construction using the shared enemy-stat loader (exact dependency
+  transplant from codex-1's 1749553, originally d25e02f). Region kind 0 is
+  sourced by EAX=0 at 0x00a49f2d before 0x00770910; common parameters come
+  from `em5800_cmn` at 0x00a49f3d. The installed regression compares every
+  pool's id/current/max HP, defenses and object size with the parsed game
+  records, and verifies independent mutable pools per owner.
+- Sequence 4 sets collision +0xCFC bit 0 at 0x00a4a55a. The new fighter
+  therefore starts with HP damage disabled, verified through `apply_hp`.
+  Its later clearing transition is still untraced; loaded stats do not
+  imply that the dragon is ready for damageable encounter integration.
+  All three dragon tests pass after this construction change.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's

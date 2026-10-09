@@ -1,8 +1,11 @@
 //! Installed-data check; no original gameplay comparison is asserted.
 // The module is tested by path until its shared lib.rs export is integrated.
 use ddenemyrt::body;
+use ddenemyrt::combat;
 #[path = "../src/dragon.rs"]
 mod dragon;
+#[path = "../src/enemy_stats.rs"]
+mod enemy_stats;
 
 #[test]
 fn opening_dragon_definitions_are_loaded_from_the_install() {
@@ -64,9 +67,9 @@ fn registered_dragon_body_contains_the_entrance_motions() {
         return;
     }
     let exe_file = ddexe::ExeFile::next_to(&native).unwrap();
-    let data = dragon::DragonAiData::opening(&exe_file.image().unwrap()).unwrap();
     let vfs = ddvfs::Vfs::open(&native).unwrap();
-    let body = data.load_body(&vfs, 1.0).unwrap();
+    let data = dragon::DragonData::opening(&vfs, &exe_file.image().unwrap(), 1.0).unwrap();
+    let body = &data.body;
     assert!(!body.skeleton.joints.is_empty());
     assert_eq!(body.banks.len(), 5);
     assert_eq!(body.collision.len(), 3);
@@ -76,4 +79,41 @@ fn registered_dragon_body_contains_the_entrance_motions() {
         let motion = body::MotionId::new(((id >> 8) & 0xf) as u8, id & 0xff);
         assert!(body.frames(motion) > 0, "missing entrance motion {id}");
     }
+    let installed = ddenemy::EnemyData::load(&vfs, ddenemy::EnemyId::parse("em5800").unwrap()).unwrap();
+    let region = installed
+        .regions
+        .as_ref()
+        .unwrap()
+        .regions
+        .iter()
+        .find(|r| r.kind == 0)
+        .unwrap();
+    assert_eq!(data.regions.len(), region.elements.len());
+    for (pool, element) in data.regions.iter().zip(&region.elements) {
+        assert_eq!(
+            (pool.id, pool.hp, pool.hp_max),
+            (element.id, element.hp_max, element.hp_max)
+        );
+    }
+    let common = &installed.common.as_ref().unwrap().1;
+    assert_eq!(data.ai.tables.root(0), Some(dragon::OPENING_THINK_ROOT));
+    let reflected = &installed.common.as_ref().unwrap().0.object;
+    let Some([mtxfs::Value::U(obj_size)]) = reflected.get(&reflected.root, "OBJ補正サイズ") else {
+        panic!()
+    };
+    assert_eq!(data.obj_size, *obj_size as u32);
+    assert_eq!(data.defender.defence, common.defense);
+    assert_eq!(data.defender.mgc_defence, common.magic_defense);
+    let first = data.fighter(40);
+    let mut second = data.fighter(41);
+    assert_ne!(first.owner, second.owner);
+    let combat::Victim::Enemy { regions, rates, .. } = &mut second.victim else {
+        panic!()
+    };
+    assert_eq!(rates.flags & 1, 1);
+    let hp = regions[0].hp;
+    ddcombat::damage::apply_hp(&mut regions[0], hp + 100.0, rates, false);
+    assert_eq!(regions[0].hp, hp, "opening initialization blocks HP damage");
+    regions[0].hp -= 1.0;
+    assert_eq!(first.victim.hp(), hp, "owners must not share mutable HP pools");
 }
