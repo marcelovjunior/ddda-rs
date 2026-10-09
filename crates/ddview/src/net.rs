@@ -488,7 +488,7 @@ pub fn step(
 ) {
     let (Some(mut st), Some(net)) = (state, net) else { return };
     let st = &mut *st;
-    if !pause.paused { play::orbit(st, &buttons, &mouse); }
+    if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) { play::orbit(st, &buttons, &mouse); }
     let mut input = if pause.paused { PlayerInput::default() } else {
         PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) }
     };

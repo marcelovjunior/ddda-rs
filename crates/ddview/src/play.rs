@@ -472,7 +472,7 @@ pub fn step(
         let relaxed = st.sim.players.first().is_some_and(|p| p.relaxed);
         info!("{} walk and run", if relaxed { "town (relaxed)" } else { "field" });
     }
-    orbit(&mut st, &buttons, &mouse);
+    if pause.mouse_look(buttons.pressed(MouseButton::Right)) { orbit(&mut st, &buttons, &mouse); }
     let cam_yaw = st.cam_yaw;
     let mut local = HashMap::new();
     let locals = st.locals.clone();
@@ -531,7 +531,7 @@ pub fn active_input(input: &Input) -> bool {
 
 /// Retain a short input until a fixed tick consumes it. Held input still
 /// refreshes direction and camera yaw every render frame.
-fn latch_input(previous: Input, mut latest: Input) -> Input {
+pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     if latest.stick == [0.0; 2] && previous.stick != [0.0; 2] {
         latest.stick = previous.stick;
         latest.walk = previous.walk;
@@ -550,7 +550,9 @@ pub fn orbit(st: &mut PlayState, _buttons: &ButtonInput<MouseButton>, mouse: &Ac
 
 fn orbit_angles(yaw: f32, pitch: f32, delta: Vec2) -> (f32, f32) {
     // Viewer mouse sensitivity (radians/pixel), not an original-game constant.
-    let yaw = yaw + delta.x * 0.004;
+    // Mouse right turns the view right. Yaw 0 looks along +Z and screen-right
+    // is -X there (ddsim), so a larger yaw turns the view left: subtract.
+    let yaw = yaw - delta.x * 0.004;
     // mAngLimitXMin / Max -60 / 30 degrees in the player camera lists
     // (sign *inferred*: up to 60 degrees above, 30 below)
     let pitch = (pitch + delta.y * 0.004).clamp(-60f32.to_radians(), 30f32.to_radians());
@@ -1017,7 +1019,8 @@ mod tests {
     #[test]
     fn mouse_orbit_is_direct_and_respects_pitch_limits() {
         let (yaw, pitch) = orbit_angles(0.0, 0.0, Vec2::new(20.0, -20.0));
-        assert!(yaw > 0.0 && pitch < 0.0);
+        // mouse right -> view turns right -> yaw decreases
+        assert!(yaw < 0.0 && pitch < 0.0);
         assert_eq!(
             orbit_angles(0.0, 0.0, Vec2::new(0.0, -10000.0)).1,
             -60f32.to_radians()

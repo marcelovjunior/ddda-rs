@@ -2539,6 +2539,7 @@ dependencies = [
 name = "ddsave"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddvfs",
  "miniz_oxide 0.8.9",
  "mtarc",

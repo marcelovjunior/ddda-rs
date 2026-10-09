@@ -102,6 +102,8 @@ struct Args {
     cam_pitch: Option<f32>,
     /// Start at the viewer pause menu (also useful with --shot).
     paused: bool,
+    /// Automated runs never grab the cursor or pause on focus loss.
+    unattended: bool,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -147,6 +149,7 @@ fn args() -> Args {
         kit: None,
         cam_pitch: None,
         paused: false,
+        unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -157,6 +160,7 @@ fn args() -> Args {
         size: (1600, 900),
     };
     while let Some(k) = it.next() {
+        if k == "--unattended" { a.unattended = true; continue; }
         if k == "--paused" {
             a.play = true;
             a.paused = true;
@@ -572,7 +576,7 @@ fn main() {
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(|pause: Res<pause::PauseState>, args: Res<Args>| !pause.paused || args.host.is_some() || args.join.is_some()), play::update_hud).chain())
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud).chain())
 
         .run();
 }
@@ -642,7 +646,7 @@ fn setup(
             .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
             .or_else(|| ddlook::save::template_look(&vfs, 0).ok());
         if let Some(state) =
-            opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, vec![arisen], args.demo)
+            opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, if args.join.is_some() { vec![None, arisen] } else { vec![arisen] }, args.demo)
         {
             commands.insert_resource(state);
             play::spawn_hud(&mut commands);

@@ -18,6 +18,7 @@
 pub mod builder;
 pub mod cmc;
 pub mod rift;
+pub mod rift_ui;
 pub mod tables;
 
 pub use ddsave::pawn::{RomPawnId, NORA_LEVEL_BANDS};
