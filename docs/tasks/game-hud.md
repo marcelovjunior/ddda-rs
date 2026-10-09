@@ -41,3 +41,14 @@ colours, which the next build corrected. No original process was controlled.
 Still open: reference image comparison after colour/prompt corrections,
 font rendering, exact pawn anchor, Converse availability/event visibility,
 followed-seat key artwork and final old-overlay removal. Not a completed HUD.
+
+Second checkpoint: installed GFD bitmap fonts now render prompt text; traced
+VK binding selectors fix J/K/Space artwork. Local keyboard slot selects the
+corresponding P1 or P2 key art rather than assuming seat zero; remote followed
+seats have no local key prompts. Opening-session read-only queries suppress
+Converse when unavailable and HUD during events. Original interaction remains
+host-seat-only, reflected explicitly in its availability query. All 16 mtgui
+tests passed, including installed resources and missing/truncated animation
+pools. Screenshot `ddda-hud-third.png` (private TEMP) visually verifies original
+font, corrected key art, green health and faded full stamina with HP410.
+Pawn projection, final reference comparison and overlay removal remain open.

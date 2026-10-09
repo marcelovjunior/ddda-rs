@@ -242,11 +242,11 @@ frames at +12/+16. Normal health and stamina use selector 5
 localized `id/DDN/message/actionpallet/actionpallet` resource. The keyboard
 group's nodes 175/190/197/204 hold light/heavy/interact/jump text; the
 positions correspond to ref001. `0x005ed3b0` adds 0x8c to keyboard binding
-scan codes before looking up the control selector. Key icons are selected
+virtual-key codes before looking up the control selector. Key icons are selected
 from the authored texture and size keys, not a copied atlas table.
 
 The presentation checkpoint is incomplete: the old overlay is retained for
-binding checks, prompt typography uses the viewer font, pawn world anchoring
+binding checks, prompt typography uses the installed GFD font, pawn world anchoring
 uses the highest animated joint provisionally (the exact source anchor is
 unresolved), and full animation/status transitions are not yet executed.
 The screen projection's 70cm camera-facing offset and -40 vertical offset
@@ -259,3 +259,17 @@ The node graph and links have executable/data evidence, but no screenshot
 comparison or input behavior validation. Next action: trace the loading-message
 resource assignment and options control-to-message bindings, then define a
 separate headless per-instance GUI state model before any presentation work.
+
+### Bitmap GUI fonts
+
+`mtgui::font` reads GFD 0x10705 with the loader at `0x00fff120`: nominal
+size, baseline groups, texture base and sorted 16-byte glyph records.
+The proportional advance, bearing and baseline metrics follow `0x010018f0`;
+glyph rectangles and half-texel UV insets follow `0x010ff260`. The short
+texture suffix table is at `0x016307b8`. Text and glyph pixels remain runtime
+install reads. Single-line plain text is supported; ruby, markup, wrapping
+and filter animations are not. The installed Japanese font contains the
+English prompt glyphs and references four texture pages. A bounded saved-game
+screenshot verified Light Attack, Heavy Attack and Jump rendering with J/K/Space
+artwork, and HP 410 against the simulation overlay. Converse is hidden outside
+an available opening-session conversation; all HUD is hidden during its event.
