@@ -376,6 +376,15 @@ to one of them.
   `0x008559A0`) kill on contact: game over for the Arisen. That they are
   deep water or the abyss is inferred.
 
+**Hard landing** (`0x00B6E5C0`): a fall that lands at least adjust
+0x55 (-1000, so 10 m) below its start (`0x00B78A00`; uPlayer +0x2098 is
+the start height) requests `cPlActDmgGround` (action 0x19) variant 3
+instead of `cPlActLand`: motion 0x107 from bank 1 (`m0000_dm`, common
+bank table 0x014F1D30), and damage 0x56 + 0x57 percent x the excess
+(200 + 0.8 x (drop - 1000)). ddsim: `State::HardLanding`, damage queued in
+`Player::fall_damage` for the host. Not yet modelled: Grace (0x1DC, 15 m)
+and Resilience.
+
 **ddsim models:**
 - the ring: the wait, walk, run and sprint, 100 apart, with ground within
   50 above or below the feet (the original reads the body's last ground
