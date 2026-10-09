@@ -30,6 +30,7 @@ pub struct SkyPlugin;
 impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "sky.wgsl");
+        bevy::shader::load_shader_library!(app, "sky_scatter.wgsl");
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
             .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate));
     }
@@ -133,6 +134,12 @@ pub struct StageSky {
     pub sky: mtweather::Sky,
     pub inputs: SkyInputs,
     pub lights: SkyLights,
+    /// Colour of each environment cube `DDCube<i>_CM`:
+    /// `mEnvMapBaseColor[i]` x lerp(1, `mEnvMapColor[i]`.rgb, .a), the
+    /// constants of the cube tint pass (sc\dx9\root 0x912060). *Assumed:*
+    /// the weather scales (`mEnvMapBaseColorScale_C/_R`, `mEnvMapBaseScale_C/_R`)
+    /// are not applied (their use is not traced), the blend factor is 0.
+    pub env_colors: [[f32; 3]; 5],
 }
 
 /// First key of the track `name` under track `parent`.
@@ -199,7 +206,24 @@ impl StageSky {
         inp.cloud_scattering = wmf("CloudScattering", own("mCloudScattering", inp.cloud_scattering));
         inp.cloud_eccentricity = wmf("CloudEccentricity", own("mCloudEccentricity", inp.cloud_eccentricity));
         let lights = Self::light_units(&s, w);
-        Some(StageSky { sky: sky_res, inputs: inp, lights })
+        // The arrays' tracks repeat the name; the type hash field holds the
+        // element index.
+        let element = |name: &str, i: u32| {
+            s.tracks
+                .iter()
+                .find(|t| t.link as usize == wm && t.name == name && t.type_hash == i)
+                .and_then(|t| t.keys.first())
+                .and_then(|k| match k.value {
+                    Value::Vec4(v) => Some(v),
+                    _ => None,
+                })
+        };
+        let env_colors = std::array::from_fn(|i| {
+            let base = element("mEnvMapBaseColor", i as u32).unwrap_or([1.0; 4]);
+            let c = element("mEnvMapColor", i as u32).unwrap_or([1.0; 4]);
+            std::array::from_fn(|k| base[k] * (1.0 + c[3] * (c[k] - 1.0)))
+        });
+        Some(StageSky { sky: sky_res, inputs: inp, lights, env_colors })
     }
 
     /// The light units of the scheduler by their tracks: the infinite
@@ -288,7 +312,9 @@ pub fn weather_of_fog(vfs: &ddvfs::Vfs, stage: u32, minute: u32, color: [f32; 3]
 
 impl StageSky {
     /// Spawns the dome for a sun direction (unit, towards the sun) with
-    /// radius `radius` (viewer units; keep it inside the far plane).
+    /// radius `radius` (viewer units; keep it inside the far plane), and
+    /// inserts [`crate::stage::SkyEnv`] for the materials' reflections seen
+    /// from `eye` (game units).
     pub fn spawn(
         &self,
         commands: &mut Commands,
@@ -297,6 +323,7 @@ impl StageSky {
         materials: &mut Assets<SkyMaterial>,
         sun_dir: Vec3,
         radius: f32,
+        eye: Vec3,
     ) {
         let cb = mtweather::sky::constants(&self.sky, &self.inputs, sun_dir.to_array());
         let mut map = |top: f32, scale: f32| {
@@ -320,6 +347,12 @@ impl StageSky {
             cb: std::array::from_fn(|i| Vec4::from_slice(&cb[4 * i..4 * i + 4])),
             eye: Vec4::ZERO,
         };
+        commands.insert_resource(crate::stage::EnvCubeColors(self.env_colors.map(Vec3::from)));
+        commands.insert_resource(crate::stage::SkyEnv {
+            params: crate::stage::SkyEnvParams { cb: params.cb, eye: eye.extend(0.0) },
+            rayleigh: rayleigh.clone(),
+            mie: mie.clone(),
+        });
         let material = materials.add(SkyMaterial { params, rayleigh, mie });
         commands.spawn((
             Mesh3d(meshes.add(Sphere::new(radius).mesh().uv(64, 32))),

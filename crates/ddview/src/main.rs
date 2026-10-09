@@ -563,6 +563,7 @@ fn setup(
                     .unwrap_or(light.sun_dir.normalize_or(Vec3::Y)),
                 // Just inside the far plane.
                 args.far * stage::UNIT * 0.9,
+                args.pos,
             ),
             None => warn!("no sky scheduler for stage {}", args.stage),
         }

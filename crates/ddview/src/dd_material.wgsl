@@ -14,6 +14,8 @@
 //   colour = lerp(colour, fog colour, saturate((depth - start) * inv_range) * density)
 // with fSHCoef evaluated exactly as the stage pixel shaders do.
 
+#import ddview::sky_scatter::sky_color
+
 #ifdef PREPASS_PIPELINE
 #import bevy_pbr::{
     mesh_functions,
@@ -51,6 +53,8 @@ struct DdParams {
     fog_range: vec4<f32>,
     // xyz: fReflectiveColor, w: Fresnel F0
     reflect: vec4<f32>,
+    // xyz: environment cube colour, w: cube index
+    env: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
@@ -59,12 +63,28 @@ const FLAG_REFLECT: u32 = 4u;
 const FLAG_SPEC_MAP: u32 = 8u;
 // Shadow caster only (the primitive's draw mode lacks the main pass).
 const FLAG_SHADOW_ONLY: u32 = 16u;
+// The environment reflection evaluates the stage sky.
+const FLAG_SKY_ENV: u32 = 32u;
+// The environment reflection samples the environment cube.
+const FLAG_ENV_CUBE: u32 = 64u;
+// No light buffer: unlit, the vertex colour is the light.
+const FLAG_NO_LIGHT_BUFFER: u32 = 128u;
+
+struct SkyEnvParams {
+    cb: array<vec4<f32>, 11>,
+    eye: vec4<f32>,
+};
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> dd: DdParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var transparency_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var transparency_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var spec_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var spec_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105) var<uniform> sky_env: SkyEnvParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(106) var sky_rayleigh: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var sky_mie: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var env_cube: texture_cube<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var env_sampler: sampler;
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
@@ -174,14 +194,21 @@ fn fragment(
                     & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_directional_shadow(0u, in.world_position, in.world_normal, view_z, in.position.xy);
         }
-        let light = sh_irradiance(n) + dd.sun_color.rgb * max(dot(n, dd.sun_dir.xyz), 0.0) * shadow;
+        var light = sh_irradiance(n) + dd.sun_color.rgb * max(dot(n, dd.sun_dir.xyz), 0.0) * shadow;
+        if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
+            // Unlit: the vertex colour (in the base colour) is the light.
+            light = vec3<f32>(1.0);
+        }
         var color = pbr_input.material.base_color.rgb * light;
         if ((dd.flags & FLAG_REFLECT) != 0u) {
             // Environment reflection as in the stage shaders (e.g. file
-            // offset 0x88068C): env * fReflectiveColor * specular map G *
-            // mean ambient * Schlick Fresnel lerp(F0, 1, (1 - N.V)^5). The
-            // env is a run-time render (sky cube / planar water reflection);
-            // the fog colour stands in for it here (*not traced*).
+            // offsets 0x88068C, 0x4A0980): env * fReflectiveColor *
+            // specular map G * mean ambient * Schlick Fresnel lerp(F0, 1,
+            // (1 - N.V)^5). The env is the sky's reflection cube
+            // (DDCube0_CM): the stage sky evaluated along the reflected
+            // view ray. *Not done:* the cube's other contents (EnvCube pass
+            // geometry), the normal and detail normal maps; without a sky
+            // the fog colour stands in.
             var mask = 1.0;
             if ((dd.flags & FLAG_SPEC_MAP) != 0u) {
 #ifdef VERTEX_UVS_A
@@ -189,10 +216,28 @@ fn fragment(
 #endif
             }
             let sh = sh_irradiance(n);
-            let ambient = (sh.r + sh.g + sh.b) / 3.0;
+            var ambient = (sh.r + sh.g + sh.b) / 3.0;
+            if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
+                // mean(VertexColor.rgb) x Occlusion
+                ambient = 1.0;
+#ifdef VERTEX_COLORS
+                ambient = (in.color.r + in.color.g + in.color.b) / 3.0;
+#endif
+            }
             let nv = clamp(dot(n, pbr_input.V), 0.0, 1.0);
             let fres = mix(dd.reflect.w, 1.0, pow(1.0 - nv, 5.0));
-            color += dd.fog_color.rgb * dd.reflect.rgb * mask * ambient * fres;
+            var env = dd.fog_color.rgb;
+            let r = reflect(-pbr_input.V, n);
+            if ((dd.flags & FLAG_ENV_CUBE) != 0u) {
+                // DDCube<i>_CM = DDBaseCube<i>_CM x the weather's colour
+                // (0x912060; its HDR encode is a no-op below 1).
+                env = textureSample(env_cube, env_sampler, r).rgb * dd.env.rgb;
+            } else if ((dd.flags & FLAG_SKY_ENV) != 0u) {
+                // Planar water reflection (FReflectWaterMap): the sky
+                // stands in for the mirrored scene.
+                env = sky_color(sky_env.cb, sky_rayleigh, sky_mie, sky_env.eye.xyz, r);
+            }
+            color += env * dd.reflect.rgb * mask * ambient * fres;
         }
         // Linear fog on view depth in game units (cm).
         let depth = -view_z * dd.fog_range.z;
