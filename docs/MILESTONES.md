@@ -166,3 +166,42 @@ from `cPlCliffHangBegin`, motion blending.
 
 Next action: maintainer playtest of `--play` (speeds, walls, ledges); then
 ledge detection from the exe.
+
+## Batch 2026-10-09 (overnight, multi-agent)
+
+The head coordinated about 20 agents through the board (`docs/BOARD.md`).
+
+**Merged into main** (each checked by `scripts/merge_task.py`: no
+conflict markers, tests pass):
+
+| Area | Briefs |
+|---|---|
+| Readers | text (`mtgmd`), player params (`ddparam`), enemy data (`mtprp`, `ddenemy`), AI state machines (`mtfsm`), weather (`mtweather`), map and travel (`ddmap`), GUI (`mtgui`), NPC links (`ddnpc`), sound (`mtsound`), effects (`mteffect`) |
+| Research | pawns and the Rift (`ddsave`, `ddpawn`, PAWNS.md), stamina rules, asset survey (SURVEY.md) |
+| Core | ledges (ddsim, `Ground::ray`/`sphere`), motion blending (`mtlmt::blend`) |
+| Tools | the in-process oracle (`research/ddda-oracle`, ORACLE.md), MtDTI reflected fields (`research/dti/dti_props.py`) |
+
+**Compared with the original:**
+- The clock: 1/30-s units, scaled by a per-frame `mDeltaTime` from the QPC
+  timer (RECORDINGS.md; the formula was traced by codex-11).
+- Sprint stamina: -1.5 per frame. Recovery: +1.625 per frame, after a
+  0.59-0.61 s hold.
+- Keyboard turning is instant.
+- Blend lengths and countdown, through an oracle trace (ANIMATION.md).
+- The offline Rift pool matches the level table, and hire costs are
+  checked against a live read (PAWNS.md).
+
+**In progress:**
+- Claude lane: terrain shading (claude-3), shops (claude-6), events and
+  quests (claude-7), combat (claude-8), vocations (claude-9), pawn builder
+  (claude-5).
+- Codex lane: rift-ui, save-pawns, enemy resource selection, weather
+  clock, travel arrival.
+- Live: the ledge jump/fall rule (claude-4).
+
+**Blockers:** none. The mage save limits live checks of vocation-specific
+moves such as the dagger double jump.
+
+**Next action:** finish the M1 shading gate and the M2 gate. That means
+recorded paths, speeds, jump arcs and stamina through the oracle against
+`ddsim`, as an automated acceptance test.
