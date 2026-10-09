@@ -368,6 +368,7 @@ pub fn update(
     mut quads: Query<(&Quad, &mut Node, &mut ImageNode), Without<Prompt>>,
     mut prompts: Query<(&Prompt, &mut Node), Without<Quad>>,
 ) {
+    let _timing = crate::perf::Section::start("hud::update");
     let Ok(window) = windows.single() else {
         return;
     };

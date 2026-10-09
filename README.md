@@ -99,8 +99,11 @@ graphs, sound, effects and more.
 
 ### Cassardis opening slice
 
-`ddview <nativePC> --play --opening` starts at Newly Arisen after a
-headless prologue fast-forward. Walk to the weapon table, press E, and
+`ddview <nativePC> --play --opening` first plays the opening movie
+(Enter skips), then the character editor (arrows edit, Enter confirms;
+`--charaedit` runs it alone), then starts at Newly Arisen with that Arisen
+after a headless fast-forward of the prologue and the dragon attack
+(`--skip-intro` goes straight there; `--movie st100ev00` plays a movie alone). Walk to the weapon table, press E, and
 pick 1 Fighter or 2 Mage in the labelled vocation stub. Exit the room to
 play ev10, speak to Quina with E (E advances lines; digits choose), then
 walk out toward the village. The slice stops when q0002 boots.

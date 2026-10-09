@@ -3,7 +3,7 @@
 - **Owner:** Codex lane (codex-1 survey; implementation staffing via head)
 - **Branch:** `task/chimera-runtime`
 - **Board area:** `fight/chimera`
-- **Status:** open; survey authorized by head #2072
+- **Status:** in progress; codex-28 implementation assigned by head #2090 / codex-1 #2098
 
 ## Goal
 
@@ -50,6 +50,10 @@ Claim exact paths before editing. Coordinate shared `ddenemyrt` fight/lib,
 Viewer hookup needs head's agreement; head owns streaming. Do not edit
 MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 
+Root board #2175 additionally coordinates exact files
+`crates/ddcombat/src/damage.rs` and `crates/ddenemyrt/src/combat.rs` for the
+backward-compatible valued-hit API and mirrored linked-hit helper.
+
 ## Work and acceptance
 
 1. Survey the actual prologue placement, body/child resources, life regions,
@@ -73,6 +77,54 @@ MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 
 ## Results
 
-Initial source/data survey only. No chimera runtime is implemented by this
-brief. The first implementation action is to identify the two child units'
-life/death masks and the final persistent placement-kill producer.
+Source checkpoint: isolated body/child death and parent-reaction selectors
+are implemented with source addresses. Twelve targeted regressions pass.
+`docs/CHIMERA.md` records ownership, common priority masks, child-01 guards,
+the persistent writer chain, action registration, and damage-routing leads.
+An installed catalogue reader resolves 317 action records and 147 resource
+requests; the installed regression locates combat resources and parses the
+three region files (5/4/2 sets). Runtime hit-region maps preserve pool IDs.
+Source-traced CRT flag fixups retain 41/28/27 bound resources; on-disk
+zero flag words are not mistaken for effective runtime flags.
+The ordinary hit resolver now optionally retains valued damage for a separate
+linked-collision helper; five synthetic regressions check no second mitigation,
+main-only HP, mapping/attribute/no-death guards, status/break behavior and
+per-attacker metadata. No link walking or host fight integration yet.
+Validation: `cargo test -p ddcombat -p ddenemyrt` passes 72 tests with one
+existing ignored diagnostic (33 combat and 39 enemy-runtime tests).
+The normal body action 0x3a is a falling action before death action 0x57;
+the 180-unit death cleanup timer is not the persistent-kill producer.
+Shared parameter loading now accepts explicit common/region resource paths,
+including both child suffixes. One installed regression verifies legacy common
+stats equivalence, all three chimera kind-zero pools against parsed resources,
+and missing-path errors. The existing em#### identity validation stays intact.
+`ChimeraData::load` now constructs all three installed bodies and combat stats;
+an installed regression checks motion-bank order and independent owner pools.
+Scale and collision rates/flags are explicit caller inputs. Actor initialization,
+action stepping and host placement binding remain outstanding.
+Latest validation: `cargo test -p ddenemy -p ddenemyrt` passes 51 tests
+(10 parameter-reader and 41 enemy-runtime), with one existing ignored diagnostic.
+Follow-up: installed body-specific magick bonuses and their guarded
+post-mitigation modifier are implemented; 13 chimera integration tests pass.
+The modifier keys on the resolved pool ID, not the raw collision region.
+An additive configured combat pass now supports explicit owner mappings,
+ordered immediate linked-hit relay and a post-mitigation callback, preserving
+the legacy wrapper. Six further synthetic regressions cover nonidentity
+mapping, three simultaneous owners, ordering, equivalence and atomic errors.
+Full `cargo test -p ddcombat -p ddenemyrt` passes 81 tests (33+48), one ignored.
+The callback's current `has_hp` observations are explicitly distinct from the
+original actor +0x5bd0 death marker. Source timing is confirmed: common vf72
+calls vf119 (0x00ab37d0), setting that marker before the persistent-kill call.
+Synchronous accepted-death policy observation is now exposed; host binding remains unimplemented;
+unmapped ordinary configured hits return a preflight error.
+Review follow-up restricts the modifier callback to configured enemies;
+20 chimera integration tests pass, including a mutating callback that must
+leave an unconfigured enemy's ordinary damage unchanged.
+The additive `EnemyHitPolicy` observer runs after each local and mirrored hit,
+before the next one. Twenty-one chimera integration tests pass, including
+accepted versus priority-blocked child death with identical zero HP and the
+resulting difference in the later body modifier. No live host wiring yet.
+
+No host combat actor, placement kill, story progression or original-game
+comparison is claimed by this checkpoint. Next: the child-00 collision-link
+relay of already-valued hits to the body and exact body/child damage binding.

@@ -1,9 +1,9 @@
 # chara-creation-ui: Character creation (stage 801)
 
-- **Owner:** codex lane
+- **Owner:** head
 - **Branch:** `task/chara-creation-ui`
 - **Board area:** `ui/chara-creation`
-- **Status:** open
+- **Status:** partial
 
 Part of the opening slice. Read `docs/OPENING_SLICE.md` first,
 especially its rule: build the system, not the step.
@@ -33,4 +33,27 @@ Stage 801 shows the original screen and the edited Arisen enters stage 200 looki
 
 ## Results
 
-(filled in by the agent)
+head, 2026-10-09, first version: `ddview <nativePC> --charaedit` (or
+`--charaedit-female`).
+- **Fields:** all 41 `cSAVE_DATA_EDIT` fields, starting from the first
+  built-in pawn of that sex (`romPawnInfo`; *viewer choice*, the original's
+  starting character is not traced).
+- **Rebuild:** every change rebuilds the body through
+  `ddlook::save::edit_look` (0x00780fa0); Enter prints the record.
+- **Allowed values:**
+  - presets come from the existing `edit\parts` files (the sets are not
+    contiguous: 0-8, 50 and up; female adds 100);
+  - colours from the pallets, hair and beard from the edit pattern;
+  - sliders are the five-step tables;
+  - every other field is marked "range not traced".
+- **Test:** `steps_skip_missing_presets_and_wrap`.
+
+Open:
+- the `uGUIEdit` screen and its pages (the GUI data);
+- each field's real range;
+- face-part assembly for the face fields (CHARACTERS.md);
+- clothing during creation;
+- stage 801's set;
+- applying the result to the opening's Arisen;
+- height, weight and speed (ddedit `ground_scale`, `body_weight` and
+  `body_class` from the edited skeleton).

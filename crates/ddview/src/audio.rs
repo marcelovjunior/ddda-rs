@@ -289,12 +289,12 @@ pub fn voices_from_save_xml(xml: &str, slot: &str) -> Result<mtsound::voice::Eve
 }
 
 #[derive(Asset, TypePath, Clone)]
-struct DecodedAudio {
+pub(crate) struct DecodedAudio {
     samples: Arc<[f32]>,
     channels: ChannelCount,
     rate: SampleRate,
 }
-struct Samples { audio: DecodedAudio, at: usize }
+pub(crate) struct Samples { audio: DecodedAudio, at: usize }
 impl Iterator for Samples {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
@@ -337,6 +337,7 @@ struct EventSound(String);
 struct OneShotSe;
 
 fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>, mut choices: Local<SoundChoices>) {
+    let _timing = crate::perf::Section::start("audio::play_pending");
     // Commands are deferred: include sources queued earlier in this batch so
     // two cues for one unit cannot leave two voices playing simultaneously.
     let mut units: HashMap<String, Vec<Entity>> = HashMap::new();
@@ -418,6 +419,18 @@ fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut asset
 fn sync_pause(pause: Option<Res<crate::pause::PauseState>>, args: Option<Res<crate::Args>>, sinks: Query<&AudioSink, With<EventSound>>) {
     let paused = pause.is_some_and(|p| p.paused) && args.is_some_and(|a| a.host.is_none() && a.join.is_none());
     for sink in &sinks { if paused { sink.pause(); } else { sink.play(); } }
+}
+
+/// Plays already-decoded mono or stereo PCM once (the movies, movie.rs).
+pub(crate) fn play_pcm(
+    commands: &mut Commands,
+    assets: &mut Assets<DecodedAudio>,
+    samples: Vec<f32>,
+    channels: u16,
+    sample_rate: u32,
+) -> Result<Entity, String> {
+    let a = stereo(mtsound::decode::Pcm { channels, sample_rate, samples })?;
+    Ok(commands.spawn((AudioPlayer(assets.add(a)), PlaybackSettings::DESPAWN)).id())
 }
 
 #[cfg(test)]

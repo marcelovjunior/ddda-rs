@@ -772,25 +772,58 @@ pub const CAMERA_NEAR: f32 = 96.0;
 /// The field camera's `mFov` in those recordings; the render adds the
 /// player's CameraFov setting (docs/SHADING.md).
 pub const CAMERA_FOV: f32 = 55.0;
-/// The camera parameters' collision margin `mMargin` (5 cm in the player
-/// lists `param\cam\pl\*`).
-pub const CAMERA_MARGIN: f32 = 5.0;
 
 /// Eye and target (stage frame, cm) for the followed feet `feet` at the
-/// orbit angles (`pitch` > 0: the eye above the target). The eye is pulled
-/// in to the first surface between the target and it, `CAMERA_MARGIN` off
-/// it (*inferred* from `mMargin`; the original's camera collision is not
-/// traced).
+/// orbit angles (`pitch` > 0: the eye above the target), kept out of
+/// walls as the original's game camera does (`0x007de570`, called from
+/// `0x007e1400`):
+/// 1. A ray from the target to the eye; on a hit the eye moves to it.
+/// 2. A sphere one near-plane distance in front of the eye, toward the
+///    target, of radius `near x 1.3 + (1 - |cos|) x 10`. The cosine is
+///    between the view direction and the eye-target direction, which are
+///    the same here, so the radius is `1.3 x near`. If it overlaps
+///    collision, it is swept toward the target (`0x010fe5e0`) and the eye
+///    goes one near-plane distance behind the sweep's stop.
+/// So the near plane never cuts into a wall.
+/// *Not modelled:* hits whose attribute has bit 0x10 (`0x007c6f90`) are
+/// ignored by the original; the sweep's stop is found here by bisection.
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
     let mut eye = target - dir * CAMERA_DISTANCE;
     if let Some(hit) = ground.ray(target.to_array(), eye.to_array()) {
-        let h = Vec3::from(hit.point);
-        let d = (h - target).length() - CAMERA_MARGIN;
-        eye = target - dir * d.max(10.0);
+        eye = Vec3::from(hit.point);
+    }
+    let toward = (target - eye).normalize_or_zero();
+    let radius = CAMERA_NEAR * 1.3;
+    let centre = eye + toward * CAMERA_NEAR;
+    if sphere_hits(ground, centre, radius) {
+        // the farthest point from the target, between the centre and the
+        // target, where the sphere is clear
+        let (mut clear, mut blocked) = (1.0f32, 0.0f32);
+        if !sphere_hits(ground, target, radius) {
+            for _ in 0..12 {
+                let mid = (clear + blocked) * 0.5;
+                if sphere_hits(ground, centre.lerp(target, mid), radius) {
+                    blocked = mid;
+                } else {
+                    clear = mid;
+                }
+            }
+        }
+        eye = centre.lerp(target, clear) - toward * CAMERA_NEAR;
     }
     (eye, target)
+}
+
+/// Whether a sphere touches any collision triangle.
+fn sphere_hits(ground: &dyn ddsim::Ground, c: Vec3, r: f32) -> bool {
+    let mut tris = Vec::new();
+    let (lo, hi) = ((c - Vec3::splat(r)).to_array(), (c + Vec3::splat(r)).to_array());
+    if !ground.triangles_in(lo, hi, &mut tris) {
+        return false;
+    }
+    tris.iter().any(|(t, _)| Vec3::from(ddsim::sweep::closest_on_triangle(c.to_array(), t)).distance_squared(c) < r * r)
 }
 
 /// The follow camera's projection: `CAMERA_FOV` plus the player's
@@ -1079,9 +1112,28 @@ mod tests {
         assert_eq!(target, Vec3::new(0.0, CAMERA_TARGET_HEIGHT, 0.0));
         assert!((eye - target).length() - CAMERA_DISTANCE < 1e-3);
         assert!(eye.z < 0.0);
-        // a wall 100 cm behind: the eye stops 5 cm before it
+        // a wall 100 cm behind found by the ray: the eye stops on it
         let (eye, _) = follow_camera(&Wall, Vec3::ZERO, 0.0, 0.0);
-        assert!((eye.z + 100.0 - CAMERA_MARGIN).abs() < 1e-3, "{eye:?}");
+        assert!((eye.z + 100.0).abs() < 1e-3, "{eye:?}");
+        // a wall 150 cm behind that only the sphere meets (0x007de570): the
+        // sphere (1.3 x near = 124.8) one near plane (96) in front of the eye
+        // clears it at z = -150 + 124.8, so the eye stops at -25.2 - 96
+        struct Plane;
+        impl ddsim::Ground for Plane {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
+                Some(0.0)
+            }
+            fn triangles_in(&self, lo: [f32; 3], _: [f32; 3], out: &mut Vec<ddsim::sweep::Face>) -> bool {
+                if lo[2] > -150.0 {
+                    return false;
+                }
+                let z = -150.0;
+                out.push(([[-1e4, -1e4, z], [1e4, -1e4, z], [0.0, 1e4, z]], 0));
+                true
+            }
+        }
+        let (eye, _) = follow_camera(&Plane, Vec3::ZERO, 0.0, 0.0);
+        assert!((eye.z - (-150.0 + 1.3 * CAMERA_NEAR - CAMERA_NEAR)).abs() < 1.0, "{eye:?}");
     }
 
     #[test]

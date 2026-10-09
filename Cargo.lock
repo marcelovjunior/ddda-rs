@@ -2349,9 +2349,11 @@ dependencies = [
  "ddexe",
  "dditem",
  "ddparam",
+ "ddpawn",
  "ddpawnai",
  "ddsim",
  "ddskill",
+ "ddstory",
  "ddvfs",
  "mtarc",
  "mtfsm",
@@ -2650,6 +2652,7 @@ dependencies = [
  "mtlmt",
  "mtlot",
  "mtmod",
+ "mtmovie",
  "mtmrl",
  "mtshader",
  "mtsound",
@@ -3922,6 +3925,13 @@ name = "mtmod"
 version = "0.1.0"
 dependencies = [
  "mtshader",
+]
+
+[[package]]
+name = "mtmovie"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

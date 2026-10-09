@@ -27,6 +27,12 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod probe;
+mod perf;
+mod clock;
+mod intro;
+mod charaedit;
+mod movie;
 mod stream;
 mod event;
 mod character;
@@ -37,6 +43,7 @@ mod items;
 mod skills;
 mod hud;
 mod pause;
+mod shadows;
 mod sky;
 mod stage;
 
@@ -107,6 +114,17 @@ struct Args {
     cam_pitch: Option<f32>,
     /// Start at the viewer pause menu (also useful with --shot).
     paused: bool,
+    /// `--movie <name>`: play one of the game's movies (`st100ev00`, `title_A`, ...).
+    movie: Option<String>,
+    /// `--charaedit` / `--charaedit-female`: the character editor (charaedit.rs).
+    charaedit: Option<u8>,
+    /// `--skip-intro`: `--opening` starts at Cassardis (no movie, no editor).
+    skip_intro: bool,
+    /// The lighting was built from the data at `clock_ms` (not a capture),
+    /// so the clock may advance it (clock.rs).
+    light_from_data: bool,
+    /// `--perf`: log frame-time statistics (perf.rs).
+    perf: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -126,7 +144,10 @@ fn args() -> Args {
         stage: 100,
         cell: (58, 50),
         radius: 2,
-        far_cells: 20,
+        // 6 draws the same picture as 20 at the 58m50n overlook (0 pixels
+        // differ by more than 7 levels; the low models and fog cover the rest)
+        // at a 10.9 ms instead of an 18 ms median frame
+        far_cells: 6,
         pos: Vec3::new(205.4, 41019.0 + 170.0, 3542.5),
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
@@ -154,6 +175,11 @@ fn args() -> Args {
         kit: None,
         cam_pitch: None,
         paused: false,
+        movie: None,
+        charaedit: None,
+        skip_intro: false,
+        light_from_data: false,
+        perf: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -166,6 +192,12 @@ fn args() -> Args {
     };
     while let Some(k) = it.next() {
         if k == "--unattended" { a.unattended = true; continue; }
+        if k == "--movie" { a.movie = it.next(); continue; }
+        if k == "--charaedit" { a.charaedit = Some(0); continue; }
+        if k == "--skip-intro" { a.skip_intro = true; continue; }
+        if k == "--perf" { a.perf = true; continue; }
+        if k == "--probe" { stage::KEEP_MESHES.store(true, std::sync::atomic::Ordering::Relaxed); continue; }
+        if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
             a.play = true;
             a.paused = true;
@@ -479,6 +511,7 @@ fn resolve_lighting(args: &mut Args) {
     l.clock_ms = Some(clock);
     l.spot = spot(&sky, player);
     args.light = Some(l);
+    args.light_from_data = true;
 }
 
 /// `CameraFov` from the player's own game settings
@@ -580,9 +613,11 @@ fn main() {
         .init_resource::<play::Hud>()
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
+        .init_resource::<movie::MovieFinished>()
+        .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
+        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain())
 
         .run();
 }
@@ -601,6 +636,16 @@ fn setup(
     mut sky_materials: ResMut<Assets<sky::SkyMaterial>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
+    if let Some(name) = &args.movie {
+        commands.spawn(Camera2d);
+        if let Err(e) = movie::start(&mut commands, &mut images, &movie::path(&args.native_pc, name)) {
+            error!("movie: {e}");
+        }
+        return;
+    }
+    if args.perf {
+        commands.insert_resource(perf::Perf::default());
+    }
     let t = std::time::Instant::now();
     // Kept for the whole run: the field streamer loads cells from them later.
     let vfs: &'static ddvfs::Vfs = Box::leak(Box::new(ddvfs::Vfs::open(&args.native_pc).expect("open nativePC")));
@@ -626,6 +671,25 @@ fn setup(
         tag: None,
     };
     loader.index_models();
+    shadows::prepare(&mut commands, vfs, &mut meshes, &mut images);
+    // The sun's shadow as the stage's sky scheduler sets it (sky.rs
+    // SkyShadow; applied to the directional light by sky_shadow).
+    let shadow_stage = if args.opening { opening::STAGE } else { args.stage };
+    commands.insert_resource(SkyShadowSetting(
+        sky::StageSky::load(vfs, shadow_stage, args.weather.unwrap_or(0)).and_then(|s| s.shadow),
+    ));
+    if let Some(sex) = args.charaedit {
+        // facing the body from the front, about chest high
+        commands.spawn((
+            Camera3d::default(),
+            Transform::from_xyz(0.0, 1.2, 3.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
+        ));
+        commands.spawn((DirectionalLight { illuminance: 8000.0, ..default() }, Transform::from_xyz(1.0, 3.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        if let Err(e) = charaedit::setup(&mut commands, vfs, mfx, sex) {
+            error!("charaedit: {e}");
+        }
+        return;
+    }
     if let Some(model) = &args.character {
         let motion = args.motion.clone().unwrap_or_default();
         match character::spawn(
@@ -648,21 +712,20 @@ fn setup(
         return;
     }
     if let Some(session) = slot.0.lock().unwrap().take() {
-        let res = opening::OpeningRes(std::sync::Mutex::new(session));
-        // seat 0 wears the save's Arisen, else a stand-in
-        let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(vfs, x, "mPlayerDataManual").ok());
-        let arisen = saved
-            .as_ref()
-            .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
-            .or_else(|| ddlook::save::template_look(vfs, 0).ok());
-        if let Some(state) =
-            opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, if args.join.is_some() { vec![None, arisen] } else { vec![arisen] }, args.demo)
-        {
-            commands.insert_resource(state);
-            if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
+        // The movie and the editor first (intro.rs), unless the run has its
+        // own Arisen or is unattended or networked.
+        let intro = !args.skip_intro && args.save_xml.is_none() && !args.demo && args.host.is_none() && args.join.is_none();
+        if intro {
+            intro::start(&mut commands, &mut images, &args.native_pc, session, vfs, mfx);
+        } else {
+            // seat 0 wears the save's Arisen, else a stand-in
+            let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(vfs, x, "mPlayerDataManual").ok());
+            let arisen = saved
+                .as_ref()
+                .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
+                .or_else(|| ddlook::save::template_look(vfs, 0).ok());
+            opening_world(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, session, arisen, &args, vfs);
         }
-        commands.insert_resource(res);
-        spawn_camera_and_light(&mut commands, &args, None);
         // The world handoff for the opening's JumpArea (stream.rs): its host
         // drives the focus; the stage models it spawned are StageEntity.
         match stream::Streamer::field_grid(&args.native_pc) {
@@ -728,8 +791,11 @@ fn setup(
         let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
         let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
         info!("landmarks {n}");
-        let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
-        info!("low models {n}");
+        // with field streaming (--play offline) the streamer keeps them by cell
+        if !(args.play && args.host.is_none() && args.join.is_none()) {
+            let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
+            info!("low models {n}");
+        }
     }
     loader.spawn_water(
         &mut commands,
@@ -879,6 +945,12 @@ fn setup(
         }
     }
     spawn_camera_and_light(&mut commands, &args, post);
+    // The clock advances in play when the lighting comes from the data.
+    if args.play && args.light_from_data {
+        if let Some(ms) = args.clock_ms {
+            commands.insert_resource(clock::GameClock::new(vfs, args.stage, args.weather.unwrap_or(0), ms));
+        }
+    }
     // Field streaming: offline --play on stage 100 (the grid descriptor is
     // read from the installed exe).
     if args.play && args.stage == 100 && args.host.is_none() && args.join.is_none() {
@@ -899,6 +971,34 @@ fn setup(
             Err(e) => warn!("stream: off ({e})"),
         }
     }
+}
+
+/// The opening's world: its stage, the party (seat 0 wears `arisen`), the
+/// HUD and the camera. Called at start, or by the intro once the edit is
+/// confirmed.
+#[allow(clippy::too_many_arguments)]
+pub fn opening_world(
+    commands: &mut Commands,
+    loader: &mut stage::Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+    session: opening::Session,
+    arisen: Option<ddlook::Look>,
+    args: &Args,
+    vfs: &ddvfs::Vfs,
+) {
+    let res = opening::OpeningRes(std::sync::Mutex::new(session));
+    let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
+    if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo) {
+        commands.insert_resource(state);
+        if let Err(e) = hud::spawn(commands, vfs, images) {
+            error!("HUD: {e}");
+        }
+    }
+    commands.insert_resource(res);
+    spawn_camera_and_light(commands, args, None);
 }
 
 /// Who plays (play.rs): with `--save`, its Arisen (seat 0) and main pawn,
@@ -944,6 +1044,39 @@ fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
     play::Party { arisen, pawn, goblins: if joining { 0 } else { args.goblins }, kits }
 }
 
+/// The stage's sun shadow settings, once read.
+#[derive(Resource)]
+struct SkyShadowSetting(Option<sky::SkyShadow>);
+
+/// The original's sun shadow is a `uSkyStableShadow`: one shadow map over
+/// `mShadowViewDistanceEx` (6000 cm on stages 100 and 200), not Bevy's
+/// default four cascades over 1 km, which drew every caster of a stage
+/// several times a frame. `mShadowDistribution` (0.25) is not applied (its
+/// use is not traced).
+fn sky_shadow(
+    mut commands: Commands,
+    setting: Option<Res<SkyShadowSetting>>,
+    lights: Query<Entity, (With<DirectionalLight>, Without<ShadowSet>)>,
+) {
+    let Some(setting) = setting else { return };
+    let Some(sh) = setting.0 else { return };
+    for e in &lights {
+        let far = sh.view_distance * stage::UNIT;
+        let config = bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 0.1,
+            maximum_distance: far,
+            first_cascade_far_bound: far,
+            overlap_proportion: 0.0,
+        }
+        .build();
+        commands.entity(e).insert((config, ShadowSet));
+    }
+}
+
+#[derive(Component)]
+struct ShadowSet;
+
 /// Sun and camera, shared by the stage and character modes.
 fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<stage::post::DdPost>) {
     // Sun. Without --light its direction and strength are placeholders
@@ -959,7 +1092,8 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<sta
     commands.spawn((
         DirectionalLight {
             illuminance: 12_000.0,
-            shadow_maps_enabled: true,
+            // DDVIEW_NO_SHADOWS: performance experiments only
+            shadow_maps_enabled: std::env::var_os("DDVIEW_NO_SHADOWS").is_none(),
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, 0.0).looking_to(-to_light, Vec3::Y),

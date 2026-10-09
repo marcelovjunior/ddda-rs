@@ -176,7 +176,27 @@ pub struct SkyFollow;
 #[derive(Resource, Clone, Debug)]
 pub struct EnvCubeColors(pub [Vec3; 5]);
 
+impl DdExt {
+    /// New sky constants for the materials that reflect the sky
+    /// (`FLAG_SKY_ENV`; the clock's sky update, clock.rs).
+    pub(crate) fn set_sky_cb(&mut self, cb: [Vec4; 11]) {
+        if self.params.flags & FLAG_SKY_ENV != 0 {
+            self.sky.cb = cb;
+        }
+    }
+}
+
 impl DdParams {
+    /// The parameters relit by `l`: only materials drawn with the game's
+    /// lighting change (the clock's relighting, clock.rs).
+    pub(crate) fn relit(self, l: &StageLighting) -> Self {
+        if self.flags & FLAG_DD_LIGHTING != 0 {
+            self.with_lighting(l)
+        } else {
+            self
+        }
+    }
+
     fn with_lighting(mut self, l: &StageLighting) -> Self {
         if !l.enabled {
             return self;
@@ -346,6 +366,7 @@ fn resolve_dd_materials(
     sky: Option<Res<SkyEnv>>,
     env_colors: Option<Res<EnvCubeColors>>,
 ) {
+    let _timing = crate::perf::Section::start("stage::resolve_dd_materials");
     for (e, p) in &pending {
         let h = p
             .0
@@ -389,6 +410,9 @@ pub struct Part {
     pub casts_shadow: bool,
     /// The model's middle and far LOD distances (cm).
     pub lod_dist: [f32; 2],
+    /// The model's bounding-sphere centre (model space, viewer units): the
+    /// point its LOD distance is measured to (0x00ea3d00, 0x00ea5320).
+    pub sphere_centre: Vec3,
 }
 
 /// Pass mask of the scene's main colour pass (`FUN_00fedb80` pass masks:
@@ -595,6 +619,18 @@ fn arc_model_path(arc: &std::path::Path) -> Option<String> {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StageEntity;
 
+/// `--probe` keeps stage meshes in main memory too, so the probe's ray
+/// cast (probe.rs) can test them; otherwise they live on the GPU only.
+pub static KEEP_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn mesh_usage() -> RenderAssetUsages {
+    if KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed) {
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD
+    } else {
+        RenderAssetUsages::RENDER_WORLD
+    }
+}
+
 /// What a streamed cell entity belongs to (`crate::stream`): the cell
 /// `(m, n)` and which of its parts.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -612,6 +648,9 @@ pub enum CellPart {
     Layout,
     /// The viewer's distant stand-in (terrain plus `fmfore`).
     Far,
+    /// A stage-100 low model: `m` is the slot (-1 for `st100_all00`), `n`
+    /// is 1 for the `_h` variant.
+    Low,
 }
 
 pub struct Loader<'a> {
@@ -760,6 +799,7 @@ impl Loader<'_> {
         let mut mat_cache: HashMap<(u16, bool, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
         let lod_dist = [model.mid_dist as f32, model.low_dist as f32];
+        let sphere_centre = Vec3::new(model.sphere[0], model.sphere[1], model.sphere[2]) * UNIT;
         for (mesh_index, m) in model.meshes.iter().enumerate() {
             // The draw mode is a mask of the render passes that draw the
             // primitive (0x00ea5320 tests it against the pass mask); meshes
@@ -826,7 +866,7 @@ impl Loader<'_> {
             }) {
                 continue;
             }
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, mesh_usage());
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
                 v.positions
@@ -859,6 +899,7 @@ impl Loader<'_> {
                 lod: m.lod,
                 casts_shadow: m.draw_mode & PASS_SHADOW != 0,
                 lod_dist,
+                sphere_centre,
             });
         }
         Some(parts)
@@ -1360,6 +1401,41 @@ impl Loader<'_> {
             n += 1;
         }
         n
+    }
+
+    /// The low models for the player's cell `(m, n)`: `(-1, false)` for the
+    /// backdrop, then each area slot with whether it uses `_h`
+    /// (see [`Loader::spawn_low_models`]).
+    pub fn low_models_for(&self, cell: (i32, i32)) -> Vec<(i32, bool)> {
+        let high = low_model_high_slots(cell);
+        let mut out = vec![(-1, false)];
+        out.extend((0..LOW_MODEL_NUMBERS.len()).map(|i| (i as i32, high[i] || self.view_range >= 2)));
+        out
+    }
+
+    /// One low model (`slot` -1 is the backdrop) for a viewer whose origin
+    /// cell is `origin`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_low_model(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        origin: (i32, i32),
+        slot: i32,
+        high: bool,
+    ) -> bool {
+        let path = match usize::try_from(slot).ok().and_then(|i| LOW_MODEL_NUMBERS.get(i)) {
+            Some(n) => format!("scr\\st100\\model\\st100_area{n:02}_{}", if high { "h" } else { "l" }),
+            None => "scr\\st100\\model\\st100_all00".to_string(),
+        };
+        let shift = -Vec3::new((origin.1 - 50) as f32 * 10000.0, 0.0, (origin.0 - 50) as f32 * 10000.0);
+        let Some(parts) = self.model(&path, meshes, materials, images) else {
+            return false;
+        };
+        self.spawn_parts(commands, &parts, Transform::from_translation(shift * UNIT), &path);
+        true
     }
 
     /// The stage-100 low models (`uStageLowMdl`, created by the split
