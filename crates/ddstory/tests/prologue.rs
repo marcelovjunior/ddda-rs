@@ -20,7 +20,7 @@ fn party_selection_preserves_installed_stock_and_rng_boundaries() {
         assert_eq!(*member, expected);
     }
     assert_eq!(
-        (setup.gold, setup.rift_crystals, setup.experience),
+        (setup.gold, setup.rift_crystals, setup.discipline),
         (38_000, 785, 1068)
     );
     assert_eq!(party_from_stock(&stock, &name, 4999).unwrap().gold, 42_999);

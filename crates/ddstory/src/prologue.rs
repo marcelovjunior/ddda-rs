@@ -117,7 +117,8 @@ pub struct PartySetup {
     pub companions: [Cmc; 3],
     pub gold: u32,
     pub rift_crystals: u32,
-    pub experience: u32,
+    /// Spendable discipline (cPlayerInfo.mJobPoint +0x344), not level XP.
+    pub discipline: u32,
 }
 
 /// Selects already-built stock entries and applies the new-game names.
@@ -153,6 +154,6 @@ pub fn party_from_stock(
         companions: [a, b, c],
         gold: 37_000 + random % 5_000 + 1_000,
         rift_crystals: 785,
-        experience: 1068,
+        discipline: 1068,
     })
 }
