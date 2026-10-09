@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/map-travel-links`
 - **Board area:** `world/map`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -29,4 +29,26 @@ to `head`.
 
 ## Results
 
-(filled in by the agent)
+Implemented `ddmap`: typed XFS landmarks/start positions and SPN v0x30
+place names, plus explicit caller-selected GMD name resolution. No simulation,
+rendering or global player state.
+
+Validation: `cargo test -p ddmap -- --nocapture` passed two synthetic tests
+and one installed-corpus regression. All 3,400 archive copies parse:
+3,251 landmark copies / 51,323 rows; 126 start files / 506 rows; 23 place-name
+files / 208 rows. All 207 non-sentinel text IDs resolve in all seven map
+language tables; 5,733 unnamed landmark occurrences retain u32::MAX. The
+st000 three-offset start layout and all its truncated prefixes are checked.
+
+`docs/MAP.md` records source addresses for layouts, map name lookup, menu
+destination selection into per-actor item-use queues, ten saved Portcrystal
+slots, placement/pickup and inventory consumption. Ordinary Ferrystone and
+Portcrystal consume quantity one via b77130 -> 45f480 -> 45f4f0 -> 4588c0
+-> 459880; item1724 Eternal Ferrystone has an explicit exception. No game
+bytes, decompilations or private research files are committed.
+
+Not implemented/verified against running original: destination availability
+gates, final stage transition/arrival, full SPN HUD consumer, item-add failure
+handling, multiplayer ownership/replication. Next action: trace destination
+queue through stage transition and compare allowed/failing travel flows
+before headless host-authoritative implementation.
