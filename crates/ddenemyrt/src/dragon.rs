@@ -267,6 +267,82 @@ pub enum HoverKakkuTarget {
     Configured { heading_degrees: f32, speed: f32 },
 }
 
+/// TargetFly's translation substep, not a complete action. Quaternion
+/// steering, turn-layer blending and rider effects must be resolved before
+/// calling this; action 10 remains rejected by the actor prefix.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetFlyTravel {
+    pub target: [f32; 3],
+    pub desired_speed: f32,
+    pub speed: f32,
+    pub arrival_radius: f32,
+    pub done: bool,
+}
+
+impl TargetFlyTravel {
+    /// Parameter modes 0/2 in 0x00a60b70 (DDDA.exe 2017-12-13 Steam).
+    /// Zero desired speed becomes one, but current speed remains the original
+    /// parameter value; the native code changes only action +0xB4.
+    pub fn enter(target: [f32; 3], speed: f32, arrival_radius: f32) -> Self {
+        Self {
+            target,
+            desired_speed: if speed == 0.0 { 1.0 } else { speed },
+            speed,
+            arrival_radius,
+            done: false,
+        }
+    }
+
+    /// Translation in vf07 0x00a61590, dispatched by phase 97 (0x0084c800)
+    /// in pass C, after terrain correction and before collision activation.
+    /// `cached_forward` is vf22(-1)'s matrix row 2, from actor +0xB0
+    /// (getter 0x00ff9a20), NOT the freshly updated flight quaternion.
+    /// `lagging_turn` is the sourced action +0xD4 state, not guessed here.
+    pub fn step(
+        &mut self,
+        pos: &mut [f32; 3],
+        cached_forward: [f32; 3],
+        lagging_turn: bool,
+        engine_step: f32,
+    ) {
+        if self.done {
+            return;
+        }
+        // 0x00a61992..0x00a619cd saves pre-move displacement on the stack.
+        let delta = std::array::from_fn::<_, 3, _>(|i| self.target[i] - pos[i]);
+        if lagging_turn {
+            self.speed -= engine_step * 0.5;
+            if self.speed < self.desired_speed - 30.0 {
+                self.speed = self.desired_speed - 30.0;
+            }
+        } else {
+            self.speed += engine_step * 2.0;
+            if self.speed >= self.desired_speed {
+                self.speed = self.desired_speed;
+            }
+        }
+        let length = (cached_forward[0] * cached_forward[0]
+            + cached_forward[1] * cached_forward[1]
+            + cached_forward[2] * cached_forward[2])
+            .sqrt();
+        let mut forward = cached_forward;
+        if length >= f32::EPSILON {
+            let inverse = 1.0 / length;
+            forward.iter_mut().for_each(|v| *v *= inverse);
+        }
+        for i in 0..3 {
+            pos[i] += self.speed * forward[i] * engine_step;
+        }
+        // Disassembly at 0x00a62098..0x00a620fc repairs decompiler stack
+        // aliases: this uses saved delta Y/X/Z, not the advanced position.
+        let distance = (delta[1] * delta[1] + delta[0] * delta[0] + delta[2] * delta[2]).sqrt();
+        if distance < self.arrival_radius {
+            *pos = self.target;
+            self.done = true;
+        }
+    }
+}
+
 /// Supported actor prefix. Unsupported actions fail before cancelling the
 /// current action. This deliberately cannot run the whole entrance yet.
 pub struct Dragon {
@@ -686,8 +762,36 @@ impl DragonAiData {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn target_fly_translation_uses_cached_forward_and_pre_move_strict_distance() {
+        use super::TargetFlyTravel;
+        let mut flight = TargetFlyTravel::enter([0.0, 0.0, 300.0], 115.0, 300.0);
+        let mut pos = [0.0; 3];
+        flight.step(&mut pos, [0.0, 0.0, 2.0], false, 1.0);
+        assert_eq!(pos, [0.0, 0.0, 115.0]);
+        assert!(!flight.done, "exact radius before movement does not finish");
+        flight.step(&mut pos, [2.0, 0.0, 0.0], false, 1.0);
+        assert_eq!(pos, flight.target, "inside radius snaps after translation");
+        assert!(flight.done);
+        flight.step(&mut pos, [1.0, 0.0, 0.0], true, 100.0);
+        assert_eq!(pos, flight.target);
+        assert_eq!(flight.speed, 115.0);
+        let mut slow = TargetFlyTravel::enter([1000.0; 3], 115.0, 1.0);
+        slow.step(&mut pos, [0.0, 0.0, 1.0], true, 100.0);
+        assert_eq!(slow.speed, 85.0);
+        slow.step(&mut pos, [0.0, 0.0, 1.0], false, 1.0);
+        assert_eq!(slow.speed, 87.0);
+        let mut zero = TargetFlyTravel::enter([1000.0; 3], 0.0, 1.0);
+        assert_eq!((zero.desired_speed, zero.speed), (1.0, 0.0));
+        zero.step(&mut pos, [0.0; 3], false, 0.25);
+        assert_eq!(zero.speed, 0.5);
+    }
+    #[test]
     fn hover_kakku_yaw_preserves_gates_short_arc_and_strict_arrival() {
         use super::DragonYaw;
+        assert_eq!(super::wrap_yaw(3.1415927), -3.1415927);
+        assert_eq!(super::wrap_yaw(-3.1415927), -3.1415927);
+        assert_eq!(super::wrap_yaw(6.2831855), 0.0);
+        assert_eq!(super::wrap_yaw(-6.2831855), 0.0);
         let mut yaw = DragonYaw::enter(3.0, -3.0);
         assert!(yaw.active);
         assert!((yaw.rate - (6.2831855 - 6.0) / 30.0).abs() < 1e-7);

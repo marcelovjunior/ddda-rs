@@ -228,4 +228,27 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     let stopped_yaw = actor.yaw;
     actor.step(&data, input(false)).unwrap();
     assert_eq!(actor.yaw, stopped_yaw, "54 exit cancels its yaw controller");
+    actor
+        .start_hover_kakku(
+            &data,
+            dragon::HoverKakkuTarget::Configured {
+                heading_degrees: 0.0,
+                speed: 60.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(actor.flight_speed_parameters(), Some((60.0, 60.0 * 0.04)));
+    let previous_yaw = actor.yaw;
+    assert_eq!(
+        actor.start_hover_kakku(
+            &missing,
+            dragon::HoverKakkuTarget::Configured {
+                heading_degrees: 180.0,
+                speed: 1.0,
+            }
+        ),
+        Err(dragon::DragonError::MissingMotion(103))
+    );
+    assert_eq!(actor.yaw, previous_yaw);
+    assert_eq!(actor.flight_speed_parameters(), Some((60.0, 60.0 * 0.04)));
 }
