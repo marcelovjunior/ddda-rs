@@ -2353,6 +2353,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddlook"
+version = "0.1.0"
+dependencies = [
+ "dditem",
+ "ddnpc",
+ "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtmod",
+]
+
+[[package]]
 name = "ddmap"
 version = "0.1.0"
 dependencies = [

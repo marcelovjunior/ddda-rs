@@ -1,0 +1,17 @@
+[package]
+name = "ddlook"
+version = "0.1.0"
+description = "Headless character looks: which models, part masks, colours and morph records make up an Arisen, pawn, NPC or event actor"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddvfs = { path = "../ddvfs" }
+ddnpc = { path = "../ddnpc" }
+mtarc = { path = "../mtarc" }
+ddsave = { path = "../ddsave" }
+dditem = { path = "../dditem" }
+
+[dev-dependencies]
+mtmod = { path = "../mtmod" }
