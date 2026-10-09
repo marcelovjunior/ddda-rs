@@ -23,6 +23,9 @@ pub mod player;
 pub mod save;
 pub mod systems;
 
+/// The fight runtime the host composes (`Host::fight`), for views.
+pub use ddenemyrt;
+
 pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};
 pub use input::{FrameInputs, PlayerInput};

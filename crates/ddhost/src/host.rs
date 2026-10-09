@@ -244,7 +244,16 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         // Step 36, pass A, line 10 "Player": the Arisen (and later the
         // pawns) move: one Sim::step is one engine frame.
-        let sim_inputs = inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
+        let mut sim_inputs: std::collections::HashMap<PlayerId, ddsim::Input> =
+            inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
+        // The fight's pawns move on the same line, driven by the virtual
+        // pads of their AI (ddenemyrt::pawn, uCmc through the player
+        // pipeline). Their seats are sim players outside the roster.
+        if let Some(f) = self.fight.as_mut() {
+            for (id, i) in f.pawn_inputs(&self.sim, step) {
+                sim_inputs.entry(id).or_insert(i);
+            }
+        }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
         // Line 10 continued (fight): scripted attacks advance and move their
         // Arisen; line 15: the enemies think, act and move; step 38: the
