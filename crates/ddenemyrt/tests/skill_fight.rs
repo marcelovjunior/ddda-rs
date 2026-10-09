@@ -83,3 +83,53 @@ fn sword_skills_use_their_own_bank_and_damage_a_goblin() {
         assert!(sim.player(1).unwrap().skills.active.is_none());
     }
 }
+
+#[test]
+fn mage_spells_damage_with_the_casting_seats_shell_ownership() {
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    if !native.is_dir() {
+        return;
+    }
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let exe = ddexe::ExeFile::next_to(native).unwrap();
+    let data = Arc::new(FightData::load(&vfs, &exe.image().unwrap()).unwrap());
+    for id in [210, 212] {
+        let mut sim = ddsim::Sim::new(Default::default());
+        let mut fight = Fight::new(data.clone());
+        sim.add_player(0, [1000.0, 0.0, 0.0], 0.0);
+        sim.add_player(1, [0.0; 3], 0.0);
+        fight.add_arisen(0);
+        fight.add_arisen_as(1, ddenemyrt::fight::Kit::Mage);
+        fight.equip(&mut sim, 0);
+        fight.equip(&mut sim, 1);
+        sim.player_mut(1).unwrap().skills.equipped[0] = Some(id);
+        fight.add_goblin([0.0, 0.0, 400.0], std::f32::consts::PI);
+        let initial_hp = fight.goblins[0].fighter.victim.hp();
+        let other_stamina = sim.player(0).unwrap().stamina;
+        fight.volumes(&sim);
+        sim.request_skill(1, 0);
+        let mut emitted = false;
+        let mut spell_hit = false;
+        for _ in 0..450 {
+            let hits = fight.hits(1.0).to_vec();
+            for hit in hits {
+                if hit.attacker >= ddenemyrt::fight::SHELL_OWNER_BASE {
+                    assert_eq!(fight.shooters.get(&hit.attacker), Some(&1));
+                    spell_hit = true;
+                }
+            }
+            sim.step(1.0 / 30.0, &Default::default(), &Flat);
+            fight.players_moved(&mut sim, &Flat, 1.0);
+            fight.volumes(&sim);
+            for spell in &fight.spells.shells {
+                assert_eq!((spell.skill, spell.shooter), (id, 1));
+                emitted = true;
+            }
+        }
+        assert!(emitted, "skill {id} did not spawn");
+        assert!(spell_hit, "skill {id} did not hit");
+        assert!(fight.goblins[0].fighter.victim.hp() < initial_hp);
+        assert_eq!(sim.player(0).unwrap().stamina, other_stamina);
+        assert!(sim.player(1).unwrap().skills.released.is_empty());
+    }
+}
