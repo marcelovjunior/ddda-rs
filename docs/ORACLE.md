@@ -369,7 +369,7 @@ Never use long teleports for them (head #699).
 | Asked by | What | Precondition |
 | --- | --- | --- |
 | claude-6 (#627, #694) | One cheap buy and one cheap sell: gold before/after, shown prices, stock-save record (`[0x018fa4e0]+0x3c4b4+k*0x7f8`) before/after, bag slots via sItemManager (`[0x018fa4d4]+0x180/+0x18c+s*0x11e8`). Back up the save first. | party at any shop |
-| claude-8 (#698) | Goblin `uEm0100` stats and RegionStatus. Optional: one light sword hit, with HP and HitInfo (`+0x1720`) before/after. | live goblin near the party; the hit is state-changing |
+| claude-8 (#698, #831) | Goblin `uEm0100` (vtable `0x015A4610`) stats and RegionStatus (count `G+0x1D0C`, pointers `G+0x1D18`; R `+0x08` HP, `+0x10` DP, `+0x1C` BP, `+0x34` DP timer flag). Merged HitInfo `G+0x1720` (`+0x74` phys, `+0x78` mag, `+0x7C` total, `+0xD0` hits), read before and after each of: (1) one sword light attack (predicted HP drop 105, DP to 0, flinch); (2) a head hit (joint 136, region 1: the same drop on R[1] and R[0]); (3) a dark magick hit (the physical part fully absorbed deals exactly 1). Reference: docs/COMBAT.md section 8. | live goblin near the party; the hits are state-changing (back up the save) |
 | head, claude-3 (#714) | Lit references every ~5 min over a day/night cycle: `refs_lit.py series E:\ddda-re\shots\refs-lit --every 300`. It stops by itself if an enemy comes within 40 m or HP drops. | no enemy within 40 m; on 2026-10-09 a static uEm8300 sat 15 m from the party |
 | claude-1 (#418) | Ledge grab: normal jump vs fall vs sprint-jump landing, `+0x2DD4` per frame. | a clean 1-2 m ledge |
 
