@@ -94,3 +94,11 @@ This explains a permitted nine-model/eight-archive residence pattern, but
 its construction history and boundary transitions remain unobserved.
 Validation: cargo test -p ddtool passed (zero unit tests); the actual
 installed corpus CLI run is the substantive survey check. diff --check passed.
+
+Further class closure: `cSetInfoCoord::vf08` (`0x0079f230`) writes
+mDrawDistance to the character override +0x2994. Scenery `uOmSetBase`
+update gate (`0x00c55380`) compares 3D distance to radius +0x430;
+`0x00c556c0` selects by size field +0x16c. Stage-category radius constants
+are initialized at `0x0044d770`. Stage100 2500/100000 and size cutoff300
+were passively confirmed at 15:37:57 UTC. Other scenery subclasses and
+actual construction/destruction transitions remain open. No process writes.

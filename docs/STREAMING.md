@@ -189,7 +189,40 @@ For example, subtype 5 (goblin) has base near 4000, hence near/far
 the player's installed exe, not copied as bulk data into the engine.
 The default character constructor (`0x0084a100`) supplies 10000/30000
 before class initialization and sets the override to -1.
-The placement-to-override path for enemies remains untraced.
+`cSetInfoCoord::vf08` (`0x0079f230`) casts the created object to
+`uCharacterBase`, then copies placement +0x64 into actor +0x2994 (and
++0x68 into +0x2998). This resolves the common placement override path.
+
+### Scenery model update distance
+
+`uOmSetBase::vf08` (`0x00c55380`) has a separate stage-100 gate: when
+its readiness/update flags permit and object flags +0x3c4 lack 0x200,
+it compares squared 3D player distance to squared radius +0x430.
+Distance greater than the radius clears +0x448 bit 1 and skips the normal
+`uSetModel::vf08` path. Equality remains eligible. This is model-update
+suppression, not a traced object destructor or universal scenery rule.
+Other readiness, flag and indoor visibility tests also intervene.
+
+`uOmSetBase::vf30` (`0x00c556c0`) initializes +0x430 after transform work:
+if model field +0x16c exceeds `sGameSys+0xbe460`, choose the large-object
+radius +0xbe45c, otherwise choose +0xbe458. The exact geometric meaning
+of +0x16c is not established here; call it the size selector, not height.
+`0x0044d770` initializes these values from stage category and multiplies
+the radii by the same quality factor 1/2/3 (the size cutoff is unscaled).
+
+| Stage category | Small radius | Large radius | Size cutoff |
+| --- | ---: | ---: | ---: |
+| 100, or 200..250 except 220 | 2500 | 100000 | 300 |
+| 220 | 2000 | 10000 | 300 |
+| 601..609 | 5000 | 100000 | 300 |
+| Other | 3000 | 100000 | 300 |
+
+These are small embedded policy constants sourced to `0x0044d770`, not
+an asset table. The table describes initialization; the inspected distance
+consumer `0x00c55380` applies its radial test only on stage 100. Other
+scenery subclasses and indoor policies must be checked before generalizing.
+A passive parameter read at 2026-10-09 15:37:57 UTC confirmed stage-100
+values 2500/100000/300. No scenery distance transition was induced.
 
 ### Managed NPC distances and budgets
 
@@ -218,8 +251,8 @@ The full queue priority/exception logic is not translated here.
 `uNpc::vf08` (`0x00baf4f0`) reads this Intel mode through actor+0x5854;
 modes greater than 1 skip its full update. Without Intel it uses the
 character mode. These are update gates, distinct from layout construction
-and eventual destruction. Individual scenery distance consumers and the
-complete NPC creation/removal lifecycle remain open; the 3-by-3 layout
+and eventual destruction. Other scenery subclasses and the complete NPC creation/removal lifecycle
+remain open; the 3-by-3 layout
 window is not an enemy/NPC spawn guarantee.
 
 A second passive observation at 2026-10-09 15:33:38 UTC found 30 Intel
@@ -316,7 +349,7 @@ player's installed exe and layouts from their archives. Do not implement
 the angular expression as a plain circle.
 
 Next: resolve the remaining terrain archive/residency discrepancy and
-compare threshold boundaries with recorded ordinary movement. Trace remaining scenery/enemy override consumers and physical NPC
+compare threshold boundaries with recorded ordinary movement. Trace remaining scenery subclasses and physical NPC
 creation/removal, then record ordinary boundary crossings under the
 current live-session safety protocol. The brief's
 full per-class distance and transition-comparison gate remains open.
