@@ -612,11 +612,14 @@ motion, refreshes posed attack/hurt volumes and keeps fighter pools per
 instance. An installed-data regression runs each action twice, checks the
 motion sequences, owner IDs, attack activation and deterministic positions.
 Unsupported actions fail without replacing the current action. These are
-selected-action tests, not think-driven fights. Wolf death requests0x2ff
+selected-action tests, not think-driven fights. The local cEm0200Die action requests 0x2ff
 (`0x00908660`), absent in its installed damage bank; the no-motion/corpse
 path is unresolved and remains unsupported rather than inventing a clip.
-Harpy corpse removal, status-time integration, target sensing and Fight/
-viewer dispatch also remain host work.
+This is not the normal wolf death dispatch: uEmWolfBase::vf72 (0x008f6230)
+selects common-bank action 0x03000042 for the ordinary grounded case.
+Its registration and directional variants are being traced separately.
+Harpy corpse removal, status-time integration, target sensing and viewer
+dispatch also remain host work.
 
 Selected-action coverage now also includes the normal uninterrupted wolf
 howl (0x009026a0/0x009027c0) and AttackRun (0x008fe110/0x008fe160).
@@ -625,3 +628,17 @@ raises the next-think attack flag only inside the strict squared-distance
 and 60-degree cone gate. Its done byte permits next-frame thinking. Tests
 cover exact range equality and rear rejection using installed parameters.
 Pack broadcasts and interrupted howl still require host integration.
+
+The shared Fight now includes wolves and harpies in hit/status processing,
+posed volumes, push-out, swing-history release, pawn target inputs and player
+spell/shell targeting. Goblins and beasts allocate from one enemy-owner
+counter; the existing fixed seat/enemy/shell ranges still need a general
+allocator before large populations or high seat IDs are supported. Callers
+explicitly select supported actions and captured target owners. Dead beasts
+stop attacking, but forced reactions and death animation dispatch are pending.
+An installed-data regression uses two player seats and mixed enemy families,
+checks Ingle damage is attributed to seat 1 and leaves the distant beast
+unhurt, and repeats each family run to compare deterministic digests.
+All 35 ddenemyrt tests pass (one debug probe ignored). This verifies shared
+combat plumbing; autonomous family fights and original-game comparison remain
+open. Next: connect the traced common death action and family think host.

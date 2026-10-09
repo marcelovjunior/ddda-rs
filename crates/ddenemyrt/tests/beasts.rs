@@ -119,3 +119,60 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
         }
     }
 }
+
+/// This is a shared hit/targeting-pipeline check with stationary enemies,
+/// not acceptance of the still-unconnected family think controllers.
+#[test]
+fn mixed_family_fight_targets_damage_and_owner_ids_are_separate() {
+    use ddenemyrt::fight::{Fight, FightData, Kit};
+    use std::sync::Arc;
+    struct Flat;
+    impl ddsim::Ground for Flat {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+    }
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    if !native.is_dir() { return; }
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let exe = ddexe::ExeFile::next_to(native).unwrap();
+    let data = Arc::new(FightData::load(&vfs, &exe.image().unwrap()).unwrap());
+    for family in [Family::Wolf, Family::Harpy] {
+        let run = || {
+            let mut sim = ddsim::Sim::new(Default::default());
+            let mut fight = Fight::new(data.clone());
+            for seat in [0, 1] {
+                sim.add_player(seat, [if seat == 0 { 10000.0 } else { 0.0 }, 0.0, 0.0], 0.0);
+                fight.add_arisen_as(seat, Kit::Mage);
+                fight.equip(&mut sim, seat);
+            }
+            let first = fight.add_beast(family, [0.0, 0.0, 400.0], 0.0);
+            let second = fight.add_goblin([10000.0, 0.0, 10000.0], 0.0);
+            let third = fight.add_beast(family, [10000.0, 0.0, 12000.0], 0.0);
+            assert!(first != second && second != third && first != third);
+            assert_eq!(fight.enemy_fighters().count(), 3);
+            let initial = fight.beasts[0].fighter.victim.hp();
+            let other = fight.beasts[1].fighter.victim.hp();
+            fight.volumes(&sim);
+            sim.player_mut(1).unwrap().skills.equipped[0] = Some(210);
+            sim.request_skill(1, 0);
+            let mut hit = false;
+            for _ in 0..400 {
+                let events = fight.hits(1.0).to_vec();
+                for event in events {
+                    if event.victim == first {
+                        assert_eq!(fight.shooters.get(&event.attacker), Some(&1));
+                        hit = true;
+                    }
+                }
+                sim.step(1.0 / 30.0, &Default::default(), &Flat);
+                fight.players_moved(&mut sim, &Flat, 1.0);
+                fight.push_out(&mut sim);
+                fight.volumes(&sim);
+            }
+            assert!(hit, "{family:?} not hit");
+            assert!(fight.beasts[0].fighter.victim.hp() < initial);
+            assert_eq!(fight.beasts[1].fighter.victim.hp(), other);
+            fight.digest()
+        };
+        assert_eq!(run(), run());
+    }
+}

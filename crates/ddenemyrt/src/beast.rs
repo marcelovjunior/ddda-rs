@@ -83,6 +83,9 @@ impl BeastData {
 /// than borrowing the goblin's motions or behaviour.
 #[derive(Debug)]
 pub struct Beast {
+    pub family: Family,
+    /// Captured target selected by the family host, never a global player.
+    pub target: Option<u32>,
     pub pos: [f32; 3],
     pub yaw: f32,
     pub action: Option<usize>,
@@ -112,6 +115,8 @@ impl Beast {
     pub fn new(data: &BeastData, owner: u32, pos: [f32; 3], yaw: f32) -> Self {
         use crate::combat::{Attacker, Fighter, Victim};
         Self {
+            family: data.family,
+            target: None,
             pos,
             yaw,
             action: None,
@@ -144,6 +149,7 @@ impl Beast {
     /// requests missing motion0x2ff (0x00908660); its no-motion/corpse path
     /// is unresolved. Alternate harpy forms and flying death are unsupported.
     pub fn start_action(&mut self, data: &BeastData, id: usize) -> Result<(), String> {
+        if self.family != data.family { return Err("mismatched beast family data".into()); }
         let action = data.actions.get(id).ok_or("family action outside table")?;
         let (phase, motion) = match (data.family, action.class.as_str(), action.variant) {
             (Family::Wolf, "cEm0200Bite", _) => {
@@ -251,9 +257,29 @@ impl Beast {
                 self.pos[1] = y;
             }
         }
+        self.volumes(data);
+    }
+
+    /// Common uEnemy::vf90 0x00aa96e0 rank rule applied to the action
+    /// bits written by8fe390 (bite) and8fe160 (attack run).
+    pub fn push_rank(&self, base: u32) -> u32 {
+        if base == 0 { return 0; }
+        match self.phase {
+            ActionPhase::Bite(WolfBite::Strike) => base + 1,
+            ActionPhase::AttackRun => base + 2,
+            _ => base,
+        }
+    }
+
+    pub fn dead(&self) -> bool { self.fighter.victim.dead() }
+
+    pub fn volumes(&mut self, data: &BeastData) {
         let pose = data.body.pose(self.motion, self.frame, self.pos, self.yaw);
         let active = data.body.activations(self.motion, self.frame);
         (self.fighter.attacks, self.fighter.hurts) = data.body.volumes(&active, &pose, self.fighter.owner);
+        // Temporary integration guard until forced family death actions are
+        // wired: a dead actor cannot keep dealing its last attack's damage.
+        if self.dead() { self.fighter.attacks.clear(); }
     }
 
     // Shared animation phase92: 0x010629f0 / root travel0x0105b740,

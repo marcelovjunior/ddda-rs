@@ -31,4 +31,14 @@ Headless fights: an Arisen vs a wolf pack and vs a harpy, with deterministic tes
 
 ## Results
 
-(filled in by the agent)
+Work in progress: installed wolf/harpy data, sourced think helpers and selected
+action execution are implemented. Shared Fight processing now includes both
+families in damage/status, push-out, player spell targeting and pawn inputs.
+All 35 ddenemyrt tests pass, including deterministic installed-data action and
+two-seat mixed-family hit tests (one debug probe ignored). Details and source
+addresses are in docs/AI.md.
+
+Not complete: autonomous family think/sensing, forced damage/death dispatch,
+spawn/viewer/network integration and original-game fight comparisons. Normal
+wolf death uses common action 0x03000042 (0x008f6230), distinct from the local
+unsupported cEm0200Die motion. Next: trace that registration and wire death.

@@ -92,12 +92,11 @@ impl Fight {
     /// Call before stepping the simulation; merge with the players' inputs.
     pub fn pawn_inputs(&mut self, sim: &ddsim::Sim, dt: f32) -> HashMap<u8, Input> {
         let enemies: Vec<Enemy> = self
-            .goblins
-            .iter()
-            .map(|g| Enemy {
-                id: g.fighter.owner,
-                pos: g.pos,
-                alive: !g.dead(),
+            .enemy_fighters()
+            .map(|(fighter, pos)| Enemy {
+                id: fighter.owner,
+                pos,
+                alive: !fighter.victim.dead(),
                 radius: 0.0,
             })
             .collect();

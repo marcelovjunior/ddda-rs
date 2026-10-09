@@ -14,6 +14,8 @@
 
 use crate::arisen::ArisenData;
 use crate::body::MotionId;
+use crate::beast::{Beast, BeastData};
+use ddai::thinktbl::families::Family;
 use crate::combat::{hit_pass, Attacker, Fighter, HitEvent, Tables, Victim};
 use crate::goblin::{Goblin, GoblinData, Target};
 use crate::shell::{Shell, ShellParam};
@@ -35,6 +37,8 @@ pub struct FightData {
     /// The attacks' values from `param\pl\other\m_pl000_00`.
     pub attack_param: ddsim::AttackParam,
     pub goblin: GoblinData,
+    pub wolf: BeastData,
+    pub harpy: BeastData,
     pub tables: Tables,
     /// The pawns' AI data (`crate::pawn`).
     pub pawn: ddpawnai::pawn::PawnData,
@@ -58,6 +62,8 @@ impl FightData {
             attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
                 .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
             goblin: GoblinData::load(vfs, exe)?,
+            wolf: BeastData::load(vfs, exe, Family::Wolf)?,
+            harpy: BeastData::load(vfs, exe, Family::Harpy)?,
             tables: Tables {
                 game: adjust(r"param\game")?,
                 dlc: adjust(r"param\dlc")?,
@@ -116,6 +122,8 @@ pub struct Fight {
     /// By seat.
     pub arisen: BTreeMap<u8, ArisenFighter>,
     pub goblins: Vec<Goblin>,
+    pub beasts: Vec<Beast>,
+    next_enemy: u32,
     /// The hits of the last [`Fight::hits`].
     pub events: Vec<HitEvent>,
     /// The status updates of the last [`Fight::hits`].
@@ -148,6 +156,8 @@ impl Fight {
             data,
             arisen: BTreeMap::new(),
             goblins: Vec::new(),
+            beasts: Vec::new(),
+            next_enemy: ENEMY_OWNER_BASE,
             events: Vec::new(),
             status_events: Vec::new(),
             positions: BTreeMap::new(),
@@ -238,9 +248,35 @@ impl Fight {
 
     /// Adds a goblin; returns its owner id.
     pub fn add_goblin(&mut self, pos: [f32; 3], yaw: f32) -> u32 {
-        let owner = ENEMY_OWNER_BASE + self.goblins.len() as u32;
+        let owner = self.next_enemy;
+        self.next_enemy += 1;
         self.goblins.push(Goblin::new(&self.data.goblin, owner, pos, yaw));
         owner
+    }
+
+    /// Live/dead enemy bodies across supported families, for targeting adapters.
+    pub fn enemy_fighters(&self) -> impl Iterator<Item = (&Fighter, [f32; 3])> {
+        self.goblins.iter().map(|g| (&g.fighter, g.pos))
+            .chain(self.beasts.iter().map(|b| (&b.fighter, b.pos)))
+    }
+
+    /// Adds a family actor. Its explicit action/target are supplied by the
+    /// caller until the family think host is connected; no idle AI is guessed.
+    pub fn add_beast(&mut self, family: Family, pos: [f32; 3], yaw: f32) -> u32 {
+        let owner = self.next_enemy;
+        self.next_enemy += 1;
+        let data = match family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+        self.beasts.push(Beast::new(data, owner, pos, yaw));
+        owner
+    }
+
+    pub fn start_beast_action(&mut self, owner: u32, action: usize, target: Option<u32>) -> Result<(), String> {
+        let beast = self.beasts.iter_mut().find(|b| b.fighter.owner == owner).ok_or("unknown beast owner")?;
+        let data = match beast.family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+        beast.start_action(data, action)?;
+        beast.target = target;
+        self.release(owner);
+        Ok(())
     }
 
     /// Adds a goblin run by the FSM `path` (an `rAIFSM` of the install).
@@ -269,7 +305,8 @@ impl Fight {
             .arisen
             .values_mut()
             .map(|a| &mut a.fighter)
-            .chain(self.goblins.iter_mut().map(|g| &mut g.fighter));
+            .chain(self.goblins.iter_mut().map(|g| &mut g.fighter))
+            .chain(self.beasts.iter_mut().map(|b| &mut b.fighter));
         for v in victims {
             v.history
                 .entries
@@ -282,6 +319,7 @@ impl Fight {
     pub fn hits(&mut self, dt: f32) -> &[HitEvent] {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
+        fighters.extend(self.beasts.iter().map(|b| b.fighter.clone()));
         let shell_fighters = self.shell_fighters();
         fighters.extend(shell_fighters);
         fighters.extend(self.spell_fighters());
@@ -306,6 +344,10 @@ impl Fight {
         for g in &mut self.goblins {
             g.fighter = it.next().expect("one fighter per goblin");
         }
+        for b in &mut self.beasts {
+            b.fighter = it.next().expect("one fighter per beast");
+            if b.dead() { b.fighter.attacks.clear(); }
+        }
         // a shell that hit is gone (*placeholder*, see `crate::shell`)
         let hit: Vec<u32> = self.events.iter().map(|e| e.attacker).collect();
         self.shells.retain(|s| !hit.contains(&s.owner));
@@ -326,9 +368,11 @@ impl Fight {
     /// After the players moved (line 10): each Arisen's weapon is put in
     /// the sim if it is not there yet; a new attack frees its hit history;
     /// the target heading for the next attack is set (*placeholder* for the
-    /// target choice `0x00B79090`: the nearest live goblin); new WandShot
+    /// target choice `0x00B79090`: the nearest live enemy); new WandShot
     /// volleys fire their shells; the shells fly `step` frames.
     pub fn players_moved(&mut self, sim: &mut ddsim::Sim, _ground: &dyn ddsim::Ground, step: f32) {
+        let enemies: Vec<_> = self.enemy_fighters().filter(|(f, _)| !f.victim.dead())
+            .map(|(f, pos)| (f.owner, pos, fighter_aim(f, pos))).collect();
         let seats: Vec<u8> = self.arisen.keys().copied().collect();
         for seat in seats {
             let kit = self.arisen[&seat].kit;
@@ -339,9 +383,12 @@ impl Fight {
                 sim.attack_param = self.data.attack_param;
             }
             let Some(p) = sim.player_mut(seat) else { continue };
-            let target = nearest_goblin(&self.goblins, p.position);
-            p.attack_heading = target.map(|g| {
-                let q = self.goblins[g].pos;
+            let p_position = p.position;
+            let target = enemies.iter().min_by(|a, b| {
+                let d = |p: [f32; 3]| (p[0] - p_position[0]).powi(2) + (p[2] - p_position[2]).powi(2);
+                d(a.1).total_cmp(&d(b.1))
+            }).copied();
+            p.attack_heading = target.map(|(_, q, _)| {
                 (q[0] - p.position[0]).atan2(q[2] - p.position[2])
             });
             let (started, volleys) = (p.attacks_started, p.volleys_fired);
@@ -358,7 +405,7 @@ impl Fight {
             for _ in 0..fired {
                 let owner = self.next_shell;
                 self.next_shell += 1;
-                let target = target.map(|g| self.goblins[g].fighter.owner);
+                let target = target.map(|t| t.0);
                 self.shells.push(Shell::fire(
                     &self.data.shell,
                     owner,
@@ -373,17 +420,16 @@ impl Fight {
                 let Some(skill) = self.data.skills.0.get(&id) else { continue };
                 let Some(spell) = &skill.spell else { continue };
                 let pose = skill.release_pose(feet, yaw);
-                let aim = target.map(|g| aim_point(&self.goblins[g]));
+                let aim = target.map(|t| t.2);
                 self.spells.fire(spell, id, u32::from(seat), &pose, aim, &mut self.next_shell);
             }
         }
         let param = self.data.shell;
-        let goblins = &self.goblins;
         self.shells.retain_mut(|s| {
             let aim = s
                 .target
-                .and_then(|t| goblins.iter().find(|g| g.fighter.owner == t && !g.dead()))
-                .map(aim_point);
+                .and_then(|t| enemies.iter().find(|e| e.0 == t))
+                .map(|e| e.2);
             s.fly(&param, aim, step)
         });
         self.spells.step(&self.data.skills, step);
@@ -461,6 +507,12 @@ impl Fight {
                 started.push(g.fighter.owner);
             }
         }
+        for beast in &mut self.beasts {
+            if beast.dead() { continue; }
+            let data = match beast.family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+            let target = beast.target.and_then(|id| targets.iter().find(|t| t.id == id && t.alive)).map(|t| t.pos);
+            beast.step_action(data, target, ground, step);
+        }
         for a in started {
             self.release(a);
         }
@@ -498,6 +550,15 @@ impl Fight {
                 volumes: gdata.body.push_volumes(&acts, &pose),
             });
         }
+        for beast in &self.beasts {
+            let data = match beast.family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+            let pose = data.body.pose(beast.motion, beast.frame, beast.pos, beast.yaw);
+            let active = data.body.activations(beast.motion, beast.frame);
+            bodies.push(crate::pushout::PushBody {
+                rank: beast.push_rank(data.obj_size), kind: 0,
+                volumes: data.body.push_volumes(&active, &pose),
+            });
+        }
         // the deepest push per character
         let mut pushes: Vec<Option<[f32; 2]>> = vec![None; bodies.len()];
         for i in 0..bodies.len() {
@@ -519,10 +580,14 @@ impl Fight {
                     p.position[0] += d[0];
                     p.position[2] += d[1];
                 }
-            } else {
+            } else if k < seats.len() + self.goblins.len() {
                 let g = &mut self.goblins[k - seats.len()];
                 g.pos[0] += d[0];
                 g.pos[2] += d[1];
+            } else {
+                let b = &mut self.beasts[k - seats.len() - self.goblins.len()];
+                b.pos[0] += d[0];
+                b.pos[2] += d[1];
             }
         }
     }
@@ -545,6 +610,11 @@ impl Fight {
         for g in &mut self.goblins {
             self.positions.insert(g.fighter.owner, g.pos);
             g.volumes(&self.data.goblin);
+        }
+        for beast in &mut self.beasts {
+            self.positions.insert(beast.fighter.owner, beast.pos);
+            let data = match beast.family { Family::Wolf => &self.data.wolf, Family::Harpy => &self.data.harpy };
+            beast.volumes(data);
         }
         for s in &self.shells {
             self.positions.insert(s.owner, s.pos);
@@ -575,6 +645,9 @@ impl Fight {
         for g in &self.goblins {
             s += &g.digest();
         }
+        for b in &self.beasts {
+            s += &format!("beast{}:{:?}:{:?}:{:?}:{}:{:?}:{}:{};", b.fighter.owner, b.family, b.action, b.motion, b.frame, b.pos, b.yaw, b.fighter.victim.hp());
+        }
         for (seat, p) in &self.pawns {
             s += &format!("p{seat}:{:?}:{};", p.brain.goal, p.brain.history.len());
         }
@@ -592,22 +665,10 @@ fn arisen_motion(body: &crate::body::Body, p: &ddsim::Player) -> (MotionId, f32)
     (m, body.wrap_frame(m, p.frame))
 }
 
-/// The live goblin nearest to `from` (horizontally).
-fn nearest_goblin(goblins: &[Goblin], from: [f32; 3]) -> Option<usize> {
-    goblins
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| !g.dead())
-        .map(|(i, g)| (i, (g.pos[0] - from[0]).powi(2) + (g.pos[2] - from[2]).powi(2)))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(i, _)| i)
-}
-
-/// Where a shell aims on a goblin: the middle of its hurt volumes
-/// (*placeholder* for the homing's target point), else 50 cm above its feet.
-fn aim_point(g: &Goblin) -> [f32; 3] {
-    let centers: Vec<[f32; 3]> = g
-        .fighter
+/// Average hurt-volume center. The existing goblin fallback of50cm remains
+/// a labelled homing approximation for bodies with no active hurt volumes.
+fn fighter_aim(fighter: &Fighter, pos: [f32; 3]) -> [f32; 3] {
+    let centers: Vec<[f32; 3]> = fighter
         .hurts
         .iter()
         .map(|h| match h.volume {
@@ -620,7 +681,7 @@ fn aim_point(g: &Goblin) -> [f32; 3] {
         })
         .collect();
     if centers.is_empty() {
-        return [g.pos[0], g.pos[1] + 50.0, g.pos[2]];
+        return [pos[0], pos[1] + 50.0, pos[2]];
     }
     let n = centers.len() as f32;
     std::array::from_fn(|k| centers.iter().map(|c| c[k]).sum::<f32>() / n)
