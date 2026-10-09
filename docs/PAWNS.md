@@ -98,40 +98,137 @@ bound is at least the level. The bounds are the 33 bytes at `0x0150a384`:
 
 So `romNoraPawn00` covers levels 1-5 and `romNoraPawn32` covers 171-200.
 
-**Building a pawn at level L** (`0x00795610`; traced in outline, not
-translated):
+**Building a pawn at level L** (`0x00795610`, with `0x00796080`).
+Translated in `ddpawn::builder::build_nora` (traced, tested, compared). The
+steps, in order:
 
-- The name is replaced by a Latin name when `sGameSys.mLanguage`
-  (+0x16d8) is not 0 (Japanese).
-- `mLevel` = L and `mJob` = the template's vocation. Job levels are copied.
-  Vocations 4-6 (the Arisen-only ones) get job level 1.
-- Stats come from the vocation's `rPlLevel` table:
-  - Row 1 gives the level-1 values. Each level 2..L adds the gains of the row
-    covering that level (the row's u16 at +4 is its first level).
-  - Gains: +6 → `mHpMax`, +8 → `mStaminaLv`, +10 → `mBasicAttack`,
-    +0xc → `mBasicDefend`, +0xe → `mBasicMgcAttack`, +0x10 → `mBasicMgcDefend`.
-  - `mHp` = `mHpMaxWhite` = `mHpMax`.
-  - `mStaminaBase` = `PlStaminaMax[weight type]`, and
-    `mStamina` = `mStaminaBase` + `mStaminaLv`.
-  - Whether this matches the player's own level-up is not checked
-    (compare `player-params`).
-- Inclinations come from the chara preset, knowledge from the study preset.
-  `mPawnType`, `mStatus` and `mEmployGamePlayTime` are zeroed, and the online
-  info is reset by `0x0077b2a0`.
+1. **Start.** Start from an initialised record (`0x00787dc0`):
+   - parameters from `0x00786540`: job levels 1, weapon skills and augments
+     -1, empty equipment;
+   - inclinations from `0x005d0940`: value `0x018fa5b4`, a BSS float with
+     no writer, so 0.0, and status 0;
+   - `mInfoEx` 500.0.
+2. **Appearance.** Copy the template's whole appearance (`0x00787b70`).
+   - If `sGameSys.mLanguage` (+0x16d8) is not 0 (Japanese), replace the name
+     from the name lists (`0x00cdbf00`, below).
+3. **Level and vocation.** `mLevel` = L, `mJob` = the template's vocation.
+4. **Job levels.** `mJobLevel` is indexed by vocation number.
+   - Vocations 1-3 and 7-9 take the template's six job levels.
+   - Vocations 4-6 (the Arisen-only ones) get 1.
+5. **Core skills.** Each core skill (template +0x65) is looked up in
+   `rSkillList`'s normal list (an index past the end reads entry 0).
+   - Its bit is set in `mSkillLv1` if the vocation's job level reaches the
+     entry's.
+6. **Weapon skills** (`0x00796080`). The vocation's weapon classes take
+   template weapon skills `(first, count)`:
+
+   | Vocation | Classes and template skills |
+   |---|---|
+   | Fighter | sword 0..3, shield 3..6 |
+   | Strider | dagger 0..3, bow 3..6 |
+   | Mage | staff 0..6 |
+   | Warrior | longsword 0..3 and warhammer 0..3 (the same three) |
+   | Ranger | dagger 0..3, longbow 3..6 |
+   | Sorcerer | archistaff 0..6 |
+
+   A skill is placed only if the job level reaches its `rSkillList` custom
+   entry and the vocation's bit is set in the skill's vocation mask. The
+   mask is the first word of the 32-byte records at `.rdata` `0x014f3660`.
+   - It goes into its template position, so a refused skill leaves -1.
+   - Its bit is set in `mSkillLv1` (skill level 1) or `mSkillLv2`.
+7. **Augments.** Each template augment passes the same job-level check
+   against the ability list.
+   - It is stored converted (`c<63: (c/7)*10 + c%7`, `c>=63: c+37`, 69 as
+     68) in the next free `mAbility` slot.
+   - Its bit is set in `mAbilityInfo`.
+8. **Stats.** Taken from the vocation's `rPlLevel` table (Fighter/Warrior →
+   `LvFighter`/`LvBattler`, and so on).
+   - Row 1 holds the level-1 values. For each level 2..L the row advances by
+     one when the level is below the current row's first level or reaches
+     the next row's. That row's gains are then added in single precision.
+   - Gains: `mHPMax` → `mHpMax`, `mStaminaMax` → `mStaminaLv`, and attack,
+     defence, magick attack and magick defence.
+   - `mHp` = `mHpMaxWhite` = `mHpMax`.
+   - `mStaminaBase` = `PlStaminaMax[weight type]`, and
+     `mStamina` = `mStaminaBase + mStaminaLv`.
+9. **Equipment.** The 11 template items with 301 ≤ id < 0x76d are equipped
+   by `0x00786b90`:
+   - count 1, flags 3 (+0x800 in template position 10);
+   - slot = the item's category (`itemList +0x34 >> 28`; category 9 uses
+     the template position);
+   - skipped if `+0x38 & 0xc00`.
+
+   Items 0x74b..0x76c carry built-in skills (`0x0045e130`). A generator
+   seeded with `sItemManager+0x5b00` (`0x00d006c0`; seed origin untraced)
+   picks one of the item's rows at `.rdata` `0x01539f78`. The row's two
+   numbers go to `mChgNum` and `mDay1` (`0x0045e510`). No pawn in the
+   checked save carries such an item.
+10. **Inclinations** (`0x00ca7220`). They come from `AI\preset_charainfo`
+    record `mRomPawnCharaNo`:
+    - three inclinations get 800, 700 and 660;
+    - `mInfoEx[TALK]` gets 100/300/500/700/900 by kind;
+    - `mInfoEx[SKILL_USE]` gets 200/500/800 by kind.
+11. **Scene talk.** `mUseSceneTalk` = six values `(h >> 5k) % 7` of
+    `h = !crc32(le32(chara no))` (`0x00ca7320`; compared: matches the save).
+12. **Knowledge.** It comes from `AI\preset_study`: `index[mRomPawnAiNo]`
+    names an entry, and `0x00ca7670` sets its knowledge bits, recursively
+    through groups.
+13. **Finish.** `mPawnType`, `mStatus` and `mEmployGamePlayTime` are
+    zeroed, and the online info is reset (`0x0077b2a0`); the caller stores
+    the ID.
+
+**Compared with a real save** (`crates/ddpawn/tests/builder.rs`).
+
+- Every pawn record the save holds in full was rebuilt from its ID alone:
+  - 5 nora records (3 distinct generated pawns at levels 4 and 6) in the
+    party and close-friend lists of both player slots;
+  - 2 Rook records;
+  - 4 summon-history entries.
+- They equal the save field for field, except for fields the game changes
+  after building:
+
+  | Field | Why it differs |
+  |---|---|
+  | `mHp`, `mHpMaxWhite` | Current health (0 for a pawn that died). |
+  | `mStaminaBase`, `mStamina` | Recomputed when the pawn is spawned: `0x00b81120` classes the body and `0x00b5bd02` stores `PlStaminaMax[class]`. One pawn has 580 against its template's 520. |
+  | `mStudyFlag` | Knowledge only grows; the built bits are a subset. |
+  | Item `mFlag` | The hire adds 0x80 (`0x00447000`). |
+  | `mInfo[k].mStatus` | Set later for the inclinations the builder gave a value; the writer is not traced. |
+  | Rook's `mPawnType` | 2 at build, 0 in the save; see story stock. |
+  | `mEmployGamePlayTime` | The hire time. |
+
+- All 29,700 templates also build at both ends of their band without
+  leaving the translated paths.
 
 ### Built-in pawns (`rRomPawnInfo`)
 
 `mQuality`, `mSaveDataCmcArray` (100 complete `cSAVE_DATA_CMC`) and
 `mNameNoArray` (100 u32). (compared)
 
-- **Records 0..19 are the story stock.** `0x00796420` copies them into stock
-  slots 0..19 with ID `0x2000_0000 | i`. (traced)
-  - The names are localised.
-  - Slots 10..16 get appearance overrides.
-  - Slots 14, 15 and 16 get their names from the NPC table (`0x004769c0`
-    with ids 0x1f8, 0x380, 0x381).
-  - Record 14 is a level-6 Mage named ルーク (Rook). A real save holds it in
-    the summon history as `0x2000000E` (compared).
+- **Records 0..19 are the story stock.** `0x00796420` builds stock slots
+  0..19 from them, with ID `0x2000_0000 | i`. It is translated in
+  `ddpawn::builder::build_story_stock` (traced, tested, compared). Each slot:
+  - **Copy.** Takes the record's appearance, parameters, knowledge,
+    inclinations and pawn type.
+  - **Name.** If the language is not Japanese, the name comes from the name
+    lists with `mNameNoArray[i]`, read as a signed byte.
+  - **Slots 10..16.** They get a 20-byte appearance override (a stack
+    table of code immediates, so it is kept as constants in `ddpawn`), with
+    personality 0. Pawn type becomes 2 for slots 10..14 and 0 for 15 and 16.
+  - **Slots 14, 15, 16.** Their names come from NPC-ledger entries 0x1f8,
+    0x380 and 0x381 (`0x004769c0`; it is the ledger's `mNameJ`, compared).
+    Their equipment is cleared and replaced with fixed items:
+    - slot 14: 414, 575, 634, 985, 1062;
+    - slot 15: 601..608;
+    - slot 16: 609..616.
+  - **Rook.** Slot 14 is Rook, a level-6 Mage named ルーク. The save's close
+    friends hold a full Rook record (`0x2000000E`). It equals the rebuilt
+    slot 14 field for field except the post-build fields above and
+    `mPawnType`.
+  - **Pawn type 2.** `mPawnType` is copied into the party record's +0x7f4
+    (`0x004472d0`). A value of 2 there makes a dismissal only flag the pawn
+    (PAWNS §5), so the story keeps it. The saved 0 shows it was cleared when
+    the story released Rook; the writer is not traced.
   - Records 10..16 are level 20/6 pawns; the rest are placeholder copies of
     one level-51 Fighter (data).
 - **Records 20..99** are reachable only through a saved ID
@@ -227,8 +324,16 @@ original):
 - The placement step had moved the level-7 pawns into slots 88..119.
 
 **RNG.** The random generator is the global at `0x018d017c`: a xorshift128
-with shifts (15, 17, 4) (`0x00d00690`, tested). Its seeding is not traced,
-so the exact pool cannot be reproduced yet.
+with shifts (15, 17, 4) (`0x00d00690`, tested).
+
+- A static initialiser at `0x0137e5c0` seeds it once at process start with
+  0x1105 through `0x00d006c0` (traced). That seeding is translated as
+  `XorShift128::seeded`; a live check of it was requested (#661).
+- No other reseed of this global was found.
+- It is shared by about 400 call sites. Its state when the pool is filled
+  therefore depends on everything drawn since the game started, so a
+  bit-exact pool can only be reproduced by reading that state live just
+  before the fill.
 
 **Placement in the world.** `0x0047ddf0(stage)` arranges stock slots into
 groups for stages 100, 210, 220/230 and 601, via `0x0047d610`. (traced)
@@ -272,11 +377,14 @@ Menu text: `id\message\pawn_search\pawn_search_<lang>`.
   exactly the selected level. The level is sPawnManager+0x1528, the cursor
   + 1, at most 200, shown as "99~" above 99.
 - A duplicate ID is redrawn, up to 100 times.
-- The vocation, gender and weapon-skill filters (+0x152c, +0x1530) are only
-  read by the network query (`cNetPawnFilter`: `mBoard mLevel mGender mJob
-  mSkill mEnemy mSortKey mSortType`). Offline they seem to have no effect.
-  (traced as far as `0x0047a550`/`0x00794f10`; a GUI-side filter is not
-  ruled out)
+- The vocation, gender and weapon-skill filters (+0x152c, +0x1530) are not
+  read by the list builder (`0x0047a550`, `0x00794f10`); the network query
+  uses them (`cNetPawnFilter`: `mBoard mLevel mGender mJob mSkill mEnemy
+  mSortKey mSortType`).
+- Offline the GUI filters the rows instead (codex-15, #567; see
+  `docs/RIFT_UI.md`). `0x006d4bb0` marks rows to hide via `0x006d4c50`,
+  which tests each row's vocation, gender and six weapon skills. The row
+  renderer `0x006d5090` skips the marked rows.
 - `0x0047af50` moves to the front the pawns whose knowledge passes
   `0x005d0760` (guessed: knowledge of the current quest).
 
@@ -309,10 +417,16 @@ Each row is an `nRim::cPawnInfoList` (0x18 bytes):
   - 0: hired.
 - **Target slot.** The slot freed by the last dismissal (uRim+0x45c), else
   party slot 1, else 2.
-  - `0x0043e5b0` installs the `cSAVE_DATA_CMC` into the party `cCmcInfo` at
-    sGameSys+0xa76d0 + slot × 0x1660. Slot 0 is the Arisen (its +0x700 is
-    the player level at sGameSys+0xa7dd0); +0x7f4 marks the slot occupied.
-  - Which party slot holds the main pawn is not settled.
+  - `0x0043e5b0` installs the `cSAVE_DATA_CMC` into the party pawn record
+    `cCmcInfo` at sGameSys+0xa7ec0 + slot × 0x1660 (`0x004472d0`; +4 is the
+    active flag).
+  - **The main pawn is slot 0**, and hired pawns are slots 1 and 2. The
+    copy gives each item the owner id slot + 1 (`0x00447000`), and the
+    save's hired pawns carry owner ids 2 and 3 (compared). This matches the
+    save's `mCmc[0..3]`.
+  - The Arisen is a separate record at sGameSys+0xa76d0; its +0x700 is the
+    player level at sGameSys+0xa7dd0.
+  - `cCmcInfo+0x7f4` is the pawn's `mPawnType`, not an occupied flag.
 - **Swap.** Hiring when full asks which pawn to release (`0x0073cca0`
   checks the cost first, then releases, then hires).
 
@@ -356,7 +470,10 @@ trunc(m * ((L + P) * (L - P)^2 + 18.0))   otherwise, single precision, clamped t
   `0x00b87cc0`, and a scene step `0x005278d0`) goes through `0x0043e9b0`
   and then `0x0043ec60(slot, died = 1)`. (traced)
   - If the party slot's +0x7f4 is 2, the pawn is only flagged and stays.
-    The meaning is unknown; it may be "retaining" (message 273).
+    +0x7f4 is the pawn's `mPawnType` (`0x004472d0`), which is 2 for story
+    pawns 10..14 (§1). Story pawns therefore cannot be lost this way. That
+    message 273 ("You cannot send away a pawn you are retaining") is shown
+    for them is guessed.
 - **What `0x0043ec60` records** for a hired pawn (traced):
   - `mWithTime` (play time since hire), `mEmployCnt` += 1, `mDieCnt` +=
     died, and `mClearQuestCnt` (quests cleared while hired). These are added
@@ -501,6 +618,9 @@ which is which is guessed from their play times. Each has:
 | `mAdventureLog/mLogPawnRental{Man,Woman,Rom}`, `mLogMyPawnBeRented`... | statistics |
 | `mAdventureLog/mLogQuest[64]` | quests with the two hired pawns' IDs and names |
 
+Typed readers for the remaining pawn fields (knowledge, full items,
+skills) are `ddsave::pawns` (codex-14, `docs/SAVE_PAWNS.md`).
+
 `mSystemData` also keeps `mEditPawn`, `mLastClearPawnData` and
 `mLastClearCloseFriendPawnData[4]` for New Game+.
 
@@ -586,7 +706,8 @@ registrations) and the code above.
 | +0x9e470 | close friends |
 | +0xa3830 | history |
 | +0xa764c | own ratings |
-| +0xa76d0 | party `cCmcInfo[4]` |
+| +0xa76d0 | the Arisen's record (level at +0x700) |
+| +0xa7ec0 | party pawns `cCmcInfo[3]` (0 main pawn, 1-2 hired) |
 | +0xa7a1c | Rift Crystals |
 | +0xa7dd0 | player level |
 
@@ -640,28 +761,30 @@ unless stated:
    on level 5.
 2. The hire cost of a pawn above the player's level, read from the list's
    "Base Cost": `(L+P)(L-P)^2+18`.
-3. Whether the vocation/gender filters change offline "Pawns by Level"
-   results.
-4. The seed of the xorshift state at `0x018d017c`, for a bit-exact pool.
+3. Whether the GUI row filter (§4) matches the original's offline results
+   (rift-ui).
+4. The xorshift state at `0x018d017c` just before a pool fill, and a check
+   of the `0x00d006c0` seeding translation (requested, #661).
 5. Whether a sixth summon into the Rift is refused (5-pawn cap).
+6. `sItemManager+0x5b00`, the seed of built-in item skills.
 
 Code still to trace:
 
 - The constant passed as the save version.
 - The gift-refusal rule and the `mPresentItem` writer.
 - Where the evaluate screen's ratings go.
-- Party `cCmcInfo+0x7f4 == 2` ("retaining"?).
-- Which party `cCmcInfo` slot is the main pawn.
+- What clears a story pawn's `mPawnType` 2, and who writes
+  `mInfo[k].mStatus`.
+- The body class behind `mStaminaBase` (`0x00b81120`: the measure read
+  through a virtual call at object +0x3dec and the threshold table at
+  sPlayerManager+0x8f8). It is needed to predict a spawned pawn's stamina.
 - The mode values of `0x0047cc00`.
-- The story stock overrides in `0x00796420`.
 - Categories 2, 5, 8 and 0x11.
 - `mKaiouData` / `mKaiouPornData`.
-- The full pawn builder `0x00795610`: the weapon-skill slotting
-  `0x00796080` and the level accumulation details.
 
 ## Implementation briefs (proposed)
 
-1. **pawn-builder** (rules, `crates/ddpawn`): translate `0x00795610` and
+1. **pawn-builder** (done, `task/pawn-builder`; see §1): translate `0x00795610` and
    `0x00796080` to build a full `cSAVE_DATA_CMC`-equivalent pawn (stats,
    skills, augments, equipment, inclinations, knowledge) from a nora
    template and a level. It needs typed `rPlLevel`/`rPlStamina` (reuse
@@ -670,7 +793,7 @@ Code still to trace:
    *Done when* a nora pawn rebuilt from a save's ID reproduces that save's
    `mParam` stats, skills and equipment for all 8 nora pawns in the private
    save, with the translation marked and tested.
-2. **story-stock** (rules + data): translate `0x00796420` (stock slots
+2. **story-stock** (done with pawn-builder): translate `0x00796420` (stock slots
    0..19 from `romPawnInfo`, the overrides for slots 10..16, NPC-table
    names). *Done when* slot 14 rebuilds as the saved Rook record
    (`0x2000000E` in a save) field for field.

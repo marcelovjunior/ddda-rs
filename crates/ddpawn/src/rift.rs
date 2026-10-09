@@ -335,10 +335,11 @@ mod tests {
 mod seed_tests {
     use super::*;
 
+    /// Regression values of the translation of 0x00d006c0 (not yet compared
+    /// with the original; a live call was requested, board #661).
     #[test]
-    fn seeded_print() {
-        for seed in [0x1105u32, 0, 12345] {
-            eprintln!("seeded({seed:#x}) = {:08x?}", XorShift128::seeded(seed).state);
-        }
+    fn seeded_regression() {
+        assert_eq!(XorShift128::seeded(0x1105).state, [0xcab55256, 0x08501947, 0x5c500e44, 0xd9a8fda2]);
+        assert_eq!(XorShift128::seeded(0).state, [0x0194fd72, 0x79e6c985, 0x08dd9701, 0x41cfce91]);
     }
 }
