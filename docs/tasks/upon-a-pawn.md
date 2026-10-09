@@ -376,4 +376,20 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Passed: placement/lifecycle3, story_pawns9, host NPC2, ddnpcrt12 tests.
   Targeted host/NPC clippy has no new warnings with the pre-existing
   install.rs chunks_exact lint allowed; broad all-target checks also find
-  the pre-existing replay.rs modulo lint. Viewer release build is queued.
+  the pre-existing replay.rs modulo lint. Viewer release build passed; private checkpoint binary copied.
+
+### Host NPC single-step follow-up
+
+- Host now steps each NPC once and handles its error in place. The old
+  aggregate-then-retry path lost requests from preceding owners and advanced
+  them twice when a later owner failed. Failed graphs still halt while their
+  allocated owner, last position and error diagnostic remain.
+- Two-owner regression proves the healthy entry request survives a later
+  unsupported process and does not repeat; the failing owner stays parked
+  with one diagnostic. Test fails against the previous implementation (lost
+  Place request) and passes with the fix.
+- Passed placement/lifecycle4 and story_pawns9 tests; targeted host clippy
+  passes with only the already documented install.rs lint allowed.
+- Next: resolve real q2 target/materialization prerequisites before wiring
+  Guard talk to the route. Installed NPC1 candidates include stage200 group27
+  record0 (authored q0002_n01); this is not yet a verified script binding.
