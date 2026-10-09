@@ -29,28 +29,31 @@ Attacks, footsteps and the st200 ev10 voice line play in `ddview`. Describe what
 
 ## Results
 
-Buildable checkpoint, not complete. Event stream cues are forwarded in the
-standalone player and opening cutscenes, decoded into a cached Bevy source,
-and paused with offline play. The six-channel stereo fold is provisional.
-SREQ program/variation lookup and installed ev10 SPAC decoding are tested.
-Release ddview builds; all 11 mtsound tests pass, including the installed
-resource corpus. Two viewer audio regressions pass. A bounded event-22 run
-resolves both streams, saves a screenshot and exits without reported audio-device
-errors. Source addresses and remaining mapping work are in SOUND.md.
+Implemented event stream and ordinary SE playback from installed resources.
+Streams use STRQ request/prepare IDs and loose Vorbis files. Ordinary terminal
+SREQ play commands resolve their referenced SPAC program/variation and decode
+ADPCM/PCM. Effects overlap independently; streams replace the previous source
+for their unit, including multiple cues queued in one deferred batch.
 
-Audible playback and comparison against the original have not been verified.
-Conditional Arisen voice, motion footsteps/attacks and field BGM are still
-unconnected. Motion-event remap and request variants now have a typed reader
-and regression, and all 92 installed motion sound maps parse. Next: bind the
-request banks and surface lookup to actor motion events.
+Conditional voices use the sourced uSoundSe gate (0x00c78570). Both standalone
+events and opening cutscenes read the Arisen and first pawn's voice context
+from --save using the conversion at 0x00780fa0. A no-save opening supplies no
+conditional context. The separate edit-condition group remains unknown.
+Standalone events use the saved actor's sex-specific scheduler unless --sex
+was explicitly supplied. Offline pause pauses the sources.
 
-The material ray API and explicit direct/attribute bank routing are ready.
-Five motion unit tests pass; material columns and bank selectors remain
-separate, including the original's low-29-bit material scan. No footsteps
-or weapon sounds are yet claimed audible.
+Verification: 32 viewer tests pass, one installed HUD test ignored; five of
+these cover audio routing, voice context and deferred playback. Eighteen
+reader unit tests have passed across the targeted runs, along with installed
+ev10 stream/ADPCM decoding and all 92 motion maps/one surface map. A previous
+bounded event-22 run resolved both streams and exited without audio-device
+errors. A bounded saved-voice run from frame 510 reaches both authored voice
+alternatives at frame 514 but resolves only the selected f1 package (40,320
+samples), saves a screenshot and exits without decoder/device errors.
 
-Unconditional event SE cues now resolve ordinary terminal SREQ play commands
-to their referenced SPAC wave and play as overlapping one-shots. Stop/fade,
-random requests, multi-request chains and conditional event variants are
-explicitly unsupported. Fifteen reader tests and the installed ev10 decode
-pass. Original mixer behavior and audible comparison remain open.
+Not complete: motion-triggered footsteps/attacks, field BGM, original mixer
+priority/groups, runtime program overrides, gain/pitch/delay/spatial sends,
+random requests and multi-request chains. Audible playback and original-game
+comparison have not been verified. Motion readers, weapon bank naming,
+direct/attribute routing and Terrain::ray_with_material are ready for the
+next actor-motion hookup. Details and evidence are in docs/SOUND.md.

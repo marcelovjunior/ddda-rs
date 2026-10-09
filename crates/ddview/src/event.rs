@@ -50,6 +50,7 @@ struct EventArgs {
     row: usize,
     language: usize,
     sex: u8,
+    sex_explicit: bool,
     hour: u32,
     start_frame: u32,
     hold: bool,
@@ -79,6 +80,7 @@ fn parse_args() -> Option<EventArgs> {
         row: if lineup { usize::MAX } else { all.get(i + 1).and_then(|s| s.parse().ok()).expect("--event needs a row number") },
         language: 1,
         sex: 0,
+        sex_explicit: false,
         hour: 8,
         start_frame: 0,
         hold: false,
@@ -103,7 +105,7 @@ fn parse_args() -> Option<EventArgs> {
             "--save" => a.save = Some(PathBuf::from(val())),
             "--exe" => a.exe = PathBuf::from(val()),
             "--lang" => a.language = val().parse().unwrap(),
-            "--sex" => a.sex = val().parse().unwrap(),
+            "--sex" => { a.sex = val().parse().unwrap(); a.sex_explicit = true; },
             "--hour" => a.hour = val().parse().unwrap(),
             "--start-frame" => a.start_frame = val().parse().unwrap(),
             "--hold" => a.hold = true,
@@ -130,12 +132,19 @@ fn parse_args() -> Option<EventArgs> {
 /// Runs the event viewer when the command line has `--event`; returns
 /// false otherwise (the caller goes on with its own modes).
 pub fn run_if_requested() -> bool {
-    let Some(args) = parse_args() else { return false };
+    let Some(mut args) = parse_args() else { return false };
     if args.row == usize::MAX {
         run_lineup(args);
         return true;
     }
     let data = ddstory::data::InstallData::open(&args.native_pc, Some(&args.exe)).expect("open install");
+    let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
+    let (saved, voices) = args.save.as_ref().map(|p| saved_characters(&vfs, p)).unwrap_or_default();
+    // Keep the event's sex-specific sound scheduler aligned with the saved
+    // actor, while preserving an explicitly requested --sex diagnostic.
+    if !args.sex_explicit {
+        if let Some(player) = voices.player { args.sex = player.model_or_gender as u8; }
+    }
     let stage_no = data.event_table().and_then(|t| t.rows.get(args.row)).map(|r| r.stage as u32).unwrap_or(0);
     let cfg = EventConfig { language: args.language, sex: args.sex, hour: args.hour, stage: stage_no };
     let mut player = EventPlayer::open(&data, args.row, cfg).expect("open event");
@@ -143,8 +152,6 @@ pub fn run_if_requested() -> bool {
     // the save when one is given, else the base body.
     let mut looks = std::collections::HashMap::new();
     {
-        let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
-        let saved = args.save.as_ref().map(|p| saved_looks(&vfs, p)).unwrap_or_default();
         let mut probe = EventPlayer::open(&data, args.row, cfg).expect("open event");
         let f = probe.step(1.0).expect("event step");
         for a in &f.actors {
@@ -188,7 +195,7 @@ pub fn run_if_requested() -> bool {
         .add_plugins(crate::audio::GameAudioPlugin(args.native_pc.clone()))
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 250.0, ..default() })
-        .insert_resource(Playing { player, last, stage: stage_no, args: args.clone(), looks })
+        .insert_resource(Playing { player, last, stage: stage_no, args: args.clone(), looks, voices })
         .add_systems(Startup, setup)
         .add_systems(Update, (drive, character::animate, shot).chain())
         .run();
@@ -203,6 +210,7 @@ struct Playing {
     args: EventArgs,
     /// Looks per actor name (absent: the base Arisen body).
     looks: std::collections::HashMap<String, ddlook::Look>,
+    voices: mtsound::voice::EventVoices,
 }
 
 /// One actor of the timeline and its motion list.
@@ -245,7 +253,9 @@ fn setup(
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let args = &playing.args;
-    if !args.hold && args.start_frame == 0 { crate::audio::cues(&mut commands, &playing.last); }
+    if !args.hold && args.start_frame == 0 {
+        crate::audio::cues_with_voices(&mut commands, &playing.last, playing.voices);
+    }
     let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
     let mfx_path = args.native_pc.join("usershader").join("BbsShaderPackage.mfx");
     let mfx = mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx");
@@ -457,10 +467,14 @@ pub fn spawn_event_ui(commands: &mut Commands) {
 }
 
 /// The save's Arisen and party pawns (slot `mPlayerDataManual`).
-fn saved_looks(vfs: &ddvfs::Vfs, path: &std::path::Path) -> Vec<ddlook::save::SavedLook> {
+fn saved_characters(vfs: &ddvfs::Vfs, path: &std::path::Path)
+    -> (Vec<ddlook::save::SavedLook>, mtsound::voice::EventVoices) {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let save = ddsave::SaveFile::parse(&bytes).expect("save file");
-    ddlook::save::save_looks(vfs, &save.xml, "mPlayerDataManual").expect("save looks")
+    let looks = ddlook::save::save_looks(vfs, &save.xml, "mPlayerDataManual").expect("save looks");
+    let voices = crate::audio::voices_from_save_xml(&save.xml, "mPlayerDataManual")
+        .unwrap_or_else(|e| { warn!("event voice context unavailable: {e}"); Default::default() });
+    (looks, voices)
 }
 
 /// One character from a look: base body skeleton, parts, mask, hair tint.
@@ -576,7 +590,7 @@ fn setup_lineup(
                 Err(e) => error!("npc {id}: {e}"),
             }
         } else {
-            looks.extend(saved_looks(&vfs, std::path::Path::new(e)).into_iter().map(|s| (s.who, s.look)));
+            looks.extend(saved_characters(&vfs, std::path::Path::new(e)).0.into_iter().map(|s| (s.who, s.look)));
         }
     }
     let n = looks.len() as f32;
@@ -671,7 +685,7 @@ fn drive(
             *acc -= 1.0;
             let f = playing.player.step(1.0).expect("event step");
             log_frame(&f);
-            crate::audio::cues(&mut commands, &f);
+            crate::audio::cues_with_voices(&mut commands, &f, playing.voices);
             playing.last = f;
         }
     }

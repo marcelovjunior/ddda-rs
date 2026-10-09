@@ -3,6 +3,7 @@
 use std::ops::Range;
 pub mod decode;
 pub mod motion;
+pub mod voice;
 fn span(b: &[u8], o: usize, n: usize) -> Result<&[u8], String> {
     b.get(o..o.checked_add(n).ok_or("size overflow")?)
         .ok_or_else(|| format!("out of bounds: {o:#x}+{n:#x}/{}", b.len()))
