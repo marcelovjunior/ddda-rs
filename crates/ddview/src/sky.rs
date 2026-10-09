@@ -432,3 +432,30 @@ fn follow_camera(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// st100_sky's SkySpotLight: LightColor (0.022, 0.05672, 0.078), start
+    /// 2000, end 3000, cone 90, spread 60, falloff 1.
+    #[test]
+    fn sky_spot_light() {
+        let s = SkySpot {
+            color: [0.022, 0.05672, 0.078],
+            offset: [0.0, 2000.0, 0.1],
+            start: 2000.0,
+            end: 3000.0,
+            cone: 90.0,
+            spread: 60.0,
+            falloff: 1.0,
+        };
+        assert_eq!(s.color_at(0.5), [0.0; 3]);
+        let c = s.color_at(1.0);
+        assert!((c[0] - 0.022).abs() < 1e-6 && (c[2] - 0.078).abs() < 1e-6);
+        let (a, f) = s.attenuation();
+        assert!(a[0] == 2000.0 && (a[1] - 0.001).abs() < 1e-9 && f == 1.0);
+        // cos 45 deg and 1 / (cos 15 deg - cos 45 deg)
+        assert!((a[2] - 0.707_106_8).abs() < 1e-6 && (a[3] - 3.863_7).abs() < 1e-3);
+    }
+}

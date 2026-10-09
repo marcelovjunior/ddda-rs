@@ -76,6 +76,8 @@ const FLAG_SKY_ENV: u32 = 32u;
 const FLAG_ENV_CUBE: u32 = 64u;
 // No light buffer: unlit, the vertex colour is the light.
 const FLAG_NO_LIGHT_BUFFER: u32 = 128u;
+// Alpha blended (keeps its alpha in the frame).
+const FLAG_BLENDED: u32 = 256u;
 
 struct SkyEnvParams {
     cb: array<vec4<f32>, 11>,
@@ -264,6 +266,11 @@ fn fragment(
         let f = clamp((depth - dd.fog_range.x) * dd.fog_range.y, 0.0, 1.0) * dd.fog_color.w;
         color = mix(color, dd.fog_color.rgb, f);
         out.color = vec4<f32>(color, pbr_input.material.base_color.a);
+        if ((dd.flags & FLAG_BLENDED) == 0u) {
+            // The frame's alpha carries the view depth (m) for the depth of
+            // field (dd_post.wgsl); blended surfaces keep their alpha.
+            out.color.a = -view_z;
+        }
     } else {
         out.color = apply_pbr_lighting(pbr_input);
     }

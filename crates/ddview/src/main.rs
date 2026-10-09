@@ -367,6 +367,14 @@ fn config_view_range() -> u32 {
     }
 }
 
+/// `DofFilter` from the player's game settings (ON unless it says OFF).
+fn config_dof_filter() -> bool {
+    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return true };
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines().find_map(|l| l.trim().strip_prefix("DofFilter=")).map(str::trim) != Some("OFF")
+}
+
 /// Stage and cell (A, B) of the `origin_cell` path in a reference JSON.
 fn origin_cell(json: &str) -> Option<(u32, (i32, i32))> {
     let i = json.find("\"origin_cell\"")?;
@@ -572,7 +580,13 @@ fn setup(
         args.weather.map(|w| sky::WEATHERS[w]),
         if args.light.is_some() { "on" } else { "Bevy PBR" }
     );
-    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage));
+    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage)).map(|p| {
+        // DOFFilter runs only with the player's DofFilter=ON (0x0050adc0).
+        match stage::post::DdPost::dof_filter(&vfs, args.stage).filter(|_| config_dof_filter()) {
+            Some(dof) => p.with_dof(&dof, args.near, args.far, args.size),
+            None => p,
+        }
+    });
     if let Some(light) = &args.light {
         match sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0)) {
             Some(sky) => sky.spawn(
@@ -637,7 +651,9 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<sta
             .entity(cam)
             .insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
         if let Some(post) = post {
-            commands.entity(cam).insert(post);
+            // A float frame: the depth of field reads the view depth from
+            // its alpha.
+            commands.entity(cam).insert((post, bevy::camera::Hdr));
         }
     }
     if args.play {

@@ -33,5 +33,6 @@ struct SkyParams {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let dir = normalize(in.world_position.xyz - view.world_position);
-    return vec4<f32>(sky_color(sky.cb, rayleigh_depth, mie_depth, sky.eye.xyz, dir), 1.0);
+    // Alpha: the sky's depth for the depth of field (far).
+    return vec4<f32>(sky_color(sky.cb, rayleigh_depth, mie_depth, sky.eye.xyz, dir), 60000.0);
 }

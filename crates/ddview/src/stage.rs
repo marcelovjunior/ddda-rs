@@ -140,6 +140,8 @@ const FLAG_SKY_ENV: u32 = 32;
 const FLAG_ENV_CUBE: u32 = 64;
 /// No light buffer: unlit, the vertex colour is the light (`forward_unlit`).
 const FLAG_NO_LIGHT_BUFFER: u32 = 128;
+/// Alpha blended: keeps its alpha (others write the view depth there).
+const FLAG_BLENDED: u32 = 256;
 
 /// Colour of each of the five environment cubes `DDCube<i>_CM`, made from
 /// `DDBaseCube<i>_CM` by the weather manager's `mEnvMapBaseColor[i]` x
@@ -833,6 +835,9 @@ impl Loader<'_> {
         let mut env_cube = None;
         if forward_unlit(s) {
             params.flags |= FLAG_NO_LIGHT_BUFFER;
+        }
+        if sm.alpha_mode == AlphaMode::Blend {
+            params.flags |= FLAG_BLENDED;
         }
         if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {
             // Reflection of the sky render (DDCube0_CM) or of the planar
