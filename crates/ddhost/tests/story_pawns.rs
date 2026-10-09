@@ -10,6 +10,163 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
+    use ddhost::StoryWorld;
+    let camera = ddstory::Request::Camera {
+        simple: false,
+        cam_id: 17,
+        quest: 0,
+    };
+    let mut world = ddhost::opening::OpeningWorld::new();
+    // Include a callback already queued before activation.
+    world.handle(200, &[camera.clone()]);
+    world.handle(
+        200,
+        &[ddstory::Request::JumpArea {
+            stage: 100,
+            pos: 0,
+            fade: 0,
+        }],
+    );
+    world.enable_live_encounters();
+    world.handle(
+        200,
+        &[
+            camera.clone(),
+            ddstory::Request::JumpArea {
+                stage: 210,
+                pos: 0,
+                fade: 0,
+            },
+        ],
+    );
+    for _ in 0..150 {
+        assert!(!world.events().iter().any(|event| matches!(
+            event,
+            ddstory::HostEvent::SetQuestBit { .. }
+                | ddstory::HostEvent::SetGsf { .. }
+                | ddstory::HostEvent::StageLoaded { .. }
+        )));
+    }
+    let actual = ddstory::HostEvent::StageLoaded { stage: 100 };
+    world.report(actual.clone());
+    assert!(world.events().contains(&actual));
+    let mut fixture = ddhost::opening::OpeningWorld::new();
+    fixture.handle(200, &[camera]);
+    assert!((0..150).flat_map(|_| fixture.events()).any(|event| matches!(
+        event,
+        ddstory::HostEvent::SetQuestBit {
+            quest: 0,
+            bit: 5,
+            value: true
+        }
+    )));
+}
+
+#[test]
+fn live_encounters_never_complete_applied_scripts_or_enemies_on_a_timer() {
+    use ddhost::StoryWorld;
+    use ddstory::Host as StoryHost;
+    let mut world = ddhost::opening::OpeningWorld::new();
+    world.enable_live_encounters();
+    let npc = ddstory::Target {
+        kind: 5,
+        group: 1,
+        index: 0,
+    };
+    let enemy = ddstory::Target {
+        kind: 2,
+        group: 23,
+        index: 0,
+    };
+    world.handle(
+        200,
+        &[
+            ddstory::Request::ApplyScript {
+                target: npc,
+                path: r"ai\fsm\npc\st200\quest\q0002_n001_ai".into(),
+            },
+            ddstory::Request::Placement {
+                target: enemy,
+                present: true,
+                act: 1,
+            },
+        ],
+    );
+    for _ in 0..1000 {
+        assert!(!world
+            .events()
+            .iter()
+            .any(|e| matches!(e, ddstory::HostEvent::SetGsf { no: 381, value: true })));
+        assert!(!world.enemy_check(200, &enemy, 3));
+        assert!(!world.applied_script_finished(200, &npc));
+        assert!(!world.unit_exists(200, &enemy));
+    }
+    world.report(ddstory::HostEvent::SetGsf { no: 381, value: true });
+    assert!(world
+        .events()
+        .contains(&ddstory::HostEvent::SetGsf { no: 381, value: true }));
+    let facts = world.encounters.as_mut().unwrap();
+    facts.report_unit(
+        100,
+        enemy,
+        ddstory::encounter::UnitFacts {
+            layout_loaded: true,
+            present: true,
+            hp: Some(0.0),
+            max_hp: Some(100.0),
+            ..Default::default()
+        },
+    );
+    assert!(world.enemy_check(100, &enemy, 3));
+    world.unbind_enemy(100, enemy);
+    assert!(
+        !world.enemy_check(100, &enemy, 3),
+        "unloading is not persistent death"
+    );
+}
+
+#[test]
+fn stage_dragon_hook_waits_for_real_observations_and_respects_stage_stop() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    assert!(
+        story.world.lot(380, 0),
+        "new-game initializer 0x00445be1 enables the prologue enemy layout"
+    );
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    story.world.gsf.set(378, true);
+    let mut facts = ddstory::encounter::EncounterFacts::default();
+    story.tick(&Default::default(), &facts).unwrap();
+    assert_eq!(story.stage.dragon_challenge.baseline_hp, None);
+    facts.challenge_dragon = Some(ddstory::dragon::ChallengeDragon { life_hp: Some(100.0) });
+    story.stage.game_flags.b8844 = 0x80000;
+    story.tick(&Default::default(), &facts).unwrap();
+    assert_eq!(story.stage.dragon_challenge.baseline_hp, None);
+    story.stage.game_flags.b8844 = 0;
+    story.tick(&Default::default(), &facts).unwrap();
+    assert_eq!(story.stage.dragon_challenge.baseline_hp, Some(100.0));
+    facts.challenge_dragon = Some(ddstory::dragon::ChallengeDragon { life_hp: Some(95.0) });
+    story.stage.stage_no = 100;
+    story.tick(&Default::default(), &facts).unwrap();
+    assert!(!story.world.gsf.get(379));
+    story.stage.stage_no = 200;
+    story.tick(&Default::default(), &facts).unwrap();
+    assert!(story.world.gsf.get(379));
+    // A real stage load recreates its challenge baseline.
+    story
+        .tick(
+            &ddstory::Inputs {
+                events: vec![ddstory::HostEvent::StageLoaded { stage: 200 }],
+                ..Default::default()
+            },
+            &facts,
+        )
+        .unwrap();
+    assert_eq!(story.stage.dragon_challenge.baseline_hp, None);
+}
+
+#[test]
 fn rook_record_is_shared_protected_and_saved_without_a_rift_visit() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)

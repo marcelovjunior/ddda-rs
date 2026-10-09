@@ -76,3 +76,22 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   Rook's record round-trips through the existing Rift save, and two seats
   share it. Not compared with an original recruitment capture; no claim
   that the whole quest or goblin fight is playable yet.
+
+### Live encounter adapter checkpoint
+
+- OpeningWorld can opt into EncounterFacts and bind resolved placement
+  targets to authoritative goblin combat owners. StoryWorld observes HP
+  before the story phase; loading and persistent kills remain explicit
+  placement observations. Actor requests bypass ScriptedHost timers.
+- Added the sourced stage-200 challenge hook after event processing and
+  before scenarios (0x00504330 -> 0x0051ccc0), respecting stop bit 0x80000
+  and resetting its baseline on stage load. Missing actors cannot pass.
+- All three host story_pawns tests pass, including 1,000 frames without
+  synthetic actor progress, source new-game lot 380:0, stage/stop/reset
+  behavior, and installed Rook recruitment. Viewer activation remains
+  pending real placement/AI adapters and head's stage handoff API.
+- Review follow-up: live activation clears camera fixture callbacks,
+  suppresses already queued synthetic quest/GSF/stage reports, and keeps
+  actual reports in a separate queue. JumpArea now awaits actual stage
+  loading in live mode. Four host tests pass, including pre-activation
+  queued callbacks, Camera 17, handoff, and preserved scripted fixtures.

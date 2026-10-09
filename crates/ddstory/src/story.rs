@@ -68,6 +68,8 @@ pub fn script_gate(stage_no: u32, f: &GameFlags) -> bool {
 
 #[derive(Debug, Default)]
 pub struct StageState {
+    /// Stage-200 challenge state, reset on every stage load.
+    pub dragon_challenge: crate::dragon::DragonChallenge,
     /// aStage +0x724; 0 while no stage is loaded.
     pub stage_no: u32,
     pub event: EventMode,
@@ -172,6 +174,7 @@ impl<D: Data> Story<D> {
     fn enter_stage(&mut self, stage: u32, cmds: &mut Vec<Command>) -> Result<(), Error> {
         self.tasks.clear();
         self.stage.stage_no = stage;
+        self.stage.dragon_challenge = Default::default();
         self.stage.event = EventMode::default();
         self.world.stage_no = stage;
         // 0x004827e0: stage 800 with SceNo 1000 boots q0000 and q0031. The
@@ -397,6 +400,16 @@ impl<D: Data> Story<D> {
             }
         }
         self.apply(&mut cmds, &mut out)?;
+        // Translated from aStage slot 7 -> slot 12 (0x00504330) and
+        // aStage200::vf12 0x0051ccc0 (DDDA.exe 2017-12-13 Steam).
+        // The stage-specific check follows event-mode work and precedes
+        // scenarios; absent actor observations cannot complete it.
+        if self.stage.stage_no == 200 && self.stage.game_flags.b8844 & 0x80000 == 0 {
+            let (dragon, players) = host.dragon_challenge_actors();
+            if self.stage.dragon_challenge.update(self.world.gsf.get(378), self.world.gsf.get(379), dragon, &players) {
+                self.world.gsf.set(379, true);
+            }
+        }
         // 4. Scenarios.
         {
             let mut env = Env {
