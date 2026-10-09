@@ -60,15 +60,15 @@ is, which files it may touch, and how to know it is done. The coordinator
 
 ## Briefs
 
-Briefs without a file yet are being written by the head.
+Claude-lane briefs without a file yet are being written by the head. Codex lane: see `docs/CODEX.md`.
 
 | Id | Title | Lane | Owner | Status |
 |---|---|---|---|---|
 | [ledge](ledge.md) | Ledge grab and climb, turn rate, stop motions from the exe | core | claude | open |
 | [blend](blend.md) | Motion blending between actions | core | claude | open |
 | [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude | open |
-| [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex | open |
-| [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex | open |
-| [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex | open |
-| [text](text.md) | Message/text resources reader (dialogue, item names) | reader | codex | open |
-| [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex | open |
+| [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-1 | assigned |
+| [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex-1 | assigned |
+| [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex-1 | assigned |
+| [text](text.md) | Message/text resources reader (dialogue, item names) | reader | codex-1 | assigned |
+| [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex-1 | assigned |
