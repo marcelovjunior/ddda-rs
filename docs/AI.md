@@ -434,6 +434,66 @@ and sets SysCondition 0, active 1; a reload after a Finish still waits for
 0x00aa78b0. Kill (bit 0x10), 0x00e095c0 and `uEnemy::vf72` stop and unload
 instead. `sAICtrlManager` requests (0x00412910) are not involved.
 
+## The goblin unit (`ddenemyrt::goblin`)
+
+The unit side that runs the think and plays the actions (DDDA.exe
+2017-12-13 Steam; traced statically, not compared live).
+
+**Frame.** `uObjModel::vf08` runs vf90, vf91, vf92. In vf90
+(`uEnemy::vf90` 0x00AA96E0 -> `uEm0100::vf136` 0x008D2280 ->
+0x008D2360) the pending forced actions are served first (death +0x5B58,
+then damage +0x5B74, ...), otherwise the think table runs when the
+current action's done byte (+0x50) is set (or unit +0x7360), and its
+result is requested only if it differs from the current action (or
++0x6FF5). In vf91 (`uCharacterBase::vf91` 0x0084BF60) the action manager
+(0x007F1EA0) switches actions (old vf08, new vf05) and runs the current
+vf06, so a requested action starts and updates in the same frame. The
+hit callbacks (vf70/71/72) fill the pending slots that the next frame's
+vf90 serves.
+
+**Action ids.** Bits 24..31 pick an action bank, bits 0..15 the record
+(`0x007F1EA0`): bank 0 the goblin's (0x018335F8, 237 records),
+`uEnemy::vf05` (0x00AA8830) adds bank 1 (0x018635D0), 2 and 3 (0x01864B98,
+the common damage and death actions).
+
+**Motions.** Ids are bank `(id >> 8) & 0xF`, slot `id & 0xFF`
+(0x00AB4900, with fallbacks for missing damage motions). Banks
+(`uEm0100::vf05` 0x008CDC80, bound in load order by 0x008892B0): 0
+`e0100_co`, 1 `e0100_at`, 2 `e0100_dm`, 3 `e0100_ex`, 4 `e0100_pl`.
+
+| Action | Class, vf05 / vf06 | Motion | Moves | Done |
+|---|---|---|---|---|
+| 0 | Wait 0x008D4A10 / 0x008D4B90 | 0x0A (random start 0..179 on the first entry), idle variants 0x0F / 0x0B / 0x0C | no | every frame |
+| 1 | WaitAtck 0x008D4DD0 / 0x008D5000 | 0 and 1..4 in two phases | no | every frame |
+| 13 | DashTrace 0x008D6920 / 0x008D69B0 | 0x2C, then loop 0x2D | root travel; turns to its goal at 120 deg/s (+0x6008, ctor 0x008CD5B0) | once looping |
+| 26-29 | Turn90 / Turn180 0x008D6E90 / 0x008D7190, vf06 0x008D6FA0 | 0x35..0x38 (0x39..0x3C outside combat mode) | 90 or 180 degrees over the motion | motion end |
+| 101 | NAttack1 0x008DD200 / 0x008DC820 | 0x101 | root travel; tracks 3 deg/frame to frame 42 | motion end |
+| 102 | NAttack2 0x008DCA10 / 0x008DCAC0 | 0x102 | tracks to frame 31 | motion end |
+| 104 | NAttack12 vf06 0x008DCF60 | 0x101, at frame 59 0x102 from frame 16 | as above | motion end |
+| 0x7A..0x7F | cEmActDmgShrink 0x0089F2D0 / 0x0089F420 | 0x200, 0x205, 0x204 front; 0x202, 0x208, 0x207 back | root travel (no knockback data) | motion end |
+| 0x80 / 0x81 | cEmActActingDie 0x008A66E0 / 0x008A6930 | 0x239 / 0x23A | root travel | never |
+
+**Hit reactions.** Stagger (`uEm0100::vf70` 0x008D3DA0 -> `uEnemy::vf70`
+0x00AABAE0): with unit +0x2360 bit 0 (set by every standing action and
+the attacks), the goblin's light set: 50% 0x7A, else 50% 0x7C, else 0x7B
+(front, attacker within 90 degrees), 0x7D / 0x7F / 0x7E behind; without
+it, bank 3 record 8 (0x3000008, the same class and motion 0x200). Death
+(`uEm0100::vf72` 0x008D4080): the special deaths (break, gauge, burning,
+poison) fall through to `cEmActActingDie` 0x80 front / 0x81 back, or the
+knockdown deaths 199 / 227 when a knockdown is pending.
+
+**Host answers** (*placeholders*, marked in the code): the think flags
+2, 3, 8, 20 (alert and melee) are set while the goblin has a live
+target; path check 1017 answers true (open ground); DashTrace's goal is
+the target itself (the game steers toward the next point of its AI path,
++0x5C80 from 0x008AB5B0); the rand is a seeded generator.
+
+**FSM.** A goblin may carry a quest FSM (`Thinker::controlled_frame`):
+its `Action` requests become forced actions, `ThinkTable` hands the
+built-in table to the think, `EscapePos` fills think slot 1, free flags go
+back to the FSM. Test: q0002_goburin's action 1 (WaitAtck) comes first,
+then the tables taunt (71), dash (13) and attack.
+
 ## Next step
 
 - Compare a live goblin fight with `ddai::thinktbl` (board #1096, claude-4),

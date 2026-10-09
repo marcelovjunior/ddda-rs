@@ -221,3 +221,16 @@ pub mod load {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_model_matrix_faces_its_yaw() {
+        let m = model_matrix([10.0, 0.0, 0.0], std::f32::consts::FRAC_PI_2);
+        // +z of the model (ahead) goes to +x of the world
+        let p = ddcombat::volumes::transform_point(&m, [0.0, 0.0, 100.0]);
+        assert!((p[0] - 110.0).abs() < 1e-3 && p[2].abs() < 1e-3, "{p:?}");
+    }
+}

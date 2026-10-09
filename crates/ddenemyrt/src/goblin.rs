@@ -743,3 +743,39 @@ impl Goblin {
 fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn motion_ids_and_damage_fallbacks() {
+        assert_eq!(motion_id(0x101), MotionId::new(1, 1));
+        assert_eq!(motion_id(0x239), MotionId::new(2, 0x39));
+        assert_eq!(motion_id(0x02d), MotionId::new(0, 0x2d));
+        assert_eq!(dm_fallback(0x204), 0x200);
+        assert_eq!(dm_fallback(0x20d), 0x202);
+        assert_eq!(dm_fallback(0x208), 0x208);
+    }
+
+    #[test]
+    fn turns_take_the_short_way_and_stop_at_the_goal() {
+        let pi = std::f32::consts::PI;
+        assert!((turn_toward(0.0, 1.0, 0.1) - 0.1).abs() < 1e-6);
+        assert!((turn_toward(0.0, 0.05, 0.1) - 0.05).abs() < 1e-6);
+        // across the wrap: from just under pi to just over -pi goes up
+        let y = turn_toward(pi - 0.05, -pi + 0.05, 0.03);
+        assert!((y - (pi - 0.02)).abs() < 1e-5, "{y}");
+        assert!((yaw_to([0.0; 3], [1.0, 0.0, 0.0]) - pi / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn first_motions_of_the_actions() {
+        assert_eq!(first_motion(action::N_ATTACK1), Some(0x101));
+        assert_eq!(first_motion(action::N_ATTACK2), Some(0x102));
+        assert_eq!(first_motion(action::DASH_TRACE), Some(0x02c));
+        assert_eq!(first_motion(28), Some(0x36));
+        assert_eq!(first_motion(action::DIE_FRONT), Some(0x239));
+        assert_eq!(first_motion(500), None);
+    }
+}
