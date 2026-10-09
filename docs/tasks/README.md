@@ -116,3 +116,5 @@ Codex lane: see `docs/CODEX.md`.
 | [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | codex-1 | reassigned (WIP on branch) |
 | [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | codex-1 | reassigned (WIP on branch) |
 | [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | codex-1 | reassigned (WIP on branch) |
+| [story-order](story-order.md) | ddstory in the traced frame order + state accessor | core | claude-7 | assigned |
+| [host-integration](host-integration.md) | One player identity, per-crate save chunks, wire economy/progress/rift into ddhost | core | claude-10 | assigned |
