@@ -506,3 +506,30 @@ then the tables taunt (71), dash (13) and attack.
   unit sides (callbacks, result rewrite, action table) are per family.
 - The two missing goblin FSM processes (`Check Area Hit` 0x007aafd0, `Set
   QuestFlag` 0x007aad90).
+
+
+## Wolf and harpy registration (enemy-families, in progress)
+
+`ddai::thinktbl::families` reads the default wolf and harpy graphs with
+one shared record walker. Wolf initialization `0x008f06f0` installs
+`0x017ab188`; harpy initialization `0x0093cbd0` installs `0x01773ec0`.
+Their think runners `0x008f3830` and `0x0093b470` also pass grabbed tables
+`0x017c27b8` / `0x01779c20` to common selector `0x00aad940`.
+The indexed placement override arrays are not yet exposed by this API.
+
+Action registration calls `0x007f19c0` with 113 wolf and 76 harpy entries
+(EDI verified in assembly at `0x008f0747` and `0x0093a754`). Its input
+points to the DTI field, at `0x018386b0` / `0x01841370`, and advances by
+0x44. It does not point 0x28 bytes before that field. Action records and
+class names are read from the installed exe, not embedded.
+
+Harpy callbacks `0x0093bd60` / `0x0093bda0` are translated and tested:
+check 0 tests state +0x62b0 == 0; command 0 clamps its unsigned argument
+to 0 or 1; check 1 compares float +0x5860 against an unsigned threshold
+converted exactly by x87. That field's gameplay meaning remains unresolved.
+World-facing IDs >=1000 still belong to the common host callbacks.
+
+Installed-data tests parse both graphs and all registered classes, and
+verify that parameterizing the walker preserves the goblin roots and its
+grabbed graph. This is table/callback support only; flight, action phases,
+combat integration and original-game comparisons are not yet complete.

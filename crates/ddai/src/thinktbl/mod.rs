@@ -20,6 +20,7 @@
 //! callbacks (paths, line of sight, party state...) and rand.
 
 pub mod em0100;
+pub mod families;
 pub mod mgr;
 pub mod table;
 

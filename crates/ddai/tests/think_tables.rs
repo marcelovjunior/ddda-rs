@@ -16,6 +16,46 @@ struct Exe {
     classes: Vec<String>,
 }
 
+#[test]
+fn family_graphs_and_registered_actions() {
+    use ddai::thinktbl::families::Family;
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("E:/SteamLibrary/steamapps/common/DDDA/nativePC"));
+    let path = std::env::var_os("DDDA_EXE")
+        .map(PathBuf::from)
+        .or_else(|| ddexe::locate(&native).ok());
+    let Some(path) = path.filter(|p| p.is_file()) else {
+        eprintln!("SKIP family table tests: no DDDA.exe");
+        return;
+    };
+    let file = ddexe::ExeFile::open(path).unwrap();
+    let img = file.image().unwrap();
+    for (family, count, attack_id, attack_class) in [
+        (Family::Wolf, 113, 25, "cEm0200Bite"),
+        (Family::Harpy, 76, 29, "cEm0600ActAirAttack"),
+    ] {
+        let tables = family.tables(&img).unwrap();
+        assert_eq!(tables.root(0), Some(family.default_table()));
+        assert_eq!(tables.root(1), None);
+        assert!(tables.len() > 1);
+        assert!(tables.get(family.default_table()).is_ok());
+        let classes = family.action_classes(&img).unwrap();
+        assert_eq!(classes.len(), count);
+        assert_eq!(classes[attack_id], attack_class);
+    }
+    // Parameterizing the walk must preserve the goblin graph, including
+    // its out-of-band grabbed table, without changing indexed roots.
+    let goblin = Tables::read(&img).unwrap();
+    let roots = img.u32s(ddai::thinktbl::table::TABLES_VA, 31).unwrap();
+    let generic = Tables::read_roots(&img, roots, &[0x017e_c010]).unwrap();
+    assert_eq!(goblin.len(), generic.len());
+    for index in 0..31 {
+        assert_eq!(goblin.root(index), generic.root(index));
+    }
+    assert_eq!(goblin.get(0x017e_c010), generic.get(0x017e_c010));
+}
+
 fn exe() -> Option<&'static Exe> {
     static E: OnceLock<Option<Exe>> = OnceLock::new();
     E.get_or_init(|| {
