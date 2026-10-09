@@ -104,6 +104,12 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    /// Replaces the ground the prediction stands on (a guest that joined
+    /// before loading the host's world).
+    pub fn set_ground(&mut self, ground: Box<dyn Ground + Send>) {
+        self.ground = ground;
+    }
+
     pub fn rtt_ms(&self) -> f32 {
         self.link.rtt_ms
     }
