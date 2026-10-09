@@ -600,3 +600,20 @@ Wolf local check5 now has the sourced posed-joint4 horizontal cone helper
 normalizes only XZ and rejects missing joints or coincident horizontal
 points. Regression coverage includes facing, rear targets, yaw rotation
 and vertical-only separation. Connecting sensed targets remains host work.
+
+The wolf steering coefficient now resolves to the shared angle controller:
+`0x007975d0` sets goal/rate, `0x00797470` steps the shortest wrapped angle
+by rate times unit time, and `0x0084cc00` applies status-adjusted time.
+Regression tests cover both wrap directions, snapping and the minimum rate.
+
+An explicit per-owner Beast action runtime now executes the installed wolf
+bite phases and harpy takeoff/standard grounded death. It advances root
+motion, refreshes posed attack/hurt volumes and keeps fighter pools per
+instance. An installed-data regression runs each action twice, checks the
+motion sequences, owner IDs, attack activation and deterministic positions.
+Unsupported actions fail without replacing the current action. These are
+selected-action tests, not think-driven fights. Wolf death requests0x2ff
+(`0x00908660`), absent in its installed damage bank; the no-motion/corpse
+path is unresolved and remains unsupported rather than inventing a clip.
+Harpy corpse removal, status-time integration, target sensing and Fight/
+viewer dispatch also remain host work.

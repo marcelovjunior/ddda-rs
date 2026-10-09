@@ -56,6 +56,188 @@ impl BeastData {
     }
 }
 
+/// Runtime for actions whose phases have been traced. The family think host
+/// chooses actions separately; unsupported classes return an error rather
+/// than borrowing the goblin's motions or behaviour.
+#[derive(Debug)]
+pub struct Beast {
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub action: Option<usize>,
+    pub motion: MotionId,
+    pub frame: f32,
+    pub motion_ended: bool,
+    pub done: bool,
+    pub movement_flags: u32,
+    pub fighter: crate::combat::Fighter,
+    phase: ActionPhase,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ActionPhase {
+    None,
+    Bite(WolfBite),
+    Takeoff(HarpyTakeoff),
+    GroundDeath,
+}
+
+impl Beast {
+    pub fn new(data: &BeastData, owner: u32, pos: [f32; 3], yaw: f32) -> Self {
+        use crate::combat::{Attacker, Fighter, Victim};
+        Self {
+            pos,
+            yaw,
+            action: None,
+            motion: MotionId::new(0, 0),
+            frame: 0.0,
+            motion_ended: false,
+            done: true,
+            movement_flags: 0,
+            phase: ActionPhase::None,
+            fighter: Fighter {
+                owner,
+                attacker: Attacker::Enemy(data.attacker),
+                victim: Victim::Enemy {
+                    defender: data.defender,
+                    regions: data.regions.clone(),
+                    rates: Default::default(),
+                },
+                attacks: vec![],
+                hurts: vec![],
+                history: Default::default(),
+                statuses: Default::default(),
+                dots: Default::default(),
+                pools: Default::default(),
+            },
+        }
+    }
+
+    /// Only standard em0200/em0600 forms are handled here. Wolf death
+    /// requests missing motion0x2ff (0x00908660); its no-motion/corpse path
+    /// is unresolved. Alternate harpy forms and flying death are unsupported.
+    pub fn start_action(&mut self, data: &BeastData, id: usize) -> Result<(), String> {
+        let action = data.actions.get(id).ok_or("family action outside table")?;
+        let (phase, motion) = match (data.family, action.class.as_str(), action.variant) {
+            (Family::Wolf, "cEm0200Bite", _) => {
+                (ActionPhase::Bite(WolfBite::Windup), WolfBite::Windup.motion())
+            }
+            (Family::Harpy, "cEm0600ActGroundToHover", _) => (
+                ActionPhase::Takeoff(HarpyTakeoff::TakingOff),
+                HarpyTakeoff::initial_motion(),
+            ),
+            // 0x009471f0: standard harpy, no special subtype32/33 state.
+            (Family::Harpy, "cEm0600ActDie", _) => (ActionPhase::GroundDeath, MotionId::new(2, 0x39)),
+            _ => {
+                return Err(format!(
+                    "unported {:?} action {id}: {} variant{}",
+                    data.family, action.class, action.variant
+                ))
+            }
+        };
+        if data.body.motion(motion).is_none() {
+            return Err(format!("missing family motion {motion:?}"));
+        }
+        self.action = Some(id);
+        self.phase = phase;
+        self.done = false;
+        self.motion = motion;
+        self.frame = 0.0;
+        self.motion_ended = false;
+        Ok(())
+    }
+
+    /// Action phase91 then motion phase92, as in the existing goblin runtime.
+    /// The caller supplies captured target and world ground. This is action
+    /// execution, not a substitute for the family's unconnected think host.
+    pub fn step_action(
+        &mut self,
+        data: &BeastData,
+        target: Option<[f32; 3]>,
+        ground: &dyn ddsim::Ground,
+        dt: f32,
+    ) {
+        let mut next = None;
+        self.movement_flags = 0;
+        match &mut self.phase {
+            ActionPhase::Bite(bite) => {
+                if bite.tracks_target(self.frame) {
+                    if let Some(target) = target {
+                        // Wolf phase91 0x008f0ff0 / target yaw0x008f5550.
+                        let goal = (target[0] - self.pos[0]).atan2(target[2] - self.pos[2]);
+                        self.yaw = wolf_turn(self.yaw, goal, 0.1, dt);
+                    }
+                }
+                if self.motion_ended && *bite != WolfBite::Finished {
+                    bite.motion_end();
+                    self.done = *bite == WolfBite::Finished;
+                    if !self.done {
+                        next = Some((bite.motion(), 0.0));
+                    }
+                }
+            }
+            ActionPhase::Takeoff(takeoff) => {
+                let result = takeoff.step(self.frame, self.motion_ended);
+                self.movement_flags = result.movement_flags;
+                self.done = result.done;
+                next = result.motion;
+            }
+            ActionPhase::GroundDeath => {
+                // 0x009086f0 / 0x009472c0: animation end hands off to
+                // corpse cleanup. That cleanup remains host work.
+                self.done = self.motion_ended;
+            }
+            ActionPhase::None => return,
+        }
+        if let Some((motion, frame)) = next {
+            self.motion = motion;
+            self.frame = frame;
+            self.motion_ended = false;
+        }
+        self.advance(data, dt);
+        if self.movement_flags & 1 == 0 {
+            if let Some(y) = ground.height(self.pos[0], self.pos[2], self.pos[1]) {
+                self.pos[1] = y;
+            }
+        }
+        let pose = data.body.pose(self.motion, self.frame, self.pos, self.yaw);
+        let active = data.body.activations(self.motion, self.frame);
+        (self.fighter.attacks, self.fighter.hurts) = data.body.volumes(&active, &pose, self.fighter.owner);
+    }
+
+    // Shared animation phase92: 0x010629f0 / root travel0x0105b740,
+    // DDDA.exe 2017-12-13 Steam. Same loop convention as goblin::advance.
+    fn advance(&mut self, data: &BeastData, dt: f32) {
+        let Some(motion) = data.body.motion(self.motion) else {
+            return;
+        };
+        let root = ddsim::RootMotion::from_motion(motion);
+        let looping = motion.loop_frame >= 0;
+        let delta = if looping {
+            root.delta(self.frame, dt)
+        } else {
+            root.delta_once(self.frame, dt)
+        };
+        let (sin, cos) = self.yaw.sin_cos();
+        self.pos[0] += delta[0] * cos + delta[2] * sin;
+        self.pos[1] += delta[1];
+        self.pos[2] += -delta[0] * sin + delta[2] * cos;
+        let last = motion.frame_count.saturating_sub(1) as f32;
+        let frame = self.frame + dt;
+        if looping {
+            let begin = motion.loop_frame as f32;
+            self.frame = if frame > last {
+                begin + (frame - last).rem_euclid((last - begin).max(1.0))
+            } else {
+                frame
+            };
+            self.motion_ended = frame > last;
+        } else {
+            self.frame = frame.min(last);
+            self.motion_ended = frame >= last;
+        }
+    }
+}
+
 /// The three sequential bite motions; transitions occur on motion end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WolfBite {
@@ -126,6 +308,53 @@ pub fn harpy_turn(yaw: f32, goal: f32, cap: f32, divisor: f32, frames: f32) -> f
         goal
     } else {
         yaw + step
+    }
+}
+
+/// The shared angle controller used by the wolf's phase91 steering.
+/// The coefficient is radians per 30-Hz unit frame, not interpolation gain.
+/// The caller supplies status-adjusted unit time (0x0084cc00).
+// Translated from 0x007975d0 and 0x00797470 (DDDA.exe 2017-12-13 Steam).
+pub fn wolf_turn(yaw: f32, goal: f32, coefficient: f32, frames: f32) -> f32 {
+    fn wrap(angle: f32) -> f32 {
+        let mut a = angle - (angle * 0.159_154_94) as i32 as f32 * 6.283_185_5;
+        if angle < 0.0 {
+            a += 6.283_185_5;
+        }
+        if a >= 3.141_592_7 {
+            a -= 6.283_185_5;
+        }
+        a
+    }
+    let goal = wrap(goal);
+    let (mut a, mut b) = (goal, yaw);
+    if yaw * goal < 0.0 {
+        if goal < 0.0 {
+            a += 6.283_185_5;
+        }
+        if yaw < 0.0 {
+            b += 6.283_185_5;
+        }
+        let delta = a - b;
+        if delta.abs() > 3.141_592_7 {
+            if b <= a {
+                a = delta;
+                b = 6.283_185_5;
+            } else {
+                b -= a;
+                a = 6.283_185_5;
+            }
+        }
+    }
+    let delta = a - b;
+    if delta.abs() < f32::EPSILON {
+        return goal;
+    }
+    let step = coefficient.max(f32::EPSILON) * frames;
+    if delta.abs() < step {
+        goal
+    } else {
+        wrap(yaw + if delta < 0.0 { -step } else { step })
     }
 }
 
@@ -276,6 +505,16 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wolf_steering_uses_rate_times_unit_time_and_short_wrapped_route() {
+        assert!((wolf_turn(0.0, 1.0, 0.1, 0.5) - 0.05).abs() < 1e-6);
+        assert!((wolf_turn(0.0, -1.0, 0.1, 0.5) + 0.05).abs() < 1e-6);
+        assert!((wolf_turn(3.1, -3.1, 0.1, 0.5) + 3.1331854).abs() < 1e-6);
+        assert!((wolf_turn(-3.1, 3.1, 0.1, 0.5) - 3.1331854).abs() < 1e-6);
+        assert!((wolf_turn(0.0, 0.02, 0.1, 1.0) - 0.02).abs() < 1e-6);
+        assert_eq!(wolf_turn(0.0, 1.0, 0.0, 1.0), f32::EPSILON);
+    }
 
     #[test]
     fn harpy_takeoff_releases_ground_after18_and_finishes_after_hover_entry() {
