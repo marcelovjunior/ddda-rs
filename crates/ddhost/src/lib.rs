@@ -27,6 +27,8 @@ pub mod systems;
 
 /// The fight runtime the host composes (`Host::fight`), for views.
 pub use ddenemyrt;
+/// The NPC runtime the host composes (`Host::npcs`), for views.
+pub use ddnpcrt;
 
 pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};

@@ -40,13 +40,44 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     /// Pass A line 15 for NPCs: one frame of every scheduled NPC.
+    ///
+    /// An NPC whose graphs need what ddnpcrt does not translate yet (e.g.
+    /// the `cAIActionFSMNpc.Timer` variables) leaves the schedule with its
+    /// error noted in `Host::npc_errors`, instead of stopping the frame for
+    /// everyone. It stays where it was (`Host::npc_parked`), and can still
+    /// be talked to.
     pub(crate) fn step_npcs(&mut self) -> Result<Vec<ddnpcrt::schedule::Request>, HostError> {
         let (Some(data), Some(story)) = (self.data.npc.clone(), self.story.as_ref()) else {
             return Ok(vec![]);
         };
-        self.npcs
-            .step(&*data, &story.world, self.clock.seconds(), &[])
-            .map_err(|e| HostError::Npc(e.to_string()))
+        match self.npcs.step(&*data, &story.world, self.clock.seconds(), &[]) {
+            Ok(r) => Ok(r),
+            Err(_) => {
+                // find the NPCs that fail on their own and drop them
+                let clock = ddnpcrt::schedule::Clock {
+                    hour: story.world.hour,
+                    minute: story.world.minute,
+                    dt: self.clock.seconds(),
+                };
+                let ids: Vec<u32> = self.npcs.npcs.keys().copied().collect();
+                let mut out = vec![];
+                for id in ids {
+                    let Some(npc) = self.npcs.npcs.get_mut(&id) else { continue };
+                    match npc.step(&*data, clock) {
+                        Ok(r) => out.extend(r),
+                        Err(e) => {
+                            if let Some(n) = self.npcs.npcs.remove(&id) {
+                                if let Some(p) = n.position() {
+                                    self.npc_parked.insert(id, p);
+                                }
+                            }
+                            self.npc_errors.push((id, e.to_string()));
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
     }
 
     /// Seat `player` talks to NPC `npc`. Refused while the other Arisen

@@ -247,13 +247,17 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         let report = self.host.tick(&inputs)?;
         let bodies: Vec<Body> = self.host.sim.players.iter().map(Body::of).collect();
         let (vitals, enemies) = mirror::from_fight(self.host.fight.as_ref());
-        self.history.push_back(Snapshot { frame: report.frame, base: None, cmd_newest: None, bodies, vitals, enemies });
+        let npcs = mirror::npcs_of(&self.host.npcs, &self.host.npc_parked);
+        self.history.push_back(Snapshot { frame: report.frame, base: None, cmd_newest: None, bodies, vitals, enemies, npcs });
         if self.history.len() > HISTORY {
             self.history.pop_front();
         }
         for (addr, r) in self.clients.iter_mut() {
             for q in &report.requests {
                 r.link.send_reliable(ToClient::Story { frame: report.frame, text: format!("{q:?}") }.encode());
+                if let ddstory::Request::PlayEvent { row, .. } = q {
+                    r.link.send_reliable(ToClient::PlayEvent { frame: report.frame, row: *row as u32 }.encode());
+                }
             }
             let payload = r.seat.map(|_| {
                 let base = r.snapshot_ack.and_then(|a| self.history.iter().find(|s| s.frame == a));
