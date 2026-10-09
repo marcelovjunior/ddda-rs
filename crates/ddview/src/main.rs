@@ -32,6 +32,7 @@ mod net;
 mod opening;
 mod play;
 mod items;
+mod skills;
 mod hud;
 mod pause;
 mod sky;
@@ -759,6 +760,8 @@ fn setup(
             Ok(mut state) => {
                 state.demo = args.demo;
                 if args.host.is_none() && args.join.is_none() {
+                    skills::equip(&mut state.sim, &state.locals, args.save_xml.as_deref().map(String::as_str));
+                    info!("skills: slots 1-6 (P1), Numpad4-9 (P2); base-level supported actions");
                     if let Some(xml) = args.save_xml.as_deref() {
                         match items::QuickItems::load(&vfs, xml, &state.locals) {
                             Ok(items) => {

@@ -963,7 +963,7 @@ and the World mirror; the live level-7 Mage values (#722).
 5. **Level-3 skills from equipment** (with claude-6): item flag bit 29 and
    skill ids in item data.
 
-## Equipped skill runtime (in progress)
+## Equipped skill runtime
 
 `ddskill::magic` reads `rMagicActParamList` (`map\0`, version 4) from the
 installation. Loader 0x00CC71A0 allocates 0x490-byte objects; 0x00825F80,
@@ -987,9 +987,14 @@ The base spell path follows chant/release/end phases at 0x00B456C0,
 0x00B45DD0 and 0x00B47890. Ingle/Levin select shell groups through action
 record parameters and the runtime magic list. The current checkpoint
 loads four motion banks and runs all four actions headlessly, charging
-once and keeping a second player independent. Damage, viewer keys,
-higher levels, manual targeting, chant sharing and LAN skill activation
-are not implemented at this checkpoint. No live comparison is claimed.
+once and keeping a second player independent. Fight integration damages
+installed goblins with all four actions. Ingle creates its hit child;
+Levin produces its delayed strikes, with each shell's damage attributed
+to the casting seat. Broad Cut/Tusk Toss use push-out ranks 15/14 from
+their constructors (0x00B3E0E0/0x00B3E7D0). The Tusk Toss test places its
+target from the installed attack geometry: a target 100 cm straight
+ahead is still missed, and original movement/targeting is not validated.
+No live comparison is claimed.
 
 Shell checkpoint: `skills::spells` loads Ingle's speed shell and hit child,
 and Levin's three delayed lightning shells. C12F70/C12D60 provide the
@@ -1002,3 +1007,23 @@ posed chant-ball joint and offset from the magic data (B4A090), not a
 fixed height. The deterministic RNG is a co-op adapter: the original RNG
 algorithm is unresolved. Target selection is supplied by the host; free
 aim/lock selection and wall impacts remain incomplete.
+
+Runtime limits: only the base action level is executed; equipped augments,
+weapon-level cost penalties, higher skill levels, held release/cancel
+windows, sustained Anodyne healing and chant sharing are not connected.
+Until cancel arbitration is traced, a skill key does not interrupt a
+basic attack or staff shot. A host-forced state change clears the skill
+sidecar. Skill input is per player but absent from the LAN wire protocol.
+Shell visual effects/audio and world-wall impacts are not implemented.
+
+Offline `ddview --play` binds slots 1–6 to the digit keys for P1 and
+Numpad 4–9 for P2. `--save` reads the Arisen's six `mWeaponSkill` slots
+from the manual save; unsupported IDs remain in place and do nothing.
+Extra local seats do not inherit the saved Arisen's skills. Without a
+save, preview slots 1/2 contain Broad Cut/Tusk Toss (`--kit fighter`) or
+Ingle/Levin (`--kit mage`). These preview slots are not progression
+unlocks. The animation cache includes skill ID, so shared motion numbers
+cannot select another spell's bank. Keys are inactive in pause, opening
+and network sessions. Regression checks send these actual key bindings
+through each installed action, verify its animation exists and charge
+once; separate Fight tests check damage and casting-seat attribution.
