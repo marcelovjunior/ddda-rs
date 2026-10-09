@@ -14,6 +14,38 @@ use ddquest::order::Fields;
 use mtfsm::{Parameter, Record};
 use std::sync::Arc;
 
+/// Observed stage-100 collision cells, corresponding to completed (status 3)
+/// entries in uStageSplitCtrl +0x7c/+0x88. This is not a wanted-cell list.
+/// Grid values must come from the installed stage descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedFieldCells {
+    pub origin: [f32; 2],
+    pub cell: [f32; 2],
+    /// Filename offsets in X/Z (N/M) order.
+    pub name_offset: [i32; 2],
+    /// Completed cells in filename (M, N) order.
+    pub loaded: Vec<(i32, i32)>,
+}
+
+impl LoadedFieldCells {
+    /// Translated from 0x005072e0 and 0x00c5f630
+    /// (DDDA.exe 2017-12-13 Steam). Conversion truncates toward zero,
+    /// unlike the general streaming candidate-grid floor operation.
+    pub fn contains(&self, pos: [f32; 3]) -> bool {
+        if self.cell.iter().any(|v| !v.is_finite() || *v <= 0.0)
+            || self.origin.iter().any(|v| !v.is_finite())
+            || !pos[0].is_finite() || !pos[2].is_finite() {
+            return false;
+        }
+        let n = ((pos[0] - self.origin[0]) / self.cell[0]) as i32;
+        let m = ((pos[2] - self.origin[1]) / self.cell[1]) as i32;
+        let (Some(n), Some(m)) = (n.checked_add(self.name_offset[0]), m.checked_add(self.name_offset[1])) else {
+            return false;
+        };
+        self.loaded.contains(&(m, n))
+    }
+}
+
 /// An XFS object as an owned record (same shape mtfsm uses).
 pub fn to_record(x: &mtxfs::Xfs, o: &mtxfs::Object) -> Record {
     let c = x.class_of(o);
@@ -67,6 +99,19 @@ fn v3(a: &[f32]) -> [f32; 3] {
 }
 
 impl Zone {
+    /// Static scenario shape anchor from 0x007450e0. This is not always
+    /// the volume centre: area height is removed, boxes use bottom Y,
+    /// and cylinders use their first endpoint (shape type 6).
+    fn detection_anchor(&self) -> [f32; 3] {
+        match self {
+            Zone::Area { v, .. } => std::array::from_fn(|i| (v[0][i] + v[1][i] + v[2][i] + v[3][i]) * 0.25),
+            Zone::Sphere { c, .. } => *c,
+            Zone::Cylinder { p0, .. } => *p0,
+            Zone::Obb { m, ext } => [m[3][0], m[3][1] - ext[1], m[3][2]],
+            Zone::Aabb { min, max } => [(min[0] + max[0]) * 0.5, min[1], (min[2] + max[2]) * 0.5],
+        }
+    }
+
     pub fn from_record(z: &Record) -> Result<Zone, Error> {
         let bad = || Error::Data(format!("zone {:?}", z.class_name));
         Ok(match z.class_name {
@@ -388,7 +433,20 @@ impl Scenarios {
                     return Err(Error::Unimplemented(format!("detection flags {flags:#x} ({})", e.name)));
                 }
                 if stage == 100 {
-                    return Err(Error::Unimplemented("stage 100 detection range rule (0x00443a60)".into()));
+                    let anchor = shape.zone.detection_anchor();
+                    // 0x00742810: loaded collision cell OR squared distance
+                    // <=225000000 (15000 cm). 0x00443a60 supplies the Arisen
+                    // world position, or zero when absent. Co-op extension:
+                    // any Arisen admits the volume, never only the followed seat.
+                    let in_range = |pos| {
+                        let d = sub(anchor, pos);
+                        d[1] * d[1] + d[0] * d[0] + d[2] * d[2] <= 225_000_000.0
+                    };
+                    let near = if inputs.players.is_empty() { in_range([0.0; 3]) }
+                        else { inputs.players.iter().any(|player| in_range(player.pos)) };
+                    if !near && !inputs.loaded_field_cells.as_ref().is_some_and(|cells| cells.contains(anchor)) {
+                        continue;
+                    }
                 }
                 if flags & 0x1f != 0 {
                     let members = if flags & 0xf != 0 { flags & 0xf } else { 0xf };
@@ -825,6 +883,80 @@ fn collect(r: &Record, out: &mut Vec<Record>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn enemy_area(anchor: [f32; 3]) -> Scenarios {
+        Scenarios { tasks: vec![vec![Entry {
+            name: "range fixture".into(),
+            param: Param { task: 0, boot: 0, check: 0, gsf: -1, detect: 0x20, priority: 0 },
+            shape: Some(Shape { zone: Zone::Sphere { c: anchor, r: 1.0 }, angle: None, toward: None }),
+            arg: None, status: 4, mask: 0, prev: 0, ended: false,
+        }]], ..Default::default() }
+    }
+
+    #[test]
+    fn field_detection_has_inclusive_3d_range_and_any_arisen_admission() {
+        let mut areas = enemy_area([50_000.0, 0.0, 0.0]);
+        let player = |pos| crate::Player { pos, yaw: 0.0 };
+        let mut input = Inputs {
+            players: vec![player([35_000.0, 0.0, 0.0])],
+            enemies: vec![player([50_000.0, -25.0, 0.0])], ..Default::default()
+        };
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0x20, "distance equality admits");
+        input.players[0].pos[1] = 100.0;
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0, "vertical separation matters and stale masks clear");
+        input.players.push(player([50_000.0, 0.0, 0.0]));
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0x20, "second Arisen admits independently");
+        input.players.clear();
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0, "absent actor position falls back to zero");
+        areas.detect(200, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0x20, "whole stages have no range filter");
+    }
+
+    #[test]
+    fn loaded_collision_exception_requires_matching_cell_and_preserves_shape_test() {
+        let mut areas = enemy_area([50_000.0, 0.0, 0.0]);
+        let mut input = Inputs {
+            players: vec![crate::Player::default()],
+            enemies: vec![crate::Player { pos: [50_000.0, -25.0, 0.0], yaw: 0.0 }],
+            loaded_field_cells: Some(LoadedFieldCells {
+                origin: [0.0; 2], cell: [10_000.0; 2], name_offset: [30, 40], loaded: vec![(40, 35)],
+            }), ..Default::default()
+        };
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0x20);
+        input.enemies[0].pos[0] += 10.0;
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0, "loaded cell does not fabricate a hit");
+        input.enemies[0].pos[0] -= 10.0;
+        input.loaded_field_cells.as_mut().unwrap().loaded.clear();
+        areas.detect(100, &input).unwrap();
+        assert_eq!(areas.tasks[0][0].mask, 0, "unloaded cell stops far detection");
+    }
+
+    #[test]
+    fn field_cell_lookup_truncates_and_uses_filename_axis_order() {
+        let cells = LoadedFieldCells { origin: [10.0, 20.0], cell: [10.0, 10.0],
+            name_offset: [100, 200], loaded: vec![(200, 100)] };
+        assert!(cells.contains([9.0, 99_999.0, 19.0]));
+        assert!(!cells.contains([0.0, 0.0, 19.0]));
+        assert!(!cells.contains([20.0, 0.0, 20.0]));
+    }
+
+    #[test]
+    fn detection_anchor_preserves_source_bottom_and_endpoint_rules() {
+        let area = Zone::Area { v: [[0.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 6.0, 4.0], [0.0, 6.0, 4.0]],
+            bottom: 99.0, height: 20.0, cross: [0.0; 3], convex: true, concave_status: 0 };
+        assert_eq!(area.detection_anchor(), [2.0, 4.0, 2.0]);
+        assert_eq!(Zone::Cylinder { p0: [1.0, 2.0, 3.0], p1: [8.0, 9.0, 10.0], r: 2.0 }.detection_anchor(), [1.0, 2.0, 3.0]);
+        assert_eq!(Zone::Aabb { min: [0.0, 2.0, 4.0], max: [6.0, 8.0, 10.0] }.detection_anchor(), [3.0, 2.0, 7.0]);
+        let mut m = [[0.0; 4]; 4];
+        m[3] = [5.0, 8.0, 9.0, 1.0];
+        assert_eq!(Zone::Obb { m, ext: [1.0, 3.0, 2.0] }.detection_anchor(), [5.0, 5.0, 9.0]);
+    }
 
     #[test]
     fn obb_and_cylinder() {
