@@ -20,6 +20,15 @@ const CALLS: usize = 16;
 /// What the enemy supplies to the think: the callbacks the uEm installs in
 /// `cThinkMgr` (uEm0100 at 0x008cef02..0x008cef16) and the game's rand.
 pub trait Host {
+    /// The think's owning uObjModel (+0x123c), used to construct point
+    /// targets in owner-relative coordinates. No owner means the original
+    /// command fails its owner/type check.
+    fn owner_pose(&self) -> Option<([f32; 3], f32)> {
+        None
+    }
+    /// Optional +0x58 notification after 0x008b8170 copies a generated
+    /// target into its slot. The default represents a null callback.
+    fn generated_target(&mut self, _index: usize, _slot: &mut Slot) {}
     /// +0x4c, a row/condition check with id `id` and argument `arg`
     /// (uEm0100: 0x008ea7a0, which sends ids below 1000 to 0x008ea7e0 and
     /// the rest to uEm 0x008ab100).
@@ -59,6 +68,8 @@ pub struct Slot {
     pub selectable: bool,
     /// +0x68 mask tested by 0x008bc3b0 (commands 0x41/0x42).
     pub selection_mask: u32,
+    /// +0x6c, auxiliary mask assigned by generated-point commands.
+    pub auxiliary_mask: u32,
     /// +0x10: the thinker's position at measurement.
     pub self_pos: [f32; 3],
     /// +0x20: the target's position.
@@ -99,6 +110,7 @@ impl Default for Slot {
             valid: false,
             selectable: false,
             selection_mask: 0,
+            auxiliary_mask: 0,
             self_pos: [0.0; 3],
             pos: [0.0; 3],
             radius: 0.0,
@@ -1168,6 +1180,47 @@ impl ThinkMgr {
                 }
                 true
             }
+            // 0x008ba2a0 case 0x5f: rotate row +0x8c/+0x90/+0x94 by
+            // owner yaw + selected target bearing, then offset owner position.
+            0x5f => {
+                let Some((position, yaw)) = host.owner_pose() else {
+                    return self.tail(rec, false, interp);
+                };
+                let Some(target) = self.slot(self.cur) else {
+                    return self.tail(rec, false, interp);
+                };
+                let destination = rec.word(0x3c) as usize;
+                if destination == SLOTS {
+                    return Err(Error::Unimplemented(
+                        "generated point automatic slot allocation".into(),
+                    ));
+                }
+                if destination >= SLOTS {
+                    return self.tail(rec, false, interp);
+                }
+                let angle = yaw + target.angle * 0.017_453_292;
+                let (sin, cos) = angle.sin_cos();
+                let offset = [rec.float(0x8c), rec.float(0x90), rec.float(0x94)];
+                let point = [
+                    position[0] + offset[0] * cos + offset[2] * sin,
+                    position[1] + offset[1],
+                    position[2] - offset[0] * sin + offset[2] * cos,
+                ];
+                let mut slot = Slot::measure(position, yaw, point, 0.0, 0);
+                slot.selectable = true;
+                slot.selection_mask = 0x0100_0000;
+                slot.auxiliary_mask = b;
+                slot.x7c = 8;
+                slot.x80 = a;
+                self.slots[destination] = slot;
+                host.generated_target(destination, &mut self.slots[destination]);
+                if !*bd {
+                    *bd = true;
+                    self.history = [SLOTS as u32; SLOTS];
+                    self.history_len = 0;
+                }
+                self.select(destination as u32)
+            }
             0x62 => {
                 if let Some(s) = self.slots.get_mut(a as usize) {
                     *s = Slot::default();
@@ -1243,7 +1296,7 @@ impl ThinkMgr {
                 self.f1210 = false;
                 true
             }
-            0x40 | 0x41 | 0x4e | 0x5c..=0x61 | 0x63 | 0x64 | 0x7a | 0x7b => {
+            0x40 | 0x41 | 0x4e | 0x5c..=0x5e | 0x60 | 0x61 | 0x63 | 0x64 | 0x7a | 0x7b => {
                 return Err(Error::Unimplemented(format!(
                     "think command {code:#x} at {:#010x}",
                     rec.va
@@ -1938,6 +1991,60 @@ mod tests {
     }
 
     const T: u32 = 0x1000;
+
+    #[test]
+    fn generated_point_rotates_by_owner_yaw_and_target_bearing() {
+        struct Positioned;
+        impl Host for Positioned {
+            fn owner_pose(&self) -> Option<([f32; 3], f32)> {
+                Some(([10.0, 20.0, 30.0], std::f32::consts::FRAC_PI_2))
+            }
+            fn check(&mut self, _: u32, _: u32) -> Result<bool, Error> {
+                Ok(false)
+            }
+            fn set(&mut self, _: u32, _: u32) -> Result<u32, Error> {
+                Ok(0)
+            }
+            fn rand(&mut self) -> u32 {
+                0
+            }
+        }
+        let mut m = mgr(T, at(100.0, -90.0));
+        m.cur = 0;
+        let rec = with(
+            with(
+                with(with(row(T, 0, 1), 0x3c, 6), 0x8c, 40.0f32.to_bits()),
+                0x90,
+                7.0f32.to_bits(),
+            ),
+            0x94,
+            (-500.0f32).to_bits(),
+        );
+        m.command(&mut Positioned, &rec, 0x5f, 0, 9, 0x400, &mut false, true)
+            .unwrap();
+        let s = &m.slots[6];
+        for (actual, expected) in s.pos.into_iter().zip([50.0, 27.0, -470.0]) {
+            assert!((actual - expected).abs() < 0.001);
+        }
+        assert_eq!(
+            (m.cur, s.obj, s.selection_mask, s.auxiliary_mask, s.x7c, s.x80),
+            (6, 0, 0x0100_0000, 0x400, 8, 9)
+        );
+        assert!(s.valid && s.selectable);
+        assert_eq!(&m.history[..m.history_len as usize], &[6]);
+
+        // A missing model owner must leave the destination untouched.
+        m.slots[6] = Slot::default();
+        m.cur = 0;
+        m.command(&mut Fixed { roll: 0 }, &rec, 0x5f, 0, 9, 0x400, &mut false, true)
+            .unwrap();
+        assert!(!m.slots[6].valid);
+        assert_eq!(m.cur, 0);
+        m.slots[0].valid = false;
+        m.command(&mut Positioned, &rec, 0x5f, 0, 9, 0x400, &mut false, true)
+            .unwrap();
+        assert!(!m.slots[6].valid);
+    }
 
     #[test]
     fn masked_selection_uses_nearest_eligible_slot_and_stable_ties() {
