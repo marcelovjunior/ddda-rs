@@ -255,12 +255,91 @@ sequence 2 (group 2, attack 0: `mAttackRate` 0.8 strike) is on for
 **frames 45..48**, the swing's hit window. Read any list with
 `cargo run -p ddcombat --example lmt_hits -- <nativePC> <motion list>`.
 
-Gaps: what reads group-0 bits 16..31 (set in 2,963 of 9,158 motions; the
-loop above stops at bit 15) and groups 1..3; how `mRelation` and the
-history key are consumed (`FUN_0076EAF0` matches history entries by
-victim and the key's low 16 bits, `FUN_0076EB60` records them; the
-multi-hit rule they implement is not read to the end); the non-actor
-path of `FUN_0076F2D0` (16 entries per bit of +0xD3C).
+Other readers of the event block (all through `FUN_01057060`) do not
+place hit volumes: `cMotionSeqCount` (0x0082B452, any group, used by
+actions and AI for timing windows), `nCollision::cMotionSequenceSupport`
+(0x01108819, scenery collision per sequence page), `0x010852B5` (group
+from a byte at +0x6A), and enemy action code at 0x00A51AF0 / 0x00A6E4E6
+(group 0 over frame ranges). So group-0 bits 16..31 (set in 2,963 of
+9,158 motions) and groups 1..3 are timing flags for actions, not hits;
+which bit means what is per action and is left to the action work. The
+non-actor path of `FUN_0076F2D0` (a fixed 16-entry table per bit of
++0xD3C) is not used by characters.
+
+### 2.2 Volumes on joints and the shape tests (traced)
+
+- **Points** (`FUN_00CCDE30` with `FUN_00CCE190`): a node point is its
+  offset as a row vector times the joint's world matrix with rows 0..2
+  normalized (joint scale removed). Joint -1 is the model's world matrix
+  (`uModel`+0xB0); -3/-4/-5/-6 are the midpoint of the offset placed on
+  joints 14 & 18, 15 & 19, 16 & 20, 17 & 21 (`mov edi, 0xe / 0x12`, ...);
+  -2 is a Y rotation at the world origin by an angle argument (*source not
+  traced*); a joint the model lacks uses the identity, so the point is the
+  offset itself.
+- **Volume** (`FUN_00773830`, every frame for every live entry): radius =
+  `mRadius` x the owner's scale (the mean of owner +0x60..+0x68; entry
+  flag 0x318 bit 6 is set by default in `FUN_007735C0`). Shape 0 is a
+  capsule p0..p1; 1 a sphere at p0; 4 a capsule pulled in by the radius
+  at both ends, or, when the points are closer than two radii, a sphere one
+  radius from p0 towards p1. The entry carries an `MtGeomCapsule`
+  (+0xA0: points +0xB0 / +0xC0, radius +0xD0) or `MtGeomSphere` (+0xE0:
+  centre +0xF0, radius +0xFC); `FUN_0076B660` hands it to the generic
+  `sCollision` broadphase (a grid, `FUN_0116E820`), hurt-side entries as
+  queries with the pair callback `0x0076D730`.
+- **Tests** (the `MtGeom` double-dispatch slots call `MtCollision`
+  functions): sphere-sphere `0x00D13600`, capsule-sphere `0x00D139A0`,
+  capsule-capsule `0x00D154E0` (segment-segment squared distance
+  `0x00D54B20`, point-segment `0x00D54AE0`). All hit when the squared
+  core distance is **<=** the squared sum of radii (touching counts); a
+  capsule with coincident points (length^2 < 1.19e-7) acts as a sphere.
+  Only current positions are tested: there is no sweep between frames.
+
+### 2.3 Which pairs count, and repeated hits (traced)
+
+- **Pair callback** `0x0076D730` (attacker entry, victim entry): the same
+  owner is rejected unless `mIsOwnHit`; `mIsPlNoHit` / `mIsEmNoHit` /
+  `mIsEtcNoHit` / `mIsNpcNoHit` reject a victim group of `mKind` 0 / 1 /
+  2 / 3. The kinds then decide: bit `0x0150A5A0[victim kind]` must be in
+  `0x0150A5E8[attacker kind]` (kind 1 enemies hit kinds 0, 2, 3, 4; kind 0
+  hits 1, 2, 3, 4, 7); otherwise only the friendly-hit flags open it (row 2
+  of that table, then the team matrix `0x0150A630` by the collisions'
+  +0xD30 teams). `mIsFriendHitDamage1_2` / `1_4` / `0` set a factor 0.5 /
+  0.25 / 0 stored at the victim entry +0x174 (*consumer not traced*).
+  Accepted pairs become `NodeHitInfo`s (hurt node at +0x10, attack node at
+  +0x350) on the victim's lists.
+- **Ignore zones** (`FUN_00779B10`): a contact inside one of the victim's
+  ignore volumes (+0xDA8 list: capsule, sphere, AABB, OBB) is dropped.
+- **Same-frame dedup** (`FUN_00779860`): per attacker, contacts with the
+  same key or the same non-zero `mRelation` collapse to one; the hurt node
+  with the lower `mHitPrio` wins (goblin head 1 beats body 5).
+- **History** (victim `cObjCollision`+0xC04): an entry is (attacker, key,
+  `mRelation`, timer). The key is entry+0x178 =
+  `(SeqIndex.mNo << 8 | Group.mNo) << 16` (the low half, entry+0x184, is
+  0 for the per-frame entries `FUN_007735C0` builds). `FUN_0076EAF0`
+  blocks damage when the attacker has an entry with the same key, or with
+  the same non-zero `mRelation`. Every contact is recorded for the frame
+  (`FUN_0076EB60`, up to 0x40). At the end of the frame (`FUN_0076ECA0`)
+  a plain entry survives only if the same contact happened again this
+  frame; an entry with a non-zero `mRelation` survives while the
+  attacker's flag +0x1EC1 is clear; an `mMultiHit` entry keeps a timer of
+  `mResetTime` frames that `FUN_0076EF10` counts down by the attacker's
+  step and that frees the attack to hit again. New contacts are then
+  added.
+- Result: **an attack sequence hits a target once per continuous
+  contact**; a multi-hit attack again every `mResetTime` frames; all
+  sequences sharing a non-zero `mRelation` count as one swing.
+- Not modelled: the wall check `FUN_00779270` (a ray from the attacker
+  to the victim for owners with `uObjModel`+0x1E7C set), the extra check
+  `FUN_0076F020`, and +0x1EC1.
+
+Goal check (`ddcombat` tests): the goblin's first attack (`e0100_at`
+motion 1, sequence 2: sphere r 60 at offset (30, 20, 50) of joint 8)
+against a standing Arisen (`collision\pl\m0000` hurt group 1: head
+sphere r 25 on joint 4, body shape-4 capsule r 30 between joints 1 and 2)
+with rigid poses gives **exactly one hit, on frame 45**, out to a
+distance of 50 + sqrt(90^2 - 30^2 - 15^2) = **133.5** between the roots,
+and none beyond (animated joints change the numbers; the poses are an
+input).
 
 ## 3. The attacker's value
 
@@ -480,7 +559,9 @@ slash 1, element-0 multiplier 1, body region, `mDamageAdj` 1, class 1.
 | stagger | DP 100 - 100 * (P.stagger/100) * 1 * 1 = 0 → **flinch** at default stagger power |
 | knockdown | none (`mBlowType` 3) |
 
-Concrete numbers: a level-1 Fighter (`param\pl\level\lvfighter` row 1
+Concrete numbers (the Fighter's starting weapon is actually the Rusted
+Sword, item 0x141, per claude-9 / claude-6 #882; the example keeps the
+Iron Sword): a level-1 Fighter (`param\pl\level\lvfighter` row 1
 gives attack 80, *inferred* to be the starting `mBasicAttack`; claude-9
 owns the level rule) with an **Iron Sword** (item 301 at forge level 0:
 strength 50, magick 0, stagger and knockdown power 100; claude-6, board
@@ -526,7 +607,15 @@ source address: `enemy_attack` (0x0088B530), `player_attack` and
 (attacker, victim, region pools, `Adjust` tables), so any number of
 players and pawns resolve independently. `ddcombat::events` reads the
 LMT event groups and translates 0x01057060 / 0x0076F430
-(`activations(motion, frame)`).
+(`activations(motion, frame)`). `ddcombat::volumes` places the volumes
+(`node_point` 0x00CCDE30, `build_volume` 0x00773830), tests them
+(`overlap`: 0x00D13600, 0x00D139A0, 0x00D154E0), filters pairs
+(`pair_filter` 0x0076D730), deduplicates (`contacts` 0x00779860) and keeps
+the history (`HitHistory` 0x0076EAF0, 0x0076EB60, 0x0076ECA0, 0x0076EF10);
+`resolve_frame` runs one victim's frame and returns the attacks that deal
+damage, ready for `enemy_attack` / `player_attack` and `merge_frame`.
+Tests: `tests/volumes.rs` (5 synthetic) and
+`tests/install.rs::goblin_swing_against_arisen_from_install`.
 
 Tests: `tests/damage.rs` (8 synthetic cases: the worked example, head
 link, per-hit defence and same-frame exclusion, critical roll and magick
@@ -546,8 +635,10 @@ volume placement on joints and the shape tests.
 
 ## 10. What is still unknown
 
-- Hit timing: traced (2.1) except group-0 bits 16..31, event groups
-  1..3, and how `mRelation` / the hit history limit repeated hits.
+- Hit timing and volumes: traced (2.1-2.3). Open: the team ids of the
+  friendly-hit matrix, the consumer of the friendly damage factor, the
+  wall check, attacker flag +0x1EC1, joint -2's angle, and the meaning of
+  event bits 16..31 for actions.
 - Hurt/hit shape tests in detail (`FUN_00771370`, `FUN_007725C0`) and
   `mHitPrio` ordering. Riftstone's shape table is taken as is.
 - What sets: collision mode +0xD14, P+0x144 (crit-capable), P+0x7C/+0x80,
