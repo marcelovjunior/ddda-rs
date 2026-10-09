@@ -14,6 +14,8 @@
 //!         f32[4] end position, f32[4] end rotation, u32 flags, u32 events, u32 floats
 //! track   36 bytes: u8 codec, u8 usage, u8 bone type, u8 joint id, f32 weight,
 //!         u32 buffer size, u32 buffer offset, f32[4] reference, u32 extremes offset
+//! events  4 groups x 72 bytes (at "events"): u16[32] remap, u32 run count,
+//!         u32 runs offset -> runs of 8 bytes: u32 bits, u32 frames
 //! curve   12 bytes (at "floats", (flags >> 16) & 0x1F of them): u8 value type,
 //!         u8[3], u32 key count, u32 keys offset
 //! key     16 bytes: u32 (interpolation | frame << 8), value, f32 tangent in/out
@@ -157,6 +159,63 @@ pub struct MotionList {
     /// Each slot's curves (empty for empty slots), indexed as the game's
     /// `0x010571C0(k)`.
     pub curves: Vec<Vec<Curve>>,
+    /// Each slot's four event groups (empty for empty slots).
+    pub events: Vec<Vec<Vec<EventRun>>>,
+}
+
+/// A run of event bits: `bits` hold for `frames` frames after the previous
+/// run of the group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventRun {
+    pub bits: u32,
+    pub frames: u32,
+}
+
+/// The bits of a group's runs that reach past frame `from` and start at or
+/// before frame `to` (the game passes the previous and the current whole
+/// motion frame).
+// Translated from 0x01057060 (DDDA.exe 2017-12-13 Steam); inlined again in
+// the per-frame motion update 0x01060730.
+pub fn event_bits(runs: &[EventRun], from: i32, to: i32) -> u32 {
+    let mut bits = 0;
+    let mut end: i64 = 0;
+    for r in runs {
+        end += i64::from(r.frames);
+        if end > i64::from(from) {
+            bits |= r.bits;
+        }
+        if end > i64::from(to) {
+            break;
+        }
+    }
+    bits
+}
+
+/// The four event groups of the motion header at `at`.
+fn parse_events(d: &[u8], at: usize) -> Result<Vec<Vec<EventRun>>, Error> {
+    let base = u32_at(d, at + 52) as usize;
+    if base == 0 {
+        return Ok(vec![Vec::new(); 4]);
+    }
+    if base + 72 * 4 > d.len() {
+        return err(at + 52, "events outside the file");
+    }
+    (0..4)
+        .map(|g| {
+            let q = base + 72 * g;
+            let n = u32_at(d, q + 64) as usize;
+            let list = u32_at(d, q + 68) as usize;
+            if list + 8 * n > d.len() {
+                return err(q + 68, "event runs outside the file");
+            }
+            Ok((0..n)
+                .map(|k| EventRun {
+                    bits: u32_at(d, list + 8 * k),
+                    frames: u32_at(d, list + 8 * k + 4),
+                })
+                .collect())
+        })
+        .collect()
 }
 
 /// One key of a motion curve.
@@ -223,7 +282,11 @@ impl Curve {
                     + m0)
                     * s
                     + va;
-                if self.kind == 0 { v.trunc() } else { v }
+                if self.kind == 0 {
+                    v.trunc()
+                } else {
+                    v
+                }
             }
             _ => 0.0,
         }
@@ -408,11 +471,13 @@ pub fn parse(d: &[u8]) -> Result<MotionList, Error> {
     }
     let mut motions = Vec::with_capacity(count);
     let mut curves = Vec::with_capacity(count);
+    let mut events = Vec::with_capacity(count);
     for slot in 0..count {
         let at = u32_at(d, 8 + 4 * slot) as usize;
         if at == 0 {
             motions.push(None);
             curves.push(Vec::new());
+            events.push(Vec::new());
             continue;
         }
         if at + 60 > d.len() {
@@ -478,6 +543,7 @@ pub fn parse(d: &[u8]) -> Result<MotionList, Error> {
         }
         let flags = u32_at(d, at + 48);
         curves.push(parse_curves(d, at, flags)?);
+        events.push(parse_events(d, at)?);
         motions.push(Some(Motion {
             frame_count,
             loop_frame: u32_at(d, at + 12) as i32,
@@ -487,7 +553,11 @@ pub fn parse(d: &[u8]) -> Result<MotionList, Error> {
             tracks,
         }));
     }
-    Ok(MotionList { motions, curves })
+    Ok(MotionList {
+        motions,
+        curves,
+        events,
+    })
 }
 
 #[cfg(test)]
@@ -529,6 +599,23 @@ mod tests {
         assert!((e.value(5.0) - 0.5).abs() < 1e-6);
         assert!((e.value(2.5) - 0.15625).abs() < 1e-6);
         assert_eq!(curve(&[]).value(3.0), 0.0);
+    }
+
+    #[test]
+    fn event_bits_cover_the_frames_passed() {
+        // m0000_co slot 21 group 1: 0x20000000 for frames 0-17
+        let runs = [
+            EventRun {
+                bits: 0x2000_0000,
+                frames: 18,
+            },
+            EventRun { bits: 0, frames: 13 },
+        ];
+        assert_eq!(event_bits(&runs, 0, 1), 0x2000_0000);
+        // frame 17 -> 18 still passes the run's end; 18 -> 19 does not
+        assert_eq!(event_bits(&runs, 17, 18), 0x2000_0000);
+        assert_eq!(event_bits(&runs, 18, 19), 0);
+        assert_eq!(event_bits(&[], 0, 5), 0);
     }
 
     #[test]

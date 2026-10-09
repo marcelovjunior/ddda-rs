@@ -34,24 +34,35 @@
 use std::collections::HashMap;
 
 pub mod ledge;
+pub mod stamina;
 
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
+pub use stamina::{StaminaRow, StaminaTables};
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
 /// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
 /// 30 fps gives 0.317 s), and non-locomotion motions advance 30 frames/s.
 pub const MOTION_FPS: f32 = 30.0;
 
-/// Time factor of walking, running and sprinting. In the acceptance traces
-/// (docs/ACCEPTANCE.md) the player's own cUnit `mDeltaTime` (+0x14) is
-/// exactly 1.15 x sMain's while the action is walk/run (2), sprint start
-/// (125) or sprint (5), and 1.0 otherwise; the per-frame velocity (+0x2530)
-/// is not scaled, so both the motion frame and the movement advance 1.15
-/// times faster than game time. *Measured*: the writer of the scaled delta
-/// is not traced (`m_pl000_00` ids 0x1E4 / 0x1E5 hold 1.15, no reader
-/// found). The original applies the factor two game frames after the
-/// action changes; that lag (about 0.03 s) is not modelled.
+/// The run and sprint rows' motion speed at load class 1 (1.15), for tests
+/// and docs; the simulation reads the player's row (`Sim::time_rate`).
+///
+/// The player's own time runs faster than game time while walking, running
+/// or sprinting: `uObjModel::vf90` (0x00885E30) sets the unit's
+/// `mDeltaTime` (+0x14) to sMain's x sWorkRate rates x the product of
+/// +0xEE4 .. +0xEF8, and `0x00B81920` stores in +0xEE4 the `mMotSpd` of the
+/// current action's stamina row (Walk, Run or Dash table by load class; 1
+/// for other actions). The traces show exactly 1.15 x sMain's delta in runs
+/// and sprints (docs/ACCEPTANCE.md). The per-frame velocity is not scaled,
+/// so both the motion frame and the movement advance that much faster. The
+/// original applies the factor two game frames after the action changes
+/// (the stamina update runs after the actions); that lag is not modelled.
 pub const LOCOMOTION_RATE: f32 = 1.15;
+
+/// Stamina of the recorded level-7 Arisen (the acceptance traces start at
+/// 640, full). *Measured*: the maximum's derivation (`0x00782390`) is not
+/// modelled; hosts set `Player::stamina_max`.
+pub const STAMINA_MAX_RECORDED: f32 = 640.0;
 
 /// Factor on walk and run speed (uPlayer +0xDA8, multiplied in
 /// `0x00B80690` / `0x00B80710`). Recorded as 0.8471090 on the ground for a
@@ -314,6 +325,18 @@ pub struct Player {
     pub drop_from: f32,
     /// The ledge being grabbed, hung from or climbed.
     pub hold: Option<Hold>,
+    /// cPlayerInfo +0x2A8 and its maximum.
+    pub stamina: f32,
+    pub stamina_max: f32,
+    /// Body and load classes picking stamina rows (uPlayer +0x34C8 /
+    /// +0x34CC). *Assumed* 1 by default: the weights that select them
+    /// (`0x00B81120`, `0x00B81270`) are not modelled; 1 matches the
+    /// recordings.
+    pub body_class: usize,
+    pub load_class: usize,
+    /// Stamina ran out (crossed to 0) at least once since the host cleared
+    /// it. What the original does next (`cPlActTired`) is not modelled.
+    pub ran_out: bool,
 }
 
 /// A held ledge and the points the hang and climb move between.
@@ -336,6 +359,8 @@ pub struct RootMotion {
     track: Option<mtlmt::Track>,
     /// The motion's curves (`mtlmt::MotionList::curves`), read by index.
     pub curves: Vec<mtlmt::Curve>,
+    /// The motion's event groups (`mtlmt::MotionList::events`).
+    pub events: Vec<Vec<mtlmt::EventRun>>,
 }
 
 impl RootMotion {
@@ -349,7 +374,22 @@ impl RootMotion {
             frame_count: m.frame_count,
             track,
             curves: Vec::new(),
+            events: Vec::new(),
         }
+    }
+
+    /// The same motion with its event groups (`mtlmt::MotionList::events[slot]`).
+    pub fn with_events(mut self, events: Vec<Vec<mtlmt::EventRun>>) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// Event bits of `group` over whole motion frames `from`..`to`
+    /// (`mtlmt::event_bits`); 0 without event data.
+    pub fn event_bits(&self, group: usize, from: i32, to: i32) -> u32 {
+        self.events
+            .get(group)
+            .map_or(0, |runs| mtlmt::event_bits(runs, from, to))
     }
 
     /// The same motion with its curves (`mtlmt::MotionList::curves[slot]`).
@@ -361,7 +401,10 @@ impl RootMotion {
     /// Curve `k` at motion frame `frame`, if the motion has it and it has keys
     /// (the game's `0x010571C0(k)`; a curve without keys reads 0 there).
     pub fn curve(&self, k: usize, frame: f32) -> Option<f32> {
-        self.curves.get(k).filter(|c| !c.keys.is_empty()).map(|c| c.value(frame))
+        self.curves
+            .get(k)
+            .filter(|c| !c.keys.is_empty())
+            .map(|c| c.value(frame))
     }
 
     /// A motion of `frame_count` frames without root movement.
@@ -370,6 +413,7 @@ impl RootMotion {
             frame_count,
             track: None,
             curves: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -471,16 +515,6 @@ fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// The player's own time per game time in `state`: `LOCOMOTION_RATE` while
-/// walking, running or sprinting, else 1 (cUnit +0x14 in the traces; the
-/// sprint stop runs at 1).
-fn time_rate(state: State) -> f32 {
-    match state {
-        State::Walk { .. } | State::Run { .. } | State::SprintStart | State::Sprint => LOCOMOTION_RATE,
-        _ => 1.0,
-    }
-}
-
 /// The horizontal step `m` (x, z) of a velocity-driven move, projected onto
 /// the ground plane under `feet` and flattened again: on a slope of angle
 /// t along the move it shrinks to m cos^2 t. *Measured*, not traced: in the
@@ -489,7 +523,10 @@ fn time_rate(state: State) -> f32 {
 /// -0.25..0.29 (e.g. 0.957 at 0.208), which is what removing the velocity's
 /// component along the ground normal gives. Floors only (`ledge::FLOOR_MIN_NY`).
 fn along_ground(ground: &dyn Ground, feet: [f32; 3], m: [f32; 2]) -> [f32; 2] {
-    let Some(h) = ground.ray([feet[0], feet[1] + 1.0, feet[2]], [feet[0], feet[1] - STEP_DOWN, feet[2]]) else {
+    let Some(h) = ground.ray(
+        [feet[0], feet[1] + 1.0, feet[2]],
+        [feet[0], feet[1] - STEP_DOWN, feet[2]],
+    ) else {
         return m;
     };
     let n = h.normal;
@@ -521,6 +558,7 @@ pub struct Sim {
     pub jump_sprint: JumpParam,
     pub move_param: MoveParam,
     pub ledge_param: LedgeParam,
+    pub stamina_tables: StaminaTables,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -538,6 +576,7 @@ impl Sim {
             jump_sprint: JUMP_SPRINT,
             move_param: MOVE_SHIPPED,
             ledge_param: LEDGE_SHIPPED,
+            stamina_tables: StaminaTables::shipped(),
             pending: 0.0,
         }
     }
@@ -559,6 +598,11 @@ impl Sim {
             jump_held: false,
             drop_from: position[1],
             hold: None,
+            stamina: STAMINA_MAX_RECORDED,
+            stamina_max: STAMINA_MAX_RECORDED,
+            body_class: 1,
+            load_class: 1,
+            ran_out: false,
         });
     }
 
@@ -596,7 +640,9 @@ impl Sim {
     /// One step of `dt` motion frames for player `i`.
     fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
         let y0 = self.players[i].position[1];
+        let (state0, frame0) = (self.players[i].state, self.players[i].frame);
         self.frame_states(i, input, ground, dt);
+        self.stamina_step(i, state0, frame0, dt);
         // 0x0088A7E0: the fall distance (uPlayer +0x207C) counts from the
         // last frame the character did not move down
         let p = &mut self.players[i];
@@ -654,8 +700,10 @@ impl Sim {
                     return;
                 }
                 // a landing or a sprint stop plays out unless the player moves
-                if matches!(state, State::Land { .. } | State::SprintJumpLand | State::SprintStop)
-                    && !moving
+                if matches!(
+                    state,
+                    State::Land { .. } | State::SprintJumpLand | State::SprintStop
+                ) && !moving
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
                     self.ground_move(i, state, ground, dt);
@@ -664,7 +712,11 @@ impl Sim {
                 let next = if !moving {
                     // letting go of a sprint enters cPlActRunEnd (action 3,
                     // recorded); a run stops at once
-                    if state == State::Sprint { State::SprintStop } else { State::Wait }
+                    if state == State::Sprint {
+                        State::SprintStop
+                    } else {
+                        State::Wait
+                    }
                 } else if input.sprint {
                     let start_done = self.players[i].frame >= self.period_of(State::SprintStart.motion_id());
                     match state {
@@ -918,6 +970,53 @@ impl Sim {
         Self::set_state(p, State::Fall);
     }
 
+    /// The player's own time per game time in `state` (`LOCOMOTION_RATE`):
+    /// the motion speed of the walk, run or dash row at the player's load
+    /// class; 1 for other states (the sprint stop included, as recorded).
+    // Translated from 0x00B81920 (DDDA.exe 2017-12-13 Steam): actions 1, 2,
+    // 5 / 0x7D read Walk, Run, Dash row +0xC into uPlayer +0xEE4.
+    fn time_rate(&self, p: &Player, state: State) -> f32 {
+        let t = &self.stamina_tables;
+        let rows = match state {
+            State::Walk { .. } => &t.walk,
+            State::Run { .. } => &t.run,
+            State::SprintStart | State::Sprint => &t.dash,
+            _ => return 1.0,
+        };
+        rows.get(p.load_class.min(rows.len().saturating_sub(1)))
+            .map_or(1.0, |r| r.motion_speed)
+    }
+
+    /// One stamina update after the player's states (`0x00B81450`):
+    /// recovery unless the playing motion's events suppress it over the
+    /// frames just passed, then the sprint's drain.
+    fn stamina_step(&mut self, i: usize, state0: State, frame0: f32, dt: f32) {
+        let t = &self.stamina_tables;
+        let p = &self.players[i];
+        let id = p.state.motion_id();
+        let (from, to) = if p.state == state0 && p.frame >= frame0 {
+            (frame0 as i32, p.frame as i32)
+        } else {
+            (p.frame as i32, p.frame as i32)
+        };
+        let suppressed = self.motions.get(&id).is_some_and(|m| {
+            m.event_bits(stamina::RECOVERY_SUPPRESS_GROUP, from, to) & stamina::RECOVERY_SUPPRESS_BIT != 0
+        });
+        let recovery = if suppressed {
+            0.0
+        } else {
+            t.recovery(p.body_class, p.load_class)
+        };
+        let drain = match p.state {
+            State::SprintStart | State::Sprint => t.dash_drain(p.load_class),
+            _ => 0.0,
+        };
+        let (s, out) = stamina::step(p.stamina, p.stamina_max, recovery, drain, dt);
+        let p = &mut self.players[i];
+        p.stamina = s;
+        p.ran_out |= out;
+    }
+
     /// Ground speed (cm per frame) of a velocity-driven state, or None for
     /// states that move by root motion.
     fn ground_speed(&self, p: &Player, state: State) -> Option<f32> {
@@ -959,6 +1058,7 @@ impl Sim {
     fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32) {
         let jn = self.jump_normal;
         let speed = self.ground_speed(&self.players[i], state);
+        let rate = self.time_rate(&self.players[i], state);
         let period = self.period_of(state.motion_id());
         let p = &mut self.players[i];
         let mut target = p.position;
@@ -966,7 +1066,6 @@ impl Sim {
             // velocity along the facing, in the player's own (scaled) time;
             // the motion only animates
             let (s, c) = p.yaw.sin_cos();
-            let rate = time_rate(state);
             let step = along_ground(ground, p.position, [v * dt * rate * s, v * dt * rate * c]);
             target[0] += step[0];
             target[2] += step[1];
@@ -1117,6 +1216,7 @@ mod tests {
                 ],
             }),
             curves: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -1777,7 +1877,8 @@ mod tests {
     #[test]
     fn releasing_a_sprint_slides_to_a_stop() {
         let mut s = sim();
-        s.motions.insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        s.motions
+            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
         let sprint = Input {
             sprint: true,
             ..fwd()
@@ -1798,10 +1899,82 @@ mod tests {
         assert!((d - 196.875 - 2.8125).abs() < 0.1, "{d}");
     }
 
+    /// Group 1 suppressing recovery for `frames` motion frames.
+    fn suppress(frames: u32, total: u32) -> Vec<Vec<mtlmt::EventRun>> {
+        let run = |bits, frames| mtlmt::EventRun { bits, frames };
+        vec![
+            vec![],
+            vec![
+                run(stamina::RECOVERY_SUPPRESS_BIT, frames),
+                run(0, total - frames),
+            ],
+            vec![],
+            vec![],
+        ]
+    }
+
+    #[test]
+    fn sprinting_spends_stamina_and_the_stop_holds_recovery() {
+        let mut s = sim();
+        // as m0000_co: sprint (20) and sprint start (43) suppress recovery
+        // throughout, the stop (21) for frames 0-17
+        s.motions.insert(20, run().with_events(suppress(10, 10)));
+        s.motions
+            .insert(43, RootMotion::none(15).with_events(suppress(14, 14)));
+        s.motions.insert(
+            0x15,
+            RootMotion::none(31)
+                .with_curves(stop_curve())
+                .with_events(suppress(18, 31)),
+        );
+        let sprint = Input {
+            sprint: true,
+            ..fwd()
+        };
+        let mut inputs = HashMap::from([(0, sprint)]);
+        s.step(2.0, &inputs, &Flat(0.0));
+        // 60 frames at -1.5 (the dash row at load class 1): 640 - 90
+        let p = s.player(0).unwrap();
+        assert!((p.stamina - 550.0).abs() < 1e-3, "{}", p.stamina);
+        inputs.clear();
+        // the stop holds stamina for 18 motion frames (0.6 s), then recovers
+        s.step(0.5, &inputs, &Flat(0.0));
+        assert!((s.player(0).unwrap().stamina - 550.0).abs() < 1e-3);
+        s.step(0.5, &inputs, &Flat(0.0));
+        let st = s.player(0).unwrap().stamina;
+        assert!(st > 550.0 && st < 550.0 + 1.625 * 15.0, "{st}");
+        // idle: +1.625 per frame
+        s.step(1.0, &inputs, &Flat(0.0));
+        let gain = s.player(0).unwrap().stamina - st;
+        assert!((gain - 48.75).abs() < 1e-2, "{gain}");
+        assert!(!s.player(0).unwrap().ran_out);
+    }
+
+    #[test]
+    fn stamina_runs_out_and_clamps() {
+        let mut s = sim();
+        s.motions.insert(20, run().with_events(suppress(10, 10)));
+        s.motions
+            .insert(43, RootMotion::none(15).with_events(suppress(14, 14)));
+        s.player_mut(0).unwrap().stamina = 3.0;
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                sprint: true,
+                ..fwd()
+            },
+        )]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.stamina, 0.0);
+        assert!(p.ran_out);
+    }
+
     #[test]
     fn a_run_stops_at_once() {
         let mut s = sim();
-        s.motions.insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        s.motions
+            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
         let mut inputs = HashMap::from([(0, fwd())]);
         s.step(1.0, &inputs, &Flat(0.0));
         let z0 = s.player(0).unwrap().position[2];

@@ -226,8 +226,15 @@ pub fn new_sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
             .cloned()
             .flatten()
             .ok_or(format!("{path}: slot {} missing", id & 0xFF))?;
-        let curves = lists[&bank].curves[usize::from(id & 0xFF)].clone();
-        roots.insert(id, RootMotion::from_motion(&m).with_curves(curves));
+        let slot = usize::from(id & 0xFF);
+        let curves = lists[&bank].curves[slot].clone();
+        let events = lists[&bank].events[slot].clone();
+        roots.insert(
+            id,
+            RootMotion::from_motion(&m)
+                .with_curves(curves)
+                .with_events(events),
+        );
     }
     let mut sim = Sim::new(roots);
     let jp = jump_params(vfs, &[0, 9])?;
@@ -257,6 +264,7 @@ pub struct Replay {
     /// Our state after each frame (index-aligned with the trace).
     pub pos: Vec<[f32; 3]>,
     pub state: Vec<State>,
+    pub stamina: Vec<f32>,
     pub relaxed: bool,
 }
 
@@ -278,9 +286,15 @@ pub fn replay(mut sim: Sim, ground: &dyn ddsim::Ground, t: &Trace) -> Replay {
         let v = runs.iter().sum::<f32>() / runs.len() as f32;
         (v - sim.move_param.run_relaxed).abs() < (v - sim.move_param.run).abs()
     };
-    sim.player_mut(0).unwrap().relaxed = relaxed;
+    let p = sim.player_mut(0).unwrap();
+    p.relaxed = relaxed;
+    // the traces start at full stamina: take the first frame's value as both
+    // the stamina and its maximum (the maximum is not read from the original)
+    p.stamina = f0.stamina;
+    p.stamina_max = f0.stamina;
     let mut pos = vec![f0.pos];
     let mut state = vec![State::Wait];
+    let mut stamina = vec![f0.stamina];
     let mut inputs = HashMap::new();
     for f in &t.frames[1..] {
         inputs.insert(0, input_of(f.keys, f.cam_yaw));
@@ -290,8 +304,14 @@ pub fn replay(mut sim: Sim, ground: &dyn ddsim::Ground, t: &Trace) -> Replay {
         let p = sim.player(0).unwrap();
         pos.push(p.position);
         state.push(p.state);
+        stamina.push(p.stamina);
     }
-    Replay { pos, state, relaxed }
+    Replay {
+        pos,
+        state,
+        stamina,
+        relaxed,
+    }
 }
 
 // ------------------------------------------------------------------ metrics
@@ -510,40 +530,43 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
             ));
         }
     }
-    // stamina after a sprint: the hold before recovery and the idle recovery rate
+    // stamina after a sprint: the hold before recovery and the idle recovery
+    // rate, each measured on its own run (idle: original action 0, our Wait)
     if let Some(last_sprint) = (0..n).rev().find(|&i| t.frames[i].keys & KEY_SPRINT != 0) {
+        let after = |st: &[f32], idle: &dyn Fn(usize) -> bool| -> (Option<f32>, Option<f32>) {
+            let lo = (last_sprint..n).min_by(|&a, &b| st[a].total_cmp(&st[b])).unwrap();
+            let Some(up) = (lo..n).find(|&i| st[i] > st[lo] + 1e-3) else {
+                return (None, None);
+            };
+            let idle = (up..n).find(|&i| idle(i)).unwrap_or(up);
+            let rate = (ts[n - 1] > ts[idle]).then(|| (st[n - 1] - st[idle]) / (ts[n - 1] - ts[idle]));
+            (Some(ts[up] - ts[lo]), rate)
+        };
         let st: Vec<f32> = t.frames.iter().map(|f| f.stamina).collect();
-        let lo = (last_sprint..n).min_by(|&a, &b| st[a].total_cmp(&st[b])).unwrap();
-        if let Some(up) = (lo..n).find(|&i| st[i] > st[lo] + 1e-3) {
+        let (hold_o, rate_o) = after(&st, &|i| t.frames[i].action == 0);
+        let (hold_s, rate_s) = after(&r.stamina, &|i| r.state[i] == State::Wait);
+        if hold_o.is_some() {
+            rows.push(row("stamina hold after sprint", hold_o, hold_s, tol::TIME, "s"));
+        }
+        if rate_o.is_some() {
             rows.push(row(
-                "stamina hold after sprint",
-                Some(ts[up] - ts[lo]),
-                None,
-                tol::TIME,
-                "s",
+                "stamina recovery rate (idle)",
+                rate_o,
+                rate_s,
+                tol::STAMINA,
+                "/s",
             ));
-            let idle = (up..n).find(|&i| t.frames[i].action == 0).unwrap_or(up);
-            if ts[n - 1] > ts[idle] {
-                let rate = (st[n - 1] - st[idle]) / (ts[n - 1] - ts[idle]);
-                rows.push(row(
-                    "stamina recovery rate (idle)",
-                    Some(rate),
-                    None,
-                    tol::STAMINA,
-                    "/s",
-                ));
-            }
         }
     }
-    // stamina: rate over the window (ddsim has no stamina)
+    // stamina: rate over the window
     if let Some((a, b)) = t.window {
         let b = b.min(n - 1);
         if a < b && ts[b] > ts[a] {
-            let rate = (t.frames[b].stamina - t.frames[a].stamina) / (ts[b] - ts[a]);
+            let rate = |st: &dyn Fn(usize) -> f32| (st(b) - st(a)) / (ts[b] - ts[a]);
             rows.push(row(
                 &format!("stamina rate, frames {a}..{b}"),
-                Some(rate),
-                None,
+                Some(rate(&|i| t.frames[i].stamina)),
+                Some(rate(&|i| r.stamina[i])),
                 tol::STAMINA,
                 "/s",
             ));
@@ -636,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn compare_reports_gaps_and_unmodelled_stamina() {
+    fn compare_reports_gaps_and_stamina() {
         let fr = |z: f32, keys: u32| Frame {
             keys,
             dt_main: 1.0,
@@ -660,6 +683,7 @@ mod tests {
         let r = Replay {
             pos: vec![[0.0; 3], [0.0, 0.0, 10.0], [0.0, 0.0, 25.0]],
             state: vec![State::Wait; 3],
+            stamina: vec![600.0, 590.0, 570.0],
             relaxed: false,
         };
         let rows = compare(&t, &r);
@@ -668,7 +692,10 @@ mod tests {
         assert!(get("final position gap").ok());
         // 20 cm over 2 frames of 1/30 s
         assert!((get("speed").original.unwrap() - 300.0).abs() < 1e-3);
-        assert!(!get("stamina").ok());
-        assert!(table(&rows).contains("not modelled"));
+        // original -20 over 2/30 s = -300/s; ours -30 -> -450/s
+        let st = get("stamina rate");
+        assert!((st.original.unwrap() + 300.0).abs() < 1e-3);
+        assert!((st.ours.unwrap() + 450.0).abs() < 1e-3);
+        assert!(!st.ok());
     }
 }
