@@ -54,8 +54,21 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   or a comparison against the running original.
 - Recovery after the loose SATA cable: worktree `git fsck --no-dangling`
   passed; source edits were intact and the complete AI test suite passed.
+- Follow-up: the real FSM controller 0x0059f440 disables and unbinds a
+  killed FSM, clearing SysCondition, whereas Finish rewinds and pauses it.
+  `Thinker::controlled_frame` now preserves that distinction. An installed
+  Dragon_OP regression verifies no subsequent updates or action-driven
+  restart after Kill, and explicit restart still works. All 33 AI tests pass.
 
 ### Encounter evidence and remaining work
+
+- Added `DragonAiData::opening`, reading 52 reachable think records from
+  the sequence-4 root and all 93 action classes from the installed exe.
+  Descriptor stride and count come from 0x00a3f89f / 0x00a3f8a4 and
+  0x007f19c0. The shared `Tables::read_roots` walker is transplanted from
+  codex-1's e9cfa51; existing goblin traversal remains unchanged. The
+  installed reader regression passes, including all six entrance action
+  class identities. This loads definitions, not simulated actions.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's

@@ -18,6 +18,7 @@
 pub mod arisen;
 pub mod body;
 pub mod combat;
+pub mod dragon;
 pub mod fight;
 pub mod goblin;
 pub mod pawn;

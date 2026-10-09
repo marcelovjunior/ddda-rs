@@ -29,6 +29,36 @@ fn actor() -> Inputs {
 }
 
 #[test]
+fn installed_dragon_kill_disables_controller_until_explicit_restart() {
+    let Some(graph) = installed() else { return };
+    let mut thinker = Thinker::new("Dragon_OP", graph).unwrap();
+    let mut inputs = actor();
+    inputs.actor.as_mut().unwrap().action_done = true;
+    inputs.area_stay = 0x8000_0000;
+    inputs.motion_frame = 20.0;
+    inputs.motion_ended = true;
+    for _ in 0..250 {
+        thinker.controlled_frame(&inputs).unwrap();
+    }
+    assert!(thinker.disabled);
+    assert!(!thinker.paused);
+    assert_eq!(thinker.fields.sys_condition, 0);
+    let timers = thinker.fields.timers;
+    for _ in 0..100 {
+        assert!(thinker.controlled_frame(&inputs).unwrap().is_empty());
+    }
+    assert_eq!(thinker.fields.timers, timers);
+    thinker.restart().unwrap();
+    assert!(!thinker.disabled);
+    assert!(
+        thinker
+            .controlled_frame(&inputs)
+            .unwrap()
+            .contains(&Request::Action { action: 52 })
+    );
+}
+
+#[test]
 fn installed_dragon_waits_for_actor_and_area_feedback() {
     let Some(graph) = installed() else { return };
     let mut thinker = Thinker::new("Dragon_OP", graph).unwrap();
