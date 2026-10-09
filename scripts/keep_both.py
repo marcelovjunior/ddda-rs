@@ -7,7 +7,7 @@ subcommand to crates/ddtool/src/main.rs. Usage: keep_both.py <file>...
 import re
 import sys
 
-BLOCK = re.compile(r'<<<<<<< [^\n]*\n(.*?)=======\n(.*?)>>>>>>> [^\n]*\n', re.S)
+BLOCK = re.compile(r'<<<<<<< [^\n]*\n(.*?)=======\r?\n(.*?)>>>>>>> [^\n]*\n', re.S)
 
 for path in sys.argv[1:]:
     text = open(path, encoding='utf-8', newline='').read()
