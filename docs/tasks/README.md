@@ -83,7 +83,7 @@ Codex lane: see `docs/CODEX.md`.
 | [sound-resources](sound-resources.md) | Sound banks, requests, streams | reader | codex-1 | merged 2026-10-09 |
 | [effect-links](effect-links.md) | Effect lists, motion-to-effect links | reader | codex-1 | merged 2026-10-09 |
 | [combat-rules](combat-rules.md) | Damage formula, resistances, stagger, hit detection | research | claude-8 | assigned |
-| [vocations-skills](vocations-skills.md) | Vocations, skills, augments, level growth | research | claude-9 | assigned |
+| [vocations-skills](vocations-skills.md) | Vocations, skills, augments, level growth | research | claude-9 | merged 2026-10-09 |
 | [weather-clock-bindings](weather-clock-bindings.md) | How the game clock drives weather/sky interpolation | exe | codex-1 | merged 2026-10-09 |
 | [stamina-rule-evidence](stamina-rule-evidence.md) | Stamina rules vs recordings (RECORDINGS.md) | exe | codex-1 | merged 2026-10-09 |
 | [enemy-resource-selection](enemy-resource-selection.md) | Which resources an enemy instance loads (reader side; rules are claude-8's) | reader | codex-1 | merged 2026-10-09 |
