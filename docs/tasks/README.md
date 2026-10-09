@@ -69,7 +69,7 @@ Codex lane: see `docs/CODEX.md`.
 | [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude-3 | assigned |
 | [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-3 | merged 2026-10-09 |
 | [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex-4 | merged 2026-10-09 |
-| [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex-1 | assigned |
+| [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex-5 | merged 2026-10-09 |
 | [text](text.md) | Message/text resources reader (dialogue, item names) | reader | codex-2 | merged 2026-10-09 |
 | [asset-survey](asset-survey.md) | Survey: sound, effects, GUI, items, quests, NPC placement, saves | reader | codex-1 | merged 2026-10-09 |
 | [oracle](oracle.md) | In-process probe: run unfocused, capture frames, input, calls, teleport | core | claude-4 | assigned |
