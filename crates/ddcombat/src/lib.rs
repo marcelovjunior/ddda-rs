@@ -5,6 +5,7 @@
 //! documents both with addresses.
 
 pub mod damage;
+pub mod events;
 pub mod ocl;
 
 pub use ocl::{Attack, Group, Node, ObjCollision, SeqIndex};

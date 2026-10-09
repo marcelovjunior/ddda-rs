@@ -127,3 +127,42 @@ fn worked_example_from_install() {
     assert_eq!(regions[0].hp, 895.0);
     assert!(out.reaction.stagger);
 }
+
+/// Every motion list's event blocks read; group-0 bits are counted.
+/// The goblin's first attack motion opens its hit window (sequence 2:
+/// group 2 with attack 0 of `e0100_00`) on frames 45..49.
+#[test]
+fn motion_collision_events() {
+    let Some(root) = native_pc() else { return };
+    let vfs = ddvfs::Vfs::open(root).unwrap();
+    let hash = mtarc::type_hash("rMotionList");
+    let mut paths: Vec<_> = vfs.paths_of_type(hash).collect();
+    paths.sort_unstable();
+    let (mut files, mut motions, mut high_bits, mut errors) = (0, 0, 0, Vec::new());
+    for p in &paths {
+        let d = vfs.read(p, hash).unwrap();
+        match ddcombat::events::parse_lmt_events(&d) {
+            Ok(ms) => {
+                files += 1;
+                for m in ms.iter().flatten() {
+                    motions += 1;
+                    if m.groups[0].events.iter().any(|e| e.0 >> 16 != 0) {
+                        high_bits += 1;
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{p}: {e}")),
+        }
+    }
+    eprintln!("rMotionList: {files} paths, {motions} motions with events, {high_bits} with group-0 bits >= 16");
+    assert!(errors.is_empty(), "{errors:#?}");
+
+    let d = vfs.read("motion\\em\\e01\\e0100_at\\e0100_at", hash).unwrap();
+    let ms = ddcombat::events::parse_lmt_events(&d).unwrap();
+    let m1 = ms[1].as_ref().unwrap();
+    let seqs = |f: f32| ddcombat::events::activations(m1, f).iter().map(|a| (a.resource_id, a.seq)).collect::<Vec<_>>();
+    assert!(!seqs(44.9).contains(&(0, 2)));
+    assert!(seqs(45.0).contains(&(0, 2)));
+    assert!(seqs(48.9).contains(&(0, 2)));
+    assert!(!seqs(49.0).contains(&(0, 2)));
+}
