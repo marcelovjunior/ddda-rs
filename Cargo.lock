@@ -2630,12 +2630,14 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddcombat",
  "ddeconomy",
  "ddexe",
  "ddhost",
  "dditem",
  "ddlook",
  "ddnet",
+ "ddpawn",
  "ddquest",
  "ddsave",
  "ddsim",
@@ -2661,6 +2663,7 @@ dependencies = [
 name = "ddworld"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddsim",
  "ddvfs",
  "mtarc",

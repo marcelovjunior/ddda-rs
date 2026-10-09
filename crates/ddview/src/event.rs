@@ -235,7 +235,7 @@ pub struct InfoText;
 
 fn spawn_parts(commands: &mut Commands, parts: &[stage::Part], transform: Transform, name: &str) {
     for p in parts {
-        let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
+        let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string()), stage::StageEntity));
         match &p.material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
             PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
@@ -269,6 +269,7 @@ fn setup(
         stats: Default::default(),
         lod_eye: None,
         view_range: 1,
+        tag: None,
     };
     loader.index_models();
     // The stage's lighting from the data at the event's hour (weather F),
@@ -579,6 +580,7 @@ fn setup_lineup(
         stats: Default::default(),
         lod_eye: None,
         view_range: 1,
+        tag: None,
     };
     loader.index_models();
     let mut looks: Vec<(String, ddlook::Look)> = vec![];

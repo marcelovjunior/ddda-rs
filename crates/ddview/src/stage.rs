@@ -590,6 +590,30 @@ fn arc_model_path(arc: &std::path::Path) -> Option<String> {
     index.entries.iter().find(|e| e.type_hash == RMODEL).map(|e| e.path.clone())
 }
 
+/// A model of a whole-stage area (`event::spawn_stage_models`), dropped
+/// when the party leaves the stage (`crate::stream::Streamer::enter`).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct StageEntity;
+
+/// What a streamed cell entity belongs to (`crate::stream`): the cell
+/// `(m, n)` and which of its parts.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StreamCell {
+    pub m: i32,
+    pub n: i32,
+    pub part: CellPart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CellPart {
+    /// The cell's terrain model.
+    Model,
+    /// Its `_s00` layout (placed scenery).
+    Layout,
+    /// The viewer's distant stand-in (terrain plus `fmfore`).
+    Far,
+}
+
 pub struct Loader<'a> {
     pub vfs: &'a Vfs,
     pub mfx: &'a ShaderPackage,
@@ -607,6 +631,8 @@ pub struct Loader<'a> {
     pub lod_eye: Option<Vec3>,
     /// The config's ViewRange (1 NORMAL, 2 FAR, 3 FARTHEST).
     pub view_range: u32,
+    /// Tag for the entities spawned now (streamed cells).
+    pub tag: Option<StreamCell>,
 }
 
 /// Builds a Bevy image from a TEX file, sRGB for the formats the exe
@@ -1121,6 +1147,9 @@ impl Loader<'_> {
             self.stats.meshes += 1;
             self.stats.triangles += p.triangles;
             let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
+            if let Some(tag) = self.tag {
+                e.insert(tag);
+            }
             match &p.material {
                 PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
                 PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
@@ -1154,9 +1183,52 @@ impl Loader<'_> {
         };
         self.stats.cells += 1;
         let cell = format!("st{stage}_{a}m{b}n");
+        let tag = self.tag;
+        self.tag = tag.map(|t| StreamCell { part: CellPart::Model, ..t });
         self.spawn_parts(commands, &parts, Transform::from_translation(offset), &cell);
+        self.tag = tag.map(|t| StreamCell { part: CellPart::Layout, ..t });
         self.spawn_scenery(commands, meshes, materials, images, stage, a, b, offset);
+        self.tag = tag;
         true
+    }
+
+    /// Only the cell's terrain model (streaming loads models and layouts
+    /// with their own windows).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_cell_model(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        a: i32,
+        b: i32,
+        offset: Vec3,
+    ) -> bool {
+        let path = format!("scr\\st{stage}\\model\\m{}\\st{stage}_{a}m{b}n", a / 10 * 10);
+        let Some(parts) = self.model(&path, meshes, materials, images) else {
+            return false;
+        };
+        self.stats.cells += 1;
+        self.spawn_parts(commands, &parts, Transform::from_translation(offset), &format!("st{stage}_{a}m{b}n"));
+        true
+    }
+
+    /// Only the cell's `_s00` layout.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_cell_layout(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        a: i32,
+        b: i32,
+        offset: Vec3,
+    ) {
+        self.spawn_scenery(commands, meshes, materials, images, stage, a, b, offset);
     }
 
     /// Static models placed by the cell's `_s00` layout. Placement

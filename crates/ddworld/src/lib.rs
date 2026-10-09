@@ -11,6 +11,19 @@ use std::collections::HashMap;
 use ddvfs::Vfs;
 use mtshader::ShaderPackage;
 
+pub mod stream;
+
+/// Scenery collision paths (`model\om\...\collision\<id>_h00`) by model id,
+/// built once and reused by every [`Terrain::add_scenery_cells`].
+pub type SceneryIndex = HashMap<String, Vec<String>>;
+
+/// The cells of a square of `radius` around `(a0, b0)`.
+fn square(a0: i32, b0: i32, radius: i32) -> Vec<(i32, i32)> {
+    (a0 - radius..=a0 + radius)
+        .flat_map(|a| (b0 - radius..=b0 + radius).map(move |b| (a, b)))
+        .collect()
+}
+
 const RMODEL: u32 = 0x58A1_5856;
 const RCOLLISION: u32 = 0x51FC_779F;
 const RLAYOUT: u32 = 0x1530_2EF4;
@@ -24,6 +37,7 @@ pub struct Terrain {
     flags: Vec<u32>,
     /// Full SBC material records; absent for render terrain / flags-only fixtures.
     materials: Vec<Option<[u32; 8]>>,
+    attributes: Vec<Option<u32>>,
     grid: HashMap<(i32, i32), Vec<u32>>,
     pub cells: usize,
 }
@@ -36,6 +50,9 @@ pub struct MaterialRayHit {
     /// is consumed by the original sound getter 0x00423b80; record binding
     /// comes from 0x01165820 / 0x011637f0.
     pub material: Option<[u32; 8]>,
+    /// SBC triangle +0x14, returned by getter 0x00423be0. This is separate
+    /// from the material record and its movement flag word.
+    pub attribute: Option<u32>,
 }
 
 /// Rotation matrix (rows) for intrinsic X, then Y, then Z Euler angles,
@@ -135,6 +152,7 @@ impl Terrain {
             tris: Vec::new(),
             flags: Vec::new(),
             materials: Vec::new(),
+            attributes: Vec::new(),
             grid: HashMap::new(),
             cells: 0,
         }
@@ -181,9 +199,14 @@ impl Terrain {
     /// (`0x00C5F680`) stores it as `cSplitSbc::mpClsnScrMrgRsrc`; the `e` file
     /// is `mpClsnEffMrgRsrc` (effects) and is not used for movement.
     pub fn load_collision(vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> Self {
+        Self::load_collision_cells(vfs, stage, square(a0, b0, radius))
+    }
+
+    /// The collision of the cells `(m, n)` (as [`Terrain::load_collision`]).
+    pub fn load_collision_cells(vfs: &Vfs, stage: u32, cells: impl IntoIterator<Item = (i32, i32)>) -> Self {
         let mut t = Terrain::empty();
-        for a in a0 - radius..=a0 + radius {
-            for b in b0 - radius..=b0 + radius {
+        {
+            for (a, b) in cells {
                 let off = [(b - 50) as f32 * 10000.0, 0.0, (a - 50) as f32 * 10000.0];
                 let mut any = false;
                 for kind in ["h"] {
@@ -199,7 +222,9 @@ impl Terrain {
                         let material = collision_material(&c, tri);
                         t.add_triangle(
                             p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]),
-                            material.map_or(0, |m| m[0]), material,
+                            material.map_or(0, |m| m[0]),
+                            material,
+                            Some(tri.attribute),
                         );
                     }
                     any = true;
@@ -220,7 +245,13 @@ impl Terrain {
     /// Rotation uses the same Euler convention as the viewer (*assumed* XYZ:
     /// R = Rx * Ry * Rz on column vectors).
     pub fn add_scenery(&mut self, vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> usize {
-        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+        let index = Self::scenery_index(vfs);
+        self.add_scenery_cells(vfs, &index, stage, square(a0, b0, radius))
+    }
+
+    /// Every scenery model's collision paths by model id.
+    pub fn scenery_index(vfs: &Vfs) -> SceneryIndex {
+        let mut by_name: SceneryIndex = HashMap::new();
         for p in vfs
             .paths_of_type(RCOLLISION)
             .filter(|p| p.starts_with(r"model\om\"))
@@ -230,9 +261,20 @@ impl Terrain {
                 by_name.entry(id.to_string()).or_default().push(p.to_string());
             }
         }
+        by_name
+    }
+
+    /// The scenery collision of the cells `(m, n)` (as [`Terrain::add_scenery`]).
+    pub fn add_scenery_cells(
+        &mut self,
+        vfs: &Vfs,
+        by_name: &SceneryIndex,
+        stage: u32,
+        cells: impl IntoIterator<Item = (i32, i32)>,
+    ) -> usize {
         let mut instances = 0;
-        for a in a0 - radius..=a0 + radius {
-            for b in b0 - radius..=b0 + radius {
+        {
+            for (a, b) in cells {
                 let lot = format!(r"scr\st{stage}\etc\st{stage}_{a}m{b}n_s00");
                 let Ok(bytes) = vfs.read(&lot, RLAYOUT) else {
                     continue;
@@ -262,7 +304,9 @@ impl Terrain {
                                     }
                                     w
                                 }),
-                                material.map_or(0, |m| m[0]), material,
+                                material.map_or(0, |m| m[0]),
+                                material,
+                                Some(rec.attribute),
                             );
                         }
                     }
@@ -279,15 +323,26 @@ impl Terrain {
 
     /// Adds a triangle whose collision material has the flag word `flags`.
     pub fn add_flagged(&mut self, p: [[f32; 3]; 3], flags: u32) {
-        self.add_triangle(p, flags, None);
+        self.add_triangle(p, flags, None, None);
     }
 
     /// Adds a triangle with its complete authored SBC material record.
     pub fn add_material(&mut self, p: [[f32; 3]; 3], material: [u32; 8]) {
-        self.add_triangle(p, material[0], Some(material));
+        self.add_triangle(p, material[0], Some(material), None);
     }
 
-    fn add_triangle(&mut self, p: [[f32; 3]; 3], flags: u32, material: Option<[u32; 8]>) {
+    /// Adds both authored metadata sources used by collision sound queries.
+    pub fn add_material_with_attribute(&mut self, p: [[f32; 3]; 3], material: [u32; 8], attribute: u32) {
+        self.add_triangle(p, material[0], Some(material), Some(attribute));
+    }
+
+    fn add_triangle(
+        &mut self,
+        p: [[f32; 3]; 3],
+        flags: u32,
+        material: Option<[u32; 8]>,
+        attribute: Option<u32>,
+    ) {
         let id = self.tris.len() as u32;
         let (minx, maxx) = (
             p[0][0].min(p[1][0]).min(p[2][0]),
@@ -306,6 +361,7 @@ impl Terrain {
         self.tris.push(p);
         self.flags.push(flags);
         self.materials.push(material);
+        self.attributes.push(attribute);
     }
 
     /// Nearest triangle crossing of the segment (Moller-Trumbore, both
@@ -355,6 +411,7 @@ impl Terrain {
         }
         best.map(|(k, normal, id)| MaterialRayHit {
             material: self.materials[id],
+            attribute: self.attributes[id],
             hit: ddsim::RayHit {
                 point: [from[0] + d[0] * k, from[1] + d[1] * k, from[2] + d[2] * k],
                 normal,
@@ -545,16 +602,19 @@ mod tests {
         let lower = [0x2000, 4, 3, 5, 7, 9, 11, 13];
         let upper = [1, 8, 2, 4, 6, 8, 10, 12];
         t.add_material(plane(0.0), lower);
-        t.add_material(plane(50.0), upper);
+        t.add_material_with_attribute(plane(50.0), upper, 2);
         let from = [100.0, 100.0, 100.0];
         let to = [100.0, -100.0, 100.0];
         let first = t.ray_with_material(from, to).unwrap();
         assert_eq!(first.material, Some(upper));
+        assert_eq!(first.attribute, Some(2));
         assert_eq!(t.ray(from, to), Some(first.hit));
         assert_eq!(first.hit.point[1], 50.0);
         assert_eq!(t.ray_with_material(to, from).unwrap().material, Some(lower));
+        assert_eq!(t.ray_with_material(to, from).unwrap().attribute, None);
         t.add_flagged(plane(75.0), 0x2000);
         assert_eq!(t.ray_with_material(from, to).unwrap().material, None);
+        assert_eq!(t.ray_with_material(from, to).unwrap().attribute, None);
         let mut faces = Vec::new();
         t.triangles_in([10.0, -1.0, 10.0], [20.0, 1.0, 20.0], &mut faces);
         assert_eq!(faces[0].1, lower[0]);

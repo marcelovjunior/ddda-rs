@@ -398,6 +398,7 @@ fn dress(
         stats: Default::default(),
         lod_eye: None,
         view_range: 1,
+        tag: None,
     };
     for (seat, data) in due {
         s.dressed.insert(seat);

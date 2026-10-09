@@ -390,3 +390,38 @@ Other scenery subclasses, NPC construction-rate limits and full policy
 exceptions remain to be traced. The terrain pattern has a compatible
 traced explanation, but its actual construction history was not recorded.
 No movement or creation/removal transition comparison is claimed.
+
+## Implementation (head, 2026-10-09)
+
+`ddworld::stream` holds the rules:
+- `Grid::from_exe` reads the grid descriptor from the installed exe
+  (0x0153023c).
+- `Grid::window` is the clipped 5/5/3 candidate window (0x00507440).
+- `Grid::near` is the distance predicate, translated from 0x005075d0.
+- `Grid::wanted` combines the two.
+
+`ddworld::Terrain::load_collision_cells` and `add_scenery_cells` build
+collision for any cell list, with a reusable `SceneryIndex`.
+
+`ddview` `--play` on stage 100 (`crates/ddview/src/stream.rs`) recomputes
+the wanted cells from the followed player every frame:
+- terrain models and layouts spawn and despawn within an 8 ms budget per
+  frame, nearest first;
+- collision (the collision cells plus the scenery of the layout cells) is
+  rebuilt on a worker thread and swapped in whole.
+
+*Viewer choices:*
+- the distant ring (`--far-cells`, terrain plus `fmfore`) stands in for the
+  regional coarse models;
+- no fade in or out;
+- the quality multiplier comes from the config's ViewRange (*assumed*).
+
+Checked with `--radius 0`: the streamer fills in the neighbouring cells,
+scenery and distant ring from a single loaded cell.
+
+Not yet:
+- `--opening` and LAN sessions (they load their own stage);
+- stage transitions (Cassardis st200 to the field);
+- the initialization bypass of the first update (the viewer's start square
+  stands in for it).
+
