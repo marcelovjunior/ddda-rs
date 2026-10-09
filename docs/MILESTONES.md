@@ -236,3 +236,48 @@ moves such as the dagger double jump.
 **Next action:** finish the M1 shading gate and the M2 gate. That means
 recorded paths, speeds, jump arcs and stamina through the oracle against
 `ddsim`, as an automated acceptance test.
+
+## Batch 2026-10-09 (morning)
+
+**M1 (look):** blended terrain layers, lighting from the game data by
+time and weather, the sky's scatter shaders, the stage's tone curve and
+vignette, water materials and reflections, the backdrop models, the far
+ring, foliage billboards, depth of field.
+- ref001 is within 3-4% of mean colour.
+- The day captures are within 1-3 levels.
+- Open: stars, moon, lamp lights (they need a Cassardis night capture,
+  waiting on the maintainer), the Bluemoon Tower detail.
+
+See SHADING.md and the M1 section above.
+
+**M2 (walk):** acceptance replay (`ddaccept`) at 40 of 44 rows, up from 16.
+- Done: velocity from data, the motion speed rate, stamina, the sprint
+  stop, falls, landing holds, load and body classes, and the
+  `cScrAdjust` capsule sweep and slide.
+- Open: the drop path after frame 195. It needs a live trace, and the
+  game is paused on the maintainer's fight.
+
+**M3 (together):** `ddhost` (FRAME.md, ADR 0002), with economy, Rift and
+progression wired in, and two-player save/load with stable hashes. `ddnet`
+LAN co-op passes loopback tests under 10% loss and 40 ± 20 ms (prediction
+error ≤ 5.7 cm). `ddview --host/--join` is in progress (claude-10).
+
+**M4 (fight):** `ddcombat` covers hit volumes on joints, the exact shape
+tests, hit history, the damage formulas and region pools; the goblin's
+first swing hits exactly once, on frame 45. `ddai` runs the goblin's FSM.
+The think tables are in progress (claude-9). Status effects: build-up
+only.
+
+**M5/M6 groundwork:**
+- `ddstory` runs the opening (q0000 → q0002) in the traced frame order.
+- The event player plays st200 ev10 with its cameras, subtitles and NPC
+  outfits.
+- Characters are assembled from the save: one skeleton, part masks,
+  morphs checked bit for bit against the exe, weapons.
+- `ddeconomy`, `ddrift` and `ddprogress` runtimes exist.
+
+**Next actions:**
+- the M3 GUI join test;
+- the M4 think tables;
+- play from the save in `--play`, once claude-10 releases `play.rs`;
+- the live trace for the drop path.
