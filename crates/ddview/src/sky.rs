@@ -179,6 +179,17 @@ pub struct StageSky {
     pub env_colors: [[f32; 3]; 5],
     /// The cloud domes (`uSkyCloudModel`) of this weather.
     pub clouds: Vec<CloudDome>,
+    /// The sun's shadow (`uSkyStableShadow`), when the scheduler has one.
+    pub shadow: Option<SkyShadow>,
+}
+
+/// `uSkyStableShadow` (a `uStableShadow`: one shadow map over the view,
+/// not cascades): its view distance (cm) and distribution, as the sky
+/// scheduler sets them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkyShadow {
+    pub view_distance: f32,
+    pub distribution: f32,
 }
 
 /// A `uSkyCloudModel` of the sky scheduler.
@@ -254,6 +265,13 @@ impl StageSky {
         inp.cloud_scattering = wmf("CloudScattering", own("mCloudScattering", inp.cloud_scattering));
         inp.cloud_eccentricity = wmf("CloudEccentricity", own("mCloudEccentricity", inp.cloud_eccentricity));
         let lights = Self::light_units(&s, w);
+        let stable = mtarc::type_hash("uSkyStableShadow");
+        let shadow = s.tracks.iter().position(|t| t.type_hash == stable).and_then(|i| {
+            Some(SkyShadow {
+                view_distance: float(&s, i, "mShadowViewDistanceEx")?,
+                distribution: float(&s, i, "mShadowDistribution").unwrap_or(0.0),
+            })
+        });
         // The arrays' tracks repeat the name; the type hash field holds the
         // element index.
         let element = |name: &str, i: u32| {
@@ -296,7 +314,7 @@ impl StageSky {
                 })
             })
             .collect();
-        Some(StageSky { sky: sky_res, inputs: inp, lights, env_colors, clouds })
+        Some(StageSky { sky: sky_res, inputs: inp, lights, env_colors, clouds, shadow })
     }
 
     /// The light units of the scheduler by their tracks: the infinite
@@ -498,5 +516,22 @@ mod tests {
         assert!(a[0] == 2000.0 && (a[1] - 0.001).abs() < 1e-9 && f == 1.0);
         // cos 45 deg and 1 / (cos 15 deg - cos 45 deg)
         assert!((a[2] - 0.707_106_8).abs() < 1e-6 && (a[3] - 3.863_7).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    #[test]
+    fn the_stage_skies_have_a_stable_shadow() {
+        let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !native.exists() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        for stage in [100, 200] {
+            let s = super::StageSky::load(&vfs, stage, 0).unwrap().shadow.expect("uSkyStableShadow");
+            eprintln!("stage {stage}: {s:?}");
+            assert!(s.view_distance > 0.0);
+        }
     }
 }

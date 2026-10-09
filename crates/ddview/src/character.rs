@@ -639,6 +639,7 @@ fn spawn_meshes(
 /// then mixes in the pose frozen at the last motion change while its fade
 /// lasts (`mtlmt::blend`).
 pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Query<&mut Transform>) {
+    let _timing = crate::perf::Section::start("character::animate");
     // the model's frame step in motion frames (the same clamp as play::step)
     let step = time.delta_secs().min(0.1) * MOTION_FPS;
     for mut p in &mut players {

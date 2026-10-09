@@ -580,6 +580,7 @@ pub fn step(
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
 ) {
+    let _timing = crate::perf::Section::start("opening::step");
     let (Some(mut st), Some(res)) = (state, res) else {
         return;
     };
@@ -972,6 +973,7 @@ pub fn cutscene(
     mut gameplay_projection: Local<GameplayProjection>,
     mut voices: Local<Option<mtsound::voice::EventVoices>>,
 ) {
+    let _timing = crate::perf::Section::start("opening::cutscene");
     let Some(res) = res else { return };
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;

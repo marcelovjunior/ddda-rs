@@ -267,6 +267,7 @@ fn model_centre(parts: &[stage::Part], meshes: &Assets<Mesh>) -> Vec3 {
 
 /// Shows each [`Lod`] part only at its level.
 pub fn lod_update(cams: Query<(&Camera, &GlobalTransform), With<Camera3d>>, mut parts: Query<(&Lod, &mut Visibility)>) {
+    let _timing = crate::perf::Section::start("event::lod_update");
     let Some((_, cam)) = cams.iter().find(|(c, _)| c.is_active) else { return };
     let eye = cam.translation();
     for (l, mut v) in &mut parts {
@@ -291,6 +292,11 @@ fn spawn_parts(
         let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string()), stage::StageEntity));
         if p.lod != 255 {
             e.insert((Lod { mask: p.lod, mid: p.lod_dist[0], low: p.lod_dist[1], centre, view_range }, Visibility::Hidden));
+        }
+        // only parts whose draw mode has the shadow-cast pass (as stage.rs's
+        // cells): Cassardis drawn into every cascade cost 40 ms a frame
+        if !p.casts_shadow {
+            e.insert(bevy::light::NotShadowCaster);
         }
         match &p.material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
@@ -397,8 +403,15 @@ pub fn spawn_stage_models(
     for m in &models {
         if let Some(parts) = loader.model(m, meshes, materials, images) {
             // Converted meshes are already in viewer units (stage.rs).
+            // *Interim:* the whole-stage models keep the near level (as the
+            // view range FARTHEST does). Measured from their centre, which
+            // can be tens of metres from the ground under the player, they
+            // dropped near ground (maintainer's probe, st200_md06).
+            // `uBaseModel.mLODType` (+0x108 bits 9-12, a fixed level when
+            // not negative) is the original's override; who sets it for
+            // stage models is not traced.
             let centre = model_centre(&parts, meshes);
-            spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, loader.view_range);
+            spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, 3);
         }
     }
     let mut placed = 0;

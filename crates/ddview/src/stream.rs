@@ -239,6 +239,7 @@ pub fn update(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _timing = crate::perf::Section::start("stream::update");
     let Some(mut s) = streamer else { return };
     let s = &mut *s;
     if s.stage != FIELD {

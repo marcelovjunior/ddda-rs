@@ -615,7 +615,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -670,6 +670,12 @@ fn setup(
         tag: None,
     };
     loader.index_models();
+    // The sun's shadow as the stage's sky scheduler sets it (sky.rs
+    // SkyShadow; applied to the directional light by sky_shadow).
+    let shadow_stage = if args.opening { opening::STAGE } else { args.stage };
+    commands.insert_resource(SkyShadowSetting(
+        sky::StageSky::load(vfs, shadow_stage, args.weather.unwrap_or(0)).and_then(|s| s.shadow),
+    ));
     if let Some(sex) = args.charaedit {
         // facing the body from the front, about chest high
         commands.spawn((
@@ -1036,6 +1042,39 @@ fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
     play::Party { arisen, pawn, goblins: if joining { 0 } else { args.goblins }, kits }
 }
 
+/// The stage's sun shadow settings, once read.
+#[derive(Resource)]
+struct SkyShadowSetting(Option<sky::SkyShadow>);
+
+/// The original's sun shadow is a `uSkyStableShadow`: one shadow map over
+/// `mShadowViewDistanceEx` (6000 cm on stages 100 and 200), not Bevy's
+/// default four cascades over 1 km, which drew every caster of a stage
+/// several times a frame. `mShadowDistribution` (0.25) is not applied (its
+/// use is not traced).
+fn sky_shadow(
+    mut commands: Commands,
+    setting: Option<Res<SkyShadowSetting>>,
+    lights: Query<Entity, (With<DirectionalLight>, Without<ShadowSet>)>,
+) {
+    let Some(setting) = setting else { return };
+    let Some(sh) = setting.0 else { return };
+    for e in &lights {
+        let far = sh.view_distance * stage::UNIT;
+        let config = bevy::light::CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 0.1,
+            maximum_distance: far,
+            first_cascade_far_bound: far,
+            overlap_proportion: 0.0,
+        }
+        .build();
+        commands.entity(e).insert((config, ShadowSet));
+    }
+}
+
+#[derive(Component)]
+struct ShadowSet;
+
 /// Sun and camera, shared by the stage and character modes.
 fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<stage::post::DdPost>) {
     // Sun. Without --light its direction and strength are placeholders
@@ -1051,7 +1090,8 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<sta
     commands.spawn((
         DirectionalLight {
             illuminance: 12_000.0,
-            shadow_maps_enabled: true,
+            // DDVIEW_NO_SHADOWS: performance experiments only
+            shadow_maps_enabled: std::env::var_os("DDVIEW_NO_SHADOWS").is_none(),
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, 0.0).looking_to(-to_light, Vec3::Y),

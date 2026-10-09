@@ -366,6 +366,7 @@ fn resolve_dd_materials(
     sky: Option<Res<SkyEnv>>,
     env_colors: Option<Res<EnvCubeColors>>,
 ) {
+    let _timing = crate::perf::Section::start("stage::resolve_dd_materials");
     for (e, p) in &pending {
         let h = p
             .0
