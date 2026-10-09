@@ -693,6 +693,14 @@ pub trait Ground {
         None
     }
 
+    /// Nearest ray hit and its material flag word (camera getter
+    /// 0x007c6f90). Query first, then filter the returned hit; skipping
+    /// flagged triangles before the query changes the camera's behavior.
+    /// Geometry-only implementations retain their existing ray behavior.
+    fn ray_with_flags(&self, from: [f32; 3], to: [f32; 3]) -> Option<(RayHit, u32)> {
+        self.ray(from, to).map(|hit| (hit, 0))
+    }
+
     /// Whether any surface lies within `radius` of `center` (the
     /// original's sphere test `0x00FAF4B0`).
     fn sphere(&self, _center: [f32; 3], _radius: f32) -> bool {

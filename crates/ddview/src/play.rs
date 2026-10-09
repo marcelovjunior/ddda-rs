@@ -782,38 +782,49 @@ pub const CAMERA_FOV: f32 = 55.0;
 ///    target, of radius `near x 1.3 + (1 - |cos|) x 10`. The cosine is
 ///    between the view direction and the eye-target direction, which are
 ///    the same here, so the radius is `1.3 x near`. If it overlaps
-///    collision, it is swept toward the target (`0x010fe5e0`) and the eye
+///    collision, it is swept from the target toward that centre (`0x010fe5e0`) and the eye
 ///    goes one near-plane distance behind the sweep's stop.
-/// So the near plane never cuts into a wall.
-/// *Not modelled:* hits whose attribute has bit 0x10 (`0x007c6f90`) are
-/// ignored by the original; the sweep's stop is found here by bisection.
+/// Nearest ray/sweep hits whose material has bit 0x10 are discarded after
+/// querying (0x007c6f90). Convex contact uses the same geometric replacement
+/// as character collision, not the original GJK callback implementation.
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
     let mut eye = target - dir * CAMERA_DISTANCE;
-    if let Some(hit) = ground.ray(target.to_array(), eye.to_array()) {
-        eye = Vec3::from(hit.point);
+    if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
+        if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
     let toward = (target - eye).normalize_or_zero();
     let radius = CAMERA_NEAR * 1.3;
     let centre = eye + toward * CAMERA_NEAR;
     if sphere_hits(ground, centre, radius) {
-        // the farthest point from the target, between the centre and the
-        // target, where the sphere is clear
-        let (mut clear, mut blocked) = (1.0f32, 0.0f32);
-        if !sphere_hits(ground, target, radius) {
-            for _ in 0..12 {
-                let mid = (clear + blocked) * 0.5;
-                if sphere_hits(ground, centre.lerp(target, mid), radius) {
-                    blocked = mid;
-                } else {
-                    clear = mid;
-                }
-            }
+        if let Some((stop, flags)) = camera_sphere_cast(ground, target, centre, radius) {
+            if flags & 0x10 == 0 { eye = stop - toward * CAMERA_NEAR; }
         }
-        eye = centre.lerp(target, clear) - toward * CAMERA_NEAR;
     }
     (eye, target)
+}
+
+/// Translated query direction/response from 0x010fdea0 / 0x010fd710
+/// (DDDA.exe 2017-12-13 Steam). The queried start is the target. Only the
+/// nearest contact's flags are returned, even if the camera will ignore it.
+fn camera_sphere_cast(ground: &dyn ddsim::Ground, start: Vec3, end: Vec3, radius: f32) -> Option<(Vec3, u32)> {
+    let mut faces = Vec::new();
+    let pad = Vec3::splat(radius);
+    ground.triangles_in((start.min(end) - pad).to_array(), (start.max(end) + pad).to_array(), &mut faces);
+    let motion = end - start;
+    let mut nearest: Option<(f32, Vec3, f32, u32)> = None;
+    for (face, flags) in &faces {
+        let Some((fraction, normal, gap)) = ddsim::sweep::sphere_contact(start.to_array(), radius, motion.to_array(), face) else { continue };
+        if nearest.is_none_or(|hit| fraction < hit.0) {
+            nearest = Some((fraction, Vec3::from(normal), gap, *flags));
+        }
+    }
+    nearest.map(|(fraction, normal, gap, flags)| {
+        let stop = if gap < 0.0 { start + normal * (0.1 - gap) }
+            else { start + motion * fraction + normal * 0.1 };
+        (stop, flags)
+    })
 }
 
 /// Whether a sphere touches any collision triangle.
@@ -1134,6 +1145,39 @@ mod tests {
         }
         let (eye, _) = follow_camera(&Plane, Vec3::ZERO, 0.0, 0.0);
         assert!((eye.z - (-150.0 + 1.3 * CAMERA_NEAR - CAMERA_NEAR)).abs() < 1.0, "{eye:?}");
+    }
+
+    #[test]
+    fn camera_cast_stops_at_first_thin_wall_from_target() {
+        let mut terrain = ddworld::Terrain::empty();
+        for z in [-30.0, -110.0] {
+            terrain.add([[-1000.0, -1000.0, z], [1000.0, -1000.0, z], [0.0, 1000.0, z]]);
+        }
+        // End overlaps the second wall, but the cast must meet the first
+        // one. Searching backwards from the end can choose the wrong pocket.
+        let (stop, _) = camera_sphere_cast(&terrain, Vec3::ZERO, Vec3::new(0.0, 0.0, -100.0), 20.0).unwrap();
+        assert!((stop.z + 9.9).abs() < 0.002, "{stop:?}");
+        assert!(!sphere_hits(&terrain, stop, 20.0));
+    }
+
+    #[test]
+    fn camera_discards_nearest_flagged_hit_without_searching_past_it() {
+        let mut terrain = ddworld::Terrain::empty();
+        for (z, flags) in [(-150.0, 0x10), (-190.0, 0)] {
+            terrain.add_flagged([[-1000.0, -1000.0, z], [1000.0, -1000.0, z], [0.0, 1000.0, z]], flags);
+        }
+        let (eye, _) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+        assert!((eye.z + CAMERA_DISTANCE).abs() < 0.001, "{eye:?}");
+        let (_, flags) = camera_sphere_cast(&terrain, Vec3::new(0.0, 140.0, 0.0), Vec3::new(0.0, 140.0, -134.0), 124.8).unwrap();
+        assert_eq!(flags, 0x10);
+    }
+
+    #[test]
+    fn camera_sphere_initial_overlap_uses_penetration_normal() {
+        let mut terrain = ddworld::Terrain::empty();
+        terrain.add([[-1000.0, -1000.0, -10.0], [1000.0, -1000.0, -10.0], [0.0, 1000.0, -10.0]]);
+        let (stop, _) = camera_sphere_cast(&terrain, Vec3::ZERO, Vec3::new(0.0, 0.0, -50.0), 20.0).unwrap();
+        assert!((stop.z - 10.1).abs() < 0.002, "{stop:?}");
     }
 
     #[test]

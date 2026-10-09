@@ -60,3 +60,13 @@ Still open for the lane:
   check around the target model;
 - any smoothing of the pull-in and recovery in the camera's update;
 - an oracle comparison next to a wall.
+
+codex-30, 2026-10-09, followup on `task/camera-near` (head priority #2382):
+traced **0x010fdea0**: the sphere starts at target and moves outward to
+the near-plane centre. The bisection interpretation above was reversed.
+The replacement uses existing `ddsim` sphere-contact geometry and
+**0x010fd710**'s 0.1 cm contact response, retaining the explicit geometric
+replacement limitation. The bit0x10 material filter is applied to the
+nearest ray/sweep result, not to candidate triangles. Nonfield stages now
+retain SBC metadata. See camera-near Results and CAMERA.md for validation
+and remaining target-model/push/smoothing and original-comparison work.
