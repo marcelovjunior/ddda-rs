@@ -42,9 +42,15 @@ pub use ledge::{LedgeParam, LEDGE_SHIPPED};
 /// 30 fps gives 0.317 s), and non-locomotion motions advance 30 frames/s.
 pub const MOTION_FPS: f32 = 30.0;
 
-/// Playback rate of the walk, run and sprint motions: recorded at 34.5
-/// frames/s (the motion frame counter, uPlayer motion +0x3CC) against 30.0
-/// for other motions. *Measured*; where the rate is set is not traced.
+/// Time factor of walking, running and sprinting. In the acceptance traces
+/// (docs/ACCEPTANCE.md) the player's own cUnit `mDeltaTime` (+0x14) is
+/// exactly 1.15 x sMain's while the action is walk/run (2), sprint start
+/// (125) or sprint (5), and 1.0 otherwise; the per-frame velocity (+0x2530)
+/// is not scaled, so both the motion frame and the movement advance 1.15
+/// times faster than game time. *Measured*: the writer of the scaled delta
+/// is not traced (`m_pl000_00` ids 0x1E4 / 0x1E5 hold 1.15, no reader
+/// found). The original applies the factor two game frames after the
+/// action changes; that lag (about 0.03 s) is not modelled.
 pub const LOCOMOTION_RATE: f32 = 1.15;
 
 /// Factor on walk and run speed (uPlayer +0xDA8, multiplied in
@@ -437,6 +443,25 @@ fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
         Some(m) if (slid[0] - from[0]) * m[0] + (slid[2] - from[2]) * m[1] >= 0.0 => slid,
         Some(_) => from,
     }
+}
+
+/// The horizontal step `m` (x, z) of a velocity-driven move, projected onto
+/// the ground plane under `feet` and flattened again: on a slope of angle
+/// t along the move it shrinks to m cos^2 t. *Measured*, not traced: in the
+/// run and sprint traces (docs/ACCEPTANCE.md) the horizontal step over
+/// |velocity| x unit delta is 1 / (1 + slope^2) within 0.5% over slopes
+/// -0.25..0.29 (e.g. 0.957 at 0.208), which is what removing the velocity's
+/// component along the ground normal gives. Floors only (`ledge::FLOOR_MIN_NY`).
+fn along_ground(ground: &dyn Ground, feet: [f32; 3], m: [f32; 2]) -> [f32; 2] {
+    let Some(h) = ground.ray([feet[0], feet[1] + 1.0, feet[2]], [feet[0], feet[1] - STEP_DOWN, feet[2]]) else {
+        return m;
+    };
+    let n = h.normal;
+    if n[1] < ledge::FLOOR_MIN_NY {
+        return m;
+    }
+    let d = m[0] * n[0] + m[1] * n[2];
+    [m[0] - d * n[0], m[1] - d * n[2]]
 }
 
 /// Stick magnitude above which the player moves. *Placeholder*.
@@ -883,10 +908,12 @@ impl Sim {
         let p = &mut self.players[i];
         let mut target = p.position;
         if let Some(v) = speed {
-            // velocity along the facing; the motion only animates
+            // velocity along the facing, in the player's own (scaled) time;
+            // the motion only animates
             let (s, c) = p.yaw.sin_cos();
-            target[0] += v * dt * s;
-            target[2] += v * dt * c;
+            let step = along_ground(ground, p.position, [v * dt * LOCOMOTION_RATE * s, v * dt * LOCOMOTION_RATE * c]);
+            target[0] += step[0];
+            target[2] += step[1];
             p.speed = v;
             let f = p.frame + dt * LOCOMOTION_RATE;
             p.frame = if state.looping() { f.rem_euclid(period) } else { f };
@@ -1071,7 +1098,8 @@ mod tests {
         }
     }
 
-    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run;
+    /// Five frames of running: the velocity in the player's scaled time.
+    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run * LOCOMOTION_RATE;
 
     #[test]
     fn running_moves_forward_at_the_run_speed() {
@@ -1140,7 +1168,7 @@ mod tests {
             s.step(1.0 / MOTION_FPS, &inputs, &Flat(0.0));
             let z = s.player(0).unwrap().position[2];
             assert!(
-                (z - last - MOVE_SHIPPED.run).abs() < 1e-2,
+                (z - last - MOVE_SHIPPED.run * LOCOMOTION_RATE).abs() < 1e-2,
                 "moved {} in one frame",
                 z - last
             );
@@ -1679,7 +1707,8 @@ mod tests {
         assert_eq!(p.state.motion_id(), 0x55);
         // 12.0 x 0.8471 = 10.165 cm per frame, as recorded (uPlayer +0x2530)
         assert!((p.speed - 10.165).abs() < 1e-3, "{}", p.speed);
-        assert!((p.position[2] - 101.65).abs() < 1e-2, "{:?}", p.position);
+        // 10 frames x 10.165 x 1.15 (the scaled unit time)
+        assert!((p.position[2] - 116.8975).abs() < 1e-2, "{:?}", p.position);
     }
 
     #[test]
