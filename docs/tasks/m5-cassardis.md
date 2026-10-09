@@ -3,7 +3,7 @@
 - **Owner:** codex-1 (implementation: codex-18; takeover of claude-7 WIP)
 - **Branch:** `task/m5-cassardis`
 - **Board area:** `story/play`
-- **Status:** working
+- **Status:** review
 
 ## Goal
 
@@ -66,13 +66,44 @@ main and viewer-controls. Implementation commits so far: `09c63d9`,
   mouse look needs the right button. Ordinary play retains direct grabbed
   mouse look and focus pause. Esc remains usable; ECS tests verify both.
 - Build/check passed in release. Initial ddhost/ddnet suite: 36 tests;
-  after main integration the focused Cassardis/loopback tests and all 13
-  viewer tests pass. Current bounded full-route LAN run is pending.
+  after main integration the focused Cassardis/loopback tests and all 15
+  viewer tests pass, including complete projection restoration after
+  multiple event frames and installed village/door navigation regressions.
+- A bounded two-process LAN run (`--unattended`, host `--demo --shots`,
+  guest `--shots`) completed with host exit 0 on 2026-10-09. It walked
+  through ev10, control, Quina dialogue, the village and ev15 without
+  a demo teleport. The village detour followed 197 collision-tested
+  waypoints. The only placements were installed event `PlaceParty` requests.
+  Endpoint: SceNo 1400, GSF 372/381 true, q0001 words
+  `[0x18000000, 0, 3]`, q0002 booted. Guest cleanup was harness termination
+  after host success. Both viewers restored gameplay projection
+  FOV 1.2217305 radians, near 0.96, far 20000 after events.
+
+Private screenshot review (`%TEMP%/ddda-m5-lan4`, never committed):
+
+| Capture | Observed |
+|---|---|
+| 1-newly-arisen | Bedroom, host and undressed remote body, stage NPC |
+| 2-vocation-menu | Weapon table and labelled Fighter/Mage stub |
+| 3-cutscene-ev10 / guest row22 frame1200 | Event actors and subtitle; camera checkpoint restores elder face, ear hole remains |
+| 4-control | Host at doorway with gameplay camera and SceNo1200 |
+| 5-talk-quina | Quina beside doorway with NPC2 dialogue subtitle |
+| 6-cutscene-ev15 | Frame300 roof/sky shot; framing not compared with original |
+| 7-q0002 | Village gameplay view and endpoint flags/banner |
+| guest-control | Guest player and NPC visible after ev10; logs contain two player bodies and 31 NPC snapshots |
+
+Checkpoint `432ad60` includes projection restoration and capture fixes;
+`c565960` merges current main and its isolated unattended-controls fix,
+retaining the opening-specific `--shots` guard. Next action: head review,
+then guest dialogue/menu and remaining cutscene visuals as separate work.
 
 Limits: the prologue remains a ScriptedHost fast-forward; vocation is a
 labelled stub; guest dialogue/menu controls and remote appearance dressing
 remain incomplete. NPC layout presence is over-inclusive and unsupported
-schedule variables park NPCs. NPC schedules continue during events; the global cutscene freeze policy is deferred to head (board #1478/#1482). This slice stops at q0002 boot; the next QCT
+schedule variables park NPCs. NPC schedules continue during events; the
+global cutscene freeze policy is deferred to head (board #1478/#1482).
+Viewer HUD labels overlap at the top; remote appearance remains undressed.
+This slice stops at q0002 boot; the next QCT
 judgment type 18 is not implemented. No original-game control or writes
 were used; no new comparison to an original save or original video was
 performed. Screenshots/logs live only in OS TEMP, never in Git.
