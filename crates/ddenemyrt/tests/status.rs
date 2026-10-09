@@ -20,6 +20,37 @@ fn data() -> Option<Arc<FightData>> {
 }
 
 #[test]
+fn item_recovery_is_per_seat_and_does_not_revive() {
+    use ddenemyrt::combat::Victim;
+    let Some(data) = data() else { return };
+    let mut fight = Fight::new(data.clone());
+    fight.add_arisen(0);
+    fight.add_arisen(1);
+    for seat in [0, 1] {
+        let fighter = &mut fight.arisen.get_mut(&seat).unwrap().fighter;
+        assert!(fighter.statuses.add(kind::POISON, &data.tables.status_player));
+        let Victim::Player { hp, .. } = &mut fighter.victim else { unreachable!() };
+        *hp = 50.0;
+    }
+    let mask = 1u64 << kind::POISON;
+    assert_eq!(fight.recover_item(0, 20.0, mask), Some((20.0, vec![kind::POISON])));
+    assert_eq!(fight.arisen[&0].fighter.victim.hp(), 70.0);
+    assert_eq!(fight.arisen[&1].fighter.victim.hp(), 50.0);
+    assert!(fight.arisen[&1].fighter.statuses.has(kind::POISON));
+    assert_eq!(fight.recover_item(255, 20.0, mask), None);
+    let Victim::Player { hp, hp_max, .. } = &mut fight.arisen.get_mut(&0).unwrap().fighter.victim
+        else { unreachable!() };
+    *hp = *hp_max - 5.0;
+    assert_eq!(fight.recover_item(0, 20.0, mask), Some((5.0, vec![])));
+    let Victim::Player { hp, .. } = &mut fight.arisen.get_mut(&1).unwrap().fighter.victim
+        else { unreachable!() };
+    *hp = 0.0;
+    assert_eq!(fight.recover_item(1, 20.0, mask), None);
+    assert_eq!(fight.arisen[&1].fighter.victim.hp(), 0.0);
+    assert!(fight.arisen[&1].fighter.statuses.has(kind::POISON));
+}
+
+#[test]
 fn poison_ticks_and_wears_off_in_the_goblin_fight() {
     let Some(data) = data() else { return };
     let poison = *data.tables.status_enemy.get(kind::POISON).unwrap();
