@@ -12,6 +12,7 @@ ddcombat = { path = "../ddcombat" }
 ddenemy = { path = "../ddenemy" }
 ddexe = { path = "../ddexe" }
 ddparam = { path = "../ddparam" }
+ddpawnai = { path = "../ddpawnai" }
 dditem = { path = "../dditem" }
 ddsim = { path = "../ddsim" }
 ddskill = { path = "../ddskill" }

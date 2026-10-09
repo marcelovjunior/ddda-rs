@@ -34,6 +34,8 @@ pub struct FightData {
     pub attack_param: ddsim::AttackParam,
     pub goblin: GoblinData,
     pub tables: Tables,
+    /// The pawns' AI data (`crate::pawn`).
+    pub pawn: ddpawnai::pawn::PawnData,
 }
 
 impl FightData {
@@ -54,6 +56,7 @@ impl FightData {
                 game: adjust(r"param\game")?,
                 dlc: adjust(r"param\dlc")?,
             },
+            pawn: crate::pawn::load(vfs)?,
         })
     }
 }
@@ -95,6 +98,8 @@ pub struct Fight {
     /// The Arisen each shell owner id was fired by (kept after the shell).
     pub shooters: BTreeMap<u32, u32>,
     next_shell: u32,
+    /// Pawns by seat (each also an [`ArisenFighter`] in `arisen`).
+    pub pawns: BTreeMap<u8, crate::pawn::PawnSeat>,
     /// *Placeholder* critical roll (only critical-capable weapons read it).
     roll_seed: u32,
 }
@@ -116,6 +121,7 @@ impl Fight {
             shells: Vec::new(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
+            pawns: BTreeMap::new(),
             roll_seed: 0x1234_5678,
         }
     }
@@ -458,6 +464,9 @@ impl Fight {
         }
         for g in &self.goblins {
             s += &g.digest();
+        }
+        for (seat, p) in &self.pawns {
+            s += &format!("p{seat}:{:?}:{};", p.brain.goal, p.brain.history.len());
         }
         s
     }

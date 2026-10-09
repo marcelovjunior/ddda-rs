@@ -8,7 +8,9 @@
 //!   ddsim's);
 //! * [`shell`]: the staff's shells;
 //! * [`goblin`]: the goblin unit (uEm0100): its think (`ddai`), actions,
-//!   motions and root motion on the world's collision.
+//!   motions and root motion on the world's collision;
+//! * [`pawn`]: pawns (`ddpawnai`): their virtual pads drive their bodies
+//!   in ddsim like players.
 //!
 //! Nothing here assumes one player: every fighter has an owner id, and
 //! targets are picked from the host's list of Arisen.
@@ -18,5 +20,6 @@ pub mod body;
 pub mod combat;
 pub mod fight;
 pub mod goblin;
+pub mod pawn;
 pub mod pushout;
 pub mod shell;

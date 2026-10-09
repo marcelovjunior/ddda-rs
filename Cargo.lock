@@ -2333,6 +2333,7 @@ dependencies = [
  "ddexe",
  "dditem",
  "ddparam",
+ "ddpawnai",
  "ddsim",
  "ddskill",
  "ddvfs",
@@ -2438,6 +2439,15 @@ dependencies = [
  "ddnpc",
  "ddparam",
  "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
+name = "ddpawnai"
+version = "0.1.0"
+dependencies = [
  "ddvfs",
  "mtarc",
  "mtxfs",
