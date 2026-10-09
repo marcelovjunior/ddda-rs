@@ -8,9 +8,15 @@ pub struct GameAudioPlugin(pub PathBuf);
 impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         let vfs = ddvfs::Vfs::open(&self.0).map_err(|e| warn!("audio disabled: {e}")).ok();
+        if let Some(vfs) = &vfs {
+            match PlayerMotionSounds::load(vfs) {
+                Ok(sounds) => { app.insert_resource(sounds); }
+                Err(e) => warn!("motion audio disabled: {e}"),
+            }
+        }
         app.add_audio_source::<DecodedAudio>()
             .insert_resource(AudioState { vfs, pending: Vec::new(), cache: HashMap::new(), failed: HashSet::new() })
-            .add_systems(PostUpdate, (play_pending, sync_pause).chain());
+            .add_systems(PostUpdate, (queue_motion_sounds, play_pending, sync_pause).chain());
     }
 }
 
@@ -20,6 +26,222 @@ struct AudioState {
     pending: Vec<Cue>,
     cache: HashMap<String, Handle<DecodedAudio>>,
     failed: HashSet<String>,
+}
+
+/// Presentation-only RNG: same generator as 0x00d00690, isolated from the
+/// host's simulation RNG. The fixed seed is a viewer choice, not a matching
+/// original-game sequence. Random resource state is shared across actors.
+struct SoundChoices {
+    requests: HashMap<String, Vec<u8>>,
+    random: HashMap<String, mtsound::random::RandomRequests>,
+    rng: ddpawn::rift::XorShift128,
+}
+impl Default for SoundChoices {
+    fn default() -> Self {
+        Self { requests: HashMap::new(), random: HashMap::new(),
+            rng: ddpawn::rift::XorShift128::seeded(0) }
+    }
+}
+impl SoundChoices {
+    fn select(&mut self, vfs: &ddvfs::Vfs, path: &str, id: u16) -> Result<u16, String> {
+        use ddpawn::rift::PawnRng;
+        if !self.requests.contains_key(path) {
+            self.requests.insert(path.into(), vfs.read(path, mtarc::type_hash("rSoundRequest"))?);
+        }
+        let requests = mtsound::Requests::parse(&self.requests[path])?;
+        let request = requests.request(id).ok_or("sound request absent")?;
+        let word = |offset| u32::from_le_bytes(request.raw[offset..offset+4].try_into().unwrap());
+        if word(8) != 4 { return Ok(id); }
+        // Translated from 0x00ddb340 (DDDA.exe 2017-12-13 Steam).
+        // Parent chains and inherited mixer overrides are not reproduced.
+        let next = u16::from_le_bytes(request.raw[28..30].try_into().unwrap());
+        if next != u16::MAX && next != id { return Err("random sound request chain unsupported".into()); }
+        let random_path = requests.random.ok_or("random sound resource absent")?;
+        if !self.random.contains_key(random_path) {
+            let bytes = vfs.read(random_path, mtarc::type_hash("rSoundRandom"))?;
+            self.random.insert(random_path.into(), mtsound::random::RandomRequests::parse(&bytes)?);
+        }
+        let row = self.random.get_mut(random_path).unwrap().row_mut(word(52))
+            .ok_or("random sound row absent")?;
+        // Viewer safety bound; the original retries indefinitely. Do not
+        // renormalize weights or substitute a request on exhaustion.
+        for _ in 0..128 {
+            if let Some(selected) = row.draw(self.rng.next_u32()) {
+                let selected = u16::try_from(selected).map_err(|_| "random sound selected invalid ID")?;
+                requests.single_wave(selected)?;
+                return Ok(selected);
+            }
+        }
+        Err("random sound retry budget exhausted".into())
+    }
+}
+
+/// Actor-local sampling inputs from a fixed simulation tick. Presentation
+/// interpolation must not call this: it could repeat or skip event edges.
+pub struct ActorSoundFrame<'a> {
+    pub owner: u32,
+    pub layer: u8,
+    pub body: &'a ddhost::ddenemyrt::body::Body,
+    pub motion: ddhost::ddenemyrt::body::MotionId,
+    pub frame: f32,
+    pub position: [f32; 3],
+    pub yaw: f32,
+    /// Known uSoundMotionSe selector. Unknown accepts only player requests
+    /// invariant between selectors 0 and 2 (0x00c736f0).
+    pub selector: Option<u32>,
+    pub primary_model: Option<u32>,
+    pub secondary_model: Option<u32>,
+}
+
+/// The two independent results used by the surface sound lookup.
+pub struct SoundSurface {
+    pub material_word: u32,
+    pub triangle_attribute: u32,
+}
+
+/// Loaded player sound resources and rising bits per actor AND motion layer.
+/// The fixed-step owner calls sample; resolved requests can use the same
+/// ordinary SREQ playback path as event effects.
+#[derive(Resource)]
+pub struct PlayerMotionSounds {
+    requests: mtsound::motion::MotionRequests,
+    surfaces: mtsound::motion::SurfaceRequests,
+    attribute_banks: Vec<String>,
+    previous: HashMap<(u32, u8), u32>,
+    kit_models: HashMap<ddsim::Weapon, u32>,
+    pending: Vec<Cue>,
+}
+
+impl PlayerMotionSounds {
+    pub fn load(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        let requests = mtsound::motion::MotionRequests::parse(&vfs.read(
+            r"sound\se\pl_com\pl_com_bmse", mtarc::type_hash("rSoundMotionSe"))?)?;
+        let surfaces = mtsound::motion::SurfaceRequests::parse(&vfs.read(
+            r"sound\se\mt\mt_attri", mtarc::type_hash("rSoundAttributeSe"))?)?;
+        let file = ddexe::ExeFile::next_to(&vfs.root)?;
+        let image = file.image()?;
+        // Translated from player sound binding 0x00b5f880
+        // (DDDA.exe 2017-12-13 Steam). Read bulk paths from the install.
+        let attribute_banks = (0..30).map(|i| {
+            image.cstr(image.u32(0x0187_5288 + 4 * i)?)
+        }).collect::<Result<Vec<_>, ddexe::Error>>()?;
+        let items = dditem::itl::ItemList::parse(&vfs.read(r"etc\item\itemList",
+            mtarc::type_hash("rItemList"))?).map_err(|e| e.to_string())?;
+        // Match the current fight's explicitly limited Fighter/Mage kits.
+        // Saved equipment beyond those kits is not yet a combat input.
+        use ddhost::ddenemyrt::arisen::{IRON_SWORD, MAGE_STAFF};
+        let mut kit_models = HashMap::new();
+        for (weapon, item) in [(ddsim::Weapon::Sword, IRON_SWORD), (ddsim::Weapon::Staff, MAGE_STAFF)] {
+            kit_models.insert(weapon, items.get(item).ok_or("audio combat-kit item absent")?.equip_model());
+        }
+        Ok(Self { requests, surfaces, attribute_banks, previous: HashMap::new(),
+            kit_models, pending: Vec::new() })
+    }
+
+    /// Only the request banks with traced bindings are available here.
+    fn bank(&self, slot: mtsound::motion::BankSlot, actor: &ActorSoundFrame<'_>) -> Option<String> {
+        use mtsound::motion::{BankSlot, weapon_banks};
+        Some(match slot {
+            BankSlot::Common => r"sound\se\pl_com\pl_com".into(),
+            BankSlot::Bound(2) => weapon_banks(actor.primary_model?, false)?.common,
+            BankSlot::Bound(3) => weapon_banks(actor.primary_model?, false)?.specific,
+            BankSlot::Bound(4) => weapon_banks(actor.secondary_model?, true)?.common,
+            BankSlot::Bound(5) => weapon_banks(actor.secondary_model?, true)?.specific,
+            BankSlot::Attribute(index) => self.attribute_banks.get(index as usize)?.clone(),
+            // Clothing, voice, other bound slots and motion streams unconnected.
+            _ => return None,
+        })
+    }
+
+    pub fn sample(&mut self, actor: ActorSoundFrame<'_>,
+        mut surface: impl FnMut([f32; 3], [f32; 3]) -> Option<SoundSurface>) -> Vec<Cue> {
+        use mtsound::motion::{attribute_bank, direct_bank, rising_ids, surface_index};
+        if actor.layer >= 8 { return Vec::new(); }
+        let key = (actor.owner, actor.layer);
+        let Some(events) = actor.body.events(actor.motion) else {
+            self.previous.insert(key, 0);
+            return Vec::new();
+        };
+        let group = &events.groups[3];
+        let wrapped = actor.body.wrap_frame(actor.motion, actor.frame);
+        let frame = wrapped as i32;
+        let bits = ddcombat::events::event_bits(group, frame, frame);
+        let previous = self.previous.insert(key, bits).unwrap_or(0);
+        let ids = rising_ids(previous, bits, &group.remap);
+        if ids.is_empty() { return Vec::new(); }
+        let pose = actor.body.pose(actor.motion, wrapped, actor.position, actor.yaw);
+        let mut cues = Vec::new();
+        for id in ids {
+            let Some(request) = self.requests.get(id) else { continue; };
+            let selected = match actor.selector {
+                Some(selector) => request.request(selector),
+                None if request.requests[0] == request.requests[2] => request.requests[0],
+                None => continue,
+            };
+            if selected < 0 { continue; }
+            let matrix = if request.joint < 0 { Some(&pose.model) } else {
+                pose.joints.iter().find(|(id, _)| i32::from(*id) == request.joint).map(|(_, m)| m)
+            };
+            let Some(matrix) = matrix else { continue; };
+            let position = ddcombat::volumes::transform_point(matrix, request.offset);
+            let (slot, selected) = if request.surface {
+                let Some(row) = self.surfaces.0.get(selected as usize).and_then(Option::as_ref) else { continue; };
+                // Cached unit-floor lookup (UseFindIntersect=false) unconnected.
+                if !row.find_intersection { continue; }
+                let from = [position[0], position[1] + request.up_margin, position[2]];
+                let to = [position[0], position[1] + request.down_margin, position[2]];
+                let Some(hit) = surface(from, to) else { continue; };
+                let selected = row.request(surface_index(hit.material_word));
+                // 0x00c72b60 / getter0x00423be0: independent bank override.
+                let index = if hit.triangle_attribute & 2 != 0 { 2 } else { 0 };
+                (attribute_bank(row.request_type, index), selected)
+            } else {
+                (direct_bank(request.request_type), selected as u32)
+            };
+            let Ok(se_id) = u16::try_from(selected) else { continue; };
+            if se_id == u16::MAX { continue; }
+            let Some(path) = slot.and_then(|slot| self.bank(slot, &actor)) else { continue; };
+            cues.push(Cue::Se { unit: format!("motion:{}:{}:{id}", actor.owner, actor.layer),
+                path, se_id: i32::from(se_id), conditional: None });
+        }
+        cues
+    }
+
+    pub fn forget_actor(&mut self, owner: u32) {
+        self.previous.retain(|(actor, _), _| *actor != owner);
+    }
+
+    /// Sample every represented actor once per fixed simulation tick, after
+    /// its motion advances. Layer zero only: upper-body/blended motion layers
+    /// are not yet represented by the headless player simulation.
+    pub fn sample_sim(&mut self, sim: &ddsim::Sim,
+        data: &ddhost::ddenemyrt::fight::FightData, terrain: &ddworld::Terrain) {
+        let present: HashSet<_> = sim.players.iter().map(|p| u32::from(p.id)).collect();
+        self.previous.retain(|(actor, _), _| present.contains(actor));
+        for player in &sim.players {
+            let body = player.skills.active.and_then(|a| data.skills.0.get(&a.id))
+                .map(|skill| &skill.body).unwrap_or_else(|| {
+                    if player.weapon == ddsim::Weapon::Staff { &data.mage.body } else { &data.arisen.body }
+                });
+            let motion = player.motion_id();
+            let cues = self.sample(ActorSoundFrame {
+                owner: u32::from(player.id), layer: 0, body,
+                motion: ddhost::ddenemyrt::body::MotionId::new((motion >> 8) as u8, motion & 255),
+                frame: player.frame, position: player.position, yaw: player.yaw,
+                selector: None,
+                primary_model: self.kit_models.get(&player.weapon).copied(),
+                secondary_model: None,
+            }, |from, to| {
+                let hit = terrain.ray_with_material(from, to)?;
+                Some(SoundSurface { material_word: hit.material?[1], triangle_attribute: hit.attribute? })
+            });
+            self.pending.extend(cues);
+        }
+    }
+}
+
+fn queue_motion_sounds(sounds: Option<ResMut<PlayerMotionSounds>>, mut audio: ResMut<AudioState>) {
+    if let Some(mut sounds) = sounds { audio.pending.append(&mut sounds.pending); }
 }
 
 /// Event owners supply their selected player/edit/pawn records. The default
@@ -67,12 +289,12 @@ pub fn voices_from_save_xml(xml: &str, slot: &str) -> Result<mtsound::voice::Eve
 }
 
 #[derive(Asset, TypePath, Clone)]
-struct DecodedAudio {
+pub(crate) struct DecodedAudio {
     samples: Arc<[f32]>,
     channels: ChannelCount,
     rate: SampleRate,
 }
-struct Samples { audio: DecodedAudio, at: usize }
+pub(crate) struct Samples { audio: DecodedAudio, at: usize }
 impl Iterator for Samples {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
@@ -114,12 +336,26 @@ struct EventSound(String);
 #[derive(Component)]
 struct OneShotSe;
 
-fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>) {
+fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>, mut choices: Local<SoundChoices>) {
     // Commands are deferred: include sources queued earlier in this batch so
     // two cues for one unit cannot leave two voices playing simultaneously.
     let mut units: HashMap<String, Vec<Entity>> = HashMap::new();
     for (entity, sound) in &playing { units.entry(sound.0.clone()).or_default().push(entity); }
-    for cue in std::mem::take(&mut audio.pending) {
+    for mut cue in std::mem::take(&mut audio.pending) {
+        if let Cue::Se { path, se_id, conditional: None, .. } = &mut cue {
+            if let Some(vfs) = &audio.vfs {
+                let selected = u16::try_from(*se_id).map_err(|_| "invalid SE ID".to_string())
+                    .and_then(|id| choices.select(vfs, path, id));
+                match selected {
+                    Ok(id) => *se_id = i32::from(id),
+                    Err(e) => {
+                        let key = format!("select:{path}:{se_id}");
+                        if audio.failed.insert(key.clone()) { warn!("audio {key}: {e}"); }
+                        continue;
+                    }
+                }
+            }
+        }
         let (unit, key) = match &cue {
             Cue::Stream { unit, path, stream_id, prepare_id, .. } =>
                 (unit, format!("{path}:{stream_id}:{prepare_id}")),
@@ -184,9 +420,101 @@ fn sync_pause(pause: Option<Res<crate::pause::PauseState>>, args: Option<Res<cra
     for sink in &sinks { if paused { sink.pause(); } else { sink.play(); } }
 }
 
+/// Plays already-decoded mono or stereo PCM once (the movies, movie.rs).
+pub(crate) fn play_pcm(
+    commands: &mut Commands,
+    assets: &mut Assets<DecodedAudio>,
+    samples: Vec<f32>,
+    channels: u16,
+    sample_rate: u32,
+) -> Result<Entity, String> {
+    let a = stereo(mtsound::decode::Pcm { channels, sample_rate, samples })?;
+    Ok(commands.spawn((AudioPlayer(assets.add(a)), PlaybackSettings::DESPAWN)).id())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installed_random_effects_vary_before_wave_cache_lookup() {
+        let root = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !root.is_dir() { return; }
+        let mut app = App::new();
+        let cue = Cue::Se { unit: "footstep".into(),
+            path: r"sound\se\mt\mt_soil\mt_soil".into(), se_id: 5, conditional: None };
+        app.insert_resource(Assets::<DecodedAudio>::default()).insert_resource(AudioState {
+            vfs: Some(ddvfs::Vfs::open(root).unwrap()), pending: vec![cue; 32],
+            cache: HashMap::new(), failed: HashSet::new(),
+        }).add_systems(Update, play_pending);
+        app.update();
+        let state = app.world().resource::<AudioState>();
+        assert!(state.failed.is_empty(), "{:?}", state.failed);
+        assert!(state.cache.len() > 1, "random request must not freeze its first wave in cache");
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<OneShotSe>>();
+        assert_eq!(query.iter(world).count(), 32);
+    }
+    #[test]
+    fn installed_motion_sounds_keep_actor_edges_separate_and_resolve_weapon_waves() {
+        use ddhost::ddenemyrt::{arisen::ArisenData, body::MotionId};
+        let root = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !root.is_dir() { eprintln!("SKIP: no install"); return; }
+        let vfs = ddvfs::Vfs::open(root).unwrap();
+        let data = ArisenData::fighter(&vfs).unwrap();
+        let items = dditem::itl::ItemList::parse(&vfs.read(r"etc\item\itemList",
+            mtarc::type_hash("rItemList")).unwrap()).unwrap();
+        let model = items.get(ddhost::ddenemyrt::arisen::IRON_SWORD).unwrap().equip_model();
+        let mut audio = PlayerMotionSounds::load(&vfs).unwrap();
+        let input = |owner, layer, motion, frame| ActorSoundFrame {
+            owner, layer, body: &data.body, motion, frame,
+            position: [0.0; 3], yaw: 0.0, selector: None,
+            primary_model: Some(model), secondary_model: None,
+        };
+        let surface = |_: [f32; 3], _: [f32; 3]| Some(SoundSurface {
+            material_word: 1, triangle_attribute: 0,
+        });
+        let mut footstep = None;
+        'motions: for slot in 0..data.body.banks[0].as_ref().unwrap().list.motions.len() {
+            let motion = MotionId::new(0, slot as u16);
+            audio.forget_actor(10);
+            for frame in 0..data.body.frames(motion) {
+                let cues = audio.sample(input(10, 0, motion, frame as f32), surface);
+                if cues.iter().any(|c| matches!(c, Cue::Se { path, .. } if path.contains(r"\mt\"))) {
+                    footstep = Some((motion, frame as f32, cues));
+                    break 'motions;
+                }
+            }
+        }
+        let (motion, frame, first) = footstep.expect("installed common motion has a surface sound");
+        assert!(audio.sample(input(10, 0, motion, frame), surface).is_empty());
+        let other = audio.sample(input(11, 0, motion, frame), surface);
+        let layer = audio.sample(input(10, 1, motion, frame), surface);
+        assert!(!other.is_empty()); assert!(!layer.is_empty());
+        assert_ne!(first, other); // owner retained in source identity
+        audio.forget_actor(10);
+        assert_eq!(audio.sample(input(10, 0, motion, frame), surface), first);
+
+        let attack = MotionId::new(7, 0);
+        let mut decoded = 0;
+        audio.forget_actor(10);
+        for frame in 0..data.body.frames(attack) {
+            for cue in audio.sample(input(10, 0, attack, frame as f32), surface) {
+                let Cue::Se { path, se_id, .. } = cue else { unreachable!() };
+                if !path.contains(r"\wep\") { continue; }
+                let bytes = vfs.read(&path, mtarc::type_hash("rSoundRequest")).unwrap();
+                let requests = mtsound::Requests::parse(&bytes).unwrap();
+                let Ok(request) = requests.single_wave(se_id as u16) else { continue; };
+                let bytes = vfs.read(request.source.unwrap(), mtarc::type_hash("rSoundPackage")).unwrap();
+                let package = mtsound::Package::parse(&bytes).unwrap();
+                let (program, variation) = request.wave_keys();
+                let wave = package.wave_for(program, variation).unwrap().unwrap();
+                let pcm = mtsound::decode::wave(&wave.riff(), 4_000_000).unwrap();
+                assert!(pcm.samples.iter().any(|v| v.abs() > 0.001));
+                decoded += 1;
+            }
+        }
+        assert!(decoded > 0, "sword motion must resolve at least one weapon wave");
+    }
     #[test]
     fn save_voice_context_keeps_player_and_first_pawn_separate() {
         let xml = r#"<class><class name="manual"><class name="mPlCmcEditAndParam">

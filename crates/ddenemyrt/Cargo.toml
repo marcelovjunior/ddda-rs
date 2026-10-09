@@ -13,6 +13,7 @@ ddenemy = { path = "../ddenemy" }
 ddexe = { path = "../ddexe" }
 ddparam = { path = "../ddparam" }
 ddpawnai = { path = "../ddpawnai" }
+ddpawn = { path = "../ddpawn" }
 dditem = { path = "../dditem" }
 ddsim = { path = "../ddsim" }
 ddskill = { path = "../ddskill" }
@@ -22,3 +23,6 @@ mtfsm = { path = "../mtfsm" }
 mtlmt = { path = "../mtlmt" }
 mtmod = { path = "../mtmod" }
 mtxfs = { path = "../mtxfs" }
+
+[dev-dependencies]
+ddstory = { path = "../ddstory" }

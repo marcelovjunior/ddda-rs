@@ -198,6 +198,7 @@ pub fn prepare(
     })
     .map_err(|e| e.to_string())?;
     host.world.live(CASSARDIS_ROWS);
+    host.world.manual_stages = true;
     let w = &host.story.as_ref().unwrap().world;
     info!(
         "opening: fast-forwarded {} frames in {:.1} s: SceNo ladder {:?}; now stage {}, SceNo {}, start position {}, {:02}:{:02}",
@@ -548,7 +549,19 @@ pub fn setup(
 
 /// The step part: host frames, inputs, the party, NPCs, talks, the menu.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+/// Assets and world entities needed by an actual stage load.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct OpeningStage<'w, 's> {
+    commands: Commands<'w, 's>,
+    streamer: Option<ResMut<'w, crate::stream::Streamer>>,
+    entities: crate::stream::WorldEntities<'w, 's>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
 pub fn step(
+    mut stage_view: OpeningStage,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -568,6 +581,12 @@ pub fn step(
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
+    if let Some(streamer) = stage_view.streamer.as_mut() {
+        streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
+        if let Some(terrain) = streamer.take_terrain() {
+            s.host.ground = Box::new(terrain);
+        }
+    }
     if !s.network_ready {
         s.network_ready = true;
         if let Err(e) = s.network(&args) {
@@ -693,13 +712,7 @@ pub fn step(
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
-    while s.acc >= frame
-        && !s
-            .host
-            .story
-            .as_ref()
-            .is_some_and(|story| story.quest(2).is_some())
-    {
+    while s.acc >= frame {
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
         s.pending_input = PlayerInput::default();
@@ -734,8 +747,39 @@ pub fn step(
                     start_pos: Some(n), ..
                 } => s.place_party(*n),
                 Request::PlaceParty { pos: Some(p), .. } => info!("opening: party placed at {p:?}"),
-                Request::JumpArea { stage, .. } if *stage != STAGE => {
-                    warn!("opening: JumpArea to stage {stage} is outside this slice")
+                Request::JumpArea { stage, pos, .. } => {
+                    let result = (|| -> Result<(), String> {
+                        let streamer = stage_view.streamer.as_mut().ok_or("opening stage streamer absent")?;
+                        let starts = ddhost::install::start_positions(streamer.loader.vfs, *stage)?;
+                        let start = starts.entries.get(*pos as usize).ok_or("stage start position absent")?;
+                        let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
+                            &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
+                            *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        s.host.ground = Box::new(terrain);
+                        s.starts = starts.entries.iter().map(|e| (
+                            [e.position[0], e.position[1], e.position[2]], e.angle,
+                            e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),
+                        )).collect();
+                        s.place_party(*pos);
+                        if let Some(server) = &mut s.host.server {
+                            if let Some(spot) = &mut server.config.spot {
+                                spot.stage = *stage;
+                            }
+                        }
+                        s.between.snapshot(&s.host.sim);
+                        for (_, (entity, _, _)) in s.npcs.drain() {
+                            stage_view.commands.entity(entity).despawn();
+                        }
+                        s.npc_moving.clear();
+                        s.host.npcs.npcs.clear();
+                        s.host.npc_parked.clear();
+                        s.host.world.npcs.clear();
+                        s.host.world.report(ddstory::HostEvent::StageLoaded { stage: *stage });
+                        Ok(())
+                    })();
+                    if let Err(e) = result {
+                        s.failure = Some(format!("stage {stage} handoff failed: {e}"));
+                    }
                 }
                 Request::QuestBanner { kind, quest, log } => {
                     info!("opening: quest banner kind {kind} q{quest:04} log {log}")
@@ -875,14 +919,13 @@ fn close_menu(s: &mut Session, job: u32) {
     s.host.world.close_menu(Some(job));
 }
 
+fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize, sex: u8) -> EventConfig {
+    EventConfig { language, sex, hour: world.hour, stage: guest_stage.unwrap_or(world.stage_no) }
+}
+
 fn start_cut(s: &mut Session, row: usize) {
     let w = s.world();
-    let cfg = EventConfig {
-        language: s.language,
-        sex: s.sex,
-        hour: w.hour,
-        stage: STAGE,
-    };
+    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
         Ok(p) => {
             info!("opening: cutscene row {row} ({}), {} frames", p.path, p.end_frame);
@@ -1079,7 +1122,7 @@ pub fn cutscene(
     {
         if let Ok(mut i) = info_text.single_mut() {
             i.0.push_str(
-                "\nOpening slice complete: q0002 booted. Further quest execution is outside this slice.",
+                "\nq0002 active.",
             );
         }
     }
@@ -1560,6 +1603,21 @@ fn plan_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cutscene_lighting_follows_loaded_stage_and_guest_welcome() {
+        let mut world = ddstory::World::default();
+        world.stage_no = 380;
+        world.hour = 12;
+        let cfg = cut_config(&world, None, 1, 0);
+        assert_eq!(ddstory::event::light_index(20, cfg.stage, cfg.hour), Some(1));
+        let guest = cut_config(&world, Some(800), 1, 0);
+        assert_eq!(ddstory::event::light_index(20, guest.stage, guest.hour), None);
+        world.stage_no = 100;
+        let field = cut_config(&world, None, 1, 0);
+        assert_eq!(field.stage, 100);
+        assert_eq!(ddstory::event::light_index(20, field.stage, field.hour), Some(2));
+    }
+
     #[test]
     fn cutscene_restores_gameplay_projection_after_multiple_frames() {
         let original = PerspectiveProjection {

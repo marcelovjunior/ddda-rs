@@ -200,6 +200,29 @@ pub fn template_look<S: Source + ?Sized>(src: &S, sex: u8) -> Result<Look, Error
     Err(Error::Data(format!("no built-in pawn of sex {sex}")))
 }
 
+/// A look for edit fields (`(field, value)`, `EDIT_U8_FIELDS` names)
+/// wearing the equipment of the first built-in pawn of the same sex
+/// (`romPawnInfo`). For a freshly edited Arisen: the original's starting
+/// equipment is not traced, so this is a *viewer choice*.
+pub fn edit_look_dressed<S: Source + ?Sized>(src: &S, fields: &[(String, u32)]) -> Result<Look, Error> {
+    let t = Tables::load(src)?;
+    let pat = EditPattern::load(src)?;
+    let items = item_records(src)?;
+    let sex = field(fields, "mGender").unwrap_or(0);
+    let b = src
+        .resource(r"etc\editPattern\romPawnInfo", "rRomPawnInfo")?
+        .ok_or_else(|| Error::Data("romPawnInfo missing".into()))?;
+    let info = ddpawn::RomPawnInfo::parse(&b).map_err(|e| Error::Data(format!("romPawnInfo: {e}")))?;
+    let gender = ddpawn::cmc::EDIT_U8_FIELDS.iter().position(|f| *f == "mGender").unwrap_or(0);
+    let eq: Vec<i16> = info
+        .records
+        .iter()
+        .find(|c| u32::from(c.edit.fields[gender]) == sex)
+        .map(|c| c.param.equip.iter().map(|e| e.item_no).collect())
+        .unwrap_or_default();
+    edit_look(src, &t, &pat, &items, Unit::Player, fields, &eq).ok_or_else(|| Error::Data("no look for these edit values".into()))
+}
+
 /// The Arisen and the party pawns of a save slot (`mPlayerDataManual` or
 /// `mPlayerDataBase`).
 pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Result<Vec<SavedLook>, Error> {

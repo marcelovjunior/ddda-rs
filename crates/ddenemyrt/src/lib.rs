@@ -17,11 +17,14 @@
 
 pub mod arisen;
 pub mod body;
+pub mod chimera;
 pub mod combat;
+pub mod dragon;
 pub(crate) mod enemy_stats;
 pub mod fight;
 pub mod goblin;
 pub mod pawn;
+pub mod pawn_actor;
 pub mod pushout;
 pub mod shell;
 

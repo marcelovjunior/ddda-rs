@@ -474,6 +474,7 @@ pub fn step(
     mut projs: Query<&mut Projection, With<FollowCam>>,
     mut projected: Local<bool>,
     mut pending: Local<HashMap<PlayerId, Input>>,
+    mut sounds: Option<ResMut<crate::audio::PlayerMotionSounds>>,
 ) {
     let Some(mut st) = state else { return };
     if pause.paused { pending.clear(); return; }
@@ -555,6 +556,9 @@ pub fn step(
         st.prev.snapshot(&st.sim);
         st.prev_goblins = st.fight.as_ref().map_or_else(Vec::new, |f| f.goblins.iter().map(|g| (g.pos, g.yaw)).collect());
         fixed_frame(st, &local);
+        if let (Some(sounds), Some(data)) = (sounds.as_deref_mut(), st.fight_data.as_ref()) {
+            sounds.sample_sim(&st.sim, data, &st.terrain);
+        }
         pending.clear();
     }
     // The simulation runs in fixed 1/30-s frames; the screen is drawn between

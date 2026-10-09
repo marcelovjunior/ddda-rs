@@ -2349,9 +2349,11 @@ dependencies = [
  "ddexe",
  "dditem",
  "ddparam",
+ "ddpawn",
  "ddpawnai",
  "ddsim",
  "ddskill",
+ "ddstory",
  "ddvfs",
  "mtarc",
  "mtfsm",
@@ -2586,6 +2588,7 @@ name = "ddstory"
 version = "0.1.0"
 dependencies = [
  "ddnpc",
+ "ddpawn",
  "ddquest",
  "ddvfs",
  "mtarc",
@@ -2629,12 +2632,14 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddcombat",
  "ddeconomy",
  "ddexe",
  "ddhost",
  "dditem",
  "ddlook",
  "ddnet",
+ "ddpawn",
  "ddquest",
  "ddsave",
  "ddsim",
@@ -2647,6 +2652,7 @@ dependencies = [
  "mtlmt",
  "mtlot",
  "mtmod",
+ "mtmovie",
  "mtmrl",
  "mtshader",
  "mtsound",
@@ -2660,6 +2666,7 @@ dependencies = [
 name = "ddworld"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddsim",
  "ddvfs",
  "mtarc",
@@ -3918,6 +3925,13 @@ name = "mtmod"
 version = "0.1.0"
 dependencies = [
  "mtshader",
+]
+
+[[package]]
+name = "mtmovie"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

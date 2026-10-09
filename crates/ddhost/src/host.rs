@@ -18,6 +18,9 @@ use std::collections::BTreeSet;
 /// menus). Until those systems exist in headless crates, a stand-in
 /// answers (`ddstory::scripted::ScriptedHost`).
 pub trait StoryWorld: ddstory::Host {
+    /// Observe combat at the beginning of the story phase, before this
+    /// frame's hit pass. Implementations bind actors to placement keys.
+    fn observe_fight(&mut self, _fight: Option<&ddenemyrt::fight::Fight>) {}
     /// Perform this frame's requests (stage `stage` is loaded).
     fn handle(&mut self, stage: u32, requests: &[Request]);
     /// Completions and facts due this frame, in the order they happened.
@@ -114,6 +117,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub economy: ddeconomy::Economy,
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
+    pub story_npcs: crate::story_npcs::StoryNpcs,
     /// NPCs that left the schedule on an error of their graphs (id, error),
     /// for the views to report.
     pub npc_errors: Vec<(u32, String)>,
@@ -156,6 +160,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             locks: InteractionLocks::default(),
             economy: ddeconomy::Economy::default(),
             npcs: ddnpcrt::NpcRuntime::default(),
+            story_npcs: Default::default(),
             npc_errors: vec![],
             npc_parked: Default::default(),
             progression: ddprogress::Progression::new(),
@@ -212,6 +217,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // all of them in one tick; the world's completions since the last
         // frame come first. The story sees every Arisen where the last frame
         // left them: line 10 has not moved yet.
+        self.world.observe_fight(self.fight.as_ref());
         let events = self.world.events();
         // Step 20, aGameMain's managers: sNpcManager::vf06 (0x00475AD0)
         // restocks the shops once per new day, before sQuestManager.
@@ -250,6 +256,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 requests.push(Request::JumpArea { stage: story.world.stage_no, pos: story.world.start_pos, fade: 0 });
             }
             self.boot = false;
+        }
+        for request in &requests {
+            if let Request::StoryPawn { stock, slot } = request {
+                self.recruit_story_pawn(*stock, *slot)?;
+            }
         }
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
@@ -296,13 +307,27 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         // Pass A line 15, the NPCs: daily schedules and their actions
         // (ddnpcrt on the ddai core).
-        let npc_requests = self.step_npcs()?;
+        self.prepare_story_npcs()?;
+        let mut npc_requests = self.step_npcs()?;
+        npc_requests.extend(self.step_story_npcs()?);
+        for request in &npc_requests {
+            if let ddnpcrt::schedule::Request::Gsf { no, value } = request {
+                if let Some(story) = &mut self.story {
+                    story.world.gsf.set(*no as usize, *value);
+                }
+            }
+        }
         // One prompt slot: the lowest seat that pressed takes it.
         self.scenario_press = presses.first().copied();
         // Pass A line 15 (enemies, NPCs), steps 37-42 (push-out, AI senses,
         // hit volumes), 51-53 (cameras, sound, weather): not composed yet.
         // The world performs the story's requests (actors, presentation).
         let stage = self.story.as_ref().map_or(0, |s| s.stage.stage_no);
+        for request in &requests {
+            if let Request::ApplyScript { target, path } = request {
+                self.apply_story_npc(stage, *target, path);
+            }
+        }
         self.world.handle(stage, &requests);
         for r in &requests {
             self.request_log.debug(r);

@@ -13,10 +13,13 @@
 
 pub mod cond;
 pub mod data;
+pub mod dragon;
 pub mod event;
 pub mod exe;
+pub mod encounter;
 pub mod look;
 pub mod orders;
+pub mod prologue;
 pub mod qct;
 pub mod route;
 pub mod scenario;
@@ -104,6 +107,11 @@ pub struct Inputs {
 /// Completions and facts the host reports back.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostEvent {
+    /// Available pawn-message slots at priority 1; None means the GUI
+    /// object is absent. IsDispCmcMess (0x005bb320) is true unless
+    /// 0x00634090 reports all three slots available. The presentation
+    /// adapter reports this state; quest scripts must not guess it.
+    PawnMessageSlots(Option<u32>),
     /// The cutscene requested by [`Request::PlayEvent`] has ended.
     EventFinished,
     /// A camera requested by [`Request::Camera`] has ended.
@@ -158,6 +166,13 @@ pub struct NpcIntel {
 /// Facts about units the host owns (party, NPCs, enemies, objects) and
 /// options. Only orders that need them ask.
 pub trait Host {
+    /// Live observations for aStage200's original challenge check
+    /// (0x0051ccc0). The adapter supplies the actual type-0x5a enemy
+    /// lookup result and present, valid Arisen life-region observations.
+    /// Missing integration reports no actors, never an invented death.
+    fn dragon_challenge_actors(&self) -> (Option<dragon::ChallengeDragon>, Vec<dragon::ChallengePlayer>) {
+        (None, vec![])
+    }
     /// The placement's layout set is loaded (0x005cc210).
     fn layout_loaded(&self, stage: u32, t: &Target) -> bool;
     /// The placement resolves to a unit (0x007643d0).
@@ -198,6 +213,10 @@ pub trait Host {
 /// routine that produces it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    /// Recruit a built-in story pawn into a party pawn slot (0 main,
+    /// 1/2 hired). Event setup 0x0050c290, case 0x17, calls 0x00440190
+    /// before PlayEvent. The host reads the record from its story stock.
+    StoryPawn { stock: u32, slot: u32 },
     /// Play cutscene `row` of the exe's event table (stage, event); see
     /// EVENTS.md. Answer with [`HostEvent::EventFinished`].
     PlayEvent { row: usize, stage: u32, event: u32 },

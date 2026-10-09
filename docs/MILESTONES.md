@@ -322,3 +322,38 @@ Open:
 - the event freeze for NPC group 57 (Quina moves during shared events);
 - the elder's ear and brow culling (cutscene-visuals);
 - an ev15 frame-300 view of roof and sky.
+
+**Batch 2026-10-09 evening (head + Codex lane), all on main:**
+- **Movement feel (head):**
+  - turning recorded with the oracle (adjust 3);
+  - drawing between fixed frames (`play::Between`);
+  - air attacks (rows 0x302);
+  - the hard landing with fall damage.
+- **Field streaming and the stage handoff (head):**
+  - `ddworld::stream`: the grid comes from the exe, the 5/5/3 windows from
+    0x00507440, the predicate from 0x005075d0;
+  - `Streamer::enter`: door scenarios and JumpArea, with test
+    `the_cassardis_gate_arrives_on_field_ground`.
+- **Movies (head):** `mtmovie` decodes the WMVs with Media Foundation;
+  `ddview --movie st100ev00` plays them.
+- **Character edit, first version (head):** `ddview --charaedit`; the 41
+  fields rebuild the body through `edit_look`; Enter fills `EditResult`.
+- **Audio (codex-1):** event streams, conditional voices, motion sounds by
+  surface, random selection.
+- **Opening slice:**
+  - prologue setup and encounter facts (codex-27);
+  - q0002 records, live facts and the opening's stage handoff (codex-26);
+  - dragon AI, resources, body and hover (codex-25);
+  - chimera catalogue and multi-part damage (codex-28).
+- **Pawn-actor brief:** saved pawn records into active fighters (codex-1).
+- **Incident:** E: dropped off at 15:11 (a loose SATA cable). The repo was
+  verified with `git fsck`. Bundles are now kept in `C:\ddda-backup`.
+
+Blockers:
+- the chimera fight (prologue);
+- the dragon fight;
+- the Rook actor (pawn-actor);
+- the NPC applied controllers for q0002 (codex-26);
+- the opening hookup of the movie and the editor.
+
+Next action: q0003 trace (road to the Encampment), head.
