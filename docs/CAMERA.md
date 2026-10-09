@@ -227,8 +227,13 @@ penetration response. The current follow-camera bisection remains an
 approximation and has not been replaced in this fade checkpoint.
 
 Field stage 100 already includes layout-object collision through
-`Terrain::add_scenery_cells`. Nonfield loading currently uses only the
-stage merged SBC in `ddhost::install::stage_collision`, dropping material
-metadata via `Terrain::add`. Whether the reported Cassardis porch pillar
+`Terrain::add_scenery_cells`. Nonfield loading uses only the stage merged
+SBC in `ddhost::install::stage_collision`. The camera-near followup now
+preserves its authored material record and triangle attribute, matching
+the field loader (previously these were discarded by `Terrain::add`).
+An installed regression verifies unchanged triangle count and 100 surface
+casts against the actual Cassardis SBC metadata, including nonzero flags.
+This supplies metadata; the camera still needs the hit filter hookup.
+Whether the reported Cassardis porch pillar
 is represented in that merged SBC remains to be checked; no new scenery
 collision or guessed near-plane reduction is introduced here.

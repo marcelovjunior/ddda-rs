@@ -68,6 +68,12 @@ two-actor field screenshot and exited automatically without query/system
 errors. Its ordinary distant camera does not validate near-fade appearance.
 Compared against original: not yet; porch and wall acceptance remains open.
 
-Next: validate viewer build/material regression, then preserve nonfield
-collision metadata and establish whether the porch pillar has SBC geometry.
+Followup (head scope approval #2452): nonfield `stage_collision` now
+preserves authored SBC material records and triangle attributes. The
+installed Cassardis regression passes: unchanged triangle count and at
+least 100 surface casts retain their source metadata, including nonzero
+flags. No additional geometry was introduced.
+
+Next: connect the source bit0x10 hit filter and establish whether the porch
+pillar has SBC geometry at the maintainer's exact probe position.
 No game or install changes; no live game control used for this checkpoint.
