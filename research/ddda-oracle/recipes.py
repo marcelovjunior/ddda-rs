@@ -32,6 +32,8 @@ PARTY = 0x99C                # sPlayerManager: 4 x uPlayerBase* [Arisen, pawn, p
 CHR_RECORD = 0x3DEC          # uPlayerBase -> character record inside sGameSys
 REC_LEVEL = 0x700            # record: level (u32)
 REC_NAME = 0x70C             # record: name (C string)
+REC_HP = 0x29C               # cPlayerInfo HP (f32; +0x2A0 max)
+REC_STAMINA = 0x2A8          # cPlayerInfo stamina (f32)
 SWORLDOFFSET_PTR = 0x018FA528
 WORLD_ABS_OFFSET = 0x50      # sWorldOffset mWorldAbsoluteOffset (vector3)
 SAREA_PTR = 0x018D099C       # sAreaExt*
@@ -104,12 +106,64 @@ def set_pos(o, obj, x, y, z):
     return o.write(obj + UCOORD_POS, struct.pack('<3f', x, y, z), main=True)
 
 
-def teleport(o, dx, dy, dz, settle_frames=10):
+LEDGES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'target', 'i686-pc-windows-msvc',
+                      'release', 'ddda-ledges.exe')
+NATIVE_PC = r'E:\SteamLibrary\steamapps\common\DDDA\nativePC'
+MAX_TELEPORT = 500.0
+
+
+def ground_y(o, x, z, near_y):
+    """Walkable surface under local (x, z) of the CURRENT origin cell, from
+    the stage collision (placed scenery is not included)."""
+    import subprocess
+    st = stage(o)
+    a, b = (int(v) for v in st['origin_cell'][6:-1].split('m'))
+    env = dict(os.environ, LEDGES_AT='1')
+    r = subprocess.run([LEDGES, NATIVE_PC, str(a), str(b), str(x), str(near_y), str(z)],
+                       capture_output=True, text=True, env=env)
+    out = r.stdout.strip().splitlines()
+    if r.returncode != 0 or not out or out[-1] == 'none':
+        raise OracleError(f'no ground under ({x}, {z}) near y {near_y}')
+    return float(out[-1])
+
+
+def safe_teleport(o, x, z, watch_frames=30, max_dist=MAX_TELEPORT):
+    """Teleport under the rules set after the 2026-10-09 incident (docs/ORACLE.md):
+    same origin cell only, at most `max_dist` cm, onto ground from the
+    collision (+5 cm), then watch HP and action for `watch_frames` frames.
+    Returns (position, anomalies)."""
+    import math
     p = player(o)
-    x, y, z = pos(o, p)
-    set_pos(o, p, x + dx, y + dy, z + dz)
-    o.wait(settle_frames)
-    return (x, y, z), pos(o, p)
+    x0, y0, z0 = pos(o, p)
+    if not (0.0 <= x < 10000.0 and 0.0 <= z < 10000.0):
+        raise OracleError(f'({x}, {z}) is outside the current origin cell; refused')
+    if math.hypot(x - x0, z - z0) > max_dist:
+        raise OracleError(f'teleport of {math.hypot(x - x0, z - z0):.0f} cm > {max_dist} cm; refused')
+    y = ground_y(o, x, z, y0)
+    rec = o.u32(p + CHR_RECORD)
+    hp0 = o.f32(rec + REC_HP)
+    set_pos(o, p, x, y + 5.0, z)
+    anomalies = []
+    for _ in range(watch_frames):
+        o.wait(1)
+        hp, act = o.f32(rec + REC_HP), o.u32(p + 0x2DD4)
+        if hp < hp0:
+            anomalies.append(f'HP {hp0} -> {hp}')
+            break
+        if act not in (0, 1, 2, 13, 14):
+            anomalies.append(f'action {act}')
+            break
+    return pos(o, p), anomalies
+
+
+def teleport(o, dx, dy, dz, settle_frames=10):
+    """Relative teleport; only within the current cell and MAX_TELEPORT (dy ignored:
+    the target height comes from the collision)."""
+    x, y, z = pos(o, player(o))
+    after, anomalies = safe_teleport(o, x + dx, z + dz)
+    if anomalies:
+        raise OracleError(f'after teleport: {anomalies}')
+    return (x, y, z), after
 
 
 def stage(o):

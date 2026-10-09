@@ -1,0 +1,15 @@
+[package]
+name = "ddaccept"
+version = "0.1.0"
+description = "Acceptance replay: recorded routes of the original fed through ddsim on ddworld collision"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddsim = { path = "../ddsim" }
+ddworld = { path = "../ddworld" }
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+mtlmt = { path = "../mtlmt" }
+mtxfs = { path = "../mtxfs" }

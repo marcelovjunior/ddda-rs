@@ -108,6 +108,91 @@ fn main() {
             }
         }
     }
+    if let Ok(spec) = std::env::var("LEDGES_LINES") {
+        // "length yaw1 yaw2 ...": for each yaw (radians, 0 = +Z, sin -> x),
+        // the walkable distance from (x, z): 50 cm samples with ground,
+        // inside the origin cell, no step above 25 cm
+        let v: Vec<f32> = spec.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        let length = v[0];
+        for &yaw in &v[1..] {
+            let (mut d, mut y) = (0.0f32, py);
+            while d + 50.0 <= length {
+                let (qx, qz) = (px + yaw.sin() * (d + 50.0), pz + yaw.cos() * (d + 50.0));
+                if !(0.0..CELL).contains(&qx) || !(0.0..CELL).contains(&qz) {
+                    break;
+                }
+                match surface_at(&tris, &grid, qx, qz, y) {
+                    Some(q) if (q - y).abs() <= 25.0 => {
+                        y = q;
+                        d += 50.0;
+                    }
+                    _ => break,
+                }
+            }
+            println!("{yaw} {d}");
+        }
+        return;
+    }
+    if std::env::var("LEDGES_AT").is_ok() {
+        // the walkable surface under (x, z) within 6 m of y, for teleports
+        match surface_at(&tris, &grid, px, pz, py) {
+            Some(y) => println!("{y}"),
+            None => {
+                println!("none");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if let Ok(r) = std::env::var("LEDGES_FLAT") {
+        // open flat areas: centres on a 5 m lattice whose disc of radius r cm
+        // (1 m samples) has ground everywhere, steps < 25 cm between 1 m
+        // neighbours and a height range < 150 cm (merged stage collision only)
+        let r: f32 = r.parse().unwrap_or(1500.0);
+        let k = (r / 100.0) as i32;
+        let mut found = Vec::new();
+        let lattice = (radius / 500.0) as i32;
+        for ci in -lattice..=lattice {
+            for cj in -lattice..=lattice {
+                let (cx, cz) = (px + ci as f32 * 500.0, pz + cj as f32 * 500.0);
+                let mut ok = true;
+                let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                let mut prev_row: Vec<Option<f32>> = vec![None; (2 * k + 1) as usize];
+                'outer: for a in -k..=k {
+                    let mut prev: Option<f32> = None;
+                    for b in -k..=k {
+                        if a * a + b * b > k * k {
+                            prev = None;
+                            continue;
+                        }
+                        let Some(y) = surface_at(&tris, &grid, cx + a as f32 * 100.0, cz + b as f32 * 100.0, py) else {
+                            ok = false;
+                            break 'outer;
+                        };
+                        let idx = (b + k) as usize;
+                        if prev.is_some_and(|q| (q - y).abs() > 25.0) || prev_row[idx].is_some_and(|q| (q - y).abs() > 25.0) {
+                            ok = false;
+                            break 'outer;
+                        }
+                        prev = Some(y);
+                        prev_row[idx] = Some(y);
+                        lo = lo.min(y);
+                        hi = hi.max(y);
+                    }
+                }
+                if ok && hi - lo < 150.0 {
+                    let d = ((cx - px).powi(2) + (cz - pz).powi(2)).sqrt();
+                    found.push((d, cx, cz, lo, hi));
+                }
+            }
+        }
+        found.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        println!("dist_cm centre_x centre_z min_y max_y   (flat discs of radius {r} cm)");
+        for (d, x, z, lo, hi) in found.iter().take(30) {
+            println!("{d:7.0} {x:9.1} {z:9.1} {lo:9.1} {hi:9.1}");
+        }
+        return;
+    }
     if std::env::var("LEDGES_GRID").is_ok() {
         // height above py in dm, rows = z (top = +z), cols = x
         println!("grid: heights above y={py} in dm; '.' = no surface; rows z from {} down, cols x from {}", pz + n as f32 * STEP, px - n as f32 * STEP);
