@@ -28,6 +28,8 @@ pub const UNIT: f32 = 0.01;
 #[derive(Default)]
 pub struct Stats {
     pub cells: usize,
+    pub far_cells: usize,
+    pub water_models: usize,
     pub instances: usize,
     pub instances_without_model: usize,
     pub meshes: usize,
@@ -52,6 +54,9 @@ pub struct Loader<'a> {
     pub models: HashMap<String, Option<Vec<Part>>>,
     /// Model resource path by its last path component (`om0528`).
     pub model_names: HashMap<String, String>,
+    /// Material for every water model. *Placeholder*: the water shader
+    /// (`XfB_N__EW...` materials) is not read yet.
+    pub water: Option<Handle<StandardMaterial>>,
     pub stats: Stats,
 }
 
@@ -328,6 +333,83 @@ impl Loader<'_> {
             };
             self.stats.instances += 1;
             self.spawn_parts(commands, &parts, transform, &p.name);
+        }
+    }
+
+    /// The simplified distant model of a cell (`fmfore_<A>m<B>n`, cell-local
+    /// like the terrain), for cells outside the detailed radius.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_far_cell(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        a: i32,
+        b: i32,
+        offset: Vec3,
+    ) -> bool {
+        let path = format!("scr\\st{stage}\\model\\fm_m{}\\fmfore_{a}m{b}n", a / 10 * 10);
+        let Some(parts) = self.model(&path, meshes, materials, images) else {
+            return false;
+        };
+        self.stats.far_cells += 1;
+        self.spawn_parts(commands, &parts, Transform::from_translation(offset), &path);
+        true
+    }
+
+    /// Every water model of the stage (`scr\st<S>\model\water\`: the sea plane
+    /// and the river, lake and wave models), all in the stage frame (origin
+    /// cell 50m50n). `origin` is the viewer's origin cell (A0, B0).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_water(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        origin: (i32, i32),
+    ) {
+        let prefix = format!("scr\\st{stage}\\model\\water\\");
+        let mut paths: Vec<String> = self
+            .vfs
+            .paths_of_type(RMODEL)
+            .filter(|p| p.starts_with(&prefix))
+            .map(str::to_string)
+            .collect();
+        paths.sort();
+        let water = self
+            .water
+            .get_or_insert_with(|| {
+                materials.add(StandardMaterial {
+                    base_color: Color::srgba(0.06, 0.16, 0.22, 0.9),
+                    alpha_mode: AlphaMode::Blend,
+                    perceptual_roughness: 0.08,
+                    reflectance: 0.5,
+                    ..default()
+                })
+            })
+            .clone();
+        let shift = -Vec3::new(
+            (origin.1 - 50) as f32 * 10000.0,
+            0.0,
+            (origin.0 - 50) as f32 * 10000.0,
+        ) * UNIT;
+        for p in &paths {
+            let Some(parts) = self.model(p, meshes, materials, images) else {
+                continue;
+            };
+            let parts: Vec<Part> = parts
+                .into_iter()
+                .map(|q| Part {
+                    material: water.clone(),
+                    ..q
+                })
+                .collect();
+            self.stats.water_models += 1;
+            self.spawn_parts(commands, &parts, Transform::from_translation(shift), p);
         }
     }
 }

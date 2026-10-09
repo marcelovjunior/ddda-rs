@@ -70,13 +70,24 @@ Viewer (`ddvfs`, `ddview`), first renders 2026-10-08 20:30:
 - The ground-level shot from the live player pose shows plausible terrain.
   **Not yet compared with the original game**: no reference screenshot.
 
-Missing for the M1 gate:
-- Reference screenshots from the original game at recorded poses.
-- Placed objects (buildings, trees, props: the `lot` archives), water
-  models, terrain layer blending (only the base albedo is drawn), the
-  stage's own lighting (sun and ambient are placeholders).
-- Handedness (a possible mirror) is unresolved until a reference shot
-  exists.
+Reference comparison (2026-10-08, private `E:\ddda-re\shotsefs`):
+- Screenshot listener records the live camera pose (uCameraGame +0x30..+0x6c)
+  at each F12. Six usable references from two areas; poses checked by a
+  ground fit (player feet on the origin cell's terrain within 1 cm for
+  ref001, 002, 004, 005). ref006 unverified, ref007 uncertain.
+- **No mirroring.** Terrain, coast and sea sides match in every reference.
+- Static scenery (`_s00` layouts via `mtlot`) lands where the original has
+  it: a sword prop (ref001) and a large tree (ref004) match exactly.
+- Water (sea plane at y 30000 plus river/lake/wave models, stage frame) and
+  a ring of distant `fmfore` cell models are drawn. Water material is a
+  placeholder.
 
-Next action: get a reference screenshot of the original at the recorded
-pose, then read the `lot` placement archives.
+Missing for the M1 gate:
+- The castle seen in ref001 (not in the cell layouts; source not found).
+- Terrain layer blending (only the base albedo is drawn); the water and
+  stage lighting shaders (sun and ambient are placeholders); fog.
+- Euler order of layout angles is assumed XYZ (consistent so far, not
+  traced in the exe).
+
+Next action: animations (LMT reader and skeletons), as the maintainer
+asked, while the M1 shading gaps wait.

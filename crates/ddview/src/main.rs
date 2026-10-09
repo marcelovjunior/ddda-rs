@@ -4,7 +4,7 @@
 //! ```text
 //! ddview <nativePC> [--stage 100] [--cell 58,50] [--radius 2]
 //!        [--pos x,y,z] [--look x,y,z] [--up x,y,z] [--fov deg] [--size WxH]
-//!        [--ref refNNN.json] [--shot out.png] [--shot-delay secs]
+//!        [--far-cells N] [--ref refNNN.json] [--shot out.png] [--shot-delay secs]
 //! ```
 //! `--pos`/`--look` are in game units (cm) in the origin cell's frame, the
 //! same frame as the live game's `uPlayer +0x40` (see docs/WORLD.md).
@@ -32,6 +32,7 @@ struct Args {
     stage: u32,
     cell: (i32, i32),
     radius: i32,
+    far_cells: i32,
     pos: Vec3,
     look: Vec3,
     up: Vec3,
@@ -58,6 +59,7 @@ fn args() -> Args {
         stage: 100,
         cell: (58, 50),
         radius: 2,
+        far_cells: 20,
         pos: Vec3::new(205.4, 41019.0 + 170.0, 3542.5),
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
@@ -77,6 +79,7 @@ fn args() -> Args {
                 a.cell = (p[0], p[1]);
             }
             "--radius" => a.radius = v.parse().unwrap(),
+            "--far-cells" => a.far_cells = v.parse().unwrap(),
             "--pos" => a.pos = parse_vec3(&v),
             "--look" => a.look = parse_vec3(&v),
             "--shot" => a.shot = Some(PathBuf::from(v)),
@@ -170,6 +173,7 @@ fn setup(
         textures: Default::default(),
         models: Default::default(),
         model_names: Default::default(),
+        water: None,
         stats: Default::default(),
     };
     loader.index_models();
@@ -189,7 +193,35 @@ fn setup(
             );
         }
     }
+    // Distant ring: simplified models of the cells outside the detailed radius.
+    for da in -args.far_cells..=args.far_cells {
+        for db in -args.far_cells..=args.far_cells {
+            if da.abs() <= args.radius && db.abs() <= args.radius {
+                continue;
+            }
+            let offset = Vec3::new(db as f32 * 100.0, 0.0, da as f32 * 100.0);
+            loader.spawn_far_cell(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &mut images,
+                args.stage,
+                a0 + da,
+                b0 + db,
+                offset,
+            );
+        }
+    }
+    loader.spawn_water(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        args.stage,
+        (a0, b0),
+    );
     let s = &loader.stats;
+    info!("far cells {} water models {}", s.far_cells, s.water_models);
     info!(
         "cells {} instances {} (no model {}) meshes {} triangles {} textures {} problems {} ({:.1} s)",
         s.cells,
