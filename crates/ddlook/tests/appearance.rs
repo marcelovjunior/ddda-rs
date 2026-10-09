@@ -75,3 +75,25 @@ fn installed_templates_keep_record_sex_models_and_presets_together() {
             look.parts.iter().map(|p| &p.path).collect::<Vec<_>>(), source.presets.borrow());
     }
 }
+
+#[test]
+fn npc_body_resources_use_authored_shapes_without_player_bust_slider() {
+    let path = std::env::var_os("DDDA_NATIVE_PC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+    if !path.is_dir() { return; }
+    let vfs = ddvfs::Vfs::open(&path).unwrap();
+    let file = ddexe::ExeFile::next_to(&path).unwrap();
+    let tables = ddlook::body::Tables::read(&file.image().unwrap()).unwrap();
+    for npc in [1, 2] {
+        let look = ddlook::npc_look(&vfs, npc, npc, 22).unwrap();
+        let edit = look.look.body_shape.as_ref().expect("NPC body resource");
+        assert_eq!(edit.bust, 0.0);
+        assert_eq!(edit.scales.len(), ddlook::body::JOINT_COUNT);
+        let joints = tables.joints(look.look.sex, edit).unwrap();
+        assert!(joints.iter().all(|(_, joint)| joint.scale.iter().all(|v| v.is_finite())));
+        let bytes = vfs.resource(&look.look.base, "rModel").unwrap().unwrap();
+        let model = mtmod::parse(&bytes).unwrap();
+        assert!(joints.iter().all(|(id, _)| model.bones.iter().any(|bone| bone.anim_map_index == *id)));
+    }
+}
