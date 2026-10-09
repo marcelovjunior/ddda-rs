@@ -2396,7 +2396,9 @@ dependencies = [
  "ddquest",
  "ddvfs",
  "mtarc",
+ "mtcamera",
  "mtfsm",
+ "mtgmd",
  "mtxfs",
 ]
 
