@@ -544,3 +544,20 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   actual talk cleanup, headless locomotion and field NPC admission are still
   outstanding. Next: translate the source-backed SceNo variable, then rerun
   the bounded route to expose the next real prerequisite.
+
+### Shared SceNo in NPC graphs (codex-31)
+
+- cThinkFSM reflection 0x007a82d0 directly binds getter0x005baf00 for SceNo
+  (sGameSys+0x30). Both normal and applied NPC owners now receive the host's
+  current scene each frame. Missing observations remain errors; no default
+  scene or actor completion is manufactured.
+- Eight NPC library tests, two installed applied-action tests and nine host
+  story_pawns tests pass. The q1 NPC1/NPC2 installed graphs now read SceNo
+  and reach their next unsupported actor process, Set Disable Flag, without
+  emitting Finish. This is not full q1 action support.
+- Touched-crate clippy passes with the pre-existing install.rs
+  chunks_exact_to_as_chunks warning allowed; that unowned code was unchanged.
+- Viewer follow-up65b3b73 removes a rendering-membership filter from scenario
+  NPC observations. All admitted canonical intels now contribute positions,
+  even without a rendered body. Heading still uses authored placement yaw;
+  canonical direction updates from Wait/Place remain unresolved.

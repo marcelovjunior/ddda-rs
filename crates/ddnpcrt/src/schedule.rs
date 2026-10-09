@@ -143,6 +143,7 @@ struct Think {
     /// cThinkFSM +0xbc..0xc8, initialized by 0x007a74f0.
     flags: [u32; 4],
     actor: ActorObservations,
+    scene: Option<u32>,
     goal: Goal,
     pos: Option<[f32; 3]>,
     load: Option<String>,
@@ -272,6 +273,9 @@ impl Owner for Think {
     fn var(&self, env: &Env<'_>, v: &Var) -> Result<Value, Error> {
         Ok(match v.property {
             "SysCondition" => Value::Int(self.sys as i64),
+            // cThinkFSM reflection 0x007a82d0 binds getter 0x005baf00,
+            // which reads the shared scene number at sGameSys+0x30.
+            "SceNo" => Value::Int(self.scene.ok_or_else(|| Error::Data("NPC SceNo observation unavailable".into()))? as i64),
             // 0x007ab890: valid actor's frame flag; absent actor is false.
             "TalkEnd (flag)" => Value::Bool(self.talk_end),
             "FreeCondition" => Value::Int(self.free as i64),
@@ -414,7 +418,7 @@ impl Npc {
             sys: 0,
             free: 0,
             flags: [0; 4],
-            actor: ActorObservations::default(),
+            actor: ActorObservations::default(), scene: None,
             goal: Goal::None,
             pos: None,
             load: None,
@@ -472,6 +476,13 @@ impl Npc {
     pub fn observe_actor(&mut self, actor: ActorObservations) {
         self.ctrl.actor = actor;
         self.think.actor = actor;
+    }
+
+    /// Observe the shared scene number for both controller and action graphs.
+    /// Absence remains an error if an authored graph reads SceNo.
+    pub fn observe_scene(&mut self, scene: Option<u32>) {
+        self.ctrl.scene = scene;
+        self.think.scene = scene;
     }
 
     /// Set a graph's private FreeFlag, distinct from FreeCondition.
@@ -571,12 +582,27 @@ mod variable_tests {
     use super::*;
     fn fields() -> Think {
         Think { npc: 1, sys: 0, free: u32::MAX, flags: [0; 4],
-            actor: ActorObservations::default(), goal: Goal::None, pos: None,
+            actor: ActorObservations::default(), scene: None, goal: Goal::None, pos: None,
             load: None, out: vec![], complete_moves: false, strict: true, talk_end: false }
     }
     fn value(fields: &Think, owner: &str, property: &str, index: Option<u32>) -> Value {
         fields.var(&Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 },
             _graphs: std::marker::PhantomData }, &Var { owner, property, index }).unwrap()
+    }
+    #[test]
+    fn scene_observation_is_shared_and_refreshes_after_story_progress() {
+        let mut npc = Npc::intel(1);
+        let env = Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 }, _graphs: std::marker::PhantomData };
+        let var = Var { owner: "cAIActionFSMDemo", property: "SceNo", index: None };
+        assert!(npc.think.var(&env, &var).is_err());
+        for scene in [1100, 1200, 1400] {
+            npc.observe_scene(Some(scene));
+            assert_eq!(npc.think.var(&env, &var).unwrap(), Value::Int(scene as i64));
+            assert_eq!(value(&npc.ctrl, "cAIConsiderFSM_24Schedule", "SceNo", None), Value::Int(scene as i64));
+        }
+        npc.observe_scene(None);
+        assert!(npc.think.var(&env, &var).is_err());
+        assert!(npc.ctrl.var(&env, &var).is_err());
     }
     #[test]
     fn free_flags_are_128_private_bits_not_free_condition() {

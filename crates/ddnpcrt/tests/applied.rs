@@ -55,3 +55,31 @@ fn installed_applied_npc_waits_for_talk_then_finishes_once() {
     assert_eq!(finishes, 1);
     assert!(npc.applied_finished());
 }
+
+#[test]
+fn installed_newly_arisen_actions_reach_the_next_real_actor_prerequisite() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let data = ddnpcrt::InstallData::open(native, "eng").unwrap();
+    for id in [1, 2] {
+        let path = format!(r"ai\fsm\npc\st200\quest\q0001_n{id:03}_ai");
+        let mut npc = Npc::applied(id, &data, &path).unwrap();
+        npc.observe_scene(Some(1100));
+        let clock = Clock { hour: 8, minute: 0, dt: 1.0 / 30.0 };
+        let mut blocked = false;
+        for _ in 0..90 {
+            match npc.step(&data, clock) {
+                Ok(requests) => assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. }))),
+                Err(error) => {
+                    assert_eq!(error.to_string(), "unimplemented: NPC process Set Disable Flag");
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        assert!(blocked, "SceNo resolves; the actual actor-disable process still needs translation");
+        assert!(!npc.applied_finished());
+    }
+}
