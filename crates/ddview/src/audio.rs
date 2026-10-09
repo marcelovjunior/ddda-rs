@@ -28,6 +28,54 @@ struct AudioState {
     failed: HashSet<String>,
 }
 
+/// Presentation-only RNG: same generator as 0x00d00690, isolated from the
+/// host's simulation RNG. The fixed seed is a viewer choice, not a matching
+/// original-game sequence. Random resource state is shared across actors.
+struct SoundChoices {
+    requests: HashMap<String, Vec<u8>>,
+    random: HashMap<String, mtsound::random::RandomRequests>,
+    rng: ddpawn::rift::XorShift128,
+}
+impl Default for SoundChoices {
+    fn default() -> Self {
+        Self { requests: HashMap::new(), random: HashMap::new(),
+            rng: ddpawn::rift::XorShift128::seeded(0) }
+    }
+}
+impl SoundChoices {
+    fn select(&mut self, vfs: &ddvfs::Vfs, path: &str, id: u16) -> Result<u16, String> {
+        use ddpawn::rift::PawnRng;
+        if !self.requests.contains_key(path) {
+            self.requests.insert(path.into(), vfs.read(path, mtarc::type_hash("rSoundRequest"))?);
+        }
+        let requests = mtsound::Requests::parse(&self.requests[path])?;
+        let request = requests.request(id).ok_or("sound request absent")?;
+        let word = |offset| u32::from_le_bytes(request.raw[offset..offset+4].try_into().unwrap());
+        if word(8) != 4 { return Ok(id); }
+        // Translated from 0x00ddb340 (DDDA.exe 2017-12-13 Steam).
+        // Parent chains and inherited mixer overrides are not reproduced.
+        let next = u16::from_le_bytes(request.raw[28..30].try_into().unwrap());
+        if next != u16::MAX && next != id { return Err("random sound request chain unsupported".into()); }
+        let random_path = requests.random.ok_or("random sound resource absent")?;
+        if !self.random.contains_key(random_path) {
+            let bytes = vfs.read(random_path, mtarc::type_hash("rSoundRandom"))?;
+            self.random.insert(random_path.into(), mtsound::random::RandomRequests::parse(&bytes)?);
+        }
+        let row = self.random.get_mut(random_path).unwrap().row_mut(word(52))
+            .ok_or("random sound row absent")?;
+        // Viewer safety bound; the original retries indefinitely. Do not
+        // renormalize weights or substitute a request on exhaustion.
+        for _ in 0..128 {
+            if let Some(selected) = row.draw(self.rng.next_u32()) {
+                let selected = u16::try_from(selected).map_err(|_| "random sound selected invalid ID")?;
+                requests.single_wave(selected)?;
+                return Ok(selected);
+            }
+        }
+        Err("random sound retry budget exhausted".into())
+    }
+}
+
 /// Actor-local sampling inputs from a fixed simulation tick. Presentation
 /// interpolation must not call this: it could repeat or skip event edges.
 pub struct ActorSoundFrame<'a> {
@@ -288,12 +336,26 @@ struct EventSound(String);
 #[derive(Component)]
 struct OneShotSe;
 
-fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>) {
+fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>, mut choices: Local<SoundChoices>) {
     // Commands are deferred: include sources queued earlier in this batch so
     // two cues for one unit cannot leave two voices playing simultaneously.
     let mut units: HashMap<String, Vec<Entity>> = HashMap::new();
     for (entity, sound) in &playing { units.entry(sound.0.clone()).or_default().push(entity); }
-    for cue in std::mem::take(&mut audio.pending) {
+    for mut cue in std::mem::take(&mut audio.pending) {
+        if let Cue::Se { path, se_id, conditional: None, .. } = &mut cue {
+            if let Some(vfs) = &audio.vfs {
+                let selected = u16::try_from(*se_id).map_err(|_| "invalid SE ID".to_string())
+                    .and_then(|id| choices.select(vfs, path, id));
+                match selected {
+                    Ok(id) => *se_id = i32::from(id),
+                    Err(e) => {
+                        let key = format!("select:{path}:{se_id}");
+                        if audio.failed.insert(key.clone()) { warn!("audio {key}: {e}"); }
+                        continue;
+                    }
+                }
+            }
+        }
         let (unit, key) = match &cue {
             Cue::Stream { unit, path, stream_id, prepare_id, .. } =>
                 (unit, format!("{path}:{stream_id}:{prepare_id}")),
@@ -361,6 +423,25 @@ fn sync_pause(pause: Option<Res<crate::pause::PauseState>>, args: Option<Res<cra
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installed_random_effects_vary_before_wave_cache_lookup() {
+        let root = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !root.is_dir() { return; }
+        let mut app = App::new();
+        let cue = Cue::Se { unit: "footstep".into(),
+            path: r"sound\se\mt\mt_soil\mt_soil".into(), se_id: 5, conditional: None };
+        app.insert_resource(Assets::<DecodedAudio>::default()).insert_resource(AudioState {
+            vfs: Some(ddvfs::Vfs::open(root).unwrap()), pending: vec![cue; 32],
+            cache: HashMap::new(), failed: HashSet::new(),
+        }).add_systems(Update, play_pending);
+        app.update();
+        let state = app.world().resource::<AudioState>();
+        assert!(state.failed.is_empty(), "{:?}", state.failed);
+        assert!(state.cache.len() > 1, "random request must not freeze its first wave in cache");
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<OneShotSe>>();
+        assert_eq!(query.iter(world).count(), 32);
+    }
     #[test]
     fn installed_motion_sounds_keep_actor_edges_separate_and_resolve_weapon_waves() {
         use ddhost::ddenemyrt::{arisen::ArisenData, body::MotionId};

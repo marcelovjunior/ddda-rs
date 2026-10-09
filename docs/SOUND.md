@@ -305,3 +305,37 @@ A bounded two-seat offline `--demo --unattended` run resolved player request
 and exited. Several other surface requests were explicitly rejected as
 non-ordinary commands. This confirms the fixed-tick-to-playback path, while
 also showing that random/control dispatch still limits footstep coverage.
+
+### Random sound requests
+
+`random::RandomRequests` reads rSoundRandom's DNRS v2 memory image from the
+install (loader 0x00e30370): 0x8c-byte rows contain an ID, 16 signed request
+IDs with unsigned weights, a repeat byte and the previous request. The
+lookup builder 0x00e30060 keeps the last duplicate ID. Selection 0x00dcc120
+draws `(rng % 100) + 1`, accumulates weights, and retries an uncovered roll
+or a forbidden repeat. Repeat-enabled rows leave the previous-request field
+unchanged. We preserve these rules without renormalizing the table.
+
+SREQ command four at 0x00ddb340 selects from the random row named at request
++0x34, then runs that request. The viewer now supports terminal random
+requests selecting terminal ordinary plays. Selection happens before the
+wave-cache lookup, so a cached sound does not freeze the random choice.
+Random tables retain state across actors sharing the resource. Playback uses
+the source-verified XorShift128 from ddpawn (0x00d00690) with an isolated,
+fixed presentation seed of zero; this seed and a 128-draw safety budget are
+viewer choices, not original-game timing or sequence matches. Exhaustion
+suppresses the cue instead of inventing a selection. Simulation RNG is untouched.
+
+Two reader regressions cover weighted boundaries, repeats, state, duplicate
+IDs and truncated files. All 368 installed random maps parse; soil request
+five resolves ordinary alternatives. Seven viewer audio tests pass, including
+32 repeated soil requests producing overlapping sources and multiple decoded
+cache entries. Parent mixer overrides, control commands, nested random
+requests and chains remain unsupported; default program/variation playback
+retains the mixer limitations described above.
+
+A bounded two-seat offline demo with the random selector resolved multiple
+soil variants (including requests 60..65 and 71..75), player movement variants
+and weapon requests 92/93, then saved its screenshot. One weapon request's
+selected non-play command remained explicitly unsupported. This verifies
+runtime routing and decode/submission; audible fidelity remains unverified.

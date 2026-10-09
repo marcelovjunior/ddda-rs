@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddpawn = { path = "../ddpawn" }
 ddcombat = { path = "../ddcombat" }
 mtsound = { path = "../mtsound" }
 ddeconomy = { path = "../ddeconomy" }
