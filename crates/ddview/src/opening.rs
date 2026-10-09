@@ -919,14 +919,13 @@ fn close_menu(s: &mut Session, job: u32) {
     s.host.world.close_menu(Some(job));
 }
 
+fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize, sex: u8) -> EventConfig {
+    EventConfig { language, sex, hour: world.hour, stage: guest_stage.unwrap_or(world.stage_no) }
+}
+
 fn start_cut(s: &mut Session, row: usize) {
     let w = s.world();
-    let cfg = EventConfig {
-        language: s.language,
-        sex: s.sex,
-        hour: w.hour,
-        stage: STAGE,
-    };
+    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
         Ok(p) => {
             info!("opening: cutscene row {row} ({}), {} frames", p.path, p.end_frame);
@@ -1123,7 +1122,7 @@ pub fn cutscene(
     {
         if let Ok(mut i) = info_text.single_mut() {
             i.0.push_str(
-                "\nq0002 active; stage traversal enabled. Actor AI still uses documented stand-ins.",
+                "\nq0002 active.",
             );
         }
     }
@@ -1604,6 +1603,21 @@ fn plan_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cutscene_lighting_follows_loaded_stage_and_guest_welcome() {
+        let mut world = ddstory::World::default();
+        world.stage_no = 380;
+        world.hour = 12;
+        let cfg = cut_config(&world, None, 1, 0);
+        assert_eq!(ddstory::event::light_index(20, cfg.stage, cfg.hour), Some(1));
+        let guest = cut_config(&world, Some(800), 1, 0);
+        assert_eq!(ddstory::event::light_index(20, guest.stage, guest.hour), None);
+        world.stage_no = 100;
+        let field = cut_config(&world, None, 1, 0);
+        assert_eq!(field.stage, 100);
+        assert_eq!(ddstory::event::light_index(20, field.stage, field.hour), Some(2));
+    }
+
     #[test]
     fn cutscene_restores_gameplay_projection_after_multiple_frames() {
         let original = PerspectiveProjection {

@@ -112,3 +112,15 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   story_pawns tests passed, including stage acknowledgment without live
   actor facts. Release viewer build succeeds. No original visual comparison
   or end-to-end gate traversal has been claimed.
+
+- Follow-up: cutscene configuration now uses the current host stage (or
+  guest Welcome stage), with a regression for stage-dependent lighting.
+  The HUD only reports q0002 activity; implementation limits stay here.
+- Enemy identity is now sourced end to end: 0x00cc1f60 reads the layout
+  record id into SetInfo+4; 0x007613d0 copies it to actor+0x20f0;
+  0x007643d0 -> 0x004223f0 matches the script index without subtraction.
+  The reusable bind_spawned_goblin helper uses this id directly. Installed
+  stage100 group23 produces precisely indices 0,1,2 (regression passed).
+- Latest verification: targeted release cutscene lighting test and all
+  six host story_pawns tests passed. Neither binding nor live actor mode
+  is yet connected to the viewer's encounter spawning.

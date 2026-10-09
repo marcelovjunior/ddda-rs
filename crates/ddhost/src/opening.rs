@@ -83,6 +83,20 @@ impl OpeningWorld {
         self.enemy_bindings.insert((stage, target), owner);
     }
 
+    /// Bind a spawned goblin using its original layout identity.
+    /// Translated from 0x007613d0 (SetInfo+4 -> actor+0x20f0),
+    /// 0x00cc1f60 (record id -> SetInfo+4), and lookup
+    /// 0x007643d0 -> 0x004223f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn bind_spawned_goblin(&mut self, spawn: &ddspawn::Spawn, owner: u32) -> Target {
+        let target = Target {
+            kind: 2,
+            group: spawn.group,
+            index: spawn.record.id as u32,
+        };
+        self.bind_goblin(spawn.stage, target, owner);
+        target
+    }
+
     /// Forget an actor binding on unload without declaring it dead.
     pub fn unbind_enemy(&mut self, stage: u32, target: Target) {
         self.enemy_bindings.remove(&(stage, target));
