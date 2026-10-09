@@ -32,9 +32,9 @@ use std::sync::Mutex;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use ddhost::ddnpcrt::{self, TalkEvent};
 use ddhost::opening::{fast_forward, to_newly_arisen, OpeningWorld, CASSARDIS_ROWS};
 use ddhost::{Control, FrameClock, FrameInputs, Host, PlayerInput, ProfileId};
-use ddhost::ddnpcrt::{self, TalkEvent};
 use ddsim::Input;
 use ddstory::data::InstallData;
 use ddstory::event::{EventConfig, EventFrame, EventPlayer};
@@ -88,9 +88,51 @@ struct Demo {
     talked: bool,
 }
 
+type StoryHost = Host<InstallData, OpeningWorld>;
+
+/// The same authoritative session, with an optional LAN transport.
+/// The original has no co-op: this ownership arrangement is our design.
+pub struct HostHandle {
+    local: Option<Box<StoryHost>>,
+    server: Option<Box<ddnet::Server<InstallData, OpeningWorld, ddnet::Udp>>>,
+}
+impl std::ops::Deref for HostHandle {
+    type Target = StoryHost;
+    fn deref(&self) -> &StoryHost {
+        self.server
+            .as_ref()
+            .map(|s| &s.host)
+            .unwrap_or_else(|| self.local.as_deref().unwrap())
+    }
+}
+impl std::ops::DerefMut for HostHandle {
+    fn deref_mut(&mut self) -> &mut StoryHost {
+        match &mut self.server {
+            Some(s) => &mut s.host,
+            None => self.local.as_deref_mut().unwrap(),
+        }
+    }
+}
+impl HostHandle {
+    fn tick_network(
+        &mut self,
+        inputs: &FrameInputs,
+        now: u64,
+    ) -> Result<ddhost::FrameReport, ddhost::HostError> {
+        match &mut self.server {
+            Some(s) => s.step(inputs, now),
+            None => self.local.as_mut().unwrap().tick(inputs),
+        }
+    }
+}
+
 /// The session (host frame stepping, the cutscene, the talk, the demo).
 pub struct Session {
-    pub host: Host<InstallData, OpeningWorld>,
+    pub host: HostHandle,
+    guest: Option<ddnet::Client<ddnet::Udp>>,
+    network_ready: bool,
+    failure: Option<String>,
+    guest_npcs: HashMap<u32, [f32; 3]>,
     acc: f32,
     cut: Option<Cut>,
     talk: Option<TalkView>,
@@ -105,6 +147,7 @@ pub struct Session {
     shots: Option<PathBuf>,
     shot_queue: Vec<String>,
     shots_taken: usize,
+    view_frames: u64,
     quit_at: Option<f32>,
     language: usize,
     sex: u8,
@@ -119,20 +162,36 @@ pub struct Session {
 pub struct OpeningRes(pub Mutex<Session>);
 
 /// Builds the host and walks it to q0001 (before the window opens).
-pub fn prepare(native_pc: &std::path::Path, exe: &std::path::Path, players: u8, demo: bool, shots: Option<PathBuf>) -> Result<Session, String> {
+pub fn prepare(
+    native_pc: &std::path::Path,
+    exe: &std::path::Path,
+    players: u8,
+    demo: bool,
+    shots: Option<PathBuf>,
+) -> Result<Session, String> {
     let t = std::time::Instant::now();
     let data = InstallData::open(native_pc, Some(exe)).map_err(|e| e.to_string())?;
     let vfs = ddvfs::Vfs::open(native_pc)?;
     let sim = ddhost::install::sim(&vfs)?;
     let ground = ddhost::install::stage_collision(&vfs, STAGE)?;
-    let mut host = Host::new(sim, Some(Story::new_game(data)), OpeningWorld::new(), Box::new(ground));
-    host.data.npc = Some(std::sync::Arc::new(ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?));
+    let mut host = Host::new(
+        sim,
+        Some(Story::new_game(data)),
+        OpeningWorld::new(),
+        Box::new(ground),
+    );
+    host.data.npc = Some(std::sync::Arc::new(
+        ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
+    ));
     for k in 0..players.max(1) {
         let control = if k == 0 { Control::Local } else { Control::Remote };
-        host.join(ProfileId(u64::from(k) + 1), control, ddhost::opening::AWAY, 0.0).ok_or("cannot seat")?;
+        host.join(ProfileId(u64::from(k) + 1), control, ddhost::opening::AWAY, 0.0)
+            .ok_or("cannot seat")?;
     }
-    let f = fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| h.story.as_ref().is_some_and(|s| s.quest(1).is_some()))
-        .map_err(|e| e.to_string())?;
+    let f = fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| {
+        h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
+    })
+    .map_err(|e| e.to_string())?;
     host.world.live(CASSARDIS_ROWS);
     let w = &host.story.as_ref().unwrap().world;
     info!(
@@ -165,9 +224,19 @@ pub fn prepare(native_pc: &std::path::Path, exe: &std::path::Path, players: u8, 
             spawned += 1;
         }
     }
-    info!("opening: {spawned} NPCs on their stage-{STAGE} schedules ({} controllers)", ids.len());
+    info!(
+        "opening: {spawned} NPCs on their stage-{STAGE} schedules ({} controllers)",
+        ids.len()
+    );
     let mut s = Session {
-        host,
+        host: HostHandle {
+            local: Some(Box::new(host)),
+            server: None,
+        },
+        guest: None,
+        network_ready: false,
+        failure: None,
+        guest_npcs: HashMap::new(),
         acc: 0.0,
         cut: None,
         talk: None,
@@ -175,10 +244,18 @@ pub fn prepare(native_pc: &std::path::Path, exe: &std::path::Path, players: u8, 
         npcs: HashMap::new(),
         npc_motions: (None, None),
         npc_moving: HashMap::new(),
-        demo: demo.then_some(Demo { step: Step::WeaponTable, since: 0.0, check: (0.0, Vec3::ZERO), press: false, last_talk: 0.0, talked: false }),
+        demo: demo.then_some(Demo {
+            step: Step::WeaponTable,
+            since: 0.0,
+            check: (0.0, Vec3::ZERO),
+            press: false,
+            last_talk: 0.0,
+            talked: false,
+        }),
         shots,
         shot_queue: vec![],
         shots_taken: 0,
+        view_frames: 0,
         quit_at: None,
         language: 1,
         sex: 0,
@@ -186,7 +263,10 @@ pub fn prepare(native_pc: &std::path::Path, exe: &std::path::Path, players: u8, 
         arisen_look: None,
         gone: vec![],
     };
-    let start = s.host.story.as_ref().unwrap().world.start_pos;
+    let start = f
+        .arrival
+        .filter(|(stage, _)| *stage == STAGE)
+        .map_or(s.world().start_pos, |(_, n)| n);
     s.place_party(start);
     Ok(s)
 }
@@ -200,14 +280,21 @@ impl Session {
         };
         let seats: Vec<_> = self.host.roster.ids().collect();
         for (k, id) in seats.into_iter().enumerate() {
-            let off = if k == 0 { [0.0; 3] } else { offs.get(k - 1).copied().unwrap_or([150.0 * k as f32, 0.0, 0.0]) };
+            let off = if k == 0 {
+                [0.0; 3]
+            } else {
+                offs.get(k - 1).copied().unwrap_or([150.0 * k as f32, 0.0, 0.0])
+            };
             if let Some(p) = self.host.sim.player_mut(id) {
                 p.position = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
                 p.yaw = yaw;
                 p.drop_from = p.position[1];
             }
         }
-        info!("opening: party placed at start position {n} ({:.0}, {:.0}, {:.0})", pos[0], pos[1], pos[2]);
+        info!(
+            "opening: party placed at start position {n} ({:.0}, {:.0}, {:.0})",
+            pos[0], pos[1], pos[2]
+        );
     }
 
     fn world(&self) -> &ddstory::World {
@@ -235,14 +322,28 @@ impl Session {
     fn show_talk(&mut self, events: &[TalkEvent]) {
         for e in events {
             match e {
-                TalkEvent::Line { npc, text, conversation, index, .. } => {
+                TalkEvent::Line {
+                    npc,
+                    text,
+                    conversation,
+                    index,
+                    ..
+                } => {
                     let line = clean(text);
                     info!("opening: NPC {npc} conversation {conversation} line {index}: {line}");
-                    self.talk = Some(TalkView { npc: *npc, line, choices: vec![] });
+                    self.talk = Some(TalkView {
+                        npc: *npc,
+                        line,
+                        choices: vec![],
+                    });
                 }
                 TalkEvent::Choices { npc, options, .. } => {
                     let line = self.talk.as_ref().map(|t| t.line.clone()).unwrap_or_default();
-                    self.talk = Some(TalkView { npc: *npc, line, choices: options.iter().map(|o| clean(o)).collect() });
+                    self.talk = Some(TalkView {
+                        npc: *npc,
+                        line,
+                        choices: options.iter().map(|o| clean(o)).collect(),
+                    });
                 }
                 TalkEvent::Action { npc, action, .. } => {
                     info!("opening: NPC {npc} talk command {action:?} (screens are not shown in this slice)");
@@ -274,7 +375,10 @@ fn clean(t: &str) -> String {
 
 /// The player look of a cutscene actor or NPC.
 fn npc_look(vfs: &ddvfs::Vfs, id: u32, row: u32) -> Option<ddlook::Look> {
-    ddlook::npc_look(vfs, id, id, row).map(|l| l.look).map_err(|e| warn!("NPC {id}: look: {e}")).ok()
+    ddlook::npc_look(vfs, id, id, row)
+        .map(|l| l.look)
+        .map_err(|e| warn!("NPC {id}: look: {e}"))
+        .ok()
 }
 
 /// Startup part: the stage, the Arisen (via play.rs), the NPCs, the
@@ -295,16 +399,44 @@ pub fn setup(
     crate::event::spawn_stage_models(commands, loader, meshes, materials, images, STAGE);
     let vfs = loader.vfs;
     // The Arisen: play.rs's characters at the seats.
-    let seats: Vec<(u8, [f32; 3], f32)> = s.host.sim.players.iter().map(|p| (p.id, p.position, p.yaw)).collect();
+    let seats: Vec<(u8, [f32; 3], f32)> = (0..2)
+        .map(|id| {
+            let p = s.host.sim.player(id).or_else(|| s.host.sim.player(0)).unwrap();
+            (id, p.position, p.yaw)
+        })
+        .collect();
     let arisen = seats
         .iter()
-        .map(|&(id, pos, yaw)| (id, party_looks.get(usize::from(id)).cloned().flatten(), Vec3::from(pos), yaw))
+        .map(|&(id, pos, yaw)| {
+            (
+                id,
+                party_looks.get(usize::from(id)).cloned().flatten(),
+                Vec3::from(pos),
+                yaw,
+            )
+        })
         .collect();
     s.arisen_look = party_looks.first().cloned().flatten();
     s.sex = s.arisen_look.as_ref().map_or(0, |l| l.sex);
-    let party = play::Party { arisen, pawn: None, goblins: 0, kits: HashMap::new() };
+    let party = play::Party {
+        arisen,
+        pawn: None,
+        goblins: 0,
+        kits: HashMap::new(),
+    };
     let terrain = ddworld::Terrain::empty();
-    let mut st = match play::setup(commands, loader, meshes, materials, images, bindposes, terrain, Vec3::ZERO, party, None) {
+    let mut st = match play::setup(
+        commands,
+        loader,
+        meshes,
+        materials,
+        images,
+        bindposes,
+        terrain,
+        Vec3::ZERO,
+        party,
+        None,
+    ) {
         Ok(st) => st,
         Err(e) => {
             error!("opening: {e}");
@@ -314,12 +446,27 @@ pub fn setup(
     st.demo = demo;
     // NPCs with their looks, idle until their schedule moves them.
     let list = mtlmt::parse(&vfs.read(play::MOTIONS, crate::character::RMOTIONLIST).ok()?).ok()?;
-    s.npc_motions = (list.motions.first().cloned().flatten(), list.motions.get(0x54).cloned().flatten());
+    s.npc_motions = (
+        list.motions.first().cloned().flatten(),
+        list.motions.get(0x54).cloned().flatten(),
+    );
     let ids: Vec<u32> = s.host.npcs.npcs.keys().copied().collect();
     for id in ids {
         let pos = Vec3::from(s.host.npcs.position(id).unwrap_or([0.0, -100_000.0, 0.0]));
         let r = match npc_look(vfs, id, 0) {
-            Some(l) => crate::character::spawn_look(commands, loader, meshes, materials, images, bindposes, &l, play::MOTIONS, 0, pos * UNIT, Some(0.0)),
+            Some(l) => crate::character::spawn_look(
+                commands,
+                loader,
+                meshes,
+                materials,
+                images,
+                bindposes,
+                &l,
+                play::MOTIONS,
+                0,
+                pos * UNIT,
+                Some(0.0),
+            ),
             None => continue,
         };
         match r {
@@ -333,7 +480,12 @@ pub fn setup(
     // The cutscenes' actors, hidden until their event plays.
     let data = &s.host.story.as_ref().unwrap().data;
     for row in CASSARDIS_ROWS {
-        let cfg = EventConfig { language: s.language, sex: s.sex, hour: s.world().hour, stage: STAGE };
+        let cfg = EventConfig {
+            language: s.language,
+            sex: s.sex,
+            hour: s.world().hour,
+            stage: STAGE,
+        };
         let Ok(mut probe) = EventPlayer::open(data, row, cfg) else {
             warn!("opening: event row {row} does not open");
             continue;
@@ -350,7 +502,9 @@ pub fn setup(
                 looks.insert(a.name.clone(), l);
             }
         }
-        let actors = crate::event::spawn_event_actors(commands, loader, meshes, materials, images, bindposes, &first, &looks, row);
+        let actors = crate::event::spawn_event_actors(
+            commands, loader, meshes, materials, images, bindposes, &first, &looks, row,
+        );
         for e in actors {
             commands.entity(e).insert(Visibility::Hidden);
         }
@@ -369,22 +523,64 @@ pub fn step(
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
     res: Option<Res<OpeningRes>>,
+    args: Res<crate::Args>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
 ) {
-    let (Some(mut st), Some(res)) = (state, res) else { return };
+    let (Some(mut st), Some(res)) = (state, res) else {
+        return;
+    };
     let st = &mut *st;
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
+    if !s.network_ready {
+        s.network_ready = true;
+        if let Err(e) = s.network(&args) {
+            panic!("opening network: {e}");
+        }
+    }
+    let network_now = (now * 1000.0) as u64;
+    if let Some(server) = &mut s.host.server {
+        server.pump(network_now);
+        if server
+            .host
+            .story
+            .as_ref()
+            .is_some_and(|story| story.quest(2).is_some())
+        {
+            server.heartbeat(network_now);
+        }
+    }
+    if s.guest.is_some() {
+        guest_step(
+            s,
+            st,
+            &keys,
+            &buttons,
+            &mouse,
+            time.delta_secs(),
+            network_now,
+            &mut roots,
+            &mut cams,
+            &mut vis,
+        );
+        return;
+    }
     play::orbit(st, &buttons, &mouse);
     // Local input: talk and menu keys first, the rest to the host.
     let near = s.npc_near();
-    let mut input = PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: false };
+    let mut input = PlayerInput {
+        sim: play::p1_input(&keys, &buttons, st.cam_yaw),
+        interact: false,
+    };
     let e_press = keys.just_pressed(KeyCode::KeyE);
     if s.world_menu().is_some() {
-        input.sim = Input { camera_yaw: st.cam_yaw, ..Default::default() };
+        input.sim = Input {
+            camera_yaw: st.cam_yaw,
+            ..Default::default()
+        };
         let pick = if keys.just_pressed(KeyCode::Digit1) {
             Some(ddskill_fighter())
         } else if keys.just_pressed(KeyCode::Digit2) {
@@ -396,7 +592,10 @@ pub fn step(
             close_menu(s, j);
         }
     } else if s.talk.is_some() {
-        input.sim = Input { camera_yaw: st.cam_yaw, ..Default::default() };
+        input.sim = Input {
+            camera_yaw: st.cam_yaw,
+            ..Default::default()
+        };
         let digit = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
             .iter()
             .position(|&k| keys.just_pressed(k));
@@ -418,7 +617,10 @@ pub fn step(
             }
         }
     } else if s.cut.is_some() {
-        input.sim = Input { camera_yaw: st.cam_yaw, ..Default::default() };
+        input.sim = Input {
+            camera_yaw: st.cam_yaw,
+            ..Default::default()
+        };
     } else if e_press && near.is_some() {
         let npc = near.unwrap();
         match s.host.talk(0, npc) {
@@ -435,13 +637,25 @@ pub fn step(
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
-    while s.acc >= frame {
+    while s.acc >= frame
+        && !s
+            .host
+            .story
+            .as_ref()
+            .is_some_and(|story| story.quest(2).is_some())
+    {
         s.acc -= frame;
         // the NPCs where the view shows them, for volumes that detect NPCs
         s.host.world.npcs = s
             .npcs
             .iter()
-            .map(|(&id, &(_, p, yaw))| ddstory::NpcUnit { id, unit: ddstory::Player { pos: p.to_array(), yaw } })
+            .map(|(&id, &(_, p, yaw))| ddstory::NpcUnit {
+                id,
+                unit: ddstory::Player {
+                    pos: p.to_array(),
+                    yaw,
+                },
+            })
             .collect();
         let mut inputs = FrameInputs::new();
         let seats: Vec<_> = s.host.roster.ids().collect();
@@ -449,21 +663,25 @@ pub fn step(
             inputs.insert(id, if id == 0 { input } else { PlayerInput::default() });
         }
         input.interact = false;
-        let report = match s.host.tick(&inputs) {
+        let report = match s.host.tick_network(&inputs, network_now) {
             Ok(r) => r,
             Err(e) => {
-                error!("opening: host frame: {e}");
+                s.failure = Some(format!("host frame failed: {e}"));
                 break;
             }
         };
         for r in &report.requests {
             match r {
-                Request::PlaceParty { start_pos: Some(n), .. } => s.place_party(*n),
+                Request::PlaceParty {
+                    start_pos: Some(n), ..
+                } => s.place_party(*n),
                 Request::PlaceParty { pos: Some(p), .. } => info!("opening: party placed at {p:?}"),
                 Request::JumpArea { stage, .. } if *stage != STAGE => {
                     warn!("opening: JumpArea to stage {stage} is outside this slice")
                 }
-                Request::QuestBanner { kind, quest, log } => info!("opening: quest banner kind {kind} q{quest:04} log {log}"),
+                Request::QuestBanner { kind, quest, log } => {
+                    info!("opening: quest banner kind {kind} q{quest:04} log {log}")
+                }
                 Request::Message { quest, mes_id, .. } => info!("opening: message q{quest:04} #{mes_id}"),
                 Request::OpenMenu { .. } | Request::Order { .. } | Request::Scenario { .. } => {}
                 other => debug!("opening: {other:?}"),
@@ -483,7 +701,14 @@ pub fn step(
                 s.last_sce,
                 w.gsf.get(372),
                 w.gsf.get(381),
-                s.host.story.as_ref().unwrap().quests.iter().map(|q| q.number()).collect::<Vec<_>>()
+                s.host
+                    .story
+                    .as_ref()
+                    .unwrap()
+                    .quests
+                    .iter()
+                    .map(|q| q.number())
+                    .collect::<Vec<_>>()
             );
             s.last_sce = sce;
         }
@@ -495,7 +720,9 @@ pub fn step(
     let dt = time.delta_secs();
     let ids: Vec<u32> = s.npcs.keys().copied().collect();
     for id in ids {
-        let Some(target) = s.host.npcs.position(id).map(Vec3::from) else { continue };
+        let Some(target) = s.host.npcs.position(id).map(Vec3::from) else {
+            continue;
+        };
         let (e, mut at, mut yaw) = s.npcs[&id];
         let d = target - at;
         let flat = Vec3::new(d.x, 0.0, d.z);
@@ -514,7 +741,11 @@ pub fn step(
             tr.translation = at * UNIT;
             tr.rotation = Quat::from_rotation_y(yaw);
             if s.npc_moving.get(&id) != Some(&moving) {
-                let m = if moving { s.npc_motions.1.clone() } else { s.npc_motions.0.clone() };
+                let m = if moving {
+                    s.npc_motions.1.clone()
+                } else {
+                    s.npc_motions.0.clone()
+                };
                 if let Some(m) = m {
                     pb.change_motion(m, 6.0);
                 }
@@ -534,7 +765,11 @@ pub fn step(
     let hide = s.cut.is_some();
     for (&e, &on) in &st.visible {
         if let Ok(mut v) = vis.get_mut(e) {
-            *v = if on && !hide { Visibility::Inherited } else { Visibility::Hidden };
+            *v = if on && !hide {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
     }
     for e in s.gone.drain(..) {
@@ -544,7 +779,11 @@ pub fn step(
     }
     for &(e, ..) in s.npcs.values() {
         if let Ok(mut v) = vis.get_mut(e) {
-            *v = if hide { Visibility::Hidden } else { Visibility::Inherited };
+            *v = if hide {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
         }
     }
 }
@@ -580,15 +819,24 @@ fn close_menu(s: &mut Session, job: u32) {
 
 fn start_cut(s: &mut Session, row: usize) {
     let w = s.world();
-    let cfg = EventConfig { language: s.language, sex: s.sex, hour: w.hour, stage: STAGE };
+    let cfg = EventConfig {
+        language: s.language,
+        sex: s.sex,
+        hour: w.hour,
+        stage: STAGE,
+    };
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
         Ok(p) => {
             info!("opening: cutscene row {row} ({}), {} frames", p.path, p.end_frame);
-            s.cut = Some(Cut { row, player: p, last: EventFrame::default(), acc: 0.0 });
+            s.cut = Some(Cut {
+                row,
+                player: p,
+                last: EventFrame::default(),
+                acc: 0.0,
+            });
         }
         Err(e) => {
-            error!("opening: event {row}: {e}; reported over at once");
-            s.host.world.event_done();
+            s.failure = Some(format!("event {row} failed to open: {e}"));
         }
     }
 }
@@ -612,7 +860,15 @@ pub fn cutscene(
     let Some(res) = res else { return };
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
-    let aspect = windows.single().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
+    if let Some(message) = s.failure.take() {
+        error!("opening failed: {message}");
+        exit.write(AppExit::error());
+        return;
+    }
+    let aspect = windows
+        .single()
+        .map(|w| w.width() / w.height().max(1.0))
+        .unwrap_or(16.0 / 9.0);
     let mut finished = None;
     if let Some(c) = &mut s.cut {
         // mDeltaTime: frames at 30 per second.
@@ -622,7 +878,7 @@ pub fn cutscene(
             match c.player.step(1.0) {
                 Ok(f) => c.last = f,
                 Err(e) => {
-                    error!("opening: event step: {e}");
+                    s.failure = Some(format!("event playback failed: {e}"));
                     break;
                 }
             }
@@ -634,7 +890,11 @@ pub fn cutscene(
         crate::event::apply_actors(f, c.row, &mut actors);
         crate::event::apply_ui(f, &mut fade, &mut subs);
         if f.frame.is_some_and(|x| (300.0..302.0).contains(&x)) {
-            let name = if c.row == 22 { "3-cutscene-ev10" } else { "6-cutscene-ev15" };
+            let name = if c.row == 22 {
+                "3-cutscene-ev10"
+            } else {
+                "6-cutscene-ev15"
+            };
             s.shot_queue.push(format!("want:{name}"));
         }
         if c.player.finished() || f.finished {
@@ -644,7 +904,12 @@ pub fn cutscene(
     if let Some(Some(row)) = finished {
         info!("opening: cutscene row {row} over; control returns");
         s.cut = None;
-        s.host.world.event_done();
+        if s.guest.is_none() {
+            s.host.world.event_done();
+            if let Some(server) = &mut s.host.server {
+                server.event_done();
+            }
+        }
         for (a, _, mut v, _) in &mut actors {
             if a.row == row {
                 *v = Visibility::Hidden;
@@ -660,7 +925,11 @@ pub fn cutscene(
             }
         }
     }
-    let wants: Vec<String> = s.shot_queue.iter().filter_map(|q| q.strip_prefix("want:").map(str::to_string)).collect();
+    let wants: Vec<String> = s
+        .shot_queue
+        .iter()
+        .filter_map(|q| q.strip_prefix("want:").map(str::to_string))
+        .collect();
     s.shot_queue.retain(|q| !q.starts_with("want:"));
     for w in wants {
         if s.shots_taken_for(&w) {
@@ -684,7 +953,15 @@ pub fn cutscene(
     }
     if let Ok(mut i) = info_text.single_mut() {
         let w = s.world();
-        let quests: Vec<String> = s.host.story.as_ref().unwrap().quests.iter().map(|q| format!("q{:04}", q.number())).collect();
+        let quests: Vec<String> = s
+            .host
+            .story
+            .as_ref()
+            .unwrap()
+            .quests
+            .iter()
+            .map(|q| format!("q{:04}", q.number()))
+            .collect();
         i.0 = format!(
             "opening (m5 slice): stage {} SceNo {}  {:02}:{:02}  quests {}  GSF372 {} GSF381 {}{}\nE: interact / talk   WASD: move   right mouse: camera",
             w.stage_no,
@@ -697,14 +974,43 @@ pub fn cutscene(
             s.cut.as_ref().map(|c| format!("  cutscene row {} frame {:?}", c.row, c.last.frame.map(|f| f as i64))).unwrap_or_default()
         );
     }
+    if s.host
+        .story
+        .as_ref()
+        .is_some_and(|story| story.quest(2).is_some())
+    {
+        if let Ok(mut i) = info_text.single_mut() {
+            i.0.push_str(
+                "\nOpening slice complete: q0002 booted. Further quest execution is outside this slice.",
+            );
+        }
+    }
+    if s.guest.is_some() {
+        if let Ok(mut i) = info_text.single_mut() {
+            i.0 = "Opening guest: story and NPCs controlled by host | WASD move | mouse look | Esc pause"
+                .into();
+        }
+    }
+    s.view_frames += 1;
+    // Let pipelines and the first visible frame settle before capturing.
+    if s.view_frames < 60 {
+        return;
+    }
     // Screenshots (`--shots`).
-    let names: Vec<String> = s.shot_queue.iter().filter(|q| !q.contains(':')).cloned().collect();
+    let names: Vec<String> = s
+        .shot_queue
+        .iter()
+        .filter(|q| !q.contains(':'))
+        .cloned()
+        .collect();
     s.shot_queue.retain(|q| q.contains(':'));
     if let Some(dir) = s.shots.clone() {
         for n in names {
             let path = dir.join(format!("{n}.png"));
             info!("opening: screenshot {}", path.display());
-            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path));
             s.shots_taken += 1;
         }
     }
@@ -719,8 +1025,12 @@ pub fn cutscene(
 /// The demo's input for this frame: walk to the step's target, press E,
 /// answer the menu and the talk.
 fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
-    let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else { return PlayerInput::default() };
-    let Some(d) = s.demo.as_mut() else { return PlayerInput::default() };
+    let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else {
+        return PlayerInput::default();
+    };
+    let Some(d) = s.demo.as_mut() else {
+        return PlayerInput::default();
+    };
     if d.since == 0.0 {
         d.since = now;
         d.check = (now, p);
@@ -740,36 +1050,61 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Step::Q0002Event => place("cassardis: q0002 event"),
         Step::Done => None,
     };
+    if (now % 2.0) < 0.04 {
+        info!(
+            "opening demo: {step:?} at {p:?}, target {target:?}, SceNo {}",
+            s.world().sce_no
+        );
+    }
     let w = s.world().clone();
     let menu = s.world_menu();
     let talking = s.talk.is_some();
-    let quests: Vec<u32> = s.host.story.as_ref().unwrap().quests.iter().map(|q| q.number()).collect();
+    let quests: Vec<u32> = s
+        .host
+        .story
+        .as_ref()
+        .unwrap()
+        .quests
+        .iter()
+        .map(|q| q.number())
+        .collect();
     let d = s.demo.as_mut().unwrap();
     let mut next = None;
     let mut input = PlayerInput::default();
-    let mut teleport = None;
     let mut face = None;
     if let Some(t) = target {
         let flat = Vec3::new(t.x - p.x, 0.0, t.z - p.z);
         let reach = if step == Step::TalkQuina { 150.0 } else { 60.0 };
         if flat.length() > reach {
-            input.sim = Input { stick: [0.0, 1.0], walk: step == Step::TalkQuina && flat.length() < 300.0, camera_yaw: flat.x.atan2(flat.z), ..Default::default() };
-            // no progress for 3 s: the path is blocked (no navigation in
-            // the demo); stand at the target
+            input.sim = Input {
+                stick: [0.0, 1.0],
+                walk: step == Step::TalkQuina && flat.length() < 300.0,
+                camera_yaw: flat.x.atan2(flat.z),
+                ..Default::default()
+            };
+            // Report a blocked route, never silently place the player
+            // through geometry and call that a walked acceptance run.
             if now - d.check.0 > 3.0 {
                 if (p - d.check.1).length() < 60.0 {
-                    teleport = Some(t);
+                    warn!("opening demo: blocked walking to {step:?}; no placement fallback");
                 }
                 d.check = (now, p);
             }
         } else {
-            input.sim = Input { camera_yaw: flat.x.atan2(flat.z), ..Default::default() };
+            input.sim = Input {
+                camera_yaw: flat.x.atan2(flat.z),
+                ..Default::default()
+            };
             if step == Step::WeaponTable {
                 d.press = !d.press;
                 input.interact = d.press;
-                face = route.iter().find(|w| w.name == "cassardis: weapon table").and_then(|w| {
-                    w.place(&s.host.story.as_ref()?.stage.scenarios).map(|(_, yaw)| yaw)
-                });
+                face = route
+                    .iter()
+                    .find(|w| w.name == "cassardis: weapon table")
+                    .and_then(|w| {
+                        w.place(&s.host.story.as_ref()?.stage.scenarios)
+                            .map(|(_, yaw)| yaw)
+                    });
             }
         }
     }
@@ -795,24 +1130,24 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Step::Q0002Event if quests.contains(&2) => next = Some(Step::Done),
         _ => {}
     }
-    let talk_due = step == Step::TalkQuina && target.is_some_and(|t| (Vec3::new(t.x - p.x, 0.0, t.z - p.z)).length() <= 150.0) && now - d.last_talk > 1.5;
+    let talk_due = step == Step::TalkQuina
+        && target.is_some_and(|t| (Vec3::new(t.x - p.x, 0.0, t.z - p.z)).length() <= 150.0)
+        && now - d.last_talk > 1.5;
     if talk_due {
         d.last_talk = now;
     }
     let menu_due = step == Step::WeaponTable && menu.is_some() && next == Some(Step::RoomExit);
     if let Some(n) = next {
-        info!("opening demo: {step:?} done (SceNo {}, GSF 372 {}, GSF 381 {}, quests {quests:?}) -> {n:?}", w.sce_no, w.gsf.get(372), w.gsf.get(381));
+        info!(
+            "opening demo: {step:?} done (SceNo {}, GSF 372 {}, GSF 381 {}, quests {quests:?}) -> {n:?}",
+            w.sce_no,
+            w.gsf.get(372),
+            w.gsf.get(381)
+        );
         d.step = n;
         d.since = now;
         d.check = (now, p);
         d.last_talk = 0.0;
-    }
-    if let Some(t) = teleport {
-        info!("opening demo: path blocked; the Arisen stands at the target ({:.0}, {:.0}, {:.0})", t.x, t.y, t.z);
-        if let Some(pl) = s.host.sim.player_mut(0) {
-            pl.position = t.to_array();
-            pl.drop_from = t.y;
-        }
     }
     if let (Some(yaw), Some(pl)) = (face, s.host.sim.player_mut(0)) {
         // the demo turns the Arisen to the table (the scenario's angle
@@ -852,10 +1187,142 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
                 w.quest_bits(1).map(|b| b.words()),
                 quests.contains(&2)
             );
+            let valid = w.sce_no == 1400
+                && w.gsf.get(372)
+                && w.gsf.get(381)
+                && quests.contains(&2)
+                && w.quest_bits(1)
+                    .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]);
+            if !valid {
+                s.failure = Some("opening endpoint flag/SceNo check failed".into());
+            }
             s.shot("7-q0002");
             s.quit_at = s.shots.as_ref().map(|_| now + 3.0);
         }
         _ => {}
     }
     input
+}
+
+impl Session {
+    fn network(&mut self, args: &crate::Args) -> Result<(), String> {
+        if args.join.is_some() {
+            let mut guest = crate::net::take_prejoined().ok_or("opening guest did not complete prejoin")?;
+            let vfs = ddvfs::Vfs::open(&args.native_pc)?;
+            guest.set_ground(Box::new(ddhost::install::stage_collision(&vfs, STAGE)?));
+            self.guest = Some(guest);
+            self.demo = None;
+        } else if let Some(port) = args.host {
+            let udp = ddnet::Udp::bind(&format!("0.0.0.0:{port}")).map_err(|e| e.to_string())?;
+            let p = self.host.sim.player(0).ok_or("missing host seat")?;
+            let spot = ddnet::Spot {
+                stage: STAGE,
+                cell: (50, 50),
+                pos: p.position,
+                yaw: p.yaw,
+            };
+            let config = ddnet::ServerConfig {
+                build: 1_513_180_209,
+                data: ddnet::data_fingerprint(&args.native_pc).map_err(|e| e.to_string())?,
+                spawn: spot.pos,
+                spot: Some(spot),
+            };
+            let host = *self.host.local.take().ok_or("already hosting")?;
+            let mut server = ddnet::Server::new(host, udp, config);
+            server.wait_for_events = true;
+            self.host.server = Some(Box::new(server));
+            info!("opening: hosting on {port}");
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guest_step(
+    s: &mut Session,
+    st: &mut PlayState,
+    keys: &ButtonInput<KeyCode>,
+    buttons: &ButtonInput<MouseButton>,
+    mouse: &AccumulatedMouseMotion,
+    dt: f32,
+    now: u64,
+    roots: &mut Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
+    cams: &mut Query<&mut Transform, With<FollowCam>>,
+    vis: &mut Query<&mut Visibility, Without<Actor>>,
+) {
+    play::orbit(st, buttons, mouse);
+    let input = PlayerInput {
+        sim: if s.cut.is_some() {
+            Input::default()
+        } else {
+            play::p1_input(keys, buttons, st.cam_yaw)
+        },
+        interact: keys.just_pressed(KeyCode::KeyE),
+    };
+    let c = s.guest.as_mut().unwrap();
+    c.pump(now);
+    s.acc = (s.acc + dt).min(0.25);
+    while s.acc >= FrameClock::default().seconds() {
+        s.acc -= FrameClock::default().seconds();
+        c.frame(input, now);
+    }
+    if let Some(seat) = c.seat {
+        st.follow = seat;
+    }
+    let latest = c.latest().map_or(0, |snap| snap.frame);
+    let events: Vec<_> = c.events.drain(..).collect();
+    let shown = |b: &ddnet::Body| Shown {
+        id: b.id,
+        position: b.position,
+        yaw: b.yaw,
+        state: b.state,
+        frame: b.frame,
+        weapon: ddsim::Weapon::None,
+    };
+    let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
+    bodies.extend(c.own().as_ref().map(shown));
+    for n in c.npcs() {
+        s.guest_npcs.insert(n.id, n.pos);
+    }
+    for event in events {
+        if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
+            start_cut(s, row as usize);
+            if let Some(cut) = &mut s.cut {
+                // Catch up a delayed start or late join to the last received host frame.
+                for _ in 0..latest.saturating_sub(frame).min(cut.player.end_frame as u64) {
+                    if let Ok(f) = cut.player.step(1.0) {
+                        cut.last = f;
+                    }
+                }
+            }
+        }
+    }
+    let follow = st.follow;
+    if s.cut.is_some() {
+        st.follow = u8::MAX;
+    }
+    play::show(st, &bodies, roots, cams);
+    st.follow = follow;
+    for (&e, &present) in &st.visible {
+        if let Ok(mut v) = vis.get_mut(e) {
+            *v = if present && s.cut.is_none() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+    }
+    for (&id, &(entity, _, _)) in &s.npcs {
+        let at = s.guest_npcs.get(&id);
+        if let (Some(at), Ok((mut t, _))) = (at, roots.get_mut(entity)) {
+            t.translation = Vec3::from(*at) * UNIT;
+        }
+        if let Ok(mut v) = vis.get_mut(entity) {
+            *v = if at.is_some() && s.cut.is_none() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+    }
 }

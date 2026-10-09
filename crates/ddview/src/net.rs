@@ -230,7 +230,7 @@ pub fn prejoin(mut args: crate::Args) -> crate::Args {
     args
 }
 
-fn take_prejoined() -> Option<Guest> {
+pub(crate) fn take_prejoined() -> Option<Guest> {
     let shared = PREJOINED.lock().unwrap().take()?;
     let mut g = shared.lock().unwrap();
     g.take()

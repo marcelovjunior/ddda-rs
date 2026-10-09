@@ -36,7 +36,13 @@ impl OpeningWorld {
     /// The opening's stand-ins (`ScriptedHost::opening`): events, menus
     /// and the dragon answered by the scripted host until [`Self::live`].
     pub fn new() -> Self {
-        OpeningWorld { inner: ScriptedHost::opening(), npcs: vec![], manual_menus: false, menu: None, pending: vec![] }
+        OpeningWorld {
+            inner: ScriptedHost::opening(),
+            npcs: vec![],
+            manual_menus: false,
+            menu: None,
+            pending: vec![],
+        }
     }
 
     /// From now on every cutscene waits for the view (`inner.awaiting`,
@@ -150,6 +156,8 @@ pub const AWAY: [f32; 3] = [0.0, -100_000.0, 0.0];
 pub struct Forwarded {
     pub frames: u64,
     pub ladder: Vec<u32>,
+    /// Last event/script party placement; world.start_pos is the area-entry selector.
+    pub arrival: Option<(u32, u32)>,
 }
 
 /// Walks `route` headless: seat 0 stands in each waypoint's volume (the
@@ -166,7 +174,10 @@ pub fn fast_forward<D: Data>(
 ) -> Result<Forwarded, HostError> {
     let seats: Vec<_> = h.roster.ids().collect();
     let (mut step, mut at_step) = (0usize, 0u64);
-    let mut out = Forwarded { ladder: vec![h.story.as_ref().map_or(0, |s| s.world.sce_no)], ..Default::default() };
+    let mut out = Forwarded {
+        ladder: vec![h.story.as_ref().map_or(0, |s| s.world.sce_no)],
+        ..Default::default()
+    };
     for frame in 0..max_frames {
         let w = route.get(step);
         if w.is_none() && done(h) {
@@ -184,14 +195,36 @@ pub fn fast_forward<D: Data>(
             }
         }
         h.world.npcs = w
-            .map(|w| w.npcs.iter().map(|&id| NpcUnit { id, unit: ddstory::Player { pos, yaw: 0.0 } }).collect())
+            .map(|w| {
+                w.npcs
+                    .iter()
+                    .map(|&id| NpcUnit {
+                        id,
+                        unit: ddstory::Player { pos, yaw: 0.0 },
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let mut inputs = FrameInputs::new();
         for (k, &id) in seats.iter().enumerate() {
             let interact = k == 0 && w.is_some_and(|w| w.interact) && frame % 2 == 0;
-            inputs.insert(id, PlayerInput { interact, ..Default::default() });
+            inputs.insert(
+                id,
+                PlayerInput {
+                    interact,
+                    ..Default::default()
+                },
+            );
         }
-        h.tick(&inputs)?;
+        let report = h.tick(&inputs)?;
+        for request in report.requests {
+            if let Request::PlaceParty {
+                start_pos: Some(n), ..
+            } = request
+            {
+                out.arrival = h.story.as_ref().map(|s| (s.world.stage_no, n));
+            }
+        }
         let s = h.story.as_ref().ok_or(HostError::NoData("story"))?;
         if out.ladder.last() != Some(&s.world.sce_no) {
             out.ladder.push(s.world.sce_no);
@@ -207,14 +240,19 @@ pub fn fast_forward<D: Data>(
             at_step = 0;
         }
     }
-    Err(HostError::Story(ddstory::Error::Data(format!("opening stalled at waypoint {step} after {max_frames} frames"))))
+    Err(HostError::Story(ddstory::Error::Data(format!(
+        "opening stalled at waypoint {step} after {max_frames} frames"
+    ))))
 }
 
 /// The opening route up to q0001's start in Cassardis (stage 200, SceNo
 /// 1100, after event st200 ev05): the prologue and q0000.
 pub fn to_newly_arisen() -> Vec<Waypoint> {
     let mut r = ddstory::route::opening();
-    let end = r.iter().position(|w| w.name == "cassardis: dragon attack").map_or(r.len(), |i| i + 1);
+    let end = r
+        .iter()
+        .position(|w| w.name == "cassardis: dragon attack")
+        .map_or(r.len(), |i| i + 1);
     r.truncate(end);
     r
 }

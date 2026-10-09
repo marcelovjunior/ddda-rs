@@ -38,19 +38,51 @@ fn guest_sees_the_npcs_and_gets_the_cutscene() {
         return;
     }
     let story = Story::new_game(InstallData::open(&np, Some(&exe)).unwrap());
-    let mut host = Host::new(Sim::new(HashMap::new()), Some(story), OpeningWorld::new(), Box::new(Void));
-    host.data = SystemData { npc: Some(Arc::new(ddhost::ddnpcrt::InstallData::open(&np, "eng").unwrap())), ..Default::default() };
+    let mut host = Host::new(
+        Sim::new(HashMap::new()),
+        Some(story),
+        OpeningWorld::new(),
+        Box::new(Void),
+    );
+    host.data = SystemData {
+        npc: Some(Arc::new(ddhost::ddnpcrt::InstallData::open(&np, "eng").unwrap())),
+        ..Default::default()
+    };
     host.join(ProfileId(1), Control::Local, [0.0; 3], 0.0).unwrap();
-    fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| h.story.as_ref().is_some_and(|s| s.quest(1).is_some())).unwrap();
+    fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| {
+        h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
+    })
+    .unwrap();
     assert!(host.spawn_npc(2, 1).unwrap());
     // as the viewer: cutscenes and the menu wait for the view
     host.world.live(CASSARDIS_ROWS);
-    let mut srv = Server::new(host, Udp::bind("127.0.0.1:0").unwrap(), ServerConfig { build: BUILD, data: DATA, spawn: [0.0; 3], spot: None });
-    let mut c = Client::new(Udp::bind("127.0.0.1:0").unwrap(), srv.transport.local_addr(), 2, BUILD, DATA, None, Sim::new(HashMap::new()), Box::new(Void), 0);
+    let mut srv = Server::new(
+        host,
+        Udp::bind("127.0.0.1:0").unwrap(),
+        ServerConfig {
+            build: BUILD,
+            data: DATA,
+            spawn: [0.0; 3],
+            spot: None,
+        },
+    );
+    srv.wait_for_events = true;
+    let mut c = Client::new(
+        Udp::bind("127.0.0.1:0").unwrap(),
+        srv.transport.local_addr(),
+        2,
+        BUILD,
+        DATA,
+        None,
+        Sim::new(HashMap::new()),
+        Box::new(Void),
+        0,
+    );
     let route = ddstory::route::opening();
     let at = |name: &str, srv: &Server<InstallData, OpeningWorld, Udp>| {
         let w = route.iter().find(|w| w.name == name).unwrap();
-        w.place(&srv.host.story.as_ref().unwrap().stage.scenarios).unwrap()
+        w.place(&srv.host.story.as_ref().unwrap().stage.scenarios)
+            .unwrap()
     };
     let mut now = 0;
     let mut row = None;
@@ -70,7 +102,13 @@ fn guest_sees_the_npcs_and_gets_the_cutscene() {
         let p = srv.host.sim.player_mut(0).unwrap();
         (p.position, p.yaw) = (pos, yaw);
         let mut local = FrameInputs::new();
-        local.insert(0, PlayerInput { interact, ..Default::default() });
+        local.insert(
+            0,
+            PlayerInput {
+                interact,
+                ..Default::default()
+            },
+        );
         srv.step(&local, now).unwrap();
         if srv.host.world.menu.is_some() {
             srv.host.world.close_menu(Some(1));
@@ -91,4 +129,58 @@ fn guest_sees_the_npcs_and_gets_the_cutscene() {
     let npcs = c.npcs();
     let quina = npcs.iter().find(|n| n.id == 2).expect("Quina in the snapshot");
     assert_eq!(Some(quina.pos), srv.host.npcs.position(2));
+    // A guest that arrives during the event gets its original start frame,
+    // allowing its view to catch up rather than restarting the host story.
+    srv.host.leave(c.seat.unwrap());
+    let mut late = Client::new(
+        Udp::bind("127.0.0.1:0").unwrap(),
+        srv.transport.local_addr(),
+        3,
+        BUILD,
+        DATA,
+        None,
+        Sim::new(HashMap::new()),
+        Box::new(Void),
+        now,
+    );
+    let mut late_start = None;
+    for _ in 0..30 {
+        now += 33;
+        late.pump(now);
+        late.frame(PlayerInput::default(), now);
+        srv.pump(now);
+        srv.step(&FrameInputs::new(), now).unwrap();
+        for event in late.events.drain(..) {
+            if let ToClient::PlayEvent { frame, row } = event {
+                late_start = Some((frame, row));
+            }
+        }
+        if late_start.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    assert_eq!(late_start.map(|(_, row)| row), Some(22));
+    let before = srv.host.sim.player(0).unwrap().position;
+    let moving = FrameInputs::from([(
+        0,
+        PlayerInput {
+            sim: ddsim::Input {
+                stick: [1.0, 0.0],
+                ..Default::default()
+            },
+            interact: true,
+        },
+    )]);
+    for _ in 0..10 {
+        now += 33;
+        srv.step(&moving, now).unwrap();
+    }
+    let blocked = srv.host.sim.player(0).unwrap().position;
+    assert_eq!(
+        (before[0], before[2]),
+        (blocked[0], blocked[2]),
+        "shared cutscene suppresses movement input"
+    );
+    srv.event_done();
 }

@@ -41,7 +41,13 @@ fn tick_at(h: &mut Host<InstallData, OpeningWorld>, name: &str, interact: bool) 
     let p = h.sim.player_mut(0).unwrap();
     (p.position, p.yaw) = (pos, yaw);
     let mut inputs = FrameInputs::new();
-    inputs.insert(0, PlayerInput { interact, ..Default::default() });
+    inputs.insert(
+        0,
+        PlayerInput {
+            interact,
+            ..Default::default()
+        },
+    );
     inputs.insert(1, PlayerInput::default());
     h.tick(&inputs).unwrap().requests
 }
@@ -53,13 +59,29 @@ fn cassardis_from_newly_arisen_to_upon_a_pawn() {
         return;
     };
     let story = Story::new_game(InstallData::open(&np, Some(&exe)).unwrap());
-    let mut h = Host::new(Sim::new(HashMap::new()), Some(story), OpeningWorld::new(), Box::new(Void));
-    h.data = SystemData { npc: Some(Arc::new(ddnpcrt::InstallData::open(&np, "eng").unwrap())), ..Default::default() };
+    let mut h = Host::new(
+        Sim::new(HashMap::new()),
+        Some(story),
+        OpeningWorld::new(),
+        Box::new(Void),
+    );
+    h.data = SystemData {
+        npc: Some(Arc::new(ddnpcrt::InstallData::open(&np, "eng").unwrap())),
+        ..Default::default()
+    };
     h.join(ProfileId(1), Control::Local, [0.0; 3], 0.0).unwrap();
     h.join(ProfileId(2), Control::Remote, [0.0; 3], 0.0).unwrap();
 
     // 1. As after the prologue: q0001 booted in Cassardis.
-    let f = fast_forward(&mut h, &to_newly_arisen(), 240, 30_000, |h| h.story.as_ref().is_some_and(|s| s.quest(1).is_some())).unwrap();
+    let f = fast_forward(&mut h, &to_newly_arisen(), 240, 30_000, |h| {
+        h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
+    })
+    .unwrap();
+    assert_eq!(
+        f.arrival,
+        Some((200, 2)),
+        "ev05 party placement survives fast-forward"
+    );
     let w = &h.story.as_ref().unwrap().world;
     assert_eq!((w.stage_no, w.sce_no), (200, 1100), "{:?}", f.ladder);
     assert!(h.story.as_ref().unwrap().quest(1).is_some());
@@ -77,7 +99,8 @@ fn cassardis_from_newly_arisen_to_upon_a_pawn() {
     }
     assert!(opened, "no vocation menu");
     assert_eq!(h.world.menu.map(|m| m.0), Some(Menu::Vocation));
-    h.world.close_menu(Some(ddskill::vocation::Vocation::Fighter as u32));
+    h.world
+        .close_menu(Some(ddskill::vocation::Vocation::Fighter as u32));
     for _ in 0..5 {
         tick_at(&mut h, "cassardis: weapon table", false);
     }
@@ -175,4 +198,5 @@ fn cassardis_from_newly_arisen_to_upon_a_pawn() {
     assert_eq!(ladder, vec![1300, 1400]);
     assert!(s.world.gsf.get(381));
     assert!(s.quest(2).is_some(), "q0002 booted");
+    assert_eq!(s.world.quest_bits(1).unwrap().words(), &[0x18000000, 0, 3]);
 }
