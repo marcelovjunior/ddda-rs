@@ -83,6 +83,7 @@ struct Demo {
     since: f32,
     /// Where the Arisen was at the last progress check.
     check: (f32, Vec3),
+    path: std::collections::VecDeque<Vec3>,
     press: bool,
     last_talk: f32,
     talked: bool,
@@ -131,6 +132,7 @@ pub struct Session {
     pub host: HostHandle,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
+    pending_input: PlayerInput,
     failure: Option<String>,
     guest_npcs: HashMap<u32, [f32; 3]>,
     acc: f32,
@@ -235,6 +237,7 @@ pub fn prepare(
         },
         guest: None,
         network_ready: false,
+        pending_input: PlayerInput::default(),
         failure: None,
         guest_npcs: HashMap::new(),
         acc: 0.0,
@@ -248,6 +251,7 @@ pub fn prepare(
             step: Step::WeaponTable,
             since: 0.0,
             check: (0.0, Vec3::ZERO),
+            path: Default::default(),
             press: false,
             last_talk: 0.0,
             talked: false,
@@ -399,7 +403,7 @@ pub fn setup(
     crate::event::spawn_stage_models(commands, loader, meshes, materials, images, STAGE);
     let vfs = loader.vfs;
     // The Arisen: play.rs's characters at the seats.
-    let seats: Vec<(u8, [f32; 3], f32)> = (0..2)
+    let seats: Vec<(u8, [f32; 3], f32)> = (0..ddhost::player::MAX_ARISEN as u8)
         .map(|id| {
             let p = s.host.sim.player(id).or_else(|| s.host.sim.player(0)).unwrap();
             (id, p.position, p.yaw)
@@ -524,6 +528,7 @@ pub fn step(
     state: Option<ResMut<PlayState>>,
     res: Option<Res<OpeningRes>>,
     args: Res<crate::Args>,
+    pause: Res<crate::pause::PauseState>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
@@ -540,6 +545,9 @@ pub fn step(
         if let Err(e) = s.network(&args) {
             panic!("opening network: {e}");
         }
+    }
+    if pause.paused && args.host.is_none() && args.join.is_none() {
+        return;
     }
     let network_now = (now * 1000.0) as u64;
     if let Some(server) = &mut s.host.server {
@@ -561,6 +569,8 @@ pub fn step(
             &buttons,
             &mouse,
             time.delta_secs(),
+            pause.paused,
+            pause.mouse_look(buttons.pressed(MouseButton::Right)),
             network_now,
             &mut roots,
             &mut cams,
@@ -568,22 +578,24 @@ pub fn step(
         );
         return;
     }
-    play::orbit(st, &buttons, &mouse);
+    if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
+        play::orbit(st, &buttons, &mouse);
+    }
     // Local input: talk and menu keys first, the rest to the host.
     let near = s.npc_near();
     let mut input = PlayerInput {
         sim: play::p1_input(&keys, &buttons, st.cam_yaw),
         interact: false,
     };
-    let e_press = keys.just_pressed(KeyCode::KeyE);
+    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
     if s.world_menu().is_some() {
         input.sim = Input {
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-        let pick = if keys.just_pressed(KeyCode::Digit1) {
+        let pick = if !pause.paused && keys.just_pressed(KeyCode::Digit1) {
             Some(ddskill_fighter())
-        } else if keys.just_pressed(KeyCode::Digit2) {
+        } else if !pause.paused && keys.just_pressed(KeyCode::Digit2) {
             Some(ddskill_mage())
         } else {
             None
@@ -630,10 +642,22 @@ pub fn step(
     } else {
         input.interact = keys.pressed(KeyCode::KeyE);
     }
+    if play::active_input(&input.sim) && s.demo.is_some() {
+        s.demo = None;
+    }
     // The demo stands in for the keys.
-    if s.demo.is_some() && s.cut.is_none() {
+    if !pause.paused && s.demo.is_some() && s.cut.is_none() {
         input = demo_input(s, now);
     }
+    if pause.paused {
+        input = PlayerInput::default();
+    }
+    if pause.paused || s.cut.is_some() || s.talk.is_some() || s.world_menu().is_some() {
+        s.pending_input = PlayerInput::default();
+    }
+    s.pending_input.sim = play::latch_input(s.pending_input.sim, input.sim);
+    s.pending_input.interact |= input.interact;
+    input = s.pending_input;
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
@@ -645,6 +669,7 @@ pub fn step(
             .is_some_and(|story| story.quest(2).is_some())
     {
         s.acc -= frame;
+        s.pending_input = PlayerInput::default();
         // the NPCs where the view shows them, for volumes that detect NPCs
         s.host.world.npcs = s
             .npcs
@@ -849,6 +874,8 @@ pub fn cutscene(
     mut commands: Commands,
     time: Res<Time>,
     res: Option<Res<OpeningRes>>,
+    args: Res<crate::Args>,
+    pause: Res<crate::pause::PauseState>,
     mut cams: Query<(&mut Transform, &mut Projection), (With<FollowCam>, Without<Actor>)>,
     mut actors: Query<(&mut Actor, &mut Playback, &mut Visibility, &mut Transform), Without<EventCam>>,
     mut fade: Query<&mut BackgroundColor, With<FadePlane>>,
@@ -863,6 +890,9 @@ pub fn cutscene(
     if let Some(message) = s.failure.take() {
         error!("opening failed: {message}");
         exit.write(AppExit::error());
+        return;
+    }
+    if pause.paused && args.host.is_none() && args.join.is_none() {
         return;
     }
     let aspect = windows
@@ -889,6 +919,21 @@ pub fn cutscene(
         }
         crate::event::apply_actors(f, c.row, &mut actors);
         crate::event::apply_ui(f, &mut fade, &mut subs);
+        if s.guest.is_some() && f.frame.is_some_and(|x| ((x as u32) % 300) < 2) {
+            info!(
+                "opening guest event row {} frame {:?}, camera {:?}, {} actors",
+                c.row,
+                f.frame,
+                f.camera,
+                f.actors.len()
+            );
+            s.shot_queue.push(format!(
+                "want:guest-row{}-frame{}",
+                c.row,
+                f.frame.unwrap_or(0.0) as u32 / 300 * 300
+            ));
+        }
+
         if f.frame.is_some_and(|x| (300.0..302.0).contains(&x)) {
             let name = if c.row == 22 {
                 "3-cutscene-ev10"
@@ -963,7 +1008,7 @@ pub fn cutscene(
             .map(|q| format!("q{:04}", q.number()))
             .collect();
         i.0 = format!(
-            "opening (m5 slice): stage {} SceNo {}  {:02}:{:02}  quests {}  GSF372 {} GSF381 {}{}\nE: interact / talk   WASD: move   right mouse: camera",
+            "opening (m5 slice): stage {} SceNo {}  {:02}:{:02}  quests {}  GSF372 {} GSF381 {}{}\nE: interact / talk   WASD: move   mouse: camera   Esc: pause",
             w.stage_no,
             w.sce_no,
             w.hour,
@@ -1072,9 +1117,20 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
     let mut next = None;
     let mut input = PlayerInput::default();
     let mut face = None;
-    if let Some(t) = target {
+    while d.path.front().is_some_and(|waypoint| {
+        Vec3::new(waypoint.x - p.x, 0.0, waypoint.z - p.z).length() < ddsim::BODY_RADIUS
+    }) {
+        d.path.pop_front();
+    }
+    if let Some(t) = d.path.front().copied().or(target) {
         let flat = Vec3::new(t.x - p.x, 0.0, t.z - p.z);
-        let reach = if step == Step::TalkQuina { 150.0 } else { 60.0 };
+        let reach = if !d.path.is_empty() {
+            ddsim::BODY_RADIUS
+        } else if step == Step::TalkQuina {
+            150.0
+        } else {
+            60.0
+        };
         if flat.length() > reach {
             input.sim = Input {
                 stick: [0.0, 1.0],
@@ -1086,7 +1142,10 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
             // through geometry and call that a walked acceptance run.
             if now - d.check.0 > 3.0 {
                 if (p - d.check.1).length() < 60.0 {
-                    warn!("opening demo: blocked walking to {step:?}; no placement fallback");
+                    if let Some(goal) = target {
+                        d.path = demo_path(&s.host, p, goal).into();
+                        warn!("opening demo: blocked walking to {step:?}; collision planner found {} waypoints (no placement fallback)", d.path.len());
+                    }
                 }
                 d.check = (now, p);
             }
@@ -1145,6 +1204,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
             w.gsf.get(381)
         );
         d.step = n;
+        d.path.clear();
         d.since = now;
         d.check = (now, p);
         d.last_talk = 0.0;
@@ -1245,26 +1305,37 @@ fn guest_step(
     buttons: &ButtonInput<MouseButton>,
     mouse: &AccumulatedMouseMotion,
     dt: f32,
+    paused: bool,
+    mouse_look: bool,
     now: u64,
     roots: &mut Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     cams: &mut Query<&mut Transform, With<FollowCam>>,
     vis: &mut Query<&mut Visibility, Without<Actor>>,
 ) {
-    play::orbit(st, buttons, mouse);
+    if !paused && mouse_look {
+        play::orbit(st, buttons, mouse);
+    }
     let input = PlayerInput {
-        sim: if s.cut.is_some() {
+        sim: if paused || s.cut.is_some() {
             Input::default()
         } else {
             play::p1_input(keys, buttons, st.cam_yaw)
         },
-        interact: keys.just_pressed(KeyCode::KeyE),
+        interact: !paused && keys.just_pressed(KeyCode::KeyE),
     };
     let c = s.guest.as_mut().unwrap();
     c.pump(now);
+    if paused || s.cut.is_some() {
+        s.pending_input = PlayerInput::default();
+    }
+    s.pending_input.sim = play::latch_input(s.pending_input.sim, input.sim);
+    s.pending_input.interact |= input.interact;
+    let input = s.pending_input;
     s.acc = (s.acc + dt).min(0.25);
     while s.acc >= FrameClock::default().seconds() {
         s.acc -= FrameClock::default().seconds();
         c.frame(input, now);
+        s.pending_input = PlayerInput::default();
     }
     if let Some(seat) = c.seat {
         st.follow = seat;
@@ -1324,5 +1395,141 @@ fn guest_step(
                 Visibility::Hidden
             };
         }
+    }
+}
+
+/// Demo navigation only, not a translated NPC/pathfinding rule. An A* search
+/// samples capsule sweeps against the installed collision mesh. Resolution
+/// is one existing player diameter. The budget bounds demo work; a failed
+/// search leaves the player where collision put it, never warps it.
+fn demo_path(host: &StoryHost, from: Vec3, target: Vec3) -> Vec<Vec3> {
+    plan_path(host.ground.as_ref(), &host.sim.sweep_param, from, target)
+}
+fn plan_path(
+    ground: &dyn ddsim::Ground,
+    param: &ddsim::sweep::SweepParam,
+    from: Vec3,
+    target: Vec3,
+) -> Vec<Vec3> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap, HashSet};
+    let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
+    let cell = ddsim::BODY_RADIUS * 2.0;
+    let mut open = BinaryHeap::from([(Reverse(distance(from) as i32), (0i32, 0i32))]);
+    let mut nodes = HashMap::from([((0, 0), (from, 0.0f32, (0, 0)))]);
+    let mut visited = HashSet::new();
+    while let Some((_, key)) = open.pop() {
+        if !visited.insert(key) {
+            continue;
+        }
+        let (at, cost, _) = nodes[&key];
+        if distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS {
+            let mut path = vec![];
+            let mut k = key;
+            while k != (0, 0) {
+                let (p, _, parent) = nodes[&k];
+                path.push(p);
+                k = parent;
+            }
+            path.reverse();
+            return path;
+        }
+        if visited.len() > 2500 {
+            break;
+        }
+        for dx in -1..=1i32 {
+            for dz in -1..=1i32 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                let next = (key.0 + dx, key.1 + dz);
+                if visited.contains(&next) {
+                    continue;
+                }
+                let mx = dx as f32 * cell;
+                let mz = dz as f32 * cell;
+                let hit = ddsim::sweep::sweep(
+                    param,
+                    &ddsim::sweep::PLAYER_CAPSULE,
+                    at.to_array(),
+                    [mx, -ddsim::GROUND_CHECK_DROP, mz],
+                    true,
+                    &|lo, hi, out| {
+                        ground.triangles_in(lo, hi, out);
+                    },
+                );
+                let mut p = Vec3::from(hit.position);
+                if !hit.grounded() {
+                    let Some(floor) = ground.height(p.x, p.z, p.y + ddsim::FALL_CHECK_UP) else {
+                        continue;
+                    };
+                    if p.y - floor > ddsim::STEP_DOWN {
+                        continue;
+                    }
+                    p.y = floor;
+                }
+                let moved = Vec3::new(p.x - at.x, 0.0, p.z - at.z);
+                if (moved - Vec3::new(mx, 0.0, mz)).length() > 1.0 {
+                    continue;
+                }
+                let g = cost + moved.length();
+                if nodes.get(&next).is_some_and(|(_, old, _)| *old <= g) {
+                    continue;
+                }
+                nodes.insert(next, (p, g, key));
+                open.push((Reverse((g + distance(p)) as i32), next));
+            }
+        }
+    }
+    vec![]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn demo_navigation_cassardis_door() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.exists() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let ground = ddhost::install::stage_collision(&vfs, STAGE).unwrap();
+        let path = plan_path(
+            &ground,
+            &ddsim::sweep::SweepParam::default(),
+            Vec3::new(8024.744, 1731.1794, -7044.8994),
+            Vec3::new(8231.768, 1708.3849, -6733.37),
+        );
+        assert!(!path.is_empty(), "walk around recorded demo blockage");
+    }
+    #[test]
+    fn demo_navigation_walks_around_a_wall_without_placement() {
+        let mut ground = ddworld::Terrain::empty();
+        ground.add([
+            [-1000.0, 0.0, -1000.0],
+            [-1000.0, 0.0, 1000.0],
+            [1000.0, 0.0, 1000.0],
+        ]);
+        ground.add([
+            [-1000.0, 0.0, -1000.0],
+            [1000.0, 0.0, 1000.0],
+            [1000.0, 0.0, -1000.0],
+        ]);
+        ground.add([
+            [100.0, 0.0, -150.0],
+            [100.0, 1000.0, -150.0],
+            [100.0, 1000.0, 150.0],
+        ]);
+        ground.add([[100.0, 0.0, -150.0], [100.0, 1000.0, 150.0], [100.0, 0.0, 150.0]]);
+        let path = plan_path(
+            &ground,
+            &ddsim::sweep::SweepParam::default(),
+            Vec3::ZERO,
+            Vec3::new(400.0, 0.0, 0.0),
+        );
+        assert!(!path.is_empty());
+        assert!(path.iter().any(|p| p.z.abs() > 150.0));
+        assert!((path.last().unwrap().x - 400.0).hypot(path.last().unwrap().z) < 150.0);
     }
 }

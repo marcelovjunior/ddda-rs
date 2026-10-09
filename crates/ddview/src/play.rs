@@ -472,7 +472,7 @@ pub fn step(
         let relaxed = st.sim.players.first().is_some_and(|p| p.relaxed);
         info!("{} walk and run", if relaxed { "town (relaxed)" } else { "field" });
     }
-    orbit(&mut st, &buttons, &mouse);
+    if pause.mouse_look(buttons.pressed(MouseButton::Right)) { orbit(&mut st, &buttons, &mouse); }
     let cam_yaw = st.cam_yaw;
     let mut local = HashMap::new();
     let locals = st.locals.clone();
@@ -531,7 +531,7 @@ pub fn active_input(input: &Input) -> bool {
 
 /// Retain a short input until a fixed tick consumes it. Held input still
 /// refreshes direction and camera yaw every render frame.
-fn latch_input(previous: Input, mut latest: Input) -> Input {
+pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     if latest.stick == [0.0; 2] && previous.stick != [0.0; 2] {
         latest.stick = previous.stick;
         latest.walk = previous.walk;
