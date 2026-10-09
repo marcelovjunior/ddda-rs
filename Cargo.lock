@@ -2347,6 +2347,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddstory"
+version = "0.1.0"
+dependencies = [
+ "ddquest",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddtool"
 version = "0.1.0"
 dependencies = [

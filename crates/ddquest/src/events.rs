@@ -44,7 +44,8 @@ pub struct EventTable {
     pub first: Vec<u32>,
 }
 
-struct Pe<'a> {
+/// Minimal PE view: virtual-address reads of DDDA.exe.
+pub struct Pe<'a> {
     b: &'a [u8],
     base: u32,
     sections: Vec<(u32, u32, u32, u32)>, // va, vsize, raw size, raw offset
@@ -59,7 +60,7 @@ fn rd16(b: &[u8], o: usize) -> Option<u16> {
 }
 
 impl<'a> Pe<'a> {
-    fn parse(b: &'a [u8]) -> Option<Pe<'a>> {
+    pub fn parse(b: &'a [u8]) -> Option<Pe<'a>> {
         let pe = rd32(b, 0x3c)? as usize;
         if b.get(pe..pe + 4)? != b"PE\0\0" {
             return None;
@@ -74,6 +75,15 @@ impl<'a> Pe<'a> {
             sections.push((rd32(b, s + 12)?, rd32(b, s + 8)?, rd32(b, s + 16)?, rd32(b, s + 20)?));
         }
         Some(Pe { b, base, sections, timestamp })
+    }
+    /// PE header timestamp (identifies the build).
+    pub fn timestamp(&self) -> u32 {
+        self.timestamp
+    }
+    /// `len` bytes at virtual address `va`, if mapped from the file.
+    pub fn bytes(&self, va: u32, len: usize) -> Option<&'a [u8]> {
+        let o = self.off(va)?;
+        self.b.get(o..o + len)
     }
     fn off(&self, va: u32) -> Option<usize> {
         let rva = va.checked_sub(self.base)?;
