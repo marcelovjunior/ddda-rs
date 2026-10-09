@@ -64,6 +64,10 @@ impl Plugin for ShadingPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "dd_material.wgsl");
         bevy::asset::embedded_asset!(app, "dd_post.wgsl");
+        // dd_material.wgsl imports the sky scattering (water and the
+        // environment reflection), so it loads with the stage shading:
+        // --event and --lineup run without the sky plugin.
+        bevy::shader::load_shader_library!(app, "sky_scatter.wgsl");
         app.add_plugins(MaterialPlugin::<DdMaterial>::default())
             .add_plugins(bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<post::DdPost>::default())
             .init_resource::<StageLighting>()
@@ -128,6 +132,10 @@ pub struct DdParams {
     pub spot_atten: Vec4,
     /// rgb: the constant light of `FLAG_CONST_LIGHT` materials.
     pub const_light: Vec4,
+    /// rgb: `fAlbedoBlendColor.rgb * .w * fDiffuseColor` (`FLAG_ALBEDO_ADD`).
+    pub albedo_blend: Vec4,
+    /// rgb: `fSpecularColor`, w: `fShininess` (`FLAG_CHARACTER`).
+    pub spec: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
@@ -146,6 +154,12 @@ const FLAG_NO_LIGHT_BUFFER: u32 = 128;
 const FLAG_BLENDED: u32 = 256;
 /// Lit by a constant colour (`const_light`) instead of the stage lights.
 const FLAG_CONST_LIGHT: u32 = 512;
+/// `FAlbedoMapAdd` with `FUVViewNormal`: the albedo-blend map added on the
+/// view-normal UV (`albedo_blend`).
+const FLAG_ALBEDO_ADD: u32 = 1024;
+/// Character pixel shaders' specular: the sun's Blinn-Phong lobe, the
+/// environment cube (`FReflectCubeMapShadowLight`), Schlick Fresnel.
+const FLAG_CHARACTER: u32 = 2048;
 
 /// Marks the sky's cloud domes; they follow the camera horizontally.
 #[derive(Component)]
@@ -180,6 +194,33 @@ impl DdParams {
     }
 }
 
+/// The stage's lighting from the data at a game clock and weather, as
+/// main.rs's `resolve_lighting` builds it without a capture: the sky
+/// scheduler's light units at the clock's sun and the weather's fog
+/// (docs/SHADING.md, "Lighting from the data"). No night spot light (it
+/// follows the player). `None` when the stage has no sky scheduler.
+pub fn data_lighting(vfs: &Vfs, stage: u32, clock_ms: u32, weather: usize) -> Option<StageLighting> {
+    let sky = crate::sky::StageSky::load(vfs, stage, weather)?;
+    let fog = crate::sky::weather_fog(vfs, stage, weather, clock_ms / 60_000)?;
+    let sun = mtweather::sky::sun_direction(&sky.sky, clock_ms);
+    let (hemis, lights) = sky.light_values(sun);
+    let mut l = crate::lighting_from_units(&hemis, &lights, &fog);
+    l.clock_ms = Some(clock_ms);
+    Some(l)
+}
+
+/// The colour the albedo-blend map adds with (`FAlbedoMapAdd` on
+/// `FUVViewNormal`): `fAlbedoBlendColor.rgb * .w`, times `fDiffuseColor`
+/// (which scales the lit albedo; the base colour carries it for the albedo
+/// map, so the added term takes it too). `None` when it adds nothing, as
+/// for most `model\pl` materials (w or rgb 0).
+fn albedo_add(s: &Shading) -> Option<Vec4> {
+    let b = s.albedo_blend_color;
+    let d = s.diffuse_color;
+    (s.feature("FUVAlbedoBlendMap") == Some("FUVViewNormal") && b[3] != 0.0 && b[..3] != [0.0; 3])
+        .then(|| Vec4::new(b[0] * b[3] * d[0], b[1] * b[3] * d[1], b[2] * b[3] * d[2], 0.0))
+}
+
 /// `StandardMaterial` plus the original's rules: transparency maps,
 /// swing billboards and (with [`StageLighting`]) its lighting and fog.
 pub type DdMaterial = ExtendedMaterial<StandardMaterial, DdExt>;
@@ -209,6 +250,10 @@ pub struct DdExt {
     #[texture(108, dimension = "cube")]
     #[sampler(109)]
     pub env_cube: Option<Handle<Image>>,
+    /// `tAlbedoBlendMap` (`FLAG_ALBEDO_ADD`).
+    #[texture(110)]
+    #[sampler(111)]
+    pub albedo_blend: Option<Handle<Image>>,
 }
 
 /// `CBSky` and the camera for the sky evaluated in the stage materials;
@@ -768,7 +813,7 @@ impl Loader<'_> {
 
     /// The Bevy material for one MRL material (`None`: no MRL entry).
     /// Rules and their evidence: `mtmrl::shading` and docs/SHADING.md.
-    fn material(
+    pub fn material(
         &mut self,
         shading: Option<&Shading>,
         two_sided: bool,
@@ -867,18 +912,10 @@ impl Loader<'_> {
             // DDBaseCube<i>_CM tinted by the weather manager (pixel shader at
             // file offset 0x912060 of sc\dx9\root, sEnvMapManager's
             // SystemEnvCube pass 0x00434be0).
-            let cube = s
-                .textures
-                .get("tEnvMap")
-                .and_then(|t| t.strip_prefix("scr\\sky\\DDCube"))
-                .and_then(|t| t.strip_suffix("_CM"))
-                .and_then(|i| i.parse::<u32>().ok());
-            if let Some(i) = cube {
-                env_cube = self.texture(&format!("scr\\sky\\DDBaseCube{i}_CM"), images);
-                if env_cube.is_some() {
-                    params.flags |= FLAG_ENV_CUBE;
-                    params.env = Vec4::new(1.0, 1.0, 1.0, i as f32);
-                }
+            if let Some((h, i)) = self.env_cube(s, images) {
+                env_cube = Some(h);
+                params.flags |= FLAG_ENV_CUBE;
+                params.env = Vec4::new(1.0, 1.0, 1.0, i as f32);
             }
             if s.feature("FSpecular") == Some("FSpecularMap") {
                 if let Some(p) = s.textures.get("tSpecularMap") {
@@ -907,10 +944,72 @@ impl Loader<'_> {
                     sky_rayleigh: Handle::default(),
                     sky_mie: Handle::default(),
                     env_cube,
+                    albedo_blend: None,
                 },
             },
             handle: OnceLock::new(),
         }))
+    }
+
+    /// The stage sky's environment cube a material's `tEnvMap` names
+    /// (`scr\sky\DDCube<i>_CM`): the static `DDBaseCube<i>_CM` and `i`.
+    fn env_cube(&mut self, s: &Shading, images: &mut Assets<Image>) -> Option<(Handle<Image>, u32)> {
+        let i = s
+            .textures
+            .get("tEnvMap")
+            .and_then(|t| t.strip_prefix("scr\\sky\\DDCube"))
+            .and_then(|t| t.strip_suffix("_CM"))
+            .and_then(|i| i.parse::<u32>().ok())?;
+        Some((self.texture(&format!("scr\\sky\\DDBaseCube{i}_CM"), images)?, i))
+    }
+
+    /// A character part's material: [`Self::material`] plus the terms of
+    /// the character pixel shaders (file offsets 0x31BEA8 and 0x40C494 of
+    /// `sc\dx9\root`, the `FAlbedoMapAdd` / `FUVViewNormal` /
+    /// `FReflectCubeMapShadowLight` / `FSpecularMap` variants most
+    /// `model\pl` materials use; docs/SHADING.md, "Characters"):
+    /// - albedo = albedo x fAlbedoColor + blend.rgb x blend.a x
+    ///   fAlbedoBlendColor.rgb x .w, blend = `tAlbedoBlendMap` on the
+    ///   view-normal UV;
+    /// - plus (sun x shadow x (N.H)^fShininess x fSpecularColor + env) x
+    ///   specular map x lerp(F0, 1, (1 - N.V)^5).
+    pub fn character_material(
+        &mut self,
+        shading: Option<&Shading>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+    ) -> PartMaterial {
+        let base = self.material(shading, false, false, materials, images);
+        let (Some(s), PartMaterial::Dd(slot)) = (shading, &base) else { return base };
+        let mut m = slot.material.clone();
+        if let Some(c) = albedo_add(s) {
+            if let Some(h) = s.textures.get("tAlbedoBlendMap").and_then(|t| self.texture(t, images)) {
+                m.extension.params.flags |= FLAG_ALBEDO_ADD;
+                m.extension.params.albedo_blend = c;
+                m.extension.albedo_blend = Some(h);
+            }
+        }
+        if s.feature("FSpecular") != Some("FSpecularDisable") {
+            let p = &mut m.extension.params;
+            p.flags |= FLAG_CHARACTER;
+            p.spec = Vec3::from(s.specular_color).extend(s.shininess);
+            let f0 = if s.feature("FFresnel") == Some("FFresnelSchlick") { s.fresnel } else { 1.0 };
+            p.reflect = Vec3::from(s.reflective_color).extend(f0);
+            if s.feature("FReflect") == Some("FReflectCubeMapShadowLight") {
+                if let Some((h, i)) = self.env_cube(s, images) {
+                    m.extension.env_cube = Some(h);
+                    m.extension.params.flags |= FLAG_ENV_CUBE;
+                    m.extension.params.env = Vec4::new(1.0, 1.0, 1.0, i as f32);
+                }
+            }
+            if s.feature("FSpecular") == Some("FSpecularMap") && m.extension.spec.is_none() {
+                if let Some(h) = s.textures.get("tSpecularMap").and_then(|p| self.texture(p, images)) {
+                    m.extension.spec = Some(h);
+                    m.extension.params.flags |= FLAG_SPEC_MAP;
+                }
+            }
+        }
+        PartMaterial::Dd(Arc::new(DdSlot { material: m, handle: OnceLock::new() }))
     }
 
     /// A sky cloud dome (`uSkyCloudModel`): the model at `pos` (viewer
@@ -1240,6 +1339,44 @@ impl Loader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn character_shading(features: &[(&str, &str)], blend: [f32; 4], diffuse: [f32; 3]) -> Shading {
+        Shading {
+            features: features.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            textures: HashMap::new(),
+            albedo_uv: "UV_Primary".into(),
+            albedo_color: [1.0; 3],
+            albedo_blend_color: blend,
+            specular_color: [1.0; 3],
+            shininess: 16.0,
+            diffuse_color: diffuse,
+            transparency: 1.0,
+            reflective_color: [0.0; 3],
+            fresnel: 1.0,
+            uv_transform: None,
+            alpha: AlphaSource::None,
+            blend: None,
+            depth: None,
+            raster: None,
+            alpha_test: None,
+        }
+    }
+
+    /// FAlbedoMapAdd: the blend map adds fAlbedoBlendColor.rgb x .w (x
+    /// fDiffuseColor) on the view-normal UV; the (0,0,0,0) and (1,1,1,0)
+    /// colours of most `model\pl` materials add nothing.
+    #[test]
+    fn albedo_add_colour() {
+        let vn = [("FAlbedo", "FAlbedoMapAdd"), ("FUVAlbedoBlendMap", "FUVViewNormal")];
+        assert_eq!(albedo_add(&character_shading(&vn, [0.0; 4], [1.0; 3])), None);
+        assert_eq!(albedo_add(&character_shading(&vn, [1.0, 1.0, 1.0, 0.0], [1.0; 3])), None);
+        assert_eq!(
+            albedo_add(&character_shading(&vn, [0.25, 0.5, 0.75, 1.0], [0.5; 3])),
+            Some(Vec4::new(0.125, 0.25, 0.375, 0.0))
+        );
+        let secondary = [("FAlbedo", "FAlbedoMapAdd"), ("FUVAlbedoBlendMap", "FUVSecondary")];
+        assert_eq!(albedo_add(&character_shading(&secondary, [1.0; 4], [1.0; 3])), None);
+    }
 
     #[test]
     fn lod_levels_follow_the_distances() {
