@@ -269,6 +269,7 @@ fn setup(
         stats: Default::default(),
         lod_eye: None,
         view_range: 1,
+        tag: None,
     };
     loader.index_models();
     // The stage's lighting from the data at the event's hour (weather F),
@@ -579,6 +580,7 @@ fn setup_lineup(
         stats: Default::default(),
         lod_eye: None,
         view_range: 1,
+        tag: None,
     };
     loader.index_models();
     let mut looks: Vec<(String, ddlook::Look)> = vec![];

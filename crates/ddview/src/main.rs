@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod stream;
 mod event;
 mod character;
 mod net;
@@ -580,7 +581,7 @@ fn main() {
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, play::step, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -601,17 +602,20 @@ fn setup(
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let t = std::time::Instant::now();
-    let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
+    // Kept for the whole run: the field streamer loads cells from them later.
+    let vfs: &'static ddvfs::Vfs = Box::leak(Box::new(ddvfs::Vfs::open(&args.native_pc).expect("open nativePC")));
     let mfx_path = args.native_pc.join("usershader").join("BbsShaderPackage.mfx");
-    let mfx = mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx");
+    let mfx: &'static mtshader::ShaderPackage = Box::leak(Box::new(
+        mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx"),
+    ));
     info!(
         "indexed {} resources in {:.1} s",
         vfs.len(),
         t.elapsed().as_secs_f32()
     );
     let mut loader = stage::Loader {
-        vfs: &vfs,
-        mfx: &mfx,
+        vfs,
+        mfx,
         textures: Default::default(),
         models: Default::default(),
         model_names: Default::default(),
@@ -619,6 +623,7 @@ fn setup(
         stats: Default::default(),
         lod_eye: Some(args.pos * stage::UNIT),
         view_range: config_view_range(),
+        tag: None,
     };
     loader.index_models();
     if let Some(model) = &args.character {
@@ -645,11 +650,11 @@ fn setup(
     if let Some(session) = slot.0.lock().unwrap().take() {
         let res = opening::OpeningRes(std::sync::Mutex::new(session));
         // seat 0 wears the save's Arisen, else a stand-in
-        let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(&vfs, x, "mPlayerDataManual").ok());
+        let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(vfs, x, "mPlayerDataManual").ok());
         let arisen = saved
             .as_ref()
             .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
-            .or_else(|| ddlook::save::template_look(&vfs, 0).ok());
+            .or_else(|| ddlook::save::template_look(vfs, 0).ok());
         if let Some(state) =
             opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, if args.join.is_some() { vec![None, arisen] } else { vec![arisen] }, args.demo)
         {
@@ -661,9 +666,15 @@ fn setup(
         return;
     }
     let (a0, b0) = args.cell;
+    // What is spawned here, tagged for the field streamer (stream.rs).
+    let mut present = std::collections::HashSet::new();
+    let tag = |m: i32, n: i32, part: stage::CellPart| stage::StreamCell { m, n, part };
     for da in -args.radius..=args.radius {
         for db in -args.radius..=args.radius {
             let offset = Vec3::new(db as f32 * 100.0, 0.0, da as f32 * 100.0);
+            loader.tag = Some(tag(a0 + da, b0 + db, stage::CellPart::Model));
+            present.insert(tag(a0 + da, b0 + db, stage::CellPart::Model));
+            present.insert(tag(a0 + da, b0 + db, stage::CellPart::Layout));
             loader.spawn_cell(
                 &mut commands,
                 &mut meshes,
@@ -683,6 +694,8 @@ fn setup(
                 continue;
             }
             let offset = Vec3::new(db as f32 * 100.0, 0.0, da as f32 * 100.0);
+            loader.tag = Some(tag(a0 + da, b0 + db, stage::CellPart::Far));
+            present.insert(tag(a0 + da, b0 + db, stage::CellPart::Far));
             loader.spawn_far_cell(
                 &mut commands,
                 &mut meshes,
@@ -695,6 +708,7 @@ fn setup(
             );
         }
     }
+    loader.tag = None;
     if args.stage == 100 {
         let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
         let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
@@ -730,16 +744,16 @@ fn setup(
         // Stage frame (cm) of the viewer origin: cell (a0, b0) relative to 50m50n.
         let origin = Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
         // Ground and walls from the cells' collision meshes (st<S>h_/e_..._mrg00).
-        let mut terrain = ddworld::Terrain::load_collision(&vfs, args.stage, a0, b0, args.radius);
-        let with_collision = terrain.add_scenery(&vfs, args.stage, a0, b0, args.radius);
+        let mut terrain = ddworld::Terrain::load_collision(vfs, args.stage, a0, b0, args.radius);
+        let with_collision = terrain.add_scenery(vfs, args.stage, a0, b0, args.radius);
         info!("scenery instances with collision: {with_collision}");
         info!(
             "terrain {} cells {} triangles",
             terrain.cells,
             terrain.triangles()
         );
-        let party = party(&vfs, &args, origin);
-        let data = match play::fight_data(&vfs, &args.native_pc) {
+        let party = party(vfs, &args, origin);
+        let data = match play::fight_data(vfs, &args.native_pc) {
             Ok(d) => Some(d),
             Err(e) => {
                 error!("play: fight data: {e}");
@@ -764,7 +778,7 @@ fn setup(
                     skills::equip(&mut state.sim, &state.locals, args.save_xml.as_deref().map(String::as_str));
                     info!("skills: slots 1-6 (P1), Numpad4-9 (P2); base-level supported actions");
                     if let Some(xml) = args.save_xml.as_deref() {
-                        match items::QuickItems::load(&vfs, xml, &state.locals) {
+                        match items::QuickItems::load(vfs, xml, &state.locals) {
                             Ok(items) => {
                                 info!("quick-use: U (P1), Numpad0 (P2); first useful saved restorative");
                                 commands.insert_resource(items);
@@ -786,7 +800,7 @@ fn setup(
                     let spawn = origin + args.spawn;
                     let yaw = args.save_xml.as_deref().and_then(|x| play::saved_spot(x)).map_or(0.0, |s| s.yaw);
                     if let Err(e) =
-                        net::setup(&mut commands, &vfs, &args.native_pc, mode, args.profile, place, (spawn, yaw), &mut state)
+                        net::setup(&mut commands, vfs, &args.native_pc, mode, args.profile, place, (spawn, yaw), &mut state)
                     {
                         error!("net: {e}");
                     }
@@ -805,15 +819,15 @@ fn setup(
         args.weather.map(|w| sky::WEATHERS[w]),
         if args.light.is_some() { "on" } else { "Bevy PBR" }
     );
-    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage)).map(|p| {
+    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(vfs, args.stage)).map(|p| {
         // DOFFilter runs only with the player's DofFilter=ON (0x0050adc0).
-        match stage::post::DdPost::dof_filter(&vfs, args.stage).filter(|_| config_dof_filter()) {
+        match stage::post::DdPost::dof_filter(vfs, args.stage).filter(|_| config_dof_filter()) {
             Some(dof) => p.with_dof(&dof, args.near, args.far, args.size),
             None => p,
         }
     });
     if let Some(light) = &args.light {
-        let sky = sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0));
+        let sky = sky::StageSky::load(vfs, args.stage, args.weather.unwrap_or(0));
         if let (Some(sky), Some(ms)) = (&sky, args.clock_ms.or(light.clock_ms)) {
             // The cloud domes, at the sky's height offset above the camera's
             // ground position.
@@ -850,6 +864,20 @@ fn setup(
         }
     }
     spawn_camera_and_light(&mut commands, &args, post);
+    // Field streaming: offline --play on stage 100 (the grid descriptor is
+    // read from the installed exe).
+    if args.play && args.stage == 100 && args.host.is_none() && args.join.is_none() {
+        let grid = ddexe::ExeFile::next_to(&args.native_pc)
+            .map_err(|e| e.0)
+            .and_then(|f| f.image().map_err(|e| e.0).and_then(|exe| ddworld::stream::Grid::from_exe(&exe, ddworld::stream::STAGE100_GRID)));
+        match grid {
+            Ok(grid) => {
+                info!("stream: on ({} cells tagged at start)", present.len());
+                commands.insert_resource(stream::Streamer::new(loader, vfs, grid, args.stage, (a0, b0), args.far_cells, present));
+            }
+            Err(e) => warn!("stream: off ({e})"),
+        }
+    }
 }
 
 /// Who plays (play.rs): with `--save`, its Arisen (seat 0) and main pawn,
