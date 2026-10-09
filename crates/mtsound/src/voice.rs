@@ -11,6 +11,17 @@ pub struct Variant {
     pub voice: u32,
 }
 
+impl Variant {
+    /// Convert saved edit fields to cPlayerInfo's sound selector fields.
+    /// Invalid voice bytes leave the original's previous voice untouched;
+    /// without that prior state, report unknown instead of inventing one.
+    // Translated from 0x00780fa0 (DDDA.exe 2017-12-13 Steam).
+    pub fn from_edit(gender: u8, voice: u8) -> Option<Self> {
+        (voice < 12).then_some(Self { model_or_gender: u32::from(gender & 1),
+            voice: u32::from(voice) })
+    }
+}
+
 /// One event's explicitly selected actor context. Missing records suppress
 /// their conditional sounds; they must not silently become another actor.
 #[derive(Debug, Clone, Copy, Default)]
@@ -45,6 +56,14 @@ impl EventVoices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_conversion_masks_gender_and_rejects_unknown_prior_voice() {
+        assert_eq!(Variant::from_edit(2, 11), Some(Variant { model_or_gender: 0, voice: 11 }));
+        assert_eq!(Variant::from_edit(3, 0), Some(Variant { model_or_gender: 1, voice: 0 }));
+        assert_eq!(Variant::from_edit(0, 12), None);
+        assert_eq!(Variant::from_edit(1, 255), None);
+    }
 
     #[test]
     fn each_character_group_selects_exactly_one_voice_variant() {

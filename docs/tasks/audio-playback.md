@@ -59,3 +59,8 @@ Conditional selection is now translated from 0x00c78570 and exposed as
 `audio::cues_with_voices`, using explicit event player/edit/pawn records.
 Two selector regressions pass. Existing callers still have no voice context,
 so conditional playback remains suppressed until those records are supplied.
+
+Save conversion and `audio::voices_from_save_xml` are ready: player and first
+pawn contexts come from their own edit records, following 0x00780fa0. Three
+voice tests and five viewer audio tests pass. Shared event caller hookup is
+being coordinated with head; the distinct edit-condition group stays unknown.

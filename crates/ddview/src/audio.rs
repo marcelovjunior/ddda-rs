@@ -52,6 +52,24 @@ fn selected_cues(cues: &[Cue], voices: mtsound::voice::EventVoices) -> Vec<Cue> 
     }).collect()
 }
 
+/// Voice context for the save slot used to dress the event's player and pawn.
+/// The separate original edit-record condition (4..7) is not inferred from
+/// these records, so it remains absent.
+pub fn voices_from_save_xml(xml: &str, slot: &str) -> Result<mtsound::voice::EventVoices, String> {
+    let doc = ddsave::xml::Document::parse(xml).map_err(|e| e.to_string())?;
+    let party = doc.root().child(slot).and_then(|p| p.child("mPlCmcEditAndParam"))
+        .ok_or("save slot has no character records")?;
+    fn variant(record: ddsave::xml::Node<'_, '_>) -> Option<mtsound::voice::Variant> {
+        let edit = record.child("mEdit")?;
+        mtsound::voice::Variant::from_edit(edit.get("mGender")?, edit.get("mVoice")?)
+    }
+    Ok(mtsound::voice::EventVoices {
+        player: party.child("mPl").and_then(variant),
+        pawn: party.child("mCmc").and_then(|p| p.children().next()).and_then(variant),
+        edit: None,
+    })
+}
+
 #[derive(Asset, TypePath, Clone)]
 struct DecodedAudio {
     samples: Arc<[f32]>,
@@ -173,6 +191,22 @@ fn sync_pause(pause: Option<Res<crate::pause::PauseState>>, args: Option<Res<cra
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn save_voice_context_keeps_player_and_first_pawn_separate() {
+        let xml = r#"<class><class name="manual"><class name="mPlCmcEditAndParam">
+            <class name="mPl"><class name="mEdit"><u8 name="mGender" value="0"/>
+                <u8 name="mVoice" value="3"/></class></class>
+            <array name="mCmc"><class><class name="mEdit"><u8 name="mGender" value="1"/>
+                <u8 name="mVoice" value="0"/></class></class>
+                <class><class name="mEdit"><u8 name="mGender" value="0"/>
+                <u8 name="mVoice" value="6"/></class></class></array>
+            </class></class></class>"#;
+        let context = voices_from_save_xml(xml, "manual").unwrap();
+        let selected: Vec<_> = (0..16).filter(|&n| context.allows(Some(n))).collect();
+        assert_eq!(selected, [3, 8, 12]);
+        assert!(context.edit.is_none());
+        assert!(voices_from_save_xml(xml, "absent").is_err());
+    }
     #[test]
     fn event_actor_context_filters_alternative_voice_cues() {
         use mtsound::voice::{EventVoices, Variant};

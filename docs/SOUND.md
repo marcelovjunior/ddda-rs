@@ -250,3 +250,12 @@ accepts this per-event context; the existing context-free adapter suppresses
 conditional cues. Event owners still need to supply the correct records from
 their save/character-creation state. Stable context during an event is assumed;
 changing conditions during a held call flag needs the original gate/edge order.
+
+The save conversion is confirmed at 0x00780fa0: cPlayerInfo+0xc receives
+saved mGender masked with one, and +0x294 receives mVoice only when it is
+below 12. `Variant::from_edit` preserves this conversion and reports unknown
+for an invalid voice (the original retains prior state, which is unavailable
+to a fresh reader). `audio::voices_from_save_xml` reads the chosen save slot's
+Arisen and first pawn separately. It does not substitute either for the
+distinct edit-record condition group. Three voice regressions and all five
+viewer audio regressions pass. The viewer's event callers still need the hook.
