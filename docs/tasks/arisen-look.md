@@ -112,6 +112,6 @@ compensate all axes. The renderer previously applied the latter behavior
 to every type-0xb joint. It now retains the semantic joint ID and uses a
 sourced helper for that distinction, including the strict epsilon case
 that keeps the initial factor instead of dividing by a clamped length.
-Two regressions and strict ddlook clippy pass. Release viewer verification
-is deferred until the uncontended route benchmark is over. No original
+Two regressions and strict ddlook clippy pass. The release viewer build
+passed after the uncontended route benchmark (two existing warnings). No original
 same-record appearance comparison is claimed.
