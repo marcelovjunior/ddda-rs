@@ -511,27 +511,62 @@ The motion played on a flinch or knockdown (`mShrinkType` 1/2,
 `mBlowType` 0..3, the knockback `mDistanceZ`.. fields used by
 `FUN_0084ED90`) belongs to the victim's damage actions and is not traced.
 
-## 7. Status build-up (`FUN_007772B0`, traced)
+## 7. Status build-up (`FUN_007772B0`, traced; `ddcombat::status`)
 
-Per hit, on region R, `rate` = coll+0xD28 (no magick part) or +0xD2C:
+Per merged hit, on region R, `rate` = `cObjCollision`+0xD28 when the
+magick part is <= 0, else +0xD2C (both default 1). Twenty slots, each with
+an accumulator (R+0x70 + 4i), a threshold (R+0xC0 + 4i, from the PRP
+resistances by `FUN_00770FD0`), a chance (R+0x164 + 4i, default 1) and a
+decay timer (R+0x114 + 4i):
 
-- **Element statuses** (by `mElement` 1..5: burning, frozen, shocked
-  (`耐落雷`), holy, dark build-ups at R+0x98..+0xA8):
-  `acc += rate * mElementRate * R.elementResist[e]`; then a uniform roll
-  `<=` R+0x18C.. (chance); if `acc >= threshold` (R+0xE8..+0xF8) the
-  status flag is set and `acc` clamps. Thresholds `>= 10000` or 0 never
-  trigger. Region bits +0x1DC adjust the fire threshold (bit 1: -800,
-  bit 0: +1000) and ice/thunder (bit 0: -800) (*inferred*: drenched/oiled).
-- **Other statuses** (poison, slow, blind, silence, sleep, ... in the
-  `rObjCollision::Attack` order `mPoison`..`mMgcDefDown`): the same with
-  `acc_i += HitInfo+0x144+4i * rate`, chance R+0x164+4i, threshold
-  R+0xC0+4i, flag bits from R+0x110 bit 3 on.
-- Accumulators decay (`FUN_007781A0`): after +0x1CC frames without
-  build-up they drop by +0x1D4 per frame, after +0x1D0 frames by +0x1D8
-  (*the defaults of these four fields are unknown*).
+| Slot | Threshold label | Built by | Kind (`0x015098C0`) |
+|---:|---|---|---:|
+| 0 | `耐毒` poison | `mPoison` | 0 |
+| 1 | `耐のろま` slow | `mSlow` | 1 |
+| 2 | `耐暗闇` blind | `mBlind` | 2 |
+| 3 | `耐睡眠` sleep | `mSleep` | 4 |
+| 4 | `耐油まみれ` oil | `mOil` | 5 |
+| 5 | `耐ずぶ濡れ` drenched | `mWet` | 6 |
+| 6 | `耐敵化` | `mEnemy` | 7 |
+| 7 | `耐沈黙` silence | `mSilence` | 3 |
+| 8 | `耐スキル封印` skill seal | `mSeal` | 8 |
+| 9 | `耐呪い` curse | `mCurse` | 9 |
+| 10 | `耐延焼` burning | fire `mElementRate` x fire resist | 10 |
+| 11 | `耐氷漬け` frozen | ice rate x ice resist | 11 |
+| 12 | `耐落雷` lightning | thunder rate x thunder resist | -1 |
+| 13 | `耐久聖` holy | holy rate x holy resist | -1 |
+| 14 | `耐久魔` dark | dark rate x dark resist | -1 |
+| 15 | `耐石化` petrify | `mStone` | 12 |
+| 16 | `耐攻撃力ダウン` | `mAtkDown` | 14 |
+| 17 | `耐防御力ダウン` | `mDefDown` | 15 |
+| 18 | `耐魔法攻撃力ダウン` | `mMgcAtkDown` | 16 |
+| 19 | `耐魔法防御力ダウン` | `mMgcDefDown` | 17 |
 
-Applying a set flag as a timed status (duration, `rStatusParam`
-`mTimer`/`mParam0`/`mParam1`, the `cStatus` entry types) is *not traced*.
+- Only the merged element's slot builds (`HitInfo`+0xF8 picks it);
+  burning, frozen and lightning replace each other (a newly fired one
+  clears the other two).
+- A slot builds only if its threshold is < 10000 and not 0. The
+  burning threshold is -800 with region bit 1 and +1000 with region bit 0
+  (+0x1DC), frozen and lightning -800 with bit 0 (*inferred*: oil and
+  drenched).
+- `acc += value * rate`; then a roll `rand * 2^-32` <= chance: a positive
+  build-up resets the decay timer, and `acc >= threshold` fires the slot
+  (`acc` clamps to the threshold). A failed roll still adds.
+- **Decay** (`FUN_007781A0`, constructor defaults of 0x00776BA0): after
+  150 frames without build-up the accumulator drops by 0.5 per frame,
+  after 450 frames by 1 per frame.
+- **Firing** (`FUN_0076E340`): each fired slot calls the owner's vf74
+  with its index and resets the accumulator. `uEnemy::vf74` (0x00AAB230)
+  maps the slot through `0x015098C0` to a status kind; slots 12..14 are
+  handled in `uCharacterBase::vf74` (0x0084E560: lightning chains via
+  `uShlElemThunder`, the holy and dark effects). The kinds 14..17 of the
+  "down" slots are the `cStatus` types 0x0E..0x11 that the damage rules
+  multiply by (sections 3 and 4); 0x12..0x15 are *guessed* to be the
+  matching "up" buffs.
+- Not traced: what each kind does once applied (duration, the
+  `rStatusParam` entry it reads, its effect), how the player side builds
+  up statuses (equipment resistances, s[10..] in 5.1), and the weapon's
+  own status values added by `FUN_0088AA20`.
 
 ## 8. Worked example: a sword light slash on a goblin
 
@@ -627,7 +662,11 @@ example from `collision\pl\m0001_00_lv1`, `lvfighter`, `em0100`,
 reads all 1,032 motion lists and checks the goblin's frame 45..48
 window).
 
-Not implemented: status build-up and timed statuses, the species- and
+`ddcombat::status` holds the build-up (`build_up` 0x007772B0, `decay`
+0x007781A0, `fire` 0x0076E340, `StatusPools::from_char_param`
+0x00770FD0; tests `tests/status.rs`).
+
+Not implemented: timed statuses and their effects, the species- and
 player-specific multipliers listed in sections 4 and 5.2 (the functions
 take the core inputs and say what they omit), the special enemy case of
 0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard,

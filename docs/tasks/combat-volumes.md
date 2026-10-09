@@ -66,7 +66,15 @@ clippy clean.
 
 **Gaps:** friendly-hit team matrix ids and the factor's consumer, the
 wall check 0x00779270, attacker flag +0x1EC1, joint -2's angle, posed
-skeletons (an input here). combat-status not started in this brief.
+skeletons (an input here).
+
+**combat-status (partial, as time allowed):** the build-up is traced and
+implemented (`ddcombat::status`: 20 slots with their sources, thresholds
+from the PRP, chance roll, element replacement, decay after 150 / 450
+frames, firing order; 4 synthetic tests). The slot-to-kind table
+0x015098C0 ties the four "down" slots to the `cStatus` types 0x0E..0x11
+the damage rules use. Still open: what each fired kind does (duration,
+`rStatusParam`, effect), the player-side build-up, weapon status values.
 
 **Live checks:** goblin hit, head hit and magick hit stay in ORACLE.md's
 open checks with claude-4 (#831, #835).
