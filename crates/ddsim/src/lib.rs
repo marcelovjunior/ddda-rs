@@ -839,6 +839,14 @@ impl Sim {
                     self.ground_move(i, state, ground, dt);
                     return;
                 }
+                if state == State::Sprint && !moving {
+                    // cPlActDash::vf06 (0x00ACAF80) sets the frame's sprint
+                    // velocity before it requests cPlActRunEnd (action 3)
+                    // for a released stick: the stop starts a frame later
+                    self.ground_move(i, state, ground, dt);
+                    Self::set_state(&mut self.players[i], State::SprintStop);
+                    return;
+                }
                 let next = if !moving {
                     // letting go of a sprint enters cPlActRunEnd (action 3,
                     // recorded); a run stops at once
@@ -2195,27 +2203,38 @@ mod tests {
 
     #[test]
     fn releasing_a_sprint_slides_to_a_stop() {
-        let mut s = sim();
-        s.motions
-            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let sprinter = || {
+            let mut s = sim();
+            s.motions
+                .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+            s
+        };
+        let (mut s, mut held) = (sprinter(), sprinter());
         let sprint = Input {
             sprint: true,
             ..fwd()
         };
         let mut inputs = HashMap::from([(0, sprint)]);
         s.step(1.0, &inputs, &Flat(0.0));
+        held.step(1.0, &inputs, &Flat(0.0));
         assert_eq!(s.player(0).unwrap().state, State::Sprint);
         let z0 = s.player(0).unwrap().position[2];
+        // the frame the stick is let go still sprints (cPlActDash::vf06
+        // requests the stop after setting the velocity), as a held one does
+        held.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
         inputs.clear();
         s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
         assert_eq!(s.player(0).unwrap().state, State::SprintStop);
+        let z1 = s.player(0).unwrap().position[2];
+        assert!((z1 - held.player(0).unwrap().position[2]).abs() < 1e-4);
+        assert!(z1 > z0);
         s.step(2.0, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert_eq!(p.state, State::Wait);
         // 22.5 x (5 x 0.75 + 20 x 0.25) = 196.9 cm (recorded: 198.1), plus
         // 2.8 cm from sampling the curve at the start of each quarter frame,
         // plus the stop's first frames still in the sprint's 1.15x time
-        let d = p.position[2] - z0;
+        let d = p.position[2] - z1;
         assert!((d - 196.875 - 2.8125).abs() < 1.0, "{d}");
     }
 
