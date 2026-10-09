@@ -89,6 +89,44 @@ def enemies_near(o, radius=4000.0):
     return near
 
 
+ONE = 0x3F800000
+EIGHTH = 0x3E000000
+
+
+def cb_ambient(o, cap=50):
+    """CPU copies of the shader constant buffer CBAmbient (claude-3 #792):
+    hits h of 0.125 with f32 1.0 at h-0x10 and h-0x0c (else at h-0x10
+    only); 0x90 bytes from h-0x1c each. Neighbours are checked from page
+    reads, not one read per hit."""
+    hits = o.scan([EIGHTH], limit=400000)[EIGHTH]
+    pages = {}
+    for h in hits:
+        pages.setdefault(h & ~0xFFF, []).append(h)
+    strict, loose = [], []
+    for page, hs in pages.items():
+        try:
+            b = o.read(page - 0x20, 0x1040)
+        except OracleError:
+            continue
+        for h in hs:
+            i = h - (page - 0x20)
+            w10 = struct.unpack_from('<I', b, i - 0x10)[0]
+            w0c = struct.unpack_from('<I', b, i - 0x0C)[0]
+            if w10 == ONE and w0c == ONE:
+                strict.append(h)
+            elif w10 == ONE:
+                loose.append(h)
+    chosen = strict if strict else loose
+    out = []
+    for h in chosen[:cap]:
+        try:
+            out.append({'addr': hex(h - 0x1C), 'hex': o.read(h - 0x1C, 0x90).hex()})
+        except OracleError as e:
+            out.append({'addr': hex(h - 0x1C), 'error': str(e)})
+    return {'hits_0.125': len(hits), 'strict': len(strict), 'loose': len(loose),
+            'mode': 'strict' if strict else 'loose', 'copies': out}
+
+
 def snapshot(o, base):
     t0 = time.time()
     rep = {'time': time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -111,6 +149,15 @@ def snapshot(o, base):
     rep['uCameraGame'] = cams
     sc = o.u32(0x018D0B6C)
     rep['sCamera'] = {'obj': hex(sc), 'raw_0x0_0xd00': o.read(sc, 0xD00).hex()}
+    # viewport 0's camera (claude-3 #796): *(sCamera+0x34)
+    vc = o.u32(sc + 0x34)
+    by_vt = {int(c['vtable'], 16): n for n, c in o.registry().items() if c.get('vtable')}
+    try:
+        vt = o.u32(vc)
+        rep['viewport0_camera'] = {'obj': hex(vc), 'vtable': hex(vt), 'class': by_vt.get(vt, '?'),
+                                   'raw_0x0_0x300': o.read(vc, 0x300).hex()}
+    except OracleError as e:
+        rep['viewport0_camera'] = {'obj': hex(vc), 'error': str(e)}
     sr = o.u32(recipes.SRENDER_PTR)
     rep['sRender'] = {'obj': hex(sr), 'raw_0x0_0x140': o.read(sr, 0x140).hex()}
     rep['uPlayer_pos'] = recipes.pos(o, recipes.player(o))
@@ -127,6 +174,7 @@ def snapshot(o, base):
                     items.append({'obj': hex(a), 'error': str(e)})
             g[cls] = items
         rep[group] = g
+    rep['CBAmbient'] = cb_ambient(o)
     rep['getters'] = {
         'Gamma 0x00da69b0': o.call(0x00DA69B0, this=sr, float=True)['st0'],
         'HDREmphasis 0x00da6a00': o.call(0x00DA6A00, this=sr, float=True)['st0'],
@@ -135,6 +183,74 @@ def snapshot(o, base):
     with open(base + '.json', 'w') as f:
         json.dump(rep, f, indent=1, default=str)
     return rep
+
+
+# Enemy classes that are passive animals (head #760: uEm8300 = oxen). Other
+# e8000-e8602 animals are counted as threats until their ids are checked
+# (giant bats and rats do attack).
+PASSIVE = {'uEm8300'}
+HP_PAUSE = 325.0  # head #741: below 60 % of 542, pause the game (Esc) and stop
+
+
+_last_pos = {}
+
+
+def threats(o):
+    """Head #798: an enemy within 30 m, or one (within 40 m) that moved more
+    than 2 m since the previous poll. Passive animals excluded."""
+    out = []
+    for e in enemies_near(o):
+        if e['class'] in PASSIVE:
+            continue
+        prev = _last_pos.get(e['obj'])
+        _last_pos[e['obj']] = e['pos']
+        moved = prev is not None and math.dist(prev, e['pos']) > 200.0
+        if e['dist'] <= 3000 or moved:
+            out.append(e)
+    return out
+
+
+def game_hours(o):
+    g = o.u32(recipes.SGAMESYS_PTR)
+    return o.u32(g + recipes.GAME_TIME) / 3600000.0
+
+
+def series(o, argv):
+    """Head #714/#741: a capture every `every` s while no threat is within
+    40 m for 60 s; pause the game (Esc) and stop if HP < HP_PAUSE; stop
+    after one game day or `count` captures."""
+    out = argv[1]
+    every = int(argv[argv.index('--every') + 1]) if '--every' in argv else 300
+    count = int(argv[argv.index('--count') + 1]) if '--count' in argv else 10 ** 6
+    os.makedirs(out, exist_ok=True)
+    rec = o.u32(recipes.player(o) + recipes.CHR_RECORD)
+    h0, last_hours, elapsed_h = game_hours(o), game_hours(o), 0.0
+    clear_since, last_shot, shots = None, 0.0, 0
+    while shots < count and elapsed_h < 24.0:
+        hp = o.f32(rec + recipes.REC_HP)
+        if hp < HP_PAUSE:
+            o.cmd('tap', vk=0x1B, frames=4)
+            print(f'{time.strftime("%H:%M:%S")} PAUSED (Esc): Arisen HP {hp:.1f} < {HP_PAUSE}; stopping', flush=True)
+            return 3
+        t = threats(o)
+        now = time.time()
+        if t:
+            clear_since = None
+            print(f'{time.strftime("%H:%M:%S")} hold: {[(e["class"], e["dist"]) for e in t]} HP {hp:.1f}', flush=True)
+        else:
+            clear_since = clear_since or now
+            if now - clear_since >= 60 and now - last_shot >= every:
+                base = os.path.join(out, time.strftime('ref-%Y%m%d-%H%M%S'))
+                rep = snapshot(o, base)
+                last_shot, shots = now, shots + 1
+                print(f'{time.strftime("%H:%M:%S")} {base} clock {rep["clock"]["+0x50 h"]}:{rep["clock"]["+0x54 m"]:02d} HP {hp:.1f}', flush=True)
+        # first poll of an enemy cannot show movement: poll again soon
+        hrs = game_hours(o)
+        elapsed_h += (hrs - last_hours) % 24.0
+        last_hours = hrs
+        time.sleep(20)
+    print(f'done: {shots} captures over {elapsed_h:.1f} game hours', flush=True)
+    return 0
 
 
 def main(argv):
@@ -146,23 +262,7 @@ def main(argv):
               'cameras', len(rep['uCameraGame']))
         return 0
     if argv[0] == 'series':
-        out = argv[1]
-        every = int(argv[argv.index('--every') + 1]) if '--every' in argv else 300
-        count = int(argv[argv.index('--count') + 1]) if '--count' in argv else 10 ** 6
-        os.makedirs(out, exist_ok=True)
-        rec = o.u32(recipes.player(o) + recipes.CHR_RECORD)
-        hp0 = o.f32(rec + recipes.REC_HP)
-        for i in range(count):
-            near = enemies_near(o)
-            hp = o.f32(rec + recipes.REC_HP)
-            if near or hp < hp0:
-                print(f'STOP: enemies within 40 m {near} / HP {hp0} -> {hp}')
-                return 2
-            base = os.path.join(out, time.strftime('ref-%Y%m%d-%H%M%S'))
-            rep = snapshot(o, base)
-            print(base, rep['clock'], flush=True)
-            time.sleep(every)
-        return 0
+        return series(o, argv)
     print(__doc__)
     return 1
 
