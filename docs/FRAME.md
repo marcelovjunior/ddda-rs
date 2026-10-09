@@ -56,7 +56,7 @@ The groups and their titles are this document's.
 
 | # | Call | What |
 |---|---|---|
-| 7 | `sSave::vf06` 0x00498300 | save system |
+| 7 | `sSave::vf06` 0x00498300 | save cooldown |
 | 8 | `sStorageExt::vf06` 0x004B7870 | storage (device) |
 | 9 | `sResourceExt` vf09, `sToolExt` vf09 | (empty) |
 | 10 | `sWorldOffset::vf06` 0x004C64E0 | floating origin |
@@ -72,9 +72,9 @@ The groups and their titles are this document's.
 
 | # | Call | What |
 |---|---|---|
-| 18 | `sGameSys::vf06` 0x0043CEB0 | game system (section 6) |
+| 18 | `sGameSys::vf06` 0x0043CEB0 | game clock step and game delta, talk time-out, the game-time clock `0x0043F2C0` (section 6) |
 | 19 | `0x004883C0` | |
-| 20 | `sAreaExt::vf06` 0x00419910 | the area stack (`aBbsRpg`, `aGameMain`, `aStageNNN`; ORACLE.md) |
+| 20 | `sAreaExt::vf06` 0x00419910 | the area stack (`aBbsRpg`, `aGameMain`, `aStageNNN`; ORACLE.md): **managers, quests, stage modes and events, scenarios** (section 6) |
 | 21 | `0x00E76140` | |
 
 ### D. Input
@@ -93,14 +93,14 @@ All input is read here, before any unit moves.
 | # | Call | What |
 |---|---|---|
 | 26 | `sShader2Ext::vf06` 0x004AB320 | |
-| 27 | `sAreaHit::vf06` 0x0041A2C0 | area hit volumes |
-| 28 | `sZone::vf06` 0x00F74590 | |
-| 29 | `sItemManager::vf06` 0x0045CF60 | |
-| 30 | `sAI::vf06` 0x00F795C0 | AI system |
-| 31 | `sWorkRate::vf06` 0x004C5FC0 | time-scale rates |
+| 27 | `sAreaHit::vf06` 0x0041A2C0 | area hit volumes (the story's AreaHit) |
+| 28 | `sZone::vf06` 0x00F74590 | zone listeners |
+| 29 | `sItemManager::vf06` 0x0045CF60 | items |
+| 30 | `sAI::vf06` 0x00F795C0 | AI objects, slot 6, as parallel jobs |
+| 31 | `sWorkRate::vf06` 0x004C5FC0 | six timed rate slots (hit-stop, slow motion), back to 1.0 when their timers end |
 | 32 | if not paused (`sMain+0x68 != 0` or `sMain+0x6c == 0`): reset of `sObjCollision` counters, `0x00479770(0)` | |
-| 33 | `0x004792C0` | |
-| 34 | `sRecognition::vf06` 0x00487B00 | |
+| 33 | `0x004792C0` | **hits**: the last frame's volumes tested, damage applied (5.1) |
+| 34 | `sRecognition::vf06` 0x00487B00 | enemy list, rebuilt on an interval |
 | 35 | `sPawnManager` vf06 | (empty) |
 
 ### F. The units (section 3)
@@ -109,27 +109,27 @@ All input is read here, before any unit moves.
 |---|---|---|
 | 36 | `sUnitExt::vf06` 0x004B97C0 → `sUnit::vf06` 0x00DB6740 | **pass A: every unit's move**, line by line |
 | 37 | `sCollisionExt::vf06` 0x00422DC0 | collision |
-| 38 | `0x004797E0(sObjCollision)` | |
+| 38 | `0x004797E0(sObjCollision)` | characters pushed out of each other (5.4) |
 | 39 | `sGUIExt` vf06 | (empty) |
 | 40 | `sUnitExt::vf13` → `sUnit::vf13` 0x00DB5700 | **pass B**, line by line |
-| 41 | `0x00413C40` | |
+| 41 | `0x00413C40` | frees `sPlayerManager`'s per-frame request queues |
 | 42 | `sUnitExt::vf11` → `sUnit::vf11` 0x00DB5690 | **pass C**, line by line |
 
 ### G. After the units
 
 | # | Call | What |
 |---|---|---|
-| 43 | `0x00F79650` | |
-| 44 | `sNpcIntelManager::vf10` 0x00471D80 | |
+| 43 | `0x00F79650` | `sAI` second pass (`0x00F79210(1)`) |
+| 44 | `sNpcIntelManager::vf10` 0x00471D80 | NPC intel culling |
 | 45 | `sIdMessage::vf06` 0x00455280, `sIdCockpit::vf06` 0x00451F80 | HUD messages, cockpit |
 | 46 | `0x00498370`, `0x00479CB0`, `0x00ED5350` | |
 | 47 | `sObjCollision::vf06` 0x00478AB0 | |
 | 48 | `sSoftBody` vf06, `sGeneralPoint` vf06 | (empty) |
 | 49 | `sAISensorTarget::vf06` 0x00415220 | |
 | 50 | `sEffectExt::vf06` 0x004258F0 | effects |
-| 51 | `sCameraExt::vf06` 0x00420910 | cameras |
+| 51 | `sCameraExt::vf06` 0x00420910 | cameras (`sCamera::vf06` 0x00DC4830) |
 | 52 | `sSoundExt::vf06` 0x004AD440 | sound |
-| 53 | `sWeatherManager::vf06` 0x004C0C70 | weather |
+| 53 | `sWeatherManager::vf06` 0x004C0C70 | weather (clock to weather to zone light) |
 | 54 | `sNetworkExt::vf06` 0x00467F50, `sDDCaProto::vf06` 0x00CA23F0 | online (pawn sharing) |
 | 55 | `sBenchmark::vf06` 0x00FA0920 | |
 
@@ -205,10 +205,62 @@ Live, every line's flags were 0x1FD (bit 0 set, bit 1 clear) and every
 rate was 1.0 [live]. So units on one line move concurrently, and lines
 run one after another.
 
-**Pause** [exe]: every pass, and `sUnitExt`'s line move, returns at once
-while `sMain+0x6c` (`mPause`) is set and `sMain+0x68` is 0. `sMain::vf06`
-counts `+0x68` down by one each paused frame, so a pause can let N more
-frames run.
+**Pause and freezing** [exe]:
+- `sMain+0x6c` (`mPause`) is a capture/benchmark pause only. While it is
+  set and the frame-step counter `sMain+0x68` is 0, these return at once:
+  - the three unit passes and `sUnitExt`'s line move;
+  - `sAI`, `sAreaHit`, `sWorkRate`, `sRecognition`, `sObjCollision`;
+  - the main body of `sGameSys::vf06`.
+
+  `sMain::vf06` counts `+0x68` down once per paused frame, so a pause can
+  let N more frames run.
+- **Gameplay freezes through the group mask.** The only writer of
+  `sUnit+0xd30` is `0x00DB5A60(bit, enable)`. During events and menus,
+  `0x0043F6C0` clears **bit 57**. That freezes:
+  - the player, pawns, NPCs and enemies;
+  - objects, shells and stage models;
+  - the sky and the HUD.
+
+  These keep running:
+  - scripts (group 16) and schedulers (17);
+  - menus (44-47);
+  - fade and sound (49, 50).
+
+  The story scripts stop anyway, through the gate `0x0044D430` (section
+  6). Other mask bits: 60 (`0x0043F7E0`), 58 (`0x0043F990`), 55 and 59
+  (`0x00514A90`, `0x00516460`).
+
+**Adding units to lines** [exe]:
+- `0x00DB5800` (at the head) and `0x00DB58B0` (at the tail) take (line,
+  unit, group low, group high). They write the line into `unit+4` bits
+  3-9 (0x7F = none) and set the unit's groups through `sUnit` vf19.
+- `0x00DB6BB0` removes a unit.
+- The creators that choose lines:
+  - `0x004BA540` (by DTI, line in eax);
+  - `0x00421FE0` (characters);
+  - `0x0049DA10` (objects);
+  - `0x00433E00` (enemies; an id in a 37-entry list goes on line - 9).
+
+| Class | Line | Group |
+|---|---|---|
+| uFSMTask, uFSMQuest (story scripts) | 0 Pre Process | 16 |
+| uScheduler | 1 Scheduler | 17 |
+| stage models, uStageSplitCtrl, sky grass | 4 / 5 Scr | 20 |
+| uPawnIntel | 9 | 28 |
+| uPlayer | 10 Player | 25 |
+| uCmc (pawns) | 10 Player | 28 |
+| uNpcIntel | 12 | 30 |
+| uNpc, uHumanEnemy, uEnemy | 15 Enemy | 30 / 31 |
+| enemy parts | 16 / 17 | 32 |
+| shells, uOm objects | 18 Obj2 | 53 / 34 / 35 |
+| cameras (uCameraCtrl, uFreeCamera) | 21 Camera | 37 |
+| lights | 25 | 41 |
+| HUD | 26 / 27 | 42 |
+| menus | 28-32 | 44-47 |
+| fade, loading, sound | 33 | 49 |
+
+Effect units attached to an owner go on the owner's line + 1. The live
+walk (section 4) agrees for every class it saw.
 
 **Line order table** [exe]: `sUnitExt` can reorder lines through a table
 at `sUnit+0x19f374` (0x004B97F0, 0x00CC68C0: line dependencies with an
@@ -419,4 +471,133 @@ Status timers use the `sWorkRate` rates instead.
 | 11 | AI sensors (all characters) | pass B |
 | 12 | wall/terrain push-out, hit volumes on for next frame | pass C |
 
-(SECTIONS 6-7 PENDING)
+## 6. Managers and the story
+
+### 6.1 `sGameSys::vf06` (0x0043CEB0), step 18 [exe]
+
+- Writes `+0xB879C` = `mDeltaTime / mFps`, the saved clock's step in
+  seconds.
+- Writes the game delta at `+0xB87A0`. It is 0 while `+0xB8844` has bit
+  0x80000.
+- Times out a talk request after 30 s.
+- Unless paused, runs the game-system updates. Among them is the
+  game-time clock `0x0043F2C0`; the others are `0x0078B760`, `0x0043D2B0`,
+  `0x0043D4F0`, `0x004403A0`, `0x00441650`, `0x00441A60`, `0x00441C30` /
+  `0x00441D40`, `0x0044A350`, `0x00437420` and `0x00442900`, not yet named.
+
+### 6.2 `sAreaExt::vf06` (0x00419910), step 20 [exe]
+
+`sAreaExt::vf06` calls `sArea::vf06` (0x00DB54D0). That walks the area
+stack (`+0x382C`, up to 8 areas, root first): slots 5 and 6 once, then
+slot 7 every frame. A pending area change (`+0x3828`) is applied by
+`0x00DB4F10`. Live, the stack is [aBbsRpg, aGameMain, aStage100]
+(ORACLE.md), so in one frame:
+
+1. **`aGameMain` slot 7.** It is not a function in the Ghidra project;
+   it was read from the disassembly at 0x004FB960. It:
+   - runs `0x004FB7B0` once (new game or load);
+   - then calls slot 6 of the managers through their globals:
+     - `sEnemyManager` (0x018FA4B0), human enemies, `sPlayerManager`
+       (0x018FA4EC);
+     - the ScrOm manager, NPC intel, `sNpcManager` (0x018FA4E0), shells;
+     - **`sQuestManager`** (0x018FA4F0, written by its ctor 0x004821A0):
+       quest updates and the **QCT** (`0x00482DD0` → `0x0078C830` →
+       `0x007922F0`; QUESTS.md);
+     - **`sEventManager`**, lock-on, the AI boards;
+     - **`sSetManager`** (spawning), sound.
+2. **`aStage` slot 7** (`0x00504330`):
+   - play time += step, capped at 216,000;
+   - then a switch on the stage mode `+0x4 & 0xff`. Mode 2 is the
+     **event** mode `0x0050B870`; mode 3 runs `0x0050BE20` / `0x0050C290`
+     / `0x0050C7A0` (event load, play, end; EVENTS.md); mode 4 is the
+     simple event `0x0050DCD0`; there are more, up to 0x2C;
+   - unless `sGameSys+0xb8844` has bit 0x80000, slot 12;
+   - then **`sScenario`** (global 0x018FA4FC) slot 6 = `0x0049A0E0` →
+     `0x00797DF0`: trigger volumes and the scenario prompt
+     (`sScenario+0x108`).
+3. **Unit pass A, line 0** (step 36): uFSMTask (stage scripts) and
+   uFSMQuest (quest scripts) slot 8 → the cAIFSM driver `0x00E092A0`.
+   - They are gated by `0x0044D430`: no script runs during the stop
+     flags, during a talk, or on stages 0x321-0x324.
+   - Line 0 also runs as jobs (flags 0x1FD), so the scripts of one frame
+     run concurrently.
+
+So the story's order in a frame is:
+1. quests and the QCT;
+2. stage mode (events);
+3. scenarios;
+4. input (steps 22-25);
+5. scripts.
+
+The prompt a scenario reads (`sScenario+0x108`) is set by `uPlayerBase`
+vf204 (0x00B6EAC0; QUESTS.md). *Inferred*: vf204 runs in the player's
+move, from the button commands of phase 90 on line 10; its caller was not
+traced. If so, **a press made in frame N reaches the scenarios in frame
+N+1**.
+
+*Differences from ddstory today* (QUESTS.md "Frame order", marked
+guessed there):
+- ddstory runs scenarios → QCT → stage scripts → quest scripts in one
+  `tick`.
+- The trace gives QCT → event mode → scenarios → scripts.
+- Stage and quest scripts share line 0 as concurrent jobs, so no order
+  between them is defined.
+
+### 6.3 Other systems [exe]
+
+- **AI.** `sAI` runs at step 30 and again after pass C (step 43). The
+  characters' own think runs in phase 90, and their senses in pass B
+  (section 5).
+- **Hits.** Step 33 resolves the hits of the previous frame's volumes
+  (5.1), before anything moves.
+- **Spawning.** `sSetManager` runs in `aGameMain`'s managers (6.2), so
+  units it creates join their lines and first move in the same frame's
+  pass A (state 1 → slot 5, then slot 8).
+- **Presentation.** Cameras run on line 21 and at step 51; effects at
+  steps 11 and 50 and on lines 22-24; sound at step 52 and on line 33;
+  weather at step 53. All of them follow the characters.
+
+## 7. The host's order
+
+`ddhost::Host::tick` follows sections 2-6, cut down to the systems that
+exist as crates. Rows marked "next" name where a system goes when it
+arrives.
+
+| Host phase | Original step | Crate | State |
+|---|---|---|---|
+| 1. step | 6 `sMain::vf06` | `FrameClock` (constant step) | done |
+| 2. world completions (stage loaded, event ended) | 18-20 results | `StoryWorld::events` | done |
+| 3. story: QCT, events, scenarios, scripts | 20 (aGameMain, aStage, sScenario), 36 line 0 | `ddstory::Story::tick` | done; internal order per 6.2 requested from ddstory |
+| 4. game clock, day counter, restock | 18 `sGameSys` clock | `ddstory::World` clock, `ddeconomy::update` | next |
+| 5. input latch, presses | 22-25 | `input::Edges` | done |
+| 6. AI objects | 30 | AI runtime | next |
+| 7. hits from the last frame's volumes, damage | 33 | `ddcombat` | next |
+| 8. the Arisen and pawns move | 36 line 10 | `ddsim::Sim::step` (one engine frame) | done (Arisen) |
+| 9. enemies and NPCs move | 36 line 15 | enemy/NPC runtime | next |
+| 10. push-out between characters | 38 | `ddworld` / ddsim | next |
+| 11. AI senses | 40 pass B | AI runtime | next |
+| 12. wall push-out, hit volumes on | 42 pass C | `ddsim`, `ddcombat` | next |
+| 13. requests performed; cameras, sound, effects | 50-53 | `StoryWorld::handle`, views | done (stand-in) |
+
+Two consequences for the host:
+- **The story sees positions from the last frame.** The story runs
+  before line 10 moves.
+- **A scenario press arrives one frame late** (6.2). `Host::tick` keeps
+  it for the next frame, and when two seats press on the same frame, the
+  lower seat takes the one prompt slot.
+
+Units on one line are concurrent jobs in the original (section 3). The
+host runs them in seat order, then creation order (ADR 0002, section 3).
+
+## 8. Open
+
+- Not yet confirmed live by a call-order log: the oracle can record calls
+  through private vtable copies without patching code (claude-4, #872),
+  but the probe command does not exist yet. Sections 2, 3, 5 and 6 are
+  static; the singleton fields and the line contents are confirmed live.
+- The worker-thread count (`sMain+0x98` / `mJobThreadNum`). With one
+  worker, or one job, a line runs inline.
+- Which line each effect type uses; where the area stack is registered;
+  the runtime line rates (all 1.0 in one read).
+- The 1.15 locomotion rate (ACCEPTANCE.md) is applied to the unit step in
+  `uObjModel::vf90`, phase 90 (5.2). ddsim models it as `unit_rate`.

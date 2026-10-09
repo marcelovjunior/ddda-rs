@@ -133,3 +133,19 @@ fn leaving_releases_locks() {
     assert_eq!(h.sim.players.len(), 1);
     assert_eq!(h.party.arisen().collect::<Vec<_>>(), vec![0]);
 }
+
+#[test]
+fn interact_reaches_the_story_one_frame_later_lower_seat_first() {
+    let mut h = session();
+    let press = |p1: bool, p2: bool| {
+        let mut m = FrameInputs::new();
+        m.insert(0, PlayerInput { interact: p1, ..Default::default() });
+        m.insert(1, PlayerInput { interact: p2, ..Default::default() });
+        m
+    };
+    assert_eq!(h.tick(&press(false, true)).unwrap().interact, None);
+    assert_eq!(h.tick(&press(false, true)).unwrap().interact, Some(1), "held, not pressed again");
+    assert_eq!(h.tick(&press(false, false)).unwrap().interact, None);
+    h.tick(&press(true, true)).unwrap();
+    assert_eq!(h.tick(&press(false, false)).unwrap().interact, Some(0), "both pressed: seat 0");
+}

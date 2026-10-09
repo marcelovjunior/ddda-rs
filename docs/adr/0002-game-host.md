@@ -100,7 +100,35 @@ The host runs the original's order (FRAME.md), cut down to the systems
 that exist. The table maps each host phase to the original step it
 stands for.
 
-(ORDER TABLE: filled from FRAME.md section 7)
+| Host phase | Original (FRAME.md section 2 step) | Crate |
+|---|---|---|
+| 1. step | 6 `sMain::vf06` (clock) | `FrameClock` |
+| 2. world completions | 18-20 (stage and event modes) | `StoryWorld::events` |
+| 3. story: QCT, events, scenarios, scripts | 20 (`aGameMain`, `aStage`, `sScenario`), 36 line 0 | `ddstory` |
+| 4. game clock, day, restock | 18 `sGameSys` | `ddstory::World`, `ddeconomy` (next) |
+| 5. input latch | 22-25 `sQlocInput`, `sKeyboard`, `sMouse` | `input` |
+| 6. AI objects | 30 `sAI` | AI runtime (next) |
+| 7. hits from the last frame's volumes | 33 `0x004792C0` | `ddcombat` (next) |
+| 8. Arisen and pawns move | 36 line 10 "Player" | `ddsim` (Arisen done) |
+| 9. enemies and NPCs move | 36 line 15 "Enemy" | next |
+| 10. push-out between characters | 38 `0x004797E0` | next |
+| 11. AI senses | 40 pass B | next |
+| 12. wall push-out, hit volumes on | 42 pass C | `ddsim`, `ddcombat` (next) |
+| 13. requests performed, cameras, sound | 50-53 | `StoryWorld::handle`, views |
+
+**Traced** consequences the host keeps:
+- The story sees the positions where the last frame left the Arisen.
+- Hits are resolved from the volumes switched on in the previous frame,
+  before anything moves.
+- A scenario press reaches the story one frame after it was made (the
+  prompt is set during the player's move; *inferred*, FRAME.md 6.2).
+
+One `Sim::step` is one engine frame (ddsim's rate queue,
+`Player::unit_rate`), so the host calls it exactly once per host frame.
+
+The story's internal order is traced as QCT → event mode → scenarios →
+scripts. ddstory runs scenarios first; changing that is ddstory's owner's
+call (requested on the board).
 
 **Decision:** within one move line, units run sequentially in a fixed
 order: seat order for the Arisen, then creation order.
@@ -393,10 +421,13 @@ small.
 
 ## Open questions
 
-- Pause: the original stops units through `sMain.mPause` and the unit
-  group mask (FRAME.md). In co-op, does a menu pause anything? Proposal:
-  never for personal menus; cutscenes and events freeze the shared world
-  for both, as the original's event mode does.
+- Pause: `sMain.mPause` is only a capture/benchmark pause. Gameplay
+  freezes through unit group bit 57, which `0x0043F6C0` clears during
+  events and menus (FRAME.md section 3).
+  - Proposal: a personal menu freezes nothing in co-op, because the world
+    is shared.
+  - Events (cutscenes) freeze the shared world for both Arisen, as bit 57
+    does in the original.
 - Who answers story prompts (dialogue choices, quest acceptance) when
   both press: today the lower seat. COOP_DESIGN.md leaves story ownership
   open.

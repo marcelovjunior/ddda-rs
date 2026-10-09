@@ -30,6 +30,32 @@ single-player design is the expensive mistake to avoid.
 - **The world's shared state is host-owned:** time of day, quest state,
   NPC schedules, enemy AI, Riftstone pawn pool.
 
+## The host and the protocol
+
+[ADR 0002](adr/0002-game-host.md) (proposed) turns the decisions above
+into an architecture. [FRAME.md](FRAME.md) is the original's frame order
+it follows.
+
+- **`ddhost::Host`** owns the session: the seats, the party, `ddsim`,
+  `ddstory`, the world adapter and the interaction locks. It steps them
+  at a fixed frame (1/30 s by default) in the traced order.
+- **Identities.**
+  - `PlayerId` is the seat in this session (0 = the host).
+  - `ProfileId` is the Arisen across sessions and saves.
+- **Party.** Host Arisen, main pawn, one hired pawn, guest Arisen in the
+  last hired-pawn slot.
+- **The interaction lock** is one host-owned table (NPC id → seat).
+  Systems acquire through the host; leaving releases.
+- **Saves** are a chunked container: shared chunks plus per-profile
+  chunks. The host saves everything; each guest takes home its own
+  profile's chunks.
+- **LAN.**
+  - UDP, with input upload (held states, redundant).
+  - Snapshots, delta-encoded against acked baselines, plus reliable
+    events.
+  - Clients predict their own Arisen with ddsim, interpolate everyone
+    else, and run camera, HUD and cutscenes locally.
+
 ## Open questions (to decide as the systems are reached)
 
 - Who "owns" the story when the original assumes one Arisen: dialogue
@@ -37,6 +63,6 @@ single-player design is the expensive mistake to avoid.
 - Cutscenes: do both players watch together, and whose character appears?
 - Main-pawn learning (inclinations, knowledge) when two Arisen command it.
 - Fast travel and Portcrystals: does travel pull both players?
-- Saves: host-only, or each player keeps their own character?
-- Pause and menus in a shared world.
+- Saves: host-only, or each player keeps their own character? *Proposed in ADR 0002: the host saves all; each player keeps their own character's chunks.*
+- Pause and menus in a shared world. *Proposed in ADR 0002: personal menus freeze nothing; events freeze the shared world for both, as the original's group bit 57 does (FRAME.md).*
 - Pawn rental between the two players' Riftstones.

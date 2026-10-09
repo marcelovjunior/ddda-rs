@@ -88,6 +88,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub ground: Box<dyn Ground>,
     pub locks: InteractionLocks,
     edges: Edges,
+    /// The interact press made last frame, for this frame's scenarios.
+    scenario_press: Option<PlayerId>,
     /// The story's stage is not loaded yet: ask the world to load it.
     boot: bool,
     /// Running hash of every request emitted, for replay checks.
@@ -107,6 +109,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             ground,
             locks: InteractionLocks::default(),
             edges: Edges::default(),
+            scenario_press: None,
             boot: true,
             request_log: StateHasher::default(),
         }
@@ -130,27 +133,29 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
-    /// One host frame, in the original's order (docs/FRAME.md). The step
-    /// numbers below are FRAME.md's.
+    /// One host frame, in the original's order. The steps are those of
+    /// `sBbsRpgMain::vf06` (0x0041DD60) in docs/FRAME.md section 2; section
+    /// 7 maps them to the host. Systems that do not exist yet are named
+    /// where they will go.
     pub fn tick(&mut self, inputs: &FrameInputs) -> Result<FrameReport, HostError> {
         if let Some(&p) = inputs.keys().find(|p| self.roster.seat(**p).is_none()) {
             return Err(HostError::UnknownPlayer(p));
         }
         self.frame += 1;
-        // 1. sMain::vf06 (0x00DBFA90): the step. Constant here.
+        // Step 6, sMain::vf06 (0x00DBFA90): the step. Constant here.
         let time = self.clock.story_time();
-        // 2. Input (sQlocInput::vf06 0x00409EE0, sKeyboard, sMouse): latched
-        //    before anything moves.
-        let presses = self.edges.interact_presses(inputs);
-        // 3. sGameSys::vf06 / sAreaExt::vf06: stage and event modes; here,
-        //    the world's completions since the last frame.
+        // Steps 18-20, sGameSys::vf06 then sAreaExt::vf06: the managers of
+        // aGameMain (sQuestManager's QCT), aStage's mode (events) and
+        // sScenario, then (step 36, line 0) the story scripts. ddstory runs
+        // all of them in one tick; the world's completions since the last
+        // frame come first. The story sees every Arisen where the last frame
+        // left them: line 10 has not moved yet.
         let events = self.world.events();
-        // 4. sUnit pass A, line 0 "Pre Process": uFSMTask (stage scripts)
-        //    and uFSMQuest (quest scripts) move before line 10 "Player", so
-        //    the story sees where every Arisen stood at the end of the last
-        //    frame.
         let mut requests = vec![];
-        let mut interact = None;
+        // The scenario prompt reads sScenario +0x108, which the player's move
+        // (line 10, uPlayerBase vf204 0x00B6EAC0) set during the last frame:
+        // a press reaches the story one frame after it was made.
+        let interact = self.scenario_press.take();
         if let Some(story) = self.story.as_mut() {
             let seats: Vec<PlayerId> = self.roster.ids().collect();
             let players = seats
@@ -162,9 +167,6 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     ddstory::Player { pos: p.position, yaw: p.yaw }
                 })
                 .collect();
-            // One scenario prompt slot (sScenario +0x108): the first seat
-            // that pressed this frame takes it.
-            interact = presses.first().copied();
             let story_inputs = ddstory::Inputs {
                 time,
                 players,
@@ -181,10 +183,20 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             self.boot = false;
         }
-        // 5. sUnit pass A, line 10 "Player": every Arisen moves (ddsim).
+        // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
+        // sMouse): this frame's inputs, before anything moves.
+        let presses = self.edges.interact_presses(inputs);
+        // Steps 30 (sAI), 33 (hits from the last frame's volumes, damage):
+        // no headless AI or hit pass yet.
+        // Step 36, pass A, line 10 "Player": the Arisen (and later the
+        // pawns) move: one Sim::step is one engine frame.
         let sim_inputs = inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
-        // 6. The world performs the story's requests (actors, presentation).
+        // One prompt slot: the lowest seat that pressed takes it.
+        self.scenario_press = presses.first().copied();
+        // Pass A line 15 (enemies, NPCs), steps 37-42 (push-out, AI senses,
+        // hit volumes), 51-53 (cameras, sound, weather): not composed yet.
+        // The world performs the story's requests (actors, presentation).
         let stage = self.story.as_ref().map_or(0, |s| s.stage.stage_no);
         self.world.handle(stage, &requests);
         for r in &requests {
@@ -198,7 +210,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// so far. Equal hashes after the same inputs are the replay property.
     pub fn state_hash(&self) -> u64 {
         let mut h = StateHasher::default();
-        h.u64(self.frame).debug(&self.roster).debug(&self.party).debug(&self.locks);
+        h.u64(self.frame).debug(&self.roster).debug(&self.party).debug(&self.locks).debug(&self.scenario_press);
         for p in &self.sim.players {
             h.debug(p);
         }
