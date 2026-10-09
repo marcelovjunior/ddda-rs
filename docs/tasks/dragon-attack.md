@@ -216,4 +216,4 @@ Verified seven dragon unit tests and two installed tests. Clippy passes
 with the existing `combat.rs` callback `type_complexity` warnings allowed;
 exact executable angle constants are marked deliberately, and the touched
 root-travel loop was simplified without changing arithmetic. Release
-viewer build is queued behind the active NPC/camera work.
+viewer build passed, with two existing viewer warnings.
