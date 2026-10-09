@@ -108,3 +108,4 @@ Codex lane: see `docs/CODEX.md`.
 | [event-player](event-player.md) | Play st200 ev10: cameras, actors, subtitles; return control | core | claude-7 | assigned |
 | [rift-sim](rift-sim.md) | The Rift as a host-owned system (summon, hire, dismiss) | core | claude-5 | assigned |
 | [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | assigned |
+| [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | assigned |
