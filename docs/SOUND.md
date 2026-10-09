@@ -200,3 +200,14 @@ hit geometry. Render terrain and flags-only fixtures report unknown material,
 not a fabricated surface. Six world unit tests and the installed higher-ground
 landing regression pass. The new unit check covers nearest-hit material,
 reverse-direction selection, missing material and unchanged movement flags.
+
+`direct_bank` and `attribute_bank` now preserve the two different ReqType
+numberings from 0x00c724b0 and 0x00c72b60. Direct 0 is common, 1..10 are
+bound slots, and 11 is stream; attribute 0 is the selected attribute bank,
+1 is common, and 2..11 are bound slots. In the collision path, material word
+one's first set bit among 0..28 selects the request column (no low bit means
+column zero). It does **not** select the attribute bank. The separate bank
+selector starts at zero and becomes two when getter 0x00423be0 reports bit
+1; that bit's physical meaning remains unresolved. Five motion unit tests
+pass, including the distinct numberings, high-bit exclusion and simultaneous
+material bits. Actor bindings and playback remain the next integration step.

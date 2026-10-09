@@ -2,6 +2,49 @@
 use std::collections::BTreeMap;
 use mtxfs::{Object, Value, Xfs};
 
+/// A binding on one actor's uSoundMotionSe, not a global sound bank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BankSlot {
+    Common,
+    /// Zero-based entries at unit+0x40 through unit+0x64.
+    Bound(u8),
+    Stream,
+    /// Index into the independently bound attribute-bank array at unit+0x70.
+    Attribute(u32),
+}
+
+/// Direct ReqType dispatch. Unsupported types do not issue a sound.
+// Translated from 0x00c724b0 (DDDA.exe 2017-12-13 Steam).
+pub fn direct_bank(request_type: u32) -> Option<BankSlot> {
+    match request_type {
+        0 => Some(BankSlot::Common),
+        1..=10 => Some(BankSlot::Bound((request_type - 1) as u8)),
+        11 => Some(BankSlot::Stream),
+        _ => None,
+    }
+}
+
+/// Attribute ReqType uses a different numbering from direct ReqType.
+/// `attribute_bank` is a host-selected bank, NOT the material surface index.
+// Translated from 0x00c72b60 (DDDA.exe 2017-12-13 Steam).
+pub fn attribute_bank(request_type: u32, attribute_bank: u32) -> Option<BankSlot> {
+    match request_type {
+        0 => Some(BankSlot::Attribute(attribute_bank)),
+        1 => Some(BankSlot::Common),
+        2..=11 => Some(BankSlot::Bound((request_type - 2) as u8)),
+        _ => None,
+    }
+}
+
+/// Material word 1 selects a request column; only bits 0..28 participate.
+/// A missing intersection must be handled by the caller, not passed as zero.
+// Translated from 0x00c72b60 using getter 0x00423b80
+// (DDDA.exe 2017-12-13 Steam).
+pub fn surface_index(material_word: u32) -> u32 {
+    let index = (material_word & 0x1fff_ffff).trailing_zeros();
+    if index < 29 { index } else { 0 }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MotionRequest {
     pub unique_id: u16,
@@ -183,6 +226,33 @@ pub fn rising_ids(previous: u32, current: u32, remap: &[u16; 32]) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn direct_and_attribute_numbering_stay_distinct() {
+        assert_eq!(direct_bank(0), Some(BankSlot::Common));
+        assert_eq!(attribute_bank(0, 2), Some(BankSlot::Attribute(2)));
+        assert_eq!(attribute_bank(1, 2), Some(BankSlot::Common));
+        // Primary weapon common and specific bindings at +0x48/+0x4c.
+        assert_eq!(direct_bank(3), Some(BankSlot::Bound(2)));
+        assert_eq!(attribute_bank(4, 0), Some(BankSlot::Bound(2)));
+        assert_eq!(direct_bank(4), Some(BankSlot::Bound(3)));
+        assert_eq!(direct_bank(11), Some(BankSlot::Stream));
+        assert_eq!(attribute_bank(11, 0), Some(BankSlot::Bound(9)));
+        assert_eq!(direct_bank(12), None);
+        assert_eq!(attribute_bank(12, 0), None);
+    }
+
+    #[test]
+    fn surface_uses_first_low_material_bit_and_ignores_high_flags() {
+        assert_eq!(surface_index(0), 0);
+        assert_eq!(surface_index(0xe000_0000), 0);
+        assert_eq!(surface_index((1 << 28) | (1 << 5)), 5);
+        assert_eq!(surface_index(1 << 28), 28);
+        let row = SurfaceRequest { find_intersection: true, request_type: 0,
+            requests: std::array::from_fn(|i| 100 + i as u32) };
+        assert_eq!(row.request(surface_index(1 << 5)), 105);
+        // Surface 5 changes the request column, not the attribute bank.
+        assert_eq!(attribute_bank(row.request_type, 2), Some(BankSlot::Attribute(2)));
+    }
     #[test]
     fn weapon_bank_paths_use_model_category_and_variant_suffix() {
         assert_eq!(weapon_banks(0x0100_0000, false).unwrap().specific,
