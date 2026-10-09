@@ -98,7 +98,11 @@ magick bonuses (two heads / one head), with labels at `0x0158eb70` and
 implements the guarded post-mitigation modifier. A synthetic regression
 covers liveness, suppression and pool IDs, preserving every other hit field;
 the installed constructor loads it only for the body. The combat-pass hook
-is not connected yet. Body post-hit `0x009a4560` maps
+is now available through the configured combat pass. Its child state remains
+an explicit actor observation: vf117 `0x004c7590` reads byte +0x5bd0, not HP.
+Child-00 vf34 (write at `0x009b18eb`) can initialize
+that marker for an already-empty pool; full combat marker timing remains
+unresolved. Body post-hit `0x009a4560` maps
 HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
 values to pool 0 for visual damage. Child post-hit callbacks
 `0x009b42f0`/`0x009bcb80` select pool 1 for hit kinds 4/6 respectively.
@@ -136,8 +140,31 @@ to main HP. It never mutates the mapped non-main pool or calls mitigation.
 As in the ordinary hit pass, event total is valued damage, not observed HP
 loss after no-HP flags, floors or clamping. Missing LINK_HP reports zero;
 present LINK_HP preserves the carried total even when HP loss is prevented.
-It does not collect contacts, assign links, walk chains, or emit story facts.
-These remain host integration work.
+The additive `hit_pass_configured` now collects normal contacts and accepts
+explicit per-owner `EnemyCollisionConfig`: installed hit-to-pool IDs, optional
+mirror region remap, an ordered complete linked-owner chain, and two status
+rates. It retains the valued local payload and immediately applies linked
+hits before the next local victim. Destination defense, HP scaling and the
+post-mitigation callback are not run a second time. The host still supplies
+the actual child/body identities and chain; this emits no story facts.
+
+`resolve_enemy_hit_valued_with` supplies a hook immediately after common
+mitigation, passing the resolved pool ID. The configured host hook also sees
+current `CombatOwnerState::has_hp`, refreshed after earlier local/linked hits.
+That snapshot is an HP observation, **not** the original actor death marker.
+The regression policy uses HP to exercise ordering only; real body bonus
+policy must use the actor +0x5bd0 observation. Legacy public wrappers retain
+their previous signatures and behavior.
+
+Configured validation rejects missing/duplicate owner bindings, invalid
+chains and unmapped ordinary hurt regions before changing HP, history or RNG.
+Ordinary missing mapping is deliberately unsupported: `0x0076db10` skips
+local valuation and may retain an earlier HitInfo +0x7c value that `MergedHit`
+does not represent. No guessed total or main-pool fallback is used. Missing
+**mirrored** mapping retains sourced main status/break processing without HP.
+Synthetic regressions exercise nonidentity maps/remaps, three simultaneous
+owners, immediate event order, hook timing, legacy equivalence, and atomic
+rejection. This does not establish a live chimera encounter.
 
 `cEm5200_01ActDie` entry `0x009c0d40`, variant 10, has a separate prologue
 side effect: at `0x009c0ead..0x009c0ef0` it tests its parent's packed

@@ -40,6 +40,8 @@ impl BodyDamageBonus {
     /// `suppressed` is actor byte +0x7406; its broader meaning is unresolved.
     /// `resolved_pool_id` is HitInfo +0x68, filled from resolved region +4 by
     /// 0x0076db10, rather than the hurt-region index at HitInfo +0x6c.
+    /// `child00_alive` means child exists and vf117 (0x004c7590) returns
+    /// zero from actor +0x5bd0. HP alone does not establish that observation.
     // Translated from 0x009a44f0 (DDDA.exe 2017-12-13 Steam).
     pub fn apply(
         &self,

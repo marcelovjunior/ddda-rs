@@ -989,7 +989,7 @@ pub fn resolve_enemy_hit(
 /// supported behavior and limitations as `resolve_enemy_hit`.
 // Translated from 0x0076db10 (DDDA.exe 2017-12-13 Steam).
 pub fn resolve_enemy_hit_valued(
-    mut h: MergedHit,
+    h: MergedHit,
     defender: &EnemyDefender,
     regions: &mut [RegionPool],
     hit_region: usize,
@@ -997,9 +997,26 @@ pub fn resolve_enemy_hit_valued(
     game: &Adjust,
     min_damage: f32,
 ) -> (HitOutcome, ValuedEnemyHit) {
+    resolve_enemy_hit_valued_with(h, defender, regions, hit_region, rates, game, min_damage, |_, _| {})
+}
+
+/// Ordinary hit resolution with the enemy's vf68-specific extension after
+/// common mitigation (0x00aaa490), before 0x0076db10 region/rate scaling.
+/// The callback receives the resolved pool ID, not the collision region.
+pub fn resolve_enemy_hit_valued_with(
+    mut h: MergedHit,
+    defender: &EnemyDefender,
+    regions: &mut [RegionPool],
+    hit_region: usize,
+    rates: &CollisionRates,
+    game: &Adjust,
+    min_damage: f32,
+    after_mitigation: impl FnOnce(u32, &mut MergedHit),
+) -> (HitOutcome, ValuedEnemyHit) {
     let resist_from = if regions[hit_region].attr & attr::MAIN_RESIST != 0 { 0 } else { hit_region };
     let resist = regions[resist_from].resist;
     enemy_mitigate(&mut h, defender, &resist);
+    after_mitigation(regions[hit_region].id, &mut h);
     let total = scale_for_region(&mut h, &regions[hit_region], rates, game, None, min_damage);
     let no_death = h.row.is_no_death;
     let mut out = HitOutcome { total, reaction: Reaction::default(), main_reaction: Reaction::default(), dead_parts: vec![] };

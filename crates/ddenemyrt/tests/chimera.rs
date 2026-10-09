@@ -335,7 +335,284 @@ fn parent_reactions_preserve_child_and_pose() {
 mod linked_hits {
     use ddcombat::cstatus::StatusTable;
     use ddcombat::damage::*;
+    use ddcombat::volumes::{AttackVolume, HurtVolume, Side, Volume};
     use ddenemyrt::combat::{apply_linked_enemy_hit, Attacker, Fighter, HitEvent, Victim};
+    use ddenemyrt::combat::{hit_pass, hit_pass_configured, EnemyCollisionConfig, Tables};
+
+    fn config(owner: u32, linked_owners: Vec<u32>) -> EnemyCollisionConfig {
+        EnemyCollisionConfig {
+            owner,
+            hit_to_pool: vec![0, 1],
+            linked_region_remap: None,
+            linked_owners,
+            status_rates: [1.0, 1.0],
+        }
+    }
+
+    fn configured_scene(attacker: u32) -> (Vec<Fighter>, Tables) {
+        let shape = Volume::Sphere { c: [0.0; 3], r: 1.0 };
+        let mut attack = victim();
+        attack.owner = attacker;
+        attack.attacker = Attacker::Enemy(EnemyAttacker::new(60.0, 0.0));
+        attack.attacks.push(AttackVolume {
+            side: Side {
+                owner: attacker,
+                kind: 0,
+            },
+            volume: shape,
+            row: AttackRow {
+                attack_rate: 1.0,
+                sword_rate: 100.0,
+                ..Default::default()
+            },
+            flags: Default::default(),
+            reset_time: 0.0,
+            key: 0x10000,
+            relation: 0,
+        });
+        let mut child = victim();
+        child.owner = 104;
+        child.hurts.push(HurtVolume {
+            side: Side { owner: 104, kind: 1 },
+            volume: shape,
+            region_id: 1,
+            hit_prio: 0,
+        });
+        if let Victim::Enemy { defender, rates, .. } = &mut child.victim {
+            *defender = EnemyDefender::new(20.0, 0.0);
+            *rates = CollisionRates::default();
+        }
+        let parent = victim(); // Defence 10000 and damage rate 0 must not mitigate relayed hits.
+        let tables = Tables {
+            game: Adjust(vec![1.0; 0x40]),
+            ..Default::default()
+        };
+        (vec![attack, child, parent], tables)
+    }
+
+    #[test]
+    fn configured_mapping_and_immediate_relay_preserve_n_owner_damage() {
+        for attacker in [0, 1, 37] {
+            let (mut fighters, mut tables) = configured_scene(attacker);
+            tables.game.0[0x25] = 0.5;
+            regions_mut(&mut fighters[1])[0].hp = 15.0;
+            regions_mut(&mut fighters[2])[0].hp = 15.0;
+            let mut later = fighters[1].clone();
+            later.owner = 105;
+            later.hurts[0].side.owner = 105;
+            regions_mut(&mut later)[0].hp = 100.0;
+            fighters.push(later);
+            let mut child_config = config(104, vec![103]);
+            fighters[1].hurts[0].region_id = 7;
+            child_config.hit_to_pool = vec![999; 8];
+            child_config.hit_to_pool[7] = 1;
+            let mut parent_config = config(103, vec![]);
+            // Remap raw region7 -> region0 -> pool1. Mirror HP still targets main.
+            parent_config.linked_region_remap = Some(vec![0; 8]);
+            parent_config.hit_to_pool = vec![1, 0];
+            let configs = vec![child_config, parent_config, config(105, vec![])];
+            let mut calls = Vec::new();
+            let events = hit_pass_configured(
+                &mut fighters,
+                &tables,
+                1.0,
+                &mut || 1.0,
+                &|_| true,
+                &configs,
+                &mut |owner, id, hit, state| {
+                    calls.push((owner, id, hit.phys));
+                    if owner == 105 {
+                        assert!(!state.iter().find(|s| s.owner == 104).unwrap().has_hp);
+                        assert!(!state.iter().find(|s| s.owner == 103).unwrap().has_hp);
+                    }
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                events.iter().map(|e| (e.attacker, e.victim)).collect::<Vec<_>>(),
+                vec![(attacker, 104), (attacker, 103), (attacker, 105)]
+            );
+            assert_eq!(events.iter().map(|e| e.total).collect::<Vec<_>>(), vec![20.0; 3]);
+            assert!(events[0].killed && events[1].killed && !events[2].killed);
+            assert_eq!(calls, vec![(104, 1, 40.0), (105, 1, 40.0)]);
+            assert_eq!(regions(&fighters[2])[1].hp, 100.0);
+            assert_eq!(regions(&fighters[3])[0].hp, 80.0);
+        }
+    }
+
+    #[test]
+    fn configured_pass_retains_legacy_without_links_or_overrides() {
+        let (original, tables) = configured_scene(37);
+        let mut legacy = original.clone();
+        let mut configured = original;
+        let expected = hit_pass(&mut legacy, &tables, 1.0, &mut || 1.0, &|_| true);
+        let actual = hit_pass_configured(
+            &mut configured,
+            &tables,
+            1.0,
+            &mut || 1.0,
+            &|_| true,
+            &[config(104, vec![])],
+            &mut |_, _, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual[0].total, 40.0);
+        for (a, b) in legacy.iter().zip(&configured) {
+            assert_eq!(regions(a), regions(b));
+            assert_eq!(a.history, b.history);
+        }
+        assert_eq!(configured[1].victim.hp(), 60.0);
+    }
+
+    #[test]
+    fn three_simultaneous_owners_merge_once_before_linked_relay() {
+        let (mut fighters, tables) = configured_scene(0);
+        for owner in [1, 37] {
+            let mut attacker = fighters[0].clone();
+            attacker.owner = owner;
+            attacker.attacks[0].side.owner = owner;
+            fighters.insert(1, attacker);
+        }
+        let events = hit_pass_configured(
+            &mut fighters,
+            &tables,
+            1.0,
+            &mut || 1.0,
+            &|_| true,
+            &[config(104, vec![103]), config(103, vec![])],
+            &mut |_, _, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(events.len(), 2);
+        for event in events {
+            assert_eq!(event.attacker, 0); // first merged contact owns aggregate metadata
+            assert_eq!(event.hits, 3);
+            assert_eq!(event.total, 120.0); // (3*60) - (3*20), once per collision
+            assert!(event.killed);
+        }
+        let child = fighters.iter().find(|f| f.owner == 104).unwrap();
+        assert_eq!(
+            child
+                .history
+                .entries
+                .iter()
+                .map(|e| e.attacker)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([0, 1, 37])
+        );
+    }
+
+    #[test]
+    fn hook_observes_current_hp_before_later_body_bonus() {
+        let (mut fighters, tables) = configured_scene(0);
+        fighters[0].attacker = Attacker::Enemy(EnemyAttacker::new(60.0, 60.0));
+        let mut spell = fighters[0].attacks[0].clone();
+        spell.volume = Volume::Sphere {
+            c: [10.0, 0.0, 0.0],
+            r: 1.0,
+        };
+        spell.key = 0x20000;
+        spell.row.attack_rate = 0.0;
+        spell.row.mgc_attack_rate = 1.0;
+        fighters[0].attacks.push(spell.clone());
+        regions_mut(&mut fighters[1])[0].hp = 15.0;
+        fighters[2].hurts.push(HurtVolume {
+            side: Side { owner: 103, kind: 1 },
+            volume: spell.volume,
+            region_id: 1,
+            hit_prio: 0,
+        });
+        if let Victim::Enemy { defender, rates, .. } = &mut fighters[2].victim {
+            *defender = EnemyDefender::new(10000.0, 20.0);
+            *rates = CollisionRates::default();
+        }
+        let bonus = super::BodyDamageBonus {
+            child00_alive: 2.0,
+            child00_missing_or_dead: 3.0,
+        };
+        let mut body_calls = 0;
+        let events = hit_pass_configured(
+            &mut fighters,
+            &tables,
+            1.0,
+            &mut || 1.0,
+            &|_| true,
+            &[config(104, vec![103]), config(103, vec![])],
+            &mut |owner, pool, hit, state| {
+                if owner == 103 {
+                    body_calls += 1;
+                    assert_eq!(hit.mag, 40.0); // common defence already subtracted
+                    // This synthetic policy exercises hook ordering, not original
+                    // actor +0x5bd0 death-marker timing. Host policy must supply that.
+                    let alive = state.iter().find(|s| s.owner == 104).unwrap().has_hp;
+                    assert!(!alive);
+                    bonus.apply(hit, pool, false, alive);
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(body_calls, 1); // mirrored hit never re-enters the modifier
+        assert_eq!(
+            events.iter().map(|e| (e.victim, e.total)).collect::<Vec<_>>(),
+            vec![(104, 40.0), (103, 40.0), (103, 120.0)]
+        );
+        assert!(events[0].killed && events[2].killed);
+    }
+
+    #[test]
+    fn configured_rejection_precedes_hp_history_and_rng_mutation() {
+        for case in 0..7 {
+            let (mut fighters, tables) = configured_scene(37);
+            let mut configs = vec![config(104, vec![103]), config(103, vec![])];
+            match case {
+                0 => configs[0].hit_to_pool = vec![0],
+                1 => configs[0].owner = 999,
+                2 => configs.push(configs[0].clone()),
+                3 => configs[0].linked_owners.push(103),
+                4 => fighters[2].owner = 104,
+                5 => configs[0].linked_owners = vec![999],
+                6 => configs[0].hit_to_pool = vec![0, 999],
+                _ => unreachable!(),
+            }
+            let before = fighters.clone();
+            let result = hit_pass_configured(
+                &mut fighters,
+                &tables,
+                1.0,
+                &mut || panic!("preflight must not consume RNG"),
+                &|_| panic!("preflight must not advance history"),
+                &configs,
+                &mut |_, _, _, _| panic!("preflight must not value damage"),
+            );
+            assert!(result.is_err(), "case {case}");
+            for (a, b) in fighters.iter().zip(before) {
+                assert_eq!(regions(a), regions(&b));
+                assert_eq!(a.history, b.history);
+            }
+        }
+    }
+
+    #[test]
+    fn configured_missing_mirror_pool_does_not_fall_back_to_hp() {
+        let (mut fighters, tables) = configured_scene(0);
+        let mut parent = config(103, vec![]);
+        parent.hit_to_pool = vec![999];
+        let events = hit_pass_configured(
+            &mut fighters,
+            &tables,
+            1.0,
+            &mut || 1.0,
+            &|_| true,
+            &[config(104, vec![103]), parent],
+            &mut |_, _, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].total, 40.0);
+        assert_eq!(events[1].total, 0.0);
+        assert_eq!(fighters[2].victim.hp(), 100.0);
+    }
 
     #[test]
     fn body_magick_bonus_uses_resolved_pool_and_child_liveness_only() {

@@ -107,7 +107,14 @@ Latest validation: `cargo test -p ddenemy -p ddenemyrt` passes 51 tests
 Follow-up: installed body-specific magick bonuses and their guarded
 post-mitigation modifier are implemented; 13 chimera integration tests pass.
 The modifier keys on the resolved pool ID, not the raw collision region.
-Shared combat-pass connection remains the next step.
+An additive configured combat pass now supports explicit owner mappings,
+ordered immediate linked-hit relay and a post-mitigation callback, preserving
+the legacy wrapper. Six further synthetic regressions cover nonidentity
+mapping, three simultaneous owners, ordering, equivalence and atomic errors.
+Full `cargo test -p ddcombat -p ddenemyrt` passes 81 tests (33+48), one ignored.
+The callback's current `has_hp` observations are explicitly distinct from the
+original actor +0x5bd0 death marker. Real marker timing and host binding remain
+unimplemented; unmapped ordinary configured hits return a preflight error.
 
 No host combat actor, placement kill, story progression or original-game
 comparison is claimed by this checkpoint. Next: the child-00 collision-link

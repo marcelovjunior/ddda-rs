@@ -9,7 +9,7 @@
 //! Arisen and enemies take part.
 
 use ddcombat::damage::{
-    enemy_attack, merge_frame, player_attack, player_mitigate, resolve_enemy_hit, Adjust, CollisionRates,
+    enemy_attack, merge_frame, player_attack, player_mitigate, resolve_enemy_hit_valued_with, Adjust, CollisionRates,
     EnemyAttacker, EnemyDefender, HitValue, PlayerAttacker, PlayerDefender, Reaction, RegionPool,
 };
 use ddcombat::cstatus::{burning, poison_enemy, poison_player, DotState, StatusTable, Statuses};
@@ -167,6 +167,96 @@ pub struct Tables {
     pub status_player: StatusTable,
 }
 
+/// Host-selected collision mappings and linked-collision chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnemyCollisionConfig {
+    pub owner: u32,
+    /// Collision +0xcf4: raw hurt-region index -> installed life-pool ID.
+    pub hit_to_pool: Vec<u32>,
+    /// Destination collision +0xd34/+0xd38, applied only to mirrored hits.
+    /// Indices beyond this optional remap retain their original value.
+    pub linked_region_remap: Option<Vec<u32>>,
+    /// Explicit ordered collision +0xcc8 chain for this source. The host
+    /// supplies the complete chain; destination chains are not re-expanded.
+    pub linked_owners: Vec<u32>,
+    /// Collision +0xd28/+0xd2c, physical and magick status build-up rates.
+    pub status_rates: [f32; 2],
+}
+
+impl EnemyCollisionConfig {
+    fn pool_index(&self, region: u32, pools: &[RegionPool], mirrored: bool) -> Option<usize> {
+        let region = if mirrored {
+            self.linked_region_remap.as_ref().and_then(|m| m.get(region as usize)).copied().unwrap_or(region)
+        } else { region };
+        let id = self.hit_to_pool.get(region as usize)?;
+        pools.iter().position(|p| p.id == *id)
+    }
+}
+
+/// Refreshed before each local hit, after preceding local/linked HP changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CombatOwnerState {
+    pub owner: u32,
+    /// Combat HP observation, not the actor death marker (uEnemy +0x5bd0).
+    pub has_hp: bool,
+}
+
+/// Configured enemy collision pass. Configuration errors are rejected before
+/// HP, status, history or RNG changes. Ordinary unmapped hurt regions are not
+/// supported: 0x0076db10 skips local valuation there, leaving a carried total
+/// whose earlier producer is not yet represented by MergedHit. Such inputs
+/// return an error, never fall back to main HP. A mirrored missing mapping
+/// retains the separate sourced status/break-only behavior.
+///
+/// Post-mitigation policy sees current owner HP state. Actor death-marker
+/// observations remain the host policy's responsibility. Owner and chain order
+/// are explicit; all unconfigured fighters retain the legacy pass behavior.
+pub fn hit_pass_configured(
+    fighters: &mut [Fighter],
+    tables: &Tables,
+    dt: f32,
+    roll: &mut dyn FnMut() -> f32,
+    holds: &dyn Fn(u32) -> bool,
+    config: &[EnemyCollisionConfig],
+    after_mitigation: &mut dyn FnMut(u32, u32, &mut ddcombat::damage::MergedHit, &[CombatOwnerState]),
+) -> Result<Vec<HitEvent>, String> {
+    let mut owners = std::collections::BTreeSet::new();
+    for fighter in fighters.iter() {
+        if !owners.insert(fighter.owner) {
+            return Err(format!("duplicate fighter owner {}", fighter.owner));
+        }
+    }
+    let mut configured = std::collections::BTreeSet::new();
+    for c in config {
+        if !configured.insert(c.owner) {
+            return Err(format!("duplicate collision owner {}", c.owner));
+        }
+        let fighter = fighters.iter().find(|f| f.owner == c.owner)
+            .ok_or_else(|| format!("missing collision owner {}", c.owner))?;
+        let Victim::Enemy { regions, .. } = &fighter.victim else {
+            return Err(format!("collision owner {} is not an enemy", c.owner));
+        };
+        if regions.first().is_none_or(|p| p.id != 0) {
+            return Err(format!("collision owner {} has no main pool", c.owner));
+        }
+        for hurt in &fighter.hurts {
+            if c.pool_index(hurt.region_id, regions, false).is_none() {
+                return Err(format!("owner {} has unsupported ordinary region {}", c.owner, hurt.region_id));
+            }
+        }
+        let mut chain = std::collections::BTreeSet::from([c.owner]);
+        for owner in &c.linked_owners {
+            if !chain.insert(*owner) {
+                return Err(format!("owner {} has duplicate linked owner {owner}", c.owner));
+            }
+            if !owners.contains(owner) || !config.iter().any(|target| target.owner == *owner) {
+                return Err(format!("owner {} has missing linked collision owner {owner}", c.owner));
+            }
+        }
+    }
+    Ok(hit_pass_inner(fighters, tables, dt, roll, holds, config, after_mitigation))
+}
+
 /// Runs the hit pass over `fighters`: each victim's hits from everyone's
 /// attack volumes, in fighter order (the original runs one job per
 /// collision; the order only matters for simultaneous deaths). `dt` is the
@@ -181,6 +271,18 @@ pub fn hit_pass(
     dt: f32,
     roll: &mut dyn FnMut() -> f32,
     holds: &dyn Fn(u32) -> bool,
+) -> Vec<HitEvent> {
+    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut |_, _, _, _| {})
+}
+
+fn hit_pass_inner(
+    fighters: &mut [Fighter],
+    tables: &Tables,
+    dt: f32,
+    roll: &mut dyn FnMut() -> f32,
+    holds: &dyn Fn(u32) -> bool,
+    config: &[EnemyCollisionConfig],
+    after_mitigation: &mut dyn FnMut(u32, u32, &mut ddcombat::damage::MergedHit, &[CombatOwnerState]),
 ) -> Vec<HitEvent> {
     let attacks: Vec<AttackVolume> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
     // the attacker's status multipliers (0x0088B530 / 0x0088AA20)
@@ -204,7 +306,11 @@ pub fn hit_pass(
         })
         .collect();
     let mut events = Vec::new();
-    for v in fighters.iter_mut() {
+    for victim_index in 0..fighters.len() {
+        let current_owners: Vec<_> = if config.is_empty() { Vec::new() } else {
+            fighters.iter().map(|f| CombatOwnerState { owner: f.owner, has_hp: !f.victim.dead() }).collect()
+        };
+        let v = &mut fighters[victim_index];
         if v.victim.dead() {
             continue;
         }
@@ -234,13 +340,18 @@ pub fn hit_pass(
         };
         let hits_n = merged.hits;
         let attacker = attacks[first].side.owner;
+        let collision = config.iter().find(|c| c.owner == v.owner);
+        let mut carried = None;
         let event = match &mut v.victim {
             Victim::Enemy {
                 defender,
                 regions,
                 rates,
             } => {
-                let at = regions.iter().position(|r| r.id == region).unwrap_or(0);
+                let at = match collision {
+                    Some(c) => c.pool_index(region, regions, false).expect("mapping validated before hit pass"),
+                    None => regions.iter().position(|r| r.id == region).unwrap_or(0),
+                };
                 let was_alive = regions[0].hp > 0.0;
                 // the victim's statuses: defence downs / ups and curse
                 // (0x00AAA490), sleep / frozen / oil / drenched (0x0084D8B0)
@@ -254,14 +365,20 @@ pub fn hit_pass(
                 merged.blow *= sb;
                 // min damage: the attacker object's +0x14 (*not confirmed*
                 // to be the unit step), 1.0 here
-                let out = resolve_enemy_hit(merged, &def, regions, at, rates, &tables.game, 1.0);
+                let (out, valued) = resolve_enemy_hit_valued_with(merged, &def, regions, at, rates, &tables.game, 1.0,
+                    |pool_id, hit| after_mitigation(v.owner, pool_id, hit, &current_owners));
                 // build-up on the hit region (0x007772B0; a main region
                 // exists, so it runs whatever the region's mAttr says)
                 let r = &mut regions[at];
                 let resist = r.resist.element;
-                build_up(&mut r.status, &status_hit, &resist, 1.0, 1.0, &mut *roll);
+                let (status_hit, status_rates) = if let Some(c) = collision {
+                    (StatusHit { element: valued.hit.element, element_buildup: valued.hit.element_buildup,
+                        status: valued.hit.status, mag: valued.hit.mag }, c.status_rates)
+                } else { (status_hit, [1.0, 1.0]) };
+                build_up(&mut r.status, &status_hit, &resist, status_rates[0], status_rates[1], &mut *roll);
                 let (slots, _frozen) = fire(&mut r.status);
                 add_fired(&mut v.statuses, &slots, &tables.status_enemy);
+                carried = Some(valued);
                 HitEvent {
                     attacker,
                     victim: v.owner,
@@ -296,7 +413,20 @@ pub fn hit_pass(
                 }
             }
         };
-        events.push(event);
+        events.push(event.clone());
+        // 0x0076b7e0 runs each linked collision immediately after its local
+        // hit, preserving the already-valued payload and original region.
+        if let (Some(collision), Some(valued)) = (collision, carried) {
+            for owner in &collision.linked_owners {
+                let target_config = config.iter().find(|c| c.owner == *owner).expect("validated linked config");
+                let target = fighters.iter_mut().find(|f| f.owner == *owner).expect("validated linked owner");
+                let Victim::Enemy { regions, .. } = &target.victim else { unreachable!("validated linked enemy") };
+                let mapped = target_config.pool_index(event.region, regions, true);
+                if let Some(linked) = apply_linked_enemy_hit(target, &event, &valued, mapped, target_config.status_rates, &tables.status_enemy, roll) {
+                    events.push(linked);
+                }
+            }
+        }
     }
     events
 }
