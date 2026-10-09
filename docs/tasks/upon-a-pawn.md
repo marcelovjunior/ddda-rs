@@ -197,3 +197,44 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   target resolution but share this pointer predicate; graph completion is
   neither. Controller allocation occurs before the daily graph load, so
   missing graph data alone cannot establish an absent original controller.
+
+### Guard dialogue eligibility and completion observations
+
+- Source `0x00bb0db0` performs eligibility before spatial checks: stage
+  flags, active dialogue, frontend state (`0x00bb4000`), transition state
+  (`0x0043f640` / `0x0043f6a0`), actor unit readiness (`0x0049ace0`),
+  actor disable/status bits and a valid interacting character. Original
+  character action ids 0xba, 0x33, 0x25 and the death predicate reject it.
+  Unknown status-bit meanings remain unknown; proximity must not imply
+  eligibility. The guard flag adds restrictions but does not alone choose
+  the launch branch; actor predicate `0x00bb4f90` chooses that branch.
+- `0x0043dd80` reserves a candidate at game-system+0x50, provided no active
+  dialogue exists. `0x0043ded0` promotes the same actor to active dialogue
+  +0x54 (rejecting a different reserved candidate). `0x00bb4060` enters
+  talk action 0x03000041 only after promotion succeeds. Reservation,
+  activation and completion therefore need separate host observations.
+- Guard-authored message routing `0x00bb47d0`: kind 2 looks up the NPC's
+  loaded text resource by configured quest number; kind 5 uses key -2.
+  Kind 4 checks resource key -1 for the message and falls back to key -2
+  (`0x00baddf0`). A found resource is passed with the configured message
+  number to `0x00455990`. The quest-number argument for kind 2 and -2 for
+  kind 5 are verified in instructions `0x00bb47ef` / `0x00bb480a`.
+  Missing resource does not manufacture dialogue completion.
+- Talk exit helper `0x00bb41c0` checks actual talk-active state +0x5864,
+  waits for the actor-state predicate, clears active bytes, reenables its
+  controller unless +0x6fba blocks it, sets pending exit +0x586a and clears
+  the active dialogue through `0x0043dfd0`. The talk action's state 0x1d
+  calls it, as do action replacements `uNpc::vf132` / `vf134`. Thus exit
+  is not necessarily successful text consumption. `uNpc::vf111` consumes
+  pending +0x586a only with controller enabled and game flag 0x100000
+  clear, producing the already documented one-frame TalkEnd observation.
+- Proposed host contract (not implemented): explicit actor identity and
+  per-PlayerId interacting-character eligibility/transform; observed
+  frontend/transition/dialogue availability; candidate and active dialogue
+  actor ids; typed authored Guard config and trigger latch; actual resource
+  availability; actor talk-exit pending/controller-enabled observations.
+  The host arbitrates the original shared dialogue slot deterministically
+  for N players. Arbitration policy is a co-op extension, not original
+  evidence. Unknown observations stay unavailable, never implicitly true.
+  Existing observe_story_npc_talk_end remains an explicit fixture/adapter
+  input; no spatial or UI-close shortcut was added.
