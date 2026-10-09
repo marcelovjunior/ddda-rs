@@ -17,6 +17,7 @@ mod msg_dump;
 mod param_dump;
 mod save_pawns;
 mod scan;
+mod stream_survey;
 mod survey;
 mod tex;
 mod xfs;
@@ -26,6 +27,7 @@ use scan::find_arcs;
 /// One line per subcommand; each line ends with a comma so branches that add
 /// subcommands merge cleanly.
 const USAGE: &[&str] = &[
+    "  ddtool stream-survey <nativePC dir>",
     "  ddtool save-pawns <private save copy>",
     "  ddtool msg-dump <nativePC dir> <resource path>",
     "  ddtool param-dump <nativePC dir> <resource path>",
@@ -49,6 +51,7 @@ const USAGE: &[&str] = &[
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["stream-survey", dir] => stream_survey::run(Path::new(dir)),
         ["save-pawns", path] => save_pawns::run(Path::new(path)),
         ["msg-dump", dir, path] => msg_dump::msg_dump(Path::new(dir), path),
         ["param-dump", dir, path] => param_dump::run(Path::new(dir), path),
