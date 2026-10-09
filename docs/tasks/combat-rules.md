@@ -3,7 +3,7 @@
 - **Owner:** claude lane
 - **Branch:** `task/combat-rules`
 - **Board area:** `research/combat`
-- **Status:** open
+- **Status:** review (claude-8, 2026-10-09)
 
 ## Goal
 
@@ -49,4 +49,54 @@ report to `head`.
 
 ## Results
 
-(filled in by the agent)
+Full write-up: `docs/COMBAT.md`. Not yet compared against the running
+game (live check requested from claude-4, board #698).
+
+**Found (exe addresses, 2017-12-13 Steam build):**
+- Hit pipeline: per-frame collision update `0x0076B7E0` (pairs attack and
+  hurt volumes, builds `DamageInfo` `0x00774ED0`, merges same-frame hits
+  into one `HitInfo` per victim with a hit count at +0xD0, filters
+  `mIsSameFrameNoHit00..03`), then `0x0076DB10` (mitigation callback,
+  region scaling, HP/DP/BP/status application). `uObjModel::vf05`
+  `0x00885C10` wires the callbacks to vtable slots (vf68 = mitigation,
+  vf72/vf75 = pool emptied). `cObjCollision` sits at actor+0x10E0.
+- Attacker value: enemies `0x0088B530` (stat x `mAttackRate` /
+  `mMgcAttackRate`, status multipliers); players/pawns `0x0088AA20`
+  (`mAttackRate`*base + weapon*`mWpPhyAtkRate`*crit + `mAttack`, and a
+  magick part from the weapon's magick on every hit; critical roll from
+  `param\dlc`[0x19..0x1B]); dispatcher `0x0088A910`.
+- Enemy mitigation `uEnemy::vf68` `0x00AAA490`: linear,
+  `max(0, atk - hits*def)`, element resist on the magick part,
+  slash/strike split by `mSwordRate`/`mHitRate` x region resists;
+  `mIsNoCalcEnemyDefence` skips defence. Player mitigation
+  `uPlayerBase::vf68` `0x00B7AD90` + `0x00B83EE0`: hyperbolic,
+  `x*(1 - c*D/(D+100)) - d`, `D = 0.5*equipDef + baseDef`
+  (`param\game`[5], [6]).
+- Region pools (`cObjCollision::RegionStatus`, ctor `0x00776BA0`, filled
+  by `0x00770910` from RST and `0x00770FD0` from the PRP resist array at
+  actor+0x59E8): HP `0x00776F50`, DP stagger / BP knockdown `0x00777110`,
+  per-frame recovery and weak-point class `0x007781A0`, `mAttr` bits,
+  `param\game` class multipliers 1.25/1/0.75/0.4/0.
+- Status build-up `0x007772B0` (element statuses from `mElementRate` x
+  element resist, others from the attack's `mPoison`.. values; random
+  chance, thresholds from the PRP `耐..` values, >= 10000 immune).
+- `cCharParamEnemy` (`vf03` `0x0074A410`) is the common PRP class; its
+  stats live at actor+0x59B0 (attack +0x59BC .. resists +0x59E8).
+
+**Built and tested:** `crates/ddcombat`: `rObjCollision` reader (groups,
+nodes, 83-value attacks with names/offsets, 57 flags, sequence index),
+3 synthetic tests + install tests: all 8,629 occurrences (415 paths) parse
+to the last byte. Examples `ocl_dump`, `ocl_list`, `rst_dump`, `adj_dump`.
+
+**Worked example:** level-1 Fighter, Iron Sword (50), sword attack 1
+(`mAttack` 50) on a goblin (def 75, HP 1000): 180 - 75 = 105 HP, flinch;
+goblin attack 0 on an unarmoured Arisen with base defence 80: 111.1.
+
+**Unknown:** motion-event activation of hit groups, shape tests,
+collision mode +0xD14, crit-capable flag P+0x144, `cStatus` type names
+and status durations (`rStatusParam` consumer), stamina-damage consumer,
+guard / friendly fire / experience. No live measurement yet.
+
+**Next:** the five briefs proposed in COMBAT.md section 10
+(combat-hit-volumes, combat-damage, combat-status, combat-oracle-checks,
+player-attack-params).
