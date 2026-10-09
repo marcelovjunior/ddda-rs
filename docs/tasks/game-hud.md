@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/game-hud`
 - **Board area:** `ui/hud`
-- **Status:** open
+- **Status:** working (geometry/binding checkpoint; comparison gate open)
 
 ## Goal
 
@@ -29,4 +29,15 @@ The `--play --save` HUD shows the game's bars and prompts at the original positi
 
 ## Results
 
-(filled in by the agent)
+First checkpoint: `mtgui::layout` exposes the authored animation objects,
+texture atlas rectangles, colour/texture keys and control selector ranges.
+`ddview::hud` loads cockpit bars, numeric HP and keyboard action artwork;
+the old overlay remains temporarily for value comparison. Release viewer
+build passed; 13 GUI tests including the installed cockpit/palette and all
+216 GUI archive occurrences passed. The first bounded screenshot verified
+HP digits 410 against the old overlay's 410/410; it exposed animation-driven
+colours, which the next build corrected. No original process was controlled.
+
+Still open: reference image comparison after colour/prompt corrections,
+font rendering, exact pawn anchor, Converse availability/event visibility,
+followed-seat key artwork and final old-overlay removal. Not a completed HUD.

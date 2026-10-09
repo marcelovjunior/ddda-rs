@@ -28,3 +28,5 @@ mtswm = { path = "../mtswm" }
 mtweather = { path = "../mtweather" }
 ddquest = { path = "../ddquest" }
 mttex = { path = "../mttex" }
+mtgui = { path = "../mtgui" }
+mtgmd = { path = "../mtgmd" }

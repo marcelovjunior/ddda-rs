@@ -2634,6 +2634,8 @@ dependencies = [
  "ddvfs",
  "ddworld",
  "mtarc",
+ "mtgmd",
+ "mtgui",
  "mtlmt",
  "mtlot",
  "mtmod",
