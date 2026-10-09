@@ -14,3 +14,5 @@
 pub mod arisen;
 pub mod body;
 pub mod combat;
+pub mod fight;
+pub mod goblin;

@@ -57,13 +57,23 @@ impl SaveFile {
     }
 
     pub fn get(&self, tag: [u8; 4], owner: Owner) -> Option<&[u8]> {
-        self.chunks.iter().find(|c| c.tag == tag && c.owner == owner).map(|c| c.bytes.as_slice())
+        self.chunks
+            .iter()
+            .find(|c| c.tag == tag && c.owner == owner)
+            .map(|c| c.bytes.as_slice())
     }
 
     /// The chunks of one Arisen: what a guest takes home (design decision:
     /// the host saves everyone, and each player can keep their own part).
     pub fn profile_part(&self, p: ProfileId) -> SaveFile {
-        SaveFile { chunks: self.chunks.iter().filter(|c| c.owner == Owner::Profile(p)).cloned().collect() }
+        SaveFile {
+            chunks: self
+                .chunks
+                .iter()
+                .filter(|c| c.owner == Owner::Profile(p))
+                .cloned()
+                .collect(),
+        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -105,7 +115,11 @@ impl SaveFile {
                 o => return Err(format!("chunk owner kind {o}")),
             };
             let len = r.u32()? as usize;
-            chunks.push(Chunk { tag, owner, bytes: r.take(len)?.to_vec() });
+            chunks.push(Chunk {
+                tag,
+                owner,
+                bytes: r.take(len)?.to_vec(),
+            });
         }
         if r.at != b.len() {
             return Err(format!("{} trailing bytes", b.len() - r.at));
@@ -132,7 +146,10 @@ impl<'a> Reader<'a> {
 
 /// A [`TAG_PLACE`] chunk: position (cm, stage frame) and yaw.
 pub fn place_bytes(pos: [f32; 3], yaw: f32) -> Vec<u8> {
-    pos.iter().chain([yaw].iter()).flat_map(|v| v.to_le_bytes()).collect()
+    pos.iter()
+        .chain([yaw].iter())
+        .flat_map(|v| v.to_le_bytes())
+        .collect()
 }
 
 pub fn place_from(b: &[u8]) -> Option<([f32; 3], f32)> {
@@ -151,14 +168,21 @@ mod tests {
     fn round_trip_keeps_unknown_chunks() {
         let mut s = SaveFile::default();
         s.put(TAG_WORLD, Owner::Shared, vec![1, 2, 3]);
-        s.put(TAG_PLACE, Owner::Profile(ProfileId(9)), place_bytes([1.0, 2.0, 3.0], 0.5));
+        s.put(
+            TAG_PLACE,
+            Owner::Profile(ProfileId(9)),
+            place_bytes([1.0, 2.0, 3.0], 0.5),
+        );
         s.put(*b"ECON", Owner::Profile(ProfileId(9)), vec![7; 10]);
         s.put(TAG_WORLD, Owner::Shared, vec![4]);
         let b = s.to_bytes();
         let t = SaveFile::from_bytes(&b).unwrap();
         assert_eq!(t, s);
         assert_eq!(t.get(TAG_WORLD, Owner::Shared), Some(&[4u8][..]));
-        assert_eq!(place_from(t.get(TAG_PLACE, Owner::Profile(ProfileId(9))).unwrap()), Some(([1.0, 2.0, 3.0], 0.5)));
+        assert_eq!(
+            place_from(t.get(TAG_PLACE, Owner::Profile(ProfileId(9))).unwrap()),
+            Some(([1.0, 2.0, 3.0], 0.5))
+        );
         assert_eq!(t.profile_part(ProfileId(9)).chunks.len(), 2);
         assert!(SaveFile::from_bytes(&b[..b.len() - 1]).is_err());
     }

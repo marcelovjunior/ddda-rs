@@ -51,7 +51,12 @@ impl InteractionLocks {
 
     /// Releases every lock of `player` (end of session, disconnect).
     pub fn release_all(&mut self, player: PlayerId) -> Vec<NpcId> {
-        let mine: Vec<NpcId> = self.held.iter().filter(|(_, &p)| p == player).map(|(&n, _)| n).collect();
+        let mine: Vec<NpcId> = self
+            .held
+            .iter()
+            .filter(|(_, &p)| p == player)
+            .map(|(&n, _)| n)
+            .collect();
         for n in &mine {
             self.held.remove(n);
         }

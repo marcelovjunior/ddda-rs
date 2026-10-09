@@ -51,7 +51,10 @@ impl FrameClock {
 
     /// The story's view of the step (`sMain` mDeltaTime and mFps).
     pub fn story_time(&self) -> ddstory::Time {
-        ddstory::Time { delta: self.delta, fps: BASE_FPS }
+        ddstory::Time {
+            delta: self.delta,
+            fps: BASE_FPS,
+        }
     }
 }
 

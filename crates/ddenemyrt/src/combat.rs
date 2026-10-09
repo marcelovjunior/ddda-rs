@@ -12,7 +12,7 @@ use ddcombat::damage::{
     enemy_attack, merge_frame, player_attack, player_mitigate, resolve_enemy_hit, Adjust, CollisionRates,
     EnemyAttacker, EnemyDefender, HitValue, PlayerAttacker, PlayerDefender, Reaction, RegionPool,
 };
-use ddcombat::volumes::{resolve_frame, AttackVolume, HitHistory, HurtVolume};
+use ddcombat::volumes::{contacts, AttackVolume, HitHistory, HurtVolume};
 
 /// How a fighter's attacks are valued.
 #[derive(Debug, Clone)]
@@ -99,11 +99,15 @@ pub struct Tables {
 /// collision; the order only matters for simultaneous deaths). `dt` is the
 /// frame step in 30 fps frames. `roll` gives the player critical roll
 /// (only read for critical-capable weapons).
+/// `holds(attacker)` tells whether an attacker's swing still holds its
+/// `mRelation` history entries (the attacker flag +0x1EC1 clear,
+/// 0x0076ECA0).
 pub fn hit_pass(
     fighters: &mut [Fighter],
     tables: &Tables,
     dt: f32,
     roll: &mut dyn FnMut() -> f32,
+    holds: &dyn Fn(u32) -> bool,
 ) -> Vec<HitEvent> {
     let attacks: Vec<AttackVolume> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
     let attackers: Vec<(u32, Attacker)> = fighters.iter().map(|f| (f.owner, f.attacker.clone())).collect();
@@ -112,7 +116,7 @@ pub fn hit_pass(
         if v.victim.dead() {
             continue;
         }
-        let hits = resolve_frame(&attacks, &v.hurts, &mut v.history, dt);
+        let hits = resolve(&attacks, &v.hurts, &mut v.history, dt, holds);
         let Some(&(first, region)) = hits.first() else {
             continue;
         };
@@ -173,4 +177,29 @@ pub fn hit_pass(
         events.push(event);
     }
     events
+}
+
+/// `ddcombat::volumes::resolve_frame` with the relation hold of the
+/// attackers: contacts (0x00779860), the history check (0x0076EAF0), the
+/// contacts recorded (0x0076EB60) and the end of the victim's frame
+/// (0x0076ECA0). Which attacks set +0x1EC1 is *not traced*: the fight
+/// takes an entry as held while its attacker's swing goes on.
+fn resolve(
+    attacks: &[AttackVolume],
+    hurts: &[HurtVolume],
+    history: &mut HitHistory,
+    dt: f32,
+    holds: &dyn Fn(u32) -> bool,
+) -> Vec<(usize, u32)> {
+    history.begin_frame(dt);
+    let mut hits = Vec::new();
+    for c in contacts(attacks, hurts) {
+        let a = &attacks[c.attack];
+        if !history.already_hit(a.side.owner, a.key, a.relation) {
+            hits.push((c.attack, hurts[c.hurt].region_id));
+        }
+        history.record(a.side.owner, a.key, a.relation, a.flags.multi_hit, a.reset_time);
+    }
+    history.end_frame(holds);
+    hits
 }

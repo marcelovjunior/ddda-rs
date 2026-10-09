@@ -84,7 +84,10 @@ pub enum Member {
     /// The host's main pawn, shared: either Arisen may command it.
     MainPawn,
     /// A hired pawn; `owner` is the Arisen who hired it.
-    Hired { owner: PlayerId, slot: u8 },
+    Hired {
+        owner: PlayerId,
+        slot: u8,
+    },
 }
 
 /// The party: four slots, in the original's order.

@@ -114,7 +114,7 @@ fn sword_attack_1_hits_a_goblin_once_for_105() {
     let mut hits = vec![];
     for frame in 0..60 {
         // hits from last frame's volumes
-        for e in hit_pass(&mut fighters, &tables, 1.0, &mut || 0.5) {
+        for e in hit_pass(&mut fighters, &tables, 1.0, &mut || 0.5, &|_| true) {
             hits.push((frame, swing.frame, e));
         }
         // the swing advances one motion frame and moves the Arisen forward

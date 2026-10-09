@@ -37,7 +37,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut p = Party::for_roster(&self.roster);
         for k in 0..2 {
             if self.rift.party.hired[k].is_some() && p.slots[2 + k].is_none() {
-                p.slots[2 + k] = Some(Member::Hired { owner: self.hired_by[k].unwrap_or(0), slot: k as u8 + 1 });
+                p.slots[2 + k] = Some(Member::Hired {
+                    owner: self.hired_by[k].unwrap_or(0),
+                    slot: k as u8 + 1,
+                });
             }
         }
         self.party = p;
@@ -66,10 +69,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             .position(|m| *m == Some(Member::Arisen(player)))
             .ok_or(HostError::UnknownPlayer(player))?;
         if self.progression.party[slot].is_some() {
-            return Err(HostError::Rift(format!("seat {player} already has an Arisen record")));
+            return Err(HostError::Rift(format!(
+                "seat {player} already has an Arisen record"
+            )));
         }
         let c = self.progression.add(Character::new(&t, vocation, false));
-        self.progression.party[slot] = Some(ddprogress::Member { character: c, role: Role::Arisen(player) });
+        self.progression.party[slot] = Some(ddprogress::Member {
+            character: c,
+            role: Role::Arisen(player),
+        });
         Ok(c)
     }
 
@@ -77,7 +85,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     pub fn create_main_pawn(&mut self, vocation: Vocation) -> Result<CharId, HostError> {
         let t = self.data.tables.clone().ok_or(HostError::NoData("progression"))?;
         let c = self.progression.add(Character::new(&t, vocation, true));
-        self.progression.party[1] = Some(ddprogress::Member { character: c, role: Role::MainPawn { owner: 0 } });
+        self.progression.party[1] = Some(ddprogress::Member {
+            character: c,
+            role: Role::MainPawn { owner: 0 },
+        });
         Ok(c)
     }
 
@@ -96,14 +107,24 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             Member::Hired { slot, .. } => (Owner::Pawn(slot), None),
         };
         let (level, augments) = match (c, m) {
-            (Some(c), _) => (c.progress.level, c.augments.map(|a| a.map_or(NO_AUGMENT, u32::from))),
+            (Some(c), _) => (
+                c.progress.level,
+                c.augments.map(|a| a.map_or(NO_AUGMENT, u32::from)),
+            ),
             (None, Member::Hired { slot, .. }) => {
-                let level = self.rift.party.hired[slot as usize - 1].as_ref().map_or(1, |p| u32::from(p.pawn.param.level));
+                let level = self.rift.party.hired[slot as usize - 1]
+                    .as_ref()
+                    .map_or(1, |p| u32::from(p.pawn.param.level));
                 (level, [NO_AUGMENT; 6])
             }
             (None, _) => (1, [NO_AUGMENT; 6]),
         };
-        ddeconomy::Member { owner, present: true, level, augments }
+        ddeconomy::Member {
+            owner,
+            present: true,
+            level,
+            augments,
+        }
     }
 
     /// The party as the economy sees it from `player`: their own Arisen
@@ -111,7 +132,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     pub fn economy_party(&self, player: PlayerId) -> ddeconomy::Party {
         let own = Member::Arisen(player);
         let mut members = vec![self.econ_member(own)];
-        members.extend(self.party.slots.iter().flatten().filter(|m| **m != own).map(|m| self.econ_member(*m)));
+        members.extend(
+            self.party
+                .slots
+                .iter()
+                .flatten()
+                .filter(|m| **m != own)
+                .map(|m| self.econ_member(*m)),
+        );
         ddeconomy::Party { members }
     }
 
@@ -124,25 +152,43 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let party = self.economy_party(player);
         let world = &self.story.as_ref().ok_or(HostError::NoData("story"))?.world;
         self.locks.acquire(npc, player).map_err(HostError::Lock)?;
-        self.economy.open_shop(&cat, world, &party, player, npc).map_err(|e| {
-            let _ = self.locks.release(npc, player);
-            HostError::Economy(e)
-        })
+        self.economy
+            .open_shop(&cat, world, &party, player, npc)
+            .map_err(|e| {
+                let _ = self.locks.release(npc, player);
+                HostError::Economy(e)
+            })
     }
 
     /// Buys in an open shop session (`Economy::buy`).
-    pub fn buy(&mut self, s: &ddeconomy::Session, item: u32, count: u32, to: Owner) -> Result<u32, HostError> {
+    pub fn buy(
+        &mut self,
+        s: &ddeconomy::Session,
+        item: u32,
+        count: u32,
+        to: Owner,
+    ) -> Result<u32, HostError> {
         let cat = self.data.catalog.clone().ok_or(HostError::NoData("economy"))?;
         let party = self.economy_party(s.player);
         let world = &self.story.as_ref().ok_or(HostError::NoData("story"))?.world;
-        self.economy.buy(&cat, world, &party, s, item, count, to).map_err(HostError::Economy)
+        self.economy
+            .buy(&cat, world, &party, s, item, count, to)
+            .map_err(HostError::Economy)
     }
 
     /// Sells in an open shop session (`Economy::sell`).
-    pub fn sell(&mut self, s: &ddeconomy::Session, from: Owner, index: usize, count: u32) -> Result<u32, HostError> {
+    pub fn sell(
+        &mut self,
+        s: &ddeconomy::Session,
+        from: Owner,
+        index: usize,
+        count: u32,
+    ) -> Result<u32, HostError> {
         let cat = self.data.catalog.clone().ok_or(HostError::NoData("economy"))?;
         let party = self.economy_party(s.player);
-        self.economy.sell(&cat, &party, s, from, index, count).map_err(HostError::Economy)
+        self.economy
+            .sell(&cat, &party, s, from, index, count)
+            .map_err(HostError::Economy)
     }
 
     /// Ends a shop or upgrade session and frees its NPC.
@@ -187,7 +233,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Summons a listed pawn into the room (`Rift::summon`).
     pub fn rift_summon(&mut self, player: PlayerId, row: &mut ddrift::Row) -> Result<usize, HostError> {
         self.visitor(player)?;
-        self.rift.summon(player, row).map_err(|e| HostError::Rift(format!("{e:?}")))
+        self.rift
+            .summon(player, row)
+            .map_err(|e| HostError::Rift(format!("{e:?}")))
     }
 
     /// Hires room pawn `room_slot` for the party (`Rift::hire`, 0x0073C2C0).
@@ -196,11 +244,20 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// party pawn slot (1 or 2).
     pub fn rift_hire(&mut self, player: PlayerId, room_slot: usize) -> Result<usize, HostError> {
         self.visitor(player)?;
-        let level = self.character_of(Role::Arisen(player)).map_or(1, |c| c.progress.level);
+        let level = self
+            .character_of(Role::Arisen(player))
+            .map_or(1, |c| c.progress.level);
         let rc = self.economy.wallet(player).rift_crystals;
-        let mut arisen = ddrift::Arisen { id: player, level, rift_crystals: rc };
+        let mut arisen = ddrift::Arisen {
+            id: player,
+            level,
+            rift_crystals: rc,
+        };
         let play_time = self.play_time();
-        let slot = self.rift.hire(&mut arisen, room_slot, play_time).map_err(|e| HostError::Rift(format!("{e:?}")))?;
+        let slot = self
+            .rift
+            .hire(&mut arisen, room_slot, play_time)
+            .map_err(|e| HostError::Rift(format!("{e:?}")))?;
         self.economy.wallet(player).rift_crystals = arisen.rift_crystals;
         self.hired_by[slot - 1] = Some(player);
         self.refresh_party();
@@ -219,9 +276,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     /// Rebuilds the Rift's stock, as the original does on a load
     /// (`Rift::refill`, 0x0047D330). `level` is the host Arisen's level.
-    pub fn refill_rift(&mut self, load_mode: u32, rng: &mut impl ddpawn::rift::PawnRng) -> Result<(), HostError> {
+    pub fn refill_rift(
+        &mut self,
+        load_mode: u32,
+        rng: &mut impl ddpawn::rift::PawnRng,
+    ) -> Result<(), HostError> {
         let data = self.data.rift.clone().ok_or(HostError::NoData("rift"))?;
         let level = self.character_of(Role::Arisen(0)).map_or(1, |c| c.progress.level);
-        self.rift.refill(&data, level, load_mode, rng).map_err(HostError::Rift)
+        self.rift
+            .refill(&data, level, load_mode, rng)
+            .map_err(HostError::Rift)
     }
 }

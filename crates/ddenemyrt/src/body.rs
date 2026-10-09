@@ -112,6 +112,22 @@ impl Body {
         self.motion(id).map_or(0, |m| m.frame_count)
     }
 
+    /// `frame` brought into the motion: a looping motion (loop frame >= 0)
+    /// wraps past its last frame back to the loop frame, a one-shot one
+    /// holds its last frame.
+    pub fn wrap_frame(&self, id: MotionId, frame: f32) -> f32 {
+        let Some(m) = self.motion(id) else { return frame };
+        let last = m.frame_count.saturating_sub(1) as f32;
+        if frame <= last {
+            return frame;
+        }
+        if m.loop_frame < 0 {
+            return last;
+        }
+        let lf = m.loop_frame as f32;
+        lf + (frame - last).rem_euclid((last - lf).max(1.0))
+    }
+
     /// The root-motion track of a motion as ddsim reads it.
     pub fn root_motion(&self, id: MotionId) -> Option<ddsim::RootMotion> {
         self.motion(id).map(ddsim::RootMotion::from_motion)

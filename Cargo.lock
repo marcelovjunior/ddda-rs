@@ -2349,7 +2349,9 @@ version = "0.1.0"
 name = "ddhost"
 version = "0.1.0"
 dependencies = [
+ "ddcombat",
  "ddeconomy",
+ "ddenemyrt",
  "ddexe",
  "ddid",
  "dditem",

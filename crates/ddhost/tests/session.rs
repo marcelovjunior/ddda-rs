@@ -33,7 +33,9 @@ fn data() -> Option<SystemData> {
         let native = std::env::var_os("DDDA_NATIVE_PC")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC"));
-        let exe = std::env::var_os("DDDA_EXE").map(PathBuf::from).or_else(|| ddexe::locate(&native).ok());
+        let exe = std::env::var_os("DDDA_EXE")
+            .map(PathBuf::from)
+            .or_else(|| ddexe::locate(&native).ok());
         let Some(exe) = exe.filter(|e| native.is_dir() && e.is_file()) else {
             eprintln!("SKIP: no install or DDDA.exe");
             return None;
@@ -57,7 +59,12 @@ const SWORD: u32 = 307;
 
 /// A fresh host with the two profiles seated in `order`.
 fn host(data: &SystemData, order: [ProfileId; 2]) -> Host<NoStoryData, ScriptedHost> {
-    let mut h = Host::new(Sim::new(HashMap::new()), Some(Story::new_game(NoStoryData)), ScriptedHost::default(), Box::new(Flat));
+    let mut h = Host::new(
+        Sim::new(HashMap::new()),
+        Some(Story::new_game(NoStoryData)),
+        ScriptedHost::default(),
+        Box::new(Flat),
+    );
     h.data = data.clone();
     h.join(order[0], Control::Local, [0.0, 0.0, 0.0], 0.0).unwrap();
     h.join(order[1], Control::Remote, [200.0, 0.0, 0.0], 0.0).unwrap();
@@ -67,8 +74,28 @@ fn host(data: &SystemData, order: [ProfileId; 2]) -> Host<NoStoryData, ScriptedH
 fn inputs(frame: u64) -> FrameInputs {
     let t = frame as f32;
     let mut m = FrameInputs::new();
-    m.insert(0, PlayerInput { sim: Input { stick: [0.0, 1.0], camera_yaw: t * 0.02, ..Default::default() }, interact: false });
-    m.insert(1, PlayerInput { sim: Input { stick: [1.0, 0.0], walk: true, ..Default::default() }, interact: false });
+    m.insert(
+        0,
+        PlayerInput {
+            sim: Input {
+                stick: [0.0, 1.0],
+                camera_yaw: t * 0.02,
+                ..Default::default()
+            },
+            interact: false,
+        },
+    );
+    m.insert(
+        1,
+        PlayerInput {
+            sim: Input {
+                stick: [1.0, 0.0],
+                walk: true,
+                ..Default::default()
+            },
+            interact: false,
+        },
+    );
     m
 }
 
@@ -76,11 +103,21 @@ fn row(id: u32, level: u8) -> ddrift::Row {
     let mut pawn = Cmc::initial();
     pawn.param.level = level;
     pawn.rom_id = id;
-    ddrift::Row { flags: 0, pawn, online: ddrift::PawnRef::rom(id) }
+    ddrift::Row {
+        flags: 0,
+        pawn,
+        online: ddrift::PawnRef::rom(id),
+    }
 }
 
 fn level(h: &Host<NoStoryData, ScriptedHost>, role: Role) -> u32 {
-    let m = h.progression.party.iter().flatten().find(|m| m.role == role).unwrap();
+    let m = h
+        .progression
+        .party
+        .iter()
+        .flatten()
+        .find(|m| m.role == role)
+        .unwrap();
     h.progression.characters[m.character].progress.level
 }
 
@@ -99,7 +136,10 @@ fn play(data: &SystemData) -> Host<NoStoryData, ScriptedHost> {
 
     // A purchase under the interaction lock.
     let s = h.open_shop(0, CAXTON).unwrap();
-    assert!(matches!(h.open_shop(1, CAXTON), Err(HostError::Lock(LockError::Held(0)))));
+    assert!(matches!(
+        h.open_shop(1, CAXTON),
+        Err(HostError::Lock(LockError::Held(0)))
+    ));
     assert!(matches!(h.save(), Err(HostError::Busy)), "no save inside a shop");
     let paid = h.buy(&s, SWORD, 1, Owner::Arisen(0)).unwrap();
     assert_eq!(paid, 2700);
@@ -158,10 +198,16 @@ fn load_on_swapped_seats_follows_the_profiles() {
     c.load(&file, NoStoryData).unwrap();
     assert_eq!(c.economy.wallets[&0], a.economy.wallets[&1]);
     assert_eq!(c.economy.wallets[&1], a.economy.wallets[&0]);
-    assert_eq!(c.economy.inventory.bag(Owner::Arisen(1)), a.economy.inventory.bag(Owner::Arisen(0)));
+    assert_eq!(
+        c.economy.inventory.bag(Owner::Arisen(1)),
+        a.economy.inventory.bag(Owner::Arisen(0))
+    );
     assert_eq!(level(&c, Role::Arisen(0)), level(&a, Role::Arisen(1)));
     // The hired pawn stays with the profile that hired it.
     assert_eq!(c.party.slots[2], Some(Member::Hired { owner: 0, slot: 1 }));
     // The guest's place follows its profile too.
-    assert_eq!(c.sim.player(0).unwrap().position, a.sim.player(1).unwrap().position);
+    assert_eq!(
+        c.sim.player(0).unwrap().position,
+        a.sim.player(1).unwrap().position
+    );
 }

@@ -5,9 +5,9 @@ use crate::clock::FrameClock;
 use crate::hash::StateHasher;
 use crate::input::{Edges, FrameInputs};
 use crate::lock::{InteractionLocks, LockError};
-use crate::systems::SystemData;
 use crate::player::{Control, Party, PlayerId, ProfileId, Roster};
 use crate::save::{self, Owner, SaveFile};
+use crate::systems::SystemData;
 use ddsim::{Ground, Sim};
 use ddstory::data::Data;
 use ddstory::{HostEvent, NpcUnit, Request, Story};
@@ -122,6 +122,9 @@ pub struct Host<D: Data, W: StoryWorld> {
     boot: bool,
     /// Running hash of every request emitted, for replay checks.
     request_log: StateHasher,
+    /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
+    /// `None` runs without combat.
+    pub fight: Option<ddenemyrt::fight::Fight>,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -146,12 +149,19 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             scenario_press: None,
             boot: true,
             request_log: StateHasher::default(),
+            fight: None,
         }
     }
 
     /// Seats an Arisen and places it in the world. `None` when the roster
     /// is full or the profile is already seated.
-    pub fn join(&mut self, profile: ProfileId, control: Control, pos: [f32; 3], yaw: f32) -> Option<PlayerId> {
+    pub fn join(
+        &mut self,
+        profile: ProfileId,
+        control: Control,
+        pos: [f32; 3],
+        yaw: f32,
+    ) -> Option<PlayerId> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
         self.economy.wallet(id);
@@ -209,7 +219,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     let p = self.sim.player(id).expect("seated players have a body");
                     // Yaw convention: ddsim's 0 faces +Z, like uCoord mAngle.y
                     // (assumed, not traced).
-                    ddstory::Player { pos: p.position, yaw: p.yaw }
+                    ddstory::Player {
+                        pos: p.position,
+                        yaw: p.yaw,
+                    }
                 })
                 .collect();
             let story_inputs = ddstory::Inputs {
@@ -224,19 +237,39 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             // New game (0x00445AB0) and load only name the stage; the host
             // loads it and reports StageLoaded (ddstory's contract).
             if self.boot && story.stage.stage_no == 0 {
-                requests.push(Request::JumpArea { stage: story.world.stage_no, pos: story.world.start_pos, fade: 0 });
+                requests.push(Request::JumpArea {
+                    stage: story.world.stage_no,
+                    pos: story.world.start_pos,
+                    fade: 0,
+                });
             }
             self.boot = false;
         }
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let presses = self.edges.interact_presses(inputs);
-        // Steps 30 (sAI), 33 (hits from the last frame's volumes, damage):
-        // no headless AI or hit pass yet.
+        // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
+        // from the volumes the fight switched on last frame, damage applied,
+        // before anyone moves (FRAME.md 5.1).
+        let step = self.clock.seconds() * ddsim::MOTION_FPS;
+        if let Some(f) = self.fight.as_mut() {
+            f.hits(step);
+        }
         // Step 36, pass A, line 10 "Player": the Arisen (and later the
         // pawns) move: one Sim::step is one engine frame.
         let sim_inputs = inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
-        self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        self.sim
+            .step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        // Line 10 continued (fight): scripted attacks advance and move their
+        // Arisen; line 15: the enemies think, act and move; step 38: the
+        // push-out between characters; pass C (step 42): poses and the hit
+        // volumes for the next frame.
+        if let Some(f) = self.fight.as_mut() {
+            f.players_moved(&mut self.sim, self.ground.as_ref(), step);
+            f.enemies(&self.sim, self.ground.as_ref(), step);
+            f.push_out(&mut self.sim);
+            f.volumes(&self.sim);
+        }
         // Same line, phase 90 of each character: at most one level-up
         // (0x00B5BD20) and one rank-up (0x00B5C230) per frame. The original
         // keeps the vocation in sGameSys, so it is mirrored into the story
@@ -257,7 +290,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact })
+        Ok(FrameReport {
+            frame: self.frame,
+            requests,
+            interact,
+        })
     }
 
     /// A hash of the whole simulated state, for replays.
@@ -272,7 +309,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Equal hashes after the same inputs are the replay property.
     pub fn state_hash(&self) -> u64 {
         let mut h = StateHasher::default();
-        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press);
+        h.u64(self.saved_hash())
+            .debug(&self.locks)
+            .debug(&self.scenario_press);
         for p in &self.sim.players {
             h.debug(p);
         }
@@ -283,6 +322,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
+        if let Some(f) = &self.fight {
+            h.debug(&f.digest());
+        }
         h.u64(self.request_log.finish());
         h.finish()
     }
@@ -299,7 +341,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Equal before a save and after its load.
     pub fn saved_hash(&self) -> u64 {
         let mut h = StateHasher::default();
-        h.u64(self.frame).debug(&self.roster).debug(&self.party).debug(&self.hired_by);
+        h.u64(self.frame)
+            .debug(&self.roster)
+            .debug(&self.party)
+            .debug(&self.hired_by);
         for p in &self.sim.players {
             h.debug(&(p.id, p.position, p.yaw));
         }
@@ -307,7 +352,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             h.bytes(&s.world.save());
         }
         h.debug(&self.economy).debug(&self.progression);
-        h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
+        h.debug(&self.rift.party)
+            .debug(&self.rift.log)
+            .debug(&self.rift.cost_multiplier);
         h.finish()
     }
 
@@ -346,11 +393,18 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         for seat in self.roster.seats() {
             if let Some(p) = self.sim.player(seat.id) {
-                f.put(save::TAG_PLACE, Owner::Profile(seat.profile), save::place_bytes(p.position, p.yaw));
+                f.put(
+                    save::TAG_PLACE,
+                    Owner::Profile(seat.profile),
+                    save::place_bytes(p.position, p.yaw),
+                );
             }
         }
         let profile = |p: PlayerId| self.roster.seat(p).map(|s| s.profile);
-        for (tag, parts) in [(save::TAG_ECON, self.economy.save()), (save::TAG_PROG, self.progression.save())] {
+        for (tag, parts) in [
+            (save::TAG_ECON, self.economy.save()),
+            (save::TAG_PROG, self.progression.save()),
+        ] {
             f.put(tag, Owner::Shared, parts.shared);
             for (seat, bytes) in parts.players {
                 if let Some(pr) = profile(seat) {
@@ -398,7 +452,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.boot = true;
         }
         for seat in self.roster.seats() {
-            if let Some((pos, yaw)) = f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).and_then(save::place_from) {
+            if let Some((pos, yaw)) = f
+                .get(save::TAG_PLACE, Owner::Profile(seat.profile))
+                .and_then(save::place_from)
+            {
                 if let Some(p) = self.sim.player_mut(seat.id) {
                     p.position = pos;
                     p.yaw = yaw;
