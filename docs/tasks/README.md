@@ -111,3 +111,4 @@ Codex lane: see `docs/CODEX.md`.
 | [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | assigned |
 | [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
 | [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | assigned |
+| [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | assigned |
