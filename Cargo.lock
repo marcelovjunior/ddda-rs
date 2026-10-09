@@ -2358,6 +2358,7 @@ dependencies = [
  "ddexe",
  "ddid",
  "dditem",
+ "ddnpcrt",
  "ddpawn",
  "ddprogress",
  "ddquest",
@@ -2438,8 +2439,7 @@ dependencies = [
 name = "ddnpcrt"
 version = "0.1.0"
 dependencies = [
- "ddeconomy",
- "dditem",
+ "ddai",
  "ddnpc",
  "ddstory",
  "ddvfs",

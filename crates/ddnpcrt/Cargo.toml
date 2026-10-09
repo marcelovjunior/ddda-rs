@@ -1,20 +1,19 @@
 [package]
 name = "ddnpcrt"
 version = "0.1.0"
-description = "Headless NPC runtime: daily schedules, talking and the co-op interaction lock (host-owned)"
+description = "Headless NPC runtime: daily schedules, talking and the co-op interaction rule (host-owned)"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddai = { path = "../ddai" }
 ddnpc = { path = "../ddnpc" }
 ddstory = { path = "../ddstory" }
-ddeconomy = { path = "../ddeconomy" }
-dditem = { path = "../dditem" }
-mtfsm = { path = "../mtfsm" }
-mtgmd = { path = "../mtgmd" }
-mtxfs = { path = "../mtxfs" }
-
-[dev-dependencies]
 ddvfs = { path = "../ddvfs" }
 mtarc = { path = "../mtarc" }
+mtfsm = { path = "../mtfsm" }
+mtgmd = { path = "../mtgmd" }
+
+[dev-dependencies]
+mtxfs = { path = "../mtxfs" }

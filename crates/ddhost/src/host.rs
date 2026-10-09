@@ -46,6 +46,10 @@ pub enum HostError {
     /// Another Arisen holds the NPC (the interaction lock).
     Lock(LockError),
     Economy(ddeconomy::Error),
+    /// A talk could not start or continue (ddnpcrt).
+    Talk(ddnpcrt::TalkError),
+    /// An NPC graph failed (ddnpcrt / ddai).
+    Npc(String),
     Rift(String),
     /// A system's game data was not given to the host.
     NoData(&'static str),
@@ -61,6 +65,8 @@ impl std::fmt::Display for HostError {
             HostError::Save(e) => write!(f, "save: {e}"),
             HostError::Lock(e) => write!(f, "interaction lock: {e:?}"),
             HostError::Economy(e) => write!(f, "economy: {e:?}"),
+            HostError::Talk(e) => write!(f, "talk: {e:?}"),
+            HostError::Npc(e) => write!(f, "npc: {e}"),
             HostError::Rift(e) => write!(f, "rift: {e}"),
             HostError::NoData(what) => write!(f, "no {what} data"),
             HostError::Busy => write!(f, "an interaction is open"),
@@ -85,6 +91,8 @@ pub struct FrameReport {
     pub requests: Vec<Request>,
     /// The Arisen whose interact press reached the story this frame.
     pub interact: Option<PlayerId>,
+    /// The NPCs' requests to the actor layer (ddnpcrt schedules).
+    pub npc_requests: Vec<ddnpcrt::schedule::Request>,
 }
 
 pub struct Host<D: Data, W: StoryWorld> {
@@ -104,6 +112,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub locks: InteractionLocks,
     /// Wallets, bags, shops (ddeconomy).
     pub economy: ddeconomy::Economy,
+    /// NPC schedules and talks (ddnpcrt).
+    pub npcs: ddnpcrt::NpcRuntime,
     /// Levels, skills, vocations (ddprogress).
     pub progression: ddprogress::Progression,
     /// The Rift: party pawns, pawn log, the room (ddrift).
@@ -140,6 +150,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             ground,
             locks: InteractionLocks::default(),
             economy: ddeconomy::Economy::default(),
+            npcs: ddnpcrt::NpcRuntime::default(),
             progression: ddprogress::Progression::new(),
             rift: ddrift::Rift::new(1, ddrift::PawnLog::default()),
             data: SystemData::default(),
@@ -169,6 +180,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if self.roster.leave(id).is_some() {
             self.sim.players.retain(|p| p.id != id);
             self.locks.release_all(id);
+            self.npcs.talk_abort(id);
             self.economy.close_all(id);
             self.rift_leave(id);
             self.rift.party.reserved = [false, self.roster.len() >= 2];
@@ -275,6 +287,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.progression.sync_to_world(&mut story.world);
             }
         }
+        // Pass A line 15, the NPCs: daily schedules and their actions
+        // (ddnpcrt on the ddai core).
+        let npc_requests = self.step_npcs()?;
         // One prompt slot: the lowest seat that pressed takes it.
         self.scenario_press = presses.first().copied();
         // Pass A line 15 (enemies, NPCs), steps 37-42 (push-out, AI senses,
@@ -285,7 +300,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact })
+        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests })
     }
 
     /// A hash of the whole simulated state, for replays.
