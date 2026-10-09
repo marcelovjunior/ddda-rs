@@ -50,6 +50,10 @@ Claim exact paths before editing. Coordinate shared `ddenemyrt` fight/lib,
 Viewer hookup needs head's agreement; head owns streaming. Do not edit
 MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 
+Root board #2175 additionally coordinates exact files
+`crates/ddcombat/src/damage.rs` and `crates/ddenemyrt/src/combat.rs` for the
+backward-compatible valued-hit API and mirrored linked-hit helper.
+
 ## Work and acceptance
 
 1. Survey the actual prologue placement, body/child resources, life regions,
@@ -74,7 +78,7 @@ MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 ## Results
 
 Source checkpoint: isolated body/child death and parent-reaction selectors
-are implemented with source addresses. Seven targeted regressions pass.
+are implemented with source addresses. Twelve targeted regressions pass.
 `docs/CHIMERA.md` records ownership, common priority masks, child-01 guards,
 the persistent writer chain, action registration, and damage-routing leads.
 An installed catalogue reader resolves 317 action records and 147 resource
@@ -82,6 +86,12 @@ requests; the installed regression locates combat resources and parses the
 three region files (5/4/2 sets). Runtime hit-region maps preserve pool IDs.
 Source-traced CRT flag fixups retain 41/28/27 bound resources; on-disk
 zero flag words are not mistaken for effective runtime flags.
+The ordinary hit resolver now optionally retains valued damage for a separate
+linked-collision helper; five synthetic regressions check no second mitigation,
+main-only HP, mapping/attribute/no-death guards, status/break behavior and
+per-attacker metadata. No link walking or host fight integration yet.
+Validation: `cargo test -p ddcombat -p ddenemyrt` passes 72 tests with one
+existing ignored diagnostic (33 combat and 39 enemy-runtime tests).
 The normal body action 0x3a is a falling action before death action 0x57;
 the 180-unit death cleanup timer is not the persistent-kill producer.
 

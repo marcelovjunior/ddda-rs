@@ -293,3 +293,239 @@ fn parent_reactions_preserve_child_and_pose() {
         }
     }
 }
+
+mod linked_hits {
+    use ddcombat::cstatus::StatusTable;
+    use ddcombat::damage::*;
+    use ddenemyrt::combat::{apply_linked_enemy_hit, Attacker, Fighter, HitEvent, Victim};
+
+    // Synthetic fixtures deliberately differ from installed creature values.
+    fn pools() -> Vec<RegionPool> {
+        (0..2)
+            .map(|id| {
+                RegionPool::from_element(
+                    id,
+                    100.0,
+                    30.0,
+                    0.0,
+                    40.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    attr::LINK_HP,
+                    1,
+                    75.0,
+                    30.0,
+                )
+            })
+            .collect()
+    }
+
+    fn hit() -> MergedHit {
+        MergedHit {
+            row: AttackRow {
+                sword_rate: 100.0,
+                shrink_type: 1,
+                blow_type: 0,
+                ..Default::default()
+            },
+            phys: 60.0,
+            mag: 0.0,
+            element_buildup: [0.0; 6],
+            element: 0,
+            shrink: 10.0,
+            blow: 10.0,
+            stamina: 0.0,
+            status: [0.0; 15],
+            hits: 1,
+            has_phys: true,
+            has_mag: false,
+        }
+    }
+
+    fn victim() -> Fighter {
+        Fighter {
+            owner: 103,
+            attacker: Attacker::Enemy(EnemyAttacker::new(1.0, 1.0)),
+            victim: Victim::Enemy {
+                defender: EnemyDefender::new(10000.0, 10000.0),
+                regions: pools(),
+                rates: CollisionRates {
+                    damage: 0.0,
+                    ..Default::default()
+                },
+            },
+            attacks: vec![],
+            hurts: vec![],
+            history: Default::default(),
+            statuses: Default::default(),
+            dots: Default::default(),
+            pools: Default::default(),
+        }
+    }
+
+    fn source(owner: u32) -> HitEvent {
+        HitEvent {
+            attacker: owner,
+            victim: 104,
+            region: 4,
+            hits: 2,
+            total: 17.0,
+            reaction: Reaction::default(),
+            killed: false,
+        }
+    }
+
+    fn regions(v: &Fighter) -> &[RegionPool] {
+        let Victim::Enemy { regions, .. } = &v.victim else {
+            unreachable!()
+        };
+        regions
+    }
+
+    fn regions_mut(v: &mut Fighter) -> &mut Vec<RegionPool> {
+        let Victim::Enemy { regions, .. } = &mut v.victim else {
+            unreachable!()
+        };
+        regions
+    }
+
+    #[test]
+    fn valued_wrapper_preserves_nonlinked_damage_and_exposes_scaled_hit() {
+        let mut game = Adjust(vec![1.0; 0x40]);
+        game.0[0x22] = 0.5;
+        game.0[0x25] = 0.5;
+        let def = EnemyDefender::new(20.0, 0.0);
+        let mut old = pools();
+        let mut new = old.clone();
+        let rates = CollisionRates::default();
+        let expected = resolve_enemy_hit(hit(), &def, &mut old, 1, &rates, &game, 1.0);
+        let (actual, valued) = resolve_enemy_hit_valued(hit(), &def, &mut new, 1, &rates, &game, 1.0);
+        assert_eq!(actual, expected);
+        assert_eq!(old, new);
+        assert_eq!(valued.total, actual.total);
+        assert!(valued.hit.phys < hit().phys);
+        assert_eq!(valued.total, valued.hit.phys + valued.hit.mag);
+    }
+
+    #[test]
+    fn linked_hit_skips_second_mitigation_and_keeps_owner_metadata() {
+        for owner in [0, 1, 37] {
+            let mut v = victim();
+            let untouched = regions(&v)[1].clone();
+            // Total intentionally differs from phys+mag: the carried total
+            // is authoritative, as with an original HitInfo+0x7c override.
+            let valued = ValuedEnemyHit {
+                hit: hit(),
+                total: 17.0,
+            };
+            let out = apply_linked_enemy_hit(
+                &mut v,
+                &source(owner),
+                &valued,
+                Some(1),
+                [1.0; 2],
+                &StatusTable::default(),
+                &mut || 0.0,
+            )
+            .unwrap();
+            assert_eq!(
+                (out.attacker, out.victim, out.region, out.hits),
+                (owner, 103, 4, 2)
+            );
+            assert_eq!(out.total, 17.0);
+            assert!(!out.killed);
+            assert_eq!(regions(&v)[0].hp, 83.0);
+            assert_eq!(regions(&v)[0].dp, 20.0);
+            assert_eq!(regions(&v)[0].bp, 30.0);
+            assert_eq!(regions(&v)[1], untouched);
+        }
+    }
+
+    #[test]
+    fn linked_hp_requires_mapping_and_attribute_but_break_and_status_do_not() {
+        for mapping in [None, Some(99), Some(1)] {
+            let mut v = victim();
+            regions_mut(&mut v)[1].attr = 0;
+            let mut valued = ValuedEnemyHit {
+                hit: hit(),
+                total: 500.0,
+            };
+            valued.hit.status[0] = 5.0;
+            let out = apply_linked_enemy_hit(
+                &mut v,
+                &source(1),
+                &valued,
+                mapping,
+                [2.0, 3.0],
+                &StatusTable::default(),
+                &mut || 0.0,
+            )
+            .unwrap();
+            assert_eq!(out.total, 0.0);
+            assert!(!out.killed);
+            assert_eq!(regions(&v)[0].hp, 100.0);
+            assert_eq!(regions(&v)[0].dp, 20.0);
+            assert_eq!(regions(&v)[0].status.acc[0], 10.0);
+        }
+    }
+
+    #[test]
+    fn linked_main_hp_no_death_and_break_flags_are_preserved() {
+        for no_death in [false, true] {
+            let mut v = victim();
+            let Victim::Enemy { rates, .. } = &mut v.victim else {
+                unreachable!()
+            };
+            rates.flags = 0x18;
+            let mut valued = ValuedEnemyHit {
+                hit: hit(),
+                total: 500.0,
+            };
+            valued.hit.row.is_no_death = no_death;
+            let out = apply_linked_enemy_hit(
+                &mut v,
+                &source(0),
+                &valued,
+                Some(0),
+                [1.0; 2],
+                &StatusTable::default(),
+                &mut || 0.0,
+            )
+            .unwrap();
+            assert_eq!(regions(&v)[0].hp, if no_death { 1.0 } else { 0.0 });
+            assert_eq!(out.killed, !no_death);
+            assert_eq!((regions(&v)[0].dp, regions(&v)[0].bp), (30.0, 40.0));
+            assert_eq!(regions(&v)[1].hp, 100.0);
+        }
+    }
+
+    #[test]
+    fn linked_status_uses_carried_magick_and_frozen_cancels_break() {
+        let mut v = victim();
+        let mut valued = ValuedEnemyHit {
+            hit: hit(),
+            total: 1.0,
+        };
+        valued.hit.mag = 1.0;
+        valued.hit.status[0] = 5.0;
+        valued.hit.shrink = 100.0;
+        valued.hit.blow = 100.0;
+        valued.hit.element = 2;
+        valued.hit.element_buildup[2] = 5.0;
+        regions_mut(&mut v)[0].status.threshold[11] = 10.0;
+        let out = apply_linked_enemy_hit(
+            &mut v,
+            &source(0),
+            &valued,
+            Some(1),
+            [2.0, 3.0],
+            &StatusTable::default(),
+            &mut || 0.0,
+        )
+        .unwrap();
+        assert_eq!(regions(&v)[0].status.acc[0], 15.0);
+        assert_eq!(out.reaction, Reaction::default());
+        assert_eq!((regions(&v)[0].dp, regions(&v)[0].bp), (30.0, 40.0));
+    }
+}

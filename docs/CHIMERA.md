@@ -116,6 +116,26 @@ again and mitigate twice. Child 01's initialization does not install this
 link; its lifecycle and any later link writer still need tracing. Existing
 within-actor region propagation is not this cross-actor relay.
 
+The mirrored branch is now implemented as a separate combat helper, fed a
+`ValuedEnemyHit` retained by `resolve_enemy_hit_valued`. The legacy
+`resolve_enemy_hit` API delegates to that function and retains its old
+return type. The helper receives a host-resolved optional destination pool,
+the existing source event, and the destination status rates. It applies
+break and status to the main pool even when the mapped pool is absent,
+resolves frozen cancellation, then conditionally applies the carried total
+to main HP. It never mutates the mapped non-main pool or calls mitigation.
+It does not collect contacts, assign links, walk chains, or emit story facts.
+These remain host integration work.
+
+`cEm5200_01ActDie` entry `0x009c0d40`, variant 10, has a separate prologue
+side effect: at `0x009c0ead..0x009c0ef0` it tests its parent's packed
+placement for stage 380/group 10/index 0, then passes GSF **705** (`0x2c1`)
+to `0x00401280`. This is child death, not the body's persistent-kill bit.
+The same variant calls `0x009b9af0` to create a detached child-01 unit in
+mode 1 and copies its impact pose. Neither fact authorizes treating that
+remnant as a new layout enemy. The flag side effect is traced only, not yet
+emitted by the host.
+
 Child think roots depend on the parent's +0x5c14 and +0x5c18 == 2:
 child 00 uses 0x016fe6e8 or 0x016ff368; child 01 uses 0x016f8ee8 or
 0x016f9a28. Body array 0x016cd234 and fallback 0x0170f060 are selected
@@ -128,11 +148,16 @@ parent reactions, preserving the masks and early-return behavior. Five
 regressions pass: all arbitration bits in both masks, missing damage and
 dead-state rejection, body motion overrides, child-01 guards, and the two
 parent reaction families (including zero/negative/missing impact side).
-Seven regressions pass in total. The installed catalogue regression resolves every action DTI,
+The installed catalogue regression resolves every action DTI,
 checks the sourced death/fall variants, locates all referenced model,
 motion and object-collision resources, and parses all requested region files.
 It also verifies all mapped pool IDs, shuffled pool order and missing-region
 rejection. A CRT regression pins binding exceptions and upper-bit preservation.
+Five linked-hit regressions cover the unchanged ordinary resolver, distinct
+carried total, no repeated mitigation, untouched mapped pool, missing mapping,
+attribute-8 gate, no-death floor, break guards, physical/magick status rates,
+frozen cancellation and attacker identities 0, 1 and 37. These are synthetic
+contract checks; they do not constitute a two-player chimera fight.
 The integration test includes the module by path pending the shared
 `lib.rs` owner's export. No game observation was performed.
 

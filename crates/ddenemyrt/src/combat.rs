@@ -97,6 +97,62 @@ pub struct HitEvent {
     pub killed: bool,
 }
 
+/// Apply a hit already valued on another enemy collision to this linked
+/// collision. The host resolves the destination's optional region remap
+/// (+0xd34/+0xd38) and region-ID map (+0xcf4) before passing `mapped_pool`.
+/// The main pool remains index zero, as in the ordinary enemy hit pass.
+/// Missing mapped pools suppress HP only; main break/status still run.
+///
+/// `source` retains attacker, original hurt region and merged hit count.
+/// The result names the linked victim and its main-pool reaction/death.
+/// `status_rates` are this collision's +0xd28/+0xd2c, not damage multipliers.
+/// This does not collect contacts, alter history, or walk further links.
+// Translated from 0x0076b7e0 and the mirrored branch of 0x0076db10
+// (DDDA.exe 2017-12-13 Steam), using the shared HP/break/status helpers.
+pub fn apply_linked_enemy_hit(
+    victim: &mut Fighter,
+    source: &HitEvent,
+    valued: &ddcombat::damage::ValuedEnemyHit,
+    mapped_pool: Option<usize>,
+    status_rates: [f32; 2],
+    status_table: &StatusTable,
+    roll: &mut dyn FnMut() -> f32,
+) -> Option<HitEvent> {
+    use ddcombat::damage::{apply_break, apply_hp, attr, resolve_reaction};
+    let Victim::Enemy { regions, rates, .. } = &mut victim.victim else {
+        return None;
+    };
+    let links_hp = mapped_pool.and_then(|i| regions.get(i))
+        .is_some_and(|r| r.attr & attr::LINK_HP != 0);
+    let main = regions.first_mut()?;
+    let was_alive = main.hp > 0.0;
+    let h = &valued.hit;
+    apply_break(main, h, rates);
+    let status_hit = StatusHit {
+        element: h.element,
+        element_buildup: h.element_buildup,
+        status: h.status,
+        mag: h.mag,
+    };
+    build_up(&mut main.status, &status_hit, &main.resist.element,
+        status_rates[0], status_rates[1], &mut *roll);
+    let (slots, frozen) = fire(&mut main.status);
+    add_fired(&mut victim.statuses, &slots, status_table);
+    let reaction = resolve_reaction(main, frozen);
+    if links_hp {
+        apply_hp(main, valued.total, rates, h.row.is_no_death);
+    }
+    Some(HitEvent {
+        attacker: source.attacker,
+        victim: victim.owner,
+        region: source.region,
+        hits: source.hits,
+        total: if links_hp { valued.total } else { 0.0 },
+        reaction,
+        killed: was_alive && main.hp <= 0.0,
+    })
+}
+
 /// The tuning tables the pass reads.
 #[derive(Debug, Clone, Default)]
 pub struct Tables {
