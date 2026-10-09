@@ -301,6 +301,63 @@ pub fn hls_to_rgb(c: [f32; 4]) -> [f32; 4] {
     [channel(h + 2.0), channel(h), channel(h - 2.0), a]
 }
 
+/// The sun colour at `height_cm` above the sky's height offset: the
+/// transmittance times the sky's sun colour.
+// Translated from 0x00f32fd0 (DDDA.exe 2017-12-13 Steam)
+pub fn sun_at_height(sky: &Sky, inp: &SkyInputs, height_cm: f32, sun_dir: [f32; 3]) -> [f32; 3] {
+    let t = transmittance(sky, inp, inp.height_offset + height_cm, sun_dir);
+    std::array::from_fn(|i| t[i] * inp.sun_color[i])
+}
+
+/// The sky's ambient colour at `height_cm` above its height offset, times
+/// `scale`: the resource's +0x70 colour times (1 - sun height)^16 (1 below
+/// the horizon) plus the sun colour there times the Rayleigh and Mie
+/// scattering at that height (densities exp(-h / scale height)) x 4 pi.
+// Translated from 0x00f330a0 (DDDA.exe 2017-12-13 Steam)
+pub fn ambient_at_height(sky: &Sky, inp: &SkyInputs, height_cm: f32, scale: f32, sun_dir: [f32; 3]) -> [f32; 3] {
+    let (rayleigh, mie, _) = coefficients(sky, inp);
+    let a = &sky.scalars_a0_bc;
+    let h = (inp.height_offset + height_cm) * -1e-5;
+    let er = (h / a[4]).exp();
+    let em = (h / a[6]).exp();
+    let sun = sun_at_height(sky, inp, height_cm, sun_dir);
+    let night = if 0.0 <= sun_dir[1] { 1.0 - sun_dir[1] } else { 1.0 };
+    let base = f64::from(night).powf(16.0) as f32;
+    std::array::from_fn(|i| {
+        sky.vector_70[i] * base + sun[i] * (rayleigh[i] * er + mie[i] * em) * 4.0 * std::f32::consts::PI * scale
+    })
+}
+
+/// A cloud dome's (`uSkyCloudModel`) sun colour: the sun at
+/// `mSunColorHeight` times `mSunColorScale`, its HLS saturation times
+/// `mSaturationScale`, times `mIntensityScale`; and its ambient colour at
+/// `mAmbColorHeight` times `mAmbColorScale`.
+// Translated from 0x00c64620 (DDDA.exe 2017-12-13 Steam)
+pub fn cloud_light(
+    sky: &Sky,
+    inp: &SkyInputs,
+    sun_dir: [f32; 3],
+    unit: &CloudUnit,
+) -> ([f32; 3], [f32; 3]) {
+    let s = sun_at_height(sky, inp, unit.sun_height, sun_dir);
+    let mut hls = rgb_to_hls([s[0] * unit.sun_scale, s[1] * unit.sun_scale, s[2] * unit.sun_scale, 1.0]);
+    hls[2] *= unit.saturation;
+    let rgb = hls_to_rgb(hls);
+    let sun = [rgb[0] * unit.intensity, rgb[1] * unit.intensity, rgb[2] * unit.intensity];
+    (sun, ambient_at_height(sky, inp, unit.amb_height, unit.amb_scale, sun_dir))
+}
+
+/// The light properties of a `uSkyCloudModel`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CloudUnit {
+    pub sun_height: f32,
+    pub sun_scale: f32,
+    pub saturation: f32,
+    pub intensity: f32,
+    pub amb_height: f32,
+    pub amb_scale: f32,
+}
+
 /// The weather manager's day/night blend (`mDayNightBlendRate`): 0 by day
 /// (sun over 0.2 up), 1 by night (under -0.2), linear between.
 // Translated from 0x004c18c0 (DDDA.exe 2017-12-13 Steam)
@@ -490,6 +547,24 @@ mod tests {
         assert!(sun_light_color(&sky_f(), &inp, [-0.7438, -0.0762, -0.6641], 0.1, 3.6, 1.0)[0] < 1e-6);
         assert_eq!(night_blend([0.0, 0.5, 0.0]), 0.0);
         assert_eq!(night_blend([0.0, -0.5, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn cloud_light_rules() {
+        let inp = SkyInputs { sun_color: [23.04, 23.936, 25.6], mie_scattering: [7.554876; 3], height_offset: 30000.0, ..SkyInputs::default() };
+        let unit = CloudUnit { sun_height: 600_000.0, sun_scale: 0.1, saturation: 0.0, intensity: 1.0, amb_height: 600_000.0, amb_scale: 1.0 };
+        let (sun, amb) = cloud_light(&sky_f(), &inp, [0.0, 1.0, 0.0], &unit);
+        // Saturation 0: grey at the lightness of the scaled sun colour.
+        assert!((sun[0] - sun[1]).abs() < 1e-6 && (sun[1] - sun[2]).abs() < 1e-6 && sun[0] > 1.0);
+        // The resource's +0x70 colour is zero: the ambient is the in-scatter,
+        // proportional to the scale.
+        let unit2 = CloudUnit { amb_scale: 2.0, ..unit };
+        let (_, amb2) = cloud_light(&sky_f(), &inp, [0.0, 1.0, 0.0], &unit2);
+        for i in 0..3 {
+            assert!(amb[i] > 0.0 && (amb2[i] - 2.0 * amb[i]).abs() < 1e-6);
+        }
+        // Blue scatters most.
+        assert!(amb[2] > amb[0]);
     }
 
     #[test]

@@ -88,6 +88,20 @@ pub struct StageLighting {
     pub fog_end: f32,
     /// Game clock (ms into the day) of the capture, if it has one.
     pub clock_ms: Option<u32>,
+    /// The night spot light (`uSkySpotLight`), if lit.
+    pub spot: Option<SpotLight>,
+}
+
+/// A spot light in the stage frame (cm, the viewer's origin cell), with
+/// the deferred spot shader's attenuation parameters.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpotLight {
+    pub pos: Vec3,
+    pub dir: Vec3,
+    pub color: Vec3,
+    /// start, 1 / (end - start), cos outer, 1 / (cos inner - cos outer)
+    pub atten: Vec4,
+    pub falloff: f32,
 }
 
 /// Uniform of [`DdExt`]; layout mirrored in `dd_material.wgsl`.
@@ -104,6 +118,16 @@ pub struct DdParams {
     pub fog_range: Vec4,
     /// xyz: fReflectiveColor, w: Fresnel F0 (FReflect* materials).
     pub reflect: Vec4,
+    /// xyz: the environment cube's colour (`EnvCubeColors`), w: its index.
+    pub env: Vec4,
+    /// Spot light: position (viewer units, w falloff), direction, colour
+    /// (w 1 when lit), attenuation (see [`SpotLight`]).
+    pub spot_pos: Vec4,
+    pub spot_dir: Vec4,
+    pub spot_color: Vec4,
+    pub spot_atten: Vec4,
+    /// rgb: the constant light of `FLAG_CONST_LIGHT` materials.
+    pub const_light: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
@@ -112,6 +136,26 @@ const FLAG_REFLECT: u32 = 4;
 const FLAG_SPEC_MAP: u32 = 8;
 /// Drawn into the shadow map only (draw mode without the main pass).
 const FLAG_SHADOW_ONLY: u32 = 16;
+/// The environment reflection evaluates the stage sky ([`SkyEnv`]).
+const FLAG_SKY_ENV: u32 = 32;
+/// The environment reflection samples an environment cube (`env_cube`).
+const FLAG_ENV_CUBE: u32 = 64;
+/// No light buffer: unlit, the vertex colour is the light (`forward_unlit`).
+const FLAG_NO_LIGHT_BUFFER: u32 = 128;
+/// Alpha blended: keeps its alpha (others write the view depth there).
+const FLAG_BLENDED: u32 = 256;
+/// Lit by a constant colour (`const_light`) instead of the stage lights.
+const FLAG_CONST_LIGHT: u32 = 512;
+
+/// Marks the sky's cloud domes; they follow the camera horizontally.
+#[derive(Component)]
+pub struct SkyFollow;
+
+/// Colour of each of the five environment cubes `DDCube<i>_CM`, made from
+/// `DDBaseCube<i>_CM` by the weather manager's `mEnvMapBaseColor[i]` x
+/// lerp(1, `mEnvMapColor[i]`.rgb, .a) (see `sky::StageSky::env_colors`).
+#[derive(Resource, Clone, Debug)]
+pub struct EnvCubeColors(pub [Vec3; 5]);
 
 impl DdParams {
     fn with_lighting(mut self, l: &StageLighting) -> Self {
@@ -126,6 +170,12 @@ impl DdParams {
         let range = l.fog_end - l.fog_start;
         let inv = if range > 0.0 { 1.0 / range } else { 0.0 };
         self.fog_range = Vec4::new(l.fog_start, inv, 1.0 / UNIT, 0.0);
+        if let Some(s) = l.spot {
+            self.spot_pos = (s.pos * UNIT).extend(s.falloff);
+            self.spot_dir = s.dir.normalize_or_zero().extend(0.0);
+            self.spot_color = s.color.extend(1.0);
+            self.spot_atten = s.atten;
+        }
         self
     }
 }
@@ -147,6 +197,35 @@ pub struct DdExt {
     #[texture(103)]
     #[sampler(104)]
     pub spec: Option<Handle<Image>>,
+    /// The sky for the environment reflection (see [`SkyEnv`]).
+    #[uniform(105)]
+    #[reflect(ignore)]
+    pub sky: SkyEnvParams,
+    #[texture(106, sample_type = "float", filterable = false)]
+    pub sky_rayleigh: Handle<Image>,
+    #[texture(107, sample_type = "float", filterable = false)]
+    pub sky_mie: Handle<Image>,
+    /// `DDBaseCube<i>_CM` for an `FReflectCubeMap` on `DDCube<i>_CM`.
+    #[texture(108, dimension = "cube")]
+    #[sampler(109)]
+    pub env_cube: Option<Handle<Image>>,
+}
+
+/// `CBSky` and the camera for the sky evaluated in the stage materials;
+/// layout mirrored in `dd_material.wgsl`.
+#[derive(Clone, Copy, Debug, Default, ShaderType)]
+pub struct SkyEnvParams {
+    pub cb: [Vec4; 11],
+    pub eye: Vec4,
+}
+
+/// The stage's sky (inserted by the sky dome's spawn): the stage materials
+/// reflect it (`FReflectCubeMap`, the sky's reflection cube).
+#[derive(Resource, Clone, Default)]
+pub struct SkyEnv {
+    pub params: SkyEnvParams,
+    pub rayleigh: Handle<Image>,
+    pub mie: Handle<Image>,
 }
 
 impl MaterialExtension for DdExt {
@@ -180,6 +259,8 @@ fn resolve_dd_materials(
     pending: Query<(Entity, &PendingDd)>,
     mut assets: ResMut<Assets<DdMaterial>>,
     lighting: Res<StageLighting>,
+    sky: Option<Res<SkyEnv>>,
+    env_colors: Option<Res<EnvCubeColors>>,
 ) {
     for (e, p) in &pending {
         let h = p
@@ -188,6 +269,17 @@ fn resolve_dd_materials(
             .get_or_init(|| {
                 let mut m = p.0.material.clone();
                 m.extension.params = m.extension.params.with_lighting(&lighting);
+                if m.extension.params.flags & FLAG_ENV_CUBE != 0 {
+                    let i = (m.extension.params.env.w as usize).min(4);
+                    let c = env_colors.as_ref().map_or(Vec3::ONE, |e| e.0[i]);
+                    m.extension.params.env = c.extend(i as f32);
+                }
+                if let Some(sky) = &sky {
+                    m.extension.params.flags |= FLAG_SKY_ENV;
+                    m.extension.sky = sky.params;
+                    m.extension.sky_rayleigh = sky.rayleigh.clone();
+                    m.extension.sky_mie = sky.mie.clone();
+                }
                 assets.add(m)
             })
             .clone();
@@ -252,6 +344,22 @@ fn uv_slot(layout: &InputLayout, alias: &str) -> Option<usize> {
         .position(|e| e.offset == offset)
 }
 
+/// Materials drawn without the light buffer: every stage100 pixel shader
+/// with the sea's sampler set (albedo, normal, detail normal, specular,
+/// environment cube; e.g. file offset 0x4A0980 of sc\dx9\stage100) and
+/// every blended water shader (FTransparencyVolume, with tDepthMap) reads no
+/// tLightAccumulationTexture. Their colour is albedo x fAlbedoColor x
+/// fDiffuseColor x v1.rgb x v2.w plus the reflection x mean(v1.rgb) x v2.w;
+/// no vertex shader outside the grass reads fSHCoef or a light, so v1 and
+/// v2.w are *inferred* to be the layout's VertexColor and Occlusion
+/// (IANonSkinTBNC carries both): unlit, baked colours.
+fn forward_unlit(s: &Shading) -> bool {
+    (s.blends_alpha() && s.feature("FTransparency") == Some("FTransparencyVolume"))
+        || (s.feature("FBump") == Some("FBumpDetailNormalMap")
+            && s.feature("FReflect") == Some("FReflectCubeMap")
+            && !s.textures.keys().any(|k| k.starts_with("tDDMaterial")))
+}
+
 /// Vertex colour attribute. Billboard meshes carry their swing pivots
 /// (viewer units) with w = -1 for `dd_material.wgsl`. Other meshes carry
 /// the layout's `Occlusion` byte in RGB (the pixel shaders multiply all
@@ -278,14 +386,17 @@ fn vertex_colors(
             .collect()
     });
     let alpha = shading.is_some_and(Shading::uses_alpha) && v.colors.len() == n;
-    if occlusion.is_none() && !alpha {
+    // Unlit forward materials multiply by the vertex colour's RGB as well.
+    let rgb = shading.is_some_and(forward_unlit) && v.colors.len() == n;
+    if occlusion.is_none() && !alpha && !rgb {
         return None;
     }
     Some(
         (0..n)
             .map(|i| {
                 let o = occlusion.as_ref().map_or(1.0, |o| o[i]);
-                [o, o, o, if alpha { v.colors[i][3] } else { 1.0 }]
+                let c = if rgb { v.colors[i] } else { [1.0; 4] };
+                [c[0] * o, c[1] * o, c[2] * o, if alpha { v.colors[i][3] } else { 1.0 }]
             })
             .collect(),
     )
@@ -419,7 +530,8 @@ pub struct Loader<'a> {
 pub fn tex_to_image(bytes: &[u8]) -> Result<Image, String> {
     let t = mttex::parse(bytes).map_err(|e| e.to_string())?;
     let h = &t.header;
-    if h.shape != mttex::Shape::Flat {
+    let cube = h.shape == mttex::Shape::Cube;
+    if h.shape == mttex::Shape::Volume {
         return Err(format!("{:?} textures not supported in the viewer", h.shape));
     }
     let srgb = mttex::is_srgb(h.format_code);
@@ -446,13 +558,21 @@ pub fn tex_to_image(bytes: &[u8]) -> Result<Image, String> {
         Extent3d {
             width: h.width,
             height: h.height,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: if cube { 6 } else { 1 },
         },
         TextureDimension::D2,
         format,
         RenderAssetUsages::RENDER_WORLD,
     );
     img.texture_descriptor.mip_level_count = h.mip_count.max(1);
+    if cube {
+        // Faces in D3D order (+X, -X, +Y, -Y, +Z, -Z), each with its mips:
+        // wgpu's layer-major order.
+        img.texture_view_descriptor = Some(bevy::render::render_resource::TextureViewDescriptor {
+            dimension: Some(bevy::render::render_resource::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+    }
     img.data = Some(data);
     img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
@@ -585,6 +705,15 @@ impl Loader<'_> {
                 })
                 .clone();
             if shadow_only && matches!(material, PartMaterial::Standard(_)) {
+                continue;
+            }
+            // Albedo maps under effect\rtt\ are render targets of the effect
+            // system (e.g. the coast's animated foam, e_st100_10_BM), not
+            // in the data: without them the mesh would draw white, so it is
+            // left out (*not done*: the foam effect).
+            if shading.as_ref().and_then(|s| s.textures.get("tAlbedoMap")).is_some_and(|t| {
+                t.starts_with("effect\\rtt\\") && self.vfs.read(t, RTEXTURE).is_err()
+            }) {
                 continue;
             }
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
@@ -720,6 +849,13 @@ impl Loader<'_> {
         }
         let mut map = None;
         let mut spec = None;
+        let mut env_cube = None;
+        if forward_unlit(s) {
+            params.flags |= FLAG_NO_LIGHT_BUFFER;
+        }
+        if sm.alpha_mode == AlphaMode::Blend {
+            params.flags |= FLAG_BLENDED;
+        }
         if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {
             // Reflection of the sky render (DDCube0_CM) or of the planar
             // water reflection; both are run-time render targets, see the
@@ -727,6 +863,23 @@ impl Loader<'_> {
             params.flags |= FLAG_REFLECT;
             let f0 = if s.feature("FFresnel") == Some("FFresnelSchlick") { s.fresnel } else { 1.0 };
             params.reflect = Vec3::from(s.reflective_color).extend(f0);
+            // The sky's environment cubes are run-time copies of the static
+            // DDBaseCube<i>_CM tinted by the weather manager (pixel shader at
+            // file offset 0x912060 of sc\dx9\root, sEnvMapManager's
+            // SystemEnvCube pass 0x00434be0).
+            let cube = s
+                .textures
+                .get("tEnvMap")
+                .and_then(|t| t.strip_prefix("scr\\sky\\DDCube"))
+                .and_then(|t| t.strip_suffix("_CM"))
+                .and_then(|i| i.parse::<u32>().ok());
+            if let Some(i) = cube {
+                env_cube = self.texture(&format!("scr\\sky\\DDBaseCube{i}_CM"), images);
+                if env_cube.is_some() {
+                    params.flags |= FLAG_ENV_CUBE;
+                    params.env = Vec4::new(1.0, 1.0, 1.0, i as f32);
+                }
+            }
             if s.feature("FSpecular") == Some("FSpecularMap") {
                 if let Some(p) = s.textures.get("tSpecularMap") {
                     spec = self.texture(p, images);
@@ -746,10 +899,56 @@ impl Loader<'_> {
         PartMaterial::Dd(Arc::new(DdSlot {
             material: DdMaterial {
                 base: sm,
-                extension: DdExt { params, map, spec },
+                extension: DdExt {
+                    params,
+                    map,
+                    spec,
+                    sky: SkyEnvParams::default(),
+                    sky_rayleigh: Handle::default(),
+                    sky_mie: Handle::default(),
+                    env_cube,
+                },
             },
             handle: OnceLock::new(),
         }))
+    }
+
+    /// A sky cloud dome (`uSkyCloudModel`): the model at `pos` (viewer
+    /// units), lit by the constant `light` (the unit's sun plus ambient
+    /// colour; *assumed*, its shader is not traced) with its alpha times
+    /// `alpha`, following the camera horizontally.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_sky_model(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        path: &str,
+        light: Vec3,
+        alpha: f32,
+        pos: Vec3,
+    ) -> bool {
+        let Some(parts) = self.model(path, meshes, materials, images) else { return false };
+        for p in &parts {
+            let PartMaterial::Dd(slot) = &p.material else { continue };
+            let mut m = slot.material.clone();
+            m.extension.params.flags |= FLAG_CONST_LIGHT;
+            m.extension.params.const_light = light.extend(0.0);
+            let a = m.base.base_color.alpha() * alpha;
+            m.base.base_color.set_alpha(a);
+            let slot = Arc::new(DdSlot { material: m, handle: OnceLock::new() });
+            commands.spawn((
+                Mesh3d(p.mesh.clone()),
+                Transform::from_translation(pos),
+                Name::new(path.to_string()),
+                PendingDd(slot),
+                SkyFollow,
+                bevy::light::NotShadowCaster,
+                bevy::light::NotShadowReceiver,
+            ));
+        }
+        true
     }
 
     fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {
