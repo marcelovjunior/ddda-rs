@@ -282,13 +282,18 @@ existing `ddenemyrt::Body::push_volumes` builds activated authored
 object-adjustment groups, but does not represent all these callback
 gates or runtime-created entries. It is therefore a partial foundation,
 not yet an exact collection-1 provider. **0x0076b2c0** clears collection1's
-count (direct call at **0x00baf5cc**, player virtual-slot8 path). The offset
+count (direct call at **0x00baf5cc**, `uNpc::vf08` path). The offset
 producer itself is called at **0x00886850**, near the end of
 `uObjModel::vf09` (**0x00886530**). These call targets were checked from
 instruction bytes because Ghidra's reference query mixed references to
 the reset and producer. A provider must preserve the selected posed
 entries at this phase rather than rebuilding an arbitrary set from a
-later motion frame; other classes' reset paths remain to be established.
+later motion frame. Normal `uObjModel::vf90` **0x00885e30** inlines that
+reset when actor +0x2398 bit4 is enabled: actor +0x1B98 is collection1's
+count. Phase93 **0x0076b470** activates mask0x18 and poses collection1's
+entries; pass-C **0x0076b300/0x0076b660** process masks0x180/0x7FFFFE6F
+before the camera producer. This identifies the object-adjustment phase
+as a separate snapshot from the later attack/hurt-volume collection.
 
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
