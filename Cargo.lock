@@ -2284,6 +2284,7 @@ dependencies = [
 name = "ddai"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddvfs",
  "mtarc",
  "mtfsm",
