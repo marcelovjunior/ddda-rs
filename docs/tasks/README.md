@@ -95,3 +95,8 @@ Codex lane: see `docs/CODEX.md`.
 | [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |
 | [lcm-camera](lcm-camera.md) | Cutscene camera-list reader | reader | codex-1 | merged 2026-10-09 |
 | [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | assigned |
+| [pawn-knowledge-map](pawn-knowledge-map.md) | Pawn knowledge: save bits to quest/enemy/area ids | reader | codex-1 | assigned |
+| [rift-list-projection](rift-list-projection.md) | Rift list filters and pagination per viewer | reader | codex-1 | assigned |
+| [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | assigned |
+| [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | assigned |
+| [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
