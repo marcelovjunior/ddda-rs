@@ -157,5 +157,20 @@ attribution of their hitches**. Ordinary interactive update policy is
 unchanged.
 
 Release build and targeted clippy passed (existing warnings only). The
-first bounded route run is in progress; its timing overlaps builds and
-is for functional validation only. No new performance acceptance claim.
+first bounded route run walked through the Cassardis gate and loaded
+stage100/start2 at (41337.184, 31001.443, 143614.31), cell (64,54).
+It then correctly stopped with the existing unimplemented stage100
+scenario detection rule. The core owner is implementing that prerequisite
+from cAreaHit::vf07 (0x00742810); no harness bypass is introduced. This run
+overlapped builds and is functional validation only, not acceptance timing.
+
+The run also exposed a harness-only blocking A* search: opening step
+336.6 ms, frame 342.7 ms, yielding a 196-waypoint collision-safe path.
+The demo planner now retains its frontier across frames and yields between
+node expansions after a 1 ms work budget (an individual expansion can
+exceed this budget). While planning it supplies neutral player input,
+never changes player placement. A regression compares one-expansion
+slices against the uninterrupted route around a wall; that and the two
+installed Cassardis door/village navigation tests pass in release mode.
+Live timing of the incremental planner and the completed field cell
+crossing remain pending the core fix. No new performance acceptance claim.
