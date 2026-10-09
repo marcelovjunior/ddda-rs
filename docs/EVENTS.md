@@ -6,8 +6,10 @@ Measured 2026-10-09 against the Steam install and the 2017-12-13 exe
 (`events`) and the quest-script orders that request events (`order`).
 **Tested:** every scheduler in the install parses (1,253 / 1,253); the
 event table reads from the installed, SteamStub-packed `DDDA.exe`.
-**Not implemented:** playback. **Not compared with the original** except
-where a section says "live".
+**Implemented (event-player):** timeline playback (`ddquest::sdl::Clock`,
+`Scheduler::eval`), a headless event player (`ddstory::event`) and a thin
+viewer (`ddview --event <row>`); see "Playback". **Not compared with the
+original** except where a section says "live".
 
 Story progress, quests and flags are in [QUESTS.md](QUESTS.md). The two
 docs share one worked example: the opening, from the prologue to the
@@ -216,6 +218,142 @@ When it ends: SceNo becomes 1200 (raise-only), the party is placed at
 start position 12 of stage 200, and q0001's played flag (FreeFlag 2)
 flips; the script waits for `IsFadeBlack` and then `!IsEvent`.
 
+## Playback (`ddstory::event`, `ddquest::sdl`)
+
+**Timeline clock** (`ddquest::sdl::Clock`, translated):
+
+- **Constructor 0x00dde6c0:** frame 0, previous frame -1, speed 1,
+  paused, looping, cut snapping on. The event setup 0x004362f0 turns
+  looping off for every event timeline and pauses them; the prepare state
+  unpauses them.
+- **Update (`uScheduler::vf08` 0x00de02a0):**
+  1. If the frame differs from the previous update's, the tracks are
+     evaluated at it (0x00ddfd50).
+  2. The previous frame becomes the current one.
+  3. Unless paused, the frame advances by speed x mDeltaTime.
+  4. At the frame count it wraps to 0 when looping, otherwise it stays at
+     the frame count.
+- **Playhead (0x00ddfd50):**
+  - integer-frame files floor both frames;
+  - the cut snap 0x00ddeb00 floors a frame whose next integer frame is a
+    cut key;
+  - the key index uses the frame rounded by the x87 `fistp`, *assumed* to
+    be in its default round-to-nearest-even mode.
+- **Key evaluation (0x00ddee70):**
+  - The key in force is the last key at or before the rounded frame, or
+    the **first key when the playhead is before it**.
+  - A trigger key (mode 2) applies only when prev <= key <= frame.
+  - Int keys:
+    - modes 0 and 2 set the value;
+    - modes 1 and 4 count (value - key + rounded frame);
+    - modes 3 and 5 interpolate linearly, truncated;
+    - other modes apply nothing.
+  - Float and vec4 keys:
+    - modes 1 and 4 count (value + frame - key);
+    - mode 3 is linear;
+    - mode 5 is Catmull-Rom (Hermite form, tangents (p[i+1] - p[i-1]) / 2
+      and (p[i+2] - p[i]) / 2, with indices clamped at both ends).
+  - Matrix keys are linear in mode 3 only.
+  - Every other kind sets its value.
+
+**Event player** (`ddstory::event::EventPlayer::open(data, row, config)`,
+then `step(delta)` once per frame):
+
+- **Timelines (0x004362f0):**
+  - the main timeline;
+  - `_light<N>`, chosen by `light_index`:
+    - light 1 on stages 320, 380, 400, 410, 436, 440, 450, 500, 502, 610
+      and 611;
+    - none on stage 800 or for rows past 0x61;
+    - otherwise by the hour: below 4 -> 4, below 7 -> 1, below 17 -> 2,
+      below 20 -> 3, otherwise 4;
+  - `_msg_` and `_sound_` with the letter `m` or `f` (sGameSys +0xa76dc
+    bit 0; strings 0x0155c6fc and 0x0155c700), for rows 0x14, 0x16, 0x1a,
+    0x1b, 0x2f and 0x34.
+- **End test (0x00435fb0):** once round(main frame) >= frame count - 1,
+  every timeline pauses and the event is over. The test runs before the
+  units update, so the last frame, 1701 for st200 ev10, is still shown.
+  That order of system and unit updates is *assumed*. Skip (0x00436070)
+  ends at once; its 10-frame fade is left to the host.
+- **Per-frame output (`EventFrame`):**
+  - **Camera** (`uOfsMotionCamera`):
+    - cut (`mCut`), local frame (`mFrame`) and the base `mtcamera` pose
+      from the camera list;
+    - the raw `mOffsetPos` and the actor-joint adjustments (target unit,
+      joint, weight, mask; 0x007ecc30 and 0x007ed220 average joint
+      displacements into eye and target offsets);
+    - not applied: those adjustments, sWorldOffset (0x007eb9b0) and
+      `mOffsetPos`.
+  - **Actors** (`uActorModelPl`): unit type and number, motion list,
+    motion number and frame, Draw, Move, offset.
+  - **Fade:** the image-plane filter's colour while it draws.
+  - **Subtitle:** label (`IndexName`) while `Visible`, the line from the
+    GMD, and speaker and listener.
+  - **Sound cues:** `uSoundStream` when `mStreamCallFlag` turns true, and
+    `uSoundSe` when `mSeCallFlag` turns true (with `mConditionalNo` when
+    `mConditionalFlag` is set). The edge rule is *guessed*: the sound
+    units were not traced. For variants, the host picks.
+- **Language:**
+  - The subtitle unit's `MessageResourcePath` setter (0x00726780)
+    rewrites every three-letter language token of the path to the game
+    language. The rewrite is `localize_path`, 0x00de13a0, with the table
+    0x016333e0: jpn, eng, fre, spa, ger, ita, kor, zht, chS, por, rus,
+    pol, dut, fin, swe, dan, nor, cze, hun, slo, oth.
+  - If the rewritten file is missing, the setter loads the path as
+    written.
+  - `Language 255` in the timeline is not read by this path.
+- **Return of control:** the host sends `HostEvent::EventFinished` when
+  `finished` is set. `Story` then runs the stage's end step (0x0050c7a0):
+  it raises SceNo and asks for `PlaceParty`. `route::run` and
+  `ScriptedHost::play_rows` play chosen rows this way inside the opening.
+
+**st200 ev10, headless** (`cargo test --release -p ddstory --test
+event`; dump with `cargo run --release -p ddstory --example event_dump --
+<nativePC> <DDDA.exe> 22 [language] [sex]`):
+
+- **Updates:** 1,702 updates, frames 0-1701, finished at 1701.
+- **Cuts:** at 0, 460, 670, 790, 910, 1030, 1150 and 1270. Each actor's
+  motion number follows the cut. The player is hidden in cuts 2-6.
+- **Subtitles:** labels 0 @30, 1 @151, 2 @326 (3 for the female
+  variant), 4 @480, 5 @610, 6 @700, 7 @729, 8 @825, 9 @931, 10 @1052,
+  11 @1186 and 12 @1271. Lines are hidden at 113, 406, 555, 662, 1000,
+  1126, 1256 and 1296.
+- **Fade:** black at 0, clear 60-1642, black again from 1643.
+- **Cues:** BGM and NPC voice streams at 0; the Arisen's voice at 514, in
+  two variants (`mConditionalNo` 2 and 3).
+- **Inside the opening:** row 22 plays for real. SceNo goes from 1100 to
+  1200 and `PlaceParty` start position 12 follows after the last frame.
+  The ladder and the boots are unchanged.
+
+**Viewer:**
+
+```text
+ddview <nativePC> --event 22 [--start-frame F --hold --shot out.png]
+```
+
+- **Shows:**
+  - the stage models (`scr\st200\model\st200_mdNN` at the stage origin,
+    and the `st200_00m00n_s00/s10` scenery at its stored positions;
+    *assumed* frame);
+  - the actors;
+  - the event camera and FOV (horizontal FOV converted);
+  - the fade and the subtitle text.
+- **Actors:** every actor is the base Arisen body as a stand-in, and the
+  NPC looks are not read. Each actor is placed by its motion's joint-255
+  root track, in stage centimetres (*assumed* from the data: the result
+  lines up with the event camera).
+- **Screenshots** (2026-10-09, not committed):
+  - frame 60 (cut 0): a figure by the wall of the room, line 0;
+  - 460 (cut 1): a close-up of the player's torso and hand. Cut 1 weights
+    the camera adjustment on the player's joint 173 at 1.0, which is not
+    applied here;
+  - 670 (cut 2): the two NPCs face to face, player hidden;
+  - 790 (cut 3): the two NPCs in close-up with line 7;
+  - 1270 (cut 7): both NPCs in front and the player behind them.
+- **Not checked against the original:** the poses. The stand-ins stand
+  where the player should lie in bed, probably because the event motions
+  do not suit the base skeleton or because IK is missing.
+
 ## Open questions
 
 - Header +0x08 constant and bits above 24 of +0x0c.
@@ -227,4 +365,12 @@ flips; the script waits for `IsFadeBlack` and then `!IsEvent`.
 - Event FSMs under `event\stSSS\evEE\FSM\` (cFSMEvent, cAIActionFSMDemo
   owners) and `event\stSSS\stage_FSM\stage_NNN[_nosave]` (started as
   cFSMEvent tasks by 0x005081a0): not decoded.
-- LCM camera reader (format notes exist in the Riftstone reference).
+- `uOfsMotionCamera`: what `mOffsetPos` feeds and the reference pose of
+  the joint adjustment (0x007ed1c0). The base pose is implemented and
+  the adjustment is not.
+- `uSoundSe` / `uSoundStream`: what starts a sound, and which
+  `mConditionalNo` plays.
+- Which sGameSys +0xa76dc bit 0 means female, and whether that bit is
+  the player record's sex.
+- The engine's frame-rate handling for events: do events run on
+  mDeltaTime at 30?
