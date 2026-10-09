@@ -33,9 +33,9 @@ pub fn update(
     standard: Query<&MeshMaterial3d<StandardMaterial>>,
     dd_assets: Res<Assets<DdMaterial>>,
     std_assets: Res<Assets<StandardMaterial>>,
-    mut count: Local<u32>,
+    (mut count, mut auto_done): (Local<u32>, Local<bool>),
     time: Res<Time<Real>>,
-    mut auto_done: Local<bool>,
+    play: Option<Res<crate::play::PlayState>>,
 ) {
     // DDVIEW_PROBE_AUTO=<seconds>: one cast by itself (unattended checks)
     let auto = !*auto_done
@@ -76,8 +76,27 @@ pub fn update(
         .with_filter(&not_character)
         .never_early_exit();
     let hits = ray_cast.cast_ray(ray, &settings);
+    // The same ray against the collision (stage frame, cm): a drawn
+    // surface without collision near it is one the camera can cut into;
+    // collision without a drawn surface is a missing model.
+    if let Some(st) = play.as_deref() {
+        use ddsim::Ground;
+        let from = ray.origin / UNIT + st.origin;
+        let to = from + *ray.direction * 20000.0;
+        match st.terrain.ray(from.to_array(), to.to_array()) {
+            Some(h) => info!(
+                "probe #{}: eye at {:?} cm (stage); collision hit at {:?} cm, {:.2} m away, normal {:?}",
+                *count + 1,
+                from,
+                h.point,
+                (Vec3::from(h.point) - from).length() * UNIT,
+                h.normal
+            ),
+            None => info!("probe #{}: eye at {:?} cm (stage); no collision within 200 m", *count + 1, from),
+        }
+    }
     let Some(first) = hits.first().map(|(_, h)| h.distance) else {
-        info!("probe #{}: nothing under the crosshair (was ddview started with --probe?)", *count);
+        info!("probe #{}: nothing drawn under the crosshair (was ddview started with --probe?)", *count);
         return;
     };
     info!("probe #{}: ray from {:?} along {:?}; surfaces within {REPORT_DEPTH} m of the first:", *count, ray.origin, *ray.direction);
@@ -101,8 +120,21 @@ pub fn update(
         };
         let lod = lods.get(*e).map_or("lod all".to_string(), |l| format!("lod mask {:#x} (mid {} low {})", l.mask, l.mid, l.low));
         let shown = if visibility.get(*e).is_ok_and(|v| v.get()) { "drawn" } else { "HIDDEN" };
+        // distance from the hit to the nearest collision triangle
+        let collision = play.as_deref().map_or(String::new(), |st| {
+            use ddsim::Ground;
+            let at = h.point / UNIT + st.origin;
+            let mut tris = Vec::new();
+            let r = Vec3::splat(300.0);
+            st.terrain.triangles_in((at - r).to_array(), (at + r).to_array(), &mut tris);
+            let near = tris
+                .iter()
+                .map(|(t, _)| Vec3::from(ddsim::sweep::closest_on_triangle(at.to_array(), t)).distance(at))
+                .fold(f32::INFINITY, f32::min);
+            if near.is_finite() { format!(", collision {near:.0} cm away") } else { ", NO collision within 3 m".to_string() }
+        });
         info!(
-            "  {:+.4} m  {shown} {name}  ({e:?}) {lod} at {:?} cm, normal {:?}, triangle {:?}; {material}",
+            "  {:+.4} m  {shown} {name}  ({e:?}) {lod} at {:?} cm{collision}, normal {:?}, triangle {:?}; {material}",
             h.distance - first,
             h.point / UNIT,
             h.normal,
