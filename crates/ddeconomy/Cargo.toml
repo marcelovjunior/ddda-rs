@@ -1,0 +1,16 @@
+[package]
+name = "ddeconomy"
+version = "0.1.0"
+description = "Headless economy runtime: wallets, bags, storage, shop sessions, restock and enhancement (host-owned, N players)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dditem = { path = "../dditem" }
+ddstory = { path = "../ddstory" }
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+mtxfs = { path = "../mtxfs" }

@@ -459,19 +459,15 @@ consumer is still **unknown**.
   buy-back list (`0x00461f30`) and **raises the shop's stock of that item
   by the count** (`0x00477a40`, `+count`, capped 999, only if the shop
   lists it). NPC 398 (Alon) buying item 205 also calls `0x00462270`.
-- **Live**: no buy or sell has been compared yet (queued at claude-4; the
-  party is not at a shop).
+- **Live**: no buy or sell has been compared yet (queued at claude-4, listed
+  under "Open live checks" in ORACLE.md; the party is not at a shop).
 - Inn answer `+0xf4`; the second inn path in handler 14.
 - `0x004621e0` (buy x 1.5) caller.
 
 ## 10. Proposed implementation briefs
 
-1. **economy-core** (headless crate, depends on `dditem`): per-player
-   wallets (gold, RC, clamps), shop session (open check, stock list, rate,
-   buy/sell with the traced formulas), `cSAVE_SHOP` stock with restock tick
-   on the day counter. N players: each player has a wallet and bags; stock
-   is world state owned by the host. Done when the dditem rules drive a
-   scripted buy/sell/restock test and match oracle readings for 3 shops.
+1. **economy-core**: done, `crates/ddeconomy` (section 11); the oracle
+   comparison is the queued live check.
 2. **enhance**: done (research and translations in `dditem::forge`);
    runtime use belongs to economy-core.
 3. **shop-live-check** (claude-4 oracle): one buy and one sell at any shop
@@ -481,3 +477,71 @@ consumer is still **unknown**.
    storage capacity, buy-to-storage routing.
 5. **curse-purify**: done (`dditem::forge::curse_roll`, `dditem::rng`); the
    runtime needs the per-item seed table in the save.
+
+## 11. Runtime: `crates/ddeconomy`
+
+Headless, host-owned, N players. It keeps the economy state and applies
+the `dditem` rules; story state comes from `ddstory::World` (SceNo, GSF,
+quest flags, NPC affinity, the day counter, the stage).
+
+### State and co-op decisions
+
+| State | Owner | Original |
+|---|---|---|
+| `Wallet` (gold, RC; add caps at 99,999,999, spend floors at 0) | per Arisen | `cPlayerInfo` +0x348 / +0x34c |
+| Bags (`Owner::Arisen(p)`, `Owner::Pawn(n)`) and storage (`Owner::Storage(p)`) | each Arisen has a bag and a storage; pawns have bags, the main pawn's is shared | `sItemManager.mItemBagTbl[5]` |
+| Shop stock (`StockBook`, 17 records x 250 slots), buy-back list, lineup gates | world (one per session) | `sNpcManager.mSaveShop`, `sItemManager` junk list, sGameSys bytes |
+| NPC locks | world | none (co-op rule: one player per NPC) |
+
+`Party` lists the members as the trading player sees them: their own
+Arisen first, then the others (main pawn, the other Arisen in a hired-pawn
+slot, hired pawns). Discounts count the present members' bags
+(`0x00460350` mode 0); judgment commands 16/31 also count the player's
+storage (mode 1); both also count the paired item `n + 229` for items 1-42
+(`0x004607a4`). The Suasion factor multiplies over the first four members.
+A player may deliver to, sell from and enhance in their own Arisen bag,
+their own storage and present pawns, never another Arisen's bag.
+
+### Sessions
+
+- `open_shop(player, npc)`: lock (refused with `NpcBusy` while another
+  player holds the NPC), Olra/stage-200 rule, shop open conditions, stock
+  record (`0x00477ad0`, including Iola's forced 99s). `open_upgrade(player,
+  npc, extended)` locks for the upgrade screens. `close` releases.
+- `offers`: buy-back entries first at base price on the Junk screen
+  (`0x006e1b40`), then the lineup (gates and conditions `0x00cdde40`; price
+  `0x006e14b0`; duplicate lines merge their stock); marks seen-bits.
+- `buy`: stock and money checks, total = `unit * count` (cart sum
+  `0x005ea940`), paid on confirmation (`uGUIShopCheckItem`, spend in buy
+  mode / add in sell mode, `0x006e3345`), items added with the bag rules
+  below, stock lowered, buy-back entry consumed.
+- `sell`: sellable copies (in-use copies excluded), unit price `0x006e17c0`
+  with the party factor, level percent and Rarities +20%; currency of the
+  shop (Rift Crystals at the Rim shop); unique items enter the buy-back
+  list (`0x0045f040`: a fixed list of ids, e.g. Wyrmking's Ring 0xe5, 0x5dd-
+  0x5ec; everything else sold is gone); the shop's stock of the item rises.
+  The Junk screen has no sell mode.
+- `enhance_offers` / `enhance`: offers `0x006f3350`, charge `0x006f3520`,
+  materials from the party bags (last first) then storage, one copy re-added
+  with the new level; consumed Wyrmking's Rings go to the buy-back list.
+- `update(day)`: one restock tick when `World::day` has advanced
+  (`0x00475ad0`).
+
+### Bag rules (traced, `0x0045e680`)
+
+- Only kinds 7-25 and 27 keep an enhancement level.
+- A matching stack (item and level) grows; a new slot holds at most 999
+  (the cap on a growing stack, in `0x00458600`, is **guessed** the same).
+- A full bag (256 slots) evicts one stack to storage first (`0x0045dcc0`):
+  the first stack not in use of category type 2, 0, 1, 5, 6, 7, 8, 9, 10,
+  11, 3, in that order. With storage full too, the Arisen's new item goes to
+  the main pawn when present, otherwise to storage; a full storage (7,000)
+  sends the item to the buy-back list (kept only if eligible).
+- Not modelled: per-instance item data (flag bits 29-31 items), items used on
+  pickup (gold and Rift Crystal pouches, `0x0045f250`), the "new arrival"
+  flag `+0x20e718`, the Alon / item 205 call `0x00462270`.
+
+Tests: `cargo test -p ddeconomy` (7 session tests on a synthetic catalog for
+one and two players: buy, sell, buy-back, Rarities, restock from the clock,
+locks, enhance, eviction; plus an install test on Caxton, an Iron Sword
+enhancement and Madeleine's 5-day restock).

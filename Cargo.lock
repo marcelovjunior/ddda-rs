@@ -2290,6 +2290,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddeconomy"
+version = "0.1.0"
+dependencies = [
+ "dditem",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddenemy"
 version = "0.1.0"
 dependencies = [

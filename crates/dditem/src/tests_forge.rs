@@ -158,3 +158,18 @@ fn rarities_and_augments() {
     assert_eq!(AUGMENT_NAME_INDEX[7], 255);
     assert_eq!(AUGMENT_GROUP[7], 13);
 }
+
+#[test]
+fn buyback_and_paired_items() {
+    use crate::rules::{buyback_eligible, paired_item};
+    assert!(buyback_eligible(0xe5));
+    assert!(buyback_eligible(0x5e0));
+    assert!(buyback_eligible(0x6bc));
+    assert!(!buyback_eligible(0x6bb));
+    assert!(!buyback_eligible(301));
+    assert!(!buyback_eligible(0x251));
+    assert_eq!(paired_item(1), Some(230));
+    assert_eq!(paired_item(42), Some(271));
+    assert_eq!(paired_item(43), None);
+    assert_eq!(paired_item(0), None);
+}
