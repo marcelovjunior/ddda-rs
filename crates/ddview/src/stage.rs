@@ -7,17 +7,32 @@
 //! cell (A0, B0). Game units are taken as centimetres and scaled by 0.01
 //! (*unresolved:* unit not yet confirmed). Axes are used as stored (Y up);
 //! the reference screenshots show no mirroring.
+//!
+//! Materials follow the original's shading rules as far as they are traced
+//! (`mtmrl::shading`, docs/SHADING.md): albedo and diffuse colour
+//! constants, UV offsets, cull mode from the rasterizer state, and the
+//! terrain layers. A cell's terrain is opaque base meshes plus overlay
+//! meshes on exactly the same triangles (checked on four cells: every
+//! overlay triangle coincides with a base triangle) drawn with
+//! `BSBlendAlpha` (SrcAlpha, InvSrcAlpha), depth test without write, and
+//! alpha = albedo alpha x vertex alpha [x transparency map] x
+//! `fTransparency`. *Difference:* the original blends in sRGB (its pixel
+//! shaders encode to sRGB before the blend), Bevy blends in linear.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, TextureDimension, TextureFormat};
+use bevy::shader::ShaderRef;
 
 use ddvfs::Vfs;
-use mtshader::ShaderPackage;
+use mtmrl::shading::{AlphaSource, Shading};
+use mtshader::{Cull, InputLayout, ShaderPackage};
 
 pub const RMODEL: u32 = 0x58A1_5856;
 pub const RMATERIAL: u32 = 0x2749_C8A8;
@@ -38,12 +53,84 @@ pub struct Stats {
     pub missing: Vec<String>,
 }
 
+/// Registers the material type for transparency-map layers and the
+/// system that hands those materials to their entities.
+pub struct ShadingPlugin;
+
+impl Plugin for ShadingPlugin {
+    fn build(&self, app: &mut App) {
+        bevy::asset::embedded_asset!(app, "transparency_map.wgsl");
+        app.add_plugins(MaterialPlugin::<LayerMaterial>::default())
+            .add_systems(Update, resolve_layer_materials);
+    }
+}
+
+/// `StandardMaterial` whose alpha is also multiplied by a transparency map
+/// (`FTransparencyMap`) sampled with the mesh's second UV set.
+pub type LayerMaterial = ExtendedMaterial<StandardMaterial, TransparencyMap>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub struct TransparencyMap {
+    /// Channel of the map that scales the alpha (0 = R).
+    #[uniform(100)]
+    pub channel: u32,
+    #[texture(101)]
+    #[sampler(102)]
+    pub map: Handle<Image>,
+}
+
+impl MaterialExtension for TransparencyMap {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://ddview/transparency_map.wgsl".into()
+    }
+}
+
+/// A layer material built once and shared by every entity that uses it.
+pub struct LayerSlot {
+    pub material: LayerMaterial,
+    pub handle: OnceLock<Handle<LayerMaterial>>,
+}
+
+/// Placed on entities whose material is a [`LayerMaterial`]; replaced by
+/// `MeshMaterial3d` in [`resolve_layer_materials`] (the loader only has
+/// the `StandardMaterial` asset store).
+#[derive(Component, Clone)]
+pub struct PendingLayer(pub Arc<LayerSlot>);
+
+fn resolve_layer_materials(
+    mut commands: Commands,
+    pending: Query<(Entity, &PendingLayer)>,
+    mut assets: ResMut<Assets<LayerMaterial>>,
+) {
+    for (e, p) in &pending {
+        let h = p.0.handle.get_or_init(|| assets.add(p.0.material.clone())).clone();
+        commands.entity(e).remove::<PendingLayer>().insert(MeshMaterial3d(h));
+    }
+}
+
+#[derive(Clone)]
+pub enum PartMaterial {
+    Standard(Handle<StandardMaterial>),
+    Layer(Arc<LayerSlot>),
+}
+
 /// One drawable piece of a converted model.
 #[derive(Clone)]
 pub struct Part {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: PartMaterial,
     pub triangles: usize,
+}
+
+/// Index into `Vertices::uvs` (the layout's `TexCoord` elements in order)
+/// of a UV alias such as `UV_Extend`: the `TexCoord` at the alias's offset.
+fn uv_slot(layout: &InputLayout, alias: &str) -> Option<usize> {
+    let offset = layout.elements.iter().find(|e| e.name == alias)?.offset;
+    layout
+        .elements
+        .iter()
+        .filter(|e| e.name == "TexCoord")
+        .position(|e| e.offset == offset)
 }
 
 pub struct Loader<'a> {
@@ -60,22 +147,28 @@ pub struct Loader<'a> {
     pub stats: Stats,
 }
 
-/// Builds a Bevy image from a TEX file: base colour, so sRGB (*assumed*:
-/// the exe's sRGB rule is not traced yet).
+/// Builds a Bevy image from a TEX file, sRGB for the formats the exe
+/// flags as colour (`mttex::is_srgb`), linear otherwise.
 pub fn tex_to_image(bytes: &[u8]) -> Result<Image, String> {
     let t = mttex::parse(bytes).map_err(|e| e.to_string())?;
     let h = &t.header;
     if h.shape != mttex::Shape::Flat {
         return Err(format!("{:?} textures not supported in the viewer", h.shape));
     }
-    let format = match h.format {
-        mttex::D3dFormat::Dxt1 => TextureFormat::Bc1RgbaUnormSrgb,
-        mttex::D3dFormat::Dxt3 => TextureFormat::Bc2RgbaUnormSrgb,
-        mttex::D3dFormat::Dxt5 => TextureFormat::Bc3RgbaUnormSrgb,
-        mttex::D3dFormat::A8R8G8B8 | mttex::D3dFormat::X8R8G8B8 => TextureFormat::Bgra8UnormSrgb,
-        f => return Err(format!("format {f:?} not supported in the viewer")),
+    let srgb = mttex::is_srgb(h.format_code);
+    let format = match (h.format, srgb) {
+        (mttex::D3dFormat::Dxt1, true) => TextureFormat::Bc1RgbaUnormSrgb,
+        (mttex::D3dFormat::Dxt1, false) => TextureFormat::Bc1RgbaUnorm,
+        (mttex::D3dFormat::Dxt3, true) => TextureFormat::Bc2RgbaUnormSrgb,
+        (mttex::D3dFormat::Dxt3, false) => TextureFormat::Bc2RgbaUnorm,
+        (mttex::D3dFormat::Dxt5, true) => TextureFormat::Bc3RgbaUnormSrgb,
+        (mttex::D3dFormat::Dxt5, false) => TextureFormat::Bc3RgbaUnorm,
+        (mttex::D3dFormat::A8R8G8B8 | mttex::D3dFormat::X8R8G8B8, true) => TextureFormat::Bgra8UnormSrgb,
+        (mttex::D3dFormat::A8R8G8B8 | mttex::D3dFormat::X8R8G8B8, false) => TextureFormat::Bgra8Unorm,
+        (f, _) => return Err(format!("format {f:?} not supported in the viewer")),
     };
-    if format != TextureFormat::Bgra8UnormSrgb && (h.width % 4 != 0 || h.height % 4 != 0) {
+    let uncompressed = matches!(format, TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm);
+    if !uncompressed && (h.width % 4 != 0 || h.height % 4 != 0) {
         return Err(format!(
             "{}x{} not a multiple of the block size",
             h.width, h.height
@@ -163,7 +256,7 @@ impl Loader<'_> {
         };
         let mrl_bytes = self.vfs.read(path, RMATERIAL).ok();
         let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
-        let mut mat_cache: HashMap<u16, Handle<StandardMaterial>> = HashMap::new();
+        let mut mat_cache: HashMap<u16, (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
         for m in &model.meshes {
             // LOD byte: bit 0 = highest detail (*assumed*), 255 = all.
@@ -178,6 +271,20 @@ impl Loader<'_> {
             if v.uvs[0].is_empty() || tris.is_empty() {
                 continue;
             }
+            let (material, shading) = mat_cache
+                .entry(m.material)
+                .or_insert_with(|| {
+                    let name = model
+                        .material_names
+                        .get(m.material as usize)
+                        .cloned()
+                        .unwrap_or_default();
+                    let shading = mrl
+                        .as_ref()
+                        .and_then(|l| l.by_name(&name).map(|mat| mtmrl::shading::describe(mat, l, mfx)));
+                    (self.material(shading.as_ref(), materials, images), shading)
+                })
+                .clone();
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
@@ -189,51 +296,27 @@ impl Loader<'_> {
             if !v.normals.is_empty() {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.normals.clone());
             }
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v.uvs[0].clone());
+            // UV set of the albedo map (FUVAlbedoMap) as UV 0; the
+            // transparency map's set (FUVTransparencyMap) as UV 1.
+            let slot = |alias: &str| uv_slot(layout, alias).filter(|&k| !v.uvs[k].is_empty());
+            let albedo = shading.as_ref().and_then(|s| slot(&s.albedo_uv)).unwrap_or(0);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v.uvs[albedo].clone());
+            if let Some(AlphaSource::Map { uv, .. }) = shading.as_ref().map(|s| &s.alpha) {
+                let k = slot(uv).unwrap_or(albedo);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, v.uvs[k].clone());
+            }
+            // Vertex alpha scales the alpha of materials that use it; the
+            // vertex colour's RGB is not used by `FDiffuse` (the default
+            // variant, all terrain), so it is left white here.
+            if shading.as_ref().is_some_and(Shading::uses_alpha) && !v.colors.is_empty() {
+                mesh.insert_attribute(
+                    Mesh::ATTRIBUTE_COLOR,
+                    v.colors.iter().map(|c| [1.0, 1.0, 1.0, c[3]]).collect::<Vec<_>>(),
+                );
+            }
             mesh.insert_indices(Indices::U32(
                 tris.iter().flatten().map(|&i| u32::from(i)).collect(),
             ));
-            let material = mat_cache
-                .entry(m.material)
-                .or_insert_with(|| {
-                    let name = model
-                        .material_names
-                        .get(m.material as usize)
-                        .cloned()
-                        .unwrap_or_default();
-                    let mut sm = StandardMaterial {
-                        perceptual_roughness: 0.9,
-                        metallic: 0.0,
-                        reflectance: 0.2,
-                        ..default()
-                    };
-                    if let Some(mat) = mrl.as_ref().and_then(|l| l.by_name(&name)) {
-                        for c in &mat.commands {
-                            let obj = mfx.object(c.object).map(|o| o.name.as_str());
-                            match (c.kind, obj) {
-                                (mtmrl::CommandKind::Texture, Some("tAlbedoMap")) => {
-                                    if let Some(t) = mrl.as_ref().and_then(|l| l.texture(c)) {
-                                        let p = t.path.clone();
-                                        sm.base_color_texture = self.texture(&p, images);
-                                    }
-                                }
-                                (mtmrl::CommandKind::Feature, Some("FTransparency")) => {
-                                    let v = mfx.object(c.value).map(|o| o.name.as_str());
-                                    if matches!(v, Some("FTransparencyAlpha") | Some("FTransparencyMap")) {
-                                        // Alpha test vs blend not yet traced; cut-out
-                                        // at 0.5 is a placeholder.
-                                        sm.alpha_mode = AlphaMode::Mask(0.5);
-                                        sm.double_sided = true;
-                                        sm.cull_mode = None;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    materials.add(sm)
-                })
-                .clone();
             parts.push(Part {
                 mesh: meshes.add(mesh),
                 material,
@@ -243,16 +326,98 @@ impl Loader<'_> {
         Some(parts)
     }
 
+    /// The Bevy material for one MRL material (`None`: no MRL entry).
+    /// Rules and their evidence: `mtmrl::shading` and docs/SHADING.md.
+    fn material(
+        &mut self,
+        shading: Option<&Shading>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+    ) -> PartMaterial {
+        // Roughness and reflectance are viewer placeholders: the original
+        // lights with its own model (light pre-pass buffer, SH ambient),
+        // not a PBR one.
+        let mut sm = StandardMaterial {
+            perceptual_roughness: 0.9,
+            metallic: 0.0,
+            reflectance: 0.2,
+            ..default()
+        };
+        let Some(s) = shading else {
+            return PartMaterial::Standard(materials.add(sm));
+        };
+        if let Some(p) = s.textures.get("tAlbedoMap") {
+            sm.base_color_texture = self.texture(p, images);
+        }
+        // colour = albedo * fAlbedoColor * light * fDiffuseColor: both
+        // constants scale the same product, so they combine into the base
+        // colour (linear).
+        let c: [f32; 3] = std::array::from_fn(|k| s.albedo_color[k] * s.diffuse_color[k]);
+        let alpha = if s.uses_alpha() { s.transparency } else { 1.0 };
+        sm.base_color = Color::linear_rgba(c[0], c[1], c[2], alpha);
+        if s.feature("FSpecular") == Some("FSpecularDisable") {
+            // The pixel shaders of this variant have no specular term.
+            sm.reflectance = 0.0;
+        }
+        match s.raster.map(|r| r.cull) {
+            Some(Cull::None) => {
+                // The original flips the normal of back faces (vFace).
+                sm.double_sided = true;
+                sm.cull_mode = None;
+            }
+            Some(Cull::Front) => sm.cull_mode = Some(Face::Front),
+            _ => sm.cull_mode = Some(Face::Back),
+        }
+        sm.alpha_mode = if !s.uses_alpha() {
+            AlphaMode::Opaque
+        } else if s.blends_alpha() {
+            AlphaMode::Blend
+        } else {
+            // Alpha test: the reference value is CBROPTest at run time,
+            // not traced; 0.5 is a placeholder.
+            // Alpha-tested foliage (`*_NUKI` leaf crowns) is RSMesh (cull
+            // back), but its cards all lie in parallel planes facing +Z
+            // (checked on om0500, om0501, om0531, om0532): the original
+            // turns them to the camera, which is not traced or done here.
+            // Drawn two-sided instead so they stay visible, as the
+            // references show them from above (ref001) and below (ref004).
+            sm.double_sided = true;
+            sm.cull_mode = None;
+            AlphaMode::Mask(0.5)
+        };
+        if let Some([r0, r1]) = s.uv_transform {
+            sm.uv_transform = bevy::math::Affine2::from_cols(
+                Vec2::new(r0[0], r1[0]),
+                Vec2::new(r0[1], r1[1]),
+                Vec2::new(r0[3], r1[3]),
+            );
+        }
+        if let AlphaSource::Map { texture, channel, .. } = &s.alpha {
+            if let Some(map) = self.texture(texture, images) {
+                return PartMaterial::Layer(Arc::new(LayerSlot {
+                    material: LayerMaterial {
+                        base: sm,
+                        extension: TransparencyMap {
+                            channel: u32::from(*channel),
+                            map,
+                        },
+                    },
+                    handle: OnceLock::new(),
+                }));
+            }
+        }
+        PartMaterial::Standard(materials.add(sm))
+    }
+
     fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {
         for p in parts {
             self.stats.meshes += 1;
             self.stats.triangles += p.triangles;
-            commands.spawn((
-                Mesh3d(p.mesh.clone()),
-                MeshMaterial3d(p.material.clone()),
-                transform,
-                Name::new(name.to_string()),
-            ));
+            let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
+            match &p.material {
+                PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
+                PartMaterial::Layer(slot) => e.insert(PendingLayer(slot.clone())),
+            };
         }
     }
 
@@ -404,7 +569,7 @@ impl Loader<'_> {
             let parts: Vec<Part> = parts
                 .into_iter()
                 .map(|q| Part {
-                    material: water.clone(),
+                    material: PartMaterial::Standard(water.clone()),
                     ..q
                 })
                 .collect();

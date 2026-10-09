@@ -170,6 +170,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(stage::ShadingPlugin)
         .insert_resource(args)
         .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
         .insert_resource(GlobalAmbientLight {
