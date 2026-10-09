@@ -192,3 +192,34 @@ fn killed_goblins_return_after_a_day() {
         Gate::Spawn
     );
 }
+
+/// A real save (the maintainer's backup; skipped without it): SceNo 3400,
+/// noon, and the stage-100 groups' records decode; spawns at 64m53n follow.
+#[test]
+fn save_state_drives_the_spawns() {
+    let Some(vfs) = vfs() else { return };
+    let p = std::env::var("DDDA_SAVE")
+        .unwrap_or_else(|_| "E:/ddda-re/save-backups/20261009-012612/remote/DDDA.sav".into());
+    let Ok(bytes) = std::fs::read(&p) else {
+        eprintln!("skipped: no save at {p}");
+        return;
+    };
+    let f = ddsave::SaveFile::parse(&bytes).unwrap();
+    let s = ddspawn::save::SaveState::from_xml(&f.xml).unwrap();
+    assert_eq!(s.stage_flags.len(), 65);
+    eprintln!("save: SceNo {} hour {} day {}", s.scene, s.hour, s.day);
+    let records = s.records(0);
+    for (g, r) in records.iter().enumerate().filter(|(_, r)| r.in_use()) {
+        assert_eq!(((r.bits >> 8) & 0x1ff) as usize, g);
+    }
+    let l = st100();
+    let flag = |n: u16| s.flag(0, n);
+    let w = World {
+        scene: s.scene,
+        hour: s.hour,
+        flag: &flag,
+    };
+    let read = |p: &str| vfs.read(p, mtarc::type_hash("rLayout")).ok();
+    let (gates, sp) = spawns(100, &l, (64, 53), &read, &w, &records).unwrap();
+    eprintln!("64m53n from the save: {gates:?}; {} spawns", sp.len());
+}

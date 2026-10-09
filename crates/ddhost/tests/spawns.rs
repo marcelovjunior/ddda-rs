@@ -100,3 +100,32 @@ fn cassardis_area_goblins_join_the_fight() {
     }
     assert!(night.goblins.iter().any(|g| g.log.len() > 1), "the goblins act");
 }
+
+/// The maintainer's save (skipped without it): its Arisen stands near
+/// Cassardis or elsewhere; the goblins of the cells around it come from the
+/// data, gated by the save's SceNo, hour and flags.
+#[test]
+fn goblins_from_a_save() {
+    let Some((vfs, data)) = install() else { return };
+    let p = std::env::var("DDDA_SAVE")
+        .unwrap_or_else(|_| "E:/ddda-re/save-backups/20261009-012612/remote/DDDA.sav".into());
+    let Ok(bytes) = std::fs::read(&p) else { return };
+    let f = ddsave::SaveFile::parse(&bytes).unwrap();
+    let s = ddspawn::save::SaveState::from_xml(&f.xml).unwrap();
+    let mut fight = Fight::new(data);
+    // At the Cassardis start position (stage 100, start 56).
+    let out =
+        ddhost::spawns::spawn_from_save(&mut fight, &vfs, 100, &s, [41522.656, 31094.824, 142168.1]).unwrap();
+    eprintln!(
+        "save SceNo {} hour {}: {} goblins, {} placeholders",
+        s.scene,
+        s.hour,
+        out.goblins.len(),
+        out.placeholders.len()
+    );
+    assert_eq!(fight.goblins.len(), out.goblins.len());
+    assert!(
+        out.goblins.iter().any(|g| g.1.group == 250),
+        "noon before the dragon: group 250"
+    );
+}

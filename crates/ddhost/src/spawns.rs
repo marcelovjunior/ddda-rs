@@ -95,3 +95,25 @@ pub fn spawn_cells(
     }
     Ok(out)
 }
+
+/// Everything from a game save (`ddspawn::save::SaveState`): the stage's
+/// group list, the 3x3 cells around `around`, the save's SceNo, hour,
+/// layout flags and kill records; goblins join `fight`.
+pub fn spawn_from_save(
+    fight: &mut Fight,
+    vfs: &ddvfs::Vfs,
+    stage: u32,
+    save: &ddspawn::save::SaveState,
+    around: [f32; 3],
+) -> Result<CellSpawns, String> {
+    let index = ddstory::world::stage_index(stage).ok_or(format!("stage {stage}: no stage index"))?;
+    let list = group_list(vfs, stage)?;
+    let flag = |n: u16| save.flag(index, n);
+    let w = World {
+        scene: save.scene,
+        hour: save.hour,
+        flag: &flag,
+    };
+    let records = save.records(index as u32);
+    spawn_cells(fight, vfs, stage, &list, &cells_around(around), &w, &records)
+}

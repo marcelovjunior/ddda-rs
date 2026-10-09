@@ -15,6 +15,7 @@
 
 pub mod gpl;
 pub mod respawn;
+pub mod save;
 
 use gpl::{Group, GroupList};
 use respawn::Record;

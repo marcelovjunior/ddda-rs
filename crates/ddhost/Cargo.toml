@@ -28,4 +28,5 @@ mtarc = { path = "../mtarc" }
 ddvfs = { path = "../ddvfs" }
 
 [dev-dependencies]
+ddsave = { path = "../ddsave" }
 ddcombat = { path = "../ddcombat" }
