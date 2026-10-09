@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/chara-edit`
 - **Board area:** `player/customization`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -31,4 +31,17 @@ to `head`.
 
 ## Results
 
-(filled in by the agent)
+`ddedit` strictly decodes the shared appearance schema without duplicating
+the pawn record. All 228 original-written private save edit records pass;
+Arisen/main-pawn presets resolve. Saved Arisen ground scale is 0.847109079,
+compared with live 0.8471090197563171; live joint/model inputs reproduce the
+live value. Main-pawn derived scale is 0.974198282. See CHARA_EDIT.md for
+addresses, non-atomic observation caveat and the one-f32-step difference.
+
+Source-backed helpers cover preset selection, enabled horizontal scale,
+runtime-input body weight, and caller-loaded body-class boundaries. Five
+tests and Clippy validate these. Full saved-selector height/weight remains
+unimplemented: temporary-model measurement producer 0x00cbbf00 and resolved
+slider lookups are the precise missing links. No original process/install
+writes, game data, identities or raw decompilation are included. Suggested
+next brief: reconstruct and compare those nine runtime measurements.

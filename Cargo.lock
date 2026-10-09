@@ -2314,6 +2314,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddedit"
+version = "0.1.0"
+dependencies = [
+ "ddlook",
+ "ddpawn",
+ "ddsave",
+ "ddvfs",
+]
+
+[[package]]
 name = "ddenemy"
 version = "0.1.0"
 dependencies = [
