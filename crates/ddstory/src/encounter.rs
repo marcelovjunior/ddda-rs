@@ -21,8 +21,9 @@ pub struct UnitFacts {
     pub hp: Option<f32>,
     pub max_hp: Option<f32>,
     pub npc: Option<NpcIntel>,
-    /// The host finished the ApplyFSM task, not a guessed duration.
-    pub applied_script_finished: bool,
+    /// Observed actor-type predicate from 0x005c8460: character controller
+    /// +0x4c or NPC intel +0x15c exists. Never derive this from action Finish.
+    pub apply_fsm_ready: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -120,9 +121,9 @@ impl Host for EncounterFacts {
     // Translated from 0x005c8460 (DDDA.exe 2017-12-13 Steam).
     // An unloaded NPC/object is not completion; missing party members
     // and enemies with persistent death records are explicit exceptions.
-    fn applied_script_finished(&self, stage: u32, target: &Target) -> bool {
+    fn apply_fsm_ready(&self, stage: u32, target: &Target) -> bool {
         let u = self.unit(stage, target);
-        (u.present && u.applied_script_finished)
+        (u.present && u.apply_fsm_ready)
             || (target.kind == 1 && !u.present)
             || (target.kind == 2 && u.killed)
     }

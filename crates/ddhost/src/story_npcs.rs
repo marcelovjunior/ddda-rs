@@ -18,6 +18,7 @@ struct Applied {
 pub struct StoryNpcs {
     bindings: HashMap<(u32, Target), u32>,
     pending: HashMap<(u32, Target), String>,
+    normal_controllers: HashMap<(u32, Target), bool>,
     applied: BTreeMap<u32, Applied>,
 }
 
@@ -25,7 +26,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// The layout adapter supplies identity; no target/NPC-number heuristic.
     pub fn bind_story_npc(&mut self, stage: u32, target: Target, npc: u32) {
         assert_eq!(target.kind, 5, "NPC binding requires an NPC target");
-        self.story_npcs.bindings.insert((stage, target), npc);
+        if self.story_npcs.bindings.insert((stage, target), npc) != Some(npc) {
+            self.story_npcs.normal_controllers.remove(&(stage, target));
+        }
     }
 
     pub fn unbind_story_npc(&mut self, stage: u32, target: Target) {
@@ -33,6 +36,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.story_npcs.applied.remove(&npc);
         }
         self.story_npcs.pending.remove(&(stage, target));
+        self.story_npcs.normal_controllers.remove(&(stage, target));
     }
 
     /// Queue an authored graph until its actual placement is bound.
@@ -56,10 +60,33 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
-    /// Normal graph availability, kept distinct from applied graph Finish.
-    /// The original ApplyFSM predicate reads cAICtrl+0x4c (0x005c8572).
-    /// This observation is not yet wired to that predicate: its complete
-    /// pointer lifecycle and non-NPC cases still require source verification.
+    /// Report actual normal-controller creation/destruction for a bound NPC.
+    /// 0x00bbd930 allocates intel+0x15c before loading its daily graph; body
+    /// setup 0x00bbe545 links the same pointer through cAICtrl+0x4c.
+    /// Missing graph data and applied Finish cannot establish this fact.
+    /// None withdraws an observation; unbinding also removes it.
+    pub fn observe_story_npc_normal_controller(
+        &mut self, stage: u32, target: Target, present: Option<bool>,
+    ) {
+        let key = (stage, target);
+        if !self.story_npcs.bindings.contains_key(&key) {
+            return;
+        }
+        if let Some(present) = present {
+            self.story_npcs.normal_controllers.insert(key, present);
+        } else {
+            self.story_npcs.normal_controllers.remove(&key);
+        }
+    }
+
+    /// Explicit NPC ApplyFSM observation, independent of graph completion.
+    /// The actor adapter still reports target resolution separately.
+    pub fn story_npc_apply_fsm_ready(&self, stage: u32, target: Target) -> Option<bool> {
+        self.story_npcs.normal_controllers.get(&(stage, target)).copied()
+    }
+
+    /// Loaded normal graph availability, kept distinct from both controller
+    /// allocation and applied graph Finish. This is diagnostic only.
     pub fn story_npc_normal_graph_present(&self, npc: u32) -> Option<bool> {
         self.story_npcs.applied.get(&npc).map(|a| {
             a.normal
@@ -79,9 +106,6 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn prepare_story_npcs(&mut self) -> Result<(), HostError> {
-        let Some(data) = self.data.npc.clone() else {
-            return Ok(());
-        };
         let Some(story) = self.story.as_ref() else {
             return Ok(());
         };
@@ -89,6 +113,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.applied.retain(|_, a| a.stage == stage);
         self.story_npcs.bindings.retain(|(s, _), _| *s == stage);
         self.story_npcs.pending.retain(|(s, _), _| *s == stage);
+        self.story_npcs.normal_controllers.retain(|(s, _), _| *s == stage);
+        let Some(data) = self.data.npc.clone() else {
+            return Ok(());
+        };
         let mut ready: Vec<_> = self
             .story_npcs
             .pending

@@ -208,7 +208,8 @@ impl Host for ScriptedHost {
     fn npc_unit(&self, _: u32) -> bool {
         true
     }
-    fn applied_script_finished(&self, _: u32, t: &Target) -> bool {
+    // Deliberate scripted fixture delay, not the original pointer predicate.
+    fn apply_fsm_ready(&self, _: u32, t: &Target) -> bool {
         self.applied.get(t).is_some_and(|(_, f)| self.frame >= f + 120)
     }
     fn unit_hp(&self, _: u32, _: &Target, _: bool) -> Option<f32> {

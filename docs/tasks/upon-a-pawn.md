@@ -238,3 +238,15 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   evidence. Unknown observations stay unavailable, never implicitly true.
   Existing observe_story_npc_talk_end remains an explicit fixture/adapter
   input; no spatial or UI-close shortcut was added.
+
+- Head-approved follow-up renames the shared predicate to apply_fsm_ready;
+  ScriptedHost deliberately retains its fixture delay. The host now stores
+  an explicit optional normal-controller allocation observation by bound
+  stage/target. It is independent of loaded graph and applied Finish;
+  replacement, unbind and stage cleanup invalidate it. No allocation or
+  target presence is inferred, and full live actor wiring is still pending.
+- Verification: 15 targeted ddstory/ddhost tests pass (encounter, both
+  opening suites, story_pawns). Explicit allocation regression covers
+  unknown versus false, graph-independent true, rebind/unbind invalidation,
+  and stage cleanup even when NPC data is absent. Installed applied graph
+  still proves Finish cannot synthesize the allocation observation.
