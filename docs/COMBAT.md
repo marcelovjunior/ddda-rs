@@ -684,10 +684,12 @@ The first M4 slice runs the pipeline end to end, headless:
 - **Activation.** Each body's motion events switch its sequences on per
   frame (2.1); its collision files are the body file plus the paired
   attack file (goblin `e0100` + `e0100_00`; Arisen `m0000`, and `m0001` +
-  `m0001_00_lv1` for the sword).
+  `m0001_00_lv1` for the sword, `m0007` + `m0007_00` for the staff).
 - **Frame order** (FRAME.md 5.1-5.7): `Host::tick` runs the hit pass on
-  the volumes placed last frame, then the Arisen move (ddsim) and their
-  scripted attacks advance, then the enemies (think, action, motion, root
+  the volumes placed last frame, then the Arisen move and attack (ddsim:
+  `ddsim::attack`, MOVEMENT.md "Attacks"), their new attacks free their
+  hit history and the staff's volleys fire shells, then the enemies
+  (think, action, motion, root
   travel), the character push-out, and pass C (poses, volumes for the next
   frame).
 - **Hit pass** (`ddenemyrt::combat`): each victim's contacts against
@@ -695,26 +697,34 @@ The first M4 slice runs the pipeline end to end, headless:
   player), the merge, then the enemy pools (`resolve_enemy_hit`) or the
   player curve (`player_mitigate`; the player's own region scaling is not
   applied). Stagger and death go to the enemy as forced actions.
-- **The Arisen's sword attack 1** is motion 0 of
-  `motion\pl\m\m00\m0001_at\m0001_at`: its events switch on
+- **The Arisen's attacks** come from its input through ddsim's attack
+  actions; the fight poses the Arisen from ddsim's state (bank 7 is the
+  kit's weapon `_at` list: a level-1 Fighter with an Iron Sword or a
+  level-1 Mage with the starting staff, `ddenemyrt::fight::Kit`). S1_1 is
+  motion 0 of `motion\pl\m\m00\m0001_at\m0001_at`: its events switch on
   `collision\pl\m0001` sequences 1 and 2 (groups 1 and 2, attacks 1 and
-  2, relation 1) on frames 6..10 (found by scanning every player motion
-  list; m0001_at motions 200, 203 and 205 use them too). The motion
-  carries a root travel of 190 cm. Attack input and the weapon actions are
-  not modelled: the host scripts the swing.
+  2, relation 1) on frames 6..10; the motion carries a root travel of
+  190 cm.
 
-Results (tests `ddenemyrt/tests/sword.rs`, `ddhost/tests/goblin.rs`):
-- the sword swing against a standing goblin hits once, from the volumes
-  of motion frame 6, for **105** (the worked example), and staggers it;
+Results (tests `ddenemyrt/tests/attacks.rs`, `ddhost/tests/goblin.rs`):
+- a sword light combo S1_1 -> S1_2 -> S1_3 against a standing goblin: S1_2
+  starts on S1_1's frame 13 and S1_3 on S1_2's frame 14 (slot 1 executing),
+  and each hits once from inside its hit window: **105** (motion frame 6,
+  the worked example), 85, 145; the heavy attack LandL hits for 125; the
+  staff's WandStrike1 -> WandStrike2 (Strike2 from Strike1's frame 25) for
+  49 and 69; each WandShot volley's shell for 27;
 - a goblin that closes in on a standing level-1 Fighter hits only from
   volumes placed inside its windows: NAttack1 (`e0100_at` motion 1,
   frames 45..48) deals **111.1** (200 x 100 / 180), NAttack2 (motion 2,
   frames 34..37, attack 0.7) 97.2;
-- ten sword hits of 105 kill the goblin (HP 1000); it flinches at the
-  first nine and plays `cEmActActingDie` after the tenth;
+- ten light attacks (S1_1, pressed from the wait) of 105 kill the goblin
+  (HP 1000); it flinches at the first nine (front or back: the lunge
+  carries the Arisen around it) and plays its death after the tenth;
 - the fight replays bit for bit (`Host::state_hash`).
 
 Placeholders in the slice (marked in the code):
+- the Arisen's attack target (`0x00B79090`, not traced) is the nearest
+  live goblin;
 - the history's relation hold (attacker flag +0x1EC1) is taken as
   released when the attacker starts its next attack;
 - the goblin stands on the ground height under it (its own scenery sweep,
@@ -748,7 +758,8 @@ contact carries a point, a normal (+0x690) and a depth (+0x6A0), stored by
 
 Ranks are written every frame: the Arisen's actions set theirs
 (`cPlActWait` 13, `cPlActWalk` 14, run, sprint, jumps, falls, landings 15,
-ledge actions 0, sword ground attacks 14; `ddsim::State::push_rank`); an
+ledge actions 0, sword ground attacks and staff strikes 14, WandShot 13;
+`ddsim::State::push_rank`); an
 enemy's is `cCharParamEnemy` +0xD4 `OBJ補正サイズ` (goblin 13), plus 1 while
 its action sets +0x2360 bits 0x104 (attacks, walks), else plus 2 for 0x18
 (runs, dashes) (`uEnemy::vf90` 0x00AA96E0). So a waiting or attacking
@@ -758,6 +769,28 @@ dashing goblin (15) gives way to a waiting Arisen (13).
 Not traced: the shape routines' exact contact normal and depth (the
 closest-point direction and the overlap are used), the pair order of the
 manager's list (the fight lists the Arisen first), and the manager flag.
+
+### 9.3 The staff's shells (`ddenemyrt::shell`)
+
+WandShot (MOVEMENT.md "Attacks") fires one shell per volley (`0x00B4FA00`);
+the shell, not the staff, carries the hit. It comes from list uPlayer
++0x35BC, group 0, index 0 (the variant's +0x40 / +0x44; elemental
+enchantments, actor +0x26A0, pick indices 4-8). `vf198` (0x00B5BA20) loads
+the list from `param\shl_param_07` for the Arisen and pawns (actor +0x206D
+& 6), else `param\shl_param_07_he`. Entry 0 is a `cShlParamHoming`:
+collision sequence `seq_0` = 1 of the list's `mCollisionPath`
+`collision\pl\m0007` (group 1, a 20 cm sphere on the shell, attack 1 of
+`m0007_00`), speed `spd` 90 cm a frame changing by `spdAccel` -0.5 toward
+`spdMax` 80, `dieDist` 2000 cm. In the fight each shell is a fighter of its
+own (owner ids from 1000; `Fight::shooters` maps them to the Arisen) with
+the shooter's attack values, so its hit is valued like the Arisen's.
+
+*Placeholders* (the shell actions `cShlAct*` are not traced): the spawn
+point (the staff joint in the original) is 130 cm up and 40 cm ahead of the
+Arisen's feet; the homing (`hmg*` / `hm*`) is a straight flight at the
+middle of the target's hurt volumes, re-aimed every frame and stopping on
+it; the shell dies on its first hit (`dieFlag` 7 is *assumed* to include
+hits); `colTimer_0` and the later sequences are not used.
 
 ## 10. What is still unknown
 
