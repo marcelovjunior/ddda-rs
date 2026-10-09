@@ -687,7 +687,8 @@ with a timer or a zero-HP generic actor. The DTI registry separates uEm5200
 from uEm5200_00 and uEm5200_01, each with its own action/death classes.
 The body think-table array is 0x016cd234; its death callback is 0x009a4dc0.
 That callback sets a bit in actor+0x2e38 and tests it with +0x2e34 before
-calling common enemy death. The masks' part-state meanings remain unresolved.
+calling common enemy death. These masks also occur in the common enemy
+callback; they have not been established as chimera part-state masks.
 It then selects local action 0x3a or 0x52..0x58 according to current mode,
 motion and another actor flag. This is more than one ordinary death action.
 
@@ -696,6 +697,17 @@ uses motions 0x239/0x23b/0x23c/0x2b8, initializes a 180-motion-frame timer,
 and references child units at body+0x72e0/+0x72e4. Update 0x009aef20 waits
 for the initial motion, transitions to a death motion, counts down the timer
 and enters cleanup through 0x00aad0c0. Child death, damage routing and the
-persistent placement-kill writer still need tracing before implementation.
+persistent placement-kill binding still need tracing before implementation.
 This survey is source evidence only; no chimera runtime or original-game
 comparison is claimed.
+
+Common uEnemy death 0x00aab3b0 calls 0x004a7910 with actor placement keys
+at +0x20ec/+0x20f0. That function checks existing persistent death and calls
+0x004a7ad0, which requires an active manager, nonnegative placement index
+and an existing layout group. Its per-placement bit writer 0x0049f5d0
+updates the packed record. Thus placement death starts in the accepted
+common-death path, before animation cleanup. The later 0x00aad0c0 merely
+queues object message four for linked units; it is not the kill-bit writer.
+Child selectors 0x009b46b0/0x009bd060 use separate local death actions
+0x32/0x38 and notify their parent through 0x009a5880/0x009a5a00. Parent
+reaction selection and the children's placement identity still need binding.
