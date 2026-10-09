@@ -131,6 +131,18 @@ class Oracle:
         r = self.cmd('scan', values=list(values), limit=limit, image=image)
         return {int(k, 16): v for k, v in r['hits'].items()}
 
+    def trace(self, fields, frames, script=None, timeout_ms=None):
+        """Samples memory after each of the next `frames` game frames.
+        fields: [(addr, len), ..]; script: [(frame, [vk, ..]), ..] sets the
+        held keys from that frame index on (released at the end).
+        Returns one bytes row per frame (fields concatenated)."""
+        kw = dict(fields=[[a, n] for a, n in fields], frames=frames,
+                  script=[[f, list(k)] for f, k in (script or [])])
+        if timeout_ms:
+            kw['timeout_ms'] = timeout_ms
+        r = self.cmd('trace', **kw)
+        return [bytes.fromhex(h) for h in r['rows']]
+
     def unload(self):
         return self.cmd('unload')
 

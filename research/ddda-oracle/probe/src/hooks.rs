@@ -42,11 +42,13 @@ type PresentFn = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_
 
 unsafe extern "thiscall" fn hook_frame(this: *mut c_void) {
     MAIN_TID.store(windows_sys::Win32::System::Threading::GetCurrentThreadId(), Ordering::Relaxed);
+    crate::trace::pre();
     crate::input::frame();
     crate::tick(true);
     let orig: ThisFn = core::mem::transmute(VF06_FRAME as usize);
     orig(this);
     FRAMES.fetch_add(1, Ordering::SeqCst);
+    crate::trace::post();
 }
 
 unsafe extern "thiscall" fn hook_idle(this: *mut c_void) {

@@ -76,6 +76,7 @@ may be JSON integers or `"0x..."` strings. A float argument is written as
 | `tap` | `vk` (one or a list), `frames` | Presses for that many frames. |
 | `release` | | Releases all scripted keys. |
 | `input` | | Scripted key state. |
+| `trace` | `fields` [[addr, len]..], `frames`, `script` [[frame, [vk..]]..] | `rows`: one hex string per game frame (the fields concatenated), sampled right after each sMain::vf06. Script entries set the held keys from that frame index on; keys are released at the end. This is the tool for per-frame logs of a scripted action. |
 | `patches` | | Applied in-memory patches. |
 | `unload` | | Undoes everything (on the main thread) and frees the DLL. |
 
@@ -85,6 +86,53 @@ may be JSON integers or `"0x..."` strings. A float argument is written as
 stray copies of vtable values (about seven per class), so a hit is checked
 with a plausible field, or a singleton is reached through its static pointer
 (below).
+
+## Asking for a live check
+
+Only the owner of `live/game` (claude-4 as of 2026-10-09) drives the game.
+Post a `request` to the owner with:
+
+- **What to read.** Give a global and a chain of offsets
+  (`*(u32*)0x018fa4bc + 0xb876c`), or an MtDTI class and field
+  (`uPlayer +0x2dd4`), with the type (u8/u32/s32/f32/vector3) and the count.
+- **When.** Say whether it is a one-off read or per frame during an action.
+  For per-frame logs, name the fields and the action: keys and their frame
+  timing (`W held 40 frames, then Space`), or a place (cell plus local x/z,
+  or "a ledge 1-2 m high"). Keys are camera-relative, so prefer a target
+  ("toward the block at x, z") over a raw direction.
+- **Calls.** Give the function address, the calling convention, `this`, the
+  arguments, and whether it returns a float.
+- **State changes.** Say whether the check changes game state (position,
+  items, quests, time). The owner backs up the save first and avoids
+  spending resources or advancing quests unless the request needs it.
+
+Replies quote the values and, for traces, put the full table in
+`E:\ddda-re\notes\oracle\` (private research tree, not committed).
+
+Action ids seen at `uPlayer +0x2dd4`:
+
+| Id | Action |
+| --- | --- |
+| 0 | idle |
+| 1 | stop (seen once) |
+| 2 | move |
+| 7 | jump start |
+| 9 | airborne |
+| 13 | falling (after a teleport into the air) |
+| 14 | landing |
+
+*These names come from the observed sequences, not from the exe.*
+
+### Finding a place: `ddda-ledges`
+
+`target\i686-pc-windows-msvc\release\ddda-ledges.exe <nativePC> <A0> <B0> <x> <y> <z> [radius] [min] [max]`
+lists vertical steps of `min..max` cm whose top is a walkable shelf. It
+works from the merged stage collision of the 3x3 cells around the
+floating-origin cell (A0, B0), and its output is in the same local frame as
+`uPlayer.mPos`. `LEDGES_GRID=1` prints a height grid instead.
+
+Placed scenery (rocks, buildings from layouts) is **not** in that mesh. A
+"block" it reports can be part of a building, so check with a capture.
 
 ## How it works
 

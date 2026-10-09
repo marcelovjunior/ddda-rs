@@ -2,7 +2,7 @@
 # see .cargo/config.toml. Kept out of the main 64-bit workspace.
 [workspace]
 resolver = "2"
-members = ["probe", "inject"]
+members = ["probe", "inject", "ledges"]
 
 [workspace.package]
 edition = "2021"

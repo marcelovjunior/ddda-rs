@@ -37,12 +37,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddda-ledges"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtsbc",
+]
+
+[[package]]
 name = "ddda-oracle"
 version = "0.1.0"
 dependencies = [
  "png",
  "serde_json",
  "windows-sys",
+]
+
+[[package]]
+name = "ddvfs"
+version = "0.1.0"
+dependencies = [
+ "mtarc",
 ]
 
 [[package]]
@@ -96,6 +112,17 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
+
+[[package]]
+name = "mtarc"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "mtsbc"
+version = "0.1.0"
 
 [[package]]
 name = "png"

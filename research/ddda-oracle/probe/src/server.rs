@@ -258,6 +258,7 @@ fn dispatch(req: &Value) -> Result<Value, String> {
         }
         "patches" => Ok(json!({"patches": patch::list()})),
         "keys" | "tap" | "release" | "input" => input_cmd(cmd, req),
+        "trace" => trace_cmd(req),
         "unload" => crate::unload(),
         _ => Err(format!("unknown cmd {cmd}")),
     }
@@ -297,6 +298,65 @@ fn input_cmd(cmd: &str, req: &Value) -> Result<Value, String> {
     }
     let (down, taps, on) = crate::input::status();
     Ok(json!({"installed": crate::input::installed(), "down": down, "taps": taps, "input_on": on}))
+}
+
+/// trace {fields: [[addr, len], ..], frames, script: [[frame, [vk..]], ..]}
+/// -> rows: one hex string per frame (fields concatenated), sampled after
+/// each game frame. Script entries set the held keys from that frame on;
+/// keys are released when the trace ends.
+fn trace_cmd(req: &Value) -> Result<Value, String> {
+    let fields: Vec<(u32, usize)> = match req.get("fields") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|f| match f {
+                Value::Array(p) if p.len() == 2 => Ok((num(&p[0])?, num(&p[1])? as usize)),
+                _ => Err("field must be [addr, len]".to_string()),
+            })
+            .collect::<Result<_, _>>()?,
+        _ => return Err("fields must be an array of [addr, len]".into()),
+    };
+    let total: usize = fields.iter().map(|f| f.1).sum();
+    let frames = opt(req, "frames", 60)?;
+    if total * frames as usize > 64 << 20 {
+        return Err("trace too large (> 64 MiB)".into());
+    }
+    let script: Vec<(u32, Vec<u8>)> = match req.get("script") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|e| match e {
+                Value::Array(p) if p.len() == 2 => Ok((num(&p[0])?, vk_list(Some(&p[1]))?)),
+                _ => Err("script entry must be [frame, [vk..]]".to_string()),
+            })
+            .collect::<Result<_, _>>()?,
+        None => Vec::new(),
+        _ => return Err("script must be an array".into()),
+    };
+    if !script.is_empty() && !crate::input::installed() {
+        let v = on_main(
+            || unsafe {
+                match crate::input::install() {
+                    Ok(()) => json!({}),
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            },
+            Duration::from_secs(10),
+        )?;
+        if v.get("ok") == Some(&Value::Bool(false)) {
+            return Ok(v);
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let f0 = FRAMES.load(Ordering::SeqCst);
+    crate::trace::start(crate::trace::Trace { fields, frames, script, idx: 0, armed: false, rows: Vec::new(), tx })?;
+    let timeout = Duration::from_millis(opt(req, "timeout_ms", 10_000 + frames * 100)? as u64);
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(rows)) => Ok(json!({"first_frame": f0, "rows": rows.iter().map(|r| hex(r)).collect::<Vec<_>>()})),
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            crate::trace::cancel();
+            Err(format!("trace did not finish within {timeout:?}"))
+        }
+    }
 }
 
 fn fault_json(f: &guard::Fault) -> Value {

@@ -14,6 +14,7 @@ mod hooks;
 mod input;
 mod patch;
 mod server;
+mod trace;
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -162,6 +163,7 @@ unsafe extern "system" fn init_thread(_: *mut c_void) -> u32 {
 
 /// Main-thread part of unloading: undo everything the game executes.
 unsafe fn teardown_main() {
+    trace::cancel();
     input::release_all();
     let _ = hooks::set_bg(false);
     patch::revert_all();
