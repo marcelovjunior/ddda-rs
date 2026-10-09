@@ -90,3 +90,12 @@ Head's probe #2486 found a wall only 42 cm ahead of the eye (near96), with
 drawn st200_md12 about 10 cm beyond its SBC; this is not evidence for adding
 new scenery geometry. The porch pillar itself was not yet probed.
 No game or install changes; no live game control used for this checkpoint.
+
+Further source trace: CAMERA.md now records the +0xB98 producer chain
+from selected actor sphere/capsule contacts (0x00888750), per-frame maximum
+accumulator (0x00421d60/0x00420910), and exact scalar smoother
+(0x007bc800, vtable0x01599174). No behavior was added for this path: the
+viewer lacks the selected animated actor collision entries and eligibility
+state. It should not substitute guessed render bounds. Source review
+included disassembly because Ghidra prunes the producer's contact loop.
+This documentation checkpoint adds no tests or original comparison.

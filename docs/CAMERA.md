@@ -183,7 +183,8 @@ Read-only exe trace, 2026-10-09, camera-near:
   Normal distance uses all three axes, with a separate horizontal test.
 - Threshold globals **0x01875de4..0x01875dfc** are read from the installed
   exe: ordinary inner/outer 64/74 cm, stage 100 non-pawn 80/90 cm
-  (90 is immediate code), pawn 130/140 cm, special camera 135/160 cm.
+  (90 is the code constant at **0x01516f38**), pawn 130/140 cm,
+  special camera 135/160 cm.
   The special camera also changes the distance reference and is not
   implemented by the viewer adapter.
 - The four states live at actor +0x2520, timer +0x251c. Visible enters
@@ -242,3 +243,67 @@ casts against the actual Cassardis SBC metadata, including nonzero flags.
 Whether the reported Cassardis porch pillar
 is represented in that merged SBC remains to be checked; no new scenery
 collision or guessed near-plane reduction is introduced here.
+
+### Actor collision offset and its smoothing (source traced, not implemented)
+
+The camera +0xB98 offset in **0x007e1400** is fed by actor collision,
+rather than a wall-dependent near-plane adjustment. The producer
+**0x00888750** selects an actor's `cObjCollision` entries through
+**0x00773340** (collection selector 1, entry flag mask 0x10). It only
+considers shape types 0 (capsule) and 1 (sphere), with radius strictly
+greater than **32 cm** (constant **0x01517928**). Actor eligibility has
+additional state/type gates; this is not a query against every visible
+actor or a replacement for the stage SBC query.
+
+The entry mask 0x10 is the authored group's **mIsObjAdj** flag: reflection
+**0x00ccd510** places it at group +0x0E, and **0x0076fab0** translates it
+into entry +0x1C0 bit0x10. Existing `ddcombat::ObjCollision` already reads
+these groups; `ddcombat::volumes::build_volume` supplies the source-backed
+joint placement. Integration therefore needs the live selected entries
+and actor eligibility, rather than a new collision resource parser.
+
+The initial overlap gate tests these shapes against a capsule from the
+desired eye (+0x310) to the current eye (+0x40), radius read from installed
+global **0x01875dec** (80 cm). Once any eligible shape overlaps, the
+producer starts a **30 cm** sphere (constant **0x014ea160**) at
+`desired_target + normalize(desired_eye - desired_target) * 32`, and casts
+it with displacement `desired_eye - desired_target`. Sphere and capsule
+queries are **0x00d62bb0** and **0x00d62e90** respectively. For each hit,
+it measures the distance between the returned contact position and the
+desired eye, then submits that nonnegative distance to **0x00421d60**.
+The latter retains the greatest absolute input at `sCameraExt +0xD14`;
+**0x00420910** clears the accumulator each frame. These are collider
+contacts, not rendered triangle intersections.
+
+Normal camera update **0x007dcf30** smooths that accumulator through the
+scalar object at +0xB94, coefficient 0.1, output +0xB98. Constructor
+**0x007dc200** selects vtable **0x01599174**; the destructor's different
+vtable must not be used to identify these methods. **0x007bc800** and
+methods **0x007bc910..0x007bc960** give this update for each time chunk
+`h = min(remaining_frames, 1.1)`:
+
+```text
+k = min(k, 1)
+damping = min(2 * sqrt(k), 1)
+acceleration = -k * (value - target) - damping * velocity
+velocity = velocity * h + acceleration * h
+value += velocity
+```
+
+Negative delta snaps the value to the target without resetting velocity;
+zero delta leaves both unchanged. The unusual multiplication of the old
+velocity by the chunk length is present in the source and should not be
+silently replaced with a conventional spring integrator. Inactive normal
+player camera mode clears +0xB98 directly. **0x007e1400** applies the
+offset before its stage sweep, under its active-camera and transition
+gates, moving the eye toward the target and potentially moving the target
+as well when the remaining distance is small.
+
+This path is not wired into the viewer: it needs the selected, animated
+actor sphere/capsule entries and their source eligibility state. Using
+render bounds or an invented generic actor radius would not reproduce it.
+Next action: expose the authored actor collision entries to a per-view
+camera query, then translate and regression-test the offset/accumulator
+and scalar smoother together. No live/original comparison was performed
+for this trace. Ghidra drops part of the producer as unreachable; the
+shape loop and contact accumulator were checked against disassembly.
