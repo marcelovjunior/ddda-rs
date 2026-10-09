@@ -125,6 +125,8 @@ pub struct Fight {
     pub positions: BTreeMap<u32, [f32; 3]>,
     /// Shells in flight.
     pub shells: Vec<Shell>,
+    /// Equipped spell projectiles and their impact children.
+    pub spells: crate::skills::spells::SpellWorld,
     /// The Arisen each shell owner id was fired by (kept after the shell).
     pub shooters: BTreeMap<u32, u32>,
     next_shell: u32,
@@ -150,6 +152,7 @@ impl Fight {
             status_events: Vec::new(),
             positions: BTreeMap::new(),
             shells: Vec::new(),
+            spells: Default::default(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
             pawns: BTreeMap::new(),
@@ -258,6 +261,7 @@ impl Fight {
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         let shell_fighters = self.shell_fighters();
         fighters.extend(shell_fighters);
+        fighters.extend(self.spell_fighters());
         let mut seed = self.roll_seed;
         let mut roll = || {
             seed ^= seed << 13;
@@ -282,6 +286,11 @@ impl Fight {
         // a shell that hit is gone (*placeholder*, see `crate::shell`)
         let hit: Vec<u32> = self.events.iter().map(|e| e.attacker).collect();
         self.shells.retain(|s| !hit.contains(&s.owner));
+        self.spells.hit(&hit, &self.data.skills, &mut self.next_shell);
+        for s in &self.spells.shells {
+            self.shooters.insert(s.owner, s.shooter);
+            self.positions.insert(s.owner, s.pos);
+        }
         for e in &self.events {
             let from = self.positions.get(&e.attacker).copied();
             if let Some(g) = self.goblins.iter_mut().find(|g| g.fighter.owner == e.victim) {
@@ -314,6 +323,7 @@ impl Fight {
             });
             let (started, volleys) = (p.attacks_started, p.volleys_fired);
             let (feet, yaw) = (p.position, p.yaw);
+            let released = std::mem::take(&mut p.skills.released);
             let a = self.arisen.get_mut(&seat).expect("seat listed");
             let new_attack = started != a.attacks_seen;
             let fired = volleys.saturating_sub(a.volleys_seen);
@@ -336,6 +346,13 @@ impl Fight {
                 ));
                 self.shooters.insert(owner, u32::from(seat));
             }
+            for id in released {
+                let Some(skill) = self.data.skills.0.get(&id) else { continue };
+                let Some(spell) = &skill.spell else { continue };
+                let pose = skill.release_pose(feet, yaw);
+                let aim = target.map(|g| aim_point(&self.goblins[g]));
+                self.spells.fire(spell, id, u32::from(seat), &pose, aim, &mut self.next_shell);
+            }
         }
         let param = self.data.shell;
         let goblins = &self.goblins;
@@ -346,6 +363,26 @@ impl Fight {
                 .map(aim_point);
             s.fly(&param, aim, step)
         });
+        self.spells.step(&self.data.skills, step);
+        for s in &self.spells.shells {
+            self.shooters.insert(s.owner, s.shooter);
+        }
+    }
+
+    fn spell_fighters(&self) -> Vec<Fighter> {
+        self.spells.shells.iter().filter_map(|s| {
+            let skill = self.data.skills.0.get(&s.skill)?;
+            let spell = skill.spell.as_ref()?;
+            let shooter = self.kit(self.arisen.get(&(s.shooter as u8))?.kit);
+            Some(Fighter {
+                owner: s.owner,
+                attacker: Attacker::Player(shooter.attacker),
+                victim: Victim::Player { defender: shooter.defender, hp: 1.0, hp_max: 1.0 },
+                attacks: s.volumes(spell), hurts: vec![],
+                history: HitHistory::default(), statuses: Default::default(),
+                dots: Default::default(), pools: Default::default(),
+            })
+        }).collect()
     }
 
     /// The fighters standing for the shells in the hit pass: attack
@@ -489,6 +526,9 @@ impl Fight {
         for s in &self.shells {
             self.positions.insert(s.owner, s.pos);
         }
+        for s in &self.spells.shells {
+            self.positions.insert(s.owner, s.pos);
+        }
     }
 
     /// A hash input of the fight's state, for replays.
@@ -504,6 +544,10 @@ impl Fight {
         }
         for sh in &self.shells {
             s += &format!("s{}:{:?}:{};", sh.owner, sh.pos, sh.speed);
+        }
+        for sh in &self.spells.shells {
+            s += &format!("spell{}:{}:{}:{:?}:{}:{};", sh.owner, sh.shooter,
+                sh.skill, sh.pos, sh.age, sh.impact);
         }
         for g in &self.goblins {
             s += &g.digest();
