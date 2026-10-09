@@ -13,3 +13,7 @@ mtarc = { path = "../mtarc" }
 ddvfs = { path = "../ddvfs" }
 mtcamera = { path = "../mtcamera" }
 mtgmd = { path = "../mtgmd" }
+ddnpc = { path = "../ddnpc" }
+
+[dev-dependencies]
+mtlmt = { path = "../mtlmt" }

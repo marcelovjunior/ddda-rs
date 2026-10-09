@@ -35,6 +35,37 @@ pub struct EventMode {
 }
 
 /// The loaded stage as far as the story is concerned (aStage).
+/// The sGameSys words the script gate 0x0044d430 tests. What sets the
+/// individual bits was not traced (stop requests of menus, talks and
+/// similar); the host reports them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GameFlags {
+    /// sGameSys +0xb883c.
+    pub b883c: u32,
+    /// sGameSys +0xb8844.
+    pub b8844: u32,
+    /// sGameSys +0xb8848.
+    pub b8848: u32,
+    /// sGameSys +0x54.
+    pub s54: u32,
+}
+
+/// True when story scripts and quest control tables do not run this frame:
+/// a stop bit is set (+0xb883c bit 27, +0xb8848 bits 26-28, +0xb8844 bit
+/// 23), +0x54 is non-zero, or the stage (+0x34) is 801-804 (0x321-0x324,
+/// the character editor). Callers: uFSMTask::vf08 0x005d1160,
+/// uFSMQuest::vf08 0x0078eb50 and the quest update 0x0078c830 (QCT).
+// Translated from 0x0044d430 (DDDA.exe 2017-12-13 Steam).
+pub fn script_gate(stage_no: u32, f: &GameFlags) -> bool {
+    f.b883c & 0x0800_0000 != 0
+        || f.b8848 & 0x1000_0000 != 0
+        || f.b8848 & 0x0800_0000 != 0
+        || f.b8848 & 0x0400_0000 != 0
+        || f.b8844 & 0x0080_0000 != 0
+        || f.s54 != 0
+        || (0x321..=0x324).contains(&stage_no)
+}
+
 #[derive(Debug, Default)]
 pub struct StageState {
     /// aStage +0x724; 0 while no stage is loaded.
@@ -56,6 +87,9 @@ pub struct StageState {
     pub valid_quests: u32,
     /// NPC units this frame (from [`crate::Inputs`]).
     pub npcs: Vec<crate::NpcUnit>,
+    /// sGameSys request and stop flags the script gate reads (0x0044d430);
+    /// the host reports them with [`HostEvent::GameFlags`].
+    pub game_flags: GameFlags,
 }
 
 /// Deferred story operations, applied in order after each phase.
@@ -292,6 +326,7 @@ impl<D: Data> Story<D> {
                 HostEvent::MenuClosed(Menu::Vocation) => menu_closed = true,
                 HostEvent::SetGsf { no, value } => self.world.gsf.set(*no as usize, *value),
                 HostEvent::PlayerJob(j) => self.world.player_job = *j,
+                HostEvent::GameFlags(f) => self.stage.game_flags = *f,
                 HostEvent::SetQuestBit { quest, bit, value } => {
                     if *quest < 0x80 && *bit < 0x60 {
                         self.world.set_quest_bit(*quest as usize, *bit as usize, *value)
@@ -365,7 +400,12 @@ impl<D: Data> Story<D> {
             r?;
         }
         self.apply(&mut cmds, &mut out)?;
-        // 5. Scripts (line 0).
+        // 5. Scripts (line 0), unless gated (0x0044d430 in uFSMTask /
+        // uFSMQuest vf08).
+        if script_gate(self.world.stage_no, &self.stage.game_flags) {
+            self.apply(&mut cmds, &mut out)?;
+            return Ok(out);
+        }
         let mut tasks = std::mem::take(&mut self.tasks);
         let mut res = Ok(());
         for t in tasks.iter_mut() {
@@ -445,6 +485,11 @@ impl<D: Data> Story<D> {
                 _ => {}
             }
             let number = q.number();
+            // 0x0078c830 skips the QCT while the script gate is shut
+            // (0x0078ca80).
+            if script_gate(self.world.stage_no, &self.stage.game_flags) {
+                continue;
+            }
             if let Some(ctrl) = q.ctrl.as_mut() {
                 let mut env = Env {
                     world: &mut self.world,

@@ -15,6 +15,7 @@ pub mod cond;
 pub mod data;
 pub mod event;
 pub mod exe;
+pub mod look;
 pub mod orders;
 pub mod qct;
 pub mod route;
@@ -125,6 +126,8 @@ pub enum HostEvent {
     SetQuestBit { quest: u32, bit: u32, value: bool },
     /// The Arisen's vocation (sGameSys +0xa76e0, JobPl 0x005bb010).
     PlayerJob(u32),
+    /// The sGameSys flags the script gate reads (0x0044d430).
+    GameFlags(story::GameFlags),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -248,8 +248,56 @@ pub struct CameraView {
     /// the actors' skeletons; 0x007ecc30 / 0x007ed220).
     pub pose: Option<mtcamera::Pose>,
     pub fov_type: u32,
+    /// `uMotionCamera.mOffsetPos` (+0x70). No reader of it was found in
+    /// the per-frame camera path (uMotionCamera::vf08 0x00fab460,
+    /// uOfsMotionCamera::vf08 0x007eb9b0 / vf09 0x007ebba0, uCamera::vf09
+    /// 0x01128840, cSetInfoCoord::vf09 0x005f35c0), so it is reported and
+    /// not applied.
     pub offset_pos: Option<[f32; 4]>,
+    /// `mOption` (+0x490): bit 0 smooths the adjustment (0x007bc400).
+    pub option: i32,
     pub adjust: Vec<CameraAdjust>,
+}
+
+impl CameraView {
+    /// The pose with the actor-joint adjustments applied. `offsets[i]` is
+    /// adjustment entry i's joint displacement: the joint's world position
+    /// minus the position its local pose chain gives (0x007ed220), so it is
+    /// non-zero only where IK or body morphs move the joint. The host,
+    /// which owns the skeletons, supplies it.
+    ///
+    /// For each mask (1 target, 2 eye), the matching entries (target set,
+    /// joint >= 0, weight > 0) are averaged with weight / total weight of
+    /// `offset * weight` (0x007ecc30); the target gets mask 1, the eye
+    /// mask 2 (0x007ebba0, without the smoothing of mOption bit 0).
+    // Translated from 0x007ecc30, 0x007ed220 (last step) and 0x007ebba0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn adjusted(&self, offsets: &[[f32; 3]]) -> Result<Option<mtcamera::Pose>, Error> {
+        let Some(mut pose) = self.pose else { return Ok(None) };
+        if self.option & 1 != 0 {
+            return Err(Error::Unimplemented("camera adjustment smoothing (mOption bit 0, 0x007bc400)".into()));
+        }
+        let sum = |mask: i32| -> [f32; 3] {
+            let live = |a: &CameraAdjust| a.mask & mask != 0 && a.target.is_some() && a.joint >= 0 && a.weight > 0.0;
+            let total: f32 = self.adjust.iter().filter(|a| live(a)).map(|a| a.weight).sum();
+            let mut out = [0.0; 3];
+            if total > 0.0 {
+                for (i, a) in self.adjust.iter().enumerate().filter(|(_, a)| live(a)) {
+                    let o = offsets.get(i).copied().unwrap_or([0.0; 3]);
+                    for k in 0..3 {
+                        out[k] += o[k] * a.weight * (a.weight / total);
+                    }
+                }
+            }
+            out
+        };
+        let (t, e) = (sum(1), sum(2));
+        for k in 0..3 {
+            pose.target[k] += t[k];
+            pose.position[k] += e[k];
+        }
+        Ok(Some(pose))
+    }
 }
 
 /// An actor (`uActorModelPl`) this frame.
@@ -527,6 +575,7 @@ impl EventPlayer {
             pose,
             fov_type,
             offset_pos: m.vec4(&format!("{name}.mOffsetPos")),
+            option: m.int(&format!("{name}.mOption")).unwrap_or(0),
             adjust,
         }))
     }
@@ -633,6 +682,31 @@ impl EventPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_adjustment() {
+        let pose = mtcamera::Pose { position: [0.0; 3], target: [0.0, 0.0, -100.0], up: [0.0, 1.0, 0.0], fov_degrees: 30.0 };
+        let adj = |mask, weight| CameraAdjust { mask, target: Some("pl_00".into()), joint: 173, weight };
+        let v = CameraView {
+            list: String::new(),
+            cut: 0,
+            frame: 0.0,
+            pose: Some(pose),
+            fov_type: 0,
+            offset_pos: None,
+            option: 0,
+            adjust: vec![adj(2, 0.0), adj(1, 0.8)],
+        };
+        // Mask 1 moves the target by offset * weight (one live entry).
+        let p = v.adjusted(&[[5.0, 0.0, 0.0], [10.0, 0.0, 0.0]]).unwrap().unwrap();
+        assert_eq!(p.target, [8.0, 0.0, -100.0]);
+        assert_eq!(p.position, [0.0; 3]);
+        // No displacement, no change.
+        assert_eq!(v.adjusted(&[]).unwrap().unwrap(), pose);
+        let mut s = v.clone();
+        s.option = 1;
+        assert!(s.adjusted(&[]).is_err());
+    }
 
     #[test]
     fn language_rewrite() {
