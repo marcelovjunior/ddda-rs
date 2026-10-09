@@ -3,8 +3,9 @@
 //! the body rebuilt by the game's own edit-to-look path
 //! (`ddlook::save::edit_look`, 0x00780fa0) after every change.
 //!
-//! Keys: Up/Down picks a field, Left/Right changes it, Enter prints the
-//! record (the values a save would hold).
+//! Keys: Up/Down picks a field, Left/Right changes it, Enter confirms:
+//! the record (the values a save would hold) is printed and stored in
+//! [`EditResult`] for the caller (the opening's stage 801).
 //!
 //! *Not yet the original's screen.* The `uGUIEdit` layout, its pages and
 //! each field's allowed values are not read: the ranges below come from
@@ -21,6 +22,10 @@ use crate::stage::Loader;
 
 /// The idle motion the edited body holds (bank 0 slot 0, `m0000_co`).
 const MOTION: &str = r"motion\pl\m\m00\m0000_co\m0000_co";
+
+/// The confirmed edit record, `(field, value)` in `EDIT_U8_FIELDS` order.
+#[derive(Resource, Default)]
+pub struct EditResult(pub Option<Vec<(String, u32)>>);
 
 #[derive(Resource)]
 pub struct CharaEdit {
@@ -122,6 +127,7 @@ pub fn setup(commands: &mut Commands, loader: Loader<'static>, sex: u8) -> Resul
             Node { position_type: PositionType::Absolute, left: Val::Px(12.0), top: Val::Px(12.0), ..default() },
         ))
         .id();
+    commands.insert_resource(EditResult(None));
     commands.insert_resource(CharaEdit { loader, tables, pattern, values, allowed, cursor: 0, body: None, text, dirty: true });
     Ok(())
 }
@@ -132,6 +138,7 @@ pub fn update(
     mut commands: Commands,
     edit: Option<ResMut<CharaEdit>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut result: Option<ResMut<EditResult>>,
     mut texts: Query<&mut Text>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -157,9 +164,12 @@ pub fn update(
     if keys.just_pressed(KeyCode::Enter) {
         let record: Vec<String> = EDIT_U8_FIELDS.iter().zip(e.values).map(|(f, v)| format!("{f}={v}")).collect();
         info!("charaedit: {}", record.join(" "));
+        if let Some(r) = result.as_mut() {
+            r.0 = Some(EDIT_U8_FIELDS.iter().map(|f| f.to_string()).zip(e.values).collect());
+        }
     }
     if let Ok(mut t) = texts.get_mut(e.text) {
-        let mut s = String::from("Character edit (Up/Down field, Left/Right value, Enter prints)\n\n");
+        let mut s = String::from("Character edit (Up/Down field, Left/Right value, Enter confirms)\n\n");
         let first = e.cursor.saturating_sub(12).min(n.saturating_sub(25));
         for i in first..(first + 25).min(n) {
             let mark = if i == e.cursor { ">" } else { " " };
