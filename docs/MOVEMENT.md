@@ -65,10 +65,12 @@ How `ddsim` moves an Arisen, and where each rule comes from. Code:
   run 20 when the feet test `0x00AC5FB0` (two joints along the facing)
   returns false, else 0, 17, 0. ddsim has no skeleton and takes the false
   branch (*placeholder*); the run trace starts on frame 20.
-- **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2)
-  (the velocity with its component along the ground normal removed). This
-  fits the traces within 0.5% over slopes -0.25..0.29 (`ddsim::along_ground`;
-  *measured*, the engine code is not traced).
+- **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2).
+  This is the scenery sweep's floor slide (below): the move's horizontal
+  part loses its component along the floor normal's horizontal part. It
+  fits the traces within 0.5% over slopes -0.25..0.29, the sprint stop
+  included. Without collision triangles ddsim projects the step with
+  `ddsim::along_ground` instead.
 
 **Recorded** (read-only, uPlayer at ~200 Hz; mage, start area, town variant;
 the acceptance traces of docs/ACCEPTANCE.md confirm the speeds):
@@ -161,7 +163,11 @@ yaw (+0x257C) to adjust 0xF1 (22.5) x the motion's curve 9 x uPlayer
 +0x68 x +0x29A8 (both 1.0 in the recordings), and ends with the motion.
 Curve 9 of motion 21 is linear 1.0 at frame 0, 0.5 at 5, 0 from 25: 196.9
 cm in all, recorded 198.1. The stop runs in game time (unit delta 1.0).
-A run stops at once (recorded 0 cm, as ddsim).
+A run stops at once (recorded 0 cm, as ddsim). A released sprint moves one
+more frame at sprint speed: `cPlActDash::vf06` (0x00ACAF80) sets the
+frame's velocity before it requests action 3 for a released stick (+0x32C0
+== 0), so the stop starts a frame later (recorded: action 3 one frame after
+the release).
 
 **Motion curves and events** (`mtlmt`). `0x010571C0(k)` returns curve k
 of the playing motion: the LMT's float block, `(flags >> 16) & 0x1F`
@@ -213,16 +219,93 @@ landing motions 12 and 15 set it from frame 3, the sprint stop (21) from
 frame 18. The traces hold a landing about 3.3 game frames with the stick
 held. That `cPlActLand` uses the same bit is *assumed*.
 
-**Falling off.** `0x00B6E5C0` enters `cPlActFall` when the action allows
-falls (uPlayer +0x35E8 bit 0), the character is not grounded (+0x1ED0)
-and the ground cast from 100 cm above the feet (`0x0084FEA0`) is more than
-30 cm below them. ddsim follows ground within 30 cm (`STEP_DOWN`) only if
-it is a floor (up component of the normal >= 0.7, *assumed* stand-in for
-the grounded flag); steeper ground is never walked, so slopes are fallen
-down whatever the step size, and steep ground under a fall holds the
-character up without landing (the original stays in action 13 on the
-drop route's steep edge). A fall's starting horizontal speed is the last
-step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
+**Falling off and landing.** `0x00B6E5C0` enters `cPlActFall` when the
+action allows falls (uPlayer +0x35E8 bit 0), the character is not grounded
+(+0x1ED0) and the ground cast from 100 cm above the feet (`0x0084FEA0`) is
+more than 30 cm below them (`FALL_CHECK_UP`, `STEP_DOWN`). It lands
+(action 14) when the action allows landing (+0x35E8 bit 1, set by
+`cPlActFall::vf05`) and the character is grounded. The grounded flag comes
+from the scenery sweep (below). A fall's starting horizontal speed is the
+last step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
+`cPlActLand::vf05` (0x00ACD2C0) plays the moving landing (motion 12) only
+when the stick is held within 45 degrees of the facing (the rotator's
+target yaw +0x2578 against the stick angle +0x32C4); otherwise the
+standing one (15).
+
+**Scenery collision** (`crates/ddsim/src/sweep.rs`). The character is moved
+by `cScrAdjust` (uObjModel +0x19C0, properties from its vf03 0x0079DB30).
+Each frame `0x0079E200` sweeps its capsule from the old to the new position
+(`0x010B4960` -> `0x010B4560` -> `0x010B2E20` -> `0x010B0CA0`) and stores
+the result bits at +0x1A8.
+
+- *Capsule.* From `collision\pl\m0001` group 109 (`mIsScrAdj`, a sphere of
+  radius 35 at the model origin); read live (claude-4, board #931): 35 to
+  145 cm above the feet, radius 35 (`PLAYER_CAPSULE`).
+- *Ground check.* On the ground (`mIsGroundCheck`, set while uPlayer
+  +0x273C bit 0 is, `uPlayerBase::vf93` 0x00B63F70) the target sinks by
+  `mGroundCheckOffset` (adjust 0x7E, -20, written by `uPlayerBase::vf90`
+  0x00B61A20) x the unit delta (`GROUND_CHECK_DROP`). In the air the query
+  carries flag 0x40000000 instead (`0x00DE4B70`).
+- *The loop* (`0x010B0CA0`, at most `sCollision::Param` +0x44 = 10 moves):
+  find the first contact along the move; stand at the contact backed off
+  0.01 along the move, then 0.1 off the surface along its normal (+0x200,
+  from Param +0x4C); categorize the contact; on the ground a wall or ceiling
+  contact drops a rest shorter than sqrt 5 that has not advanced along the
+  move (sCollision +0x18C = 5, +0x188 = 15, +0x190 = 0.001, +0x194 = 1e-5);
+  slide the rest (`0x010AFC60`); go on while the rest is longer than
+  sqrt 1e-5. The first contact also reads the axis check (below).
+- *Categories* (`0x00DEFD00`, `0x00DEF0C0`). A triangle whose material flag
+  word (the sbc material record's first word, kept per triangle by
+  `ddworld`) meets sCollision +0x44 (0) is a floor, +0x48 (0x80000000) a
+  steep slope, +0x4C (0x2002, set by the game's sCollision 0x00422D00) a
+  wall; otherwise the contact normal decides: y above sin 45 is a floor,
+  at or below sin 45 a wall, and below sin -10 a ceiling. The game sets
+  both the floor and the wall angle to 45 degrees (`0x00FB37F0`,
+  `0x00FB3840` from 0x00422D00; the base constructor 0x00DF02B0 sets 60,
+  80, -10), so there is no slope category by normal. Much of the stage's
+  rock has flag 0x2000: it is a wall whatever its slope (the drop route's
+  strip, on which the original keeps falling).
+- *Slide* (`0x010AFC60`, player query: Param +0xB0 = 0, +0xB4 = 1 on the
+  ground and 0 in the air, +0xB5 = 0). Floor: anything but a move straight
+  down keeps its horizontal part minus its component along the normal's
+  horizontal part, and the matching rise (the slope law above); straight
+  down stops, and a contact within the first 0.0625 of the move
+  (sCollision +0x50) is undone, so standing on a slope does not creep.
+  Slope and ceiling: projected onto the plane. Wall: projected onto the
+  plane; on the ground a slide going up keeps only its horizontal
+  component along the wall; then (flag 0x80000000) if the slide keeps less
+  than 0.1 (Param +0x68) of the move's horizontal direction, or of the
+  rest's, it runs down (or up) the wall by what is left to the target
+  height, along the crease with the previous wall when this contact came
+  within the first 0.1 of the move.
+- *Axis check* (`mAxisCheckType` 2, `mAxisCheckSphereRadius` 15; callback
+  `0x011C5E90`): a sphere of radius 15 cast from the capsule's lower centre
+  at the old position down by 35 x sqrt 2, in the air plus the move's
+  drop. Its category is the nearest upward-facing triangle's (a tie goes to
+  the steeper one). At the first contact of the sweep (`0x010B0CA0`) no hit
+  sets result bit 0x400 and switches the query to group 2 (floors count as
+  slopes); a hit that is not a floor switches to group 2 only. The result
+  is the categories met | 0x400 | the axis category << 20.
+- *Grounded* (`uObjModel::vf90` 0x00885E30): not when the axis check is on
+  and 0x400 is set; else floor or slope met (on the ground also the axis
+  floor bit 0x100000). `Swept::grounded`.
+- *Narrowphase.* The original's per-triangle callbacks (GJK raycast
+  `0x00D7FB00`, sphere-triangle `0x00D631E0` via `0x01166220`) are replaced
+  by exact capsule-triangle distance with conservative advancement; like
+  the original, a triangle facing along the move is skipped unless the
+  capsule already overlaps it. Not translated: the per-edge flags (sbc
+  triangle bytes +0x18..+0x1A, 4 = inactive edge whose contacts count only
+  on the face; `mtsbc` does not read them), the depenetration retries
+  (+0x1F0 below -0.0625, `0x010B2A60`, `0x010FEA30`), moving colliders
+  (`0x010B3000`), the second axis check (+0x298) and the ceiling follow-up
+  (`0x010FEA80`, `mIsCellingAdjust`).
+- ddsim uses the sweep when the ground provides triangles
+  (`Ground::triangles_in`, `ddworld::Terrain`); test grounds without them
+  keep the older point-and-cylinder rules (`wall_slide`, `STEP_UP`).
+- The original sweeps once per engine frame; ddsim sweeps every `TICK`
+  (a quarter motion frame), so the ground check's drop and the
+  length-dependent thresholds (the stall rule, the 0.0625 undo, the crease)
+  apply to quarter-frame moves.
 
 ## Assumptions and placeholders
 
@@ -266,25 +349,13 @@ step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
 - Double jump: the original allows it for dagger vocations; `--play` gives
   it to both players.
 - No animation blending: states switch motions immediately.
-- **The character's collision against scenery is approximated.** The
-  original: `cScrAdjust` at uObjModel +0x19C0 (properties from its vf03
-  0x0079DB30: `mCapsule` +0xD0, `mOffset` +0x100, `mGroundCheckOffset(G)`
-  +0x190 / +0x194 = adjust 0x7E (-20), `mCheckFilter` +0x198,
-  `mAxisCheckType` +0x1A0 = 2, `mAxisCheckSphereRadius` +0x1A4, flags
-  +0x1AC..). Its capsule comes from the model's scenery-adjust volume:
-  `collision\pl\m0001` group 109 (`mIsScrAdj`), one sphere of radius 35 at
-  joint -1 (the model origin), set relative to the root joint by
-  0x0076C540. Read live (claude-4, board #931, standing): `mCapsule` from
-  (0, 35, 0) to (0, 145, 0) above the feet, radius 35; `mOffset` 0; ground
-  check offsets -20; axis check type 2, sphere radius 15. 0x0079E200 sweeps it from the old to the new position through
-  the generic MtCollision collide-and-slide (0x010B4960 -> 0x010B3000,
-  iterating with GJK/MPR triangle callbacks), then checks the ground below
-  (type 2: a cast of radius x 1.41 down). ddsim keeps a point on the ground
-  and slides along walls found on the capsule's segment from 60 cm (not
-  35, *placeholder*: without the sweep a lower segment blocks on steps) to
-  145 cm (`BODY_HEIGHT`), radius 35 (`BODY_RADIUS`). Consequences on the drop route:
-  the original rests on the strip's edge 12 cm from its origin (a sphere
-  of 35 there sits 2 cm below the top; recorded 0.7) where ddsim falls at
-  once, and after landing ddsim does not free itself from a wall slide as
-  the original does at frame 195 (path gap 116 cm, the four failing
-  acceptance rows). No placed scenery is missing under the strip point.
+- **Scenery collision, open points.** The sweep (above) is translated, its
+  narrowphase replaced by exact geometry. The query's check filter
+  (`mCheckFilter` +0x198, Param +0x04 / +0x0C) is not applied: every
+  collision triangle is met. On the drop route the original slides along a
+  rock's edge at the same 0.45 cm/frame as ddsim from frame 90, then at
+  frame 195 moves along the same wall at 2.2 cm/frame; ddsim keeps
+  crawling. The crease rule gives that direction and slope but not the
+  speed; the cause is not found (live trace asked of claude-4, board
+  #1090). The old rules for grounds without triangles (`wall_slide`, step
+  up 60 cm, `BODY_HEIGHT`, `BODY_RADIUS`) are *placeholders*.
