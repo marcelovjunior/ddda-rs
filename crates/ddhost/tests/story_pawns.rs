@@ -10,6 +10,20 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn manual_stage_loading_waits_for_actual_completion_without_enabling_actor_facts() {
+    use ddhost::StoryWorld;
+    let mut world = ddhost::opening::OpeningWorld::new();
+    world.manual_stages = true;
+    world.handle(200, &[ddstory::Request::JumpArea { stage: 100, pos: 2, fade: 0 }]);
+    for _ in 0..150 {
+        assert!(!world.events().iter().any(|e| matches!(e, ddstory::HostEvent::StageLoaded { .. })));
+    }
+    assert!(world.encounters.is_none());
+    world.report(ddstory::HostEvent::StageLoaded { stage: 100 });
+    assert!(world.events().contains(&ddstory::HostEvent::StageLoaded { stage: 100 }));
+}
+
+#[test]
 fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
     use ddhost::StoryWorld;
     let camera = ddstory::Request::Camera {

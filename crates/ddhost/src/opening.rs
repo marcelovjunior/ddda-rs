@@ -32,6 +32,8 @@ pub struct OpeningWorld {
     /// Menus wait for the view ([`OpeningWorld::close_menu`]) instead of
     /// closing themselves.
     pub manual_menus: bool,
+    /// StageLoaded is reported only after the caller installs its world.
+    pub manual_stages: bool,
     /// The menu waiting for the view: menu and the seat index it opened
     /// for.
     pub menu: Option<(Menu, usize)>,
@@ -49,6 +51,7 @@ impl OpeningWorld {
             enemy_bindings: Default::default(),
             npcs: vec![],
             manual_menus: false,
+            manual_stages: false,
             menu: None,
             pending: vec![],
         }
@@ -141,15 +144,15 @@ impl StoryWorld for OpeningWorld {
         }
     }
     fn handle(&mut self, stage: u32, requests: &[Request]) {
-        if !self.manual_menus && self.encounters.is_none() {
+        if !self.manual_menus && !self.manual_stages && self.encounters.is_none() {
             return self.inner.handle(stage, requests);
         }
         let mut rest = Vec::with_capacity(requests.len());
         for r in requests {
             match r {
                 Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
-                Request::JumpArea { .. }
-                | Request::Placement { .. }
+                Request::JumpArea { .. } if self.manual_stages || self.encounters.is_some() => {}
+                Request::Placement { .. }
                 | Request::Group { .. }
                 | Request::ApplyScript { .. }
                 | Request::NpcLife { .. }
@@ -166,6 +169,9 @@ impl StoryWorld for OpeningWorld {
     }
     fn events(&mut self) -> Vec<HostEvent> {
         let mut e = self.inner.events();
+        if self.manual_stages {
+            e.retain(|event| !matches!(event, HostEvent::StageLoaded { .. }));
+        }
         if self.encounters.is_some() {
             // Also discard synthetic callbacks queued before live activation.
             // Actual observations live in our separate pending queue below.

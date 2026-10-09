@@ -95,3 +95,20 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   actual reports in a separate queue. JumpArea now awaits actual stage
   loading in live mode. Four host tests pass, including pre-activation
   queued callbacks, Camera 17, handoff, and preserved scripted fixtures.
+
+### Stage handoff checkpoint
+
+- The opening now continues ticking after q0002 boots and handles JumpArea
+  through Streamer::enter. It reads the destination's authored start
+  position/angle/member offsets, replaces collision, places every roster
+  seat, clears old stage NPCs, and reports StageLoaded only afterward.
+  Stream focus follows the viewed seat and installs rebuilt field terrain.
+- Manual stage acknowledgments are independent from live actor facts:
+  the current viewer still uses ScriptedHost actor/AI stand-ins. This is
+  traversal plumbing, not a completed q0002 or original encounter match.
+  Guest world streaming on remote stage changes is still missing; all
+  host roster seats receive authoritative destination positions.
+- Verified release viewer tests: 35 passed, one ignored. All five host
+  story_pawns tests passed, including stage acknowledgment without live
+  actor facts. Release viewer build succeeds. No original visual comparison
+  or end-to-end gate traversal has been claimed.
