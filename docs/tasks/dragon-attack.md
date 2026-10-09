@@ -170,6 +170,23 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   Eight dragon tests pass, covering gates, shortest arc, exact-step equality,
   transition resets/completion and actor exit. TargetFly, full animation
   blending and live host effects remain unimplemented.
+- TargetFly scheduling is now traced: vtable 0x015d42f0 has no-op vf06
+  (0x005f35c0), movement vf07 (0x00a61590), and exit 0x00a62150.
+  `uCharacterBase::vf97` 0x0084c800 dispatches action vf07 in pass C,
+  after terrain correction and before collision activation, not phase 91.
+  Flight reads normalized row 2 of `vf22(-1)`'s cached model matrix
+  (`uModel::vf22` 0x00ff9a20 returns actor +0xB0). It does not substitute
+  the quaternion it just updated for that cached forward vector.
+- Added only `TargetFlyTravel`, an isolated translation substep requiring
+  explicit cached forward and turn-lag state. Disassembly at
+  0x00a62098..0x00a620fc repairs misleading decompiler stack aliases: the
+  strict arrival-radius comparison uses displacement saved before movement.
+  Tests cover this boundary, snap/no-restart, speed ramp/slowdown floor and
+  the zero-speed initialization distinction. Nine dragon tests pass, also
+  including exact yaw wrap boundaries and configured-mode 54 rejection.
+  Action 10 remains **Unsupported**: quaternion steering, side-turn layers,
+  rider effects, pass-C orchestration and final collision timing are still
+  required before enabling it in the actor prefix.
 - Still required: actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->
