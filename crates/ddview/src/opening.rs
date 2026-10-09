@@ -765,6 +765,7 @@ pub fn step(
             inputs.insert(id, if id == 0 { input } else { PlayerInput::default() });
         }
         input.interact = false;
+        s.host.scenario_field_cells = stage_view.streamer.as_ref().and_then(|streamer| streamer.scenario_field_cells());
         let report = match s.host.tick_network(&inputs, network_now) {
             Ok(r) => r,
             Err(e) => {

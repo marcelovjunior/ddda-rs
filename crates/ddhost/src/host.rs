@@ -121,6 +121,9 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
     pub story_npcs: crate::story_npcs::StoryNpcs,
+    /// Current stage's observed completed collision cells, supplied by its
+    /// loading adapter before the story phase; clear on leaving the field.
+    pub scenario_field_cells: Option<ddstory::scenario::LoadedFieldCells>,
     /// NPCs that left the schedule on an error of their graphs (id, error),
     /// for the views to report.
     pub npc_errors: Vec<(u32, String)>,
@@ -164,6 +167,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             economy: ddeconomy::Economy::default(),
             npcs: ddnpcrt::NpcRuntime::default(),
             story_npcs: Default::default(),
+            scenario_field_cells: None,
             npc_errors: vec![],
             npc_parked: Default::default(),
             progression: ddprogress::Progression::new(),
@@ -248,6 +252,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 time,
                 players,
                 npcs: self.world.npcs(),
+                loaded_field_cells: self.scenario_field_cells.clone(),
                 interact: interact.and_then(|p| seats.iter().position(|&s| s == p)),
                 events,
                 ..Default::default()

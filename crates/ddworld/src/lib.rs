@@ -41,6 +41,7 @@ pub struct Terrain {
     attributes: Vec<Option<u32>>,
     grid: HashMap<(i32, i32), Vec<u32>>,
     pub cells: usize,
+    parsed_collision_cells: Vec<(i32, i32)>,
 }
 
 /// A ray hit with the authored collision material, when available.
@@ -158,6 +159,7 @@ impl Terrain {
             attributes: Vec::new(),
             grid: HashMap::new(),
             cells: 0,
+            parsed_collision_cells: Vec::new(),
         }
     }
 
@@ -234,10 +236,18 @@ impl Terrain {
                 }
                 if any {
                     t.cells += 1;
+                    t.parsed_collision_cells.push((a, b));
                 }
             }
         }
         t
+    }
+
+    /// Field collision resources that actually parsed successfully. Missing
+    /// or malformed requested cells are absent; render/scenery triangles
+    /// alone do not make a field collision resource ready.
+    pub fn parsed_collision_cells(&self) -> &[(i32, i32)] {
+        &self.parsed_collision_cells
     }
 
     /// Adds the collision of each cell's placed scenery (`_s00` layout): every
@@ -569,6 +579,19 @@ mod ddsim_ground {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_collision_metadata_excludes_missing_requests_and_render_only_terrain() {
+        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !native.exists() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let terrain = super::Terrain::load_collision_cells(&vfs, 100, [(64, 54), (-999, -999)]);
+        assert_eq!(terrain.parsed_collision_cells(), &[(64, 54)]);
+        assert_eq!(terrain.cells, 1);
+        assert!(!terrain.tris.is_empty());
+        assert!(wall_and_floor().parsed_collision_cells().is_empty());
+    }
+
     use super::*;
     use ddsim::Ground;
 
