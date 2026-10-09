@@ -88,6 +88,20 @@ pub struct StageLighting {
     pub fog_end: f32,
     /// Game clock (ms into the day) of the capture, if it has one.
     pub clock_ms: Option<u32>,
+    /// The night spot light (`uSkySpotLight`), if lit.
+    pub spot: Option<SpotLight>,
+}
+
+/// A spot light in the stage frame (cm, the viewer's origin cell), with
+/// the deferred spot shader's attenuation parameters.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SpotLight {
+    pub pos: Vec3,
+    pub dir: Vec3,
+    pub color: Vec3,
+    /// start, 1 / (end - start), cos outer, 1 / (cos inner - cos outer)
+    pub atten: Vec4,
+    pub falloff: f32,
 }
 
 /// Uniform of [`DdExt`]; layout mirrored in `dd_material.wgsl`.
@@ -106,6 +120,12 @@ pub struct DdParams {
     pub reflect: Vec4,
     /// xyz: the environment cube's colour (`EnvCubeColors`), w: its index.
     pub env: Vec4,
+    /// Spot light: position (viewer units, w falloff), direction, colour
+    /// (w 1 when lit), attenuation (see [`SpotLight`]).
+    pub spot_pos: Vec4,
+    pub spot_dir: Vec4,
+    pub spot_color: Vec4,
+    pub spot_atten: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
@@ -140,6 +160,12 @@ impl DdParams {
         let range = l.fog_end - l.fog_start;
         let inv = if range > 0.0 { 1.0 / range } else { 0.0 };
         self.fog_range = Vec4::new(l.fog_start, inv, 1.0 / UNIT, 0.0);
+        if let Some(s) = l.spot {
+            self.spot_pos = (s.pos * UNIT).extend(s.falloff);
+            self.spot_dir = s.dir.normalize_or_zero().extend(0.0);
+            self.spot_color = s.color.extend(1.0);
+            self.spot_atten = s.atten;
+        }
         self
     }
 }
@@ -311,14 +337,14 @@ fn uv_slot(layout: &InputLayout, alias: &str) -> Option<usize> {
 /// Materials drawn without the light buffer: every stage100 pixel shader
 /// with the sea's sampler set (albedo, normal, detail normal, specular,
 /// environment cube; e.g. file offset 0x4A0980 of sc\dx9\stage100) and
-/// every blended water shader (with tDepthMap) reads no
+/// every blended water shader (FTransparencyVolume, with tDepthMap) reads no
 /// tLightAccumulationTexture. Their colour is albedo x fAlbedoColor x
 /// fDiffuseColor x v1.rgb x v2.w plus the reflection x mean(v1.rgb) x v2.w;
 /// no vertex shader outside the grass reads fSHCoef or a light, so v1 and
 /// v2.w are *inferred* to be the layout's VertexColor and Occlusion
 /// (IANonSkinTBNC carries both): unlit, baked colours.
 fn forward_unlit(s: &Shading) -> bool {
-    s.blends_alpha()
+    (s.blends_alpha() && s.feature("FTransparency") == Some("FTransparencyVolume"))
         || (s.feature("FBump") == Some("FBumpDetailNormalMap")
             && s.feature("FReflect") == Some("FReflectCubeMap")
             && !s.textures.keys().any(|k| k.starts_with("tDDMaterial")))

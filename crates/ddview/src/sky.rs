@@ -105,6 +105,44 @@ pub struct SkyLights {
     pub fill: Option<BlendLight>,
     /// Hemisphere light (`uSkyHemiSphereLight`).
     pub hemi: Option<BlendLight>,
+    /// The night spot light (`uSkySpotLight`).
+    pub spot: Option<SkySpot>,
+}
+
+/// `uSkySpotLight`: a spot light at `LightOffset` above the player (*assumed*
+/// anchor), lit only at night.
+#[derive(Clone, Debug, Default)]
+pub struct SkySpot {
+    pub color: [f32; 3],
+    pub offset: [f32; 3],
+    /// `mStart`, `mEnd` (cm), `mCone`, `mSpread` (degrees), `mFalloff`.
+    pub start: f32,
+    pub end: f32,
+    pub cone: f32,
+    pub spread: f32,
+    pub falloff: f32,
+}
+
+impl SkySpot {
+    /// Its colour at night blend `b`: `LightColor` x clamp((b - 0.8) x 10,
+    /// 0, 1) (the zone fade, 1 outside zones, is left out).
+    // Translated from 0x00c69460 (DDDA.exe 2017-12-13 Steam)
+    pub fn color_at(&self, b: f32) -> [f32; 3] {
+        let f = ((b - 0.8) * 9.999_998).clamp(0.0, 1.0);
+        self.color.map(|c| c * f)
+    }
+
+    /// Shader attenuation parameters (`sLightParam` +0x30..+0x40): start,
+    /// 1 / (end - start), cos(cone / 2), 1 / (cos((cone - spread) / 2) -
+    /// cos(cone / 2)), and the falloff exponent.
+    // Translated from 0x00e19850 (DDDA.exe 2017-12-13 Steam)
+    pub fn attenuation(&self) -> ([f32; 4], f32) {
+        let deg = std::f32::consts::PI / 180.0;
+        let outer = (self.cone * 0.5 * deg).cos();
+        let inner = ((self.cone - self.spread) * 0.5 * deg).cos();
+        let delta = (inner - outer).max(1.192_092_9e-7);
+        ([self.start, 1.0 / (self.end - self.start), outer, 1.0 / delta], self.falloff)
+    }
 }
 
 /// A light with day and night colours (and a reverse, ground, colour for
@@ -231,11 +269,22 @@ impl StageSky {
     /// `DayColor_<w>` the fill light, the hemisphere light has both colours.
     fn light_units(s: &Scheduler, w: &str) -> SkyLights {
         let infinite = mtarc::type_hash("uSkyInfiniteLight");
+        let spot = mtarc::type_hash("uSkySpotLight");
         let hemisphere = mtarc::type_hash("uSkyHemiSphereLight");
         let mut out = SkyLights::default();
         for (i, t) in s.tracks.iter().enumerate() {
             let day = vec3(s, i, &format!("DayColor_{w}"));
-            if t.type_hash == infinite {
+            if t.type_hash == spot {
+                out.spot = Some(SkySpot {
+                    color: vec3(s, i, "LightColor").unwrap_or_default(),
+                    offset: vec3(s, i, "LightOffset").unwrap_or([0.0, 0.0, 0.0]),
+                    start: float(s, i, "mStart").unwrap_or(0.0),
+                    end: float(s, i, "mEnd").unwrap_or(1.0),
+                    cone: float(s, i, "mCone").unwrap_or(90.0),
+                    spread: float(s, i, "mSpread").unwrap_or(0.0),
+                    falloff: float(s, i, "mFalloff").unwrap_or(1.0),
+                });
+            } else if t.type_hash == infinite {
                 if let Some(intensity) = float(s, i, &format!("IntensityScale_{w}")) {
                     out.sun_scale = float(s, i, "mLightScale").unwrap_or(1.0);
                     out.sun_intensity = intensity;
@@ -315,6 +364,7 @@ impl StageSky {
     /// radius `radius` (viewer units; keep it inside the far plane), and
     /// inserts [`crate::stage::SkyEnv`] for the materials' reflections seen
     /// from `eye` (game units).
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &self,
         commands: &mut Commands,

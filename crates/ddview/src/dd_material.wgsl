@@ -55,6 +55,13 @@ struct DdParams {
     reflect: vec4<f32>,
     // xyz: environment cube colour, w: cube index
     env: vec4<f32>,
+    // spot light: position (viewer units, w falloff), direction (from the
+    // light), colour (w 1 when lit), attenuation (start cm, 1/(end-start),
+    // cos outer, 1/(cos inner - cos outer))
+    spot_pos: vec4<f32>,
+    spot_dir: vec4<f32>,
+    spot_color: vec4<f32>,
+    spot_atten: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
@@ -195,6 +202,19 @@ fn fragment(
             shadow = shadows::fetch_directional_shadow(0u, in.world_position, in.world_normal, view_z, in.position.xy);
         }
         var light = sh_irradiance(n) + dd.sun_color.rgb * max(dot(n, dd.sun_dir.xyz), 0.0) * shadow;
+        if (dd.spot_color.w > 0.0) {
+            // Deferred spot light (pixel shader at file offset 0x9B1A70 of
+            // sc\dx9\root): colour x (1 - sat((d - start) / (end - start)))^2
+            // x sat((dot(-dir, L) - cos outer) / (cos inner - cos outer))^falloff
+            // x max(N.L, 0); no shadow.
+            let to_light = dd.spot_pos.xyz - in.world_position.xyz;
+            let d = length(to_light) * dd.fog_range.z;
+            let l = normalize(to_light);
+            var range = 1.0 - clamp((d - dd.spot_atten.x) * dd.spot_atten.y, 0.0, 1.0);
+            range = range * range;
+            let cone = pow(clamp((dot(-dd.spot_dir.xyz, l) - dd.spot_atten.z) * dd.spot_atten.w, 0.0, 1.0), dd.spot_pos.w);
+            light += dd.spot_color.rgb * range * cone * max(dot(n, l), 0.0);
+        }
         if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
             // Unlit: the vertex colour (in the base colour) is the light.
             light = vec3<f32>(1.0);

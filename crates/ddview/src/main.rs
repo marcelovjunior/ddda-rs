@@ -70,6 +70,8 @@ struct Args {
     demo: bool,
     players: u8,
     spawn: Vec3,
+    /// The reference's player position (`"player"`), else `spawn`.
+    player: Option<Vec3>,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -106,6 +108,7 @@ fn args() -> Args {
         players: 2,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
+        player: None,
         up: Vec3::Y,
         fov_deg: 45.0,
         near: 10.0,
@@ -185,6 +188,9 @@ fn apply_ref(a: &mut Args, path: &str) {
         Vec3::new(v[0], v[1], v[2])
     };
     a.pos = v3("eye");
+    if text.contains("\"player\"") {
+        a.player = Some(v3("player"));
+    }
     a.look = v3("target");
     a.up = v3("up");
     // The recorded fov is uCameraGame.mFov. The game renders with
@@ -280,6 +286,7 @@ fn lighting_from_units(hemis: &[[f32; 9]], lights: &[[f32; 6]], fog: &mtweather:
         fog_start: fog.start,
         fog_end: fog.end,
         clock_ms: None,
+        spot: None,
     }
 }
 
@@ -294,6 +301,20 @@ fn resolve_lighting(args: &mut Args) {
     let clock = args.clock_ms.or(args.light.as_ref().and_then(|l| l.clock_ms)).unwrap_or(12 * 3_600_000);
     args.clock_ms = Some(clock);
     let minute = clock / 60_000;
+    // The night spot light: not part of the --light captures (spot units
+    // were not read), so it is added from the data in both cases.
+    let spot = |sky: &sky::StageSky, player: Vec3| -> Option<stage::SpotLight> {
+        let s = sky.lights.spot.as_ref()?;
+        let sun = mtweather::sky::sun_direction(&sky.sky, clock);
+        let color = Vec3::from(s.color_at(mtweather::sky::night_blend(sun)));
+        if color == Vec3::ZERO {
+            return None;
+        }
+        let (atten, falloff) = s.attenuation();
+        let offset = Vec3::from(s.offset);
+        Some(stage::SpotLight { pos: player + offset, dir: -offset, color, atten: Vec4::from(atten), falloff })
+    };
+    let player = args.player.unwrap_or(args.spawn);
     if args.weather.is_none() {
         args.weather = Some(
             args.light
@@ -302,7 +323,10 @@ fn resolve_lighting(args: &mut Args) {
                 .unwrap_or(0),
         );
     }
-    if args.light.is_some() {
+    if let Some(l) = &mut args.light {
+        if let Some(sky) = sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0)) {
+            l.spot = spot(&sky, player);
+        }
         return;
     }
     let weather = args.weather.unwrap_or(0);
@@ -315,6 +339,7 @@ fn resolve_lighting(args: &mut Args) {
     let (hemis, lights) = sky.light_values(sun);
     let mut l = lighting_from_units(&hemis, &lights, &fog);
     l.clock_ms = Some(clock);
+    l.spot = spot(&sky, player);
     args.light = Some(l);
 }
 
