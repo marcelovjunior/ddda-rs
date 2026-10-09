@@ -123,6 +123,20 @@ motion banks, a dressed Arisen.
   (within 1 cm of the references) and is blocked by faces higher than a
   step (STEP_UP 60 cm, placeholder).
 
-Next action: object collision for placed scenery (rocks, trees), then a
-dressed Arisen (face, hair, equipment) so the two players look like the
-game's characters.
+- Movement compared with a recording of the original (read-only memory,
+  2026-10-08): walk, run and sprint move by a velocity from
+  `m_pl000_00` (`rAdjustParam`), not root motion. Run velocity matches the
+  recorded 10.165 cm/frame exactly; ground speed is 3-10% under the
+  recorded path speed (open). Jump apex 92.6 cm vs 93.1 recorded. The
+  simulation steps at 120 Hz. Town and field walk/run variants. Sprint-start
+  ramp. Second jump plays the dagger roll. See MOVEMENT.md.
+- Walls: players collide with steep triangles of the stage collision and
+  slide along them. Only the `h` meshes are movement collision (`e` is
+  `cSplitSbc::mpClsnEffMrgRsrc`, effects). Big trees block; bushes and
+  shrubs have no stage collision, as in the data.
+
+Blockers: none. Open: turn rate, run/sprint stop motions, ledge detection
+from `cPlCliffHangBegin`, motion blending.
+
+Next action: maintainer playtest of `--play` (speeds, walls, ledges); then
+ledge detection from the exe.
