@@ -46,6 +46,8 @@ Verified: seven scenario unit tests (four new), installed q0002_event1
 inside/outside detection, and an installed terrain test rejecting a
 missing requested cell from completed metadata. Strict clippy found an
 existing chunks_exact warning in unrelated ddstory/world.rs; verification
-with that specific allowance passed. Release viewer build remains pending.
+with that specific allowance passed. Release viewer build passed (two
+existing viewer warnings and the coordinated layout accessor not yet used
+by the NPC adapter).
 No original-game comparison or full route acceptance is claimed yet.
 Next: rerun the gate-to-field benchmark after head merges this fix.
