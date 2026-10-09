@@ -109,3 +109,4 @@ Codex lane: see `docs/CODEX.md`.
 | [rift-sim](rift-sim.md) | The Rift as a host-owned system (summon, hire, dismiss) | core | claude-5 | assigned |
 | [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | assigned |
 | [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | assigned |
+| [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
