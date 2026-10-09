@@ -2294,6 +2294,7 @@ dependencies = [
 name = "ddeconomy"
 version = "0.1.0"
 dependencies = [
+ "ddid",
  "dditem",
  "ddstory",
  "ddvfs",
@@ -2328,6 +2329,10 @@ dependencies = [
  "mtlmt",
  "mtxfs",
 ]
+
+[[package]]
+name = "ddid"
+version = "0.1.0"
 
 [[package]]
 name = "dditem"

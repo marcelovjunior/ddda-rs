@@ -10,6 +10,7 @@
 //! counter) comes from `ddstory::World`.
 
 pub mod inventory;
+pub mod save;
 pub mod stock;
 pub mod wallet;
 
@@ -183,7 +184,7 @@ impl JudgmentState for Judge<'_> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Economy {
     pub wallets: BTreeMap<PlayerId, Wallet>,
     pub inventory: Inventory,

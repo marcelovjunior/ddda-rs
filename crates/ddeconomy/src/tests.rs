@@ -355,3 +355,41 @@ fn bag_full_eviction_and_overflow() {
     inv.add(&cat.items, Owner::Storage(0), 0, RING as i16, 1, 0, &mut bb);
     assert_eq!(bb.entries, vec![(RING as i16, 1)]);
 }
+
+#[test]
+fn save_parts_round_trip() {
+    let cat = catalog();
+    let w = world();
+    let p0 = party(0);
+    let p1 = party(1);
+    let mut e = Economy::new(w.day);
+    e.wallet(0).gold = 5000;
+    e.wallet(1).rift_crystals = 70;
+    e.gates.cosmetics_used.insert(1613);
+    e.gates.metamorphosis = -1;
+    let s = e.open_shop(&cat, &w, &p0, 0, SMITH).unwrap();
+    e.buy(&cat, &w, &p0, &s, SWORD, 1, Owner::Arisen(0)).unwrap();
+    e.buy(&cat, &w, &p0, &s, ORE, 3, Owner::Storage(0)).unwrap();
+    e.buy(&cat, &w, &p0, &s, ORE, 2, Owner::Pawn(0)).unwrap();
+    e.sell(&cat, &p0, &s, Owner::Arisen(0), 0, 1).unwrap();
+    assert!(e.sessions_open());
+    e.close(s);
+    let s = e.open_shop(&cat, &w, &p1, 1, FOURNIVAL).unwrap();
+    e.close(s);
+    let parts = e.save();
+    assert_eq!(parts.players.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(Economy::load(&parts).unwrap(), e);
+    // The seats can change between sessions: player 0's part loaded on seat 1.
+    let mut swapped = parts.clone();
+    swapped.players = [(1, parts.players[&0].clone())].into();
+    let f = Economy::load(&swapped).unwrap();
+    assert_eq!(f.wallets[&1], e.wallets[&0]);
+    assert_eq!(f.inventory.bag(Owner::Storage(1)), e.inventory.bag(Owner::Storage(0)));
+    // Truncated or trailing bytes are refused.
+    let mut bad = parts.clone();
+    bad.shared.pop();
+    assert!(Economy::load(&bad).is_err());
+    bad.shared = parts.shared.clone();
+    bad.shared.push(0);
+    assert!(Economy::load(&bad).is_err());
+}

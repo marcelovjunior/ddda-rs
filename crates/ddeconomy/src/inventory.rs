@@ -8,7 +8,8 @@
 use dditem::itl::ItemList;
 use std::collections::BTreeMap;
 
-pub type PlayerId = usize;
+/// The seat of an Arisen (`ddid::PlayerId`, 0 = the host).
+pub use ddid::PlayerId;
 
 /// Who holds a bag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
