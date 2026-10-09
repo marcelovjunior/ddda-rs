@@ -138,6 +138,10 @@ fn registered_dragon_body_contains_the_entrance_motions() {
         motion_step: 0.0,
         root_translation_transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         think_target_y: 10.0,
+        motion_flags: 0,
+        yaw_enabled: true,
+        movement_condition_flags: 0,
+        yaw_slow_factor: 1.0,
         external_displacement: [0.0; 3],
         acceleration: [0.0; 3],
         horizontal_status_multipliers: [None; 2],
@@ -185,4 +189,43 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     );
     assert!(actor.done());
     assert_eq!(actor.frame, 7.0);
+
+    let effects = actor
+        .start_action(&data, 53, 1.0, dragon::HoverHeight::ThinkTarget)
+        .unwrap();
+    assert!(effects.contains(&dragon::DragonEffect::ResetFlightLayer));
+    assert!(!actor.done());
+    assert_eq!(
+        actor.step(&data, input(true)).unwrap(),
+        vec![dragon::DragonEffect::HoverAirControl],
+        "transitions do not send HoverUp's attached messages"
+    );
+    assert!(!actor.done());
+    let mut end = input(false);
+    end.motion_flags = 0x8000_0000;
+    actor.step(&data, end).unwrap();
+    assert!(actor.done());
+    actor
+        .start_hover_kakku(
+            &data,
+            dragon::HoverKakkuTarget::ThinkTarget {
+                position: [100.0, 35.0, 0.0],
+                speed: 115.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(actor.flight_speed_parameters(), Some((115.0, 115.0 * 0.04)));
+    assert!(!actor.done());
+    actor.step(&data, input(false)).unwrap();
+    assert!((actor.yaw - 1.5707964 / 30.0).abs() < 1e-6);
+    actor.motion_ended = true;
+    actor.step(&data, input(false)).unwrap();
+    assert!(actor.done());
+    let effects = actor
+        .start_action(&data, 53, 1.0, dragon::HoverHeight::ThinkTarget)
+        .unwrap();
+    assert!(effects.contains(&dragon::DragonEffect::ClearAcceleration));
+    let stopped_yaw = actor.yaw;
+    actor.step(&data, input(false)).unwrap();
+    assert_eq!(actor.yaw, stopped_yaw, "54 exit cancels its yaw controller");
 }

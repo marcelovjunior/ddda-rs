@@ -85,10 +85,114 @@ pub fn hover_transition_complete(motion_ended: bool, motion_flags: u32) -> bool 
     motion_ended || motion_flags & 0x8000_0000 != 0
 }
 
+/// Native yaw-controller state used by HoverKakku (action 54).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DragonYaw {
+    pub current: f32,
+    pub target: f32,
+    pub rate: f32,
+    pub active: bool,
+}
+
+// Embedded angle constants and wrapping: 0x00a6bf00 / 0x00797470,
+// DDDA.exe 2017-12-13 Steam. Preserve truncation and the inclusive +pi edge.
+fn wrap_yaw(angle: f32) -> f32 {
+    let mut wrapped = angle - (angle * 0.15915494).trunc() * 6.2831855;
+    if angle < 0.0 {
+        wrapped += 6.2831855;
+    }
+    if wrapped >= 3.1415927 {
+        wrapped -= 6.2831855;
+    }
+    wrapped
+}
+
+fn yaw_difference(current: f32, target: f32) -> f32 {
+    let (mut from, mut to) = (current, target);
+    if current * target < 0.0 {
+        if target < 0.0 {
+            to += 6.2831855;
+        }
+        if current < 0.0 {
+            from += 6.2831855;
+        }
+        let difference = to - from;
+        if difference.abs() > 3.1415927 {
+            if from <= to {
+                from = 6.2831855;
+                to = difference;
+            } else {
+                from -= to;
+                to = 6.2831855;
+            }
+        }
+    }
+    to - from
+}
+
+impl DragonYaw {
+    /// Translated from HoverKakku vf05 0x00a6bf00. Explicit headings are
+    /// supplied in radians; native alternate-mode degrees are converted by
+    /// the caller. The think-target mode uses [`Self::target_bearing`].
+    pub fn enter(current: f32, target: f32) -> Self {
+        let distance = yaw_difference(current, target).abs();
+        let rate = distance * 0.033333335;
+        let active = distance >= f32::EPSILON && rate >= f32::EPSILON;
+        Self {
+            current: if active { current } else { target },
+            target,
+            rate,
+            active,
+        }
+    }
+
+    /// a6bf5e..a6bfd5: normalize full displacement, then atan2(x,z).
+    /// The two double arguments use XMM0/XMM1, obscured by the decompiler.
+    pub fn target_bearing(pos: [f32; 3], target: [f32; 3]) -> f32 {
+        let mut delta = std::array::from_fn::<_, 3, _>(|i| target[i] - pos[i]);
+        let length = (delta[1] * delta[1] + delta[0] * delta[0] + delta[2] * delta[2]).sqrt();
+        if length >= f32::EPSILON {
+            let inverse = 1.0 / length;
+            delta[0] *= inverse;
+            delta[2] *= inverse;
+        }
+        wrap_yaw((f64::from(delta[0]).atan2(f64::from(delta[2]))) as f32)
+    }
+
+    /// 0x0084cc00 -> 0x00797470. `enabled` is actor +0x2576;
+    /// `condition_flags` is +0x26A0, distinct from damage flags +0x2738.
+    /// Slow factor +0x27B0 is used only for condition bit 0x1000.
+    pub fn step(&mut self, enabled: bool, condition_flags: u32, slow_factor: f32, step: f32) {
+        if !enabled || condition_flags & 0x800 != 0 || !self.active {
+            return;
+        }
+        let step = if condition_flags & 0x1000 != 0 {
+            step * slow_factor
+        } else {
+            step
+        };
+        self.target = wrap_yaw(self.target);
+        let difference = yaw_difference(self.current, self.target);
+        let distance = self.rate * step;
+        if difference.abs() < distance {
+            self.current = self.target;
+            self.active = false;
+        } else {
+            let signed = if difference < 0.0 { -distance } else { distance };
+            self.current = wrap_yaw(self.current + signed);
+        }
+    }
+}
+
 /// Effects requiring authoritative host state; callers must apply these in
 /// order. The prefix does not pretend to simulate attachment or air control.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DragonEffect {
+    /// 0x00a49480 then 0x00a6bd80: clear secondary layer 2 and the
+    /// flight controller's blend/steering state, including model +0x648.
+    ResetFlightLayer,
+    /// Action-54 exit 0x00a6c130 also clears the actor's acceleration.
+    ClearAcceleration,
     /// Common action-entry bookkeeping, 0x00a4db70, including +0x603B clear.
     BaseActionEnter,
     /// Common action-exit bookkeeping, 0x00a76c90, conditional host flags.
@@ -123,6 +227,10 @@ pub struct DragonStep<'a> {
     /// and animation blending require host support and are not simulated.
     pub root_translation_transform: [[f32; 3]; 3],
     pub think_target_y: f32,
+    pub motion_flags: u32,
+    pub yaw_enabled: bool,
+    pub movement_condition_flags: u32,
+    pub yaw_slow_factor: f32,
     pub external_displacement: [f32; 3],
     pub acceleration: [f32; 3],
     /// Ordered status multipliers from +0x26A0 bits 0x800/0x1000;
@@ -136,6 +244,29 @@ pub struct DragonStep<'a> {
     pub attached_owners: &'a [u32],
 }
 
+#[derive(Debug, Clone, Copy)]
+enum DragonAction {
+    HoverUp(HoverHeight),
+    KakkuHover,
+    HoverKakku { speed: f32, acceleration: f32 },
+}
+
+impl DragonAction {
+    fn motion(self) -> u16 {
+        match self {
+            Self::HoverUp(_) => 100,
+            Self::KakkuHover => 121,
+            Self::HoverKakku { .. } => 103,
+        }
+    }
+}
+
+/// Action 54's two native parameter modes (0x00a6bf00).
+pub enum HoverKakkuTarget {
+    ThinkTarget { position: [f32; 3], speed: f32 },
+    Configured { heading_degrees: f32, speed: f32 },
+}
+
 /// Supported actor prefix. Unsupported actions fail before cancelling the
 /// current action. This deliberately cannot run the whole entrance yet.
 pub struct Dragon {
@@ -144,7 +275,10 @@ pub struct Dragon {
     pub fighter: Fighter,
     pub frame: f32,
     pub motion_ended: bool,
-    hover: Option<HoverUp>,
+    action: Option<DragonAction>,
+    velocity: [f32; 3],
+    done: bool,
+    turn: Option<DragonYaw>,
 }
 
 impl Dragon {
@@ -155,20 +289,25 @@ impl Dragon {
             fighter: data.fighter(owner),
             frame: 0.0,
             motion_ended: false,
-            hover: None,
+            action: None,
+            velocity: [0.0; 3],
+            done: false,
+            turn: None,
         }
     }
 
     pub fn done(&self) -> bool {
-        self.hover.as_ref().is_some_and(|a| a.done)
+        self.done
     }
 
     pub fn velocity(&self) -> Option<[f32; 3]> {
-        self.hover.as_ref().map(|a| a.velocity)
+        self.action.map(|_| self.velocity)
     }
 
-    /// Typed HoverUp modes avoid accepting unknown serialized mode values.
-    /// Entry/exit translated from 0x00a6ba90/0x00a6bc80.
+    /// Starts action 52 or 53. Action 54 requires [`Self::start_hover_kakku`]
+    /// because it has additional sourced parameters. Typed HoverUp modes
+    /// avoid accepting unknown serialized mode values. Entry/exit translated
+    /// from 0x00a6ba90/0x00a6bc80; action 53 from 0x00a6bd80/0x00a76c90.
     pub fn start_action(
         &mut self,
         data: &DragonData,
@@ -176,32 +315,99 @@ impl Dragon {
         scale_y: f32,
         height: HoverHeight,
     ) -> Result<Vec<DragonEffect>, DragonError> {
-        if action != 52 {
-            return Err(DragonError::Unsupported(action));
+        let action = match action {
+            52 => DragonAction::HoverUp(height),
+            53 => DragonAction::KakkuHover,
+            _ => return Err(DragonError::Unsupported(action)),
+        };
+        self.enter(data, action, scale_y, None)
+    }
+
+    /// Action 54 entry/exit: 0x00a6bf00/0x00a6c130 (Steam 2017-12-13).
+    pub fn start_hover_kakku(
+        &mut self,
+        data: &DragonData,
+        target: HoverKakkuTarget,
+    ) -> Result<Vec<DragonEffect>, DragonError> {
+        let (heading, speed) = match target {
+            HoverKakkuTarget::ThinkTarget { position, speed } => {
+                (DragonYaw::target_bearing(self.pos, position), speed)
+            }
+            HoverKakkuTarget::Configured {
+                heading_degrees,
+                speed,
+            } => (heading_degrees * 0.017453292, speed),
+        };
+        self.enter(
+            data,
+            DragonAction::HoverKakku {
+                speed,
+                acceleration: speed * 0.04,
+            },
+            0.0,
+            Some(DragonYaw::enter(self.yaw, heading)),
+        )
+    }
+
+    /// Captured action +0x80/+0x7C fields; they do not imply translation
+    /// during HoverKakku's vf06, which only checks motion completion.
+    pub fn flight_speed_parameters(&self) -> Option<(f32, f32)> {
+        match self.action {
+            Some(DragonAction::HoverKakku { speed, acceleration }) => Some((speed, acceleration)),
+            _ => None,
         }
-        let id = crate::body::MotionId::new(0, HoverUp::MOTION);
+    }
+
+    fn enter(
+        &mut self,
+        data: &DragonData,
+        action: DragonAction,
+        scale_y: f32,
+        turn: Option<DragonYaw>,
+    ) -> Result<Vec<DragonEffect>, DragonError> {
+        let motion = action.motion();
+        let id = crate::body::MotionId::new(0, motion);
         if data.body.frames(id) == 0 {
-            return Err(DragonError::MissingMotion(HoverUp::MOTION));
+            return Err(DragonError::MissingMotion(motion));
         }
         let mut effects = Vec::new();
-        if let Some(previous) = &mut self.hover {
-            previous.exit();
-            effects.push(DragonEffect::ExitHover);
+        if let Some(previous) = self.action {
+            if matches!(previous, DragonAction::HoverUp(_)) {
+                self.velocity = [0.0; 3];
+                effects.push(DragonEffect::ExitHover);
+            }
             effects.push(DragonEffect::BaseActionExit);
+            if matches!(previous, DragonAction::HoverKakku { .. }) {
+                self.velocity = [0.0; 3];
+                self.turn = None;
+                effects.push(DragonEffect::ClearAcceleration);
+            }
         }
-        self.hover = Some(HoverUp::enter(scale_y, height));
+        self.action = Some(action);
+        self.done = false;
+        if let DragonAction::HoverUp(height) = action {
+            self.velocity = HoverUp::enter(scale_y, height).velocity;
+        }
+        if let Some(turn) = turn {
+            self.yaw = turn.current;
+            self.turn = Some(turn);
+        }
         self.frame = 0.0;
         self.motion_ended = false;
         effects.push(DragonEffect::BaseActionEnter);
         effects.push(DragonEffect::BindMotion {
-            id: 100,
+            id: motion,
             blend: 5.0,
             speed: 1.0,
         });
+        if matches!(action, DragonAction::KakkuHover) {
+            effects.push(DragonEffect::ResetFlightLayer);
+        }
         Ok(effects)
     }
 
-    /// Phase 91 action update (0x00a6bb40), velocity integration
+    /// Phase 91 action update (0x00a6bb40/0x00a6be00), yaw rotator
+    /// (0x0084cc00), velocity integration
     /// (0x0084ccc0), phase 92 motion/root travel (0x010629f0/0x0105b740),
     /// then phase 93 collision flags/volumes. DDDA.exe 2017-12-13 Steam.
     /// The host must consume returned effects before advancing other actors.
@@ -210,15 +416,15 @@ impl Dragon {
         data: &DragonData,
         input: DragonStep<'_>,
     ) -> Result<Vec<DragonEffect>, DragonError> {
-        let id = crate::body::MotionId::new(0, HoverUp::MOTION);
+        let action = self.action.ok_or(DragonError::NoAction)?;
+        let id = crate::body::MotionId::new(0, action.motion());
         let motion = data
             .body
             .motion(id)
             .filter(|m| m.frame_count > 0)
-            .ok_or(DragonError::MissingMotion(HoverUp::MOTION))?;
-        let hover = self.hover.as_mut().ok_or(DragonError::NoAction)?;
+            .ok_or(DragonError::MissingMotion(action.motion()))?;
         let mut effects = vec![DragonEffect::HoverAirControl];
-        if input.notify_attached {
+        if matches!(action, DragonAction::HoverUp(_)) && input.notify_attached {
             effects.extend(
                 input
                     .attached_owners
@@ -226,20 +432,41 @@ impl Dragon {
                     .map(|&owner| DragonEffect::AttachedMessage { owner, message: 4 }),
             );
         }
-        hover.update(self.pos[1], input.think_target_y);
+        match action {
+            DragonAction::HoverUp(height) => {
+                let mut hover = HoverUp {
+                    height,
+                    velocity: self.velocity,
+                    done: self.done,
+                };
+                hover.update(self.pos[1], input.think_target_y);
+                self.velocity = hover.velocity;
+                self.done = hover.done;
+            }
+            _ => self.done |= hover_transition_complete(self.motion_ended, input.motion_flags),
+        }
+        if let Some(turn) = &mut self.turn {
+            turn.step(
+                input.yaw_enabled,
+                input.movement_condition_flags,
+                input.yaw_slow_factor,
+                input.engine_step,
+            );
+            self.yaw = turn.current;
+        }
         for multiplier in input.horizontal_status_multipliers.into_iter().flatten() {
-            hover.velocity[0] *= multiplier;
-            hover.velocity[2] *= multiplier;
+            self.velocity[0] *= multiplier;
+            self.velocity[2] *= multiplier;
         }
         for axis in 0..3 {
-            self.pos[axis] += hover.velocity[axis] * input.engine_step + input.external_displacement[axis];
-            hover.velocity[axis] += input.acceleration[axis] * input.engine_step;
+            self.pos[axis] += self.velocity[axis] * input.engine_step + input.external_displacement[axis];
+            self.velocity[axis] += input.acceleration[axis] * input.engine_step;
             // Native upper-then-lower ordering; inputs must be finite actor state.
-            if hover.velocity[axis] > input.velocity_max[axis] {
-                hover.velocity[axis] = input.velocity_max[axis];
+            if self.velocity[axis] > input.velocity_max[axis] {
+                self.velocity[axis] = input.velocity_max[axis];
             }
-            if hover.velocity[axis] < input.velocity_min[axis] {
-                hover.velocity[axis] = input.velocity_min[axis];
+            if self.velocity[axis] < input.velocity_min[axis] {
+                self.velocity[axis] = input.velocity_min[axis];
             }
         }
         let root = ddsim::RootMotion::from_motion(motion);
@@ -458,6 +685,32 @@ impl DragonAiData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hover_kakku_yaw_preserves_gates_short_arc_and_strict_arrival() {
+        use super::DragonYaw;
+        let mut yaw = DragonYaw::enter(3.0, -3.0);
+        assert!(yaw.active);
+        assert!((yaw.rate - (6.2831855 - 6.0) / 30.0).abs() < 1e-7);
+        let before = yaw;
+        yaw.step(false, 0, 1.0, 1.0);
+        yaw.step(true, 0x800, 1.0, 1.0);
+        assert_eq!(yaw, before);
+        yaw.step(true, 0x1000, 0.5, 1.0);
+        assert!((yaw.current - (3.0 + yaw.rate * 0.5)).abs() < 1e-6);
+        let mut edge = DragonYaw {
+            current: 0.0,
+            target: 1.0,
+            rate: 1.0,
+            active: true,
+        };
+        edge.step(true, 0, 1.0, 1.0);
+        assert_eq!(edge.current, 1.0);
+        assert!(edge.active, "native arrival comparison is strict");
+        edge.step(true, 0, 1.0, 1.0);
+        assert!(!edge.active);
+        assert_eq!(DragonYaw::target_bearing([0.0; 3], [0.0, 8.0, 2.0]), 0.0);
+        assert!((DragonYaw::target_bearing([0.0; 3], [2.0, 8.0, 0.0]) - 1.5707964).abs() < 1e-6);
+    }
     #[test]
     fn root_translation_requires_resolved_scale_and_orientation() {
         // Nonuniform scale followed by a quarter turn about Y.

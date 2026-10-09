@@ -157,6 +157,19 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   assuming unit scale and yaw only. A nonuniform rotated-transform regression
   passes; all seven dragon tests pass. Single-track translation is supported;
   animation blending and root rotation remain host work.
+- Added transitions 53/54 to the actor prefix. Action 53 binds motion 121
+  and returns a typed layer-2/flight-state reset effect (0x00a6bd80 and
+  0x00a49480). Action 54 binds 103, captures speed/acceleration parameters
+  and sets its yaw controller (0x00a6bf00). Repaired the decompiler's hidden
+  atan2 arguments using disassembly at 0x00a6bfca: normalized X/Z are passed
+  as doubles in XMM0/XMM1. The local rotator translates 0x0084cc00 and
+  0x00797470 with explicit enable/status inputs, slow factor and strict
+  arrival comparison. Transition completion reads prior-frame motion end
+  or model bit 31; neither transition emits HoverUp's attached message.
+  Action-54 exit clears velocity/yaw and emits acceleration-clear bookkeeping.
+  Eight dragon tests pass, covering gates, shortest arc, exact-step equality,
+  transition resets/completion and actor exit. TargetFly, full animation
+  blending and live host effects remain unimplemented.
 - Still required: actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->
