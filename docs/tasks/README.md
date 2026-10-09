@@ -99,7 +99,7 @@ Codex lane: see `docs/CODEX.md`.
 | [rift-list-projection](rift-list-projection.md) | Rift list filters and pagination per viewer | reader | codex-1 | merged 2026-10-09 |
 | [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | superseded by enemy-spawns |
 | [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | merged 2026-10-09 |
-| [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
+| [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | merged 2026-10-09 |
 | [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | merged 2026-10-09 |
 | [m2-fixes](m2-fixes.md) | Close the M2 acceptance mismatches (speed, stop, stamina, slopes) | core | claude-1 | merged 2026-10-09 |
 | [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | merged 2026-10-09 |
