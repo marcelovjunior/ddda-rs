@@ -110,7 +110,7 @@ Codex lane: see `docs/CODEX.md`.
 | [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | merged 2026-10-09 |
 | [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | merged 2026-10-09 |
 | [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
-| [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | assigned |
+| [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | merged 2026-10-09 |
 | [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | assigned |
 | [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-5 | assigned |
 | [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | assigned |
