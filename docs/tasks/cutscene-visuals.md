@@ -68,7 +68,7 @@ Implemented, with visual acceptance still open:
 - Scope extensions for stage depth, ddstory fields/tests and controls
   Results approved on board #1385/#1401/#1410.
 
-Validation so far: release build succeeds; 20 ddlook tests, 9 mtcamera
+Validation so far: release build succeeds; 21 ddlook tests, 9 mtcamera
 tests, 3 ddstory event tests and 16 ddview tests pass. Additional
 installed-material regression verifies the brow group, NPC mask selection,
 alpha blending and zero authored depth bias. Release target reused from
@@ -109,3 +109,7 @@ Bounded diagnostic captures (also exit0, 45-second limit) isolate:
   reading table 0x0163c1a8 from the installed executable. Both relevant rows
   (male set0x8a, female0x89) specify no replacements, so it cannot explain
   this scene. The experimental reader/dependency was removed.
+
+Review follow-up: malformed eyebrow preset rows now return an error,
+rather than shifting later preset indices through filtering (regression).
+Fixed preset offsets were verified against instructions 0x00781b13..93.

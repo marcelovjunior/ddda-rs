@@ -12,6 +12,9 @@ pub struct Eyebrow {
 /// Translated from 0x00780fa0 (DDDA.exe 2017-12-13 Steam).
 pub fn save_offset(preset: u32, x: u32, y: u32) -> [f32; 2] {
     const SLIDER: [f32; 5] = [-0.05, -0.025, 0.0, 0.025, 0.05];
+    // 0x00781b13..0x00781b93 builds/selects these five stack pairs:
+    // .02 at 0x0161c398, .07 at 0x01502774, .04 at 0x015176d8,
+    // -.02 at 0x0161cf80 and -.03 at 0x0161d384; remaining lanes zero.
     const FIXED: [[f32; 2]; 5] = [[0.0, 0.02], [0.02, 0.07], [0.04, -0.02], [0.0, 0.0], [-0.03, 0.02]];
     if (200..205).contains(&preset) { FIXED[(preset - 200) as usize] }
     else if preset < 200 { [SLIDER.get(x as usize).copied().unwrap_or(0.0), SLIDER.get(y as usize).copied().unwrap_or(0.0)] }
