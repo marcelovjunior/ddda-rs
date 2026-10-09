@@ -707,6 +707,15 @@ impl Loader<'_> {
             if shadow_only && matches!(material, PartMaterial::Standard(_)) {
                 continue;
             }
+            // Albedo maps under effect\rtt\ are render targets of the effect
+            // system (e.g. the coast's animated foam, e_st100_10_BM), not
+            // in the data: without them the mesh would draw white, so it is
+            // left out (*not done*: the foam effect).
+            if shading.as_ref().and_then(|s| s.textures.get("tAlbedoMap")).is_some_and(|t| {
+                t.starts_with("effect\\rtt\\") && self.vfs.read(t, RTEXTURE).is_err()
+            }) {
+                continue;
+            }
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
