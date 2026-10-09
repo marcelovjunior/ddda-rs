@@ -556,13 +556,21 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
     let step = time.delta_secs().min(0.1) * MOTION_FPS;
     for mut p in &mut players {
         if let Some(frames) = p.blend_request.take() {
-            // freeze the pose shown now (itself possibly mid-blend)
+            // freeze the pose shown now (itself possibly mid-blend), before
+            // the morph: the morph pass goes on top of the blend each frame,
+            // so freezing the morphed locals would morph them again at every
+            // motion change (a chain of attacks blew joints up)
+            let unmorphed: HashMap<Entity, Transform> = p
+                .morph
+                .as_ref()
+                .map(|m| m.bones.iter().zip(&m.base).map(|(&(e, _), &t)| (e, t)).collect())
+                .unwrap_or_default();
             p.blend = mtlmt::blend::Interpolation::start(frames).map(|b| {
                 let pose = p
                     .joints
                     .values()
                     .filter_map(|&e| {
-                        let t = joints.get(e).ok()?;
+                        let t = unmorphed.get(&e).copied().or_else(|| joints.get(e).ok().copied())?;
                         Some((e, t.rotation, t.translation, t.scale))
                     })
                     .collect();
