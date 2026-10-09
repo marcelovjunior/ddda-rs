@@ -88,8 +88,17 @@ be used to advance the prologue by itself.
 
 Body damage callback `0x009a44f0` scales HitInfo +0x78 only when actor
 +0x7406 is zero and HitInfo +0x68 equals 1. The multiplier comes from
-actor +0x7268 while child 00 is alive, or +0x726c otherwise. They are
-loaded parameters, not values to invent. Body post-hit `0x009a4560` maps
+actor +0x7268 while child 00 is alive, or +0x726c otherwise. The guard's
+HitInfo +0x68 is the resolved pool **ID**: `0x0076db10` writes it from
+the resolved region's +4, after mapping raw HitInfo +0x6c via `0x00770f00`.
+`0x009a0918` copies `charparam/em/em5200` into actor +0x7260 through
+`0x00756990`. Reflection `0x0074ec30` identifies +8/+0xc as lion-head-only
+magick bonuses (two heads / one head), with labels at `0x0158eb70` and
+`0x0158ebc8`. `BodyDamageBonus` loads both values from that resource and
+implements the guarded post-mitigation modifier. A synthetic regression
+covers liveness, suppression and pool IDs, preserving every other hit field;
+the installed constructor loads it only for the body. The combat-pass hook
+is not connected yet. Body post-hit `0x009a4560` maps
 HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
 values to pool 0 for visual damage. Child post-hit callbacks
 `0x009b42f0`/`0x009bcb80` select pool 1 for hit kinds 4/6 respectively.

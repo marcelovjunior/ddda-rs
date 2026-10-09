@@ -17,6 +17,13 @@ fn installed_units_bind_bodies_and_keep_owner_pools_independent() {
     for unit in [Unit::Body, Unit::Child00, Unit::Child01] {
         let data = ChimeraData::load(&vfs, &exe, unit, 1.25).unwrap();
         assert_eq!(data.body.scale, 1.25);
+        assert_eq!(data.damage_bonus.is_some(), unit == Unit::Body);
+        if let Some(bonus) = data.damage_bonus {
+            let resource =
+                ddenemy::EnemyData::load(&vfs, ddenemy::EnemyId::parse("em5200").unwrap()).unwrap();
+            let object = &resource.specific.unwrap().object;
+            assert_eq!(bonus, BodyDamageBonus::from_object(object).unwrap());
+        }
         assert!(!data.body.skeleton.joints.is_empty());
         let motions: Vec<_> = data
             .catalogue
@@ -329,6 +336,30 @@ mod linked_hits {
     use ddcombat::cstatus::StatusTable;
     use ddcombat::damage::*;
     use ddenemyrt::combat::{apply_linked_enemy_hit, Attacker, Fighter, HitEvent, Victim};
+
+    #[test]
+    fn body_magick_bonus_uses_resolved_pool_and_child_liveness_only() {
+        let bonus = super::BodyDamageBonus {
+            child00_alive: 2.0,
+            child00_missing_or_dead: 3.0,
+        };
+        let mut original = hit();
+        original.mag = 7.0;
+        original.has_mag = true;
+        for pool_id in [0, 1, 2, 11, u32::MAX] {
+            for suppressed in [false, true] {
+                for alive in [false, true] {
+                    let mut actual = original.clone();
+                    bonus.apply(&mut actual, pool_id, suppressed, alive);
+                    let mut expected = original.clone();
+                    if pool_id == 1 && !suppressed {
+                        expected.mag = if alive { 14.0 } else { 21.0 };
+                    }
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
 
     // Synthetic fixtures deliberately differ from installed creature values.
     fn pools() -> Vec<RegionPool> {

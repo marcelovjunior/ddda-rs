@@ -13,6 +13,51 @@ pub enum Unit {
     Child01,
 }
 
+/// Loaded `cCharParamEm5200` +8/+0xc values (actor +0x7268/+0x726c).
+/// Reflected labels identify the lion-head magick bonuses. No defaults are
+/// supplied: the values belong to the installed specific-parameter resource.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyDamageBonus {
+    pub child00_alive: f32,
+    pub child00_missing_or_dead: f32,
+}
+
+impl BodyDamageBonus {
+    /// Reflection 0x0074ec30 maps these labels to +8/+0xc; initialization
+    /// 0x009a0918 copies the specific resource to actor +0x7260 via 0x00756990.
+    pub fn from_object(object: &mtxfs::Xfs) -> Result<Self, String> {
+        let read = |name| match object.get(&object.root, name) {
+            Some([mtxfs::Value::F(values)]) if values.len() == 1 => Ok(values[0] as f32),
+            _ => Err(format!("chimera specific parameters: missing scalar {name}")),
+        };
+        Ok(Self {
+            child00_alive: read("ライオン頭部のみへの魔法ダメージボーナス（２頭時のみ）")?,
+            child00_missing_or_dead: read("ライオン頭部のみへの魔法ダメージボーナス（１頭時のみ）")?,
+        })
+    }
+
+    /// Apply after common enemy mitigation and before region/rate scaling.
+    /// `suppressed` is actor byte +0x7406; its broader meaning is unresolved.
+    /// `resolved_pool_id` is HitInfo +0x68, filled from resolved region +4 by
+    /// 0x0076db10, rather than the hurt-region index at HitInfo +0x6c.
+    // Translated from 0x009a44f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn apply(
+        &self,
+        hit: &mut ddcombat::damage::MergedHit,
+        resolved_pool_id: u32,
+        suppressed: bool,
+        child00_alive: bool,
+    ) {
+        if !suppressed && resolved_pool_id == 1 {
+            hit.mag *= if child00_alive {
+                self.child00_alive
+            } else {
+                self.child00_missing_or_dead
+            };
+        }
+    }
+}
+
 /// One unit's installed body and combat parameters. Body and children each
 /// retain their own pools; this does not infer links or parent kill identity.
 #[derive(Debug, Clone)]
@@ -23,6 +68,8 @@ pub struct ChimeraData {
     pub defender: ddcombat::damage::EnemyDefender,
     pub regions: Vec<ddcombat::damage::RegionPool>,
     pub obj_size: u32,
+    /// The body-only post-mitigation override; children do not inherit it.
+    pub damage_bonus: Option<BodyDamageBonus>,
 }
 
 impl ChimeraData {
@@ -35,6 +82,15 @@ impl ChimeraData {
         let region = catalogue.unique_bound("rRegionStatus", |_| true)?;
         // Initializers 0x009a0bd1, 0x009b1118 and 0x009b909c select kind 0.
         let stats = crate::enemy_stats::load_paths(vfs, &common.path, &region.path)?;
+        let damage_bonus = if unit == Unit::Body {
+            let parameters = ddenemy::EnemyData::load(vfs, ddenemy::EnemyId::parse("em5200")?)?;
+            let specific = parameters
+                .specific
+                .ok_or("chimera: missing charparam/em/em5200 specific parameters")?;
+            Some(BodyDamageBonus::from_object(&specific.object)?)
+        } else {
+            None
+        };
         Ok(Self {
             catalogue,
             body,
@@ -42,6 +98,7 @@ impl ChimeraData {
             defender: stats.defender,
             regions: stats.regions,
             obj_size: stats.obj_size,
+            damage_bonus,
         })
     }
 

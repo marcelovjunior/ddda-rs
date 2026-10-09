@@ -104,6 +104,10 @@ Scale and collision rates/flags are explicit caller inputs. Actor initialization
 action stepping and host placement binding remain outstanding.
 Latest validation: `cargo test -p ddenemy -p ddenemyrt` passes 51 tests
 (10 parameter-reader and 41 enemy-runtime), with one existing ignored diagnostic.
+Follow-up: installed body-specific magick bonuses and their guarded
+post-mitigation modifier are implemented; 13 chimera integration tests pass.
+The modifier keys on the resolved pool ID, not the raw collision region.
+Shared combat-pass connection remains the next step.
 
 No host combat actor, placement kill, story progression or original-game
 comparison is claimed by this checkpoint. Next: the child-00 collision-link
