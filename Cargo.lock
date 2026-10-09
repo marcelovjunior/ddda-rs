@@ -2369,6 +2369,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddpawnai"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddprogress"
 version = "0.1.0"
 dependencies = [
