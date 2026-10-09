@@ -6,6 +6,24 @@ fn cockpit_authored_geometry() {
         .read("id/DDN/cockpit/cockpit0_1", mtarc::type_hash("rGUI"))
         .unwrap();
     let gui = mtgui::Gui::parse(&bytes).unwrap();
+    // Public section storage can be edited by callers; missing or truncated
+    // key/value pools must return errors rather than panic.
+    for header in [0xf0, 0xf4, 0xfc] {
+        let mut damaged = gui.clone();
+        damaged.sections.retain(|s| s.header_offset != header);
+        assert!(damaged.animation_objects("life_counter").is_err());
+    }
+    let mut damaged = gui.clone();
+    damaged
+        .sections
+        .iter_mut()
+        .find(|s| s.header_offset == 0xf4)
+        .unwrap()
+        .bytes = &[];
+    assert!(damaged.animation_objects("life_counter").is_err());
+    let mut damaged = gui.clone();
+    damaged.sections.retain(|s| s.header_offset != 0x100);
+    assert!(damaged.animation_objects("PL_Hp_gauge").is_err());
     let textures = gui.texture_regions().unwrap();
     let counter = gui.animation_objects("life_counter").unwrap();
     let digits = counter.iter().find(|o| !o.texture_keys.is_empty()).unwrap();
@@ -61,7 +79,7 @@ fn action_palette_control_and_keys() {
         gui.animation_objects(a.name).unwrap();
     }
     let node = gui.nodes.iter().position(|n| n.id == 178).unwrap();
-    let range = gui.control_range(node, 140 + 0x24).unwrap().unwrap();
+    let range = gui.control_range(node, 140 + 0x24).unwrap().unwrap(); // VK_HOME
     assert_eq!(range, [380.0, 385.0]);
     let objects = gui.animation_objects("360_buttons").unwrap();
     // Colour parent and textured child must keep disjoint track spans.
@@ -74,4 +92,30 @@ fn action_palette_control_and_keys() {
         .vector_keys
         .iter()
         .any(|(name, frame, _)| *name == "Size" && *frame == 380));
+}
+
+#[test]
+#[ignore = "requires DDDA_NATIVE_PC, reads player's install"]
+fn font_glyphs_and_texture_pages() {
+    let vfs = ddvfs::Vfs::open(std::env::var("DDDA_NATIVE_PC").unwrap()).unwrap();
+    let bytes = vfs
+        .read("id/common/font/ddfont_jpn", mtarc::type_hash("rGUIFont"))
+        .unwrap();
+    let font = mtgui::font::Font::parse(&bytes).unwrap();
+    assert_eq!(font.glyphs.len(), 4055);
+    assert_eq!(font.nominal_size, 26);
+    assert_eq!(font.pages, 4);
+    for page in 0..font.pages {
+        assert!(vfs
+            .locate(
+                &font.texture_path(page as u8).unwrap(),
+                mtarc::type_hash("rTexture")
+            )
+            .is_some());
+    }
+    for text in ["Heavy Attack", "Light Attack", "Converse", "Jump"] {
+        let line = font.line(text, [15.0, 17.0]).unwrap();
+        assert_eq!(line.len(), text.chars().count());
+        assert!(line.windows(2).all(|w| w[1].position[0] >= w[0].position[0]));
+    }
 }

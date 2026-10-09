@@ -141,3 +141,24 @@ Both brow layouts map UV_Primary to the first TexCoord, as the renderer
 uses. Hair104's six MRL copies and hair105's nine copies are identical.
 The primitive sort flag/alpha priority and original per-mesh sort center
 remain candidates; no unsupported sort bias or culling override added.
+
+### Transparent sort follow-up (head #1704)
+
+The candidate ordering mismatch is now corrected for character meshes:
+the original uses ancestor sphere center + current model radius when
+primitive sort bit2 is clear, or the first weight-bound bone-space center
+when set. It then clamps/truncates centimetre depth and appends authored
+alpha priority. Sources: 0x00ea3130 -> 0x00ea1f40, 0x00ea3d00,
+0x00ea5320 and 0x00ffc350. Details in CHARACTERS.md. Runtime model bias
++0x154 uses the constructor's zero default (0x00ea3490); runtime overrides
+remain unimported. Review also guards zero-count weight-bound records
+from borrowing the next primitive's bound.
+
+`cargo test --release -p ddview`: 21 pass after current main integration;
+release build passes. The new regression covers clamp, truncation,
+priority/depth precedence and f32 packed-key precision loss. Private
+`cutscene{800,1200}-sort.png` runs both exit0 under 45-second timeouts,
+using screenshot unattended mode with clean logs. Compared with the
+depth checkpoint captures, Quina's hair compositing improves visibly.
+The elder's ear hole and unclear brows persist in the new captures.
+No new original-game comparison or temporal z-fight acceptance yet.

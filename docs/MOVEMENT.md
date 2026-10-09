@@ -146,7 +146,7 @@ the acceptance traces of docs/ACCEPTANCE.md confirm the speeds):
   height to 5 over the edge; the climb ends 10 in from the edge, 5 over it,
   in `cPlActWait`.
 
-**Turning** (traced in part). `cPlActRun::vf06` builds the velocity from
+**Turning** (traced; recorded 2026-10-09, see the open points). `cPlActRun::vf06` builds the velocity from
 the action's +0x60, which `cPlAction::vf06` copies each frame from uPlayer
 +0x2654; `uPlayerBase::vf90` (0x00B61A20) sets that to the stick's angle
 (uPlayer +0x32C4) while the stick is held. So the velocity follows the
@@ -421,8 +421,32 @@ ground 0x301 / air 0x302, check, slot). The ground rows used:
 | | heavy | any other | WandStrike1 `0x0107001E` | |
 
 Left out: S1_1 -> S1_2_1 (check 24, an ability bit not identified), LandL's
-follow-up `0x0101000D` (a learned ability), the air rows (AirS, AirL,
-WandAirStrike, the air WandShot), skills.
+follow-up `0x0101000D` (a learned ability), the staff's charged rows
+(command 0x0C, checks 8, 15, 16), skills.
+
+**Air attacks** (rows flagged 0x302; records are 8 words, the last -1).
+The jump, sprint-jump and fall motions (11, 14, 23, 7) keep slots 1 and 4
+executing throughout, so an air press starts at once.
+
+| Press | Sword | Staff |
+|---|---|---|
+| light | AirS `0x01010003` (slot 4): motion 0x714, jump row 0x36 | air WandShot `0x01070022`: variant 1 (0x014F7148), motions 0x716 / 0x717 / 0x718, one volley |
+| heavy | AirL `0x01010005`: motion 0x703, row 0x37; landing 0x704 | WandAirStrike `0x01070020`: motion 0x725, row 0x47 |
+
+- `0x00937CF0(row)` loads a `pljumpparam` row into uPlayer +0x38D8
+  (SpeedY), +0x38DC (gravity), +0x38E0 (SpeedZ); `0x00AC59A0` adds it as an
+  impulse (rows 0x36 and 0x47: none) and sets the gravity (-2).
+- AirS and WandAirStrike run physics each frame (`0x00AC51D0`) and set
+  +0x35E8 bit 1, so touching ground lands.
+- AirL hangs until its motion's first bit-31 frame. Then `0x00AC5830` sets
+  the vertical speed to 0 and the gravity to -8 (row 0x37), and it drops.
+  On ground (+0x1ED0) phase 2 plays 0x704 with the velocity zeroed.
+- The air WandShot's phases call no physics: the caster hangs in the air.
+- ddsim: `Attack::SwordAirLight`, `SwordAirHeavy`, `SwordAirHeavyLand`,
+  `StaffAirStrike`, `ShotPhase::Air*`; after an air attack ends in the
+  air the fall follows (*assumed*). Tests:
+  `the_staff_air_shot_hangs_and_fires_once`,
+  `the_sword_plunge_hangs_until_bit_31_then_drops_and_lands`.
 
 **Cancel slots (the combo windows).** The cancel object at uPlayer +0x2588
 has 7 slots on motion layer 0, event group 0 (`0x00827F50`): slot `i` is in
@@ -505,9 +529,15 @@ stage flags, actor +0x26A4, +0x4CF0, +0x31EA).
 - Town or field is a per-player flag set by the host. `--play` starts in
   town mode (as recorded); F2 toggles it.
 - Integration order: position += velocity, then velocity += gravity.
-- Turning is instant. In the original the velocity also follows the stick
-  at once and only the model's yaw turns over time (Turning, above); the
-  recorded velocity direction turns ~70°/s, cause not traced.
+- Turning (recorded 2026-10-09, keyboard): the heading (+0x2654) and the
+  velocity take the stick's direction at once. The facing (+0x257C) steps
+  toward it along the short arc by adjust 3 (22.5 degrees, 0.3927 rad,
+  stored at +0x2584 by `uPlayerBase::vf90`) x the unit delta, which is
+  about 776 degrees/s at the 1.15 unit rate. A 90 degree turn takes about 3.5
+  frames and 180 degrees about 7. The run motion keeps playing; there is
+  no turn motion. ddsim does the same (`Player::heading`,
+  `Sim::turn_to_heading`); the sprint stop moves along the facing. The
+  ~70 degrees/s of the older recording was an analog stick.
 - Step up 60 cm (placeholder). Fall gravity = normal
   jump's: `cPlActFall::vf05` (0x00ACCDD0) keeps the gravity of a character
   already falling and otherwise takes the last jump row's (uPlayer

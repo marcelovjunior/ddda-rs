@@ -1,5 +1,10 @@
 # Milestones
 
+**Current focus (2026-10-09): the opening slice.** M5 is now a vertical
+slice from the new game to the Encampment, played in co-op; see
+[OPENING_SLICE.md](OPENING_SLICE.md). Other systems advance only where the
+slice needs them.
+
 Each milestone is a route the players can actually do, with a gate checked
 against the original game. Co-op comes early (M3) on purpose: it validates
 the architecture before many systems are built on it.

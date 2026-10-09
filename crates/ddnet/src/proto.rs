@@ -13,7 +13,7 @@ use ddid::{PlayerId, Reader, Result, Writer};
 ///   guest's look in Hello; the host's spot in Welcome; Look events; HP
 ///   and enemies in snapshots.
 /// - 3: NPC bodies in snapshots; PlayEvent (cutscenes).
-pub const PROTOCOL: u16 = 3;
+pub const PROTOCOL: u16 = 4;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]

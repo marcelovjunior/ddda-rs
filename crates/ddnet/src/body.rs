@@ -154,6 +154,10 @@ fn state(w: &mut Writer, s: State) {
                 Attack::SwordHeavy => 3,
                 Attack::StaffStrike1 => 4,
                 Attack::StaffStrike2 => 5,
+                Attack::SwordAirLight => 6,
+                Attack::SwordAirHeavy => 7,
+                Attack::SwordAirHeavyLand => 8,
+                Attack::StaffAirStrike => 9,
             };
             w.u8(15).u8(a);
             return;
@@ -163,6 +167,9 @@ fn state(w: &mut Writer, s: State) {
                 ShotPhase::Start => 0,
                 ShotPhase::Loop => 1,
                 ShotPhase::End => 2,
+                ShotPhase::AirStart => 3,
+                ShotPhase::AirLoop => 4,
+                ShotPhase::AirEnd => 5,
             };
             w.u8(16).u8(p);
             return;
@@ -181,6 +188,10 @@ fn read_state(r: &mut Reader) -> Result<State> {
             3 => Attack::SwordHeavy,
             4 => Attack::StaffStrike1,
             5 => Attack::StaffStrike2,
+            6 => Attack::SwordAirLight,
+            7 => Attack::SwordAirHeavy,
+            8 => Attack::SwordAirHeavyLand,
+            9 => Attack::StaffAirStrike,
             a => return Err(format!("attack {a}")),
         };
         return Ok(State::Attack { attack });
@@ -190,6 +201,9 @@ fn read_state(r: &mut Reader) -> Result<State> {
             0 => ShotPhase::Start,
             1 => ShotPhase::Loop,
             2 => ShotPhase::End,
+            3 => ShotPhase::AirStart,
+            4 => ShotPhase::AirLoop,
+            5 => ShotPhase::AirEnd,
             p => return Err(format!("shot phase {p}")),
         };
         return Ok(State::Shot { phase });
