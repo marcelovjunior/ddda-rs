@@ -14,12 +14,32 @@ fn rook_and_prologue_records_keep_their_actual_stats_and_equipment() {
     let vfs = ddvfs::Vfs::open(&native).unwrap();
     let data = EquipmentData::load(&vfs, &exe.image().unwrap()).unwrap();
     let skills = ddskill::catalogue::ExeTables::from_image(&exe.image().unwrap()).unwrap();
+    // Equality branches, switch-range boundaries, gaps, final fallback,
+    // and signed/out-of-range behavior of0x004647e0.
+    for (item, excluded) in [
+        (-1, false),
+        (0x46, false),
+        (0x47, true),
+        (0x48, false),
+        (0x12c, true),
+        (0x12d, false),
+        (0x17d, true),
+        (0x17e, false),
+        (0x298, true),
+        (0x3a0, true),
+        (0x53a, true),
+        (0x6a4, true),
+        (0x736, false),
+        (0x740, false),
+        (0x76c, false),
+        (0x76d, true),
+    ] {
+        assert_eq!(data.exclusions.contains(item), excluded, "item {item:#x}");
+    }
     let story = ddstory::data::InstallData::open(&native, None).unwrap();
     for stock in 10..=14 {
         let record = ddstory::prologue::story_stock(&story, stock, 0).unwrap();
-        // Fixture explicitly enables installed starting gear. The general
-        // 0x004647e0 exclusion predicate is a caller input, not validated here.
-        let actor = data.convert(stock as u32 + 100, &record, |_| false).unwrap();
+        let actor = data.convert_installed(stock as u32 + 100, &record).unwrap();
         assert_eq!(actor.record, record);
         assert_eq!(actor.base_attacker(false).base_attack, record.param.attack);
         assert_eq!(

@@ -147,7 +147,66 @@ pub struct EquipmentData {
     pub weapon_levels: ItemLevelParam,
     pub armour_levels: ItemLevelParam,
     pub accessory_levels: ItemLevelParam,
+    pub exclusions: ItemExclusions,
     defence_slots: Vec<usize>,
+}
+
+/// Item-ID exclusion predicate used by the combat-stat getters. The bulk
+/// switch maps remain in the player's executable; they are not copied here.
+pub struct ItemExclusions {
+    excluded: Vec<bool>,
+}
+
+impl ItemExclusions {
+    /// Translated switch dispatch from 0x004647e0 (2017-12-13 Steam).
+    pub fn load(exe: &ddexe::Exe<'_>) -> Result<Self, String> {
+        let mut excluded = vec![false; 0x76d];
+        // First ID, count, byte-index map, two-target jump table. These
+        // addresses and bounds are operands of the source's dispatch code.
+        for (first, count, map, jumps) in [
+            (0x47, 0xe6, 0x00464900, 0x004648f8),
+            (0x192, 0xed, 0x004649f0, 0x004649e8),
+            (0x29c, 0xde, 0x00464ae8, 0x00464ae0),
+            (0x3c1, 0xf3, 0x00464bd0, 0x00464bc8),
+            (0x57c, 0xa9, 0x00464ccc, 0x00464cc4),
+            (0x6b1, 0x83, 0x00464d80, 0x00464d78),
+            (0x736, 0x0b, 0x00464e0c, 0x00464e04),
+        ] {
+            let targets = exe.u32s(jumps, 2)?;
+            for (index, selector) in exe.bytes(map, count)?.iter().enumerate() {
+                let target = targets
+                    .get(usize::from(*selector))
+                    .ok_or_else(|| format!("item exclusion map {map:#x}: invalid selector {selector}"))?;
+                excluded[first + index] = match *target {
+                    0x004648d1 => true,
+                    // The first six ranges are below the final fallback
+                    // range0x736..0x740, so its bounds reject them.
+                    0x004648d4 if first < 0x736 => false,
+                    0x004648f3 => false,
+                    _ => return Err(format!("item exclusion map {map:#x}: unknown branch {target:#x}")),
+                };
+            }
+        }
+        // Equality branches encoded directly in 0x004647e0.
+        for id in [0x17d, 0x298, 0x3a0, 0x53a, 0x6a4] {
+            excluded[id] = true;
+        }
+        Ok(Self { excluded })
+    }
+
+    /// The source compares signed item IDs. Negative IDs are not excluded
+    /// by this predicate (callers reject them separately); IDs >=0x76d are.
+    pub fn contains(&self, item: i32) -> bool {
+        if item >= 0x76d {
+            true
+        } else {
+            usize::try_from(item)
+                .ok()
+                .and_then(|id| self.excluded.get(id))
+                .copied()
+                .unwrap_or(false)
+        }
+    }
 }
 
 impl EquipmentData {
@@ -169,6 +228,7 @@ impl EquipmentData {
             weapon_levels: levels(r"etc\item\LvParamWepon")?,
             armour_levels: levels(r"etc\item\LvParamArmor")?,
             accessory_levels: levels(r"etc\item\LvParamAccessory")?,
+            exclusions: ItemExclusions::load(exe)?,
             defence_slots,
         })
     }
@@ -192,9 +252,8 @@ impl EquipmentData {
     /// Copy saved base values without reconstructing growth from a level row
     /// (0x00446a30). Equipment setup follows 0x00446860/0x00459340.
     ///
-    /// `unavailable` supplies the item exclusion predicate 0x004647e0,
-    /// which is not yet translated here. It must be an explicit caller
-    /// decision, not an implicit assumption that every saved ID is usable.
+    /// `unavailable` supplies an explicit exclusion observation. Use
+    /// `convert_installed` for the sourced installed predicate0x004647e0.
     /// No body, combat Fighter, bag replacement or AI fallback is created.
     pub fn convert(
         &self,
@@ -288,6 +347,11 @@ impl EquipmentData {
             equipment,
         })
     }
+
+    /// Build baseline stats using the installed exclusion switch tables.
+    pub fn convert_installed(&self, owner: u32, record: &Cmc) -> Result<SavedPawnBase, String> {
+        self.convert(owner, record, |item| self.exclusions.contains(item as i32))
+    }
 }
 
 // Translated from 0x00459340 (DDDA.exe 2017-12-13 Steam).
@@ -376,6 +440,9 @@ mod tests {
             },
             armour_levels: empty.clone(),
             accessory_levels: empty,
+            exclusions: ItemExclusions {
+                excluded: vec![false; 0x76d],
+            },
             defence_slots: (2..=10).collect(),
         }
     }
