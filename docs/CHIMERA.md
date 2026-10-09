@@ -161,11 +161,19 @@ carried total, no repeated mitigation, untouched mapped pool, missing mapping,
 attribute-8 gate, no-death floor, break guards, physical/magick status rates,
 frozen cancellation and attacker identities 0, 1 and 37. These are synthetic
 contract checks; they do not constitute a two-player chimera fight.
-The integration test includes the module by path pending the shared
-`lib.rs` owner's export. No game observation was performed.
+The module is exported through the agreed `lib.rs` hook. `ChimeraData::load`
+constructs each unit's skeleton, ordered motion banks, bound collision files
+and common/region combat values from its installed resource bindings.
+Kind zero is selected by all three initializers (0x009a0bd1, 0x009b1118,
+0x009b909c). The common-stat loader accepts explicit child resource paths
+without widening the `EnemyId` type. Installed regressions check legacy
+common-stat equivalence, kind-zero pools, missing paths, bank ordering and
+independent owner pools. Scale and collision rates/flags remain explicit
+caller inputs; this constructor does not claim an initialization policy.
+No game observation was performed.
 
-Still open: assembling loaded resources into combat actors and spawn binding; complete damage routing;
+Still open: spawn binding and initialization flags; complete damage routing;
 child anatomical mapping; action execution, root movement and collision;
 think driver and N-Arisen fight integration; story/live acceptance.
-Next action: load the three action/resource sets and trace the life-pool
-writer before binding combat death to the stage-380 placement.
+Next action: connect the sourced child-00 linked-hit contract to the host's
+combat pass before binding combat death to the stage-380 placement.

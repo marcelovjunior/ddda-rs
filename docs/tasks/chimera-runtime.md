@@ -98,6 +98,12 @@ Shared parameter loading now accepts explicit common/region resource paths,
 including both child suffixes. One installed regression verifies legacy common
 stats equivalence, all three chimera kind-zero pools against parsed resources,
 and missing-path errors. The existing em#### identity validation stays intact.
+`ChimeraData::load` now constructs all three installed bodies and combat stats;
+an installed regression checks motion-bank order and independent owner pools.
+Scale and collision rates/flags are explicit caller inputs. Actor initialization,
+action stepping and host placement binding remain outstanding.
+Latest validation: `cargo test -p ddenemy -p ddenemyrt` passes 51 tests
+(10 parameter-reader and 41 enemy-runtime), with one existing ignored diagnostic.
 
 No host combat actor, placement kill, story progression or original-game
 comparison is claimed by this checkpoint. Next: the child-00 collision-link

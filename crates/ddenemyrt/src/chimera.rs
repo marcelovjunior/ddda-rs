@@ -13,6 +13,61 @@ pub enum Unit {
     Child01,
 }
 
+/// One unit's installed body and combat parameters. Body and children each
+/// retain their own pools; this does not infer links or parent kill identity.
+#[derive(Debug, Clone)]
+pub struct ChimeraData {
+    pub catalogue: Catalogue,
+    pub body: crate::body::Body,
+    pub attacker: ddcombat::damage::EnemyAttacker,
+    pub defender: ddcombat::damage::EnemyDefender,
+    pub regions: Vec<ddcombat::damage::RegionPool>,
+    pub obj_size: u32,
+}
+
+impl ChimeraData {
+    /// Scale comes from the owning placement (children copy their parent's
+    /// scale in 0x009a0880), rather than a chosen constructor default.
+    pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>, unit: Unit, scale: f32) -> Result<Self, String> {
+        let catalogue = Catalogue::read(exe, unit)?;
+        let body = catalogue.load_body(vfs, scale)?;
+        let common = catalogue.unique_bound("rPropParam", |r| r.path.ends_with("_cmn"))?;
+        let region = catalogue.unique_bound("rRegionStatus", |_| true)?;
+        // Initializers 0x009a0bd1, 0x009b1118 and 0x009b909c select kind 0.
+        let stats = crate::enemy_stats::load_paths(vfs, &common.path, &region.path)?;
+        Ok(Self {
+            catalogue,
+            body,
+            attacker: stats.attacker,
+            defender: stats.defender,
+            regions: stats.regions,
+            obj_size: stats.obj_size,
+        })
+    }
+
+    /// Instantiate independent combat state for an explicit owner. Collision
+    /// rates/flags are caller-supplied until the unit's initialization and
+    /// action-specific flag writes are fully translated.
+    pub fn fighter(&self, owner: u32, rates: ddcombat::damage::CollisionRates) -> crate::combat::Fighter {
+        use crate::combat::{Attacker, Fighter, Victim};
+        Fighter {
+            owner,
+            attacker: Attacker::Enemy(self.attacker),
+            victim: Victim::Enemy {
+                defender: self.defender,
+                regions: self.regions.clone(),
+                rates,
+            },
+            attacks: Vec::new(),
+            hurts: Vec::new(),
+            history: Default::default(),
+            statuses: Default::default(),
+            dots: Default::default(),
+            pools: Default::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionRecord {
     pub class: String,
@@ -43,6 +98,48 @@ pub struct Catalogue {
 }
 
 impl Catalogue {
+    fn unique_bound(
+        &self,
+        class: &str,
+        select: impl Fn(&ResourceRequest) -> bool,
+    ) -> Result<&ResourceRequest, String> {
+        let mut matches = self
+            .resources
+            .iter()
+            .filter(|r| r.flags & 1 != 0 && r.class == class && select(r));
+        let selected = matches
+            .next()
+            .ok_or_else(|| format!("chimera {:?}: missing bound {class}", self.unit))?;
+        if matches.next().is_some() {
+            return Err(format!("chimera {:?}: ambiguous bound {class}", self.unit));
+        }
+        Ok(selected)
+    }
+
+    /// Translated from 0x008892b0 / 0x00889510 (DDDA.exe 2017-12-13 Steam):
+    /// only bit-zero resources bind; motion-bank order follows descriptors.
+    /// Collision event activations resolve the files by their resource IDs.
+    pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
+        use crate::body::{load, Body};
+        let model = self.unique_bound("rModel", |_| true)?;
+        let skeleton = load::skeleton(vfs, &model.path)?;
+        let bound = || self.resources.iter().filter(|r| r.flags & 1 != 0);
+        let banks = bound()
+            .filter(|r| r.class == "rMotionList")
+            .map(|r| load::bank(vfs, &r.path).map(Some))
+            .collect::<Result<_, _>>()?;
+        let collision = bound()
+            .filter(|r| r.class == "rObjCollision")
+            .map(|r| load::collision(vfs, &r.path, None))
+            .collect::<Result<_, _>>()?;
+        Ok(Body {
+            skeleton,
+            banks,
+            collision,
+            scale,
+        })
+    }
+
     /// Read bulk records from the supported installed exe. Class identities
     /// come from its own DTI registrations, never a copied class-name table.
     pub fn read(exe: &ddexe::Exe<'_>, unit: Unit) -> Result<Self, String> {
@@ -291,4 +388,35 @@ pub fn parent_reaction(
         }
     };
     Some(base + if child == Child::Unit00 { 0 } else { 5 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resource_initializers_preserve_upper_flags_and_binding_exceptions() {
+        for (unit, index, bound) in [
+            (Unit::Body, 0, true),
+            (Unit::Body, 1, false),
+            (Unit::Body, 39, true),
+            (Unit::Body, 40, false),
+            (Unit::Body, 55, false),
+            (Unit::Body, 56, true),
+            (Unit::Body, 57, false),
+            (Unit::Body, 85, true),
+            (Unit::Child00, 25, true),
+            (Unit::Child00, 26, false),
+            (Unit::Child00, 31, false),
+            (Unit::Child00, 32, true),
+            (Unit::Child00, 33, true),
+            (Unit::Child01, 0, true),
+            (Unit::Child01, 26, true),
+        ] {
+            for stored in [0, 7, 0xffff_ffff, 0x1234_5678] {
+                let flags = initialized_resource_flags(unit, index, stored);
+                assert_eq!(flags & !7, stored & !7);
+                assert_eq!(flags & 7, if bound { 3 } else { 2 });
+            }
+        }
+    }
 }

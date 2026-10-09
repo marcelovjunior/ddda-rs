@@ -1,7 +1,65 @@
-// Isolated until the shared lib.rs owner adds `pub mod chimera`.
-#[path = "../src/chimera.rs"]
-mod chimera;
-use chimera::*;
+use ddenemyrt::chimera::*;
+
+#[test]
+fn installed_units_bind_bodies_and_keep_owner_pools_independent() {
+    use ddcombat::damage::CollisionRates;
+    use ddenemyrt::combat::Victim;
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC"));
+    if !native.is_dir() {
+        eprintln!("DDDA install absent; skipped chimera body regression");
+        return;
+    }
+    let file = ddexe::ExeFile::next_to(&native).unwrap();
+    let exe = file.image().unwrap();
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    for unit in [Unit::Body, Unit::Child00, Unit::Child01] {
+        let data = ChimeraData::load(&vfs, &exe, unit, 1.25).unwrap();
+        assert_eq!(data.body.scale, 1.25);
+        assert!(!data.body.skeleton.joints.is_empty());
+        let motions: Vec<_> = data
+            .catalogue
+            .resources
+            .iter()
+            .filter(|r| r.flags & 1 != 0 && r.class == "rMotionList")
+            .collect();
+        assert_eq!(data.body.banks.len(), motions.len());
+        assert!(!motions.is_empty());
+        for (bank, request) in data.body.banks.iter().zip(motions) {
+            assert_eq!(bank.as_ref().unwrap().path, request.path);
+        }
+        assert!(!data.body.collision.is_empty());
+        assert_eq!(
+            data.body.collision.len(),
+            data.catalogue
+                .resources
+                .iter()
+                .filter(|r| r.flags & 1 != 0 && r.class == "rObjCollision")
+                .count()
+        );
+        let mut first = data.fighter(
+            0,
+            CollisionRates {
+                flags: 0x19,
+                damage: 0.5,
+                ..Default::default()
+            },
+        );
+        let second = data.fighter(37, CollisionRates::default());
+        assert_eq!((first.owner, second.owner), (0, 37));
+        let original = data.regions[0].hp;
+        let Victim::Enemy { regions, rates, .. } = &mut first.victim else {
+            panic!()
+        };
+        assert_eq!(rates.flags, 0x19);
+        assert_eq!(rates.damage, 0.5);
+        regions[0].hp = 0.0;
+        assert_eq!(second.victim.hp(), original);
+        assert_eq!(data.regions[0].hp, original);
+        assert!(first.attacks.is_empty() && first.hurts.is_empty());
+    }
+}
 
 #[test]
 fn installed_catalogues_keep_children_and_death_variants_distinct() {
@@ -72,33 +130,6 @@ fn installed_catalogues_keep_children_and_death_variants_distinct() {
                     "missing {request:?}"
                 );
             }
-        }
-    }
-}
-
-#[test]
-fn resource_initializers_preserve_upper_flags_and_binding_exceptions() {
-    for (unit, index, bound) in [
-        (Unit::Body, 0, true),
-        (Unit::Body, 1, false),
-        (Unit::Body, 39, true),
-        (Unit::Body, 40, false),
-        (Unit::Body, 55, false),
-        (Unit::Body, 56, true),
-        (Unit::Body, 57, false),
-        (Unit::Body, 85, true),
-        (Unit::Child00, 25, true),
-        (Unit::Child00, 26, false),
-        (Unit::Child00, 31, false),
-        (Unit::Child00, 32, true),
-        (Unit::Child00, 33, true),
-        (Unit::Child01, 0, true),
-        (Unit::Child01, 26, true),
-    ] {
-        for stored in [0, 7, 0xffff_ffff, 0x1234_5678] {
-            let flags = initialized_resource_flags(unit, index, stored);
-            assert_eq!(flags & !7, stored & !7);
-            assert_eq!(flags & 7, if bound { 3 } else { 2 });
         }
     }
 }

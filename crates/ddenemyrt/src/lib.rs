@@ -17,6 +17,7 @@
 
 pub mod arisen;
 pub mod body;
+pub mod chimera;
 pub mod combat;
 pub(crate) mod enemy_stats;
 pub mod fight;
