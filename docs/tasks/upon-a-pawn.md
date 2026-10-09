@@ -508,3 +508,13 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   (placement7/story_pawns9); targeted host clippy passes with the documented
   pre-existing lint allowed. Viewer adapter WIP is separate and compiled;
   GUI smoke waits for codex29's uncontended route timing run.
+
+### Guard motion prerequisite (codex-31)
+
+- Translated 0x00bb4f90 into TalkMotionObservation: mode zero permits
+  the motion transition; otherwise actual active motion and actor flags
+  bit2 are required. Unknown observations do not authorize the transition.
+  The same predicate gates real talk exit in 0x00bb41c0. This is one
+  prerequisite, not complete Guard eligibility or automatic UI cleanup.
+- All five Guard release tests and ddnpcrt clippy --no-deps pass.
+  The predicate remains ready for actor-state adapter wiring.
