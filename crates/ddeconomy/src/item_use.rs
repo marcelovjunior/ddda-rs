@@ -41,13 +41,14 @@ impl Recovery {
         // values (0x0045B620); special-use items need their own dispatch.
         if item.kind() >= 7 || slot.level() != 0 || hp < 0.0 || stamina < 0.0
             || matches!(slot.item, 0x62 | 0x74) || raw[0x68..0x6f].iter().any(|&v| v != 0)
+            || u32::from_le_bytes(raw[0x38..0x3c].try_into().unwrap()) & 0x78000 != 0
         { return Err(UseError::Unsupported); }
         let mut cures = 0;
         // Calls/arguments in 0x00856050; getters 0x0045A8D0..0x0045B370.
         // Oil and drenched are +2a/+29 (the old survey reversed them).
         for (offset, kind) in [(0x1d,10), (0x1e,11), (0x25,0), (0x26,1),
             (0x27,2), (0x28,4), (0x2a,5), (0x29,6), (0x2b,7), (0x2c,3),
-            (0x2d,8), (0x2e,9), (0x2f,12), (0x30,14), (0x32,15), (0x31,16), (0x33,17)] {
+            (0x2d,8), (0x2e,9), (0x2f,12), (0x30,14), (0x31,15), (0x32,16), (0x33,17)] {
             let value = raw[offset] as i8;
             if value >= 2 { return Err(UseError::Unsupported); }
             if value == 1 { cures |= 1u64 << kind; }

@@ -35,7 +35,7 @@ fn cure_bytes_are_signed_and_sharing_does_not_cure() {
     record.raw[0x32] = 1;
     let slot = Slot { item: 0, num: 1, flags: 1 };
     let effect = Recovery::from_record(&record, slot).unwrap();
-    assert_eq!(effect.cures, (1 << 0) | (1 << 6) | (1 << 15));
+    assert_eq!(effect.cures, (1 << 0) | (1 << 6) | (1 << 16));
     let shared = effect.for_recipient(1.5, true);
     assert_eq!((shared.hp, shared.stamina, shared.cures), (37.5, 30.0, 0));
     record.raw[0x25] = 2;
