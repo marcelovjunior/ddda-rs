@@ -115,3 +115,4 @@ Codex lane: see `docs/CODEX.md`.
 | [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-5 | assigned |
 | [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | assigned |
 | [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | assigned |
+| [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | claude-8 | assigned |
