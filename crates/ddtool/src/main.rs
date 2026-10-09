@@ -22,24 +22,27 @@ mod xfs;
 
 use scan::find_arcs;
 
-const USAGE: &str = "usage:
-  ddtool msg-dump <nativePC dir> <resource path>
-  ddtool param-dump <nativePC dir> <resource path>
-  ddtool arc-ls <file.arc>
-  ddtool arc-scan <nativePC dir> [--inflate]
-  ddtool tex-scan <nativePC dir>
-  ddtool tex-dds <file.arc> <entry path> <out.dds>
-  ddtool mod-scan <nativePC dir>
-  ddtool mrl-scan <nativePC dir>
-  ddtool mod-info <nativePC dir> <file.arc> <entry path>
-  ddtool xfs-scan <nativePC dir>
-  ddtool xfs-dump <file.arc> <entry path>
-  ddtool lot-scan <nativePC dir>
-  ddtool lmt-scan <nativePC dir>
-  ddtool sbc-scan <nativePC dir>
-  ddtool xfs-get <nativePC dir> <resource path>
-  ddtool survey <nativePC dir> [resource class]";
-  ddtool fsm-dump <nativePC dir> <resource path>";
+/// One line per subcommand; each line ends with a comma so branches that add
+/// subcommands merge cleanly.
+const USAGE: &[&str] = &[
+    "  ddtool msg-dump <nativePC dir> <resource path>",
+    "  ddtool param-dump <nativePC dir> <resource path>",
+    "  ddtool arc-ls <file.arc>",
+    "  ddtool arc-scan <nativePC dir> [--inflate]",
+    "  ddtool tex-scan <nativePC dir>",
+    "  ddtool tex-dds <file.arc> <entry path> <out.dds>",
+    "  ddtool mod-scan <nativePC dir>",
+    "  ddtool mrl-scan <nativePC dir>",
+    "  ddtool mod-info <nativePC dir> <file.arc> <entry path>",
+    "  ddtool xfs-scan <nativePC dir>",
+    "  ddtool xfs-dump <file.arc> <entry path>",
+    "  ddtool lot-scan <nativePC dir>",
+    "  ddtool lmt-scan <nativePC dir>",
+    "  ddtool sbc-scan <nativePC dir>",
+    "  ddtool xfs-get <nativePC dir> <resource path>",
+    "  ddtool survey <nativePC dir> [resource class]",
+    "  ddtool fsm-dump <nativePC dir> <resource path>",
+];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -63,7 +66,9 @@ fn main() -> ExitCode {
         ["xfs-get", dir, path] => xfs::xfs_get(Path::new(dir), path),
         ["survey", dir] => survey::survey(Path::new(dir), None),
         ["survey", dir, class] => survey::survey(Path::new(dir), Some(class)),
-        _ => Err(USAGE.to_string()),
+        _ => Err(format!("usage:
+{}", USAGE.join("
+"))),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
