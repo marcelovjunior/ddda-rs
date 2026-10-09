@@ -11,6 +11,19 @@ use std::collections::HashMap;
 use ddvfs::Vfs;
 use mtshader::ShaderPackage;
 
+pub mod stream;
+
+/// Scenery collision paths (`model\om\...\collision\<id>_h00`) by model id,
+/// built once and reused by every [`Terrain::add_scenery_cells`].
+pub type SceneryIndex = HashMap<String, Vec<String>>;
+
+/// The cells of a square of `radius` around `(a0, b0)`.
+fn square(a0: i32, b0: i32, radius: i32) -> Vec<(i32, i32)> {
+    (a0 - radius..=a0 + radius)
+        .flat_map(|a| (b0 - radius..=b0 + radius).map(move |b| (a, b)))
+        .collect()
+}
+
 const RMODEL: u32 = 0x58A1_5856;
 const RCOLLISION: u32 = 0x51FC_779F;
 const RLAYOUT: u32 = 0x1530_2EF4;
@@ -186,9 +199,14 @@ impl Terrain {
     /// (`0x00C5F680`) stores it as `cSplitSbc::mpClsnScrMrgRsrc`; the `e` file
     /// is `mpClsnEffMrgRsrc` (effects) and is not used for movement.
     pub fn load_collision(vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> Self {
+        Self::load_collision_cells(vfs, stage, square(a0, b0, radius))
+    }
+
+    /// The collision of the cells `(m, n)` (as [`Terrain::load_collision`]).
+    pub fn load_collision_cells(vfs: &Vfs, stage: u32, cells: impl IntoIterator<Item = (i32, i32)>) -> Self {
         let mut t = Terrain::empty();
-        for a in a0 - radius..=a0 + radius {
-            for b in b0 - radius..=b0 + radius {
+        {
+            for (a, b) in cells {
                 let off = [(b - 50) as f32 * 10000.0, 0.0, (a - 50) as f32 * 10000.0];
                 let mut any = false;
                 for kind in ["h"] {
@@ -204,7 +222,9 @@ impl Terrain {
                         let material = collision_material(&c, tri);
                         t.add_triangle(
                             p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]),
-                            material.map_or(0, |m| m[0]), material, Some(tri.attribute),
+                            material.map_or(0, |m| m[0]),
+                            material,
+                            Some(tri.attribute),
                         );
                     }
                     any = true;
@@ -225,7 +245,13 @@ impl Terrain {
     /// Rotation uses the same Euler convention as the viewer (*assumed* XYZ:
     /// R = Rx * Ry * Rz on column vectors).
     pub fn add_scenery(&mut self, vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> usize {
-        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+        let index = Self::scenery_index(vfs);
+        self.add_scenery_cells(vfs, &index, stage, square(a0, b0, radius))
+    }
+
+    /// Every scenery model's collision paths by model id.
+    pub fn scenery_index(vfs: &Vfs) -> SceneryIndex {
+        let mut by_name: SceneryIndex = HashMap::new();
         for p in vfs
             .paths_of_type(RCOLLISION)
             .filter(|p| p.starts_with(r"model\om\"))
@@ -235,9 +261,20 @@ impl Terrain {
                 by_name.entry(id.to_string()).or_default().push(p.to_string());
             }
         }
+        by_name
+    }
+
+    /// The scenery collision of the cells `(m, n)` (as [`Terrain::add_scenery`]).
+    pub fn add_scenery_cells(
+        &mut self,
+        vfs: &Vfs,
+        by_name: &SceneryIndex,
+        stage: u32,
+        cells: impl IntoIterator<Item = (i32, i32)>,
+    ) -> usize {
         let mut instances = 0;
-        for a in a0 - radius..=a0 + radius {
-            for b in b0 - radius..=b0 + radius {
+        {
+            for (a, b) in cells {
                 let lot = format!(r"scr\st{stage}\etc\st{stage}_{a}m{b}n_s00");
                 let Ok(bytes) = vfs.read(&lot, RLAYOUT) else {
                     continue;
@@ -267,7 +304,9 @@ impl Terrain {
                                     }
                                     w
                                 }),
-                                material.map_or(0, |m| m[0]), material, Some(rec.attribute),
+                                material.map_or(0, |m| m[0]),
+                                material,
+                                Some(rec.attribute),
                             );
                         }
                     }
@@ -297,7 +336,13 @@ impl Terrain {
         self.add_triangle(p, material[0], Some(material), Some(attribute));
     }
 
-    fn add_triangle(&mut self, p: [[f32; 3]; 3], flags: u32, material: Option<[u32; 8]>, attribute: Option<u32>) {
+    fn add_triangle(
+        &mut self,
+        p: [[f32; 3]; 3],
+        flags: u32,
+        material: Option<[u32; 8]>,
+        attribute: Option<u32>,
+    ) {
         let id = self.tris.len() as u32;
         let (minx, maxx) = (
             p[0][0].min(p[1][0]).min(p[2][0]),

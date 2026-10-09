@@ -2660,6 +2660,7 @@ dependencies = [
 name = "ddworld"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddsim",
  "ddvfs",
  "mtarc",
