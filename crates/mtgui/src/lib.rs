@@ -1,6 +1,7 @@
 //! Read-only rGUI v0x21209 memory-image tables. Unknown fields remain raw.
 //! Layout and fixups: DDDA.exe 2017-12-13 Steam, 0x01076170.
 use std::ops::Range;
+pub mod layout;
 pub type Result<T> = std::result::Result<T, String>;
 const NONE: u32 = u32::MAX;
 
