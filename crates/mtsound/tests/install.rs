@@ -49,6 +49,7 @@ fn installation() {
                 copies += 1;
             }
         }
+        assert!(copies > 0, "{c}: no archive instances found");
         println!("{c}: {} paths, {copies} copies, {records} records", paths.len());
     }
     let mut missing = Vec::new();
@@ -61,6 +62,7 @@ fn installation() {
     for p in missing.iter().take(12) {
         println!("missing package {p}")
     }
+    assert!(missing.is_empty(), "unresolved package links: {missing:?}");
     let mut found = 0;
     let mut absent = Vec::new();
     for p in &streams {
