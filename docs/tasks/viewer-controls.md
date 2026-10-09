@@ -64,9 +64,9 @@ Implemented on `task/viewer-controls` by codex-17:
   local input and no demo input while in the menu. Held keys/menu clicks are
   cleared across transitions. `--paused` starts here for inspection/capture.
 - Stage rasterizer depth bias is mapped from forward Z to Bevy reverse Z.
-  Alpha-blended depth-tested/no-write layers get a minimum positive bias of
-  two depth units, explicitly a viewer adaptation. Opaque-before-transparent
-  ordering is retained; no world-space mesh displacement or alpha change.
+  The initial minimum positive bias of two for blended overlays was removed
+  in cutscene-visuals: it was unverified tuning. Only the imported rasterizer
+  bias remains, with its sign converted for reverse Z.
 - Minimal `net.rs` edits were agreed with codex-18; `take_prejoined` is now
   crate-visible for that agent's M5 integration.
 
@@ -91,3 +91,10 @@ Validation:
   scripted moving-camera check is the remaining action. No fresh original
   game comparison was made. Native UI automation stopped when instructed;
   subsequent validation used CLI screenshots and app/headless tests only.
+
+Follow-up: codex-18's 41c9fe4 and head's af425c8 are merged into the
+cutscene branch. `--unattended`, `--demo`, `--shot` and `--shots` keep the
+cursor visible/ungrabbed, require RMB for mouse look and do not pause on
+focus loss. Normal manual mode retains grabbed mouse look and Esc pause.
+Head corrected the horizontal mouse sign. The inherited integration's
+13 viewer tests pass here; no physical keyboard delivery claim is added.

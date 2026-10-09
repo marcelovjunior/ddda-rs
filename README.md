@@ -94,6 +94,32 @@ and attacks.
 install: archives, textures, models, XFS objects, text, parameters, AI
 graphs, sound, effects and more.
 
+### Cassardis opening slice
+
+`ddview <nativePC> --play --opening` starts at Newly Arisen after a
+headless prologue fast-forward. Walk to the weapon table, press E, and
+pick 1 Fighter or 2 Mage in the labelled vocation stub. Exit the room to
+play ev10, speak to Quina with E (E advances lines; digits choose), then
+walk out toward the village. The slice stops when q0002 boots.
+
+`--demo --shots <temporary-directory>` runs the scripted route, captures
+its steps, checks the endpoint flags and exits. Blocked paths are logged;
+the demo never teleports through geometry. Do not treat the demo as an
+original-game comparison.
+
+Unattended test modes (`--unattended`, `--demo`, `--shot`, or `--shots`) keep running on
+focus loss, leave the cursor free, and rotate the camera only while the
+right mouse button is held. Normal play retains grabbed direct mouse look
+and focus-loss pause. Esc remains available in both modes.
+
+For this slice both machines use `--opening`: the host adds `--host 47810`,
+the guest adds `--join <host-ip>:47810`. The guest sees host-owned NPCs,
+players and shared cutscenes; dialogue/menu controls currently belong to
+the host viewer. Esc pauses solo; network transport and shared events
+continue while a local menu is open. The original game install is only
+read. NPC layout gating and several schedule actions remain incomplete;
+this is not the complete opening campaign.
+
 ## Layout
 
 | Crate | What it is |

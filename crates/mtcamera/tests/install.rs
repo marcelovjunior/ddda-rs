@@ -127,3 +127,10 @@ fn st200_ev10_timeline_camera_resource_and_cuts_resolve() {
         assert!(camera.sample(0.0, false).is_some());
     }
 }
+#[test]
+fn st200_ev10_uses_constructor_projection_defaults() {
+ let Some(vfs) = install() else { return; };
+ let bytes = vfs.read(r"event\st200\ev10\st200ev10", mtarc::type_hash("rScheduler")).unwrap();
+ let timeline=Scheduler::parse(&bytes).unwrap();
+ assert!(!timeline.tracks.iter().any(|t| ["mNearPlane","mFarPlane","mZoom","mAspect","mFovType","mFov"].contains(&t.name.as_str())));
+}
