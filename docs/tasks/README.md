@@ -91,3 +91,4 @@ Codex lane: see `docs/CODEX.md`.
 | [pawn-builder](pawn-builder.md) | Pawn from ID: stats, skills, gear; the story pawns | research | claude-5 | assigned |
 | [save-pawns](save-pawns.md) | Typed pawn knowledge/equipment from the save | reader | codex-1 | assigned |
 | [rift-ui](rift-ui.md) | The Rift menus: screens, strings, bindings | reader | codex-1 | assigned |
+| [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | assigned |
