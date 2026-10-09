@@ -8,6 +8,25 @@ use crate::combat::{Attacker, Fighter, Victim};
 use ddai::{Error, thinktbl::Tables};
 use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool};
 
+/// Phase-93 projection of character condition flags into collision flags.
+/// `controller_flag_c` is the observed cAICtrl +0x0C byte; `actor_flags`
+/// is the word returned by vf180 (actor +0x2738, 0x004c7480).
+///
+/// Translated from uEnemy::vf93 0x00aa9bf0 (0x00aa9d08..0x00aa9dbc),
+/// reached by uEmDragonBase::vf93 0x00a40c20, DDDA.exe 2017-12-13 Steam.
+/// No defaults are supplied: a host must provide the actual controller and
+/// condition state before invoking this phase.
+pub fn sync_collision_flags(rates: &mut CollisionRates, controller_flag_c: bool, actor_flags: u32) {
+    if controller_flag_c {
+        return;
+    }
+    let projected = ((actor_flags >> 27) & 1)
+        | ((actor_flags >> 25) & 2)
+        | ((actor_flags >> 26) & 4)
+        | ((actor_flags >> 22) & 8);
+    rates.flags = (rates.flags & !0xf) | projected;
+}
+
 /// Loaded opening-dragon body and combat parameters. Action stepping is
 /// separate; this type does not manufacture action completion or volumes.
 #[derive(Debug, Clone)]
@@ -40,8 +59,9 @@ impl DragonData {
 
     /// Constructs the actual fight component with independent owner and pools.
     /// The sequence-4 initialization branch of 0x00a49f00 sets collision
-    /// +0xCFC bit 0: HP damage is disabled initially. Its clearing transition
-    /// remains untraced; callers must not assume the entrance is damageable.
+    /// +0xCFC bit 0: HP damage is disabled initially. The later phase-93
+    /// projection is [`sync_collision_flags`]; callers must supply actual
+    /// controller/condition state before assuming the entrance is damageable.
     pub fn fighter(&self, owner: u32) -> Fighter {
         Fighter {
             owner,
@@ -188,6 +208,36 @@ impl DragonAiData {
 #[cfg(test)]
 mod tests {
     use super::initialized_resource_flags;
+    use super::{CollisionRates, sync_collision_flags};
+
+    #[test]
+    fn phase93_keeps_controller_guard_and_projects_only_four_collision_bits() {
+        let mut rates = CollisionRates {
+            flags: 0x8a01,
+            ..Default::default()
+        };
+        sync_collision_flags(&mut rates, true, 0);
+        assert_eq!(
+            rates.flags, 0x8a01,
+            "completed/killed controller preserves initialization"
+        );
+        sync_collision_flags(&mut rates, false, 0);
+        assert_eq!(
+            rates.flags, 0x8a00,
+            "running controller clears the initial no-HP bit"
+        );
+        for (actor, collision) in [
+            (0x0800_0000, 1),
+            (0x0400_0000, 2),
+            (0x1000_0000, 4),
+            (0x0200_0000, 8),
+        ] {
+            sync_collision_flags(&mut rates, false, actor);
+            assert_eq!(rates.flags, 0x8a00 | collision);
+        }
+        sync_collision_flags(&mut rates, false, 0xe1ff_ffff);
+        assert_eq!(rates.flags, 0x8a00, "unrelated actor flags must not project");
+    }
 
     #[test]
     fn static_initialization_preserves_unrelated_flag_bits() {

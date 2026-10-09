@@ -98,9 +98,16 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   records, and verifies independent mutable pools per owner.
 - Sequence 4 sets collision +0xCFC bit 0 at 0x00a4a55a. The new fighter
   therefore starts with HP damage disabled, verified through `apply_hp`.
-  Its later clearing transition is still untraced; loaded stats do not
-  imply that the dragon is ready for damageable encounter integration.
+  Loaded stats do not imply that the dragon is ready for damageable
+  encounter integration; its phase-93 inputs still require host wiring.
   All three dragon tests pass after this construction change.
+- Traced the clearing path: dragon vf93 0x00a40c20 calls enemy vf93
+  0x00aa9bf0. When cAICtrl +0x0C is zero, it projects actor +0x2738
+  condition bits into collision flags 1/2/4/8, preserving other bits.
+  Added local `sync_collision_flags` with explicit controller and actor
+  inputs, no inferred defaults. The regression covers the guard, each
+  mapping and unrelated-bit preservation; codex-1 independently ran all
+  four dragon tests, passing. Runtime action/phase integration remains.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
