@@ -32,6 +32,8 @@ pub struct OpeningWorld {
     /// Menus wait for the view ([`OpeningWorld::close_menu`]) instead of
     /// closing themselves.
     pub manual_menus: bool,
+    /// StageLoaded is reported only after the caller installs its world.
+    pub manual_stages: bool,
     /// The menu waiting for the view: menu and the seat index it opened
     /// for.
     pub menu: Option<(Menu, usize)>,
@@ -49,6 +51,7 @@ impl OpeningWorld {
             enemy_bindings: Default::default(),
             npcs: vec![],
             manual_menus: false,
+            manual_stages: false,
             menu: None,
             pending: vec![],
         }
@@ -78,6 +81,20 @@ impl OpeningWorld {
     pub fn bind_goblin(&mut self, stage: u32, target: Target, owner: u32) {
         assert_eq!(target.kind, 2, "enemy binding requires an enemy target");
         self.enemy_bindings.insert((stage, target), owner);
+    }
+
+    /// Bind a spawned goblin using its original layout identity.
+    /// Translated from 0x007613d0 (SetInfo+4 -> actor+0x20f0),
+    /// 0x00cc1f60 (record id -> SetInfo+4), and lookup
+    /// 0x007643d0 -> 0x004223f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn bind_spawned_goblin(&mut self, spawn: &ddspawn::Spawn, owner: u32) -> Target {
+        let target = Target {
+            kind: 2,
+            group: spawn.group,
+            index: spawn.record.id as u32,
+        };
+        self.bind_goblin(spawn.stage, target, owner);
+        target
     }
 
     /// Forget an actor binding on unload without declaring it dead.
@@ -141,15 +158,15 @@ impl StoryWorld for OpeningWorld {
         }
     }
     fn handle(&mut self, stage: u32, requests: &[Request]) {
-        if !self.manual_menus && self.encounters.is_none() {
+        if !self.manual_menus && !self.manual_stages && self.encounters.is_none() {
             return self.inner.handle(stage, requests);
         }
         let mut rest = Vec::with_capacity(requests.len());
         for r in requests {
             match r {
                 Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
-                Request::JumpArea { .. }
-                | Request::Placement { .. }
+                Request::JumpArea { .. } if self.manual_stages || self.encounters.is_some() => {}
+                Request::Placement { .. }
                 | Request::Group { .. }
                 | Request::ApplyScript { .. }
                 | Request::NpcLife { .. }
@@ -166,6 +183,9 @@ impl StoryWorld for OpeningWorld {
     }
     fn events(&mut self) -> Vec<HostEvent> {
         let mut e = self.inner.events();
+        if self.manual_stages {
+            e.retain(|event| !matches!(event, HostEvent::StageLoaded { .. }));
+        }
         if self.encounters.is_some() {
             // Also discard synthetic callbacks queued before live activation.
             // Actual observations live in our separate pending queue below.

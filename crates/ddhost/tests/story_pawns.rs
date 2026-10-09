@@ -10,6 +10,70 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn installed_q2_goblin_script_indices_are_layout_record_ids() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() {
+        return;
+    }
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let mut groups = ddhost::spawns::group_list(&vfs, 100).unwrap();
+    groups.groups.retain(|g| g.slot == 23);
+    let cells = groups.groups[0].cells.clone();
+    let mut opening = ddhost::opening::OpeningWorld::new();
+    let mut indices = std::collections::BTreeSet::new();
+    for cell in cells {
+        let (_, spawns) = ddspawn::spawns(
+            100,
+            &groups,
+            (cell.m, cell.n),
+            &|path| vfs.read(path, mtarc::type_hash("rLayout")).ok(),
+            &ddspawn::World {
+                scene: 1400,
+                hour: 12,
+                flag: &|_| true,
+            },
+            &[],
+        )
+        .unwrap();
+        for spawn in spawns {
+            assert_eq!(spawn.class, "cSetInfoEnemy0100");
+            let target = opening.bind_spawned_goblin(&spawn, 1);
+            assert_eq!(target.index, spawn.record.id as u32);
+            indices.insert(target.index);
+        }
+    }
+    assert_eq!(indices, [0, 1, 2].into_iter().collect());
+}
+
+#[test]
+fn manual_stage_loading_waits_for_actual_completion_without_enabling_actor_facts() {
+    use ddhost::StoryWorld;
+    let mut world = ddhost::opening::OpeningWorld::new();
+    world.manual_stages = true;
+    world.handle(
+        200,
+        &[ddstory::Request::JumpArea {
+            stage: 100,
+            pos: 2,
+            fade: 0,
+        }],
+    );
+    for _ in 0..150 {
+        assert!(!world
+            .events()
+            .iter()
+            .any(|e| matches!(e, ddstory::HostEvent::StageLoaded { .. })));
+    }
+    assert!(world.encounters.is_none());
+    world.report(ddstory::HostEvent::StageLoaded { stage: 100 });
+    assert!(world
+        .events()
+        .contains(&ddstory::HostEvent::StageLoaded { stage: 100 }));
+}
+
+#[test]
 fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
     use ddhost::StoryWorld;
     let camera = ddstory::Request::Camera {
