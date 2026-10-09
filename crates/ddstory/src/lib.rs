@@ -91,9 +91,10 @@ pub struct Inputs {
     /// NPC and enemy units on the stage (for volumes that detect them).
     pub npcs: Vec<NpcUnit>,
     pub enemies: Vec<Player>,
-    /// Interact pressed this frame while a scenario prompt is shown
-    /// (uPlayerBase vf204 0x00b6eac0 sets sScenario +0x108).
-    pub interact: bool,
+    /// The player (index into `players`) who pressed interact this frame
+    /// while a scenario prompt is shown (uPlayerBase vf204 0x00b6eac0 sets
+    /// sScenario +0x108).
+    pub interact: Option<usize>,
     /// Things that finished or happened since the last frame.
     pub events: Vec<HostEvent>,
 }
@@ -202,8 +203,8 @@ pub enum Request {
     /// Load `stage` at start position `pos` (JumpArea 0x005bc700 ->
     /// 0x00517ca0). Answer with [`HostEvent::StageLoaded`].
     JumpArea { stage: u32, pos: u32, fade: u32 },
-    /// Open a menu. Answer with [`HostEvent::MenuClosed`].
-    OpenMenu(Menu),
+    /// Open a menu for a player. Answer with [`HostEvent::MenuClosed`].
+    OpenMenu { menu: Menu, player: usize },
     /// Show a quest/stage message.
     Message { kind: u8, quest: u16, mes_id: u16, disp_sec: f32 },
     /// Quest banner (sIdCockpit 0x004525d0): kind 1 start, 2 objective,

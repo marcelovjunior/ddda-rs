@@ -452,8 +452,11 @@ impl Dispatch for Orders {
             "PlCheck" => {
                 let r = rec(p)?;
                 let kind = u(r, "mCheckFlag")? as u32;
+                if !(2..=10).contains(&kind) {
+                    return Err(unimplemented(ctx, p, "PlCheck kinds 0/1 (skill/target lists)"));
+                }
                 let n = ctx.env.host.pl_check(kind);
-                let total = if (2..=10).contains(&kind) { 1 } else { ctx.mem.value as i32 };
+                let total = 1;
                 match u(r, "mCheckType")? {
                     0 => write(ctx, r, total != 0 && n >= total)?,
                     1 => write(ctx, r, n != 0)?,

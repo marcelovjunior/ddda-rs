@@ -112,7 +112,7 @@ impl ScriptedHost {
                 Request::Message { .. } | Request::Tutorial { .. } => {
                     self.later(self.message_frames, HostEvent::MessageFinished)
                 }
-                Request::OpenMenu(Menu::Vocation) => {
+                Request::OpenMenu { menu: Menu::Vocation, .. } => {
                     let j = self.job;
                     self.later(20, HostEvent::PlayerJob(j));
                     self.later(20, HostEvent::MenuClosed(Menu::Vocation));

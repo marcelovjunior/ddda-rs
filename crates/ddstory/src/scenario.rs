@@ -427,6 +427,7 @@ impl Scenarios {
         self.prompt = 0;
         let mut best = 8;
         let button = inputs.interact;
+        env.stage.interacting = button;
         for &(t, i) in &self.order.clone() {
             let e = &self.tasks[t][i];
             if e.status & 0x22 == 0 {
@@ -461,7 +462,8 @@ impl Scenarios {
     }
 
     /// 0x00797df0 for one entry; returns the prompt it registers, if any.
-    fn evaluate(&mut self, env: &mut Env, t: usize, i: usize, button: bool) -> Result<Option<u32>, Error> {
+    fn evaluate(&mut self, env: &mut Env, t: usize, i: usize, button: Option<usize>) -> Result<Option<u32>, Error> {
+        let button = button.is_some();
         let (status, gsf, boot, has_shape, check) = {
             let e = &self.tasks[t][i];
             (e.status, e.param.gsf, e.param.boot, e.shape.is_some(), e.param.check)
@@ -718,7 +720,8 @@ fn task_callback(env: &mut Env, e: &Entry) -> Result<u32, Error> {
                 // while the menu is open a second press adds nothing.
                 if !env.stage.menu_open {
                     env.stage.menu_open = true;
-                    env.out.push(Request::OpenMenu(crate::Menu::Vocation));
+                    let player = env.stage.interacting.unwrap_or(0);
+                    env.out.push(Request::OpenMenu { menu: crate::Menu::Vocation, player });
                 }
                 Ok(0)
             }

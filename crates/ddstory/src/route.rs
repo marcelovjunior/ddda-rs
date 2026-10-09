@@ -134,7 +134,7 @@ pub fn run<D: crate::data::Data>(
         let inputs = Inputs {
             players: vec![Player { pos, yaw }],
             npcs,
-            interact: wp.is_some_and(|w| w.interact),
+            interact: wp.filter(|w| w.interact).map(|_| 0),
             events,
             ..Default::default()
         };

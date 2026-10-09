@@ -50,6 +50,8 @@ pub struct StageState {
     /// A menu opened by a request is open (the stage is in its mode, e.g.
     /// 0x19 for the vocation menu).
     pub menu_open: bool,
+    /// Who pressed interact this frame.
+    pub interacting: Option<usize>,
     /// ValidQuestNum (0x00484050), computed before each frame.
     pub valid_quests: u32,
     /// NPC units this frame (from [`crate::Inputs`]).

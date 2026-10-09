@@ -309,6 +309,11 @@ impl Script {
         let st: &State = c.state(self.levels[k].current).ok_or_else(|| Error::Data("no current state".into()))?;
         for (i, p) in st.processes.iter().enumerate() {
             let mem = self.mem.entry((st.unique_id, i)).or_default();
+            if enter {
+                // Our per-process bookkeeping ("request sent once per state
+                // entry", countdowns) starts afresh on every entry.
+                *mem = ProcMem::default();
+            }
             let mut ctx = OrderCtx { script: &self.path, owner: &mut self.owner, mem, env, state_name: &st.name };
             if enter {
                 D::update(&mut ctx, p)?;
