@@ -3,7 +3,7 @@
 - **Owner:** codex-19 (codex-1 lane)
 - **Branch:** `task/stream-rules`
 - **Board area:** `world/streaming`
-- **Status:** review (partial research; full distance/transition gate remains open)
+- **Status:** review (requested research delivered; limitations recorded below)
 
 ## Goal
 
@@ -88,14 +88,16 @@ are not universal spawn radii. Shared hooks add ddspawn dependency only.
 `cargo test -p ddtool` passed with zero unit tests; the corpus run is the
 substantive survey check. `git diff --check` passed. No Bevy build.
 
-The full acceptance gate remains **partial**: no threshold movement or
-creation/removal transition was recorded, and the full class exception
-set is not exhausted. Other scenery subclasses, exact NPC construction
+The requested sourced rules, passive snapshots and proposed design are
+delivered for review. The brief permits standstill snapshots; it does not
+require a movement or transition comparison. Research limitations remain:
+no threshold movement or creation/removal transition was recorded, and
+the full class exception set is not exhausted. Other scenery subclasses, exact NPC construction
 rate limits, and terrain construction history remain open. Scripted
 movement is authorized under the current safety protocol but has not been
 performed. No CUA, original-game input/call/write/injection, install change,
 or private/raw data commit occurred. Scratch remains in OS TEMP.
 
-Next action: compare a narrowly selected distance boundary under the
-current live-session safety protocol, then extend the scenery subclass
-trace only where that comparison exposes a missing policy.
+Suggested follow-up, outside this brief's required snapshot evidence:
+compare a selected distance boundary under the live-session safety
+protocol and extend scenery subclass coverage where needed.

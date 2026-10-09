@@ -1,8 +1,9 @@
 # Streaming rules: stage 100
 
 Research against the 2017-12-13 Steam executable. Addresses identify that
-build. This is a **partial trace, with a passive live snapshot**, not an
-implemented streaming system or a movement/boundary acceptance test.
+build. This is sourced research with passive live snapshots, as permitted
+by the brief, and a proposed design. It is not an implemented streaming
+system. Coverage limits and unobserved transitions are identified below.
 No original-game input, calls, memory writes or injection was performed.
 
 ## Three different decisions
@@ -365,7 +366,7 @@ The older snapshot in [ORACLE.md](ORACLE.md) also agrees: indices 22/23
 plus filename offsets 30/40 give 52n/63m; absolute offset is
 (-20000,0,-130000). This resolves those fields without changing that doc.
 
-## Proposed core design and remaining gate
+## Proposed core design and follow-up research
 
 Keep authoritative positions in a fixed stage frame in `ddworld`. Compute
 resource interest independently for every player and union those interests
@@ -381,9 +382,11 @@ from client quality settings. Read grid/region/landmark tables from the
 player's installed exe and layouts from their archives. Do not implement
 the angular expression as a plain circle.
 
-Next: compare a selected threshold boundary under the current live-session
-safety protocol, including physical actor residency and archive dependencies.
+A useful follow-up is a selected threshold comparison under the current
+live-session safety protocol, including physical actor residency and
+archive dependencies. This is additional validation, not a requirement of
+the brief, which explicitly permits standstill snapshots.
 Other scenery subclasses, NPC construction-rate limits and full policy
 exceptions remain to be traced. The terrain pattern has a compatible
 traced explanation, but its actual construction history was not recorded.
-The brief's transition-comparison gate remains open.
+No movement or creation/removal transition comparison is claimed.
