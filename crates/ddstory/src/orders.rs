@@ -816,7 +816,8 @@ fn actor_state(ctx: &mut OrderCtx, p: &Process, other: &str) -> Result<(), Error
             write(ctx, r, bit)
         }
         // Translated from 0x005c8460: give each cLinkUnitFSM's MainFSM to
-        // its targets; the result holds once all have finished.
+        // its targets; the result holds once all satisfy the actor readiness
+        // predicate. Applied action Finish is a separate lifecycle event.
         "ApplyFSM" => {
             let r = rec(p)?;
             let host = ctx.env.host;
@@ -833,7 +834,7 @@ fn actor_state(ctx: &mut OrderCtx, p: &Process, other: &str) -> Result<(), Error
                     for t in targets(lu) {
                         total += 1;
                         reqs.push(Request::ApplyScript { target: t, path: path.clone() });
-                        if host.applied_script_finished(stage, &t) {
+                        if host.apply_fsm_ready(stage, &t) {
                             done += 1;
                         }
                     }

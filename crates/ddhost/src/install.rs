@@ -134,14 +134,22 @@ pub fn tables(vfs: &ddvfs::Vfs, exe: &std::path::Path) -> Result<ddprogress::Tab
 /// The stage collision of a single-model stage (Cassardis and the other
 /// non-grid stages: `scr\stSSS\collision\stSSSh_mrg00`, the half characters
 /// stand on, as `ddworld::Terrain::load_collision` reads it per cell on
-/// st100). The material flag words are not carried (`Terrain::add`).
+/// st100). Keep the same authored material and triangle metadata as the
+/// field loader: camera filter 0x007c6f90 reads material word zero, while
+/// sound getter 0x00423be0 uses the separate triangle attribute.
 pub fn stage_collision(vfs: &ddvfs::Vfs, stage: u32) -> Result<ddworld::Terrain, String> {
     let path = format!(r"scr\st{stage}\collision\st{stage}h_mrg00");
     let b = vfs.read(&path, mtarc::type_hash("rCollision"))?;
     let c = mtsbc::parse(&b).map_err(|e| format!("{path}: {e:?}"))?;
     let mut t = ddworld::Terrain::empty();
-    for (p, _) in c.world_triangles() {
-        t.add(p);
+    for (p, triangle) in c.world_triangles() {
+        if let Some(&material) = c.materials.get(usize::from(triangle.material)) {
+            t.add_material_with_attribute(p, material, triangle.attribute);
+        } else {
+            // Preserve the field loader's behavior for absent material
+            // records; do not manufacture an authored record.
+            t.add(p);
+        }
     }
     t.cells = 1;
     Ok(t)

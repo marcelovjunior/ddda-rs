@@ -357,3 +357,27 @@ Blockers:
 - the opening hookup of the movie and the editor.
 
 Next action: q0003 trace (road to the Encampment), head.
+
+**Batch 2026-10-09 night (head, from the maintainer's playtests):**
+- **The game clock in play** advances at the original's rate (0x0043f2c0)
+  and relights the stage and sky each game minute, spread over frames.
+- **Performance:**
+  - the clock's relighting was the 400-650 ms stutter;
+  - the sun shadow now follows the stage's `uSkyStableShadow`: one map over
+    60 m instead of four cascades over 1 km;
+  - whole-stage parts respect their shadow-cast flag;
+  - the distant ring is 6 cells.
+  - Cassardis walk 46 → 12 ms; field 18 → 11 ms. `--perf` logs frame
+    times and the main systems.
+- **Cassardis rendering:**
+  - one LOD per model, measured to the model's bounding-sphere centre
+    (0x00ea5320, 0x00ea3d00; `mLODType` automatic from 0x00c25234), which
+    fixed the z-fighting;
+  - the opening's camera gets collision.
+- **Camera collision as the original** (0x007de570): a ray, then a 1.3 x
+  near-plane sphere.
+- **Tools:** `--probe` (F8 crosshair, F9 logs the surfaces under it,
+  drawn or hidden, with LOD masks).
+
+Briefs queued for the Codex lane: camera-collision follow-ups,
+character-shadows, skill-vfx.

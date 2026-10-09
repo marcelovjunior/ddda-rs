@@ -1,86 +1,97 @@
 # Roadmap: systems
 
-`MILESTONES.md` orders the work by playable route (M0-M10). This file
+`MILESTONES.md` orders the work by playable route (M0-M10); the current
+focus is the opening slice ([OPENING_SLICE.md](OPENING_SLICE.md)). This file
 breaks the game into systems: for each, what exists, where its evidence
 lives, and who works on it. The work items are in [`tasks/`](tasks/README.md),
 and coordination happens on the board ([BOARD.md](BOARD.md)).
 
-**Status** (updated 2026-10-09):
+**Status** (updated 2026-10-09 evening):
 - **done:** compared with the original;
 - **working:** implemented and tested, not compared;
+- **partial:** some of it is working, the rest open (see the brief);
 - **researched:** rules and data traced, readers merged, no runtime;
-- **in progress:** a brief is assigned;
 - **not started.**
+
+Owners: `head` (the coordinating Claude session) and the Codex lane
+(`codex-1` and its children). The Claude subagents of the first day are
+stopped.
 
 ## Foundation and world
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
 | Archives, textures, models, materials | done | FORMATS.md | - |
-| Map geometry (cells, scenery, water, distant ring) | working | WORLD.md | castle and `_p` layouts |
-| Shading (terrain layers, lighting, fog, water) | in progress | SHADING.md | terrain-shading (claude-3) |
-| Collision (stage `h` meshes, walls, rays) | working | MOVEMENT.md, WORLD.md | - |
-| Weather, sky, fog, time of day | researched | WEATHER.md, WEATHER_CLOCK | runtime after M1 shading |
-| Streaming and loading screens | in progress | GUI.md | stream-rules (codex lane) |
-| Enemy placement and respawn | in progress | - | enemy-placement (codex lane) |
+| Map geometry (cells, scenery, water, low models) | working | WORLD.md | castle and `_p` layouts |
+| Field streaming (cells, collision, layouts, low models) | working | STREAMING.md | original's region far models, fade; head |
+| Stage handoff (doors, JumpArea, start positions) | working (field + whole stages) | STREAMING.md, OPENING_SLICE.md | opening hookup done; guest streaming (codex-26) |
+| Shading (terrain layers, lighting, fog, water) | working | SHADING.md | water shader |
+| Collision (stage `h` meshes, scenery, walls, rays, materials) | working | MOVEMENT.md, WORLD.md | - |
+| Weather, sky, fog, time of day | working (from a save's clock) | WEATHER.md, WEATHER_CLOCK.md | clock advance in play |
+| Loading screens | not started | GUI.md | - |
+| Enemy placement and respawn | partial (Cassardis families) | SPAWNS.md | enemy-families |
 
 ## The Arisen
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
-| Movement (walk, run, sprint, jump, fall) | working; partly done | MOVEMENT.md, RECORDINGS.md | m2-acceptance (claude-4) |
-| Ledge grab and climb | working | MOVEMENT.md | live confirmation (claude-4) |
-| Turning, stop motions | researched | MOVEMENT.md, RECORDINGS.md | needs motion curves |
-| Animation playback, skinning | working | ANIMATION.md | - |
-| Animation blending | done (lengths and countdown live-confirmed) | ANIMATION.md | per-joint masks |
-| Stamina | researched (rates live-confirmed) | PARAMS.md, RECORDINGS.md | runtime in ddsim |
-| Weight, encumbrance, body class | researched | PARAMS.md | chara-edit (codex lane) |
-| Character creation and its effects | in progress | - | chara-edit (codex lane) |
-| Dressed Arisen (equipment models) | not started | - | - |
-| Vocations, skills, augments, growth | in progress | - | vocations-skills (claude-9) |
-| Items, inventory, storage | researched | SHOPS.md | economy-core after ddstory |
-| Status effects | researched (readers) | ENEMIES.md | after combat-rules |
+| Movement (walk, run, sprint, jump, fall, hard landing) | working; partly done | MOVEMENT.md, RECORDINGS.md | drop-path trace |
+| Turning | done (recorded with the oracle) | MOVEMENT.md | pad turning |
+| Ledge grab and climb | working | MOVEMENT.md | live confirmation |
+| Animation playback, skinning, blending | done (lengths live-confirmed) | ANIMATION.md | per-joint masks |
+| Basic and air attacks | working | MOVEMENT.md | aim of the air shot |
+| Stamina | working (rates live-confirmed) | STAMINA.md, PARAMS.md | - |
+| Weight, encumbrance, body class | researched; measurement helper in progress | PARAMS.md, CHARA_EDIT.md | pawn-actor (codex-1), then head wires the editor |
+| Character creation | partial (`--charaedit`, fields and presets) | CHARA_EDIT.md | uGUIEdit screen, ranges; chara-creation-ui |
+| Dressed Arisen (equipment models) | working (from saves) | CHARACTERS.md | - |
+| Vocations and skills | partial (four skills) | VOCATIONS.md | skills-runtime follow-ups |
+| Items and quick use | working (restoratives) | SHOPS.md, STATUS.md | inventory screen |
+| Status effects | working (combat) | STATUS.md | - |
 
 ## Combat and creatures
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
-| Hits, damage, stagger | in progress | - | combat-rules (claude-8) |
-| Enemy data (stats, regions, shells) | researched | ENEMIES.md, ENEMY_RESOURCES.md | - |
-| Enemy AI (FSM graphs, interpreter) | researched | AI.md | runtime after M4 design |
-| Magic, shells | researched (readers) | ENEMIES.md, EFFECTS.md | combat-rules |
+| Hits, damage, stagger | working | COMBAT.md | - |
+| Enemy runtime: goblins | working | AI.md | - |
+| Enemy runtime: wolves, harpies | partial | AI.md | enemy-families (codex-1) |
+| Dragon (opening fight) | partial (AI requests, body, hover, flight) | AI.md, dragon-attack brief | codex-25 |
+| Chimera (prologue) | partial (catalogue, multi-part damage) | CHIMERA.md | codex-28 |
+| Magic, shells | working (Ingle, Levin, WandShot) | COMBAT.md | more spells |
 | Climbing large enemies | not started | - | - |
 
 ## Pawns, NPCs, story
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
-| Rift, pawn recruitment, hire costs | researched (pool and costs live-confirmed) | PAWNS.md, RIFT_UI.md | pawn-builder (claude-5); rift-sim later |
-| Pawn data in saves | researched | PAWNS.md, SAVE_PAWNS.md | pawn-knowledge-map (codex lane) |
-| Pawn AI, inclinations, chatter | not started | AI.md | after enemy AI |
-| NPCs: placement, schedules, dialogue links | researched | NPCS.md | - |
-| Quests, story flags, scenario ladder | researched (flags live-confirmed) | QUESTS.md | quest-runtime (claude-7) |
-| Cutscenes (timelines, cameras) | researched | EVENTS.md, CAMERA.md | event-player after quest-runtime |
-| Shops, prices, restock, enhancement | researched (layout live-confirmed) | SHOPS.md | enhance (claude-6) |
-| Interaction lock (co-op) | designed | COOP_DESIGN.md | M3 |
+| Rift, pawn recruitment, hire costs | researched (pool and costs live-confirmed) | PAWNS.md, RIFT_UI.md, RIFT_LIST.md | Riftstone is met in q0003 |
+| Pawns as actors (stats, equipment, tiers) | partial | pawn-actor brief | body, Mage AI (codex-1) |
+| Pawn AI | working (main pawn fights) | PAWN_AI.md | inclinations, chatter |
+| NPCs: placement, schedules, applied scripts, talk | partial | NPCS.md | guard/talk and variables (codex-26) |
+| Quests, story flags, scenario ladder | working (q0000-q0002 headless; q0003 outlined) | QUESTS.md, OPENING_SLICE.md | q0003 trace |
+| Cutscenes (timelines, cameras, voices) | working; visual defects open | EVENTS.md, CAMERA.md | cutscene-visuals |
+| Movies | working (`--movie`, opening intro) | opening-movie brief | skip input |
+| Shops, prices, restock, enhancement | researched (layout live-confirmed) | SHOPS.md | shop screen |
+| Interaction lock (co-op) | designed | COOP_DESIGN.md | - |
 
 ## Presentation
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
-| Visual effects | researched (readers; particle bodies opaque) | EFFECTS.md | - |
-| Sound and music | researched (readers) | SOUND.md | playback later |
-| UI, HUD, menus | researched (readers) | GUI.md, RIFT_UI.md | - |
-| World map, fast travel | researched | MAP.md, TRAVEL.md | teleport runtime later |
+| Visual effects | researched (readers; particle bodies opaque) | EFFECTS.md | skill-vfx: decode EFL bodies (next free Codex child) |
+| Sound and music | partial (events, voices, motion sounds) | SOUND.md | mixer, field BGM (codex-1) |
+| HUD | working (bars, prompts) | GUI.md | names, icons, minimap |
+| Menus | not started | GUI.md, RIFT_UI.md | - |
+| World map, fast travel | researched | MAP.md, TRAVEL.md | - |
 | Game text (all languages) | done (reader) | TEXT.md | - |
 
 ## Multiplayer, platform, tooling
 
 | System | Status | Docs | Next / owner |
 |---|---|---|---|
-| Co-op (LAN, host-authoritative) | designed | COOP_DESIGN.md | M3 |
-| FPS unlock | working by design | RECORDINGS.md (the clock) | - |
-| Saves | researched (read-only reader) | PAWNS.md, SAVE_PAWNS.md | - |
-| Oracle (live probe) | working | ORACLE.md | claude-4 |
+| Co-op (LAN, host-authoritative) | working (two windows; opening slice) | COOP_DESIGN.md | guest dialogue and menus |
+| FPS unlock | working (fixed steps, drawn between frames) | MOVEMENT.md, RECORDINGS.md | - |
+| Saves | researched (read-only reader) | PAWNS.md, SAVE_PAWNS.md | our own saves |
+| Oracle (live probe) | working | ORACLE.md | - |
 | Reflected field names | working | `research/dti/dti_props.py` | - |
-| Acceptance routes | in progress | - | m2-acceptance (claude-4) |
+| Backups | working (bundles in `C:\ddda-backup`) | - | head after each batch |

@@ -337,6 +337,7 @@ struct EventSound(String);
 struct OneShotSe;
 
 fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>, mut choices: Local<SoundChoices>) {
+    let _timing = crate::perf::Section::start("audio::play_pending");
     // Commands are deferred: include sources queued earlier in this batch so
     // two cues for one unit cannot leave two voices playing simultaneously.
     let mut units: HashMap<String, Vec<Entity>> = HashMap::new();
