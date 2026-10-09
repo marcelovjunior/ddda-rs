@@ -2517,6 +2517,9 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddexe",
+ "ddhost",
+ "ddnet",
  "ddsim",
  "ddstory",
  "ddvfs",

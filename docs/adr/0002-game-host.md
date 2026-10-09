@@ -444,6 +444,82 @@ small.
 | | the hired pawn, the Rift pool |
 | | shop stock and restock |
 
+### 8.9 Implementation (`crates/ddnet`, m3-lan)
+
+Built as decided above, with these specifics.
+
+**Link** (`link.rs`):
+- The header is `DDCO`, a version, the connection id, the sequence,
+  the newest sequence received with 32 ack bits, and the next reliable
+  id expected.
+- The reliable channel resends every unacknowledged message in every
+  packet (up to 1,000 bytes, at least one message) until the peer's
+  "next expected" passes it. It delivers in order.
+- The unreliable payload is newest-wins by sequence.
+- Round trip is measured from acks.
+- No fragmentation (snapshots of two Arisen are about 100 bytes).
+
+**Join** (`server.rs`):
+- `Hello` carries the protocol version, the exe build and the data
+  fingerprint (`data_fingerprint`: every `.arc` path and size under
+  `nativePC`), plus the profile.
+- The host refuses, with a reason:
+  - another protocol, build or data;
+  - a full roster;
+  - a profile already seated.
+- On join the host sends `Welcome` (seat, host frame, delta) and the
+  seats already present. The others get `Joined`.
+- `Bye`, or 2 s of silence, unseats the client and tells the rest
+  `Left`.
+- LAN discovery (the 47811 broadcast) is not built yet: `--join` takes
+  an address.
+
+**Inputs:**
+- Each packet carries the newest 8 commands, each stamped with the host
+  frame it is for, plus the client's newest applied snapshot frame (the
+  delta baseline).
+- The host queues commands by frame, runs a frame on its command, and
+  repeats the last one when it is missing (counted as a miss).
+- Every snapshot reports the newest command frame received. The client
+  keeps that 1-4 frames ahead of the host: it skips ahead one frame, or
+  holds one, per snapshot.
+
+**Snapshots:**
+- One per host frame. Each Arisen's public `ddsim::Player` fields are
+  sent in ten field groups behind a mask, as a delta against the acked
+  baseline. The host keeps 64 frames of baselines; an unchanged body
+  costs 3 bytes.
+- The three private ddsim fields (sprint entry speed, jump held, the
+  rate queue) stay with the client's own prediction. They follow from the
+  inputs and settle when the input stops.
+
+**Events:**
+- Story requests go reliably, stamped with their frame, as text until
+  the views perform them.
+- `Joined` and `Left` also go reliably.
+
+**Client:**
+- It predicts its own Arisen with `ddsim`, configured from the install
+  like the host's (`ddhost::install::sim`).
+- On each snapshot it resets that Arisen to the host's body and replays
+  the commands the host has not run.
+- The others are interpolated 3 frames (100 ms) behind the newest
+  snapshot.
+
+**Measured** (`tests/loopback.rs`, real UDP on 127.0.0.1, 40 ms ± 20 ms
+each way, 10% loss both ways):
+- 6 s of running, turning, sprinting and jumping, then 3 s idle;
+- prediction error at most 5.7 cm, mean 0.4 cm;
+- 10 frames of 270 ran on a repeated command;
+- after the input stops, the client's newest snapshot hashes equal to the
+  host's state for that frame, and its prediction equals the host's body
+  (apart from the motion frame of the frames it runs ahead).
+
+**ddview:**
+- `--host <port>` and `--join <addr>` (port 47810 by default), with
+  `--profile <id>`; `--demo` drives unattended input.
+- Both sides step at 30 Hz and show the other Arisen.
+
 ## Alternatives considered
 
 - **Deterministic lockstep:** every machine simulates; only inputs are

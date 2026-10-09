@@ -36,7 +36,7 @@ pub struct Client<T: Transport> {
     pub refused: Option<String>,
     /// Prediction: a simulation holding only this client's Arisen.
     pub sim: Sim,
-    ground: Box<dyn Ground>,
+    ground: Box<dyn Ground + Send>,
     clock: FrameClock,
     /// Commands by host frame, not yet confirmed by a snapshot.
     cmds: VecDeque<(u64, PlayerInput)>,
@@ -59,7 +59,7 @@ pub struct Client<T: Transport> {
 impl<T: Transport> Client<T> {
     /// Starts joining `server`. `sim` is configured like the host's (motions
     /// and parameters, `ddhost::install::sim`) and holds no players.
-    pub fn new(transport: T, server: SocketAddr, profile: u64, build: u32, data: u64, sim: Sim, ground: Box<dyn Ground>, now: u64) -> Self {
+    pub fn new(transport: T, server: SocketAddr, profile: u64, build: u32, data: u64, sim: Sim, ground: Box<dyn Ground + Send>, now: u64) -> Self {
         let conn = (profile ^ now.rotate_left(17) ^ 0x5bd1_e995) as u32 | 1;
         let mut link = Link::new(conn, now);
         link.send_reliable(ToHost::Hello { protocol: PROTOCOL, build, data, profile }.encode());
