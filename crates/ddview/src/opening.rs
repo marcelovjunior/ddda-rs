@@ -134,6 +134,7 @@ pub struct Session {
     network_ready: bool,
     pending_input: PlayerInput,
     failure: Option<String>,
+    guest_control_shot: bool,
     guest_npcs: HashMap<u32, [f32; 3]>,
     acc: f32,
     cut: Option<Cut>,
@@ -239,6 +240,7 @@ pub fn prepare(
         network_ready: false,
         pending_input: PlayerInput::default(),
         failure: None,
+        guest_control_shot: false,
         guest_npcs: HashMap::new(),
         acc: 0.0,
         cut: None,
@@ -293,6 +295,13 @@ impl Session {
                 p.position = [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]];
                 p.yaw = yaw;
                 p.drop_from = p.position[1];
+            }
+        }
+        if let Some(server) = &mut self.host.server {
+            server.config.spawn = pos;
+            if let Some(spot) = &mut server.config.spot {
+                spot.pos = pos;
+                spot.yaw = yaw;
             }
         }
         info!(
@@ -647,7 +656,11 @@ pub fn step(
     }
     // The demo stands in for the keys.
     if !pause.paused && s.demo.is_some() && s.cut.is_none() {
-        input = demo_input(s, now);
+        input = if s.shots.is_some() && s.shots_taken == 0 {
+            PlayerInput::default()
+        } else {
+            demo_input(s, now)
+        };
     }
     if pause.paused {
         input = PlayerInput::default();
@@ -883,6 +896,7 @@ pub fn cutscene(
     mut info_text: Query<&mut Text, (With<InfoText>, Without<SubtitleText>)>,
     windows: Query<&Window>,
     mut exit: MessageWriter<AppExit>,
+    mut gameplay_projection: Local<GameplayProjection>,
 ) {
     let Some(res) = res else { return };
     let mut guard = res.0.lock().unwrap();
@@ -915,6 +929,7 @@ pub fn cutscene(
         }
         let f = &c.last;
         if let Ok((mut t, mut proj)) = cams.single_mut() {
+            gameplay_projection.capture(&proj);
             crate::event::apply_camera(f, aspect, &mut t, &mut proj);
         }
         crate::event::apply_actors(f, c.row, &mut actors);
@@ -949,6 +964,9 @@ pub fn cutscene(
     if let Some(Some(row)) = finished {
         info!("opening: cutscene row {row} over; control returns");
         s.cut = None;
+        if s.guest.is_some() {
+            s.guest_control_shot = true;
+        }
         if s.guest.is_none() {
             s.host.world.event_done();
             if let Some(server) = &mut s.host.server {
@@ -965,8 +983,13 @@ pub fn cutscene(
         }
         // the follow camera's projection again
         if let Ok((_, mut proj)) = cams.single_mut() {
-            if let Projection::Perspective(pp) = proj.as_mut() {
-                pp.fov = (play::CAMERA_FOV + play::config_camera_fov()).to_radians();
+            if gameplay_projection.restore(&mut proj) {
+                if let Projection::Perspective(pp) = proj.as_ref() {
+                    info!(
+                        "opening: restored gameplay projection fov={} near={} far={}",
+                        pp.fov, pp.near, pp.far
+                    );
+                }
             }
         }
     }
@@ -1038,26 +1061,23 @@ pub fn cutscene(
     }
     s.view_frames += 1;
     // Let pipelines and the first visible frame settle before capturing.
-    if s.view_frames < 60 {
+    if s.view_frames < 60 || time.elapsed_secs() < 5.0 {
         return;
     }
     // Screenshots (`--shots`).
-    let names: Vec<String> = s
+    // Only one primary-window request per frame: Bevy drops duplicates.
+    let next = s
         .shot_queue
         .iter()
-        .filter(|q| !q.contains(':'))
-        .cloned()
-        .collect();
-    s.shot_queue.retain(|q| q.contains(':'));
-    if let Some(dir) = s.shots.clone() {
-        for n in names {
-            let path = dir.join(format!("{n}.png"));
-            info!("opening: screenshot {}", path.display());
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path));
-            s.shots_taken += 1;
-        }
+        .position(|q| !q.contains(':'))
+        .map(|i| s.shot_queue.remove(i));
+    if let (Some(dir), Some(name)) = (s.shots.clone(), next) {
+        let path = dir.join(format!("{name}.png"));
+        info!("opening: screenshot {}", path.display());
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+        s.shots_taken += 1;
     }
     let now = time.elapsed_secs();
     if let Some(t) = s.quit_at {
@@ -1118,14 +1138,14 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
     let mut input = PlayerInput::default();
     let mut face = None;
     while d.path.front().is_some_and(|waypoint| {
-        Vec3::new(waypoint.x - p.x, 0.0, waypoint.z - p.z).length() < ddsim::BODY_RADIUS
+        Vec3::new(waypoint.x - p.x, 0.0, waypoint.z - p.z).length() < ddsim::BODY_RADIUS * 0.5
     }) {
         d.path.pop_front();
     }
     if let Some(t) = d.path.front().copied().or(target) {
         let flat = Vec3::new(t.x - p.x, 0.0, t.z - p.z);
         let reach = if !d.path.is_empty() {
-            ddsim::BODY_RADIUS
+            ddsim::BODY_RADIUS * 0.5
         } else if step == Step::TalkQuina {
             150.0
         } else {
@@ -1134,7 +1154,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         if flat.length() > reach {
             input.sim = Input {
                 stick: [0.0, 1.0],
-                walk: step == Step::TalkQuina && flat.length() < 300.0,
+                walk: !d.path.is_empty() || (step == Step::TalkQuina && flat.length() < 300.0),
                 camera_yaw: flat.x.atan2(flat.z),
                 ..Default::default()
             };
@@ -1352,9 +1372,7 @@ fn guest_step(
     };
     let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
     bodies.extend(c.own().as_ref().map(shown));
-    for n in c.npcs() {
-        s.guest_npcs.insert(n.id, n.pos);
-    }
+    s.guest_npcs = c.npcs().into_iter().map(|n| (n.id, n.pos)).collect();
     for event in events {
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
             start_cut(s, row as usize);
@@ -1383,6 +1401,15 @@ fn guest_step(
             };
         }
     }
+    if s.guest_control_shot {
+        info!(
+            "opening guest control: {} player bodies, {} NPC snapshots",
+            bodies.len(),
+            s.guest_npcs.len()
+        );
+        s.shot("guest-control");
+        s.guest_control_shot = false;
+    }
     for (&id, &(entity, _, _)) in &s.npcs {
         let at = s.guest_npcs.get(&id);
         if let (Some(at), Ok((mut t, _))) = (at, roots.get_mut(entity)) {
@@ -1400,11 +1427,27 @@ fn guest_step(
 
 /// Demo navigation only, not a translated NPC/pathfinding rule. An A* search
 /// samples capsule sweeps against the installed collision mesh. Resolution
-/// is one existing player diameter. The budget bounds demo work; a failed
+/// is the existing player radius. The budget bounds demo work; a failed
 /// search leaves the player where collision put it, never warps it.
 fn demo_path(host: &StoryHost, from: Vec3, target: Vec3) -> Vec<Vec3> {
     plan_path(host.ground.as_ref(), &host.sim.sweep_param, from, target)
 }
+#[derive(Default)]
+pub(crate) struct GameplayProjection(Option<Projection>);
+impl GameplayProjection {
+    fn capture(&mut self, projection: &Projection) {
+        self.0.get_or_insert_with(|| projection.clone());
+    }
+    fn restore(&mut self, projection: &mut Projection) -> bool {
+        if let Some(saved) = self.0.take() {
+            *projection = saved;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 fn plan_path(
     ground: &dyn ddsim::Ground,
     param: &ddsim::sweep::SweepParam,
@@ -1414,7 +1457,7 @@ fn plan_path(
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap, HashSet};
     let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
-    let cell = ddsim::BODY_RADIUS * 2.0;
+    let cell = ddsim::BODY_RADIUS;
     let mut open = BinaryHeap::from([(Reverse(distance(from) as i32), (0i32, 0i32))]);
     let mut nodes = HashMap::from([((0, 0), (from, 0.0f32, (0, 0)))]);
     let mut visited = HashSet::new();
@@ -1434,7 +1477,7 @@ fn plan_path(
             path.reverse();
             return path;
         }
-        if visited.len() > 2500 {
+        if visited.len() > 20000 {
             break;
         }
         for dx in -1..=1i32 {
@@ -1469,7 +1512,7 @@ fn plan_path(
                     p.y = floor;
                 }
                 let moved = Vec3::new(p.x - at.x, 0.0, p.z - at.z);
-                if (moved - Vec3::new(mx, 0.0, mz)).length() > 1.0 {
+                if (moved - Vec3::new(mx, 0.0, mz)).length() > cell * 0.5 {
                     continue;
                 }
                 let g = cost + moved.length();
@@ -1488,6 +1531,35 @@ fn plan_path(
 mod tests {
     use super::*;
     #[test]
+    fn cutscene_restores_gameplay_projection_after_multiple_frames() {
+        let original = PerspectiveProjection {
+            fov: 1.2,
+            near: 0.05,
+            far: 12000.0,
+            aspect_ratio: 1.6,
+            ..Default::default()
+        };
+        let mut projection = Projection::Perspective(original.clone());
+        let mut saved = GameplayProjection::default();
+        saved.capture(&projection);
+        if let Projection::Perspective(event) = &mut projection {
+            event.fov = 0.7;
+            event.near = 16.0;
+            event.far = 4_000_000.0;
+            event.aspect_ratio = 1.8;
+        }
+        saved.capture(&projection);
+        assert!(saved.restore(&mut projection));
+        let Projection::Perspective(actual) = &projection else {
+            panic!("perspective lost")
+        };
+        assert_eq!(actual.fov, original.fov);
+        assert_eq!(actual.near, original.near);
+        assert_eq!(actual.far, original.far);
+        assert_eq!(actual.aspect_ratio, original.aspect_ratio);
+        assert!(!saved.restore(&mut projection));
+    }
+    #[test]
     fn demo_navigation_cassardis_door() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
         if !native.exists() {
@@ -1502,6 +1574,22 @@ mod tests {
             Vec3::new(8231.768, 1708.3849, -6733.37),
         );
         assert!(!path.is_empty(), "walk around recorded demo blockage");
+    }
+    #[test]
+    fn demo_navigation_cassardis_village() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.exists() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let ground = ddhost::install::stage_collision(&vfs, STAGE).unwrap();
+        let path = plan_path(
+            &ground,
+            &ddsim::sweep::SweepParam::default(),
+            Vec3::new(2154.6106, -74.36087, -1563.7985),
+            Vec3::new(-879.3919, -8.177856, 250.40385),
+        );
+        assert!(!path.is_empty(), "walk around recorded village blockage");
     }
     #[test]
     fn demo_navigation_walks_around_a_wall_without_placement() {
