@@ -658,6 +658,8 @@ pub struct RegionPool {
     pub bp_timer: Option<f32>,
     pub resist: Resist,
     pub events: RegionEvents,
+    /// The status build-up of this region (+0x70..+0x1B0, `crate::status`).
+    pub status: crate::status::StatusPools,
 }
 
 impl RegionPool {
@@ -701,6 +703,7 @@ impl RegionPool {
             bp_timer: None,
             resist: Resist::default(),
             events: RegionEvents::default(),
+            status: crate::status::StatusPools::default(),
         }
     }
 }

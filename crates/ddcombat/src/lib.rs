@@ -4,6 +4,7 @@
 //! rules as pure functions translated from the exe. `docs/COMBAT.md`
 //! documents both with addresses.
 
+pub mod cstatus;
 pub mod damage;
 pub mod events;
 pub mod ocl;

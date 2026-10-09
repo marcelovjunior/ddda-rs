@@ -92,6 +92,16 @@ impl GoblinData {
                     e.bp_reset_timer_max,
                 );
                 r.resist = resist;
+                // status thresholds (0x00770FD0), memory order of
+                // cCharParamEnemy +0x54..+0xA0; absent labels keep 999
+                let th = |k: &str| stats.resistances.get(k).copied().unwrap_or(999.0);
+                r.status = ddcombat::status::StatusPools::from_char_param([
+                    th("耐毒"), th("耐のろま"), th("耐暗闇"), th("耐睡眠"), th("耐油まみれ"),
+                    th("耐ずぶ濡れ"), th("耐敵化"), th("耐沈黙"), th("耐スキル封印"), th("耐呪い"),
+                    th("耐氷漬け"), th("耐延焼"), th("耐落雷"), th("耐久聖"), th("耐久魔"),
+                    th("耐石化"), th("耐攻撃力ダウン"), th("耐防御力ダウン"), th("耐魔法攻撃力ダウン"),
+                    th("耐魔法防御力ダウン"),
+                ]);
                 r
             })
             .collect();
@@ -242,6 +252,9 @@ impl Goblin {
                 attacks: vec![],
                 hurts: vec![],
                 history: HitHistory::default(),
+                statuses: Default::default(),
+                dots: Default::default(),
+                pools: Default::default(),
             },
             log: vec![],
             frames: 0,

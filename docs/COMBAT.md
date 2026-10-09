@@ -563,10 +563,9 @@ decay timer (R+0x114 + 4i):
   "down" slots are the `cStatus` types 0x0E..0x11 that the damage rules
   multiply by (sections 3 and 4); 0x12..0x15 are *guessed* to be the
   matching "up" buffs.
-- Not traced: what each kind does once applied (duration, the
-  `rStatusParam` entry it reads, its effect), how the player side builds
-  up statuses (equipment resistances, s[10..] in 5.1), and the weapon's
-  own status values added by `FUN_0088AA20`.
+- What each kind does once it fires (its `rStatusParam` entry, duration,
+  effect and cures), the player-side build-up, the wall check and the
+  friendly-fire teams: **docs/STATUS.md** (`ddcombat::cstatus`).
 
 ## 8. Worked example: a sword light slash on a goblin
 
