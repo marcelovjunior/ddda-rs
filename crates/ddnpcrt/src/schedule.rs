@@ -29,21 +29,71 @@ pub trait Graphs {
     fn graph(&self, path: &str) -> Result<Arc<Graph>, Error>;
 }
 
+/// Runtime guard configuration, reflected by 0x00578ad0 and copied into
+/// NPC intel by 0x00578ee0 -> 0x00bbf580 (DDDA.exe 2017-12-13 Steam).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Guard {
+    pub kind: u32,
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub direction: f32,
+    pub range: f32,
+    pub height: f32,
+    pub message_kind: u32,
+    pub message: i32,
+    pub quest: u32,
+    pub guard: bool,
+    pub jump_kind: u32,
+    pub start_position: u32,
+}
+
 /// What an NPC asks of the actor layer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    /// Configure a sensor; the actor/talk system decides eligibility.
+    Guard {
+        npc: u32,
+        config: Guard,
+    },
+    Gsf {
+        no: u32,
+        value: bool,
+    },
+    /// Applied graph stopped, not the distinct parent ApplyFSM predicate.
+    Finished {
+        npc: u32,
+    },
     /// `cAIActionInterfaceNpcSetGoto`: walk (or run) to a point, using the
     /// navigation route when `route` is set.
-    Goto { npc: u32, pos: [f32; 3], run: bool, route: bool },
+    Goto {
+        npc: u32,
+        pos: [f32; 3],
+        run: bool,
+        route: bool,
+    },
     /// `cAIActionInterfaceNpcSetWait`: stand, facing `dir` when given.
-    Wait { npc: u32, seconds: Option<f32>, dir: Option<[f32; 3]> },
+    Wait {
+        npc: u32,
+        seconds: Option<f32>,
+        dir: Option<[f32; 3]>,
+    },
     /// `cAIActionInterfaceNpcSetMotion` / `SetActionEx`: play the motion the
     /// record names (passed through unread).
-    Motion { npc: u32, interface: String },
+    Motion {
+        npc: u32,
+        interface: String,
+    },
     /// Placed at once (`SetInitPosNpc`, `cAIActionInterfaceDemoSetPos`).
-    Place { npc: u32, pos: [f32; 3], dir: Option<[f32; 3]> },
+    Place {
+        npc: u32,
+        pos: [f32; 3],
+        dir: Option<[f32; 3]>,
+    },
     /// The action graph changed (`LoadFSM` of the daily controller).
-    Action { npc: u32, path: String },
+    Action {
+        npc: u32,
+        path: String,
+    },
 }
 
 /// The actor layer finished the NPC's current interface.
@@ -85,6 +135,8 @@ struct Think {
     load: Option<String>,
     out: Vec<Request>,
     complete_moves: bool,
+    strict: bool,
+    talk_end: bool,
 }
 
 struct Env<'a> {
@@ -93,7 +145,9 @@ struct Env<'a> {
 }
 
 fn rec(p: &Process) -> Result<&mtfsm::Record, Error> {
-    p.parameter.as_ref().ok_or_else(|| Error::Data("process without parameter".into()))
+    p.parameter
+        .as_ref()
+        .ok_or_else(|| Error::Data("process without parameter".into()))
 }
 
 fn name(p: &Process) -> String {
@@ -106,7 +160,9 @@ impl Think {
     }
 
     fn interface(&mut self, r: &mtfsm::Record) -> Result<(), Error> {
-        let i = r.object("Interface").ok_or_else(|| Error::Data("interface missing".into()))?;
+        let i = r
+            .object("Interface")
+            .ok_or_else(|| Error::Data("interface missing".into()))?;
         let npc = self.npc;
         match i.class_name.unwrap_or("") {
             "cAIActionInterfaceNpcSetGoto" => {
@@ -122,7 +178,11 @@ impl Think {
             "cAIActionInterfaceNpcSetWait" => {
                 let t = i.object("mpWaitTimer");
                 let infinite = t.and_then(|t| t.b("無限待機")).unwrap_or(false);
-                let seconds = if infinite { None } else { t.and_then(|t| t.f("待機時間")) };
+                let seconds = if infinite {
+                    None
+                } else {
+                    t.and_then(|t| t.f("待機時間"))
+                };
                 let dir = i
                     .object("mpDirection")
                     .filter(|d| d.b("方向指定").unwrap_or(false))
@@ -131,12 +191,23 @@ impl Think {
                 self.goal = Goal::Wait(seconds);
             }
             c @ ("cAIActionInterfaceNpcSetMotion" | "cAIActionInterfaceNpcSetActionEx") => {
-                self.out.push(Request::Motion { npc, interface: c.to_string() });
+                self.out.push(Request::Motion {
+                    npc,
+                    interface: c.to_string(),
+                });
                 self.goal = Goal::Motion;
             }
             "cAIActionInterfaceDemoSetPos" => {
-                let pos = if i.b("ポジションセットOn/Off").unwrap_or(false) { i.vec3("ポジション") } else { None };
-                let dir = if i.b("方向セットOn/Off").unwrap_or(false) { i.vec3("方向") } else { None };
+                let pos = if i.b("ポジションセットOn/Off").unwrap_or(false) {
+                    i.vec3("ポジション")
+                } else {
+                    None
+                };
+                let dir = if i.b("方向セットOn/Off").unwrap_or(false) {
+                    i.vec3("方向")
+                } else {
+                    None
+                };
                 if let Some(p) = pos {
                     self.pos = Some(p);
                     self.out.push(Request::Place { npc, pos: p, dir });
@@ -144,6 +215,26 @@ impl Think {
                 self.goal = Goal::None;
                 self.finish();
             }
+            "cAIActionInterfaceNpcSetGuard" => {
+                let missing = |field| Error::Data(format!("guard missing {field}"));
+                let config = Guard {
+                    kind: i.u("タイプ").ok_or_else(|| missing("type"))? as u32,
+                    center: i.vec3("中心座標").ok_or_else(|| missing("center"))?,
+                    radius: i.f("中心からの距離").ok_or_else(|| missing("radius"))?,
+                    direction: i.f("向き").ok_or_else(|| missing("direction"))?,
+                    range: i.f("範囲").ok_or_else(|| missing("range"))?,
+                    height: i.f("高さ").ok_or_else(|| missing("height"))?,
+                    message_kind: i.u("メッセージタイプ").ok_or_else(|| missing("message type"))? as u32,
+                    message: i.s("メッセージ番号").ok_or_else(|| missing("message"))? as i32,
+                    quest: i.u("クエスト番号").ok_or_else(|| missing("quest"))? as u32,
+                    guard: i.b("番兵フラグ").ok_or_else(|| missing("guard flag"))?,
+                    jump_kind: i.u("ジャンプタイプ").ok_or_else(|| missing("jump"))? as u32,
+                    start_position: i.u("スタート位置").ok_or_else(|| missing("start"))? as u32,
+                };
+                self.out.push(Request::Guard { npc, config });
+                self.goal = Goal::Open;
+            }
+            other if self.strict => return Err(Error::Unimplemented(format!("NPC interface {other}"))),
             _ => self.goal = Goal::Open,
         }
         Ok(())
@@ -157,33 +248,67 @@ impl Owner for Think {
     /// here is **guessed**: without it a finished interface would satisfy
     /// the next state's links at once.
     fn state_changed(&mut self, _env: &mut Env<'_>) {
-        self.sys &= !4;
+        if self.strict {
+            // Translated from cThinkFSM::vf05 0x007a9da0.
+            self.sys = 0;
+        } else {
+            self.sys &= !4;
+        }
     }
 
     fn var(&self, env: &Env<'_>, v: &Var) -> Result<Value, Error> {
         Ok(match v.property {
             "SysCondition" => Value::Int(self.sys as i64),
+            // 0x007ab890: valid actor's frame flag; absent actor is false.
+            "TalkEnd (flag)" => Value::Bool(self.talk_end),
             "FreeCondition" => Value::Int(self.free as i64),
             // cThinkFSM getter 0x007ac350: the game hour.
             "GameHour" => Value::Int(env.clock.hour as i64),
             // cAIConsiderFSM_24Schedule +0xe4, set by 0x0059d790.
-            "GlobalTime" => Value::Int(ddnpc::schedule_time(env.clock.hour, env.clock.minute).unwrap_or(0) as i64),
+            "GlobalTime" => {
+                Value::Int(ddnpc::schedule_time(env.clock.hour, env.clock.minute).unwrap_or(0) as i64)
+            }
             p => return Err(Error::Unimplemented(format!("NPC variable {}.{p}", v.owner))),
         })
     }
 
-    fn update(&mut self, _env: &mut Env<'_>, p: &Process, _m: &mut ProcMem, _at: ProcAt) -> Result<(), Error> {
+    fn update(
+        &mut self,
+        _env: &mut Env<'_>,
+        p: &Process,
+        _m: &mut ProcMem,
+        _at: ProcAt,
+    ) -> Result<(), Error> {
         match name(p).as_str() {
             "LoadFSM" => {
-                let path = rec(p)?.text("FSMPath").ok_or_else(|| Error::Data("LoadFSM without path".into()))?;
+                let path = rec(p)?
+                    .text("FSMPath")
+                    .ok_or_else(|| Error::Data("LoadFSM without path".into()))?;
                 self.load = Some(path);
             }
             "SetInitPosNpc" => {
-                let pos = rec(p)?.vec3("InitPos").ok_or_else(|| Error::Data("InitPos".into()))?;
+                let pos = rec(p)?
+                    .vec3("InitPos")
+                    .ok_or_else(|| Error::Data("InitPos".into()))?;
                 self.pos = Some(pos);
-                self.out.push(Request::Place { npc: self.npc, pos, dir: None });
+                self.out.push(Request::Place {
+                    npc: self.npc,
+                    pos,
+                    dir: None,
+                });
             }
             "SetInterfaceNpc" | "SetInterfaceDemo" | "SetInterface" => self.interface(rec(p)?)?,
+            // Translated from 0x007aad10 (DDDA.exe 2017-12-13 Steam).
+            "Set GSFFlag" => {
+                let r = rec(p)?;
+                if let Some(no) = r.u("FlagNo").filter(|&n| n < 1536) {
+                    self.out.push(Request::Gsf {
+                        no: no as u32,
+                        value: r.b("Bool").unwrap_or(false),
+                    });
+                }
+            }
+            "Finish" => {}
             "Set FreeCondition" => {
                 let r = rec(p)?;
                 let n = r.u("FlagNo").unwrap_or(0) as u32 & 31;
@@ -196,12 +321,18 @@ impl Owner for Think {
             // Presentation and behaviour switches with no effect on where
             // the NPC is (talk motion, surprise, lift, armour, timers,
             // shop hit range, ...): recorded by the data, not modelled.
+            other if self.strict => return Err(Error::Unimplemented(format!("NPC process {other}"))),
             _ => {}
         }
         Ok(())
     }
 
     fn state(&mut self, env: &mut Env<'_>, p: &Process, _m: &mut ProcMem, _at: ProcAt) -> Result<(), Error> {
+        // Translated from 0x007497e0: the state callback sets Finish.
+        if name(p) == "Finish" {
+            self.sys |= 1;
+            return Ok(());
+        }
         if !matches!(name(p).as_str(), "SetInterfaceNpc" | "SetInterface") {
             return Ok(());
         }
@@ -249,6 +380,8 @@ pub struct Npc {
     /// Owner fields of the controller graph (its own SysCondition etc.).
     ctrl: Think,
     pub action_path: Option<String>,
+    applied: bool,
+    finished: bool,
 }
 
 impl Npc {
@@ -263,6 +396,8 @@ impl Npc {
             load: None,
             out: vec![],
             complete_moves: false,
+            strict: false,
+            talk_end: false,
         };
         Ok(Npc {
             id,
@@ -271,7 +406,39 @@ impl Npc {
             think: mk(),
             ctrl: mk(),
             action_path: None,
+            applied: false,
+            finished: false,
         })
+    }
+
+    /// Run an explicitly applied action graph, without a daily controller.
+    /// Source: 0x00765070 -> 0x00bb45e0 -> 0x0059e260.
+    pub fn applied(id: u32, graphs: &dyn Graphs, path: &str) -> Result<Npc, Error> {
+        let graph = graphs.graph(path)?;
+        if graph.attribute & 2 != 0
+            && graph
+                .root
+                .as_ref()
+                .is_some_and(|c| c.states.iter().any(|s| s.subcluster.is_some()))
+        {
+            return Err(Error::Unimplemented("applied NPC per-cluster work memory".into()));
+        }
+        let mut npc = Self::scheduled(id, graphs, path)?;
+        npc.action = npc.controller.take();
+        npc.action_path = Some(path.into());
+        npc.applied = true;
+        npc.think.strict = true;
+        Ok(npc)
+    }
+
+    /// One-frame actor observation. Cleared by uCharacterBase::vf111
+    /// (0x00850121), set from actual dialogue by uNpc::vf111 (0x00bb32cb).
+    pub fn observe_talk_end(&mut self, ended: bool) {
+        self.think.talk_end = ended;
+    }
+
+    pub fn applied_finished(&self) -> bool {
+        self.applied && self.finished
     }
 
     /// Complete moves and motions at once (a host without an NPC mover).
@@ -285,7 +452,10 @@ impl Npc {
 
     /// The action graph's current state names, root first.
     pub fn action_states(&self) -> Vec<String> {
-        self.action.as_ref().map(|c| c.current_names()).unwrap_or_default()
+        self.action
+            .as_ref()
+            .map(|c| c.current_names())
+            .unwrap_or_default()
     }
 
     /// The actor layer reports the current interface done (an arrival with
@@ -299,7 +469,10 @@ impl Npc {
 
     /// One frame: the controller, then the action graph it selected.
     pub fn step(&mut self, graphs: &dyn Graphs, clock: Clock) -> Result<Vec<Request>, Error> {
-        let mut env = Env { clock, _graphs: std::marker::PhantomData };
+        let mut env = Env {
+            clock,
+            _graphs: std::marker::PhantomData,
+        };
         if let Some(c) = self.controller.as_mut() {
             c.step(&mut self.ctrl, &mut env)?;
         }
@@ -308,11 +481,26 @@ impl Npc {
             self.action = Some(core(&path, g)?);
             self.think.sys = 0;
             self.think.goal = Goal::None;
-            self.think.out.push(Request::Action { npc: self.id, path: path.clone() });
+            self.think.out.push(Request::Action {
+                npc: self.id,
+                path: path.clone(),
+            });
             self.action_path = Some(path);
         }
-        if let Some(a) = self.action.as_mut() {
-            a.step(&mut self.think, &mut env)?;
+        let result = if let Some(a) = self.action.as_mut() {
+            a.step(&mut self.think, &mut env)
+        } else {
+            Ok(())
+        };
+        self.think.talk_end = false;
+        result?;
+        // Applied wrappers stop at Finish (0x005a1300), unlike the enemy
+        // driver's rewind cycle. Normal-controller restoration is external.
+        if self.applied && !self.finished && self.think.sys & 1 != 0 {
+            self.finished = true;
+            self.action = None;
+            self.think.sys = 0;
+            self.think.out.push(Request::Finished { npc: self.id });
         }
         Ok(std::mem::take(&mut self.think.out))
     }

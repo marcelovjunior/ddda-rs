@@ -10,6 +10,73 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn applied_npc_host_requires_binding_and_real_talk_observation() {
+    use ddhost::ddnpcrt::schedule::Request as NpcRequest;
+    use ddstory::Host as StoryHost;
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() {
+        return;
+    }
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut world = ddhost::opening::OpeningWorld::new();
+    world.enable_live_encounters();
+    let mut host = Host::new(
+        ddsim::Sim::new(Default::default()),
+        Some(story),
+        world,
+        Box::new(Void),
+    );
+    host.data.npc = Some(std::sync::Arc::new(
+        ddhost::ddnpcrt::InstallData::open(native, "eng").unwrap(),
+    ));
+    let target = ddstory::Target {
+        kind: 5,
+        group: 1,
+        index: 0,
+    };
+    host.apply_story_npc(200, target, r"ai\fsm\npc\st200\quest\q0002_n001_ai");
+    for _ in 0..10 {
+        assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty());
+    }
+    assert!(host.story_npc_action(1).is_none());
+    host.bind_story_npc(200, target, 1);
+    let mut guard_seen = false;
+    for _ in 0..300 {
+        guard_seen |= host
+            .tick(&Default::default())
+            .unwrap()
+            .npc_requests
+            .iter()
+            .any(|r| matches!(r, NpcRequest::Guard { config, .. } if config.kind == 1));
+        assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
+    }
+    assert!(guard_seen);
+    assert_eq!(host.story_npc_normal_graph_present(1), Some(false));
+    host.observe_story_npc_talk_end(1);
+    let mut finishes = 0;
+    for _ in 0..600 {
+        for request in host.tick(&Default::default()).unwrap().npc_requests {
+            match request {
+                NpcRequest::Goto { npc, pos, .. } => host.story_npc_arrived(npc, pos),
+                NpcRequest::Finished { .. } => finishes += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(host.story.as_ref().unwrap().world.gsf.get(381));
+    assert_eq!(finishes, 1);
+    assert!(host.story_npc_action(1).unwrap().3);
+    assert!(
+        !host.world.applied_script_finished(200, &target),
+        "graph Finish is not parent ApplyFSM readiness"
+    );
+}
+
+#[test]
 fn installed_q2_goblin_script_indices_are_layout_record_ids() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)
