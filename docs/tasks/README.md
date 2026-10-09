@@ -76,7 +76,7 @@ Codex lane: see `docs/CODEX.md`.
 | [pawns-rift](pawns-rift.md) | Riftstones, the Rift, recruiting pawns, pawn data | research | claude-5 | assigned |
 | [shops-economy](shops-economy.md) | Shops, prices, forging, storage | research | claude-6 | assigned |
 | [events-quests](events-quests.md) | Cutscenes, events, quests, story flags | research | claude-7 | assigned |
-| [weather-data](weather-data.md) | Weather, fog and sky readers + clock interpolation | reader + exe | codex-1 | assigned (priority 1) |
+| [weather-data](weather-data.md) | Weather, fog and sky readers + clock interpolation | reader + exe | codex-1 | merged 2026-10-09 |
 | [npc-dialogue-links](npc-dialogue-links.md) | NPC ledger, schedules, dialogue links | reader + exe | codex-1 | assigned (2) |
 | [gui-structure](gui-structure.md) | GUI resources (HUD, menus, loading screens) | reader | codex-1 | assigned (3) |
 | [map-travel-links](map-travel-links.md) | World map, landmarks, fast travel | reader + exe | codex-1 | assigned (4) |

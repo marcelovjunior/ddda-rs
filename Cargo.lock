@@ -3576,6 +3576,14 @@ name = "mttex"
 version = "0.1.0"
 
 [[package]]
+name = "mtweather"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "mtxfs"
 version = "0.1.0"
 dependencies = [
