@@ -16,6 +16,7 @@
 
 pub mod catalogue;
 pub mod growth;
+pub mod magic;
 pub mod skill_list;
 pub mod vocation;
 

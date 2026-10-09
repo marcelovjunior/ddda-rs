@@ -215,6 +215,43 @@ The font and gradation texture match those listed for load0_001.
 
 ## Remaining work
 
+### Cockpit renderer work in progress
+
+`uGUILifeGauge::vf58` (`0x006781c0`) loads
+`id/DDN/cockpit/cockpit0_1`. Its player HP and stamina nodes are at
+(243,643) and (243,655) on the authored 1280x720 screen. The bar geometry,
+atlas corners and numeric HP glyphs now come from this resource at runtime.
+`0x0067c590` crops both width and texture coordinates, retaining a three-pixel
+minimum for positive HP/stamina. `0x00679070` fades full stamina to 0.3 alpha.
+`0x00678210` truncates HP, retaining one for a positive fraction;
+`0x00679290` packs its four numeric glyph nodes leftward without leading zeros.
+
+Object construction is `0x01077ec0`: animation word +4 low16 is object count,
+high16 is sequence count, +12 is the first a4 object. Object +4 low8 is
+constant-property count; the following byte counts animated properties,
+not sequences. Each object's a8 sequence spans select b0 tracks; b0 flags
+low8 select the value pool and bits8..23 count keys. `mtgui::layout` exposes
+these records without claiming a full interpolation VM.
+
+`cGUIInstAnimControl::vf19` (`0x010782a0`) and `0x0107ec10` consume node
+extra data: a count then 20-byte records, selector at +8 and start/end
+frames at +12/+16. Normal health and stamina use selector 5
+(`0x00678ec0`, `0x00679070`); colours are authored animation keys.
+
+`uGUIActionPallet::vf58` (`0x005ee480`) loads `id/common/custskl0` and the
+localized `id/DDN/message/actionpallet/actionpallet` resource. The keyboard
+group's nodes 175/190/197/204 hold light/heavy/interact/jump text; the
+positions correspond to ref001. `0x005ed3b0` adds 0x8c to keyboard binding
+scan codes before looking up the control selector. Key icons are selected
+from the authored texture and size keys, not a copied atlas table.
+
+The presentation checkpoint is incomplete: the old overlay is retained for
+binding checks, prompt typography uses the viewer font, pawn world anchoring
+uses the highest animated joint provisionally (the exact source anchor is
+unresolved), and full animation/status transitions are not yet executed.
+The screen projection's 70cm camera-facing offset and -40 vertical offset
+are traced to `0x00679a10`. Comparison gate remains open.
+
 The reader is a bounded table/node/resource reader, not widget playback.
 Animation interpolation, serialized sequence opcodes, extra-data layouts,
 GUI font/icon formats, controller behavior and rendering remain unimplemented.
