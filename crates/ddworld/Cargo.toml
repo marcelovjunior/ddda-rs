@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 ddvfs = { path = "../ddvfs" }
+mtlot = { path = "../mtlot" }
 mtmod = { path = "../mtmod" }
 mtsbc = { path = "../mtsbc" }
 mtshader = { path = "../mtshader" }

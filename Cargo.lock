@@ -2319,6 +2319,7 @@ version = "0.1.0"
 dependencies = [
  "ddsim",
  "ddvfs",
+ "mtlot",
  "mtmod",
  "mtsbc",
  "mtshader",
