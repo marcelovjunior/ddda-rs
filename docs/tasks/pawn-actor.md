@@ -76,6 +76,23 @@ files stay outside the repository.
 
 ## Results
 
-Brief only. Record recruitment and prologue data setup already exist; active
-conversion and Mage pawn inputs remain incomplete. First action: trace record
-copy/stat setup and establish the active-field mapping before adding an API.
+Source survey only; no active actor implementation in this branch.
+0x00447390 runs edit conversion 0x00780fa0, parameter conversion 0x00446a30,
+equipment effects 0x00446860 and skill refresh 0x00780350, then copies pawn
+type, knowledge and inclination records into the active pawn-info record.
+
+0x00446a30 copies saved vocation +5 to active +0x10 and saved level +4 to
+active +0x700. The saved HP/stamina/base attack and defence fields at
++0x188..+0x1ac are copied to active +0x29c..+0x2c0; experience +0x1b0 goes
+to +0x2c4. Saved discipline +0x60 goes to +0x344. These are existing saved
+base values, not a request to reconstruct a level-1 kit. It also expands
+signed skill slots, copies learned-skill bitsets and rebuilds status arrays;
+invalid status kinds outside 0..39 are cleared. Equipment effects remain
+a separate pass: 0x00446860 scans 12 valid equipped slots, resolves each item
+through 0x00459340 and calls 0x00442fe0/0x00442d50 after resetting its output
+fields. Consumers and derived formulas still require tracing.
+
+Next: bind these active values to the existing combat representation, then
+trace the Mage virtual-pad decisions and motion/resource selection. Record
+recruitment/prologue setup already exist; body/stat/inventory conversion and
+Mage pawn inputs remain incomplete and untested by this source-only survey.
