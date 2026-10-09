@@ -2333,6 +2333,7 @@ dependencies = [
  "ddexe",
  "dditem",
  "ddparam",
+ "ddpawnai",
  "ddsim",
  "ddskill",
  "ddvfs",

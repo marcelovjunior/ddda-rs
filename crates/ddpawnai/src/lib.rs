@@ -7,7 +7,11 @@
 //! names translate them and the doc comments keep the originals.
 
 pub mod goap;
+pub mod incl;
+pub mod pawn;
+pub mod plact;
 pub mod prio;
+pub mod think;
 
 use mtxfs::{Object, Value, Xfs};
 
