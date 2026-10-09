@@ -157,3 +157,11 @@ This project reads the game's files from the user's own installation at
 run time. It does not include, redistribute or modify game files.
 Addresses and behaviour descriptions refer to the 2017-12-13 Steam build.
 Third-party notices are in [third_party/](third_party/).
+
+
+Unattended viewer tests must use `--unattended`; `--demo` and `--shot`
+also enable it automatically. These runs never grab or lock the cursor,
+keep running after losing focus, and rotate the camera only while the
+right mouse button is held. Normal play keeps direct grabbed mouse look
+and focus-loss pause. Esc and the pause menu remain available in either
+mode. Use `--unattended` for automated runs without a demo or screenshot.
