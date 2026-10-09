@@ -184,3 +184,28 @@ fn body_morphs_differ() {
     // The four party members do not share one body.
     assert!(bodies.windows(2).any(|w| w[0] != w[1]));
 }
+
+#[test]
+fn face_morphs_differ() {
+    let Some(v) = vfs() else { return };
+    let a = ddlook::npc_look(&v, 1, 1, 22).unwrap().look.face;
+    let b = ddlook::npc_look(&v, 2, 2, 22).unwrap().look.face;
+    eprintln!("npc1 {} face joints, npc2 {}", a.len(), b.len());
+    assert!(!a.is_empty() && !b.is_empty());
+    assert_ne!(a, b);
+    let Some(xml) = save_xml() else { return };
+    let looks = ddlook::save::save_looks(&v, &xml, "mPlayerDataManual").unwrap();
+    for l in &looks {
+        let f = &l.look.face;
+        let j = f.iter().find(|j| j.id == 81);
+        eprintln!("{}: {} face joints, eye joint 81 {:?}", l.who, f.len(), j);
+        assert!(!f.is_empty(), "{}", l.who);
+        assert!(f.iter().all(|j| j.offset.iter().chain(&j.scale).chain(&j.rotation).all(|x| x.is_finite())));
+    }
+    // Four distinct faces.
+    for i in 0..looks.len() {
+        for k in i + 1..looks.len() {
+            assert_ne!(looks[i].look.face, looks[k].look.face, "{} {}", looks[i].who, looks[k].who);
+        }
+    }
+}

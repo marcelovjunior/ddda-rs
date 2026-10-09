@@ -3,6 +3,8 @@
 //!
 //! cargo run -p ddlook --example look_dump -- <nativePC> model <rModel path>...
 //! cargo run -p ddlook --example look_dump -- <nativePC> npc <id> [unit] [row]
+//! cargo run -p ddlook --example look_dump -- <nativePC> paths <class> [substring]
+//! cargo run -p ddlook --example look_dump -- <nativePC> raw <class> <path> <out file>
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let v = ddvfs::Vfs::open(&a[1]).unwrap();
@@ -72,6 +74,21 @@ fn main() {
             let l = ddlook::npc_look(&v, id, unit, row).unwrap();
             println!("{l:#?}");
         }
-        _ => panic!("model | npc"),
+        "raw" => {
+            // raw <class> <path> <out file>
+            let b = v.read(&a[4], mtarc::type_hash(&a[3])).unwrap();
+            std::fs::write(&a[5], &b).unwrap();
+            println!("{} bytes", b.len());
+        }
+        "paths" => {
+            // paths <class> [substring]
+            let f = a.get(4).map(String::as_str).unwrap_or("");
+            let mut v: Vec<&str> = v.paths_of_type(mtarc::type_hash(&a[3])).filter(|p| p.contains(f)).collect();
+            v.sort();
+            for p in v {
+                println!("{p}");
+            }
+        }
+        _ => panic!("model | npc | paths"),
     }
 }

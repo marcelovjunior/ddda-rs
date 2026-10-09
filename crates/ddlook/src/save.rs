@@ -101,12 +101,15 @@ pub fn edit_look<S: Source + ?Sized>(
     );
     look.skin_color = Some([skin[0], skin[1], skin[2]]);
     look.weapons = crate::weapon::weapons(raw(0), raw(1));
+    // Preset numbers (0x00780fa0): the field, plus 100 for a female
+    // unless mHumanBodyAll is 200 or more.
+    let base = if sex == 1 && field(f, "mHumanBodyAll").unwrap_or(0) < 200 { 100 } else { 0 };
     // The body morph from the human presets (0x00780fa0 -> 0x00cbc750).
     // The nine floats come from a skeleton measurement (0x00cbbf00) that
     // is not translated: neutral (1.0) here.
     let mut human = crate::morph::HumanEdit::neutral();
     for (part, (name, field_name)) in crate::morph::PRESET_PARTS.iter().enumerate() {
-        let n = field(f, field_name).unwrap_or(0);
+        let n = field(f, field_name).unwrap_or(0) + base;
         let path = format!("edit\\parts\\{name}\\{name}_{n:03}");
         let preset = src
             .resource(&path, "rHumanPartsEdit")
@@ -116,6 +119,21 @@ pub fn edit_look<S: Source + ?Sized>(
         human.apply_preset(part, preset.as_ref());
     }
     look.body = Some(crate::morph::body_morph(&human, &|_| true));
+    // The face morph from the face presets (0x00780fa0 -> 0x00cb9280) and
+    // the slider parameters.
+    let mut face = crate::face::FaceEdit::neutral();
+    for (part, (name, field_name)) in crate::face::FACE_PRESET_PARTS.iter().enumerate() {
+        let n = field(f, field_name).unwrap_or(0) + base;
+        let path = format!("edit\\parts\\{name}\\{name}_{n:03}");
+        let preset = src
+            .resource(&path, "rFacePartsEdit")
+            .ok()
+            .flatten()
+            .and_then(|b| crate::face::FaceParts::parse(&b).ok());
+        face.apply_preset(part, preset.as_ref());
+    }
+    let params = crate::face::FaceParams::from_save(&|n| field(f, n).map(|v| v as u8));
+    look.face = crate::face::face_morph(&face, &params, &|_| true);
     Some(look)
 }
 

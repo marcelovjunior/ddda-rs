@@ -50,8 +50,8 @@ pub struct Morph {
     /// Base-model bones in file order (parents first): entity and parent
     /// index.
     pub bones: Vec<(Entity, Option<usize>)>,
-    /// Per bone: uCnsEdit type, scale, child scale, offset.
-    pub joint: Vec<Option<(u32, Vec3, Vec3, Vec3)>>,
+    /// Per bone: its uCnsEdit records in order (body, then face).
+    pub joint: Vec<Vec<Edit>>,
     /// uModel +0x60.
     pub model_scale: Vec3,
     /// The unmorphed local transforms of the last frame: the motion only
@@ -60,6 +60,19 @@ pub struct Morph {
     /// Rigid attachments (sheathed weapons): anchor entity under the root,
     /// bone index, local matrix (uCnsAttach mode 1).
     pub attach: Vec<(Entity, usize, Mat4)>,
+}
+
+/// One uCnsEdit record (0x00860ac0).
+#[derive(Clone, Copy)]
+pub struct Edit {
+    /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 and 0xc
+    /// approximated as plain.
+    pub kind: u32,
+    pub scale: Vec3,
+    pub child: Vec3,
+    pub offset: Vec3,
+    /// +0x70 as a rotation (type 0: X, then Y, then Z).
+    pub rotation: Quat,
 }
 
 /// The morph pass (uCnsEdit::vf24 0x00860ac0 on world matrices, parents
@@ -80,14 +93,16 @@ fn apply_morph(m: &mut Morph, joints: &mut Query<&mut Transform>) {
         m.base[i] = local;
         let pw = parent.map_or(root, |p| world[p]);
         let mut w = pw * local.to_matrix();
-        if let Some((kind, s, c, t)) = m.joint[i] {
-            let k = if kind == 0xb {
+        for e in &m.joint[i] {
+            let k = if e.kind == 0xb {
                 let len = Vec3::new(w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length());
-                s * c / len.max(Vec3::splat(1.192_092_9e-7))
+                e.scale * e.child / len.max(Vec3::splat(1.192_092_9e-7))
             } else {
-                s
+                e.scale
             };
-            w = w * Mat4::from_translation(t) * Mat4::from_scale(k);
+            // Row-vector C = diag(k) x R with the offset row, W' = C x W:
+            // column form W x T(offset) x R x S(k).
+            w = w * Mat4::from_translation(e.offset) * Mat4::from_quat(e.rotation) * Mat4::from_scale(k);
         }
         world.push(w);
     }
@@ -164,6 +179,7 @@ pub fn spawn(
         None,
         None,
         &[],
+        &[],
         &|_| true,
         motion_path,
         slot,
@@ -188,6 +204,7 @@ pub fn spawn_assembled(
     model_path: &str,
     base_tint: Option<[f32; 3]>,
     body: Option<&ddlook::morph::BodyMorph>,
+    face: &[ddlook::face::FaceJoint],
     parts: &[ExtraPart],
     visible: &dyn Fn(u16) -> bool,
     motion_path: &str,
@@ -284,13 +301,35 @@ pub fn spawn_assembled(
                 (joint_entities[i], (x.parent != 255 && p < i).then_some(p))
             })
             .collect();
+        // Body edits (ddlook::morph), then face edits (ddlook::face; the eye
+        // joints' special types are not translated and are left out). Joint
+        // 0x90 gets both; their order is *assumed*.
         let joint = model
             .bones
             .iter()
             .map(|x| {
-                body?.joints.iter().find(|(id, _)| *id == x.anim_map_index).map(|(_, m)| {
-                    (m.kind, Vec3::from(m.scale), Vec3::from(m.child), Vec3::from(m.offset))
-                })
+                let id = x.anim_map_index;
+                let mut v = vec![];
+                if let Some((_, m)) = body.and_then(|b| b.joints.iter().find(|(j, _)| *j == id)) {
+                    v.push(Edit {
+                        kind: m.kind,
+                        scale: Vec3::from(m.scale),
+                        child: Vec3::from(m.child),
+                        offset: Vec3::from(m.offset),
+                        rotation: Quat::IDENTITY,
+                    });
+                }
+                if let Some(f) = face.iter().find(|f| f.id == id && ddlook::face::special_kind(id).is_none()) {
+                    let r = f.rotation.map(f32::to_radians);
+                    v.push(Edit {
+                        kind: 0,
+                        scale: Vec3::from(f.scale),
+                        child: Vec3::ONE,
+                        offset: Vec3::from(f.offset),
+                        rotation: Quat::from_euler(EulerRot::ZYX, r[2], r[1], r[0]),
+                    });
+                }
+                v
             })
             .collect();
         let base = model.bones.iter().map(|x| Transform::from_matrix(Mat4::from_cols_array(&x.local))).collect();

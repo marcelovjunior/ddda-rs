@@ -430,6 +430,7 @@ fn spawn_look(
         &look.base,
         look.skin_color,
         look.body.as_ref(),
+        &look.face,
         &parts,
         &move |g| mask.visible(g),
         motion_path,
