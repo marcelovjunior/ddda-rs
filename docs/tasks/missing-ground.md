@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/missing-ground`
 - **Board area:** `render/lod`
-- **Status:** open (head traced the data; needs a live check)
+- **Status:** resolved: the original has the same hole, covered by an auto-closing door (maintainer, 2026-10-09); see doors
 
 ## Goal
 
