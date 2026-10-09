@@ -51,12 +51,19 @@ struct EventArgs {
     shot: Option<PathBuf>,
     shot_delay: f32,
     save: Option<PathBuf>,
+    /// `--lineup` entries: `npc:N` or a save file.
+    lineup: Vec<String>,
 }
 
 fn parse_args() -> Option<EventArgs> {
     let all: Vec<String> = std::env::args().skip(1).collect();
-    let i = all.iter().position(|a| a == "--event" || a == "--lineup")?;
-    let lineup = all[i] == "--lineup";
+    // `--event` wins when both are given; `--lineup <save>` next to it
+    // then names the save that dresses the player (as `--save`).
+    let ev = all.iter().position(|a| a == "--event");
+    let li = all.iter().position(|a| a == "--lineup");
+    let i = ev.or(li)?;
+    let lineup = ev.is_none();
+    let lineup_arg = li.and_then(|k| all.get(k + 1)).cloned();
     let native_pc = PathBuf::from(all.first().expect("usage: ddview <nativePC> --event <row>"));
     let mut a = EventArgs {
         exe: native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default(),
@@ -70,8 +77,13 @@ fn parse_args() -> Option<EventArgs> {
         size: (1600, 900),
         shot: None,
         shot_delay: 10.0,
-        save: lineup.then(|| PathBuf::from(all.get(i + 1).expect("--lineup needs a save file"))),
+        save: None,
+        lineup: lineup_arg.iter().flat_map(|v| v.split(',')).map(str::to_string).collect(),
     };
+    if !lineup {
+        // `--event N --lineup save` (the head smoke run): use the save.
+        a.save = a.lineup.iter().find(|e| !e.starts_with("npc:")).map(PathBuf::from);
+    }
     let mut it = all.iter().skip(1);
     while let Some(k) = it.next() {
         let mut val = || it.next().unwrap_or_else(|| panic!("{k} needs a value")).clone();
@@ -128,7 +140,10 @@ pub fn run_if_requested() -> bool {
                         None
                     }
                 },
-                0 => saved.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()),
+                // The save's Arisen, else a stand-in (ddlook::save::template_look).
+                0 => saved.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()).or_else(|| {
+                    ddlook::save::template_look(&vfs, args.sex).map_err(|e| eprintln!("player stand-in: {e}")).ok()
+                }),
                 _ => saved.iter().find(|s| s.who == format!("pawn{}", a.unit_no)).map(|s| s.look.clone()),
             };
             if let Some(l) = look {
@@ -372,11 +387,26 @@ fn spawn_look(
     at: Vec3,
     hold: Option<f32>,
 ) -> Result<Entity, String> {
-    let parts: Vec<character::ExtraPart> = look
+    let mut parts: Vec<character::ExtraPart> = look
         .parts
         .iter()
-        .map(|p| character::ExtraPart { path: p.path.clone(), tint: if p.hair { look.hair_color } else { None } })
+        .map(|p| character::ExtraPart {
+            path: p.path.clone(),
+            tint: if p.hair {
+                look.hair_color
+            } else if p.beard {
+                look.beard_color
+            } else {
+                None
+            },
+            attach: None,
+        })
         .collect();
+    parts.extend(look.weapons.iter().map(|w| character::ExtraPart {
+        path: w.path.clone(),
+        tint: None,
+        attach: Some((w.joint, w.rotation, w.offset)),
+    }));
     let mask = look.mask;
     character::spawn_assembled(
         commands,
@@ -386,6 +416,7 @@ fn spawn_look(
         images,
         bindposes,
         &look.base,
+        look.skin_color,
         &parts,
         &move |g| mask.visible(g),
         motion_path,
@@ -441,7 +472,18 @@ fn setup_lineup(
         stats: Default::default(),
     };
     loader.index_models();
-    let looks = saved_looks(&vfs, args.save.as_ref().unwrap());
+    let mut looks: Vec<(String, ddlook::Look)> = vec![];
+    for e in &args.lineup {
+        if let Some(n) = e.strip_prefix("npc:") {
+            let id: u32 = n.parse().expect("npc:<id>");
+            match ddlook::npc_look(&vfs, id, id, 0) {
+                Ok(l) => looks.push((format!("npc{id}"), l.look)),
+                Err(e) => error!("npc {id}: {e}"),
+            }
+        } else {
+            looks.extend(saved_looks(&vfs, std::path::Path::new(e)).into_iter().map(|s| (s.who, s.look)));
+        }
+    }
     let n = looks.len() as f32;
     for (i, s) in looks.iter().enumerate() {
         // 90 cm apart, centred; empty motion: the rest pose.
@@ -453,14 +495,14 @@ fn setup_lineup(
             &mut materials,
             &mut images,
             &mut bindposes,
-            &s.look,
+            &s.1,
             "",
             0,
             Vec3::new(x, 0.0, 0.0),
             Some(0.0),
         ) {
-            Ok(_) => info!("{}: {} parts, base {}", s.who, s.look.parts.len(), s.look.base),
-            Err(e) => error!("{}: {e}", s.who),
+            Ok(_) => info!("{}: {} parts, base {}", s.0, s.1.parts.len(), s.1.base),
+            Err(e) => error!("{}: {e}", s.0),
         }
     }
     commands.spawn((

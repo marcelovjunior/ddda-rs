@@ -15,7 +15,9 @@
 //!    rArmorTableNpc -> rArmorModelNpc), hair and beard (0x008407f0:
 //!    rArmorTable / rArmorModel of `h_parts`).
 
+pub mod pattern;
 pub mod save;
+pub mod weapon;
 
 use std::fmt;
 
@@ -441,6 +443,8 @@ pub struct LookPart {
     /// Hair and beard take the edit's hair colour (0x008407f0 ->
     /// 0x008438f0).
     pub hair: bool,
+    /// The beard (takes the beard colour).
+    pub beard: bool,
 }
 
 /// Everything a renderer needs to build one character on one skeleton.
@@ -452,9 +456,18 @@ pub struct Look {
     pub base: String,
     pub parts: Vec<LookPart>,
     pub mask: PartMask,
-    /// Hair and beard colour: edit floats 8-10 x 0.5 + 0.2 (actor
-    /// +0x13d0..+0x13d8, 0x008407f0), when the edit record has them.
+    /// Hair colour: actor +0x13d0..+0x13d8 x 0.5 + 0.2 (0x008407f0).
     pub hair_color: Option<[f32; 3]>,
+    /// Beard colour: not applied. The runtime edit holds one (actor
+    /// +0x13f0, pallet 0), but the beard branch of 0x008407f0 sets no
+    /// colour and the formula is not traced (the hair formula on it gives
+    /// a green beard for st200 n001).
+    pub beard_color: Option<[f32; 3]>,
+    /// Skin colour (actor +0x13e0), raw (its use in the shader is not
+    /// traced).
+    pub skin_color: Option<[f32; 3]>,
+    /// Sheathed weapons.
+    pub weapons: Vec<weapon::WeaponPart>,
     /// Edit-record resources (rHumanEdit, rBodyEdit, rFaceEdit) for
     /// morphs; not applied by this crate.
     pub morphs: Option<[String; 3]>,
@@ -527,7 +540,7 @@ impl Tables {
             if let Some((kind, p)) = self.models[sex_models as usize].get(m) {
                 // One shipped record names an empty path: no model.
                 if !p.is_empty() {
-                    out.push(LookPart { kind, path: p.to_string(), hair });
+                    out.push(LookPart { kind, path: p.to_string(), hair, beard: false });
                 }
             }
         }
@@ -554,7 +567,12 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         t.resolve(sex, sex, id, false, &mut parts);
     }
     t.resolve(2, 2, outfit.hair, true, &mut parts);
+    let n = parts.len();
     t.resolve(2, 2, outfit.beard, true, &mut parts);
+    for p in &mut parts[n..] {
+        p.hair = false;
+        p.beard = true;
+    }
     // 0x008449b0: parts 0-199 on; the player hides part 17, a pawn part 16
     // (NPC ids pick by 0x00ba7150, not translated).
     let mut mask = PartMask::default();
@@ -578,7 +596,17 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
             }
         }
     }
-    Look { sex, base: base_body(sex), parts, mask, hair_color, morphs: None }
+    Look {
+        sex,
+        base: base_body(sex),
+        parts,
+        mask,
+        hair_color,
+        beard_color: None,
+        skin_color: None,
+        weapons: vec![],
+        morphs: None,
+    }
 }
 
 /// The NPC as an event actor: `uActorModelPl::vf05` 0x0083e010 branch 2.
@@ -608,9 +636,6 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
     let s = entry.stage;
     let edit_path = format!("edit\\st{s:03}\\n{npc:03}\\st{s:03}_n{npc:03}");
     let edit = EditPawn::parse(&read(src, &edit_path, "rEditPawn")?)?;
-    if edit.weapons.iter().any(|&x| x != -1) {
-        return Err(Error::Unimplemented(format!("{edit_path}: weapons (actor +0x1330.., 0x00840180)")));
-    }
     let mut set = edit.armor_set as i32;
     let mut hair = edit.hair;
     apply_variant(npc, set_variant(unit_no, npc, row), &mut set, &mut hair);
@@ -635,7 +660,7 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         for &id in rec.models.iter().take(2) {
             if id as i32 >= 0 {
                 if let Some((kind, p)) = t.npc_models[sex as usize].get(id) {
-                    parts.push(LookPart { kind, path: p.to_string(), hair: false });
+                    parts.push(LookPart { kind, path: p.to_string(), hair: false, beard: false });
                 }
             }
         }
@@ -655,6 +680,8 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         look
     };
     look.morphs = morphs;
+    look.skin_color = Some([f[12], f[13], f[14]]);
+    look.weapons = weapon::weapons(edit.weapons[0], edit.weapons[1]);
     Ok(NpcLook { npc, edit_path, edit, armor_set: set, look })
 }
 

@@ -106,17 +106,68 @@ For st200 ev10:
 
 The masks start from all bits set (*assumed* model default).
 
-## Colours
+## Materials
 
-- **Hair and beard:** edit floats 8-10 × 0.5 + 0.2 (actor
-  +0x13d0..+0x13d8). 0x008407f0 passes them to 0x008438f0, which sets a
-  material constant on matching meshes.
-- **In `ddview`:** the colour multiplies the albedo of hair and beard
-  materials (*approximation*). This is done for NPCs.
-- **Save characters:** `mColorHair` and the other `mColor*` fields are
-  palette indices whose table was not found. Save characters are not
-  tinted.
-- **Not applied:** skin, eye and makeup colours.
+Character materials use the traced material description
+(`mtmrl::shading::describe`, SHADING.md), as the stage does:
+- albedo map with fAlbedoColor × fDiffuseColor;
+- culling from the rasterizer state (cloth is mostly two-sided);
+- the material header's alpha test, or alpha blending.
+
+Before this, cloth was culled from behind and its cut-outs drew black.
+That showed the body through the gaps head saw at ev10 frame 295, on the
+shoulders and arms of the elder and Quina.
+
+## Colours (traced: 0x00780fa0)
+
+The save -> runtime edit conversion 0x00780fa0 reads
+`etc\editPattern\editPattern` (rEditPatternData, sGameSys +0xbe254;
+`ddlook::pattern`):
+
+| Runtime edit field | Source | Pallet |
+|---|---|---|
+| +0x50 / +0x60 eye R / L | `mColorEyeR` / `mColorEyeL` | 2 |
+| +0x70 hair | `mColorHair` | 0 |
+| +0x80 skin | `mColorBody` | 1 |
+| +0x90 beard | `mColorBeard` | 0 |
+| +0xa0 eyebrow | `mColorEyebrow` | 0 |
+| +0xb0 makeup | `mColorMakeup` | 2 |
+
+- **Index rule:** an index of 63 or more takes colour 0.
+- **NPCs:** their edit floats carry the same layout (eye R, eye L, hair,
+  skin, beard, ...).
+- **Hair colour as the game uses it** (0x008407f0 -> 0x008438f0): the hair
+  value × 0.5 + 0.2. It is applied in `ddview` as an albedo multiplier on
+  hair models (*approximation* of the material constant).
+- **Skin colour:** applied raw to the base body's materials. How the
+  shader uses it was not traced (*approximation*).
+- **Beard colour: not applied.** The beard branch of 0x008407f0 sets no
+  colour, and using the hair formula on the elder's beard turned it
+  green.
+- **Not applied:** eye, eyebrow and makeup colours.
+
+## Weapons (traced)
+
+- **Ids:** the save's equipment slots 0 and 1 hold the primary and
+  secondary weapons; slots 2-11 hold armour. An item record's +0x40 holds
+  the weapon id or armour id.
+- **Model** (0x00bc1a00): `model\wp\<kind>\<kind>NNN[_x]\...`:
+  - number = id % 100, with 20 read as 999;
+  - `_a`, `_b`... per hundred;
+  - kinds by category: 1 one, 2 mac, 3 two, 4 dag, 5 stk, 6 wan, 7 war,
+    8 sld, 9 bld, 10 bow, 11 bbw, 12 mbw, 13/14 qui;
+  - 15/16 qui with `arr` files.
+- **Sheathed attachment:** the row is picked by category (0x00c1bad0),
+  from table 0x01872bc0. Each row has a joint id, a rotation in degrees
+  and an offset in cm (0x0080bcb0).
+- **Hang-up:** uCnsAttach (0x00859bb0, mode 1) builds the rotation as Rx ×
+  Ry × Rz for row vectors, so X is applied first.
+- **In `ddview`:** each weapon keeps its own small skeleton (bone ids 0-2,
+  which are not body joints) under an anchor on that joint.
+- **Not applied:**
+  - the second model of a dagger pair (0x00bc1c30);
+  - the body-edit offset correction of rows on joints 11 / 13
+    (0x0080bcb0).
 
 ## Morphs (not applied)
 
@@ -137,8 +188,26 @@ The game shapes heads and bodies with joint offsets, not separate models:
   model's `rJointEx` (`model\pl\m`). Which joint each entry moves, and
   how the presets combine, was not traced.
 
-Until those are traced, every character shows the unmorphed base head
-and body.
+Traced so far (character-polish):
+- **0x00780fa0 (save -> runtime):**
+  - loads the six face presets and five human presets
+    (`edit\parts\%s\%s_%03d`);
+  - sets rBodyEdit +0x60 / +0x64 from `mBodySlender` / `mBodyMuscle`
+    through constant tables;
+  - fills around 20 scale and offset floats of the runtime edit (+0xc0..
+    +0x110) from the other indices through stack tables.
+- **0x0081be30 (rHumanEdit -> controller):** copies 13 slots (scale vec3
+  and offset vec3) and nine floats into the human-edit controller.
+- **0x00812a10 (rFaceEdit -> face controller):** copies 101 offset vec3.
+- **Controller update (0x0081ba40):**
+  - 0x0081c330 makes one joint-ex object per joint (ids 1-20 except 5 and
+    9, plus 0x42, 0x44, 0x90, 0x96, 0x99);
+  - 0x0081c6c0, 0x0081cff0 and 0x0081db50 compute their transforms.
+- **Face counterpart:** 0x00812820 -> 0x00812fb0 (1,182 lines of
+  decompile, mirrored left/right) and 0x00815c60.
+
+Translating these joint computations is the remaining work. Until then,
+every character shows the unmorphed base head and body.
 
 ## The save's Arisen and pawns (`ddlook::save`)
 
@@ -150,11 +219,15 @@ are `mCmc`, each with `mEdit` (`cSAVE_DATA_EDIT`) and `mParam`.
   item record +0x40. This is *inferred*: 640 records of the shipped
   `itemList` hold an `m_parts` armour-table id there, and the reader of
   the field was not found.
-- **Hair:** `0x0f000000 | mHairNo`.
-- **Beard:** `0x10000000 | mBeardNo`, for male characters only.
-- **Evidence for hair and beard:** *inferred* from the h_parts ids and the
-  NPC edits. The male-only beard is *guessed*: female records carry a
-  beard number, and with it the female characters rendered with beards.
+- **Hair** (traced, 0x00780fa0): `0x0f000000 | mHairId[mHairNo]` from
+  the editPattern table.
+- **Beard** (traced): `0x10000000 | mBeardId[mBeardNo]`, for male
+  characters only.
+- **Equipment slots:** 0 and 1 are weapons, 2-11 are armour.
+- **Stand-in without a save** (`ddlook::save::template_look`): the first
+  built-in pawn of `etc\editPattern\romPawnInfo` of the configured sex.
+  This is a viewer choice, not a game rule; the original's player actor
+  copies the real player.
 
 The maintainer's save: the Arisen and three pawns all render dressed.
 They wear 7-10 models each, and the parts-off records hide 5-17 body
@@ -166,10 +239,25 @@ personal data).
 - `ddview <nativePC> --event 22 [--save DDDA.sav]`: event actors assembled
   as above. With `--save`, the player actor is the save's Arisen and pawn
   actors are its pawns.
-- `ddview <nativePC> --lineup DDDA.sav [--shot out.png]`: the Arisen and
-  pawns side by side in the bind pose.
+- `ddview <nativePC> --lineup DDDA.sav[,npc:N...] [--shot out.png]`: the
+  save's Arisen and pawns, and NPC looks, side by side in the bind pose.
+- With both `--event` and `--lineup <save>`, the event runs and the
+  lineup's save dresses the player.
 
-**Screenshots** (2026-10-09, private save, not committed):
+**Screenshots** (character-polish, 2026-10-09, not committed):
+- **lineup of the save plus `npc:1,npc:2`:** six characters dressed, with
+  no gaps.
+  - Swords and a dagger hang at the hip.
+  - A bow sits on the back.
+  - Shields lie on the left upper arm (row 3, joint 11), not checked
+    against the original.
+  - The Arisen's staff sits on the back (joint 2).
+  - Hair is in the save's colours. Quina's hair is alpha-tested.
+- **ev10 frame 295 with `--lineup <save>`:** the saved Arisen dressed
+  behind Quina and the elder, with no skin gaps.
+- **ev10 frame 1300 without a save:** the stand-in Arisen dressed.
+
+**Earlier screenshots** (character-assembly):
 - **lineup:** four characters dressed in tunics, trousers, boots, a cloak
   and a mail coif. Hair is from the save. No skin shows through the
   covered parts. The heads are the unmorphed base heads.
@@ -180,9 +268,10 @@ personal data).
 
 ## Open
 
-- Morphs: the `rJointEx` and `uEditModel` application.
-- Colour palettes for the save's `mColor*`, and skin and eye colours.
-- The item -> piece reader (+0x40).
-- The runtime beard rule for female characters.
-- Weapons (uWeaponPl).
+- Morphs: the joint computations listed under Morphs.
+- The beard colour formula, and eye, eyebrow and makeup colours, plus the
+  skin colour's shader use.
+- The item -> piece reader (+0x40); the slot -> actor field order.
+- The dagger's second model; the weapon offset correction by body edit;
+  shield placement checked against the original.
 - NPC mask bits 16/17 (0x00ba7150).

@@ -2358,11 +2358,13 @@ version = "0.1.0"
 dependencies = [
  "dditem",
  "ddnpc",
+ "ddpawn",
  "ddsave",
  "ddvfs",
  "mtarc",
  "mtmod",
  "mtshader",
+ "mtxfs",
 ]
 
 [[package]]
