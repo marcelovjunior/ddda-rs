@@ -150,6 +150,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
+    pub doors: Option<crate::doors::Doors>,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -180,6 +181,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             boot: true,
             request_log: StateHasher::default(),
             fight: None,
+            doors: None,
         }
     }
 
@@ -319,6 +321,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut npc_requests = self.step_npcs()?;
         npc_requests.extend(self.step_story_npcs()?);
         self.record_story_npc_requests(&npc_requests);
+        self.step_doors(&presses);
         for request in &npc_requests {
             if let ddnpcrt::schedule::Request::Gsf { no, value } = request {
                 if let Some(story) = &mut self.story {
@@ -374,6 +377,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(f) = &self.fight {
             h.debug(&f.digest());
         }
+        if let Some(doors) = &self.doors { h.debug(&doors.digest()); }
         h.u64(self.request_log.finish());
         h.finish()
     }
@@ -524,3 +528,4 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         Ok(())
     }
 }
+

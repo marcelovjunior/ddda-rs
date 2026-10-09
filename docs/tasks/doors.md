@@ -88,3 +88,21 @@ lock/key/night/save conditions, sliding/special door variants, and bounded
 original/viewer comparison. Core candidates deliberately do not pretend
 to resolve persistent object records or resource readiness. Next action:
 wire the regular hinged doors into the host and the stage renderer.
+
+### Host/collision checkpoint
+
+The host now owns door requests, authored clip frames, occupancy, and replay
+hash state. A shared h00 terrain overlay toggles player and camera geometry
+without duplicating base terrain; streamed base-ground replacement has an
+explicit wrapper API. Canonical loaded NPC positions join all player/pawn
+seats in occupancy. Other enemy manager admission remains unwired.
+
+Validation: 7 dddoor + 7 ddhost unit tests pass. Installed Cassardis house
+regression opens the real group18/record2 door, holds it open with a second
+actor, closes after departure, restores collision, and refuses unresolved
+persistence. dddoor strict all-target clippy passes; ddhost lib/door-test
+clippy passes with existing install.rs chunks_exact_to_as_chunks lint
+allowed (unrelated all-target replay lint also predates this change).
+The nearest interaction adapter is explicitly opt-in and provisional:
+original focus/angle arbitration still needs connection. Viewer rendering
+and original-game comparison remain pending; the brief is not complete.

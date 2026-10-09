@@ -12,3 +12,6 @@ mtlot = { path = "../mtlot" }
 ddexe = { path = "../ddexe" }
 ddspawn = { path = "../ddspawn" }
 mtlmt = { path = "../mtlmt" }
+ddsim = { path = "../ddsim" }
+ddworld = { path = "../ddworld" }
+mtsbc = { path = "../mtsbc" }

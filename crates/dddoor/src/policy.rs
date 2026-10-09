@@ -25,8 +25,7 @@ impl Policy {
         if state.permanently_unlocked { return Some(Availability::Unlocked); }
         Some(match self.mode {
             1 => if state.key_present? { Availability::Key } else { Availability::Locked },
-            2 => if !state.link_resolved { Availability::Locked }
-                else if state.link_present { Availability::Locked } else { Availability::Unlocked },
+            2 => if !state.link_resolved || state.link_present { Availability::Locked } else { Availability::Unlocked },
             3 => if state.progress_gate? { Availability::Unlocked } else { Availability::Locked },
             4 if !(5..=21).contains(&state.hour) && !state.night_bypass => Availability::Night,
             5 if !state.script_controller || !state.script_open => Availability::Locked,
@@ -79,3 +78,4 @@ mod tests {
         assert_eq!(p.resolve(observed), None);
     }
 }
+
