@@ -70,7 +70,7 @@ Viewer (`ddvfs`, `ddview`), first renders 2026-10-08 20:30:
 - The ground-level shot from the live player pose shows plausible terrain.
   **Not yet compared with the original game**: no reference screenshot.
 
-Reference comparison (2026-10-08, private `E:\ddda-re\shotsefs`):
+Reference comparison (2026-10-08, private `E:\ddda-re\shots\refs`):
 - Screenshot listener records the live camera pose (uCameraGame +0x30..+0x6c)
   at each F12. Six usable references from two areas; poses checked by a
   ground fit (player feet on the origin cell's terrain within 1 cm for
