@@ -116,3 +116,11 @@ remaining view length. A fourth actor-offset regression covers that rule
 and its signed boundary. Independent lane review passed all six mtcamera
 library tests (four offset, two fade); targeted clippy passes. Provider
 and viewer integration remain explicitly absent pending complete gates.
+
+Handoff to later staffing: source evidence now identifies opening dragon
+uEm5800 as a concrete eligible class and documents its ordinary enemy
+vf64 filter and phase93 collection snapshot in CAMERA.md. Preserve source
+shape kinds, actor +0x2748 state, per-view eligibility and runtime-created
+entries before wiring a provider. Camera work paused by lane assignment
+to staff the higher-priority doors brief; no provider or original visual
+acceptance claim. Branch remains reviewable and all camera claims released.

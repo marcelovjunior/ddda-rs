@@ -357,3 +357,20 @@ camera query, preserving activation and virtual-slot64 gates, then
 translate the shape contacts and pose shift. No live/original comparison was performed
 for this trace. Ghidra drops part of the producer as unreachable; the
 shape loop and contact accumulator were checked against disassembly.
+
+Provider handoff: the opening dragon is a concrete first candidate.
+`uEm5800` constructor **0x00a49880** calls **0x00a3e5e0**, whose instruction
+at **0x00a3ecb8** sets +0x1FC0 to4. Its installed vtable **0x015d3448**
+slot64 resolves to the ordinary enemy filter **0x00aaa3d0**, so the
+object-adjustment bit must be removed when actor +0x2748 bit8 is set.
+This is a separate field from the existing dragon step's +0x2738 actor
+flags and must be supplied explicitly, not inferred from those flags.
+Next provider work should preserve the phase93 selected `mIsObjAdj`
+entries and pose, including their original shape kind (source kind4 must
+not become camera-eligible merely because its placed volume is a capsule).
+Apply the complete per-view actor gate above, implement the source
+sphere/capsule contact queries, and only then connect the existing
+accumulator/smoother/pose shift before the stage sweep. The existing
+`Body::push_volumes` can guide placement but loses source kind and callback
+state; it cannot be used directly as the complete provider. No dragon
+runtime or viewer files were changed for this handoff.
