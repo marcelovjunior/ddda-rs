@@ -35,6 +35,62 @@ pub struct HumanEdit {
     pub slots: Vec<([f32; 3], [f32; 3])>,
 }
 
+/// Nine skeleton measurements used to fill rHumanEdit +0x68..+0x88.
+/// Positions must be the original model's evaluated world-space joints:
+/// once without the edit, once after its constraint pass. Supplying rest
+/// locals or a neutral pose does not reproduce that evaluation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyMeasurements {
+    values: [f32; 9],
+}
+
+impl BodyMeasurements {
+    /// Translated from the paired measurement passes in 0x00cbbf00
+    /// (DDDA.exe 2017-12-13 Steam). `origin_y` is model +0xe4.
+    /// Joint IDs resolve through model +0x368, not file bone indices.
+    pub fn from_pose(
+        position: impl Fn(u8) -> Option<[f32; 3]>,
+        origin_y: f32,
+    ) -> Result<Self, Error> {
+        let joint = |id| position(id).ok_or_else(|| Error::Data(format!("body measurement: missing joint {id}")));
+        let (joint0, joint4, joint6, joint7, joint8, joint10, joint13, joint14, joint16, joint18) = (
+            joint(0)?, joint(4)?, joint(6)?, joint(7)?, joint(8)?,
+            joint(10)?, joint(13)?, joint(14)?, joint(16)?, joint(18)?,
+        );
+        let distance = |a: [f32; 3], b: [f32; 3]| {
+            let x = a[0] - b[0];
+            let y = a[1] - b[1];
+            let z = a[2] - b[2];
+            (x * x + y * y + z * z).sqrt()
+        };
+        Ok(Self { values: [
+            joint4[1] - origin_y,
+            distance(joint6, joint10),
+            distance(joint14, joint18),
+            joint13[1] - origin_y,
+            joint16[1] - origin_y,
+            distance(joint6, joint8),
+            distance(joint6, joint7),
+            distance(joint7, joint8),
+            distance(joint0, joint8),
+        ] })
+    }
+
+    /// Edited/reference ratios, in rHumanEdit field order. This translates
+    /// 0x00cbc521..0x00cbc715, without clamping or replacing zero reference
+    /// measurements with guessed values. Invalid poses return an error.
+    pub fn relative_to(&self, reference: &Self) -> Result<[f32; 9], Error> {
+        let mut ratios = [0.0; 9];
+        for (i, ratio) in ratios.iter_mut().enumerate() {
+            if !self.values[i].is_finite() || !reference.values[i].is_finite() || reference.values[i] == 0.0 {
+                return Err(Error::Data(format!("body measurement: invalid reference/edited field {i}")));
+            }
+            *ratio = self.values[i] / reference.values[i];
+        }
+        Ok(ratios)
+    }
+}
+
 fn rd_u32(b: &[u8], o: &mut usize) -> Result<u32, Error> {
     let v = b.get(*o..*o + 4).ok_or_else(|| Error::Data("short edit record".into()))?;
     *o += 4;
@@ -48,9 +104,9 @@ fn rd_v3(b: &[u8], o: &mut usize) -> Result<[f32; 3], Error> {
 }
 
 impl HumanEdit {
-    /// Neutral record: scale 1, offset 0, floats 1 (*assumed* defaults of
-    /// the runtime record made by 0x0077d6f0; the presets overwrite the
-    /// slots they name).
+    /// Neutral record: scale 1, offset 0, floats 1. The runtime constructor
+    /// 0x0077d6f0 calls rHumanEdit::vf14 (0x00cbaed0), which resets all nine
+    /// floats to1 and the fixed flag to0; presets overwrite their slots.
     pub fn neutral() -> HumanEdit {
         HumanEdit { floats: [1.0; 9], fixed: false, slots: vec![([1.0; 3], [0.0; 3]); 13] }
     }
@@ -510,6 +566,42 @@ fn joints(c: &Ctrl, present: &dyn Fn(u8) -> bool) -> BodyMorph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measurements_use_world_joint_ids_and_preserve_height_distance_order() {
+        let pose = |id: u8| Some([f32::from(id), 2.0 * f32::from(id) + 7.0, 3.0 * f32::from(id)]);
+        let base = BodyMeasurements::from_pose(pose, 7.0).unwrap();
+        let length = 14.0_f32.sqrt();
+        let expected = [8.0, 4.0 * length, 4.0 * length, 26.0, 32.0,
+            2.0 * length, length, length, 8.0 * length];
+        for (actual, expected) in base.values.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+        assert_eq!(base.relative_to(&base).unwrap(), [1.0; 9]);
+        let edited = BodyMeasurements::from_pose(|id| {
+            let [x, y, z] = pose(id).unwrap();
+            Some([x * 2.0 + 90.0, (y - 7.0) * 3.0 - 11.0, z * 4.0 - 80.0])
+        }, -11.0).unwrap();
+        let ratios = edited.relative_to(&base).unwrap();
+        let distance_ratio = 184.0_f32.sqrt() / length;
+        for (index, ratio) in ratios.into_iter().enumerate() {
+            let expected = if matches!(index, 0 | 3 | 4) { 3.0 } else { distance_ratio };
+            assert!((ratio - expected).abs() < 1e-5, "field {index}: {ratio}");
+        }
+    }
+
+    #[test]
+    fn measurements_reject_missing_or_degenerate_pose_without_neutral_fallback() {
+        assert!(BodyMeasurements::from_pose(|_| None, 0.0).is_err());
+        let zero = BodyMeasurements::from_pose(|_| Some([0.0; 3]), 0.0).unwrap();
+        assert!(zero.relative_to(&zero).is_err());
+        let bad = BodyMeasurements { values: [f32::NAN; 9] };
+        assert!(bad.relative_to(&BodyMeasurements { values: [1.0; 9] }).is_err());
+        let neutral = HumanEdit::neutral();
+        assert_eq!(neutral.floats, [1.0; 9]);
+        assert!(!neutral.fixed);
+        assert_eq!(neutral.slots, vec![([1.0; 3], [0.0; 3]); 13]);
+    }
 
     #[test]
     fn neutral_edit_is_identity() {
