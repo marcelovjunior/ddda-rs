@@ -110,6 +110,8 @@ const FLAG_MAP: u32 = 1;
 const FLAG_DD_LIGHTING: u32 = 2;
 const FLAG_REFLECT: u32 = 4;
 const FLAG_SPEC_MAP: u32 = 8;
+/// Drawn into the shadow map only (draw mode without the main pass).
+const FLAG_SHADOW_ONLY: u32 = 16;
 
 impl DdParams {
     fn with_lighting(mut self, l: &StageLighting) -> Self {
@@ -525,7 +527,7 @@ impl Loader<'_> {
         let swm = swm_bytes.as_deref().and_then(|b| mtswm::parse(b).ok());
         // Keyed by (material index, drawn two-sided as a stand-in for an
         // undecoded billboard node).
-        let mut mat_cache: HashMap<(u16, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
+        let mut mat_cache: HashMap<(u16, bool, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
         let lod_dist = [model.mid_dist as f32, model.low_dist as f32];
         for (mesh_index, m) in model.meshes.iter().enumerate() {
@@ -533,8 +535,8 @@ impl Loader<'_> {
             // primitive (0x00ea5320 tests it against the pass mask); meshes
             // without the main pass (e.g. the white shadow cards of the
             // om0570 cypresses, draw mode 0xE6C8) only cast shadows.
-            // *Not drawn here*: shadow-only casters.
-            if m.draw_mode & PASS_MAIN == 0 {
+            let shadow_only = m.draw_mode & PASS_MAIN == 0;
+            if shadow_only && m.draw_mode & PASS_SHADOW == 0 {
                 continue;
             }
             let Some(layout) = mfx.layout(m.vertex_format) else {
@@ -566,7 +568,7 @@ impl Loader<'_> {
             });
             let undecoded_billboard = billboard.is_none() && node.is_some_and(|(_, n)| n.is_billboard());
             let (material, shading) = mat_cache
-                .entry((m.material, undecoded_billboard))
+                .entry((m.material, undecoded_billboard, shadow_only))
                 .or_insert_with(|| {
                     let name = model
                         .material_names
@@ -577,11 +579,14 @@ impl Loader<'_> {
                         .as_ref()
                         .and_then(|l| l.by_name(&name).map(|mat| mtmrl::shading::describe(mat, l, mfx)));
                     (
-                        self.material(shading.as_ref(), undecoded_billboard, materials, images),
+                        self.material(shading.as_ref(), undecoded_billboard, shadow_only, materials, images),
                         shading,
                     )
                 })
                 .clone();
+            if shadow_only && matches!(material, PartMaterial::Standard(_)) {
+                continue;
+            }
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
@@ -638,6 +643,7 @@ impl Loader<'_> {
         &mut self,
         shading: Option<&Shading>,
         two_sided: bool,
+        shadow_only: bool,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
     ) -> PartMaterial {
@@ -709,6 +715,9 @@ impl Loader<'_> {
             );
         }
         let mut params = DdParams::default();
+        if shadow_only {
+            params.flags |= FLAG_SHADOW_ONLY;
+        }
         let mut map = None;
         let mut spec = None;
         if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {

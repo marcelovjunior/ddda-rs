@@ -57,6 +57,8 @@ const FLAG_MAP: u32 = 1u;
 const FLAG_DD_LIGHTING: u32 = 2u;
 const FLAG_REFLECT: u32 = 4u;
 const FLAG_SPEC_MAP: u32 = 8u;
+// Shadow caster only (the primitive's draw mode lacks the main pass).
+const FLAG_SHADOW_ONLY: u32 = 16u;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> dd: DdParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var transparency_texture: texture_2d<f32>;
@@ -139,6 +141,9 @@ fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
+    if ((dd.flags & FLAG_SHADOW_ONLY) != 0u) {
+        discard;
+    }
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     if ((dd.flags & FLAG_MAP) != 0u) {
