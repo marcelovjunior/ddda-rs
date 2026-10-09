@@ -259,6 +259,19 @@ fn config_camera_fov() -> Option<f32> {
         .and_then(|v| v.trim().parse().ok())
 }
 
+/// `ViewRange` from the player's game settings as the config object stores
+/// it (written by 0x00eddb20: NORMAL 1, FAR 2, FARTHEST 3); NORMAL if absent.
+fn config_view_range() -> u32 {
+    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 1 };
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    match text.lines().find_map(|l| l.trim().strip_prefix("ViewRange=")).map(str::trim) {
+        Some("FAR") => 2,
+        Some("FARTHEST") => 3,
+        _ => 1,
+    }
+}
+
 /// Stage and cell (A, B) of the `origin_cell` path in a reference JSON.
 fn origin_cell(json: &str) -> Option<(u32, (i32, i32))> {
     let i = json.find("\"origin_cell\"")?;
@@ -333,6 +346,8 @@ fn setup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: Some(args.pos * stage::UNIT),
+        view_range: config_view_range(),
     };
     loader.index_models();
     if let Some(model) = &args.character {
@@ -395,6 +410,8 @@ fn setup(
         let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
         let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
         info!("landmarks {n}");
+        let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
+        info!("low models {n}");
     }
     loader.spawn_water(
         &mut commands,

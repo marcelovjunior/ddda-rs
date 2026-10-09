@@ -221,6 +221,8 @@ fn setup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: None,
+        view_range: 1,
     };
     loader.index_models();
 
@@ -439,6 +441,8 @@ fn setup_lineup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: None,
+        view_range: 1,
     };
     loader.index_models();
     let looks = saved_looks(&vfs, args.save.as_ref().unwrap());
