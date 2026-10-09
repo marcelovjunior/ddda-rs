@@ -672,5 +672,9 @@ Harpy death selector 0x0093c700 can override local actions 3/4 with common
 0x0300005f / 0x03000060. Both installed common records name cEmActDieBreak,
 with variants zero/one. Entry 0x008a7fb0 and update 0x008a8070 drive effects,
 hide/cleanup and a 60-frame removal timer; this is not the ordinary grounded
-death animation. The selector's +0x5cb4 and +0x27b0 conditions still need
-semantic binding before automatic harpy death dispatch is implemented.
+death animation. Actor +0x27b0 is petrification progress: status-kind 12
+handler 0x00853260 decreases it toward zero and restores one when removed;
+0x0084df60 sets the death byte +0x2b51 when it reaches zero. The harpy
+selector then chooses common 0x03000060 (break variant one). Its separate
++0x5cb4 condition chooses 0x0300005f and remains semantically unresolved,
+so automatic harpy death dispatch is still pending.
