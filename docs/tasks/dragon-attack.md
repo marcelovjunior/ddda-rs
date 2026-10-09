@@ -54,8 +54,69 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   or a comparison against the running original.
 - Recovery after the loose SATA cable: worktree `git fsck --no-dangling`
   passed; source edits were intact and the complete AI test suite passed.
+- Follow-up: the real FSM controller 0x0059f440 disables and unbinds a
+  killed FSM, clearing SysCondition, whereas Finish rewinds and pauses it.
+  `Thinker::controlled_frame` now preserves that distinction. An installed
+  Dragon_OP regression verifies no subsequent updates or action-driven
+  restart after Kill, and explicit restart still works. All 33 AI tests pass.
 
 ### Encounter evidence and remaining work
+
+- Added `DragonAiData::opening`, reading 52 reachable think records from
+  the sequence-4 root and all 93 action classes from the installed exe.
+  Descriptor stride and count come from 0x00a3f89f / 0x00a3f8a4 and
+  0x007f19c0. The shared `Tables::read_roots` walker is transplanted from
+  codex-1's e9cfa51; existing goblin traversal remains unchanged. The
+  installed reader regression passes, including all six entrance action
+  class identities. This loads definitions, not simulated actions.
+- The same runtime reader now preserves all 57 resource descriptors
+  registered by `uEm5800::vf05` 0x00a49ed0 through 0x00889de0, including
+  paths, reflected classes and flags. The installed regression verifies
+  five motion lists and three collision resources. Bank binding and body
+  construction are separate work; descriptor order is not asserted to be
+  a bank index.
+- Follow-up source trace found that flags in the file are uninitialized:
+  static initializer 0x01363d50..0x0136412c enables binding for the first
+  49 descriptors and leaves the final eight preload-only. The reader now
+  translates that initialization rather than exposing misleading zero
+  flags. Both installed-resource and boundary/high-bit preservation tests
+  pass. The binder 0x008892b0 selects flag bit 0 and passes per-class
+  indices to `uObjModel::vf79` 0x00889510.
+- Added `DragonAiData::load_body` using those bound resources and a
+  caller-supplied actor scale. It loads the skeleton, five motion banks
+  and three collision files; existing combat volume activation filters
+  by each file's resource ID. The installed regression checks that all
+  eight motion IDs selected by the six entrance actions are available.
+  Codex-1 independently ran all three dragon tests, passing. This is
+  body-data loading, not yet action stepping or an original-game comparison.
+- Added opening `DragonData` and owner-specific fight-component
+  construction using the shared enemy-stat loader (exact dependency
+  transplant from codex-1's 1749553, originally d25e02f). Region kind 0 is
+  sourced by EAX=0 at 0x00a49f2d before 0x00770910; common parameters come
+  from `em5800_cmn` at 0x00a49f3d. The installed regression compares every
+  pool's id/current/max HP, defenses and object size with the parsed game
+  records, and verifies independent mutable pools per owner.
+- Sequence 4 sets collision +0xCFC bit 0 at 0x00a4a55a. The new fighter
+  therefore starts with HP damage disabled, verified through `apply_hp`.
+  Loaded stats do not imply that the dragon is ready for damageable
+  encounter integration; its phase-93 inputs still require host wiring.
+  All three dragon tests pass after this construction change.
+- Traced the clearing path: dragon vf93 0x00a40c20 calls enemy vf93
+  0x00aa9bf0. When cAICtrl +0x0C is zero, it projects actor +0x2738
+  condition bits into collision flags 1/2/4/8, preserving other bits.
+  Added local `sync_collision_flags` with explicit controller and actor
+  inputs, no inferred defaults. The regression covers the guard, each
+  mapping and unrelated-bit preservation; codex-1 independently ran all
+  four dragon tests, passing. Runtime action/phase integration remains.
+- Added HoverUp's sourced control state (0x00a6ba90/0x00a6bb40/
+  0x00a6bc80): scale-Y times 35 velocity, live think-target or explicit
+  height, inclusive completion without position snapping, and cancellation
+  stopping velocity without manufacturing completion. Added the shared
+  hover-transition completion predicate from 0x00a6be00: primary motion
+  end or model flag bit 31. Six dragon tests pass, including both new
+  regressions. These are action controls, **not** a complete scheduler:
+  motion/layer binding, attached-actor notifications, air flags and the
+  host's integration phases remain required.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
@@ -76,10 +137,63 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   was allocated elsewhere), including strict threshold, missing actors,
   missing regions, independent player branch and unordered float inputs.
   The module export and host tick remain coordinated integration work.
-- Still required: stage-gate integration; actual dragon movement/actions,
+- Stage-gate integration is supplied by codex-26's 4a3d654, after event
+  processing and before scenarios, with frame-stop guard and stage-reset
+  baseline. Integrated regression passed on that branch.
+- Added an explicitly limited `Dragon` actor prefix for action 52: entry
+  validates support and motion before mutating state; phase 91 performs
+  HoverUp control and explicit host-resolved velocity integration, phase 92
+  uses the body root-motion driver, and phase 93 updates flags and volumes.
+  Common action bookkeeping, motion binding/blend, air control and attached
+  message 4 are typed effects that the host must apply. Unsupported actions
+  return an error rather than synthetic completion. The six dragon tests
+  pass, with installed regression coverage for next-frame height completion,
+  owner-specific messages, collision projection and rejection before mutation.
+  This prefix has not been compared against the original or wired into the
+  host. Transitions 53/54 and TargetFly remain the next supported subset.
+- Review of 0x0105b740 confirmed root travel uses actor axis scales and
+  +0xDA0/+0xDA4/+0xDA8 multipliers with orientation. The prefix now requires
+  an explicit host-resolved root-translation transform, rather than silently
+  assuming unit scale and yaw only. A nonuniform rotated-transform regression
+  passes; all seven dragon tests pass. Single-track translation is supported;
+  animation blending and root rotation remain host work.
+- Added transitions 53/54 to the actor prefix. Action 53 binds motion 121
+  and returns a typed layer-2/flight-state reset effect (0x00a6bd80 and
+  0x00a49480). Action 54 binds 103, captures speed/acceleration parameters
+  and sets its yaw controller (0x00a6bf00). Repaired the decompiler's hidden
+  atan2 arguments using disassembly at 0x00a6bfca: normalized X/Z are passed
+  as doubles in XMM0/XMM1. The local rotator translates 0x0084cc00 and
+  0x00797470 with explicit enable/status inputs, slow factor and strict
+  arrival comparison. Transition completion reads prior-frame motion end
+  or model bit 31; neither transition emits HoverUp's attached message.
+  Action-54 exit clears velocity/yaw and emits acceleration-clear bookkeeping.
+  Eight dragon tests pass, covering gates, shortest arc, exact-step equality,
+  transition resets/completion and actor exit. TargetFly, full animation
+  blending and live host effects remain unimplemented.
+- TargetFly scheduling is now traced: vtable 0x015d42f0 has no-op vf06
+  (0x005f35c0), movement vf07 (0x00a61590), and exit 0x00a62150.
+  `uCharacterBase::vf97` 0x0084c800 dispatches action vf07 in pass C,
+  after terrain correction and before collision activation, not phase 91.
+  Flight reads normalized row 2 of `vf22(-1)`'s cached model matrix
+  (`uModel::vf22` 0x00ff9a20 returns actor +0xB0). It does not substitute
+  the quaternion it just updated for that cached forward vector.
+- Added only `TargetFlyTravel`, an isolated translation substep requiring
+  explicit cached forward and turn-lag state. Disassembly at
+  0x00a62098..0x00a620fc repairs misleading decompiler stack aliases: the
+  strict arrival-radius comparison uses displacement saved before movement.
+  Tests cover this boundary, snap/no-restart, speed ramp/slowdown floor and
+  the zero-speed initialization distinction. Nine dragon tests pass, also
+  including exact yaw wrap boundaries and configured-mode 54 rejection.
+  Action 10 remains **Unsupported**: quaternion steering, side-turn layers,
+  rider effects, pass-C orchestration and final collision timing are still
+  required before enabling it in the actor prefix.
+- Still required: actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->
   ev05 acceptance and original-state comparison. Existing ScriptedHost
   opening shortcuts have not yet been replaced.
-- Next action: test and integrate the sourced stage gate, then load the
-  sequence-4 table and trace the reachable dragon actions.
+- Next action: trace async resource binding and the reachable dragon
+  actions. PressAttack (0x00a6aed0/0x00a6af70) reads fall parameters from
+  `cCharParamEmDragon`; BreathWide (0x00a56a30/0x00a56d10) advances from
+  motion 263 to 264 and gates its breath collision by motion frames.
+  These dependencies must be implemented before claiming a playable fight.

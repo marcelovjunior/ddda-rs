@@ -50,11 +50,7 @@ impl Act {
     /// The interpreter's step past this record: 0xa0 for kinds 0 and 1,
     /// else 0 (0x008b853c and every caller of 0x008b7e80).
     pub fn step(&self) -> u32 {
-        if self.kind() < 2 {
-            RECORD_SIZE
-        } else {
-            0
-        }
+        if self.kind() < 2 { RECORD_SIZE } else { 0 }
     }
     /// Chain record: +0x08 code. Row: +0x08 flags.
     pub fn code(&self) -> u32 {
@@ -111,7 +107,7 @@ impl Act {
     }
 }
 
-/// Every record reachable from the 31 built-in tables (and the records they
+/// Every record reachable from the selected built-in tables (and the records they
 /// name), keyed by address.
 #[derive(Debug, Clone, Default)]
 pub struct Tables {

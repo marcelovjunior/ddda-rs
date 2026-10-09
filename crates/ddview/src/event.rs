@@ -235,7 +235,7 @@ pub struct InfoText;
 
 fn spawn_parts(commands: &mut Commands, parts: &[stage::Part], transform: Transform, name: &str) {
     for p in parts {
-        let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
+        let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string()), stage::StageEntity));
         match &p.material {
             PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
             PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),

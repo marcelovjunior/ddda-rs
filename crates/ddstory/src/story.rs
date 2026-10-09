@@ -68,6 +68,8 @@ pub fn script_gate(stage_no: u32, f: &GameFlags) -> bool {
 
 #[derive(Debug, Default)]
 pub struct StageState {
+    /// Stage-200 challenge state, reset on every stage load.
+    pub dragon_challenge: crate::dragon::DragonChallenge,
     /// aStage +0x724; 0 while no stage is loaded.
     pub stage_no: u32,
     pub event: EventMode,
@@ -78,6 +80,9 @@ pub struct StageState {
     pub camera_running: bool,
     /// A message requested by an order is on screen.
     pub message_showing: bool,
+    /// Priority-1 pawn-message availability (0x00634090), or no GUI.
+    /// IsDispCmcMess is false only when exactly three slots are available.
+    pub pawn_message_slots: Option<u32>,
     /// A menu opened by a request is open (the stage is in its mode, e.g.
     /// 0x19 for the vocation menu).
     pub menu_open: bool,
@@ -141,6 +146,9 @@ impl<D: Data> Story<D> {
         world.stage_no = 380;
         world.start_pos = 0;
         world.set_sce_no(100, false);
+        // Translated from 0x00445be1 (DDDA.exe 2017-12-13 Steam):
+        // sGameSys+0xaee78 bit 31, stage-index 12's layout flag zero.
+        world.set_lot(380, 0, true);
         Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0 }
     }
 
@@ -166,6 +174,7 @@ impl<D: Data> Story<D> {
     fn enter_stage(&mut self, stage: u32, cmds: &mut Vec<Command>) -> Result<(), Error> {
         self.tasks.clear();
         self.stage.stage_no = stage;
+        self.stage.dragon_challenge = Default::default();
         self.stage.event = EventMode::default();
         self.world.stage_no = stage;
         // 0x004827e0: stage 800 with SceNo 1000 boots q0000 and q0031. The
@@ -323,6 +332,7 @@ impl<D: Data> Story<D> {
                 HostEvent::FadeBlack(b) => self.stage.fade_black = *b,
                 HostEvent::CameraFinished => self.stage.camera_running = false,
                 HostEvent::MessageFinished => self.stage.message_showing = false,
+                HostEvent::PawnMessageSlots(slots) => self.stage.pawn_message_slots = *slots,
                 HostEvent::MenuClosed(Menu::Vocation) => menu_closed = true,
                 HostEvent::SetGsf { no, value } => self.world.gsf.set(*no as usize, *value),
                 HostEvent::PlayerJob(j) => self.world.player_job = *j,
@@ -377,12 +387,29 @@ impl<D: Data> Story<D> {
         // (0x00516fc0).
         if self.stage.event.playing.is_none() {
             if let Some(req) = self.stage.event.pending.take() {
+                // Translated from event setup 0x0050c290, case 0x17,
+                // calling 0x00440190 (DDDA.exe 2017-12-13 Steam).
+                // Recruitment precedes the movie/event start: story stock
+                // 14 becomes pawn slot 1 (overall party member 2).
+                if req.row == 0x17 {
+                    out.push(Request::StoryPawn { stock: 14, slot: 1 });
+                }
                 out.push(Request::PlayEvent { row: req.row, stage: req.stage, event: req.event });
                 self.stage.event.playing = Some(req);
                 self.stage.event.started = true;
             }
         }
         self.apply(&mut cmds, &mut out)?;
+        // Translated from aStage slot 7 -> slot 12 (0x00504330) and
+        // aStage200::vf12 0x0051ccc0 (DDDA.exe 2017-12-13 Steam).
+        // The stage-specific check follows event-mode work and precedes
+        // scenarios; absent actor observations cannot complete it.
+        if self.stage.stage_no == 200 && self.stage.game_flags.b8844 & 0x80000 == 0 {
+            let (dragon, players) = host.dragon_challenge_actors();
+            if self.stage.dragon_challenge.update(self.world.gsf.get(378), self.world.gsf.get(379), dragon, &players) {
+                self.world.gsf.set(379, true);
+            }
+        }
         // 4. Scenarios.
         {
             let mut env = Env {

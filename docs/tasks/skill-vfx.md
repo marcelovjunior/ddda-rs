@@ -16,6 +16,13 @@ Play the game's effects (`mteffect`, EFFECTS.md) from the motion events and shel
 checks may control the game, with the safety rules in `docs/CODEX.md`.
 Test runs use `--unattended`.
 
+**First step (head, 2026-10-09).** `mteffect` reads only the resource
+links: the generator, particle and life bodies are kept opaque
+(EFFECTS.md). Decode those first: emission, lifetime, size, colour and
+velocity curves, billboard and strip kinds, traced from 0x01146b30,
+0x01146bf0 and 0x01146e80 and their consumers. Then render the simplest
+kind (textured billboards) for Ingle's shell, checked against a capture.
+
 ## Scope
 
 - `crates/ddview/src/effects.rs`

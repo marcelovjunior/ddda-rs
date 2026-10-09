@@ -83,6 +83,10 @@ pub fn var(owner: &Owner, env: &Env, v: &Var) -> Result<Value, Error> {
         "IsOmFlag" => Value::Bool(w.om_flag(env.stage.stage_no, idx(v)?)),
         "JobPl" => Value::Int(w.player_job as i64),
         "IsDamagePl" => Value::Bool(env.host.player_damaged()),
+        // Translated from 0x005bb320 (DDDA.exe 2017-12-13 Steam):
+        // no pawn-message GUI means true; otherwise ask 0x00634090 at
+        // priority 1 and compare its result to three available slots.
+        "IsDispCmcMess" => Value::Bool(env.stage.pawn_message_slots != Some(3)),
         "IsMyCmcLost" => Value::Bool(env.host.pawn_lost()),
         "ValidQuestNum" => Value::Int(env.stage.valid_quests as i64),
         "CaughtNpcId" => Value::Int(w.caught_npc as i64),

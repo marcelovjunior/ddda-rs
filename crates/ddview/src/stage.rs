@@ -590,6 +590,11 @@ fn arc_model_path(arc: &std::path::Path) -> Option<String> {
     index.entries.iter().find(|e| e.type_hash == RMODEL).map(|e| e.path.clone())
 }
 
+/// A model of a whole-stage area (`event::spawn_stage_models`), dropped
+/// when the party leaves the stage (`crate::stream::Streamer::enter`).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct StageEntity;
+
 /// What a streamed cell entity belongs to (`crate::stream`): the cell
 /// `(m, n)` and which of its parts.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -124,6 +124,16 @@ fn judge(env: &Env, row: &Row) -> Result<bool, Error> {
             12 => (w.sce_no as i32) < a as i32,
             // 0x00460350: at least max(b, 1) of item a.
             16 => env.host.has_item(a, b.max(1)),
+            // Translated from 0x0078ece0 cases 18/19 (DDDA.exe
+            // 2017-12-13 Steam): b selects the apparent-death bank
+            // (0x00435710) or permanent-death bank (0x00435740).
+            18 | 19 => {
+                if a >= 900 {
+                    return Err(Error::Data(format!("QCT NPC death index {a} outside 0..900")));
+                }
+                let dead = if b == 0 { w.npc_app_die.get(a as usize) } else { w.npc_die.get(a as usize) };
+                dead == (t == 18)
+            }
             // Player record +0xc (0x00442ac0 n = 0).
             23 if a == 0 => w.player_sex == 0,
             24 if a == 0 => w.player_sex == 1,

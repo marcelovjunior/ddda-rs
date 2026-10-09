@@ -41,13 +41,13 @@ extended past q0002.
 | Step | Original | Status | Brief |
 |---|---|---|---|
 | 1 | New game: stage 380, SceNo 100 | traced | opening-prologue |
-| 2 | Prologue, stage 380: the playable hero, fights (harpies among them), SceNo 200 → 900, event st380 ev00 | fast-forwarded stub | opening-prologue |
+| 2 | Prologue, stage 380: the playable hero, fights (harpies among them), SceNo 200 → 900, event st380 ev00 | party setup and encounter facts merged; the chimera blocks (chimera-runtime) | opening-prologue |
 | 3 | Prologue end → stage 800, q0000 boot, the movie `movie\event\st100ev00.wmv` (the beach and the dragon) | traced, not played | opening-movie |
 | 4 | Stage 801: character creation | data readers (chara-edit), no UI | chara-creation-ui |
-| 5 | Stage 200: st200 ev00 "It's the dragon!", the scripted fight "Challenge the Dragon", ev01 (heart taken), ev05 | traced, not played | dragon-attack |
+| 5 | Stage 200: st200 ev00 "It's the dragon!", the scripted fight "Challenge the Dragon", ev01 (heart taken), ev05 | dragon AI requests and the completion check merged; fight and host open | dragon-attack |
 | 6 | q0001 "Newly Arisen": weapon table, vocation, ev10, Quina | **playable** (M5 opening slice, 0c291a6) | done |
 | 7 | ev15, q0002 "Upon a Pawn": the first pawn, the goblins harassing a woman | q0002 boots; nothing after | upon-a-pawn |
-| 8 | q0003: the road out of Cassardis to the Encampment (st210 ev00 at SceNo 2000) | not started | road-to-encampment |
+| 8 | q0003: the road out of Cassardis to the Encampment (st210 ev00 at SceNo 2000) | field streaming and the stage handoff merged (STREAMING.md); q0003 untraced | road-to-encampment |
 | 9 | Arrival at the Encampment, where the hydra's head is later brought | not started | road-to-encampment |
 
 Steps 7–9 have not been traced yet: who the first pawn is, where the
@@ -58,7 +58,7 @@ starts by tracing its quest's scripts and QCT, like q0000–q0002.
 
 | System | For steps | State |
 |---|---|---|
-| Movement feel: turn rate, locomotion blending, air attacks, falls | all | gaps from the playtest (movement-feel) |
+| Movement feel: turn rate, locomotion blending, air attacks, falls | all | done (movement-feel) |
 | Enemy runtime: goblins, harpies, wolves, the dragon, prologue enemies | 2, 5, 7, 8 | goblins done; wolves and harpies in progress (enemy-families) |
 | Boss and scripted-fight support (fight checks, `EnemyCheck`, `mCntState`) | 5 | traced in part |
 | Event player: faces, audio, the brow and ear defects | 2, 5–9 | playable; visual defects open (cutscene-visuals) |
@@ -68,8 +68,8 @@ starts by tracing its quest's scripts and QCT, like q0000–q0002.
 | Quest runtime and log | all | q0000–q0002 headless |
 | HUD | all | merged (game-hud) |
 | Skill and hit VFX (`mteffect`) | 2, 5, 7 | readers only (skill-vfx) |
-| Sound and music | all | readers and ev10 decode (audio-playback) |
-| Field streaming between cells | 8 | rules researched (STREAMING.md), not built |
+| Sound and music | all | event streams, voices, motion sounds and random selection merged; mixer and BGM open |
+| Field streaming between cells | 8 | built (`ddworld::stream`, `ddview` stream.rs); the opening hookup is codex-26's |
 | Co-op: guest dialogue and menus, event freeze | all | host-driven only |
 
 ## Acceptance
@@ -81,3 +81,40 @@ Each step's gate is the original's state after it:
 
 The whole slice passes when two players on a LAN play steps 1–9 without
 fast-forwards or teleports, and the end state matches the original's.
+
+## Steps 8-9: what the data says (head, 2026-10-09)
+
+**Stages connect through door scenarios** (`scr\stSSS\etc\stSSS_door`,
+`cScenarioArg_AreaJump` `mStageNo` / `mPosNo`; 0x00799480 jumps when the
+Arisen is inside the volume; `ddstory::scenario` already emits
+`Request::JumpArea`):
+- Cassardis `st200_door` record 0 leads to stage 100, start position 2:
+  the gate to the field. Records 1-5 lead to 700 and 610.
+- The field's `st100_door` leads to 210 (positions 0 and 1), 200, 300 (both
+  positions), 220, 310, 320, 700, 702 and 6.
+- The Encampment's `st210_door` leads to stage 100, positions 1 and 3, and
+  within 210 to positions 3 and 14.
+
+So the walk is: Cassardis gate → field position 2 → field door into
+210 → q0003. `stream::Streamer::enter` does the handoff (test
+`the_cassardis_gate_arrives_on_field_ground`). The opening's host must
+evaluate the current stage's door scenarios (stage 100's too) to emit
+them.
+
+**q0003 happens at the Encampment** (`quest\q0003_b00`; Japanese state
+names in brackets). In order:
+- the encampment check (宿営地チェック): AreaHit 3/4;
+- the mysterious voice (謎の声): a message;
+- the simple event that shows the Rift (リムを見せるシンプルイベント:
+  camera 8, timers, SE);
+- leave the tent (テントの外に出る): AreaHit 5/9/10 and SceNo;
+- the NPC simple event (camera 9, layouts 210:68 and 63, NPC group 18,
+  battle BGM, quest marker bit 17);
+- the encampment clean-up (layouts 210:100-115 off);
+- the road block (道ふさぎ: AreaHit 0/1/3);
+- listening to the Rift (bit 20, camera 21, BGM control);
+- the st210 checks.
+
+"リム" is the Riftstone, so the first Rift contact is in q0003. To trace
+next: its QCT, the AreaHit volumes, and how q0002 hands over to q0003.
+
