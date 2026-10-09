@@ -228,6 +228,10 @@ pub const SWITCH: i32 = -6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThinkMgr {
+    /// +0xda4..0xde0: target slot selected for each category by 0x008b6f20.
+    /// None means this port has not yet received a category assignment;
+    /// the original constructor's initial category values are not traced.
+    pub category_targets: [Option<u8>; 16],
     /// +0x04..+0x23: 32 condition flags the unit writes (uEm0100: in
     /// 0x008d1280 and 0x008d2930, e.g. +0x615d = flag 9 = unit +0x607c ==
     /// 1). Row masks +0x10 / +0x14 require them set / clear (0x008bbd30).
@@ -450,6 +454,7 @@ impl ThinkMgr {
     // Translated from 0x008b73f0, 0x008b76e0, 0x008b7c70 (DDDA.exe 2017-12-13 Steam).
     pub fn new() -> Self {
         ThinkMgr {
+            category_targets: [None; 16],
             flags: 0,
             out: [0; 8],
             scale: 1.0,
@@ -1296,7 +1301,36 @@ impl ThinkMgr {
                 self.f1210 = false;
                 true
             }
-            0x40 | 0x41 | 0x4e | 0x5c..=0x5e | 0x60 | 0x61 | 0x63 | 0x64 | 0x7a | 0x7b => {
+            // Translated from 0x008bc550 / 0x008bc5b0 and
+            // 0x008b6f20 (DDDA.exe 2017-12-13 Steam).
+            0x7a | 0x7b => {
+                if let Some(slot) = self.slot(b) {
+                    let mask = if code == 0x7b {
+                        a
+                    } else if slot.x80 <= 1 {
+                        slot.x7c
+                    } else {
+                        slot.x80
+                    };
+                    if mask & 1 == 0 {
+                        if mask & 2 != 0 {
+                            self.category_targets.fill(Some(b as u8));
+                        } else {
+                            // Category3/bit8 is deliberately absent from
+                            // the original helper's selective assignments.
+                            for bit in [2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] {
+                                if mask & (1 << bit) != 0 {
+                                    self.category_targets[bit] = Some(b as u8);
+                                }
+                            }
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            0x40 | 0x41 | 0x4e | 0x5c..=0x5e | 0x60 | 0x61 | 0x63 | 0x64 => {
                 return Err(Error::Unimplemented(format!(
                     "think command {code:#x} at {:#010x}",
                     rec.va
@@ -1991,6 +2025,83 @@ mod tests {
     }
 
     const T: u32 = 0x1000;
+
+    #[test]
+    fn category_target_commands_use_slot_mask_and_explicit_override() {
+        let mut m = mgr(T, at(100.0, 0.0));
+        m.slots[0].x7c = 2;
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 1),
+            0x7a,
+            0,
+            0,
+            0,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(m.category_targets, [Some(0); 16]);
+        m.slots[6] = Slot {
+            valid: true,
+            x80: (1 << 4) | (1 << 3),
+            ..Slot::default()
+        };
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 1),
+            0x7a,
+            0,
+            0,
+            6,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(m.category_targets[4], Some(6));
+        assert_eq!(
+            m.category_targets[3],
+            Some(0),
+            "bit3 is absent from selective setter"
+        );
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 1),
+            0x7b,
+            0,
+            4,
+            6,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(m.category_targets[2], Some(6));
+        let before = m.category_targets;
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 1),
+            0x7b,
+            0,
+            3,
+            0,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(m.category_targets, before, "bit0 suppresses writes");
+        m.command(
+            &mut Fixed { roll: 0 },
+            &row(T, 0, 1),
+            0x7b,
+            0,
+            2,
+            22,
+            &mut false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(m.category_targets, before, "invalid slots cannot be assigned");
+    }
 
     #[test]
     fn generated_point_rotates_by_owner_yaw_and_target_bearing() {
