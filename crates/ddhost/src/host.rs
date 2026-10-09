@@ -122,6 +122,9 @@ pub struct Host<D: Data, W: StoryWorld> {
     boot: bool,
     /// Running hash of every request emitted, for replay checks.
     request_log: StateHasher,
+    /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
+    /// `None` runs without combat.
+    pub fight: Option<ddenemyrt::fight::Fight>,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -146,6 +149,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             scenario_press: None,
             boot: true,
             request_log: StateHasher::default(),
+            fight: None,
         }
     }
 
@@ -231,12 +235,27 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let presses = self.edges.interact_presses(inputs);
-        // Steps 30 (sAI), 33 (hits from the last frame's volumes, damage):
-        // no headless AI or hit pass yet.
+        // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
+        // from the volumes the fight switched on last frame, damage applied,
+        // before anyone moves (FRAME.md 5.1).
+        let step = self.clock.seconds() * ddsim::MOTION_FPS;
+        if let Some(f) = self.fight.as_mut() {
+            f.hits(step);
+        }
         // Step 36, pass A, line 10 "Player": the Arisen (and later the
         // pawns) move: one Sim::step is one engine frame.
         let sim_inputs = inputs.iter().map(|(&id, i)| (id, i.sim)).collect();
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        // Line 10 continued (fight): scripted attacks advance and move their
+        // Arisen; line 15: the enemies think, act and move; step 38: the
+        // push-out between characters; pass C (step 42): poses and the hit
+        // volumes for the next frame.
+        if let Some(f) = self.fight.as_mut() {
+            f.players_moved(&mut self.sim, self.ground.as_ref(), step);
+            f.enemies(&self.sim, self.ground.as_ref(), step);
+            f.push_out(&mut self.sim);
+            f.volumes(&self.sim);
+        }
         // Same line, phase 90 of each character: at most one level-up
         // (0x00B5BD20) and one rank-up (0x00B5C230) per frame. The original
         // keeps the vocation in sGameSys, so it is mirrored into the story
@@ -283,6 +302,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
+        if let Some(f) = &self.fight {
+            h.debug(&f.digest());
+        }
         h.u64(self.request_log.finish());
         h.finish()
     }

@@ -669,8 +669,62 @@ window).
 Not implemented: timed statuses and their effects, the species- and
 player-specific multipliers listed in sections 4 and 5.2 (the functions
 take the core inputs and say what they omit), the special enemy case of
-0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard,
-volume placement on joints and the shape tests.
+0x0076DB10 (victim vf+0x148 x 0.091), knockback trajectories, guard.
+
+### 9.1 A fight in the host (`ddenemyrt`, `mtlmt::pose`)
+
+The first M4 slice runs the pipeline end to end, headless:
+
+- **Posing.** `mtlmt::pose::Skeleton` composes a model's rest skeleton
+  (`mtmod` bones) with a motion sampled at a frame (row vectors,
+  `world = local x parent world`, ANIMATION.md); `ddenemyrt::body` places
+  the model by position and yaw and hands the joint world matrices to
+  `ddcombat::volumes` as its `Pose`. Root travel (joint 255) moves the
+  unit and does not pose.
+- **Activation.** Each body's motion events switch its sequences on per
+  frame (2.1); its collision files are the body file plus the paired
+  attack file (goblin `e0100` + `e0100_00`; Arisen `m0000`, and `m0001` +
+  `m0001_00_lv1` for the sword).
+- **Frame order** (FRAME.md 5.1-5.7): `Host::tick` runs the hit pass on
+  the volumes placed last frame, then the Arisen move (ddsim) and their
+  scripted attacks advance, then the enemies (think, action, motion, root
+  travel), the character push-out, and pass C (poses, volumes for the next
+  frame).
+- **Hit pass** (`ddenemyrt::combat`): each victim's contacts against
+  everyone's attack volumes, the history, the attacker's value (enemy or
+  player), the merge, then the enemy pools (`resolve_enemy_hit`) or the
+  player curve (`player_mitigate`; the player's own region scaling is not
+  applied). Stagger and death go to the enemy as forced actions.
+- **The Arisen's sword attack 1** is motion 0 of
+  `motion\pl\m\m00\m0001_at\m0001_at`: its events switch on
+  `collision\pl\m0001` sequences 1 and 2 (groups 1 and 2, attacks 1 and
+  2, relation 1) on frames 6..10 (found by scanning every player motion
+  list; m0001_at motions 200, 203 and 205 use them too). The motion
+  carries a root travel of 190 cm. Attack input and the weapon actions are
+  not modelled: the host scripts the swing.
+
+Results (tests `ddenemyrt/tests/sword.rs`, `ddhost/tests/goblin.rs`):
+- the sword swing against a standing goblin hits once, from the volumes
+  of motion frame 6, for **105** (the worked example), and staggers it;
+- a goblin that closes in on a standing level-1 Fighter hits only from
+  volumes placed inside its windows: NAttack1 (`e0100_at` motion 1,
+  frames 45..48) deals **111.1** (200 x 100 / 180), NAttack2 (motion 2,
+  frames 34..37, attack 0.7) 97.2;
+- ten sword hits of 105 kill the goblin (HP 1000); it flinches at the
+  first nine and plays `cEmActActingDie` after the tenth;
+- the fight replays bit for bit (`Host::state_hash`).
+
+Placeholders in the slice (marked in the code):
+- the history's relation hold (attacker flag +0x1EC1) is taken as
+  released when the attacker starts its next attack;
+- the character push-out (`0x004797E0`, not traced) keeps an Arisen and a
+  goblin 70 cm apart (35 + 35, their `mIsObjAdj` radii);
+- the goblin stands on the ground height under it (its own scenery sweep,
+  capsule r44 from 44 to 106 cm, is not run);
+- the rand of the think and of the actions is a seeded xorshift, not the
+  game's global rand (0x00d00690);
+- the critical roll (only critical-capable weapons read it) is seeded the
+  same way.
 
 ## 10. What is still unknown
 

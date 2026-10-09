@@ -32,6 +32,7 @@
 use std::fmt;
 
 pub mod blend;
+pub mod pose;
 
 pub const MAGIC: [u8; 4] = *b"LMT\0";
 pub const VERSION: u16 = 66;
