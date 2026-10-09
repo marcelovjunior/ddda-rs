@@ -78,7 +78,7 @@ fn world(scene: i32, hour: u32, flags: &[u16]) -> (i32, u32, Vec<u16>) {
     (scene, hour, flags.to_vec())
 }
 
-fn run(scene: i32, hour: u32, flags: &[u16], records: &[Record]) -> (Vec<(u32, Gate)>, Vec<(u32, String)>) {
+fn run(scene: i32, hour: u32, flags: &[u16], records: &[Record]) -> (ddspawn::Gates, Vec<(u32, String)>) {
     let vfs = vfs().unwrap();
     let l = st100();
     let (scene, hour, on) = world(scene, hour, flags);
