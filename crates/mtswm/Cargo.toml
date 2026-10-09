@@ -1,0 +1,9 @@
+[package]
+name = "mtswm"
+version = "0.1.0"
+description = "Reader for rSwingModel (.swm) foliage swing/billboard data of Dragon's Dogma: Dark Arisen"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -4,13 +4,18 @@
 //! ```text
 //! ddview <nativePC> [--stage 100] [--cell 58,50] [--radius 2]
 //!        [--pos x,y,z] [--look x,y,z] [--up x,y,z] [--fov deg] [--size WxH]
-//!        [--far-cells N] [--ref refNNN.json] [--shot out.png] [--shot-delay secs]
+//!        [--far-cells N] [--camera-fov deg] [--ref refNNN.json] [--light light.json]
+//!        [--shot out.png] [--shot-delay secs]
 //! ```
 //! `--pos`/`--look` are in game units (cm) in the origin cell's frame, the
 //! same frame as the live game's `uPlayer +0x40` (see docs/WORLD.md).
 //! `--ref` takes the eye, target, up, FOV and near/far planes from a
 //! reference pose recorded by the private screenshot watcher
-//! (`uCameraGame +0x30..+0x6c`). `--fov` is the vertical field of view.
+//! (`uCameraGame +0x30..+0x6c`) and its origin cell. `--fov` is the
+//! vertical field of view; a reference's fov gets the game's CameraFov
+//! setting added (read from the player's config.ini, or `--camera-fov`
+//! given before `--ref`). `--light` switches the stage materials to the
+//! original's lighting with inputs from a JSON file (docs/SHADING.md).
 //! With `--shot` the viewer saves one frame after `--shot-delay` seconds
 //! (default 10: Bevy compiles pipelines asynchronously and draws nothing
 //! until they are ready) and exits.
@@ -44,6 +49,9 @@ struct Args {
     far: f32,
     size: (u32, u32),
     shot: Option<PathBuf>,
+    light: Option<stage::StageLighting>,
+    /// The game's [GRAPHICS] CameraFov setting, added to reference fovs.
+    camera_fov: f32,
     shot_delay: f32,
     character: Option<String>,
     motion: Option<String>,
@@ -74,6 +82,8 @@ fn args() -> Args {
         pos: Vec3::new(205.4, 41019.0 + 170.0, 3542.5),
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
+        light: None,
+        camera_fov: config_camera_fov().unwrap_or(0.0),
         shot_delay: 10.0,
         character: None,
         motion: None,
@@ -108,6 +118,8 @@ fn args() -> Args {
             "--pos" => a.pos = parse_vec3(&v),
             "--look" => a.look = parse_vec3(&v),
             "--shot" => a.shot = Some(PathBuf::from(v)),
+            "--light" => a.light = Some(load_lighting(&v)),
+            "--camera-fov" => a.camera_fov = v.parse().unwrap(),
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
             "--up" => a.up = parse_vec3(&v),
             "--fov" => a.fov_deg = v.parse().unwrap(),
@@ -154,9 +166,101 @@ fn apply_ref(a: &mut Args, path: &str) {
     a.pos = v3("eye");
     a.look = v3("target");
     a.up = v3("up");
-    a.fov_deg = nums_after("fov_deg", 1)[0];
+    // The recorded fov is uCameraGame.mFov. The game renders with
+    // mFov + the CameraFov setting of its config.ini (uCameraBase::vf21,
+    // 0x007D3E00, adds the global at *0x018D1D20 + 0x24, which the
+    // [GRAPHICS] CameraFov option fills). Checked live: mFov 55 with
+    // CameraFov 15 gives the 70 degree projection in sCamera's viewport.
+    a.fov_deg = nums_after("fov_deg", 1)[0] + a.camera_fov;
     a.near = nums_after("near", 1)[0];
     a.far = nums_after("far", 1)[0];
+    // The recorded floating-origin cell, e.g. "scr\\st100\\model\\m60\\st100_61m52n":
+    // the eye and target are in that cell's frame (docs/WORLD.md). A later
+    // --stage/--cell on the command line overrides it.
+    if let Some((stage, cell)) = origin_cell(&text) {
+        a.stage = stage;
+        a.cell = cell;
+    }
+}
+
+/// Reads the original's lighting inputs for one moment from a JSON file
+/// (written from live reads of the game's light units, docs/SHADING.md):
+/// `hemisphere_count` and `hemispheres` (sky rgb, ground rgb, direction per
+/// light), `light_count` and `lights` (colour rgb, direction to the light
+/// per light; the first is the sun, drawn with its shadow map, the others
+/// are added to the SH), `fog_color`, `fog_density`, `fog_start`,
+/// `fog_end` (cm). Only lights of the stage's light group belong in it.
+fn load_lighting(path: &str) -> stage::StageLighting {
+    use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let nums = |key: &str, n: usize| -> Vec<f32> {
+        let i = text
+            .find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("{path}: no {key}"));
+        let v: Vec<f32> = text[i + key.len() + 2..]
+            .split(|c: char| {
+                !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
+            })
+            .filter(|t| !t.is_empty() && t.parse::<f32>().is_ok())
+            .take(n)
+            .map(|t| t.parse().unwrap())
+            .collect();
+        assert_eq!(v.len(), n, "{path}: {key} needs {n} numbers");
+        v
+    };
+    let v3 = |v: &[f32]| [v[0], v[1], v[2]];
+    let mut sh = [[0.0f32; 9]; 3];
+    let hemis = nums("hemisphere_count", 1)[0] as usize;
+    let h = nums("hemispheres", 9 * hemis);
+    for k in 0..hemis {
+        let x = &h[9 * k..];
+        sh_add(&mut sh, &sh_hemisphere(v3(&x[6..]), v3(x), v3(&x[3..])));
+    }
+    let count = nums("light_count", 1)[0] as usize;
+    let l = nums("lights", 6 * count);
+    for k in 1..count {
+        let x = &l[6 * k..];
+        sh_add(&mut sh, &sh_directional(v3(&x[3..]), v3(x)));
+    }
+    let packed = pack_sh(&sh);
+    let (sun_color, sun_dir) = if count > 0 {
+        (Vec3::from_slice(&l[0..3]), Vec3::from_slice(&l[3..6]))
+    } else {
+        (Vec3::ZERO, Vec3::Y)
+    };
+    let f3 = |key: &str| Vec3::from_slice(&nums(key, 3));
+    stage::StageLighting {
+        enabled: true,
+        sh: packed.map(Vec4::from),
+        sun_dir,
+        sun_color,
+        fog_color: f3("fog_color"),
+        fog_density: nums("fog_density", 1)[0],
+        fog_start: nums("fog_start", 1)[0],
+        fog_end: nums("fog_end", 1)[0],
+    }
+}
+
+/// `CameraFov` from the player's own game settings
+/// (`%LOCALAPPDATA%\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`), if present.
+fn config_camera_fov() -> Option<f32> {
+    let dir = std::env::var_os("LOCALAPPDATA")?;
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("CameraFov="))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// Stage and cell (A, B) of the `origin_cell` path in a reference JSON.
+fn origin_cell(json: &str) -> Option<(u32, (i32, i32))> {
+    let i = json.find("\"origin_cell\"")?;
+    let rest = &json[i + "\"origin_cell\"".len()..];
+    let value = rest.split('"').nth(1)?;
+    let name = value.rsplit('\\').next()?; // st100_61m52n
+    let (stage, cell) = name.strip_prefix("st")?.split_once('_')?;
+    let (a, b) = cell.strip_suffix('n')?.split_once('m')?;
+    Some((stage.parse().ok()?, (a.parse().ok()?, b.parse().ok()?)))
 }
 
 fn main() {
@@ -175,6 +279,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(stage::ShadingPlugin)
+        .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
         .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
         .insert_resource(GlobalAmbientLight {
@@ -330,14 +435,23 @@ fn setup(
 
 /// Sun and camera, shared by the stage and character modes.
 fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
-    // Sun: direction is a placeholder until the stage's light data is read.
+    // Sun. Without --light its direction and strength are placeholders
+    // for Bevy's PBR. With --light the stage materials do their own
+    // lighting and use this light only for its shadow map, pointed along
+    // the original's sun direction.
+    let to_light = args
+        .light
+        .as_ref()
+        .map(|l| l.sun_dir)
+        .filter(|d| d.length_squared() > 0.0)
+        .unwrap_or(Vec3::new(0.4, 1.0, 0.3));
     commands.spawn((
         DirectionalLight {
             illuminance: 12_000.0,
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, 0.0).looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y),
+        Transform::from_xyz(0.0, 0.0, 0.0).looking_to(-to_light, Vec3::Y),
     ));
     let pos = args.pos * stage::UNIT;
     let look = args.look * stage::UNIT;
@@ -353,6 +467,13 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
             Transform::from_translation(pos).looking_at(look, args.up),
         ))
         .id();
+    if args.light.is_some() {
+        // The stage shader outputs the original's colour; no tone mapping
+        // (the original's post-processing is not traced).
+        commands
+            .entity(cam)
+            .insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
+    }
     if args.play {
         commands.entity(cam).insert(play::FollowCam);
     } else {

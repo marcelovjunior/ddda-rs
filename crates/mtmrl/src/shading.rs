@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use mtshader::{BlendFactor, BlendState, DepthStencilState, RasterizerState, ShaderPackage};
 
-use crate::{CommandKind, Material, MaterialList};
+use crate::{AlphaTest, CommandKind, Material, MaterialList};
 
 /// Where a material's alpha comes from (MFX feature `FTransparency`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +77,8 @@ pub struct Shading {
     pub blend: Option<BlendState>,
     pub depth: Option<DepthStencilState>,
     pub raster: Option<RasterizerState>,
+    /// Alpha test from the material header (`Material::alpha_test`).
+    pub alpha_test: Option<AlphaTest>,
 }
 
 impl Shading {
@@ -179,6 +181,7 @@ pub fn describe(m: &Material<'_>, list: &MaterialList<'_>, pkg: &ShaderPackage) 
         blend: pkg.blend_state(m.blend_state).copied(),
         depth: pkg.depth_stencil_state(m.depth_stencil_state).copied(),
         raster: pkg.rasterizer_state(m.rasterizer_state).copied(),
+        alpha_test: m.alpha_test(),
         features,
         textures,
     }

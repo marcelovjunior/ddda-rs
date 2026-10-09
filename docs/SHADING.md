@@ -6,8 +6,9 @@ shaders), **data** (checked on the game files), *assumed* (a guess, said
 why). Format findings for `docs/FORMATS.md` are in the first sections.
 
 Code: `mtshader` (MFX constant buffers and render states), `mtmrl`
-(constant-buffer data, `mtmrl::shading`), `mttex::is_srgb`,
-`crates/ddview/src/stage.rs` and `transparency_map.wgsl`.
+(constant-buffer data, `mtmrl::shading`, alpha test), `mttex::is_srgb`,
+`mtswm` (swing models), `mtweather::lighting` (SH),
+`crates/ddview/src/stage.rs` and `dd_material.wgsl`.
 
 ## Sources
 
@@ -97,9 +98,7 @@ Values that differ from the MFX defaults (materials, all MRLs):
 `fTransparency` 153, `fTransparencyVolume` 111, plus `CBBurn*` and others.
 **Every terrain cell material of stage 100 (2,979) holds the defaults.**
 
-Material header word `bits[1]`: byte 1 holds 0x78/0x80/0x46/0x7E/... on
-alpha-tested materials (`8c90xx00`), possibly the alpha-test reference
-(lead, not traced; opaque materials carry such values too).
+Material header word `bits[1]` holds the alpha test (see "Alpha test").
 
 ## Pixel shader rules — traced from the compiled shaders
 
@@ -170,6 +169,96 @@ of the texture's format word for format codes 0x09, 0x14, 0x16, 0x18,
 effects); masks (0x19), normal maps (0x1F) and `_CMM` (0x13) are not
 flagged. *The flag's consumer (sampler sRGB state) is not traced.*
 
+## Alpha test — traced
+
+`rMaterial::vf09` (0x0112E4D0) builds each draw material from the MRL
+header word `bits[1]`: enable = bit 20, comparison = bits 21-23 (forced to
+7, Always, when disabled), reference = byte 1. The draw code (FUN_00FEE320)
+writes `reference / 255` to `CBROPTest.fAlphaRef` and
+`1.1 / (1 - reference / 255)` to `fAlphaToCoverageScale`; the pixel shaders
+discard when `alpha <= fAlphaRef`. Every enabled material uses comparison 4
+(Greater). Common references: 0x78 (1,467 materials), 0x80 (966), 0x46
+(125), 0 (358, also the blended terrain overlays). `mtmrl::Material::alpha_test`.
+
+## Swing billboards — data + traced shaders
+
+Foliage has an `rSwingModel` (`mtswm`; `...\etc\<model>_s00`, or the model's
+own path for `fmfore_*`): one node per mesh with a per-vertex record of a
+quantised pivot (`u8 xyz / 255 * scale + offset`, model space) and a wind
+weight. Nodes with flag 0x200 are billboards (133 of 137 have every vertex
+in its pivot's local XY plane). The stage swing vertex shaders (e.g. file
+offset 0x1A9500 in `sc\dx9\stage100`) compute
+
+```text
+pivot_world = fWorld * pivot
+world       = pivot_world + d.x * ViewI.row0 + d.y * ViewI.row1 + d.z * ViewI.row2,  d = position - pivot
+```
+
+(the offset is not transformed by the model matrix), rotate the normal the
+same way, then add a wind sway along `fSwingConstraint` scaled by the
+weight while keeping `|world - pivot_world|`. The viewer does the
+billboard rotation (pivot in the vertex colour, w = -1, `dd_material.wgsl`)
+and not the wind. 8-byte records (`fmfore_*`, flag 0xCA08) are not decoded;
+those meshes are drawn two-sided. Which flag bits select the cylindrical
+(`FSwingBillboardTransformFixedY`) variant is not traced; all billboards
+use the spherical form above.
+
+`nDraw::MaterialNull` meshes (`Scene_Material` in scenery models) are not
+drawn (whether they cast shadows is not traced).
+
+## Projection and placement — traced / measured
+
+- The game renders with `uCamera.mFov + CameraFov`: `uCameraBase::vf21`
+  (0x007D3E00) adds the float at `*0x018D1D20 + 0x24`, a settings object
+  filled from `[GRAPHICS] CameraFov` in the player's
+  `%LOCALAPPDATA%\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini` (15 on this
+  machine). Live check: uCameraGame/uCameraCtrl `mFov` 55, while sCamera
+  viewport 0 holds m11 = 1.42815 (70.0 degrees) and m00/m11 = 9/16. The
+  recorded `uCameraGame.mAspect` (1.0) is not the viewport's. The reference
+  poses now line up with the screenshots (props, rocks, bones in place).
+- Layout `mAngle` is applied about world X, then Y, then Z (R = Rz Ry Rx):
+  measured (the only order of six that puts log om0529 in st100_58m49n
+  where the live capture has it; also consistent with refs 001/002/005).
+  Not traced in the exe.
+
+## Lighting — traced shaders, live values
+
+The stage is a light pre-pass renderer:
+
+- **Light buffer:** deferred light shaders (`sc\dx9\root`, e.g. file offsets
+  0x33FD5C, 0x82DFF0) add, per light, `colour * intensity * max(N.L, 0)`
+  [x shadow] (point lights also attenuate), stored as `exp2(-light)` and
+  decoded by the material pass as `min(-log2(sample), 8)`.
+- **SH:** hemisphere lights have no deferred shader; they and the
+  unshadowed infinite lights go into `fSHCoef` (`mtweather::lighting`:
+  projections translated from 0x0130D6D0 and 0x0130D420, Sloan packing
+  *assumed*).
+- **Light units** (live, sky scheduler): `uSkyInfiniteLight` colour +0x50,
+  direction to the light +0x230 (several: the sun, a fill light from
+  above, a weaker group-0x10 light); `uSkyHemiSphereLight` sky colour
+  +0x50, ground colour +0x230, axis +0x240; `uSkyColorFog` start +0x188,
+  end +0x18C, density +0x194, colour +0x1A0 (e.g. 1000 / 110000 / 0.9).
+- **Light groups:** `uLight.mGroup` (+0x34) is a bit mask; stage cells and
+  scenery have MOD light group 1. The sun (0x10C7), the fill light
+  (0x10C5) and one hemisphere (0x10C7) share bit 0; a grey hemisphere and
+  the third infinite light are group 0x10 only. Including the group-0x10
+  lights doubles the shadowed ground's brightness against the captures,
+  excluding them matches: the rule `mGroup & model.light_group != 0` is
+  *assumed* from that, not traced.
+
+The viewer (`--light <json>`) computes `fSHCoef` from the hemisphere and
+non-sun infinite lights, lights the stage with
+`albedo * (SH(N) + sun * max(N.L, 0) * shadow)` using Bevy's shadow map for
+the sun, applies the linear depth fog, and turns off Bevy's tone mapping.
+
+**Compared** (claude-4's read-only day series, private
+`E:\ddda-re\shots\refs-lit`, same camera pose as the capture): the sunlit
+wedge and the shadow edge of the 09:46 capture line up; mean colour of a
+ground region (8-bit sRGB) ref vs ours: 09:46 (79,80,68)/(100,102,88),
+12:21 (30,39,40)/(36,47,48), 15:00 (26,34,34)/(43,55,56), 17:45
+(26,34,34)/(30,40,41), 20:21 (12,16,17)/(14,21,22), 23:04 (5,9,11)/(3,6,7).
+Ours is 15-25 % brighter by day, slightly darker at night.
+
 ## What the viewer does
 
 `stage.rs` builds each material from `mtmrl::shading::describe`:
@@ -177,30 +266,35 @@ flagged. *The flag's consumer (sampler sRGB state) is not traced.*
 | Original | Viewer | Status |
 | --- | --- | --- |
 | `fAlbedoColor` (FAlbedoMap) x `fDiffuseColor` | base colour (linear) | traced |
-| alpha = albedo.a x vertex alpha x `fTransparency` | base alpha x `ATTRIBUTE_COLOR` = (1,1,1,vertex alpha) | traced |
+| vertex `Occlusion` x all light | folded into the vertex colour RGB | traced (VS passes it, PS multiplies the light) |
+| alpha = albedo.a x vertex alpha x `fTransparency` | base alpha x vertex colour alpha | traced |
 | `BSBlendAlpha` | `AlphaMode::Blend` (no depth write) | traced |
-| `FTransparencyMap` | `ExtendedMaterial` multiplying the map's G on UV 1 | traced, map space linear per is_srgb |
-| alpha test | `AlphaMode::Mask(0.5)` | 0.5 is a placeholder (CBROPTest at run time) |
-| rasterizer cull | `cull_mode` / `double_sided` | traced; alpha-tested foliage forced two-sided, see below |
-| `FUVTransformOffset` + `fUVTransform` | `uv_transform` | *assumed*: 156 of 176 non-identity transforms have this variant; the default variant is taken to ignore the transform |
-| `FSpecularDisable` | `reflectance = 0` | derived (no specular term) |
+| `FTransparencyMap` | map G on UV 1 in `dd_material.wgsl` | traced, map space linear per is_srgb |
+| alpha test | `AlphaMode::Mask(reference + 0.5/255)` | traced |
+| rasterizer cull | `cull_mode` / `double_sided` | traced |
+| swing billboards | vertex stage of `dd_material.wgsl` | traced (no wind) |
+| `FUVTransformOffset` + `fUVTransform` | `uv_transform` | *assumed* (156 of 176 non-identity transforms have this variant) |
+| `FSpecularDisable` | `reflectance = 0` (Bevy fallback only) | derived |
+| SH + light buffer + fog | `--light`: own lighting in `dd_material.wgsl` | traced shaders; SH packing and light-group rule assumed |
 | sRGB-space blending | linear-space blending | **difference** (Bevy) |
-| lighting (light buffer, SH, sun, fog) | Bevy PBR, placeholder sun/ambient | not done |
+| post-processing (tone map, bloom, colour correction, DOF) | none | not traced |
 
-Alpha-tested leaf crowns (`*_NUKI`, e.g. `om0500`, `om0501`, `om0531`,
-`om0532`) are `RSMesh` (cull back) but every card of a crown lies in a
-plane z = const facing +Z: the original turns them to the camera (how is
-not traced). Culled as stored they vanish from most views, so the viewer
-keeps drawing alpha-tested materials two-sided.
+Without `--light` the stage keeps Bevy's PBR with the placeholder sun and
+ambient.
 
 ## Open
 
-- The SPK permutation lookup (feature set -> shader), to pin each rule to
-  the exact shader of a material.
-- The alpha-test reference (CBROPTest; lead: MRL `bits[1]` byte 1).
-- Foliage billboarding (what turns the leaf cards; candidate
-  `CBSwingBillboard`).
+- The SPK permutation lookup (feature set -> shader).
+- The SH packer and the light-group test in the exe (both assumed here).
+- Post-processing: the material pass writes colour x `fHDRCompressEncode`
+  (0.5); the tone map / colour correction / bloom / DOF chain that follows
+  is not traced (likely the remaining 15-25 % by day). config.ini on this
+  machine: HDR=DEFAULT, DofFilter=ON, Brightness=10, ShadowQuality=LOW.
+- Sky dome, water shading and the far terrain (distant hills; trees float
+  above missing far ground in ref001) are not drawn.
+- Wind sway of swing models; 8-byte swing records; the cylindrical
+  billboard variant.
+- Night: the moon / group-0x10 lights and point lights (`st100_light`
+  scheduler) are not used; the 23:04 capture is darker in ours.
 - `FDiffuseVertexColor*`, `FTransparencyVolume`, `FAlbedoMapBlend` and the
   other variants: not traced.
-- Lighting inputs: who fills `fSHCoef`, `sLightParamDL0`, `CBFog`
-  (codex-6 / codex-11 trace the weather and light data side).

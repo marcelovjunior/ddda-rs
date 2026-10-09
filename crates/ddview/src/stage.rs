@@ -27,7 +27,7 @@ use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor}
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, ShaderType, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 
 use ddvfs::Vfs;
@@ -53,65 +53,135 @@ pub struct Stats {
     pub missing: Vec<String>,
 }
 
-/// Registers the material type for transparency-map layers and the
-/// system that hands those materials to their entities.
+/// Registers the stage material type and the system that hands those
+/// materials to their entities.
 pub struct ShadingPlugin;
 
 impl Plugin for ShadingPlugin {
     fn build(&self, app: &mut App) {
-        bevy::asset::embedded_asset!(app, "transparency_map.wgsl");
-        app.add_plugins(MaterialPlugin::<LayerMaterial>::default())
-            .add_systems(Update, resolve_layer_materials);
+        bevy::asset::embedded_asset!(app, "dd_material.wgsl");
+        app.add_plugins(MaterialPlugin::<DdMaterial>::default())
+            .init_resource::<StageLighting>()
+            .add_systems(Update, resolve_dd_materials);
     }
 }
 
-/// `StandardMaterial` whose alpha is also multiplied by a transparency map
-/// (`FTransparencyMap`) sampled with the mesh's second UV set.
-pub type LayerMaterial = ExtendedMaterial<StandardMaterial, TransparencyMap>;
+/// The original's lighting inputs for one moment (docs/SHADING.md). With
+/// `enabled` false the stage materials use Bevy's PBR lighting instead.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct StageLighting {
+    pub enabled: bool,
+    /// `fSHCoef[7]` as the pixel shaders read it.
+    pub sh: [Vec4; 7],
+    /// Unit direction to the sun (light) in the stage frame.
+    pub sun_dir: Vec3,
+    pub sun_color: Vec3,
+    pub fog_color: Vec3,
+    pub fog_density: f32,
+    /// Fog start and end in game units (cm) of view depth.
+    pub fog_start: f32,
+    pub fog_end: f32,
+}
+
+/// Uniform of [`DdExt`]; layout mirrored in `dd_material.wgsl`.
+#[derive(Clone, Copy, Debug, Default, ShaderType)]
+pub struct DdParams {
+    pub flags: u32,
+    pub map_channel: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub sh: [Vec4; 7],
+    pub sun_dir: Vec4,
+    pub sun_color: Vec4,
+    pub fog_color: Vec4,
+    pub fog_range: Vec4,
+}
+
+const FLAG_MAP: u32 = 1;
+const FLAG_DD_LIGHTING: u32 = 2;
+
+impl DdParams {
+    fn with_lighting(mut self, l: &StageLighting) -> Self {
+        if !l.enabled {
+            return self;
+        }
+        self.flags |= FLAG_DD_LIGHTING;
+        self.sh = l.sh;
+        self.sun_dir = l.sun_dir.normalize_or_zero().extend(0.0);
+        self.sun_color = l.sun_color.extend(0.0);
+        self.fog_color = l.fog_color.extend(l.fog_density);
+        let range = l.fog_end - l.fog_start;
+        let inv = if range > 0.0 { 1.0 / range } else { 0.0 };
+        self.fog_range = Vec4::new(l.fog_start, inv, 1.0 / UNIT, 0.0);
+        self
+    }
+}
+
+/// `StandardMaterial` plus the original's rules: transparency maps,
+/// swing billboards and (with [`StageLighting`]) its lighting and fog.
+pub type DdMaterial = ExtendedMaterial<StandardMaterial, DdExt>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
-pub struct TransparencyMap {
-    /// Channel of the map that scales the alpha (0 = R).
+pub struct DdExt {
     #[uniform(100)]
-    pub channel: u32,
+    #[reflect(ignore)]
+    pub params: DdParams,
+    /// `tTransparencyMap` (FTransparencyMap), sampled on UV 1.
     #[texture(101)]
     #[sampler(102)]
-    pub map: Handle<Image>,
+    pub map: Option<Handle<Image>>,
 }
 
-impl MaterialExtension for TransparencyMap {
+impl MaterialExtension for DdExt {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://ddview/dd_material.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
-        "embedded://ddview/transparency_map.wgsl".into()
+        "embedded://ddview/dd_material.wgsl".into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        "embedded://ddview/dd_material.wgsl".into()
     }
 }
 
-/// A layer material built once and shared by every entity that uses it.
-pub struct LayerSlot {
-    pub material: LayerMaterial,
-    pub handle: OnceLock<Handle<LayerMaterial>>,
+/// A stage material built once and shared by every entity that uses it.
+pub struct DdSlot {
+    pub material: DdMaterial,
+    pub handle: OnceLock<Handle<DdMaterial>>,
 }
 
-/// Placed on entities whose material is a [`LayerMaterial`]; replaced by
-/// `MeshMaterial3d` in [`resolve_layer_materials`] (the loader only has
-/// the `StandardMaterial` asset store).
+/// Placed on entities whose material is a [`DdMaterial`]; replaced by
+/// `MeshMaterial3d` in [`resolve_dd_materials`], which also fills in the
+/// lighting (the loader only has the `StandardMaterial` asset store).
 #[derive(Component, Clone)]
-pub struct PendingLayer(pub Arc<LayerSlot>);
+pub struct PendingDd(pub Arc<DdSlot>);
 
-fn resolve_layer_materials(
+fn resolve_dd_materials(
     mut commands: Commands,
-    pending: Query<(Entity, &PendingLayer)>,
-    mut assets: ResMut<Assets<LayerMaterial>>,
+    pending: Query<(Entity, &PendingDd)>,
+    mut assets: ResMut<Assets<DdMaterial>>,
+    lighting: Res<StageLighting>,
 ) {
     for (e, p) in &pending {
-        let h = p.0.handle.get_or_init(|| assets.add(p.0.material.clone())).clone();
-        commands.entity(e).remove::<PendingLayer>().insert(MeshMaterial3d(h));
+        let h = p
+            .0
+            .handle
+            .get_or_init(|| {
+                let mut m = p.0.material.clone();
+                m.extension.params = m.extension.params.with_lighting(&lighting);
+                assets.add(m)
+            })
+            .clone();
+        commands.entity(e).remove::<PendingDd>().insert(MeshMaterial3d(h));
     }
 }
 
 #[derive(Clone)]
 pub enum PartMaterial {
     Standard(Handle<StandardMaterial>),
-    Layer(Arc<LayerSlot>),
+    Dd(Arc<DdSlot>),
 }
 
 /// One drawable piece of a converted model.
@@ -131,6 +201,45 @@ fn uv_slot(layout: &InputLayout, alias: &str) -> Option<usize> {
         .iter()
         .filter(|e| e.name == "TexCoord")
         .position(|e| e.offset == offset)
+}
+
+/// Vertex colour attribute. Billboard meshes carry their swing pivots
+/// (viewer units) with w = -1 for `dd_material.wgsl`. Other meshes carry
+/// the layout's `Occlusion` byte in RGB (the pixel shaders multiply all
+/// light by it, so it folds into the albedo) and the vertex alpha in A when
+/// the material uses alpha. The vertex colour's own RGB is not used by
+/// `FDiffuse` (the default variant, all terrain).
+fn vertex_colors(
+    model: &mtmod::Model<'_>,
+    m: &mtmod::Mesh,
+    layout: &InputLayout,
+    v: &mtmod::Vertices,
+    shading: Option<&Shading>,
+    billboard: Option<&[([f32; 3], f32)]>,
+) -> Option<Vec<[f32; 4]>> {
+    if let Some(p) = billboard {
+        return Some(p.iter().map(|(q, _)| [q[0] * UNIT, q[1] * UNIT, q[2] * UNIT, -1.0]).collect());
+    }
+    let n = v.positions.len();
+    let occlusion: Option<Vec<f32>> = layout.element("Occlusion", 0).and_then(|e| {
+        let raw = model.mesh_vertices(m).ok()?;
+        let stride = m.vertex_stride as usize;
+        (0..n)
+            .map(|i| mtmod::read_component(raw, i * stride + e.offset as usize, e.ty, 0).ok())
+            .collect()
+    });
+    let alpha = shading.is_some_and(Shading::uses_alpha) && v.colors.len() == n;
+    if occlusion.is_none() && !alpha {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| {
+                let o = occlusion.as_ref().map_or(1.0, |o| o[i]);
+                [o, o, o, if alpha { v.colors[i][3] } else { 1.0 }]
+            })
+            .collect(),
+    )
 }
 
 pub struct Loader<'a> {
@@ -256,9 +365,13 @@ impl Loader<'_> {
         };
         let mrl_bytes = self.vfs.read(path, RMATERIAL).ok();
         let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
-        let mut mat_cache: HashMap<u16, (PartMaterial, Option<Shading>)> = HashMap::new();
+        let swm_bytes = self.swing_model(path);
+        let swm = swm_bytes.as_deref().and_then(|b| mtswm::parse(b).ok());
+        // Keyed by (material index, drawn two-sided as a stand-in for an
+        // undecoded billboard node).
+        let mut mat_cache: HashMap<(u16, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
-        for m in &model.meshes {
+        for (mesh_index, m) in model.meshes.iter().enumerate() {
             // LOD byte: bit 0 = highest detail (*assumed*), 255 = all.
             if m.lod & 1 == 0 {
                 continue;
@@ -271,8 +384,28 @@ impl Loader<'_> {
             if v.uvs[0].is_empty() || tris.is_empty() {
                 continue;
             }
+            // nDraw::MaterialNull meshes (e.g. `Scene_Material` proxies in
+            // scenery models) draw nothing in the colour pass. *Whether they
+            // cast shadows is not traced*; they are skipped.
+            let null_class = mtmrl::jamcrc(b"nDraw::MaterialNull") & 0x7FFF_FFFF;
+            let name = model.material_names.get(m.material as usize).map(String::as_str).unwrap_or("");
+            if mrl
+                .as_ref()
+                .and_then(|l| l.by_name(name))
+                .is_some_and(|mat| mat.class_hash & 0x7FFF_FFFF == null_class)
+            {
+                continue;
+            }
+            // Swing billboard pivots of this mesh (rSwingModel node with
+            // flag 0x200 and 4-byte records), when the counts agree.
+            let node = swm.as_ref().and_then(|s| s.nodes.get(mesh_index).map(|n| (s, n)));
+            let billboard = node.filter(|(_, n)| n.is_billboard()).and_then(|(s, n)| {
+                s.pivots(mesh_index)
+                    .filter(|p| p.len() == v.positions.len() && usize::from(n.vertex_count) == v.positions.len())
+            });
+            let undecoded_billboard = billboard.is_none() && node.is_some_and(|(_, n)| n.is_billboard());
             let (material, shading) = mat_cache
-                .entry(m.material)
+                .entry((m.material, undecoded_billboard))
                 .or_insert_with(|| {
                     let name = model
                         .material_names
@@ -282,7 +415,10 @@ impl Loader<'_> {
                     let shading = mrl
                         .as_ref()
                         .and_then(|l| l.by_name(&name).map(|mat| mtmrl::shading::describe(mat, l, mfx)));
-                    (self.material(shading.as_ref(), materials, images), shading)
+                    (
+                        self.material(shading.as_ref(), undecoded_billboard, materials, images),
+                        shading,
+                    )
                 })
                 .clone();
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
@@ -305,14 +441,8 @@ impl Loader<'_> {
                 let k = slot(uv).unwrap_or(albedo);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, v.uvs[k].clone());
             }
-            // Vertex alpha scales the alpha of materials that use it; the
-            // vertex colour's RGB is not used by `FDiffuse` (the default
-            // variant, all terrain), so it is left white here.
-            if shading.as_ref().is_some_and(Shading::uses_alpha) && !v.colors.is_empty() {
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_COLOR,
-                    v.colors.iter().map(|c| [1.0, 1.0, 1.0, c[3]]).collect::<Vec<_>>(),
-                );
+            if let Some(colors) = vertex_colors(&model, m, layout, &v, shading.as_ref(), billboard.as_deref()) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             }
             mesh.insert_indices(Indices::U32(
                 tris.iter().flatten().map(|&i| u32::from(i)).collect(),
@@ -326,17 +456,29 @@ impl Loader<'_> {
         Some(parts)
     }
 
+    /// The model's `rSwingModel`: `...\etc\<name>_s00` for scenery
+    /// (`...\model\<name>`), else the model's own path (`fmfore_*`).
+    fn swing_model(&self, model_path: &str) -> Option<Vec<u8>> {
+        let ty = mtarc::type_hash("rSwingModel");
+        let (dir, name) = model_path.rsplit_once('\\')?;
+        let etc = dir
+            .strip_suffix("\\model")
+            .map(|d| format!("{d}\\etc\\{name}_s00"));
+        etc.and_then(|p| self.vfs.read(&p, ty).ok())
+            .or_else(|| self.vfs.read(model_path, ty).ok())
+    }
+
     /// The Bevy material for one MRL material (`None`: no MRL entry).
     /// Rules and their evidence: `mtmrl::shading` and docs/SHADING.md.
     fn material(
         &mut self,
         shading: Option<&Shading>,
+        two_sided: bool,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
     ) -> PartMaterial {
-        // Roughness and reflectance are viewer placeholders: the original
-        // lights with its own model (light pre-pass buffer, SH ambient),
-        // not a PBR one.
+        // Roughness and reflectance only matter without StageLighting
+        // (Bevy PBR fallback); they are viewer placeholders.
         let mut sm = StandardMaterial {
             perceptual_roughness: 0.9,
             metallic: 0.0,
@@ -368,22 +510,27 @@ impl Loader<'_> {
             Some(Cull::Front) => sm.cull_mode = Some(Face::Front),
             _ => sm.cull_mode = Some(Face::Back),
         }
+        if two_sided {
+            // Billboard cards whose swing records are not decoded (8-byte
+            // nodes of the distant fmfore models): not turned to the camera,
+            // so drawn from both sides to stay visible.
+            sm.double_sided = true;
+            sm.cull_mode = None;
+        }
+        // Alpha test from the material header (Material::alpha_test,
+        // traced): discard unless alpha > reference. Bevy keeps
+        // alpha >= cutoff, so the cutoff sits half a step above the
+        // reference (alpha comes from 8-bit textures and vertex bytes).
+        let test = s.alpha_test.map(|t| t.reference_f32() + 0.5 / 255.0);
         sm.alpha_mode = if !s.uses_alpha() {
             AlphaMode::Opaque
         } else if s.blends_alpha() {
             AlphaMode::Blend
+        } else if let Some(cutoff) = test {
+            AlphaMode::Mask(cutoff)
         } else {
-            // Alpha test: the reference value is CBROPTest at run time,
-            // not traced; 0.5 is a placeholder.
-            // Alpha-tested foliage (`*_NUKI` leaf crowns) is RSMesh (cull
-            // back), but its cards all lie in parallel planes facing +Z
-            // (checked on om0500, om0501, om0531, om0532): the original
-            // turns them to the camera, which is not traced or done here.
-            // Drawn two-sided instead so they stay visible, as the
-            // references show them from above (ref001) and below (ref004).
-            sm.double_sided = true;
-            sm.cull_mode = None;
-            AlphaMode::Mask(0.5)
+            // Alpha computed but neither tested nor blended: no effect.
+            AlphaMode::Opaque
         };
         if let Some([r0, r1]) = s.uv_transform {
             sm.uv_transform = bevy::math::Affine2::from_cols(
@@ -392,21 +539,22 @@ impl Loader<'_> {
                 Vec2::new(r0[3], r1[3]),
             );
         }
+        let mut params = DdParams::default();
+        let mut map = None;
         if let AlphaSource::Map { texture, channel, .. } = &s.alpha {
-            if let Some(map) = self.texture(texture, images) {
-                return PartMaterial::Layer(Arc::new(LayerSlot {
-                    material: LayerMaterial {
-                        base: sm,
-                        extension: TransparencyMap {
-                            channel: u32::from(*channel),
-                            map,
-                        },
-                    },
-                    handle: OnceLock::new(),
-                }));
+            if let Some(h) = self.texture(texture, images) {
+                params.flags |= FLAG_MAP;
+                params.map_channel = u32::from(*channel);
+                map = Some(h);
             }
         }
-        PartMaterial::Standard(materials.add(sm))
+        PartMaterial::Dd(Arc::new(DdSlot {
+            material: DdMaterial {
+                base: sm,
+                extension: DdExt { params, map },
+            },
+            handle: OnceLock::new(),
+        }))
     }
 
     fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {
@@ -416,7 +564,7 @@ impl Loader<'_> {
             let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
             match &p.material {
                 PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
-                PartMaterial::Layer(slot) => e.insert(PendingLayer(slot.clone())),
+                PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
             };
         }
     }
@@ -489,8 +637,13 @@ impl Loader<'_> {
                 continue;
             };
             let local = Vec3::from(p.position) - block;
-            // *Unresolved:* Euler order of mAngle; XYZ assumed until traced in the exe.
-            let rotation = Quat::from_euler(EulerRot::XYZ, p.angle[0], p.angle[1], p.angle[2]);
+            // mAngle is applied about the world X, then Y, then Z axis
+            // (extrinsic XYZ, R = Rz * Ry * Rx): measured on om0529 in
+            // st100_58m49n (angles 2.23, 0.70, 3.25 rad), whose log only
+            // lines up with the live capture m1_lighting_02 in this order
+            // (all six intrinsic orders were rendered). *Not traced in the
+            // exe.*
+            let rotation = Quat::from_euler(EulerRot::ZYX, p.angle[2], p.angle[1], p.angle[0]);
             let transform = Transform {
                 translation: offset + local * UNIT,
                 rotation,
