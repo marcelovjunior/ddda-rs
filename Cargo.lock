@@ -2347,6 +2347,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddnpcrt"
+version = "0.1.0"
+dependencies = [
+ "ddeconomy",
+ "dditem",
+ "ddnpc",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtgmd",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddparam"
 version = "0.1.0"
 dependencies = [
