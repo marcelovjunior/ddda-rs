@@ -1,9 +1,9 @@
 # stream-rules: World streaming: when cells and assets load and unload
 
-- **Owner:** codex lane
+- **Owner:** codex-19 (codex-1 lane)
 - **Branch:** `task/stream-rules`
 - **Board area:** `world/streaming`
-- **Status:** open
+- **Status:** review (partial research; full distance/transition gate remains open)
 
 ## Goal
 
@@ -31,4 +31,34 @@ to `head`.
 
 ## Results
 
-(filled in by the agent)
+`docs/STREAMING.md` records the traced stage-100 pipeline, default 5-by-5
+model/collision and 3-by-3 layout candidate windows (`0x004fdf60`,
+`0x00507440`, `0x00c5f070`, `0x00c5f680`, `0x00c60510`), additional distance
+filter (`0x005075d0`), model fade and layout retirement states, regional
+coarse-model variants, and 15 distance-selected landmark records
+(`0x00c61bd0`, installed-exe table `0x01873550`, stride 0x40; aggregate
+threshold range 20000..43000). The origin indices and exact recentering
+formula are resolved (`0x004c66b0`, verified CVTTSS2SI truncation).
+
+Passive snapshot obtained with head #1292 authorization, 2026-10-09
+15:12:05 UTC, PID 8300, frame 4091325: stage100, grid indices N19/M18,
+absolute offset (+10000,0,-80000), nine models/eight collision/six layouts.
+Python checks passed for origin reconstruction, all six live widths, all
+nine model placements and existence of their nine installed cell archives.
+Older ORACLE.md indices22/23 also resolve to its recorded 63m52n cell.
+This was a paused snapshot, not a boundary-crossing comparison. Probe
+operations were info/read only; live/game claim released. Scratch and raw
+data remain in OS TEMP. No engine/reader code or game data was committed;
+no build needed; git diff --check passed.
+
+The full done-when is **not yet met**. The distance predicate's library
+wrappers and complete caller-kind register arguments require independent
+evaluation; individual scenery/enemy/NPC drawing/sleep/despawn distance
+consumers remain unresolved. Group activation has authored shape gates
+(`0x00cc5670`), so no universal class radius is claimed. No moving live
+comparison was requested or performed. The doc ends with an N-player
+interest/residency and per-view floating-origin design proposal.
+
+Next action: resolve `0x012f161f`/`0x012f0906` and compare predicted cell
+residency with a stable passive snapshot, then trace per-class distance
+consumers and obtain maintainer-provided ordinary crossing observations.
