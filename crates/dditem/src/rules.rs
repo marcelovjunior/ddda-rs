@@ -123,8 +123,8 @@ pub trait JudgmentState {
     fn affinity(&self, npc: i32) -> i32;
     /// Player owns at least `count` of `item` (`0x00460350`).
     fn has_item(&self, item: u32, count: u32) -> bool;
-    /// Field +0x700 of party slot `slot` (0 player, 1-3 pawns); commands
-    /// 20-22. Meaning not yet traced.
+    /// Field +0x700 of party slot `slot`'s record (0 player, 1-3 pawns);
+    /// commands 20-22. The level, per claude-4's live reading.
     fn party_value(&self, slot: u32) -> u32;
 }
 
