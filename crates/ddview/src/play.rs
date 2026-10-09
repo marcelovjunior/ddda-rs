@@ -52,6 +52,10 @@ pub struct PlayState {
     /// Stage-frame position (cm) of the viewer's origin.
     pub origin: Vec3,
     pub motions: HashMap<u16, mtlmt::Motion>,
+    /// Default interpolation frames per motion slot, by bank: the
+    /// `rAdjustParam` stored under each motion list's path
+    /// (docs/ANIMATION.md).
+    pub blend_tables: HashMap<u16, Vec<f32>>,
     pub entities: HashMap<PlayerId, Entity>,
     pub follow: PlayerId,
     pub cam_yaw: f32,
@@ -126,6 +130,7 @@ pub fn setup(
     players: u8,
 ) -> Result<PlayState, String> {
     let mut lists: HashMap<u16, mtlmt::MotionList> = HashMap::new();
+    let mut blend_tables = HashMap::new();
     let mut motions = HashMap::new();
     let mut roots = HashMap::new();
     for id in USED_MOTIONS {
@@ -134,6 +139,9 @@ pub fn setup(
         if !lists.contains_key(&bank) {
             let bytes = loader.vfs.read(path, RMOTIONLIST)?;
             lists.insert(bank, mtlmt::parse(&bytes).map_err(|e| e.to_string())?);
+            // the bank table (0x014F1D30) loads the same path as both
+            // rMotionList and rAdjustParam (0x00B7FF30)
+            blend_tables.insert(bank, adjust_table(loader, path)?);
         }
         let slot = usize::from(id & 0xFF);
         let m = lists[&bank]
@@ -187,6 +195,7 @@ pub fn setup(
         terrain,
         origin,
         motions,
+        blend_tables,
         entities,
         follow: 0,
         cam_yaw: 0.0,
@@ -220,6 +229,20 @@ fn display_frame(m: &mtlmt::Motion, f: f32) -> f32 {
     } else {
         last
     }
+}
+
+/// Interpolation frames when a player's shown motion changes to `motion`.
+fn interpolation_frames(tables: &HashMap<u16, Vec<f32>>, motion: u16) -> f32 {
+    // cPlCliffHang::vf05 (0x00ADCC50) requests 0 frames; every other action
+    // ddsim models requests -1, i.e. the motion's default
+    // (docs/ANIMATION.md)
+    if motion == 0x2F {
+        return 0.0;
+    }
+    tables
+        .get(&(motion >> 8))
+        .and_then(|t| mtlmt::blend::default_frames(t, motion))
+        .unwrap_or(0.0)
 }
 
 /// One tick: input -> simulation -> character transforms and motions.
@@ -313,7 +336,14 @@ pub fn step(
         let id = p.state.motion_id();
         if st.shown.get(&p.id) != Some(&id) {
             if let Some(m) = st.motions.get(&id) {
-                pb.motion = m.clone();
+                // the first motion of a model does not blend (uModel::vf30)
+                let frames = if st.shown.contains_key(&p.id) {
+                    interpolation_frames(&st.blend_tables, id)
+                } else {
+                    0.0
+                };
+                debug!("player {}: motion {:#x}, blend {frames} frames", p.id, id);
+                pb.change_motion(m.clone(), frames);
             }
             st.shown.insert(p.id, id);
         }
