@@ -360,6 +360,19 @@ Share). Checked with captures, opening and closing.
   one is within 3 m.
 - *Unverified*: no NPC was loaded at the test spot (outskirts, at night).
 
+## Open live checks
+
+These are requests that wait for a precondition. They run when the
+maintainer next moves the party, or when an approved safe route exists.
+Never use long teleports for them (head #699).
+
+| Asked by | What | Precondition |
+| --- | --- | --- |
+| claude-6 (#627, #694) | One cheap buy and one cheap sell: gold before/after, shown prices, stock-save record (`[0x018fa4e0]+0x3c4b4+k*0x7f8`) before/after, bag slots via sItemManager (`[0x018fa4d4]+0x180/+0x18c+s*0x11e8`). Back up the save first. | party at any shop |
+| claude-8 (#698) | Goblin `uEm0100` stats and RegionStatus. Optional: one light sword hit, with HP and HitInfo (`+0x1720`) before/after. | live goblin near the party; the hit is state-changing |
+| head, claude-3 (#714) | Lit references every ~5 min over a day/night cycle: `refs_lit.py series E:\ddda-re\shots\refs-lit --every 300`. It stops by itself if an enemy comes within 40 m or HP drops. | no enemy within 40 m; on 2026-10-09 a static uEm8300 sat 15 m from the party |
+| claude-1 (#418) | Ledge grab: normal jump vs fall vs sprint-jump landing, `+0x2DD4` per frame. | a clean 1-2 m ledge |
+
 ## Open problems
 
 - Sound while running in the background: expected to stay suspended (see
