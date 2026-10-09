@@ -10,6 +10,60 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
+    use ddhost::StoryWorld;
+    let camera = ddstory::Request::Camera {
+        simple: false,
+        cam_id: 17,
+        quest: 0,
+    };
+    let mut world = ddhost::opening::OpeningWorld::new();
+    // Include a callback already queued before activation.
+    world.handle(200, &[camera.clone()]);
+    world.handle(
+        200,
+        &[ddstory::Request::JumpArea {
+            stage: 100,
+            pos: 0,
+            fade: 0,
+        }],
+    );
+    world.enable_live_encounters();
+    world.handle(
+        200,
+        &[
+            camera.clone(),
+            ddstory::Request::JumpArea {
+                stage: 210,
+                pos: 0,
+                fade: 0,
+            },
+        ],
+    );
+    for _ in 0..150 {
+        assert!(!world.events().iter().any(|event| matches!(
+            event,
+            ddstory::HostEvent::SetQuestBit { .. }
+                | ddstory::HostEvent::SetGsf { .. }
+                | ddstory::HostEvent::StageLoaded { .. }
+        )));
+    }
+    let actual = ddstory::HostEvent::StageLoaded { stage: 100 };
+    world.report(actual.clone());
+    assert!(world.events().contains(&actual));
+    let mut fixture = ddhost::opening::OpeningWorld::new();
+    fixture.handle(200, &[camera]);
+    assert!((0..150).flat_map(|_| fixture.events()).any(|event| matches!(
+        event,
+        ddstory::HostEvent::SetQuestBit {
+            quest: 0,
+            bit: 5,
+            value: true
+        }
+    )));
+}
+
+#[test]
 fn live_encounters_never_complete_applied_scripts_or_enemies_on_a_timer() {
     use ddhost::StoryWorld;
     use ddstory::Host as StoryHost;

@@ -64,6 +64,7 @@ impl OpeningWorld {
     /// Enable authoritative actor observations independently of the
     /// presentation adapter. Call before dispatching actor requests.
     pub fn enable_live_encounters(&mut self) -> &mut ddstory::encounter::EncounterFacts {
+        self.inner.on_camera.clear();
         self.encounters.get_or_insert_with(Default::default)
     }
 
@@ -147,7 +148,8 @@ impl StoryWorld for OpeningWorld {
         for r in requests {
             match r {
                 Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
-                Request::Placement { .. }
+                Request::JumpArea { .. }
+                | Request::Placement { .. }
                 | Request::Group { .. }
                 | Request::ApplyScript { .. }
                 | Request::NpcLife { .. }
@@ -164,6 +166,16 @@ impl StoryWorld for OpeningWorld {
     }
     fn events(&mut self) -> Vec<HostEvent> {
         let mut e = self.inner.events();
+        if self.encounters.is_some() {
+            // Also discard synthetic callbacks queued before live activation.
+            // Actual observations live in our separate pending queue below.
+            e.retain(|event| {
+                !matches!(
+                    event,
+                    HostEvent::SetQuestBit { .. } | HostEvent::SetGsf { .. } | HostEvent::StageLoaded { .. }
+                )
+            });
+        }
         e.append(&mut self.pending);
         e
     }

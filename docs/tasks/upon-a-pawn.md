@@ -90,3 +90,8 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   synthetic actor progress, source new-game lot 380:0, stage/stop/reset
   behavior, and installed Rook recruitment. Viewer activation remains
   pending real placement/AI adapters and head's stage handoff API.
+- Review follow-up: live activation clears camera fixture callbacks,
+  suppresses already queued synthetic quest/GSF/stage reports, and keeps
+  actual reports in a separate queue. JumpArea now awaits actual stage
+  loading in live mode. Four host tests pass, including pre-activation
+  queued callbacks, Camera 17, handoff, and preserved scripted fixtures.
