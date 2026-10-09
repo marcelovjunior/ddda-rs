@@ -134,3 +134,15 @@ fn pose_uses_rotation_not_stored_target_direction() {
     assert!((pose.target[0] + 5.0).abs() < 1e-5);
     assert!((pose.target[2] - 7.0).abs() < 1e-5);
 }
+
+#[test]
+fn motion_camera_projection_uses_zoom_and_horizontal_conversion() {
+    use mtcamera::{vertical_fov_radians, DEFAULT_FAR_CM, DEFAULT_NEAR_CM};
+    assert_eq!((DEFAULT_NEAR_CM, DEFAULT_FAR_CM), (16.0, 4_000_000.0));
+    assert!((vertical_fov_radians(45.0, 15.0, 0, 16.0/9.0) - 60f32.to_radians()).abs() < 1e-6);
+    let horizontal = vertical_fov_radians(90.0, 0.0, 1, 2.0);
+    assert!((horizontal - 2.0 * 0.5f32.atan()).abs() < 1e-6);
+    assert_eq!(vertical_fov_radians(90.0, 0.0, 7, 2.0), horizontal);
+    assert_eq!(vertical_fov_radians(0.0, -1.0, 0, 1.0), 0.01f32.to_radians());
+    assert_eq!(vertical_fov_radians(180.0, 1.0, 0, 1.0), 179.99f32.to_radians());
+}

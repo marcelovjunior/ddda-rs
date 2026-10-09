@@ -1,5 +1,47 @@
 # Shops, prices, enhancement and the item economy
 
+## Consumable use (2026-10-09)
+
+`ddeconomy::item_use` reads recovery from the installed `rItemList`; no
+item catalogue is embedded. `0x0066CCD0` uses ordinary inventory items
+immediately through `0x00B77130`. Items with +0x38 mask 0x78000 instead
+take an action path and are outside this slice. `0x0045F250` handles
+currency/unlock items on acquisition, not ordinary healing.
+
+`uPlayerBase::vf183` (`0x00B77780`, assembly checked) reads signed i16 HP
+at +0x70 and stamina at +0x72. Both multiply by the recipient's augment
+0x4a factor (`plAbilityParam.mFVal0` when equipped, `.mFVal1` otherwise;
+`0x00783340`). The sharing path applies another 0.25 and skips cures.
+Item +0x38 bits 12..14 == 4 affects the whole party (`0x00B77130`).
+After effect application, that routine removes one copy except flag bit
+13 and item 0x6bc. The runtime's failed application leaves the bag intact.
+
+HP restoration resets the ceiling to full maximum before `0x00888DA0`
+adds HP; `0x00B7A890` raises recoverable HP to the result. This differs
+from wound-limited spell healing. `0x00B81E30` caps stamina at maximum,
+or 60% maximum while cursed. Stamina is restored **before** item cures.
+See STATUS.md for direct per-status bytes and possession's pawn gate.
+
+Installed examples checked by tests: Salubrious Brew (99) +1500 HP,
+Greenwarish (43) +120 HP, Mushroom (45) +250 stamina, Mithridate (48)
+poison cure. Synthetic tests check owner isolation, failed-use atomicity,
+sharing, signed cure bytes, wound recovery, dead rejection and curse cap.
+The fight adapter has no persistent wounded-HP pool yet; its item healing
+uses full maximum. It must not be reused unchanged for spells.
+
+The viewer adapter reads `mPlayerDataManual/mPlCmcEditAndParam/mItem`
+(four `cSAVE_DATA_ITEM` bags, each 256 records and `mItemCount` occupied
+slots). Save files are never written. Unsupported buff, harmful, throwing
+and special action items remain untouched. Automatic pawn item decisions,
+Sharing propagation in the viewer, network item commands, use-action
+animations and a full inventory menu are not implemented by this slice.
+
+Offline `ddview --play --save` uses **U** for P1 and **Numpad0** for P2:
+the first useful supported restorative in that seat's bag. Full resources
+do not consume a restorative. All three viewer item tests pass, and a
+bounded unattended run consumed the private save's five item-1 copies
+and one item-2 copy via the key while sprinting; both viewer runs exited 0.
+
 Research for a 1:1 rewrite of DDDA's shops. Addresses refer to the
 2017-12-13 Steam build (`METHODOLOGY.md`). Each rule is **traced** (read in
 the exe, address given), **data** (read from the install), or **guessed**.

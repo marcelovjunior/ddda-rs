@@ -206,20 +206,23 @@ struct Playing {
 
 /// One actor of the timeline and its motion list.
 #[derive(Component)]
-struct Actor {
-    name: String,
+pub struct Actor {
+    pub name: String,
     motions: Vec<Option<mtlmt::Motion>>,
     shown: i32,
+    /// The event row it belongs to (the opening keeps several events'
+    /// actors spawned).
+    pub row: usize,
 }
 
 #[derive(Component)]
-struct EventCam;
+pub struct EventCam;
 #[derive(Component)]
-struct FadePlane;
+pub struct FadePlane;
 #[derive(Component)]
-struct SubtitleText;
+pub struct SubtitleText;
 #[derive(Component)]
-struct InfoText;
+pub struct InfoText;
 
 fn spawn_parts(commands: &mut Commands, parts: &[stage::Part], transform: Transform, name: &str) {
     for p in parts {
@@ -267,20 +270,65 @@ fn setup(
         commands.insert_resource(l.clone());
     }
 
-    // Stage geometry: every `scr\stSSS\model\stSSS_mdNN` model at the
-    // stage origin, and the `_s00` / `_s10` scenery layouts of cell
-    // 00m00n at their stored positions. *Assumed*: these single-cell
-    // stages use stage coordinates directly (the st100 block offset of
-    // stage.rs does not apply); checked only by eye on st200.
-    let s = playing.stage;
+    spawn_stage_models(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, playing.stage);
+    spawn_event_actors(
+        &mut commands,
+        &mut loader,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        &mut bindposes,
+        &playing.last,
+        &playing.looks,
+        args.row,
+    );
+
+    let to_light = light.as_ref().map(|l| l.sun_dir).filter(|d| d.length_squared() > 0.0).unwrap_or(Vec3::new(0.4, 1.0, 0.3));
+    commands.spawn((
+        DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
+        Transform::default().looking_to(-to_light, Vec3::Y),
+    ));
+    let cam = commands
+        .spawn((
+            Camera3d::default(),
+            Projection::Perspective(PerspectiveProjection {
+                fov: 30f32.to_radians(), near: ddstory::event::DEFAULT_NEAR_CM * UNIT,
+                far: ddstory::event::DEFAULT_FAR_CM * UNIT, ..default()
+            }),
+            Transform::default(),
+            EventCam,
+        ))
+        .id();
+    if light.is_some() {
+        // The materials output the original's colour (as main.rs).
+        commands.entity(cam).insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
+    }
+    spawn_event_ui(&mut commands);
+}
+
+/// Stage geometry of a single-model stage: every
+/// `scr\stSSS\model\stSSS_mdNN` model at the stage origin, and the `_s00`
+/// / `_s10` scenery layouts of cell 00m00n at their stored positions.
+/// *Assumed*: these single-cell stages use stage coordinates directly (the
+/// st100 block offset of stage.rs does not apply); checked only by eye on
+/// st200. Returns the number of placed objects.
+pub fn spawn_stage_models(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    s: u32,
+) -> usize {
+    let vfs = loader.vfs;
     let prefix = format!("scr\\st{s}\\model\\st{s}_md").to_lowercase();
     let mut models: Vec<String> =
         vfs.paths_of_type(stage::RMODEL).filter(|p| p.to_lowercase().starts_with(&prefix)).map(str::to_string).collect();
     models.sort();
     for m in &models {
-        if let Some(parts) = loader.model(m, &mut meshes, &mut materials, &mut images) {
+        if let Some(parts) = loader.model(m, meshes, materials, images) {
             // Converted meshes are already in viewer units (stage.rs).
-            spawn_parts(&mut commands, &parts, Transform::IDENTITY, m);
+            spawn_parts(commands, &parts, Transform::IDENTITY, m);
         }
     }
     let mut placed = 0;
@@ -292,22 +340,40 @@ fn setup(
             let Some(p) = r.placement() else { continue };
             let id = p.name.split('_').next().unwrap_or("").to_ascii_lowercase();
             let Some(path) = loader.model_names.get(&id).cloned() else { continue };
-            let Some(parts) = loader.model(&path, &mut meshes, &mut materials, &mut images) else { continue };
+            let Some(parts) = loader.model(&path, meshes, materials, images) else { continue };
             // *Unresolved:* Euler order of mAngle (XYZ, as stage.rs).
             let t = Transform {
                 translation: Vec3::from(p.position) * UNIT,
                 rotation: Quat::from_euler(EulerRot::XYZ, p.angle[0], p.angle[1], p.angle[2]),
                 scale: Vec3::from(p.scale),
             };
-            spawn_parts(&mut commands, &parts, t, &p.name);
+            spawn_parts(commands, &parts, t, &p.name);
             placed += 1;
         }
     }
     info!("stage {s}: {} models, {placed} placed objects", models.len());
+    placed
+}
 
-    // Actors: one skeleton per model of the look, all driven by the same
-    // motion and placement.
-    for a in &playing.last.actors {
+/// The actors of an event's first frame `first`: one skeleton per model of
+/// the look, all driven by the same motion and placement. `looks` by actor
+/// name (absent: the base Arisen body). Each root gets an [`Actor`] of
+/// `row`.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_event_actors(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+    first: &EventFrame,
+    looks: &std::collections::HashMap<String, ddlook::Look>,
+    row: usize,
+) -> Vec<Entity> {
+    let vfs = loader.vfs;
+    let mut out = vec![];
+    for a in &first.actors {
         let Some(list_path) = a.motion_list.clone() else { continue };
         let motions = match vfs.read(&list_path, RMOTIONLIST).map_err(|e| e.to_string()).and_then(|b| {
             mtlmt::parse(&b).map_err(|e| format!("{list_path}: {e}"))
@@ -325,14 +391,14 @@ fn setup(
             error!("{}: {list_path} has no motions", a.name);
             continue;
         };
-        let r = match playing.looks.get(&a.name) {
-            Some(look) => spawn_look(
-                &mut commands,
-                &mut loader,
-                &mut meshes,
-                &mut materials,
-                &mut images,
-                &mut bindposes,
+        let r = match looks.get(&a.name) {
+            Some(look) => character::spawn_look(
+                commands,
+                loader,
+                meshes,
+                materials,
+                images,
+                bindposes,
                 look,
                 &list_path,
                 slot,
@@ -340,12 +406,12 @@ fn setup(
                 Some(a.motion_frame),
             ),
             None => character::spawn(
-                &mut commands,
-                &mut loader,
-                &mut meshes,
-                &mut materials,
-                &mut images,
-                &mut bindposes,
+                commands,
+                loader,
+                meshes,
+                materials,
+                images,
+                bindposes,
                 crate::play::BODY,
                 &list_path,
                 slot,
@@ -355,30 +421,18 @@ fn setup(
         };
         match r {
             Ok(root) => {
-                commands.entity(root).insert(Actor { name: a.name.clone(), motions, shown: a.motion_no });
+                commands.entity(root).insert(Actor { name: a.name.clone(), motions, shown: a.motion_no, row });
+                out.push(root);
             }
             Err(e) => error!("{}: {e}", a.name),
         }
     }
+    out
+}
 
-    let to_light = light.as_ref().map(|l| l.sun_dir).filter(|d| d.length_squared() > 0.0).unwrap_or(Vec3::new(0.4, 1.0, 0.3));
-    commands.spawn((
-        DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
-        Transform::default().looking_to(-to_light, Vec3::Y),
-    ));
-    let cam = commands
-        .spawn((
-            Camera3d::default(),
-            Projection::Perspective(PerspectiveProjection { fov: 30f32.to_radians(), near: 0.05, far: 2000.0, ..default() }),
-            Transform::default(),
-            EventCam,
-        ))
-        .id();
-    if light.is_some() {
-        // The materials output the original's colour (as main.rs).
-        commands.entity(cam).insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
-    }
-    // Fade plane (the timeline's image-plane filter) and subtitle.
+/// The fade plane (the timeline's image-plane filter), the subtitle line
+/// and the info line.
+pub fn spawn_event_ui(commands: &mut Commands) {
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
         BackgroundColor(Color::NONE),
@@ -551,7 +605,7 @@ fn setup_lineup(
     ));
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection { fov: 35f32.to_radians(), near: 0.05, far: 100.0, ..default() }),
+        Projection::Perspective(PerspectiveProjection { fov: 35f32.to_radians(), near: ddstory::event::DEFAULT_NEAR_CM * UNIT, far: 100.0, ..default() }),
         Transform::from_xyz(0.0, 1.1, 4.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
     ));
 }
@@ -618,24 +672,73 @@ fn drive(
         }
     }
     let f = &playing.last;
-    if let (Some(c), Ok((mut t, mut proj))) = (&f.camera, cams.single_mut()) {
+    let aspect = windows.single().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
+    if let Ok((mut t, mut proj)) = cams.single_mut() {
+        apply_camera(f, aspect, &mut t, &mut proj);
+    }
+    apply_actors(f, playing.args.row, &mut actors);
+    apply_ui(f, &mut fade, &mut subs);
+    if let Ok(mut i) = info_text.single_mut() {
+        let cut = f.camera.as_ref().map(|c| c.cut).unwrap_or(-1);
+        let label = f.subtitle.as_ref().map(|s| s.label.as_str()).unwrap_or("-");
+        i.0 = format!(
+            "event row {} frame {} / {}  cut {cut}  subtitle {label}{}",
+            playing.args.row,
+            f.frame.map(|x| x as i64).unwrap_or(-1),
+            playing.player.end_frame,
+            if f.finished { "  (finished)" } else { "" }
+        );
+    }
+}
+
+/// The event camera of frame `f` on a camera (`aspect` width / height).
+pub fn apply_camera(f: &EventFrame, aspect: f32, t: &mut Transform, proj: &mut Projection) {
+    if let Some(c) = &f.camera {
         // Zero joint displacements (see the module note).
         if let Ok(Some(p)) = c.adjusted(&[]) {
             let eye = Vec3::from(p.position) * UNIT;
             let target = Vec3::from(p.target) * UNIT;
             *t = Transform::from_translation(eye).looking_at(target, Vec3::from(p.up));
-            let aspect = windows.single().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
-            let mut fov = p.fov_degrees.clamp(0.01, 179.99).to_radians();
-            // FOV type 1 is horizontal (uMotionCamera::vf21 0x00faa920).
-            if c.fov_type != 0 {
-                fov = 2.0 * ((fov * 0.5).tan() / aspect).atan();
-            }
-            if let Projection::Perspective(pp) = proj.as_mut() {
+            // This class uses mZoom, not uCameraBase's CameraFov option.
+            // Its vtable slot 21 points to uMotionCamera::vf21 0x00faa920.
+            let fov = ddstory::event::vertical_fov_radians(p.fov_degrees, c.zoom_degrees, c.fov_type, aspect);
+            if let Projection::Perspective(pp) = proj {
                 pp.fov = fov;
+                pp.near = c.near_cm * UNIT;
+                pp.far = c.far_cm * UNIT;
             }
         }
     }
-    for (mut a, mut pb, mut vis, mut root) in &mut actors {
+}
+
+/// The fade and the subtitle of frame `f`.
+pub fn apply_ui(
+    f: &EventFrame,
+    fade: &mut Query<&mut BackgroundColor, With<FadePlane>>,
+    subs: &mut Query<&mut Text, (With<SubtitleText>, Without<InfoText>)>,
+) {
+    if let Ok(mut bg) = fade.single_mut() {
+        bg.0 = match f.fade {
+            Some(c) => Color::srgba(c[0], c[1], c[2], c[3].clamp(0.0, 1.0)),
+            None => Color::NONE,
+        };
+    }
+    if let Ok(mut s) = subs.single_mut() {
+        s.0 = f.subtitle.as_ref().and_then(|s| s.text.clone()).unwrap_or_default().replace('\r', "");
+    }
+}
+
+/// Actors of event `row` at frame `f`: motion, frame, placement, drawn.
+#[allow(clippy::type_complexity)]
+pub fn apply_actors(
+    f: &EventFrame,
+    row: usize,
+    actors: &mut Query<(&mut Actor, &mut Playback, &mut Visibility, &mut Transform), Without<EventCam>>,
+) {
+    for (mut a, mut pb, mut vis, mut root) in actors.iter_mut() {
+        if a.row != row {
+            continue;
+        }
         let Some(v) = f.actors.iter().find(|v| v.name == a.name) else { continue };
         if v.motion_no != a.shown {
             if let Some(Some(m)) = a.motions.get(v.motion_no.max(0) as usize) {
@@ -663,26 +766,6 @@ fn drive(
             }
         }
         *vis = if v.draw { Visibility::Inherited } else { Visibility::Hidden };
-    }
-    if let Ok(mut bg) = fade.single_mut() {
-        bg.0 = match f.fade {
-            Some(c) => Color::srgba(c[0], c[1], c[2], c[3].clamp(0.0, 1.0)),
-            None => Color::NONE,
-        };
-    }
-    if let Ok(mut s) = subs.single_mut() {
-        s.0 = f.subtitle.as_ref().and_then(|s| s.text.clone()).unwrap_or_default().replace('\r', "");
-    }
-    if let Ok(mut i) = info_text.single_mut() {
-        let cut = f.camera.as_ref().map(|c| c.cut).unwrap_or(-1);
-        let label = f.subtitle.as_ref().map(|s| s.label.as_str()).unwrap_or("-");
-        i.0 = format!(
-            "event row {} frame {} / {}  cut {cut}  subtitle {label}{}",
-            playing.args.row,
-            f.frame.map(|x| x as i64).unwrap_or(-1),
-            playing.player.end_frame,
-            if f.finished { "  (finished)" } else { "" }
-        );
     }
 }
 

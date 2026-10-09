@@ -20,6 +20,7 @@ pub mod input;
 pub mod install;
 pub mod lock;
 pub mod npcs;
+pub mod opening;
 pub mod player;
 pub mod save;
 pub mod spawns;
@@ -27,6 +28,8 @@ pub mod systems;
 
 /// The fight runtime the host composes (`Host::fight`), for views.
 pub use ddenemyrt;
+/// The NPC runtime the host composes (`Host::npcs`), for views.
+pub use ddnpcrt;
 pub use ddspawn;
 
 pub use clock::FrameClock;

@@ -10,6 +10,7 @@
 //! | jump (twice: double jump) | Space | Enter |
 //! | light attack | J or left mouse | Numpad 1 |
 //! | heavy attack | K or middle mouse | Numpad 2 |
+//! | quick-use saved restorative | U | Numpad 0 |
 //!
 //! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
@@ -446,6 +447,8 @@ pub fn step(
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
     net: Option<Res<crate::net::NetRes>>,
+    items: Option<ResMut<crate::items::QuickItems>>,
+    opening: Option<Res<crate::opening::OpeningRes>>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
@@ -459,9 +462,26 @@ pub fn step(
         camera_projection(&mut projs);
         *projected = true;
     }
-    // A network session (--host / --join) steps and shows the players itself.
-    if net.is_some() {
+    // A network session (--host / --join) and the opening (opening.rs)
+    // step and show the players themselves.
+    if net.is_some() || opening.is_some() {
         return;
+    }
+    if let Some(mut items) = items {
+        let seats = st.locals.clone();
+        for (index, key) in [KeyCode::KeyU, KeyCode::Numpad0].into_iter().enumerate() {
+            if keys.just_pressed(key) {
+                if let Some(&seat) = seats.get(index) {
+                    let st = &mut *st;
+                    if let Some(fight) = st.fight.as_mut() {
+                        match items.use_next(seat, &mut st.sim, fight) {
+                            Ok(item) => info!("quick-use: seat {seat} used item {item}"),
+                            Err(e) => info!("quick-use: seat {seat}: {e}"),
+                        }
+                    }
+                }
+            }
+        }
     }
     if keys.just_pressed(KeyCode::F2) {
         for p in &mut st.sim.players {
@@ -529,7 +549,7 @@ pub fn active_input(input: &Input) -> bool {
 
 /// Retain a short input until a fixed tick consumes it. Held input still
 /// refreshes direction and camera yaw every render frame.
-fn latch_input(previous: Input, mut latest: Input) -> Input {
+pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     if latest.stick == [0.0; 2] && previous.stick != [0.0; 2] {
         latest.stick = previous.stick;
         latest.walk = previous.walk;
@@ -707,7 +727,7 @@ fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>) {
 }
 
 /// `CameraFov` from the player's game settings (config.ini), else 0.
-fn config_camera_fov() -> f32 {
+pub(crate) fn config_camera_fov() -> f32 {
     let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 0.0 };
     let path = std::path::PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
     std::fs::read_to_string(path)

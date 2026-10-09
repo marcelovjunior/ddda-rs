@@ -100,6 +100,11 @@ pub fn edit_look<S: Source + ?Sized>(
         Some([h[0] * 0.5 + 0.2, h[1] * 0.5 + 0.2, h[2] * 0.5 + 0.2]),
     );
     look.skin_color = Some([skin[0], skin[1], skin[2]]);
+    let brow = field(f, "mFaceEyebrow").unwrap_or(0);
+    if let Some((scale, texture)) = pat.eyebrow(brow) {
+        let offset = crate::eyebrow::save_offset(brow, field(f, "mOfsXFaceEyebrow").unwrap_or(2), field(f, "mOfsYFaceEyebrow").unwrap_or(2));
+        look.eyebrow = Some(crate::eyebrow::Eyebrow::from_edit(col(0, "mColorEyebrow"), offset, scale, texture));
+    }
     look.weapons = crate::weapon::weapons(raw(0), raw(1));
     // Preset numbers (0x00780fa0): the field, plus 100 for a female
     // unless mHumanBodyAll is 200 or more.

@@ -103,7 +103,35 @@ pub struct Statuses {
     pub immune: bool,
 }
 
+/// Positive item recovery from 0x00B77780 -> 0x00888DA0. Item use resets
+/// the recovery ceiling to full maximum before adding HP, unlike healing
+/// spells limited by recoverable HP. 0x00B7A890 raises recoverable HP to
+/// the resulting HP. Dead actors cannot be revived by a restorative.
+pub fn recover_item_hp(hp: &mut f32, recoverable: &mut f32, maximum: f32, amount: f32) -> f32 {
+    if *hp <= 0.0 || !amount.is_finite() || amount <= 0.0 { return 0.0; }
+    let before = *hp;
+    *hp = (*hp + amount).min(maximum);
+    *recoverable = (*recoverable).max(*hp);
+    *hp - before
+}
+
 impl Statuses {
+    /// Direct item cure path, 0x00856050 / 0x00856FC0, not effect
+    /// messages 0x12..0x15. Removes every matching stack. Possession is
+    /// only handled for pawns (owner +0x206d bit 2). Returns removed kinds
+    /// so presentation can end status visuals; build-up pools are separate.
+    pub fn cure_item(&mut self, mask: u64, pawn: bool) -> Vec<u32> {
+        let mask = if pawn { mask } else { mask & !(1 << kind::POSSESSED) };
+        let mut removed = Vec::new();
+        self.works.retain(|w| {
+            if w.kind < 64 && mask & (1u64 << w.kind) != 0 {
+                if !removed.contains(&w.kind) { removed.push(w.kind); }
+                false
+            } else { true }
+        });
+        removed
+    }
+
     pub fn has(&self, kind: u32) -> bool {
         self.works.iter().any(|w| w.kind == kind)
     }

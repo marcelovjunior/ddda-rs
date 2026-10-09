@@ -2368,6 +2368,8 @@ dependencies = [
  "ddexe",
  "ddid",
  "dditem",
+ "ddmap",
+ "ddnpc",
  "ddnpcrt",
  "ddpawn",
  "ddprogress",
@@ -2379,9 +2381,11 @@ dependencies = [
  "ddspawn",
  "ddstory",
  "ddvfs",
+ "ddworld",
  "mtarc",
  "mtfsm",
  "mtlmt",
+ "mtsbc",
  "mtxfs",
 ]
 
@@ -2619,8 +2623,10 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddeconomy",
  "ddexe",
  "ddhost",
+ "dditem",
  "ddlook",
  "ddnet",
  "ddquest",

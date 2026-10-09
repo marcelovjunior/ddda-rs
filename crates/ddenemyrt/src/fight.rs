@@ -168,6 +168,29 @@ impl Fight {
         }
     }
 
+    /// Applies an already authorized restorative to one living seat.
+    /// Returns HP restored and status kinds removed; missing/dead seats
+    /// return `None` so the inventory caller can avoid consuming an item.
+    /// The caller applies stamina first, using curse state before cures
+    /// (uPlayerBase::vf183, 0x00b77780, 2017-12-13 Steam).
+    pub fn recover_item(&mut self, seat: u8, hp_amount: f32, cure_mask: u64) -> Option<(f32, Vec<u32>)> {
+        let pawn = self.pawns.contains_key(&seat);
+        let fighter = &mut self.arisen.get_mut(&seat)?.fighter;
+        let Victim::Player { hp, hp_max, .. } = &mut fighter.victim else {
+            return None;
+        };
+        if *hp <= 0.0 {
+            return None;
+        }
+        // The fight does not yet retain a recoverable-wound pool. Items
+        // may restore all the way to maximum HP, so this ceiling is exact
+        // for item recovery; it must not be reused for healing spells.
+        let mut recoverable = *hp_max;
+        let restored = ddcombat::cstatus::recover_item_hp(hp, &mut recoverable, *hp_max, hp_amount);
+        let removed = fighter.statuses.cure_item(cure_mask, pawn);
+        Some((restored, removed))
+    }
+
     /// Adds seat `seat`'s Arisen (a level-1 Fighter at full HP).
     pub fn add_arisen(&mut self, seat: u8) {
         self.add_arisen_as(seat, Kit::Fighter);

@@ -297,3 +297,23 @@ ddview --join 127.0.0.1:47812 --save <save>
 - The host's screenshot shows the guest's dressed Arisen beside its own
   party. The guest's shows the host's Arisen and pawn.
 - Not checked: two physical machines, or a guest with a different save.
+
+**M5 opening slice (codex-18, merged 0c291a6, 2026-10-09):** the
+Cassardis opening plays through in LAN co-op with no teleports:
+- st200 ev10 → control → Quina conversation;
+- a collision-only, 197-waypoint walk into the village → ev15 → q0002
+  boot;
+- the end state matches the original's: SceNo 1400, GSF 372 and 381 set,
+  q0001 bits `[18000000, 0, 3]`.
+
+The guest shows the faces and subtitles, and the host's and guest's
+cameras restore the gameplay projection after each event. Test:
+`ddview` 15 release tests plus the Cassardis and story-loopback
+regressions.
+
+Open:
+- the prologue fast-forward is a stub;
+- guest dialogue and menus;
+- the event freeze for NPC group 57 (Quina moves during shared events);
+- the elder's ear and brow culling (cutscene-visuals);
+- an ev15 frame-300 view of roof and sky.

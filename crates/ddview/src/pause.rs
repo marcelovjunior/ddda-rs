@@ -36,7 +36,7 @@ pub fn animate_world(pause: Res<PauseState>, net: Option<Res<crate::net::NetRes>
 
 pub fn setup(mut commands: Commands, args: Res<crate::Args>, mut pause: ResMut<PauseState>) {
     pause.enabled = args.play;
-    pause.auto_pause = !(args.unattended || args.demo || args.shot.is_some());
+    pause.auto_pause = !(args.unattended || args.demo || args.shot.is_some() || args.shots.is_some());
     pause.paused = args.paused;
     if !args.play {
         return;
