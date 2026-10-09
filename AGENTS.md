@@ -28,6 +28,11 @@ the task. The research method is in `docs/METHODOLOGY.md`.
   and has a regression test. Replace Ghidra's automatic names (`FUN_`,
   `DAT_`, `param_N`) with readable names. Raw exports, Ghidra databases,
   exe bytes, game files and recordings are never committed.
+- Constants: small values and tables that the exe's code embeds (thresholds,
+  multipliers, odds, short override lists) may be committed as translated
+  constants, each with its source address. Bulk data (records, text, tables
+  the exe or the data files hold in readable form) is always read from the
+  player's install at run time, never copied into the repo.
 - Simulation lives in headless core crates with no rendering, audio or OS
   input. Bevy is a thin presentation and input layer. This split is what
   makes co-op (host-authoritative simulation) and testing possible.
