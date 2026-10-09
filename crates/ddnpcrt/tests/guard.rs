@@ -62,3 +62,59 @@ fn installed_preload_whitelist_and_authored_quest_text() {
         assert!(!resource.text.is_empty());
     }
 }
+
+#[test]
+fn candidate_success_is_not_activation_and_seats_cannot_steal_ownership() {
+    use ddnpcrt::guard::{DialogueOwner, DialogueSlot};
+    let first = DialogueOwner { actor: 100, player: 1 };
+    let other_seat = DialogueOwner { actor: 100, player: 3 };
+    let other_actor = DialogueOwner { actor: 101, player: 3 };
+    let mut slot = DialogueSlot::default();
+    assert!(!slot.reserve(first, None));
+    assert!(!slot.reserve(first, Some(3)));
+    assert!(slot.reserve(first, Some(9)), "status uses low three bits");
+    assert!(slot.reserve(other_actor, Some(2)), "original returns success without replacing candidate");
+    assert_eq!(slot.reserved(), Some(first));
+    assert!(!slot.activate(other_actor, Some(2)));
+    assert!(!slot.activate(other_seat, Some(2)), "co-op seat must own reservation");
+    assert!(slot.activate(first, Some(1)));
+    assert_eq!(slot.reserved(), None);
+    assert_eq!(slot.active(), Some(first));
+    assert!(!slot.reserve(other_actor, Some(1)));
+    assert!(!slot.clear_active(other_seat));
+    assert!(!slot.clear_active(other_actor));
+    assert!(slot.clear_active(first));
+    assert!(slot.activate(other_actor, Some(2)), "direct activation with empty candidate is supported");
+    slot.retire(first.actor);
+    assert_eq!(slot.active(), Some(other_actor));
+    slot.retire(other_actor.actor);
+    assert_eq!(slot.active(), None);
+}
+
+#[test]
+fn talk_end_requires_real_actor_state_and_preserves_blocked_pending_exit() {
+    use ddnpcrt::guard::TalkEndObservation;
+    let mut observation = TalkEndObservation { pending_exit: 1, ..Default::default() };
+    assert!(!observation.take_frame());
+    observation.controller_enabled = Some(true);
+    observation.game_flags = Some(0x10_0000);
+    assert!(!observation.take_frame());
+    assert_eq!(observation.pending_exit, 1);
+    observation.game_flags = Some(0);
+    assert!(observation.take_frame());
+    assert_eq!(observation.pending_exit, 0);
+    assert!(!observation.take_frame());
+    observation.pending_exit = 2;
+    assert!(!observation.take_frame(), "original tests pending byte exactly1");
+    observation.controller_enabled = None;
+    observation.game_flags = None;
+    observation.current_action = Some(0x0300_0041);
+    assert!(!observation.take_frame(), "unknown active dialogue is not empty");
+    observation.active_dialogue_empty = Some(false);
+    assert!(!observation.take_frame());
+    observation.active_dialogue_empty = Some(true);
+    assert!(observation.take_frame(), "independent original talk-action branch");
+    assert_eq!(observation.pending_exit, 2, "fallback does not consume pending exit");
+    observation.current_action = Some(0);
+    assert!(!observation.take_frame());
+}
