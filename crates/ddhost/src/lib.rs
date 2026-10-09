@@ -17,6 +17,7 @@ pub mod data;
 pub mod hash;
 pub mod host;
 pub mod input;
+pub mod install;
 pub mod lock;
 pub mod player;
 pub mod save;

@@ -2322,7 +2322,10 @@ dependencies = [
  "ddquest",
  "ddsim",
  "ddstory",
+ "ddvfs",
+ "mtarc",
  "mtfsm",
+ "mtlmt",
  "mtxfs",
 ]
 

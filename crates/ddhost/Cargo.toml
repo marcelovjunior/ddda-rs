@@ -12,3 +12,6 @@ ddstory = { path = "../ddstory" }
 ddquest = { path = "../ddquest" }
 mtfsm = { path = "../mtfsm" }
 mtxfs = { path = "../mtxfs" }
+mtlmt = { path = "../mtlmt" }
+mtarc = { path = "../mtarc" }
+ddvfs = { path = "../ddvfs" }
