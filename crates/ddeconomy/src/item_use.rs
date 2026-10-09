@@ -29,7 +29,7 @@ impl Recovery {
     /// 0x00B77780 uses the recipient's augment 0x4a multiplier for both
     /// amounts. The caller reads mFVal0/1 from plAbilityParam, according
     /// to whether that recipient equips the augment (0x00783340).
-    /// Medicant sharing multiplies by 0.25 and does not pass status effects.
+    /// The sharing path multiplies by 0.25 and does not pass status effects.
     pub fn for_recipient(self, augment_factor: f32, shared: bool) -> Self {
         let share = if shared { 0.25 } else { 1.0 };
         Self {

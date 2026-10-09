@@ -78,7 +78,7 @@ player table where they differ.
 | 8 | Skill seal | 0x101 | 90 | 0 | 0 | effect cue (vf145); skill lock in action code (*not traced*) |
 | 9 | Curse | 0x3 | 90 | 0.6 | 1.4 | attack x p0 (0x0088B530, 0x0088AA20: status 9 with flag 0x200), damage taken x p1 (0x00AAA490, 0x00B7AD90) |
 | 10 | Burning | 0x104 | 15 | 33 / 12 | 1 / 0.5 | HP -p0 per second, p0 x step / 30 per frame (vf147 0x00852F40 on the unit step; player 0x00B75890 on the scaled step); the owner carries a fire attack entry (+0x2750) that can set others alight (*not modelled*) |
-| 11 | Frozen | 0x104 | 15 | 2 | 0.083 | motion stops (+0x1F6E cleared, vf148 0x00853060; p1 x 30 frames ramp the ice in); physical damage taken x p0 (0x0084D8B0); cured items unfreeze first (0x00B75EC0) |
+| 11 | Frozen | 0x104 | 15 | 2 | 0.083 | motion stops (+0x1F6E cleared, vf148 0x00853060; p1 x 30 frames ramp the ice in); physical damage taken x p0 (0x0084D8B0); broad cure messages unfreeze first (0x00B75EC0) |
 | 12 | Petrify | 0x2 | 10000 (no expiry) | 10 / 40 | 180 / 80 | staged progress (vf149 0x00853260, player 0x00B75F30) driven by p0 / p1; blocks and displaces groups 1, 3, 4, 6; the end state is *not traced* |
 | 13 | (group 8) | 0x8 | 10000 | 180 | 0 | blocks every other group; not reached by build-up; *meaning not traced* |
 | 14 | Attack down | 0x3, stack 4 | 90 | 0.7 | 0 | physical attack x p0 per stack (product, 0x00837480 types 0x0E / 0x12) |

@@ -64,8 +64,11 @@ tests cover bag validation, optional private-save import and full potion /
 stamina / poison application. After codex-18 released play/main, codex-20
 added the resource/key hookup on this branch: U for P1, Numpad0 for P2,
 offline `--play --save`, respecting pause and excluding network mode.
-All 14 ddview release tests pass, with the actual private save supplied to
-the import test. The binary builds successfully.
+All 18 ddview release tests pass after merging main's M5 work (9a2e41f),
+with the actual private save supplied to the import test. The binary builds
+successfully. The one merge conflict kept both the item resource and the
+opening resource in `play::step`; opening and network sessions continue
+through their own drivers.
 
 Two bounded unattended viewer runs passed: at full resources U consumed
 nothing; while scripted W/Shift movement spent stamina, U consumed the
@@ -78,7 +81,7 @@ evidence: `%TEMP%/ddda-item-use-check/{out.log,items.png}` (second run).
 Not compared live: no original-game state was changed. No game files,
 recordings or raw decompilation committed. The fight has no persistent
 wounded-HP pool; item healing uses full HP maximum and must not be reused
-unchanged for spells. Automatic pawn item decisions, viewer Medicant
+unchanged for spells. Automatic pawn item decisions, viewer sharing
 propagation, network item commands, throwables, use animations and a full
 inventory menu remain outside this slice.
 

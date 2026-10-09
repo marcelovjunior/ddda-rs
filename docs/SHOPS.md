@@ -33,7 +33,7 @@ The viewer adapter reads `mPlayerDataManual/mPlCmcEditAndParam/mItem`
 (four `cSAVE_DATA_ITEM` bags, each 256 records and `mItemCount` occupied
 slots). Save files are never written. Unsupported buff, harmful, throwing
 and special action items remain untouched. Automatic pawn item decisions,
-Medicant propagation in the viewer, network item commands, use-action
+Sharing propagation in the viewer, network item commands, use-action
 animations and a full inventory menu are not implemented by this slice.
 
 Offline `ddview --play --save` uses **U** for P1 and **Numpad0** for P2:

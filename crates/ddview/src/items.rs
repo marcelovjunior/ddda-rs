@@ -11,6 +11,9 @@ use ddsave::xml::{Document, Node};
 use ddsim::{PlayerId, Sim};
 use std::collections::BTreeMap;
 
+// cStatus curse bit 0x200, tested by 0x00B81E30 before clamping stamina.
+const CURSE_KIND: u32 = 9;
+
 #[derive(Resource)]
 pub struct QuickItems {
     pub inventory: Inventory,
@@ -117,7 +120,7 @@ impl QuickItems {
             _ => false,
         };
         let stamina = sim.players.iter().find(|p| p.id == seat).is_some_and(|p| {
-            let cursed = actor.fighter.statuses.has(9);
+            let cursed = actor.fighter.statuses.has(CURSE_KIND);
             effect.stamina > 0.0 && p.stamina < p.stamina_max * if cursed { 0.6 } else { 1.0 }
         });
         hp || stamina || actor.fighter.statuses.mask() & effect.cures != 0
@@ -163,7 +166,7 @@ impl QuickItems {
                     }
                     let effect = effect.for_recipient(factor, false);
                     // B77780 applies stamina before cures (curse still caps it).
-                    let cursed = actor.fighter.statuses.has(9);
+                    let cursed = actor.fighter.statuses.has(CURSE_KIND);
                     if let Some(player) = sim.players.iter_mut().find(|p| p.id == id) {
                         player.recover_item_stamina(effect.stamina, cursed);
                     }
