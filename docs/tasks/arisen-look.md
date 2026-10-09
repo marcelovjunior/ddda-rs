@@ -96,7 +96,9 @@ scale. The viewer previously treated kind 9 as a plain multiplicative
 scale. The human-hand path now uses that compensation, retaining the
 source's strict epsilon boundary (a degenerate axis keeps factor one,
 rather than dividing by a clamped epsilon). Two regressions and strict
-ddlook clippy pass. Release viewer verification is pending the shared
-build slot; no original hand comparison is claimed. General rotated
+ddlook clippy and the release viewer build pass. The shared build cache
+required a narrow mtcamera clean after a stale missing-module error;
+two existing viewer warnings remain. No original hand comparison is
+claimed. General rotated
 type-9 constraints, type-0xc constraints and the independent fresh-model
 body-measurement pipeline remain separate work.
