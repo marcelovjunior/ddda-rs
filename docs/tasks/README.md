@@ -129,3 +129,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m2-sweep](m2-sweep.md) | Character capsule sweep-and-slide (last 4 M2 rows) | core | claude-1 | merged 2026-10-09 |
 | [think-tables](think-tables.md) | Goblin combat think table: approach/attack choice, cooldowns | core | claude-9 | merged 2026-10-09 |
 | [m4-goblin-fight](m4-goblin-fight.md) | Headless goblin vs Arisen fight in ddhost (M4 slice) | core | claude-1 | merged 2026-10-09 |
+| [player-attacks](player-attacks.md) | Arisen attack actions from input (sword, staff), push-out | core | claude-1 | assigned |
