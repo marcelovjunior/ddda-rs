@@ -4,6 +4,8 @@
 //! Nothing here has been compared with the running game unless a test or
 //! the docs say so.
 
+pub mod events;
 pub mod order;
+pub mod qct;
 pub mod sdl;
 pub mod story;
