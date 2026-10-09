@@ -14,7 +14,17 @@
 //!         f32[4] end position, f32[4] end rotation, u32 flags, u32 events, u32 floats
 //! track   36 bytes: u8 codec, u8 usage, u8 bone type, u8 joint id, f32 weight,
 //!         u32 buffer size, u32 buffer offset, f32[4] reference, u32 extremes offset
+//! events  4 groups x 72 bytes (at "events"): u16[32] remap, u32 run count,
+//!         u32 runs offset -> runs of 8 bytes: u32 bits, u32 frames
+//! curve   12 bytes (at "floats", (flags >> 16) & 0x1F of them): u8 value type,
+//!         u8[3], u32 key count, u32 keys offset
+//! key     16 bytes: u32 (interpolation | frame << 8), value, f32 tangent in/out
 //! ```
+//!
+//! The curves are what the game reads with `0x010571C0` (curve k of the
+//! playing motion, e.g. the sprint stop's speed); `Curve::value` is
+//! translated from their evaluator. Riftstone calls them float groups and
+//! the type byte a component remap.
 //!
 //! Tracks address joints by the model's joint id (the first byte of a bone
 //! record), not by bone index; 255 is the root.
@@ -146,6 +156,177 @@ pub struct Motion {
 pub struct MotionList {
     /// One entry per slot; `None` for empty slots.
     pub motions: Vec<Option<Motion>>,
+    /// Each slot's curves (empty for empty slots), indexed as the game's
+    /// `0x010571C0(k)`.
+    pub curves: Vec<Vec<Curve>>,
+    /// Each slot's four event groups (empty for empty slots).
+    pub events: Vec<Vec<Vec<EventRun>>>,
+}
+
+/// A run of event bits: `bits` hold for `frames` frames after the previous
+/// run of the group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventRun {
+    pub bits: u32,
+    pub frames: u32,
+}
+
+/// The bits of a group's runs that reach past frame `from` and start at or
+/// before frame `to` (the game passes the previous and the current whole
+/// motion frame).
+// Translated from 0x01057060 (DDDA.exe 2017-12-13 Steam); inlined again in
+// the per-frame motion update 0x01060730.
+pub fn event_bits(runs: &[EventRun], from: i32, to: i32) -> u32 {
+    let mut bits = 0;
+    let mut end: i64 = 0;
+    for r in runs {
+        end += i64::from(r.frames);
+        if end > i64::from(from) {
+            bits |= r.bits;
+        }
+        if end > i64::from(to) {
+            break;
+        }
+    }
+    bits
+}
+
+/// The four event groups of the motion header at `at`.
+fn parse_events(d: &[u8], at: usize) -> Result<Vec<Vec<EventRun>>, Error> {
+    let base = u32_at(d, at + 52) as usize;
+    if base == 0 {
+        return Ok(vec![Vec::new(); 4]);
+    }
+    if base + 72 * 4 > d.len() {
+        return err(at + 52, "events outside the file");
+    }
+    (0..4)
+        .map(|g| {
+            let q = base + 72 * g;
+            let n = u32_at(d, q + 64) as usize;
+            let list = u32_at(d, q + 68) as usize;
+            if list + 8 * n > d.len() {
+                return err(q + 68, "event runs outside the file");
+            }
+            Ok((0..n)
+                .map(|k| EventRun {
+                    bits: u32_at(d, list + 8 * k),
+                    frames: u32_at(d, list + 8 * k + 4),
+                })
+                .collect())
+        })
+        .collect()
+}
+
+/// One key of a motion curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveKey {
+    /// 0 hold, 1 linear, 2 Hermite (to the next key).
+    pub interp: u8,
+    pub frame: u16,
+    /// The value's raw bits: f32 for float curves, i32 for integer ones.
+    pub value: u32,
+    pub tangent_in: f32,
+    pub tangent_out: f32,
+}
+
+/// A scalar curve over the motion's frames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Curve {
+    /// 0 integer, 1 float (others evaluate to 0).
+    pub kind: u8,
+    pub keys: Vec<CurveKey>,
+}
+
+impl Curve {
+    /// The curve at `frame` (the motion layer's frame, +0x4C), as the
+    /// game's float view of it (`0x010571C0` returns the slot as f32).
+    /// Integer curves are returned converted to f32.
+    // Translated from 0x010571E0 (DDDA.exe 2017-12-13 Steam). The original
+    // keeps the last key index between frames; searching afresh gives the
+    // same value.
+    pub fn value(&self, frame: f32) -> f32 {
+        let as_f = |k: &CurveKey| match self.kind {
+            0 => k.value as i32 as f32,
+            1 => f32::from_bits(k.value),
+            _ => 0.0,
+        };
+        let keys = &self.keys;
+        let Some(first) = keys.first() else { return 0.0 };
+        if keys.len() == 1 || frame < f32::from(first.frame) {
+            return as_f(first);
+        }
+        let last = keys.len() - 1;
+        let mut i = 0;
+        while i < last && f32::from(keys[i + 1].frame) < frame {
+            i += 1;
+        }
+        if i == last {
+            return as_f(&keys[last]);
+        }
+        let (a, b) = (&keys[i], &keys[i + 1]);
+        let s = (frame - f32::from(a.frame)) / f32::from(b.frame.wrapping_sub(a.frame));
+        match a.interp {
+            0 => as_f(a),
+            1 if self.kind == 0 => {
+                let (va, vb) = (a.value as i32, b.value as i32);
+                (((vb.wrapping_sub(va)) as f32 * s) as i32).wrapping_add(va) as f32
+            }
+            1 => {
+                let (va, vb) = (as_f(a), as_f(b));
+                (vb - va) * s + va
+            }
+            2 => {
+                let (va, vb, m0, m1) = (as_f(a), as_f(b), a.tangent_in, a.tangent_out);
+                let v = (((2.0 * va + m0 - 2.0 * vb + m1) * s + (-3.0 * va - 2.0 * m0 + 3.0 * vb - m1)) * s
+                    + m0)
+                    * s
+                    + va;
+                if self.kind == 0 {
+                    v.trunc()
+                } else {
+                    v
+                }
+            }
+            _ => 0.0,
+        }
+    }
+}
+
+/// The curves of the motion header at `at`.
+fn parse_curves(d: &[u8], at: usize, flags: u32) -> Result<Vec<Curve>, Error> {
+    let n = ((flags >> 16) & 0x1F) as usize;
+    let base = u32_at(d, at + 56) as usize;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if base + 12 * n > d.len() {
+        return err(at + 56, "curves outside the file");
+    }
+    (0..n)
+        .map(|c| {
+            let q = base + 12 * c;
+            let count = u32_at(d, q + 4) as usize;
+            let keys_at = u32_at(d, q + 8) as usize;
+            if keys_at + 16 * count > d.len() {
+                return err(q + 8, "curve keys outside the file");
+            }
+            let keys = (0..count)
+                .map(|k| {
+                    let r = keys_at + 16 * k;
+                    let packed = u32_at(d, r);
+                    CurveKey {
+                        interp: (packed & 0xFF) as u8,
+                        frame: ((packed >> 8) & 0xFFFF) as u16,
+                        value: u32_at(d, r + 4),
+                        tangent_in: f32_at(d, r + 8),
+                        tangent_out: f32_at(d, r + 12),
+                    }
+                })
+                .collect();
+            Ok(Curve { kind: d[q], keys })
+        })
+        .collect()
 }
 
 fn u16_at(d: &[u8], i: usize) -> u16 {
@@ -289,10 +470,14 @@ pub fn parse(d: &[u8]) -> Result<MotionList, Error> {
         return err(6, "offset table runs past the end");
     }
     let mut motions = Vec::with_capacity(count);
+    let mut curves = Vec::with_capacity(count);
+    let mut events = Vec::with_capacity(count);
     for slot in 0..count {
         let at = u32_at(d, 8 + 4 * slot) as usize;
         if at == 0 {
             motions.push(None);
+            curves.push(Vec::new());
+            events.push(Vec::new());
             continue;
         }
         if at + 60 > d.len() {
@@ -356,21 +541,82 @@ pub fn parse(d: &[u8]) -> Result<MotionList, Error> {
                 keys,
             });
         }
+        let flags = u32_at(d, at + 48);
+        curves.push(parse_curves(d, at, flags)?);
+        events.push(parse_events(d, at)?);
         motions.push(Some(Motion {
             frame_count,
             loop_frame: u32_at(d, at + 12) as i32,
             end_position: f32x4(d, at + 16),
             end_rotation: f32x4(d, at + 32),
-            flags: u32_at(d, at + 48),
+            flags,
             tracks,
         }));
     }
-    Ok(MotionList { motions })
+    Ok(MotionList {
+        motions,
+        curves,
+        events,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn curve(keys: &[(u8, u16, f32)]) -> Curve {
+        Curve {
+            kind: 1,
+            keys: keys
+                .iter()
+                .map(|&(interp, frame, v)| CurveKey {
+                    interp,
+                    frame,
+                    value: v.to_bits(),
+                    tangent_in: 0.0,
+                    tangent_out: 0.0,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn curves_hold_interpolate_and_clamp() {
+        // m0000_co slot 21 (the sprint stop) curve 9
+        let c = curve(&[(1, 0, 1.0), (1, 5, 0.5), (1, 25, 0.0), (1, 29, 0.0)]);
+        assert_eq!(c.value(-1.0), 1.0);
+        assert_eq!(c.value(0.0), 1.0);
+        assert!((c.value(2.5) - 0.75).abs() < 1e-6);
+        assert_eq!(c.value(5.0), 0.5);
+        assert!((c.value(15.0) - 0.25).abs() < 1e-6);
+        assert_eq!(c.value(40.0), 0.0);
+        // hold keys keep their value until the next key
+        let h = curve(&[(0, 0, 2.0), (0, 10, 3.0)]);
+        assert_eq!(h.value(9.9), 2.0);
+        assert_eq!(h.value(10.5), 3.0);
+        // Hermite with zero tangents is smoothstep
+        let e = curve(&[(2, 0, 0.0), (2, 10, 1.0)]);
+        assert!((e.value(5.0) - 0.5).abs() < 1e-6);
+        assert!((e.value(2.5) - 0.15625).abs() < 1e-6);
+        assert_eq!(curve(&[]).value(3.0), 0.0);
+    }
+
+    #[test]
+    fn event_bits_cover_the_frames_passed() {
+        // m0000_co slot 21 group 1: 0x20000000 for frames 0-17
+        let runs = [
+            EventRun {
+                bits: 0x2000_0000,
+                frames: 18,
+            },
+            EventRun { bits: 0, frames: 13 },
+        ];
+        assert_eq!(event_bits(&runs, 0, 1), 0x2000_0000);
+        // frame 17 -> 18 still passes the run's end; 18 -> 19 does not
+        assert_eq!(event_bits(&runs, 17, 18), 0x2000_0000);
+        assert_eq!(event_bits(&runs, 18, 19), 0);
+        assert_eq!(event_bits(&[], 0, 5), 0);
+    }
 
     #[test]
     fn codec6_round_values() {

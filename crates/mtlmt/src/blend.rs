@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn vector_mix_and_default_frames() {
-        assert_eq!(mix_vector([0.0, 2.0, 4.0], [10.0, 2.0, 0.0], 0.25), [2.5, 2.0, 3.0]);
+        assert_eq!(
+            mix_vector([0.0, 2.0, 4.0], [10.0, 2.0, 0.0], 0.25),
+            [2.5, 2.0, 3.0]
+        );
         let table: Vec<f32> = (0..256).map(|i| i as f32).collect();
         assert_eq!(default_frames(&table, 0x0003), Some(3.0));
         assert_eq!(default_frames(&table, 0x0611), Some(17.0));

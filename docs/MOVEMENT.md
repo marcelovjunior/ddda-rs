@@ -12,6 +12,7 @@ How `ddsim` moves an Arisen, and where each rule comes from. Code:
 | run | `cPlActRun` | 4 field, 0x55 town | velocity: adjust 0x100 (15.0) / 0x101 (12.0) × factor |
 | sprint start | `cPlActDashBegin` | 43 (0x2B) | velocity ramps to the sprint speed |
 | sprint | `cPlActDash` | 20 (0x14) | velocity: adjust 0xF1 (22.5) |
+| sprint stop | `cPlActRunEnd` (action 3) | 21 (0x15) | velocity: adjust 0xF1 x the motion's curve 9 |
 | jump takeoff | `cPlActJumpBegin` | 10 moving, 13 standing | none |
 | airborne | `cPlActJump` | 11 moving, 14 standing (loops from 41 / 40) | physics, below |
 | sprint-jump takeoff | `cPlActDashJumpBegin` | 22 (0x16) | root motion 85.6 cm |
@@ -40,10 +41,25 @@ How `ddsim` moves an Arisen, and where each rule comes from. Code:
   returns flag 0x50 in towns and some quest areas. Walk and run then use
   motions 0x54 / 0x55 and the speed ids 0xFF / 0x101 (`cPlActWalk::vf05`,
   `cPlActRun::vf05`).
-- **Sprint start** (`cPlActDashBegin::vf06`): speed = max(entry speed,
-  0xF1 × a ramp). The recording reaches 22.5 in 4-5 frames.
+- **Sprint start** (`cPlActDashBegin::vf06` 0x00ACAA50): speed = max(entry
+  speed, 0xF1 x curve 9 of motion 43), the curve rising 0 to 1 over motion
+  frames 0-5 (4.35 game frames at the motion speed; recorded 4-5 frames).
+- **The player's own time.** `uObjModel::vf90` (0x00885E30) sets the
+  unit's `mDeltaTime` (+0x14) to sMain's x the sWorkRate rates its mask
+  selects x uPlayer +0xEE4 .. +0xEF8. `0x00B81920` writes +0xEE4: the
+  `mMotSpd` of the current action's stamina row (Walk, Run or Dash table,
+  row = load class; 1.0 for other actions). At load class 1 run and dash
+  give 1.15 (walk 1.06). The velocity is per frame of that time, so walk,
+  run and sprint move and animate 1.15x faster than game time. The traces
+  show exactly 1.15 x sMain's delta, two frames after the action changes
+  (the stamina update follows the actions; the lag is not modelled).
+- **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2)
+  (the velocity with its component along the ground normal removed). This
+  fits the traces within 0.5% over slopes -0.25..0.29 (`ddsim::along_ground`;
+  *measured*, the engine code is not traced).
 
-**Recorded** (read-only, uPlayer at ~200 Hz; mage, start area, town variant):
+**Recorded** (read-only, uPlayer at ~200 Hz; mage, start area, town variant;
+the acceptance traces of docs/ACCEPTANCE.md confirm the speeds):
 - Run velocity |+0x2530| = 10.165 = 12.0 × 0.8471, path speed 320-338 cm/s.
 - Sprint velocity = 22.5, path speed 700-760 cm/s.
 - The walk, run and sprint motions advance 34.5 frames/s; other motions
@@ -126,41 +142,76 @@ the rate in uPlayer +0x2584 (run). That rate's writer for the player, and
 the writer of +0x32C4 (which would explain the recorded ~70 degrees/s turn
 of the velocity), are not found.
 
-**Stopping** (traced in part). `cPlActRunEnd` (action 3) is the sprint
-stop: `vf05` (0x00ACB570) plays motion 21 (0x15) when the motion shown is
-the sprint's (0x14 or 0x4F); `vf06` (0x00ACB6C0) sets the velocity along
-the current yaw (+0x257C) to adjust 0xF1 (22.5) x the motion's curve 9 x
-uPlayer +0x68 x +0x29A8, and ends with the motion. The curve is motion
-data `mtlmt` does not read yet, so the sprint stop is not implemented. The
-run stop (a 35-frame motion in the recording) is not in `cPlActRunEnd`
-(it sets no motion unless coming from a sprint); not found.
+**Stopping.** `cPlActRunEnd` (action 3) is the sprint stop: `vf05`
+(0x00ACB570) plays motion 21 (0x15) when the motion shown is the sprint's
+(0x14 or 0x4F); `vf06` (0x00ACB6C0) sets the velocity along the current
+yaw (+0x257C) to adjust 0xF1 (22.5) x the motion's curve 9 x uPlayer
++0x68 x +0x29A8 (both 1.0 in the recordings), and ends with the motion.
+Curve 9 of motion 21 is linear 1.0 at frame 0, 0.5 at 5, 0 from 25: 196.9
+cm in all, recorded 198.1. The stop runs in game time (unit delta 1.0).
+A run stops at once (recorded 0 cm, as ddsim).
+
+**Motion curves and events** (`mtlmt`). `0x010571C0(k)` returns curve k
+of the playing motion: the LMT's float block, `(flags >> 16) & 0x1F`
+entries of 12 bytes (u8 type, u32 key count, u32 keys) whose 16-byte keys
+hold (interpolation | frame << 8, value, two tangents). `0x010571E0`
+evaluates them at the layer's frame: hold, linear or Hermite to the next
+key (`mtlmt::Curve::value`). The motion's four event groups (runs of
+`(bits, frames)`) give per-layer event words; `0x01057060` ORs the bits of
+the runs reaching past the previous whole frame up to the current one
+(`mtlmt::event_bits`). ddsim uses curve 9 (sprint start, sprint stop, ledge
+grab rise, climb height) and 10 (climb position), and event group 1 bit
+0x20000000 (stamina recovery held).
+
+**Stamina** (`crates/ddsim/src/stamina.rs`; evidence docs/STAMINA.md).
+Per player: stamina, maximum, body and load class (default 1).
+- Each frame (`0x00B81450`): recovery then drain, each x game frames
+  (sMain's delta x sWorkRate rates, 1 here), each added and clamped to
+  [0, max]; running out (previous > 0, new <= 0) is flagged.
+- Recovery (`0x00B81810`): `RecoverNormal[body].mStamina /
+  (RecoverNormal[body].mFrame + RecoverNormal[4 + load].mFrame)` = 1.625
+  per frame (48.75/s), unless the playing motion's event group 1 has bit
+  0x20000000 over the frames just passed. The sprint start (43) and sprint
+  (20) carry it throughout, the sprint stop (21) for frames 0-17: hence the
+  recorded 0.618 s hold after a sprint.
+- Drain (`0x00B81920`, actions 5 / 0x7D): `-(Dash[load].mStamina /
+  mFrame)` = -1.5 per frame (-45/s). Running costs nothing.
+- Not modelled: status and equipment modifiers, recovery debt, the cap's
+  derivation (the recorded 640 is the default), what happens when stamina
+  runs out (`cPlActTired`), the classes' selection from weights.
+
+**Falling off.** `0x00B6E5C0` enters `cPlActFall` when the action allows
+falls (uPlayer +0x35E8 bit 0), the character is not grounded (+0x1ED0)
+and the ground cast from 100 cm above the feet (`0x0084FEA0`) is more than
+30 cm below them. ddsim follows ground within 30 cm (`STEP_DOWN`) only if
+it is a floor (up component of the normal >= 0.7, *assumed* stand-in for
+the grounded flag); steeper ground is never walked, so slopes are fallen
+down whatever the step size, and steep ground under a fall holds the
+character up without landing (the original stays in action 13 on the
+drop route's steep edge). A fall's starting horizontal speed is the last
+step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
 
 ## Assumptions and placeholders
 
 - 30 frames per second for velocities and physics. The jump timing supports
   it.
-- **Open discrepancy:** recorded ground speeds are 3-10% above velocity × 30
-  (sprint ~3%, run ~10%). The cause is not traced.
-- Locomotion playback rate 1.15 is measured, not traced.
+- The ground-speed discrepancy of the first recording (speeds 3-10% above
+  velocity x 30) is the 1.15 unit time and the slope projection above.
 - Factor 0.8471 is measured. Its writers (codex-3, docs/PARAMS.md): MOVSS
   stores at 0x00B6B3D6 / 0x00B6B477 / 0x00B6B4D1 in 0x00B6B350, via
   player +0x2E54 -> object +4 -> owner; 0x0081C170 derives a horizontal
   scale from character customization. 0.847 is not reproduced yet.
 - Open from the blend brief (claude-2), not applied: walk/run start frames
-  are phase-synced (0x00B80260; start frames 18 / 20 / 17 / 0 otherwise);
-  the walk/run playback rate is uPlayer +0x333C / +0x3340 (writer not
-  found; ids 0x1E4/0x1E5 hold 1.15); walk/run/sprint velocity is also
-  multiplied by the rate and by uPlayer +0x29A8, which may explain the
-  ground-speed discrepancy.
+  are phase-synced (0x00B80260; start frames 18 / 20 / 17 / 0 otherwise).
+  The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
+  every trace (|velocity| = 10.165 exactly); the 1.15 is the unit time.
 - Town or field is a per-player flag set by the host. `--play` starts in
   town mode (as recorded); F2 toggles it.
 - Integration order: position += velocity, then velocity += gravity.
 - Turning is instant. In the original the velocity also follows the stick
   at once and only the model's yaw turns over time (Turning, above); the
   recorded velocity direction turns ~70°/s, cause not traced.
-- No run-stop or sprint-stop motions (the sprint stop is `cPlActRunEnd`,
-  Stopping above; the recording shows sprint speed decaying over ~0.6 s).
-- Step up 60 cm, step down 50 cm (placeholders). Fall gravity = normal
+- Step up 60 cm (placeholder). Fall gravity = normal
   jump's: `cPlActFall::vf05` (0x00ACCDD0) keeps the gravity of a character
   already falling and otherwise takes the last jump row's (uPlayer
   +0x38DC), so this holds after a normal jump.
@@ -168,8 +219,8 @@ run stop (a 35-frame motion in the recording) is not in `cPlActRunEnd`
   - collision hits are classified floor / wall by their normal (up
     component 0.7) and count from both faces; the engine's hit flags (bit 0
     floor, bit 2 wall, from `0x00DEA870`) are not traced;
-  - the grab's and climb's progress (the motion's curves 9 and 10 read by
-    `0x010571C0`) is linear over the motion here;
+  - the climb and the rising grab use the motion's curves 9 / 10; the
+    reaching grab still moves the feet linearly (the original uses IK);
   - the original poses the hanging body by IK (`0x00850BD0`) toward the body
     point and takes the root from it; here the feet go straight to the foot
     point, and the facing snaps to the wall instead of turning over the grab;
@@ -184,4 +235,15 @@ run stop (a 35-frame motion in the recording) is not in `cPlActRunEnd`
 - Double jump: the original allows it for dagger vocations; `--play` gives
   it to both players.
 - No animation blending: states switch motions immediately.
-- No stamina yet (`param\pl\stamina\plstamina_*`).
+- The character's collision shape is a placeholder cylinder (radius 35,
+  `BODY_RADIUS`) tested from 60 cm above the feet. On the drop route the
+  original stands 34 cm above the ground under its origin: it rests on the
+  strip's edge 15-20 cm away (the strip top is at 40254 cm, its origin
+  over the steep face at 40219), so its collider has a radius there. No
+  placed scenery seems missing: no instance in the cell's layouts (`_s00`,
+  `_p*`, `_e*`, `_t*`, any Euler order) has collision under that point.
+  After landing, the original slides along a wall and frees itself at
+  frame 195; ddsim keeps sliding (path gap 113 cm). Tracing the character collider (shape, radius, slide) is the next
+  step.
+- A landing (`cPlActLand`) is cancelled at once by the stick here; in the
+  traces it lasts about 0.1 s with the stick held (not traced).

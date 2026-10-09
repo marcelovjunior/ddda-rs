@@ -34,29 +34,57 @@
 use std::collections::HashMap;
 
 pub mod ledge;
+pub mod stamina;
 
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
+pub use stamina::{StaminaRow, StaminaTables};
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
 /// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
 /// 30 fps gives 0.317 s), and non-locomotion motions advance 30 frames/s.
 pub const MOTION_FPS: f32 = 30.0;
 
-/// Playback rate of the walk, run and sprint motions: recorded at 34.5
-/// frames/s (the motion frame counter, uPlayer motion +0x3CC) against 30.0
-/// for other motions. *Measured*; where the rate is set is not traced.
+/// The run and sprint rows' motion speed at load class 1 (1.15), for tests
+/// and docs; the simulation reads the player's row (`Sim::time_rate`).
+///
+/// The player's own time runs faster than game time while walking, running
+/// or sprinting: `uObjModel::vf90` (0x00885E30) sets the unit's
+/// `mDeltaTime` (+0x14) to sMain's x sWorkRate rates x the product of
+/// +0xEE4 .. +0xEF8, and `0x00B81920` stores in +0xEE4 the `mMotSpd` of the
+/// current action's stamina row (Walk, Run or Dash table by load class; 1
+/// for other actions). The traces show exactly 1.15 x sMain's delta in runs
+/// and sprints (docs/ACCEPTANCE.md). The per-frame velocity is not scaled,
+/// so both the motion frame and the movement advance that much faster. The
+/// original applies the factor two game frames after the action changes
+/// (the stamina update runs after the actions); that lag is not modelled.
 pub const LOCOMOTION_RATE: f32 = 1.15;
+
+/// Stamina of the recorded level-7 Arisen (the acceptance traces start at
+/// 640, full). *Measured*: the maximum's derivation (`0x00782390`) is not
+/// modelled; hosts set `Player::stamina_max`.
+pub const STAMINA_MAX_RECORDED: f32 = 640.0;
 
 /// Factor on walk and run speed (uPlayer +0xDA8, multiplied in
 /// `0x00B80690` / `0x00B80710`). Recorded as 0.8471090 on the ground for a
 /// male Arisen; its writer is not traced. *Measured*.
 pub const GROUND_SPEED_FACTOR: f32 = 0.847_109;
 
-/// Sprint start reaches sprint speed this many frames after it begins,
-/// rising linearly (never below its entry speed, per
-/// `cPlActDashBegin::vf06`). *Measured* (4-5 frames in the recording); the
-/// original's ramp (`0x010571C0` with id 9) is not traced.
-pub const SPRINT_RAMP_FRAMES: f32 = 4.5;
+/// Sprint start reaches sprint speed this many motion frames after it
+/// begins, rising linearly. Used only when the sprint-start motion has no
+/// curve 9 (`SPEED_CURVE`); the game's motion (m0000_co slot 43) ramps 0 to
+/// 1 over motion frames 0-5, i.e. 4.35 game frames at the locomotion rate,
+/// as recorded (4-5 frames).
+pub const SPRINT_RAMP_FRAMES: f32 = 5.0;
+
+/// The motion curve the sprint start and the sprint stop scale their speed
+/// by (`0x010571C0(9)` in `cPlActDashBegin::vf06` 0x00ACAA50 and
+/// `cPlActRunEnd::vf06` 0x00ACB6C0).
+pub const SPEED_CURVE: usize = 9;
+
+/// The motion curve the ledge climb moves the player toward its target by
+/// (`0x010571C0(10)` in `cPlCliffHangClimb::vf06` 0x00ADDC00); curve 9
+/// raises the target.
+pub const CLIMB_POSITION_CURVE: usize = 10;
 
 /// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
 /// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
@@ -76,7 +104,13 @@ pub struct MoveParam {
     pub run: f32,
     pub run_relaxed: f32,
     pub sprint: f32,
+    /// Largest horizontal speed a fall starts with (adjust 0xD1, read by
+    /// cPlActFall::vf05 0x00ACCDD0), cm per frame.
+    pub fall_max: f32,
 }
+
+/// Index of the fall's starting speed cap in the `rAdjustParam` table.
+pub const ADJUST_FALL_MAX: usize = 0xD1;
 
 impl MoveParam {
     /// Speeds from the `rAdjustParam` float table: walk and run get
@@ -89,6 +123,7 @@ impl MoveParam {
             run: get(ADJUST_RUN)? * GROUND_SPEED_FACTOR,
             run_relaxed: get(ADJUST_RUN_RELAXED)? * GROUND_SPEED_FACTOR,
             sprint: get(ADJUST_SPRINT)?,
+            fall_max: get(ADJUST_FALL_MAX)?,
         })
     }
 }
@@ -100,6 +135,7 @@ pub const MOVE_SHIPPED: MoveParam = MoveParam {
     run: 15.0 * GROUND_SPEED_FACTOR,
     run_relaxed: 12.0 * GROUND_SPEED_FACTOR,
     sprint: 22.5,
+    fall_max: 7.0,
 };
 
 /// Simulation step in motion frames: 120 steps per second. Per-frame values
@@ -148,6 +184,8 @@ pub enum State {
     },
     SprintStart,
     Sprint,
+    /// Stopping after a sprint (`cPlActRunEnd`, action 3).
+    SprintStop,
     /// Takeoff; `standing` = no forward speed.
     JumpStart {
         standing: bool,
@@ -203,6 +241,8 @@ impl State {
             State::Run { relaxed: true } => 0x55,
             State::SprintStart => 43,
             State::Sprint => 20,
+            // cPlActRunEnd::vf05 (0x00ACB570), after the sprint's 0x14 / 0x4F
+            State::SprintStop => 0x15,
             State::JumpStart { sprint: true, .. } => 22,
             State::JumpStart { standing: true, .. } => 13,
             State::JumpStart { .. } => 10,
@@ -298,6 +338,18 @@ pub struct Player {
     pub drop_from: f32,
     /// The ledge being grabbed, hung from or climbed.
     pub hold: Option<Hold>,
+    /// cPlayerInfo +0x2A8 and its maximum.
+    pub stamina: f32,
+    pub stamina_max: f32,
+    /// Body and load classes picking stamina rows (uPlayer +0x34C8 /
+    /// +0x34CC). *Assumed* 1 by default: the weights that select them
+    /// (`0x00B81120`, `0x00B81270`) are not modelled; 1 matches the
+    /// recordings.
+    pub body_class: usize,
+    pub load_class: usize,
+    /// Stamina ran out (crossed to 0) at least once since the host cleared
+    /// it. What the original does next (`cPlActTired`) is not modelled.
+    pub ran_out: bool,
 }
 
 /// A held ledge and the points the hang and climb move between.
@@ -318,6 +370,10 @@ pub struct Hold {
 pub struct RootMotion {
     pub frame_count: u32,
     track: Option<mtlmt::Track>,
+    /// The motion's curves (`mtlmt::MotionList::curves`), read by index.
+    pub curves: Vec<mtlmt::Curve>,
+    /// The motion's event groups (`mtlmt::MotionList::events`).
+    pub events: Vec<Vec<mtlmt::EventRun>>,
 }
 
 impl RootMotion {
@@ -330,7 +386,38 @@ impl RootMotion {
         RootMotion {
             frame_count: m.frame_count,
             track,
+            curves: Vec::new(),
+            events: Vec::new(),
         }
+    }
+
+    /// The same motion with its event groups (`mtlmt::MotionList::events[slot]`).
+    pub fn with_events(mut self, events: Vec<Vec<mtlmt::EventRun>>) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// Event bits of `group` over whole motion frames `from`..`to`
+    /// (`mtlmt::event_bits`); 0 without event data.
+    pub fn event_bits(&self, group: usize, from: i32, to: i32) -> u32 {
+        self.events
+            .get(group)
+            .map_or(0, |runs| mtlmt::event_bits(runs, from, to))
+    }
+
+    /// The same motion with its curves (`mtlmt::MotionList::curves[slot]`).
+    pub fn with_curves(mut self, curves: Vec<mtlmt::Curve>) -> Self {
+        self.curves = curves;
+        self
+    }
+
+    /// Curve `k` at motion frame `frame`, if the motion has it and it has keys
+    /// (the game's `0x010571C0(k)`; a curve without keys reads 0 there).
+    pub fn curve(&self, k: usize, frame: f32) -> Option<f32> {
+        self.curves
+            .get(k)
+            .filter(|c| !c.keys.is_empty())
+            .map(|c| c.value(frame))
     }
 
     /// A motion of `frame_count` frames without root movement.
@@ -338,6 +425,8 @@ impl RootMotion {
         RootMotion {
             frame_count,
             track: None,
+            curves: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -439,12 +528,48 @@ fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// Whether the ground at `at` (a point on it) is a floor: the surface a cast
+/// down through it meets faces up at least `ledge::FLOOR_MIN_NY`. Worlds
+/// without casts count everything as floor.
+fn is_floor(ground: &dyn Ground, at: [f32; 3]) -> bool {
+    ground
+        .ray([at[0], at[1] + 1.0, at[2]], [at[0], at[1] - 1.0, at[2]])
+        .is_none_or(|h| h.normal[1] >= ledge::FLOOR_MIN_NY)
+}
+
+/// The horizontal step `m` (x, z) of a velocity-driven move, projected onto
+/// the ground plane under `feet` and flattened again: on a slope of angle
+/// t along the move it shrinks to m cos^2 t. *Measured*, not traced: in the
+/// run and sprint traces (docs/ACCEPTANCE.md) the horizontal step over
+/// |velocity| x unit delta is 1 / (1 + slope^2) within 0.5% over slopes
+/// -0.25..0.29 (e.g. 0.957 at 0.208), which is what removing the velocity's
+/// component along the ground normal gives. Floors only (`ledge::FLOOR_MIN_NY`).
+fn along_ground(ground: &dyn Ground, feet: [f32; 3], m: [f32; 2]) -> [f32; 2] {
+    let Some(h) = ground.ray(
+        [feet[0], feet[1] + 1.0, feet[2]],
+        [feet[0], feet[1] - STEP_DOWN, feet[2]],
+    ) else {
+        return m;
+    };
+    let n = h.normal;
+    if n[1] < ledge::FLOOR_MIN_NY {
+        return m;
+    }
+    let d = m[0] * n[0] + m[1] * n[2];
+    [m[0] - d * n[0], m[1] - d * n[2]]
+}
+
 /// Stick magnitude above which the player moves. *Placeholder*.
 pub const MOVE_THRESHOLD: f32 = 0.2;
 /// Highest step the feet climb while on the ground, cm. *Placeholder*.
 pub const STEP_UP: f32 = 60.0;
-/// Drop below the feet that starts a fall instead of following the ground, cm. *Placeholder*.
-pub const STEP_DOWN: f32 = 50.0;
+/// Drop below the feet that starts a fall instead of following the ground,
+/// cm: `0x00B6E5C0` enters cPlActFall when the character is not grounded
+/// and the ground cast from 100 cm above the feet (`0x0084FEA0`) is more
+/// than 30 cm (0x014EA160) below them. Here "grounded" is standing on a
+/// floor triangle (`ledge::FLOOR_MIN_NY`, *assumed*): steeper ground is
+/// never walked on, so a slope is fallen down whatever the step size.
+pub const STEP_DOWN: f32 = 30.0;
 /// Gravity while falling (cm/frame²): the normal jump's. *Placeholder* until
 /// `cPlActFall` is traced.
 pub const FALL_GRAVITY: f32 = -2.0;
@@ -460,6 +585,7 @@ pub struct Sim {
     pub jump_sprint: JumpParam,
     pub move_param: MoveParam,
     pub ledge_param: LedgeParam,
+    pub stamina_tables: StaminaTables,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -477,6 +603,7 @@ impl Sim {
             jump_sprint: JUMP_SPRINT,
             move_param: MOVE_SHIPPED,
             ledge_param: LEDGE_SHIPPED,
+            stamina_tables: StaminaTables::shipped(),
             pending: 0.0,
         }
     }
@@ -498,6 +625,11 @@ impl Sim {
             jump_held: false,
             drop_from: position[1],
             hold: None,
+            stamina: STAMINA_MAX_RECORDED,
+            stamina_max: STAMINA_MAX_RECORDED,
+            body_class: 1,
+            load_class: 1,
+            ran_out: false,
         });
     }
 
@@ -535,7 +667,9 @@ impl Sim {
     /// One step of `dt` motion frames for player `i`.
     fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
         let y0 = self.players[i].position[1];
+        let (state0, frame0) = (self.players[i].state, self.players[i].frame);
         self.frame_states(i, input, ground, dt);
+        self.stamina_step(i, state0, frame0, dt);
         // 0x0088A7E0: the fall distance (uPlayer +0x207C) counts from the
         // last frame the character did not move down
         let p = &mut self.players[i];
@@ -563,6 +697,7 @@ impl Sim {
             | State::Run { .. }
             | State::SprintStart
             | State::Sprint
+            | State::SprintStop
             | State::Land { .. }
             | State::SprintJumpLand => {
                 if pressed {
@@ -591,16 +726,24 @@ impl Sim {
                 {
                     return;
                 }
-                // a landing plays out unless the player moves
-                if matches!(state, State::Land { .. } | State::SprintJumpLand)
-                    && !moving
+                // a landing or a sprint stop plays out unless the player moves
+                if matches!(
+                    state,
+                    State::Land { .. } | State::SprintJumpLand | State::SprintStop
+                ) && !moving
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
                     self.ground_move(i, state, ground, dt);
                     return;
                 }
                 let next = if !moving {
-                    State::Wait
+                    // letting go of a sprint enters cPlActRunEnd (action 3,
+                    // recorded); a run stops at once
+                    if state == State::Sprint {
+                        State::SprintStop
+                    } else {
+                        State::Wait
+                    }
                 } else if input.sprint {
                     let start_done = self.players[i].frame >= self.period_of(State::SprintStart.motion_id());
                     match state {
@@ -676,6 +819,9 @@ impl Sim {
             State::LedgeGrab { braced, phase } => {
                 let len = self.period_of(state.motion_id());
                 let rise_speed = self.ledge_param.rise_speed;
+                // progress: the motion's curve 9 (0x010571C0(9) in
+                // cPlCliffHangBegin::vf06), linear if the motion has none
+                let t = self.progress(state.motion_id(), SPEED_CURVE, self.players[i].frame + dt, len);
                 let p = &mut self.players[i];
                 let Some(h) = p.hold else {
                     Self::let_go(p, jn);
@@ -686,9 +832,6 @@ impl Sim {
                     return;
                 }
                 p.frame += dt;
-                // *Placeholder* progress: the original reads the motion's
-                // curve 9 (0x010571C0), not read by mtlmt yet
-                let t = (p.frame / len).min(1.0);
                 match phase {
                     GrabPhase::Reach => {
                         // *Placeholder* path: the original poses the body by IK
@@ -770,6 +913,14 @@ impl Sim {
             }
             State::LedgeClimb { .. } => {
                 let len = self.period_of(state.motion_id());
+                // cPlCliffHangClimb::vf06 (0x00ADDC00): the target rises by
+                // the motion's curve 9 and the position follows it by curve
+                // 10 (linear if the motion has none)
+                let f = self.players[i].frame + dt;
+                let (t_up, t_pos) = (
+                    self.progress(state.motion_id(), SPEED_CURVE, f, len),
+                    self.progress(state.motion_id(), CLIMB_POSITION_CURVE, f, len),
+                );
                 let p = &mut self.players[i];
                 let Some(h) = p.hold else {
                     Self::let_go(p, jn);
@@ -780,12 +931,8 @@ impl Sim {
                     return;
                 }
                 p.frame += dt;
-                // cPlCliffHangClimb::vf06 (0x00ADDC00). *Placeholder*
-                // progress: the original uses the motion's curves 9 (height)
-                // and 10 (position), not read by mtlmt yet
-                let t = (p.frame / len).min(1.0);
-                let target = ledge::climb_target(ground, &h.ledge, h.wall, h.from_y, t);
-                p.position = ledge::lerp(h.start, target, t);
+                let target = ledge::climb_target(ground, &h.ledge, h.wall, h.from_y, t_up);
+                p.position = ledge::lerp(h.start, target, t_pos);
                 if p.frame >= len {
                     p.position = ledge::climb_end(&h.ledge);
                     p.hold = None;
@@ -854,6 +1001,62 @@ impl Sim {
         Self::set_state(p, State::Fall);
     }
 
+    /// The player's own time per game time in `state` (`LOCOMOTION_RATE`):
+    /// the motion speed of the walk, run or dash row at the player's load
+    /// class; 1 for other states (the sprint stop included, as recorded).
+    // Translated from 0x00B81920 (DDDA.exe 2017-12-13 Steam): actions 1, 2,
+    // 5 / 0x7D read Walk, Run, Dash row +0xC into uPlayer +0xEE4.
+    fn time_rate(&self, p: &Player, state: State) -> f32 {
+        let t = &self.stamina_tables;
+        let rows = match state {
+            State::Walk { .. } => &t.walk,
+            State::Run { .. } => &t.run,
+            State::SprintStart | State::Sprint => &t.dash,
+            _ => return 1.0,
+        };
+        rows.get(p.load_class.min(rows.len().saturating_sub(1)))
+            .map_or(1.0, |r| r.motion_speed)
+    }
+
+    /// One stamina update after the player's states (`0x00B81450`):
+    /// recovery unless the playing motion's events suppress it over the
+    /// frames just passed, then the sprint's drain.
+    fn stamina_step(&mut self, i: usize, state0: State, frame0: f32, dt: f32) {
+        let t = &self.stamina_tables;
+        let p = &self.players[i];
+        let id = p.state.motion_id();
+        let (from, to) = if p.state == state0 && p.frame >= frame0 {
+            (frame0 as i32, p.frame as i32)
+        } else {
+            (p.frame as i32, p.frame as i32)
+        };
+        let suppressed = self.motions.get(&id).is_some_and(|m| {
+            m.event_bits(stamina::RECOVERY_SUPPRESS_GROUP, from, to) & stamina::RECOVERY_SUPPRESS_BIT != 0
+        });
+        let recovery = if suppressed {
+            0.0
+        } else {
+            t.recovery(p.body_class, p.load_class)
+        };
+        let drain = match p.state {
+            State::SprintStart | State::Sprint => t.dash_drain(p.load_class),
+            _ => 0.0,
+        };
+        let (s, out) = stamina::step(p.stamina, p.stamina_max, recovery, drain, dt);
+        let p = &mut self.players[i];
+        p.stamina = s;
+        p.ran_out |= out;
+    }
+
+    /// Curve `k` of motion `id` at `frame`, or the linear progress over
+    /// `len` frames when the motion has no such curve.
+    fn progress(&self, id: u16, k: usize, frame: f32, len: f32) -> f32 {
+        self.motions
+            .get(&id)
+            .and_then(|m| m.curve(k, frame))
+            .unwrap_or((frame / len).min(1.0))
+    }
+
     /// Ground speed (cm per frame) of a velocity-driven state, or None for
     /// states that move by root motion.
     fn ground_speed(&self, p: &Player, state: State) -> Option<f32> {
@@ -864,11 +1067,27 @@ impl Sim {
             State::Run { relaxed: false } => mp.run,
             State::Run { relaxed: true } => mp.run_relaxed,
             State::Sprint => mp.sprint,
-            // cPlActDashBegin::vf06: max(entry speed, ramp to sprint speed);
-            // the motion frame runs at LOCOMOTION_RATE
+            // cPlActDashBegin::vf06 (0x00ACAA50): max(entry speed, sprint
+            // speed x curve 9 of the motion at its frame) (x uPlayer +0x68,
+            // 1.0 here)
             State::SprintStart => {
-                let t = p.frame / LOCOMOTION_RATE / SPRINT_RAMP_FRAMES;
-                (mp.sprint * t.min(1.0)).max(p.sprint_entry)
+                let ramp = self
+                    .motions
+                    .get(&state.motion_id())
+                    .and_then(|m| m.curve(SPEED_CURVE, p.frame))
+                    .unwrap_or((p.frame / SPRINT_RAMP_FRAMES).min(1.0));
+                (mp.sprint * ramp).max(p.sprint_entry)
+            }
+            // cPlActRunEnd::vf06 (0x00ACB6C0): sprint speed x curve 9 (x
+            // uPlayer +0x68 x +0x29A8, both 1.0 in the recordings); no
+            // movement if the motion has no curve
+            State::SprintStop => {
+                mp.sprint
+                    * self
+                        .motions
+                        .get(&state.motion_id())
+                        .and_then(|m| m.curve(SPEED_CURVE, p.frame))
+                        .unwrap_or(0.0)
             }
             _ => return None,
         })
@@ -878,17 +1097,21 @@ impl Sim {
     /// step-down rules.
     fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32) {
         let jn = self.jump_normal;
+        let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
+        let rate = self.time_rate(&self.players[i], state);
         let period = self.period_of(state.motion_id());
         let p = &mut self.players[i];
         let mut target = p.position;
         if let Some(v) = speed {
-            // velocity along the facing; the motion only animates
+            // velocity along the facing, in the player's own (scaled) time;
+            // the motion only animates
             let (s, c) = p.yaw.sin_cos();
-            target[0] += v * dt * s;
-            target[2] += v * dt * c;
+            let step = along_ground(ground, p.position, [v * dt * rate * s, v * dt * rate * c]);
+            target[0] += step[0];
+            target[2] += step[1];
             p.speed = v;
-            let f = p.frame + dt * LOCOMOTION_RATE;
+            let f = p.frame + dt * rate;
             p.frame = if state.looping() { f.rem_euclid(period) } else { f };
         } else if let Some(m) = self.motions.get(&state.motion_id()) {
             p.speed = 0.0;
@@ -910,15 +1133,27 @@ impl Sim {
             p.frame += dt;
         }
         let target = wall_slide(ground, p.position, target);
-        match ground.height(target[0], target[2], p.position[1] + STEP_UP) {
-            Some(h) if h >= p.position[1] - STEP_DOWN => p.position = [target[0], h, target[2]],
+        let under = ground.height(target[0], target[2], p.position[1] + STEP_UP);
+        let floor = under.is_some_and(|h| is_floor(ground, [target[0], h, target[2]]));
+        match under {
+            Some(h) if h >= p.position[1] - STEP_DOWN && floor => p.position = [target[0], h, target[2]],
+            // steep ground rising ahead: not walked onto
+            Some(h) if h >= p.position[1] => {}
             Some(_) if !matches!(state, State::JumpStart { .. }) => {
-                // walked off an edge: fall, keeping the ground speed (per frame)
-                p.velocity = [
+                // walked off an edge or onto steep ground: fall. cPlActFall::vf05
+                // (0x00ACCDD0) takes the last step as the velocity (per frame),
+                // its horizontal length capped at adjust 0xD1 (7.0)
+                let mut v = [
                     (target[0] - p.position[0]) / dt,
                     0.0,
                     (target[2] - p.position[2]) / dt,
                 ];
+                let hv = len2([v[0], v[2]]);
+                if hv > fall_max {
+                    v[0] *= fall_max / hv;
+                    v[2] *= fall_max / hv;
+                }
+                p.velocity = v;
                 p.position = [target[0], p.position[1], target[2]];
                 p.jump = jn;
                 p.jumps_left = u8::from(p.double_jump);
@@ -981,8 +1216,13 @@ impl Sim {
             p.velocity[0] = 0.0;
             p.velocity[2] = 0.0;
         }
-        // landing: the ground under the new position, reached on the way down
+        // landing: the ground under the new position, reached on the way down;
+        // steep ground holds the character up without landing (as the
+        // original stays in cPlActFall on a steep edge, docs/ACCEPTANCE.md)
         match ground.height(next[0], next[2], p.position[1].max(next[1]) + 1.0) {
+            Some(g) if next[1] <= g && p.velocity[1] <= 0.0 && !is_floor(ground, [next[0], g, next[2]]) => {
+                p.position = [next[0], g, next[2]];
+            }
             Some(g) if next[1] <= g && p.velocity[1] <= 0.0 => {
                 let standing = matches!(p.state, State::Air { standing: true, .. }) || steer.is_none();
                 // cPlActDashJump::vf06 (0x00ACDED0) lands into action 0x0C
@@ -1033,6 +1273,8 @@ mod tests {
                     },
                 ],
             }),
+            curves: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -1071,7 +1313,8 @@ mod tests {
         }
     }
 
-    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run;
+    /// Five frames of running: the velocity in the player's scaled time.
+    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run * LOCOMOTION_RATE;
 
     #[test]
     fn running_moves_forward_at_the_run_speed() {
@@ -1140,7 +1383,7 @@ mod tests {
             s.step(1.0 / MOTION_FPS, &inputs, &Flat(0.0));
             let z = s.player(0).unwrap().position[2];
             assert!(
-                (z - last - MOVE_SHIPPED.run).abs() < 1e-2,
+                (z - last - MOVE_SHIPPED.run * LOCOMOTION_RATE).abs() < 1e-2,
                 "moved {} in one frame",
                 z - last
             );
@@ -1668,6 +1911,258 @@ mod tests {
         assert_eq!(LedgeParam::from_adjust(&t[..0x191]), None);
     }
 
+    /// m0000_co slot 21 curve 9 (the sprint stop's speed): 1 at 0, 0.5 at 5,
+    /// 0 from 25 (linear keys).
+    fn stop_curve() -> Vec<mtlmt::Curve> {
+        let key = |frame: u16, v: f32| mtlmt::CurveKey {
+            interp: 1,
+            frame,
+            value: v.to_bits(),
+            tangent_in: 0.0,
+            tangent_out: 0.0,
+        };
+        let mut c = vec![
+            mtlmt::Curve {
+                kind: 1,
+                keys: Vec::new()
+            };
+            16
+        ];
+        c[SPEED_CURVE].keys = vec![key(0, 1.0), key(5, 0.5), key(25, 0.0), key(29, 0.0)];
+        c
+    }
+
+    #[test]
+    fn releasing_a_sprint_slides_to_a_stop() {
+        let mut s = sim();
+        s.motions
+            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let sprint = Input {
+            sprint: true,
+            ..fwd()
+        };
+        let mut inputs = HashMap::from([(0, sprint)]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().state, State::Sprint);
+        let z0 = s.player(0).unwrap().position[2];
+        inputs.clear();
+        s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().state, State::SprintStop);
+        s.step(2.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        // 22.5 x (5 x 0.75 + 20 x 0.25) = 196.9 cm (recorded: 198.1), plus
+        // 2.8 cm from sampling the curve at the start of each quarter frame
+        let d = p.position[2] - z0;
+        assert!((d - 196.875 - 2.8125).abs() < 0.1, "{d}");
+    }
+
+    /// Group 1 suppressing recovery for `frames` motion frames.
+    fn suppress(frames: u32, total: u32) -> Vec<Vec<mtlmt::EventRun>> {
+        let run = |bits, frames| mtlmt::EventRun { bits, frames };
+        vec![
+            vec![],
+            vec![
+                run(stamina::RECOVERY_SUPPRESS_BIT, frames),
+                run(0, total - frames),
+            ],
+            vec![],
+            vec![],
+        ]
+    }
+
+    #[test]
+    fn sprinting_spends_stamina_and_the_stop_holds_recovery() {
+        let mut s = sim();
+        // as m0000_co: sprint (20) and sprint start (43) suppress recovery
+        // throughout, the stop (21) for frames 0-17
+        s.motions.insert(20, run().with_events(suppress(10, 10)));
+        s.motions
+            .insert(43, RootMotion::none(15).with_events(suppress(14, 14)));
+        s.motions.insert(
+            0x15,
+            RootMotion::none(31)
+                .with_curves(stop_curve())
+                .with_events(suppress(18, 31)),
+        );
+        let sprint = Input {
+            sprint: true,
+            ..fwd()
+        };
+        let mut inputs = HashMap::from([(0, sprint)]);
+        s.step(2.0, &inputs, &Flat(0.0));
+        // 60 frames at -1.5 (the dash row at load class 1): 640 - 90
+        let p = s.player(0).unwrap();
+        assert!((p.stamina - 550.0).abs() < 1e-3, "{}", p.stamina);
+        inputs.clear();
+        // the stop holds stamina for 18 motion frames (0.6 s), then recovers
+        s.step(0.5, &inputs, &Flat(0.0));
+        assert!((s.player(0).unwrap().stamina - 550.0).abs() < 1e-3);
+        s.step(0.5, &inputs, &Flat(0.0));
+        let st = s.player(0).unwrap().stamina;
+        assert!(st > 550.0 && st < 550.0 + 1.625 * 15.0, "{st}");
+        // idle: +1.625 per frame
+        s.step(1.0, &inputs, &Flat(0.0));
+        let gain = s.player(0).unwrap().stamina - st;
+        assert!((gain - 48.75).abs() < 1e-2, "{gain}");
+        assert!(!s.player(0).unwrap().ran_out);
+    }
+
+    #[test]
+    fn stamina_runs_out_and_clamps() {
+        let mut s = sim();
+        s.motions.insert(20, run().with_events(suppress(10, 10)));
+        s.motions
+            .insert(43, RootMotion::none(15).with_events(suppress(14, 14)));
+        s.player_mut(0).unwrap().stamina = 3.0;
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                sprint: true,
+                ..fwd()
+            },
+        )]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.stamina, 0.0);
+        assert!(p.ran_out);
+    }
+
+    /// Flat at y 0 for x < 100, a 3:1 slope (72 degrees) down to y -300 at
+    /// x = 200, flat beyond.
+    struct Steep;
+    impl Steep {
+        fn at(x: f32) -> (f32, [f32; 3]) {
+            if x < 100.0 {
+                (0.0, [0.0, 1.0, 0.0])
+            } else if x < 200.0 {
+                let l = 10f32.sqrt();
+                (-(x - 100.0) * 3.0, [3.0 / l, 1.0 / l, 0.0])
+            } else {
+                (-300.0, [0.0, 1.0, 0.0])
+            }
+        }
+    }
+    impl Ground for Steep {
+        fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+            let h = Self::at(x).0;
+            (h <= below_y).then_some(h)
+        }
+        /// Vertical casts only (what the movement uses).
+        fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<RayHit> {
+            let (h, normal) = Self::at(from[0]);
+            (from[1] >= h && to[1] <= h).then_some(RayHit {
+                point: [from[0], h, from[2]],
+                normal,
+            })
+        }
+    }
+
+    #[test]
+    fn steep_ground_is_fallen_down_not_walked() {
+        let mut s = sim();
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                stick: [0.0, 1.0],
+                camera_yaw: std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            },
+        )]);
+        let mut states = Vec::new();
+        for _ in 0..90 {
+            s.step(1.0 / 30.0, &inputs, &Steep);
+            let p = s.player(0).unwrap();
+            if states.last() != Some(&p.state) {
+                states.push(p.state);
+            }
+            // never stands on the slope
+            if (100.5..199.5).contains(&p.position[0]) {
+                assert!(
+                    !matches!(p.state, State::Run { .. } | State::Land { .. }),
+                    "{p:?}"
+                );
+            }
+        }
+        assert!(states.contains(&State::Fall), "{states:?}");
+        let p = s.player(0).unwrap();
+        assert_eq!(p.position[1], -300.0, "{p:?}");
+    }
+
+    #[test]
+    fn a_fall_starts_at_most_at_the_capped_speed() {
+        // the ground drops 300 cm at x = 100; sprinting off it
+        struct Drop;
+        impl Ground for Drop {
+            fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+                let h = if x < 100.0 { 0.0 } else { -300.0 };
+                (h <= below_y).then_some(h)
+            }
+        }
+        let mut s = sim();
+        s.player_mut(0).unwrap().position = [-200.0, 0.0, 0.0];
+        let inputs = HashMap::from([(
+            0,
+            Input {
+                stick: [0.0, 1.0],
+                sprint: true,
+                camera_yaw: std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            },
+        )]);
+        for _ in 0..240 {
+            s.step(TICK / MOTION_FPS, &inputs, &Drop);
+            let p = s.player(0).unwrap();
+            if p.state == State::Fall {
+                let h = len2([p.velocity[0], p.velocity[2]]);
+                assert!(h <= MOVE_SHIPPED.fall_max + 1e-4, "{p:?}");
+                return;
+            }
+        }
+        panic!("never fell");
+    }
+
+    #[test]
+    fn climb_progress_follows_the_motion_curves() {
+        let mut s = sim();
+        // m0000_co slot 48 curve 10: 0 at frame 0, 1 from frame 4
+        let key = |frame: u16, v: f32| mtlmt::CurveKey {
+            interp: 1,
+            frame,
+            value: v.to_bits(),
+            tangent_in: 0.0,
+            tangent_out: 0.0,
+        };
+        let mut c = vec![
+            mtlmt::Curve {
+                kind: 1,
+                keys: Vec::new()
+            };
+            16
+        ];
+        c[CLIMB_POSITION_CURVE].keys = vec![key(0, 0.0), key(4, 1.0)];
+        s.motions.insert(0x30, RootMotion::none(35).with_curves(c));
+        assert_eq!(s.progress(0x30, CLIMB_POSITION_CURVE, 2.0, 34.0), 0.5);
+        assert_eq!(s.progress(0x30, CLIMB_POSITION_CURVE, 20.0, 34.0), 1.0);
+        // no curve 9 in this motion: linear over its length
+        assert_eq!(s.progress(0x30, SPEED_CURVE, 17.0, 34.0), 0.5);
+    }
+
+    #[test]
+    fn a_run_stops_at_once() {
+        let mut s = sim();
+        s.motions
+            .insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let mut inputs = HashMap::from([(0, fwd())]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        let z0 = s.player(0).unwrap().position[2];
+        inputs.clear();
+        s.step(1.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        assert_eq!(p.position[2], z0);
+    }
+
     #[test]
     fn relaxed_run_uses_the_town_motion_and_speed() {
         let mut s = sim();
@@ -1679,7 +2174,8 @@ mod tests {
         assert_eq!(p.state.motion_id(), 0x55);
         // 12.0 x 0.8471 = 10.165 cm per frame, as recorded (uPlayer +0x2530)
         assert!((p.speed - 10.165).abs() < 1e-3, "{}", p.speed);
-        assert!((p.position[2] - 101.65).abs() < 1e-2, "{:?}", p.position);
+        // 10 frames x 10.165 x 1.15 (the scaled unit time)
+        assert!((p.position[2] - 116.8975).abs() < 1e-2, "{:?}", p.position);
     }
 
     #[test]
@@ -1716,6 +2212,7 @@ mod tests {
         t[ADJUST_RUN] = 15.0;
         t[ADJUST_RUN_RELAXED] = 12.0;
         t[ADJUST_SPRINT] = 22.5;
+        t[ADJUST_FALL_MAX] = 7.0;
         assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
         assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
     }
