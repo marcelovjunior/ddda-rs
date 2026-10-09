@@ -108,8 +108,13 @@ sets its own duration (*not traced*).
   kinds of masks 0xC0B (poison, slow, silence, burning, frozen), 0xF9F
   (poison, slow, blind, silence, sleep, possession, seal, curse, burning,
   frozen), 0x3C000 (the four downs) and 0x3D000 (the downs and petrify).
-  Which items send which message is *not traced* (asked of claude-6,
-  board #1227).
+  Which items send which message is *not traced*. Lead (claude-6, #1230):
+  the item record (`dditem` ITL) holds 15 per-status cure bytes at
+  +0x25..+0x33 (Riftstone: poison, torpor, blind, sleep, tarred, drenched,
+  possession, silence, seal, curse, petrify, then the four downs; a
+  panacea sets all 15), and the item-use handler 0x0045F250 is on the
+  path; the code that turns those bytes into messages 0x12..0x15 is not
+  read.
 - **Healing water** (`FUN_008542C0`, from `uCharacterBase::vf93`): a
   character standing in water deeper than `param\game`[9] on ground with
   attribute 0x3000000 and collision flags 0x2B30 / 0x2368 bit 0 heals HP
