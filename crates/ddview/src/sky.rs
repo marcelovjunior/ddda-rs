@@ -178,6 +178,17 @@ pub struct StageSky {
     /// the weather scales (`mEnvMapBaseColorScale_C/_R`, `mEnvMapBaseScale_C/_R`)
     /// are not applied (their use is not traced), the blend factor is 0.
     pub env_colors: [[f32; 3]; 5],
+    /// The cloud domes (`uSkyCloudModel`) of this weather.
+    pub clouds: Vec<CloudDome>,
+}
+
+/// A `uSkyCloudModel` of the sky scheduler.
+#[derive(Clone, Debug)]
+pub struct CloudDome {
+    pub model: String,
+    /// `mDayOnly`: hidden by night (its alpha is the day share, 0x00c64620).
+    pub day_only: bool,
+    pub light: mtweather::sky::CloudUnit,
 }
 
 /// First key of the track `name` under track `parent`.
@@ -261,7 +272,32 @@ impl StageSky {
             let c = element("mEnvMapColor", i as u32).unwrap_or([1.0; 4]);
             std::array::from_fn(|k| base[k] * (1.0 + c[3] * (c[k] - 1.0)))
         });
-        Some(StageSky { sky: sky_res, inputs: inp, lights, env_colors })
+        // Cloud domes whose mWeatherType is this weather (0x00c64620 gives
+        // the others alpha 0 once the weather has settled).
+        let cloud_type = mtarc::type_hash("uSkyCloudModel");
+        let clouds = s
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| t.type_hash == cloud_type && int(&s, *i, "mWeatherType") == Some(weather as i32))
+            .filter_map(|(i, _)| {
+                let Some(Value::Resource(Some((_, model)))) = value(&s, i, "mpModel") else { return None };
+                let f = |name, d| float(&s, i, name).unwrap_or(d);
+                Some(CloudDome {
+                    model,
+                    day_only: matches!(value(&s, i, "mDayOnly"), Some(Value::Bool(true))),
+                    light: mtweather::sky::CloudUnit {
+                        sun_height: f("mSunColorHeight", 0.0),
+                        sun_scale: f("mSunColorScale", 1.0),
+                        saturation: f("mSaturationScale", 1.0),
+                        intensity: f("mIntensityScale", 1.0),
+                        amb_height: f("mAmbColorHeight", 0.0),
+                        amb_scale: f("mAmbColorScale", 1.0),
+                    },
+                })
+            })
+            .collect();
+        Some(StageSky { sky: sky_res, inputs: inp, lights, env_colors, clouds })
     }
 
     /// The light units of the scheduler by their tracks: the infinite
@@ -415,12 +451,18 @@ impl StageSky {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn follow_camera(
-    cams: Query<&Transform, (With<Camera3d>, Without<SkyDome>)>,
+    cams: Query<&Transform, (With<Camera3d>, Without<SkyDome>, Without<crate::stage::SkyFollow>)>,
+    mut clouds: Query<&mut Transform, (With<crate::stage::SkyFollow>, Without<Camera3d>, Without<SkyDome>)>,
     mut domes: Query<(&mut Transform, &SkyDome)>,
     mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
     let Some(cam) = cams.iter().next() else { return };
+    for mut t in &mut clouds {
+        t.translation.x = cam.translation.x;
+        t.translation.z = cam.translation.z;
+    }
     for (mut t, dome) in &mut domes {
         t.translation = cam.translation;
         let eye = (cam.translation / crate::stage::UNIT).extend(0.0);

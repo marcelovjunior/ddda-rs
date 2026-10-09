@@ -126,6 +126,8 @@ pub struct DdParams {
     pub spot_dir: Vec4,
     pub spot_color: Vec4,
     pub spot_atten: Vec4,
+    /// rgb: the constant light of `FLAG_CONST_LIGHT` materials.
+    pub const_light: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
@@ -142,6 +144,12 @@ const FLAG_ENV_CUBE: u32 = 64;
 const FLAG_NO_LIGHT_BUFFER: u32 = 128;
 /// Alpha blended: keeps its alpha (others write the view depth there).
 const FLAG_BLENDED: u32 = 256;
+/// Lit by a constant colour (`const_light`) instead of the stage lights.
+const FLAG_CONST_LIGHT: u32 = 512;
+
+/// Marks the sky's cloud domes; they follow the camera horizontally.
+#[derive(Component)]
+pub struct SkyFollow;
 
 /// Colour of each of the five environment cubes `DDCube<i>_CM`, made from
 /// `DDBaseCube<i>_CM` by the weather manager's `mEnvMapBaseColor[i]` x
@@ -894,6 +902,44 @@ impl Loader<'_> {
             },
             handle: OnceLock::new(),
         }))
+    }
+
+    /// A sky cloud dome (`uSkyCloudModel`): the model at `pos` (viewer
+    /// units), lit by the constant `light` (the unit's sun plus ambient
+    /// colour; *assumed*, its shader is not traced) with its alpha times
+    /// `alpha`, following the camera horizontally.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_sky_model(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        path: &str,
+        light: Vec3,
+        alpha: f32,
+        pos: Vec3,
+    ) -> bool {
+        let Some(parts) = self.model(path, meshes, materials, images) else { return false };
+        for p in &parts {
+            let PartMaterial::Dd(slot) = &p.material else { continue };
+            let mut m = slot.material.clone();
+            m.extension.params.flags |= FLAG_CONST_LIGHT;
+            m.extension.params.const_light = light.extend(0.0);
+            let a = m.base.base_color.alpha() * alpha;
+            m.base.base_color.set_alpha(a);
+            let slot = Arc::new(DdSlot { material: m, handle: OnceLock::new() });
+            commands.spawn((
+                Mesh3d(p.mesh.clone()),
+                Transform::from_translation(pos),
+                Name::new(path.to_string()),
+                PendingDd(slot),
+                SkyFollow,
+                bevy::light::NotShadowCaster,
+                bevy::light::NotShadowReceiver,
+            ));
+        }
+        true
     }
 
     fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {

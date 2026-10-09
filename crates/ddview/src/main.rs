@@ -588,7 +588,24 @@ fn setup(
         }
     });
     if let Some(light) = &args.light {
-        match sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0)) {
+        let sky = sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0));
+        if let (Some(sky), Some(ms)) = (&sky, args.clock_ms.or(light.clock_ms)) {
+            // The cloud domes, at the sky's height offset above the camera's
+            // ground position.
+            let sun = mtweather::sky::sun_direction(&sky.sky, ms);
+            let day = 1.0 - mtweather::sky::night_blend(sun);
+            let pos = Vec3::new(args.pos.x, sky.inputs.height_offset, args.pos.z) * stage::UNIT;
+            for c in &sky.clouds {
+                let alpha = if c.day_only { day } else { 1.0 };
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let (s, a) = mtweather::sky::cloud_light(&sky.sky, &sky.inputs, sun, &c.light);
+                let light = Vec3::from(s) + Vec3::from(a);
+                loader.spawn_sky_model(&mut commands, &mut meshes, &mut materials, &mut images, &c.model, light, alpha, pos);
+            }
+        }
+        match sky {
             Some(sky) => sky.spawn(
                 &mut commands,
                 &mut meshes,

@@ -62,6 +62,8 @@ struct DdParams {
     spot_dir: vec4<f32>,
     spot_color: vec4<f32>,
     spot_atten: vec4<f32>,
+    // rgb: constant light (FLAG_CONST_LIGHT)
+    const_light: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
@@ -78,6 +80,8 @@ const FLAG_ENV_CUBE: u32 = 64u;
 const FLAG_NO_LIGHT_BUFFER: u32 = 128u;
 // Alpha blended (keeps its alpha in the frame).
 const FLAG_BLENDED: u32 = 256u;
+// Lit by a constant colour (the sky's cloud domes).
+const FLAG_CONST_LIGHT: u32 = 512u;
 
 struct SkyEnvParams {
     cb: array<vec4<f32>, 11>,
@@ -220,6 +224,9 @@ fn fragment(
         if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
             // Unlit: the vertex colour (in the base colour) is the light.
             light = vec3<f32>(1.0);
+        }
+        if ((dd.flags & FLAG_CONST_LIGHT) != 0u) {
+            light = dd.const_light.rgb;
         }
         var color = pbr_input.material.base_color.rgb * light;
         if ((dd.flags & FLAG_REFLECT) != 0u) {
