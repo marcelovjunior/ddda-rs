@@ -262,24 +262,34 @@ impl<D: Data> Story<D> {
         Ok(())
     }
 
-    /// One frame.
+    /// One frame, in the order of the original's frame (docs/FRAME.md 6.2,
+    /// `sAreaExt::vf06` 0x00419910 walking the area stack root first):
+    /// 1. the host's reports since the last frame (completions, loads);
+    /// 2. `aGameMain` slot 7 (0x004FB960): sQuestManager vf06 0x00482dd0,
+    ///    the quests and their QCT;
+    /// 3. `aStage` slot 7 (0x00504330): the stage mode (event end
+    ///    0x0050c7a0, the vocation menu's close in mode 0x19, a pending
+    ///    event request taken by play mode 0x0050b870);
+    /// 4. then sScenario vf06 0x0049a0e0 (trigger volumes);
+    /// 5. unit pass A, line 0: stage scripts (uFSMTask) and quest scripts
+    ///    (uFSMQuest). The original runs them as concurrent jobs, so their
+    ///    relative order is not defined; here stage scripts go first.
     pub fn tick(&mut self, inputs: &Inputs, host: &dyn Host) -> Result<Vec<Request>, Error> {
         let mut out = vec![];
         let mut cmds = vec![];
         self.frame += 1;
+        // 1. Reports. The event end and the menu close are stage-mode
+        // steps: they run in 3.
+        let mut event_end = false;
+        let mut menu_closed = false;
         for e in &inputs.events {
             match e {
                 HostEvent::StageLoaded { stage } => self.enter_stage(*stage, &mut cmds)?,
-                HostEvent::EventFinished => self.event_end(&mut out, &mut cmds)?,
+                HostEvent::EventFinished => event_end = true,
                 HostEvent::FadeBlack(b) => self.stage.fade_black = *b,
                 HostEvent::CameraFinished => self.stage.camera_running = false,
                 HostEvent::MessageFinished => self.stage.message_showing = false,
-                // Stage mode 0x19 (0x00512fb0) on closing uGUIJobChange:
-                // sGameSys +0xac710 |= 0x800, i.e. GSF 372.
-                HostEvent::MenuClosed(Menu::Vocation) => {
-                    self.world.gsf.set(372, true);
-                    self.stage.menu_open = false;
-                }
+                HostEvent::MenuClosed(Menu::Vocation) => menu_closed = true,
                 HostEvent::SetGsf { no, value } => self.world.gsf.set(*no as usize, *value),
                 HostEvent::PlayerJob(j) => self.world.player_job = *j,
                 HostEvent::SetQuestBit { quest, bit, value } => {
@@ -291,16 +301,11 @@ impl<D: Data> Story<D> {
         }
         self.apply(&mut cmds, &mut out)?;
         if self.stage.stage_no == 0 {
-            return Ok(out);
-        }
-        // Play mode (0x0050b870): a pending request becomes the playing one
-        // (0x00516fc0).
-        if self.stage.event.playing.is_none() {
-            if let Some(req) = self.stage.event.pending.take() {
-                out.push(Request::PlayEvent { row: req.row, stage: req.stage, event: req.event });
-                self.stage.event.playing = Some(req);
-                self.stage.event.started = true;
+            if event_end {
+                self.event_end(&mut out, &mut cmds)?;
+                self.apply(&mut cmds, &mut out)?;
             }
+            return Ok(out);
         }
         let events = self.data.event_table().cloned();
         self.stage.npcs = inputs.npcs.clone();
@@ -320,8 +325,30 @@ impl<D: Data> Story<D> {
                     && !q.log.is_empty()
             })
             .count() as u32;
-        // Phase order between systems and units is not traced; this one is
-        // fixed: scenarios, quest manager, stage tasks, quest scripts.
+        // 2. Quests and QCT.
+        self.quest_manager(inputs, host, &mut out, &mut cmds, events.as_ref())?;
+        self.apply(&mut cmds, &mut out)?;
+        // 3. Stage mode.
+        if event_end {
+            self.event_end(&mut out, &mut cmds)?;
+        }
+        // Stage mode 0x19 (0x00512fb0) on closing uGUIJobChange:
+        // sGameSys +0xac710 |= 0x800, i.e. GSF 372.
+        if menu_closed {
+            self.world.gsf.set(372, true);
+            self.stage.menu_open = false;
+        }
+        // Play mode (0x0050b870): a pending request becomes the playing one
+        // (0x00516fc0).
+        if self.stage.event.playing.is_none() {
+            if let Some(req) = self.stage.event.pending.take() {
+                out.push(Request::PlayEvent { row: req.row, stage: req.stage, event: req.event });
+                self.stage.event.playing = Some(req);
+                self.stage.event.started = true;
+            }
+        }
+        self.apply(&mut cmds, &mut out)?;
+        // 4. Scenarios.
         {
             let mut env = Env {
                 world: &mut self.world,
@@ -338,8 +365,7 @@ impl<D: Data> Story<D> {
             r?;
         }
         self.apply(&mut cmds, &mut out)?;
-        self.quest_manager(inputs, host, &mut out, &mut cmds, events.as_ref())?;
-        self.apply(&mut cmds, &mut out)?;
+        // 5. Scripts (line 0).
         let mut tasks = std::mem::take(&mut self.tasks);
         let mut res = Ok(());
         for t in tasks.iter_mut() {
@@ -378,6 +404,17 @@ impl<D: Data> Story<D> {
         }
         self.apply(&mut cmds, &mut out)?;
         Ok(out)
+    }
+
+    /// Every running script's state, stage scripts first (creation order),
+    /// then quest scripts (quest order). Read-only; for replay hashes and
+    /// debugging.
+    pub fn script_states(&self) -> Vec<crate::script::ScriptState> {
+        self.tasks
+            .iter()
+            .chain(self.quests.iter().filter_map(|q| q.script.as_ref()))
+            .map(|s| s.state())
+            .collect()
     }
 
     /// sQuestManager vf06 0x00482dd0 (story part): drop removed quests,
