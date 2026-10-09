@@ -1,9 +1,9 @@
 # travel-destination-consumer: Destination queue through arrival selection
 
-- **Owner:** proposed for Codex lane; await head assignment
+- **Owner:** codex-1 (head assignment #417)
 - **Branch:** `task/travel-destination-consumer`
 - **Board area:** `formats/travel-rules`
-- **Status:** proposed
+- **Status:** review; original observation blocked
 
 ## Goal
 
@@ -59,4 +59,22 @@ write the install/process, delegate such writes or commit private captures.
 
 ## Results
 
-(filled by assigned agent)
+Resolved the missing stage register argument in 0x00b06c30 and the queue
+operation at0x00401160. Traced state13 via0x0050ef80 to stage dispatcher
+0x004fbd50, then arrival seed0x004ff910: fixed rStartPos rows versus the
+same ten saved Portcrystal stages/positions used by placement and pickup.
+Consumption precedes queue acceptance; Eternal1724 remains exempt. Full
+upstream use/cancel gates and exceptional stage paths remain unresolved.
+
+Added actor-independent pure decoders/extractor with explicit caller state,
+source comments and restrictive unsupported-state handling. Four travel tests
+pass: three synthetic boundary/arrival tests and one installed-resource test
+covering all four fixed stage/start pairs. No core or process edits.
+
+TRAVEL.md records source addresses, stale-slot byte/fallback behavior,
+pre-collision arrival limits and a proposed explicit actor/world input
+contract. Board#534 confirms the requested ordinary travel capture is absent;
+an idle read found stage100, selectors0 and empty saved slots only.
+Comparison and full completion of that evidence gate
+remain blocked, not claimed. Next: observe selector/stage/count relation and
+resolve upstream restrictions before host-authoritative integration.

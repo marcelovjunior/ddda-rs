@@ -2,6 +2,8 @@
 //! Serialized names are retained without assigning untraced gameplay semantics.
 use mtxfs::{Object, Value, Xfs};
 
+pub mod travel;
+
 pub type Result<T> = std::result::Result<T, String>;
 
 fn class(x: &Xfs, o: &Object, name: &str) -> Result<()> {
