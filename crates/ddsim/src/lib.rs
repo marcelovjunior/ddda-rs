@@ -421,6 +421,14 @@ pub struct Player {
     /// Stamina ran out (crossed to 0) at least once since the host cleared
     /// it. What the original does next (`cPlActTired`) is not modelled.
     pub ran_out: bool,
+    /// The ring of safe ground positions (uPlayerBase +0x4A60, 4 slots,
+    /// newest first; `Sim::record_safe`).
+    pub safe: [[f32; 3]; 4],
+    /// Frames airborne without moving down (uPlayerBase +0x4AA4).
+    pub stuck: f32,
+    /// Times the body was warped back to a safe position (a host may fade
+    /// the screen as the original does for the Arisen).
+    pub warps: u32,
     /// The player's own time per game time in the current `Sim::step` (the
     /// unit delta factor, `LOCOMOTION_RATE` while walking, running or
     /// sprinting) and the factors the last two steps ended with: a factor
@@ -708,6 +716,23 @@ pub const FALL_GRAVITY: f32 = -2.0;
 /// the fall distance, is >= -100; constant 0x0161C308).
 pub const LEDGE_FALL_MIN_DROP: f32 = 100.0;
 
+/// A fall of more than this (cm, uPlayer +0x207C below -20000) in the air
+/// warps the body back to a safe position (`0x00B63520`; not on stage
+/// 0x259).
+pub const LOST_FALL: f32 = 20000.0;
+/// Frames in the air without moving down before the body is taken as stuck
+/// and warped back (`0x00B63520`, uPlayerBase +0x4AA4).
+pub const STUCK_FRAMES: f32 = 90.0;
+/// A new safe position needs this distance (cm) from the newest one
+/// (`0x00B62980`: squared 10000).
+pub const SAFE_STEP: f32 = 100.0;
+/// The ground under a safe position may be at most this far below the
+/// feet (`0x00B62980`: the ground hit at or above y - 50).
+pub const SAFE_GROUND_BELOW: f32 = 50.0;
+/// The warp's choice between the two newest positions (`0x00B62D20`:
+/// squared 40000).
+pub const SAFE_NEAR: f32 = 200.0;
+
 pub struct Sim {
     pub players: Vec<Player>,
     pub motions: HashMap<u16, RootMotion>,
@@ -800,6 +825,10 @@ impl Sim {
             body_class: 1,
             load_class: 1,
             ran_out: false,
+            // 0x00B628A0 seeds the ring with the spawn position
+            safe: [position; 4],
+            stuck: 0.0,
+            warps: 0,
             unit_rate: 1.0,
             rate_queue: [1.0; 2],
             weapon: Weapon::None,
@@ -892,6 +921,11 @@ impl Sim {
         let unit_dt = dt * self.players[i].unit_rate;
         self.frame_states(i, input, ground, unit_dt);
         self.stamina_step(i, state0, frame0, dt);
+        // uPlayerBase::vf90: the safe ring, then the lost-body check
+        self.record_safe(i, ground);
+        if self.lost(i, unit_dt) {
+            self.warp_to_safe(i, ground);
+        }
         // 0x0088A7E0: the fall distance (uPlayer +0x207C) counts from the
         // last frame the character did not move down
         let p = &mut self.players[i];
@@ -1415,6 +1449,105 @@ impl Sim {
                 }
             }
         }
+    }
+
+    /// Keeps the ring of safe positions: while standing or moving on the
+    /// ground (the wait, walk, run and sprint), at least `SAFE_STEP` from the
+    /// newest and with ground within `SAFE_GROUND_BELOW` under the feet, the
+    /// position is pushed in front and the oldest dropped. The original
+    /// also refuses water, kill-zone latches and ground with attribute bits
+    /// 0x80800 (not modelled).
+    // Translated from 0x00B62980 (DDDA.exe 2017-12-13 Steam); the action
+    // whitelist there also has 0x3D, 0x41, 0x42, 0x4F, 0x53, 0x54, 0x61,
+    // 0x65, 0x66, 0xB4 and some weapon actions, which ddsim does not have.
+    fn record_safe(&mut self, i: usize, ground: &dyn Ground) {
+        let p = &self.players[i];
+        if !matches!(
+            p.state,
+            State::Wait | State::Walk { .. } | State::Run { .. } | State::Sprint
+        ) {
+            return;
+        }
+        let q = p.position;
+        let d = sub3(q, p.safe[0]);
+        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < SAFE_STEP * SAFE_STEP {
+            return;
+        }
+        // the original reads the body's last ground hit (uPlayer +0x3284);
+        // here the ground within SAFE_GROUND_BELOW above or below the feet
+        if ground
+            .height(q[0], q[2], q[1] + SAFE_GROUND_BELOW)
+            .is_none_or(|g| g < q[1] - SAFE_GROUND_BELOW)
+        {
+            return;
+        }
+        let p = &mut self.players[i];
+        p.safe.rotate_right(1);
+        p.safe[0] = q;
+    }
+
+    /// The lost-body check: true after a fall of more than `LOST_FALL` in
+    /// the air, or `STUCK_FRAMES` in the air without moving down. The stuck
+    /// count restarts whenever the body moves down in the air; climbing
+    /// and the original's other exemptions (some actions and status flags)
+    /// stop it.
+    // Translated from 0x00B63520 (DDDA.exe 2017-12-13 Steam).
+    fn lost(&mut self, i: usize, dt: f32) -> bool {
+        let p = &mut self.players[i];
+        let airborne = matches!(p.state, State::Air { .. } | State::SecondJump | State::Fall);
+        if !airborne {
+            return false;
+        }
+        if p.velocity[1] < 0.0 {
+            p.stuck = 0.0;
+        }
+        p.stuck += dt;
+        if STUCK_FRAMES <= p.stuck {
+            p.stuck = 0.0;
+            return true;
+        }
+        p.position[1] - p.drop_from < -LOST_FALL
+    }
+
+    /// Back to a safe position: the second newest if the body is within
+    /// `SAFE_NEAR` of the newest and the two are that close, else the newest
+    /// if the body is that close to it, else the first of the four with
+    /// ground from 100 above to 50 below it (at the higher of the two). The
+    /// body then waits, falling at 2 cm a frame, its fall measured afresh.
+    /// No slot with ground leaves the body where it is. For the Arisen the
+    /// original runs this behind a 15-frame fade (stage mode 0x27,
+    /// `0x005149E0`); a host can show one on `Player::warps`.
+    // Translated from 0x00B62D20 (DDDA.exe 2017-12-13 Steam).
+    fn warp_to_safe(&mut self, i: usize, ground: &dyn Ground) {
+        let p = &self.players[i];
+        let near = |a: [f32; 3], b: [f32; 3]| {
+            let d = sub3(a, b);
+            d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < SAFE_NEAR * SAFE_NEAR
+        };
+        let to = if near(p.position, p.safe[0]) {
+            Some(if near(p.safe[0], p.safe[1]) {
+                p.safe[1]
+            } else {
+                p.safe[0]
+            })
+        } else {
+            p.safe.iter().find_map(|&s| {
+                ground
+                    .height(s[0], s[2], s[1] + 100.0)
+                    .filter(|&g| g >= s[1] - 50.0)
+                    .map(|g| [s[0], s[1].max(g), s[2]])
+            })
+        };
+        let Some(to) = to else { return };
+        let p = &mut self.players[i];
+        p.position = to;
+        p.velocity = [0.0, -2.0, 0.0];
+        p.speed = 0.0;
+        p.hold = None;
+        p.drop_from = to[1];
+        p.stuck = 0.0;
+        p.warps += 1;
+        Self::set_state(p, State::Wait);
     }
 
     /// Runs the ledge test (with `reach`) and, if it passes, takes hold.
@@ -3002,5 +3135,81 @@ mod tests {
         }
         let p = s.player(0).unwrap();
         assert!(p.position[0] > 300.0, "{:?}", p.position);
+    }
+
+    /// Flat ground east of x = 0; west of it a pit 1 km deep.
+    struct Edge;
+    impl Ground for Edge {
+        fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+            let h = if x >= 0.0 { 0.0 } else { -100_000.0 };
+            (h <= below_y).then_some(h)
+        }
+    }
+
+    /// A body that walks off into a deep pit falls 200 m, then is put back
+    /// on a safe position it walked over (0x00B63520, 0x00B62D20).
+    #[test]
+    fn a_body_falling_200_m_is_warped_back_to_safe_ground() {
+        let mut s = sim();
+        s.players[0].position = [450.0, 0.0, 0.0];
+        // west: stick screen-right with the camera along +z
+        let west = Input {
+            stick: [1.0, 0.0],
+            ..Default::default()
+        };
+        let mut fell = None;
+        for f in 0..400 {
+            s.step(1.0 / 30.0, &HashMap::from([(0, west)]), &Edge);
+            let p = s.player(0).unwrap();
+            if p.position[1] < -100.0 && fell.is_none() {
+                fell = Some(f);
+            }
+            if p.warps > 0 {
+                break;
+            }
+        }
+        let p = s.player(0).unwrap();
+        assert!(fell.is_some());
+        assert_eq!(p.warps, 1);
+        // the walk west recorded safe positions every metre: back on one
+        // (the rest of the step ran on from it with the stick held)
+        assert!(
+            matches!(p.state, State::Wait | State::Run { .. }),
+            "{:?}",
+            p.state
+        );
+        assert_eq!(p.position[1], 0.0);
+        assert!(p.position[0] >= 0.0, "{:?}", p.position);
+        assert!(
+            p.safe.iter().any(|q| (q[0] - p.position[0]).abs() < 20.0),
+            "{:?} {:?}",
+            p.position,
+            p.safe
+        );
+    }
+
+    /// 90 frames in the air without moving down count as stuck.
+    #[test]
+    fn a_body_stuck_in_the_air_is_warped_back() {
+        let mut s = sim();
+        s.jump_normal.gravity = 0.0;
+        s.jump_normal.speed_y = 1.0;
+        let jump = Input {
+            jump: true,
+            ..Default::default()
+        };
+        s.step(1.0 / 30.0, &HashMap::from([(0, jump)]), &Flat(0.0));
+        let mut n = 0;
+        while s.player(0).unwrap().warps == 0 && n < 200 {
+            s.step(1.0 / 30.0, &HashMap::new(), &Flat(0.0));
+            n += 1;
+        }
+        let p = s.player(0).unwrap();
+        assert_eq!(p.warps, 1, "{:?}", p.state);
+        // takeoff (5 frames) then 90 in the air
+        assert!((90..=97).contains(&n), "{n}");
+        // near the newest safe slot, whose neighbour is close too: the
+        // second newest, here the spawn
+        assert_eq!(p.position, [0.0; 3]);
     }
 }
