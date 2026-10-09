@@ -283,3 +283,9 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   applied/pending state before replacing identity; it does not apply the
   old graph to the replacement. All eight host story_pawns regressions
   pass after the fix, including replacement retirement.
+- Runtime preload feasibility verified read-only: existing ddexe checked
+  PE access can read the whitelist directly. Installed and unpacked list
+  bytes match for NPCs 1, 2 and 304; q2 is listed for 1 and 304, not 2.
+  The current installed controller regression's NPC 2 is deliberately a
+  daily-graph suspension fixture, not a claim that its actor owns q2 talk.
+  Scope extension for ddexe dependency is proposed on board #2328.
