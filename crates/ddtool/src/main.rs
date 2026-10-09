@@ -15,6 +15,7 @@ mod model;
 mod msg_dump;
 mod param_dump;
 mod scan;
+mod survey;
 mod tex;
 mod xfs;
 
@@ -35,7 +36,8 @@ const USAGE: &str = "usage:
   ddtool lot-scan <nativePC dir>
   ddtool lmt-scan <nativePC dir>
   ddtool sbc-scan <nativePC dir>
-  ddtool xfs-get <nativePC dir> <resource path>";
+  ddtool xfs-get <nativePC dir> <resource path>
+  ddtool survey <nativePC dir> [resource class]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -56,6 +58,8 @@ fn main() -> ExitCode {
         ["lmt-scan", dir] => xfs::lmt_scan(Path::new(dir)),
         ["sbc-scan", dir] => xfs::sbc_scan(Path::new(dir)),
         ["xfs-get", dir, path] => xfs::xfs_get(Path::new(dir), path),
+        ["survey", dir] => survey::survey(Path::new(dir), None),
+        ["survey", dir, class] => survey::survey(Path::new(dir), Some(class)),
         _ => Err(USAGE.to_string()),
     };
     match result {

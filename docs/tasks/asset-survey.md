@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/asset-survey`
 - **Board area:** `survey`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -48,4 +48,33 @@ proposed brief. Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+Completed 2026-10-09 by codex-1 on `task/asset-survey`.
+
+- Added `docs/SURVEY.md`: all ten requested systems have measured resource
+  counts, paths, a sample structure, PC exe class/address leads, reference
+  coverage/unknowns and a proposed bounded follow-up brief.
+- Added isolated `ddtool survey <nativePC> [resource class]`; minimal
+  `main.rs` dispatch/usage hookup, no dependency or shared-doc changes.
+- Rebuilt VFS census: 8,536 archives, 358,431 entries, 78,003 unique
+  resource keys, 144 classes present. Counts distinguish unique paths from
+  archive occurrences; they are not content hashes.
+- Inspected samples for 26 resource classes with zero command failures;
+  XFS samples report parsed definitions. Read PC loaders for item list,
+  quest control, NPC ledger, weather effect/fog, GUI, sound package/stream
+  request and effect list. Selected independent checks verify all 1,901
+  item record ids and WEP/WFP strides.
+- Read-only loose-file checks: 285 SNGW streams, six WMV movies, one
+  original save. Save has 32-byte header, a zlib XML payload whose lengths
+  match header fields and zero padding. No save XML or assets were written
+  or committed. Header checksums and runtime save policy remain untraced.
+- Validation: `cargo test -p ddtool` passes (zero unit tests; compilation),
+  full survey plus 26 selected-class smoke runs pass, and diff whitespace
+  check passes. No new gameplay, rendering or comparison to live game.
+- Coordinated `rStatusParam` with codex-4 (reader belongs to enemy-data),
+  text lookups with codex-2, weather findings with head/claude-3.
+- Unknowns are explicit: NPC daily schedules, item/quest execution,
+  travel-item destination/consumption rules, GUI hierarchy, effect bodies,
+  audio loop details, save integrity fields and status timer units.
+- Next action proposed to head: `item-data` first (small verified ITL2
+  entry point, now supported by game text); `weather-data` can independently
+  support M1. Proposals in SURVEY are not started or self-assigned.
