@@ -188,6 +188,15 @@ IDs per row, bank type and UseFindIntersect. Selection 0x00ce00e0 uses the
 surface index, falling back to entry zero for indices outside 0..31; the
 absent-request sentinel remains intact. Three motion-audio unit tests and
 the installed 92-motion-map/one-surface-map scan pass. Actual surface queries
-are still pending: Terrain currently keeps only material word zero, while
-the sound ray getter 0x00423b80 reads query material +4. Its exact SBC
-material mapping needs confirmation before extending the world-query API.
+use query material word one (getter 0x00423b80). The binding is now confirmed:
+0x01165820 / 0x011637f0 put the leaf's material-index-selected 32-byte record
+at query +0x40, and the getter reads that record +4. A private comparison of
+both st200 collision resources found zero leaf/triangle material-index
+differences over 40,949 pairs. This check is limited to those resources.
+
+With head's approval, Terrain now preserves each triangle's full raw material
+and exposes `ray_with_material`; `Ground::ray` retains its existing API and
+hit geometry. Render terrain and flags-only fixtures report unknown material,
+not a fabricated surface. Six world unit tests and the installed higher-ground
+landing regression pass. The new unit check covers nearest-hit material,
+reverse-direction selection, missing material and unchanged movement flags.
