@@ -200,6 +200,13 @@ pub const JUMP_SPRINT: JumpParam = JumpParam {
     damping_z: 0.3,
 };
 
+/// `pljumpparam` rows 0x36, 0x37 and 0x47 as shipped (the air attacks).
+pub const AIR_ROWS_SHIPPED: [(usize, JumpParam); 3] = [
+    (0x36, JumpParam { speed_y: 0.0, speed_z: 0.0, gravity: -2.0, add_move_xz: 4.25, damping_z: 0.25 }),
+    (0x37, JumpParam { speed_y: 0.0, speed_z: 0.0, gravity: -8.0, add_move_xz: 0.0, damping_z: 0.25 }),
+    (0x47, JumpParam { speed_y: 0.0, speed_z: 0.0, gravity: -2.0, add_move_xz: 4.25, damping_z: 0.0 }),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum State {
     Wait,
@@ -362,9 +369,8 @@ impl State {
                 | State::SprintStop
                 | State::Land { .. }
                 | State::SprintJumpLand
-                | State::Attack { .. }
-                | State::Shot { .. }
-        )
+        ) || matches!(self, State::Attack { attack } if !attack.air())
+            || matches!(self, State::Shot { phase } if !phase.air())
     }
 
     /// Whether the motion loops while the state lasts.
@@ -793,6 +799,8 @@ pub struct Sim {
     pub motions: HashMap<u16, RootMotion>,
     pub jump_normal: JumpParam,
     pub jump_sprint: JumpParam,
+    /// `pljumpparam` rows the air attacks load (`Attack::jump_row`), by row.
+    pub air_rows: HashMap<usize, JumpParam>,
     pub move_param: MoveParam,
     pub ledge_param: LedgeParam,
     pub stamina_tables: StaminaTables,
@@ -848,6 +856,7 @@ impl Sim {
             motions,
             jump_normal: JUMP_NORMAL,
             jump_sprint: JUMP_SPRINT,
+            air_rows: AIR_ROWS_SHIPPED.iter().copied().collect(),
             move_param: MOVE_SHIPPED,
             ledge_param: LEDGE_SHIPPED,
             stamina_tables: StaminaTables::shipped(),
@@ -1136,6 +1145,12 @@ impl Sim {
                 }
             }
             State::Air { .. } | State::Fall | State::SecondJump => {
+                // the transition lists' air rows (0x302) come before the
+                // default list (the second jump); the jump and fall motions
+                // keep the attack slots open throughout
+                if self.attack_input(i, light, heavy, moving.then_some(input_yaw)) {
+                    return;
+                }
                 if pressed && self.players[i].jumps_left > 0 {
                     let p = &mut self.players[i];
                     p.jumps_left -= 1;
@@ -1264,7 +1279,7 @@ impl Sim {
                 }
             }
             State::Attack { .. } | State::Shot { .. } => {
-                if moving && self.attack_move_cancel(i) {
+                if moving && state.on_ground_for_attacks() && self.attack_move_cancel(i) {
                     // the stick takes over (slot 0): the ground states run
                     // this frame
                     Self::set_state(&mut self.players[i], State::Wait);
@@ -1361,7 +1376,8 @@ impl Sim {
             _ => None,
         };
         if (light || heavy) && slot != 0 && p.stamina > 0.0 {
-            if let Some(r) = attack::next(p.weapon, current, light, heavy, chain_open) {
+            let air = matches!(p.state, State::Air { .. } | State::Fall | State::SecondJump);
+            if let Some(r) = attack::next(p.weapon, current, light, heavy, chain_open, air) {
                 p.request = Some(r);
             }
         }
@@ -1394,10 +1410,26 @@ impl Sim {
                 };
                 None
             }
+            attack::Request::AirShot => {
+                p.state = State::Shot {
+                    phase: ShotPhase::AirStart,
+                };
+                None
+            }
         };
         p.frame = 0.0;
-        p.velocity = [0.0; 3];
         p.speed = 0.0;
+        // The ground strikes zero the velocity; the air attacks' vf05s keep
+        // it and their vf06s load a jump row (speed, gravity, damping).
+        match p.state {
+            State::Attack { attack } if attack.air() => {
+                if let Some(row) = attack.jump_row().and_then(|r| self.air_rows.get(&r)) {
+                    p.jump = *row;
+                }
+            }
+            State::Shot { phase } if phase.air() => {}
+            _ => p.velocity = [0.0; 3],
+        }
         p.turn_to = p.attack_heading.or(stick);
         p.shot = attack::ShotState::default();
         p.attacks_started += 1;
@@ -1452,6 +1484,10 @@ impl Sim {
             }
         }
         let state = self.players[i].state;
+        if !state.on_ground_for_attacks() {
+            self.air_attack_frame(i, state, light, ground, dt);
+            return;
+        }
         self.ground_move(i, state, ground, dt);
         if self.players[i].state != state {
             return; // fell
@@ -1470,6 +1506,61 @@ impl Sim {
         }
     }
 
+    /// One frame of an air attack.
+    /// - AirS and WandAirStrike: physics every frame (`0x00AC51D0`) under
+    ///   their jump row; their vf05s set +0x35E8 bit 1, so touching ground
+    ///   lands (`cPlActLand`); at their end the fall takes over.
+    /// - AirL: hangs (no physics) until the first bit-31 frame of its
+    ///   motion, then `0x00AC5830` sets the vertical speed to the row's
+    ///   SpeedY (0) and its gravity (-8) and it drops; on ground phase 2
+    ///   plays 0x704 with the velocity zeroed (`SwordAirHeavyLand`).
+    /// - The air WandShot: its phases call no physics; the caster hangs.
+    ///
+    /// What follows an air attack's end in the air is *assumed* to be the
+    /// fall (where the end flag +0x50 is read is not traced).
+    // Translated from cPlActWpnSwordAtckAirS::vf06 0x00B3D360,
+    // cPlActWpnSwordAtckAirL::vf06 0x00B3DA10, cPlActWpnWandAirStrike::vf06
+    // 0x00B51590 and cPlActWpnWandShot's phases (DDDA.exe 2017-12-13 Steam).
+    fn air_attack_frame(&mut self, i: usize, state: State, light: bool, ground: &dyn Ground, dt: f32) {
+        match state {
+            State::Shot { phase } => {
+                self.players[i].frame += dt;
+                self.shot_frame(i, phase, light);
+            }
+            State::Attack { attack: Attack::SwordAirHeavy } => {
+                let closed = |s: &Self, f: f32| {
+                    s.playing(i)
+                        .is_some_and(|m| m.event_bits(0, 0, f as i32) & attack::CHAIN_CLOSED_BIT != 0)
+                };
+                if !closed(self, self.players[i].frame) {
+                    self.players[i].frame += dt;
+                    if closed(self, self.players[i].frame) {
+                        let p = &mut self.players[i];
+                        p.velocity[1] = p.jump.speed_y;
+                    }
+                    return;
+                }
+                self.air_move(i, None, ground, dt);
+                let p = &mut self.players[i];
+                if p.state != state {
+                    // landed: phase 2's motion, standing still
+                    p.velocity = [0.0; 3];
+                    Self::set_state(p, State::Attack { attack: Attack::SwordAirHeavyLand });
+                }
+            }
+            State::Attack { .. } => {
+                self.air_move(i, None, ground, dt);
+                if self.players[i].state != state {
+                    return; // landed
+                }
+                if self.attack_motion_done(i) {
+                    Self::set_state(&mut self.players[i], State::Fall);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `cPlActWpnWandShot::vf06` (0x00B4F190), ground variant.
     // Translated from 0x00B4F490 (phase 0), 0x00B4F610 (phase 1) and
     // 0x00B50590 (phase 3) (DDDA.exe 2017-12-13 Steam).
@@ -1484,14 +1575,27 @@ impl Sim {
         match phase {
             // the start motion's hold time (+0x30) is -1 in variant 0: it
             // plays to its end (or bit 30), then the loop
-            ShotPhase::Start => {
+            ShotPhase::Start | ShotPhase::AirStart => {
                 if done {
-                    Self::set_state(
-                        p,
-                        State::Shot {
-                            phase: ShotPhase::Loop,
-                        },
-                    );
+                    let next = if phase.air() { ShotPhase::AirLoop } else { ShotPhase::Loop };
+                    Self::set_state(p, State::Shot { phase: next });
+                }
+            }
+            ShotPhase::AirLoop => {
+                // variant 1: one volley, no refire
+                if !p.shot.fired && attack::shot::FIRE_FRAME <= p.frame {
+                    p.shot.fired = true;
+                    p.shot.volleys += 1;
+                    p.volleys_fired += attack::shot::SHELLS;
+                    Self::spend(p, cost);
+                }
+                if done {
+                    Self::set_state(p, State::Shot { phase: ShotPhase::AirEnd });
+                }
+            }
+            ShotPhase::AirEnd => {
+                if done {
+                    Self::set_state(p, State::Fall);
                 }
             }
             ShotPhase::Loop => {
@@ -3153,6 +3257,81 @@ mod tests {
         let p = s.player(0).unwrap();
         assert_eq!(p.state, State::Wait);
         assert!((p.yaw.abs() - std::f32::consts::PI).abs() < 1e-4, "{}", p.yaw);
+    }
+
+    /// Jumps in place and steps until the player is in the air.
+    fn airborne(s: &mut Sim) {
+        let mut inputs = HashMap::from([(0, Input { jump: true, ..Default::default() })]);
+        frames(s, 1, &inputs, &Flat(0.0));
+        inputs.insert(0, Input::default());
+        for _ in 0..30 {
+            if matches!(s.player(0).unwrap().state, State::Air { .. }) {
+                return;
+            }
+            frames(s, 1, &inputs, &Flat(0.0));
+        }
+        panic!("never airborne: {:?}", s.player(0).unwrap().state);
+    }
+
+    #[test]
+    fn the_staff_air_shot_hangs_and_fires_once() {
+        let mut s = sim();
+        s.player_mut(0).unwrap().weapon = Weapon::Staff;
+        airborne(&mut s);
+        let light = HashMap::from([(0, Input { light: true, ..Default::default() })]);
+        frames(&mut s, 1, &light, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Shot { phase: ShotPhase::AirStart });
+        let y = p.position[1];
+        assert!(y > 0.0);
+        // its phases call no physics: the caster hangs
+        let none = HashMap::new();
+        frames(&mut s, 20, &none, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().position[1], y);
+        let mut states = Vec::new();
+        for _ in 0..120 {
+            frames(&mut s, 1, &none, &Flat(0.0));
+            states.push(s.player(0).unwrap().state);
+        }
+        assert!(states.contains(&State::Shot { phase: ShotPhase::AirEnd }), "{states:?}");
+        assert!(states.contains(&State::Fall), "{states:?}");
+        // one volley (variant 1), even with more presses
+        assert_eq!(s.player(0).unwrap().volleys_fired, attack::shot::SHELLS);
+    }
+
+    #[test]
+    fn the_sword_plunge_hangs_until_bit_31_then_drops_and_lands() {
+        let mut s = sim();
+        s.player_mut(0).unwrap().weapon = Weapon::Sword;
+        // as m0001_at 0x703: bit 31 from frame 6
+        let run = |bits, frames| mtlmt::EventRun { bits, frames };
+        let events = vec![vec![run(0, 6), run(attack::CHAIN_CLOSED_BIT, 30)], vec![], vec![], vec![]];
+        let bank = s.weapon_motions.entry(Weapon::Sword).or_default();
+        bank.insert(0x703, RootMotion::none(36).with_events(events));
+        bank.insert(0x704, RootMotion::none(10));
+        airborne(&mut s);
+        let heavy = HashMap::from([(0, Input { heavy: true, ..Default::default() })]);
+        frames(&mut s, 1, &heavy, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Attack { attack: Attack::SwordAirHeavy });
+        assert_eq!(p.jump.gravity, -8.0, "row 0x37");
+        let y = p.position[1];
+        let none = HashMap::new();
+        frames(&mut s, 4, &none, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().position[1], y, "hangs before bit 31");
+        let mut landed = false;
+        for _ in 0..60 {
+            frames(&mut s, 1, &none, &Flat(0.0));
+            if s.player(0).unwrap().state == (State::Attack { attack: Attack::SwordAirHeavyLand }) {
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed, "{:?}", s.player(0).unwrap());
+        let p = s.player(0).unwrap();
+        assert!(p.position[1].abs() < 1e-3 && p.velocity == [0.0; 3]);
+        frames(&mut s, 12, &none, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().state, State::Wait);
     }
 
     #[test]
