@@ -1,11 +1,5 @@
 //! Installed-data check; no original gameplay comparison is asserted.
-// The module is tested by path until its shared lib.rs export is integrated.
-use ddenemyrt::body;
-use ddenemyrt::combat;
-#[path = "../src/dragon.rs"]
-mod dragon;
-#[path = "../src/enemy_stats.rs"]
-mod enemy_stats;
+use ddenemyrt::{body, combat, dragon};
 
 #[test]
 fn opening_dragon_definitions_are_loaded_from_the_install() {
@@ -169,12 +163,43 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     );
     assert!(!actor.done());
     assert_eq!(actor.pos, [0.0, 35.0, 0.0]);
+    assert!(
+        actor.fighter.attacks.is_empty() && actor.fighter.hurts.is_empty(),
+        "phase93 does not manufacture a pass-C activation snapshot"
+    );
+    let pose = data
+        .body
+        .pose(body::MotionId::new(0, 100), actor.frame, actor.pos, actor.yaw);
+    actor.finish_pass_c(&data, &pose).unwrap();
+    let previous_hurts = actor.fighter.hurts.clone();
+    assert!(!previous_hurts.is_empty(), "installed dragon must expose body hurt volumes");
     assert_eq!(
         actor.step(&data, input(false)).unwrap(),
         vec![dragon::DragonEffect::HoverAirControl]
     );
     assert!(actor.done());
     assert_eq!(actor.pos, [0.0, 35.0, 0.0]);
+    assert_eq!(actor.fighter.hurts, previous_hurts, "phase91-93 retain the prior pass-C snapshot");
+    // Terrain/constraint resolution can change the final matrices without
+    // changing the actor prefix's position. Only the explicit pass-C call
+    // may publish this corrected pose to combat.
+    let mut corrected = pose.clone();
+    corrected.model[3][1] += 123.0;
+    for (_, matrix) in &mut corrected.joints { matrix[3][1] += 123.0; }
+    actor.finish_pass_c(&data, &corrected).unwrap();
+    assert_eq!(actor.fighter.hurts.len(), previous_hurts.len());
+    let centre = |volume: &ddcombat::volumes::Volume| match volume {
+        ddcombat::volumes::Volume::Sphere { c, .. } => *c,
+        ddcombat::volumes::Volume::Capsule { p0, .. } => *p0,
+    };
+    for (old, new) in previous_hurts.iter().zip(&actor.fighter.hurts) {
+        let old = centre(&old.volume); let new = centre(&new.volume);
+        assert!((new[1] - old[1] - 123.0).abs() < 0.01);
+        // Short capsules rebuild their endpoint inset; translating before
+        // that float calculation can round the normalized direction.
+        assert!((new[0] - old[0]).abs() < 0.01);
+        assert!((new[2] - old[2]).abs() < 0.01);
+    }
     let combat::Victim::Enemy { rates, .. } = &actor.fighter.victim else {
         panic!()
     };
@@ -217,7 +242,7 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     assert_eq!(actor.flight_speed_parameters(), Some((115.0, 115.0 * 0.04)));
     assert!(!actor.done());
     actor.step(&data, input(false)).unwrap();
-    assert!((actor.yaw - 1.5707964 / 30.0).abs() < 1e-6);
+    assert!((actor.yaw - std::f32::consts::FRAC_PI_2 / 30.0).abs() < 1e-6);
     actor.motion_ended = true;
     actor.step(&data, input(false)).unwrap();
     assert!(actor.done());

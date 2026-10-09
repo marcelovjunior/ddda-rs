@@ -143,7 +143,10 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
 - Added an explicitly limited `Dragon` actor prefix for action 52: entry
   validates support and motion before mutating state; phase 91 performs
   HoverUp control and explicit host-resolved velocity integration, phase 92
-  uses the body root-motion driver, and phase 93 updates flags and volumes.
+  uses the body root-motion driver, and phase 93 updates collision flags.
+  Pass-C volume activation is a separate explicit host call with the
+  resolved pose, after terrain correction and phase 97; the prior collision
+  snapshot persists until that call.
   Common action bookkeeping, motion binding/blend, air control and attached
   message 4 are typed effects that the host must apply. Unsupported actions
   return an error rather than synthetic completion. The six dragon tests
@@ -197,3 +200,20 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   `cCharParamEmDragon`; BreathWide (0x00a56a30/0x00a56d10) advances from
   motion 263 to 264 and gates its breath collision by motion frames.
   These dependencies must be implemented before claiming a playable fight.
+
+### Pass-C review follow-up (codex-1)
+
+Recovered codex-25's uncommitted boundary fix after its session ended.
+`Dragon::step` now publishes only phase-93 collision flags; the explicit
+`finish_pass_c` requires a host-resolved pose after terrain correction and
+phase 97. A regression uses actual installed hurt volumes, retains their
+prior snapshot through another step, then supplies matrices translated
+123 cm vertically and verifies only the final boundary publishes that
+correction. This does not supply a host phase scheduler or implement the
+remaining dragon actions.
+
+Verified seven dragon unit tests and two installed tests. Clippy passes
+with the existing `combat.rs` callback `type_complexity` warnings allowed;
+exact executable angle constants are marked deliberately, and the touched
+root-travel loop was simplified without changing arithmetic. Release
+viewer build is queued behind the active NPC/camera work.
