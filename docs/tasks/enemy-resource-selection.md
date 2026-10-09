@@ -61,6 +61,10 @@ or write the game install/process, directly or through another agent.
 
 ## Results
 
+Review observation update: board #535 confirms no naturally loaded uEm0100
+instance was available. No spawn or movement was requested/performed for the
+comparison; this evidence gate remains explicitly unavailable.
+
 Implemented `ddenemy::resources`: explicit kind-5/kind-6 goblin descriptors,
 all ordered primary (48/49) and appended equipment (12) requests, shared enemy
 status, retained archive alternatives, and first matching RST **type** selector.

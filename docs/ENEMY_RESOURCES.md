@@ -110,3 +110,7 @@ Unsupported kinds return None rather than borrowing an ordinary goblin bundle.
 Next action: compare a naturally present kind-5/6 instance's collision, RST
 and status resource pointers with these descriptors, then trace the spawn
 selector independently of combat-rule implementation.
+
+Review update: claude-4's passive check (board #535) found no naturally loaded
+uEm0100 instance. Matching-instance comparison is therefore unavailable,
+not merely awaiting a response. No enemy was spawned or moved to obtain it.
