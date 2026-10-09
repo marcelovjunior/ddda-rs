@@ -22,10 +22,12 @@ pub mod lock;
 pub mod npcs;
 pub mod player;
 pub mod save;
+pub mod spawns;
 pub mod systems;
 
 /// The fight runtime the host composes (`Host::fight`), for views.
 pub use ddenemyrt;
+pub use ddspawn;
 
 pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};
