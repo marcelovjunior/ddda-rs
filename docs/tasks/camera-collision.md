@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/camera-collision`
 - **Board area:** `render/camera`
-- **Status:** open
+- **Status:** partial (head)
 
 ## Goal
 
@@ -42,4 +42,21 @@ and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+head, 2026-10-09: the collision test is translated from 0x007de570 (called
+by 0x007e1400 from uCameraGame vf23 and vf13):
+1. A ray from the target to the eye; on a hit the eye moves there.
+2. A sphere one near-plane distance in front of the eye, radius
+   `1.3 x mNearPlane + 10 x (1 - |cos|)` (`uCamera.mNearPlane` is +0x34).
+   If it overlaps collision, it is swept toward the target and the eye
+   goes one near plane behind its stop.
+
+This is in `play::follow_camera`, with tests for the ray and the sphere
+cases.
+
+Still open for the lane:
+- the hit-attribute bit 0x10 filter (`0x007c6f90`);
+- the sweep `0x010fe5e0`, which is bisected here;
+- what else 0x007e1400 does: the `+0xb98` offset push, and the `0xfaf5b0`
+  check around the target model;
+- any smoothing of the pull-in and recovery in the camera's update;
+- an oracle comparison next to a wall.

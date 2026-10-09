@@ -245,7 +245,7 @@ fn seg_seg(p1: V3, q1: V3, p2: V3, q2: V3) -> (f32, V3, V3) {
 }
 
 /// Closest point on a triangle (Ericson 5.1.5).
-fn closest_on_triangle(p: V3, t: &Tri) -> V3 {
+pub fn closest_on_triangle(p: V3, t: &Tri) -> V3 {
     let [a, b, c] = *t;
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
     let (d1, d2) = (dot(ab, ap), dot(ac, ap));
