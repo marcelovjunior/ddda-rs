@@ -2,7 +2,9 @@
 
 The local weather clock, its saved-clock input and the st200 SKY resource
 chain are traced. `mtweather::clock` implements a bounded, pure weather-clock
-step with explicit inputs. It does **not** implement the saved game clock,
+step with explicit inputs. Ordinary saved-clock synchronization was compared
+with 240 passive original-game samples, with zero millisecond discrepancy.
+It does **not** implement the saved game clock,
 atmospheric scattering, scheduler execution or rendering. Resource samples
 below are tested against installed files; they are not live light measurements.
 All executable addresses refer to the 2017-12-13 Steam build in METHODOLOGY.md.
@@ -97,7 +99,7 @@ flag meanings and all state transitions remain outside the translated helper.
 In ordinary synchronized play it is this producer, not mTimeScale, that
 determines the weather clock's rate.
 
-## A source-backed Cassardis (st200) chain
+## A source-backed st200 chain
 
 `0x004c3140` finds the stage in the 65-short table at 0x01530348 and reads
 the sky remap at `0x015303d6 + 22*index`. st100 is index 0 and maps to 100;
@@ -201,12 +203,37 @@ mode or base FPS. It therefore cannot yield a measured error for clock
 advancement. Source-derived 312 ms/frame at delta=0.3125, basefps=30,
 local scale=1 is a regression test, not a measured weather-clock result.
 
-Passive clock/weather observations were requested from claude-4 on board
-#439, refined #469; only existing captures/read-only reads during ordinary
-play or natural transitions were requested. No setters, calls, input,
-teleportation or process writes are authorized by that request. Comparison
-status will be recorded in the brief Results; until a suitable capture exists,
-the clock-rate and final primary-light comparison gate remains blocked.
+Passive clock/weather observations requested on board #439/#469 were returned
+by claude-4 on #532: private `notes/oracle/readonly_batch_0120.json`, key
+`codex11`, 240 consecutive frames on 2026-10-09 at 01:16:10. The window was
+focused, the player idle in stage 100, and the probe was already loaded. The
+request and capture involved read-only observations, no input, setters, calls,
+teleportation, injection or process writes. The resource example above is
+st200; these observations must not be presented as its lighting comparison.
+
+Independent replay of all recorded fields confirms:
+
+- All 240 weather times equal the saved game milliseconds exactly; maximum
+  difference **0 ms**. All recorded weather hour/minute/second fields match
+  `hms`, with zero mismatches. SyncGameTime=1, local Pause=1, local scale=1,
+  LastBattleMode=0 throughout: this directly verifies that ordinary saved-clock
+  copying is not stopped by local Pause.
+- Base FPS=30 and saved-clock scale=1 throughout. Each recorded +0xb879c
+  equals the f32 result of same-frame mDeltaTime/mFps exactly. For all 239
+  consecutive increments, the saved-clock update equals
+  `trunc_f32(scale * f32(delta_seconds * 30000))`: **0 mismatches, maximum
+  integer error 0 ms**. Before truncation, actual-minus-predicted ranges from
+  -0.99908447265625 to -0.00408935546875 ms, as expected for positive truncation.
+  Total advancement is 105703 game milliseconds over the 239 intervals.
+- mDeltaTime ranges 0.3306719959..0.7169221044. The four reported averaged FPS
+  values are 77.78461456, 65.61553192, 65.96923065 and 66.60971069; they are
+  not per-frame inverses of delta. Weather current/previous ids are 1/0 and
+  transition weight is 1 throughout.
+
+This closes the **ordinary synchronized-clock** measured comparison. It does
+not compare unsynchronized local progression, pause transitions, battle modes,
+day wrap, or final primary-light RGB. Those remain source-tested or unresolved
+as specified above. No morning/noon/night original light capture was supplied.
 
 Reproduce implemented checks:
 
@@ -219,5 +246,5 @@ cargo test -p mtweather installed_st200_chain_and_samples -- --ignored --nocaptu
 Six new synthetic tests cover local/saved/battle modes, distinct pause gates,
 float truncation, forward/reverse day boundaries, HP threshold equality and
 explicit unsupported inputs. The existing five reader tests also pass.
-Next action: obtain passive consecutive clock/scale/gate samples with a frame
-identifier and independently sample uSky colour before any renderer integration.
+Next action: passively observe naturally available clock mode/wrap transitions
+and independently sample uSky colour before any renderer integration.

@@ -3,7 +3,7 @@
 - **Owner:** codex-11 (Codex lane, head assignment #417; delegation #429)
 - **Branch:** `task/weather-clock-bindings`
 - **Board area:** `formats/weather-clock`
-- **Status:** review (implemented/source-tested; original comparison gate pending)
+- **Status:** review (ordinary sync compared; special modes/final light still open)
 
 ## Goal
 
@@ -82,13 +82,21 @@ after board #488/#491; full source explanation posted #511.
 
 Measured comparison: raw session005707 CSV has 2165 rows; abs(dt-30/fps)
 min0.000328643/median0.072867217/max1.1798625. No weather/saved clock fields are
-recorded, so clock-advance error cannot be measured from that file. Passive
-observation requests #439/#469 and availability follow-up #513 are pending;
-the measured clock-rate and final-primary-light gates remain **blocked pending
-a suitable passive capture**, not marked compared. No setters, input, calls,
-teleportation, injection or process writes were requested.
+recorded, so clock-advance error cannot be measured from that file.
+
+Review follow-up: passive observations returned by claude-4 #532, private
+notes/oracle/readonly_batch_0120.json key codex11. Independently checked all
+240 stage100 idle samples: weather/saved time equality has maximum error0ms;
+hour/minute/second have zero mismatches; all239 increments exactly match the
+same-frame saved scale*(delta/basefps)*30000 with f32 arithmetic and truncation,
+maximum integer error0ms. Recorded local Pause=1 does not stop sync copying.
+This closes ordinary synchronized-clock comparison only. Special modes/wrap
+and final-primary-light RGB remain unmeasured; final-light gate remains blocked
+pending suitable passive captures. No setters, input, calls, teleportation,
+injection or process writes were requested. Removed unverified st200 location
+name; numerical resource stage and stage100 observation are kept distinct.
 
 Detailed evidence, resource samples and limitations: docs/WEATHER_CLOCK.md.
-Next action: obtain consecutive passive clock/scale/gate values with a frame
-identifier and sample uSky colour; review this branch's covered source rules
+Next action: passively observe naturally available mode/wrap transitions and
+sample uSky colour; review this branch's covered source rules
 independently without treating the outstanding comparison gate as complete.
