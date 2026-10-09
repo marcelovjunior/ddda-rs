@@ -26,9 +26,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// The layout adapter supplies identity; no target/NPC-number heuristic.
     pub fn bind_story_npc(&mut self, stage: u32, target: Target, npc: u32) {
         assert_eq!(target.kind, 5, "NPC binding requires an NPC target");
-        if self.story_npcs.bindings.insert((stage, target), npc) != Some(npc) {
-            self.story_npcs.normal_controllers.remove(&(stage, target));
+        let key = (stage, target);
+        if self.story_npcs.bindings.get(&key).is_some_and(|old| *old != npc) {
+            // A replacement actor cannot inherit the old actor's running
+            // graph, pending request or allocation observation.
+            self.unbind_story_npc(stage, target);
         }
+        self.story_npcs.bindings.insert(key, npc);
     }
 
     pub fn unbind_story_npc(&mut self, stage: u32, target: Target) {

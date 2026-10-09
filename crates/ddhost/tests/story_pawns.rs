@@ -123,6 +123,11 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
         !host.world.apply_fsm_ready(200, &target),
         "graph Finish is not parent ApplyFSM readiness"
     );
+    host.bind_story_npc(200, target, 3);
+    assert!(host.story_npc_action(2).is_none(),
+        "replacement binding must retire the previous actor action");
+    assert!(host.story_npc_action(3).is_none(),
+        "replacement binding alone must not apply a graph to the new actor");
 }
 
 #[test]

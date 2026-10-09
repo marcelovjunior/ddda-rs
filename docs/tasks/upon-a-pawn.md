@@ -250,3 +250,36 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   unknown versus false, graph-independent true, rebind/unbind invalidation,
   and stage cleanup even when NPC data is absent. Installed applied graph
   still proves Finish cannot synthesize the allocation observation.
+
+### Next actor/Guard integration scope proposal
+
+- Reviewed main's current startup: `stage_npcs` discovers daily FSM files
+  and explicitly ignores placement gates; `spawn_npc` completes ordinary
+  movement immediately. Neither establishes a resolved live placement.
+  The movie/editor hookup now lives in main's intro module (42e05b9);
+  no viewer file was edited for this proposal.
+- Smallest truthful lifecycle hook: allocate a headless NPC-intel normal
+  consideration controller on explicit placement initialization, even if
+  its daily graph is absent/disabled, matching `0x00bbd930` before
+  `0x00bbdaa0`. Its lifetime is separate from graph availability and
+  applied action lifetime. Forward readiness only for that bound resolved
+  actor/intel; unload and replacement retire it. Existing `spawn_npc`
+  success alone can prove a loaded Core, not target presence.
+- Proposed files: ddnpcrt/src/lib.rs, new ddnpcrt/src/guard.rs and
+  tests/guard.rs, plus owned host story_npcs/host/opening/tests. Add a
+  generic authored-resource/conversation entry point to the existing
+  per-seat talk runtime, with explicit loaded resource and eligibility /
+  activation observations. Candidate reservation and active talk stay
+  separate. TalkEvent::End alone must not pulse TalkEnd: the actor cleanup
+  and controller-enabled predicates remain necessary.
+- `0x00bace50` constructs quest text paths
+  id/npc_wind/npc_quest_talk/qQQQQ_nNNN, but preloads only quest ids listed
+  for that NPC by executable table `0x0163cdf0` (u16 lists terminated by
+  0xffff; ids below 128). This is bulk runtime data, not a constant list
+  to copy. A supplied loaded-resource registry is a valid narrow boundary;
+  exact installed preload construction still needs a runtime table reader.
+- API audit found replacement binding invalidated observations but left
+  the old actor's applied action runnable. The owned fix retires old
+  applied/pending state before replacing identity; it does not apply the
+  old graph to the replacement. All eight host story_pawns regressions
+  pass after the fix, including replacement retirement.
