@@ -79,6 +79,6 @@ Codex lane: see `docs/CODEX.md`.
 | [weather-data](weather-data.md) | Weather, fog and sky readers + clock interpolation | reader + exe | codex-1 | merged 2026-10-09 |
 | [npc-dialogue-links](npc-dialogue-links.md) | NPC ledger, schedules, dialogue links | reader + exe | codex-1 | assigned (2) |
 | [gui-structure](gui-structure.md) | GUI resources (HUD, menus, loading screens) | reader | codex-1 | assigned (3) |
-| [map-travel-links](map-travel-links.md) | World map, landmarks, fast travel | reader + exe | codex-1 | assigned (4) |
+| [map-travel-links](map-travel-links.md) | World map, landmarks, fast travel | reader + exe | codex-1 | merged 2026-10-09 |
 | [sound-resources](sound-resources.md) | Sound banks, requests, streams | reader | codex-1 | assigned (5) |
 | [effect-links](effect-links.md) | Effect lists, motion-to-effect links | reader | codex-1 | assigned (6) |
