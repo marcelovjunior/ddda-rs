@@ -103,6 +103,12 @@ pub struct WeaponPart {
     pub rotation: [f32; 3],
     /// Centimetres, in the joint's frame.
     pub offset: [f32; 3],
+    /// Drawn: the weapon joint it hangs on with no offset (primary 0x96,
+    /// secondary 0x99: 0x00840180 / 0x008404b0 pass them to 0x00c1b2d0,
+    /// and 0x00c1b460 attaches there with the constraint reset by
+    /// 0x00859b10). `None` keeps the sheathed row when drawn: a shield
+    /// (category 8, the first branch of 0x0080be30).
+    pub hand: Option<u8>,
 }
 
 /// Weapons in the primary (slot 0) and secondary (slot 1) hands, sheathed.
@@ -115,7 +121,13 @@ pub fn weapons(primary: i32, secondary: i32) -> Vec<WeaponPart> {
         if row == 0xd {
             continue;
         }
-        out.push(WeaponPart { id, path, joint, rotation, offset });
+        let cat = (id as u32 >> 24) & 0xff;
+        let hand = match (slot, cat) {
+            (_, 8) => None,
+            (0, _) => Some(0x96),
+            _ => Some(0x99),
+        };
+        out.push(WeaponPart { id, path, joint, rotation, offset, hand });
     }
     out
 }

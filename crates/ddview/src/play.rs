@@ -598,6 +598,11 @@ pub fn show(
         }
         let shown = found.map_or(p.frame, |(m, _)| display_frame(m, p.frame));
         pb.hold_frame = Some(shown);
+        // Weapons in hand while attacking (*inferred*: the original draws
+        // them while uPlayer +0x273C has 0x200 and 0x400 / 0x800,
+        // uPlayerBase::vf93 0x00B63F70; the writers of those bits are not
+        // traced, so the attack states stand for them).
+        pb.drawn = matches!(p.state, ddsim::State::Attack { .. } | ddsim::State::Shot { .. });
     }
     // Follow camera: behind the followed player at the orbit angles,
     // looking at the chest.
