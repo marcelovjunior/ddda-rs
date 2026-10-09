@@ -428,6 +428,14 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
     }
     st.sim.step(1.0 / ddsim::MOTION_FPS, &inputs, &st.terrain);
     if let Some(f) = st.fight.as_mut() {
+        // hard landings' damage (ddsim queues it, the fight owns HP)
+        for p in &mut st.sim.players {
+            if p.fall_damage > 0.0 {
+                let taken = f.fall_damage(p.id, p.fall_damage);
+                info!("play: seat {} fell: {taken:.0} HP", p.id);
+                p.fall_damage = 0.0;
+            }
+        }
         f.players_moved(&mut st.sim, &st.terrain, step);
         f.enemies(&st.sim, &st.terrain, step);
         f.push_out(&mut st.sim);
