@@ -296,8 +296,12 @@ velocity by the chunk length is present in the source and should not be
 silently replaced with a conventional spring integrator. Inactive normal
 player camera mode clears +0xB98 directly. **0x007e1400** applies the
 offset before its stage sweep, under its active-camera and transition
-gates, moving the eye toward the target and potentially moving the target
-as well when the remaining distance is small.
+gates. It computes `shift = normalize(target - eye) * offset` and adds it
+to the eye. If `length(shift) - 16 < offset`, it also adds
+`shift * offset / length(shift)` to the target. Disassembly
+**0x007e19da..0x007e1a5b** confirms the comparison uses the shift length,
+not remaining eye-to-target distance. For the producer's positive offsets
+the target therefore normally moves by the same shift as the eye.
 
 This path is not wired into the viewer: it needs the selected, animated
 actor sphere/capsule entries and their source eligibility state. Using
