@@ -94,3 +94,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | assigned |
 | [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |
 | [lcm-camera](lcm-camera.md) | Cutscene camera-list reader | reader | codex-1 | assigned |
+| [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | assigned |
