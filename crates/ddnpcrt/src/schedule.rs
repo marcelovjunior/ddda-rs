@@ -121,6 +121,16 @@ enum Goal {
     Open,
 }
 
+/// Real owner observations. None means no matching materialized actor;
+/// intel-only controllers have no character flags or held-goods pointers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActorObservations {
+    /// First flags word returned by a valid character's vf180.
+    pub character_flags: Option<u32>,
+    /// Presence of NPC held-goods pointers +0x6f44 and +0x6f48.
+    pub npc_goods: Option<[bool; 2]>,
+}
+
 /// The `cThinkFSM` fields the NPC graphs read and write.
 #[derive(Debug, Clone, PartialEq)]
 struct Think {
@@ -130,6 +140,9 @@ struct Think {
     /// `FreeCondition` (+0x70); `Set FreeCondition` sets bit `FlagNo`
     /// (`1 << n`: the data tests bit 31 with 0x80000000).
     free: u32,
+    /// cThinkFSM +0xbc..0xc8, initialized by 0x007a74f0.
+    flags: [u32; 4],
+    actor: ActorObservations,
     goal: Goal,
     pos: Option<[f32; 3]>,
     load: Option<String>,
@@ -262,6 +275,13 @@ impl Owner for Think {
             // 0x007ab890: valid actor's frame flag; absent actor is false.
             "TalkEnd (flag)" => Value::Bool(self.talk_end),
             "FreeCondition" => Value::Int(self.free as i64),
+            // Translated from 0x007abda0 (DDDA.exe 2017-12-13 Steam).
+            "FreeFlag" => Value::Bool(v.index.is_some_and(|index|
+                index < 128 && self.flags[index as usize / 32] & (1 << (index & 31)) != 0)),
+            // 0x007ab860: validated character owner, vf180 word bit 7.
+            "Hit (flag)" => Value::Bool(self.actor.character_flags.is_some_and(|flags| flags & 0x80 != 0)),
+            // 0x007ac320: validated NPC owner, either held-goods pointer.
+            "NpcGoodsHaving" => Value::Bool(self.actor.npc_goods.is_some_and(|goods| goods[0] || goods[1])),
             // cThinkFSM getter 0x007ac350: the game hour.
             "GameHour" => Value::Int(env.clock.hour as i64),
             // cAIConsiderFSM_24Schedule +0xe4, set by 0x0059d790.
@@ -391,6 +411,8 @@ impl Npc {
             npc: id,
             sys: 0,
             free: 0,
+            flags: [0; 4],
+            actor: ActorObservations::default(),
             goal: Goal::None,
             pos: None,
             load: None,
@@ -435,6 +457,22 @@ impl Npc {
     /// (0x00850121), set from actual dialogue by uNpc::vf111 (0x00bb32cb).
     pub fn observe_talk_end(&mut self, ended: bool) {
         self.think.talk_end = ended;
+    }
+
+    /// Both controller graphs resolve the same actor owner.
+    pub fn observe_actor(&mut self, actor: ActorObservations) {
+        self.ctrl.actor = actor;
+        self.think.actor = actor;
+    }
+
+    /// Set a graph's private FreeFlag, distinct from FreeCondition.
+    /// Translated from 0x007abdd0 (DDDA.exe 2017-12-13 Steam).
+    pub fn set_free_flag(&mut self, controller: bool, index: u32, value: bool) {
+        if index >= 128 { return; }
+        let fields = if controller { &mut self.ctrl } else { &mut self.think };
+        let word = &mut fields.flags[index as usize / 32];
+        let bit = 1 << (index & 31);
+        if value { *word |= bit; } else { *word &= !bit; }
     }
 
     pub fn applied_finished(&self) -> bool {
@@ -503,5 +541,43 @@ impl Npc {
             self.think.out.push(Request::Finished { npc: self.id });
         }
         Ok(std::mem::take(&mut self.think.out))
+    }
+}
+
+#[cfg(test)]
+mod variable_tests {
+    use super::*;
+    fn fields() -> Think {
+        Think { npc: 1, sys: 0, free: u32::MAX, flags: [0; 4],
+            actor: ActorObservations::default(), goal: Goal::None, pos: None,
+            load: None, out: vec![], complete_moves: false, strict: true, talk_end: false }
+    }
+    fn value(fields: &Think, owner: &str, property: &str, index: Option<u32>) -> Value {
+        fields.var(&Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 },
+            _graphs: std::marker::PhantomData }, &Var { owner, property, index }).unwrap()
+    }
+    #[test]
+    fn free_flags_are_128_private_bits_not_free_condition() {
+        let mut action = fields(); let control = fields();
+        for i in [0, 31, 32, 95, 127] { action.flags[i / 32] |= 1 << (i % 32); }
+        for i in 0..130 {
+            assert_eq!(value(&action, "cAIActionFSMNpc", "FreeFlag", Some(i)),
+                Value::Bool([0, 31, 32, 95, 127].contains(&i)));
+            assert_eq!(value(&control, "cAIConsiderFSM_24Schedule", "FreeFlag", Some(i)), Value::Bool(false));
+        }
+    }
+    #[test]
+    fn actor_variables_require_matching_owner_and_exact_flags_or_goods() {
+        let mut f = fields();
+        assert_eq!(value(&f, "cAIActionFSMNpc", "Hit (flag)", None), Value::Bool(false));
+        assert_eq!(value(&f, "cAIActionFSMNpc", "NpcGoodsHaving", None), Value::Bool(false));
+        for flags in [0, 0x7f, 0x80, 0x100, u32::MAX] {
+            f.actor.character_flags = Some(flags);
+            assert_eq!(value(&f, "cAIActionFSMNpc", "Hit (flag)", None), Value::Bool(flags & 0x80 != 0));
+        }
+        for goods in [[false, false], [true, false], [false, true], [true, true]] {
+            f.actor.npc_goods = Some(goods);
+            assert_eq!(value(&f, "cAIActionFSMNpc", "NpcGoodsHaving", None), Value::Bool(goods[0] || goods[1]));
+        }
     }
 }

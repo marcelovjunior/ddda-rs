@@ -312,3 +312,17 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   storage at +0xbc; Hit getter 0x007ab860 reads actor vf180 word bit7;
   NpcGoodsHaving 0x007ac320 tests actor pointers +0x6f44/+0x6f48 after
   NPC-owner validation. These variables are traced but not yet translated.
+
+### Frozen NPC variable checkpoint
+
+- Added FreeFlag for both action and daily consideration graphs: four private
+  words initialized by 0x007a74f0, index-limited getter 0x007abda0 and
+  setter 0x007abdd0. It is independent of the FreeCondition word.
+- Hit (flag) and NpcGoodsHaving use explicit actor observations with the
+  sourced predicates above. Intel-only owners return false; actor adapters
+  must provide their current flags/goods, not infer them from movement.
+- Twelve ddnpcrt tests and touched-crate release clippy pass, including
+  128-bit boundaries, owner/flag/goods cases, installed schedules and q2.
+  The baseline viewer remains the earlier executable and still freezes
+  seven NPCs; rebuilt viewer comparison is pending. Other unsupported
+  variables may still stop schedules; no full NPC behavior claim.
