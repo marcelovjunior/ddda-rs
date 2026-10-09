@@ -50,6 +50,42 @@ pub struct SavedPawnBase {
 }
 
 impl SavedPawnBase {
+    /// Learned level observed by 0x00780ba0. Gear-provided level-three
+    /// bits (active skill state +0x74) are runtime inputs, not saved flags.
+    /// `ignore_gear` is the original function's argument. This does not
+    /// decide whether the actor can currently execute the skill.
+    pub fn skill_level(
+        &self,
+        tables: &ddskill::catalogue::ExeTables,
+        skill: u32,
+        gear_levels: &[u32; 14],
+        ignore_gear: bool,
+    ) -> Result<u8, String> {
+        if skill == u32::MAX {
+            return Ok(0);
+        }
+        let row = tables
+            .skills
+            .get(skill as usize)
+            .filter(|_| skill < 430)
+            .ok_or_else(|| format!("skill {skill} outside installed skill table"))?;
+        if row.text == -1 {
+            return Ok(0);
+        }
+        let text = usize::try_from(row.text)
+            .ok()
+            .and_then(|index| tables.texts.get(index))
+            .ok_or_else(|| format!("skill {skill}: invalid text metadata {}", row.text))?;
+        let has = |bits: &[u32; 14]| bits[skill as usize / 32] & (1 << (skill % 32)) != 0;
+        Ok(learned_level(
+            text.flags & 0x8000 != 0,
+            has(&self.record.param.skill_lv1),
+            has(&self.record.param.skill_lv2),
+            has(gear_levels),
+            ignore_gear,
+        ))
+    }
+
     /// Baseline attack inputs, before augments, enchantment, special
     /// equipment effects, critical capability and status multipliers.
     pub fn base_attacker(&self, offhand: bool) -> ddcombat::damage::PlayerAttacker {
@@ -73,6 +109,36 @@ impl SavedPawnBase {
         out.strike_pct = self.equipment.strike_percent;
         out.element_resist_pct = self.equipment.element_resistance;
         out
+    }
+}
+
+// Translated from 0x00780ba0 with bit getters 0x0077c390/0x0077c400
+// (DDDA.exe 2017-12-13 Steam). Core skills accept either learned bit;
+// level-three gear requires at least one learned bit and a weapon skill.
+fn learned_level(weapon: bool, first: bool, second: bool, gear: bool, ignore_gear: bool) -> u8 {
+    if !weapon {
+        u8::from(first || second)
+    } else if gear && !ignore_gear {
+        if first || second {
+            3
+        } else {
+            0
+        }
+    } else if second {
+        2
+    } else {
+        u8::from(first)
+    }
+}
+
+/// Range-record tier chosen by 0x00542620 (2017-12-13 Steam): missing
+/// player-info or levels zero/one select Lv1, two selects Lv2, three LvEX.
+/// This only selects a parameter record; it does not grant a skill.
+pub fn ai_parameter_tier(observed_skill_level: Option<u8>) -> usize {
+    match observed_skill_level {
+        Some(3..) => 2,
+        Some(2) => 1,
+        _ => 0,
     }
 }
 
@@ -244,6 +310,32 @@ fn equipment_slot(kind: u32) -> usize {
 mod tests {
     use super::*;
     use dditem::lvparam::{LevelEntry, LevelRow, ENTRIES};
+
+    #[test]
+    fn learned_levels_require_learning_even_with_gear_and_select_ai_tiers() {
+        for first in [false, true] {
+            for second in [false, true] {
+                for gear in [false, true] {
+                    for ignore in [false, true] {
+                        assert_eq!(
+                            learned_level(false, first, second, gear, ignore),
+                            u8::from(first || second)
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(learned_level(true, false, false, true, false), 0);
+        assert_eq!(learned_level(true, true, false, true, false), 3);
+        assert_eq!(learned_level(true, false, true, true, false), 3);
+        assert_eq!(learned_level(true, true, false, true, true), 1);
+        assert_eq!(learned_level(true, false, true, true, true), 2);
+        assert_eq!(learned_level(true, true, true, false, false), 2);
+        assert_eq!(
+            [None, Some(0), Some(1), Some(2), Some(3)].map(ai_parameter_tier),
+            [0, 0, 0, 1, 2]
+        );
+    }
 
     fn fixture() -> EquipmentData {
         let mut items = ItemList {

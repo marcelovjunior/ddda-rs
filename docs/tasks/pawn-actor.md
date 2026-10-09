@@ -84,11 +84,11 @@ Baseline `PlayerAttacker`/`PlayerDefender` inputs retain saved growth.
 No level-1 kit is substituted. Data comes from the installed item tables,
 enhancement resources and nine-slot defence selector in the executable.
 
-Tested: two synthetic regressions cover slot replacement, enhancement
+Tested: three synthetic regressions cover slot replacement, enhancement
 replacement, accessory write ordering, unavailable-item observations,
-signed resistance/capping and independent actor records. One installed
+signed resistance/capping, learned skill levels and independent actor records. One installed
 regression loads all story records 10..14, verifies their saved fields and
-equipment conversion, and retains Rook's Mage level 6. All three pass in
+equipment conversion, and retains Rook's Mage level 6. All four pass in
 release mode. This is not an original-game comparison or a playable pawn.
 
 The item exclusion predicate `0x004647e0` is an explicit caller input;
@@ -100,6 +100,25 @@ consumers are retained but not applied to HP/stamina/attack. These APIs
 provide baseline values, not fully modified combat actors.
 
 Source survey:
+The isolated `SavedPawnBase::skill_level` query translates `0x00780ba0`
+with bit getters `0x0077c390`/`0x0077c400`. `0x00446a30` copies the saved
+level-one/two bitsets into active info +0x730/+0x768; the skill state begins
+at +0x72c. The third bitset (+0x7a0) is supplied explicitly as a runtime
+equipment observation. Skill text metadata is read from `ExeTables`:
+missing text means level zero; text flag 0x8000 distinguishes weapon skills
+from core skills. A core skill accepts either learned bit. A weapon skill
+uses level two before one; an enabled equipment override selects level
+three only if at least one learned bit is present. The caller may ignore
+equipment overrides, as the source's argument permits.
+
+Disassembly of `0x00542620` selects AI parameter tier two for level >=3,
+tier one for level two, otherwise tier zero (also when player-info is
+absent). The saved-record query and tier selector are separate from AI
+execution. Installed basic staff command 0xb4 has text index -1, so its
+level is zero and it selects tier zero even when equipment bits are set.
+The installed regression verifies this for all story records 10..14.
+Other Mage commands still require their individual behavior translations.
+
 0x00447390 runs edit conversion 0x00780fa0, parameter conversion 0x00446a30,
 equipment effects 0x00446860 and skill refresh 0x00780350, then copies pawn
 type, knowledge and inclination records into the active pawn-info record.
