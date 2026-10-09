@@ -30,8 +30,8 @@ pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
 pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 
 /// Every motion the controller uses (ddsim::State::motion_id).
-const USED_MOTIONS: [u16; 19] = [
-    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 43, 47, 48, 0x54, 0x55, 0x611,
+const USED_MOTIONS: [u16; 24] = [
+    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611,
 ];
 
 /// Motion list of a bank: 0 is the common set; 6 is the equipped weapon
@@ -160,6 +160,8 @@ pub fn setup(
     sim.jump_sprint = jp[1];
     let adjust = adjust_table(loader, ADJUST_PARAMS)?;
     sim.move_param = MoveParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: too short"))?;
+    sim.ledge_param =
+        ddsim::LedgeParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: no ledge params"))?;
     info!("ground speeds from {ADJUST_PARAMS}: {:?}", sim.move_param);
     info!(
         "jump params from {JUMP_PARAMS}: normal {:?}, sprint {:?}",
