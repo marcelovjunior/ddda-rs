@@ -311,8 +311,12 @@ With game[5] = 100 and game[6] = 0.5: `D = 0.5*equipDef + baseDef`,
 damage taken = `x * (1 - c*D/(D+100)) - d`. c_p (player+0x4B88), c_m
 (+0x4B9C) default 1.0 and d_p (+0x4B8C), d_m (+0x4BA0) default 0
 (`FUN_00B6CAD0`: abilities and a difficulty factor change them); e
-(+0x4BA4) = 1 + 0.2 x the value `FUN_00783340` returns for id 0x28
-(an ability lookup; *meaning unknown*), or 1 if player+0x273C bit 1. So players use a **hyperbolic** reduction and enemies
+(+0x4BA4) = 1 if player+0x273C bit 1 is set, else 1 + 0.2 x v, where v is
+augment 40's value from `FUN_00783340` (traced: `rPlAbilityParam` row 40
+`mFVal0` = 0.5 if augment 40 is among `cPlayerInfo.mAbility[6]` (+0x258),
+else `mFVal1` = 1; claude-9 board #744). So e is 1, 1.1 or 1.2; which
+characters have bit 1 of +0x273C is *unknown*, so the size of this
+factor in normal play needs the live check. So players use a **hyperbolic** reduction and enemies
 a **linear** one. Further multipliers follow (status 0x13/0x15, guard
 0x4CA0 halves, `dlc[2]`, `dlc[3]` for ability bits 0x20 / 0x200000 of
 +0x3EF0).
@@ -426,7 +430,8 @@ Counter-example, a goblin's attack 0 on the Arisen (`mAttackRate` 0.8,
 `mHitRate` 100): attacker phys = 250 * 0.8 = 200; player side with no
 strike resist: x = 200, damage = 200 * (1 - D/(D+100)) with
 D = 0.5*equipDef + `mBasicDefend`; e.g. `mBasicDefend` 80, no armour:
-200 * 100/180 = **111.1**.
+200 * 100/180 = 111.1, times e (5.2): **111.1** if player+0x273C bit 1 is
+set, else 133.3 (122.2 with augment 40). Unresolved until measured.
 
 Both are predictions from the traced code, not yet measured (board #698
 asks claude-4 to measure the first).

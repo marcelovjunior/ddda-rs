@@ -90,7 +90,8 @@ to the last byte. Examples `ocl_dump`, `ocl_list`, `rst_dump`, `adj_dump`.
 
 **Worked example:** level-1 Fighter, Iron Sword (50), sword attack 1
 (`mAttack` 50) on a goblin (def 75, HP 1000): 180 - 75 = 105 HP, flinch;
-goblin attack 0 on an unarmoured Arisen with base defence 80: 111.1.
+goblin attack 0 on an unarmoured Arisen with base defence 80: 111.1 x e,
+where e (1, 1.1 or 1.2) is not resolved.
 
 **Unknown:** motion-event activation of hit groups, shape tests,
 collision mode +0xD14, crit-capable flag P+0x144, `cStatus` type names
