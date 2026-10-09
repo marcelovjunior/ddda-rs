@@ -52,6 +52,8 @@ struct Args {
     light: Option<stage::StageLighting>,
     /// The game's [GRAPHICS] CameraFov setting, added to reference fovs.
     camera_fov: f32,
+    /// Story progress (`*(sGameSys) + 0x30`) for progress-gated landmarks.
+    progress: i32,
     shot_delay: f32,
     character: Option<String>,
     motion: Option<String>,
@@ -84,6 +86,7 @@ fn args() -> Args {
         shot: None,
         light: None,
         camera_fov: config_camera_fov().unwrap_or(0.0),
+        progress: 0,
         shot_delay: 10.0,
         character: None,
         motion: None,
@@ -120,6 +123,7 @@ fn args() -> Args {
             "--shot" => a.shot = Some(PathBuf::from(v)),
             "--light" => a.light = Some(load_lighting(&v)),
             "--camera-fov" => a.camera_fov = v.parse().unwrap(),
+            "--progress" => a.progress = v.parse().unwrap(),
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
             "--up" => a.up = parse_vec3(&v),
             "--fov" => a.fov_deg = v.parse().unwrap(),
@@ -337,7 +341,7 @@ fn setup(
             Ok(_) => info!("character {model} motion {motion} slot {}", args.slot),
             Err(e) => error!("character: {e}"),
         }
-        spawn_camera_and_light(&mut commands, &args);
+        spawn_camera_and_light(&mut commands, &args, None);
         return;
     }
     let (a0, b0) = args.cell;
@@ -374,6 +378,11 @@ fn setup(
                 offset,
             );
         }
+    }
+    if args.stage == 100 {
+        let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
+        let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
+        info!("landmarks {n}");
     }
     loader.spawn_water(
         &mut commands,
@@ -430,11 +439,14 @@ fn setup(
             Err(e) => error!("play: {e}"),
         }
     }
-    spawn_camera_and_light(&mut commands, &args);
+    // The stage's filter chain (vignette, tone curve) goes with the
+    // original's lighting.
+    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage));
+    spawn_camera_and_light(&mut commands, &args, post);
 }
 
 /// Sun and camera, shared by the stage and character modes.
-fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
+fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<stage::post::DdPost>) {
     // Sun. Without --light its direction and strength are placeholders
     // for Bevy's PBR. With --light the stage materials do their own
     // lighting and use this light only for its shadow map, pointed along
@@ -473,6 +485,9 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
         commands
             .entity(cam)
             .insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
+        if let Some(post) = post {
+            commands.entity(cam).insert(post);
+        }
     }
     if args.play {
         commands.entity(cam).insert(play::FollowCam);
