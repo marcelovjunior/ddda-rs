@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod charaedit;
 mod movie;
 mod stream;
 mod event;
@@ -110,6 +111,8 @@ struct Args {
     paused: bool,
     /// `--movie <name>`: play one of the game's movies (`st100ev00`, `title_A`, ...).
     movie: Option<String>,
+    /// `--charaedit` / `--charaedit-female`: the character editor (charaedit.rs).
+    charaedit: Option<u8>,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -158,6 +161,7 @@ fn args() -> Args {
         cam_pitch: None,
         paused: false,
         movie: None,
+        charaedit: None,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -171,6 +175,8 @@ fn args() -> Args {
     while let Some(k) = it.next() {
         if k == "--unattended" { a.unattended = true; continue; }
         if k == "--movie" { a.movie = it.next(); continue; }
+        if k == "--charaedit" { a.charaedit = Some(0); continue; }
+        if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
             a.play = true;
             a.paused = true;
@@ -587,7 +593,7 @@ fn main() {
         .init_resource::<pause::PauseState>()
         .init_resource::<movie::MovieFinished>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, charaedit::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -639,6 +645,18 @@ fn setup(
         tag: None,
     };
     loader.index_models();
+    if let Some(sex) = args.charaedit {
+        // facing the body from the front, about chest high
+        commands.spawn((
+            Camera3d::default(),
+            Transform::from_xyz(0.0, 1.2, 3.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
+        ));
+        commands.spawn((DirectionalLight { illuminance: 8000.0, ..default() }, Transform::from_xyz(1.0, 3.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        if let Err(e) = charaedit::setup(&mut commands, loader, sex) {
+            error!("charaedit: {e}");
+        }
+        return;
+    }
     if let Some(model) = &args.character {
         let motion = args.motion.clone().unwrap_or_default();
         match character::spawn(
