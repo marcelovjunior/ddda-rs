@@ -136,13 +136,14 @@ pub fn step(
     play::orbit(st, &buttons, &mouse);
     let mut input = PlayerInput { sim: play::p1_input(&keys, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) };
     if st.demo {
-        // Unattended: walk in a small circle near the spawn (about 2.7 m
-        // across at the walk speed) and jump every 4 s.
+        // Unattended: walk in a small circle near the spawn (about 1.3 m
+        // radius at the walk speed). No jumps: a jump onto higher ground
+        // can sink a body below a single-layer collision surface in ddsim
+        // (reported to its owner), which the demo is not about.
         let t = time.elapsed_secs();
         input.sim = ddsim::Input {
-            stick: [(t * 0.6).sin(), (t * 0.6).cos()],
+            stick: [(t * 1.2).sin(), (t * 1.2).cos()],
             walk: true,
-            jump: t % 4.0 < 0.1,
             camera_yaw: st.cam_yaw,
             ..default()
         };
