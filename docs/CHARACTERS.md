@@ -351,6 +351,20 @@ personal data).
   (e.g. `motion\pl\m\m00\m0000_co\m0000_co:0`, the idle).
 - With both `--event` and `--lineup <save>`, the event runs and the
   lineup's save dresses the player.
+- `ddview <nativePC> --play --save DDDA.sav [--goblin]` (play.rs):
+  - **Party:** the save's Arisen (seat 0) and main pawn (`mCmc[0]`, sim
+    seat 4) are built as above, with morphs and sheathed weapons.
+  - **Place:** they stand at `mPlPos` / `mCmcPos[0]` with angles
+    `mPlAng` / `mCmcAng[0]`, from slot `mPlayerDataManual`.
+  - **Movement:** the shared skeleton plays ddsim's states. Common motions
+    come from bank 0 / 6; attacks come from the weapon's `_co` / `_at`
+    lists (sword `m0001`, staff `m0007`).
+  - **Goblins** play `ddenemyrt`'s motion banks.
+  - **Viewer choices:**
+    - every Arisen plays the male motion lists;
+    - the weapon stays sheathed during attacks;
+    - enemy materials' 8x8 `d_` placeholder maps are swapped for the full
+      map of the same name (the game's swap is not traced).
 
 **Screenshots** (character-morphs, 2026-10-09, not committed):
 - **lineup of the save:**

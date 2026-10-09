@@ -88,6 +88,12 @@ struct Args {
     goblins: usize,
     /// `--players` was given.
     players_given: bool,
+    /// `--kit fighter|mage`: the local Arisen's fight kit instead of the
+    /// save weapon's.
+    kit: Option<play::Kit>,
+    /// `--cam-pitch rad`: the follow camera's start pitch (negative looks
+    /// up from below).
+    cam_pitch: Option<f32>,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -128,6 +134,8 @@ fn args() -> Args {
         save_xml: None,
         goblins: 0,
         players_given: false,
+        kit: None,
+        cam_pitch: None,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -188,6 +196,14 @@ fn args() -> Args {
                 a.players = v.parse().unwrap();
                 a.players_given = true;
             }
+            "--kit" => {
+                a.kit = Some(match v.as_str() {
+                    "fighter" => play::Kit::Fighter,
+                    "mage" => play::Kit::Mage,
+                    _ => panic!("--kit fighter|mage"),
+                })
+            }
+            "--cam-pitch" => a.cam_pitch = Some(v.parse().unwrap()),
             "--save" => {
                 let bytes = std::fs::read(&v).unwrap_or_else(|e| panic!("{v}: {e}"));
                 let save = ddsave::SaveFile::parse(&bytes).unwrap_or_else(|e| panic!("{v}: {e:?}"));
@@ -667,6 +683,9 @@ fn setup(
         ) {
             Ok(mut state) => {
                 state.demo = args.demo;
+                if let Some(p) = args.cam_pitch {
+                    state.cam_pitch = p;
+                }
                 let mode = match (&args.host, &args.join) {
                     (Some(port), _) => Some(net::Mode::Host { port: *port }),
                     (None, Some(addr)) => Some(net::Mode::Join { addr: addr.clone() }),
@@ -772,7 +791,8 @@ fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
             (None, _) if net && !own => stand_in(0),
             _ => None,
         };
-        kits.insert(id, play::kit_of(look.as_ref().filter(|_| own)));
+        let kit = if own { args.kit.unwrap_or_else(|| play::kit_of(look.as_ref())) } else { play::Kit::Fighter };
+        kits.insert(id, kit);
         arisen.push((id, look, pos, spot.as_ref().map_or(0.0, |s| s.yaw)));
     }
     // The main pawn serves seat 0: the host's (or a single player's) save

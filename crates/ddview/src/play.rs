@@ -25,7 +25,8 @@ use std::collections::HashMap;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use ddhost::ddenemyrt::body::MotionId;
-use ddhost::ddenemyrt::fight::{Fight, FightData, Kit};
+use ddhost::ddenemyrt::fight::{Fight, FightData};
+pub use ddhost::ddenemyrt::fight::Kit;
 use ddsim::{Input, PlayerId, Sim, Weapon};
 
 use crate::character::{Playback, RMOTIONLIST};
