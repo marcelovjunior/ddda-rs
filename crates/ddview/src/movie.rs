@@ -31,6 +31,10 @@ pub fn path(native_pc: &Path, name: &str) -> PathBuf {
     native_pc.join("movie").join(dir).join(format!("{name}.wmv"))
 }
 
+/// Set by a caller to skip the playing movie (as Enter / Esc do).
+#[derive(Resource, Default)]
+pub struct MovieSkip(pub bool);
+
 /// Set when the last started movie ended or was skipped.
 #[derive(Resource, Default)]
 pub struct MovieFinished(pub bool);
@@ -150,12 +154,13 @@ pub fn update(
     mut finished: ResMut<MovieFinished>,
     time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut skip_request: ResMut<MovieSkip>,
     mut images: ResMut<Assets<Image>>,
     mut sounds: ResMut<Assets<DecodedAudio>>,
 ) {
     let Some(mut m) = player else { return };
     let now = time.elapsed_secs_f64();
-    let skip = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Escape);
+    let skip = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Escape) || std::mem::take(&mut skip_request.0);
     if m.start.is_none() {
         // wait for the soundtrack so picture and sound start together
         let ready = match m.sound.as_mut().map(|r| r.get_mut().unwrap().try_recv()) {

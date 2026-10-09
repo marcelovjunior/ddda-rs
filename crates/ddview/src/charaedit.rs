@@ -40,6 +40,23 @@ pub struct CharaEdit {
     body: Option<Entity>,
     text: Entity,
     dirty: bool,
+    closed: bool,
+}
+
+impl CharaEdit {
+    /// The current record, as Enter confirms it.
+    pub fn record(&self) -> Vec<(String, u32)> {
+        EDIT_U8_FIELDS.iter().map(|f| f.to_string()).zip(self.values).collect()
+    }
+
+    /// Removes the editor's body and text (the caller removes the resource).
+    pub fn close(&mut self, commands: &mut Commands) {
+        if let Some(b) = self.body.take() {
+            commands.entity(b).despawn();
+        }
+        commands.entity(self.text).despawn();
+        self.closed = true;
+    }
 }
 
 /// The first built-in pawn of `sex` (`etc\editPattern\romPawnInfo`): the
@@ -113,9 +130,27 @@ fn step(allowed: &[u32], v: u32, up: bool) -> u32 {
     }
 }
 
-/// Sets up the editor (from main's setup for `--charaedit`).
-pub fn setup(commands: &mut Commands, loader: Loader<'static>, sex: u8) -> Result<(), String> {
-    let vfs = loader.vfs;
+/// Sets up the editor (`--charaedit`, and the opening's stage 801): its
+/// own loader, the field list, and the first body.
+pub fn setup(
+    commands: &mut Commands,
+    vfs: &'static ddvfs::Vfs,
+    mfx: &'static mtshader::ShaderPackage,
+    sex: u8,
+) -> Result<(), String> {
+    let mut loader = Loader {
+        vfs,
+        mfx,
+        textures: Default::default(),
+        models: Default::default(),
+        model_names: Default::default(),
+        water: None,
+        stats: Default::default(),
+        lod_eye: None,
+        view_range: 1,
+        tag: None,
+    };
+    loader.index_models();
     let tables = ddlook::Tables::load(vfs).map_err(|e| format!("{e:?}"))?;
     let pattern = ddlook::pattern::EditPattern::load(vfs).map_err(|e| format!("{e:?}"))?;
     let values = start_values(vfs, sex)?;
@@ -128,7 +163,7 @@ pub fn setup(commands: &mut Commands, loader: Loader<'static>, sex: u8) -> Resul
         ))
         .id();
     commands.insert_resource(EditResult(None));
-    commands.insert_resource(CharaEdit { loader, tables, pattern, values, allowed, cursor: 0, body: None, text, dirty: true });
+    commands.insert_resource(CharaEdit { loader, tables, pattern, values, allowed, cursor: 0, body: None, text, dirty: true, closed: false });
     Ok(())
 }
 
@@ -147,6 +182,9 @@ pub fn update(
 ) {
     let Some(mut e) = edit else { return };
     let e = &mut *e;
+    if e.closed {
+        return;
+    }
     let n = EDIT_U8_FIELDS.len();
     if keys.just_pressed(KeyCode::ArrowDown) {
         e.cursor = (e.cursor + 1) % n;

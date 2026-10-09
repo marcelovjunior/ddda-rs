@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod intro;
 mod charaedit;
 mod movie;
 mod stream;
@@ -113,6 +114,8 @@ struct Args {
     movie: Option<String>,
     /// `--charaedit` / `--charaedit-female`: the character editor (charaedit.rs).
     charaedit: Option<u8>,
+    /// `--skip-intro`: `--opening` starts at Cassardis (no movie, no editor).
+    skip_intro: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -162,6 +165,7 @@ fn args() -> Args {
         paused: false,
         movie: None,
         charaedit: None,
+        skip_intro: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -176,6 +180,7 @@ fn args() -> Args {
         if k == "--unattended" { a.unattended = true; continue; }
         if k == "--movie" { a.movie = it.next(); continue; }
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
+        if k == "--skip-intro" { a.skip_intro = true; continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
             a.play = true;
@@ -592,8 +597,9 @@ fn main() {
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .init_resource::<movie::MovieFinished>()
+        .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, charaedit::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -652,7 +658,7 @@ fn setup(
             Transform::from_xyz(0.0, 1.2, 3.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
         ));
         commands.spawn((DirectionalLight { illuminance: 8000.0, ..default() }, Transform::from_xyz(1.0, 3.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y)));
-        if let Err(e) = charaedit::setup(&mut commands, loader, sex) {
+        if let Err(e) = charaedit::setup(&mut commands, vfs, mfx, sex) {
             error!("charaedit: {e}");
         }
         return;
@@ -679,21 +685,20 @@ fn setup(
         return;
     }
     if let Some(session) = slot.0.lock().unwrap().take() {
-        let res = opening::OpeningRes(std::sync::Mutex::new(session));
-        // seat 0 wears the save's Arisen, else a stand-in
-        let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(vfs, x, "mPlayerDataManual").ok());
-        let arisen = saved
-            .as_ref()
-            .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
-            .or_else(|| ddlook::save::template_look(vfs, 0).ok());
-        if let Some(state) =
-            opening::setup(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, &res, if args.join.is_some() { vec![None, arisen] } else { vec![arisen] }, args.demo)
-        {
-            commands.insert_resource(state);
-            if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
+        // The movie and the editor first (intro.rs), unless the run has its
+        // own Arisen or is unattended or networked.
+        let intro = !args.skip_intro && args.save_xml.is_none() && !args.demo && args.host.is_none() && args.join.is_none();
+        if intro {
+            intro::start(&mut commands, &mut images, &args.native_pc, session, vfs, mfx);
+        } else {
+            // seat 0 wears the save's Arisen, else a stand-in
+            let saved = args.save_xml.as_deref().and_then(|x| ddlook::save::save_looks(vfs, x, "mPlayerDataManual").ok());
+            let arisen = saved
+                .as_ref()
+                .and_then(|v| v.iter().find(|s| s.who == "arisen").map(|s| s.look.clone()))
+                .or_else(|| ddlook::save::template_look(vfs, 0).ok());
+            opening_world(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, &mut bindposes, session, arisen, &args, vfs);
         }
-        commands.insert_resource(res);
-        spawn_camera_and_light(&mut commands, &args, None);
         // The world handoff for the opening's JumpArea (stream.rs): its host
         // drives the focus; the stage models it spawned are StageEntity.
         match stream::Streamer::field_grid(&args.native_pc) {
@@ -930,6 +935,34 @@ fn setup(
             Err(e) => warn!("stream: off ({e})"),
         }
     }
+}
+
+/// The opening's world: its stage, the party (seat 0 wears `arisen`), the
+/// HUD and the camera. Called at start, or by the intro once the edit is
+/// confirmed.
+#[allow(clippy::too_many_arguments)]
+pub fn opening_world(
+    commands: &mut Commands,
+    loader: &mut stage::Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+    session: opening::Session,
+    arisen: Option<ddlook::Look>,
+    args: &Args,
+    vfs: &ddvfs::Vfs,
+) {
+    let res = opening::OpeningRes(std::sync::Mutex::new(session));
+    let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
+    if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo) {
+        commands.insert_resource(state);
+        if let Err(e) = hud::spawn(commands, vfs, images) {
+            error!("HUD: {e}");
+        }
+    }
+    commands.insert_resource(res);
+    spawn_camera_and_light(commands, args, None);
 }
 
 /// Who plays (play.rs): with `--save`, its Arisen (seat 0) and main pawn,
