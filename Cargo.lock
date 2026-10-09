@@ -2308,6 +2308,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dddoor"
+version = "0.1.0"
+dependencies = [
+ "ddexe",
+ "ddspawn",
+ "ddvfs",
+ "mtarc",
+ "mtlmt",
+ "mtlot",
+]
+
+[[package]]
 name = "ddeconomy"
 version = "0.1.0"
 dependencies = [
