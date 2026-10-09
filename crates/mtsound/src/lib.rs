@@ -1,6 +1,7 @@
 //! Read-only SPAC v12, SREQ v19 and STRQ v27 memory images.
 //! No playback or interpretation of untraced mixing/loop metadata.
 use std::ops::Range;
+pub mod decode;
 fn span(b: &[u8], o: usize, n: usize) -> Result<&[u8], String> {
     b.get(o..o.checked_add(n).ok_or("size overflow")?)
         .ok_or_else(|| format!("out of bounds: {o:#x}+{n:#x}/{}", b.len()))
@@ -236,6 +237,39 @@ pub struct StreamRequests<'a> {
     pub auxiliary: AuxTables<'a>,
 }
 impl<'a> StreamRequests<'a> {
+    /// Translated from 0x00dc09b0 (DDDA.exe 2017-12-13 Steam):
+    /// the cue key is a u16, not the record's position or its full first word.
+    pub fn request(&self, id: u16) -> Option<&StreamRequest<'a>> {
+        self.requests
+            .iter()
+            .find(|r| u16::from_le_bytes(r.raw[..2].try_into().unwrap()) == id)
+    }
+
+    /// Resolve a direct play, or the event's prepare-then-start pair.
+    /// This intentionally rejects other command types and chained requests.
+    /// Translated from 0x00ddb4e0 (commands 1/5/10, 11), 0x00dca2f0
+    /// (start prepared), and uSoundStream 0x00c79d30/0x00c79fa0
+    /// (prepare ID precedes stream ID), DDDA.exe 2017-12-13 Steam.
+    pub fn event_source(&self, stream_id: u16, prepare_id: u16) -> Result<&StreamSource<'a>, String> {
+        let mut request = self.request(stream_id).ok_or("stream request absent")?;
+        if u32at(request.raw, 8)? == 11 {
+            request = self.request(prepare_id).ok_or("prepare request absent")?;
+            if u32at(request.raw, 8)? != 10 {
+                return Err("event prepare request is not prepare command 10".into());
+            }
+        } else if !matches!(u32at(request.raw, 8)?, 1 | 5) {
+            return Err("unsupported stream command".into());
+        }
+        let chain = u16::from_le_bytes(request.raw[36..38].try_into().unwrap());
+        if chain != u16::MAX {
+            return Err("chained stream request unsupported".into());
+        }
+        let source = request.source.ok_or("stream request has no source")?;
+        self.sources
+            .get(source)
+            .ok_or_else(|| "stream source absent".into())
+    }
+
     /// Translated from 0x00dc0ef0 (DDDA.exe 2017-12-13 Steam).
     pub fn parse(b: &'a [u8]) -> Result<Self, String> {
         header(b, b"STRQ", 27, 60)?;
@@ -413,6 +447,47 @@ mod tests {
         put(&mut bad, 52 + 132, 0);
         assert!(Requests::parse(&bad).is_err());
     }
+    #[test]
+    fn stream_keys_and_prepared_source() {
+        let mut raw = vec![0_u8; 156];
+        raw[..2].copy_from_slice(&203_u16.to_le_bytes());
+        raw[2..4].copy_from_slice(&0xcdcd_u16.to_le_bytes());
+        put(&mut raw, 8, 10);
+        put(&mut raw, 36, u32::MAX);
+        let mut start = vec![0_u8; 156];
+        start[..2].copy_from_slice(&3_u16.to_le_bytes());
+        put(&mut start, 8, 11);
+        let requests = StreamRequests {
+            requests: vec![
+                StreamRequest {
+                    raw: &raw,
+                    source: Some(0),
+                    section: None,
+                },
+                StreamRequest {
+                    raw: &start,
+                    source: None,
+                    section: None,
+                },
+            ],
+            sources: vec![StreamSource {
+                path: "example",
+                metadata: &[],
+            }],
+            random: None,
+            auxiliary: AuxTables {
+                sections: &[],
+                settings: &[],
+                speakers: &[],
+                values: &[],
+            },
+        };
+        assert_eq!(requests.event_source(3, 203).unwrap().path, "example");
+        assert!(requests.event_source(3, 0).is_err());
+        assert!(requests.event_source(203, 3).is_err());
+        assert!(requests.request(0).is_none());
+    }
+
     #[test]
     fn stream_links_and_bounds() {
         let mut b = vec![0; 244];

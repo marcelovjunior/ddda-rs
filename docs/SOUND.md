@@ -104,3 +104,27 @@ the loose installation; report these rather than substituting another sound.
 Next step: trace one runtime cue's command/program selection through the
 package table and compare playback with the original under an authorized
 audio test. No original-game comparison has been performed.
+
+## Playback work in progress (audio-playback)
+
+`mtsound::decode` uses Lewton for Vorbis and Symphonia 0.5.5 for
+Microsoft ADPCM/PCM RIFF. These are device-independent decoders, with an
+explicit caller-provided decoded-sample budget. No audio device is opened
+by this crate. Symphonia's codec documentation is at
+https://docs.rs/symphonia-codec-adpcm/0.5.5.
+
+Stream request IDs are **u16 keys**, not array indices (`0x00dc09b0`).
+`0x00ddb4e0` dispatches commands 1/5/10 to stream allocation and command
+11 to `0x00dca2f0`, which starts previously prepared matching voices.
+`uSoundStream::vf05` (`0x00c79d30`) queues the prepare ID before the
+stream ID; mode 2's `0x00c79fa0` sends the nonpositional start request.
+The narrow resolver handles direct play and this prepare/start pair;
+other commands and request chains are explicitly rejected.
+
+st200 ev10 frame zero sends stream ID 3 in both banks. Its prepared BGM
+ID 24 resolves `event_bgm/wav/st200ev10-BGM`; voice/SE ID 203 resolves
+`event_vo_se/wave/st200ev10_m`. Both are installed loose SNGW files.
+Installed decoding checks produce six-channel 48 kHz audio, respectively
+61.183 and 56.757 seconds. The Arisen's separate SPAC grunt decodes as
+Microsoft ADPCM, mono 48019 Hz, 41344 samples. These are decode checks,
+not audible playback or comparison against the original.
