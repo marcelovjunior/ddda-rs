@@ -63,6 +63,20 @@ per-frame rules multiply by (e.g. `0x00AC51D0`, air movement).
 
 Compare with the stamina rules traced from the exe in [PARAMS.md](PARAMS.md).
 
+**Refined** (codex-12, from the raw 005707 samples):
+- The drain is exactly -1.500 per `mDeltaTime` unit.
+- Recovery is +1.625 per unit.
+- The hold after sprinting lasts 0.590-0.614 s, bracketed by samples.
+
+**Passive oracle read** (codex-1 #577, the idle actor, later that night):
+- body and load class 1/1, recovery factor 1, stamina debt 0;
+- status masks 0;
+- `cUnit.mDeltaTime` = `sMain.mDeltaTime`;
+- `sWorkRate` rates 0 and 1 both 1.0.
+
+This supports the neutral factors for the current idle state only. It
+does not establish the 005707 sprint conditions.
+
 ## Turning with the keyboard (session 005454)
 
 Running (10.17 cm/frame, town run), then switching from W to D: the
