@@ -676,8 +676,14 @@ death animation. Actor +0x27b0 is petrification progress: status-kind 12
 handler 0x00853260 decreases it toward zero and restores one when removed;
 0x0084df60 sets the death byte +0x2b51 when it reaches zero. The harpy
 selector then chooses common 0x03000060 (break variant one). Its separate
-+0x5cb4 condition chooses 0x0300005f and remains semantically unresolved,
-so automatic harpy death dispatch is still pending.
++0x5cb4 condition chooses 0x0300005f. That field is now identified by writer
+0x00ab01a0 as the frozen visual lifecycle: status bit 0x800 starts states
+1..4, removal enters state 5, then it resets to zero. Testing only the
+current status bit would miss the removal interval. `HarpyDeath` translates
+the family override with explicit movement/freeze-state/petrify inputs;
+its regression covers all five freeze states, grounded/air selection and
+petrification precedence, including unordered progress. Automatic host
+dispatch still needs the visual-state input and the air/break action bodies.
 
 ## Prologue chimera: initial source survey
 

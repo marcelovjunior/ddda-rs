@@ -45,7 +45,11 @@ All four installed beast regressions pass, including end-state persistence.
 Not complete: autonomous family think/sensing, forced damage and conditional death dispatch,
 spawn/viewer/network integration and original-game fight comparisons. Normal
 wolf death uses common action 0x03000042 (0x008f6230), distinct from the local
-unsupported cEm0200Die motion. Next: family think host and harpy death selection.
+unsupported cEm0200Die motion. Harpy death selection is now translated and
+regression-tested with explicit ground/air, frozen lifecycle and petrification
+inputs (0x0093c700, writer 0x00ab01a0). The host must retain frozen visual
+state beyond status removal; air/break action bodies remain unconnected.
+Next: family think host and complete harpy death dispatch.
 
 Selected wolf Run and Dash now execute their own sourced motions and start
 frames (0x008fc720 / 0x008fca50), with distinct completion timing. Installed

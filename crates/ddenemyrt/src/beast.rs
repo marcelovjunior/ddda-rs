@@ -26,6 +26,45 @@ pub struct WolfParams {
     pub turn_rate: f32,
 }
 
+/// Harpy's family override after the common enemy death callback accepts it.
+/// Caller must preserve the original guards: actor is not already dead,
+/// +0x2364 bit 24 is clear and +0x2360 bit 29 is clear. Other branches retain
+/// the common callback's result and are not represented by this selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarpyDeath {
+    Ground,
+    Air,
+    FrozenBreak,
+    PetrifiedBreak,
+}
+impl HarpyDeath {
+    /// `freeze_visual_state` is actor+0x5cb4, updated by 0x00ab01a0;
+    /// it may remain nonzero while the frozen status is being removed.
+    /// `petrify_progress` is actor+0x27b0, updated by 0x00853260.
+    // Translated from 0x0093c700 (DDDA.exe 2017-12-13 Steam).
+    pub fn select(movement_flags: u32, freeze_visual_state: u32, petrify_progress: f32) -> Self {
+        if petrify_progress <= 0.0 {
+            Self::PetrifiedBreak
+        } else if freeze_visual_state != 0 {
+            Self::FrozenBreak
+        } else if movement_flags & 1 != 0 {
+            Self::Air
+        } else {
+            Self::Ground
+        }
+    }
+
+    // Pending action +0x5b58 assignments in 0x0093c700.
+    pub fn action(self) -> usize {
+        match self {
+            Self::Ground => 3,
+            Self::Air => 4,
+            Self::FrozenBreak => 0x0300_005f,
+            Self::PetrifiedBreak => 0x0300_0060,
+        }
+    }
+}
+
 impl BeastData {
     pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>, family: Family) -> Result<Self, String> {
         let (id, group, model) = match family {
@@ -704,6 +743,20 @@ mod tests {
         assert!((yaw - (pi - 0.05)).abs() < 0.00001);
         assert_eq!(harpy_turn(0.0, 2.0, 0.1, 1.0, 0.5), 0.1);
         assert_eq!(harpy_turn(0.0, 0.01, 1.0, 1.0, 2.0), 0.01);
+    }
+
+    #[test]
+    fn harpy_death_preserves_freeze_lifecycle_and_petrify_precedence() {
+        assert_eq!(HarpyDeath::select(0, 0, 1.0).action(), 3);
+        assert_eq!(HarpyDeath::select(4, 0, 1.0).action(), 3);
+        assert_eq!(HarpyDeath::select(1, 0, 1.0).action(), 4);
+        for state in 1..=5 {
+            assert_eq!(HarpyDeath::select(1, state, 1.0).action(), 0x0300_005f);
+            assert_eq!(HarpyDeath::select(1, state, 0.0).action(), 0x0300_0060);
+        }
+        assert_eq!(HarpyDeath::select(0, 0, -0.01), HarpyDeath::PetrifiedBreak);
+        assert_eq!(HarpyDeath::select(0, 0, f32::NAN), HarpyDeath::Ground);
+        assert_eq!(HarpyDeath::select(0, 1, f32::NAN), HarpyDeath::FrozenBreak);
     }
 
     #[test]
