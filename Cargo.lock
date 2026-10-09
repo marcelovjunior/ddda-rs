@@ -2288,6 +2288,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddsave"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "miniz_oxide 0.8.9",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddsim"
 version = "0.1.0"
 dependencies = [
