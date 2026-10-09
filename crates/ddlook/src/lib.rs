@@ -16,6 +16,7 @@
 //!    rArmorTable / rArmorModel of `h_parts`).
 
 pub mod face;
+pub mod body;
 pub mod eyebrow;
 #[rustfmt::skip]
 mod face_controllers;
@@ -479,6 +480,9 @@ pub struct Look {
     pub morphs: Option<[String; 3]>,
     /// The body morph (crate::morph), when the edit data was found.
     pub body: Option<morph::BodyMorph>,
+    /// Separate slender/muscle/bust controller. Its bulk tables are read
+    /// from the installed exe when constructing the rendered skeleton.
+    pub body_shape: Option<body::Edit>,
     /// The face morph (crate::face): the face joints it changes.
     pub face: Vec<face::FaceJoint>,
 }
@@ -625,6 +629,7 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         weapons: vec![],
         morphs: None,
         body: None,
+        body_shape: None,
         face: vec![],
     }
 }

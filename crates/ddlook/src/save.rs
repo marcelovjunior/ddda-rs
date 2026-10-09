@@ -124,6 +124,7 @@ pub fn edit_look<S: Source + ?Sized>(
         human.apply_preset(part, preset.as_ref());
     }
     look.body = Some(crate::morph::body_morph(&human, &|_| true));
+    look.body_shape = Some(crate::body::Edit::from_save(&|name| field(f, name)).ok()?);
     // The face morph from the face presets (0x00780fa0 -> 0x00cb9280) and
     // the slider parameters.
     let mut face = crate::face::FaceEdit::neutral();
