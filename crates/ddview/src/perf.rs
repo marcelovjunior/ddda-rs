@@ -7,8 +7,10 @@ use bevy::prelude::*;
 pub struct Perf {
     frames: Vec<f32>,
     since: f32,
+    unfocused_frames: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     perf: Option<ResMut<Perf>>,
     time: Res<Time<Real>>,
@@ -17,11 +19,15 @@ pub fn update(
     meshes: Query<(&Mesh3d, &ViewVisibility, Option<&MeshMaterial3d<crate::stage::DdMaterial>>)>,
     nodes: Query<(), With<Node>>,
     dd_materials: Res<Assets<crate::stage::DdMaterial>>,
+    windows: Query<&Window>,
 ) {
     let Some(mut p) = perf else { return };
     ON.store(true, std::sync::atomic::Ordering::Relaxed);
     let dt = time.delta_secs();
     p.frames.push(dt * 1000.0);
+    if !windows.iter().any(|window| window.focused) {
+        p.unfocused_frames += 1;
+    }
     p.since += dt;
     if p.since < 5.0 {
         return;
@@ -33,6 +39,7 @@ pub fn update(
     let long = f.iter().filter(|&&ms| ms > 50.0).count();
     let over_budget = f.iter().filter(|&&ms| ms > 1000.0 / 60.0).count();
     let over_33 = f.iter().filter(|&&ms| ms > 33.0).count();
+    let unfocused_frames = std::mem::take(&mut p.unfocused_frames);
     info!(
         "perf: {} frames, median {:.1} ms, p99 {:.1} ms, worst {:.1} ms, {} over 50 ms; entities {} (meshes {}, audio {}, ui {})",
         f.len(),
@@ -50,6 +57,7 @@ pub fn update(
     let unique_materials: std::collections::HashSet<_> = visible.iter().filter_map(|(_, _, mat)| mat.map(|mat| mat.0.id())).collect();
     info!("perf: p95 {:.1} ms, {over_budget} over 16.67 ms, {over_33} over 33 ms; visible meshes {} ({} unique), visible DD materials {} ({} allocated). Visibility is across views, not draw calls.", at(0.95), visible.len(), unique_meshes.len(), unique_materials.len(), dd_materials.len());
     report_sections();
+    info!("perf: {unfocused_frames}/{} frames without window focus", f.len());
 }
 
 /// Time spent in named sections since the last report: (total ms, count,
