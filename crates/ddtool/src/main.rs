@@ -66,9 +66,7 @@ fn main() -> ExitCode {
         ["xfs-get", dir, path] => xfs::xfs_get(Path::new(dir), path),
         ["survey", dir] => survey::survey(Path::new(dir), None),
         ["survey", dir, class] => survey::survey(Path::new(dir), Some(class)),
-        _ => Err(format!("usage:
-{}", USAGE.join("
-"))),
+        _ => Err(format!("usage:\n{}", USAGE.join("\n"))),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
