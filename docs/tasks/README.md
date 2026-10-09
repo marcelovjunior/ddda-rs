@@ -92,7 +92,7 @@ Codex lane: see `docs/CODEX.md`.
 | [save-pawns](save-pawns.md) | Typed pawn knowledge/equipment from the save | reader | codex-1 | merged 2026-10-09 |
 | [rift-ui](rift-ui.md) | The Rift menus: screens, strings, bindings | reader | codex-1 | merged 2026-10-09 |
 | [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | merged 2026-10-09 |
-| [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |
+| [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | merged 2026-10-09 |
 | [lcm-camera](lcm-camera.md) | Cutscene camera-list reader | reader | codex-1 | merged 2026-10-09 |
 | [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | merged 2026-10-09 |
 | [pawn-knowledge-map](pawn-knowledge-map.md) | Pawn knowledge: save bits to quest/enemy/area ids | reader | codex-1 | assigned |

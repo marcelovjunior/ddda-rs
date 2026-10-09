@@ -1,0 +1,13 @@
+[package]
+name = "ddstory"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddquest = { path = "../ddquest" }
+mtfsm = { path = "../mtfsm" }
+mtxfs = { path = "../mtxfs" }
+mtarc = { path = "../mtarc" }
+ddvfs = { path = "../ddvfs" }

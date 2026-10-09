@@ -59,6 +59,15 @@ impl MsbBits {
     pub fn words(&self) -> &[u32] {
         &self.words
     }
+    /// Rebuild from stored words (e.g. a save); extra words are ignored,
+    /// missing ones are zero.
+    pub fn from_words(len: usize, words: &[u32]) -> Self {
+        let mut b = Self::new(len);
+        for (d, s) in b.words.iter_mut().zip(words) {
+            *d = *s;
+        }
+        b
+    }
 }
 
 /// The story-progress banks of one save. Shared by all players of a
