@@ -99,3 +99,12 @@ viewer lacks the selected animated actor collision entries and eligibility
 state. It should not substitute guessed render bounds. Source review
 included disassembly because Ghidra prunes the producer's contact loop.
 This documentation checkpoint adds no tests or original comparison.
+
+Subsequent implementation checkpoint: `mtcamera::actor_offset` now has
+source query construction, explicit `EligibleEntryProvider` contract,
+per-frame contact maximum and per-view scalar smoothing. Three targeted
+unit tests and clippy pass. Existing authored `mIsObjAdj` volumes are a
+partial provider foundation, but source collection1 includes activation,
+owner vf64 filtering and runtime-created entries; no default or viewer
+hook is supplied. CAMERA.md records these gates and unresolved actor
+enum semantics. No new rendered/original comparison.

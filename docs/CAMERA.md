@@ -244,7 +244,7 @@ Whether the reported Cassardis porch pillar
 is represented in that merged SBC remains to be checked; no new scenery
 collision or guessed near-plane reduction is introduced here.
 
-### Actor collision offset and its smoothing (source traced, not implemented)
+### Actor collision offset and its smoothing
 
 The camera +0xB98 offset in **0x007e1400** is fed by actor collision,
 rather than a wall-dependent near-plane adjustment. The producer
@@ -255,12 +255,33 @@ greater than **32 cm** (constant **0x01517928**). Actor eligibility has
 additional state/type gates; this is not a query against every visible
 actor or a replacement for the stage SBC query.
 
+The producer requires the followed actor and its camera (+0x2EA4), rejects
+followed-actor +0x2360 bit0x02000000 and the actor referenced at its
++0x2104, and accepts only candidate +0x1FC0 value4 or the combination
+of candidate +0x206D bit0x10 and +0x2574 value0x2369. These fields' complete
+semantic enums remain unresolved. For candidates with +0x206C bit0x80,
+subtypes 0x5C..0x5E and 0xB1..0xB4 are additionally rejected when model
+centres are strictly less than 200 cm apart. Do not broaden this to every
+enemy, pawn or nearby character based on a guessed enum meaning.
+
 The entry mask 0x10 is the authored group's **mIsObjAdj** flag: reflection
 **0x00ccd510** places it at group +0x0E, and **0x0076fab0** translates it
 into entry +0x1C0 bit0x10. Existing `ddcombat::ObjCollision` already reads
 these groups; `ddcombat::volumes::build_volume` supplies the source-backed
 joint placement. Integration therefore needs the live selected entries
 and actor eligibility, rather than a new collision resource parser.
+
+**0x00770630** appends accepted entries with that flag to collection 1
+at `cObjCollision +0xAB4` (count +0xAB8, data +0xAC4). Acceptance first
+calls the optional +0xCC0 callback; **0x00885c10** installs thunk
+**0x0088cf30**, dispatching owner virtual slot 64. This can remove flags:
+`uEnemy::vf64` **0x00aaa3d0** removes bit0x10 when owner +0x2748 bit8 is
+set. Goblin override **0x008d34f0** also removes it when virtual slot117
+returns true or motion is 0x282, 0x283, 0x284, or 0x28C..0x28F. The
+existing `ddenemyrt::Body::push_volumes` builds activated authored
+object-adjustment groups, but does not represent all these callback
+gates or runtime-created entries. It is therefore a partial foundation,
+not yet an exact collection-1 provider.
 
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
@@ -303,11 +324,21 @@ to the eye. If `length(shift) - 16 < offset`, it also adds
 not remaining eye-to-target distance. For the producer's positive offsets
 the target therefore normally moves by the same shift as the eye.
 
-This path is not wired into the viewer: it needs the selected, animated
+`mtcamera::actor_offset` implements the query construction, per-frame
+maximum accumulator and scalar smoother independently per view. Its
+`EligibleEntryProvider` boundary explicitly requires the actor gate,
+selected active entries and broad/narrow collision tests; there is no
+default provider that silently substitutes all hurt volumes. Three unit
+regressions cover query start/displacement and contact reduction,
+max/tie/reset behavior, and time chunking plus velocity preservation on
+snap/bypass. Targeted mtcamera tests and clippy pass. Geometry-provider
+correctness is not established by these synthetic contact fixtures.
+This path is not wired into the
+viewer: it needs the selected, animated
 actor sphere/capsule entries and their source eligibility state. Using
 render bounds or an invented generic actor radius would not reproduce it.
 Next action: expose the authored actor collision entries to a per-view
-camera query, then translate and regression-test the offset/accumulator
-and scalar smoother together. No live/original comparison was performed
+camera query, preserving activation and virtual-slot64 gates, then
+translate the shape contacts and pose shift. No live/original comparison was performed
 for this trace. Ghidra drops part of the producer as unreachable; the
 shape loop and contact accumulator were checked against disassembly.
