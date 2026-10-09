@@ -146,7 +146,7 @@ the acceptance traces of docs/ACCEPTANCE.md confirm the speeds):
   height to 5 over the edge; the climb ends 10 in from the edge, 5 over it,
   in `cPlActWait`.
 
-**Turning** (traced in part). `cPlActRun::vf06` builds the velocity from
+**Turning** (traced; recorded 2026-10-09, see the open points). `cPlActRun::vf06` builds the velocity from
 the action's +0x60, which `cPlAction::vf06` copies each frame from uPlayer
 +0x2654; `uPlayerBase::vf90` (0x00B61A20) sets that to the stick's angle
 (uPlayer +0x32C4) while the stick is held. So the velocity follows the
@@ -505,9 +505,15 @@ stage flags, actor +0x26A4, +0x4CF0, +0x31EA).
 - Town or field is a per-player flag set by the host. `--play` starts in
   town mode (as recorded); F2 toggles it.
 - Integration order: position += velocity, then velocity += gravity.
-- Turning is instant. In the original the velocity also follows the stick
-  at once and only the model's yaw turns over time (Turning, above); the
-  recorded velocity direction turns ~70°/s, cause not traced.
+- Turning (recorded 2026-10-09, keyboard): the heading (+0x2654) and the
+  velocity take the stick's direction at once. The facing (+0x257C) steps
+  toward it along the short arc by adjust 3 (22.5 degrees, 0.3927 rad,
+  stored at +0x2584 by `uPlayerBase::vf90`) x the unit delta, which is
+  about 776 degrees/s at the 1.15 unit rate. A 90 degree turn takes about 3.5
+  frames and 180 degrees about 7. The run motion keeps playing; there is
+  no turn motion. ddsim does the same (`Player::heading`,
+  `Sim::turn_to_heading`); the sprint stop moves along the facing. The
+  ~70 degrees/s of the older recording was an analog stick.
 - Step up 60 cm (placeholder). Fall gravity = normal
   jump's: `cPlActFall::vf05` (0x00ACCDD0) keeps the gravity of a character
   already falling and otherwise takes the last jump row's (uPlayer

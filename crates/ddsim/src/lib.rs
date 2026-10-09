@@ -126,7 +126,14 @@ pub struct MoveParam {
     /// Largest horizontal speed a fall starts with (adjust 0xD1, read by
     /// cPlActFall::vf05 0x00ACCDD0), cm per frame.
     pub fall_max: f32,
+    /// The model's turn toward the movement heading, radians per frame
+    /// (adjust 3 in degrees; `uPlayerBase::vf90` 0x00B61A20 stores it at
+    /// uPlayer +0x2584 for the rotator 0x007975D0).
+    pub turn: f32,
 }
+
+/// Index of the model's turn rate (degrees per frame) in the `rAdjustParam` table.
+pub const ADJUST_TURN_RATE: usize = 3;
 
 /// Index of the fall's starting speed cap in the `rAdjustParam` table.
 pub const ADJUST_FALL_MAX: usize = 0xD1;
@@ -143,6 +150,7 @@ impl MoveParam {
             run_relaxed: get(ADJUST_RUN_RELAXED)? * GROUND_SPEED_FACTOR,
             sprint: get(ADJUST_SPRINT)?,
             fall_max: get(ADJUST_FALL_MAX)?,
+            turn: get(ADJUST_TURN_RATE)?.to_radians(),
         })
     }
 }
@@ -155,6 +163,7 @@ pub const MOVE_SHIPPED: MoveParam = MoveParam {
     run_relaxed: 12.0 * GROUND_SPEED_FACTOR,
     sprint: 22.5,
     fall_max: 7.0,
+    turn: 22.5 * std::f32::consts::PI / 180.0,
 };
 
 /// Simulation step in motion frames: 120 steps per second. Per-frame values
@@ -327,6 +336,19 @@ impl State {
         }
     }
 
+    /// The gaits: the states whose facing turns toward the movement heading.
+    pub fn gait(self) -> bool {
+        matches!(
+            self,
+            State::Wait
+                | State::Walk { .. }
+                | State::Run { .. }
+                | State::SprintStart
+                | State::Sprint
+                | State::SprintStop
+        )
+    }
+
     /// Whether the attack transition lists are read in this state: on the
     /// ground (the lists' 0x301 rows; the air rows are not modelled).
     pub fn on_ground_for_attacks(self) -> bool {
@@ -385,8 +407,11 @@ pub struct Player {
     pub id: PlayerId,
     /// Feet position, cm, stage frame.
     pub position: [f32; 3],
-    /// Facing (radians, 0 faces +Z).
+    /// Facing (radians, 0 faces +Z): the model's yaw (uPlayer +0x257C).
     pub yaw: f32,
+    /// Movement heading (uPlayer +0x2654): follows the stick at once while
+    /// it is held; the facing turns toward it at `MoveParam::turn`.
+    pub heading: f32,
     pub state: State,
     /// Frame within the current state's motion.
     pub frame: f32,
@@ -840,6 +865,7 @@ impl Sim {
             id,
             position,
             yaw,
+            heading: yaw,
             state: State::Wait,
             frame: 0.0,
             velocity: [0.0; 3],
@@ -955,6 +981,12 @@ impl Sim {
         let unit_dt = dt * self.players[i].unit_rate;
         if !self.skill_frame(i, ground, unit_dt) {
             self.frame_states(i, input, ground, unit_dt);
+        }
+        // Outside the gaits, actions set the facing themselves; the heading
+        // starts from it when the player moves again.
+        let p = &mut self.players[i];
+        if !p.state.gait() {
+            p.heading = p.yaw;
         }
         self.stamina_step(i, state0, frame0, dt);
         // uPlayerBase::vf90: the safe ring, then the lost-body check
@@ -1084,10 +1116,12 @@ impl Sim {
                     p.frame = f;
                 }
                 if moving {
-                    // *Placeholder*: the original turns over time.
-                    p.yaw = input_yaw;
+                    // the heading follows the stick at once (uPlayerBase::vf90
+                    // copies the stick angle +0x32C4 to +0x2654 while it is held)
+                    p.heading = input_yaw;
                 }
                 self.ground_move(i, next, ground, dt);
+                self.turn_to_heading(i, dt);
             }
             State::JumpStart { standing, sprint } => {
                 // takeoff motion (the sprint takeoff carries root motion), then launch
@@ -1378,6 +1412,23 @@ impl Sim {
             let before = p.stamina;
             p.stamina = (before - cost).clamp(0.0, p.stamina_max);
             p.ran_out |= before > 0.0 && p.stamina <= 0.0;
+        }
+    }
+
+    /// The rotator 0x007975D0 for the gaits: the facing steps toward the
+    /// heading by at most `MoveParam::turn` per frame, the short way round.
+    /// Recorded (2026-10-09, keyboard, town run): a 90 degree turn in steps
+    /// of 0.3927 x the frame's unit delta, no turn motion.
+    fn turn_to_heading(&mut self, i: usize, dt: f32) {
+        let step = self.move_param.turn * dt;
+        let p = &mut self.players[i];
+        let d = (p.heading - p.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        if d.abs() <= step {
+            p.yaw = p.heading;
+        } else {
+            p.yaw = (p.yaw + step.copysign(d) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
         }
     }
 
@@ -1801,7 +1852,10 @@ impl Sim {
             // velocity along the facing, in the player's own (scaled) time;
             // the motion only animates. The capsule sweep's floor slide
             // projects it onto slopes; without triangles `along_ground` does.
-            let (s, c) = p.yaw.sin_cos();
+            // cPlActRunEnd (the sprint stop) moves along the facing (+0x257C);
+            // the other gaits along the heading (+0x2654)
+            let dir = if state == State::SprintStop { p.yaw } else { p.heading };
+            let (s, c) = dir.sin_cos();
             let flat = [v * dt * s, v * dt * c];
             let step = if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
                 flat
@@ -3061,6 +3115,47 @@ mod tests {
     }
 
     #[test]
+    fn the_facing_turns_toward_the_heading_at_the_adjust_rate() {
+        // Recorded 2026-10-09 (keyboard, run, W then D): the velocity takes
+        // the new direction at once; the facing (+0x257C) follows in steps
+        // of 0.3927 (adjust 3, 22.5 degrees) x the unit delta, no turn motion.
+        let mut s = sim();
+        let mut inputs = HashMap::from([(0, fwd())]);
+        frames(&mut s, 10, &inputs, &Flat(0.0));
+        assert!(s.player(0).unwrap().yaw.abs() < 1e-6);
+        // stick right: heading -90 degrees (screen-right is -X here)
+        inputs.insert(0, Input { stick: [1.0, 0.0], ..Default::default() });
+        let x0 = s.player(0).unwrap().position[0];
+        frames(&mut s, 1, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        let right = -std::f32::consts::FRAC_PI_2;
+        assert!((p.heading - right).abs() < 1e-5, "{}", p.heading);
+        assert!(p.position[0] < x0, "moves right at once: {:?}", p.position);
+        let step = MOVE_SHIPPED.turn * 1.15;
+        assert!((p.yaw + step).abs() < 1e-3, "one frame's step: {}", p.yaw);
+        assert!(matches!(p.state, State::Run { .. }), "no turn state: {:?}", p.state);
+        // 90 degrees / (22.5 x 1.15) = 3.5 frames
+        frames(&mut s, 2, &inputs, &Flat(0.0));
+        assert!(s.player(0).unwrap().yaw > right + 1e-3);
+        frames(&mut s, 1, &inputs, &Flat(0.0));
+        assert!((s.player(0).unwrap().yaw - right).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_released_stick_finishes_the_turn() {
+        let mut s = sim();
+        let mut inputs = HashMap::from([(0, fwd())]);
+        frames(&mut s, 10, &inputs, &Flat(0.0));
+        inputs.insert(0, Input { stick: [0.0, -1.0], ..Default::default() });
+        frames(&mut s, 1, &inputs, &Flat(0.0));
+        inputs.clear();
+        frames(&mut s, 10, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        assert!((p.yaw.abs() - std::f32::consts::PI).abs() < 1e-4, "{}", p.yaw);
+    }
+
+    #[test]
     fn relaxed_run_uses_the_town_motion_and_speed() {
         let mut s = sim();
         s.player_mut(0).unwrap().relaxed = true;
@@ -3110,6 +3205,7 @@ mod tests {
         t[ADJUST_RUN_RELAXED] = 12.0;
         t[ADJUST_SPRINT] = 22.5;
         t[ADJUST_FALL_MAX] = 7.0;
+        t[ADJUST_TURN_RATE] = 22.5;
         assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
         assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
     }

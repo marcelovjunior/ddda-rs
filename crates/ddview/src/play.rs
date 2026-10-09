@@ -176,6 +176,10 @@ pub struct PlayState {
     pub fight_data: Option<std::sync::Arc<FightData>>,
     /// Seconds not yet stepped at the fixed frame.
     acc: f32,
+    /// Players' and goblins' (position, yaw) before the last fixed frame,
+    /// for drawing between frames.
+    prev: HashMap<PlayerId, ([f32; 3], f32, ddsim::State, f32)>,
+    prev_goblins: Vec<([f32; 3], f32)>,
     /// Local Arisen seats (P1, P2).
     pub locals: Vec<PlayerId>,
     /// HP of each seat at full (for the HUD).
@@ -316,6 +320,8 @@ pub fn setup(
         goblins,
         fight_data: data,
         acc: 0.0,
+        prev: HashMap::new(),
+        prev_goblins: Vec::new(),
         locals,
         hp_max,
         demo_press: false,
@@ -538,15 +544,51 @@ pub fn step(
                 }
             }
         }
+        st.prev = st.sim.players.iter().map(|p| (p.id, (p.position, p.yaw, p.state, p.frame))).collect();
+        st.prev_goblins = st.fight.as_ref().map_or_else(Vec::new, |f| f.goblins.iter().map(|g| (g.pos, g.yaw)).collect());
         fixed_frame(st, &local);
         pending.clear();
     }
-    let shown: Vec<Shown> = st.sim.players.iter().map(Shown::of).collect();
+    // The simulation runs in fixed 1/30-s frames; the screen is drawn between
+    // the last two of them, so movement and the follow camera are smooth at
+    // any frame rate (*viewer choice*: the original steps once per drawn
+    // frame with the frame's delta).
+    let alpha = (st.acc / frame).clamp(0.0, 1.0);
+    let shown: Vec<Shown> = st
+        .sim
+        .players
+        .iter()
+        .map(|p| {
+            let mut s = Shown::of(p);
+            if let Some(&(pos, yaw, state, frame)) = st.prev.get(&p.id) {
+                (s.position, s.yaw) = between(pos, yaw, p.position, p.yaw, alpha);
+                // the pose too, within one motion (not across a loop's wrap)
+                if state == p.state && p.frame >= frame {
+                    s.frame = frame + (p.frame - frame) * alpha;
+                }
+            }
+            s
+        })
+        .collect();
     show(st, &shown, &mut roots, &mut cams);
     let fight = st.fight.take();
-    show_goblins(st, fight.as_ref(), &mut roots);
+    show_goblins(st, fight.as_ref(), &mut roots, alpha);
     hud.rows = hud_rows(st, &st.sim, fight.as_ref(), None);
     st.fight = fight;
+}
+
+/// A body drawn `alpha` of the way from its previous fixed frame to the
+/// current one: position linear, yaw the short way round. A jump of more
+/// than `SNAP` (a warp or respawn) is drawn at once.
+pub fn between(p0: [f32; 3], y0: f32, p1: [f32; 3], y1: f32, alpha: f32) -> ([f32; 3], f32) {
+    const SNAP: f32 = 200.0;
+    let d = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > SNAP * SNAP {
+        return (p1, y1);
+    }
+    let pos = [p0[0] + d[0] * alpha, p0[1] + d[1] * alpha, p0[2] + d[2] * alpha];
+    let dy = (y1 - y0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    (pos, y0 + dy * alpha)
 }
 
 pub fn active_input(input: &Input) -> bool {
@@ -754,12 +796,14 @@ pub fn show_goblins(
     st: &mut PlayState,
     fight: Option<&Fight>,
     roots: &mut Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
+    alpha: f32,
 ) {
     let (Some(f), Some(d)) = (fight, st.fight_data.as_ref()) else { return };
-    for (g, v) in f.goblins.iter().zip(st.goblins.iter_mut()) {
+    for (k, (g, v)) in f.goblins.iter().zip(st.goblins.iter_mut()).enumerate() {
         let Ok((mut tr, mut pb)) = roots.get_mut(v.entity) else { continue };
-        tr.translation = (Vec3::from(g.pos) - st.origin) * UNIT;
-        tr.rotation = Quat::from_rotation_y(g.yaw);
+        let (pos, yaw) = st.prev_goblins.get(k).map_or((g.pos, g.yaw), |&(p, y)| between(p, y, g.pos, g.yaw, alpha));
+        tr.translation = (Vec3::from(pos) - st.origin) * UNIT;
+        tr.rotation = Quat::from_rotation_y(yaw);
         let m = d
             .goblin
             .body
@@ -980,6 +1024,19 @@ mod tests {
             orbit_angles(0.0, 0.0, Vec2::new(0.0, 10000.0)).1,
             30f32.to_radians()
         );
+    }
+
+    #[test]
+    fn bodies_are_drawn_between_fixed_frames() {
+        let (p, y) = between([0.0, 0.0, 0.0], 0.0, [10.0, 0.0, 20.0], 1.0, 0.25);
+        assert_eq!(p, [2.5, 0.0, 5.0]);
+        assert!((y - 0.25).abs() < 1e-6);
+        // yaw the short way across +-180 degrees
+        let (_, y) = between([0.0; 3], 3.0, [0.0; 3], -3.0, 0.5);
+        assert!((y.abs() - std::f32::consts::PI).abs() < 0.2, "{y}");
+        // a warp is drawn at once
+        let (p, _) = between([0.0; 3], 0.0, [1000.0, 0.0, 0.0], 0.0, 0.1);
+        assert_eq!(p, [1000.0, 0.0, 0.0]);
     }
 
     #[test]
