@@ -170,12 +170,12 @@ impl ddsim::Ground for NoGround {
     }
 }
 
-/// For `--join`: joins before the world loads and moves the viewer to the
+/// Joins before the world loads and moves the viewer to the
 /// host's spot (stage, origin cell, spawn). The connection stays open,
 /// answering the host, until [`setup`] takes it. Without a welcome within
 /// [`PREJOIN_WAIT`] the arguments stay as they were, and [`setup`] joins
 /// later.
-pub fn prejoin(native_pc: &Path, addr: &str, profile: Option<u64>, save_xml: Option<&str>) -> Option<Spot> {
+fn prejoin_spot(native_pc: &Path, addr: &str, profile: Option<u64>, save_xml: Option<&str>) -> Option<Spot> {
     let server = resolve(addr).ok()?;
     let vfs = ddvfs::Vfs::open(native_pc).ok()?;
     let sim = ddhost::install::sim(&vfs).ok()?;
@@ -193,7 +193,7 @@ pub fn prejoin(native_pc: &Path, addr: &str, profile: Option<u64>, save_xml: Opt
         std::thread::sleep(Duration::from_millis(33));
     }
     if let Some(r) = &c.refused {
-        error!("net: refused: {r}");
+        eprintln!("net: refused: {r}");
         return None;
     }
     let spot = c.spot?;
@@ -211,8 +211,23 @@ pub fn prejoin(native_pc: &Path, addr: &str, profile: Option<u64>, save_xml: Opt
         }
         std::thread::sleep(Duration::from_millis(33));
     });
-    info!("net: prejoined; the host is on stage {} cell {:?}", spot.stage, spot.cell);
+    eprintln!("net: prejoined; the host is on stage {} cell {:?}", spot.stage, spot.cell);
     Some(spot)
+}
+
+/// `--join`: joins before the world loads ([`prejoin_spot`]) and starts the
+/// viewer at the host's spot: its stage, origin cell and spawn. Other
+/// modes pass through.
+pub fn prejoin(mut args: crate::Args) -> crate::Args {
+    let Some(addr) = args.join.clone() else { return args };
+    let xml = args.save_xml.clone();
+    if let Some(spot) = prejoin_spot(&args.native_pc, &addr, args.profile, xml.as_deref().map(|x| x.as_str())) {
+        args.stage = spot.stage;
+        args.cell = spot.cell;
+        let origin = Vec3::new((spot.cell.1 - 50) as f32 * 10000.0, 0.0, (spot.cell.0 - 50) as f32 * 10000.0);
+        args.spawn = Vec3::from(spot.pos) - origin;
+    }
+    args
 }
 
 fn take_prejoined() -> Option<Guest> {
