@@ -581,7 +581,7 @@ fn main() {
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, play::step, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -663,6 +663,21 @@ fn setup(
         }
         commands.insert_resource(res);
         spawn_camera_and_light(&mut commands, &args, None);
+        // The world handoff for the opening's JumpArea (stream.rs): its host
+        // drives the focus; the stage models it spawned are StageEntity.
+        match stream::Streamer::field_grid(&args.native_pc) {
+            Ok(grid) => commands.insert_resource(stream::Streamer::new(
+                loader,
+                vfs,
+                grid,
+                opening::STAGE,
+                stream::Driver::External,
+                (50, 50),
+                args.far_cells,
+                Default::default(),
+            )),
+            Err(e) => warn!("stream: off ({e})"),
+        }
         return;
     }
     let (a0, b0) = args.cell;
@@ -867,13 +882,19 @@ fn setup(
     // Field streaming: offline --play on stage 100 (the grid descriptor is
     // read from the installed exe).
     if args.play && args.stage == 100 && args.host.is_none() && args.join.is_none() {
-        let grid = ddexe::ExeFile::next_to(&args.native_pc)
-            .map_err(|e| e.0)
-            .and_then(|f| f.image().map_err(|e| e.0).and_then(|exe| ddworld::stream::Grid::from_exe(&exe, ddworld::stream::STAGE100_GRID)));
-        match grid {
+        match stream::Streamer::field_grid(&args.native_pc) {
             Ok(grid) => {
                 info!("stream: on ({} cells tagged at start)", present.len());
-                commands.insert_resource(stream::Streamer::new(loader, vfs, grid, args.stage, (a0, b0), args.far_cells, present));
+                commands.insert_resource(stream::Streamer::new(
+                    loader,
+                    vfs,
+                    grid,
+                    args.stage,
+                    stream::Driver::Play,
+                    (a0, b0),
+                    args.far_cells,
+                    present,
+                ));
             }
             Err(e) => warn!("stream: off ({e})"),
         }
