@@ -37,7 +37,7 @@ pub mod ledge;
 pub mod stamina;
 
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
-pub use stamina::{StaminaRow, StaminaTables};
+pub use stamina::{StaminaRow, StaminaTables, WeightTables};
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
 /// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
@@ -609,6 +609,7 @@ pub struct Sim {
     pub move_param: MoveParam,
     pub ledge_param: LedgeParam,
     pub stamina_tables: StaminaTables,
+    pub weight_tables: WeightTables,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -627,6 +628,7 @@ impl Sim {
             move_param: MOVE_SHIPPED,
             ledge_param: LEDGE_SHIPPED,
             stamina_tables: StaminaTables::shipped(),
+            weight_tables: WeightTables::shipped(),
             pending: 0.0,
         }
     }
@@ -656,6 +658,20 @@ impl Sim {
             unit_rate: 1.0,
             rate_queue: [1.0; 2],
         });
+    }
+
+    /// Sets a player's body and load classes from its body weight and its
+    /// total (body plus carried) weight, as `0x00B81120` does each frame in
+    /// the original. `capacity` is the carrying abilities' adjustment
+    /// (0x00B7E710, 0 without them). The weights come from the inventory,
+    /// which the host owns.
+    pub fn set_weights(&mut self, id: PlayerId, body_weight: f32, total_weight: f32, capacity: f32) {
+        let body = self.weight_tables.body_class(body_weight);
+        let load = self.weight_tables.load_class(body_weight, total_weight, capacity);
+        if let Some(p) = self.player_mut(id) {
+            p.body_class = body;
+            p.load_class = load;
+        }
     }
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
