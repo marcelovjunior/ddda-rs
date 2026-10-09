@@ -25,6 +25,7 @@
 mod event;
 mod character;
 mod play;
+mod sky;
 mod stage;
 
 use std::path::PathBuf;
@@ -193,7 +194,8 @@ fn apply_ref(a: &mut Args, path: &str) {
 /// light), `light_count` and `lights` (colour rgb, direction to the light
 /// per light; the first is the sun, drawn with its shadow map, the others
 /// are added to the SH), `fog_color`, `fog_density`, `fog_start`,
-/// `fog_end` (cm). Only lights of the stage's light group belong in it.
+/// `fog_end` (cm), optionally `clock` with `"+0x4c ms"` (game clock, for
+/// the sky's sun). Only lights of the stage's light group belong in it.
 fn load_lighting(path: &str) -> stage::StageLighting {
     use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -242,6 +244,7 @@ fn load_lighting(path: &str) -> stage::StageLighting {
         fog_density: nums("fog_density", 1)[0],
         fog_start: nums("fog_start", 1)[0],
         fog_end: nums("fog_end", 1)[0],
+        clock_ms: text.contains("\"+0x4c ms\"").then(|| nums("+0x4c ms", 1)[0] as u32),
     }
 }
 
@@ -273,8 +276,9 @@ fn main() {
     }
     let args = args();
     let size = args.size;
-    // Without the sky dome (not done), the background takes the fog colour
-    // under --light: what full fog fades to at the horizon.
+    // Under --light the sky dome (sky.rs) covers the background; where a
+    // stage has no sky scheduler it takes the fog colour, what full fog
+    // fades to at the horizon.
     let clear = match &args.light {
         Some(l) => Color::linear_rgb(l.fog_color.x, l.fog_color.y, l.fog_color.z),
         None => Color::srgb(0.55, 0.68, 0.85),
@@ -289,6 +293,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(stage::ShadingPlugin)
+        .add_plugins(sky::SkyPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
         .insert_resource(ClearColor(clear))
@@ -308,6 +313,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut sky_materials: ResMut<Assets<sky::SkyMaterial>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let t = std::time::Instant::now();
@@ -448,6 +454,25 @@ fn setup(
     // The stage's filter chain (vignette, tone curve) goes with the
     // original's lighting.
     let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage));
+    if let Some(light) = &args.light {
+        match sky::StageSky::load(&vfs, args.stage) {
+            Some(sky) => sky.spawn(
+                &mut commands,
+                &mut meshes,
+                &mut images,
+                &mut sky_materials,
+                // The sky's own sun from the capture's clock; without one,
+                // the capture's light (the moon at night).
+                light
+                    .clock_ms
+                    .map(|ms| Vec3::from(mtweather::sky::sun_direction(&sky.sky, ms)))
+                    .unwrap_or(light.sun_dir.normalize_or(Vec3::Y)),
+                // Just inside the far plane.
+                args.far * stage::UNIT * 0.9,
+            ),
+            None => warn!("no sky scheduler for stage {}", args.stage),
+        }
+    }
     spawn_camera_and_light(&mut commands, &args, post);
 }
 

@@ -86,6 +86,8 @@ pub struct StageLighting {
     /// Fog start and end in game units (cm) of view depth.
     pub fog_start: f32,
     pub fog_end: f32,
+    /// Game clock (ms into the day) of the capture, if it has one.
+    pub clock_ms: Option<u32>,
 }
 
 /// Uniform of [`DdExt`]; layout mirrored in `dd_material.wgsl`.
