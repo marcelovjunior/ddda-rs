@@ -326,7 +326,33 @@ pub struct Vertices {
     pub weights: Vec<[f32; 8]>,
 }
 
+/// Row-major 4x4 product for row vectors (`a` then `b`).
+fn mul_rows(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut r = [0f32; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            r[i * 4 + j] = (0..4).map(|k| a[i * 4 + k] * b[k * 4 + j]).sum();
+        }
+    }
+    r
+}
+
 impl<'a> Model<'a> {
+    /// The transform from a skinned vertex's quantised position (each
+    /// component read as S16N) to model space, row-major for row vectors.
+    ///
+    /// Each bone's stored `inverse_bind` is `D x inverse(rest world)`, so
+    /// `D = inverse_bind x rest world` is the same matrix for every bone
+    /// (measured: all bones of 400 skinned models agree exactly). For the
+    /// male body it is a uniform scale of 270.48 plus the bounding-box
+    /// minimum, while the box's largest extent (what unskinned meshes use)
+    /// is 181.98. `None` when the model has no bones.
+    pub fn skin_space(&self) -> Option<[f32; 16]> {
+        let root = self.bones.first()?;
+        // bone 0 is a root: its rest world is its local matrix
+        Some(mul_rows(&root.inverse_bind, &root.local))
+    }
+
     /// Raw bytes of a mesh's vertices.
     pub fn mesh_vertices(&self, m: &Mesh) -> std::result::Result<&'a [u8], String> {
         let stride = m.vertex_stride as usize;
@@ -384,17 +410,26 @@ impl<'a> Model<'a> {
         let read = |vi: usize, e: &mtshader::Element, comp: usize| -> std::result::Result<f32, String> {
             read_component(raw, vi * stride + e.offset as usize, e.ty, comp)
         };
+        // Skinned layouts quantise into the skin space (see `skin_space`),
+        // other layouts into the bounding box scaled by its largest extent.
+        let skin_space = if layout.element("Joint", 0).is_some() {
+            self.skin_space()
+        } else {
+            None
+        };
         if let Some(e) = layout.element("Position", 0) {
             for i in 0..n {
                 let p = [read(i, e, 0)?, read(i, e, 1)?, read(i, e, 2)?];
-                v.positions.push(if e.ty == ElementType::S16N {
-                    [
+                v.positions.push(match (e.ty, skin_space) {
+                    (ElementType::S16N, Some(d)) => {
+                        std::array::from_fn(|c| p[0] * d[c] + p[1] * d[4 + c] + p[2] * d[8 + c] + d[12 + c])
+                    }
+                    (ElementType::S16N, None) => [
                         p[0] * dim + self.bbox_min[0],
                         p[1] * dim + self.bbox_min[1],
                         p[2] * dim + self.bbox_min[2],
-                    ]
-                } else {
-                    p
+                    ],
+                    _ => p,
                 });
             }
         }

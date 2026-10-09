@@ -89,5 +89,19 @@ Missing for the M1 gate:
 - Euler order of layout angles is assumed XYZ (consistent so far, not
   traced in the exe).
 
-Next action: animations (LMT reader and skeletons), as the maintainer
-asked, while the M1 shading gaps wait.
+**Started: M2** (Walk), alongside the M1 shading gaps, at the maintainer's
+request (2026-10-08). See [ANIMATION.md](ANIMATION.md).
+
+Done:
+- `mtlmt`: every motion list decodes (4,313 files, 92.2 M keys) with value
+  checks (key spans, unit quaternions).
+- Skinning fixed and explained: skinned vertices use a per-model skin space
+  D (`inverse_bind x rest world`, identical for every bone of 400 models),
+  not the bounding box; `IASkinBridge2wt` joint bytes.
+- `ddview --character`: the male body plays motions. Slot 0 of
+  `m0000_co` is a standing idle and slot 3 a walk cycle; correct by eye,
+  **not yet compared with the original game**.
+
+Next action: read the player's motion tables (which slot is walk, run,
+idle) from the XFS data and exe instead of guessing, then assemble a
+dressed Arisen (face, hair, equipment) and drive the walk from input.

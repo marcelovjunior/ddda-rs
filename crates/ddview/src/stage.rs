@@ -103,7 +103,7 @@ pub fn tex_to_image(bytes: &[u8]) -> Result<Image, String> {
 }
 
 impl Loader<'_> {
-    fn texture(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+    pub fn texture(&mut self, path: &str, images: &mut Assets<Image>) -> Option<Handle<Image>> {
         if let Some(h) = self.textures.get(path) {
             return h.clone();
         }

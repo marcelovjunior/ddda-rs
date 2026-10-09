@@ -17,6 +17,7 @@
 //!
 //! Controls: WASD move, Q/E down/up, Shift faster, hold right mouse to look.
 
+mod character;
 mod stage;
 
 use std::path::PathBuf;
@@ -42,6 +43,10 @@ struct Args {
     size: (u32, u32),
     shot: Option<PathBuf>,
     shot_delay: f32,
+    character: Option<String>,
+    motion: Option<String>,
+    slot: usize,
+    frame: Option<f32>,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -64,6 +69,10 @@ fn args() -> Args {
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
         shot_delay: 10.0,
+        character: None,
+        motion: None,
+        slot: 0,
+        frame: None,
         up: Vec3::Y,
         fov_deg: 45.0,
         near: 10.0,
@@ -86,11 +95,16 @@ fn args() -> Args {
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
             "--up" => a.up = parse_vec3(&v),
             "--fov" => a.fov_deg = v.parse().unwrap(),
+            "--near" => a.near = v.parse().unwrap(),
             "--size" => {
                 let p: Vec<u32> = v.split('x').map(|x| x.parse().unwrap()).collect();
                 a.size = (p[0], p[1]);
             }
             "--ref" => apply_ref(&mut a, &v),
+            "--character" => a.character = Some(v),
+            "--motion" => a.motion = Some(v),
+            "--slot" => a.slot = v.parse().unwrap(),
+            "--frame" => a.frame = Some(v.parse().unwrap()),
             _ => panic!("unknown option {k}"),
         }
     }
@@ -147,7 +161,7 @@ fn main() {
             ..default()
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (fly_camera, shot))
+        .add_systems(Update, (fly_camera, shot, character::animate))
         .run();
 }
 
@@ -157,6 +171,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let t = std::time::Instant::now();
     let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
@@ -177,6 +192,27 @@ fn setup(
         stats: Default::default(),
     };
     loader.index_models();
+    if let Some(model) = &args.character {
+        let motion = args.motion.clone().unwrap_or_default();
+        match character::spawn(
+            &mut commands,
+            &mut loader,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            &mut bindposes,
+            model,
+            &motion,
+            args.slot,
+            Vec3::ZERO,
+            args.frame,
+        ) {
+            Ok(_) => info!("character {model} motion {motion} slot {}", args.slot),
+            Err(e) => error!("character: {e}"),
+        }
+        spawn_camera_and_light(&mut commands, &args);
+        return;
+    }
     let (a0, b0) = args.cell;
     for da in -args.radius..=args.radius {
         for db in -args.radius..=args.radius {
@@ -236,6 +272,11 @@ fn setup(
     for m in s.missing.iter().take(10) {
         warn!("{m}");
     }
+    spawn_camera_and_light(&mut commands, &args);
+}
+
+/// Sun and camera, shared by the stage and character modes.
+fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
     // Sun: direction is a placeholder until the stage's light data is read.
     commands.spawn((
         DirectionalLight {
