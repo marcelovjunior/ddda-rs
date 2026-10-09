@@ -318,6 +318,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.prepare_story_npcs()?;
         let mut npc_requests = self.step_npcs()?;
         npc_requests.extend(self.step_story_npcs()?);
+        self.record_story_npc_requests(&npc_requests);
         for request in &npc_requests {
             if let ddnpcrt::schedule::Request::Gsf { no, value } = request {
                 if let Some(story) = &mut self.story {
@@ -364,6 +365,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             for q in &s.quests {
                 h.u64(q.id as u64).u64(q.flags as u64).debug(&q.log);
             }
+        }
+        for placement in self.story_npc_intels() {
+            h.debug(&(placement.stage, placement.target, placement.npc,
+                self.story_npc_position(placement.npc as u32)));
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
         if let Some(f) = &self.fight {
