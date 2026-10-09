@@ -30,7 +30,6 @@ pub struct SkyPlugin;
 impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "sky.wgsl");
-        bevy::shader::load_shader_library!(app, "sky_scatter.wgsl");
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
             .add_systems(PostUpdate, follow_camera.before(TransformSystems::Propagate));
     }

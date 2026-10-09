@@ -19,7 +19,7 @@ use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 
-use crate::stage::{Loader, RMATERIAL, RMODEL, UNIT};
+use crate::stage::{DdSlot, Loader, PartMaterial, PendingDd, RMATERIAL, RMODEL, UNIT};
 
 pub const RMOTIONLIST: u32 = 0x7682_0D81;
 
@@ -482,7 +482,7 @@ fn spawn_meshes(
     let mrl_bytes = loader.vfs.read(model_path, RMATERIAL).ok();
     let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
     let mfx = loader.mfx;
-    let mut mats: HashMap<u16, Handle<StandardMaterial>> = HashMap::new();
+    let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
     for m in &model.meshes {
         // uModel::vf26 0x00ea5320: the part bit, the disp flag, the LOD
         // bit (LOD 0 here) and the pass mask: draw_mode & the pass's mask
@@ -542,62 +542,44 @@ fn spawn_meshes(
                     .get(m.material as usize)
                     .cloned()
                     .unwrap_or_default();
-                let mut sm = StandardMaterial {
-                    perceptual_roughness: 0.8,
-                    reflectance: 0.3,
-                    ..default()
-                };
-                if let (Some(list), Some(mat)) = (mrl.as_ref(), mrl.as_ref().and_then(|l| l.by_name(&name))) {
-                    // The traced material description (mtmrl::shading,
-                    // docs/SHADING.md): albedo map and colours, culling,
-                    // alpha test or blend. Cloth is mostly two-sided:
-                    // culling its back faces opened holes onto the body.
-                    let s = mtmrl::shading::describe(mat, list, mfx);
+                // The stage's material rules (stage::Loader::material: the
+                // traced albedo, colours, culling, alpha test or blend) and
+                // its lighting (dd_material.wgsl: the SH ambient, the sun
+                // with its shadow, the fog), so characters are lit as the
+                // stage is. Cloth is mostly two-sided: culling its back
+                // faces opened holes onto the body.
+                let shading = mrl.as_ref().and_then(|l| {
+                    let mut s = mtmrl::shading::describe(l.by_name(&name)?, l, mfx);
                     if let Some(p) = s.textures.get("tAlbedoMap") {
                         let p = undummy(loader, p);
-                        sm.base_color_texture = loader.texture(&p, images);
+                        s.textures.insert("tAlbedoMap".into(), p);
                     }
-                    let c: [f32; 3] = std::array::from_fn(|k| s.albedo_color[k] * s.diffuse_color[k]);
-                    let alpha = if s.uses_alpha() { s.transparency } else { 1.0 };
-                    sm.base_color = Color::linear_rgba(c[0], c[1], c[2], alpha);
-                    match s.raster.map(|r| r.cull) {
-                        Some(mtshader::Cull::None) => {
-                            sm.double_sided = true;
-                            sm.cull_mode = None;
-                        }
-                        Some(mtshader::Cull::Front) => sm.cull_mode = Some(bevy::render::render_resource::Face::Front),
-                        _ => sm.cull_mode = Some(bevy::render::render_resource::Face::Back),
-                    }
-                    let test = s.alpha_test.map(|t| t.reference_f32() + 0.5 / 255.0);
-                    sm.alpha_mode = if !s.uses_alpha() {
-                        AlphaMode::Opaque
-                    } else if s.blends_alpha() {
-                        AlphaMode::Blend
-                    } else if let Some(cutoff) = test {
-                        AlphaMode::Mask(cutoff)
-                    } else {
-                        AlphaMode::Opaque
-                    };
-                }
+                    Some(s)
+                });
+                let mut material = loader.character_material(shading.as_ref(), materials, images);
                 // *Approximation*: the edit's hair colour multiplies the
                 // albedo (the original sets a material constant, 0x008438f0).
-                if let Some(c) = tint {
-                    let b = sm.base_color.to_linear();
-                    sm.base_color = Color::linear_rgba(b.red * c[0], b.green * c[1], b.blue * c[2], b.alpha);
+                if let (Some(c), PartMaterial::Dd(slot)) = (tint, &material) {
+                    let mut m = slot.material.clone();
+                    let b = m.base.base_color.to_linear();
+                    m.base.base_color = Color::linear_rgba(b.red * c[0], b.green * c[1], b.blue * c[2], b.alpha);
+                    material = PartMaterial::Dd(std::sync::Arc::new(DdSlot { material: m, handle: Default::default() }));
                 }
-                materials.add(sm)
+                material
             })
             .clone();
-        let e = commands
-            .spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material),
-                SkinnedMesh {
-                    inverse_bindposes: bindposes_handle.clone(),
-                    joints: joints.to_vec(),
-                },
-            ))
-            .id();
+        let mut e = commands.spawn((
+            Mesh3d(meshes.add(mesh)),
+            SkinnedMesh {
+                inverse_bindposes: bindposes_handle.clone(),
+                joints: joints.to_vec(),
+            },
+        ));
+        match material {
+            PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h)),
+            PartMaterial::Dd(slot) => e.insert(PendingDd(slot)),
+        };
+        let e = e.id();
         commands.entity(root).add_child(e);
     }
 }

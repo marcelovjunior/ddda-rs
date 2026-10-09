@@ -23,7 +23,11 @@
 //! pawns (and NPCs) side by side, in the rest pose or held at frame F of
 //! the given motion (e.g. `motion\pl\m\m00\m0000_co\m0000_co:0`).
 //!
-//! *Not shown yet:* stage lighting and effects, body and face morphs,
+//! The stage and the characters are lit by the stage's data lighting at
+//! `--hour` in fine weather (`stage::data_lighting`), when the stage has a
+//! sky scheduler.
+//!
+//! *Not shown yet:* the sky dome, post filters and effects, body and face morphs,
 //! skin and eye colours, IK. The camera's actor-joint adjustments are
 //! applied with zero displacement: the viewer has no IK or body morphs, so
 //! every joint sits where its local pose puts it.
@@ -252,6 +256,16 @@ fn setup(
         view_range: 1,
     };
     loader.index_models();
+    // The stage's lighting from the data at the event's hour (weather F),
+    // as `--play --save` uses it: the stage and character materials light
+    // themselves (dd_material.wgsl); the Bevy sun below then only casts
+    // the shadow map, along the data's sun. Stages without a sky
+    // scheduler keep Bevy's lighting.
+    let light = stage::data_lighting(&vfs, playing.stage, args.hour * 3_600_000, 0);
+    info!("event lighting: {}", if light.is_some() { "stage data" } else { "Bevy PBR (no sky scheduler)" });
+    if let Some(l) = &light {
+        commands.insert_resource(l.clone());
+    }
 
     // Stage geometry: every `scr\stSSS\model\stSSS_mdNN` model at the
     // stage origin, and the `_s00` / `_s10` scenery layouts of cell
@@ -347,16 +361,23 @@ fn setup(
         }
     }
 
+    let to_light = light.as_ref().map(|l| l.sun_dir).filter(|d| d.length_squared() > 0.0).unwrap_or(Vec3::new(0.4, 1.0, 0.3));
     commands.spawn((
         DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
-        Transform::default().looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y),
+        Transform::default().looking_to(-to_light, Vec3::Y),
     ));
-    commands.spawn((
-        Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection { fov: 30f32.to_radians(), near: 0.05, far: 2000.0, ..default() }),
-        Transform::default(),
-        EventCam,
-    ));
+    let cam = commands
+        .spawn((
+            Camera3d::default(),
+            Projection::Perspective(PerspectiveProjection { fov: 30f32.to_radians(), near: 0.05, far: 2000.0, ..default() }),
+            Transform::default(),
+            EventCam,
+        ))
+        .id();
+    if light.is_some() {
+        // The materials output the original's colour (as main.rs).
+        commands.entity(cam).insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
+    }
     // Fade plane (the timeline's image-plane filter) and subtitle.
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },

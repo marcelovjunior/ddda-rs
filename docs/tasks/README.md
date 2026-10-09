@@ -134,4 +134,4 @@ Codex lane: see `docs/CODEX.md`.
 | [land-fix](land-fix.md) | Body sinking under higher ground (seen in co-op run) | core | claude-1 | merged 2026-10-09 |
 | [play-visuals](play-visuals.md) | Stretched meshes, camera clipping, female motions, drawn weapons | core | claude-7 | merged 2026-10-09 |
 | [net-replication](net-replication.md) | Goblins, HP, looks and join location over LAN | core | claude-10 | assigned |
-| [character-lighting](character-lighting.md) | Characters lit by stage sun/SH/light buffer; canyon darkness | core | claude-3 | assigned |
+| [character-lighting](character-lighting.md) | Characters lit by stage sun/SH/light buffer; canyon darkness | core | claude-3 | merged 2026-10-09 |

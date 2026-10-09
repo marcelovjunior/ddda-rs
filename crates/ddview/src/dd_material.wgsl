@@ -15,6 +15,7 @@
 // with fSHCoef evaluated exactly as the stage pixel shaders do.
 
 #import ddview::sky_scatter::sky_color
+#import bevy_pbr::skinning
 
 #ifdef PREPASS_PIPELINE
 #import bevy_pbr::{
@@ -64,6 +65,10 @@ struct DdParams {
     spot_atten: vec4<f32>,
     // rgb: constant light (FLAG_CONST_LIGHT)
     const_light: vec4<f32>,
+    // rgb: fAlbedoBlendColor.rgb * .w * fDiffuseColor (FLAG_ALBEDO_ADD)
+    albedo_blend: vec4<f32>,
+    // rgb: fSpecularColor, w: fShininess (FLAG_CHARACTER)
+    spec: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
@@ -82,6 +87,10 @@ const FLAG_NO_LIGHT_BUFFER: u32 = 128u;
 const FLAG_BLENDED: u32 = 256u;
 // Lit by a constant colour (the sky's cloud domes).
 const FLAG_CONST_LIGHT: u32 = 512u;
+// FAlbedoMapAdd on the view-normal UV (characters).
+const FLAG_ALBEDO_ADD: u32 = 1024u;
+// The character pixel shaders' specular and environment terms.
+const FLAG_CHARACTER: u32 = 2048u;
 
 struct SkyEnvParams {
     cb: array<vec4<f32>, 11>,
@@ -98,14 +107,25 @@ struct SkyEnvParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var sky_mie: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var env_cube: texture_cube<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var env_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var albedo_blend_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(111) var albedo_blend_sampler: sampler;
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
+#ifdef SKINNED
+    // Characters (character.rs): skinned as Bevy's mesh shader does.
+    let world_from_local = skinning::skin_model(vertex.joint_indices, vertex.joint_weights, vertex.instance_index);
+#else
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+#endif
     var world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
 #ifdef VERTEX_NORMALS
+#ifdef SKINNED
+    var normal = skinning::skin_normals(world_from_local, vertex.normal);
+#else
     var normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+#endif
 #endif
 #ifdef VERTEX_COLORS
     var color = vertex.color;
@@ -228,7 +248,56 @@ fn fragment(
         if ((dd.flags & FLAG_CONST_LIGHT) != 0u) {
             light = dd.const_light.rgb;
         }
-        var color = pbr_input.material.base_color.rgb * light;
+        var albedo = pbr_input.material.base_color.rgb;
+        if ((dd.flags & FLAG_ALBEDO_ADD) != 0u) {
+            // FAlbedoMapAdd / FUVViewNormal (character pixel shaders, file
+            // offsets 0x31BEA8 and 0x40C494 of sc\dx9\root): the normal
+            // through the 3x3 of fView, normalized; UV = (0.5 + 0.5 x,
+            // 0.5 - 0.5 y); albedo += blend.rgb * blend.a * colour. The
+            // game's view axes are *assumed* to match Bevy's (x right, y
+            // up). The normal is the vertex normal (normal maps are not
+            // applied).
+            let vn = normalize((view_bindings::view.view_from_world * vec4<f32>(n, 0.0)).xyz);
+            let buv = vec2<f32>(0.5 + 0.5 * vn.x, 0.5 - 0.5 * vn.y);
+            let b = textureSample(albedo_blend_texture, albedo_blend_sampler, buv);
+            albedo += b.rgb * b.a * dd.albedo_blend.rgb;
+        }
+        var color = albedo * light;
+        if ((dd.flags & FLAG_CHARACTER) != 0u) {
+            // The character pixel shaders' specular (same shaders):
+            //   spec = (DL0 colour x (N.H)^fShininess x fSpecularColor + env)
+            //          x tSpecularMap.rgb x occlusion
+            //   colour += spec x lerp(fFresnelSchlick, 1, (1 - N.V)^5)
+            // DL0 (sLightParamDL0, the forward infinite light, uInfiniteLight
+            // 0x00e15c70) is taken to be the sun with its shadow (*inferred*
+            // from the light groups, not traced at run time). env =
+            // cube(reflect) x fReflectiveColor x (1 + 7 x
+            // fAppShadowLightScale x (N.normalize(fAppReflectShadowDir +
+            // V))^fShininess - fEnvMapMask x shadow mask), at the MFX
+            // defaults fAppShadowLightScale 1, fAppReflectShadowDir (0, 1, 0),
+            // fEnvMapMask 1 (their run-time writers are not found); shadow
+            // groups 1. *Not done:* the light buffer's specular (deferred
+            // lights), the vertex occlusion (1).
+            let v = pbr_input.V;
+            let shine = dd.spec.w;
+            let h = normalize(dd.sun_dir.xyz + v);
+            var spec = dd.sun_color.rgb * shadow * pow(max(dot(n, h), 1e-5), shine) * dd.spec.rgb;
+            if ((dd.flags & FLAG_ENV_CUBE) != 0u) {
+                let r = reflect(-v, n);
+                let hs = normalize(vec3<f32>(0.0, 1.0, 0.0) + v);
+                let boost = 1.0 + 7.0 * pow(max(dot(n, hs), 1e-5), shine) - (1.0 - shadow);
+                spec += textureSample(env_cube, env_sampler, r).rgb * dd.env.rgb * dd.reflect.rgb * boost;
+            }
+            var mask = vec3<f32>(1.0);
+            if ((dd.flags & FLAG_SPEC_MAP) != 0u) {
+#ifdef VERTEX_UVS_A
+                mask = textureSample(spec_texture, spec_sampler, in.uv).rgb;
+#endif
+            }
+            // N.V is not clamped in the original.
+            let fres = mix(dd.reflect.w, 1.0, pow(max(1.0 - dot(n, v), 0.0), 5.0));
+            color += spec * mask * fres;
+        }
         if ((dd.flags & FLAG_REFLECT) != 0u) {
             // Environment reflection as in the stage shaders (e.g. file
             // offsets 0x88068C, 0x4A0980): env * fReflectiveColor *
