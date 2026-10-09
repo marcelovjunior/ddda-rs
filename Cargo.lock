@@ -2358,6 +2358,7 @@ dependencies = [
  "ddexe",
  "ddid",
  "dditem",
+ "ddnpcrt",
  "ddpawn",
  "ddprogress",
  "ddquest",
@@ -2431,6 +2432,20 @@ dependencies = [
  "mtarc",
  "mtgmd",
  "mtlot",
+ "mtxfs",
+]
+
+[[package]]
+name = "ddnpcrt"
+version = "0.1.0"
+dependencies = [
+ "ddai",
+ "ddnpc",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtgmd",
  "mtxfs",
 ]
 

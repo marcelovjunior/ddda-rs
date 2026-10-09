@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 ddid = { path = "../ddid" }
 ddeconomy = { path = "../ddeconomy" }
+ddnpcrt = { path = "../ddnpcrt" }
 ddprogress = { path = "../ddprogress" }
 ddrift = { path = "../ddrift" }
 dditem = { path = "../dditem" }

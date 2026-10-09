@@ -43,6 +43,7 @@ fn data() -> Option<SystemData> {
             catalog: Some(Arc::new(ddhost::install::catalog(&vfs).unwrap())),
             tables: Some(Arc::new(ddhost::install::tables(&vfs, &exe).unwrap())),
             rift: None,
+            npc: None,
         })
     })
     .clone()

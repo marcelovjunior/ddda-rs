@@ -26,6 +26,8 @@ pub struct SystemData {
     pub tables: Option<Arc<ddprogress::Tables>>,
     /// Offline pawn data (ddrift).
     pub rift: Option<Arc<ddrift::RiftData>>,
+    /// NPC graphs and talk sets (ddnpcrt).
+    pub npc: Option<Arc<dyn ddnpcrt::NpcData + Send + Sync>>,
 }
 
 /// An augment slot without an augment, as the economy reads `+0x258`.

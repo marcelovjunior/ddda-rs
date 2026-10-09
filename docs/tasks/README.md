@@ -114,7 +114,7 @@ Codex lane: see `docs/CODEX.md`.
 | [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | merged 2026-10-09 |
 | [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-9 | merged 2026-10-09 |
 | [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | merged 2026-10-09 |
-| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | back to claude (codex idle) |
+| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | merged 2026-10-09 |
 | [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | claude-8 | back to claude (codex idle) |
 | [story-order](story-order.md) | ddstory in the traced frame order + state accessor | core | claude-7 | merged 2026-10-09 |
 | [host-integration](host-integration.md) | One player identity, per-crate save chunks, wire economy/progress/rift into ddhost | core | claude-10 | merged 2026-10-09 |
