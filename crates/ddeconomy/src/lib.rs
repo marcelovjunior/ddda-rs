@@ -14,6 +14,7 @@
 //! part per seat (`save` module; docs/adr/0002-game-host.md).
 
 pub mod inventory;
+pub mod item_use;
 pub mod save;
 pub mod stock;
 pub mod wallet;

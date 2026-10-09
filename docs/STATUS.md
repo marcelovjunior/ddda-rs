@@ -78,7 +78,7 @@ player table where they differ.
 | 8 | Skill seal | 0x101 | 90 | 0 | 0 | effect cue (vf145); skill lock in action code (*not traced*) |
 | 9 | Curse | 0x3 | 90 | 0.6 | 1.4 | attack x p0 (0x0088B530, 0x0088AA20: status 9 with flag 0x200), damage taken x p1 (0x00AAA490, 0x00B7AD90) |
 | 10 | Burning | 0x104 | 15 | 33 / 12 | 1 / 0.5 | HP -p0 per second, p0 x step / 30 per frame (vf147 0x00852F40 on the unit step; player 0x00B75890 on the scaled step); the owner carries a fire attack entry (+0x2750) that can set others alight (*not modelled*) |
-| 11 | Frozen | 0x104 | 15 | 2 | 0.083 | motion stops (+0x1F6E cleared, vf148 0x00853060; p1 x 30 frames ramp the ice in); physical damage taken x p0 (0x0084D8B0); cured items unfreeze first (0x00B75EC0) |
+| 11 | Frozen | 0x104 | 15 | 2 | 0.083 | motion stops (+0x1F6E cleared, vf148 0x00853060; p1 x 30 frames ramp the ice in); physical damage taken x p0 (0x0084D8B0); broad cure messages unfreeze first (0x00B75EC0) |
 | 12 | Petrify | 0x2 | 10000 (no expiry) | 10 / 40 | 180 / 80 | staged progress (vf149 0x00853260, player 0x00B75F30) driven by p0 / p1; blocks and displaces groups 1, 3, 4, 6; the end state is *not traced* |
 | 13 | (group 8) | 0x8 | 10000 | 180 | 0 | blocks every other group; not reached by build-up; *meaning not traced* |
 | 14 | Attack down | 0x3, stack 4 | 90 | 0.7 | 0 | physical attack x p0 per stack (product, 0x00837480 types 0x0E / 0x12) |
@@ -103,25 +103,35 @@ sets its own duration (*not traced*).
 ## 3. Cures
 
 - **Time**: every kind with a timer < 10000 s wears off (section 1).
-- **Items** (`uPlayerBase::vf98` 0x00B79FC0, applied by 0x00B5C3B0 on
+- **Broad effect messages** (`uPlayerBase::vf98` 0x00B79FC0, applied by 0x00B5C3B0 on
   the next update): effect messages 0x12 / 0x13 / 0x14 / 0x15 remove the
   kinds of masks 0xC0B (poison, slow, silence, burning, frozen), 0xF9F
   (poison, slow, blind, silence, sleep, possession, seal, curse, burning,
   frozen), 0x3C000 (the four downs) and 0x3D000 (the downs and petrify).
-  Which items send which message is *not traced*. Lead (claude-6, #1230):
-  the item record (`dditem` ITL) holds 15 per-status cure bytes at
-  +0x25..+0x33 (Riftstone: poison, torpor, blind, sleep, tarred, drenched,
-  possession, silence, seal, curse, petrify, then the four downs; a
-  panacea sets all 15), and the item-use handler 0x0045F250 is on the
-  path; the code that turns those bytes into messages 0x12..0x15 is not
-  read.
+  These are **not the ordinary consumable cure path**. The producers of
+  these four messages remain untraced; do not assign items to them.
+- **Inventory consumables**: menu `0x0066CCD0` calls `0x00B77130`, which
+  dispatches `vf183`; `uPlayerBase::vf183` (`0x00B77780`) applies HP and
+  stamina, then calls `0x00856050`. That routine directly removes each
+  status whose signed item value is in [1,2); >=2 adds the status. The
+  earlier description of `0x00856050` as a debug table was incorrect.
+  Its getters `0x0045A8D0..0x0045B370` read the installed ITL record:
+  +1d burning, +1e frozen, +25 poison, +26 slow, +27 blind, +28 sleep,
+  **+29 drenched, +2a oil**, +2b possession (pawns only), +2c silence,
+  +2d skill seal, +2e curse, +2f petrify, +30 attack down, +31 defence
+  down, +32 magick attack down, +33 magick defence down. The last four
+  are confirmed by the EAX kind arguments at `0x00856D98..0x00856DE0`.
+  Removal calls `0x00837540(kind,0)`: all matching stacks and active masks
+  are cleared; damage build-up is not cleared. Poison's interval resets
+  on its next status update when poison is absent.
+  `ddcombat::Statuses::cure_item` handles direct removal and reports ended
+  kinds. `ddeconomy::item_use` currently accepts cure-only values, rejecting
+  harmful/buff/special effects rather than applying a partial item.
 - **Healing water** (`FUN_008542C0`, from `uCharacterBase::vf93`): a
   character standing in water deeper than `param\game`[9] on ground with
   attribute 0x3000000 and collision flags 0x2B30 / 0x2368 bit 0 heals HP
   over time, has kinds 0..0x11 removed and gets kind 0x22, whose group 7
   blocks new debilitations for its 90 s.
-- **Debug / script table** (`FUN_00856050`, from vf183): per kind, a
-  value in [1, 2) removes it and >= 2 adds it.
 
 ## 4. Player and pawn build-up
 
@@ -181,7 +191,7 @@ is 0 on the diagonal (a team never hurts itself), 2 in columns 31 and
 
 - Blind, silence, skill seal, possession: their action / AI consequences.
 - Petrify's stages and end state; kind 13 and kinds 27..39.
-- Which items send the cure messages; skill-cast durations of buffs and
+- Producers of the broad cure messages; skill-cast durations of buffs and
   enchants.
 - Lightning chains, holy and dark effects (`uCharacterBase::vf74`).
 - Player equipment status resistances in `PlayerDefender` (claude-6 /

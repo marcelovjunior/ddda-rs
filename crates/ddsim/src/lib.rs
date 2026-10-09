@@ -462,6 +462,20 @@ pub struct Player {
     heavy_held: bool,
 }
 
+impl Player {
+    /// Positive item stamina restoration, 0x00B81E30 (DDDA.exe
+    /// 2017-12-13 Steam). Curse caps stamina at 60% of maximum. The
+    /// tired-action message is not modelled by ddsim yet; ran_out is a
+    /// historical event flag and stays set until its host acknowledges it.
+    pub fn recover_item_stamina(&mut self, amount: f32, cursed: bool) -> f32 {
+        if !amount.is_finite() || amount <= 0.0 { return 0.0; }
+        let before = self.stamina;
+        let maximum = self.stamina_max * if cursed { 0.6 } else { 1.0 };
+        self.stamina = (self.stamina + amount).min(maximum);
+        self.stamina - before
+    }
+}
+
 /// A held ledge and the points the hang and climb move between.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hold {
@@ -2062,6 +2076,19 @@ mod tests {
         s.add_player(0, [0.0; 3], 0.0);
         s.add_player(1, [500.0, 0.0, 0.0], 0.0);
         s
+    }
+
+    #[test]
+    fn item_stamina_restores_only_the_recipient_and_respects_curse_cap() {
+        let mut s = sim();
+        let other = s.players[1].stamina;
+        let p = &mut s.players[0];
+        p.stamina = 25.0;
+        p.stamina_max = 1000.0;
+        assert_eq!(p.recover_item_stamina(250.0, false), 250.0);
+        assert_eq!(p.recover_item_stamina(1000.0, true), 325.0);
+        assert_eq!(p.stamina, 600.0);
+        assert_eq!(s.players[1].stamina, other);
     }
 
     fn fwd() -> Input {
