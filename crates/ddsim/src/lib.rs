@@ -11,7 +11,8 @@
 //! - action motions (bank 0 = `m0000_co`): idle 0, walk 3, run 4, fall 7,
 //!   jump takeoff 10 (moving) / 13 (standing), airborne 11 / 14, landing
 //!   12 / 15, sprint start 43, sprint 20, sprint-jump takeoff 22, sprint-jump
-//!   airborne 23, ledge hang 47, ledge climb 48 (`cPlAct*::vf05`);
+//!   airborne 23, sprint-jump landing 24, ledge grab 45 / 50 (rising 49,
+//!   settling 46), hang 47, climb 48 (`cPlAct*::vf05`, `cPlCliffHang*`);
 //! - walking, running and sprinting move by a velocity set in code, not
 //!   by root motion: facing x a speed from `param\pl\other\m_pl000_00`
 //!   (`rAdjustParam`, a float table read by id) (`cPlActWalk::vf06`,
@@ -24,7 +25,9 @@
 //!   input moves the position by AddMoveSpeedXZ. Normal jump: sets 0-8;
 //!   sprint jump: sets 9-17 (`cPlActJump::vf14`, `cPlActDashJump::vf14`);
 //! - dagger vocations have a second jump (`cPlActWpnDaggerJumpSecond`,
-//!   sets 1-8); here it is a per-player capability.
+//!   sets 1-8); here it is a per-player capability;
+//! - ledges are grabbed from a fall or the sprint jump's landing, never
+//!   from a jump in the air; the geometry is in `ledge`.
 //!
 //! Approximations are marked *placeholder* or *assumed*.
 
