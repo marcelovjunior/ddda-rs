@@ -244,7 +244,7 @@ Whether the reported Cassardis porch pillar
 is represented in that merged SBC remains to be checked; no new scenery
 collision or guessed near-plane reduction is introduced here.
 
-### Actor collision offset and its smoothing (source traced, not implemented)
+### Actor collision offset and its smoothing
 
 The camera +0xB98 offset in **0x007e1400** is fed by actor collision,
 rather than a wall-dependent near-plane adjustment. The producer
@@ -255,12 +255,45 @@ greater than **32 cm** (constant **0x01517928**). Actor eligibility has
 additional state/type gates; this is not a query against every visible
 actor or a replacement for the stage SBC query.
 
+The producer requires the followed actor and its camera (+0x2EA4), rejects
+followed-actor +0x2360 bit0x02000000 and the actor referenced at its
++0x2104, and accepts only candidate +0x1FC0 value4 or the combination
+of candidate +0x206D bit0x10 and +0x2574 value0x2369. These fields' complete
+semantic enums remain unresolved. For candidates with +0x206C bit0x80,
+subtypes 0x5C..0x5E and 0xB1..0xB4 are additionally rejected when model
+centres are strictly less than 200 cm apart. Do not broaden this to every
+enemy, pawn or nearby character based on a guessed enum meaning.
+
 The entry mask 0x10 is the authored group's **mIsObjAdj** flag: reflection
 **0x00ccd510** places it at group +0x0E, and **0x0076fab0** translates it
 into entry +0x1C0 bit0x10. Existing `ddcombat::ObjCollision` already reads
 these groups; `ddcombat::volumes::build_volume` supplies the source-backed
 joint placement. Integration therefore needs the live selected entries
 and actor eligibility, rather than a new collision resource parser.
+
+**0x00770630** appends accepted entries with that flag to collection 1
+at `cObjCollision +0xAB4` (count +0xAB8, data +0xAC4). Acceptance first
+calls the optional +0xCC0 callback; **0x00885c10** installs thunk
+**0x0088cf30**, dispatching owner virtual slot 64. This can remove flags:
+`uEnemy::vf64` **0x00aaa3d0** removes bit0x10 when owner +0x2748 bit8 is
+set. Goblin override **0x008d34f0** also removes it when virtual slot117
+returns true or motion is 0x282, 0x283, 0x284, or 0x28C..0x28F. The
+existing `ddenemyrt::Body::push_volumes` builds activated authored
+object-adjustment groups, but does not represent all these callback
+gates or runtime-created entries. It is therefore a partial foundation,
+not yet an exact collection-1 provider. **0x0076b2c0** clears collection1's
+count (direct call at **0x00baf5cc**, `uNpc::vf08` path). The offset
+producer itself is called at **0x00886850**, near the end of
+`uObjModel::vf09` (**0x00886530**). These call targets were checked from
+instruction bytes because Ghidra's reference query mixed references to
+the reset and producer. A provider must preserve the selected posed
+entries at this phase rather than rebuilding an arbitrary set from a
+later motion frame. Normal `uObjModel::vf90` **0x00885e30** inlines that
+reset when actor +0x2398 bit4 is enabled: actor +0x1B98 is collection1's
+count. Phase93 **0x0076b470** activates mask0x18 and poses collection1's
+entries; pass-C **0x0076b300/0x0076b660** process masks0x180/0x7FFFFE6F
+before the camera producer. This identifies the object-adjustment phase
+as a separate snapshot from the later attack/hurt-volume collection.
 
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
@@ -296,14 +329,48 @@ velocity by the chunk length is present in the source and should not be
 silently replaced with a conventional spring integrator. Inactive normal
 player camera mode clears +0xB98 directly. **0x007e1400** applies the
 offset before its stage sweep, under its active-camera and transition
-gates, moving the eye toward the target and potentially moving the target
-as well when the remaining distance is small.
+gates. It computes `shift = normalize(target - eye) * offset` and adds it
+to the eye. If `length(shift) - 16 < offset`, it also adds
+`shift * offset / length(shift)` to the target. Disassembly
+**0x007e19da..0x007e1a5b** confirms the comparison uses the shift length,
+not remaining eye-to-target distance. For the producer's positive offsets
+the target therefore normally moves by the same shift as the eye.
 
-This path is not wired into the viewer: it needs the selected, animated
+`mtcamera::actor_offset` implements the query construction, per-frame
+maximum accumulator, scalar smoother and pre-stage-sweep pose shift
+independently per view. Its
+`EligibleEntryProvider` boundary explicitly requires the actor gate,
+selected active entries and broad/narrow collision tests; there is no
+default provider that silently substitutes all hurt volumes. Four unit
+regressions cover query start/displacement and contact reduction,
+max/tie/reset behavior, and time chunking plus velocity preservation on
+snap/bypass, and the strict pose-shift gates/shift-length condition.
+The full mtcamera library's six tests (including two fade tests) passed
+independent lane review; targeted clippy passes. Geometry-provider
+correctness is not established by these synthetic contact fixtures.
+This path is not wired into the
+viewer: it needs the selected, animated
 actor sphere/capsule entries and their source eligibility state. Using
 render bounds or an invented generic actor radius would not reproduce it.
 Next action: expose the authored actor collision entries to a per-view
-camera query, then translate and regression-test the offset/accumulator
-and scalar smoother together. No live/original comparison was performed
+camera query, preserving activation and virtual-slot64 gates, then
+translate the shape contacts and pose shift. No live/original comparison was performed
 for this trace. Ghidra drops part of the producer as unreachable; the
 shape loop and contact accumulator were checked against disassembly.
+
+Provider handoff: the opening dragon is a concrete first candidate.
+`uEm5800` constructor **0x00a49880** calls **0x00a3e5e0**, whose instruction
+at **0x00a3ecb8** sets +0x1FC0 to4. Its installed vtable **0x015d3448**
+slot64 resolves to the ordinary enemy filter **0x00aaa3d0**, so the
+object-adjustment bit must be removed when actor +0x2748 bit8 is set.
+This is a separate field from the existing dragon step's +0x2738 actor
+flags and must be supplied explicitly, not inferred from those flags.
+Next provider work should preserve the phase93 selected `mIsObjAdj`
+entries and pose, including their original shape kind (source kind4 must
+not become camera-eligible merely because its placed volume is a capsule).
+Apply the complete per-view actor gate above, implement the source
+sphere/capsule contact queries, and only then connect the existing
+accumulator/smoother/pose shift before the stage sweep. The existing
+`Body::push_volumes` can guide placement but loses source kind and callback
+state; it cannot be used directly as the complete provider. No dragon
+runtime or viewer files were changed for this handoff.
