@@ -87,6 +87,7 @@ pub fn update(
     mut skies: ResMut<Assets<crate::sky::SkyMaterial>>,
     mut env: Option<ResMut<crate::stage::SkyEnv>>,
 ) {
+    let _timing = crate::perf::Section::start("clock::update");
     let Some(mut c) = clock else { return };
     if pause.paused {
         return;

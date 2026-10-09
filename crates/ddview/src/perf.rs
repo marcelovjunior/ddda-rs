@@ -14,8 +14,9 @@ pub fn update(
     time: Res<Time<Real>>,
     all: Query<Entity>,
     audio: Query<(), With<AudioPlayer>>,
-    meshes: Query<(), With<Mesh3d>>,
+    meshes: Query<(&Mesh3d, &ViewVisibility, Option<&MeshMaterial3d<crate::stage::DdMaterial>>)>,
     nodes: Query<(), With<Node>>,
+    dd_materials: Res<Assets<crate::stage::DdMaterial>>,
 ) {
     let Some(mut p) = perf else { return };
     ON.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -30,6 +31,8 @@ pub fn update(
     f.sort_by(f32::total_cmp);
     let at = |q: f32| f[((f.len() - 1) as f32 * q) as usize];
     let long = f.iter().filter(|&&ms| ms > 50.0).count();
+    let over_budget = f.iter().filter(|&&ms| ms > 1000.0 / 60.0).count();
+    let over_33 = f.iter().filter(|&&ms| ms > 33.0).count();
     info!(
         "perf: {} frames, median {:.1} ms, p99 {:.1} ms, worst {:.1} ms, {} over 50 ms; entities {} (meshes {}, audio {}, ui {})",
         f.len(),
@@ -42,6 +45,10 @@ pub fn update(
         audio.iter().count(),
         nodes.iter().count()
     );
+    let visible: Vec<_> = meshes.iter().filter(|(_, visibility, _)| visibility.get()).collect();
+    let unique_meshes: std::collections::HashSet<_> = visible.iter().map(|(mesh, _, _)| mesh.0.id()).collect();
+    let unique_materials: std::collections::HashSet<_> = visible.iter().filter_map(|(_, _, mat)| mat.map(|mat| mat.0.id())).collect();
+    info!("perf: p95 {:.1} ms, {over_budget} over 16.67 ms, {over_33} over 33 ms; visible meshes {} ({} unique), visible DD materials {} ({} allocated). Visibility is across views, not draw calls.", at(0.95), visible.len(), unique_meshes.len(), unique_materials.len(), dd_materials.len());
     report_sections();
 }
 
