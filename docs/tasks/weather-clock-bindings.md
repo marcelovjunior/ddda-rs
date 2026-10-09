@@ -1,9 +1,9 @@
 # weather-clock-bindings: Weather clock and scheduler-to-sky bindings
 
-- **Owner:** proposed for Codex lane; await head assignment
+- **Owner:** codex-11 (Codex lane, head assignment #417; delegation #429)
 - **Branch:** `task/weather-clock-bindings`
 - **Board area:** `formats/weather-clock`
-- **Status:** proposed
+- **Status:** review (implemented/source-tested; original comparison gate pending)
 
 ## Goal
 
@@ -56,4 +56,39 @@ delegate such writes. Raw captures remain private, never committed.
 
 ## Results
 
-(filled by assigned agent)
+Implemented `mtweather::clock` with explicit local/saved clock, scale, scenario,
+battle and pause inputs. Source: 0x004c0e30/0x004c2b60/0x00437210; initialization
+0x004bb200. Six regression tests cover modes, gates, HP caps, truncation,
+forward/reverse wrap, and unsupported inputs. Special reverse progression and
+multi-day steps are rejected; no guessed runtime default or global clock.
+
+Resolved st200 normal scheduler chain 0x004c3140 -> st200_sky tracks 1/2/3
+and 23/24 -> scr/sky/st_all_sky_F. Installed test verifies both resource links,
+the primary-light class/scale inputs, and fine-weather fog/WEP samples at
+06:00/12:00/23:00. Primary light comes through uSky/0x00c688a0; WEP is colour
+correction. Final sun RGB and zone/event override reproduction remain open.
+
+`cargo test -p mtweather`: 11 synthetic tests pass (six new, five existing).
+`cargo test -p mtweather --test clock -- --include-ignored` with DDDA_NATIVE_PC:
+seven pass including read-only installed chain/samples. Clippy with -D warnings
+passes. No rendering/simulation/core code or private data added.
+
+Additional source finding: 0x00dbe6e0 publishes mActualFps as a >1-second window
+average; 0x00dbfa90 computes mDeltaTime from QPC accumulators, gates, border,
+limit and global speed. Only +0x7c is 30/max(actualfps,1). 0x0041dd60 selects
+normal border/limit 2/2 or flag-dependent 100/16. This explains why exact
+dt=30/fps is not a per-frame invariant. Head corrected RECORDINGS independently
+after board #488/#491; full source explanation posted #511.
+
+Measured comparison: raw session005707 CSV has 2165 rows; abs(dt-30/fps)
+min0.000328643/median0.072867217/max1.1798625. No weather/saved clock fields are
+recorded, so clock-advance error cannot be measured from that file. Passive
+observation requests #439/#469 and availability follow-up #513 are pending;
+the measured clock-rate and final-primary-light gates remain **blocked pending
+a suitable passive capture**, not marked compared. No setters, input, calls,
+teleportation, injection or process writes were requested.
+
+Detailed evidence, resource samples and limitations: docs/WEATHER_CLOCK.md.
+Next action: obtain consecutive passive clock/scale/gate values with a frame
+identifier and sample uSky colour; review this branch's covered source rules
+independently without treating the outstanding comparison gate as complete.
