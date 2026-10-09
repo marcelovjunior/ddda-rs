@@ -15,6 +15,7 @@
 //!    rArmorTableNpc -> rArmorModelNpc), hair and beard (0x008407f0:
 //!    rArmorTable / rArmorModel of `h_parts`).
 
+pub mod morph;
 pub mod pattern;
 pub mod save;
 pub mod weapon;
@@ -471,6 +472,8 @@ pub struct Look {
     /// Edit-record resources (rHumanEdit, rBodyEdit, rFaceEdit) for
     /// morphs; not applied by this crate.
     pub morphs: Option<[String; 3]>,
+    /// The body morph (crate::morph), when the edit data was found.
+    pub body: Option<morph::BodyMorph>,
 }
 
 fn read<S: Source + ?Sized>(data: &S, path: &str, class: &str) -> Result<Vec<u8>, Error> {
@@ -606,6 +609,7 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         skin_color: None,
         weapons: vec![],
         morphs: None,
+        body: None,
     }
 }
 
@@ -680,6 +684,10 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         look
     };
     look.morphs = morphs;
+    // NPC edits ship the human edit itself (edp path 1).
+    if let Some(b) = src.resource(&edit.human_edit, "rHumanEdit")? {
+        look.body = Some(morph::body_morph(&morph::HumanEdit::parse(&b)?, &|_| true));
+    }
     look.skin_color = Some([f[12], f[13], f[14]]);
     look.weapons = weapon::weapons(edit.weapons[0], edit.weapons[1]);
     Ok(NpcLook { npc, edit_path, edit, armor_set: set, look })
