@@ -2397,6 +2397,7 @@ dependencies = [
  "mtmod",
  "mtmrl",
  "mtshader",
+ "mtswm",
  "mttex",
  "mtxfs",
 ]
@@ -3671,6 +3672,10 @@ dependencies = [
  "ddvfs",
  "mtarc",
 ]
+
+[[package]]
+name = "mtswm"
+version = "0.1.0"
 
 [[package]]
 name = "mttex"
