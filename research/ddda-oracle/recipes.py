@@ -35,6 +35,8 @@ REC_NAME = 0x70C             # record: name (C string)
 REC_HP = 0x29C               # cPlayerInfo HP (f32; +0x2A0 max)
 REC_STAMINA = 0x2A8          # cPlayerInfo stamina (f32)
 SWORLDOFFSET_PTR = 0x018FA528
+SWEATHERMANAGER_PTR = 0x018FA520
+SRENDER_PTR = 0x018D08F4
 WORLD_ABS_OFFSET = 0x50      # sWorldOffset mWorldAbsoluteOffset (vector3)
 SAREA_PTR = 0x018D099C       # sAreaExt*
 SAREA_MPAREA = 0x382C        # sArea mpArea[i] (getter 0x00412f50); [2] = current aStageNNN
