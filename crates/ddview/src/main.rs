@@ -51,6 +51,12 @@ struct Args {
     size: (u32, u32),
     shot: Option<PathBuf>,
     light: Option<stage::StageLighting>,
+    /// Game clock in ms into the day (`--clock HH:MM[:SS]`); else the
+    /// `--light` capture's clock, else 12:00 (*viewer default*).
+    clock_ms: Option<u32>,
+    /// Weather (`--weather f|e|r`, index into `sky::WEATHERS`); else the
+    /// weather whose fog matches the `--light` capture's, else fine.
+    weather: Option<usize>,
     /// The game's [GRAPHICS] CameraFov setting, added to reference fovs.
     camera_fov: f32,
     /// Story progress (`*(sGameSys) + 0x30`) for progress-gated landmarks.
@@ -86,6 +92,8 @@ fn args() -> Args {
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
         light: None,
+        clock_ms: None,
+        weather: None,
         camera_fov: config_camera_fov().unwrap_or(0.0),
         progress: 0,
         shot_delay: 10.0,
@@ -123,6 +131,14 @@ fn args() -> Args {
             "--look" => a.look = parse_vec3(&v),
             "--shot" => a.shot = Some(PathBuf::from(v)),
             "--light" => a.light = Some(load_lighting(&v)),
+            "--clock" => {
+                let p: Vec<u32> = v.split(':').map(|x| x.parse().expect("--clock HH:MM[:SS]")).collect();
+                a.clock_ms = Some((p[0] * 3600 + p.get(1).unwrap_or(&0) * 60 + p.get(2).unwrap_or(&0)) * 1000);
+            }
+            "--weather" => {
+                let w = v.to_uppercase();
+                a.weather = Some(sky::WEATHERS.iter().position(|x| *x == w).expect("--weather f|e|r"));
+            }
             "--camera-fov" => a.camera_fov = v.parse().unwrap(),
             "--progress" => a.progress = v.parse().unwrap(),
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
@@ -197,7 +213,6 @@ fn apply_ref(a: &mut Args, path: &str) {
 /// `fog_end` (cm), optionally `clock` with `"+0x4c ms"` (game clock, for
 /// the sky's sun). Only lights of the stage's light group belong in it.
 fn load_lighting(path: &str) -> stage::StageLighting {
-    use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let nums = |key: &str, n: usize| -> Vec<f32> {
         let i = text
@@ -214,38 +229,93 @@ fn load_lighting(path: &str) -> stage::StageLighting {
         assert_eq!(v.len(), n, "{path}: {key} needs {n} numbers");
         v
     };
-    let v3 = |v: &[f32]| [v[0], v[1], v[2]];
-    let mut sh = [[0.0f32; 9]; 3];
     let hemis = nums("hemisphere_count", 1)[0] as usize;
     let h = nums("hemispheres", 9 * hemis);
-    for k in 0..hemis {
-        let x = &h[9 * k..];
-        sh_add(&mut sh, &sh_hemisphere(v3(&x[6..]), v3(x), v3(&x[3..])));
-    }
     let count = nums("light_count", 1)[0] as usize;
     let l = nums("lights", 6 * count);
-    for k in 1..count {
-        let x = &l[6 * k..];
+    let f3 = |key: &str| {
+        let v = nums(key, 3);
+        [v[0], v[1], v[2]]
+    };
+    let fog = mtweather::FogValues {
+        color: f3("fog_color"),
+        density: nums("fog_density", 1)[0],
+        start: nums("fog_start", 1)[0],
+        end: nums("fog_end", 1)[0],
+    };
+    let mut out = lighting_from_units(
+        h.as_chunks::<9>().0,
+        l.as_chunks::<6>().0,
+        &fog,
+    );
+    out.clock_ms = text.contains("\"+0x4c ms\"").then(|| nums("+0x4c ms", 1)[0] as u32);
+    out
+}
+
+/// Lighting from the light units' values: hemisphere lights (sky rgb,
+/// ground rgb, axis) and infinite lights (colour, direction to the light;
+/// the first is the sun, drawn with its shadow map, the others go into
+/// the SH), and the fog.
+fn lighting_from_units(hemis: &[[f32; 9]], lights: &[[f32; 6]], fog: &mtweather::FogValues) -> stage::StageLighting {
+    use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
+    let v3 = |v: &[f32]| [v[0], v[1], v[2]];
+    let mut sh = [[0.0f32; 9]; 3];
+    for x in hemis {
+        sh_add(&mut sh, &sh_hemisphere(v3(&x[6..]), v3(x), v3(&x[3..])));
+    }
+    for x in lights.iter().skip(1) {
         sh_add(&mut sh, &sh_directional(v3(&x[3..]), v3(x)));
     }
-    let packed = pack_sh(&sh);
-    let (sun_color, sun_dir) = if count > 0 {
-        (Vec3::from_slice(&l[0..3]), Vec3::from_slice(&l[3..6]))
-    } else {
-        (Vec3::ZERO, Vec3::Y)
+    let (sun_color, sun_dir) = match lights.first() {
+        Some(x) => (Vec3::from_slice(&x[0..3]), Vec3::from_slice(&x[3..6])),
+        None => (Vec3::ZERO, Vec3::Y),
     };
-    let f3 = |key: &str| Vec3::from_slice(&nums(key, 3));
     stage::StageLighting {
         enabled: true,
-        sh: packed.map(Vec4::from),
+        sh: pack_sh(&sh).map(Vec4::from),
         sun_dir,
         sun_color,
-        fog_color: f3("fog_color"),
-        fog_density: nums("fog_density", 1)[0],
-        fog_start: nums("fog_start", 1)[0],
-        fog_end: nums("fog_end", 1)[0],
-        clock_ms: text.contains("\"+0x4c ms\"").then(|| nums("+0x4c ms", 1)[0] as u32),
+        fog_color: Vec3::from(fog.color),
+        fog_density: fog.density,
+        fog_start: fog.start,
+        fog_end: fog.end,
+        clock_ms: None,
     }
+}
+
+/// Fills in the clock, the weather and, without `--light`, the lighting
+/// from the game data (docs/SHADING.md, "Lighting from the data"): the
+/// sky scheduler's light units at the clock's sun and the weather's fog.
+fn resolve_lighting(args: &mut Args) {
+    if args.character.is_some() || args.play {
+        return;
+    }
+    let Ok(vfs) = ddvfs::Vfs::open(&args.native_pc) else { return };
+    let clock = args.clock_ms.or(args.light.as_ref().and_then(|l| l.clock_ms)).unwrap_or(12 * 3_600_000);
+    args.clock_ms = Some(clock);
+    let minute = clock / 60_000;
+    if args.weather.is_none() {
+        args.weather = Some(
+            args.light
+                .as_ref()
+                .and_then(|l| sky::weather_of_fog(&vfs, args.stage, minute, l.fog_color.to_array()))
+                .unwrap_or(0),
+        );
+    }
+    if args.light.is_some() {
+        return;
+    }
+    let weather = args.weather.unwrap_or(0);
+    let (Some(sky), Some(fog)) =
+        (sky::StageSky::load(&vfs, args.stage, weather), sky::weather_fog(&vfs, args.stage, weather, minute))
+    else {
+        return;
+    };
+    let sun = mtweather::sky::sun_direction(&sky.sky, clock);
+    let (hemis, lights) = sky.light_values(sun);
+    let mut l = lighting_from_units(&hemis, &lights, &fog);
+    l.clock_ms = Some(clock);
+    args.light = Some(l);
 }
 
 /// `CameraFov` from the player's own game settings
@@ -287,7 +357,8 @@ fn main() {
     if event::run_if_requested() {
         return;
     }
-    let args = args();
+    let mut args = args();
+    resolve_lighting(&mut args);
     let size = args.size;
     // Under --light the sky dome (sky.rs) covers the background; where a
     // stage has no sky scheduler it takes the fog colour, what full fog
@@ -470,9 +541,15 @@ fn setup(
     }
     // The stage's filter chain (vignette, tone curve) goes with the
     // original's lighting.
+    info!(
+        "clock {:?} ms, weather {:?}, lighting {}",
+        args.clock_ms,
+        args.weather.map(|w| sky::WEATHERS[w]),
+        if args.light.is_some() { "on" } else { "Bevy PBR" }
+    );
     let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage));
     if let Some(light) = &args.light {
-        match sky::StageSky::load(&vfs, args.stage) {
+        match sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0)) {
             Some(sky) => sky.spawn(
                 &mut commands,
                 &mut meshes,
@@ -480,8 +557,8 @@ fn setup(
                 &mut sky_materials,
                 // The sky's own sun from the capture's clock; without one,
                 // the capture's light (the moon at night).
-                light
-                    .clock_ms
+                args.clock_ms
+                    .or(light.clock_ms)
                     .map(|ms| Vec3::from(mtweather::sky::sun_direction(&sky.sky, ms)))
                     .unwrap_or(light.sun_dir.normalize_or(Vec3::Y)),
                 // Just inside the far plane.

@@ -38,6 +38,8 @@ pub struct SkyInputs {
     pub starry_sky_intensity: f32,
     /// `mDivX`, `mDivY`: scatter map size.
     pub scatter_map_size: [u32; 2],
+    /// `mPreComputeLoopCount`: steps of the CPU optical depth integration.
+    pub precompute_loop_count: u32,
 }
 
 impl Default for SkyInputs {
@@ -55,6 +57,7 @@ impl Default for SkyInputs {
             height_offset: 0.0,
             starry_sky_intensity: 1.0,
             scatter_map_size: [32, 32],
+            precompute_loop_count: 50,
         }
     }
 }
@@ -74,16 +77,23 @@ fn rayleigh_lengths(sky: &Sky) -> [f32; 3] {
     })
 }
 
+/// The sky unit's scattering coefficients (+0x370 Rayleigh, +0x380 Mie,
+/// +0x390 cloud; per metre, before the 4 pi).
+// Translated from 0x00f36d60 (tail) (DDDA.exe 2017-12-13 Steam)
+fn coefficients(sky: &Sky, inp: &SkyInputs) -> ([f32; 3], [f32; 3], f32) {
+    let rl = rayleigh_lengths(sky);
+    let rayleigh: [f32; 3] = std::array::from_fn(|i| 0.001 / (rl[i] * 100.0));
+    let mie: [f32; 3] = std::array::from_fn(|i| 0.001 / (inp.mie_scattering[i] * 100.0) * inp.mie_density);
+    let cloud = inp.cloudiness * inp.cloud_scattering * 0.001;
+    (rayleigh, mie, cloud)
+}
+
 /// The 44 floats of `CBSky` (`fRayleighScatteringK` .. `fSkyHeightOffset`,
 /// layout of the shader package's `CBSky`). `sun_dir` is the unit direction
 /// to the sun (`uSky` +0x2E0).
 // Translated from 0x00f36d60 (tail) and 0x00f33d50 (DDDA.exe 2017-12-13 Steam)
 pub fn constants(sky: &Sky, inp: &SkyInputs, sun_dir: [f32; 3]) -> [f32; 44] {
-    // uSky +0x370 / +0x380 / +0x390 (0x00f36d60 tail)
-    let rl = rayleigh_lengths(sky);
-    let rayleigh: [f32; 3] = std::array::from_fn(|i| 0.001 / (rl[i] * 100.0));
-    let mie: [f32; 3] = std::array::from_fn(|i| 0.001 / (inp.mie_scattering[i] * 100.0) * inp.mie_density);
-    let cloud = inp.cloudiness * inp.cloud_scattering * 0.001;
+    let (rayleigh, mie, cloud) = coefficients(sky, inp);
     let r = &sky.scalars_a0_bc; // +0xA0 .. +0xBC
     let secondary = r[7];
     let g = inp.eccentricity;
@@ -145,6 +155,187 @@ pub fn sun_direction(sky: &Sky, ms: u32) -> [f32; 3] {
     let north = lat.cos() * decl.sin() - lat.sin() * decl.cos() * hour.cos();
     let up = lat.sin() * decl.sin() + lat.cos() * decl.cos() * hour.cos();
     [east as f32, up as f32, -north as f32]
+}
+
+/// Density integral from `pos` (2D: across, up from the earth's centre,
+/// m) along `dir` over `length` m in `steps` trapezoid steps, density
+/// `exp(-h / scale)` (1 below the ground after the first sample).
+// Translated from 0x00f2ffc0 (DDDA.exe 2017-12-13 Steam)
+fn depth_along(pos: [f32; 2], dir: [f32; 2], length: f32, radius: f32, scale: f32, steps: u32) -> f32 {
+    let dt = length / steps as f32;
+    let [mut x, mut y] = pos;
+    let mut prev = (-(((x * x + y * y).sqrt() - radius) * (1.0 / scale))).exp();
+    let mut acc = 0.0;
+    for _ in 0..steps {
+        x += dir[0] * dt;
+        y += dt * dir[1];
+        let h = (y * y + x * x).sqrt() - radius;
+        let d = if h <= 0.0 { 1.0 } else { (-(h * (1.0 / scale))).exp() };
+        acc += (d + prev) * 0.5;
+        prev = d;
+    }
+    dt * acc
+}
+
+/// Near and far distances to a sphere of radius `shell` about the earth's
+/// centre from a point at radius `r` (`r2 = r^2`), `b` twice the ray's
+/// projection on the up axis; `None` without a hit.
+fn shell_hits(b: f32, r2: f32, shell: f32) -> Option<(f32, f32)> {
+    let disc = b * b - (r2 - shell * shell) * 4.0;
+    (disc >= 0.0).then(|| {
+        let s = disc.sqrt();
+        ((-b - s) * 0.5, (s - b) * 0.5)
+    })
+}
+
+/// Transmittance of sunlight to a point `height_cm` above the ground along
+/// `sun_dir` (unit, towards the sun): `exp(-4 pi (Rayleigh depth + Mie
+/// depth + cloud path))` per channel; zero when the ray misses the
+/// atmosphere's top. *Not translated:* the branch for a point above the
+/// aerosol layer (over 10 km; the viewer's eye never is).
+// Translated from 0x00f32840 (DDDA.exe 2017-12-13 Steam)
+pub fn transmittance(sky: &Sky, inp: &SkyInputs, height_cm: f32, sun_dir: [f32; 3]) -> [f32; 3] {
+    let (rayleigh, mie, cloud_k) = coefficients(sky, inp);
+    let a = &sky.scalars_a0_bc;
+    let (radius, atmosphere, rayleigh_scale) = (a[2] * 1000.0, a[3] * 1000.0, a[4] * 1000.0);
+    let (aerosol, mie_scale) = (a[5] * 1000.0, a[6] * 1000.0);
+    let steps = inp.precompute_loop_count.max(1);
+    let h = height_cm * 0.01;
+    let r = h + radius;
+    let mu = sun_dir[1];
+    let sin = (1.0 - mu * mu).sqrt();
+    let b = (r * mu + sin * 0.0) * 2.0;
+    let r2 = r * r;
+    let Some((_, t)) = shell_hits(b, r2, atmosphere + radius) else {
+        return [0.0; 3];
+    };
+    if t <= 0.0 {
+        return [0.0; 3];
+    }
+    let ray_depth = depth_along([0.0, r], [sin, mu], t, radius, rayleigh_scale, steps);
+    let (_near, far) = shell_hits(b, r2, aerosol + radius).unwrap_or((-1.0, -1.0));
+    let mie_depth = if far > 0.0 { depth_along([0.0, r], [sin, mu], far, radius, mie_scale, steps) } else { 0.0 };
+    let mut cloud = 0.0;
+    if inp.cloudiness > 0.0 {
+        let (thick, base) = (inp.cloud_thickness, inp.cloud_height);
+        let (top_near, top_far) = shell_hits(b, r2, thick + base + radius).unwrap_or((-1.0, -1.0));
+        let (bottom_far, bottom_exit) = match shell_hits(b, r2, base + radius) {
+            Some((n, f)) => (f, if n < 0.0 { top_far } else { n }),
+            None => (-1.0, top_far),
+        };
+        let seg_a = if top_near >= 0.0 { (top_near, bottom_exit) } else { (0.0, 0.0) };
+        let seg_b = if h <= base + thick { (0.0, bottom_exit) } else { seg_a };
+        let seg = if base <= h { seg_b } else { (bottom_far, top_far) };
+        cloud = cloud_k * (seg.1 - seg.0).max(0.0);
+    }
+    std::array::from_fn(|i| ((rayleigh[i] * ray_depth + mie[i] * mie_depth + cloud) * -12.566_371).exp())
+}
+
+/// RGB to hue (0..6), lightness, saturation, alpha.
+// Translated from 0x00cf58d0 (DDDA.exe 2017-12-13 Steam)
+pub fn rgb_to_hls(c: [f32; 4]) -> [f32; 4] {
+    let [r, g, b, a] = c;
+    let max = if g < r {
+        if r <= b { b } else { r }
+    } else if g <= b {
+        b
+    } else {
+        g
+    };
+    let min = if r < g {
+        if b <= r { b } else { r }
+    } else if b <= g {
+        b
+    } else {
+        g
+    };
+    let sum = min + max;
+    let l = sum * 0.5;
+    if min == max {
+        return [0.0, l, 0.0, a];
+    }
+    let d = max - min;
+    let s = d / if 0.5 <= l { (2.0 - max) - min } else { sum };
+    let mut h = if r == max {
+        (g - b) / d
+    } else if g == max {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    if h < 0.0 {
+        h += 6.0;
+    }
+    if 6.0 <= h {
+        h -= 6.0;
+    }
+    [h, l, s, a]
+}
+
+/// Inverse of [`rgb_to_hls`].
+// Translated from 0x00cf5a10 (DDDA.exe 2017-12-13 Steam)
+pub fn hls_to_rgb(c: [f32; 4]) -> [f32; 4] {
+    let [h, l, s, a] = c;
+    let m2 = if 0.5 < l { (l + s) - l * s } else { (s + 1.0) * l };
+    let m1 = l * 2.0 - m2;
+    if s == 0.0 {
+        return [l, l, l, a];
+    }
+    let channel = |mut x: f32| {
+        if 6.0 <= x {
+            x -= 6.0;
+        }
+        if x < 0.0 {
+            x += 6.0;
+        }
+        if x < 1.0 {
+            (m2 - m1) * x + m1
+        } else if x < 3.0 {
+            m2
+        } else if x < 4.0 {
+            (m2 - m1) * (4.0 - x) + m1
+        } else {
+            m1
+        }
+    };
+    [channel(h + 2.0), channel(h), channel(h - 2.0), a]
+}
+
+/// The weather manager's day/night blend (`mDayNightBlendRate`): 0 by day
+/// (sun over 0.2 up), 1 by night (under -0.2), linear between.
+// Translated from 0x004c18c0 (DDDA.exe 2017-12-13 Steam)
+pub fn night_blend(sun_dir: [f32; 3]) -> f32 {
+    let len = (sun_dir[0] * sun_dir[0] + sun_dir[1] * sun_dir[1] + sun_dir[2] * sun_dir[2]).sqrt();
+    let up = (1.0 / len * sun_dir[1]).clamp(-0.2, 0.2);
+    (-(up * 5.0) + 1.0) * 0.5
+}
+
+/// Colour of the sky's infinite (sun) light, `uSkyInfiniteLight`: the sun
+/// colour through the atmosphere to 100 cm above the sky's height offset
+/// (0x00f32fd0), times `mLightScale`, its HLS saturation times the
+/// weather's `SaturationScale`, times its `IntensityScale`, faded by the
+/// night blend (the unit's branch without a night colour).
+// Translated from 0x00c688a0 (DDDA.exe 2017-12-13 Steam)
+pub fn sun_light_color(
+    sky: &Sky,
+    inp: &SkyInputs,
+    sun_dir: [f32; 3],
+    light_scale: f32,
+    intensity: f32,
+    saturation: f32,
+) -> [f32; 3] {
+    let t = transmittance(sky, inp, inp.height_offset + 100.0, sun_dir);
+    let c = [
+        t[0] * inp.sun_color[0] * light_scale,
+        t[1] * inp.sun_color[1] * light_scale,
+        t[2] * inp.sun_color[2] * light_scale,
+        1.0,
+    ];
+    let mut hls = rgb_to_hls(c);
+    hls[2] *= saturation;
+    let rgb = hls_to_rgb(hls);
+    let fade = 1.0 - night_blend(sun_dir);
+    [rgb[0] * intensity * fade, rgb[1] * intensity * fade, rgb[2] * intensity * fade]
 }
 
 /// One optical depth map, `DEPTH_MAP_SIZE` squared, row-major: texel (x, y)
@@ -267,6 +458,47 @@ mod tests {
             scalars_124_12c: [0.0; 3],
             scalar_150: 0.01,
             moon_texture: Vec::new(),
+        }
+    }
+
+    /// Sun light colours read live (refs-lit series, cloudy weather: the
+    /// live fog equals st100_fog_e) for the live sun directions.
+    #[test]
+    fn sun_light_matches_the_live_reads() {
+        let inp = SkyInputs {
+            sun_color: [16.388, 17.0, 15.300001],
+            mie_scattering: [7.55; 3],
+            cloudiness: 0.5,
+            cloud_height: 2000.0,
+            cloud_thickness: 150.0,
+            cloud_scattering: 0.4,
+            height_offset: 30000.0,
+            ..SkyInputs::default()
+        };
+        for (dir, want) in [
+            ([0.4994f32, 0.8156, 0.2923], [3.2974f32, 3.1546, 2.3459]),
+            ([-0.0897, 0.9134, 0.3971], [3.5077, 3.3847, 2.5685]),
+            ([-0.6547, 0.7291, 0.1995], [3.0761, 2.9151, 2.1198]),
+            ([-0.9163, 0.3260, -0.2328], [1.3858, 1.1803, 0.6673]),
+        ] {
+            let got = sun_light_color(&sky_f(), &inp, dir, 0.1, 3.6, 1.0);
+            for i in 0..3 {
+                assert!((got[i] - want[i]).abs() <= want[i] * 0.01, "{dir:?}: {got:?} vs {want:?}");
+            }
+        }
+        // Night: the blend fades it and the ray crosses the earth.
+        assert!(sun_light_color(&sky_f(), &inp, [-0.7438, -0.0762, -0.6641], 0.1, 3.6, 1.0)[0] < 1e-6);
+        assert_eq!(night_blend([0.0, 0.5, 0.0]), 0.0);
+        assert_eq!(night_blend([0.0, -0.5, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn hls_round_trip() {
+        for c in [[0.9f32, 0.5, 0.2, 1.0], [0.1, 0.2, 0.7, 1.0], [0.4, 0.4, 0.4, 1.0], [0.97, 0.94, 0.71, 1.0]] {
+            let back = hls_to_rgb(rgb_to_hls(c));
+            for i in 0..4 {
+                assert!((back[i] - c[i]).abs() < 1e-5, "{c:?} -> {back:?}");
+            }
         }
     }
 
