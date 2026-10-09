@@ -8,8 +8,13 @@
 //! are [`Session`]s holding an NPC interaction lock: one player per NPC
 //! (docs/COOP_DESIGN.md). Story state (flags, progress, affinity, the day
 //! counter) comes from `ddstory::World`.
+//!
+//! Players are seats (`ddid::PlayerId`, u8, 0 = the host). [`Economy::save`]
+//! / [`Economy::load`] give the host's `ECON` chunks: a shared part and one
+//! part per seat (`save` module; docs/adr/0002-game-host.md).
 
 pub mod inventory;
+pub mod save;
 pub mod stock;
 pub mod wallet;
 
@@ -183,7 +188,7 @@ impl JudgmentState for Judge<'_> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Economy {
     pub wallets: BTreeMap<PlayerId, Wallet>,
     pub inventory: Inventory,
@@ -237,6 +242,11 @@ impl Economy {
         if self.locks.get(&s.npc) == Some(&s.player) {
             self.locks.remove(&s.npc);
         }
+    }
+
+    /// Ends every session `player` holds (the player left the session).
+    pub fn close_all(&mut self, player: PlayerId) {
+        self.locks.retain(|_, p| *p != player);
     }
 
     fn may_use(player: PlayerId, party: &Party, o: Owner) -> bool {

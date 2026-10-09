@@ -4,21 +4,28 @@
 //! ```text
 //! ddview <nativePC> [--stage 100] [--cell 58,50] [--radius 2]
 //!        [--pos x,y,z] [--look x,y,z] [--up x,y,z] [--fov deg] [--size WxH]
-//!        [--far-cells N] [--ref refNNN.json] [--shot out.png] [--shot-delay secs]
+//!        [--far-cells N] [--camera-fov deg] [--ref refNNN.json] [--light light.json]
+//!        [--shot out.png] [--shot-delay secs]
 //! ```
 //! `--pos`/`--look` are in game units (cm) in the origin cell's frame, the
 //! same frame as the live game's `uPlayer +0x40` (see docs/WORLD.md).
 //! `--ref` takes the eye, target, up, FOV and near/far planes from a
 //! reference pose recorded by the private screenshot watcher
-//! (`uCameraGame +0x30..+0x6c`). `--fov` is the vertical field of view.
+//! (`uCameraGame +0x30..+0x6c`) and its origin cell. `--fov` is the
+//! vertical field of view; a reference's fov gets the game's CameraFov
+//! setting added (read from the player's config.ini, or `--camera-fov`
+//! given before `--ref`). `--light` switches the stage materials to the
+//! original's lighting with inputs from a JSON file (docs/SHADING.md).
 //! With `--shot` the viewer saves one frame after `--shot-delay` seconds
 //! (default 10: Bevy compiles pipelines asynchronously and draws nothing
 //! until they are ready) and exits.
 //!
 //! Controls: WASD move, Q/E down/up, Shift faster, hold right mouse to look.
 
+mod event;
 mod character;
 mod play;
+mod sky;
 mod stage;
 
 use std::path::PathBuf;
@@ -43,6 +50,17 @@ struct Args {
     far: f32,
     size: (u32, u32),
     shot: Option<PathBuf>,
+    light: Option<stage::StageLighting>,
+    /// Game clock in ms into the day (`--clock HH:MM[:SS]`); else the
+    /// `--light` capture's clock, else 12:00 (*viewer default*).
+    clock_ms: Option<u32>,
+    /// Weather (`--weather f|e|r`, index into `sky::WEATHERS`); else the
+    /// weather whose fog matches the `--light` capture's, else fine.
+    weather: Option<usize>,
+    /// The game's [GRAPHICS] CameraFov setting, added to reference fovs.
+    camera_fov: f32,
+    /// Story progress (`*(sGameSys) + 0x30`) for progress-gated landmarks.
+    progress: i32,
     shot_delay: f32,
     character: Option<String>,
     motion: Option<String>,
@@ -52,6 +70,8 @@ struct Args {
     demo: bool,
     players: u8,
     spawn: Vec3,
+    /// The reference's player position (`"player"`), else `spawn`.
+    player: Option<Vec3>,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -73,6 +93,11 @@ fn args() -> Args {
         pos: Vec3::new(205.4, 41019.0 + 170.0, 3542.5),
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
+        light: None,
+        clock_ms: None,
+        weather: None,
+        camera_fov: config_camera_fov().unwrap_or(0.0),
+        progress: 0,
         shot_delay: 10.0,
         character: None,
         motion: None,
@@ -83,6 +108,7 @@ fn args() -> Args {
         players: 2,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
+        player: None,
         up: Vec3::Y,
         fov_deg: 45.0,
         near: 10.0,
@@ -107,6 +133,17 @@ fn args() -> Args {
             "--pos" => a.pos = parse_vec3(&v),
             "--look" => a.look = parse_vec3(&v),
             "--shot" => a.shot = Some(PathBuf::from(v)),
+            "--light" => a.light = Some(load_lighting(&v)),
+            "--clock" => {
+                let p: Vec<u32> = v.split(':').map(|x| x.parse().expect("--clock HH:MM[:SS]")).collect();
+                a.clock_ms = Some((p[0] * 3600 + p.get(1).unwrap_or(&0) * 60 + p.get(2).unwrap_or(&0)) * 1000);
+            }
+            "--weather" => {
+                let w = v.to_uppercase();
+                a.weather = Some(sky::WEATHERS.iter().position(|x| *x == w).expect("--weather f|e|r"));
+            }
+            "--camera-fov" => a.camera_fov = v.parse().unwrap(),
+            "--progress" => a.progress = v.parse().unwrap(),
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
             "--up" => a.up = parse_vec3(&v),
             "--fov" => a.fov_deg = v.parse().unwrap(),
@@ -151,16 +188,218 @@ fn apply_ref(a: &mut Args, path: &str) {
         Vec3::new(v[0], v[1], v[2])
     };
     a.pos = v3("eye");
+    if text.contains("\"player\"") {
+        a.player = Some(v3("player"));
+    }
     a.look = v3("target");
     a.up = v3("up");
-    a.fov_deg = nums_after("fov_deg", 1)[0];
+    // The recorded fov is uCameraGame.mFov. The game renders with
+    // mFov + the CameraFov setting of its config.ini (uCameraBase::vf21,
+    // 0x007D3E00, adds the global at *0x018D1D20 + 0x24, which the
+    // [GRAPHICS] CameraFov option fills). Checked live: mFov 55 with
+    // CameraFov 15 gives the 70 degree projection in sCamera's viewport.
+    a.fov_deg = nums_after("fov_deg", 1)[0] + a.camera_fov;
     a.near = nums_after("near", 1)[0];
     a.far = nums_after("far", 1)[0];
+    // The recorded floating-origin cell, e.g. "scr\\st100\\model\\m60\\st100_61m52n":
+    // the eye and target are in that cell's frame (docs/WORLD.md). A later
+    // --stage/--cell on the command line overrides it.
+    if let Some((stage, cell)) = origin_cell(&text) {
+        a.stage = stage;
+        a.cell = cell;
+    }
+}
+
+/// Reads the original's lighting inputs for one moment from a JSON file
+/// (written from live reads of the game's light units, docs/SHADING.md):
+/// `hemisphere_count` and `hemispheres` (sky rgb, ground rgb, direction per
+/// light), `light_count` and `lights` (colour rgb, direction to the light
+/// per light; the first is the sun, drawn with its shadow map, the others
+/// are added to the SH), `fog_color`, `fog_density`, `fog_start`,
+/// `fog_end` (cm), optionally `clock` with `"+0x4c ms"` (game clock, for
+/// the sky's sun). Only lights of the stage's light group belong in it.
+fn load_lighting(path: &str) -> stage::StageLighting {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let nums = |key: &str, n: usize| -> Vec<f32> {
+        let i = text
+            .find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("{path}: no {key}"));
+        let v: Vec<f32> = text[i + key.len() + 2..]
+            .split(|c: char| {
+                !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
+            })
+            .filter(|t| !t.is_empty() && t.parse::<f32>().is_ok())
+            .take(n)
+            .map(|t| t.parse().unwrap())
+            .collect();
+        assert_eq!(v.len(), n, "{path}: {key} needs {n} numbers");
+        v
+    };
+    let hemis = nums("hemisphere_count", 1)[0] as usize;
+    let h = nums("hemispheres", 9 * hemis);
+    let count = nums("light_count", 1)[0] as usize;
+    let l = nums("lights", 6 * count);
+    let f3 = |key: &str| {
+        let v = nums(key, 3);
+        [v[0], v[1], v[2]]
+    };
+    let fog = mtweather::FogValues {
+        color: f3("fog_color"),
+        density: nums("fog_density", 1)[0],
+        start: nums("fog_start", 1)[0],
+        end: nums("fog_end", 1)[0],
+    };
+    let mut out = lighting_from_units(
+        h.as_chunks::<9>().0,
+        l.as_chunks::<6>().0,
+        &fog,
+    );
+    out.clock_ms = text.contains("\"+0x4c ms\"").then(|| nums("+0x4c ms", 1)[0] as u32);
+    out
+}
+
+/// Lighting from the light units' values: hemisphere lights (sky rgb,
+/// ground rgb, axis) and infinite lights (colour, direction to the light;
+/// the first is the sun, drawn with its shadow map, the others go into
+/// the SH), and the fog.
+fn lighting_from_units(hemis: &[[f32; 9]], lights: &[[f32; 6]], fog: &mtweather::FogValues) -> stage::StageLighting {
+    use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
+    let v3 = |v: &[f32]| [v[0], v[1], v[2]];
+    let mut sh = [[0.0f32; 9]; 3];
+    for x in hemis {
+        sh_add(&mut sh, &sh_hemisphere(v3(&x[6..]), v3(x), v3(&x[3..])));
+    }
+    for x in lights.iter().skip(1) {
+        sh_add(&mut sh, &sh_directional(v3(&x[3..]), v3(x)));
+    }
+    let (sun_color, sun_dir) = match lights.first() {
+        Some(x) => (Vec3::from_slice(&x[0..3]), Vec3::from_slice(&x[3..6])),
+        None => (Vec3::ZERO, Vec3::Y),
+    };
+    stage::StageLighting {
+        enabled: true,
+        sh: pack_sh(&sh).map(Vec4::from),
+        sun_dir,
+        sun_color,
+        fog_color: Vec3::from(fog.color),
+        fog_density: fog.density,
+        fog_start: fog.start,
+        fog_end: fog.end,
+        clock_ms: None,
+        spot: None,
+    }
+}
+
+/// Fills in the clock, the weather and, without `--light`, the lighting
+/// from the game data (docs/SHADING.md, "Lighting from the data"): the
+/// sky scheduler's light units at the clock's sun and the weather's fog.
+fn resolve_lighting(args: &mut Args) {
+    if args.character.is_some() || args.play {
+        return;
+    }
+    let Ok(vfs) = ddvfs::Vfs::open(&args.native_pc) else { return };
+    let clock = args.clock_ms.or(args.light.as_ref().and_then(|l| l.clock_ms)).unwrap_or(12 * 3_600_000);
+    args.clock_ms = Some(clock);
+    let minute = clock / 60_000;
+    // The night spot light: not part of the --light captures (spot units
+    // were not read), so it is added from the data in both cases.
+    let spot = |sky: &sky::StageSky, player: Vec3| -> Option<stage::SpotLight> {
+        let s = sky.lights.spot.as_ref()?;
+        let sun = mtweather::sky::sun_direction(&sky.sky, clock);
+        let color = Vec3::from(s.color_at(mtweather::sky::night_blend(sun)));
+        if color == Vec3::ZERO {
+            return None;
+        }
+        let (atten, falloff) = s.attenuation();
+        let offset = Vec3::from(s.offset);
+        Some(stage::SpotLight { pos: player + offset, dir: -offset, color, atten: Vec4::from(atten), falloff })
+    };
+    let player = args.player.unwrap_or(args.spawn);
+    if args.weather.is_none() {
+        args.weather = Some(
+            args.light
+                .as_ref()
+                .and_then(|l| sky::weather_of_fog(&vfs, args.stage, minute, l.fog_color.to_array()))
+                .unwrap_or(0),
+        );
+    }
+    if let Some(l) = &mut args.light {
+        if let Some(sky) = sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0)) {
+            l.spot = spot(&sky, player);
+        }
+        return;
+    }
+    let weather = args.weather.unwrap_or(0);
+    let (Some(sky), Some(fog)) =
+        (sky::StageSky::load(&vfs, args.stage, weather), sky::weather_fog(&vfs, args.stage, weather, minute))
+    else {
+        return;
+    };
+    let sun = mtweather::sky::sun_direction(&sky.sky, clock);
+    let (hemis, lights) = sky.light_values(sun);
+    let mut l = lighting_from_units(&hemis, &lights, &fog);
+    l.clock_ms = Some(clock);
+    l.spot = spot(&sky, player);
+    args.light = Some(l);
+}
+
+/// `CameraFov` from the player's own game settings
+/// (`%LOCALAPPDATA%\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`), if present.
+fn config_camera_fov() -> Option<f32> {
+    let dir = std::env::var_os("LOCALAPPDATA")?;
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("CameraFov="))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// `ViewRange` from the player's game settings as the config object stores
+/// it (written by 0x00eddb20: NORMAL 1, FAR 2, FARTHEST 3); NORMAL if absent.
+fn config_view_range() -> u32 {
+    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 1 };
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    match text.lines().find_map(|l| l.trim().strip_prefix("ViewRange=")).map(str::trim) {
+        Some("FAR") => 2,
+        Some("FARTHEST") => 3,
+        _ => 1,
+    }
+}
+
+/// `DofFilter` from the player's game settings (ON unless it says OFF).
+fn config_dof_filter() -> bool {
+    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return true };
+    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines().find_map(|l| l.trim().strip_prefix("DofFilter=")).map(str::trim) != Some("OFF")
+}
+
+/// Stage and cell (A, B) of the `origin_cell` path in a reference JSON.
+fn origin_cell(json: &str) -> Option<(u32, (i32, i32))> {
+    let i = json.find("\"origin_cell\"")?;
+    let rest = &json[i + "\"origin_cell\"".len()..];
+    let value = rest.split('"').nth(1)?;
+    let name = value.rsplit('\\').next()?; // st100_61m52n
+    let (stage, cell) = name.strip_prefix("st")?.split_once('_')?;
+    let (a, b) = cell.strip_suffix('n')?.split_once('m')?;
+    Some((stage.parse().ok()?, (a.parse().ok()?, b.parse().ok()?)))
 }
 
 fn main() {
-    let args = args();
+    if event::run_if_requested() {
+        return;
+    }
+    let mut args = args();
+    resolve_lighting(&mut args);
     let size = args.size;
+    // Under --light the sky dome (sky.rs) covers the background; where a
+    // stage has no sky scheduler it takes the fog colour, what full fog
+    // fades to at the horizon.
+    let clear = match &args.light {
+        Some(l) => Color::linear_rgb(l.fog_color.x, l.fog_color.y, l.fog_color.z),
+        None => Color::srgb(0.55, 0.68, 0.85),
+    };
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -171,8 +410,10 @@ fn main() {
             ..default()
         }))
         .add_plugins(stage::ShadingPlugin)
+        .add_plugins(sky::SkyPlugin)
+        .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
-        .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
+        .insert_resource(ClearColor(clear))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
             brightness: 250.0,
@@ -189,6 +430,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut sky_materials: ResMut<Assets<sky::SkyMaterial>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let t = std::time::Instant::now();
@@ -208,6 +450,8 @@ fn setup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: Some(args.pos * stage::UNIT),
+        view_range: config_view_range(),
     };
     loader.index_models();
     if let Some(model) = &args.character {
@@ -228,7 +472,7 @@ fn setup(
             Ok(_) => info!("character {model} motion {motion} slot {}", args.slot),
             Err(e) => error!("character: {e}"),
         }
-        spawn_camera_and_light(&mut commands, &args);
+        spawn_camera_and_light(&mut commands, &args, None);
         return;
     }
     let (a0, b0) = args.cell;
@@ -265,6 +509,13 @@ fn setup(
                 offset,
             );
         }
+    }
+    if args.stage == 100 {
+        let eye = args.pos + Vec3::new((b0 - 50) as f32 * 10000.0, 0.0, (a0 - 50) as f32 * 10000.0);
+        let n = loader.spawn_landmarks(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), eye, args.progress);
+        info!("landmarks {n}");
+        let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
+        info!("low models {n}");
     }
     loader.spawn_water(
         &mut commands,
@@ -321,19 +572,80 @@ fn setup(
             Err(e) => error!("play: {e}"),
         }
     }
-    spawn_camera_and_light(&mut commands, &args);
+    // The stage's filter chain (vignette, tone curve) goes with the
+    // original's lighting.
+    info!(
+        "clock {:?} ms, weather {:?}, lighting {}",
+        args.clock_ms,
+        args.weather.map(|w| sky::WEATHERS[w]),
+        if args.light.is_some() { "on" } else { "Bevy PBR" }
+    );
+    let post = args.light.as_ref().and_then(|_| stage::post::DdPost::load(&vfs, args.stage)).map(|p| {
+        // DOFFilter runs only with the player's DofFilter=ON (0x0050adc0).
+        match stage::post::DdPost::dof_filter(&vfs, args.stage).filter(|_| config_dof_filter()) {
+            Some(dof) => p.with_dof(&dof, args.near, args.far, args.size),
+            None => p,
+        }
+    });
+    if let Some(light) = &args.light {
+        let sky = sky::StageSky::load(&vfs, args.stage, args.weather.unwrap_or(0));
+        if let (Some(sky), Some(ms)) = (&sky, args.clock_ms.or(light.clock_ms)) {
+            // The cloud domes, at the sky's height offset above the camera's
+            // ground position.
+            let sun = mtweather::sky::sun_direction(&sky.sky, ms);
+            let day = 1.0 - mtweather::sky::night_blend(sun);
+            let pos = Vec3::new(args.pos.x, sky.inputs.height_offset, args.pos.z) * stage::UNIT;
+            for c in &sky.clouds {
+                let alpha = if c.day_only { day } else { 1.0 };
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let (s, a) = mtweather::sky::cloud_light(&sky.sky, &sky.inputs, sun, &c.light);
+                let light = Vec3::from(s) + Vec3::from(a);
+                loader.spawn_sky_model(&mut commands, &mut meshes, &mut materials, &mut images, &c.model, light, alpha, pos);
+            }
+        }
+        match sky {
+            Some(sky) => sky.spawn(
+                &mut commands,
+                &mut meshes,
+                &mut images,
+                &mut sky_materials,
+                // The sky's own sun from the capture's clock; without one,
+                // the capture's light (the moon at night).
+                args.clock_ms
+                    .or(light.clock_ms)
+                    .map(|ms| Vec3::from(mtweather::sky::sun_direction(&sky.sky, ms)))
+                    .unwrap_or(light.sun_dir.normalize_or(Vec3::Y)),
+                // Just inside the far plane.
+                args.far * stage::UNIT * 0.9,
+                args.pos,
+            ),
+            None => warn!("no sky scheduler for stage {}", args.stage),
+        }
+    }
+    spawn_camera_and_light(&mut commands, &args, post);
 }
 
 /// Sun and camera, shared by the stage and character modes.
-fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
-    // Sun: direction is a placeholder until the stage's light data is read.
+fn spawn_camera_and_light(commands: &mut Commands, args: &Args, post: Option<stage::post::DdPost>) {
+    // Sun. Without --light its direction and strength are placeholders
+    // for Bevy's PBR. With --light the stage materials do their own
+    // lighting and use this light only for its shadow map, pointed along
+    // the original's sun direction.
+    let to_light = args
+        .light
+        .as_ref()
+        .map(|l| l.sun_dir)
+        .filter(|d| d.length_squared() > 0.0)
+        .unwrap_or(Vec3::new(0.4, 1.0, 0.3));
     commands.spawn((
         DirectionalLight {
             illuminance: 12_000.0,
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, 0.0).looking_to(Vec3::new(-0.4, -1.0, -0.3), Vec3::Y),
+        Transform::from_xyz(0.0, 0.0, 0.0).looking_to(-to_light, Vec3::Y),
     ));
     let pos = args.pos * stage::UNIT;
     let look = args.look * stage::UNIT;
@@ -349,6 +661,18 @@ fn spawn_camera_and_light(commands: &mut Commands, args: &Args) {
             Transform::from_translation(pos).looking_at(look, args.up),
         ))
         .id();
+    if args.light.is_some() {
+        // The stage shader outputs the original's colour; no tone mapping
+        // (the original's post-processing is not traced).
+        commands
+            .entity(cam)
+            .insert(bevy::core_pipeline::tonemapping::Tonemapping::None);
+        if let Some(post) = post {
+            // A float frame: the depth of field reads the view depth from
+            // its alpha.
+            commands.entity(cam).insert((post, bevy::camera::Hdr));
+        }
+    }
     if args.play {
         commands.entity(cam).insert(play::FollowCam);
     } else {

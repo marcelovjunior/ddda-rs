@@ -37,7 +37,7 @@ pub mod ledge;
 pub mod stamina;
 
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
-pub use stamina::{StaminaRow, StaminaTables};
+pub use stamina::{StaminaRow, StaminaTables, WeightTables};
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
 /// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
@@ -85,6 +85,21 @@ pub const SPEED_CURVE: usize = 9;
 /// (`0x010571C0(10)` in `cPlCliffHangClimb::vf06` 0x00ADDC00); curve 9
 /// raises the target.
 pub const CLIMB_POSITION_CURVE: usize = 10;
+
+/// The walk and run motions of the common set that a new walk or run
+/// phase-syncs to (0x018763D0: 3, 4, 0x54, 0x55; the weapon sets' 0x603,
+/// 0x604, 0x654, 0x655 are not used by the simulation).
+pub const LOCOMOTION_MOTIONS: [u16; 4] = [3, 4, 0x54, 0x55];
+
+/// Start frames when not phase-synced, field walk, town walk, run, for the
+/// feet test 0x00AC5FB0 returning false (cPlActWalk::vf05: 18 field, 0
+/// town; cPlActRun::vf05: 20). When it returns true they are 0, 17 and 0.
+pub const LOCOMOTION_START_FEET_NOT_AHEAD: [f32; 3] = [18.0, 0.0, 20.0];
+
+/// The motion event (group 0, bit 16) that lets the stick cancel an action
+/// into movement (`MoveCancel` in `Sim::move_cancel_allowed`).
+pub const MOVE_CANCEL_GROUP: usize = 0;
+pub const MOVE_CANCEL_BIT: u32 = 0x1_0000;
 
 /// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
 /// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
@@ -350,6 +365,14 @@ pub struct Player {
     /// Stamina ran out (crossed to 0) at least once since the host cleared
     /// it. What the original does next (`cPlActTired`) is not modelled.
     pub ran_out: bool,
+    /// The player's own time per game time in the current `Sim::step` (the
+    /// unit delta factor, `LOCOMOTION_RATE` while walking, running or
+    /// sprinting) and the factors the last two steps ended with: a factor
+    /// applies two engine frames after the action that sets it, as in the
+    /// traces (the stamina update writes uPlayer +0xEE4 after the actions,
+    /// `uObjModel::vf90` reads it at the next frame's start).
+    pub unit_rate: f32,
+    rate_queue: [f32; 2],
 }
 
 /// A held ledge and the points the hang and climb move between.
@@ -503,10 +526,20 @@ pub trait Ground {
     }
 }
 
-/// The body as a vertical cylinder for wall tests, cm. *Placeholder*: the
-/// original's player collision shape is not traced.
+/// The body's radius against scenery, cm: the player's scenery-adjust
+/// volume is a sphere of radius 35 on the model origin (`collision\pl\m0001`,
+/// rObjCollision group 109, `mIsScrAdj`, node 0: shape 1, joint -1). The
+/// original resolves it with `cScrAdjust` (uObjModel +0x19C0: `mCapsule`
+/// +0xD0, ground check offset adjust 0x7E = -20, axis check type 2) through
+/// a generic capsule sweep-and-slide (0x0079E200 -> 0x010B4960 ->
+/// 0x010B3000), which is not translated.
 pub const BODY_RADIUS: f32 = 35.0;
-pub const BODY_HEIGHT: f32 = 170.0;
+/// Top of the body capsule's segment above the feet, cm. Read live from
+/// the Arisen (claude-4, board #931): `cScrAdjust::mCapsule` runs from 35
+/// to 145 cm above the feet with radius 35 (the body spans 0-180 cm). ddsim
+/// tests walls along the segment from `STEP_UP` (not 35: it has no sweep
+/// that rides over steps, *placeholder*) to here.
+pub const BODY_HEIGHT: f32 = 145.0;
 
 /// Moves from `from` toward `to` (same height) against walls: the full
 /// move if nothing blocks it or it leads away from the wall, else the move
@@ -586,6 +619,7 @@ pub struct Sim {
     pub move_param: MoveParam,
     pub ledge_param: LedgeParam,
     pub stamina_tables: StaminaTables,
+    pub weight_tables: WeightTables,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -604,6 +638,7 @@ impl Sim {
             move_param: MOVE_SHIPPED,
             ledge_param: LEDGE_SHIPPED,
             stamina_tables: StaminaTables::shipped(),
+            weight_tables: WeightTables::shipped(),
             pending: 0.0,
         }
     }
@@ -630,7 +665,23 @@ impl Sim {
             body_class: 1,
             load_class: 1,
             ran_out: false,
+            unit_rate: 1.0,
+            rate_queue: [1.0; 2],
         });
+    }
+
+    /// Sets a player's body and load classes from its body weight and its
+    /// total (body plus carried) weight, as `0x00B81120` does each frame in
+    /// the original. `capacity` is the carrying abilities' adjustment
+    /// (0x00B7E710, 0 without them). The weights come from the inventory,
+    /// which the host owns.
+    pub fn set_weights(&mut self, id: PlayerId, body_weight: f32, total_weight: f32, capacity: f32) {
+        let body = self.weight_tables.body_class(body_weight);
+        let load = self.weight_tables.load_class(body_weight, total_weight, capacity);
+        if let Some(p) = self.player_mut(id) {
+            p.body_class = body;
+            p.load_class = load;
+        }
     }
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
@@ -646,7 +697,13 @@ impl Sim {
     }
 
     /// Advances every player by `dt` seconds, in steps of `TICK` motion frames.
+    ///
+    /// One call is one engine frame for the players' own time: the motion
+    /// speed a frame ends with applies two calls later (`Player::unit_rate`).
     pub fn step(&mut self, dt: f32, inputs: &HashMap<PlayerId, Input>, ground: &dyn Ground) {
+        for p in &mut self.players {
+            p.unit_rate = p.rate_queue[0];
+        }
         self.pending += dt * MOTION_FPS;
         while self.pending >= TICK {
             self.pending -= TICK;
@@ -654,6 +711,11 @@ impl Sim {
                 let input = inputs.get(&self.players[i].id).copied().unwrap_or_default();
                 self.frame(i, input, ground, TICK);
             }
+        }
+        for i in 0..self.players.len() {
+            let r = self.time_rate(&self.players[i], self.players[i].state);
+            let p = &mut self.players[i];
+            p.rate_queue = [p.rate_queue[1], r];
         }
     }
 
@@ -668,7 +730,10 @@ impl Sim {
     fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
         let y0 = self.players[i].position[1];
         let (state0, frame0) = (self.players[i].state, self.players[i].frame);
-        self.frame_states(i, input, ground, dt);
+        // the player's own time (cUnit +0x14) for its actions and physics;
+        // stamina runs in game time (0x00B81450 uses sMain's delta)
+        let unit_dt = dt * self.players[i].unit_rate;
+        self.frame_states(i, input, ground, unit_dt);
         self.stamina_step(i, state0, frame0, dt);
         // 0x0088A7E0: the fall distance (uPlayer +0x207C) counts from the
         // last frame the character did not move down
@@ -727,10 +792,11 @@ impl Sim {
                     return;
                 }
                 // a landing or a sprint stop plays out unless the player moves
+                // and its motion allows moving off (event group 0 bit 0x10000)
                 if matches!(
                     state,
                     State::Land { .. } | State::SprintJumpLand | State::SprintStop
-                ) && !moving
+                ) && (!moving || !self.move_cancel_allowed(i))
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
                     self.ground_move(i, state, ground, dt);
@@ -760,11 +826,17 @@ impl Sim {
                         relaxed: self.players[i].relaxed,
                     }
                 };
+                let start = (next != state)
+                    .then(|| self.locomotion_start(&self.players[i], next, dt))
+                    .flatten();
                 let p = &mut self.players[i];
                 if next == State::SprintStart && p.state != State::SprintStart {
                     p.sprint_entry = p.speed;
                 }
                 Self::set_state(p, next);
+                if let Some(f) = start {
+                    p.frame = f;
+                }
                 if moving {
                     // *Placeholder*: the original turns over time.
                     p.yaw = input_yaw;
@@ -1048,6 +1120,56 @@ impl Sim {
         p.ran_out |= out;
     }
 
+    /// Whether the playing motion lets the stick cancel it: event group 0
+    /// bit 0x10000 at the current whole frame. `cPlActWpnShieldGuardJumpLand::vf06`
+    /// (0x00B36140) cancels on exactly "stick held (uPlayer +0x32C0) and
+    /// event word +0x490 (layer 0, group 0) & 0x10000"; the landing motions
+    /// 12 and 15 set it from frame 3, which is the recorded hold (about 3.3
+    /// game frames, docs/ACCEPTANCE.md). That `cPlActLand` and the sprint
+    /// stop use the same bit (through `uPlayerBase::vf136`) is *assumed*.
+    /// Motions without event data allow it.
+    fn move_cancel_allowed(&self, i: usize) -> bool {
+        let p = &self.players[i];
+        let Some(m) = self.motions.get(&p.state.motion_id()) else {
+            return true;
+        };
+        if m.events.is_empty() {
+            return true;
+        }
+        let f = p.frame as i32;
+        m.event_bits(MOVE_CANCEL_GROUP, f, f) & MOVE_CANCEL_BIT != 0
+    }
+
+    /// The frame a walk or run motion starts on when the player enters `next`
+    /// (None for other states: they start at 0). Coming from another walk
+    /// or run motion the new one is phase-synced; otherwise it starts on
+    /// the action's given frame.
+    // Translated from 0x00B80260 (DDDA.exe 2017-12-13 Steam), with the start
+    // frames of cPlActWalk::vf05 (0x00AC9FB0) and cPlActRun::vf05
+    // (0x00ACA390). Those pick between two start frames by 0x00AC5FB0, which
+    // compares two joints (the feet) along the facing; the simulation has
+    // no skeleton, so the "false" branch is taken (*placeholder*).
+    fn locomotion_start(&self, p: &Player, next: State, dt: f32) -> Option<f32> {
+        let given = match next {
+            State::Walk { relaxed: false } => LOCOMOTION_START_FEET_NOT_AHEAD[0],
+            State::Walk { relaxed: true } => LOCOMOTION_START_FEET_NOT_AHEAD[1],
+            State::Run { .. } => LOCOMOTION_START_FEET_NOT_AHEAD[2],
+            _ => return None,
+        };
+        let old = p.state.motion_id();
+        if !LOCOMOTION_MOTIONS.contains(&old) {
+            return Some(given);
+        }
+        let old_last = self.period_of(old);
+        let new_last = self.period_of(next.motion_id());
+        // the old motion's frame advanced by this step, scaled to the new one
+        let mut f = (dt + p.frame) * (new_last / old_last);
+        if new_last <= f {
+            f -= new_last;
+        }
+        Some(f.trunc())
+    }
+
     /// Curve `k` of motion `id` at `frame`, or the linear progress over
     /// `len` frames when the motion has no such curve.
     fn progress(&self, id: u16, k: usize, frame: f32, len: f32) -> f32 {
@@ -1099,7 +1221,6 @@ impl Sim {
         let jn = self.jump_normal;
         let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
-        let rate = self.time_rate(&self.players[i], state);
         let period = self.period_of(state.motion_id());
         let p = &mut self.players[i];
         let mut target = p.position;
@@ -1107,11 +1228,11 @@ impl Sim {
             // velocity along the facing, in the player's own (scaled) time;
             // the motion only animates
             let (s, c) = p.yaw.sin_cos();
-            let step = along_ground(ground, p.position, [v * dt * rate * s, v * dt * rate * c]);
+            let step = along_ground(ground, p.position, [v * dt * s, v * dt * c]);
             target[0] += step[0];
             target[2] += step[1];
             p.speed = v;
-            let f = p.frame + dt * rate;
+            let f = p.frame + dt;
             p.frame = if state.looping() { f.rem_euclid(period) } else { f };
         } else if let Some(m) = self.motions.get(&state.motion_id()) {
             p.speed = 0.0;
@@ -1314,19 +1435,32 @@ mod tests {
     }
 
     /// Five frames of running: the velocity in the player's scaled time.
-    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run * LOCOMOTION_RATE;
+    const RUN5: f32 = (2.0 + 3.0 * LOCOMOTION_RATE) * MOVE_SHIPPED.run;
+
+    /// Steps `n` engine frames of 1/30 s: the run's 1.15 time factor applies
+    /// from the third (`Player::unit_rate`), so five frames of running
+    /// cover 2 + 3 x 1.15 frames of player time (`RUN5`).
+    fn frames(s: &mut Sim, n: usize, inputs: &HashMap<PlayerId, Input>, ground: &dyn Ground) {
+        for _ in 0..n {
+            s.step(1.0 / MOTION_FPS, inputs, ground);
+        }
+    }
 
     #[test]
     fn running_moves_forward_at_the_run_speed() {
         let mut s = sim();
         let mut inputs = HashMap::new();
         inputs.insert(0, fwd());
-        s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        frames(&mut s, 5, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert_eq!(p.state, State::Run { relaxed: false });
         assert!((p.position[2] - RUN5).abs() < 1e-3, "{:?}", p.position);
-        // the motion plays faster than the simulation's frames
-        assert!((p.frame - 5.0 * LOCOMOTION_RATE).abs() < 1e-3, "{}", p.frame);
+        // the motion plays faster than game time
+        assert!(
+            (p.frame - (2.0 + 3.0 * LOCOMOTION_RATE)).abs() < 1e-3,
+            "{}",
+            p.frame
+        );
         let q = s.player(1).unwrap();
         assert_eq!(q.state, State::Wait);
         assert_eq!(q.position[0], 500.0);
@@ -1343,7 +1477,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        frames(&mut s, 5, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert!(
             (p.position[0] + RUN5).abs() < 1e-3 && p.position[2].abs() < 1e-3,
@@ -1364,7 +1498,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        frames(&mut s, 5, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert!(
             (p.position[0] - RUN5).abs() < 1e-3 && p.position[2].abs() < 1e-3,
@@ -1378,6 +1512,7 @@ mod tests {
         let mut s = sim();
         let mut inputs = HashMap::new();
         inputs.insert(0, fwd());
+        frames(&mut s, 2, &inputs, &Flat(0.0));
         let mut last = s.player(0).unwrap().position[2];
         for _ in 0..200 {
             s.step(1.0 / MOTION_FPS, &inputs, &Flat(0.0));
@@ -1809,13 +1944,15 @@ mod tests {
         s.player_mut(0).unwrap().position = [-300.0, 0.0, 0.0];
         let w = Boxes::wall(0.0, 100.0, 190.0);
         let mut states = Vec::new();
-        for f in 0..400 {
+        // quarter-frame steps, so that every state is seen
+        for k in 0..1600 {
+            let f = k / 4;
             let mut inputs = HashMap::new();
             // sprint, jump, keep pushing toward the wall until the climb
             if !matches!(states.last(), Some(State::LedgeClimb { .. } | State::Wait)) {
                 inputs.insert(0, east((20..22).contains(&f), f < 22));
             }
-            s.step(1.0 / 30.0, &inputs, &w);
+            s.step(TICK / MOTION_FPS, &inputs, &w);
             let st = s.player(0).unwrap().state;
             if states.last() != Some(&st) {
                 states.push(st);
@@ -1833,8 +1970,10 @@ mod tests {
             "{states:?}"
         );
         assert!(states.contains(&State::LedgeClimb { braced: true }), "{states:?}");
+        // 10 cm in from the edge, 5 above it, then down onto the top
+        assert!(near(s.player(0).unwrap().position, [110.0, 195.0, 0.0], 1e-3));
+        s.step(1.0 / 30.0, &HashMap::new(), &w);
         let p = s.player(0).unwrap();
-        // 10 cm in from the edge, on the top
         assert!(near(p.position, [110.0, 190.0, 0.0], 1e-3), "{p:?}");
     }
 
@@ -1952,9 +2091,10 @@ mod tests {
         let p = s.player(0).unwrap();
         assert_eq!(p.state, State::Wait);
         // 22.5 x (5 x 0.75 + 20 x 0.25) = 196.9 cm (recorded: 198.1), plus
-        // 2.8 cm from sampling the curve at the start of each quarter frame
+        // 2.8 cm from sampling the curve at the start of each quarter frame,
+        // plus the stop's first frames still in the sprint's 1.15x time
         let d = p.position[2] - z0;
-        assert!((d - 196.875 - 2.8125).abs() < 0.1, "{d}");
+        assert!((d - 196.875 - 2.8125).abs() < 1.0, "{d}");
     }
 
     /// Group 1 suppressing recovery for `frames` motion frames.
@@ -2149,6 +2289,57 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_holds_the_stick_until_its_motion_allows_moving() {
+        let mut s = sim();
+        // as m0000_co slot 12: group 0 without bit 0x10000 for frames 0-2
+        let run = |bits, frames| mtlmt::EventRun { bits, frames };
+        let events = vec![
+            vec![run(0x2a8a_0003, 3), run(0x1545_0003, 14), run(0, 1)],
+            vec![],
+            vec![],
+            vec![],
+        ];
+        s.motions.insert(12, RootMotion::none(18).with_events(events));
+        s.player_mut(0).unwrap().state = State::Land { standing: false };
+        let inputs = HashMap::from([(0, fwd())]);
+        let mut held = 0.0;
+        while s.player(0).unwrap().state == (State::Land { standing: false }) {
+            s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
+            held += TICK;
+            assert!(held < 10.0);
+        }
+        // released once the motion reaches frame 3
+        assert!((held - 3.0).abs() < 0.3, "{held}");
+        assert!(matches!(s.player(0).unwrap().state, State::Run { .. }));
+    }
+
+    #[test]
+    fn runs_start_on_frame_20_or_in_phase_with_a_walk() {
+        let mut s = sim();
+        // the walk motion 3 has 38 frames in m0000_co; the run 4 has 22
+        s.motions.insert(3, RootMotion::none(38));
+        s.motions.insert(4, RootMotion::none(22));
+        let run_in = HashMap::from([(0, fwd())]);
+        s.step(TICK / MOTION_FPS, &run_in, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        // from idle: frame 20, plus this quarter frame
+        assert!((p.frame - 20.25).abs() < 1e-4, "{}", p.frame);
+        let mut s = sim();
+        s.motions.insert(3, RootMotion::none(38));
+        s.motions.insert(4, RootMotion::none(22));
+        {
+            let p = s.player_mut(0).unwrap();
+            p.state = State::Walk { relaxed: false };
+            p.frame = 18.5;
+        }
+        s.step(TICK / MOTION_FPS, &run_in, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Run { relaxed: false });
+        // (0.25 + 18.5) x 21 / 37 = 10.64 -> frame 10, plus this quarter frame
+        assert!((p.frame - 10.25).abs() < 1e-4, "{}", p.frame);
+    }
+
+    #[test]
     fn a_run_stops_at_once() {
         let mut s = sim();
         s.motions
@@ -2169,13 +2360,13 @@ mod tests {
         s.player_mut(0).unwrap().relaxed = true;
         let mut inputs = HashMap::new();
         inputs.insert(0, fwd());
-        s.step(10.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        frames(&mut s, 10, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert_eq!(p.state.motion_id(), 0x55);
         // 12.0 x 0.8471 = 10.165 cm per frame, as recorded (uPlayer +0x2530)
         assert!((p.speed - 10.165).abs() < 1e-3, "{}", p.speed);
-        // 10 frames x 10.165 x 1.15 (the scaled unit time)
-        assert!((p.position[2] - 116.8975).abs() < 1e-2, "{:?}", p.position);
+        // 10 frames x 10.165, the last 8 in 1.15x player time
+        assert!((p.position[2] - 10.165 * 11.2).abs() < 1e-2, "{:?}", p.position);
     }
 
     #[test]

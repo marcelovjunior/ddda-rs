@@ -137,6 +137,24 @@ struct Level {
     once: Vec<u32>,
 }
 
+/// A read-only snapshot of a script: where it is and its registers. Two
+/// runs with the same inputs give equal snapshots (replay checks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptState {
+    pub path: String,
+    pub running: bool,
+    /// Current state ids, root machine first (`Script::state_path`).
+    pub states: Vec<u32>,
+    pub sys_condition: u32,
+    pub free_flags: u32,
+    pub free_ins: [i32; 32],
+    pub free_real: [f32; 32],
+    pub cnt_state: f32,
+    pub cnt_fsm: f32,
+    pub timer_index: i8,
+    pub event_step: u32,
+}
+
 pub struct Script {
     pub path: String,
     graph: Arc<Graph>,
@@ -231,6 +249,30 @@ impl Script {
     /// Current state ids, root first (for tests and debugging).
     pub fn current_states(&self) -> Vec<u32> {
         self.levels.iter().map(|l| l.current).collect()
+    }
+
+    /// The current state of every running level, root machine first: the
+    /// state ids of the graph (`mtfsm`), stable across runs.
+    pub fn state_path(&self) -> Vec<u32> {
+        self.current_states()
+    }
+
+    /// A snapshot of the script for hashing and debugging.
+    pub fn state(&self) -> ScriptState {
+        let o = &self.owner;
+        ScriptState {
+            path: self.path.clone(),
+            running: self.running,
+            states: self.state_path(),
+            sys_condition: o.sys_condition,
+            free_flags: o.free_flags,
+            free_ins: o.free_ins,
+            free_real: o.free_real,
+            cnt_state: o.cnt_state,
+            cnt_fsm: o.cnt_fsm,
+            timer_index: o.timer_index,
+            event_step: o.event_step,
+        }
     }
 
     /// Names of the current states, root first.

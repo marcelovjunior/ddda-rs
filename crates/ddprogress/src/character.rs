@@ -22,6 +22,14 @@ impl Bits {
     pub fn get(&self, i: usize) -> bool {
         self.0.get(i >> 5).is_some_and(|w| w & (1 << (i & 31)) != 0)
     }
+    /// The words, LSB first (for saves).
+    pub fn words(&self) -> &[u32] {
+        &self.0
+    }
+    /// A set from saved words.
+    pub fn from_words(words: Vec<u32>) -> Self {
+        Bits(words)
+    }
     pub fn set(&mut self, i: usize, v: bool) {
         if let Some(w) = self.0.get_mut(i >> 5) {
             if v {

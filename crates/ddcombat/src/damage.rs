@@ -54,6 +54,10 @@ pub struct AttackRow {
     pub is_no_calc_enemy_defence: bool,
     /// `mIsSameFrameNoHit00..03` as bits 0..3.
     pub same_frame_no_hit: u8,
+    /// `mPoison`, `mSlow`, `mBlind`, `mSilence`, `mSleep`, `mOil`, `mWet`,
+    /// `mCurse`, `mEnemy`, `mSeal`, `mStone`, `mAtkDown`, `mDefDown`,
+    /// `mMgcAtkDown`, `mMgcDefDown` (attack order; see `status::SLOT_SOURCE`).
+    pub status: [f32; 15],
 }
 
 impl AttackRow {
@@ -102,6 +106,7 @@ impl AttackRow {
             is_no_damage_no_reset_blow: b("mIsNoDamageNoResetBlow"),
             is_no_calc_enemy_defence: b("mIsNoCalcEnemyDefence"),
             same_frame_no_hit: same,
+            status: ["mPoison", "mSlow", "mBlind", "mSilence", "mSleep", "mOil", "mWet", "mCurse", "mEnemy", "mSeal", "mStone", "mAtkDown", "mDefDown", "mMgcAtkDown", "mMgcDefDown"].map(f),
         }
     }
 }
@@ -349,6 +354,8 @@ pub struct MergedHit {
     pub shrink: f32,
     pub blow: f32,
     pub stamina: f32,
+    /// HitInfo+0x144..+0x17C: status build-ups, summed (0x00776810).
+    pub status: [f32; 15],
     /// HitInfo+0xD0: hits merged; defence is subtracted once per hit.
     pub hits: u32,
     /// HitInfo+0x235 bits 3 / 4: the hit has a physical / magick part.
@@ -376,6 +383,7 @@ pub fn merge_frame(hits: &[HitValue]) -> Option<MergedHit> {
         shrink: first.shrink,
         blow: first.blow,
         stamina: first.row.stamina_attack,
+        status: first.row.status,
         hits: 1,
         has_phys: true,
         has_mag: true,
@@ -414,6 +422,9 @@ pub fn merge_frame(hits: &[HitValue]) -> Option<MergedHit> {
             m.row.blow_type = h.row.blow_type;
         }
         m.stamina += h.row.stamina_attack;
+        for (s, v) in m.status.iter_mut().zip(h.row.status) {
+            *s += v;
+        }
         m.hits += 1;
     }
     Some(m)

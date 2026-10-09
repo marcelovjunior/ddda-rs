@@ -28,6 +28,14 @@ pub struct ScriptedHost {
     pub on_camera: HashMap<u32, Vec<(u64, HostEvent)>>,
     /// Every request seen, with its frame.
     pub log: Vec<(u64, Request)>,
+    /// Event rows played for real by [`crate::event::EventPlayer`] (driven
+    /// by [`crate::route::run`]) instead of the fixed `event_frames`.
+    pub play_rows: HashSet<usize>,
+    /// A requested row waiting for its player.
+    pub awaiting: Option<usize>,
+    /// Subtitle language of played events (index into
+    /// [`crate::event::LANGUAGES`]).
+    pub language: usize,
 }
 
 impl Default for ScriptedHost {
@@ -47,6 +55,9 @@ impl Default for ScriptedHost {
             pending: vec![],
             on_camera: HashMap::new(),
             log: vec![],
+            play_rows: HashSet::new(),
+            awaiting: None,
+            language: 1,
         }
     }
 }
@@ -82,6 +93,11 @@ impl ScriptedHost {
                 // Events fade out before they load (stage event mode 0x0050be20)
                 // and their timelines end in black (st200ev10 frames
                 // 1643-1702).
+                Request::PlayEvent { row, .. } if self.play_rows.contains(row) => {
+                    self.later(3, HostEvent::FadeBlack(true));
+                    self.later(10, HostEvent::FadeBlack(false));
+                    self.awaiting = Some(*row);
+                }
                 Request::PlayEvent { .. } => {
                     self.later(3, HostEvent::FadeBlack(true));
                     self.later(10, HostEvent::FadeBlack(false));
@@ -135,6 +151,14 @@ impl ScriptedHost {
                 _ => {}
             }
         }
+    }
+
+    /// A played event reached its end: its timeline ends in black (e.g.
+    /// st200ev10 frames 1643-1702), then the stage's end step runs.
+    pub fn event_done(&mut self) {
+        self.later(0, HostEvent::FadeBlack(true));
+        self.later(1, HostEvent::EventFinished);
+        self.later(11, HostEvent::FadeBlack(false));
     }
 
     /// Host events due this frame; advances the frame counter.

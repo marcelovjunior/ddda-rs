@@ -2304,6 +2304,7 @@ dependencies = [
 name = "ddeconomy"
 version = "0.1.0"
 dependencies = [
+ "ddid",
  "dditem",
  "ddstory",
  "ddvfs",
@@ -2326,12 +2327,53 @@ name = "ddexe"
 version = "0.1.0"
 
 [[package]]
+name = "ddhost"
+version = "0.1.0"
+dependencies = [
+ "ddeconomy",
+ "ddexe",
+ "ddid",
+ "dditem",
+ "ddpawn",
+ "ddprogress",
+ "ddquest",
+ "ddrift",
+ "ddsim",
+ "ddskill",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtlmt",
+ "mtxfs",
+]
+
+[[package]]
+name = "ddid"
+version = "0.1.0"
+
+[[package]]
 name = "dditem"
 version = "0.1.0"
 dependencies = [
  "ddvfs",
  "mtarc",
  "mtgmd",
+ "mtxfs",
+]
+
+[[package]]
+name = "ddlook"
+version = "0.1.0"
+dependencies = [
+ "dditem",
+ "ddnpc",
+ "ddpawn",
+ "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtmod",
+ "mtshader",
  "mtxfs",
 ]
 
@@ -2383,6 +2425,7 @@ name = "ddprogress"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddparam",
  "ddskill",
  "ddstory",
@@ -2406,6 +2449,7 @@ name = "ddrift"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddnpc",
  "ddparam",
  "ddpawn",
@@ -2447,10 +2491,14 @@ dependencies = [
 name = "ddstory"
 version = "0.1.0"
 dependencies = [
+ "ddnpc",
  "ddquest",
  "ddvfs",
  "mtarc",
+ "mtcamera",
  "mtfsm",
+ "mtgmd",
+ "mtlmt",
  "mtxfs",
 ]
 
@@ -2486,7 +2534,11 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddlook",
+ "ddquest",
+ "ddsave",
  "ddsim",
+ "ddstory",
  "ddvfs",
  "ddworld",
  "mtarc",
@@ -2495,7 +2547,9 @@ dependencies = [
  "mtmod",
  "mtmrl",
  "mtshader",
+ "mtswm",
  "mttex",
+ "mtweather",
  "mtxfs",
 ]
 
@@ -3769,6 +3823,10 @@ dependencies = [
  "ddvfs",
  "mtarc",
 ]
+
+[[package]]
+name = "mtswm"
+version = "0.1.0"
 
 [[package]]
 name = "mttex"

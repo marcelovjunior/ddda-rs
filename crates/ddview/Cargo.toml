@@ -7,6 +7,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddstory = { path = "../ddstory" }
+ddlook = { path = "../ddlook" }
+ddsave = { path = "../ddsave" }
 bevy = "0.19.1"
 ddvfs = { path = "../ddvfs" }
 ddworld = { path = "../ddworld" }
@@ -18,4 +21,7 @@ mtlot = { path = "../mtlot" }
 mtmod = { path = "../mtmod" }
 mtmrl = { path = "../mtmrl" }
 mtshader = { path = "../mtshader" }
+mtswm = { path = "../mtswm" }
+mtweather = { path = "../mtweather" }
+ddquest = { path = "../ddquest" }
 mttex = { path = "../mttex" }
