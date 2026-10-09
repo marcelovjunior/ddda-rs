@@ -40,3 +40,18 @@ the task. The research method is in `docs/METHODOLOGY.md`.
 - Update `docs/MILESTONES.md` after each batch: evidence, blockers, one next
   action. Detailed findings go in topic docs.
 - Never redistribute game files or modify the installation.
+
+## Parallel work
+
+Several agents (Claude subagents, Codex) work on this repo at once, led by
+the coordinating Claude session (`head`). Before doing anything:
+
+1. Read `docs/BOARD.md` and register on the shared board
+   (`python scripts/board.py join <your-name> ...`). Claim the system and
+   files you will edit, report status, and read your inbox, as it says.
+2. Take only the brief the head assigned you (`docs/tasks/`). Work on
+   branch `task/<id>` in your own worktree under `E:\ddda-rs-wt\`. Stay
+   inside the brief's file scope. Commit on that branch only: never push,
+   never touch `main`. Report in the brief's Results section and to `head`.
+
+The system breakdown is `docs/ROADMAP.md`.
