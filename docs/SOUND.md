@@ -97,10 +97,137 @@ follow-up work.
 
 ## Remaining work
 
-Program selection, cue commands, volume/pan/pitch/delay fields, speaker
+General cue commands, volume/pan/pitch/delay fields, speaker
 settings, source metadata words and runtime loop behavior are not assigned
 semantics by this reader. Stream requests may reference assets absent from
 the loose installation; report these rather than substituting another sound.
 Next step: trace one runtime cue's command/program selection through the
 package table and compare playback with the original under an authorized
 audio test. No original-game comparison has been performed.
+
+## Playback work in progress (audio-playback)
+
+`mtsound::decode` uses Lewton for Vorbis and Symphonia 0.5.5 for
+Microsoft ADPCM/PCM RIFF. These are device-independent decoders, with an
+explicit caller-provided decoded-sample budget. No audio device is opened
+by this crate. Symphonia's codec documentation is at
+https://docs.rs/symphonia-codec-adpcm/0.5.5.
+
+Stream request IDs are **u16 keys**, not array indices (`0x00dc09b0`).
+`0x00ddb4e0` dispatches commands 1/5/10 to stream allocation and command
+11 to `0x00dca2f0`, which starts previously prepared matching voices.
+`uSoundStream::vf05` (`0x00c79d30`) queues the prepare ID before the
+stream ID; mode 2's `0x00c79fa0` sends the nonpositional start request.
+The narrow resolver handles direct play and this prepare/start pair;
+other commands and request chains are explicitly rejected.
+
+st200 ev10 frame zero sends stream ID 3 in both banks. Its prepared BGM
+ID 24 resolves `event_bgm/wav/st200ev10-BGM`; voice/SE ID 203 resolves
+`event_vo_se/wave/st200ev10_m`. Both are installed loose SNGW files.
+Installed decoding checks produce six-channel 48 kHz audio, respectively
+61.183 and 56.757 seconds. The Arisen's separate SPAC grunt decodes as
+Microsoft ADPCM, mono 48019 Hz, 41344 samples. These are decode checks,
+not audible playback or comparison against the original.
+
+Base SREQ selection now follows request u16 keys (0x00f73b90), signed
+program/variation fields at +0x1e/+0x20 (0x00dd3510 / 0x00dd8dd0), and
+SPAC program and variation lookup (0x00e218e0, relocation 0x00e21600).
+Runtime request overrides are not applied by the base-key reader. Synthetic
+tests cover variation selection and absent waves; the installed ev10 Arisen
+request resolves and decodes through this lookup.
+
+The viewer now forwards event stream cues to a Bevy audio source in standalone
+events and opening cutscenes. Sources are cached and replaced per event unit;
+offline pause pauses the sinks. Six-channel Vorbis is provisionally folded to
+stereo, preserving the center dialogue channel and omitting LFE. This is
+explicitly not the original game's mixer, gain, reverb or positional model.
+The release viewer builds, and all 11 mtsound tests pass including the full
+installed reader corpus. Two viewer audio regressions verify center-channel
+preservation and same-unit replacement within one deferred command batch.
+A bounded 960x540 event-22 run resolves both ev10 streams, saves its screenshot
+and exits without reported audio-device errors. Audible output and original-game
+timing comparison have not been verified. Conditional Arisen voices, footsteps, attack sounds
+and field BGM remain unconnected, so the audio-playback brief remains open.
+
+Motion-SFX trace leads: uSoundMotionSe constructor 0x00c71c20 chooses LMT
+event page 3; 0x00c73630 detects rising bits, 0x00c721c0 uses the group's u16
+remap, and 0x00c722d0 resolves a UniqueID in rSoundMotionSe. AttributeSeFlag
+uses the surface helper 0x00c72b60; direct requests use 0x00c724b0. Bank binding
+and surface selection still need tracing before motion cues can be played.
+
+`mtsound::motion` now reads all 92 installed rSoundMotionSe maps. It resolves
+entries by UniqueID, preserving the three signed request variants, bank type,
+joint/attachment, offset and surface-ray margins. Reflection is 0x00ce1250;
+0x00ce10a0 builds the lookup with the last duplicate ID winning. The request
+selector is 0x00c736f0 (selectors 0/1/2 use the three variants; other selectors
+return zero). Player-state selection is still a host input. The rising-edge
+helper follows 0x00c73630, and assembly at 0x00c72287 confirms the u16 LMT
+remap before 0x00c722d0. Tests cover held-bit suppression, remap ordering,
+the absent-ID sentinel and signed request variants. The existing ddcombat
+motion-event reader already retains all four remap pages, so another LMT
+parser is unnecessary.
+
+Direct request dispatch (0x00c724b0) selects sound-unit +0x80 for type 0,
++0x40..+0x64 for types 1..10, and stream +0x68 for type 11. AttributeSeFlag,
+rather than ReqType alone, routes to 0x00c72b60's surface lookup. That path
+also uses the authored joint/offset and vertical ray margins. The resource
+bindings and actual collision surface still need to be supplied before
+motion SFX can be presented faithfully.
+
+Player initialization 0x00b5f880 binds pl_com_bmse and the type-0 request
+bank sound/se/pl_com/pl_com. It also binds mt_attri and the 30 surface banks
+from the installed executable's pointer table 0x01875288. Weapon helpers
+0x004b0ed0 and 0x004b11f0 build the primary and secondary sound-bank paths
+from the weapon model category and its model suffix modulo 100; the common
+and specific banks serve direct types 3/4 and 5/6. `weapon_banks` translates
+those helpers with regression coverage for primary/offhand categories and
+the exceptional suffixes, including war002.
+
+`SurfaceRequests` parses the installed rSoundAttributeSe map's 32 request
+IDs per row, bank type and UseFindIntersect. Selection 0x00ce00e0 uses the
+surface index, falling back to entry zero for indices outside 0..31; the
+absent-request sentinel remains intact. Three motion-audio unit tests and
+the installed 92-motion-map/one-surface-map scan pass. Actual surface queries
+use query material word one (getter 0x00423b80). The binding is now confirmed:
+0x01165820 / 0x011637f0 put the leaf's material-index-selected 32-byte record
+at query +0x40, and the getter reads that record +4. A private comparison of
+both st200 collision resources found zero leaf/triangle material-index
+differences over 40,949 pairs. This check is limited to those resources.
+
+With head's approval, Terrain now preserves each triangle's full raw material
+and exposes `ray_with_material`; `Ground::ray` retains its existing API and
+hit geometry. Render terrain and flags-only fixtures report unknown material,
+not a fabricated surface. Six world unit tests and the installed higher-ground
+landing regression pass. The new unit check covers nearest-hit material,
+reverse-direction selection, missing material and unchanged movement flags.
+
+`direct_bank` and `attribute_bank` now preserve the two different ReqType
+numberings from 0x00c724b0 and 0x00c72b60. Direct 0 is common, 1..10 are
+bound slots, and 11 is stream; attribute 0 is the selected attribute bank,
+1 is common, and 2..11 are bound slots. In the collision path, material word
+one's first set bit among 0..28 selects the request column (no low bit means
+column zero). It does **not** select the attribute bank. The separate bank
+selector starts at zero and becomes two when getter 0x00423be0 reports bit
+1; that bit's physical meaning remains unresolved. Five motion unit tests
+pass, including the distinct numberings, high-bit exclusion and simultaneous
+material bits. Actor bindings and playback remain the next integration step.
+
+### Ordinary event sound effects
+
+SREQ dispatch 0x00ddb340 / 0x00dda9f0 reads command +8: one plays through
+0x00dd8dd0, two/three call the control path, and four selects via the random
+resource. The next-request key is +0x1c; 0xffff or the current key terminates
+the chain. `Requests::single_wave` accepts only command one with a terminal
+chain and a referenced package. It rejects commands needing a stateful mixer.
+Its regression covers missing IDs/packages, control/random commands, a
+self-terminating key and a chain to another request.
+
+The viewer now plays unconditional event SE cues through that checked path,
+following the request's package reference and decoding its base program and
+variation. Effects are separate one-shots and may overlap; stream-unit
+replacement applies only to streams. Conditional cues are skipped rather than
+playing all alternatives. Runtime overrides, original priority/group limits,
+gain/pitch/delay and spatial processing remain unimplemented. Fifteen mtsound
+unit tests and the installed ev10 stream/ADPCM regression pass; the ev10 SE
+request is confirmed to be an ordinary terminal play. Audible comparison is
+still pending.

@@ -940,7 +940,10 @@ pub fn cutscene(
         while c.acc >= 1.0 && !c.player.finished() {
             c.acc -= 1.0;
             match c.player.step(1.0) {
-                Ok(f) => c.last = f,
+                Ok(f) => {
+                    crate::audio::cues(&mut commands, &f);
+                    c.last = f;
+                },
                 Err(e) => {
                     s.failure = Some(format!("event playback failed: {e}"));
                     break;

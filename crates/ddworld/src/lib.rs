@@ -22,8 +22,20 @@ pub struct Terrain {
     /// Per triangle: its collision material's flag word (the material
     /// record's first word; 0 for render terrain).
     flags: Vec<u32>,
+    /// Full SBC material records; absent for render terrain / flags-only fixtures.
+    materials: Vec<Option<[u32; 8]>>,
     grid: HashMap<(i32, i32), Vec<u32>>,
     pub cells: usize,
+}
+
+/// A ray hit with the authored collision material, when available.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialRayHit {
+    pub hit: ddsim::RayHit,
+    /// Raw SBC record, not an inferred material category. Query material +4
+    /// is consumed by the original sound getter 0x00423b80; record binding
+    /// comes from 0x01165820 / 0x011637f0.
+    pub material: Option<[u32; 8]>,
 }
 
 /// Rotation matrix (rows) for intrinsic X, then Y, then Z Euler angles,
@@ -47,11 +59,10 @@ fn euler_xyz(a: [f32; 3]) -> [[f32; 3]; 3] {
     mul(mul(rx, ry), rz)
 }
 
-/// The flag word of a collision triangle's material (the first of its
-/// record's eight words, e.g. 0x2000 or 0x2 for the ground sCollision
-/// counts as wall whatever its slope, `sCollision` +0x4C).
-fn material_flags(c: &mtsbc::Collision, t: &mtsbc::Triangle) -> u32 {
-    c.materials.get(usize::from(t.material)).map_or(0, |m| m[0])
+/// The authored eight-word material record. Word zero supplies the
+/// movement flags; remaining words are preserved without interpretation.
+fn collision_material(c: &mtsbc::Collision, t: &mtsbc::Triangle) -> Option<[u32; 8]> {
+    c.materials.get(usize::from(t.material)).copied()
 }
 
 fn bucket(x: f32, z: f32) -> (i32, i32) {
@@ -123,6 +134,7 @@ impl Terrain {
         Terrain {
             tris: Vec::new(),
             flags: Vec::new(),
+            materials: Vec::new(),
             grid: HashMap::new(),
             cells: 0,
         }
@@ -184,9 +196,10 @@ impl Terrain {
                     };
                     let Ok(c) = mtsbc::parse(&bytes) else { continue };
                     for (p, tri) in c.world_triangles() {
-                        t.add_flagged(
+                        let material = collision_material(&c, tri);
+                        t.add_triangle(
                             p.map(|q| [q[0] + off[0], q[1], q[2] + off[2]]),
-                            material_flags(&c, tri),
+                            material.map_or(0, |m| m[0]), material,
                         );
                     }
                     any = true;
@@ -238,8 +251,8 @@ impl Terrain {
                         };
                         let Ok(c) = mtsbc::parse(&cb) else { continue };
                         for (tri, rec) in c.world_triangles() {
-                            let flags = material_flags(&c, rec);
-                            self.add_flagged(
+                            let material = collision_material(&c, rec);
+                            self.add_triangle(
                                 tri.map(|q| {
                                     let s = [q[0] * pl.scale[0], q[1] * pl.scale[1], q[2] * pl.scale[2]];
                                     let mut w = [0.0f32; 3];
@@ -249,7 +262,7 @@ impl Terrain {
                                     }
                                     w
                                 }),
-                                flags,
+                                material.map_or(0, |m| m[0]), material,
                             );
                         }
                     }
@@ -266,6 +279,15 @@ impl Terrain {
 
     /// Adds a triangle whose collision material has the flag word `flags`.
     pub fn add_flagged(&mut self, p: [[f32; 3]; 3], flags: u32) {
+        self.add_triangle(p, flags, None);
+    }
+
+    /// Adds a triangle with its complete authored SBC material record.
+    pub fn add_material(&mut self, p: [[f32; 3]; 3], material: [u32; 8]) {
+        self.add_triangle(p, material[0], Some(material));
+    }
+
+    fn add_triangle(&mut self, p: [[f32; 3]; 3], flags: u32, material: Option<[u32; 8]>) {
         let id = self.tris.len() as u32;
         let (minx, maxx) = (
             p[0][0].min(p[1][0]).min(p[2][0]),
@@ -283,6 +305,61 @@ impl Terrain {
         }
         self.tris.push(p);
         self.flags.push(flags);
+        self.materials.push(material);
+    }
+
+    /// Nearest triangle crossing of the segment (Moller-Trumbore, both
+    /// faces). A triangle the segment starts on does not count.
+    pub fn ray_with_material(&self, from: [f32; 3], to: [f32; 3]) -> Option<MaterialRayHit> {
+        let d = sub(to, from);
+        let (b0, b1) = (
+            bucket(from[0].min(to[0]), from[2].min(to[2])),
+            bucket(from[0].max(to[0]), from[2].max(to[2])),
+        );
+        let mut best: Option<(f32, [f32; 3], usize)> = None;
+        let mut seen = std::collections::HashSet::new();
+        for bx in b0.0..=b1.0 {
+            for bz in b0.1..=b1.1 {
+                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let t = &self.tris[id as usize];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-9 {
+                        continue;
+                    }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) {
+                        continue;
+                    }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 {
+                        continue;
+                    }
+                    let k = dot(e2, q) * inv;
+                    if !(1e-4..=1.0).contains(&k) || best.is_some_and(|(bk, _, _)| bk <= k) {
+                        continue;
+                    }
+                    let n = cross(e1, e2);
+                    let len = dot(n, n).sqrt();
+                    let sign = if dot(n, d) > 0.0 { -1.0 } else { 1.0 } / len;
+                    best = Some((k, [n[0] * sign, n[1] * sign, n[2] * sign], id as usize));
+                }
+            }
+        }
+        best.map(|(k, normal, id)| MaterialRayHit {
+            material: self.materials[id],
+            hit: ddsim::RayHit {
+                point: [from[0] + d[0] * k, from[1] + d[1] * k, from[2] + d[2] * k],
+                normal,
+            },
+        })
     }
 
     pub fn triangles(&self) -> usize {
@@ -368,55 +445,8 @@ impl ddsim_ground::Ground for Terrain {
         best.map(|(_, dir)| dir)
     }
 
-    /// Nearest triangle crossing of the segment (Moller-Trumbore, both
-    /// faces). A triangle the segment starts on does not count.
     fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<ddsim::RayHit> {
-        let d = sub(to, from);
-        let (b0, b1) = (
-            bucket(from[0].min(to[0]), from[2].min(to[2])),
-            bucket(from[0].max(to[0]), from[2].max(to[2])),
-        );
-        let mut best: Option<(f32, [f32; 3])> = None;
-        let mut seen = std::collections::HashSet::new();
-        for bx in b0.0..=b1.0 {
-            for bz in b0.1..=b1.1 {
-                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    let t = &self.tris[id as usize];
-                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                    let p = cross(d, e2);
-                    let det = dot(e1, p);
-                    if det.abs() < 1e-9 {
-                        continue;
-                    }
-                    let inv = 1.0 / det;
-                    let s = sub(from, t[0]);
-                    let u = dot(s, p) * inv;
-                    if !(0.0..=1.0).contains(&u) {
-                        continue;
-                    }
-                    let q = cross(s, e1);
-                    let v = dot(d, q) * inv;
-                    if v < 0.0 || u + v > 1.0 {
-                        continue;
-                    }
-                    let k = dot(e2, q) * inv;
-                    if !(1e-4..=1.0).contains(&k) || best.is_some_and(|(bk, _)| bk <= k) {
-                        continue;
-                    }
-                    let n = cross(e1, e2);
-                    let len = dot(n, n).sqrt();
-                    let sign = if dot(n, d) > 0.0 { -1.0 } else { 1.0 } / len;
-                    best = Some((k, [n[0] * sign, n[1] * sign, n[2] * sign]));
-                }
-            }
-        }
-        best.map(|(k, normal)| ddsim::RayHit {
-            point: [from[0] + d[0] * k, from[1] + d[1] * k, from[2] + d[2] * k],
-            normal,
-        })
+        self.ray_with_material(from, to).map(|hit| hit.hit)
     }
 
     /// The triangles whose bounding boxes meet the box `lo`-`hi`.
@@ -506,6 +536,28 @@ mod tests {
         out.clear();
         t.triangles_in([100.0, 50.0, 100.0], [200.0, 60.0, 200.0], &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn material_rays_keep_the_nearest_record_and_unknown_material_is_explicit() {
+        let mut t = Terrain::empty();
+        let plane = |y| [[0.0, y, 0.0], [1000.0, y, 0.0], [0.0, y, 1000.0]];
+        let lower = [0x2000, 4, 3, 5, 7, 9, 11, 13];
+        let upper = [1, 8, 2, 4, 6, 8, 10, 12];
+        t.add_material(plane(0.0), lower);
+        t.add_material(plane(50.0), upper);
+        let from = [100.0, 100.0, 100.0];
+        let to = [100.0, -100.0, 100.0];
+        let first = t.ray_with_material(from, to).unwrap();
+        assert_eq!(first.material, Some(upper));
+        assert_eq!(t.ray(from, to), Some(first.hit));
+        assert_eq!(first.hit.point[1], 50.0);
+        assert_eq!(t.ray_with_material(to, from).unwrap().material, Some(lower));
+        t.add_flagged(plane(75.0), 0x2000);
+        assert_eq!(t.ray_with_material(from, to).unwrap().material, None);
+        let mut faces = Vec::new();
+        t.triangles_in([10.0, -1.0, 10.0], [20.0, 1.0, 20.0], &mut faces);
+        assert_eq!(faces[0].1, lower[0]);
     }
 
     #[test]

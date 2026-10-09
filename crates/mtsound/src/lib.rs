@@ -1,6 +1,8 @@
 //! Read-only SPAC v12, SREQ v19 and STRQ v27 memory images.
 //! No playback or interpretation of untraced mixing/loop metadata.
 use std::ops::Range;
+pub mod decode;
+pub mod motion;
 fn span(b: &[u8], o: usize, n: usize) -> Result<&[u8], String> {
     b.get(o..o.checked_add(n).ok_or("size overflow")?)
         .ok_or_else(|| format!("out of bounds: {o:#x}+{n:#x}/{}", b.len()))
@@ -63,6 +65,24 @@ pub struct Package<'a> {
     pub wave_metadata: &'a [u8],
 }
 impl<'a> Package<'a> {
+    /// Program/variation selection translated from 0x00e218e0 and the
+    /// relocation at 0x00e21600 (DDDA.exe 2017-12-13 Steam).
+    pub fn wave_for(&self, program: i16, variation: i16) -> Result<Option<&Wave<'a>>, String> {
+        let id = program as i32 as u32;
+        let Some(program) = self.programs.chunks_exact(20).find(|p| u32at(p, 0).ok() == Some(id)) else { return Ok(None); };
+        let Some(first) = self.wave_metadata.chunks_exact(44).position(|m| u32at(m, 0).ok() == Some(id)) else { return Ok(None); };
+        let count = count(program, 4)?;
+        let metadata = table(self.wave_metadata, first * 44, count, 44)?;
+        for row in metadata.chunks_exact(44) {
+            if u32at(row, 4)? as i32 == variation as i32 {
+                let index = u32at(row, 40)? as i32;
+                return if index < 0 { Ok(None) } else {
+                    self.waves.get(index as usize).map(|w| w.as_ref()).ok_or_else(|| "wave index outside package".into())
+                };
+            }
+        }
+        Ok(None)
+    }
     /// Translated from 0x00e21600 (DDDA.exe 2017-12-13 Steam).
     pub fn parse(b: &'a [u8]) -> Result<Self, String> {
         header(b, b"SPAC", 12, 32)?;
@@ -179,6 +199,25 @@ pub struct Requests<'a> {
     pub auxiliary: AuxTables<'a>,
 }
 impl<'a> Requests<'a> {
+    /// Resolve one ordinary play command. Stop/fade, random selection and
+    /// multi-request chains need a stateful mixer and are rejected here.
+    /// Translated from 0x00ddb340 / 0x00dda9f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn single_wave(&self, id: u16) -> Result<&Request<'a>, String> {
+        let request = self.request(id).ok_or("sound request absent")?;
+        if u32at(request.raw, 8)? != 1 {
+            return Err("sound request is not an ordinary play command".into());
+        }
+        let next = u16::from_le_bytes(request.raw[28..30].try_into().unwrap());
+        if next != u16::MAX && next != id {
+            return Err("sound request chain needs a stateful mixer".into());
+        }
+        if request.source.is_none() { return Err("sound request has no package".into()); }
+        Ok(request)
+    }
+    /// Translated from 0x00f73b90 (DDDA.exe 2017-12-13 Steam).
+    pub fn request(&self, id: u16) -> Option<&Request<'a>> {
+        self.requests.iter().find(|r| u16::from_le_bytes(r.raw[..2].try_into().unwrap()) == id)
+    }
     /// Translated from 0x00f735b0 (DDDA.exe 2017-12-13 Steam).
     pub fn parse(b: &'a [u8]) -> Result<Self, String> {
         header(b, b"SREQ", 19, 52)?;
@@ -217,6 +256,14 @@ impl<'a> Requests<'a> {
         })
     }
 }
+impl Request<'_> {
+    /// Base wave keys. Runtime overrides are deliberately not applied here.
+    /// Translated from 0x00dd3510/0x00dd8dd0 (DDDA.exe 2017-12-13 Steam).
+    pub fn wave_keys(&self) -> (i16, i16) {
+        (i16::from_le_bytes(self.raw[30..32].try_into().unwrap()),
+         i16::from_le_bytes(self.raw[32..34].try_into().unwrap()))
+    }
+}
 #[derive(Debug)]
 pub struct StreamSource<'a> {
     pub path: &'a str,
@@ -236,6 +283,39 @@ pub struct StreamRequests<'a> {
     pub auxiliary: AuxTables<'a>,
 }
 impl<'a> StreamRequests<'a> {
+    /// Translated from 0x00dc09b0 (DDDA.exe 2017-12-13 Steam):
+    /// the cue key is a u16, not the record's position or its full first word.
+    pub fn request(&self, id: u16) -> Option<&StreamRequest<'a>> {
+        self.requests
+            .iter()
+            .find(|r| u16::from_le_bytes(r.raw[..2].try_into().unwrap()) == id)
+    }
+
+    /// Resolve a direct play, or the event's prepare-then-start pair.
+    /// This intentionally rejects other command types and chained requests.
+    /// Translated from 0x00ddb4e0 (commands 1/5/10, 11), 0x00dca2f0
+    /// (start prepared), and uSoundStream 0x00c79d30/0x00c79fa0
+    /// (prepare ID precedes stream ID), DDDA.exe 2017-12-13 Steam.
+    pub fn event_source(&self, stream_id: u16, prepare_id: u16) -> Result<&StreamSource<'a>, String> {
+        let mut request = self.request(stream_id).ok_or("stream request absent")?;
+        if u32at(request.raw, 8)? == 11 {
+            request = self.request(prepare_id).ok_or("prepare request absent")?;
+            if u32at(request.raw, 8)? != 10 {
+                return Err("event prepare request is not prepare command 10".into());
+            }
+        } else if !matches!(u32at(request.raw, 8)?, 1 | 5) {
+            return Err("unsupported stream command".into());
+        }
+        let chain = u16::from_le_bytes(request.raw[36..38].try_into().unwrap());
+        if chain != u16::MAX {
+            return Err("chained stream request unsupported".into());
+        }
+        let source = request.source.ok_or("stream request has no source")?;
+        self.sources
+            .get(source)
+            .ok_or_else(|| "stream source absent".into())
+    }
+
     /// Translated from 0x00dc0ef0 (DDDA.exe 2017-12-13 Steam).
     pub fn parse(b: &'a [u8]) -> Result<Self, String> {
         header(b, b"STRQ", 27, 60)?;
@@ -413,6 +493,90 @@ mod tests {
         put(&mut bad, 52 + 132, 0);
         assert!(Requests::parse(&bad).is_err());
     }
+    #[test]
+    fn single_wave_rejects_control_random_and_chained_requests() {
+        let mut b = requests();
+        put(&mut b, 52, 17);
+        put(&mut b, 60, 1);
+        b[80..82].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_ok());
+        assert!(Requests::parse(&b).unwrap().single_wave(0).is_err());
+        b[80..82].copy_from_slice(&17_u16.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_ok());
+        b[80..82].copy_from_slice(&18_u16.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
+        b[80..82].copy_from_slice(&u16::MAX.to_le_bytes());
+        for command in [0, 2, 3, 4, u32::MAX] {
+            put(&mut b, 60, command);
+            assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
+        }
+        put(&mut b, 60, 1);
+        put(&mut b, 52 + 128, u32::MAX);
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
+    }
+    #[test]
+    fn package_program_and_variation_keys() {
+        let mut programs = vec![0; 20];
+        put(&mut programs, 0, 9); put(&mut programs, 4, 2);
+        let mut metadata = vec![0; 88];
+        put(&mut metadata, 0, 9); put(&mut metadata, 4, 7);
+        put(&mut metadata, 40, u32::MAX);
+        put(&mut metadata, 44, 9); put(&mut metadata, 48, 3);
+        put(&mut metadata, 84, 0);
+        let package = Package { programs: &programs, wave_metadata: &metadata,
+            waves: vec![Some(Wave { header: &[], samples: &[123], format_tag: 1,
+                channels: 1, sample_rate: 8000, bits_per_sample: 8, data_header_offset: 0 })] };
+        assert_eq!(package.wave_for(9, 3).unwrap().unwrap().samples, [123]);
+        assert!(package.wave_for(9, 7).unwrap().is_none());
+        assert!(package.wave_for(3, 9).unwrap().is_none());
+        let mut request = vec![0; 144];
+        request[30..32].copy_from_slice(&9_i16.to_le_bytes());
+        request[32..34].copy_from_slice(&3_i16.to_le_bytes());
+        let r = Request { raw: &request, source: Some("example"), section: None };
+        assert_eq!(r.wave_keys(), (9, 3));
+    }
+
+    #[test]
+    fn stream_keys_and_prepared_source() {
+        let mut raw = vec![0_u8; 156];
+        raw[..2].copy_from_slice(&203_u16.to_le_bytes());
+        raw[2..4].copy_from_slice(&0xcdcd_u16.to_le_bytes());
+        put(&mut raw, 8, 10);
+        put(&mut raw, 36, u32::MAX);
+        let mut start = vec![0_u8; 156];
+        start[..2].copy_from_slice(&3_u16.to_le_bytes());
+        put(&mut start, 8, 11);
+        let requests = StreamRequests {
+            requests: vec![
+                StreamRequest {
+                    raw: &raw,
+                    source: Some(0),
+                    section: None,
+                },
+                StreamRequest {
+                    raw: &start,
+                    source: None,
+                    section: None,
+                },
+            ],
+            sources: vec![StreamSource {
+                path: "example",
+                metadata: &[],
+            }],
+            random: None,
+            auxiliary: AuxTables {
+                sections: &[],
+                settings: &[],
+                speakers: &[],
+                values: &[],
+            },
+        };
+        assert_eq!(requests.event_source(3, 203).unwrap().path, "example");
+        assert!(requests.event_source(3, 0).is_err());
+        assert!(requests.event_source(203, 3).is_err());
+        assert!(requests.request(0).is_none());
+    }
+
     #[test]
     fn stream_links_and_bounds() {
         let mut b = vec![0; 244];
