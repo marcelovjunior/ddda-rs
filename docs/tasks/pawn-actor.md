@@ -131,6 +131,23 @@ weapon, leaving armour contributions at defaults. A saved-record constructor
 must supply the preserved base values and the sourced equipment aggregation;
 reusing the existing kit constructor would lose both saved growth and gear.
 
+Staff input lead: `cCmcMagicUserCombo::vf17` (`0x00557040`) initializes
+three remaining presses (+0x280) and zero submitted shots (+0x284).
+Its update (`0x005570d0`) has its own state machine, rather than the sword
+combo template. In state 2 it submits through `0x00536940` (owner input
+object +0x30), increments the shot count, decrements remaining presses,
+and uses a 90-frame wait between submissions. Subsequent submissions
+check the actual `cPlActWpnWandShot` action and its +0x84 shot count;
+time passing alone does not acknowledge a shot. `uCmc::vf200`
+(`0x00b537d0`) copies that input word to actor +0x32f0 before the common
+player pipeline. The alternate state 3 sets actor input mask 0x810000;
+its selection predicate and exact command meaning still need tracing.
+Final state 4 waits for actor +0x2650 == 0 and cancel slot +0x25a4 == 2
+before returning completion. Aim updater `0x005575e0` writes the target
+at +0x2fa0 with stage-coordinate conversion. A Mage adapter therefore
+needs shot-count, action, cancel-slot and target observations; replacing
+the weapon goal number in the sword-only driver is insufficient.
+
 Next: bind these active values to the existing combat representation, then
 trace the Mage virtual-pad decisions and motion/resource selection. Record
 recruitment/prologue setup already exist; body/stat/inventory conversion and
