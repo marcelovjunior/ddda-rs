@@ -33,6 +33,22 @@ pub struct Playback {
     pub joints: HashMap<u8, Entity>,
     /// Fixed frame to hold (screenshots); `None` plays in a loop.
     pub hold_frame: Option<f32>,
+    /// Set with `motion` when the motion changes: interpolation frames of
+    /// the change. `animate` freezes the shown pose and fades it out over
+    /// the new motion (`mtlmt::blend`, docs/ANIMATION.md).
+    pub blend_request: Option<f32>,
+    /// The fade in progress: the frozen local pose (rotation, translation,
+    /// scale) by joint entity.
+    pub blend: Option<(mtlmt::blend::Interpolation, Vec<(Entity, Quat, Vec3, Vec3)>)>,
+}
+
+impl Playback {
+    /// Shows `motion` from now on, blending from the current pose over
+    /// `frames` motion frames (0 snaps).
+    pub fn change_motion(&mut self, motion: mtlmt::Motion, frames: f32) {
+        self.motion = motion;
+        self.blend_request = Some(frames);
+    }
 }
 
 /// Spawns `model_path` with its skeleton at `translation` (viewer units),
@@ -220,13 +236,38 @@ pub fn spawn(
         motion,
         joints: joints_by_id,
         hold_frame,
+        blend_request: None,
+        blend: None,
     });
     Ok(root)
 }
 
-/// Samples each playing motion and writes its joints' local transforms.
-pub fn animate(time: Res<Time>, players: Query<&Playback>, mut joints: Query<&mut Transform>) {
-    for p in &players {
+/// Samples each playing motion and writes its joints' local transforms,
+/// then mixes in the pose frozen at the last motion change while its fade
+/// lasts (`mtlmt::blend`).
+pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Query<&mut Transform>) {
+    // the model's frame step in motion frames (the same clamp as play::step)
+    let step = time.delta_secs().min(0.1) * MOTION_FPS;
+    for mut p in &mut players {
+        if let Some(frames) = p.blend_request.take() {
+            // freeze the pose shown now (itself possibly mid-blend)
+            p.blend = mtlmt::blend::Interpolation::start(frames).map(|b| {
+                let pose = p
+                    .joints
+                    .values()
+                    .filter_map(|&e| {
+                        let t = joints.get(e).ok()?;
+                        Some((e, t.rotation, t.translation, t.scale))
+                    })
+                    .collect();
+                (b, pose)
+            });
+        }
+        if let Some((b, _)) = &mut p.blend {
+            if !b.advance(step) {
+                p.blend = None;
+            }
+        }
         let n = p.motion.frame_count.max(1) as f32;
         let frame = p.hold_frame.unwrap_or((time.elapsed_secs() * MOTION_FPS) % n);
         for t in &p.motion.tracks {
@@ -243,6 +284,15 @@ pub fn animate(time: Res<Time>, players: Query<&Playback>, mut joints: Query<&mu
                 mtlmt::Usage::LocalPosition => tr.translation = Vec3::new(v[0], v[1], v[2]),
                 mtlmt::Usage::LocalScale => tr.scale = Vec3::new(v[0], v[1], v[2]),
                 _ => {}
+            }
+        }
+        if let Some((b, pose)) = &p.blend {
+            use mtlmt::blend::{mix_rotation, mix_vector};
+            for &(e, r, t, s) in pose {
+                let Ok(mut tr) = joints.get_mut(e) else { continue };
+                tr.rotation = Quat::from_array(mix_rotation(tr.rotation.to_array(), r.to_array(), b.weight));
+                tr.translation = Vec3::from(mix_vector(tr.translation.to_array(), t.to_array(), b.weight));
+                tr.scale = Vec3::from(mix_vector(tr.scale.to_array(), s.to_array(), b.weight));
             }
         }
     }

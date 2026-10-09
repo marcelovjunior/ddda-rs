@@ -49,8 +49,96 @@ Topic findings for M2 (an Arisen that walks). Private evidence:
   alternating legs and counter-swinging arms at frames 0, 10, 19 and 29.
   **Not yet compared with the original game.**
 
+## Motion requests and blending (traced 2026-10-09, static analysis)
+
+Addresses are DDDA.exe 2017-12-13 Steam. Not yet compared with the
+running game.
+
+**The request.** Player actions call uPlayer vf+0x90 =
+`uPlayerBase::vf36` (0x00B800C0) with `(motion, force restart, flags,
+interpolation frames, start frame, rate)`. It forwards to
+`uObjModel::vf36` (0x00886E70), which restarts layer 0 only when the motion
+differs or force restart is set, through `0x00828350` to `uModel::vf30`
+(0x0105B480): `(layer, motion, interpolation frames, start frame, rate,
+flags)`. Layers are `uModel::Motion` objects, 0x140 bytes from uModel
++0x380 (count at +0x374). Layer 0 fields used here: +0x384 motion id,
++0x3C0 interpolation total, +0x3C4 remaining, +0x3CC frame, +0x3D4 last
+frame (frame count - 1), +0x3DC rate, +0x3E0 frozen-pose weight,
++0x3EC/+0x3F0 ease curve.
+
+**Default interpolation frames.** A negative length (every player action
+`ddsim` models passes -1.0, except `cPlCliffHang::vf05` 0x00ADCC50, which
+passes 0) is replaced by `rAdjustParam::vf15(motion & 0xFF)` on the table
+at uPlayer +0x3398 + 8 × bank. Those tables are loaded (`0x00B7FF30`) from
+the bank tables at 0x014F1D30 (common) and 0x0163DF8C (per weapon): each
+entry is `(bank << 8, path)`, and the path is loaded both as `rMotionList`
+and as `rAdjustParam`. So each player motion list has an `rAdjustParam`
+twin at the same path: 20 of the install's 1,032 motion-list paths have
+one (19 player banks and `e5600_at`), all with 256 floats.
+`m0000_co`: idle 8; walk, run, sprint, sprint start, fall, ledge 5; jump
+takeoff 3, airborne 0, landing 2; sprint-jump takeoff 3, airborne 0. The
+dagger set `m0004_co` slot 17 (second jump) is 5.
+
+**What the engine does with them.**
+1. `uModel::vf30` stores the length as total and remaining and sets the
+   frozen-pose weight to 1.0. On a layer with no motion yet it stores 0
+   (no blend). The new motion starts at the start frame at once.
+2. When the layer's motion changed (`0x01061DD0`), each joint's current
+   local pose (rotation, translation, scale) is copied into a per-joint
+   buffer (uModel +0xDD0), if the total is above `f32::EPSILON`. The old
+   motion does not keep playing: the blend source is this frozen pose,
+   which may itself be mid-blend.
+3. Every update (`0x01060730`): remaining -= the model's frame step
+   (uModel +0x14). The layer's rate does not apply to this. While remaining
+   > 0 the weight is `ease(curve, remaining / total)`. At 0 the weight is 0
+   and the blend ends. The frame advances by rate × step.
+4. `ease` (0x00D4EBF0) is a cubic Bezier from 0 to 1 with inner control
+   values (p0, p1). Each layer's curve is copied (0x01056EC0) from the
+   global 0x018D06A0. That global is in zero-initialised data and nothing
+   writes it (all four references read it), so p0 = p1 = 0 and the weight
+   is t³. Other curves of this form in the exe: (0, 1) smoothstep at
+   0x0162ACC0, (1/3, 2/3) linear at 0x0162ACC8.
+5. Per joint (`0x01058A70`): rotation = normalise(lerp(motion, frozen,
+   weight)), with the frozen quaternion negated when their dot product is
+   negative. Translation and scale are lerped the same way.
+
+**Start frames** (not presentation, so not done in the viewer; handed to
+the `ddsim` owner). `cPlActWalk::vf05` / `cPlActRun::vf05` call
+`0x00B80260(motion, start frame)`. If the motion shown is in the
+locomotion list at 0x018763D0 (3, 4, 0x54, 0x55, 0x603, 0x604, 0x654,
+0x655), the new motion starts at the same phase:
+trunc((rate × step + frame) × new last / old last), wrapped once.
+Otherwise it starts at 18 or 0 (field walk), 0 or 17 (town walk), or 20
+or 0 (run). `0x00AC5FB0` picks one by comparing two joints (probably the
+feet) along the facing.
+
+**Playback rate** (layer +0x3DC). Every request above passes rate 1.0.
+`cPlActWalk::vf06` (0x00ACA1F0) then sets it to uPlayer +0x333C when
+uPlayer +0x32C0 == 1, else 1.0. `cPlActRun::vf06` (0x00ACA5D0) sets it to
+uPlayer +0x3340. The sprint actions never write it. No instruction stores
+to +0x333C / +0x3340 by a direct offset, so the value's source is not
+traced. `m_pl000_00` ids 0x1E4 / 0x1E5 hold 1.15 (0x1E0-0x1E3: 1.05, 1.1),
+which fits the measured 1.15, but no reader of those ids was found. The
+sprint's recorded 34.5 frames/s conflicts with the exe's rate of 1.0 for
+sprint. That is an open question.
+
+**In the viewer** (`ddview --play` / `--demo`): `mtlmt::blend` holds the
+translated rules (`ease`, `Interpolation`, `mix_rotation`, `mix_vector`,
+`default_frames`; unit-tested). `play.rs` loads each bank's twin table and,
+when a player's shown motion changes, calls `Playback::change_motion` with
+the motion's default frames: 0 for the ledge hang, and no blend for the
+first motion. `character::animate` freezes the joints' local transforms,
+advances the fade by the frame time × 30, and mixes after sampling.
+
 ## Assumptions and gaps
 
+- The blend curve parameters (0, 0) come from static analysis (no writer
+  found). Check on the running game: uModel layer 0 +0x3EC / +0x3F0.
+- Within one update, the original's order of request, freeze, step and mix
+  is not traced. The viewer freezes, steps, samples, then mixes, so the
+  first frame after a change is already partly blended.
+- The original freezes only joints that pass per-joint flag tests (joint
+  +0x90 & 0x41, the new motion's track mask). The viewer freezes every joint.
 - Motion frame rate taken as 30 fps; interpolation is nlerp. Neither traced.
 - Bevy skins with four influences; eight-weight layouts keep the four largest.
 - Root track (joint 255) and absolute-space tracks are not applied.
