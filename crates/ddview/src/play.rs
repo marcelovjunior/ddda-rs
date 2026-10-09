@@ -703,6 +703,8 @@ pub fn hud_rows(
 pub struct HudFill(usize);
 #[derive(Component)]
 pub struct HudText(usize);
+#[derive(Component)]
+pub struct HudBack(usize);
 
 /// The HUD: a viewer overlay, not the game's GUI (`mtgui` formats are not
 /// drawn yet). Labelled so on screen.
@@ -727,7 +729,8 @@ pub fn spawn_hud(commands: &mut Commands) {
                     .with_children(|r| {
                         r.spawn((
                             Node { width: Val::Px(200.0), height: Val::Px(12.0), ..default() },
-                            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                            BackgroundColor(Color::NONE),
+                            HudBack(i),
                         ))
                         .with_children(|b| {
                             b.spawn((
@@ -747,7 +750,12 @@ pub fn update_hud(
     hud: Res<Hud>,
     mut fills: Query<(&HudFill, &mut Node, &mut BackgroundColor)>,
     mut texts: Query<(&HudText, &mut Text)>,
+    mut backs: Query<(&HudBack, &mut BackgroundColor), Without<HudFill>>,
 ) {
+    for (b, mut bg) in &mut backs {
+        let on = hud.rows.get(b.0).is_some_and(|r| r.2 > 1.0);
+        *bg = BackgroundColor(if on { Color::srgba(0.0, 0.0, 0.0, 0.55) } else { Color::NONE });
+    }
     for (f, mut node, mut bg) in &mut fills {
         match hud.rows.get(f.0) {
             Some((_, v, max, c)) => {
