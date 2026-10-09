@@ -3,6 +3,7 @@
 //! asserted unless documented in docs/ENEMIES.md.
 
 mod region;
+pub mod resources;
 use mtxfs::{Object, Value, Xfs};
 pub use region::{Region, RegionElement, RegionStatus};
 use std::collections::BTreeMap;
