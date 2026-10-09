@@ -617,3 +617,11 @@ selected-action tests, not think-driven fights. Wolf death requests0x2ff
 path is unresolved and remains unsupported rather than inventing a clip.
 Harpy corpse removal, status-time integration, target sensing and Fight/
 viewer dispatch also remain host work.
+
+Selected-action coverage now also includes the normal uninterrupted wolf
+howl (0x009026a0/0x009027c0) and AttackRun (0x008fe110/0x008fe160).
+The latter loads range and turning rate from param/em0200 rows0/1, then
+raises the next-think attack flag only inside the strict squared-distance
+and 60-degree cone gate. Its done byte permits next-frame thinking. Tests
+cover exact range equality and rear rejection using installed parameters.
+Pack broadcasts and interrupted howl still require host integration.

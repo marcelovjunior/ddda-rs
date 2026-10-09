@@ -55,6 +55,8 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
     let image = exe.image().unwrap();
     for (family, class) in [
         (Family::Wolf, "cEm0200Bite"),
+        (Family::Wolf, "cEm0200Howling"),
+        (Family::Wolf, "cEm0200AttackRun"),
         (Family::Harpy, "cEm0600ActGroundToHover"),
         (Family::Harpy, "cEm0600ActDie"),
     ] {
@@ -101,5 +103,19 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
             (motions, actor.pos, actor.yaw, actor.frame, attack_frames)
         };
         assert_eq!(run(), run(), "{class} nondeterministic");
+        if class == "cEm0200AttackRun" {
+            let param = data.wolf.unwrap();
+            for (target, expected) in [
+                ([0.0, 0.0, param.attack_range - 1.0], true),
+                ([0.0, 0.0, param.attack_range], false),
+                ([0.0, 0.0, -param.attack_range + 1.0], false),
+            ] {
+                let mut actor = Beast::new(&data, 310, [0.0; 3], 0.0);
+                actor.start_action(&data, id).unwrap();
+                actor.step_action(&data, Some(target), &Flat, 0.5);
+                assert_eq!(actor.attack_ready, expected);
+                assert!(actor.done); // permits think on the very next frame
+            }
+        }
     }
 }

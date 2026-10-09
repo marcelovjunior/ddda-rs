@@ -15,6 +15,13 @@ pub struct BeastData {
     pub defender: EnemyDefender,
     pub regions: Vec<RegionPool>,
     pub obj_size: u32,
+    pub wolf: Option<WolfParams>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WolfParams {
+    pub attack_range: f32,
+    pub turn_rate: f32,
 }
 
 impl BeastData {
@@ -37,6 +44,20 @@ impl BeastData {
         // body and attacks, unlike em0100's separate _00 attack resource.
         let collision = vec![load::collision(vfs, &collision_path, None)?];
         let stats = crate::enemy_stats::load(vfs, id)?;
+        let wolf = if family == Family::Wolf {
+            // uEm0200::vf33 0x008f7b80: rows0/1 -> +6090/+609c.
+            let bytes = load::read(vfs, r"param\em0200", "rAdjustParam")?;
+            let p = ddenemy::AdjustParam::parse(&bytes)?;
+            if p.values.len() < 2 {
+                return Err("wolf adjust missing steering/range".into());
+            }
+            Some(WolfParams {
+                attack_range: p.values[0],
+                turn_rate: p.values[1] * 0.017_453_292,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             family,
             // Standard em0200/em0600 actor scale is not yet compared live.
@@ -52,6 +73,7 @@ impl BeastData {
             defender: stats.defender,
             regions: stats.regions,
             obj_size: stats.obj_size,
+            wolf,
         })
     }
 }
@@ -69,6 +91,9 @@ pub struct Beast {
     pub motion_ended: bool,
     pub done: bool,
     pub movement_flags: u32,
+    /// Wolf +602e, raised by AttackRun when its captured target enters the
+    /// sourced distance/cone gate; consumed by the next unit think.
+    pub attack_ready: bool,
     pub fighter: crate::combat::Fighter,
     phase: ActionPhase,
 }
@@ -77,6 +102,8 @@ pub struct Beast {
 enum ActionPhase {
     None,
     Bite(WolfBite),
+    AttackRun,
+    Howl,
     Takeoff(HarpyTakeoff),
     GroundDeath,
 }
@@ -93,6 +120,7 @@ impl Beast {
             motion_ended: false,
             done: true,
             movement_flags: 0,
+            attack_ready: false,
             phase: ActionPhase::None,
             fighter: Fighter {
                 owner,
@@ -121,6 +149,9 @@ impl Beast {
             (Family::Wolf, "cEm0200Bite", _) => {
                 (ActionPhase::Bite(WolfBite::Windup), WolfBite::Windup.motion())
             }
+            // 0x008fe110 / 0x009026a0; standard uninterrupted howl.
+            (Family::Wolf, "cEm0200AttackRun", _) => (ActionPhase::AttackRun, MotionId::new(0, 0x24)),
+            (Family::Wolf, "cEm0200Howling", _) => (ActionPhase::Howl, MotionId::new(0, 0x64)),
             (Family::Harpy, "cEm0600ActGroundToHover", _) => (
                 ActionPhase::Takeoff(HarpyTakeoff::TakingOff),
                 HarpyTakeoff::initial_motion(),
@@ -174,6 +205,27 @@ impl Beast {
                         next = Some((bite.motion(), 0.0));
                     }
                 }
+            }
+            ActionPhase::AttackRun => {
+                // 0x008fe160; phase91 later uses +609c through7975d0.
+                if let (Some(target), Some(param)) = (target, data.wolf) {
+                    let goal = (target[0] - self.pos[0]).atan2(target[2] - self.pos[2]);
+                    // Cone gate precedes the phase91 angle-controller update.
+                    self.attack_ready |= ddai::thinktbl::families::wolf_target_in_cone(
+                        Some(self.pos),
+                        target,
+                        self.yaw,
+                        f32::from_bits(0x3f860a92),
+                    ) && distance(self.pos, target).powi(2)
+                        < param.attack_range * param.attack_range;
+                    self.yaw = wolf_turn(self.yaw, goal, param.turn_rate, dt);
+                }
+                self.done = true;
+            }
+            ActionPhase::Howl => {
+                // 0x009027c0. Pack sensor broadcast/forced interruption are
+                // not in this selected-action runner; the think host owns them.
+                self.done = self.motion_ended;
             }
             ActionPhase::Takeoff(takeoff) => {
                 let result = takeoff.step(self.frame, self.motion_ended);
