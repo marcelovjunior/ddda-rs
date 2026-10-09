@@ -130,7 +130,18 @@ each with a goal, scope and "done when". Write the brief file on a
 
 ## Hard rules (from AGENTS.md; breaking them is never worth it)
 
-- The game install is read-only. Never write to the game process.
+- The game install (files on disk) is read-only.
+- **Controlling the running game is allowed** (maintainer, 2026-10-09):
+  scripts, the in-process oracle (`docs/ORACLE.md`) or Cheat Engine, for
+  task-relevant checks. One agent drives the game at a time: claim
+  `live/game` on the board. Safety rules:
+  - copy the save folder to `E:\ddda-re\save-backups\<time>` before
+    anything that changes game state;
+  - never write the save (inn, save points, the save menu);
+  - teleport only a few metres within the current cell (a cross-cell
+    teleport killed the Arisen once);
+  - the pause menu (Esc) is the safe state when a fight goes wrong;
+  - no computer-use or native UI automation tools.
 - Never commit game files, decompiler output, `E:\ddda-re` contents or
   recordings.
 - Ghidra MCP: read endpoints only. No renames, comments, delete, import
