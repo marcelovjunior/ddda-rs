@@ -2279,6 +2279,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddparam"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddsim"
 version = "0.1.0"
 dependencies = [
@@ -2289,6 +2298,7 @@ dependencies = [
 name = "ddtool"
 version = "0.1.0"
 dependencies = [
+ "ddparam",
  "ddvfs",
  "mtarc",
  "mtgmd",
