@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod clock;
 mod intro;
 mod charaedit;
 mod movie;
@@ -116,6 +117,9 @@ struct Args {
     charaedit: Option<u8>,
     /// `--skip-intro`: `--opening` starts at Cassardis (no movie, no editor).
     skip_intro: bool,
+    /// The lighting was built from the data at `clock_ms` (not a capture),
+    /// so the clock may advance it (clock.rs).
+    light_from_data: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -166,6 +170,7 @@ fn args() -> Args {
         movie: None,
         charaedit: None,
         skip_intro: false,
+        light_from_data: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -495,6 +500,7 @@ fn resolve_lighting(args: &mut Args) {
     l.clock_ms = Some(clock);
     l.spot = spot(&sky, player);
     args.light = Some(l);
+    args.light_from_data = true;
 }
 
 /// `CameraFov` from the player's own game settings
@@ -599,7 +605,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();
@@ -918,6 +924,12 @@ fn setup(
         }
     }
     spawn_camera_and_light(&mut commands, &args, post);
+    // The clock advances in play when the lighting comes from the data.
+    if args.play && args.light_from_data {
+        if let Some(ms) = args.clock_ms {
+            commands.insert_resource(clock::GameClock::new(vfs, args.stage, args.weather.unwrap_or(0), ms));
+        }
+    }
     // Field streaming: offline --play on stage 100 (the grid descriptor is
     // read from the installed exe).
     if args.play && args.stage == 100 && args.host.is_none() && args.join.is_none() {

@@ -177,6 +177,16 @@ pub struct SkyFollow;
 pub struct EnvCubeColors(pub [Vec3; 5]);
 
 impl DdParams {
+    /// The parameters relit by `l`: only materials drawn with the game's
+    /// lighting change (the clock's relighting, clock.rs).
+    pub(crate) fn relit(self, l: &StageLighting) -> Self {
+        if self.flags & FLAG_DD_LIGHTING != 0 {
+            self.with_lighting(l)
+        } else {
+            self
+        }
+    }
+
     fn with_lighting(mut self, l: &StageLighting) -> Self {
         if !l.enabled {
             return self;
