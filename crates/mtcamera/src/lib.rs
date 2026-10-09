@@ -14,6 +14,19 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 type Result<T> = std::result::Result<T, Error>;
 
+/// uCamera constructor defaults, in game centimetres.
+// Translated from 0x01128740 (DDDA.exe 2017-12-13 Steam).
+pub const DEFAULT_NEAR_CM: f32 = 16.0;
+pub const DEFAULT_FAR_CM: f32 = 4_000_000.0;
+
+/// Motion cameras use their authored zoom, not uCameraBase's gameplay
+/// CameraFov setting. `aspect` is the viewport width / height.
+// Translated from 0x00faa920 (DDDA.exe 2017-12-13 Steam).
+pub fn vertical_fov_radians(fov_degrees: f32, zoom_degrees: f32, fov_type: u32, aspect: f32) -> f32 {
+    let fov = (fov_degrees + zoom_degrees).clamp(0.01, 179.99).to_radians();
+    if fov_type == 0 { fov } else { 2.0 * ((fov * 0.5).tan() / aspect).atan() }
+}
+
 fn span(b: &[u8], offset: usize, count: usize, stride: usize) -> Result<&[u8]> {
     let end = count
         .checked_mul(stride)

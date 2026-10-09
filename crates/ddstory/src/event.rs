@@ -234,6 +234,8 @@ pub struct CameraAdjust {
     pub weight: f32,
 }
 
+pub use mtcamera::{vertical_fov_radians, DEFAULT_FAR_CM, DEFAULT_NEAR_CM};
+
 /// The event camera (`uOfsMotionCamera`) this frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraView {
@@ -248,6 +250,10 @@ pub struct CameraView {
     /// the actors' skeletons; 0x007ecc30 / 0x007ed220).
     pub pose: Option<mtcamera::Pose>,
     pub fov_type: u32,
+    /// Authored projection fields; constructor defaults when not keyed.
+    pub near_cm: f32,
+    pub far_cm: f32,
+    pub zoom_degrees: f32,
     /// `uMotionCamera.mOffsetPos` (+0x70). No reader of it was found in
     /// the per-frame camera path (uMotionCamera::vf08 0x00fab460,
     /// uOfsMotionCamera::vf08 0x007eb9b0 / vf09 0x007ebba0, uCamera::vf09
@@ -574,6 +580,11 @@ impl EventPlayer {
             frame,
             pose,
             fov_type,
+            // uOfsMotionCamera -> uMotionCamera -> uCamera constructors:
+            // 0x007eaf20 -> 0x00fa9830 -> 0x01128740 (2017 Steam).
+            near_cm: m.float(&format!("{name}.mNearPlane")).unwrap_or(mtcamera::DEFAULT_NEAR_CM),
+            far_cm: m.float(&format!("{name}.mFarPlane")).unwrap_or(mtcamera::DEFAULT_FAR_CM),
+            zoom_degrees: m.float(&format!("{name}.mZoom")).unwrap_or(0.0),
             offset_pos: m.vec4(&format!("{name}.mOffsetPos")),
             option: m.int(&format!("{name}.mOption")).unwrap_or(0),
             adjust,
@@ -693,6 +704,9 @@ mod tests {
             frame: 0.0,
             pose: Some(pose),
             fov_type: 0,
+            near_cm: mtcamera::DEFAULT_NEAR_CM,
+            far_cm: mtcamera::DEFAULT_FAR_CM,
+            zoom_degrees: 0.0,
             offset_pos: None,
             option: 0,
             adjust: vec![adj(2, 0.0), adj(1, 0.8)],

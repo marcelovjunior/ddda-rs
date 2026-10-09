@@ -291,7 +291,10 @@ fn setup(
     let cam = commands
         .spawn((
             Camera3d::default(),
-            Projection::Perspective(PerspectiveProjection { fov: 30f32.to_radians(), near: 0.05, far: 2000.0, ..default() }),
+            Projection::Perspective(PerspectiveProjection {
+                fov: 30f32.to_radians(), near: ddstory::event::DEFAULT_NEAR_CM * UNIT,
+                far: ddstory::event::DEFAULT_FAR_CM * UNIT, ..default()
+            }),
             Transform::default(),
             EventCam,
         ))
@@ -602,7 +605,7 @@ fn setup_lineup(
     ));
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection { fov: 35f32.to_radians(), near: 0.05, far: 100.0, ..default() }),
+        Projection::Perspective(PerspectiveProjection { fov: 35f32.to_radians(), near: ddstory::event::DEFAULT_NEAR_CM * UNIT, far: 100.0, ..default() }),
         Transform::from_xyz(0.0, 1.1, 4.2).looking_at(Vec3::new(0.0, 0.95, 0.0), Vec3::Y),
     ));
 }
@@ -696,13 +699,13 @@ pub fn apply_camera(f: &EventFrame, aspect: f32, t: &mut Transform, proj: &mut P
             let eye = Vec3::from(p.position) * UNIT;
             let target = Vec3::from(p.target) * UNIT;
             *t = Transform::from_translation(eye).looking_at(target, Vec3::from(p.up));
-            let mut fov = p.fov_degrees.clamp(0.01, 179.99).to_radians();
-            // FOV type 1 is horizontal (uMotionCamera::vf21 0x00faa920).
-            if c.fov_type != 0 {
-                fov = 2.0 * ((fov * 0.5).tan() / aspect).atan();
-            }
+            // This class uses mZoom, not uCameraBase's CameraFov option.
+            // Its vtable slot 21 points to uMotionCamera::vf21 0x00faa920.
+            let fov = ddstory::event::vertical_fov_radians(p.fov_degrees, c.zoom_degrees, c.fov_type, aspect);
             if let Projection::Perspective(pp) = proj {
                 pp.fov = fov;
+                pp.near = c.near_cm * UNIT;
+                pp.far = c.far_cm * UNIT;
             }
         }
     }
