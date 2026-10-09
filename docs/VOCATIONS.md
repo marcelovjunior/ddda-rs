@@ -737,17 +737,22 @@ Stats after 199 level-ups in one vocation (data, computed):
 - Slot 0, the Arisen: 0x00782d10 (below).
 - Slot 1, the main pawn: share plus a catch-up term
   `(total_arisen - total_pawn) * k * 0.01`, totals = cumulative exp of the
-  level plus `mExp`, `k` from the parameter object at sGameSys+0xb8754
-  (index 0, value unresolved), floored at 0.
+  level plus `mExp`, `k` = `param\game` value 0 = **0.7** (sGameSys+0xb8754
+  is the `rAdjustParam` `param\game`, loaded by 0x00444740; read through
+  `rAdjustParam::vf15` 0x00ca47d0, which indexes without a bound check),
+  floored at 0. All in SSE single precision, then truncated.
 - Slots 2, 3, support pawns: no experience; `trunc(share * 0.1)` is added to
   their +0x34c (`OnlinePoint`, rift crystals for the owner; claude-5).
 
 0x00782d10 (`ddskill::growth::award_exp`): `mExp += trunc(exp * w)`, `w` =
 augment 93 value (named Weal, 1.15 / 1.0; augment 93 is not in rSkillList,
 see below). Discipline `dp = discipline_from_exp(that)` (0x00782f30), times
-two equipment factors (item 0x361 in slot +0x3e4, item 0x47f in slots
-+0x3f4 / +0x3f8; factors from the object at sGameSys+0xb875c, indices 7 and
-0x1c, unresolved), added to both `mJobExp[mJob]` (+0x2f4) and `mJobPoint`
+two equipment factors: item 0x361 (Asura Armor, "boosts the amount of
+discipline earned") in slot +0x3e4 multiplies by `param\dlc` value 7 =
+**2**, and item 0x47f (Ring of Perseverance) in each of the slots +0x3f4
+and +0x3f8 by value 0x1c = **1.5** (sGameSys+0xb875c is the
+`rAdjustParam` `param\dlc`, loaded by 0x004447c0; item names from
+`itemName_eng` 865 and 1151, which match their descriptions), added to both `mJobExp[mJob]` (+0x2f4) and `mJobPoint`
 (+0x344, cap 999,999). `mExp` is capped at 1e9. For one record class
 (DAT_0199315c) the award needs +0x7f4 == 1 (unresolved).
 
@@ -864,6 +869,69 @@ outside Mage and Sorcerer.
 
 `cargo test -p ddskill`: 16 unit + 9 install tests pass; clippy clean.
 
+## Progression runtime (`crates/ddprogress`)
+
+Host-owned, N-player progression on top of `ddskill` (brief progression).
+
+- `Tables::load(vfs, exe)`: every vocation's `rPlLevel` and `rPlJobLevel`,
+  `rPlExp`, `rPlAbilityParam`, `rSkillList`, the exe's skill records,
+  `param\game` and `param\dlc`.
+- `Character`: one `cPlayerInfo`'s progression (vocation, level and stats,
+  discipline and ranks, learn bits, six augments, per-weapon skill sets,
+  six active skills, Rift Crystals, paid vocations, change counter,
+  discipline gear). New characters start at level 1 with row 1 of their
+  vocation, rank 1 in every vocation (the live save shows rank 1 for
+  unused vocations) and the cost-0 rank-0 skills known (how the save
+  marks those is not traced). `award` is 0x00782d10 (Weal and gear
+  included); `step` is one frame of vf90: at most one level-up, then at
+  most one rank-up.
+- `augment_value` (0x00783340): for the ids in its jump table, equipped ->
+  `mFVal0`, else `mFVal1`; id 10 gives -1 / 0; others nothing.
+- `learn::check` / `learn`: the skill screen's filters (0x006fd540,
+  0x006fdb40, 0x006fdc30) and its confirm check 0x00702b94 (rank met,
+  cost <= discipline, not yet known); learning sets the bit
+  (0x00780c90 / +0x7dc) and subtracts the cost (0x006fc758). The screen's
+  weapon tabs (0x01516738 via 0x01516bd8) cover exactly the weapons of
+  the vocation's skill-set list (0x0163e784) for all nine vocations, so
+  the list stands in for the tabs.
+- `learn::equip_augment`, `equip_skill`, `active_skills`: learned only;
+  weapon skills only in their weapon's set and for the current vocation;
+  three slots per weapon, six for staves in a Mage's or Sorcerer's hands.
+  Two points are **guessed**: refusing the same augment twice, and filling
+  the active slots from the per-weapon sets when weapons change (only the
+  layout that 0x00780590 enforces is traced).
+- `change::check` / `change`: offered list (0x00675780), selectable when not
+  current and the cost is affordable (0x00675e8a), cost and flags
+  (0x00671b70, 0x00672c10), apply (0x00675da0, 0x00673740, 0x00780840:
+  active slots emptied, foreign skills and extra staff slots dropped from
+  the new vocation's weapon sets; other weapons' sets untouched), counter
+  (0x0044b7a0), starting items on the first choice.
+- `Progression::award` (0x00443470 / 0x004437d0) and `step`.
+
+**Co-op adaptations (design, not from the exe):**
+- Party roles decide the award path instead of slot numbers: `Arisen(p)`,
+  `MainPawn { owner }`, `Support { owner }`. P2's Arisen sits in slot 3
+  (COOP_DESIGN.md) and earns experience like slot 0; the level share still
+  runs over all four slots. The main pawn catches up toward its owner's
+  Arisen. With one player and the main pawn in slots 0 and 1 the result is
+  the original's.
+- Vocation flags 540..554 are kept per character (`Character::paid`); in
+  the original they are global GSF bits of the single save.
+  `sync_to_world` / `sync_from_world` mirror player 0's Arisen and the main
+  pawn into `ddstory::World` (`gsf`, `player_job`).
+- Support pawns' Rift Crystals accumulate on the pawn's record (+0x34c);
+  crediting the owner is the host's job (Rift code, not traced here).
+
+Tests (`cargo test -p ddprogress`, install tests skip without the game or
+exe): a Fighter from level 1 to 10 one level per step, a change to Warrior
+at 10 (level gate, cost 1000, discipline check, flags, carry-over) and
+level 11 with the Warrior's row; learning (costs, ranks, level order,
+vocation and unlock refusals, rank-up from discipline experience) and
+equipping; a change to Mystic Knight keeping the shared sword skills; the
+first choice's free change and items; pawn vocation limits; two players,
+the main pawn and a hired pawn sharing one award; the single-player layout
+and the World mirror; the live level-7 Mage values (#722).
+
 ## Open questions
 
 1. Not yet compared live: level-up order within a frame, party shares,
@@ -873,8 +941,7 @@ outside Mage and Sorcerer.
    or purchase sets them (claude-7 events, claude-6 shops).
 3. Items that grant level-3 skills (item flag bit 29, skill ids at +8 / +10)
    and the item ids 0x361 / 0x47f that scale discipline (claude-6).
-4. Parameter objects at sGameSys+0xb8754 (pawn catch-up `k`) and +0xb875c
-   (item factors): resource and values.
+4. Resolved: `param\game` and `param\dlc` (see Experience awards).
 5. Inside each action class, which motion of its list plays when (the
    classes' vf05/vf06, ANIMATION.md request path), and what core-skill
    record word 0 means. claude-8.
@@ -886,15 +953,11 @@ outside Mage and Sorcerer.
 
 ## Proposed implementation briefs
 
-1. **Character progression in the sim** (core, `ddsim` owner): per-player
-   `Progress` + `Discipline` components using `ddskill::growth`; level and
-   rank checks once per simulation step in update order after stamina, as
-   in vf90; host-authoritative award distribution with `party_share`.
-   Done when a scripted award sequence matches the oracle's values.
+1. **Character progression**: done (`ddprogress`, brief progression).
+   Next: the sim calls `Progression::step` once per frame after stamina,
+   and enemy deaths call `award` (combat side).
 2. **Skill catalogue**: done (`ddskill::catalogue`, brief skill-catalogue).
-3. **Learn and change screens** (core rules, no GUI): `learn(skill)`,
-   `equip_augment`, `change_vocation` implementing the visibility, cost,
-   flag and slot-filter rules above, with per-character learn bitsets.
+3. **Learn and change rules**: done (`ddprogress::learn`, `change`).
 4. **Weapon skill stamina and Proficiency** (with claude-8): wire
    `PlStamina_*` rows into skill actions; trace the magick and bow costs.
 5. **Level-3 skills from equipment** (with claude-6): item flag bit 29 and

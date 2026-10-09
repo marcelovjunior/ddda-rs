@@ -2369,6 +2369,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddprogress"
+version = "0.1.0"
+dependencies = [
+ "ddexe",
+ "ddparam",
+ "ddskill",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "ddquest"
 version = "0.1.0"
 dependencies = [
