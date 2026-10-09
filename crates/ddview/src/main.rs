@@ -32,6 +32,7 @@ mod net;
 mod opening;
 mod play;
 mod items;
+mod hud;
 mod pause;
 mod sky;
 mod stage;
@@ -577,7 +578,7 @@ fn main() {
         .init_resource::<pause::PauseState>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud).chain())
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), play::update_hud, hud::update).chain())
 
         .run();
 }
@@ -651,6 +652,7 @@ fn setup(
         {
             commands.insert_resource(state);
             play::spawn_hud(&mut commands);
+            if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
         }
         commands.insert_resource(res);
         spawn_camera_and_light(&mut commands, &args, None);
@@ -787,6 +789,7 @@ fn setup(
                 }
                 commands.insert_resource(state);
                 play::spawn_hud(&mut commands);
+                if let Err(e)=hud::spawn(&mut commands,&vfs,&mut images){error!("HUD: {e}");}
             }
             Err(e) => error!("play: {e}"),
         }
