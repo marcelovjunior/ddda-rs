@@ -104,3 +104,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m2-fixes](m2-fixes.md) | Close the M2 acceptance mismatches (speed, stop, stamina, slopes) | core | claude-1 | assigned |
 | [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | merged 2026-10-09 |
 | [combat-damage](combat-damage.md) | Damage rules as pure functions; hit-group activation trace | research + core | claude-8 | assigned |
+| [ddexe](ddexe.md) | One reader for tables in the installed exe; port ddskill/ddpawn | core | claude-9 | assigned |
