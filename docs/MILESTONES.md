@@ -281,3 +281,19 @@ only.
 - the M4 think tables;
 - play from the save in `--play`, once claude-10 releases `play.rs`;
 - the live trace for the drop path.
+
+**M3 two-window check (head, 2026-10-09 14:16):** on one PC, a host and a
+guest started from the same save:
+
+```
+ddview --host 47812 --save <save> --goblin --demo
+ddview --join 127.0.0.1:47812 --save <save>
+```
+
+- The guest joined within 5 s, at the host's spot (pre-join).
+- Both logs report identical positions for seats 0, 1 and 4, all three
+  dressed, and the host's goblin replicated to the guest (HP 0/1000,
+  dead).
+- The host's screenshot shows the guest's dressed Arisen beside its own
+  party. The guest's shows the host's Arisen and pawn.
+- Not checked: two physical machines, or a guest with a different save.
