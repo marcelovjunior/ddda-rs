@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod probe;
 mod perf;
 mod clock;
 mod intro;
@@ -194,6 +195,7 @@ fn args() -> Args {
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
         if k == "--skip-intro" { a.skip_intro = true; continue; }
         if k == "--perf" { a.perf = true; continue; }
+        if k == "--probe" { stage::KEEP_MESHES.store(true, std::sync::atomic::Ordering::Relaxed); continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
         if k == "--paused" {
             a.play = true;
@@ -613,7 +615,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, perf::update, clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, perf::update, probe::update, clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), hud::update).chain())
 
         .run();

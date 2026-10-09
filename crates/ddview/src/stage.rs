@@ -615,6 +615,18 @@ fn arc_model_path(arc: &std::path::Path) -> Option<String> {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StageEntity;
 
+/// `--probe` keeps stage meshes in main memory too, so the probe's ray
+/// cast (probe.rs) can test them; otherwise they live on the GPU only.
+pub static KEEP_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn mesh_usage() -> RenderAssetUsages {
+    if KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed) {
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD
+    } else {
+        RenderAssetUsages::RENDER_WORLD
+    }
+}
+
 /// What a streamed cell entity belongs to (`crate::stream`): the cell
 /// `(m, n)` and which of its parts.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -849,7 +861,7 @@ impl Loader<'_> {
             }) {
                 continue;
             }
-            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, mesh_usage());
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
                 v.positions

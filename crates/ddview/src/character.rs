@@ -510,7 +510,12 @@ fn spawn_meshes(
         if tris.is_empty() || v.uvs[0].is_empty() || v.joints.len() != v.positions.len() {
             continue;
         }
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        let usage = if crate::stage::KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed) {
+            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD
+        } else {
+            RenderAssetUsages::RENDER_WORLD
+        };
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usage);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v.positions.clone());
         if !v.normals.is_empty() {
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.normals.clone());
