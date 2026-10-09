@@ -844,7 +844,8 @@ pub fn step(
         // view's interpolated transforms or graph-map membership.
         s.host.world.npcs = s.host.story_npc_intels().filter_map(|placement| {
             let id = placement.npc as u32;
-            if !s.npcs.contains_key(&id) { return None; }
+            // Heading is still the authored placement heading: canonical
+            // Wait/Place-direction updates are unresolved, never read from rendering.
             s.host.story_npc_position(id).map(|pos| ddstory::NpcUnit {
                 id, unit: ddstory::Player { pos, yaw: placement.transform.angle[1] },
             })
