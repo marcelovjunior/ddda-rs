@@ -17,6 +17,22 @@ fn opening_dragon_definitions_are_loaded_from_the_install() {
     assert_eq!(data.tables.root(0), Some(dragon::OPENING_THINK_ROOT));
     assert_eq!(data.tables.len(), 52);
     assert_eq!(data.action_classes.len(), 93);
+    assert_eq!(data.resources.len(), 57);
+    assert_eq!(
+        data.resources.iter().filter(|r| r.class == "rMotionList").count(),
+        5
+    );
+    assert_eq!(
+        data.resources
+            .iter()
+            .filter(|r| r.class == "rObjCollision")
+            .count(),
+        3
+    );
+    assert!(data.resources.iter().all(|r| !r.path.is_empty() && r.flags == 0));
+    assert_eq!(data.resources[4].class, "rModel");
+    assert_eq!(data.resources[5].class, "rMotionList");
+    assert_eq!(data.resources[44].class, "rRegionStatus");
     // The installed entrance graph's action IDs resolve through this table.
     for (action, class) in [
         (10, "cEm5800TargetFly"),

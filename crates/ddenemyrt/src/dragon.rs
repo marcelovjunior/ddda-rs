@@ -16,10 +16,25 @@ pub const ACTION_TABLE: u32 = 0x0185_bcf8;
 /// Embedded count passed in EDI at 0x00a3f8a4 (DDDA.exe 2017-12-13 Steam).
 pub const ACTION_COUNT: u32 = 93;
 
+/// uEm5800::vf05 0x00a49ed0 passes this table and count to 0x00889de0
+/// (DDDA.exe 2017-12-13 Steam). Each descriptor occupies three words.
+pub const RESOURCE_TABLE: u32 = 0x0185_d5d8;
+pub const RESOURCE_COUNT: u32 = 57;
+
+/// A resource registration, preserving executable order without assuming
+/// that registration indices are motion-bank or collision-set indices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DragonResource {
+    pub path: String,
+    pub class: String,
+    pub flags: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct DragonAiData {
     pub tables: Tables,
     pub action_classes: Vec<String>,
+    pub resources: Vec<DragonResource>,
 }
 
 impl DragonAiData {
@@ -40,9 +55,29 @@ impl DragonAiData {
                 ))
             })?);
         }
+        let mut resources = Vec::new();
+        // Translated from 0x00889de0 (DDDA.exe 2017-12-13 Steam): null
+        // path entries are skipped, and surviving entries retain order.
+        for index in 0..RESOURCE_COUNT {
+            let address = RESOURCE_TABLE + index * 12;
+            let path = exe.u32(address).map_err(|e| Error::Data(e.0))?;
+            if path == 0 {
+                continue;
+            }
+            let dti = exe.u32(address + 4).map_err(|e| Error::Data(e.0))?;
+            resources.push(DragonResource {
+                path: exe.cstr(path).map_err(|e| Error::Data(e.0))?.to_owned(),
+                class: names
+                    .get(&dti)
+                    .cloned()
+                    .ok_or_else(|| Error::Data(format!("dragon resource {index}: unknown DTI {dti:#x}")))?,
+                flags: exe.u32(address + 8).map_err(|e| Error::Data(e.0))?,
+            });
+        }
         Ok(Self {
             tables,
             action_classes,
+            resources,
         })
     }
 }
