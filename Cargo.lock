@@ -2279,6 +2279,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dditem"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtgmd",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddmap"
 version = "0.1.0"
 dependencies = [
