@@ -151,3 +151,33 @@ advances the fade by the frame time × 30, and mixes after sampling.
 - Slot meanings (which slot is walk, run, attack) come from the player's FSM
   and motion tables, not yet read. 0 and 3 were identified by eye.
 - Faces, eyes and equipment pieces are not assembled yet.
+
+### Compared with the original (2026-10-09, oracle trace)
+
+claude-4 traced a scripted run → jump → land live, sampled after each
+`sMain::vf06`, at about 65 fps (private file
+`E:\ddda-re\notes\oracle\runjump_trace.json`).
+
+**Layer 0 of uPlayer:**
+- +0x3C0 is the blend length L of the current transition, in 1/30-s
+  frames.
+- +0x3C4 counts down from L by `mDeltaTime`. It is decremented on the same
+  frame as the transition and clamped at 0.
+- +0x3CC is the motion frame (1/30-s units; it resets on a new motion),
+  and +0x3D0 holds the previous frame's value.
+- +0x3EC / +0x3F0, the curve controls, read 0.0 on every frame, which is
+  consistent with the t³ ease.
+
+**Blend lengths measured:**
+
+| Transition | Frames | Matches the motion-list table |
+|---|---|---|
+| idle → run | 5 | yes |
+| run → jump start (action 7) | 3 | yes |
+| jump start → airborne (action 9) | 0 | yes |
+| airborne → landing (action 14) | 2 | yes |
+| landing → idle | 15 | not checked against the table yet |
+| standing idle | 8 | yes |
+
+Action ids at uPlayer +0x2DD4: 0 idle, 2 move, 7 jump start, 9 airborne,
+14 landing.
