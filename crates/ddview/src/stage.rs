@@ -384,6 +384,18 @@ impl Loader<'_> {
             if v.uvs[0].is_empty() || tris.is_empty() {
                 continue;
             }
+            // nDraw::MaterialNull meshes (e.g. `Scene_Material` proxies in
+            // scenery models) draw nothing in the colour pass. *Whether they
+            // cast shadows is not traced*; they are skipped.
+            let null_class = mtmrl::jamcrc(b"nDraw::MaterialNull") & 0x7FFF_FFFF;
+            let name = model.material_names.get(m.material as usize).map(String::as_str).unwrap_or("");
+            if mrl
+                .as_ref()
+                .and_then(|l| l.by_name(name))
+                .is_some_and(|mat| mat.class_hash & 0x7FFF_FFFF == null_class)
+            {
+                continue;
+            }
             // Swing billboard pivots of this mesh (rSwingModel node with
             // flag 0x200 and 4-byte records), when the counts agree.
             let node = swm.as_ref().and_then(|s| s.nodes.get(mesh_index).map(|n| (s, n)));
@@ -625,8 +637,13 @@ impl Loader<'_> {
                 continue;
             };
             let local = Vec3::from(p.position) - block;
-            // *Unresolved:* Euler order of mAngle; XYZ assumed until traced in the exe.
-            let rotation = Quat::from_euler(EulerRot::XYZ, p.angle[0], p.angle[1], p.angle[2]);
+            // mAngle is applied about the world X, then Y, then Z axis
+            // (extrinsic XYZ, R = Rz * Ry * Rx): measured on om0529 in
+            // st100_58m49n (angles 2.23, 0.70, 3.25 rad), whose log only
+            // lines up with the live capture m1_lighting_02 in this order
+            // (all six intrinsic orders were rendered). *Not traced in the
+            // exe.*
+            let rotation = Quat::from_euler(EulerRot::ZYX, p.angle[2], p.angle[1], p.angle[0]);
             let transform = Transform {
                 translation: offset + local * UNIT,
                 rotation,

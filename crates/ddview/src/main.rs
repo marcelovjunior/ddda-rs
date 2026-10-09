@@ -183,10 +183,14 @@ fn apply_ref(a: &mut Args, path: &str) {
 }
 
 /// Reads the original's lighting inputs for one moment from a JSON file
-/// (written from live reads of the game, see docs/SHADING.md):
-/// `sh` (28 floats, fSHCoef[7]), `sun_dir` (to the light), `sun_color`,
-/// `fog_color`, `fog_density`, `fog_start`, `fog_end` (cm).
+/// (written from live reads of the game's light units, docs/SHADING.md):
+/// `hemisphere_count` and `hemispheres` (sky rgb, ground rgb, direction per
+/// light), `light_count` and `lights` (colour rgb, direction to the light
+/// per light; the first is the sun, drawn with its shadow map, the others
+/// are added to the SH), `fog_color`, `fog_density`, `fog_start`,
+/// `fog_end` (cm). Only lights of the stage's light group belong in it.
 fn load_lighting(path: &str) -> stage::StageLighting {
+    use mtweather::lighting::{pack_sh, sh_add, sh_directional, sh_hemisphere};
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let nums = |key: &str, n: usize| -> Vec<f32> {
         let i = text
@@ -203,17 +207,33 @@ fn load_lighting(path: &str) -> stage::StageLighting {
         assert_eq!(v.len(), n, "{path}: {key} needs {n} numbers");
         v
     };
-    let v3 = |key: &str| {
-        let v = nums(key, 3);
-        Vec3::new(v[0], v[1], v[2])
+    let v3 = |v: &[f32]| [v[0], v[1], v[2]];
+    let mut sh = [[0.0f32; 9]; 3];
+    let hemis = nums("hemisphere_count", 1)[0] as usize;
+    let h = nums("hemispheres", 9 * hemis);
+    for k in 0..hemis {
+        let x = &h[9 * k..];
+        sh_add(&mut sh, &sh_hemisphere(v3(&x[6..]), v3(x), v3(&x[3..])));
+    }
+    let count = nums("light_count", 1)[0] as usize;
+    let l = nums("lights", 6 * count);
+    for k in 1..count {
+        let x = &l[6 * k..];
+        sh_add(&mut sh, &sh_directional(v3(&x[3..]), v3(x)));
+    }
+    let packed = pack_sh(&sh);
+    let (sun_color, sun_dir) = if count > 0 {
+        (Vec3::from_slice(&l[0..3]), Vec3::from_slice(&l[3..6]))
+    } else {
+        (Vec3::ZERO, Vec3::Y)
     };
-    let sh = nums("sh", 28);
+    let f3 = |key: &str| Vec3::from_slice(&nums(key, 3));
     stage::StageLighting {
         enabled: true,
-        sh: std::array::from_fn(|k| Vec4::from_slice(&sh[4 * k..4 * k + 4])),
-        sun_dir: v3("sun_dir"),
-        sun_color: v3("sun_color"),
-        fog_color: v3("fog_color"),
+        sh: packed.map(Vec4::from),
+        sun_dir,
+        sun_color,
+        fog_color: f3("fog_color"),
         fog_density: nums("fog_density", 1)[0],
         fog_start: nums("fog_start", 1)[0],
         fog_end: nums("fog_end", 1)[0],

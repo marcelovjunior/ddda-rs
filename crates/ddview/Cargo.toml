@@ -19,4 +19,5 @@ mtmod = { path = "../mtmod" }
 mtmrl = { path = "../mtmrl" }
 mtshader = { path = "../mtshader" }
 mtswm = { path = "../mtswm" }
+mtweather = { path = "../mtweather" }
 mttex = { path = "../mttex" }
