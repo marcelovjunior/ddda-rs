@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+pub mod clock;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error(pub String);
 impl fmt::Display for Error {
