@@ -2316,6 +2316,20 @@ name = "ddexe"
 version = "0.1.0"
 
 [[package]]
+name = "ddhost"
+version = "0.1.0"
+dependencies = [
+ "ddquest",
+ "ddsim",
+ "ddstory",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtlmt",
+ "mtxfs",
+]
+
+[[package]]
 name = "dditem"
 version = "0.1.0"
 dependencies = [
