@@ -62,6 +62,14 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
 
 ### Encounter evidence and remaining work
 
+- Added `DragonAiData::opening`, reading 52 reachable think records from
+  the sequence-4 root and all 93 action classes from the installed exe.
+  Descriptor stride and count come from 0x00a3f89f / 0x00a3f8a4 and
+  0x007f19c0. The shared `Tables::read_roots` walker is transplanted from
+  codex-1's e9cfa51; existing goblin traversal remains unchanged. The
+  installed reader regression passes, including all six entrance action
+  class identities. This loads definitions, not simulated actions.
+
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
   EnemyCheck target is kind 2, group 0, index 1.

@@ -50,11 +50,7 @@ impl Act {
     /// The interpreter's step past this record: 0xa0 for kinds 0 and 1,
     /// else 0 (0x008b853c and every caller of 0x008b7e80).
     pub fn step(&self) -> u32 {
-        if self.kind() < 2 {
-            RECORD_SIZE
-        } else {
-            0
-        }
+        if self.kind() < 2 { RECORD_SIZE } else { 0 }
     }
     /// Chain record: +0x08 code. Row: +0x08 flags.
     pub fn code(&self) -> u32 {
@@ -111,7 +107,7 @@ impl Act {
     }
 }
 
-/// Every record reachable from the 31 built-in tables (and the records they
+/// Every record reachable from the selected built-in tables (and the records they
 /// name), keyed by address.
 #[derive(Debug, Clone, Default)]
 pub struct Tables {
@@ -128,14 +124,22 @@ impl Tables {
     pub fn read(exe: &ddexe::Exe<'_>) -> Result<Self, Error> {
         let de = |e: ddexe::Error| Error::Data(e.0);
         let roots = exe.u32s(TABLES_VA, TABLE_COUNT as usize).map_err(de)?;
+        // Also the one-record table uEm0100 loads when grabbed (0x00aad940
+        // writes it to +0xe9c): 0x017ec010.
+        Self::read_roots(exe, roots, &[0x017e_c010])
+    }
+
+    /// Reads a family's root tables with the shared record walker. `extra`
+    /// contains tables installed directly by the unit rather than exposed
+    /// through its indexed table getter; these do not change root indices.
+    pub fn read_roots(exe: &ddexe::Exe<'_>, roots: Vec<u32>, extra: &[u32]) -> Result<Self, Error> {
+        let de = |e: ddexe::Error| Error::Data(e.0);
         let mut t = Tables {
             roots: roots.clone(),
             recs: HashMap::new(),
         };
         let mut todo: VecDeque<u32> = roots.into_iter().collect();
-        // Also the one-record table uEm0100 loads when grabbed (0x00aad940
-        // writes it to +0xe9c): 0x017ec010.
-        todo.push_back(0x017e_c010);
+        todo.extend(extra.iter().copied());
         while let Some(start) = todo.pop_front() {
             let mut va = start;
             while !t.recs.contains_key(&va) {
