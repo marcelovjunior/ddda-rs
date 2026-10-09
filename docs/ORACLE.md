@@ -277,8 +277,42 @@ match the stores in their constructors, which confirms the method.
 - Its position is `uCoord.mPos` at `+0x40` (vector3, cm, floating-origin frame).
 - Teleport means writing `mPos` on the main thread (`write ... main=true`).
   The character snaps to the ground on the next frame. Checked for a 2 m
-  move on flat ground only. *Large jumps across cells or into walls are
-  untested.*
+  move on flat ground only.
+- Use `recipes.safe_teleport` (the rules below), never a raw `mPos` write.
+
+**Incident, 2026-10-09: a teleport killed the Arisen.**
+
+What happened:
+1. The player stood in origin cell st100_63m52n at local
+   (177.7, 32317.3, 1930.6).
+2. `mPos` was written as (-1323, 32330, 3430). That is 15 m away and
+   across the cell boundary (x < 0) into 63m51n, 20 to 75 cm above that
+   cell's collision ground.
+3. Within 60 frames:
+   - the floating origin re-centred (x became 8720);
+   - HP dropped to 0;
+   - the action went to 30, then 38;
+   - the death menu came up.
+4. Writing HP back did not help. Head chose plain "Retry", which reloads
+   the last save.
+
+The cause is unproven: either the cross-cell move (floating-origin
+re-centring) or a kill or out-of-bounds check.
+
+Rules since then, set by head:
+- Never teleport across a cell boundary.
+- Teleport at most a few metres, onto ground found in the current origin
+  frame.
+- Watch HP and the action for 30 frames after every teleport, and report
+  anomalies.
+
+`recipes.safe_teleport(o, x, z)` enforces all three:
+- it refuses targets outside local 0..10000 or more than 5 m away;
+- it takes y from the stage collision (`ddda-ledges` with `LEDGES_AT=1`,
+  plus 5 cm);
+- it stops at the first HP drop or unexpected action.
+
+Back up the save before any route that moves the player.
 
 **Party.**
 - `sPlayerManager+0x99c` holds 4 `uPlayerBase*`: the Arisen (uPlayer) and
