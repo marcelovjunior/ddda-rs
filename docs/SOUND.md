@@ -142,8 +142,11 @@ offline pause pauses the sinks. Six-channel Vorbis is provisionally folded to
 stereo, preserving the center dialogue channel and omitting LFE. This is
 explicitly not the original game's mixer, gain, reverb or positional model.
 The release viewer builds, and all 11 mtsound tests pass including the full
-installed reader corpus. Audible output and original-game timing comparison
-have not been verified. Conditional Arisen voices, footsteps, attack sounds
+installed reader corpus. Two viewer audio regressions verify center-channel
+preservation and same-unit replacement within one deferred command batch.
+A bounded 960x540 event-22 run resolves both ev10 streams, saves its screenshot
+and exits without reported audio-device errors. Audible output and original-game
+timing comparison have not been verified. Conditional Arisen voices, footsteps, attack sounds
 and field BGM remain unconnected, so the audio-playback brief remains open.
 
 Motion-SFX trace leads: uSoundMotionSe constructor 0x00c71c20 chooses LMT

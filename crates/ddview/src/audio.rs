@@ -128,4 +128,30 @@ mod tests {
         assert_eq!(&*sound.samples, &[std::f32::consts::FRAC_1_SQRT_2; 2]);
         assert_eq!(sound.decoder().count(), 2);
     }
+
+    #[test]
+    fn repeated_unit_cues_replace_even_before_commands_are_applied() {
+        let mut assets = Assets::<DecodedAudio>::default();
+        let handle = assets.add(stereo(mtsound::decode::Pcm {
+            channels: 1, sample_rate: 48000, samples: vec![0.0],
+        }).unwrap());
+        let cue = |unit: &str| Cue::Stream {
+            unit: unit.into(), path: "cached".into(), stream_id: 1,
+            mode: 2, prepare_id: 0,
+        };
+        let mut app = App::new();
+        app.insert_resource(assets).insert_resource(AudioState {
+            vfs: None,
+            pending: vec![cue("voice"), cue("voice"), cue("music")],
+            cache: HashMap::from([("cached:1:0".into(), handle)]),
+            failed: HashSet::new(),
+        }).add_systems(Update, play_pending);
+        app.world_mut().spawn(EventSound("voice".into()));
+        app.update();
+        let world = app.world_mut();
+        let mut query = world.query::<&EventSound>();
+        let mut units: Vec<_> = query.iter(world).map(|s| s.0.as_str()).collect();
+        units.sort();
+        assert_eq!(units, ["music", "voice"]);
+    }
 }

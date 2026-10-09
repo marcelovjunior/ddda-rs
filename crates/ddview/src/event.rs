@@ -1,8 +1,8 @@
 //! `--event <row>`: plays one cutscene from the event table with the
 //! headless player `ddstory::event::EventPlayer` and shows it: the stage
 //! models, the actors with their event motions, the event camera, the
-//! fade and the subtitles. Sound cues and the end are printed (there is
-//! no audio yet). This file is presentation only: every value comes from
+//! fade and the subtitles. Stream sound cues go to the audio adapter;
+//! cue diagnostics and the end are printed. This file is presentation only: every value comes from
 //! the event player.
 //!
 //! ```text
