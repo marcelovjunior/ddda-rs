@@ -96,6 +96,9 @@ pub struct Inputs {
     /// NPC and enemy units on the stage (for volumes that detect them).
     pub npcs: Vec<NpcUnit>,
     pub enemies: Vec<Player>,
+    /// Actual completed field collision cells for scenario range admission.
+    /// None observes no loaded-cell exception; nearby volumes still detect.
+    pub loaded_field_cells: Option<scenario::LoadedFieldCells>,
     /// The player (index into `players`) who pressed interact this frame
     /// while a scenario prompt is shown (uPlayerBase vf204 0x00b6eac0 sets
     /// sScenario +0x108).
