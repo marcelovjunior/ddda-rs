@@ -12,3 +12,5 @@ mttex = { path = "../mttex" }
 mtshader = { path = "../mtshader" }
 mtmod = { path = "../mtmod" }
 mtmrl = { path = "../mtmrl" }
+mtxfs = { path = "../mtxfs" }
+mtlot = { path = "../mtlot" }

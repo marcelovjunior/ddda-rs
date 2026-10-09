@@ -14,6 +14,7 @@ use mtarc::{decode_payload, Archive};
 mod model;
 mod scan;
 mod tex;
+mod xfs;
 
 use scan::find_arcs;
 
@@ -24,7 +25,10 @@ const USAGE: &str = "usage:
   ddtool tex-dds <file.arc> <entry path> <out.dds>
   ddtool mod-scan <nativePC dir>
   ddtool mrl-scan <nativePC dir>
-  ddtool mod-info <nativePC dir> <file.arc> <entry path>";
+  ddtool mod-info <nativePC dir> <file.arc> <entry path>
+  ddtool xfs-scan <nativePC dir>
+  ddtool xfs-dump <file.arc> <entry path>
+  ddtool lot-scan <nativePC dir>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,6 +41,9 @@ fn main() -> ExitCode {
         ["mod-scan", dir] => model::mod_scan(Path::new(dir)),
         ["mrl-scan", dir] => model::mrl_scan(Path::new(dir)),
         ["mod-info", dir, arc, entry] => model::mod_info(Path::new(dir), Path::new(arc), entry),
+        ["xfs-scan", dir] => xfs::xfs_scan(Path::new(dir)),
+        ["xfs-dump", arc, entry] => xfs::xfs_dump(Path::new(arc), entry),
+        ["lot-scan", dir] => xfs::lot_scan(Path::new(dir)),
         _ => Err(USAGE.to_string()),
     };
     match result {

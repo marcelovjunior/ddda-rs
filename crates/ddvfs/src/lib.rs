@@ -80,6 +80,14 @@ impl Vfs {
         self.index.is_empty()
     }
 
+    /// Lower-case paths of every resource of one type.
+    pub fn paths_of_type(&self, type_hash: u32) -> impl Iterator<Item = &str> {
+        self.index
+            .keys()
+            .filter(move |(_, t)| *t == type_hash)
+            .map(|(p, _)| p.as_str())
+    }
+
     pub fn locate(&self, path: &str, type_hash: u32) -> Option<&[Location]> {
         self.index.get(&(key(path), type_hash)).map(Vec::as_slice)
     }

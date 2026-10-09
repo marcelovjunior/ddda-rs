@@ -34,6 +34,15 @@ pub fn for_each_resource<F>(dir: &Path, type_hash: u32, visit: F) -> Result<Walk
 where
     F: Fn(&Path, &Entry, &[u8]) -> Result<(), String> + Sync,
 {
+    for_each_matching(dir, |e| e.type_hash == type_hash, visit)
+}
+
+/// Like [`for_each_resource`], for every entry that `wanted` accepts.
+pub fn for_each_matching<P, F>(dir: &Path, wanted: P, visit: F) -> Result<Walk, String>
+where
+    P: Fn(&Entry) -> bool + Sync,
+    F: Fn(&Path, &Entry, &[u8]) -> Result<(), String> + Sync,
+{
     let mut files = Vec::new();
     find_arcs(dir, &mut files).map_err(|e| format!("{}: {e}", dir.display()))?;
     files.sort();
@@ -51,7 +60,7 @@ where
                     let res = (|| -> Result<(), String> {
                         let mut file = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
                         let arc = Archive::read_index(&mut file).map_err(|e| e.to_string())?;
-                        for e in arc.entries.iter().filter(|e| e.type_hash == type_hash) {
+                        for e in arc.entries.iter().filter(|e| wanted(e)) {
                             raw.resize(e.compressed_size as usize, 0);
                             file.seek(SeekFrom::Start(u64::from(e.offset)))
                                 .map_err(|x| x.to_string())?;

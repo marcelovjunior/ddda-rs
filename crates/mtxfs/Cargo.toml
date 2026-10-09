@@ -1,0 +1,10 @@
+[package]
+name = "mtxfs"
+version = "0.1.0"
+description = "Reader for MT Framework XFS (serialized MtDTI objects), Dragon's Dogma: Dark Arisen v0x0109"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtarc = { path = "../mtarc" }

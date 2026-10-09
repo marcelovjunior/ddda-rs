@@ -13,6 +13,7 @@
 !/docs/
 !/research/
 !/scripts/
+!/third_party/
 target/
 *.arc
 *.exe
