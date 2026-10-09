@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/game-hud`
 - **Board area:** `ui/hud`
-- **Status:** working (final screenshot verification)
+- **Status:** review (screen layout compared; pawn visual match unverified)
 
 ## Goal
 
@@ -55,7 +55,7 @@ Evidence and validation:
   pixel identity. No original process control or installation writes occurred.
 
 Commits 86f981c/f5401aa established geometry/fonts; merge 65905f8 brings in
-main's item/skill hooks. Final anchor/overlay changes follow that merge.
+main's item/skill hooks. Final anchor/overlay commit: `79a5a33`.
 
 Limitations: recruited pawn entities, pawn names/status icons, recoverable HP
 and status/flash animation remain incomplete; minimap is deferred. Original
