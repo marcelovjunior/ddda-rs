@@ -23,6 +23,7 @@ pub mod dragon;
 pub mod fight;
 pub mod goblin;
 pub mod pawn;
+pub mod pawn_actor;
 pub mod pushout;
 pub mod shell;
 
