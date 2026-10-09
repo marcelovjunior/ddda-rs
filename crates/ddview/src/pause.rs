@@ -6,6 +6,15 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 pub struct PauseState {
     pub paused: bool,
     enabled: bool,
+    /// Explicit unattended demos keep running when another viewer gets focus.
+    auto_pause: bool,
+}
+
+impl PauseState {
+    /// Automated captures never take ownership of the maintainer's mouse.
+    pub fn mouse_look(&self, right_held: bool) -> bool {
+        self.auto_pause || right_held
+    }
 }
 
 #[derive(Component)]
@@ -27,6 +36,7 @@ pub fn animate_world(pause: Res<PauseState>, net: Option<Res<crate::net::NetRes>
 
 pub fn setup(mut commands: Commands, args: Res<crate::Args>, mut pause: ResMut<PauseState>) {
     pause.enabled = args.play;
+    pause.auto_pause = !(args.unattended || args.demo || args.shot.is_some() || args.shots.is_some());
     pause.paused = args.paused;
     if !args.play {
         return;
@@ -99,7 +109,7 @@ pub fn update(
         return;
     };
     let was_paused = pause.paused;
-    if !window.focused {
+    if !window.focused && pause.auto_pause {
         pause.paused = true;
     } else if keys.just_pressed(KeyCode::Escape) {
         pause.paused = !pause.paused;
@@ -125,8 +135,8 @@ pub fn update(
         keys.reset_all();
         mouse.reset_all();
     }
-    cursor.visible = pause.paused;
-    cursor.grab_mode = if pause.paused {
+    cursor.visible = pause.paused || !pause.auto_pause;
+    cursor.grab_mode = if pause.paused || !pause.auto_pause {
         CursorGrabMode::None
     } else {
         CursorGrabMode::Locked
@@ -147,25 +157,65 @@ mod tests {
     #[test]
     fn escape_focus_and_buttons_control_pause_and_cursor() {
         let mut app = App::new();
-        app.insert_resource(PauseState { enabled: true, paused: false })
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .add_message::<AppExit>()
-            .add_systems(Update, update);
-        let window = app.world_mut().spawn((Window { focused: true, ..default() }, CursorOptions::default(), PrimaryWindow)).id();
+        app.insert_resource(PauseState {
+            enabled: true,
+            paused: false,
+            auto_pause: true,
+        })
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ButtonInput<MouseButton>>()
+        .add_message::<AppExit>()
+        .add_systems(Update, update);
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    focused: true,
+                    ..default()
+                },
+                CursorOptions::default(),
+                PrimaryWindow,
+            ))
+            .id();
         let menu = app.world_mut().spawn((PauseMenu, Node::default())).id();
-        let resume = app.world_mut().spawn((Button, Action::Resume, Interaction::None, BackgroundColor::default())).id();
-        let quit = app.world_mut().spawn((Button, Action::Quit, Interaction::None, BackgroundColor::default())).id();
+        let resume = app
+            .world_mut()
+            .spawn((
+                Button,
+                Action::Resume,
+                Interaction::None,
+                BackgroundColor::default(),
+            ))
+            .id();
+        let quit = app
+            .world_mut()
+            .spawn((
+                Button,
+                Action::Quit,
+                Interaction::None,
+                BackgroundColor::default(),
+            ))
+            .id();
         app.update();
-        assert_eq!(app.world().get::<CursorOptions>(window).unwrap().grab_mode, CursorGrabMode::Locked);
+        assert_eq!(
+            app.world().get::<CursorOptions>(window).unwrap().grab_mode,
+            CursorGrabMode::Locked
+        );
         assert!(!app.world().get::<CursorOptions>(window).unwrap().visible);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
         app.update();
         assert!(app.world().resource::<PauseState>().paused);
         assert_eq!(app.world().get::<Node>(menu).unwrap().display, Display::Flex);
-        assert_eq!(app.world().get::<CursorOptions>(window).unwrap().grab_mode, CursorGrabMode::None);
+        assert_eq!(
+            app.world().get::<CursorOptions>(window).unwrap().grab_mode,
+            CursorGrabMode::None
+        );
         assert!(app.world().get::<CursorOptions>(window).unwrap().visible);
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
         app.update();
         assert!(!app.world().resource::<PauseState>().paused);
         app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
@@ -173,11 +223,39 @@ mod tests {
         assert!(app.world().resource::<PauseState>().paused);
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
         *app.world_mut().get_mut::<Interaction>(resume).unwrap() = Interaction::Pressed;
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
         app.update();
         assert!(!app.world().resource::<PauseState>().paused);
-        assert!(!app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Left));
+        assert!(!app
+            .world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left));
         *app.world_mut().get_mut::<Interaction>(resume).unwrap() = Interaction::None;
+        app.world_mut().resource_mut::<PauseState>().auto_pause = false;
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.update();
+        assert!(
+            !app.world().resource::<PauseState>().paused,
+            "unattended demo ignores focus loss"
+        );
+        assert_eq!(
+            app.world().get::<CursorOptions>(window).unwrap().grab_mode,
+            CursorGrabMode::None
+        );
+        assert!(app.world().get::<CursorOptions>(window).unwrap().visible);
+        assert!(!app.world().resource::<PauseState>().mouse_look(false));
+        assert!(app.world().resource::<PauseState>().mouse_look(true));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        assert!(
+            app.world().resource::<PauseState>().paused,
+            "Esc still pauses an unattended demo"
+        );
+
         app.world_mut().resource_mut::<PauseState>().paused = true;
         *app.world_mut().get_mut::<Interaction>(quit).unwrap() = Interaction::Pressed;
         app.update();

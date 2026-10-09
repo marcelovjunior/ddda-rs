@@ -99,7 +99,7 @@ Codex lane: see `docs/CODEX.md`.
 | [rift-list-projection](rift-list-projection.md) | Rift list filters and pagination per viewer | reader | codex-1 | merged 2026-10-09 |
 | [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | superseded by enemy-spawns |
 | [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | merged 2026-10-09 |
-| [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
+| [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | merged 2026-10-09 |
 | [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | merged 2026-10-09 |
 | [m2-fixes](m2-fixes.md) | Close the M2 acceptance mismatches (speed, stop, stamina, slopes) | core | claude-1 | merged 2026-10-09 |
 | [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | merged 2026-10-09 |
@@ -135,12 +135,12 @@ Codex lane: see `docs/CODEX.md`.
 | [play-visuals](play-visuals.md) | Stretched meshes, camera clipping, female motions, drawn weapons | core | claude-7 | merged 2026-10-09 |
 | [net-replication](net-replication.md) | Goblins, HP, looks and join location over LAN | core | claude-10 | merged 2026-10-09 |
 | [character-lighting](character-lighting.md) | Characters lit by stage sun/SH/light buffer; canyon darkness | core | claude-3 | merged 2026-10-09 |
-| [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | codex-1 | reassigned (WIP 052a20a on branch) |
+| [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | codex-1 | merged 2026-10-09 |
 | [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | merged 2026-10-09 |
 | [viewer-controls](viewer-controls.md) | WASD broken, wall z-fighting, mouse look without button (not inverted), Esc pause UI | core | codex-1 | merged 2026-10-09 |
-| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | assigned (PRIORITY 1) |
+| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | partial merges 692c37e, ed16e62; ear/brow + z-fight open |
 | [enemy-families](enemy-families.md) | Wolves and harpies: think tables, actions, flight | core | codex-1 | assigned (1) |
-| [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | assigned (2) |
+| [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | merged 2026-10-09 |
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | assigned (3) |
 | [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | assigned (4) |
 | [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | assigned (5) |

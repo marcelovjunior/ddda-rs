@@ -305,6 +305,11 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    /// The NPCs of the newest snapshot (the views walk them there).
+    pub fn npcs(&self) -> Vec<crate::mirror::NpcBody> {
+        self.snaps.back().map(|s| s.npcs.clone()).unwrap_or_default()
+    }
+
     /// The enemies where the views show them (as [`Client::others`]).
     pub fn enemies(&self, since_ms: f64) -> Vec<Enemy> {
         let Some(last) = self.snaps.back() else { return vec![] };

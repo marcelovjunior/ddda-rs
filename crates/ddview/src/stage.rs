@@ -27,10 +27,10 @@ use std::sync::{Arc, OnceLock};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::mesh::{Indices, Mesh, PrimitiveTopology};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, ShaderType, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{AsBindGroup, CompareFunction, Extent3d, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat};
 use bevy::shader::ShaderRef;
 
 use ddvfs::Vfs;
@@ -113,8 +113,8 @@ pub struct SpotLight {
 pub struct DdParams {
     pub flags: u32,
     pub map_channel: u32,
-    pub pad0: u32,
-    pub pad1: u32,
+    pub alpha_compare: u32,
+    pub alpha_reference: u32,
     pub sh: [Vec4; 7],
     pub sun_dir: Vec4,
     pub sun_color: Vec4,
@@ -160,6 +160,7 @@ const FLAG_ALBEDO_ADD: u32 = 1024;
 /// Character pixel shaders' specular: the sun's Blinn-Phong lobe, the
 /// environment cube (`FReflectCubeMapShadowLight`), Schlick Fresnel.
 const FLAG_CHARACTER: u32 = 2048;
+const FLAG_ALPHA_TEST: u32 = 4096;
 
 /// Marks the sky's cloud domes; they follow the camera horizontally.
 #[derive(Component)]
@@ -226,7 +227,10 @@ fn albedo_add(s: &Shading) -> Option<Vec4> {
 pub type DdMaterial = ExtendedMaterial<StandardMaterial, DdExt>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[bind_group_data(DdPipelineKey)]
 pub struct DdExt {
+    /// Authored test/write/compare bits (MFX depth state word zero).
+    pub depth: Option<u8>,
     #[uniform(100)]
     #[reflect(ignore)]
     pub params: DdParams,
@@ -256,6 +260,24 @@ pub struct DdExt {
     pub albedo_blend: Option<Handle<Image>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DdPipelineKey {
+    depth: Option<u8>,
+}
+
+impl From<&DdExt> for DdPipelineKey {
+    fn from(material: &DdExt) -> Self { Self { depth: material.depth } }
+}
+
+/// MFX compare is forward Z; the viewer's depth buffer is reverse Z.
+fn imported_depth(bits: u8) -> (bool, CompareFunction) {
+    use CompareFunction::*;
+    let compare = if bits & 1 == 0 { Always } else {
+        [Never, Greater, Equal, GreaterEqual, Less, NotEqual, LessEqual, Always][((bits >> 2) & 7) as usize]
+    };
+    (bits & 2 != 0, compare)
+}
+
 /// `CBSky` and the camera for the sky evaluated in the stage materials;
 /// layout mirrored in `dd_material.wgsl`.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
@@ -274,6 +296,19 @@ pub struct SkyEnv {
 }
 
 impl MaterialExtension for DdExt {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let (Some(bits), Some(depth)) = (key.bind_group_data.depth, descriptor.depth_stencil.as_mut()) {
+            let (write, compare) = imported_depth(bits);
+            depth.depth_write_enabled = Some(write);
+            depth.depth_compare = Some(compare);
+        }
+        Ok(())
+    }
     fn vertex_shader() -> ShaderRef {
         "embedded://ddview/dd_material.wgsl".into()
     }
@@ -883,15 +918,9 @@ impl Loader<'_> {
         };
         // The original uses forward Z; Bevy uses reverse Z (positive bias
         // brings the surface forward). Preserve rasterizer bias with that
-        // sign conversion. Give coplanar alpha overlays two representable
-        // depth steps of separation in this renderer, not a world-space
-        // displacement or a change to the original material's alpha.
-        // This minimum is a viewer rendering choice (SHADING.md: DSZTest
-        // LessEqual/no-write on the bit-identical terrain overlay triangles).
+        // sign conversion (mtshader::RasterizerState, SHADING.md).
+        // No additional bias is invented for coplanar alpha overlays.
         sm.depth_bias = -s.raster.map_or(0.0, |r| r.depth_bias as f32);
-        if sm.alpha_mode == AlphaMode::Blend && s.depth.is_some_and(|d| d.depth_test && !d.depth_write) {
-            sm.depth_bias = sm.depth_bias.max(2.0);
-        }
         if let Some([r0, r1]) = s.uv_transform {
             sm.uv_transform = bevy::math::Affine2::from_cols(
                 Vec2::new(r0[0], r1[0]),
@@ -900,6 +929,15 @@ impl Loader<'_> {
             );
         }
         let mut params = DdParams::default();
+        // Blend and alpha test are independent in the original. Bevy's
+        // AlphaMode::Blend alone would silently omit the latter.
+        if s.blends_alpha() {
+            if let Some(test) = s.alpha_test {
+                params.flags |= FLAG_ALPHA_TEST;
+                params.alpha_compare = u32::from(test.compare);
+                params.alpha_reference = u32::from(test.reference);
+            }
+        }
         if shadow_only {
             params.flags |= FLAG_SHADOW_ONLY;
         }
@@ -948,6 +986,7 @@ impl Loader<'_> {
             material: DdMaterial {
                 base: sm,
                 extension: DdExt {
+                    depth: s.depth.map(|d| (d.raw[0] & 31) as u8),
                     params,
                     map,
                     spec,
@@ -1349,6 +1388,24 @@ impl Loader<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authored_depth_states_survive_blending_and_reverse_z() {
+        // Encoded MFX test/write/comparison combinations and reverse Z.
+        use bevy::render::render_resource::CompareFunction;
+        assert_eq!(super::imported_depth(15), (true, CompareFunction::GreaterEqual));
+        assert_eq!(super::imported_depth(13), (false, CompareFunction::GreaterEqual));
+        assert_eq!(super::imported_depth(30), (true, CompareFunction::Always));
+        assert_eq!(super::imported_depth(7), (true, CompareFunction::Greater));
+        assert_eq!(super::imported_depth(19), (true, CompareFunction::Less));
+        let path = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC\usershader\BbsShaderPackage.mfx");
+        if !path.is_file() { return; }
+        let p = ShaderPackage::parse(&std::fs::read(path).unwrap()).unwrap();
+        for (name, write) in [("DSZTestWrite", true), ("DSZTest", false)] {
+            let entry = p.entries.values().find(|e| e.name == name).unwrap();
+            let state = p.depth_stencil_states[&entry.index];
+            assert_eq!(super::imported_depth((state.raw[0] & 31) as u8), (write, CompareFunction::GreaterEqual));
+        }
+    }
     use super::*;
 
     fn character_shading(features: &[(&str, &str)], blend: [f32; 4], diffuse: [f32; 3]) -> Shading {

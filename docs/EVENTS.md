@@ -459,6 +459,21 @@ with Quina and the elder in their event outfits, hair and beard:
 - each model of a look runs its own copy of the skeleton, all driven by
   the same motion. The beard sits slightly off.
 
+## Event projection evidence (cutscene-visuals)
+
+st200 ev10 binds `uOfsMotionCamera`, derived from `uMotionCamera`, not
+`uCameraBase`. Vtable 0x0159b5b0 slot 21 dispatches to 0x00faa920:
+clamp authored FOV + mZoom to 0.01..179.99 degrees, convert horizontal
+FOV when mFovType is nonzero, then use mNearPlane/mFarPlane. The config
+CameraFov addition in 0x007d3e00 belongs to the other camera class.
+
+Constructor chain 0x007eaf20 -> 0x00fa9830 -> 0x01128740 supplies near
+16 cm and far 4,000,000 cm, with zero zoom. No projection-property SDL
+tracks override those defaults in st200 ev10 (install regression).
+CameraView carries near/far/zoom and the renderer applies them every
+frame, replacing the viewer-only 5 cm event near plane. The pending
+joint-displacement adjustment still limits matching original framing.
+
 ## Open questions
 
 - Header +0x08 constant and bits above 24 of +0x0c.

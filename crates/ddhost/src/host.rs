@@ -114,6 +114,11 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub economy: ddeconomy::Economy,
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
+    /// NPCs that left the schedule on an error of their graphs (id, error),
+    /// for the views to report.
+    pub npc_errors: Vec<(u32, String)>,
+    /// Where those NPCs stopped.
+    pub npc_parked: std::collections::BTreeMap<u32, [f32; 3]>,
     /// Levels, skills, vocations (ddprogress).
     pub progression: ddprogress::Progression,
     /// The Rift: party pawns, pawn log, the room (ddrift).
@@ -151,6 +156,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             locks: InteractionLocks::default(),
             economy: ddeconomy::Economy::default(),
             npcs: ddnpcrt::NpcRuntime::default(),
+            npc_errors: vec![],
+            npc_parked: Default::default(),
             progression: ddprogress::Progression::new(),
             rift: ddrift::Rift::new(1, ddrift::PawnLog::default()),
             data: SystemData::default(),

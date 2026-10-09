@@ -420,6 +420,35 @@ personal data).
 - **ev10 frame 1300 with `--save`:** the saved Arisen, dressed, stands
   behind them.
 
+## Eyebrow appearance (cutscene-visuals)
+
+Translated 0x00843940: material groups 5/6 receive eyebrow RGB multiplied
+by edit alpha, with output alpha one; group 6 also receives texture/UV
+controls. `rMaterial::vf09` 0x0112e4d0 preserves MRL bits 23..30 as the
+runtime group. Existing blend/alpha-test/culling state is retained.
+0x01067570 and 0x010675f0 replace only translation and diagonal UV matrix
+elements. Texture indices 1..3 select installed pl_eyebrowNN_BM textures;
+zero retains the material texture and 4 uses the original UV hide path.
+Normal-map replacement remains unimplemented, along with general
+character normal mapping.
+
+NPC apply 0x008442d0 copies raw edit hair RGBA (floats 8..11) to eyebrow
+RGBA, offsets/scales from floats 18..21, and texture from f118[0]. Saved
+characters use mColorEyebrow palette zero and mFaceEyebrow selection from
+editPattern (0x00780fa0 / 0x00cb5740). Bulk palette and 100 ordinary /
+8 fixed preset records are read at runtime; save conversion selects the
+first five fixed records. Regressions cover color multiplication, UV
+hide, slider/fixed offsets, installed presets and texture resolution.
+
+MRL depth writes and blending are independent. In particular hair104's
+first material uses `BSBlendAlpha` with `DSZTestWrite`, while the base
+eyebrow overlay uses `BSBlendAlpha` with `DSZTest`. The material pipeline
+now keys on the authored depth-state bits and converts the comparison
+to reverse Z (LessEqual becomes GreaterEqual), preserving writes even
+for blended materials. Blended alpha tests also retain the MRL reference
+and comparison (0x0112e4d0 / 0x00fee320). This corrects a material-state
+mismatch; it is not proof that all facial visibility defects are solved.
+
 ## Open
 
 - Morphs not translated:
@@ -428,9 +457,7 @@ personal data).
   - the nine human-edit floats of a save character (0x00cbbf00);
   - the eye constraint types 0xd, 0xe, 0xf and 0x10;
   - uCnsEdit types 9 and 0xc (approximated).
-- Eyebrows draw as a pale band: the eyebrow colour, `mColorEyebrow`, is
-  not applied.
-- The beard colour formula, and eye, eyebrow and makeup colours, plus the
+- The beard colour formula, and eye and makeup colours, plus the
   skin colour's shader use.
 - The item -> piece reader (+0x40); the slot -> actor field order.
 - The dagger's second model.

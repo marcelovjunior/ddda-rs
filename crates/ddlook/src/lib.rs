@@ -16,6 +16,7 @@
 //!    rArmorTable / rArmorModel of `h_parts`).
 
 pub mod face;
+pub mod eyebrow;
 #[rustfmt::skip]
 mod face_controllers;
 pub mod morph;
@@ -470,6 +471,7 @@ pub struct Look {
     /// Skin colour (actor +0x13e0), raw (its use in the shader is not
     /// traced).
     pub skin_color: Option<[f32; 3]>,
+    pub eyebrow: Option<eyebrow::Eyebrow>,
     /// Sheathed weapons.
     pub weapons: Vec<weapon::WeaponPart>,
     /// Edit-record resources (rHumanEdit, rBodyEdit, rFaceEdit) for
@@ -619,6 +621,7 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         hair_color,
         beard_color: None,
         skin_color: None,
+        eyebrow: None,
         weapons: vec![],
         morphs: None,
         body: None,
@@ -707,6 +710,11 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         look.face = face::face_morph(&face::FaceEdit::parse(&b)?, &face::FaceParams::default(), &|_| true);
     }
     look.skin_color = Some([f[12], f[13], f[14]]);
+    // 0x008442d0 copies NPC hair RGBA to eyebrow RGBA; offsets/scales
+    // come from edit +0x108..114 and texture from +0x118.
+    look.eyebrow = Some(eyebrow::Eyebrow::from_edit(
+        [f[8], f[9], f[10], f[11]], [f[18], f[19]], [f[20], f[21]], edit.f118[0],
+    ));
     look.weapons = weapon::weapons(edit.weapons[0], edit.weapons[1]);
     Ok(NpcLook { npc, edit_path, edit, armor_set: set, look })
 }
