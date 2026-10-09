@@ -2324,6 +2324,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddenemyrt"
+version = "0.1.0"
+dependencies = [
+ "ddai",
+ "ddcombat",
+ "ddenemy",
+ "ddexe",
+ "dditem",
+ "ddparam",
+ "ddsim",
+ "ddvfs",
+ "mtarc",
+ "mtfsm",
+ "mtlmt",
+ "mtmod",
+]
+
+[[package]]
 name = "ddexe"
 version = "0.1.0"
 
