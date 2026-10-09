@@ -3,7 +3,7 @@
 - **Owner:** claude lane
 - **Branch:** `task/combat-damage`
 - **Board area:** `research/combat`
-- **Status:** open
+- **Status:** review (claude-8, 2026-10-09)
 
 ## Goal
 
@@ -40,4 +40,45 @@ Proposals 1 and 2 in `docs/COMBAT.md`.
 
 ## Results
 
-(filled in by the agent)
+**Built (`crates/ddcombat`):**
+- `damage`: pure functions translated with source addresses:
+  `enemy_attack` 0x0088B530; `player_attack` + `critical_multiplier`
+  0x0088AA20; `merge_frame` (per-frame merge, hit count, same-frame
+  exclusion, strongest-hit fields) 0x0076B7E0; `enemy_mitigate`
+  0x00AAA490; `player_mitigate` + `defence_curve` 0x00B7AD90 /
+  0x00B83EE0; `scale_for_region` + `resolve_enemy_hit` 0x0076DB10;
+  `min_damage_rule` 0x00775C70; `apply_hp` 0x00776F50; `apply_break`
+  0x00777110; `resolve_reaction` 0x0076E340; `tick_region` /
+  `region_class` 0x007781A0. No global state: attacker, victim, pools
+  and tables are inputs (N players).
+- `events`: LMT event groups and the activation rule (0x01057060,
+  0x0076F430): `activations(motion, frame)` gives the
+  (`mResourceID`, `SeqIndex`) pairs live at a frame.
+- Examples `lmt_hits` (hit windows per motion) besides the earlier ones.
+
+**Tests:** 4 unit (ocl, events), 8 synthetic damage tests
+(`tests/damage.rs`), 4 install tests: all 8,629 `rObjCollision`
+occurrences, all 1,032 motion lists (9,158 motions with events), the
+goblin's attack-1 hit window (frames 45..48 of `e0100_at` motion 1), and
+the worked example from the installed files (Lv1 Fighter, Iron Sword,
+sword attack 1 on a goblin: **105 HP**, flinch). Clippy clean.
+
+**Traced (COMBAT.md 2.1):** hit groups are switched on by LMT event
+group 0: run-length bits at the truncated frame of each of 8 layers,
+bit i -> `remap[i]` = resource id x 1000 + sequence index; the sequence's
+group nodes are registered with its attack (body file or paired attack
+file) in three passes with group-kind masks. Also new: the minimum
+damage rule, the stagger/knockdown reaction with refill timers, the
+strongest-hit rules of the merge.
+
+**Gaps (named):** group-0 bits 16..31 (2,963 motions use them) and event
+groups 1..3; how `mRelation` and the hit history limit repeated hits;
+joint placement and shape tests (Riftstone's shape table only); status
+build-up and timed statuses; species- and player-specific multipliers.
+
+**Live:** the goblin hit, head hit and magick hit checks are requested
+from claude-4 for ORACLE.md's open checks (board #831; ORACLE.md is
+claude-4's file).
+
+**Next:** a volume-placement brief (joints + shapes 0/1/4, per-frame pairs
+feeding `merge_frame`), and a combat-status brief.
