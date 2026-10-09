@@ -8,10 +8,10 @@
 //! actor. Field offsets are those of `cThinkFSM` (reflected by vf03
 //! 0x007a82d0).
 
+use crate::Error;
 use crate::cond::{Value, Var};
 use crate::core::{Core, Owner, ProcAt, ProcMem};
 use crate::fields::Fields;
-use crate::Error;
 use mtfsm::{Graph, Process};
 use std::sync::Arc;
 
@@ -60,6 +60,13 @@ pub struct Candidate {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Inputs {
     pub time: Time,
+    /// Current, recognized stage (the host resolves the stage table used by
+    /// Set LotFlag, 0x007ab650). None when no stage is loaded.
+    pub stage: Option<u32>,
+    /// Current actor motion frame and completion, supplied by the animation
+    /// host (getters 0x007ab900 / 0x007ab8c0). No actor reads zero / false.
+    pub motion_frame: f32,
+    pub motion_ended: bool,
     /// `None` when the owner has no live actor (the getters then read 0).
     pub actor: Option<Actor>,
     /// Unit +0xe0 of each player's Arisen. The original reads "the player"
@@ -86,7 +93,35 @@ pub struct Inputs {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// CtrlAction (0x005a8950): actor vf+0x210(action number).
-    Action { action: i64 },
+    Action {
+        action: i64,
+    },
+    /// CtrlActionEx (0x005a89e0), including all serialized argument lanes.
+    ActionEx {
+        action: i64,
+        signed: [i32; 4],
+        unsigned: [u32; 4],
+        floats: [f32; 8],
+    },
+    /// SetTargetPos (0x005a90e0), with the active world offset applied.
+    TargetPos {
+        pos: [f32; 3],
+    },
+    /// cThinkFSM world writes; the host applies these in process order.
+    QuestFlag {
+        quest: u32,
+        bit: u32,
+        value: bool,
+    },
+    Gsf {
+        no: u32,
+        value: bool,
+    },
+    LayoutFlag {
+        stage: u32,
+        no: u32,
+        value: bool,
+    },
     /// CtrlMotion (0x005a8890): actor vf+0x214 with the motion and its
     /// optional interpolation, start frame, speed and attribute.
     Motion {
@@ -99,16 +134,27 @@ pub enum Request {
     /// CtrlThinkTbl (state callback 0x005a9240): the actor's think table
     /// (vf+0x2f4 / +0x2f8 with the table number) and, when `mode` != 0,
     /// unit +0x2d70 = mode - 1. Sent every frame the state runs.
-    ThinkTable { table: u64, mode: u64, class: String },
+    ThinkTable {
+        table: u64,
+        mode: u64,
+        class: String,
+    },
     /// SetEscapePos (0x005a9170): actor vf+0x2e8(position), the world offset
     /// added when sWorldOffset is active.
-    EscapePos { pos: [f32; 3] },
+    EscapePos {
+        pos: [f32; 3],
+    },
     /// SetFreeFlg (0x005a9210): OR into FreeCondition (+0x70) of the FSM the
     /// actor's AI controller holds (unit +0x2e64 -> +0x4c). The host applies
     /// it, normally with [`Thinker::or_free_condition`] on this thinker.
-    FreeCondition { bits: u32 },
+    FreeCondition {
+        bits: u32,
+    },
     /// SearchSetTarget (0x005a8aa0): the nearest candidate became the target.
-    Target { group: u64, id: u32 },
+    Target {
+        group: u64,
+        id: u32,
+    },
     /// Set Kill Owner (0x007ab200): remove the owning unit.
     KillOwner,
 }
@@ -222,6 +268,13 @@ impl Owner for ThinkFields {
             "Timer[3]" => Value::Float(self.timers[3]),
             "RandomTimer" => Value::Float(self.random_timer),
             "Attack (flag)" => Value::Bool(self.attack),
+            // Translated from 0x007ab900 / 0x007ab8c0 (DDDA.exe 2017-12-13 Steam).
+            "Motion Frame" => Value::Float(if self.after_change != 0 || i.actor.is_none() {
+                0.0
+            } else {
+                i.motion_frame
+            }),
+            "Motion End (flag)" => Value::Bool(i.actor.is_some() && i.motion_ended),
             "Motion Loop Cnt" => Value::Int(i64::from(self.motion_loop_cnt)),
             "Check Target Distance" => Value::Float(self.check_target_distance),
             "ActionEx Fail Time" => Value::Float(self.action_ex_fail_time),
@@ -287,6 +340,105 @@ impl Owner for ThinkFields {
                     env.requests.push(Request::Action { action });
                 }
             }
+            // Translated from 0x005a89e0 (DDDA.exe 2017-12-13 Steam).
+            "CtrlActionEx" => {
+                let r = par()?;
+                let lanes = |name: &str, count: usize| -> Result<Vec<&mtxfs::Value>, Error> {
+                    let values = r
+                        .fields
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .ok_or_else(|| Error::Data(format!("CtrlActionEx {name}")))?;
+                    if values.1.len() != count {
+                        return Err(Error::Data(format!(
+                            "CtrlActionEx {name}: expected {count} lanes"
+                        )));
+                    }
+                    values
+                        .1
+                        .iter()
+                        .map(|v| match v {
+                            mtfsm::Parameter::Scalar(v) => Ok(v),
+                            _ => Err(Error::Data(format!("CtrlActionEx {name}: scalar expected"))),
+                        })
+                        .collect()
+                };
+                let mut signed = [0; 4];
+                let mut unsigned = [0; 4];
+                let mut floats = [0.0; 8];
+                for (out, v) in signed.iter_mut().zip(lanes("S32パラメータ", 4)?) {
+                    *out = match v {
+                        mtxfs::Value::S(v) => i32::try_from(*v).ok(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| Error::Data("CtrlActionEx signed lane".into()))?;
+                }
+                for (out, v) in unsigned.iter_mut().zip(lanes("U32パラメータ", 4)?) {
+                    *out = match v {
+                        mtxfs::Value::U(v) => u32::try_from(*v).ok(),
+                        _ => None,
+                    }
+                    .ok_or_else(|| Error::Data("CtrlActionEx unsigned lane".into()))?;
+                }
+                for (out, v) in floats.iter_mut().zip(lanes("F32パラメータ", 8)?) {
+                    *out = match v {
+                        mtxfs::Value::F(v) if v.len() == 1 => Some(v[0] as f32),
+                        _ => None,
+                    }
+                    .ok_or_else(|| Error::Data("CtrlActionEx float lane".into()))?;
+                }
+                let action = r
+                    .s("アクション番号")
+                    .ok_or_else(|| Error::Data("CtrlActionEx number".into()))?;
+                self.sys_condition &= 0x9fff_ffff;
+                if env.inputs.actor.is_some() {
+                    env.requests.push(Request::ActionEx {
+                        action,
+                        signed,
+                        unsigned,
+                        floats,
+                    });
+                }
+            }
+            // Translated from 0x007aad10 / 0x007aad90 (DDDA.exe 2017-12-13 Steam).
+            // Out-of-range flag IDs are ignored by the original callbacks.
+            "Set GSFFlag" => {
+                if let Some(r) = p.parameter.as_ref() {
+                    if let Some(no) = r.u("FlagNo").filter(|&n| n < 1536) {
+                        env.requests.push(Request::Gsf {
+                            no: no as u32,
+                            value: r.b("Bool").unwrap_or(false),
+                        });
+                    }
+                }
+            }
+            "Set QuestFlag" => {
+                if let Some(r) = p.parameter.as_ref() {
+                    if let (Some(quest), Some(bit)) = (
+                        r.u("QuestNo").filter(|&n| n < 128),
+                        r.u("BitNo").filter(|&n| n < 96),
+                    ) {
+                        env.requests.push(Request::QuestFlag {
+                            quest: quest as u32,
+                            bit: bit as u32,
+                            value: r.b("Bool").unwrap_or(false),
+                        });
+                    }
+                }
+            }
+            // Translated from 0x007ab650 (DDDA.exe 2017-12-13 Steam).
+            "Set LotFlag" => {
+                if let (Some(r), Some(stage)) = (p.parameter.as_ref(), env.inputs.stage) {
+                    let count = if stage == 100 { 256 } else { 128 };
+                    if let Some(no) = r.u("FlagNo").filter(|&n| n < count) {
+                        env.requests.push(Request::LayoutFlag {
+                            stage,
+                            no: no as u32,
+                            value: r.b("Bool").unwrap_or(false),
+                        });
+                    }
+                }
+            }
             // Translated from 0x005a8890 (DDDA.exe 2017-12-13 Steam).
             "CtrlMotion" => {
                 let r = par()?;
@@ -307,17 +459,26 @@ impl Owner for ThinkFields {
             // only clears the request bits.
             "SearchSetTarget" | "CtrlThinkTbl" => self.sys_condition &= 0x9fff_ffff,
             // Translated from 0x005a9170 (DDDA.exe 2017-12-13 Steam).
-            "SetEscapePos" => {
+            "SetEscapePos" | "SetTargetPos" => {
                 let mut pos = par()?
-                    .vec3("逃走ポイント座標")
-                    .ok_or_else(|| Error::Data("SetEscapePos point".into()))?;
+                    .vec3(if name == "SetTargetPos" {
+                        "ターゲット座標"
+                    } else {
+                        "逃走ポイント座標"
+                    })
+                    .ok_or_else(|| Error::Data(format!("{name} point")))?;
                 self.sys_condition &= 0x9fff_ffff;
                 if env.inputs.world_offset_on {
                     for (p, o) in pos.iter_mut().zip(env.inputs.world_offset) {
                         *p += o;
                     }
                 }
-                env.requests.push(Request::EscapePos { pos });
+                env.requests.push(if name == "SetTargetPos" {
+                    // Translated from 0x005a90e0 (DDDA.exe 2017-12-13 Steam).
+                    Request::TargetPos { pos }
+                } else {
+                    Request::EscapePos { pos }
+                });
             }
             // Translated from 0x005a9210 (DDDA.exe 2017-12-13 Steam).
             "SetFreeFlg" => {
@@ -360,7 +521,7 @@ impl Owner for ThinkFields {
                     "{}: process {other} in state {}",
                     at.graph,
                     String::from_utf8_lossy(at.state_name)
-                )))
+                )));
             }
         }
         Ok(())
@@ -375,7 +536,7 @@ impl Owner for ThinkFields {
     ) -> Result<(), Error> {
         let name = String::from_utf8_lossy(&p.container);
         match name.as_ref() {
-            "CtrlAction" | "CtrlMotion" => self.request_state(env.inputs),
+            "CtrlAction" | "CtrlActionEx" | "CtrlMotion" => self.request_state(env.inputs),
             // Translated from 0x005a9240 (DDDA.exe 2017-12-13 Steam). The
             // class name only has to name a class (0x00cf5870 looks it up);
             // an empty one is treated as absent.
@@ -399,13 +560,14 @@ impl Owner for ThinkFields {
             "Finish" => self.sys_condition |= 1,
             "Kill" => self.sys_condition |= 0x10,
             // Registered without a state callback, or with the stub 0x007497f0.
-            "SetEscapePos" | "SetFreeFlg" | "Timer" | "Set Check Pos" | "Set Kill Owner" => {}
+            "SetEscapePos" | "SetTargetPos" | "SetFreeFlg" | "Timer" | "Set Check Pos" | "Set Kill Owner"
+            | "Set QuestFlag" | "Set GSFFlag" | "Set LotFlag" => {}
             other => {
                 return Err(Error::Unimplemented(format!(
                     "{}: process {other} in state {}",
                     at.graph,
                     String::from_utf8_lossy(at.state_name)
-                )))
+                )));
             }
         }
         Ok(())
