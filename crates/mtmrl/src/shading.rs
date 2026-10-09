@@ -66,6 +66,12 @@ pub struct Shading {
     pub diffuse_color: [f32; 3],
     /// `CBMaterial.fTransparency`, a factor on the alpha.
     pub transparency: f32,
+    /// `CBMaterial.fReflectiveColor`, the tint of the environment
+    /// reflection (`FReflect*` variants).
+    pub reflective_color: [f32; 3],
+    /// `$Globals.fFresnelSchlick`, the reflection's Fresnel F0
+    /// (`FFresnelSchlick`).
+    pub fresnel: f32,
     /// `CBMaterial.fUVTransform` (a row-major float4x2): row 0 gives
     /// `u' = r.x*u + r.y*v + r.w`, row 1 gives `v'` (z unused), as the
     /// vertex shaders apply it. Set only when `FUVTransformPrimary` is
@@ -147,6 +153,10 @@ pub fn describe(m: &Material<'_>, list: &MaterialList<'_>, pkg: &ShaderPackage) 
         [1.0; 3]
     };
     let diffuse_color = rgb(read("CBMaterial", "fDiffuseColor")).unwrap_or([1.0; 3]);
+    let reflective_color = rgb(read("CBMaterial", "fReflectiveColor")).unwrap_or([1.0; 3]);
+    let fresnel = read("$Globals", "fFresnelSchlick")
+        .and_then(|v| v.first().copied())
+        .unwrap_or(1.0);
     let transparency = read("CBMaterial", "fTransparency")
         .and_then(|v| v.first().copied())
         .unwrap_or(1.0);
@@ -176,6 +186,8 @@ pub fn describe(m: &Material<'_>, list: &MaterialList<'_>, pkg: &ShaderPackage) 
         albedo_color,
         diffuse_color,
         transparency,
+        reflective_color,
+        fresnel,
         uv_transform,
         alpha,
         blend: pkg.blend_state(m.blend_state).copied(),

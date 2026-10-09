@@ -19,6 +19,9 @@
 //! `fTransparency`. *Difference:* the original blends in sRGB (its pixel
 //! shaders encode to sRGB before the blend), Bevy blends in linear.
 
+#[path = "post.rs"]
+pub mod post;
+
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -60,7 +63,9 @@ pub struct ShadingPlugin;
 impl Plugin for ShadingPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "dd_material.wgsl");
+        bevy::asset::embedded_asset!(app, "dd_post.wgsl");
         app.add_plugins(MaterialPlugin::<DdMaterial>::default())
+            .add_plugins(bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<post::DdPost>::default())
             .init_resource::<StageLighting>()
             .add_systems(Update, resolve_dd_materials);
     }
@@ -81,6 +86,8 @@ pub struct StageLighting {
     /// Fog start and end in game units (cm) of view depth.
     pub fog_start: f32,
     pub fog_end: f32,
+    /// Game clock (ms into the day) of the capture, if it has one.
+    pub clock_ms: Option<u32>,
 }
 
 /// Uniform of [`DdExt`]; layout mirrored in `dd_material.wgsl`.
@@ -95,10 +102,14 @@ pub struct DdParams {
     pub sun_color: Vec4,
     pub fog_color: Vec4,
     pub fog_range: Vec4,
+    /// xyz: fReflectiveColor, w: Fresnel F0 (FReflect* materials).
+    pub reflect: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
 const FLAG_DD_LIGHTING: u32 = 2;
+const FLAG_REFLECT: u32 = 4;
+const FLAG_SPEC_MAP: u32 = 8;
 
 impl DdParams {
     fn with_lighting(mut self, l: &StageLighting) -> Self {
@@ -130,6 +141,10 @@ pub struct DdExt {
     #[texture(101)]
     #[sampler(102)]
     pub map: Option<Handle<Image>>,
+    /// `tSpecularMap` (FSpecularMap), its G channel masks the reflection.
+    #[texture(103)]
+    #[sampler(104)]
+    pub spec: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for DdExt {
@@ -240,6 +255,43 @@ fn vertex_colors(
             })
             .collect(),
     )
+}
+
+/// One landmark of the table at 0x01873550 (15 entries of 0x40 bytes):
+/// +0x08 switch radius, +0x10 position (stage frame, cm), +0x30 / +0x34 an
+/// optional gate on the story progress `*(sGameSys) + 0x30`: mode 1 draws
+/// when progress >= value, mode 2 when progress < value (entries 7 and 5,
+/// two versions of the same landmark). The float at +0x24 of entries 11-13
+/// is not read by the placement code.
+// Translated from 0x00c61bd0 (DDDA.exe 2017-12-13 Steam)
+struct Landmark {
+    radius: f32,
+    position: [f32; 3],
+    gate: Option<(i32, u8)>,
+}
+
+const LANDMARKS: [Landmark; 15] = [
+    Landmark { radius: 25000.0, position: [45000.0, 30000.0, 145000.0], gate: None },
+    Landmark { radius: 25000.0, position: [20000.0, 30000.0, 135000.0], gate: None },
+    Landmark { radius: 20000.0, position: [0.0, 35000.0, 105000.0], gate: None },
+    Landmark { radius: 30000.0, position: [-17000.0, 33000.0, 170000.0], gate: None },
+    Landmark { radius: 22000.0, position: [-93000.0, 46000.0, 111000.0], gate: None },
+    Landmark { radius: 35000.0, position: [35800.0, 35200.0, 51400.0], gate: Some((0x1E78, 2)) },
+    Landmark { radius: 35000.0, position: [14800.0, 35200.0, 51400.0], gate: None },
+    Landmark { radius: 35000.0, position: [35800.0, 35200.0, 51400.0], gate: Some((0x1E78, 1)) },
+    Landmark { radius: 20000.0, position: [-43000.0, 39000.0, 53000.0], gate: None },
+    Landmark { radius: 30000.0, position: [33000.0, 38000.0, -10000.0], gate: None },
+    Landmark { radius: 20000.0, position: [32500.0, 40400.0, -31250.0], gate: None },
+    Landmark { radius: 25000.0, position: [63500.0, 41500.0, -54200.0], gate: None },
+    Landmark { radius: 43000.0, position: [141200.0, 33800.0, 22800.0], gate: None },
+    Landmark { radius: 20000.0, position: [-76439.0, 47200.0, 22666.0], gate: None },
+    Landmark { radius: 20000.0, position: [-101490.0, 53800.0, -1200.0], gate: None },
+];
+
+/// Path of the first `rModel` entry of an archive.
+fn arc_model_path(arc: &std::path::Path) -> Option<String> {
+    let (index, _) = mtarc::Archive::open(arc).ok()?;
+    index.entries.iter().find(|e| e.type_hash == RMODEL).map(|e| e.path.clone())
 }
 
 pub struct Loader<'a> {
@@ -528,6 +580,11 @@ impl Loader<'_> {
             AlphaMode::Blend
         } else if let Some(cutoff) = test {
             AlphaMode::Mask(cutoff)
+        } else if s.blends_alpha() && s.feature("FTransparency") == Some("FTransparencyVolume") {
+            // DDMaterialWater: the original fades by water depth over
+            // fTransparencyVolume (not done); blended at fTransparency.
+            sm.base_color.set_alpha(s.transparency);
+            AlphaMode::Blend
         } else {
             // Alpha computed but neither tested nor blended: no effect.
             AlphaMode::Opaque
@@ -541,6 +598,23 @@ impl Loader<'_> {
         }
         let mut params = DdParams::default();
         let mut map = None;
+        let mut spec = None;
+        if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {
+            // Reflection of the sky render (DDCube0_CM) or of the planar
+            // water reflection; both are run-time render targets, see the
+            // shader for the stand-in.
+            params.flags |= FLAG_REFLECT;
+            let f0 = if s.feature("FFresnel") == Some("FFresnelSchlick") { s.fresnel } else { 1.0 };
+            params.reflect = Vec3::from(s.reflective_color).extend(f0);
+            if s.feature("FSpecular") == Some("FSpecularMap") {
+                if let Some(p) = s.textures.get("tSpecularMap") {
+                    spec = self.texture(p, images);
+                    if spec.is_some() {
+                        params.flags |= FLAG_SPEC_MAP;
+                    }
+                }
+            }
+        }
         if let AlphaSource::Map { texture, channel, .. } = &s.alpha {
             if let Some(h) = self.texture(texture, images) {
                 params.flags |= FLAG_MAP;
@@ -551,7 +625,7 @@ impl Loader<'_> {
         PartMaterial::Dd(Arc::new(DdSlot {
             material: DdMaterial {
                 base: sm,
-                extension: DdExt { params, map },
+                extension: DdExt { params, map, spec },
             },
             handle: OnceLock::new(),
         }))
@@ -668,13 +742,64 @@ impl Loader<'_> {
         b: i32,
         offset: Vec3,
     ) -> bool {
+        // The cell's own terrain under its forest: without it the fmfore
+        // trees float. (The cell's scenery layout is not loaded at this
+        // distance.)
+        let terrain = format!("scr\\st{stage}\\model\\m{}\\st{stage}_{a}m{b}n", a / 10 * 10);
+        let mut any = false;
+        if let Some(parts) = self.model(&terrain, meshes, materials, images) {
+            self.spawn_parts(commands, &parts, Transform::from_translation(offset), &terrain);
+            any = true;
+        }
         let path = format!("scr\\st{stage}\\model\\fm_m{}\\fmfore_{a}m{b}n", a / 10 * 10);
-        let Some(parts) = self.model(&path, meshes, materials, images) else {
-            return false;
-        };
-        self.stats.far_cells += 1;
-        self.spawn_parts(commands, &parts, Transform::from_translation(offset), &path);
-        true
+        if let Some(parts) = self.model(&path, meshes, materials, images) {
+            self.spawn_parts(commands, &parts, Transform::from_translation(offset), &path);
+            any = true;
+        }
+        if any {
+            self.stats.far_cells += 1;
+        }
+        any
+    }
+
+    /// The stage-100 landmarks (`uFmSetBase`): 15 far models placed by the
+    /// exe, not by a layout. Each switches between the model of
+    /// `rom\stage\stage100\fm\fm_index<i>_high.arc` within its radius of the
+    /// player and `fm_index<i>_low.arc` beyond it. `eye` is the viewer's
+    /// eye in the stage frame (origin cell 50m50n, cm); `origin` is the
+    /// viewer's origin cell (A0, B0).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_landmarks(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        origin: (i32, i32),
+        eye: Vec3,
+        progress: i32,
+    ) -> usize {
+        let shift = -Vec3::new((origin.1 - 50) as f32 * 10000.0, 0.0, (origin.0 - 50) as f32 * 10000.0);
+        let mut n = 0;
+        for (i, l) in LANDMARKS.iter().enumerate() {
+            match l.gate {
+                Some((v, 1)) if progress < v => continue,
+                Some((v, 2)) if progress >= v => continue,
+                _ => {}
+            }
+            let pos = Vec3::from(l.position);
+            let near = Vec2::new(eye.x - pos.x, eye.z - pos.z).length() < l.radius;
+            let file = format!("fm_index{i:02}_{}.arc", if near { "high" } else { "low" });
+            let arc = self.vfs.root.join("rom").join("stage").join("stage100").join("fm").join(file);
+            let Some(path) = arc_model_path(&arc) else {
+                self.stats.missing.push(format!("landmark {i}: no model in {}", arc.display()));
+                continue;
+            };
+            let Some(parts) = self.model(&path, meshes, materials, images) else { continue };
+            self.spawn_parts(commands, &parts, Transform::from_translation((pos + shift) * UNIT), &path);
+            n += 1;
+        }
+        n
     }
 
     /// Every water model of the stage (`scr\st<S>\model\water\`: the sea plane
@@ -719,11 +844,17 @@ impl Loader<'_> {
             let Some(parts) = self.model(p, meshes, materials, images) else {
                 continue;
             };
+            // The water models' own materials (MaterialStdEst sea,
+            // DDMaterialWater rivers and lakes); the placeholder is only
+            // used for parts without one.
             let parts: Vec<Part> = parts
                 .into_iter()
-                .map(|q| Part {
-                    material: PartMaterial::Standard(water.clone()),
-                    ..q
+                .map(|q| match q.material {
+                    PartMaterial::Dd(_) => q,
+                    _ => Part {
+                        material: PartMaterial::Standard(water.clone()),
+                        ..q
+                    },
                 })
                 .collect();
             self.stats.water_models += 1;

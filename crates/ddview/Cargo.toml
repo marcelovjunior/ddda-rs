@@ -23,4 +23,5 @@ mtmrl = { path = "../mtmrl" }
 mtshader = { path = "../mtshader" }
 mtswm = { path = "../mtswm" }
 mtweather = { path = "../mtweather" }
+ddquest = { path = "../ddquest" }
 mttex = { path = "../mttex" }

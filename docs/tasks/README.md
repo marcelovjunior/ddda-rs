@@ -118,7 +118,7 @@ Codex lane: see `docs/CODEX.md`.
 | [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | codex-1 | reassigned (WIP on branch) |
 | [story-order](story-order.md) | ddstory in the traced frame order + state accessor | core | claude-7 | merged 2026-10-09 |
 | [host-integration](host-integration.md) | One player identity, per-crate save chunks, wire economy/progress/rift into ddhost | core | claude-10 | merged 2026-10-09 |
-| [m1-finish](m1-finish.md) | Post-processing chain, sky, water, distant terrain (M1 gate) | core | claude-3 | assigned |
+| [m1-finish](m1-finish.md) | Post-processing chain, sky, water, distant terrain (M1 gate) | core | claude-3 | merged 2026-10-09 |
 | [event-polish](event-polish.md) | Event cameras follow actors, NPC actors, script gate | core | claude-7 | merged 2026-10-09 |
 | [m3-lan](m3-lan.md) | LAN co-op: ddnet over ddhost, host/join in ddview (M3) | core | claude-10 | assigned |
 | [character-assembly](character-assembly.md) | One skeleton, part masks, morphs/colours, equipment models | core | claude-7 | merged 2026-10-09 |
