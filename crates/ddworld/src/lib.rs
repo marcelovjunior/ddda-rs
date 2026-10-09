@@ -48,6 +48,66 @@ fn bucket(x: f32, z: f32) -> (i32, i32) {
     ((x / BUCKET).floor() as i32, (z / BUCKET).floor() as i32)
 }
 
+/// Triangles steeper than this (|normal.y| below it) are walls.
+const WALL_MAX_NY: f32 = 0.7;
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Closest point on triangle `t` to `p` (Ericson, Real-Time Collision
+/// Detection, 5.1.5).
+fn closest_on_triangle(p: [f32; 3], t: &[[f32; 3]; 3]) -> [f32; 3] {
+    let [a, b, c] = *t;
+    let lerp = |o: [f32; 3], d: [f32; 3], k: f32| [o[0] + d[0] * k, o[1] + d[1] * k, o[2] + d[2] * k];
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return lerp(a, ab, d1 / (d1 - d3));
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return lerp(a, ac, d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return lerp(b, sub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    [
+        a[0] + ab[0] * v + ac[0] * w,
+        a[1] + ab[1] * v + ac[1] * w,
+        a[2] + ab[2] * v + ac[2] * w,
+    ]
+}
+
 impl Terrain {
     pub fn empty() -> Self {
         Terrain {
@@ -92,15 +152,18 @@ impl Terrain {
         t
     }
 
-    /// Loads the cells' collision meshes (`st<S>h_` and `st<S>e_<A>m<B>n_mrg00`,
+    /// Loads the cells' merged stage collision (`st<S>h_<A>m<B>n_mrg00`,
     /// cell-local like the terrain model) instead of the render terrain.
+    /// The `h` file is what characters stand on and run into: the loader
+    /// (`0x00C5F680`) stores it as `cSplitSbc::mpClsnScrMrgRsrc`; the `e` file
+    /// is `mpClsnEffMrgRsrc` (effects) and is not used for movement.
     pub fn load_collision(vfs: &Vfs, stage: u32, a0: i32, b0: i32, radius: i32) -> Self {
         let mut t = Terrain::empty();
         for a in a0 - radius..=a0 + radius {
             for b in b0 - radius..=b0 + radius {
                 let off = [(b - 50) as f32 * 10000.0, 0.0, (a - 50) as f32 * 10000.0];
                 let mut any = false;
-                for kind in ["h", "e"] {
+                for kind in ["h"] {
                     let path = format!(
                         r"scr\st{stage}\collision\m{}\marge\st{stage}{kind}_{a}m{b}n_mrg00",
                         a / 10 * 10
@@ -123,7 +186,8 @@ impl Terrain {
     }
 
     /// Adds the collision of each cell's placed scenery (`_s00` layout): every
-    /// instance whose model has `model\om\...\collision\<id>_h00` / `_e00`,
+    /// instance whose model has `model\om\...\collision\<id>_h00` (the
+    /// stage-collision half; `_e00` is the effect half, as for the cells),
     /// transformed by the instance's scale, rotation and position into the
     /// stage frame (layout positions are already stage-frame; docs/WORLD.md).
     /// Rotation uses the same Euler convention as the viewer (*assumed* XYZ:
@@ -135,7 +199,7 @@ impl Terrain {
             .filter(|p| p.starts_with(r"model\om\"))
         {
             let base = p.rsplit('\\').next().unwrap_or(p);
-            if let Some(id) = base.strip_suffix("_h00").or_else(|| base.strip_suffix("_e00")) {
+            if let Some(id) = base.strip_suffix("_h00") {
                 by_name.entry(id.to_string()).or_default().push(p.to_string());
             }
         }
@@ -224,6 +288,60 @@ impl ddsim_ground::Ground for Terrain {
         }
         best
     }
+
+    /// Wall triangles (steeper than `WALL_MAX_NY`) near the vertical segment,
+    /// sampled at heights `low`..`high` no further apart than `radius`.
+    fn wall(&self, p: [f32; 3], radius: f32, low: f32, high: f32) -> Option<[f32; 2]> {
+        let (b0, b1) = (
+            bucket(p[0] - radius, p[2] - radius),
+            bucket(p[0] + radius, p[2] + radius),
+        );
+        let samples = ((high - low) / radius).ceil().max(1.0) as usize;
+        let mut best: Option<(f32, [f32; 2])> = None;
+        let mut seen = std::collections::HashSet::new();
+        for bx in b0.0..=b1.0 {
+            for bz in b0.1..=b1.1 {
+                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let t = &self.tris[id as usize];
+                    let (ylo, yhi) = (
+                        t[0][1].min(t[1][1]).min(t[2][1]),
+                        t[0][1].max(t[1][1]).max(t[2][1]),
+                    );
+                    if yhi < low || ylo > high {
+                        continue;
+                    }
+                    let n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+                    let len = dot(n, n).sqrt();
+                    if len < 1e-6 || (n[1] / len).abs() >= WALL_MAX_NY {
+                        continue;
+                    }
+                    for k in 0..=samples {
+                        let y = low + (high - low) * k as f32 / samples as f32;
+                        let q = [p[0], y, p[2]];
+                        let c = closest_on_triangle(q, t);
+                        let (dx, dz) = (q[0] - c[0], q[2] - c[2]);
+                        let d = (dx * dx + (q[1] - c[1]).powi(2) + dz * dz).sqrt();
+                        if d >= radius || best.is_some_and(|(bd, _)| bd <= d) {
+                            continue;
+                        }
+                        let h = (dx * dx + dz * dz).sqrt();
+                        let dir = if h > 1e-3 {
+                            [dx / h, dz / h]
+                        } else {
+                            // on the wall: the face normal's side facing the segment
+                            let hn = (n[0] * n[0] + n[2] * n[2]).sqrt();
+                            [n[0] / hn, n[2] / hn]
+                        };
+                        best = Some((d, dir));
+                    }
+                }
+            }
+        }
+        best.map(|(_, dir)| dir)
+    }
 }
 
 /// Re-export of the ground trait so dependants need not name ddsim.
@@ -247,5 +365,22 @@ mod tests {
         assert_eq!(t.height(2000.0, 300.0, 1e9), None);
         // below_y excludes surfaces above it
         assert_eq!(t.height(500.0, 300.0, 10.0), None);
+    }
+
+    #[test]
+    fn walls_are_found_within_the_radius() {
+        let mut t = Terrain::empty();
+        // a wall in the plane x = 100, z 0..1000, y 0..300
+        t.add([[100.0, 0.0, 0.0], [100.0, 300.0, 0.0], [100.0, 0.0, 1000.0]]);
+        t.add([[100.0, 300.0, 0.0], [100.0, 300.0, 1000.0], [100.0, 0.0, 1000.0]]);
+        // a floor is not a wall
+        t.add([[0.0, 0.0, 0.0], [0.0, 0.0, 1000.0], [90.0, 0.0, 0.0]]);
+        let n = t.wall([80.0, 0.0, 500.0], 35.0, 60.0, 170.0).unwrap();
+        assert!((n[0] + 1.0).abs() < 1e-4 && n[1].abs() < 1e-4, "{n:?}");
+        let n = t.wall([120.0, 0.0, 500.0], 35.0, 60.0, 170.0).unwrap();
+        assert!((n[0] - 1.0).abs() < 1e-4, "{n:?}");
+        assert_eq!(t.wall([50.0, 0.0, 500.0], 35.0, 60.0, 170.0), None);
+        // above the wall's top
+        assert_eq!(t.wall([80.0, 0.0, 500.0], 35.0, 400.0, 500.0), None);
     }
 }

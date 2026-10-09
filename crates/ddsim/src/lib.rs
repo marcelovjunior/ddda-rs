@@ -317,6 +317,38 @@ impl RootMotion {
 pub trait Ground {
     /// Highest ground height (cm) at (x, z) at or below `below_y`.
     fn height(&self, x: f32, z: f32, below_y: f32) -> Option<f32>;
+
+    /// A wall within `radius` of the vertical segment at `p` (x, z) from
+    /// height `low` to `high`: the horizontal unit direction from the wall
+    /// to the segment. The default world has no walls.
+    fn wall(&self, _p: [f32; 3], _radius: f32, _low: f32, _high: f32) -> Option<[f32; 2]> {
+        None
+    }
+}
+
+/// The body as a vertical cylinder for wall tests, cm. *Placeholder*: the
+/// original's player collision shape is not traced.
+pub const BODY_RADIUS: f32 = 35.0;
+pub const BODY_HEIGHT: f32 = 170.0;
+
+/// Moves from `from` toward `to` (same height) against walls: the full
+/// move if nothing blocks it or it leads away from the wall, else the move
+/// slid along the wall, else no move.
+fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
+    let hit = |q: [f32; 3]| ground.wall(q, BODY_RADIUS, from[1] + STEP_UP, from[1] + BODY_HEIGHT);
+    let d = [to[0] - from[0], to[2] - from[2]];
+    let Some(n) = hit(to) else { return to };
+    let dn = d[0] * n[0] + d[1] * n[1];
+    if dn >= 0.0 {
+        // already touching and moving away from it
+        return to;
+    }
+    let slid = [from[0] + d[0] - dn * n[0], to[1], from[2] + d[1] - dn * n[1]];
+    match hit(slid) {
+        None => slid,
+        Some(m) if (slid[0] - from[0]) * m[0] + (slid[2] - from[2]) * m[1] >= 0.0 => slid,
+        Some(_) => from,
+    }
 }
 
 /// Stick magnitude above which the player moves. *Placeholder*.
@@ -617,6 +649,7 @@ impl Sim {
             p.speed = 0.0;
             p.frame += dt;
         }
+        let target = wall_slide(ground, p.position, target);
         match ground.height(target[0], target[2], p.position[1] + STEP_UP) {
             Some(h) if h >= p.position[1] - STEP_DOWN => p.position = [target[0], h, target[2]],
             Some(_) if !matches!(state, State::JumpStart { .. }) => {
@@ -670,8 +703,16 @@ impl Sim {
         p.frame += dt;
         // a wall ahead: nothing to stand on within a step of the body, but
         // ground above it
-        let wall = ground.height(next[0], next[2], p.position[1] + STEP_UP).is_none()
-            && ground.height(next[0], next[2], f32::MAX).is_some();
+        let wall = (ground.height(next[0], next[2], p.position[1] + STEP_UP).is_none()
+            && ground.height(next[0], next[2], f32::MAX).is_some())
+            || ground
+                .wall(
+                    next,
+                    BODY_RADIUS,
+                    p.position[1] + STEP_UP,
+                    p.position[1] + BODY_HEIGHT,
+                )
+                .is_some_and(|n| (next[0] - p.position[0]) * n[0] + (next[2] - p.position[2]) * n[1] < 0.0);
         if wall {
             // ledge grab: a top within reach in front of the player
             let (s, c) = p.yaw.sin_cos();
@@ -687,8 +728,10 @@ impl Sim {
                     return;
                 }
             }
-            next[0] = p.position[0];
-            next[2] = p.position[2];
+            // slide along the wall, keeping the vertical motion
+            let slid = wall_slide(ground, p.position, [next[0], p.position[1], next[2]]);
+            next[0] = slid[0];
+            next[2] = slid[2];
             p.velocity[0] = 0.0;
             p.velocity[2] = 0.0;
         }
@@ -1028,6 +1071,36 @@ mod tests {
         t[ADJUST_SPRINT] = 22.5;
         assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
         assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
+    }
+
+    /// Flat ground with a wall plane x = 100 (facing -X) reported by `wall`
+    /// only, like an open-sided prop in the collision mesh.
+    struct Shell;
+    impl Ground for Shell {
+        fn height(&self, _: f32, _: f32, below_y: f32) -> Option<f32> {
+            (0.0 <= below_y).then_some(0.0)
+        }
+        fn wall(&self, p: [f32; 3], radius: f32, _: f32, _: f32) -> Option<[f32; 2]> {
+            ((100.0 - p[0]).abs() < radius).then_some([-1.0, 0.0])
+        }
+    }
+
+    #[test]
+    fn wall_triangles_block_and_slide() {
+        let mut s = sim();
+        let mut inputs = HashMap::new();
+        // run diagonally into the wall: blocked in x, keeps moving in z
+        inputs.insert(
+            0,
+            Input {
+                stick: [-0.7071, 0.7071],
+                ..Default::default()
+            },
+        );
+        s.step(2.0, &inputs, &Shell);
+        let p = s.player(0).unwrap();
+        assert!(p.position[0] <= 100.0 - BODY_RADIUS + 1e-3, "{:?}", p.position);
+        assert!(p.position[2] > 200.0, "did not slide: {:?}", p.position);
     }
 
     #[test]
