@@ -168,6 +168,20 @@ impl Fight {
         }
     }
 
+    /// Applies the simulation's queued landing damage directly to one living
+    /// seat, bypassing combat defence. Returns the HP actually removed.
+    /// Resilience's fall-damage halving is not yet modelled; callers pass the
+    /// base amount derived by ddsim from the installed landing parameters.
+    pub fn fall_damage(&mut self, seat: u8, amount: f32) -> f32 {
+        if !amount.is_finite() || amount <= 0.0 { return 0.0; }
+        let Some(arisen) = self.arisen.get_mut(&seat) else { return 0.0; };
+        let Victim::Player { hp, .. } = &mut arisen.fighter.victim else { return 0.0; };
+        if *hp <= 0.0 { return 0.0; }
+        let removed = amount.min(*hp);
+        *hp -= removed;
+        removed
+    }
+
     /// Applies an already authorized restorative to one living seat.
     /// Returns HP restored and status kinds removed; missing/dead seats
     /// return `None` so the inventory caller can avoid consuming an item.
