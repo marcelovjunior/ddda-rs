@@ -54,6 +54,11 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   or a comparison against the running original.
 - Recovery after the loose SATA cable: worktree `git fsck --no-dangling`
   passed; source edits were intact and the complete AI test suite passed.
+- Follow-up: the real FSM controller 0x0059f440 disables and unbinds a
+  killed FSM, clearing SysCondition, whereas Finish rewinds and pauses it.
+  `Thinker::controlled_frame` now preserves that distinction. An installed
+  Dragon_OP regression verifies no subsequent updates or action-driven
+  restart after Kill, and explicit restart still works. All 33 AI tests pass.
 
 ### Encounter evidence and remaining work
 

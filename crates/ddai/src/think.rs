@@ -207,6 +207,9 @@ pub struct Thinker {
     /// `cAIFSMCtrl` +5 (cAICtrl +0x49): the FSM finished and waits for the
     /// unit to clear it ([`Thinker::controlled_frame`]).
     pub paused: bool,
+    /// cAICtrl +0x48: Kill disables the FSM controller, unlike Finish,
+    /// which pauses and rewinds it (0x0059f440).
+    pub disabled: bool,
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -646,6 +649,7 @@ impl Thinker {
             core: Core::new(path, graph)?,
             fields: ThinkFields::default(),
             paused: false,
+            disabled: false,
         })
     }
 
@@ -654,6 +658,7 @@ impl Thinker {
     /// FreeCondition and the timers are kept.
     pub fn restart(&mut self) -> Result<(), Error> {
         self.core = Core::new(&self.core.path.clone(), self.core.graph().clone())?;
+        self.disabled = false;
         Ok(())
     }
 
@@ -672,6 +677,9 @@ impl Thinker {
     /// soon as the unit's current action allows it; no request is needed.
     // Translated from 0x00aa78b0 and 0x0059f440 (DDDA.exe 2017-12-13 Steam).
     pub fn controlled_frame(&mut self, inputs: &Inputs) -> Result<Vec<Request>, Error> {
+        if self.disabled {
+            return Ok(vec![]);
+        }
         if self.paused {
             if !inputs.actor.is_some_and(|a| a.action_done) {
                 return Ok(vec![]);
@@ -682,6 +690,12 @@ impl Thinker {
         if self.finished() {
             self.core = Core::new(&self.core.path.clone(), self.core.graph().clone())?;
             self.paused = true;
+        } else if self.fields.sys_condition & 0x10 != 0 {
+            // Translated from 0x0059f440 (DDDA.exe 2017-12-13 Steam):
+            // clear +0x48, unbind the graph and clear SysCondition. A
+            // finished action must not automatically restart a killed FSM.
+            self.disabled = true;
+            self.fields.sys_condition = 0;
         }
         Ok(requests)
     }
