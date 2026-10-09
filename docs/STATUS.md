@@ -191,7 +191,7 @@ is 0 on the diagonal (a team never hurts itself), 2 in columns 31 and
 
 - Blind, silence, skill seal, possession: their action / AI consequences.
 - Petrify's stages and end state; kind 13 and kinds 27..39.
-- Which items send the cure messages; skill-cast durations of buffs and
+- Producers of the broad cure messages; skill-cast durations of buffs and
   enchants.
 - Lightning chains, holy and dark effects (`uCharacterBase::vf74`).
 - Player equipment status resistances in `PlayerDefender` (claude-6 /

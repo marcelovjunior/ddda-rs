@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/item-use`
 - **Board area:** `player/items`
-- **Status:** working (core tested; viewer hookup in coordination with codex-18)
+- **Status:** review
 
 ## Goal
 
@@ -61,8 +61,19 @@ Viewer module `items.rs` (head scope approvals #1516/#1525) imports four
 saved bags read-only, resolves augment factors from data, and offers the
 first useful supported restorative for the named local seat. Three module
 tests cover bag validation, optional private-save import and full potion /
-stamina / poison application. Compilation and U-key hookup are pending
-codex-18's coordinated build; this brief is not yet marked complete.
+stamina / poison application. After codex-18 released play/main, codex-20
+added the resource/key hookup on this branch: U for P1, Numpad0 for P2,
+offline `--play --save`, respecting pause and excluding network mode.
+All 14 ddview release tests pass, with the actual private save supplied to
+the import test. The binary builds successfully.
+
+Two bounded unattended viewer runs passed: at full resources U consumed
+nothing; while scripted W/Shift movement spent stamina, U consumed the
+save's five copies of item 1 followed by its one copy of item 2, then
+reported no useful restorative. Input was posted by a temporary script
+only to that owned ddview window, with `--unattended`, visible ungrabbed
+cursor and no focus pause. Both exited 0 after screenshots. Private
+evidence: `%TEMP%/ddda-item-use-check/{out.log,items.png}` (second run).
 
 Not compared live: no original-game state was changed. No game files,
 recordings or raw decompilation committed. The fight has no persistent
@@ -71,6 +82,6 @@ unchanged for spells. Automatic pawn item decisions, viewer Medicant
 propagation, network item commands, throwables, use animations and a full
 inventory menu remain outside this slice.
 
-Next action: codex-18 integrates the resource and U key into offline
-`--play --save`, then compile/run the three module tests and a bounded
-unattended demonstration.
+Next action: head reviews/merges `task/item-use`; follow-up host input
+commands should move quick-use into the authoritative network frame and
+replicate inventory changes.

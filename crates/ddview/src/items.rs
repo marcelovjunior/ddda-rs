@@ -28,8 +28,14 @@ fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
     let mut slots = Vec::new();
     for entry in array.children().take(count) {
         let item = ddsave::pawn::Item::read(entry).ok_or("invalid saved item")?;
-        if item.num <= 0 || item.item_no < 0 { return Err("invalid occupied item slot".into()); }
-        slots.push(Slot { item: item.item_no, num: item.num, flags: item.flag });
+        if item.num <= 0 || item.item_no < 0 {
+            return Err("invalid occupied item slot".into());
+        }
+        slots.push(Slot {
+            item: item.item_no,
+            num: item.num,
+            flags: item.flag,
+        });
     }
     Ok(Bag { slots })
 }
@@ -41,19 +47,31 @@ impl QuickItems {
     /// main pawn is bound here, to avoid duplicating the shared pawn bag.
     pub fn load(vfs: &ddvfs::Vfs, xml: &str, locals: &[PlayerId]) -> Result<Self, String> {
         let doc = Document::parse(xml).map_err(|e| e.to_string())?;
-        let player = doc.root().path("mPlayerDataManual/mPlCmcEditAndParam").ok_or("missing manual player data")?;
+        let player = doc
+            .root()
+            .path("mPlayerDataManual/mPlCmcEditAndParam")
+            .ok_or("missing manual player data")?;
         let bags = player.child("mItem").ok_or("missing saved bags")?;
         let bags: Vec<_> = bags.children().map(read_bag).collect::<Result<_, _>>()?;
-        if bags.len() != 4 { return Err("expected four saved character bags".into()); }
+        if bags.len() != 4 {
+            return Err("expected four saved character bags".into());
+        }
         let bytes = vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList"))?;
         let items = ItemList::parse(&bytes).map_err(|e| e.to_string())?;
-        let bytes = vfs.read(r"param\pl\other\plAbilityParam", mtarc::type_hash("rPlAbilityParam"))?;
+        let bytes = vfs.read(
+            r"param\pl\other\plAbilityParam",
+            mtarc::type_hash("rPlAbilityParam"),
+        )?;
         let xfs = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
         let nodes = xfs.walk();
         let row = nodes.get(1 + 0x4a).ok_or("missing recovery augment row")?;
         let factor = |param: Node<'_, '_>| -> Result<f32, String> {
             let abilities: Vec<i8> = param.array("mAbility").ok_or("missing augment slots")?;
-            let field = if abilities.contains(&0x4a) { "mFVal0" } else { "mFVal1" };
+            let field = if abilities.contains(&0x4a) {
+                "mFVal0"
+            } else {
+                "mFVal1"
+            };
             match xfs.get(row, field).and_then(|v| v.first()) {
                 Some(mtxfs::Value::F(v)) if v.len() == 1 => Ok(v[0] as f32),
                 _ => Err("invalid recovery augment factor".into()),
@@ -71,17 +89,29 @@ impl QuickItems {
         if let Some(&seat) = locals.first() {
             if let Some(pawn) = player.child("mCmc").and_then(|a| a.children().next()) {
                 let pawn_seat = crate::play::pawn_seat(seat);
-                factors.insert(pawn_seat, factor(pawn.child("mParam").ok_or("missing pawn params")?)?);
+                factors.insert(
+                    pawn_seat,
+                    factor(pawn.child("mParam").ok_or("missing pawn params")?)?,
+                );
                 owners.insert(pawn_seat, Owner::Pawn(0));
                 inventory.bags.insert(Owner::Pawn(0), bags[1].clone());
             }
         }
-        Ok(Self { inventory, items, factors, owners })
+        Ok(Self {
+            inventory,
+            items,
+            factors,
+            owners,
+        })
     }
 
     fn needed(&self, effect: Recovery, seat: PlayerId, sim: &Sim, fight: &Fight) -> bool {
-        let Some(actor) = fight.arisen.get(&seat) else { return false };
-        if actor.fighter.victim.dead() { return false; }
+        let Some(actor) = fight.arisen.get(&seat) else {
+            return false;
+        };
+        if actor.fighter.victim.dead() {
+            return false;
+        }
         let hp = match actor.fighter.victim {
             ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } => hp < hp_max && effect.hp > 0.0,
             _ => false,
@@ -102,29 +132,46 @@ impl QuickItems {
         }
         let owner = *self.owners.get(&seat).ok_or("no saved bag for seat")?;
         let bag = self.inventory.bag(owner).ok_or("no saved bag")?;
-        let (index, item, effect) = bag.slots.iter().enumerate().find_map(|(i, slot)| {
-            let effect = self.inventory.recovery(&self.items, owner, i).ok()?;
-            let useful = if effect.whole_party {
-                self.owners.keys().any(|&id| self.needed(effect, id, sim, fight))
-            } else { self.needed(effect, seat, sim, fight) };
-            useful.then_some((i, slot.item, effect))
-        }).ok_or("no useful supported restorative in this bag")?;
-        let recipients: Vec<_> = self.owners.iter().filter(|(id, _)| effect.whole_party || **id == seat)
-            .map(|(&id, _)| (id, self.factors[&id])).collect();
-        self.inventory.use_recovery(&self.items, owner, index, |effect| {
-            for (id, factor) in recipients {
-                let Some(actor) = fight.arisen.get(&id) else { continue };
-                if actor.fighter.victim.dead() { continue; }
-                let effect = effect.for_recipient(factor, false);
-                // B77780 applies stamina before cures (curse still caps it).
-                let cursed = actor.fighter.statuses.has(9);
-                if let Some(player) = sim.players.iter_mut().find(|p| p.id == id) {
-                    player.recover_item_stamina(effect.stamina, cursed);
+        let (index, item, effect) = bag
+            .slots
+            .iter()
+            .enumerate()
+            .find_map(|(i, slot)| {
+                let effect = self.inventory.recovery(&self.items, owner, i).ok()?;
+                let useful = if effect.whole_party {
+                    self.owners.keys().any(|&id| self.needed(effect, id, sim, fight))
+                } else {
+                    self.needed(effect, seat, sim, fight)
+                };
+                useful.then_some((i, slot.item, effect))
+            })
+            .ok_or("no useful supported restorative in this bag")?;
+        let recipients: Vec<_> = self
+            .owners
+            .iter()
+            .filter(|(id, _)| effect.whole_party || **id == seat)
+            .map(|(&id, _)| (id, self.factors[&id]))
+            .collect();
+        self.inventory
+            .use_recovery(&self.items, owner, index, |effect| {
+                for (id, factor) in recipients {
+                    let Some(actor) = fight.arisen.get(&id) else {
+                        continue;
+                    };
+                    if actor.fighter.victim.dead() {
+                        continue;
+                    }
+                    let effect = effect.for_recipient(factor, false);
+                    // B77780 applies stamina before cures (curse still caps it).
+                    let cursed = actor.fighter.statuses.has(9);
+                    if let Some(player) = sim.players.iter_mut().find(|p| p.id == id) {
+                        player.recover_item_stamina(effect.stamina, cursed);
+                    }
+                    fight.recover_item(id, effect.hp, effect.cures);
                 }
-                fight.recover_item(id, effect.hp, effect.cures);
-            }
-            Ok::<_, UseError>(())
-        }).map_err(|e| format!("item use: {e:?}"))?;
+                Ok::<_, UseError>(())
+            })
+            .map_err(|e| format!("item use: {e:?}"))?;
         Ok(item)
     }
 }
@@ -138,7 +185,14 @@ mod tests {
         let entries = "<class type=\"sItemManager::cITEM_PARAM_DATA\"><s16 name=\"data.mNum\" value=\"2\"/><s16 name=\"data.mItemNo\" value=\"43\"/><u32 name=\"data.mFlag\" value=\"1\"/></class>".repeat(256);
         let xml = format!("<class><u32 name=\"mItemCount\" value=\"1\"/><array name=\"mItem\" count=\"256\">{entries}</array></class>");
         let doc = Document::parse(&xml).unwrap();
-        assert_eq!(read_bag(doc.root()).unwrap().slots, vec![Slot { item: 43, num: 2, flags: 1 }]);
+        assert_eq!(
+            read_bag(doc.root()).unwrap().slots,
+            vec![Slot {
+                item: 43,
+                num: 2,
+                flags: 1
+            }]
+        );
         let malformed = xml.replace("value=\"1\"/><array", "value=\"257\"/><array");
         let doc = Document::parse(&malformed).unwrap();
         assert!(read_bag(doc.root()).is_err());
@@ -146,8 +200,11 @@ mod tests {
 
     #[test]
     fn saved_bags_import_into_distinct_local_seats() {
-        let Some(path) = std::env::var_os("DDDA_TEST_SAVE") else { return };
-        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        let Some(path) = std::env::var_os("DDDA_TEST_SAVE") else {
+            return;
+        };
+        let native = std::env::var_os("DDDA_NATIVE_PC")
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
         let vfs = ddvfs::Vfs::open(native).unwrap();
         let save = ddsave::SaveFile::parse(&std::fs::read(path).unwrap()).unwrap();
@@ -161,9 +218,12 @@ mod tests {
 
     #[test]
     fn quick_use_consumes_one_and_applies_installed_potion_stamina_and_poison_cure() {
-        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        let native = std::env::var_os("DDDA_NATIVE_PC")
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
-        if !native.is_dir() { return; }
+        if !native.is_dir() {
+            return;
+        }
         let vfs = ddvfs::Vfs::open(&native).unwrap();
         let exe = ddexe::ExeFile::next_to(&native).unwrap();
         let data = ddhost::ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap();
@@ -172,12 +232,30 @@ mod tests {
         fight.add_arisen(1);
         let mut sim = Sim::new(Default::default());
         sim.add_player(0, [0.0; 3], 0.0);
-        let table = ItemList::parse(&vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList")).unwrap()).unwrap();
+        let table = ItemList::parse(
+            &vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList"))
+                .unwrap(),
+        )
+        .unwrap();
         let mut inventory = Inventory::default();
-        inventory.bag_mut(Owner::Arisen(0)).slots = [99, 45, 48].map(|item| Slot { item, num: 1, flags: 1 }).to_vec();
-        let mut quick = QuickItems { inventory, items: table, factors: [(0,1.0)].into(), owners: [(0,Owner::Arisen(0))].into() };
-        if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut fight.arisen.get_mut(&0).unwrap().fighter.victim {
-            *hp = 100.0; *hp_max = 2000.0;
+        inventory.bag_mut(Owner::Arisen(0)).slots = [99, 45, 48]
+            .map(|item| Slot {
+                item,
+                num: 1,
+                flags: 1,
+            })
+            .to_vec();
+        let mut quick = QuickItems {
+            inventory,
+            items: table,
+            factors: [(0, 1.0)].into(),
+            owners: [(0, Owner::Arisen(0))].into(),
+        };
+        if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } =
+            &mut fight.arisen.get_mut(&0).unwrap().fighter.victim
+        {
+            *hp = 100.0;
+            *hp_max = 2000.0;
         }
         let other_hp = fight.arisen[&1].fighter.victim.hp();
         assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 99);
@@ -186,7 +264,13 @@ mod tests {
         sim.players[0].stamina = 0.0;
         assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 45);
         assert_eq!(sim.players[0].stamina, 250.0);
-        fight.arisen.get_mut(&0).unwrap().fighter.statuses.add(0, &fight.data.tables.status_player);
+        fight
+            .arisen
+            .get_mut(&0)
+            .unwrap()
+            .fighter
+            .statuses
+            .add(0, &fight.data.tables.status_player);
         assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 48);
         assert!(!fight.arisen[&0].fighter.statuses.has(0));
         assert!(quick.inventory.bag(Owner::Arisen(0)).unwrap().slots.is_empty());

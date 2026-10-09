@@ -30,6 +30,7 @@ mod event;
 mod character;
 mod net;
 mod play;
+mod items;
 mod pause;
 mod sky;
 mod stage;
@@ -699,6 +700,17 @@ fn setup(
         ) {
             Ok(mut state) => {
                 state.demo = args.demo;
+                if args.host.is_none() && args.join.is_none() {
+                    if let Some(xml) = args.save_xml.as_deref() {
+                        match items::QuickItems::load(&vfs, xml, &state.locals) {
+                            Ok(items) => {
+                                info!("quick-use: U (P1), Numpad0 (P2); first useful saved restorative");
+                                commands.insert_resource(items);
+                            }
+                            Err(e) => error!("quick-use: {e}"),
+                        }
+                    }
+                }
                 if let Some(p) = args.cam_pitch {
                     state.cam_pitch = p;
                 }

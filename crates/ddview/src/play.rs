@@ -10,6 +10,7 @@
 //! | jump (twice: double jump) | Space | Enter |
 //! | light attack | J or left mouse | Numpad 1 |
 //! | heavy attack | K or middle mouse | Numpad 2 |
+//! | quick-use saved restorative | U | Numpad 0 |
 //!
 //! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
@@ -446,6 +447,7 @@ pub fn step(
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
     net: Option<Res<crate::net::NetRes>>,
+    items: Option<ResMut<crate::items::QuickItems>>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
@@ -462,6 +464,22 @@ pub fn step(
     // A network session (--host / --join) steps and shows the players itself.
     if net.is_some() {
         return;
+    }
+    if let Some(mut items) = items {
+        let seats = st.locals.clone();
+        for (index, key) in [KeyCode::KeyU, KeyCode::Numpad0].into_iter().enumerate() {
+            if keys.just_pressed(key) {
+                if let Some(&seat) = seats.get(index) {
+                    let st = &mut *st;
+                    if let Some(fight) = st.fight.as_mut() {
+                        match items.use_next(seat, &mut st.sim, fight) {
+                            Ok(item) => info!("quick-use: seat {seat} used item {item}"),
+                            Err(e) => info!("quick-use: seat {seat}: {e}"),
+                        }
+                    }
+                }
+            }
+        }
     }
     if keys.just_pressed(KeyCode::F2) {
         for p in &mut st.sim.players {

@@ -36,6 +36,12 @@ and special action items remain untouched. Automatic pawn item decisions,
 Medicant propagation in the viewer, network item commands, use-action
 animations and a full inventory menu are not implemented by this slice.
 
+Offline `ddview --play --save` uses **U** for P1 and **Numpad0** for P2:
+the first useful supported restorative in that seat's bag. Full resources
+do not consume a restorative. All three viewer item tests pass, and a
+bounded unattended run consumed the private save's five item-1 copies
+and one item-2 copy via the key while sprinting; both viewer runs exited 0.
+
 Research for a 1:1 rewrite of DDDA's shops. Addresses refer to the
 2017-12-13 Steam build (`METHODOLOGY.md`). Each rule is **traced** (read in
 the exe, address given), **data** (read from the install), or **guessed**.
