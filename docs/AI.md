@@ -3,9 +3,11 @@
 Evidence checked 2026-10-09 against the player's installed archives and the
 2017-12-13 Steam executable (identity in METHODOLOGY.md). Addresses below are
 virtual addresses in the unpacked analysis copy. Ghidra was read-only.
-Implemented: the headless graph reader and dump command. Tested: the entire
-installed rAIFSM corpus and synthetic regressions. **No AI simulation has
-been implemented or compared with a running original game.**
+Implemented: the headless graph reader and dump command (`mtfsm`), and a
+headless interpreter for enemy FSMs (`ddai`, section "Runtime"). Tested:
+the entire installed rAIFSM corpus, synthetic regressions, and the goblin
+FSMs from synthetic inputs. **Nothing has been compared with a running
+original game yet.**
 
 ## Corpus and locations
 
@@ -215,10 +217,90 @@ The ordered chain is 1 -> 2 -> 4 -> 3 -> 0. Callback disassembly ties the
 mask to a real engine flag; exact action identities and behavior remain
 unverified against the original.
 
+## Runtime (`crates/ddai`)
+
+Enemy and script FSMs run on one core owned by a `cBaseFSM` subclass:
+`cAIObject -> cBaseFSM -> cFSMOrder` (quest and stage scripts, `ddstory`)
+and `cAIObject -> cBaseFSM -> cThinkFSM -> cAIConsiderFSM ->
+cAILevelAbstractFSM` (enemies). `ddai` holds the shared core and the enemy
+owner; `ddstory` may move its cFSMOrder owner onto the core later (agreed
+with claude-7, board #957).
+
+- `ddai::cond`: condition trees (0x0117c040, operators 0x0117bd30 and their
+  typed routines), ported from `ddstory::cond`. An operation without
+  operands is true: 0x0117c040 leaves its result word at 1 (checked in the
+  disassembly). Bit-number and dynamic or enum indices are explicit errors.
+- `ddai::core`: the level stepper 0x00e092a0 with 0x00e06710 / 0x00e05800,
+  ported from `ddstory::script` and generic over an `Owner` (state-change
+  hook, variable lookup, update/state process callbacks). Checked again in
+  0x00e092a0: a state with `mSetting` bit 2 reruns its level in the same
+  frame until a transition fires (bit 4: also after a transition), so such a
+  state with no true link would hang the original; the port stops after 1000
+  reruns with an error. `mFSMAttribute` bit 2 makes 0x00e09750 create
+  per-cluster work memory (0x00e06e00 / 0x00e087e0), which only matters for
+  sub-machines; graphs with both are refused. The core attribute is 3
+  (0x00e05797) and the cluster timer (+0x18 / +0x1c) is not armed by any
+  implemented process.
+- `ddai::think::Thinker`: the `cThinkFSM` owner. Fields and properties from
+  vf03 0x007a82d0 (SysCondition +0x68, FreeCondition +0x70, Timer[0..3]
+  +0x78, RandomTimer +0x88, Check Pos vector +0x90, ...). `frame()` is vf06
+  0x007a9cb0: countdowns +0xa8 / +0xa5, the core step, then the running
+  timers (run mask +0x74) gain `delta / fps` and RandomTimer counts down.
+  The state-change hook is vf05 0x007a9da0 (clears SysCondition and the
+  request arm byte +0x6c, sets +0xa8 = 2, clears +0xac..+0xb8; FreeCondition
+  and the timers survive). The enemy's `cAICtrl` (unit +0x2E64) calls vf06
+  every frame from the character's think (docs/FRAME.md, phase 90).
+
+Variables implemented (getter addresses): SysCondition, FreeCondition,
+Timer[0..3], RandomTimer, Attack (flag), Motion Loop Cnt, Check Target
+Distance, ActionEx Fail Time, My AreaHit No (fields); Check Pos Length
+0x007aba80 (actor +0xe0 to the check point plus sWorldOffset, x87 sqrt, 0
+without an actor); Check Player Distance 0x007abe20 (to sPlayerManager
++0x99c, the first party slot); FSMFlag 0x007abcd0 -> 0x004b2810 (the
+current stage's FSM flag word, MSB-first); FSMAreaStayFlag 0x005bae00
+(sGameSys +0xb884c); SceNo 0x005baf00. Any other property is an error.
+
+Processes implemented, with the callbacks registered by 0x005a8470
+(`cAILevelAbstractFSM`), 0x007a74f0 (`cThinkFSM`) and the constructor 0x007495f0
+(`cBaseFSM`):
+
+| Process | update (entry) | state (each frame) | Effect here |
+|---|---|---|---|
+| CtrlAction | 0x005a8950 | 0x005a8990 | clear SysCondition 0x60000000; request `Action`; arm, then 0x20000000 when the actor's action +0x50 is set |
+| CtrlMotion | 0x005a8890 | 0x005a8990 | same, request `Motion` with the enabled options |
+| CtrlThinkTbl | 0x005a8a90 | 0x005a9240 | clear; each frame request `ThinkTable` (table, mode, class) and set 0x20000000 |
+| SearchSetTarget | 0x005a8a90 | 0x005a8aa0 | nearest live candidate strictly within range: request `Target`, 0x20000000; none: 0x40000000 |
+| SetEscapePos | 0x005a9170 | stub 0x007497f0 | request `EscapePos` (+ world offset when active) |
+| SetFreeFlg | 0x005a9210 | stub | request `FreeCondition` (OR into the actor's FSM, unit +0x2e64 -> +0x4c) |
+| Timer | 0x007a9de0 | none | Type 0 start from 0, 1 stop, 2 zero, 3 resume |
+| Set Check Pos | 0x007aaee0 | none | store the check vector |
+| Set Kill Owner | 0x007ab200 | none | request `KillOwner` |
+| Finish / Kill | stub | 0x007497e0 / 0x00749800 | SysCondition bit 0 / 0x10 |
+
+Every other process name is an error naming the process and state. Over the
+35 goblin graphs (`gob`, `em0100`, `em0101` paths) 32 run 300 idle frames;
+the rest stop at `Check Area Hit` and `Set QuestFlag`.
+
+What the FSMs are: the enemy graphs are short scripts that configure the
+native AI and then Finish. Combat itself runs in the think tables
+(`CtrlThinkTbl`, e.g. table 22 of `uEm0100`), which are code, not graph
+data. Example, q0007_gate2goblin0000_ai, from synthetic inputs (test
+`gate_goblin_idle_approach_notice`): s0000 -> "6秒後" (Timer[0] runs; after
+6 s, frame ~183) -> "フリーフラグ0on" (FreeCondition 1) -> Finish; restarted
+far from gate point B: s0000 -> "ポジションチェック" -> "ダッシュ"
+(EscapePos B, ThinkTable 22) -> Finish; at point B: FreeCondition 2 ->
+Finish; restarted with FreeCondition 3 at point A: "ポジションチェック" ->
+"発見～威嚇吠え" (found, threat roar: Action 72) -> Finish. Who restarts a
+finished FSM is not traced; the test does it.
+
+Assumptions marked in the code: actor +0xe0 is a world-space position
+(**guessed** from the getters adding sWorldOffset); the target-search
+comparison traced for group 1 is used for every group, and group membership
+comes from the host; SetFreeFlg targets the actor's own FSM in the tests.
+
 ## Next step
 
-Trace owner binding and variable-property lookup for one enemy or pawn route,
-then translate only that route's necessary callbacks into headless,
-per-entity simulation with an original-game oracle. Cover null operands,
-type coercions, process lifecycle and external transitions before treating
-this structural graph as an executable AI implementation.
+Trace the native think tables (`uEm0100` vf+0x2f4 / +0x2f8) that do the
+actual approach and attack, the two missing goblin processes (`Check Area
+Hit` 0x007aafd0, `Set QuestFlag` 0x007aad90), and who restarts a finished
+enemy FSM; then compare one goblin run with the original through the oracle.
