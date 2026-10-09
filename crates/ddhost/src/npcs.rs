@@ -50,38 +50,30 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let (Some(data), Some(story)) = (self.data.npc.clone(), self.story.as_ref()) else {
             return Ok(vec![]);
         };
-        match self.npcs.step(&*data, &story.world, self.clock.seconds(), &[]) {
-            Ok(r) => Ok(r),
-            Err(_) => {
-                // find the NPCs that fail on their own and halt their graphs
-                let clock = ddnpcrt::schedule::Clock {
-                    hour: story.world.hour,
-                    minute: story.world.minute,
-                    dt: self.clock.seconds(),
-                };
-                let ids: Vec<u32> = self.npcs.npcs.keys().copied().collect();
-                let mut out = vec![];
-                for id in ids {
-                    let Some(npc) = self.npcs.npcs.get_mut(&id) else { continue };
-                    match npc.step(&*data, clock) {
-                        Ok(r) => out.extend(r),
-                        Err(e) => {
-                            if let Some(n) = self.npcs.npcs.get_mut(&id) {
-                                if let Some(p) = n.position() {
-                                    self.npc_parked.insert(id, p);
-                                }
-                                // An unsupported port graph is not original
-                                // intel/controller destruction. Retain its
-                                // owner state for placement and ApplyFSM.
-                                n.halt_graphs();
-                            }
-                            self.npc_errors.push((id, e.to_string()));
-                        }
+        let clock = ddnpcrt::schedule::Clock {
+            hour: story.world.hour,
+            minute: story.world.minute,
+            dt: self.clock.seconds(),
+        };
+        let mut out = vec![];
+        // Step each owner exactly once. Retrying the aggregate after a later
+        // owner fails would discard earlier requests and advance those owners
+        // a second time in this same host frame.
+        for (&id, npc) in &mut self.npcs.npcs {
+            match npc.step(&*data, clock) {
+                Ok(requests) => out.extend(requests),
+                Err(error) => {
+                    if let Some(pos) = npc.position() {
+                        self.npc_parked.insert(id, pos);
                     }
+                    // An unsupported port graph is not original intel/controller
+                    // destruction. Preserve owner state for placement and ApplyFSM.
+                    npc.halt_graphs();
+                    self.npc_errors.push((id, error.to_string()));
                 }
-                Ok(out)
             }
         }
+        Ok(out)
     }
 
     /// Seat `player` talks to NPC `npc`. Refused while the other Arisen

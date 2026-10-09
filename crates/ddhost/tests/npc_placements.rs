@@ -114,3 +114,53 @@ fn unsupported_daily_action_halts_graph_without_destroying_allocated_intel() {
     assert!(host.npcs.npcs[&2].controller.is_none());
     assert!(host.world.apply_fsm_ready(200, &p.target));
 }
+
+#[test]
+fn later_owner_error_does_not_retry_or_discard_earlier_owner_progress() {
+    use ddnpcrt::{schedule::{Graphs, Npc, Request}, NpcData};
+    use mtfsm::{Parameter, Record};
+    struct GraphsWithFault;
+    impl Graphs for GraphsWithFault {
+        fn graph(&self, path: &str) -> Result<std::sync::Arc<mtfsm::Graph>, ddnpcrt::Error> {
+            let healthy = path == "healthy";
+            Ok(std::sync::Arc::new(mtfsm::Graph {
+                owner: b"cAIActionFSMNpc".to_vec(), attribute: 0, conditions: vec![],
+                root: Some(mtfsm::Cluster { id: 0, owner_node_unique_id: 0, initial_state: 1,
+                    states: vec![mtfsm::State { id: 1, unique_id: 1, owner_id: 0,
+                        name: b"owner fixture".to_vec(), setting: 0, user_attribute: 0,
+                        from_all: None, links: vec![], subcluster: None,
+                        processes: vec![mtfsm::Process {
+                            container: if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
+                            category: vec![], parameter: healthy.then(|| Record {
+                                class_hash: 0, class_name: None,
+                                fields: vec![("InitPos".into(), vec![Parameter::Scalar(mtxfs::Value::F(vec![4.0, 5.0, 6.0, 0.0]))])],
+                            }),
+                        }] }] }),
+            }))
+        }
+    }
+    impl NpcData for GraphsWithFault {
+        fn talk_set(&self, _: u32) -> Result<std::sync::Arc<ddnpcrt::TalkSet>, ddnpcrt::Error> {
+            Err(ddnpcrt::Error::Data("no talk fixture".into()))
+        }
+    }
+    let story = Story::new_game(ddhost::data::NoStoryData);
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    host.npcs.npcs.insert(1, Npc::applied(1, &GraphsWithFault, "healthy").unwrap());
+    let mut broken = Npc::applied(2, &GraphsWithFault, "broken").unwrap();
+    broken.done(Some([7.0, 8.0, 9.0]));
+    host.npcs.npcs.insert(2, broken);
+    let first = host.tick(&Default::default()).unwrap();
+    assert_eq!(first.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }],
+        "the successful owner's entry callback must survive the later owner's failure");
+    assert_eq!(host.npcs.position(1), Some([4.0, 5.0, 6.0]));
+    assert!(host.npcs.npcs[&1].action.is_some());
+    assert!(host.npcs.npcs[&2].action.is_none());
+    assert_eq!(host.npc_parked[&2], [7.0, 8.0, 9.0]);
+    assert_eq!(host.npc_errors.len(), 1);
+    assert_eq!(host.npc_errors[0].0, 2);
+    assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty(), "entry callback is not replayed");
+    assert_eq!(host.npc_errors.len(), 1, "failed graph is halted, owner and diagnostic retained");
+}
