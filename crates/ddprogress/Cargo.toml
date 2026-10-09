@@ -1,0 +1,16 @@
+[package]
+name = "ddprogress"
+version = "0.1.0"
+description = "Host-owned character progression: experience, levels, discipline, learning, vocation change"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddparam = { path = "../ddparam" }
+ddskill = { path = "../ddskill" }
+ddstory = { path = "../ddstory" }
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+ddexe = { path = "../ddexe" }
+
