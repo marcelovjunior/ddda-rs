@@ -55,10 +55,32 @@ impl FightData {
             tables: Tables {
                 game: adjust(r"param\game")?,
                 dlc: adjust(r"param\dlc")?,
+                status_enemy: status_table(vfs, r"param\status\enemy")?,
+                status_player: status_table(vfs, r"param\status\player")?,
             },
             pawn: crate::pawn::load(vfs)?,
         })
     }
+}
+
+/// An `rStatusParam` as a `ddcombat::cstatus::StatusTable`.
+fn status_table(vfs: &ddvfs::Vfs, path: &str) -> Result<ddcombat::cstatus::StatusTable, String> {
+    let p = ddenemy::StatusParam::parse(&crate::body::load::read(vfs, path, "rStatusParam")?)?;
+    Ok(ddcombat::cstatus::StatusTable(
+        p.entries
+            .iter()
+            .map(|e| {
+                e.as_ref().map(|e| ddcombat::cstatus::StatusEntry {
+                    category: e.category,
+                    is_overwrite: e.is_overwrite,
+                    overwrite_num: e.overwrite_num,
+                    timer: e.timer,
+                    param0: e.param0,
+                    param1: e.param1,
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// Which of the fight's Arisen kits a seat uses.
@@ -90,6 +112,8 @@ pub struct Fight {
     pub goblins: Vec<Goblin>,
     /// The hits of the last [`Fight::hits`].
     pub events: Vec<HitEvent>,
+    /// The status updates of the last [`Fight::hits`].
+    pub status_events: Vec<crate::combat::StatusEvent>,
     /// Where each fighter stood when its volumes were placed (for the
     /// victims' front / back reactions).
     pub positions: BTreeMap<u32, [f32; 3]>,
@@ -117,6 +141,7 @@ impl Fight {
             arisen: BTreeMap::new(),
             goblins: Vec::new(),
             events: Vec::new(),
+            status_events: Vec::new(),
             positions: BTreeMap::new(),
             shells: Vec::new(),
             shooters: BTreeMap::new(),
@@ -156,6 +181,9 @@ impl Fight {
                     attacks: vec![],
                     hurts: vec![],
                     history: HitHistory::default(),
+                    statuses: Default::default(),
+                    dots: Default::default(),
+                    pools: Default::default(),
                 },
                 kit,
                 attacks_seen: 0,
@@ -230,6 +258,9 @@ impl Fight {
             seed ^= seed << 5;
             (seed >> 8) as f32 / (1u32 << 24) as f32
         };
+        // statuses tick, poison and burning bite, build-ups decay
+        // (docs/STATUS.md; each character's update in the original)
+        self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
         self.events = hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true);
@@ -332,6 +363,9 @@ impl Fight {
                     attacks: s.volumes(set, &self.data.shell),
                     hurts: vec![],
                     history: HitHistory::default(),
+                    statuses: Default::default(),
+                    dots: Default::default(),
+                    pools: Default::default(),
                 }
             })
             .collect()

@@ -12,6 +12,8 @@ use ddcombat::damage::{
     enemy_attack, merge_frame, player_attack, player_mitigate, resolve_enemy_hit, Adjust, CollisionRates,
     EnemyAttacker, EnemyDefender, HitValue, PlayerAttacker, PlayerDefender, Reaction, RegionPool,
 };
+use ddcombat::cstatus::{burning, poison_enemy, poison_player, DotState, StatusTable, Statuses};
+use ddcombat::status::{build_up, decay, fire, StatusHit, StatusPools, SLOT_KIND};
 use ddcombat::volumes::{contacts, AttackVolume, HitHistory, HurtVolume};
 
 /// How a fighter's attacks are valued.
@@ -68,6 +70,14 @@ pub struct Fighter {
     pub hurts: Vec<HurtVolume>,
     /// The victim side's hit history (`cObjCollision`+0xC04).
     pub history: HitHistory,
+    /// Active statuses (`cStatus`, actor+0x2698; docs/STATUS.md).
+    pub statuses: Statuses,
+    /// Poison interval state (actor+0x27B4 / +0x2854).
+    pub dots: DotState,
+    /// The build-up of a player-side victim (the Arisen's own region; its
+    /// thresholds are the constructor defaults, *inferred*: no threshold
+    /// writer for players was found). Enemies build up per region.
+    pub pools: StatusPools,
 }
 
 /// One victim's damage this frame.
@@ -92,6 +102,9 @@ pub struct HitEvent {
 pub struct Tables {
     pub game: Adjust,
     pub dlc: Adjust,
+    /// `param\status\enemy` / `param\status\player` (docs/STATUS.md).
+    pub status_enemy: StatusTable,
+    pub status_player: StatusTable,
 }
 
 /// Runs the hit pass over `fighters`: each victim's hits from everyone's
@@ -110,7 +123,26 @@ pub fn hit_pass(
     holds: &dyn Fn(u32) -> bool,
 ) -> Vec<HitEvent> {
     let attacks: Vec<AttackVolume> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
-    let attackers: Vec<(u32, Attacker)> = fighters.iter().map(|f| (f.owner, f.attacker.clone())).collect();
+    // the attacker's status multipliers (0x0088B530 / 0x0088AA20)
+    let attackers: Vec<(u32, Attacker)> = fighters
+        .iter()
+        .map(|f| {
+            let (p, m) = f.statuses.attack_muls();
+            let a = match f.attacker.clone() {
+                Attacker::Enemy(mut e) => {
+                    e.phys_status_mul *= p;
+                    e.mag_status_mul *= m;
+                    Attacker::Enemy(e)
+                }
+                Attacker::Player(mut pl) => {
+                    pl.phys_status_mul *= p;
+                    pl.mag_status_mul *= m;
+                    Attacker::Player(pl)
+                }
+            };
+            (f.owner, a)
+        })
+        .collect();
     let mut events = Vec::new();
     for v in fighters.iter_mut() {
         if v.victim.dead() {
@@ -131,8 +163,14 @@ pub fn hit_pass(
                 Attacker::Player(p) => player_attack(p, &a.row, roll(), &tables.dlc),
             });
         }
-        let Some(merged) = merge_frame(&values) else {
+        let Some(mut merged) = merge_frame(&values) else {
             continue;
+        };
+        let status_hit = StatusHit {
+            element: merged.element,
+            element_buildup: merged.element_buildup,
+            status: merged.status,
+            mag: merged.mag,
         };
         let hits_n = merged.hits;
         let attacker = attacks[first].side.owner;
@@ -144,9 +182,26 @@ pub fn hit_pass(
             } => {
                 let at = regions.iter().position(|r| r.id == region).unwrap_or(0);
                 let was_alive = regions[0].hp > 0.0;
+                // the victim's statuses: defence downs / ups and curse
+                // (0x00AAA490), sleep / frozen / oil / drenched (0x0084D8B0)
+                let (dp, dm) = v.statuses.defence_muls();
+                let sleep = Some((tables.game.get(0x12), tables.game.get(0x13)));
+                let (sp, sm, sb) = v.statuses.victim_scale(merged.element, sleep);
+                let mut def = *defender;
+                def.phys_status_mul *= dp * sp;
+                def.mag_status_mul *= dm * sm;
+                merged.shrink *= sb;
+                merged.blow *= sb;
                 // min damage: the attacker object's +0x14 (*not confirmed*
                 // to be the unit step), 1.0 here
-                let out = resolve_enemy_hit(merged, defender, regions, at, rates, &tables.game, 1.0);
+                let out = resolve_enemy_hit(merged, &def, regions, at, rates, &tables.game, 1.0);
+                // build-up on the hit region (0x007772B0; a main region
+                // exists, so it runs whatever the region's mAttr says)
+                let r = &mut regions[at];
+                let resist = r.resist.element;
+                build_up(&mut r.status, &status_hit, &resist, 1.0, 1.0, &mut *roll);
+                let (slots, _frozen) = fire(&mut r.status);
+                add_fired(&mut v.statuses, &slots, &tables.status_enemy);
                 HitEvent {
                     attacker,
                     victim: v.owner,
@@ -160,7 +215,14 @@ pub fn hit_pass(
             Victim::Player { defender, hp, .. } => {
                 let mut h = merged;
                 player_mitigate(&mut h, defender, &tables.game);
-                let total = h.phys.max(0.0) + h.mag.max(0.0);
+                // status multipliers after the curve (0x00B7AD90)
+                let (dp, dm) = v.statuses.defence_muls();
+                let total = (h.phys * dp).max(0.0) + (h.mag * dm).max(0.0);
+                // build-up on the Arisen (equipment status resists not
+                // modelled: PlayerDefender carries no s[10..])
+                build_up(&mut v.pools, &status_hit, &[1.0; 5], 1.0, 1.0, &mut *roll);
+                let (slots, _frozen) = fire(&mut v.pools);
+                add_fired(&mut v.statuses, &slots, &tables.status_player);
                 let was_alive = *hp > 0.0;
                 *hp = (*hp - total).max(0.0);
                 HitEvent {
@@ -202,4 +264,70 @@ fn resolve(
     }
     history.end_frame(holds);
     hits
+}
+
+/// Fired build-up slots become statuses (the owner's vf74 with the slot,
+/// `0x015098C0` slot -> kind, then 0x00837090). Slots without a kind
+/// (lightning, holy, dark: chains and effects of `uCharacterBase::vf74`)
+/// are skipped.
+fn add_fired(statuses: &mut Statuses, slots: &[usize], table: &StatusTable) {
+    for &s in slots {
+        let k = SLOT_KIND[s];
+        if k >= 0 {
+            statuses.add(k as u32, table);
+        }
+    }
+}
+
+/// What the status pass did to one fighter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusEvent {
+    pub owner: u32,
+    /// HP change this frame (poison, burning; negative).
+    pub hp: f32,
+    /// Kinds that wore off.
+    pub ended: Vec<u32>,
+    /// The fighter's step scale (slow: `mParam0`).
+    pub step_scale: f32,
+}
+
+/// The per-frame status update of every fighter: countdown (0x00836C70)
+/// at the frame step `dt`, the damage-over-time handlers (enemy poison
+/// 0x00AAFE10, player poison 0x00B75070, burning 0x00852F40) at the
+/// fighter's own step (slow scales it, 0x00852670), HP taken from the main
+/// pool (0x00888DA0 works on region 0) and the build-up decay
+/// (0x007781A0). The original runs this in each character's update; the
+/// fight runs it at the start of [`crate::fight::Fight::hits`].
+pub fn status_pass(fighters: &mut [Fighter], dt: f32) -> Vec<StatusEvent> {
+    let mut out = Vec::new();
+    for f in fighters.iter_mut() {
+        if f.victim.dead() {
+            continue;
+        }
+        let scale = f.statuses.step_scale();
+        let step = dt * scale;
+        let ended = f.statuses.tick(dt);
+        let hp = match &mut f.victim {
+            Victim::Enemy { regions, .. } => {
+                let d = poison_enemy(&mut f.dots, &f.statuses, step) + burning(&f.statuses, step);
+                if let Some(main) = regions.first_mut() {
+                    main.hp = (main.hp + d).max(0.0);
+                }
+                for r in regions.iter_mut() {
+                    decay(&mut r.status, step);
+                }
+                d
+            }
+            Victim::Player { hp, .. } => {
+                let d = poison_player(&mut f.dots, &f.statuses, dt) + burning(&f.statuses, step);
+                *hp = (*hp + d).max(0.0);
+                decay(&mut f.pools, step);
+                d
+            }
+        };
+        if hp != 0.0 || !ended.is_empty() || !f.statuses.works.is_empty() {
+            out.push(StatusEvent { owner: f.owner, hp, ended, step_scale: scale });
+        }
+    }
+    out
 }
