@@ -3,7 +3,7 @@
 - **Owner:** claude lane
 - **Branch:** `task/ledge`
 - **Board area:** `player/movement`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -67,4 +67,60 @@ reason. Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+Branch `task/ledge` (claude-1). `cargo test -p ddsim -p ddworld`: 24 + 4
+tests pass. Details and addresses: docs/MOVEMENT.md (Ledges, Turning,
+Stopping, Assumptions).
+
+**Found in the exe.**
+- Action ids: uPlayer +0x2DD4 is the current action, +0x2DD8 the requested
+  one (`uPlayerBase::vf132` 0x00B540B0 = set action, vtable +0x210). Ids
+  index a 0x44-stride table of DTIs at 0x01866C48 (unpacked image):
+  0x0C `cPlActDashJumpLand`, 0x0D `cPlActFall`, 0x0F `cPlActEvasion`,
+  0x34 `cPlCliffHangBegin`, 0x35 `cPlCliffHang`, 0x36 `cPlCliffHangClimb`.
+- Transition: `uPlayerBase::vf136` (0x00B6D510, called every frame from
+  vf90 0x00B61A20) runs the ledge test `0x00B6FA00` and sets action 0x34.
+  `0x00B6FD20` accepts only actions 0x0C / 0x0D / 0x0F (normal mode) and
+  needs stick input, and a fall must have dropped > 100 cm. **A normal or
+  sprint jump in the air never grabs.** This contradicts the old
+  placeholder (and possibly expectations): worth confirming live (watch
+  +0x2DD4 while jumping at a ledge) once claude-4's oracle is up.
+- Geometry: 0x00B6FD20 (probe), 0x00B6FA00 (three probes + ground under
+  the ledge), 0x00ADBEB0 (foot point, free/braced hang), 0x00AD9180
+  (hands / body / feet), 0x00ADA980 (grab phases, rise), 0x00ADCDD0 (hang
+  controls, let go), 0x00ADD670 / 0x00ADDC00 (climb). All constants are
+  `m_pl000_00` ids 0x5A-0x5F, 0x17C-0x17D, 0x189-0x18A, 0x190-0x191 or
+  literals in those functions.
+- Turn rate and stops: traced in part (MOVEMENT.md); not implemented
+  (the sprint stop's speed is a motion curve that `mtlmt` does not read).
+
+**Implemented and tested** (`crates/ddsim/src/ledge.rs`, `lib.rs`):
+`Ground::ray` / `Ground::sphere` (+ `RayHit`), implemented in
+`ddworld::Terrain` (Moller-Trumbore, both faces; tests); `LedgeParam`
+(+ `from_adjust`); detection, foot point, hang pose, rise, hold test,
+climb target and end; states `SprintJumpLand`, `LedgeGrab { braced,
+phase }`, `LedgeHang { braced }`, `LedgeClimb { braced }`; fall distance
+(`Player::drop_from`). Tests: tops accepted (60, 150, 220) and refused
+(40, 230; 90 when standing; reach; blocked top); hang position (free: feet
+2 steps out, 210 below the edge; braced: feet 100 below the hands);
+climb end (10 in, 5 up); fall -> grab -> hang -> climb -> stand; no grab
+without stick or drop; normal jump never grabs; sprint jump -> landing ->
+braced grab -> climb; pulling back lets go at 2 cm/frame; vanished ledge.
+Not compared against the original (no recording of a ledge).
+
+**Still open** (placeholders, labelled in code): hit classification by
+normal (engine flags not traced); progress curves 9/10 (linear here); IK
+body placement (feet go straight to the foot point; facing snaps); hit
+attribute check 0x007C6F90; size scale; early climb from the grab
+(+0x361C); `cPlActEvasion`; the writers of +0x32CC / +0x32C4 / +0x2584.
+
+**For the viewer (head, at merge; not done here).**
+- Load motions 24 (0x18), 45 (0x2D), 46 (0x2E), 49 (0x31), 50 (0x32) in
+  `USED_MOTIONS` (47 and 48 are already there; 44 = 0x2C is not used).
+- Set `sim.ledge_param = ddsim::LedgeParam::from_adjust(&adjust)` next to
+  `move_param`.
+- `--play`: ledges are now taken by sprint-jumping at a wall (stick held)
+  or by falling past one with the stick held; normal jumps no longer grab.
+
+**Next step.** Read the LMT motion curves (`0x010571C0` reads curve k of
+the playing motion) so the grab, climb and sprint stop use the original's
+progress; then verify the jump/no-grab rule live.

@@ -64,7 +64,7 @@ Codex lane: see `docs/CODEX.md`.
 
 | Id | Title | Lane | Owner | Status |
 |---|---|---|---|---|
-| [ledge](ledge.md) | Ledge grab and climb, turn rate, stop motions from the exe | core | claude-1 | assigned |
+| [ledge](ledge.md) | Ledge grab and climb, turn rate, stop motions from the exe | core | claude-1 | merged 2026-10-09 |
 | [blend](blend.md) | Motion blending between actions | core | claude-2 | merged 2026-10-09 |
 | [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude-3 | assigned |
 | [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-3 | merged 2026-10-09 |

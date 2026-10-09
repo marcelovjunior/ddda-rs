@@ -11,7 +11,8 @@
 //! - action motions (bank 0 = `m0000_co`): idle 0, walk 3, run 4, fall 7,
 //!   jump takeoff 10 (moving) / 13 (standing), airborne 11 / 14, landing
 //!   12 / 15, sprint start 43, sprint 20, sprint-jump takeoff 22, sprint-jump
-//!   airborne 23, ledge hang 47, ledge climb 48 (`cPlAct*::vf05`);
+//!   airborne 23, sprint-jump landing 24, ledge grab 45 / 50 (rising 49,
+//!   settling 46), hang 47, climb 48 (`cPlAct*::vf05`, `cPlCliffHang*`);
 //! - walking, running and sprinting move by a velocity set in code, not
 //!   by root motion: facing x a speed from `param\pl\other\m_pl000_00`
 //!   (`rAdjustParam`, a float table read by id) (`cPlActWalk::vf06`,
@@ -24,11 +25,17 @@
 //!   input moves the position by AddMoveSpeedXZ. Normal jump: sets 0-8;
 //!   sprint jump: sets 9-17 (`cPlActJump::vf14`, `cPlActDashJump::vf14`);
 //! - dagger vocations have a second jump (`cPlActWpnDaggerJumpSecond`,
-//!   sets 1-8); here it is a per-player capability.
+//!   sets 1-8); here it is a per-player capability;
+//! - ledges are grabbed from a fall or the sprint jump's landing, never
+//!   from a jump in the air; the geometry is in `ledge`.
 //!
 //! Approximations are marked *placeholder* or *assumed*.
 
 use std::collections::HashMap;
+
+pub mod ledge;
+
+pub use ledge::{LedgeParam, LEDGE_SHIPPED};
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
 /// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
@@ -156,8 +163,33 @@ pub enum State {
     Land {
         standing: bool,
     },
-    LedgeHang,
-    LedgeClimb,
+    /// The sprint jump's landing (`cPlActDashJumpLand`, action 0x0C).
+    SprintJumpLand,
+    /// Taking hold of a ledge (`cPlCliffHangBegin`, action 0x34).
+    /// `braced`: the short-bodied hang of `ledge::foot_point`.
+    LedgeGrab {
+        braced: bool,
+        phase: GrabPhase,
+    },
+    /// Hanging (`cPlCliffHang`, action 0x35).
+    LedgeHang {
+        braced: bool,
+    },
+    /// Climbing up (`cPlCliffHangClimb`, action 0x36).
+    LedgeClimb {
+        braced: bool,
+    },
+}
+
+/// Phases of `cPlCliffHangBegin::vf06` (0x00ADA980).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GrabPhase {
+    /// Cases 10-11: reach for the edge (motion 0x2D, braced 0x32).
+    Reach,
+    /// Case 2: the feet are well below the hang, rise into it (motion 0x31).
+    Rise,
+    /// Case 10 after rising: settle into the hang (motion 0x2E).
+    Settle,
 }
 
 impl State {
@@ -182,8 +214,26 @@ impl State {
             State::Fall => 7,
             State::Land { standing: true } => 15,
             State::Land { .. } => 12,
-            State::LedgeHang => 47,
-            State::LedgeClimb => 48,
+            // cPlActDashJumpLand::vf06
+            State::SprintJumpLand => 0x18,
+            // cPlCliffHangBegin::vf06
+            State::LedgeGrab {
+                phase: GrabPhase::Rise,
+                ..
+            } => 0x31,
+            State::LedgeGrab {
+                phase: GrabPhase::Settle,
+                ..
+            } => 0x2E,
+            State::LedgeGrab { braced: false, .. } => 0x2D,
+            State::LedgeGrab { braced: true, .. } => 0x32,
+            // cPlCliffHang::vf05 plays 0x2F; for a braced hang it requests
+            // no motion, so the grab's 0x32 goes on
+            State::LedgeHang { braced: false } => 0x2F,
+            State::LedgeHang { braced: true } => 0x32,
+            // cPlCliffHangClimb::vf05: 0x30 (its variant 1, 0x2C, starts
+            // during the grab and is not modelled)
+            State::LedgeClimb { .. } => 0x30,
         }
     }
 
@@ -197,7 +247,7 @@ impl State {
                 | State::Sprint
                 | State::Air { .. }
                 | State::Fall
-                | State::LedgeHang
+                | State::LedgeHang { .. }
         )
     }
 }
@@ -242,8 +292,25 @@ pub struct Player {
     /// Ground speed when the sprint start began.
     sprint_entry: f32,
     jump_held: bool,
-    /// Ledge being climbed: hanging and standing feet positions.
-    climb: Option<([f32; 3], [f32; 3])>,
+    /// Height the current descent started from (the original's fall
+    /// distance uPlayer +0x207C is `y - drop_from`; `0x0088A7E0` resets it
+    /// whenever the character is not moving down).
+    pub drop_from: f32,
+    /// The ledge being grabbed, hung from or climbed.
+    pub hold: Option<Hold>,
+}
+
+/// A held ledge and the points the hang and climb move between.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hold {
+    pub ledge: ledge::Ledge,
+    pub hang: ledge::Hang,
+    /// Position when the grab or the climb began.
+    pub start: [f32; 3],
+    /// The climb's wall point (cPlCliffHangClimb +0x90) and the height the
+    /// climb rises from (uPlayer +0x3104).
+    pub wall: [f32; 3],
+    pub from_y: f32,
 }
 
 /// Root motion of one motion: the root track's position by frame.
@@ -313,6 +380,14 @@ impl RootMotion {
     }
 }
 
+/// The nearest hit of a segment cast.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    pub point: [f32; 3],
+    /// Unit surface normal, on the side the cast came from.
+    pub normal: [f32; 3],
+}
+
 /// Ground under a point, from the world (collision).
 pub trait Ground {
     /// Highest ground height (cm) at (x, z) at or below `below_y`.
@@ -323,6 +398,19 @@ pub trait Ground {
     /// to the segment. The default world has no walls.
     fn wall(&self, _p: [f32; 3], _radius: f32, _low: f32, _high: f32) -> Option<[f32; 2]> {
         None
+    }
+
+    /// The first surface the segment `from`-`to` meets (the original's
+    /// collision cast `0x00DEA870`). Surfaces count from both sides
+    /// (*assumed*). The default world has nothing to hit, so no ledges.
+    fn ray(&self, _from: [f32; 3], _to: [f32; 3]) -> Option<RayHit> {
+        None
+    }
+
+    /// Whether any surface lies within `radius` of `center` (the
+    /// original's sphere test `0x00FAF4B0`).
+    fn sphere(&self, _center: [f32; 3], _radius: f32) -> bool {
+        false
     }
 }
 
@@ -360,14 +448,10 @@ pub const STEP_DOWN: f32 = 50.0;
 /// Gravity while falling (cm/frame²): the normal jump's. *Placeholder* until
 /// `cPlActFall` is traced.
 pub const FALL_GRAVITY: f32 = -2.0;
-/// Ledge grab: look-ahead (cm) and the ledge-top heights above the feet that
-/// can be grabbed. *Placeholder*: the original's detection
-/// (`cPlCliffHangBegin`) is long geometry code not traced yet.
-pub const LEDGE_PROBE: f32 = 60.0;
-pub const LEDGE_MIN: f32 = 90.0;
-pub const LEDGE_MAX: f32 = 230.0;
-/// Hands-to-feet distance while hanging, cm. *Placeholder*.
-pub const HANG_DROP: f32 = 190.0;
+/// A fall may grab a ledge only after dropping more than this, cm
+/// (`0x00B6FA00`: in cPlActFall a ledge is refused while uPlayer +0x207C,
+/// the fall distance, is >= -100; constant 0x0161C308).
+pub const LEDGE_FALL_MIN_DROP: f32 = 100.0;
 
 pub struct Sim {
     pub players: Vec<Player>,
@@ -375,6 +459,7 @@ pub struct Sim {
     pub jump_normal: JumpParam,
     pub jump_sprint: JumpParam,
     pub move_param: MoveParam,
+    pub ledge_param: LedgeParam,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -391,6 +476,7 @@ impl Sim {
             jump_normal: JUMP_NORMAL,
             jump_sprint: JUMP_SPRINT,
             move_param: MOVE_SHIPPED,
+            ledge_param: LEDGE_SHIPPED,
             pending: 0.0,
         }
     }
@@ -410,7 +496,8 @@ impl Sim {
             speed: 0.0,
             sprint_entry: 0.0,
             jump_held: false,
-            climb: None,
+            drop_from: position[1],
+            hold: None,
         });
     }
 
@@ -447,6 +534,17 @@ impl Sim {
 
     /// One step of `dt` motion frames for player `i`.
     fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
+        let y0 = self.players[i].position[1];
+        self.frame_states(i, input, ground, dt);
+        // 0x0088A7E0: the fall distance (uPlayer +0x207C) counts from the
+        // last frame the character did not move down
+        let p = &mut self.players[i];
+        if p.position[1] >= y0 {
+            p.drop_from = p.position[1];
+        }
+    }
+
+    fn frame_states(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
         let (jn, js) = (self.jump_normal, self.jump_sprint);
         let moving = len2(input.stick) >= MOVE_THRESHOLD;
         // Stick x is screen-right; looking along +Z with +Y up, screen-right
@@ -465,7 +563,8 @@ impl Sim {
             | State::Run { .. }
             | State::SprintStart
             | State::Sprint
-            | State::Land { .. } => {
+            | State::Land { .. }
+            | State::SprintJumpLand => {
                 if pressed {
                     let p = &mut self.players[i];
                     let sprint = matches!(state, State::Sprint | State::SprintStart);
@@ -483,8 +582,17 @@ impl Sim {
                     p.jumps_left = u8::from(p.double_jump);
                     return;
                 }
+                // uPlayerBase::vf136 (0x00B6D510) runs the ledge test in
+                // cPlActDashJumpLand with the longer reach; 0x00B6FD20 also
+                // needs stick input (uPlayer +0x32C0 != 0)
+                if state == State::SprintJumpLand
+                    && moving
+                    && self.try_grab(i, self.ledge_param.reach_land, ground)
+                {
+                    return;
+                }
                 // a landing plays out unless the player moves
-                if matches!(state, State::Land { .. })
+                if matches!(state, State::Land { .. } | State::SprintJumpLand)
                     && !moving
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
@@ -553,45 +661,197 @@ impl Sim {
                 {
                     Self::set_state(&mut self.players[i], State::Fall);
                 }
+                // uPlayerBase::vf136: a fall tests for ledges while the stick
+                // is held (command slot 0 active), with the shorter reach.
+                // Jumps (cPlActJump, cPlActDashJump) never do: 0x00B6FD20
+                // accepts only actions 0x0C, 0x0D and 0x0F.
+                if self.players[i].state == State::Fall
+                    && moving
+                    && self.try_grab(i, self.ledge_param.reach_fall, ground)
+                {
+                    return;
+                }
                 self.air_move(i, moving.then_some(input_yaw), ground, dt);
             }
-            State::LedgeHang => {
+            State::LedgeGrab { braced, phase } => {
+                let len = self.period_of(state.motion_id());
+                let rise_speed = self.ledge_param.rise_speed;
                 let p = &mut self.players[i];
+                let Some(h) = p.hold else {
+                    Self::let_go(p, jn);
+                    return;
+                };
+                if !ledge::holds(ground, &h.ledge) {
+                    Self::let_go(p, jn);
+                    return;
+                }
                 p.frame += dt;
-                // *placeholder*: forward or jump climbs, back lets go
-                let back = moving && (input_yaw - p.yaw).cos() < -0.5;
-                if back {
-                    p.climb = None;
-                    p.velocity = [0.0; 3];
-                    p.jump = jn;
-                    Self::set_state(p, State::Fall);
-                } else if pressed || (moving && p.frame > 6.0) {
-                    Self::set_state(p, State::LedgeClimb);
+                // *Placeholder* progress: the original reads the motion's
+                // curve 9 (0x010571C0), not read by mtlmt yet
+                let t = (p.frame / len).min(1.0);
+                match phase {
+                    GrabPhase::Reach => {
+                        // *Placeholder* path: the original poses the body by IK
+                        // (0x00850BD0) toward the body point and takes the root
+                        // from it; here the feet move straight to the foot point
+                        p.position = ledge::lerp(h.start, h.hang.foot, t);
+                        if p.frame >= len {
+                            p.position = h.hang.foot;
+                            Self::set_state(p, State::LedgeHang { braced });
+                        }
+                    }
+                    GrabPhase::Rise => {
+                        let q = ledge::rise_step(
+                            ground,
+                            &h.ledge,
+                            h.start,
+                            h.hang.foot,
+                            p.position[1],
+                            t,
+                            rise_speed * dt,
+                        );
+                        p.position = q;
+                        if h.hang.foot[1] <= q[1] || p.frame >= len {
+                            if ledge::rise_snaps(h.hang.foot, q[1]) {
+                                p.position[1] = h.hang.foot[1];
+                                Self::set_state(
+                                    p,
+                                    State::LedgeGrab {
+                                        braced,
+                                        phase: GrabPhase::Settle,
+                                    },
+                                );
+                            } else {
+                                // cPlCliffHangBegin::vf06 case 2: falls without a push
+                                p.hold = None;
+                                p.velocity = [0.0; 3];
+                                p.jump = jn;
+                                Self::set_state(p, State::Fall);
+                            }
+                        }
+                    }
+                    GrabPhase::Settle => {
+                        if p.frame >= len {
+                            Self::set_state(p, State::LedgeHang { braced });
+                        }
+                    }
                 }
             }
-            State::LedgeClimb => {
-                let len = self.period_of(State::LedgeClimb.motion_id());
+            State::LedgeHang { braced } => {
+                let period = self.period_of(state.motion_id());
                 let p = &mut self.players[i];
-                p.frame += dt;
-                if let Some((from, to)) = p.climb {
-                    // *placeholder*: rise during the first 60%, step onto the top after
-                    let t = (p.frame / len).min(1.0);
-                    let up = (t / 0.6).min(1.0);
-                    let fwd = ((t - 0.6) / 0.4).clamp(0.0, 1.0);
-                    p.position = [
-                        from[0] + (to[0] - from[0]) * fwd,
-                        from[1] + (to[1] - from[1]) * up,
-                        from[2] + (to[2] - from[2]) * fwd,
-                    ];
+                let Some(mut h) = p.hold else {
+                    Self::let_go(p, jn);
+                    return;
+                };
+                p.frame = (p.frame + dt).rem_euclid(period);
+                if !ledge::holds(ground, &h.ledge) {
+                    Self::let_go(p, jn);
+                    return;
                 }
+                // cPlCliffHang::vf06 (0x00ADCDD0): uPlayer +0x32CC above 0.8
+                // climbs, below -0.8 lets go. +0x32CC is *assumed* to be the
+                // stick's push along the facing (its writer is not traced).
+                let push = if moving {
+                    len2(input.stick).min(1.0) * (input_yaw - p.yaw).cos()
+                } else {
+                    0.0
+                };
+                if push > ledge::HANG_STICK {
+                    // cPlCliffHangClimb::vf05 (0x00ADD670)
+                    h.start = p.position;
+                    h.from_y = h.hang.foot[1];
+                    h.wall = ledge::climb_wall_point(ground, &h.ledge, h.hang.body, p.position[1]);
+                    p.hold = Some(h);
+                    Self::set_state(p, State::LedgeClimb { braced });
+                } else if push < -ledge::HANG_STICK {
+                    Self::let_go(p, jn);
+                }
+            }
+            State::LedgeClimb { .. } => {
+                let len = self.period_of(state.motion_id());
+                let p = &mut self.players[i];
+                let Some(h) = p.hold else {
+                    Self::let_go(p, jn);
+                    return;
+                };
+                if !ledge::holds(ground, &h.ledge) {
+                    Self::let_go(p, jn);
+                    return;
+                }
+                p.frame += dt;
+                // cPlCliffHangClimb::vf06 (0x00ADDC00). *Placeholder*
+                // progress: the original uses the motion's curves 9 (height)
+                // and 10 (position), not read by mtlmt yet
+                let t = (p.frame / len).min(1.0);
+                let target = ledge::climb_target(ground, &h.ledge, h.wall, h.from_y, t);
+                p.position = ledge::lerp(h.start, target, t);
                 if p.frame >= len {
-                    if let Some((_, to)) = p.climb.take() {
-                        p.position = to;
-                    }
+                    p.position = ledge::climb_end(&h.ledge);
+                    p.hold = None;
                     Self::set_state(p, State::Wait);
                 }
             }
         }
+    }
+
+    /// Runs the ledge test (with `reach`) and, if it passes, takes hold.
+    /// The caller checks the action and the stick (uPlayerBase::vf136).
+    fn try_grab(&mut self, i: usize, reach: f32, ground: &dyn Ground) -> bool {
+        let lp = self.ledge_param;
+        let p = &self.players[i];
+        let Some(l) = ledge::detect(ground, &lp, p.position, p.yaw, reach) else {
+            return false;
+        };
+        // 0x00B6FA00: a fall must have dropped far enough
+        if p.state == State::Fall && p.position[1] - p.drop_from >= -LEDGE_FALL_MIN_DROP {
+            return false;
+        }
+        // uPlayerBase::vf136 also needs a foot point (0x00ADBEB0 != -1)
+        let Some((braced, foot)) = ledge::foot_point(ground, &l, p.position) else {
+            return false;
+        };
+        let mut hang = ledge::hang_pose(ground, &lp, &l, braced, foot);
+        // cPlCliffHangBegin::vf06 case 1: a free hang whose feet are well
+        // below the foot point rises into it
+        let rise = !braced && p.position[1] <= hang.foot[1] - lp.rise_margin;
+        if rise {
+            hang.foot = ledge::rise_foot(ground, &l, hang.foot);
+        }
+        let p = &mut self.players[i];
+        p.hold = Some(Hold {
+            ledge: l,
+            hang,
+            start: p.position,
+            wall: hang.body,
+            from_y: hang.foot[1],
+        });
+        p.velocity = [0.0; 3];
+        p.speed = 0.0;
+        // *Placeholder*: the original turns toward the wall over the grab
+        // (slerp to a rotation built from the body line, vf05/vf06)
+        p.yaw = ledge::facing(&l);
+        Self::set_state(
+            p,
+            State::LedgeGrab {
+                braced,
+                phase: if rise { GrabPhase::Rise } else { GrabPhase::Reach },
+            },
+        );
+        true
+    }
+
+    /// Lets go of a ledge: pushed out from the wall at 2 cm per frame, falling
+    /// (cPlCliffHang::vf06; the same in cPlCliffHangBegin and
+    /// cPlCliffHangClimb when the ledge disappears).
+    fn let_go(p: &mut Player, jn: JumpParam) {
+        p.velocity = [0.0; 3];
+        if let Some(h) = p.hold.take() {
+            let n = h.ledge.normal;
+            p.velocity = [n[0] * ledge::LET_GO_SPEED, 0.0, n[2] * ledge::LET_GO_SPEED];
+        }
+        p.jump = jn;
+        Self::set_state(p, State::Fall);
     }
 
     /// Ground speed (cm per frame) of a velocity-driven state, or None for
@@ -714,20 +974,6 @@ impl Sim {
                 )
                 .is_some_and(|n| (next[0] - p.position[0]) * n[0] + (next[2] - p.position[2]) * n[1] < 0.0);
         if wall {
-            // ledge grab: a top within reach in front of the player
-            let (s, c) = p.yaw.sin_cos();
-            let probe = [p.position[0] + LEDGE_PROBE * s, p.position[2] + LEDGE_PROBE * c];
-            if let Some(top) = ground.height(probe[0], probe[1], p.position[1] + LEDGE_MAX) {
-                let rise = top - p.position[1];
-                if (LEDGE_MIN..=LEDGE_MAX).contains(&rise) {
-                    let hang = [p.position[0], top - HANG_DROP, p.position[2]];
-                    p.climb = Some((hang, [probe[0], top, probe[1]]));
-                    p.position = hang;
-                    p.velocity = [0.0; 3];
-                    Self::set_state(p, State::LedgeHang);
-                    return;
-                }
-            }
             // slide along the wall, keeping the vertical motion
             let slid = wall_slide(ground, p.position, [next[0], p.position[1], next[2]]);
             next[0] = slid[0];
@@ -739,9 +985,15 @@ impl Sim {
         match ground.height(next[0], next[2], p.position[1].max(next[1]) + 1.0) {
             Some(g) if next[1] <= g && p.velocity[1] <= 0.0 => {
                 let standing = matches!(p.state, State::Air { standing: true, .. }) || steer.is_none();
+                // cPlActDashJump::vf06 (0x00ACDED0) lands into action 0x0C
+                let land = if matches!(p.state, State::Air { sprint: true, .. }) {
+                    State::SprintJumpLand
+                } else {
+                    State::Land { standing }
+                };
                 p.position = [next[0], g, next[2]];
                 p.velocity = [0.0; 3];
-                Self::set_state(p, State::Land { standing });
+                Self::set_state(p, land);
             }
             _ => p.position = next,
         }
@@ -793,7 +1045,19 @@ mod tests {
         for id in [10u16, 13, 22] {
             m.insert(id, RootMotion::none(5));
         }
-        m.insert(48, RootMotion::none(36));
+        // ledge motions: grab 0x2D / 0x32, rise 0x31, settle 0x2E, hang
+        // 0x2F, climb 0x30; sprint-jump landing 0x18
+        for (id, frames) in [
+            (0x2D, 21),
+            (0x32, 21),
+            (0x31, 16),
+            (0x2E, 11),
+            (0x2F, 31),
+            (0x30, 37),
+            (0x18, 11),
+        ] {
+            m.insert(id, RootMotion::none(frames));
+        }
         let mut s = Sim::new(m);
         s.add_player(0, [0.0; 3], 0.0);
         s.add_player(1, [500.0, 0.0, 0.0], 0.0);
@@ -995,30 +1259,413 @@ mod tests {
         assert_eq!(p.position[1], -300.0, "{:?}", p);
     }
 
+    /// Axis-aligned solid boxes over a floor plane, with casts and sphere
+    /// tests that count surfaces from both sides, like `ddworld::Terrain`.
+    struct Boxes {
+        floor: f32,
+        boxes: Vec<([f32; 3], [f32; 3])>,
+    }
+
+    impl Boxes {
+        /// A wall block filling x >= `x`, from far below up to `top`.
+        fn wall(floor: f32, x: f32, top: f32) -> Self {
+            Boxes {
+                floor,
+                boxes: vec![([x, -5000.0, -5000.0], [x + 2000.0, top, 5000.0])],
+            }
+        }
+    }
+
+    impl Ground for Boxes {
+        fn height(&self, x: f32, z: f32, below_y: f32) -> Option<f32> {
+            let mut best = (self.floor <= below_y).then_some(self.floor);
+            for (lo, hi) in &self.boxes {
+                let inside = (lo[0]..=hi[0]).contains(&x) && (lo[2]..=hi[2]).contains(&z);
+                if inside && hi[1] <= below_y && best.is_none_or(|b| hi[1] > b) {
+                    best = Some(hi[1]);
+                }
+            }
+            best
+        }
+
+        fn wall(&self, p: [f32; 3], radius: f32, low: f32, high: f32) -> Option<[f32; 2]> {
+            for (lo, hi) in &self.boxes {
+                if hi[1] < low || lo[1] > high {
+                    continue;
+                }
+                let c = [p[0].clamp(lo[0], hi[0]), p[2].clamp(lo[2], hi[2])];
+                let d = [p[0] - c[0], p[2] - c[1]];
+                let l = len2(d);
+                if l > 1e-3 {
+                    if l < radius {
+                        return Some([d[0] / l, d[1] / l]);
+                    }
+                    continue;
+                }
+                // inside the block: out through the nearest side
+                let sides = [
+                    (p[0] - lo[0], [-1.0, 0.0]),
+                    (hi[0] - p[0], [1.0, 0.0]),
+                    (p[2] - lo[2], [0.0, -1.0]),
+                    (hi[2] - p[2], [0.0, 1.0]),
+                ];
+                return sides.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map(|s| s.1);
+            }
+            None
+        }
+
+        fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<RayHit> {
+            let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+            // (t, axis) of every face crossing
+            let mut hits: Vec<(f32, usize)> = Vec::new();
+            if d[1] != 0.0 {
+                hits.push(((self.floor - from[1]) / d[1], 1));
+            }
+            for (lo, hi) in &self.boxes {
+                for axis in 0..3 {
+                    if d[axis] == 0.0 {
+                        continue;
+                    }
+                    for v in [lo[axis], hi[axis]] {
+                        let t = (v - from[axis]) / d[axis];
+                        let on_face = (0..3)
+                            .filter(|&k| k != axis)
+                            .all(|k| (lo[k] - 1e-3..=hi[k] + 1e-3).contains(&(from[k] + d[k] * t)));
+                        if on_face {
+                            hits.push((t, axis));
+                        }
+                    }
+                }
+            }
+            // a surface the cast starts on does not count
+            let (t, axis) = hits
+                .into_iter()
+                .filter(|(t, _)| (1e-4..=1.0).contains(t))
+                .min_by(|a, b| a.0.total_cmp(&b.0))?;
+            let mut normal = [0.0; 3];
+            normal[axis] = -d[axis].signum();
+            Some(RayHit {
+                point: [from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t],
+                normal,
+            })
+        }
+
+        fn sphere(&self, c: [f32; 3], r: f32) -> bool {
+            if (c[1] - self.floor).abs() < r {
+                return true;
+            }
+            self.boxes.iter().any(|(lo, hi)| {
+                let inside = (0..3).all(|k| (lo[k]..=hi[k]).contains(&c[k]));
+                let dist = if inside {
+                    (0..3)
+                        .map(|k| (c[k] - lo[k]).min(hi[k] - c[k]))
+                        .fold(f32::MAX, f32::min)
+                } else {
+                    (0..3)
+                        .map(|k| (lo[k] - c[k]).max(0.0).max(c[k] - hi[k]))
+                        .map(|e| e * e)
+                        .sum::<f32>()
+                        .sqrt()
+                };
+                dist < r
+            })
+        }
+    }
+
+    const EAST: f32 = std::f32::consts::FRAC_PI_2;
+
+    fn east(jump: bool, sprint: bool) -> Input {
+        Input {
+            stick: [0.0, 1.0],
+            jump,
+            sprint,
+            camera_yaw: EAST,
+            ..Default::default()
+        }
+    }
+
+    fn near(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() <= tol)
+    }
+
     #[test]
-    fn jumping_at_a_ledge_climbs_it() {
+    fn ledge_tops_accepted_and_refused() {
+        let lp = LEDGE_SHIPPED;
+        // falling past a wall 50 cm ahead, nothing below: tops from just over
+        // the low probe (50) up to the down cast's start (200 + 25)
+        for (top, ok) in [
+            (40.0, false),
+            (60.0, true),
+            (150.0, true),
+            (220.0, true),
+            (230.0, false),
+        ] {
+            let w = Boxes::wall(-1000.0, 50.0, top);
+            let l = ledge::detect(&w, &lp, [0.0; 3], EAST, lp.reach_fall);
+            assert_eq!(l.is_some(), ok, "top {top}: {l:?}");
+            if let Some(l) = l {
+                assert!(near(l.edge, [50.0, top, 0.0], 1e-3), "{l:?}");
+                assert!(near(l.normal, [-1.0, 0.0, 0.0], 1e-6), "{l:?}");
+            }
+        }
+        // standing: the ledge must be more than 100 cm over the ground below
+        assert!(ledge::detect(&Boxes::wall(0.0, 50.0, 90.0), &lp, [0.0; 3], EAST, lp.reach_land).is_none());
+        assert!(ledge::detect(&Boxes::wall(0.0, 50.0, 150.0), &lp, [0.0; 3], EAST, lp.reach_land).is_some());
+        // reach: a wall 120 cm ahead needs the landing's 150
+        let far = Boxes::wall(-1000.0, 120.0, 150.0);
+        assert!(ledge::detect(&far, &lp, [0.0; 3], EAST, lp.reach_fall).is_none());
+        assert!(ledge::detect(&far, &lp, [0.0; 3], EAST, lp.reach_land).is_some());
+        // something on the top where the body goes (a block 40 cm above it)
+        let mut blocked = Boxes::wall(-1000.0, 50.0, 150.0);
+        blocked.boxes.push(([40.0, 190.0, -100.0], [400.0, 400.0, 100.0]));
+        assert!(ledge::detect(&blocked, &lp, [0.0; 3], EAST, lp.reach_fall).is_none());
+    }
+
+    #[test]
+    fn hang_position_from_the_foot_search() {
+        let lp = LEDGE_SHIPPED;
+        let w = Boxes::wall(-1000.0, 100.0, 300.0);
+        let feet = [70.0, 150.0, 0.0];
+        let l = ledge::detect(&w, &lp, feet, EAST, lp.reach_fall).unwrap();
+        assert!(near(l.edge, [100.0, 300.0, 0.0], 1e-3), "{l:?}");
+        // nothing below within 210 cm: the first 15 cm step out, 210 down
+        let (braced, foot) = ledge::foot_point(&w, &l, feet).unwrap();
+        assert!(!braced);
+        assert!(near(foot, [70.0, 90.0, 0.0], 1e-3), "{foot:?}");
+        let h = ledge::hang_pose(&w, &lp, &l, braced, foot);
+        assert!(near(h.hands, [78.0, 300.0, 0.0], 1e-3), "{h:?}");
+        assert!(near(h.foot, [70.0, 90.0, 0.0], 1e-3), "{h:?}");
+        // the body point lies 93 cm from the hands toward the feet
+        let d = ((h.body[0] - 78.0).powi(2) + (h.body[1] - 300.0).powi(2)).sqrt();
+        assert!((d - 93.0).abs() < 1e-3, "{h:?}");
+    }
+
+    #[test]
+    fn braced_hang_over_low_ground() {
+        let lp = LEDGE_SHIPPED;
+        // a 190 cm wall standing on the floor: the body line meets the floor
+        let w = Boxes::wall(0.0, 100.0, 190.0);
+        let feet = [65.0, 0.0, 0.0];
+        let l = ledge::detect(&w, &lp, feet, EAST, lp.reach_land).unwrap();
+        let (braced, foot) = ledge::foot_point(&w, &l, feet).unwrap();
+        assert!(braced);
+        // the step out finds the floor: feet 20 cm over it
+        assert!(near(foot, [70.0, 20.0, 0.0], 1e-3), "{foot:?}");
+        let h = ledge::hang_pose(&w, &lp, &l, braced, foot);
+        // hands 33 cm out; the body kept 33 cm off the wall; feet 100 cm
+        // below the hands along that line
+        assert!(near(h.hands, [67.0, 190.0, 0.0], 1e-3), "{h:?}");
+        assert!(near(h.foot, [67.0, 90.0, 0.0], 1e-2), "{h:?}");
+    }
+
+    #[test]
+    fn climb_ends_on_the_ledge() {
+        let l = ledge::Ledge {
+            edge: [100.0, 300.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
+            wall_normal: [-1.0, 0.0, 0.0],
+        };
+        assert_eq!(ledge::climb_end(&l), [110.0, 305.0, 0.0]);
+        assert!((ledge::facing(&l) - EAST).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_fall_grabs_hangs_and_climbs() {
+        let mut s = sim();
+        let w = Boxes::wall(-1000.0, 100.0, 300.0);
+        {
+            let p = s.player_mut(0).unwrap();
+            p.position = [40.0, 400.0, 0.0];
+            p.yaw = EAST;
+            p.state = State::Fall;
+        }
+        let fwd = HashMap::from([(0, east(false, false))]);
+        let none = HashMap::new();
+        // fall toward the wall with the stick held until a ledge is taken
+        let mut n = 0;
+        while s.player(0).unwrap().hold.is_none() {
+            s.step(TICK / MOTION_FPS, &fwd, &w);
+            n += 1;
+            assert!(n < 400, "never grabbed: {:?}", s.player(0).unwrap());
+        }
+        let p = s.player(0).unwrap();
+        // only after dropping 100 cm, and with the low probe under the top
+        assert!(p.position[1] < 250.0, "{p:?}");
+        assert_eq!(p.state.motion_id(), 0x2D);
+        // let go of the stick: the grab ends in a hang at the foot point
+        for _ in 0..60 {
+            s.step(1.0 / 30.0, &none, &w);
+        }
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::LedgeHang { braced: false });
+        assert_eq!(p.state.motion_id(), 0x2F);
+        assert!(near(p.position, [70.0, 90.0, 0.0], 1e-3), "{p:?}");
+        // push toward the wall: climb, then stand on the top 10 cm in
+        s.step(1.0 / 30.0, &fwd, &w);
+        assert_eq!(s.player(0).unwrap().state, State::LedgeClimb { braced: false });
+        for _ in 0..80 {
+            s.step(1.0 / 30.0, &none, &w);
+        }
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        assert!(near(p.position, [110.0, 300.0, 0.0], 1e-3), "{p:?}");
+    }
+
+    #[test]
+    fn a_fall_without_stick_or_drop_does_not_grab() {
+        let w = Boxes::wall(-1000.0, 100.0, 300.0);
+        // no stick
+        let mut s = sim();
+        {
+            let p = s.player_mut(0).unwrap();
+            p.position = [65.0, 400.0, 0.0];
+            p.yaw = EAST;
+            p.state = State::Fall;
+        }
+        for _ in 0..60 {
+            s.step(1.0 / 30.0, &HashMap::new(), &w);
+            assert!(s.player(0).unwrap().hold.is_none());
+        }
+        // stick held, but the fall starts beside the ledge: by the time it
+        // has dropped 100 cm the top is out of the probes' range
+        let mut s = sim();
+        {
+            let p = s.player_mut(0).unwrap();
+            p.position = [65.0, 160.0, 0.0];
+            p.yaw = EAST;
+            p.state = State::Fall;
+        }
+        let mut inputs = HashMap::new();
+        inputs.insert(0, east(false, false));
+        let mut grabbed = false;
+        for _ in 0..60 {
+            s.step(1.0 / 30.0, &inputs, &w);
+            grabbed |= s.player(0).unwrap().hold.is_some();
+        }
+        let p = s.player(0).unwrap();
+        assert!(!grabbed && p.position[1] < 0.0, "{p:?}");
+    }
+
+    #[test]
+    fn a_normal_jump_never_grabs() {
         let mut s = sim();
         s.player_mut(0).unwrap().position = [60.0, 0.0, 0.0];
-        let mut climbed = false;
+        let w = Boxes::wall(0.0, 100.0, 150.0);
         for f in 0..200 {
             let mut inputs = HashMap::new();
-            inputs.insert(
-                0,
-                Input {
-                    stick: [0.0, 1.0],
-                    jump: f < 2,
-                    camera_yaw: std::f32::consts::FRAC_PI_2,
-                    ..Default::default()
-                },
-            );
-            s.step(1.0 / 30.0, &inputs, &Wall(150.0));
+            inputs.insert(0, east(f % 40 < 2, false));
+            s.step(1.0 / 30.0, &inputs, &w);
             let p = s.player(0).unwrap();
-            if p.position[1] == 150.0 && p.position[0] >= 100.0 {
-                climbed = true;
+            assert!(p.hold.is_none(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn a_sprint_jump_landing_grabs_a_low_ledge() {
+        let mut s = sim();
+        s.player_mut(0).unwrap().position = [-300.0, 0.0, 0.0];
+        let w = Boxes::wall(0.0, 100.0, 190.0);
+        let mut states = Vec::new();
+        for f in 0..400 {
+            let mut inputs = HashMap::new();
+            // sprint, jump, keep pushing toward the wall until the climb
+            if !matches!(states.last(), Some(State::LedgeClimb { .. } | State::Wait)) {
+                inputs.insert(0, east((20..22).contains(&f), f < 22));
+            }
+            s.step(1.0 / 30.0, &inputs, &w);
+            let st = s.player(0).unwrap().state;
+            if states.last() != Some(&st) {
+                states.push(st);
+            }
+            if st == State::Wait && f > 40 {
                 break;
             }
         }
-        assert!(climbed, "{:?}", s.player(0).unwrap());
+        assert!(states.contains(&State::SprintJumpLand), "{states:?}");
+        assert!(
+            states.contains(&State::LedgeGrab {
+                braced: true,
+                phase: GrabPhase::Reach
+            }),
+            "{states:?}"
+        );
+        assert!(states.contains(&State::LedgeClimb { braced: true }), "{states:?}");
+        let p = s.player(0).unwrap();
+        // 10 cm in from the edge, on the top
+        assert!(near(p.position, [110.0, 190.0, 0.0], 1e-3), "{p:?}");
+    }
+
+    #[test]
+    fn pulling_back_lets_go() {
+        let mut s = sim();
+        let w = Boxes::wall(-1000.0, 100.0, 300.0);
+        {
+            let p = s.player_mut(0).unwrap();
+            p.position = [40.0, 400.0, 0.0];
+            p.yaw = EAST;
+            p.state = State::Fall;
+        }
+        let fwd = HashMap::from([(0, east(false, false))]);
+        while s.player(0).unwrap().hold.is_none() {
+            s.step(TICK / MOTION_FPS, &fwd, &w);
+        }
+        for _ in 0..60 {
+            s.step(1.0 / 30.0, &HashMap::new(), &w);
+        }
+        assert!(matches!(s.player(0).unwrap().state, State::LedgeHang { .. }));
+        // a half push away is not enough; a full one lets go
+        let back = |k: f32| {
+            HashMap::from([(
+                0,
+                Input {
+                    stick: [0.0, -k],
+                    camera_yaw: EAST,
+                    ..Default::default()
+                },
+            )])
+        };
+        s.step(TICK / MOTION_FPS, &back(0.5), &w);
+        assert!(matches!(s.player(0).unwrap().state, State::LedgeHang { .. }));
+        s.step(TICK / MOTION_FPS, &back(1.0), &w);
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Fall);
+        assert!(p.hold.is_none());
+        assert_eq!(p.velocity, [-ledge::LET_GO_SPEED, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_vanished_ledge_is_let_go() {
+        let w = Boxes::wall(-1000.0, 100.0, 300.0);
+        let l = ledge::detect(&w, &LEDGE_SHIPPED, [70.0, 150.0, 0.0], EAST, 100.0).unwrap();
+        assert!(ledge::holds(&w, &l));
+        let empty = Boxes {
+            floor: -1000.0,
+            boxes: vec![],
+        };
+        assert!(!ledge::holds(&empty, &l));
+    }
+
+    #[test]
+    fn ledge_param_reads_the_adjust_table() {
+        let mut t = vec![0.0f32; 0x192];
+        for (id, v) in [
+            (0x5A, 150.0),
+            (0x5B, 200.0),
+            (0x5C, 50.0),
+            (0x5D, 100.0),
+            (0x5E, 100.0),
+            (0x5F, 25.0),
+            (0x17C, 30.0),
+            (0x17D, 20.0),
+            (0x189, 93.0),
+            (0x18A, 22.0),
+            (0x190, 60.0),
+            (0x191, 33.0),
+        ] {
+            t[id] = v;
+        }
+        assert_eq!(LedgeParam::from_adjust(&t), Some(LEDGE_SHIPPED));
+        assert_eq!(LedgeParam::from_adjust(&t[..0x191]), None);
     }
 
     #[test]
