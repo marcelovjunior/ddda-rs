@@ -148,6 +148,17 @@ pub fn d3d_format(code: u8) -> Option<D3dFormat> {
         .and_then(|&v| D3dFormat::from_d3d(v))
 }
 
+/// Whether a TEX format byte is a colour format the exe flags for sRGB
+/// sampling. The texture setup at 0x01104f40 sets bit 30 of the texture's
+/// format word (`+0x20`) for exactly these codes; they are the colour
+/// textures (`_BM` 0x14/0x18, sky and UI 0x28, effects 0x2F), while masks
+/// (0x19), normal maps (0x1F) and `_CMM` (0x13) are left out. *The flag's
+/// consumer (the sampler's sRGB state) is not traced yet.*
+// Translated from 0x01104f40 (DDDA.exe 2017-12-13 Steam)
+pub fn is_srgb(code: u8) -> bool {
+    matches!(code, 0x09 | 0x14 | 0x16 | 0x18 | 0x23 | 0x24 | 0x28 | 0x2F)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Flat,
@@ -357,6 +368,13 @@ pub fn parse(b: &[u8]) -> Result<Texture<'_>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srgb_codes_from_exe() {
+        let srgb: Vec<u8> = (0..48).filter(|&c| is_srgb(c)).collect();
+        assert_eq!(srgb, [0x09, 0x14, 0x16, 0x18, 0x23, 0x24, 0x28, 0x2F]);
+        assert!(!is_srgb(0x19) && !is_srgb(0x1F) && !is_srgb(0x13));
+    }
 
     fn header(shape: u32, mips: u32, w: u32, h: u32, faces: u32, code: u8, depth: u32) -> Vec<u8> {
         let mut b = MAGIC.to_vec();

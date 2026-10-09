@@ -66,7 +66,7 @@ Codex lane: see `docs/CODEX.md`.
 |---|---|---|---|---|
 | [ledge](ledge.md) | Ledge grab and climb, turn rate, stop motions from the exe | core | claude-1 | merged 2026-10-09 |
 | [blend](blend.md) | Motion blending between actions | core | claude-2 | merged 2026-10-09 |
-| [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude-3 | assigned |
+| [terrain-shading](terrain-shading.md) | Terrain layer blending and material constants | core | claude-3 | merged 2026-10-09 |
 | [player-params](player-params.md) | Stamina, weight, level, vocation parameter readers + stamina rules | reader + exe | codex-3 | merged 2026-10-09 |
 | [enemy-data](enemy-data.md) | Enemy stats readers (rPropParam, rRegionStatus, rStatusParam, rShlParamList) | reader | codex-4 | merged 2026-10-09 |
 | [ai-fsm](ai-fsm.md) | rAIFSM survey and typed reader (pawn + enemy AI data) | reader | codex-5 | merged 2026-10-09 |
