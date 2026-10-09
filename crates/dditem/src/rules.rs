@@ -309,3 +309,42 @@ pub fn inn_price(npc: u32) -> u32 {
         _ => 0,
     }
 }
+
+/// Whether a sold item enters the buy-back list (Black Cat).
+///
+/// Translated from `0x0045f040` (DDDA.exe 2017-12-13 Steam): a fixed set
+/// of unique items; everything else sold is gone.
+pub fn buyback_eligible(item: u32) -> bool {
+    let v = item & 0xffff;
+    matches!(
+        v,
+        0x8e..=0x95
+            | 0x98..=0x9a
+            | 0x9e
+            | 0xa2..=0xa4
+            | 0xa6..=0xa8
+            | 0xad..=0xb0
+            | 0xb3..=0xb5
+            | 0xbb
+            | 0xbe..=0xc5
+            | 0xcc
+            | 0xcd
+            | 0xdd
+            | 0xde
+            | 0xe5
+            | 0x116
+            | 0x250
+            | 0x49e
+            | 0x4a4
+            | 0x4a5
+            | 0x5dd..=0x5ec
+            | 0x6ba
+            | 0x6bc
+    )
+}
+
+/// The item also counted when checking whether the party owns items 1-42
+/// (`0x00460350` via the jump table at `0x004607a4`): item `n + 229`.
+pub fn paired_item(item: u32) -> Option<u32> {
+    (1..=42).contains(&item).then_some(item + 229)
+}

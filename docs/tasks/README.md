@@ -107,7 +107,7 @@ Codex lane: see `docs/CODEX.md`.
 | [ddexe](ddexe.md) | One reader for tables in the installed exe; port ddskill/ddpawn | core | claude-9 | merged 2026-10-09 |
 | [event-player](event-player.md) | Play st200 ev10: cameras, actors, subtitles; return control | core | claude-7 | assigned |
 | [rift-sim](rift-sim.md) | The Rift as a host-owned system (summon, hire, dismiss) | core | claude-5 | assigned |
-| [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | assigned |
+| [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | merged 2026-10-09 |
 | [progression](progression.md) | Exp, levels, discipline, learning, vocation change runtime | core | claude-9 | assigned |
 | [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
 | [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | assigned |
