@@ -29,20 +29,54 @@ Done:
 - Format survey (`E:\ddda-re\notes\formats-survey.md`): 8,536 `.arc` v7
   archives, 358k zlib entries, 144 resource types; MIT specs available
   (Albam, Riftstone).
-- DTI class registry harvested: 4,343 classes, 4,285 vtables, 25,712
-  virtual functions named ([DTI.md](DTI.md)).
-
-- DTI labels applied to the Ghidra project: 16,004 vtable-only functions
-  created, 30,446 functions and 12,971 data labels named (99 rows failed
-  function creation; not yet investigated).
+- DTI class registry harvested: 4,405 classes, 4,343 vtables, 25,791
+  virtual functions named ([DTI.md](DTI.md)). Reproducible from
+  `research/dti` (identical label set verified).
+- DTI labels applied to the Ghidra project. Vtable runs trimmed at the
+  first non-code word (143 vtables); the 57 functions an earlier run had
+  created at non-code addresses were removed. Final state 2026-10-08
+  20:10: 30,540 functions and 13,153 data labels named, 0 failures.
 - `mtarc` crate (ARC v7 reader) and `ddtool` CLI. **Gate passed
   2026-10-08:** `ddtool arc-scan <nativePC> --inflate` opens all 8,536
   archives, inflates all 358,431 entries to their recorded sizes, 144
   types all named from the DTI registry, 0 failures, 33 s.
 
-In progress:
-- Ghidra re-analysis over the newly created functions.
+**Active: M1** (Look: one area with a free camera)
 
-Next action (M1 starts): TEX reader (`rTexture` v0x99, 70% of the data),
-then MOD + MRL, using Albam's MIT specs and checking every claim against
-the data with `ddtool`.
+Done (format readers; checked by re-running the scans 2026-10-08 20:05):
+- `mttex`: all 73,706 `rTexture` v0x99 parse. Format byte to D3DFORMAT
+  is the exe's own table at `0x01440698` (byte-for-byte; one copying
+  slip at index 4 fixed).
+- `mtmod`, `mtmrl`, `mtshader`: all 28,094 models (70.2M vertices, 71.3M
+  triangles) and 28,152 material lists parse. All 2,077,947 material
+  commands resolve through `BbsShaderPackage.mfx`, which also gives the 24
+  vertex layouts. Format notes are in [FORMATS.md](FORMATS.md).
+- World placement rule from the live game ([WORLD.md](WORLD.md)).
+
+Open data anomalies (unexplained, not yet ruled harmless):
+- 123,205 of 70.2M normals off unit length by more than 0.05.
+- 25,811 skinned vertices reference a joint at or above the bone count.
+
+Viewer (`ddvfs`, `ddview`), first renders 2026-10-08 20:30:
+- Fixed before it would build or show anything: a compile error, the cell
+  model path (folder comes from A, not B), corrupted build artifacts
+  from the drive failure (`cargo clean`), and screenshots taken before
+  Bevy's async pipeline compilation finished (`--shot-delay`, default
+  10 s).
+- 5x5 cells around `st100_58m50n` load and join seamlessly (25 cells,
+  231 meshes, 56,527 triangles, 28 textures, 0 problems): the placement
+  rule holds. Triangles are CCW-front against the stored normals (12,000
+  vs 2 in four cells), so Bevy's default culling is right.
+- The ground-level shot from the live player pose shows plausible terrain.
+  **Not yet compared with the original game**: no reference screenshot.
+
+Missing for the M1 gate:
+- Reference screenshots from the original game at recorded poses.
+- Placed objects (buildings, trees, props: the `lot` archives), water
+  models, terrain layer blending (only the base albedo is drawn), the
+  stage's own lighting (sun and ambient are placeholders).
+- Handedness (a possible mirror) is unresolved until a reference shot
+  exists.
+
+Next action: get a reference screenshot of the original at the recorded
+pose, then read the `lot` placement archives.

@@ -1,0 +1,53 @@
+# World layout and streaming
+
+Findings about how stages are split, placed and streamed. "Live" means
+read from the running Steam game (read-only memory access, see
+`METHODOLOGY.md`); "data" means read from nativePC.
+
+## Stage 100 (Gransys overworld)
+
+**Files (data):**
+- `rom\stage\stage100\stage100.arc` holds stage-wide resources: 579 entries, including parameters, layouts and cameras.
+- `split\m<A/10*10>\n<B/10*10>\st100_<A>m<B>n.arc` holds one grid cell
+  (e.g. `split\m50\n40\st100_58m49n.arc`). Each cell has:
+  - one `rModel` and one `rMaterial` (`scr\st100\model\m<A/10*10>\st100_<A>m<B>n`;
+    the folder comes from A, checked with `ddtool arc-ls` on 58m49n, 58m50n and 57m48n)
+  - water models and materials for rivers, lakes and sea crossing the cell
+    (`scr\st100\model\water\...`); not yet drawn by the viewer
+  - two `rCollision` (`...\collision\...\st100h_<A>m<B>n_mrg00` and `st100e_...`)
+- `split_sub\`, `split_way\` hold per-cell extras with the same naming. *Roles not yet traced.*
+- `area\area_indexNN_{high,low}.arc` and `fm\fm_indexNN_{high,low}.arc` hold the terrain textures in two LOD sets, referenced by the cell MRLs.
+
+**Cell geometry (data):**
+- Cell models and collision use **cell-local** X and Z (0..10000) and **absolute** Y.
+- 1,459 cell models were checked this way.
+- Units are presumably centimetres, which makes a cell 100 m square. *Unresolved: confirm the unit.*
+
+**Placement (live, 2026-10-08):**
+- The game keeps a **floating origin** at the current cell. The ten loaded `uStageSplitMdl` objects had positions (`+0x40`) at multiples of 10000 around (0, 0, 0).
+- The cell at the origin was `st100_58m50n`. The player's position was in the same local frame:
+  - `uPlayer` at `+0x40`: (205.4, 41019.0, 3542.5)
+  - the same value is the translation row of the world matrix at `+0x90`
+
+| live cell | offset (x, z) |
+| --- | --- |
+| st100_57m48n / 57m49n / 57m50n | (-20000, -10000) / (-10000, -10000) / (0, -10000) |
+| st100_58m48n / 58m49n / 58m50n / 58m51n | (-20000, 0) / (-10000, 0) / (0, 0) / (10000, 0) |
+| st100_59m48n / 59m49n / 59m50n | (-20000, 10000) / (-10000, 10000) / (0, 10000) |
+
+**Placement rule:**
+- For cell `st100_<A>m<B>n`: X = (B - B0) * 10000 and Z = (A - A0) * 10000, relative to the origin cell (A0, B0). Y is unchanged.
+- So a global frame is X = B * 10000 + x, Z = A * 10000 + z, up to a constant.
+
+## Live object access
+
+**Addressing:**
+- DDDA.exe loads at 0x400000 with no relocation. The live DTI hash table at `0x018768A0` and the descriptors match the static registry.
+- Live objects are found by their class vtable. `uPlayer` vtable is `0x015E90D0`; one instance existed in stage 100.
+- The current stage is the one `aStageNNN` class with a heap instance (`aStage100` here).
+
+**Class census.** One sweep over the heap counted 391,858 objects of 1,358 DTI classes. The method:
+1. Read every committed, readable region outside the image.
+2. Match each u32 against the 4,343 known vtables.
+
+**Resources:** a resource object (e.g. `rModel`) holds its path as a C string at `+0x08`.

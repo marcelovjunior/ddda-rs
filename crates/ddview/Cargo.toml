@@ -1,0 +1,15 @@
+[package]
+name = "ddview"
+version = "0.1.0"
+description = "M1 viewer: load stage cells from a Dragon's Dogma: Dark Arisen install and fly through them"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = "0.19.1"
+ddvfs = { path = "../ddvfs" }
+mtmod = { path = "../mtmod" }
+mtmrl = { path = "../mtmrl" }
+mtshader = { path = "../mtshader" }
+mttex = { path = "../mttex" }

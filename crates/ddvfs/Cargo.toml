@@ -1,0 +1,10 @@
+[package]
+name = "ddvfs"
+version = "0.1.0"
+description = "Resource index over a Dragon's Dogma: Dark Arisen nativePC tree (path + type -> archive entry)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtarc = { path = "../mtarc" }
