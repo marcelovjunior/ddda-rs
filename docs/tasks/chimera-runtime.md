@@ -94,6 +94,10 @@ Validation: `cargo test -p ddcombat -p ddenemyrt` passes 72 tests with one
 existing ignored diagnostic (33 combat and 39 enemy-runtime tests).
 The normal body action 0x3a is a falling action before death action 0x57;
 the 180-unit death cleanup timer is not the persistent-kill producer.
+Shared parameter loading now accepts explicit common/region resource paths,
+including both child suffixes. One installed regression verifies legacy common
+stats equivalence, all three chimera kind-zero pools against parsed resources,
+and missing-path errors. The existing em#### identity validation stays intact.
 
 No host combat actor, placement kill, story progression or original-game
 comparison is claimed by this checkpoint. Next: the child-00 collision-link
