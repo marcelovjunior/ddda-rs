@@ -3,6 +3,8 @@
 //!
 //! cargo run -p ddlook --example look_dump -- <nativePC> model <rModel path>...
 //! cargo run -p ddlook --example look_dump -- <nativePC> npc <id> [unit] [row]
+//! cargo run -p ddlook --example look_dump -- <nativePC> paths <class> [substring]
+//! cargo run -p ddlook --example look_dump -- <nativePC> raw <class> <path> <out file>
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let v = ddvfs::Vfs::open(&a[1]).unwrap();
@@ -24,6 +26,16 @@ fn main() {
                     }
                 }
                 println!("  groups (mesh count, lods): {groups:?}");
+                if std::env::var_os("LOOK_DUMP_RAW").is_some() {
+                    // World frame from the inverse bind (rigid, row vectors).
+                    for (i, b) in m.bones.iter().enumerate() {
+                        let r = |i: usize, j: usize| b.inverse_bind[i * 4 + j];
+                        let axis = |j: usize| [r(0, j), r(1, j), r(2, j)];
+                        let t: [f32; 3] = std::array::from_fn(|j| -(0..3).map(|k| r(3, k) * r(j, k)).sum::<f32>());
+                        let parent = m.bones.get(b.parent as usize).map(|p| p.anim_map_index);
+                        println!("  bone {i} id {} parent {parent:?} pos {t:.1?} x {:.2?} y {:.2?} z {:.2?}", b.anim_map_index, axis(0), axis(1), axis(2));
+                    }
+                }
                 for me in &m.meshes {
                     let lay = mfx.layout(me.vertex_format);
                     let d = lay.map(|l| m.decode(me, l));
@@ -31,9 +43,16 @@ fn main() {
                         Some(Ok(v)) => (v.positions.len(), v.joints.len()),
                         _ => (0, 0),
                     };
+                    let bbox = match &d {
+                        Some(Ok(v)) => v.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| {
+                            (std::array::from_fn(|i| lo[i].min(p[i]).round()), std::array::from_fn(|i| hi[i].max(p[i]).round()))
+                        }),
+                        _ => ([0.0; 3], [0.0; 3]),
+                    };
                     println!(
-                        "  mesh group {} lod {} verts {} decoded {} joints {} bone_start {} weights {} layout {:?}",
+                        "  mesh group {} bbox {:?} lod {} verts {} decoded {} joints {} bone_start {} weights {} layout {:?}",
                         me.group,
+                        bbox,
                         me.lod,
                         me.vertex_count,
                         np_,
@@ -42,6 +61,9 @@ fn main() {
                         me.max_weights(),
                         lay.map(|l| l.name.clone())
                     );
+                    if std::env::var_os("LOOK_DUMP_RAW").is_some() {
+                        println!("    {me:?}");
+                    }
                 }
             }
         }
@@ -52,6 +74,21 @@ fn main() {
             let l = ddlook::npc_look(&v, id, unit, row).unwrap();
             println!("{l:#?}");
         }
-        _ => panic!("model | npc"),
+        "raw" => {
+            // raw <class> <path> <out file>
+            let b = v.read(&a[4], mtarc::type_hash(&a[3])).unwrap();
+            std::fs::write(&a[5], &b).unwrap();
+            println!("{} bytes", b.len());
+        }
+        "paths" => {
+            // paths <class> [substring]
+            let f = a.get(4).map(String::as_str).unwrap_or("");
+            let mut v: Vec<&str> = v.paths_of_type(mtarc::type_hash(&a[3])).filter(|p| p.contains(f)).collect();
+            v.sort();
+            for p in v {
+                println!("{p}");
+            }
+        }
+        _ => panic!("model | npc | paths"),
     }
 }

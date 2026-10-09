@@ -62,7 +62,8 @@ pub fn item_piece(items: &[[u8; 0x80]], item: i16) -> i32 {
 
 /// A look from an edit record (field name -> value, the 41 u8 fields of
 /// `cSAVE_DATA_EDIT`) and the 12 equipment slots (item numbers).
-pub fn edit_look(
+pub fn edit_look<S: Source + ?Sized>(
+    src: &S,
     t: &Tables,
     pat: &EditPattern,
     items: &[[u8; 0x80]],
@@ -100,11 +101,45 @@ pub fn edit_look(
     );
     look.skin_color = Some([skin[0], skin[1], skin[2]]);
     look.weapons = crate::weapon::weapons(raw(0), raw(1));
+    // Preset numbers (0x00780fa0): the field, plus 100 for a female
+    // unless mHumanBodyAll is 200 or more.
+    let base = if sex == 1 && field(f, "mHumanBodyAll").unwrap_or(0) < 200 { 100 } else { 0 };
+    // The body morph from the human presets (0x00780fa0 -> 0x00cbc750).
+    // The nine floats come from a skeleton measurement (0x00cbbf00) that
+    // is not translated: neutral (1.0) here.
+    let mut human = crate::morph::HumanEdit::neutral();
+    for (part, (name, field_name)) in crate::morph::PRESET_PARTS.iter().enumerate() {
+        let n = field(f, field_name).unwrap_or(0) + base;
+        let path = format!("edit\\parts\\{name}\\{name}_{n:03}");
+        let preset = src
+            .resource(&path, "rHumanPartsEdit")
+            .ok()
+            .flatten()
+            .and_then(|b| crate::morph::HumanParts::parse(&b).ok());
+        human.apply_preset(part, preset.as_ref());
+    }
+    look.body = Some(crate::morph::body_morph(&human, &|_| true));
+    // The face morph from the face presets (0x00780fa0 -> 0x00cb9280) and
+    // the slider parameters.
+    let mut face = crate::face::FaceEdit::neutral();
+    for (part, (name, field_name)) in crate::face::FACE_PRESET_PARTS.iter().enumerate() {
+        let n = field(f, field_name).unwrap_or(0) + base;
+        let path = format!("edit\\parts\\{name}\\{name}_{n:03}");
+        let preset = src
+            .resource(&path, "rFacePartsEdit")
+            .ok()
+            .flatten()
+            .and_then(|b| crate::face::FaceParts::parse(&b).ok());
+        face.apply_preset(part, preset.as_ref());
+    }
+    let params = crate::face::FaceParams::from_save(&|n| field(f, n).map(|v| v as u8));
+    look.face = crate::face::face_morph(&face, &params, &|_| true);
     Some(look)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn character(
+fn character<S: Source + ?Sized>(
+    src: &S,
     t: &Tables,
     pat: &EditPattern,
     items: &[[u8; 0x80]],
@@ -119,7 +154,7 @@ fn character(
         .children()
         .map(|c| c.get::<i16>("data.mItemNo").unwrap_or(-1))
         .collect();
-    let look = edit_look(t, pat, items, unit, &f, &eq)?;
+    let look = edit_look(src, t, pat, items, unit, &f, &eq)?;
     Some(SavedLook { who, look, items: eq, edit: f })
 }
 
@@ -153,7 +188,7 @@ pub fn template_look<S: Source + ?Sized>(src: &S, sex: u8) -> Result<Look, Error
             continue;
         }
         let eq: Vec<i16> = c.param.equip.iter().map(|e| e.item_no).collect();
-        if let Some(l) = edit_look(&t, &pat, &items, Unit::Player, &f, &eq) {
+        if let Some(l) = edit_look(src, &t, &pat, &items, Unit::Player, &f, &eq) {
             return Ok(l);
         }
     }
@@ -175,6 +210,7 @@ pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Re
     let mut out = vec![];
     let pl = ep.child("mPl").ok_or_else(|| Error::Data("no mPl".into()))?;
     out.extend(character(
+        src,
         &t,
         &pat,
         &items,
@@ -186,7 +222,7 @@ pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Re
     if let Some(cmc) = ep.child("mCmc") {
         for (i, c) in cmc.children().enumerate() {
             if let (Some(e), Some(p)) = (c.child("mEdit"), c.child("mParam")) {
-                out.extend(character(&t, &pat, &items, format!("pawn{i}"), Unit::Pawn, e, p));
+                out.extend(character(src, &t, &pat, &items, format!("pawn{i}"), Unit::Pawn, e, p));
             }
         }
     }

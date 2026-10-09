@@ -15,6 +15,10 @@
 //!    rArmorTableNpc -> rArmorModelNpc), hair and beard (0x008407f0:
 //!    rArmorTable / rArmorModel of `h_parts`).
 
+pub mod face;
+#[rustfmt::skip]
+mod face_controllers;
+pub mod morph;
 pub mod pattern;
 pub mod save;
 pub mod weapon;
@@ -471,6 +475,10 @@ pub struct Look {
     /// Edit-record resources (rHumanEdit, rBodyEdit, rFaceEdit) for
     /// morphs; not applied by this crate.
     pub morphs: Option<[String; 3]>,
+    /// The body morph (crate::morph), when the edit data was found.
+    pub body: Option<morph::BodyMorph>,
+    /// The face morph (crate::face): the face joints it changes.
+    pub face: Vec<face::FaceJoint>,
 }
 
 fn read<S: Source + ?Sized>(data: &S, path: &str, class: &str) -> Result<Vec<u8>, Error> {
@@ -573,15 +581,22 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         p.hair = false;
         p.beard = true;
     }
-    // 0x008449b0: parts 0-199 on; the player hides part 17, a pawn part 16
-    // (NPC ids pick by 0x00ba7150, not translated).
+    // 0x008449b0: parts 0-199 on; the player ANDs word 0 with 0x7ffdffff
+    // (hides parts 17 and 31), a pawn with 0x7ffeffff (16 and 31) (NPC
+    // ids pick by 0x00ba7150, not translated).
     let mut mask = PartMask::default();
     for p in 0..200 {
         mask.set(p, true);
     }
     match unit {
-        Unit::Player => mask.set(17, false),
-        Unit::Pawn => mask.set(16, false),
+        Unit::Player => {
+            mask.set(17, false);
+            mask.set(31, false);
+        }
+        Unit::Pawn => {
+            mask.set(16, false);
+            mask.set(31, false);
+        }
         Unit::Npc => {}
     }
     // 0x00bc1060 for every piece: the parts-off records of its models
@@ -606,6 +621,8 @@ pub fn dressed_look(t: &Tables, unit: Unit, sex: u8, outfit: &Outfit, hair_color
         skin_color: None,
         weapons: vec![],
         morphs: None,
+        body: None,
+        face: vec![],
     }
 }
 
@@ -680,6 +697,15 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         look
     };
     look.morphs = morphs;
+    // NPC edits ship the human edit itself (edp path 1).
+    if let Some(b) = src.resource(&edit.human_edit, "rHumanEdit")? {
+        look.body = Some(morph::body_morph(&morph::HumanEdit::parse(&b)?, &|_| true));
+    }
+    // And the face edit (edp path 3); NPC face parameters stay zero
+    // (0x0083fa60 does not call 0x0080bb10 for them).
+    if let Some(b) = src.resource(&edit.face_edit, "rFaceEdit")? {
+        look.face = face::face_morph(&face::FaceEdit::parse(&b)?, &face::FaceParams::default(), &|_| true);
+    }
     look.skin_color = Some([f[12], f[13], f[14]]);
     look.weapons = weapon::weapons(edit.weapons[0], edit.weapons[1]);
     Ok(NpcLook { npc, edit_path, edit, armor_set: set, look })

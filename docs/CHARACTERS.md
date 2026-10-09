@@ -99,12 +99,28 @@ For st200 ev10:
 
 **Dressed characters** (0x008449b0 with 0x00bc1060):
 1. Set parts 0-199.
-2. The player clears 17 and a pawn clears 16.
+2. The player ANDs the first word with 0x7ffdffff (clears 17 and 31), a
+   pawn with 0x7ffeffff (clears 16 and 31).
 3. For every worn piece, each of its armour models (id % 1000) has an
    `rArmorPartsOff` record. It hides its parts either always (condition
    < 0) or when a model with id % 1000 = condition is also worn.
 
 The masks start from all bits set (*assumed* model default).
+
+**Render passes** (uModel::vf26 0x00ea5320). A mesh draws in a pass only
+when, besides its part bit:
+- its disp flag (flags bit 0) is set;
+- its LOD byte has the current LOD's bit;
+- `draw_mode & pass mask` is non-zero. The mask is the u16 that
+  0x00fedb80 stores at +0x16a when a pass begins. The scene pass
+  "Common" pushes 1 (0x00daf0a8); ShadowCast pushes 8 or 0x200
+  (0x00ede86c); Velocity 0x20, Outline 0x1000.
+
+So in the colour pass, `draw_mode` bit 0 decides. The base bodies and
+outfits carry a low-poly full-body mesh with `draw_mode` 0xe6c8 (a
+shadow caster) and shells with 0x1020 (outline and velocity). Drawing
+them in colour was the skin showing through sleeves and leggings, and
+the white patches on the elder's robe.
 
 ## Materials
 
@@ -162,52 +178,142 @@ The save -> runtime edit conversion 0x00780fa0 reads
   and an offset in cm (0x0080bcb0).
 - **Hang-up:** uCnsAttach (0x00859bb0, mode 1) builds the rotation as Rx ×
   Ry × Rz for row vectors, so X is applied first.
+- **Normalised joint:** uCnsAttach::vf24 normalises the joint's world
+  rows before it applies the attach matrix (+0xac clear), so weapons keep
+  their size on a morphed arm.
 - **In `ddview`:** each weapon keeps its own small skeleton (bone ids 0-2,
-  which are not body joints) under an anchor on that joint.
-- **Not applied:**
-  - the second model of a dagger pair (0x00bc1c30);
-  - the body-edit offset correction of rows on joints 11 / 13
-    (0x0080bcb0).
+  which are not body joints) under an anchor. The anchor is placed every
+  frame from the joint's normalised world matrix.
+- **Shields:** row 3 is joint 11, the left forearm (ids 9-12 run clavicle,
+  upper arm, forearm, hand on +x). In the bind pose the forearm's outer
+  side faces up, so the shield lies flat above it. With an idle motion
+  (`--pose`), it hangs on the outside of the forearm.
+- **Offset correction** (0x0080bcb0): rows on joint 0xb add
+  `(f84 - 1) x 15` to offset x; rows on 0xd add `±(f78 - 1) x 15`, with
+  the sign of x. f84 and f78 are human-edit controller floats from the
+  untranslated skeleton measurement (1.0 here), so the correction is
+  zero.
+- **Row 23** replaces row 3 in some action states (0x0080c110); not used
+  at rest.
+- **Not applied:** the second model of a dagger pair (0x00bc1c30).
 
-## Morphs (not applied)
+## Morphs (`ddlook::morph`, `ddlook::face`)
 
-The game shapes heads and bodies with joint offsets, not separate models:
+The game shapes heads and bodies with constraints on the shared skeleton's
+joints (uCnsEdit), not with separate models. Each character model has
+three edit controllers, fed by three edit resources:
+- **rHumanEdit** (0x00cbb0e0): nine floats, a flag and 13 (scale, offset)
+  slots.
 - **rFaceEdit** (0x00cb90e0): version 0x13, count (101), and that many
   vec3.
-- **rBodyEdit** (0x00cad170): one vec3, a flag, a count and vec3s.
-- **rHumanEdit** (0x00cbb0e0): nine floats, a flag and a list.
-- **The save's parametric record** (`mFaceBase`, `mFaceEye`, ...,
-  `mHumanArm`, `mBodySlender`) selects per-part presets:
-  - `edit\parts\<base|eye|eyeblow|nose|mouth|ear>\..._NNN` (rFacePartsEdit:
-    version, part type, count, vec3s);
-  - `edit\parts\<arm|body|bodyall|head|leg>\..._NNN` (rHumanPartsEdit:
-    version 0x43, type, count, six floats each).
-- **The runtime edit** (cPlayerInfo +0x288..+0x290, made by 0x0077d6f0 /
-  0x00785500) holds the three edit resources.
-- **The application** goes through `uEditModel` (vf08 0x0087e6a0) and the
-  model's `rJointEx` (`model\pl\m`). Which joint each entry moves, and
-  how the presets combine, was not traced.
+- **rBodyEdit** (0x00cad170): not translated (see Open).
 
-Traced so far (character-polish):
-- **0x00780fa0 (save -> runtime):**
-  - loads the six face presets and five human presets
-    (`edit\parts\%s\%s_%03d`);
-  - sets rBodyEdit +0x60 / +0x64 from `mBodySlender` / `mBodyMuscle`
-    through constant tables;
-  - fills around 20 scale and offset floats of the runtime edit (+0xc0..
-    +0x110) from the other indices through stack tables.
-- **0x0081be30 (rHumanEdit -> controller):** copies 13 slots (scale vec3
-  and offset vec3) and nine floats into the human-edit controller.
-- **0x00812a10 (rFaceEdit -> face controller):** copies 101 offset vec3.
-- **Controller update (0x0081ba40):**
-  - 0x0081c330 makes one joint-ex object per joint (ids 1-20 except 5 and
-    9, plus 0x42, 0x44, 0x90, 0x96, 0x99);
-  - 0x0081c6c0, 0x0081cff0 and 0x0081db50 compute their transforms.
-- **Face counterpart:** 0x00812820 -> 0x00812fb0 (1,182 lines of
-  decompile, mirrored left/right) and 0x00815c60.
+NPCs ship all three (edp paths). For a save character, 0x00780fa0 builds
+them from the parametric record:
+- `edit\parts\<bodyall|body|head|arm|leg>\..._NNN` (rHumanPartsEdit)
+  from `mHumanBodyAll`, `mHumanBody`, `mHumanHead`, `mHumanArm`,
+  `mHumanLeg`;
+- `edit\parts\<base|eyeblow|eye|nose|mouth|ear>\..._NNN`
+  (rFacePartsEdit: version 0x13, part, count, vec3s) from `mFaceBase`,
+  `mFaceEyebrow`, `mFaceEye`, `mFaceNose`, `mFaceMouth`, `mFaceEar`.
 
-Translating these joint computations is the remaining work. Until then,
-every character shows the unmorphed base head and body.
+NNN is the field plus 100 for a female, unless `mHumanBodyAll` is 200 or
+more (EDI in 0x00780fa0); the female presets are the 1NN files. A missing
+preset resets its slots (0x00cbc810) or zeroes its components
+(0x00cb9320).
+
+### Body (`ddlook::morph`)
+
+- **Controller** (0x0081b0d0 set-up, 0x0081be30 copy):
+  - 13 slots at +0x250, with rest values from table 0x01832aa0;
+  - 33 entries at +0x720 (table 0x017ed8f8);
+  - the nine floats at +0xf70..+0xf90.
+- **Computation:** the slot clamps 0x0081c6c0 (skipped when the record's
+  flag is set), the entries 0x0081cff0, then the joints 0x0081db50.
+- **Joints** (0x0081c330): ids 1-20 except 5 and 9, and 0x42, 0x44, 0x90,
+  0x96, 0x99. Types:
+  - 0xb for 2, 3, 4, 6, 10 (0x0086d180): an absolute size, scale x child
+    over the world axis lengths;
+  - 9 for 8 and 12;
+  - 0xc for 0x96 and 0x99 (approximated as a plain scale);
+  - 0 for the rest.
+- **Model scale:** entry 0's scale is uModel +0x60, the skeleton root.
+- **Not translated:** the nine floats of a save character come from a
+  skeleton measurement (0x00cbbf00), so they are 1.0 here.
+
+### Face (`ddlook::face`)
+
+- **Controller** (cFaceEdit, 0x00811780 / 0x00811a90):
+  - 101 markers at +0x280 (table 0x01831df0): kind, rest position, edit
+    value, adjustment. A marker reads as an offset (kind 0), a scale
+    (kind 1, around 1) or a rotation (kind 2): default + value +
+    adjustment.
+  - 116 controllers at +0x2210 (table 0x017edc70): joint id, offset,
+    scale, rotation, and a link to the parent joint's controller.
+- **Parameters:** ten floats at +0x240..+0x274. 0x0080bb10 fills them
+  from the save's sliders `mOfsXFaceEye`, `mOfsYFaceEye`, `mOfsYFaceNose`,
+  `mOfsYFaceMouth`, `mOfsYFaceEar`, `mOfsZFaceEar`, `mSclFaceEye` and
+  `mSclFaceNose`, through five-step tables of 0x00780fa0. NPCs keep zeros.
+- **Update** (0x00812820):
+  1. 0x00812fb0 computes marker adjustments.
+  2. 0x00815c60 computes the controllers.
+  3. 0x0081a370 sums each controller with its parents (offsets and
+     rotations add, scales multiply) and sets the joint's uCnsEdit. Each
+     part is set only away from its default; rotation is stored in
+     degrees.
+- **Joints:** face uCnsEdit records exist for ids 0x50-0x95 and 0xd2-0xfe
+  (0x00812c80). The eye joints get other types (0x00812330), which are not
+  translated, and the viewer leaves them alone:
+  - 0x51 and 0x58: type 0x10;
+  - 0x52-0x57 and 0x59-0x5e: type 0xd;
+  - 0xe2-0xe3: type 0xf;
+  - 0xe4-0xe9: type 0xe.
+- **How the update was translated:** `face_controllers.rs` is generated
+  from the instructions of 0x00812fb0 and 0x00815c60. Ghidra's decompile
+  loses the register arguments of their helpers, so the functions were
+  executed symbolically instead: integers concrete, floats as
+  expressions.
+  - Marker kinds and controller joint ids are static, so their branches
+    are resolved.
+  - Float compares become `if`s.
+  - The f32 operation order is kept.
+- **Tested** (`matches_the_emulated_exe`) against the exe itself:
+  constructor, set-up and update ran in an x86 emulator on DDDA.exe's
+  code with pseudo-random inputs, and the outputs agree bit for bit. A
+  neutral edit changes no joint.
+- **Assumed:** the bss vector 0x018cfe80 is the zero vector.
+
+### Applying them (uCnsEdit::vf24 0x00860ac0)
+
+1. Type 0 builds `C = diag(scale) x Rx x Ry x Rz` (row vectors, angles from
+   +0x70 in degrees, X applied first), with the offset as the translation
+   row.
+2. It replaces the joint's world matrix W with `C x W`.
+3. Constraint weight +0x44 is 1 (0x0112ebb0).
+
+In `ddview` (`character::apply_morph`):
+- Each frame, after the motion, the world matrices are recomputed parents
+  first, with each joint's edits applied in column form:
+  `W x T(offset) x R x S`.
+- The model scale is the root.
+- The result is written back as local transforms. Shear from non-uniform
+  parent scales is lost in that TRS decomposition.
+- Joint 0x90 has both a body and a face edit; applying the body edit
+  first is *assumed*.
+
+### Results
+
+Save characters from the maintainer's save:
+
+| Character | Model scale | Face joints changed |
+|---|---|---|
+| Arisen (female) | (1.0, 0.859, 1.0) | 92 |
+| pawn0 | (0.9, 0.989, 0.9) | 100 |
+| pawn1 | (1.0, 0.918, 1.0) | 99 |
+| pawn2 | (1.0, 0.960, 1.0) | 100 |
+
+NPC 1 and NPC 2 change 100 and 99 face joints. The four save faces all
+differ (test `face_morphs_differ`).
 
 ## The save's Arisen and pawns (`ddlook::save`)
 
@@ -239,12 +345,25 @@ personal data).
 - `ddview <nativePC> --event 22 [--save DDDA.sav]`: event actors assembled
   as above. With `--save`, the player actor is the save's Arisen and pawn
   actors are its pawns.
-- `ddview <nativePC> --lineup DDDA.sav[,npc:N...] [--shot out.png]`: the
-  save's Arisen and pawns, and NPC looks, side by side in the bind pose.
+- `ddview <nativePC> --lineup DDDA.sav[,npc:N...] [--pose <rMotionList>[:slot]]
+  [--start-frame F] [--shot out.png]`: the save's Arisen and pawns, and NPC
+  looks, side by side, in the bind pose or held at frame F of a motion
+  (e.g. `motion\pl\m\m00\m0000_co\m0000_co:0`, the idle).
 - With both `--event` and `--lineup <save>`, the event runs and the
   lineup's save dresses the player.
 
-**Screenshots** (character-polish, 2026-10-09, not committed):
+**Screenshots** (character-morphs, 2026-10-09, not committed):
+- **lineup of the save:**
+  - The four party members have their own heights and proportions.
+  - No skin shows through the sleeves or leggings.
+  - Shields lie flat on the left forearm in the bind pose. With
+    `--pose` they hang on the outside of the forearm.
+- **lineup of the save plus `npc:1,npc:2`:** six distinct faces. The
+  elder's robe has no white patches.
+- **Close-ups:** a pale band shows over every brow (eyebrow colour, see
+  Open).
+
+**Earlier screenshots** (character-polish):
 - **lineup of the save plus `npc:1,npc:2`:** six characters dressed, with
   no gaps.
   - Swords and a dagger hang at the hip.
@@ -268,10 +387,16 @@ personal data).
 
 ## Open
 
-- Morphs: the joint computations listed under Morphs.
+- Morphs not translated:
+  - rBodyEdit (0x0080add0 / 0x0080aed0; `mBodySlender`, `mBodyMuscle`,
+    bust scale);
+  - the nine human-edit floats of a save character (0x00cbbf00);
+  - the eye constraint types 0xd, 0xe, 0xf and 0x10;
+  - uCnsEdit types 9 and 0xc (approximated).
+- Eyebrows draw as a pale band: the eyebrow colour, `mColorEyebrow`, is
+  not applied.
 - The beard colour formula, and eye, eyebrow and makeup colours, plus the
   skin colour's shader use.
 - The item -> piece reader (+0x40); the slot -> actor field order.
-- The dagger's second model; the weapon offset correction by body edit;
-  shield placement checked against the original.
+- The dagger's second model.
 - NPC mask bits 16/17 (0x00ba7150).

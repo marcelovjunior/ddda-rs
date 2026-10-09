@@ -122,6 +122,7 @@ fn saved_arisen_and_pawns_are_dressed() {
             l.look.parts.len(),
             (0..200).filter(|&p| !l.look.mask.visible(p)).count()
         );
+        eprintln!("  hidden {:?}", (0..200).filter(|&p| !l.look.mask.visible(p)).collect::<Vec<_>>());
         let f = |n: &str| l.edit.iter().find(|(k, _)| k == n).map(|(_, v)| *v);
         eprintln!(
             "  gender {:?} hair {:?} beard {:?} face base {:?} parts {:?}",
@@ -158,6 +159,53 @@ fn stand_in_arisen_is_dressed() {
         assert!(l.parts.iter().any(|p| !p.hair && !p.beard));
         for p in &l.parts {
             assert!(exists(&v, &p.path), "{}", p.path);
+        }
+    }
+}
+
+#[test]
+fn body_morphs_differ() {
+    let Some(v) = vfs() else { return };
+    let a = ddlook::npc_look(&v, 1, 1, 22).unwrap().look.body.expect("npc 1 human edit");
+    let b = ddlook::npc_look(&v, 2, 2, 22).unwrap().look.body.expect("npc 2 human edit");
+    eprintln!("npc1 scale {:?} joints {}", a.model_scale, a.joints.len());
+    eprintln!("npc2 scale {:?} joints {}", b.model_scale, b.joints.len());
+    assert_ne!(a, b);
+    for m in [&a, &b] {
+        assert!(m.model_scale.iter().all(|s| (0.5..1.6).contains(s)), "{:?}", m.model_scale);
+        assert!(m.joints.iter().any(|(_, j)| j.scale != [1.0; 3]));
+    }
+    let Some(xml) = save_xml() else { return };
+    let looks = ddlook::save::save_looks(&v, &xml, "mPlayerDataManual").unwrap();
+    let bodies: Vec<_> = looks.iter().map(|l| l.look.body.clone().unwrap()).collect();
+    for (l, m) in looks.iter().zip(&bodies) {
+        eprintln!("{}: model scale {:?}, {} morphed joints", l.who, m.model_scale, m.joints.len());
+    }
+    // The four party members do not share one body.
+    assert!(bodies.windows(2).any(|w| w[0] != w[1]));
+}
+
+#[test]
+fn face_morphs_differ() {
+    let Some(v) = vfs() else { return };
+    let a = ddlook::npc_look(&v, 1, 1, 22).unwrap().look.face;
+    let b = ddlook::npc_look(&v, 2, 2, 22).unwrap().look.face;
+    eprintln!("npc1 {} face joints, npc2 {}", a.len(), b.len());
+    assert!(!a.is_empty() && !b.is_empty());
+    assert_ne!(a, b);
+    let Some(xml) = save_xml() else { return };
+    let looks = ddlook::save::save_looks(&v, &xml, "mPlayerDataManual").unwrap();
+    for l in &looks {
+        let f = &l.look.face;
+        let j = f.iter().find(|j| j.id == 81);
+        eprintln!("{}: {} face joints, eye joint 81 {:?}", l.who, f.len(), j);
+        assert!(!f.is_empty(), "{}", l.who);
+        assert!(f.iter().all(|j| j.offset.iter().chain(&j.scale).chain(&j.rotation).all(|x| x.is_finite())));
+    }
+    // Four distinct faces.
+    for i in 0..looks.len() {
+        for k in i + 1..looks.len() {
+            assert_ne!(looks[i].look.face, looks[k].look.face, "{} {}", looks[i].who, looks[k].who);
         }
     }
 }
