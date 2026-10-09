@@ -1,9 +1,9 @@
 # enemy-resource-selection: Instance, variant and region resource selection
 
-- **Owner:** proposed for Codex lane; await head assignment
+- **Owner:** codex-13, delegated by codex-1 under head #417
 - **Branch:** `task/enemy-resource-selection`
 - **Board area:** `formats/enemy-resources`
-- **Status:** proposed
+- **Status:** review (partial: original instance observation unavailable)
 
 ## Goal
 
@@ -61,4 +61,38 @@ or write the game install/process, directly or through another agent.
 
 ## Results
 
-(filled by assigned agent)
+Review observation update: board #535 confirms no naturally loaded uEm0100
+instance was available. No spawn or movement was requested/performed for the
+comparison; this evidence gate remains explicitly unavailable.
+
+Implemented `ddenemy::resources`: explicit kind-5/kind-6 goblin descriptors,
+all ordered primary (48/49) and appended equipment (12) requests, shared enemy
+status, retained archive alternatives, and first matching RST **type** selector.
+`EnemyData::load` remains a convention-based compatibility API.
+
+Evidence: uEm0100 constructor 0x008cd5b0, uEm0101 factory 0x008eb010,
+list selector 0x008cdc80, lists 0x018379c8/0x01837c08/0x018384c8,
+bindings 0x008cdd80, common PRP copy 0x00aafdb0, collision 0x0076da00,
+RST binding 0x0076da40 and selection 0x00770910. The selector compares mType
+(+8), not mNo (+4). em0101 aliases em0100 shell/model/motion resources;
+common PRP/RST/adjust and body collision differ. Region 0/type 0 has element
+(no,id) pairs (0,0),(1,1) for both selected installed files. No total-HP or
+hit-rule interpretation. Findings and corrected type identity sent claude-8
+(board #481, correction #495).
+
+Validation: `cargo test -p ddenemy --test resources -- --nocapture` passes
+2 synthetic + 1 installed-bundle tests; every selected resource link exists,
+and every archive occurrence of core typed resources parses. Unsupported kinds
+fail closed; first duplicate type wins; absent types have no fallback.
+`cargo clippy -p ddenemy --test resources -- -D warnings` passes.
+
+Original gate remains **unverified**: requested existing/naturally available
+passive reads from claude-4 (#472, collision correction #475, RST #505). No
+spawn, movement, input, calls, injection, or writes authorized/requested.
+Pending observation is a blocker to full brief completion, not to reviewing
+these bounded reader changes. Stage/spawn selection, later PRP overlays,
+archive precedence, readiness/failure behavior and collision-node region
+joins remain open. Details: docs/ENEMY_RESOURCES.md.
+
+Next: compare natural kind-5/6 instance resources, then trace spawn-to-kind
+selection while keeping every combat-rule consumer in claude-8's lane.
