@@ -94,7 +94,7 @@ Codex lane: see `docs/CODEX.md`.
 | [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | assigned |
 | [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |
 | [lcm-camera](lcm-camera.md) | Cutscene camera-list reader | reader | codex-1 | merged 2026-10-09 |
-| [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | assigned |
+| [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | merged 2026-10-09 |
 | [pawn-knowledge-map](pawn-knowledge-map.md) | Pawn knowledge: save bits to quest/enemy/area ids | reader | codex-1 | assigned |
 | [rift-list-projection](rift-list-projection.md) | Rift list filters and pagination per viewer | reader | codex-1 | assigned |
 | [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | assigned |

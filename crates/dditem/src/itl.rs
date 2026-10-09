@@ -73,6 +73,18 @@ impl ItemRecord {
         (self.u32_at(0x38) >> 10) & 3
     }
 
+    /// Base strength (`mAttack`, +0x00 bits 0-10): stat kind 0 of the
+    /// level lookup (`0x006f04b0` passes it to `0x0045b620`).
+    pub fn attack(&self) -> u32 {
+        self.u32_at(0x00) & 0x7ff
+    }
+
+    /// Base magick (`mMagicAttack`, +0x00 bits 11-21): stat kind 1
+    /// (`0x006f04b0`).
+    pub fn magic_attack(&self) -> u32 {
+        (self.u32_at(0x00) >> 11) & 0x7ff
+    }
+
     /// `mLevelUpType` (u16 at +0x34): row of the kind's level-stat table
     /// (`0x0045b65b`).
     pub fn level_up_type(&self) -> u16 {

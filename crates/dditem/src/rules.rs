@@ -39,12 +39,12 @@ pub fn shop_rate(shop: &ShopList, gsf_set: impl Fn(u32) -> bool, owns: impl Fn(u
 /// Buy price of one unit.
 ///
 /// Translated from `0x006e14b0`: `buy * rate / 100` in unsigned 32-bit
-/// arithmetic. When the stock is rebuilt with the "special" flag set
-/// (`0x006e86c0`: buy mode and the cart holds an item whose
-/// `category_kind` is 0), item 66 (Ferrystone) and item 155 (Wakestone
-/// Shard) cost a further 50%. What that flag means for the player is not
-/// yet known.
-pub fn buy_price(item: u32, base_buy: u32, rate: u32, special: bool) -> u32 {
+/// arithmetic. `rarities_shop` is the screen's `+0x2d4` byte, set to 1
+/// only by the uGUIShopRarities constructor (`0x006eb730`, `mShopType` 7,
+/// Fournival); there item 66 (Ferrystone) and item 155 (Wakestone Shard)
+/// cost a further 50%.
+pub fn buy_price(item: u32, base_buy: u32, rate: u32, rarities_shop: bool) -> u32 {
+    let special = rarities_shop;
     let p = base_buy.wrapping_mul(rate) / 100;
     if special && (item == 0x42 || item == 0x9b) {
         p.wrapping_mul(50) / 100
@@ -96,9 +96,9 @@ fn mul_trunc(value: u32, factor: f32) -> u32 {
 /// Sell price of one unit.
 ///
 /// Translated from `0x006e17c0`: `trunc(sell * factor)` (see
-/// [`mul_trunc`]), times the level percent, integer-divided by 100; with
-/// the "special" flag and the item tagged 4 in the per-item list at
-/// `0x017f1ae0`, a further 120%.
+/// [`mul_trunc`]), times the level percent, integer-divided by 100; at the
+/// Rarities shop (see [`buy_price`]) an item in [`RARITY_ITEMS`] gets a
+/// further 120%. Pass `special_tag4 = rarities_shop && is_rarity(item)`.
 pub fn sell_price(base_sell: u32, factor: f32, level: u8, special_tag4: bool) -> u32 {
     let scaled = mul_trunc(base_sell, factor);
     let pct = SELL_LEVEL_PERCENT[(level & 0xf).min(6) as usize];
@@ -108,6 +108,21 @@ pub fn sell_price(base_sell: u32, factor: f32, level: u8, special_tag4: bool) ->
     } else {
         p
     }
+}
+
+/// Items whose effect-tag list (per-item byte lists at `0x017f1ae0`, the
+/// message indices of `id\message\item\item_ability_<lang>` shown in the
+/// item detail, `0x006076f0`) contains tag 4, "A rarity.". The list lives
+/// in the exe, not in the game data.
+pub const RARITY_ITEMS: [u16; 62] = [
+    55, 59, 120, 181, 184, 203, 206, 1206, 1207, 1213, 1214, 1221, 1222, 1234, 1242, 1245, 1254,
+    1261, 1262, 1265, 1274, 1277, 1279, 1280, 1284, 1290, 1292, 1295, 1300, 1302, 1304, 1306,
+    1310, 1311, 1313, 1316, 1320, 1324, 1329, 1332, 1333, 1334, 1377, 1378, 1385, 1386, 1389,
+    1390, 1481, 1482, 1483, 1485, 1486, 1752, 1755, 1758, 1763, 1776, 1784, 1814, 1840, 1843,
+];
+
+pub fn is_rarity(item: u32) -> bool {
+    item <= u16::MAX as u32 && RARITY_ITEMS.binary_search(&(item as u16)).is_ok()
 }
 
 /// Game state a shop judgment reads.

@@ -6,13 +6,17 @@ mod bin;
 pub mod itl;
 pub mod lvparam;
 pub mod lvup;
+pub mod forge;
 pub mod npc;
+pub mod rng;
 pub mod rules;
 pub mod shop;
 pub mod tables;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_forge;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);

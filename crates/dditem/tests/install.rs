@@ -70,6 +70,48 @@ fn enhancement_costs() {
 }
 
 #[test]
+fn enhancement_stats_curse_table_and_text() {
+    let Some(vfs) = vfs() else { return };
+    let items = itl::ItemList::parse(&read(&vfs, "rItemList", r"etc\item\itemList")).unwrap();
+    let weapons = lvparam::ItemLevelParam::parse(&read(&vfs, "rItemLevelParam", r"etc\item\LvParamWepon")).unwrap();
+    // Iron Sword: strength 50 and its row. Values per level as the exe's
+    // lookup computes them (the same numbers Riftstone reports).
+    let sword = items.get(301).unwrap();
+    assert_eq!(forge::level_table(sword.kind()), Some(forge::LevelTable::Weapon));
+    let row = weapons.rows.get(sword.level_up_type() as usize);
+    let base = sword.attack() as f32;
+    assert_eq!(base, 50.0);
+    let at: Vec<f32> = (0..=6).map(|l| forge::level_stat(row, base, 0, l)).collect();
+    assert_eq!(at, vec![50.0, 66.0, 82.0, 98.0, 210.0, 560.0, 700.0]);
+
+    // Curse table rows: 3 Novelty, then 9 per vocation group; every row
+    // sums to 100.
+    let curse = tables::parse_item_curse(&read(&vfs, "rItemCurseCnv", r"etc\item\itemCurse")).unwrap();
+    assert!(curse.iter().all(|r| r.total() == 100));
+    let names_bytes = read(&vfs, "rGUIMessage", r"id\message\item\itemName_eng");
+    let names = mtgmd::MessageFile::parse(&names_bytes).unwrap();
+    assert_eq!(names.message(0x6a5), Some("Bitterblack Novelty Lv.1"));
+    assert_eq!(names.message(0x6b0), Some("Bitterblack Armor Lv.3"));
+    // Row 8 = Bitterblack Weapon Lv.3, Fighter group.
+    let r8: Vec<_> = curse[8].items.iter().filter(|&&i| i >= 0).map(|&i| names.message(i as u32).unwrap()).collect();
+    assert!(r8.contains(&"Devilsbane"), "{r8:?}");
+
+    // Tag 4 of the item detail tags and the augment names.
+    let tags_bytes = read(&vfs, "rGUIMessage", r"id\message\item\item_ability_eng");
+    let tags = mtgmd::MessageFile::parse(&tags_bytes).unwrap();
+    assert_eq!(tags.message(4).map(str::trim_end), Some("A rarity."));
+    let abl_bytes = read(&vfs, "rGUIMessage", r"id\message\ability\abilityName_eng");
+    let abl = mtgmd::MessageFile::parse(&abl_bytes).unwrap();
+    assert_eq!(abl.message(forge::AUGMENT_NAME_INDEX[0x54] as u32), Some("Suasion"));
+    for &i in &forge::AUGMENT_NAME_INDEX {
+        assert!(i == 255 || abl.message(i as u32).is_some());
+    }
+    // plAbilityParam has one record per augment id.
+    let ablp = mtxfs::parse(&read(&vfs, "rPlAbilityParam", r"param\pl\other\plAbilityParam")).unwrap();
+    assert_eq!(ablp.object_count as usize, 1 + forge::AUGMENT_NAME_INDEX.len());
+}
+
+#[test]
 fn level_tables_and_small_tables() {
     let Some(vfs) = vfs() else { return };
     for (path, rows) in [
