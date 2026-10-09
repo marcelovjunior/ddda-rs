@@ -124,3 +124,54 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Latest verification: targeted release cutscene lighting test and all
   six host story_pawns tests passed. Neither binding nor live actor mode
   is yet connected to the viewer's encounter spawning.
+
+### Applied NPC controller research (source only)
+
+- Guard interface vf05 `0x00578ee0` configures NPC intel through
+  `0x00bbf580`; it does not itself wait for dialogue. Reflected fields
+  (`0x00578ad0`) map type/center/radius/direction/range/height plus message
+  kind, message number, quest number, guard flag and jump destination.
+  Type 0 clears intel+0x490; other types install that configuration.
+- Guard trigger `0x00bb0db0` first checks actor/global dialogue eligibility.
+  For type 1 it transforms the configured center by the NPC matrix,
+  accepts vertical separation equal to the height limit, requires horizontal
+  distance strictly below the radius and (when nonzero) the facing range.
+  An existing trigger latch, current talk and unsupported actor conditions
+  must remain explicit observations; proximity alone is not sufficient.
+- `TalkEnd (flag)` getter `0x007ab890` reads actor+0x2ea3 only for a valid
+  actor owner. `uCharacterBase::vf111` (containing `0x00850121`) clears it
+  each update; `uNpc::vf111` (containing `0x00bb32cb`) sets it from an actual
+  eligible talk completion or the completed talk action. It is a frame
+  observation, not a permanent has-talked flag.
+- NPC applied graph finishing differs from the repeating enemy driver:
+  mode 0/4 post-update `0x0059e160` -> `0x0059e3a0`/`0x0059f3e0` ->
+  `0x005a1300` sees SysCondition bit 0, clears wrapper active+4, stops the
+  graph (`0x00e095c0`) and clears SysCondition. The next `0x0059e320` frees
+  the inactive applied wrapper+0x58 and resumes the normal controller.
+- Caution: the parent ApplyFSM result (`0x005c8460`, instruction
+  `0x005c8572`) tests normal cAICtrl+0x4c, not that Finish bit directly.
+  The exact relationship to regular-controller restoration is still being
+  traced; no new completion shortcut has been implemented.
+
+### Applied NPC implementation checkpoint
+
+- Added generic Npc::applied and explicit one-frame TalkEnd input. Applied
+  graphs reject unsupported processes/interfaces and unimplemented nested
+  cluster memory rather than silently completing. Guard configuration is
+  read from the graph and emitted for the actor/talk adapter; GSF writes
+  and Finish follow sourced callbacks. No quest name is tested by runtime.
+- New host story_npcs adapter queues ApplyScript until an explicit stage /
+  target / NPC binding exists, pauses the normal controller, runs applied
+  graphs in stable NPC-id order, applies their GSF writes and exposes Guard
+  and movement requests. Actor arrivals and eligible talk ends are explicit
+  inputs. It restores the retained normal controller after the sourced
+  inactive-wrapper cleanup delay. Parent ApplyFSM readiness remains separate.
+- Verified: all eight ddnpcrt tests and seven host story_pawns tests pass
+  in release. The installed q2 action waits 300 frames without talk, rejects
+  an early stale talk pulse, then writes GSF381 and finishes once after a
+  real observation and explicitly simulated test arrival. Host regression
+  additionally waits for a real binding and verifies Finish does not set
+  parent ApplyFSM readiness.
+- Still pending: live NPC placement, guard eligibility/talk presentation,
+  actual NPC movement, parent ApplyFSM pointer-lifecycle predicate, viewer
+  actor integration and original comparison. Thus q0002 is still incomplete.
