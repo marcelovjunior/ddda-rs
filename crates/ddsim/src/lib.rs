@@ -247,7 +247,6 @@ pub enum GrabPhase {
 }
 
 impl State {
-    /// Motion id (`bank << 8 | slot`, bank 0) the original plays.
     /// The push-out rank the state's action writes to actor +0x1DF0 (the
     /// character push-out 0x004797E0: the higher rank gives way): 13 for
     /// `cPlActWait` (0x00AC9E67; 14 while its turn motion plays, not
@@ -265,6 +264,7 @@ impl State {
         }
     }
 
+    /// Motion id (`bank << 8 | slot`, bank 0) the original plays.
     pub fn motion_id(self) -> u16 {
         match self {
             State::Wait => 0,
