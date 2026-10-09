@@ -59,7 +59,7 @@ head, 2026-10-09 (commits 39e5a48, 17f9ccb, 9fd01d2):
    variant 3 (motion 0x107, bank 1 `m0000_dm`). Fall damage is
    200 + 0.8 × the excess.
    - Done: the damage is queued in `Player::fall_damage`.
-   - Open: HP is applied once `Fight::fall_damage` lands (codex-1).
+   - HP: `play.rs` applies it through `Fight::fall_damage` (codex-1, 9b86e0f).
    - Below 10 m the original plays the normal landing. `cPlActJump`
      keeps its looping air motion all the way down; there is no switch to
      the fall motion.
