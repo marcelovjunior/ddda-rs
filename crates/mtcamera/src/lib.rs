@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+pub mod fade;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);
 impl fmt::Display for Error {

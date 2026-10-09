@@ -167,3 +167,68 @@ Open: +0x18 metadata semantics; user-data application meaning; final
 `uOfsMotionCamera` actor-adjusted pose; original playback comparison.
 Next action: integrate the sampler with an event-player timeline and trace
 the st200 ev10 adjustment targets before a recorded pose comparison.
+
+## Follow camera: near plane and actor fading
+
+Read-only exe trace, 2026-10-09, camera-near:
+
+- `uCameraGame::vf22` **0x007dc8a0** writes **96 cm** to `mNearPlane`
+  (+0x34), at **0x007dce13**. Its projection consumer **0x007dc810** uses
+  that field directly. No wall-dependent near-plane change was found in
+  the normal update **0x007dcf30**; this is not a claim that every camera
+  implementation uses the same near plane.
+- **0x0088bdc0**, called by `uCharacterBase::vf97` **0x0084c800**, computes
+  near-camera opacity. It selects semantic joint **1** through
+  `uModel::vf22` **0x00ff9a20**; missing IDs use the model matrix.
+  Normal distance uses all three axes, with a separate horizontal test.
+- Threshold globals **0x01875de4..0x01875dfc** are read from the installed
+  exe: ordinary inner/outer 64/74 cm, stage 100 non-pawn 80/90 cm
+  (90 is immediate code), pawn 130/140 cm, special camera 135/160 cm.
+  The special camera also changes the distance reference and is not
+  implemented by the viewer adapter.
+- The four states live at actor +0x2520, timer +0x251c. Visible enters
+  fading-out only when squared 3D distance is **strictly below 40000** and
+  squared horizontal distance is **strictly below inner squared**. The
+  entry frame remains opaque. Fading-out advances by actor delta time,
+  clamps the timer at four frames and returns `1 - timer/4`. Hidden
+  enters fading-in when either distance is strictly above its outer
+  threshold (200 cm in 3D); that transition frame remains transparent.
+  Fading-in returns `timer/4` and changes to visible at five frames.
+  Thus its source value can exceed one; the rendering adapter clamps it.
+  Changing distance during an in-progress fade does not reverse it.
+- The resulting multiplier is combined with actor +0x2510 and stored at
+  +0x2514. `uPlayerBase::vf11` **0x00b6a070** copies it to the reflected
+  `uBaseModel.mTransparency` +0x158 and sets model flag 0x40000000 below
+  one. The source has additional global bypasses and an aiming-mode pawn
+  attenuation cone, which remain unimplemented.
+
+`mtcamera::fade` implements the ordinary four-state rule with explicit
+distance/threshold inputs and caller-supplied bypass. The viewer uses
+current morphed joint positions after transform propagation, per-view and
+per-actor state, and private material clones for the PlayState Arisen and
+pawns. It currently supports the process's single followed camera;
+simultaneous views require per-view draw material selection. NPCs outside
+PlayState, special cameras and the original global bypass flags are not
+covered. The renderer approximates model transparency with alpha blending,
+restoring authored alpha mode/depth state afterward. Alpha-tested parts,
+sorting and shadows still require an original-frame comparison.
+
+### Collision followups found during this trace
+
+**0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
+or sweep result. It does not continue to the next surface. **0x007c6f90**
+resolves the collision result's material flag word for stage/static hits.
+The sphere wrapper **0x010fe5e0** calls **0x010fdea0**, which supplies the
+target as the start and `near-plane-centre - target` as displacement.
+Thus this is a sweep outward from target toward the candidate centre,
+not a search for the first clear point moving inward. **0x010fd710**
+applies a 0.1 cm contact-normal offset; initial overlap has a separate
+penetration response. The current follow-camera bisection remains an
+approximation and has not been replaced in this fade checkpoint.
+
+Field stage 100 already includes layout-object collision through
+`Terrain::add_scenery_cells`. Nonfield loading currently uses only the
+stage merged SBC in `ddhost::install::stage_collision`, dropping material
+metadata via `Terrain::add`. Whether the reported Cassardis porch pillar
+is represented in that merged SBC remains to be checked; no new scenery
+collision or guessed near-plane reduction is introduced here.

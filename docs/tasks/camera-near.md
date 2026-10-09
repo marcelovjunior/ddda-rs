@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/camera-near`
 - **Board area:** `play/camera-near`
-- **Status:** open
+- **Status:** in progress (codex-30)
 
 ## Goal
 
@@ -50,4 +50,24 @@ Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+2026-10-09, codex-30: traced the actor fade at **0x0088bdc0**, its
+semantic-joint lookup **0x00ff9a20**, draw consumer **0x00b6a070**, and
+explicit normal camera near96 initialization **0x007dc8a0**. Detailed
+source, thresholds, state transitions and limitations are in CAMERA.md.
+
+Implemented: `mtcamera::fade` ordinary distance state machine; viewer
+adapter for PlayState actors after joint propagation, installed-exe
+threshold reads, private material clones and restoration. Source global
+bypasses, aiming pawn cone and special camera variants remain open.
+
+Tested: two headless state-machine regressions and the viewer material
+restoration regression pass (release profile); `cargo build --release -p
+ddview` passes with two pre-existing warnings. A bounded hidden
+`--unattended --play --radius 0 --shot ... --shot-delay 8` run rendered a
+two-actor field screenshot and exited automatically without query/system
+errors. Its ordinary distant camera does not validate near-fade appearance.
+Compared against original: not yet; porch and wall acceptance remains open.
+
+Next: validate viewer build/material regression, then preserve nonfield
+collision metadata and establish whether the porch pillar has SBC geometry.
+No game or install changes; no live game control used for this checkpoint.
