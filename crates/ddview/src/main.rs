@@ -31,6 +31,7 @@ mod character;
 mod net;
 mod opening;
 mod play;
+mod pause;
 mod sky;
 mod stage;
 
@@ -99,6 +100,8 @@ struct Args {
     /// `--cam-pitch rad`: the follow camera's start pitch (negative looks
     /// up from below).
     cam_pitch: Option<f32>,
+    /// Start at the viewer pause menu (also useful with --shot).
+    paused: bool,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -143,6 +146,7 @@ fn args() -> Args {
         shots: None,
         kit: None,
         cam_pitch: None,
+        paused: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -153,6 +157,11 @@ fn args() -> Args {
         size: (1600, 900),
     };
     while let Some(k) = it.next() {
+        if k == "--paused" {
+            a.play = true;
+            a.paused = true;
+            continue;
+        }
         if k == "--play" || k == "--demo" {
             a.play = true;
             a.demo |= k == "--demo";
@@ -560,12 +569,11 @@ fn main() {
         })
         .init_resource::<play::Hud>()
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (fly_camera, shot, play::step, net::step, opening::step, opening::cutscene, character::animate, play::update_hud)
-                .chain(),
-        )
+        .init_resource::<pause::PauseState>()
+        .add_systems(Startup, (setup, pause::setup).chain())
+        .add_systems(Update, (pause::update, fly_camera, shot, play::step, net::step, opening::step, opening::cutscene,
+            character::animate.run_if(|pause: Res<pause::PauseState>, args: Res<Args>| !pause.paused || args.host.is_some() || args.join.is_some()), play::update_hud).chain())
+
         .run();
 }
 
