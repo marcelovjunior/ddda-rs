@@ -52,7 +52,19 @@ How `ddsim` moves an Arisen, and where each rule comes from. Code:
   give 1.15 (walk 1.06). The velocity is per frame of that time, so walk,
   run and sprint move and animate 1.15x faster than game time. The traces
   show exactly 1.15 x sMain's delta, two frames after the action changes
-  (the stamina update follows the actions; the lag is not modelled).
+  (the stamina update writes +0xEE4 after the actions). ddsim keeps the
+  same lag: one `Sim::step` is one engine frame, and the factor a step ends
+  with applies two steps later (`Player::unit_rate`). The unit time drives
+  the player's actions, motion frames and physics; stamina runs in game
+  time.
+- **Start frames** (`0x00B80260`, called by `cPlActWalk::vf05` 0x00AC9FB0
+  and `cPlActRun::vf05` 0x00ACA390). Coming from a walk or run motion (3,
+  4, 0x54, 0x55; list at 0x018763D0) the new motion is phase-synced:
+  `(step + old frame) x new_last / old_last`, wrapped once, truncated.
+  Otherwise it starts on the action's frame: field walk 18, town walk 0,
+  run 20 when the feet test `0x00AC5FB0` (two joints along the facing)
+  returns false, else 0, 17, 0. ddsim has no skeleton and takes the false
+  branch (*placeholder*); the run trace starts on frame 20.
 - **Slopes.** The horizontal step is |velocity| x delta x 1 / (1 + slope^2)
   (the velocity with its component along the ground normal removed). This
   fits the traces within 0.5% over slopes -0.25..0.29 (`ddsim::along_ground`;
@@ -176,9 +188,30 @@ Per player: stamina, maximum, body and load class (default 1).
   recorded 0.618 s hold after a sprint.
 - Drain (`0x00B81920`, actions 5 / 0x7D): `-(Dash[load].mStamina /
   mFrame)` = -1.5 per frame (-45/s). Running costs nothing.
+- Classes (`ddsim::WeightTables`, `Sim::set_weights`): body class from the
+  body weight against `pleditweight` (0x00B81120: 50, 70, 90, 110; a
+  boundary belongs to the higher class); load class 1-5 from the total
+  weight against the body class's `pltotalweight*` rows 1-4, each raised by
+  the carrying abilities' adjustment (0x00B7E710) and by the body weight
+  above its class boundary (0x00B81270). The host passes the weights (no
+  inventory yet); without them both classes stay 1, the recorded
+  character's.
 - Not modelled: status and equipment modifiers, recovery debt, the cap's
-  derivation (the recorded 640 is the default), what happens when stamina
-  runs out (`cPlActTired`), the classes' selection from weights.
+  derivation (the recorded 640 is the default), and running out:
+  `cPlActTired` (vf05 0x00ACB8D0, vf06 0x00ACBAF0, vf08 0x00ACC3E0) is a
+  five-phase action (motions 0x58, 0x59, 0x5E, 0x5F) with a staggering
+  speed blended from adjust 0x102 by a motion curve, timers adjust
+  0x9C / 0x9D and a recovery debt (+0x4CE4 / +0x4CE8 / +0x4CEC) that the
+  recovery then follows; its entry from the stamina update is not traced.
+  ddsim only flags `ran_out`.
+
+**Landing hold.** Landings and the sprint stop give way to the stick only
+when the playing motion's event group 0 has bit 0x10000 at the current
+frame. `cPlActWpnShieldGuardJumpLand::vf06` (0x00B36140) cancels on
+exactly "stick held (+0x32C0) and layer-0 group-0 word +0x490 & 0x10000";
+landing motions 12 and 15 set it from frame 3, the sprint stop (21) from
+frame 18. The traces hold a landing about 3.3 game frames with the stick
+held. That `cPlActLand` uses the same bit is *assumed*.
 
 **Falling off.** `0x00B6E5C0` enters `cPlActFall` when the action allows
 falls (uPlayer +0x35E8 bit 0), the character is not grounded (+0x1ED0)
@@ -201,9 +234,7 @@ step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
   stores at 0x00B6B3D6 / 0x00B6B477 / 0x00B6B4D1 in 0x00B6B350, via
   player +0x2E54 -> object +4 -> owner; 0x0081C170 derives a horizontal
   scale from character customization. 0.847 is not reproduced yet.
-- Open from the blend brief (claude-2), not applied: walk/run start frames
-  are phase-synced (0x00B80260; start frames 18 / 20 / 17 / 0 otherwise).
-  The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
+- The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
   every trace (|velocity| = 10.165 exactly); the 1.15 is the unit time.
 - Town or field is a per-player flag set by the host. `--play` starts in
   town mode (as recorded); F2 toggles it.
@@ -235,15 +266,25 @@ step, capped at adjust 0xD1 (7.0) (`cPlActFall::vf05` 0x00ACCDD0).
 - Double jump: the original allows it for dagger vocations; `--play` gives
   it to both players.
 - No animation blending: states switch motions immediately.
-- The character's collision shape is a placeholder cylinder (radius 35,
-  `BODY_RADIUS`) tested from 60 cm above the feet. On the drop route the
-  original stands 34 cm above the ground under its origin: it rests on the
-  strip's edge 15-20 cm away (the strip top is at 40254 cm, its origin
-  over the steep face at 40219), so its collider has a radius there. No
-  placed scenery seems missing: no instance in the cell's layouts (`_s00`,
-  `_p*`, `_e*`, `_t*`, any Euler order) has collision under that point.
-  After landing, the original slides along a wall and frees itself at
-  frame 195; ddsim keeps sliding (path gap 113 cm). Tracing the character collider (shape, radius, slide) is the next
-  step.
-- A landing (`cPlActLand`) is cancelled at once by the stick here; in the
-  traces it lasts about 0.1 s with the stick held (not traced).
+- **The character's collision against scenery is approximated.** The
+  original: `cScrAdjust` at uObjModel +0x19C0 (properties from its vf03
+  0x0079DB30: `mCapsule` +0xD0, `mOffset` +0x100, `mGroundCheckOffset(G)`
+  +0x190 / +0x194 = adjust 0x7E (-20), `mCheckFilter` +0x198,
+  `mAxisCheckType` +0x1A0 = 2, `mAxisCheckSphereRadius` +0x1A4, flags
+  +0x1AC..). Its capsule comes from the model's scenery-adjust volume:
+  `collision\pl\m0001` group 109 (`mIsScrAdj`), one sphere of radius 35 at
+  joint -1 (the model origin), set relative to the root joint by
+  0x0076C540. Read live (claude-4, board #931, standing): `mCapsule` from
+  (0, 35, 0) to (0, 145, 0) above the feet, radius 35; `mOffset` 0; ground
+  check offsets -20; axis check type 2, sphere radius 15. 0x0079E200 sweeps it from the old to the new position through
+  the generic MtCollision collide-and-slide (0x010B4960 -> 0x010B3000,
+  iterating with GJK/MPR triangle callbacks), then checks the ground below
+  (type 2: a cast of radius x 1.41 down). ddsim keeps a point on the ground
+  and slides along walls found on the capsule's segment from 60 cm (not
+  35, *placeholder*: without the sweep a lower segment blocks on steps) to
+  145 cm (`BODY_HEIGHT`), radius 35 (`BODY_RADIUS`). Consequences on the drop route:
+  the original rests on the strip's edge 12 cm from its origin (a sphere
+  of 35 there sits 2 cm below the top; recorded 0.7) where ddsim falls at
+  once, and after landing ddsim does not free itself from a wall slide as
+  the original does at frame 195 (path gap 116 cm, the four failing
+  acceptance rows). No placed scenery is missing under the strip point.

@@ -526,10 +526,20 @@ pub trait Ground {
     }
 }
 
-/// The body as a vertical cylinder for wall tests, cm. *Placeholder*: the
-/// original's player collision shape is not traced.
+/// The body's radius against scenery, cm: the player's scenery-adjust
+/// volume is a sphere of radius 35 on the model origin (`collision\pl\m0001`,
+/// rObjCollision group 109, `mIsScrAdj`, node 0: shape 1, joint -1). The
+/// original resolves it with `cScrAdjust` (uObjModel +0x19C0: `mCapsule`
+/// +0xD0, ground check offset adjust 0x7E = -20, axis check type 2) through
+/// a generic capsule sweep-and-slide (0x0079E200 -> 0x010B4960 ->
+/// 0x010B3000), which is not translated.
 pub const BODY_RADIUS: f32 = 35.0;
-pub const BODY_HEIGHT: f32 = 170.0;
+/// Top of the body capsule's segment above the feet, cm. Read live from
+/// the Arisen (claude-4, board #931): `cScrAdjust::mCapsule` runs from 35
+/// to 145 cm above the feet with radius 35 (the body spans 0-180 cm). ddsim
+/// tests walls along the segment from `STEP_UP` (not 35: it has no sweep
+/// that rides over steps, *placeholder*) to here.
+pub const BODY_HEIGHT: f32 = 145.0;
 
 /// Moves from `from` toward `to` (same height) against walls: the full
 /// move if nothing blocks it or it leads away from the wall, else the move
