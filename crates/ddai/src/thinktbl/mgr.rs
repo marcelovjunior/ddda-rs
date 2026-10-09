@@ -228,6 +228,8 @@ pub const SWITCH: i32 = -6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThinkMgr {
+    /// +0xd70, initialized/reset to 12 by 0x008b5690.
+    next_generated_slot: usize,
     /// +0xda4..0xde0: target slot selected for each category by 0x008b6f20.
     /// None means this port has not yet received a category assignment;
     /// the original constructor's initial category values are not traced.
@@ -454,6 +456,7 @@ impl ThinkMgr {
     // Translated from 0x008b73f0, 0x008b76e0, 0x008b7c70 (DDDA.exe 2017-12-13 Steam).
     pub fn new() -> Self {
         ThinkMgr {
+            next_generated_slot: 12,
             category_targets: [None; 16],
             flags: 0,
             out: [0; 8],
@@ -1191,19 +1194,20 @@ impl ThinkMgr {
                 let Some((position, yaw)) = host.owner_pose() else {
                     return self.tail(rec, false, interp);
                 };
-                let Some(target) = self.slot(self.cur) else {
+                let Some(target_angle) = self.slot(self.cur).map(|s| s.angle) else {
                     return self.tail(rec, false, interp);
                 };
-                let destination = rec.word(0x3c) as usize;
+                let mut destination = rec.word(0x3c) as usize;
                 if destination == SLOTS {
-                    return Err(Error::Unimplemented(
-                        "generated point automatic slot allocation".into(),
-                    ));
+                    // 0x008aa240 returns the old counter in EAX, then
+                    // increments it with saturation at slot22.
+                    destination = self.next_generated_slot;
+                    self.next_generated_slot = (destination + 1).min(SLOTS - 1);
                 }
                 if destination >= SLOTS {
                     return self.tail(rec, false, interp);
                 }
-                let angle = yaw + target.angle * 0.017_453_292;
+                let angle = yaw + target_angle * 0.017_453_292;
                 let (sin, cos) = angle.sin_cos();
                 let offset = [rec.float(0x8c), rec.float(0x90), rec.float(0x94)];
                 let point = [
@@ -1225,6 +1229,12 @@ impl ThinkMgr {
                     self.history_len = 0;
                 }
                 self.select(destination as u32)
+            }
+            // Translated from 0x008b5690 (DDDA.exe 2017-12-13 Steam).
+            0x61 => {
+                self.next_generated_slot = 12;
+                self.slots[9..].fill(Slot::default());
+                true
             }
             0x62 => {
                 if let Some(s) = self.slots.get_mut(a as usize) {
@@ -1330,7 +1340,7 @@ impl ThinkMgr {
                     false
                 }
             }
-            0x40 | 0x41 | 0x4e | 0x5c..=0x5e | 0x60 | 0x61 | 0x63 | 0x64 => {
+            0x40 | 0x41 | 0x4e | 0x5c..=0x5e | 0x60 | 0x63 | 0x64 => {
                 return Err(Error::Unimplemented(format!(
                     "think command {code:#x} at {:#010x}",
                     rec.va
@@ -2143,6 +2153,22 @@ mod tests {
         );
         assert!(s.valid && s.selectable);
         assert_eq!(&m.history[..m.history_len as usize], &[6]);
+
+        let automatic = with(rec.clone(), 0x3c, SLOTS as u32);
+        for expected in (12..=22).chain([22, 22]) {
+            m.cur = 0;
+            m.command(&mut Positioned, &automatic, 0x5f, 0, 9, 0, &mut false, true)
+                .unwrap();
+            assert_eq!(m.cur, expected);
+        }
+        m.command(&mut Positioned, &rec, 0x61, 0, 0, 0, &mut false, true)
+            .unwrap();
+        assert!(m.slots[6].valid, "fixed point below9 survives reset");
+        assert!(m.slots[9..].iter().all(|s| !s.valid));
+        m.cur = 0;
+        m.command(&mut Positioned, &automatic, 0x5f, 0, 9, 0, &mut false, true)
+            .unwrap();
+        assert_eq!(m.cur, 12, "reset restores automatic allocation start");
 
         // A missing model owner must leave the destination untouched.
         m.slots[6] = Slot::default();

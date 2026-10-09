@@ -561,9 +561,15 @@ not a fight acceptance: the harpy also reaches generated-point command
 0x5f. This generated-point command is now translated from `0x008ba2a0`:
 the row offset rotates by owner yaw plus selected-target bearing, and is
 added to the owner's position. Fixed target slots and the optional +0x58
-host notification are supported; automatic slot 23 allocation remains an
-explicit error until the allocation counter's reset is traced. Regression
-tests cover coordinates, metadata, selection history and missing owners/targets.
+host notification are supported. Automatic slot 23 uses the old counter
+returned by `0x008aa240`, increments with saturation at 22, and begins at
+12. Command 0x61 (`0x008b5690`) resets slots 9..22 and that counter.
+Regression tests cover coordinates, metadata, selection history, missing
+owners/targets, saturation and reset. Commands 0x7a/0x7b assign category
+targets through `0x008bc550` / `0x008bc5b0` / `0x008b6f20`; tests pin the
+slot mask fallback, all-category bit, explicit mask and validity checks.
+The initial category-map values remain unresolved and are represented as
+unassigned until a traced command writes them.
 
 Harpy AirAttack's phase-zero approach (`0x009453c0`, `0x00945490`) and
 target-angle interpolation (`0x0093ca10`) now have isolated runtime helpers.
