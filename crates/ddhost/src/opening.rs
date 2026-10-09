@@ -237,8 +237,8 @@ impl ddstory::Host for OpeningWorld {
     fn npc_unit(&self, n: u32) -> bool {
         self.actor_host().npc_unit(n)
     }
-    fn applied_script_finished(&self, s: u32, t: &Target) -> bool {
-        self.actor_host().applied_script_finished(s, t)
+    fn apply_fsm_ready(&self, s: u32, t: &Target) -> bool {
+        self.actor_host().apply_fsm_ready(s, t)
     }
     fn unit_hp(&self, s: u32, t: &Target, p: bool) -> Option<f32> {
         self.actor_host().unit_hp(s, t, p)

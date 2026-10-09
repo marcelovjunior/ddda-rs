@@ -59,7 +59,7 @@ fn script_completion_does_not_follow_elapsed_time_or_unloaded_npcs() {
         group: 4,
         index: 0,
     };
-    assert!(!host.applied_script_finished(100, &npc));
+    assert!(!host.apply_fsm_ready(100, &npc));
     host.report_unit(
         100,
         npc,
@@ -74,19 +74,19 @@ fn script_completion_does_not_follow_elapsed_time_or_unloaded_npcs() {
     assert_eq!(host.npc_intel(100, &npc).unwrap().id, 304);
     assert!(!host.npc_unit(304), "intel and active units are separate");
     for _ in 0..10_000 {
-        assert!(!host.applied_script_finished(100, &npc));
+        assert!(!host.apply_fsm_ready(100, &npc));
     }
     host.report_unit(
         100,
         npc,
         UnitFacts {
             present: true,
-            applied_script_finished: true,
+            apply_fsm_ready: true,
             ..Default::default()
         },
     );
-    assert!(host.applied_script_finished(100, &npc));
-    assert!(host.applied_script_finished(
+    assert!(host.apply_fsm_ready(100, &npc));
+    assert!(host.apply_fsm_ready(
         380,
         &Target {
             kind: 1,
@@ -94,7 +94,7 @@ fn script_completion_does_not_follow_elapsed_time_or_unloaded_npcs() {
             index: 0
         }
     ));
-    assert!(!host.applied_script_finished(380, &ENEMY));
+    assert!(!host.apply_fsm_ready(380, &ENEMY));
     host.report_unit(
         380,
         ENEMY,
@@ -103,7 +103,7 @@ fn script_completion_does_not_follow_elapsed_time_or_unloaded_npcs() {
             ..Default::default()
         },
     );
-    assert!(host.applied_script_finished(380, &ENEMY));
+    assert!(host.apply_fsm_ready(380, &ENEMY));
 }
 
 #[test]

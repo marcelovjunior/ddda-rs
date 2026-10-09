@@ -77,8 +77,8 @@ impl ddstory::Host for World {
     fn npc_unit(&self, n: u32) -> bool {
         self.inner.npc_unit(n)
     }
-    fn applied_script_finished(&self, s: u32, t: &Target) -> bool {
-        self.inner.applied_script_finished(s, t)
+    fn apply_fsm_ready(&self, s: u32, t: &Target) -> bool {
+        self.inner.apply_fsm_ready(s, t)
     }
     fn unit_hp(&self, s: u32, t: &Target, p: bool) -> Option<f32> {
         self.inner.unit_hp(s, t, p)
