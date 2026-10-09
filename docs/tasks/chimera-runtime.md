@@ -129,6 +129,13 @@ preserving selected current versus fallback default/base and manager lock/scale
 initialization. Its installed test and 15 ddai library tests pass. The Wait
 action prefix and unit-specific think/action stepping remain next.
 
+Codex-1 independently reviewed the retained initialization checkpoint
+against `0x009a0880`; all 22 chimera integration regressions passed. After
+bringing current main into this task branch, strict ddenemyrt library
+clippy passed with the existing combat callback type-complexity allowance.
+The release viewer build remains queued behind the active lane builds.
+
 No host combat actor, placement kill, story progression or original-game
-comparison is claimed by this checkpoint. Next: the child-00 collision-link
-relay of already-valued hits to the body and exact body/child damage binding.
+comparison is claimed by this checkpoint. Next: implement the body/child
+Wait action prefix with their separate motion and think owners, then bind
+the existing damage policy and linked-hit relay to host-owned actors.
