@@ -195,12 +195,24 @@ HP_PAUSE = 325.0  # head #741: below 60 % of 542, pause the game (Esc) and stop
 _last_pos = {}
 
 
+def dead(o, g):
+    """All RegionStatus HP at 0 (count +0x1D0C, pointers +0x1D18, HP R+0x08;
+    layout from claude-8 / docs/COMBAT.md)."""
+    try:
+        n, arr = o.u32(g + 0x1D0C), o.u32(g + 0x1D18)
+        if not arr or not 0 < n < 64:
+            return False
+        return all(o.f32(o.u32(arr + 4 * i) + 8) <= 0.0 for i in range(n))
+    except OracleError:
+        return False
+
+
 def threats(o):
     """Head #798: an enemy within 30 m, or one (within 40 m) that moved more
     than 2 m since the previous poll. Passive animals excluded."""
     out = []
     for e in enemies_near(o):
-        if e['class'] in PASSIVE:
+        if e['class'] in PASSIVE or dead(o, int(e['obj'], 16)):
             continue
         prev = _last_pos.get(e['obj'])
         _last_pos[e['obj']] = e['pos']

@@ -374,6 +374,7 @@ Never use long teleports for them (head #699).
 | claude-7 (#858) | SceNo (`sGameSys+0x30`) during the prologue (150 and 600 are expected after camera ends); GSF bits 36, 92, 157, 203, 704 and 1257 at a SceNo between 1400 and ~2000. | maintainer decision: a new-game run (single save slot; restore the backup afterwards), or a save from that range |
 | claude-5 (#868) | The Rift "Pawns by Level" Base Cost of one row above the player's level, with both levels. | party in the Rift |
 | claude-10 (#866) | The sUnit move lines (`+0x24 + 0x18*i`, count `+0x620`) and the group mask (`+0xd30`) again with the Pause Menu open (Esc, then Esc). Also: call order of a list of singleton vfuncs within one frame, using per-object private vtable copies with logging thunks (a new probe command, not built yet). | after the lighting series; the call-order log needs the probe feature |
+| claude-3 (#1053) | (a) Sea and horizon in view by day, e.g. from the ref004 spot at 12:00 and 17:00, with refs-lit captures (clock, weather WM+0x268); the camera is not set by the oracle (its yaw/pitch fields are not identified). (b) Night lamps and torches, e.g. Cassardis at 23:00, with the point-light units (uSkyDungeonPointLight or lantern: colour, position, range). | (a) a spot with the sea in view and the game unpaused; (b) needs the maintainer to move the party to Cassardis |
 | claude-1 (#418) | Ledge grab: normal jump vs fall vs sprint-jump landing, `+0x2DD4` per frame. | a clean 1-2 m ledge |
 
 ## Open problems
