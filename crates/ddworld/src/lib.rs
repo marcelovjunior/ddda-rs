@@ -342,6 +342,77 @@ impl ddsim_ground::Ground for Terrain {
         }
         best.map(|(_, dir)| dir)
     }
+
+    /// Nearest triangle crossing of the segment (Moller-Trumbore, both
+    /// faces). A triangle the segment starts on does not count.
+    fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<ddsim::RayHit> {
+        let d = sub(to, from);
+        let (b0, b1) = (
+            bucket(from[0].min(to[0]), from[2].min(to[2])),
+            bucket(from[0].max(to[0]), from[2].max(to[2])),
+        );
+        let mut best: Option<(f32, [f32; 3])> = None;
+        let mut seen = std::collections::HashSet::new();
+        for bx in b0.0..=b1.0 {
+            for bz in b0.1..=b1.1 {
+                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let t = &self.tris[id as usize];
+                    let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                    let p = cross(d, e2);
+                    let det = dot(e1, p);
+                    if det.abs() < 1e-9 {
+                        continue;
+                    }
+                    let inv = 1.0 / det;
+                    let s = sub(from, t[0]);
+                    let u = dot(s, p) * inv;
+                    if !(0.0..=1.0).contains(&u) {
+                        continue;
+                    }
+                    let q = cross(s, e1);
+                    let v = dot(d, q) * inv;
+                    if v < 0.0 || u + v > 1.0 {
+                        continue;
+                    }
+                    let k = dot(e2, q) * inv;
+                    if !(1e-4..=1.0).contains(&k) || best.is_some_and(|(bk, _)| bk <= k) {
+                        continue;
+                    }
+                    let n = cross(e1, e2);
+                    let len = dot(n, n).sqrt();
+                    let sign = if dot(n, d) > 0.0 { -1.0 } else { 1.0 } / len;
+                    best = Some((k, [n[0] * sign, n[1] * sign, n[2] * sign]));
+                }
+            }
+        }
+        best.map(|(k, normal)| ddsim::RayHit {
+            point: [from[0] + d[0] * k, from[1] + d[1] * k, from[2] + d[2] * k],
+            normal,
+        })
+    }
+
+    /// Any triangle closer than `radius` to `center`.
+    fn sphere(&self, center: [f32; 3], radius: f32) -> bool {
+        let (b0, b1) = (
+            bucket(center[0] - radius, center[2] - radius),
+            bucket(center[0] + radius, center[2] + radius),
+        );
+        for bx in b0.0..=b1.0 {
+            for bz in b0.1..=b1.1 {
+                for &id in self.grid.get(&(bx, bz)).into_iter().flatten() {
+                    let c = closest_on_triangle(center, &self.tris[id as usize]);
+                    let e = sub(center, c);
+                    if dot(e, e) < radius * radius {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 /// Re-export of the ground trait so dependants need not name ddsim.
@@ -382,5 +453,49 @@ mod tests {
         assert_eq!(t.wall([50.0, 0.0, 500.0], 35.0, 60.0, 170.0), None);
         // above the wall's top
         assert_eq!(t.wall([80.0, 0.0, 500.0], 35.0, 400.0, 500.0), None);
+    }
+
+    /// A 300 cm wall in the plane x = 100 (z 0..1000) on a floor at y = 0.
+    fn wall_and_floor() -> Terrain {
+        let mut t = Terrain::empty();
+        t.add([[100.0, 0.0, 0.0], [100.0, 300.0, 0.0], [100.0, 0.0, 1000.0]]);
+        t.add([[100.0, 300.0, 0.0], [100.0, 300.0, 1000.0], [100.0, 0.0, 1000.0]]);
+        t.add([[-500.0, 0.0, 0.0], [-500.0, 0.0, 1000.0], [100.0, 0.0, 0.0]]);
+        t.add([[100.0, 0.0, 0.0], [-500.0, 0.0, 1000.0], [100.0, 0.0, 1000.0]]);
+        t
+    }
+
+    #[test]
+    fn casts_hit_the_nearest_face_from_either_side() {
+        let t = wall_and_floor();
+        // toward the wall: hit at x = 100, normal facing back at the cast
+        let h = t.ray([0.0, 150.0, 500.0], [200.0, 150.0, 500.0]).unwrap();
+        assert!(
+            (h.point[0] - 100.0).abs() < 1e-3 && (h.point[1] - 150.0).abs() < 1e-3,
+            "{h:?}"
+        );
+        assert!((h.normal[0] + 1.0).abs() < 1e-5, "{h:?}");
+        // from the other side the normal flips
+        let h = t.ray([200.0, 150.0, 500.0], [0.0, 150.0, 500.0]).unwrap();
+        assert!((h.normal[0] - 1.0).abs() < 1e-5, "{h:?}");
+        // down onto the floor
+        let h = t.ray([0.0, 150.0, 500.0], [0.0, -50.0, 500.0]).unwrap();
+        assert!(
+            h.point[1].abs() < 1e-3 && (h.normal[1] - 1.0).abs() < 1e-5,
+            "{h:?}"
+        );
+        // short of the wall, over its top, and starting on the floor
+        assert_eq!(t.ray([0.0, 150.0, 500.0], [90.0, 150.0, 500.0]), None);
+        assert_eq!(t.ray([0.0, 350.0, 500.0], [200.0, 350.0, 500.0]), None);
+        assert_eq!(t.ray([0.0, 0.0, 500.0], [0.0, 100.0, 500.0]), None);
+    }
+
+    #[test]
+    fn spheres_touch_within_the_radius() {
+        let t = wall_and_floor();
+        assert!(t.sphere([85.0, 150.0, 500.0], 20.0));
+        assert!(!t.sphere([75.0, 150.0, 500.0], 20.0));
+        assert!(t.sphere([0.0, 10.0, 500.0], 20.0));
+        assert!(!t.sphere([0.0, 30.0, 500.0], 20.0));
     }
 }
