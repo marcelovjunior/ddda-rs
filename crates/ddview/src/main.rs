@@ -17,6 +17,7 @@
 //!
 //! Controls: WASD move, Q/E down/up, Shift faster, hold right mouse to look.
 
+mod event;
 mod character;
 mod play;
 mod stage;
@@ -159,6 +160,9 @@ fn apply_ref(a: &mut Args, path: &str) {
 }
 
 fn main() {
+    if event::run_if_requested() {
+        return;
+    }
     let args = args();
     let size = args.size;
     App::new()

@@ -2479,6 +2479,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ddsim",
+ "ddstory",
  "ddvfs",
  "ddworld",
  "mtarc",
