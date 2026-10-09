@@ -54,3 +54,8 @@ to their referenced SPAC wave and play as overlapping one-shots. Stop/fade,
 random requests, multi-request chains and conditional event variants are
 explicitly unsupported. Fifteen reader tests and the installed ev10 decode
 pass. Original mixer behavior and audible comparison remain open.
+
+Conditional selection is now translated from 0x00c78570 and exposed as
+`audio::cues_with_voices`, using explicit event player/edit/pawn records.
+Two selector regressions pass. Existing callers still have no voice context,
+so conditional playback remains suppressed until those records are supplied.

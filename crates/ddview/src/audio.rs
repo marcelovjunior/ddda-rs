@@ -24,13 +24,32 @@ struct AudioState {
 
 /// Deferred so event systems need no knowledge of the mixer or device.
 pub fn cues(commands: &mut Commands, frame: &ddstory::event::EventFrame) {
+    cues_with_voices(commands, frame, mtsound::voice::EventVoices::default());
+}
+
+/// Event owners supply their selected player/edit/pawn records. The default
+/// adapter deliberately suppresses conditional cues when those are unknown.
+pub fn cues_with_voices(commands: &mut Commands, frame: &ddstory::event::EventFrame,
+    voices: mtsound::voice::EventVoices) {
     if frame.cues.is_empty() { return; }
-    let cues = frame.cues.clone();
+    let cues = selected_cues(&frame.cues, voices);
     commands.queue(move |world: &mut World| {
         if let Some(mut audio) = world.get_resource_mut::<AudioState>() {
             audio.pending.extend(cues);
         }
     });
+}
+
+fn selected_cues(cues: &[Cue], voices: mtsound::voice::EventVoices) -> Vec<Cue> {
+    cues.iter().filter_map(|cue| {
+        if let Cue::Se { unit, path, se_id, conditional } = cue {
+            if !voices.allows(*conditional) { return None; }
+            // The explicit context has already applied the conditional gate.
+            return Some(Cue::Se { unit: unit.clone(), path: path.clone(),
+                se_id: *se_id, conditional: None });
+        }
+        Some(cue.clone())
+    }).collect()
 }
 
 #[derive(Asset, TypePath, Clone)]
@@ -154,6 +173,21 @@ fn sync_pause(pause: Option<Res<crate::pause::PauseState>>, args: Option<Res<cra
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn event_actor_context_filters_alternative_voice_cues() {
+        use mtsound::voice::{EventVoices, Variant};
+        let cues: Vec<_> = (0..4).map(|id| Cue::Se {
+            unit: format!("voice{id}"), path: format!("voice{id}"),
+            se_id: 1, conditional: Some(id),
+        }).collect();
+        assert!(selected_cues(&cues, EventVoices::default()).is_empty());
+        let selected = selected_cues(&cues, EventVoices {
+            player: Some(Variant { model_or_gender: 0, voice: 3 }),
+            ..Default::default()
+        });
+        assert_eq!(selected, vec![Cue::Se { unit: "voice3".into(), path: "voice3".into(),
+            se_id: 1, conditional: None }]);
+    }
     #[test]
     fn dialogue_center_is_present_in_both_outputs() {
         let sound = stereo(mtsound::decode::Pcm { channels: 6, sample_rate: 48000, samples: vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0] }).unwrap();

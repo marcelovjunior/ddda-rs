@@ -231,3 +231,22 @@ gain/pitch/delay and spatial processing remain unimplemented. Fifteen mtsound
 unit tests and the installed ev10 stream/ADPCM regression pass; the ev10 SE
 request is confirmed to be an ordinary terminal play. Audible comparison is
 still pending.
+
+### Conditional event voices
+
+The conditional gate is now traced: uSoundSe::vf21 (0x00c78570) runs before
+the call-flag edge in vf08 (0x00c77f10). Conditional IDs 0..3 read the player
+cPlayerInfo at sGameSys+0xa76d0; 4..7 read the save-edit gender/voice bytes
+at +0x150a4/+0x150a5; 8..11 and 12..15 read the first pawn cPlayerInfo at
++0xa7ec0. cPlayerInfo reflection 0x0077d980 names +0xc `mModelType` and
++0x294 `mVoiceType`; save-edit reflection 0x00787010 names +0x28 `mGender`
+and +0x29 `mVoice`. The chosen ID is group base plus two when the model/gender
+field is zero, plus `(voice / 3) & 1`. No sex-code inversion is inferred.
+
+`mtsound::voice::EventVoices` translates this gate with explicit optional
+actor records. Two regressions cover all four groups, voice division/parity
+boundaries, invalid conditions and absent records. `audio::cues_with_voices`
+accepts this per-event context; the existing context-free adapter suppresses
+conditional cues. Event owners still need to supply the correct records from
+their save/character-creation state. Stable context during an event is assumed;
+changing conditions during a held call flag needs the original gate/edge order.
