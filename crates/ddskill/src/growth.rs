@@ -27,8 +27,11 @@ pub const EXP_CAP: u32 = 1_000_000_000;
 pub const DISCIPLINE_CAP: i32 = 999_999;
 
 /// x87 `FISTP` under a control word with RC = 0b11 (truncate), as used by
-/// 0x00b5c080 and 0x00b5c150 after computing in the FPU.
-fn trunc_u32(v: f32) -> u32 {
+/// 0x00b5c080 and 0x00b5c150. The FPU keeps at least double precision here:
+/// the running game returns 485 for level 2 (claude-4 oracle, board #722),
+/// which f32 arithmetic would round up to 486. The operands (an f32 rate
+/// times an integer below 2^8) are exact in f64, so f64 matches.
+fn trunc_u32(v: f64) -> u32 {
     v as u32
 }
 
@@ -37,9 +40,7 @@ fn trunc_u32(v: f32) -> u32 {
 /// Translated from 0x00b5c080 (DDDA.exe 2017-12-13 Steam). Row 0 `mLv` is the
 /// requirement at level 1; row 1 `mLv` is the base unit; from level 2 each
 /// step adds `rate(u) * unit`, where `rate(u)` is the `mRate` of the last row
-/// k >= 2 whose `mLv <= u`. The game computes in the x87 FPU; the arithmetic
-/// here is f32, which reproduces the exe's own level-200 total
-/// (`TOTAL_EXP_AT_MAX`); f64 does not (see the test).
+/// k >= 2 whose `mLv <= u`. Compared live for levels 1-199 (see the test).
 pub fn next_exp(level: u32, rows: &[ExpEntry]) -> u32 {
     if level == 1 {
         return rows[0].level;
@@ -47,7 +48,7 @@ pub fn next_exp(level: u32, rows: &[ExpEntry]) -> u32 {
     if level < 2 || rows.len() < 4 {
         return 0;
     }
-    let unit = rows[1].level as f32;
+    let unit = f64::from(rows[1].level);
     let mut acc = rows[0].level;
     let (mut cur, mut next) = (2usize, 3usize);
     for u in 2..=level {
@@ -55,15 +56,17 @@ pub fn next_exp(level: u32, rows: &[ExpEntry]) -> u32 {
             cur = next;
             next += 1;
         }
-        acc = trunc_u32(acc as f32 + rows[cur].rate * unit);
+        acc = trunc_u32(f64::from(acc) + f64::from(rows[cur].rate) * unit);
     }
     acc
 }
 
 /// Total experience from level 1 to reach `level`.
 ///
-/// Translated from 0x00b5c150: the sum of `next_exp(1..level)`, with level 1
-/// giving 0 and levels above 199 returning the constant `TOTAL_EXP_AT_MAX`.
+/// Translated from 0x00b5c150 (cdecl): the sum of `next_exp(1..level)`, with
+/// level 1 giving 0 and levels above 199 returning the constant
+/// `TOTAL_EXP_AT_MAX`. That constant (36,636,536) is 786 more than the sum of
+/// the curve (36,635,750); the exe uses it as is.
 pub fn cumulative_exp(level: u32, rows: &[ExpEntry]) -> u32 {
     if level > 199 {
         return TOTAL_EXP_AT_MAX;
@@ -252,23 +255,25 @@ pub struct Discipline {
 /// Adds experience to a character. Translated from 0x00782d10.
 ///
 /// `exp_rate` is the Weal augment value (augment 93, 0x00783340: 1.15 when
-/// equipped, 1.0 otherwise). `item_rate` stands for the two equipment checks
-/// (item 0x361 in slot +0x3e4, item 0x47f in slots +0x3f4/+0x3f8) whose
-/// factors come from an unresolved parameter object at sGameSys+0xb875c;
-/// pass 1.0 when neither is worn.
+/// equipped, 1.0 otherwise). `item_rates` are the two equipment factors
+/// (item 0x361 in slot +0x3e4; item 0x47f in slots +0x3f4 and +0x3f8, the
+/// second multiplying the first) that come from an unresolved parameter
+/// object at sGameSys+0xb875c; pass `[1.0, 1.0]` when none is worn.
 pub fn award_exp(
     p: &mut Progress,
     d: &mut Discipline,
     vocation: usize,
     exp: u32,
     exp_rate: f32,
-    item_rate: f32,
+    item_rates: [f32; 2],
 ) {
-    // FILD (unsigned fix-up), FMUL, FISTP with truncation.
-    let gained = (exp as f32 * exp_rate) as i64 as u32;
+    // x87: FILD (unsigned fix-up), FMUL by the f32 rate, FISTP truncating;
+    // the product is exact in f64.
+    let gained = (f64::from(exp) * f64::from(exp_rate)) as i64 as u32;
     p.exp = p.exp.wrapping_add(gained);
     let dp = discipline_from_exp(gained as i32);
-    let dp = (dp as f32 * 1.0f32 * item_rate) as i32;
+    // SSE single: CVTSI2SS, MULSS, MULSS, CVTTSS2SI.
+    let dp = (dp as f32 * item_rates[0] * item_rates[1]) as i32;
     d.exp[vocation] = d.exp[vocation].wrapping_add(dp as u32);
     d.points += dp;
     if d.points > DISCIPLINE_CAP {
@@ -352,21 +357,29 @@ mod tests {
             .collect()
     }
 
+    /// Values returned by the running game's 0x00b5c080 and 0x00b5c150
+    /// (claude-4 oracle, board #722, 2026-10-09).
     #[test]
-    fn exp_curve_matches_exe_total() {
+    fn exp_curve_matches_live_game() {
         let rows = exp_rows();
-        assert_eq!(next_exp(1, &rows), 200);
-        // 1.3f * 220 = 285.99999 rounds to 286.0 in f32.
-        assert_eq!(next_exp(2, &rows), 486);
-        assert_eq!(next_exp(6, &rows), 2004);
-        assert_eq!(next_exp(199, &rows), 504_704);
-        // The exe's hard-coded total for level 200 equals the sum of the
-        // f32 curve. With f64 arithmetic it would be 36,635,750.
+        let live = [
+            (1, 200), (2, 485), (3, 770), (5, 1340), (6, 2000), (10, 4640), (14, 7720),
+            (50, 80_100), (100, 124_100), (150, 289_100), (199, 504_700),
+        ];
+        for (level, want) in live {
+            assert_eq!(next_exp(level, &rows), want, "next_exp({level})");
+        }
+        let live = [
+            (2, 200), (3, 685), (10, 15_810), (100, 6_543_250), (199, 36_131_050),
+            (200, 36_636_536),
+        ];
+        for (level, want) in live {
+            assert_eq!(cumulative_exp(level, &rows), want, "cumulative_exp({level})");
+        }
+        // The level-200 constant is not the sum of the curve.
         let total: u32 = (1..200).map(|l| next_exp(l, &rows)).sum();
-        assert_eq!(total, TOTAL_EXP_AT_MAX);
+        assert_eq!(total, 36_635_750);
         assert_eq!(cumulative_exp(1, &rows), 0);
-        assert_eq!(cumulative_exp(3, &rows), 686);
-        assert_eq!(cumulative_exp(200, &rows), TOTAL_EXP_AT_MAX);
     }
 
     #[test]
@@ -406,21 +419,21 @@ mod tests {
         assert!(!p.level_up(false, &g, &e));
         p.exp = 700;
         assert!(p.level_up(false, &g, &e));
-        assert_eq!((p.level, p.exp, p.next_exp), (2, 500, 486));
+        assert_eq!((p.level, p.exp, p.next_exp), (2, 500, 485));
         assert!(p.level_up(false, &g, &e));
-        assert_eq!((p.level, p.exp), (3, 14));
+        assert_eq!((p.level, p.exp), (3, 15));
         assert!(!p.level_up(false, &g, &e));
     }
 
+    /// Values returned by the running game's 0x00782f30 (board #722).
     #[test]
-    fn discipline_bands() {
+    fn discipline_matches_live_game() {
         assert_eq!(discipline_from_exp(0), 0);
-        assert_eq!(discipline_from_exp(10), 4);
-        assert_eq!(discipline_from_exp(50), 20);
-        // 50 * 0.4 + 50 * 0.25
-        assert_eq!(discipline_from_exp(100), 32);
-        // 20 + 12.5 + 7.5 + 5 + 8 + 6 + 5 + 8 + 6 + 2.5 = 80.5
-        assert_eq!(discipline_from_exp(1000), 80);
+        // 100 = 50 * 0.4 + 50 * 0.25; 1000 = 20 + 12.5 + 7.5 + 5 + 8 + 6 + 5 + 8 + 6 + 2.5
+        let live = [(10, 4), (49, 19), (50, 20), (100, 32), (1000, 80), (5000, 125), (100_000, 277)];
+        for (exp, want) in live {
+            assert_eq!(discipline_from_exp(exp), want, "discipline_from_exp({exp})");
+        }
     }
 
     #[test]
@@ -447,13 +460,13 @@ mod tests {
     fn award_and_caps() {
         let mut p = Progress::default();
         let mut d = Discipline::default();
-        award_exp(&mut p, &mut d, 1, 100, 1.15, 1.0);
-        // 100 * 1.15f = 114.9999976 rounds to 115.0 in f32 (x87 in single-precision mode).
-        assert_eq!(p.exp, 115);
-        assert_eq!(d.points, discipline_from_exp(115));
+        award_exp(&mut p, &mut d, 1, 100, 1.15, [1.0, 1.0]);
+        // 100 * 1.15f = 114.9999976 truncates to 114 at x87 precision.
+        assert_eq!(p.exp, 114);
+        assert_eq!(d.points, discipline_from_exp(114));
         assert_eq!(d.exp[1], d.points as u32);
         d.points = DISCIPLINE_CAP;
-        award_exp(&mut p, &mut d, 1, 10, 1.0, 1.0);
+        award_exp(&mut p, &mut d, 1, 10, 1.0, [1.0, 1.0]);
         assert_eq!(d.points, DISCIPLINE_CAP);
     }
 

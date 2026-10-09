@@ -7,8 +7,11 @@ own English text. Addresses are this build's.
 
 Status legend: **traced** (read in the exe), **data** (shipped resource
 values), **guessed** (an inference, not a fact), **live** (compared with the
-running game). Nothing below is **live** yet; a read-only check is requested
-from claude-4 (board #651).
+running game). **Live** so far (claude-4 oracle, board #722, read-only
+reads and pure calls on the maintainer's save): the experience curve
+(0x00b5c080, 0x00b5c150), the experience-to-discipline conversion
+(0x00782f30), the level-7 stats of a Mage Arisen and a Fighter pawn, and the
+vocation-rank thresholds. Everything else is static analysis.
 
 ## Summary
 
@@ -19,9 +22,9 @@ from claude-4 (board #651).
   Which vocation and weapon a skill belongs to, its action id and its name
   come from static tables in the exe.
 - Level growth: each level adds the `rPlLevel` row of the vocation held *at
-  that moment*; changing vocation never recomputes stats. Experience curve
-  and discipline conversion are exact translations (f32 arithmetic
-  reproduces the exe's own level-200 constant).
+  that moment*; changing vocation never recomputes stats. The experience
+  curve and the discipline conversion are translated and match the running
+  game on every value checked.
 - Changing vocation (`uGUIJobChange`): needs level 10 for anything beyond the
   three basic vocations, costs 1000 or 1500 discipline the first time per
   vocation, clears the six active skill slots, keeps level, stats, ranks,
@@ -456,29 +459,33 @@ Per character, in `cPlayerInfo` (Arisen sGameSys+0xa76d0, main pawn
 `trunc(rate(u) * 220)` where `rate(u)` is the `mRate` of the last row k >= 2
 with `mLv <= u`: 1.3 (L 2-5), 3 (6-13), 5 (14-17), 8 (18-24), 9 (25-35),
 10 (36-41), 11 (42-50), 4 (51-100), 15 (101-150), 20 (151-199). Computed in
-the x87 FPU with truncation; f32 arithmetic gives 486 for level 2 (1.3f x 220
-rounds to 286), and the sum over levels 1..199 equals the constant
-0x022f0778 = 36,636,536 that 0x00b5c150 returns at level 200. f64 gives 485
-and 36,635,750. So the game runs the FPU at single precision here.
+the x87 FPU with truncation, at (at least) double precision: the running
+game returns 485 for level 2 (1.3f x 220 = 285.99999), where single
+precision would give 486 (**live**). Total experience (0x00b5c150, cdecl)
+is the sum of the curve up to level 199, then the constant 0x022f0778 =
+36,636,536 at level 200, 786 more than the curve's sum of 36,635,750.
 
 | Level | Exp to next | Total exp at this level |
 |---:|---:|---:|
 | 1 | 200 | 0 |
-| 2 | 486 | 200 |
-| 3 | 772 | 686 |
-| 5 | 1344 | 2516 |
-| 6 | 2004 | 3860 |
-| 10 | 4644 | 15836 |
-| 14 | 7724 | 38372 |
-| 25 | 25324 | 202316 |
-| 50 | 80104 | 1460436 |
-| 51 | 80984 | 1540540 |
-| 100 | 124104 | 6543636 |
-| 101 | 127404 | 6667740 |
-| 150 | 289104 | 16791336 |
-| 151 | 293504 | 17080440 |
-| 199 | 504704 | 36131832 |
+| 2 | 485 | 200 |
+| 3 | 770 | 685 |
+| 5 | 1340 | 2510 |
+| 6 | 2000 | 3850 |
+| 10 | 4640 | 15810 |
+| 14 | 7720 | 38330 |
+| 25 | 25320 | 202230 |
+| 50 | 80100 | 1460250 |
+| 51 | 80980 | 1540350 |
+| 100 | 124100 | 6543250 |
+| 101 | 127400 | 6667350 |
+| 150 | 289100 | 16790750 |
+| 151 | 293500 | 17079850 |
+| 199 | 504700 | 36131050 |
 | 200 | 0 | 36636536 |
+
+Live values (board #722) agree for next-exp at levels 1, 2, 3, 5, 6, 10,
+14, 50, 100, 150, 199 and total at 2, 3, 10, 100, 199, 200.
 
 **Level-up** 0x00b5bd20, called once per frame from the `uPlayer` update
 (vf90 0x00b61a20), so one level per frame. Skipped for flags at
@@ -506,6 +513,12 @@ calls it when `cPlayerInfo`+0x35a is set (who sets it is not traced). The
 level-up (player only): achievement bits at level 100 and 200
 (DAT_018d0cc4+0x5a74 |= 0x800000 / 0x1000000); at level >= 10 0x0044d080(1)
 (meaning unresolved).
+
+**Live** (board #722): the Arisen, a level-7 Mage, has 542 / 120 / 72 / 78 /
+104 / 98 (HP, stamina from levels, Strength, Defense, Magick, Magick
+Defense) and `mNextExp` 2660; the main pawn, a level-7 Fighter, 630 / 120 /
+104 / 98 / 72 / 72. Both equal `Progress::at_level(7, ..)` with their own
+vocation's table (install test `live_party_matches`).
 
 Stats after 199 level-ups in one vocation (data, computed):
 
@@ -552,19 +565,22 @@ two equipment factors (item 0x361 in slot +0x3e4, item 0x47f in slots
 is split over bands starting at 0, 50, 100, 150, 200, 300, 400, 500, 700,
 900, 1200, 1500, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000 that
 keep 40, 25, 15, 10, 8, 6, 5, 4, 3, 2.5, 2, 1.5, 1, 0.8, 0.6, 0.5, 0.4,
-0.3, 0.2, 0.1 % (table 0x014f24a0). 100 exp gives 32 discipline, 1000
-gives 80. Each award is converted separately, so many small kills give more
-discipline than one large award.
+0.3, 0.2, 0.1 % (table 0x014f24a0). **Live** (board #722): 10 -> 4,
+49 -> 19, 50 -> 20, 100 -> 32, 1000 -> 80, 5000 -> 125, 100000 -> 277, all
+equal to `discipline_from_exp`. Each award is converted separately, so many
+small kills give more discipline than one large award.
 
 ### Vocation rank (traced)
 
 0x00b5c230, also once per frame: for the current vocation, below rank 9,
 when `mJobExp >= mJobNextExp` (+0x31c) subtract it, rank + 1 (cap 9), set
 the next threshold from `rPlJobLevel` (row with `mLevel <= rank < next`,
-0x00b5cc50), show "Vocation Rank Increased!" (`cockpit_eng` 5). Rank and
+0x00b5cc50), then posts an event and calls 0x00452d80 (presumably the
+"Vocation Rank Increased!" notice, `cockpit_eng` 5; **guessed**). Rank and
 rank experience are per vocation and kept across changes. Thresholds (data,
 PARAMS.md): rank 1 to 2 needs 500 (most) up to 800 (Mystic Knight,
-Assassin); rank 8 to 9 needs 7500 to 14500.
+Assassin); rank 8 to 9 needs 7500 to 14500. **Live**: the Arisen's
+thresholds at ranks 1 / 3 equal `rank_next_exp` for all nine vocations.
 
 ## Changing vocation (traced)
 
@@ -631,22 +647,24 @@ outside Mage and Sorcerer.
 - `growth`: `next_exp`, `cumulative_exp`, `level_row`, `Stats`, `Progress`
   (`at_level`, `level_up`), `discipline_from_exp`, `award_exp`,
   `rank_next_exp`, `rank_up`, `party_share`, each marked with its source
-  address. Tests: the curve sums to the exe constant with the shipped table,
-  Fighter growth by hand, level-up carry-over, discipline bands, rank steps,
-  caps, party shares; install: all nine vocations to level 200.
+  address. Tests: the curve and discipline against live values (#722),
+  Fighter growth by hand, level-up carry-over, rank steps, caps, party
+  shares; install: all nine vocations to level 200, the live party's stats
+  and rank thresholds.
 - `vocation`: ids, names (labels), weapon categories, skill ranges, stamina
   tables, motion banks, change cost, unlock flags, offered lists. Tests:
   masks against the exe table values, costs, lists; install: names.
 - Example: `cargo run -p ddskill --example skill_dump -- <nativePC>`.
 
-`cargo test -p ddskill`: 14 unit + 4 install tests pass; clippy clean.
+`cargo test -p ddskill`: 14 unit + 5 install tests pass; clippy clean.
 Not done: the exe skill table, text table and augment-name table are
 documented here but not embedded in Rust (see the open decision below).
 
 ## Open questions
 
-1. Live check (requested from claude-4, #651): `next_exp(2)` = 486 (f32) or
-   485; discipline for a few awards; current `cPlayerInfo` fields.
+1. Not yet compared live: level-up order within a frame, party shares,
+   pawn catch-up, vocation change (cost, flags, slot clearing), learning.
+   These change game state; ask claude-4 with a save backup.
 2. Unlock of augments 100..114 (save bytes sGameSys+0xbe1b4..): which event
    or purchase sets them (claude-7 events, claude-6 shops).
 3. Items that grant level-3 skills (item flag bit 29, skill ids at +8 / +10)

@@ -76,7 +76,8 @@ fn growth_tables() {
     }
     let exp = ddparam::Exp::from_bytes(&read("rPlExp", "param\\pl\\level\\exp")).unwrap().entries;
     let total: u32 = (1..200).map(|l| growth::next_exp(l, &exp)).sum();
-    assert_eq!(total, growth::TOTAL_EXP_AT_MAX, "shipped curve sums to the exe constant");
+    assert_eq!(total, 36_635_750);
+    assert_eq!(growth::cumulative_exp(199, &exp), 36_131_050, "live value, board #722");
     for v in Vocation::ALL {
         let path = format!("param\\pl\\level\\Lv{}", v.param_name());
         let rows = ddparam::Level::from_bytes(&read("rPlLevel", &path)).unwrap().entries;
@@ -87,6 +88,38 @@ fn growth_tables() {
         let ranks = ddparam::JobLevel::from_bytes(&read("rPlJobLevel", &path)).unwrap().entries;
         assert_eq!(growth::rank_next_exp(9, &ranks), 0);
         assert!(growth::rank_next_exp(1, &ranks) > 0);
+    }
+}
+
+/// The running game's party (claude-4 oracle, board #722): the Arisen is a
+/// level-7 Mage and the main pawn a level-7 Fighter, each levelled in that
+/// vocation only; vocation-rank thresholds per vocation.
+#[test]
+fn live_party_matches() {
+    if install().is_none() {
+        return;
+    }
+    let exp = ddparam::Exp::from_bytes(&read("rPlExp", "param\\pl\\level\\exp")).unwrap().entries;
+    let level = |v: Vocation| {
+        let path = format!("param\\pl\\level\\Lv{}", v.param_name());
+        ddparam::Level::from_bytes(&read("rPlLevel", &path)).unwrap().entries
+    };
+    let s = |p: &Progress| {
+        let s = p.stats;
+        [s.hp_max, s.stamina_lv, s.attack, s.defend, s.magic_attack, s.magic_defend]
+    };
+    let arisen = Progress::at_level(7, &level(Vocation::Mage), &exp);
+    assert_eq!(s(&arisen), [542.0, 120.0, 72.0, 78.0, 104.0, 98.0]);
+    assert_eq!(arisen.next_exp, 2660);
+    let pawn = Progress::at_level(7, &level(Vocation::Fighter), &exp);
+    assert_eq!(s(&pawn), [630.0, 120.0, 104.0, 98.0, 72.0, 72.0]);
+    // jobNext of the Arisen at ranks [_,1,1,3,1,1,1,1,1,1] (index = vocation id).
+    let want = [500, 500, 2000, 800, 800, 650, 500, 500, 600];
+    let ranks = [1, 1, 3, 1, 1, 1, 1, 1, 1];
+    for (i, v) in Vocation::ALL.iter().enumerate() {
+        let path = format!("param\\pl\\JobLevel\\JobLv{}", v.param_name());
+        let rows = ddparam::JobLevel::from_bytes(&read("rPlJobLevel", &path)).unwrap().entries;
+        assert_eq!(growth::rank_next_exp(ranks[i], &rows), want[i], "{v:?}");
     }
 }
 
