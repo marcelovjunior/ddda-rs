@@ -524,20 +524,47 @@ format, not cSAVE_DATA_STAGE.
 
 ### Frame order
 
-Each `tick`:
-1. Host events.
-2. A pending event request becomes "playing".
-3. Scenarios: detect, then evaluate (0x00797df0).
-4. The quest manager: QCT, one row per quest (0x007922f0).
-5. Stage scripts.
-6. Quest scripts.
+Each `tick` follows the traced frame (FRAME.md 6.2: `sAreaExt::vf06`
+0x00419910 walks the area stack root first):
+1. **Host reports** since the last frame: stage loaded, camera, message
+   and fade completions, and flags written by host-run AI.
+2. **Quests and QCT** (`aGameMain` slot 7, 0x004FB960): sQuestManager vf06
+   0x00482dd0, one QCT row per quest (0x007922f0).
+3. **Stage mode** (`aStage` slot 7, 0x00504330), in this order:
+   - the event end step (0x0050c7a0) for an `EventFinished`;
+   - the vocation menu's close (mode 0x19, 0x00512fb0: GSF 372);
+   - a pending event request becomes the playing one (play mode
+     0x0050b870, 0x00516fc0).
+4. **Scenarios** (sScenario vf06 0x0049a0e0): detect, then evaluate
+   (0x00797df0).
+5. **Scripts** (unit pass A, line 0). The stage scripts (uFSMTask) run
+   first, then the quest scripts (uFSMQuest).
+   - The original runs line 0 as concurrent jobs, so their relative order
+     is not defined there; ours is a choice.
+   - The gate 0x0044D430 is not modelled: no scripts during the stop
+     flags, during a talk, or on stages 0x321-0x324.
 
 Each script runs one frame of the driver below, then the cFSMOrder
 wrapper (vf06 0x005babb0). Its timers advance (0x005bac30), the camera
 slot ticks (0x005c4340), and Finish stops it.
 
-The order of these system phases is **guessed**: the original runs them
-as separate task lists, and their relative order was not traced.
+The earlier guessed order (scenarios before the QCT, the event end
+with the host reports) gave **the same opening**:
+- the same SceNo ladder and quest boots;
+- every request on the same frame (example `opening`, compared line by
+  line).
+
+None of the opening's QCT rows reads what a scenario writes in the same
+frame, so moving the QCT before the scenarios changes nothing there.
+
+**Read-only state for replays:**
+- `Script::state_path()` gives the current state ids, root machine
+  first.
+- `Script::state()` and `Story::script_states()` give a `ScriptState`
+  snapshot: path, running, states, SysCondition, FreeFlags, FreeIns,
+  FreeReal, mCntState, mCntFSM, timer register and event step. The order
+  is the stage scripts, then the quest scripts.
+- Test: `script_states_replay` in `tests/opening.rs`.
 
 ### Script driver (0x00e092a0)
 

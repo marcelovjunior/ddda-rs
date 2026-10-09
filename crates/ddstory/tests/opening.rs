@@ -95,3 +95,37 @@ fn opening_from_new_game_to_q0002() {
     // The world survives a save round trip.
     assert_eq!(&World::load(&w.save()).unwrap(), w);
 }
+
+/// `Story::script_states` / `Script::state_path`: the same inputs give the
+/// same snapshots (what ddhost's replay hash relies on), and the snapshot
+/// follows the scripts as they move.
+#[test]
+fn script_states_replay() {
+    let run = |waypoints: usize| {
+        let data = install()?;
+        let mut story = Story::new_game(data);
+        let mut host = ScriptedHost::opening();
+        let route = ddstory::route::opening();
+        ddstory::route::run(&mut story, &mut host, &route[..waypoints], 240, 10_000, |_| true).unwrap();
+        Some(story)
+    };
+    let (Some(a), Some(b), Some(start)) = (run(3), run(3), run(0)) else { return };
+    let sa = a.script_states();
+    assert!(!sa.is_empty());
+    assert_eq!(sa, b.script_states());
+    // Stage scripts first, in creation order, then quest scripts.
+    let n = a.tasks.len();
+    for (s, t) in sa.iter().zip(&a.tasks) {
+        assert_eq!(s.path, t.path);
+        assert_eq!(s.states, t.state_path());
+        assert_eq!(s.states, t.current_states());
+        assert!(!s.states.is_empty());
+    }
+    let quest_paths: Vec<&str> = a.quests.iter().filter_map(|q| q.script.as_ref()).map(|s| s.path.as_str()).collect();
+    assert_eq!(sa[n..].iter().map(|s| s.path.as_str()).collect::<Vec<_>>(), quest_paths);
+    // The snapshot moves with the scripts: a script that runs at the
+    // first frame is in another state three waypoints later.
+    let s0 = start.script_states();
+    assert!(s0.iter().any(|x| sa.iter().any(|y| y.path == x.path && y.states != x.states)));
+    assert!(sa.iter().all(|s| s.cnt_fsm > 0.0));
+}
