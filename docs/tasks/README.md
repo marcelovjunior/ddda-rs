@@ -143,7 +143,7 @@ Codex lane: see `docs/CODEX.md`.
 | [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | merged 2026-10-09 |
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | merged 2026-10-09 |
 | [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | merged 2026-10-09 |
-| [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | merged 2026-10-09 |
+| [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | partial merges (events, voices, motion, random); mixer + BGM open |
 | [movement-feel](movement-feel.md) | Opening slice: turning, locomotion blending, air attacks, falls (playtest) | core | codex-1 | assigned (slice 1) |
 | [dragon-attack](dragon-attack.md) | Opening slice: the dragon attack on Cassardis | core | codex-1 | partial merge 6e7c80b (AI requests, completion check); fight + host open |
 | [upon-a-pawn](upon-a-pawn.md) | Opening slice: q0002, first pawn, goblins | core | codex-1 | assigned (slice 3) |
