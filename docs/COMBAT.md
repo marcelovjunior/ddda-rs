@@ -717,14 +717,47 @@ Results (tests `ddenemyrt/tests/sword.rs`, `ddhost/tests/goblin.rs`):
 Placeholders in the slice (marked in the code):
 - the history's relation hold (attacker flag +0x1EC1) is taken as
   released when the attacker starts its next attack;
-- the character push-out (`0x004797E0`, not traced) keeps an Arisen and a
-  goblin 70 cm apart (35 + 35, their `mIsObjAdj` radii);
 - the goblin stands on the ground height under it (its own scenery sweep,
   capsule r44 from 44 to 106 cm, is not run);
 - the rand of the think and of the actions is a seeded xorshift, not the
   game's global rand (0x00d00690);
 - the critical roll (only critical-capable weapons read it) is seeded the
   same way.
+
+### 9.2 Character push-out (`ddenemyrt::pushout`, traced)
+
+`0x004797E0` (step 38, after both move lines) walks the collision
+manager's contacts between characters' push-out volumes (groups with
+`mIsObjAdj`, switched on by the motions like the hit volumes; Arisen
+`m0000` group 2, a capsule r35 from the model origin to joint 13; goblin
+`e0100` group 0, spheres r35 on joints 1 and 2 and r22 on the head). Each
+contact carries a point, a normal (+0x690) and a depth (+0x6A0), stored by
+0x00773D30. Per pair:
+- characters in an ignore zone (0x00779B10), non-character units, pairs
+  0x00478F50 excludes and coincident positions are skipped;
+- the **higher push rank** (actor +0x1DF0, the collision's +0xD10) gives
+  way. On equal ranks the pair's first one does, unless it is the Arisen
+  (+0x206D bit 1, `uPlayer` ctor 0x00B55900) and the other a pawn (bit 2,
+  `uCmc` 0x00B53220) or an NPC (bit 3, `uNpc` 0x00BAB3A0); two pawns share
+  it by halves (factors 0.5 from 0x01539D10) when the manager's flag
+  +0x9C528 is set. A rank of 0 never moves;
+- 0x0076D420 records the push on the pushed collision, keeping the
+  deepest of the frame (depth +0x8C8, direction +0x890); 0x0076D6B0 applies
+  it in pass C (`uObjModel::vf09`, before the scenery sweep): x and z move
+  by depth x direction, y does not.
+
+Ranks are written every frame: the Arisen's actions set theirs
+(`cPlActWait` 13, `cPlActWalk` 14, run, sprint, jumps, falls, landings 15,
+ledge actions 0, sword ground attacks 14; `ddsim::State::push_rank`); an
+enemy's is `cCharParamEnemy` +0xD4 `OBJ補正サイズ` (goblin 13), plus 1 while
+its action sets +0x2360 bits 0x104 (attacks, walks), else plus 2 for 0x18
+(runs, dashes) (`uEnemy::vf90` 0x00AA96E0). So a waiting or attacking
+Arisen gives way to a goblin of the same rank listed after it, and a
+dashing goblin (15) gives way to a waiting Arisen (13).
+
+Not traced: the shape routines' exact contact normal and depth (the
+closest-point direction and the overlap are used), the pair order of the
+manager's list (the fight lists the Arisen first), and the manager flag.
 
 ## 10. What is still unknown
 
