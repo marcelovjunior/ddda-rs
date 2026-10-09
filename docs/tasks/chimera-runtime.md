@@ -113,8 +113,10 @@ the legacy wrapper. Six further synthetic regressions cover nonidentity
 mapping, three simultaneous owners, ordering, equivalence and atomic errors.
 Full `cargo test -p ddcombat -p ddenemyrt` passes 81 tests (33+48), one ignored.
 The callback's current `has_hp` observations are explicitly distinct from the
-original actor +0x5bd0 death marker. Real marker timing and host binding remain
-unimplemented; unmapped ordinary configured hits return a preflight error.
+original actor +0x5bd0 death marker. Source timing is confirmed: common vf72
+calls vf119 (0x00ab37d0), setting that marker before the persistent-kill call.
+Synchronous accepted-death observation and host binding remain unimplemented;
+unmapped ordinary configured hits return a preflight error.
 Review follow-up restricts the modifier callback to configured enemies;
 20 chimera integration tests pass, including a mutating callback that must
 leave an unconfigured enemy's ordinary damage unchanged.

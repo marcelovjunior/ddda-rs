@@ -101,8 +101,15 @@ the installed constructor loads it only for the body. The combat-pass hook
 is now available through the configured combat pass. Its child state remains
 an explicit actor observation: vf117 `0x004c7590` reads byte +0x5bd0, not HP.
 Child-00 vf34 (write at `0x009b18eb`) can initialize
-that marker for an already-empty pool; full combat marker timing remains
-unresolved. Body post-hit `0x009a4560` maps
+that marker for an already-empty pool. Combat death calls common vf72
+`0x00aab3b0`: its vtable +0x1dc dispatch at `0x00aab4c0` invokes vf119
+`0x00ab37d0`, whose first write sets +0x5bd0 to one. The persistent-kill
+call at `0x00aab4e4` follows. Body and child-00 use this same vf119.
+Vf118 `0x00ab3790` separately tests marker != 1 and main HP <= 0, making
+pending HP depletion and accepted death observably distinct. The host must
+apply accepted death synchronously after each local/linked result before
+later modifiers; the current callback/snapshot alone does not perform this.
+Body post-hit `0x009a4560` maps
 HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
 values to pool 0 for visual damage. Child post-hit callbacks
 `0x009b42f0`/`0x009bcb80` select pool 1 for hit kinds 4/6 respectively.
