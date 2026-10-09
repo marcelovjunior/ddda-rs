@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/rift-list-projection`
 - **Board area:** `formats/rift`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -32,4 +32,16 @@ to `head`.
 
 ## Results
 
-(filled in by the agent)
+Implemented `ddpawn::rift_ui` with explicit per-viewer filters, online state
+and filtered offset. Source 0x006d4c50/0x006d4bb0/0x006d5090: cross-filter
+AND, six-skill/category OR, bypasses, exact failed-load state and seven-row
+window. Runtime skill-table lookup supplied by caller; no copied game data.
+Safe malformed-input handling and the pagination API's boundary from the
+original cursor controller are documented in RIFT_LIST.md.
+
+Six new regression tests pass; full ddpawn suite passes 20 tests. Targeted
+Clippy passes allowing the pre-existing manual_clamp lint; unrestricted
+all-targets Clippy has three pre-existing lint kinds in unchanged code.
+Original Rift capture comparison unavailable: shared original session is a
+tutorial/combat scene, not a Rift list. No game/process/save writes. Next:
+capture known raw/filter/visible state in an offline Rift scene and compare.
