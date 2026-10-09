@@ -11,15 +11,17 @@
 //! Evidence (DDDA.exe 2017-12-13 Steam):
 //! - `uModel::vf30` (0x0105B480), the layer's motion request
 //!   `(layer, motion, interpolation frames, start frame, rate, flags)`:
-//!   stores the interpolation frames twice (layer +0x40 total, +0x44
-//!   remaining) and the frozen pose's weight 1.0 (+0x60). On a layer that
-//!   had no motion yet, remaining and weight are 0 (no blend).
+//!   stores the interpolation frames twice (`uModel::Motion::mInterFrame`
+//!   +0x40, the total, and `mInterCount` +0x44, the remaining) and the
+//!   frozen pose's weight 1.0 (+0x60, not reflected). On a layer that had
+//!   no motion yet, remaining and weight are 0 (no blend).
 //! - `0x01061DD0`, run when a layer's motion changed: copies each joint's
 //!   current local pose (joint +0x60 rotation, +0x80 translation, +0x70
 //!   scale) into the per-joint interpolation buffer (uModel +0xDD0), and
 //!   only when the total is above `f32::EPSILON`.
-//! - `0x01060730`, the per-update layer step: `remaining -= step` (uModel
-//!   +0x14, *not* multiplied by the layer's rate), then the weight is
+//! - `0x01060730`, the per-update layer step: `remaining -= step`
+//!   (`cUnit::mDeltaTime` +0x14, *not* multiplied by the layer's
+//!   `mSpeed`), then the weight is
 //!   `ease(curve, remaining / total)`, or 0 and the blend ends once
 //!   remaining reaches 0.
 //! - `0x00D4EBF0`: the ease curve, a cubic Bezier from 0 to 1 with inner
@@ -29,7 +31,8 @@
 //! Where the interpolation frames come from is in `docs/ANIMATION.md`
 //! (`rAdjustParam` twin of each motion list).
 
-/// Inner control values of the layer's ease curve. `uModel::Motion`'s
+/// Inner control values of the layer's ease curve (`mInterCurve`,
+/// +0x6C). `uModel::Motion`'s
 /// constructor (0x01056EC0) copies them from the global at 0x018D06A0,
 /// which lies in zero-initialised data and has no writer in the exe (its
 /// four references all read it), so both are 0.0 and the curve is t³.
@@ -54,9 +57,9 @@ pub fn ease(curve: [f32; 2], t: f32) -> f32 {
 /// The fade of a frozen pose over a newly started motion.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interpolation {
-    /// Interpolation length in motion frames (layer +0x40).
+    /// Interpolation length in motion frames (`mInterFrame`).
     pub total: f32,
-    /// Frames left (layer +0x44).
+    /// Frames left (`mInterCount`).
     pub remaining: f32,
     /// Weight of the frozen pose (layer +0x60): 1 = only the frozen pose.
     pub weight: f32,

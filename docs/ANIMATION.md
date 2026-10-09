@@ -60,11 +60,15 @@ interpolation frames, start frame, rate)`. It forwards to
 `uObjModel::vf36` (0x00886E70), which restarts layer 0 only when the motion
 differs or force restart is set, through `0x00828350` to `uModel::vf30`
 (0x0105B480): `(layer, motion, interpolation frames, start frame, rate,
-flags)`. Layers are `uModel::Motion` objects, 0x140 bytes from uModel
-+0x380 (count at +0x374). Layer 0 fields used here: +0x384 motion id,
-+0x3C0 interpolation total, +0x3C4 remaining, +0x3CC frame, +0x3D4 last
-frame (frame count - 1), +0x3DC rate, +0x3E0 frozen-pose weight,
-+0x3EC/+0x3F0 ease curve.
+flags)`. Layers are `uModel::Motion` objects (0x140 bytes) in
+`uModel::mMotion` (+0x380; count at +0x374). Field names are the MtDTI
+reflected ones (`research/dti/dti_props.py show uModel::Motion`): +0x04
+motion id, +0x40 `mInterFrame` (interpolation total), +0x44
+`mInterCount` (remaining), +0x4C frame (getter `mFrame`), +0x54
+`mFrameMax` (frame count - 1), +0x58 `mLoopFrame`, +0x5C `mSpeed`
+(rate), +0x60 the frozen-pose weight (not reflected), +0x6C
+`mInterCurve` (an `easecurve`). For layer 0, add 0x380 to get the uModel
+offsets in older notes (+0x3CC frame, +0x3D4 period, +0x3DC rate).
 
 **Default interpolation frames.** A negative length (every player action
 `ddsim` models passes -1.0, except `cPlCliffHang::vf05` 0x00ADCC50, which
@@ -88,12 +92,13 @@ dagger set `m0004_co` slot 17 (second jump) is 5.
    buffer (uModel +0xDD0), if the total is above `f32::EPSILON`. The old
    motion does not keep playing: the blend source is this frozen pose,
    which may itself be mid-blend.
-3. Every update (`0x01060730`): remaining -= the model's frame step
-   (uModel +0x14). The layer's rate does not apply to this. While remaining
+3. Every update (`0x01060730`): `mInterCount` -= the model's frame step
+   (`cUnit::mDeltaTime`, +0x14). The layer's `mSpeed` does not apply to
+   this. While remaining
    > 0 the weight is `ease(curve, remaining / total)`. At 0 the weight is 0
-   and the blend ends. The frame advances by rate × step.
+   and the blend ends. The frame advances by `mSpeed` × `mDeltaTime`.
 4. `ease` (0x00D4EBF0) is a cubic Bezier from 0 to 1 with inner control
-   values (p0, p1). Each layer's curve is copied (0x01056EC0) from the
+   values (p0, p1). Each layer's `mInterCurve` is copied (0x01056EC0) from the
    global 0x018D06A0. That global is in zero-initialised data and nothing
    writes it (all four references read it), so p0 = p1 = 0 and the weight
    is t³. Other curves of this form in the exe: (0, 1) smoothstep at
@@ -112,7 +117,7 @@ Otherwise it starts at 18 or 0 (field walk), 0 or 17 (town walk), or 20
 or 0 (run). `0x00AC5FB0` picks one by comparing two joints (probably the
 feet) along the facing.
 
-**Playback rate** (layer +0x3DC). Every request above passes rate 1.0.
+**Playback rate** (layer `mSpeed`, uPlayer +0x3DC). Every request above passes rate 1.0.
 `cPlActWalk::vf06` (0x00ACA1F0) then sets it to uPlayer +0x333C when
 uPlayer +0x32C0 == 1, else 1.0. `cPlActRun::vf06` (0x00ACA5D0) sets it to
 uPlayer +0x3340. The sprint actions never write it. No instruction stores
@@ -133,7 +138,8 @@ advances the fade by the frame time × 30, and mixes after sampling.
 ## Assumptions and gaps
 
 - The blend curve parameters (0, 0) come from static analysis (no writer
-  found). Check on the running game: uModel layer 0 +0x3EC / +0x3F0.
+  found). Check on the running game: layer 0 `mInterCurve` (uPlayer
+  +0x3EC / +0x3F0).
 - Within one update, the original's order of request, freeze, step and mix
   is not traced. The viewer freezes, steps, samples, then mixes, so the
   first frame after a change is already partly blended.
