@@ -92,3 +92,5 @@ Codex lane: see `docs/CODEX.md`.
 | [save-pawns](save-pawns.md) | Typed pawn knowledge/equipment from the save | reader | codex-1 | assigned |
 | [rift-ui](rift-ui.md) | The Rift menus: screens, strings, bindings | reader | codex-1 | assigned |
 | [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | assigned |
+| [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |
+| [lcm-camera](lcm-camera.md) | Cutscene camera-list reader | reader | codex-1 | assigned |
