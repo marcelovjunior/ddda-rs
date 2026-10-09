@@ -101,6 +101,23 @@ pub fn tension_band(value: f32, low: f32, high: f32) -> i32 {
     }
 }
 
+/// Wolf check5's horizontal cone from posed joint4 toward the unit's
+/// captured target point. This helper receives a full angle in radians;
+/// unlike check1, the original does not convert degrees here.
+// Translated from 0x008f5cc0 (DDDA.exe 2017-12-13 Steam).
+pub fn wolf_target_in_cone(joint4: Option<[f32; 3]>, target: [f32; 3], yaw: f32, angle: f32) -> bool {
+    let Some(joint) = joint4 else { return false };
+    let dx = target[0] - joint[0];
+    let dz = target[2] - joint[2];
+    let squared = dz * dz + dx * dx;
+    if squared <= f32::EPSILON || squared.is_nan() {
+        return false;
+    }
+    let inv = 1.0 / squared.sqrt();
+    let (sin, cos) = yaw.sin_cos();
+    inv * dx * sin + dz * inv * cos >= (angle * 0.5).cos()
+}
+
 impl HarpyThinkInputs {
     // Translated from 0x0093b470 and action query 0x009381e0
     // (DDDA.exe 2017-12-13 Steam).
@@ -183,6 +200,21 @@ mod tests {
         assert_eq!(tension_band(20.0, 10.0, 20.0), 2);
         assert_eq!(tension_band(10.0, 10.0, 10.0), 1);
         assert_eq!(tension_band(f32::NAN, 10.0, 20.0), 0);
+    }
+
+    #[test]
+    fn wolf_cone_uses_joint_horizontal_direction_and_radians() {
+        let joint = Some([10.0, 50.0, 20.0]);
+        assert!(wolf_target_in_cone(joint, [10.0, 500.0, 120.0], 0.0, 0.0));
+        assert!(!wolf_target_in_cone(joint, [10.0, 50.0, -80.0], 0.0, 1.0));
+        assert!(wolf_target_in_cone(
+            joint,
+            [110.0, 0.0, 20.0],
+            std::f32::consts::FRAC_PI_2,
+            1.0
+        ));
+        assert!(!wolf_target_in_cone(joint, [10.0, 500.0, 20.0], 0.0, 6.0));
+        assert!(!wolf_target_in_cone(None, [10.0; 3], 0.0, 6.0));
     }
 
     #[test]

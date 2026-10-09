@@ -594,3 +594,9 @@ current +0x5f0c below/equal +0x5efc as band1, above/equal +0x5f04 as band2,
 and between as band0; its low test runs first. Those thresholds come from
 the family's Tension resource (wolf loader `0x008f7b80`). The helper and
 its inclusive boundary behavior now have a regression test.
+
+Wolf local check5 now has the sourced posed-joint4 horizontal cone helper
+(`0x008f5cc0`). Its full angle is already radians, unlike check1; it
+normalizes only XZ and rejects missing joints or coincident horizontal
+points. Regression coverage includes facing, rear targets, yaw rotation
+and vertical-only separation. Connecting sensed targets remains host work.
