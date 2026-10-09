@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 ddstory = { path = "../ddstory" }
+ddlook = { path = "../ddlook" }
+ddsave = { path = "../ddsave" }
 bevy = "0.19.1"
 ddvfs = { path = "../ddvfs" }
 ddworld = { path = "../ddworld" }

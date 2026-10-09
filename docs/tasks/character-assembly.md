@@ -3,7 +3,7 @@
 - **Owner:** claude-7
 - **Branch:** `task/character-assembly`
 - **Board area:** `render/characters`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -39,4 +39,48 @@ coordinate on the board.
 
 ## Results
 
-(filled in by the agent)
+Details are in `docs/CHARACTERS.md`.
+
+**Done.**
+- **`ddlook` (new crate):** headless looks from `uActorModelPl::vf05`
+  0x0083e010.
+  - Readers for rEditPawn, rArmorTable, rArmorModel, rArmorModelNpc,
+    rArmorTableNpc and rArmorPartsOff.
+  - The 512-bit part mask.
+  - NPC event looks: set models (0x00841960) and the set's on/off mask
+    (0x00841e20).
+  - Dressed looks: equipment, hair and beard models (0x008407f0), and the
+    mask from rArmorPartsOff (0x008449b0 / 0x00bc1060).
+  - Save looks for the Arisen and the party pawns (`ddlook::save`).
+  - Tests:
+    - the ev10 NPCs' models and masks;
+    - every armour model path resolving;
+    - the private save's characters dressed with parts hidden.
+- **`ddview character.rs`:** `spawn_assembled` gives one skeleton. Part
+  bones bind to the base joints by joint id, and meshes are filtered by
+  the part mask. `spawn` keeps its signature for `main.rs` / `play.rs`.
+- **`ddview event.rs`:**
+  - event NPCs are assembled (Quina and the elder, outfits, hair, beard,
+    hair colour);
+  - `--save DDDA.sav` dresses the player actor as the saved Arisen;
+  - `--lineup DDDA.sav` shows the Arisen and pawns.
+  - Screenshots are described in CHARACTERS.md.
+- **Colours:** NPC hair and beard colour from the edit floats (traced),
+  applied as an albedo tint (approximation).
+
+**Not done (missing links named in CHARACTERS.md).**
+- **Morphs:** not applied. The face, body and human edit formats are
+  known, but their application through `uEditModel` / `rJointEx` was not
+  traced.
+- **Save colours:** the palettes for `mColor*` are unknown.
+- **Skin and eye colours.**
+- **Weapons.**
+- **Inferred:** the item -> piece link (item record +0x40, 640 matching
+  records) and the save hair/beard ids.
+- **Guessed:** no beard for female characters.
+
+**Housekeeping.**
+- `ddstory::look` still holds an older copy of the NPC readers; switching
+  it to `ddlook` is a small follow-up for the ddstory owner.
+- `crates/ddview/Cargo.toml` gained the `ddlook` and `ddsave` lines (asked
+  in #1021).

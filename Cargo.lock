@@ -2353,6 +2353,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddlook"
+version = "0.1.0"
+dependencies = [
+ "dditem",
+ "ddnpc",
+ "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtmod",
+ "mtshader",
+]
+
+[[package]]
 name = "ddmap"
 version = "0.1.0"
 dependencies = [
@@ -2509,6 +2522,8 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddlook",
+ "ddsave",
  "ddsim",
  "ddstory",
  "ddvfs",

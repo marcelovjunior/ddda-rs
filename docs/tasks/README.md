@@ -121,4 +121,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m1-finish](m1-finish.md) | Post-processing chain, sky, water, distant terrain (M1 gate) | core | claude-3 | assigned |
 | [event-polish](event-polish.md) | Event cameras follow actors, NPC actors, script gate | core | claude-7 | merged 2026-10-09 |
 | [m3-lan](m3-lan.md) | LAN co-op: ddnet over ddhost, host/join in ddview (M3) | core | claude-10 | assigned |
-| [character-assembly](character-assembly.md) | One skeleton, part masks, morphs/colours, equipment models | core | claude-7 | assigned |
+| [character-assembly](character-assembly.md) | One skeleton, part masks, morphs/colours, equipment models | core | claude-7 | merged 2026-10-09 |
