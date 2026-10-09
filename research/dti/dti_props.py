@@ -159,7 +159,7 @@ def scan():
 def show(name):
     data = json.load(open(OUT))
     chain = []
-    while name in data:
+    while name in data and name not in chain:  # some registry parents loop back
         chain.append(name)
         name = data[name]['parent']
     rows = []
