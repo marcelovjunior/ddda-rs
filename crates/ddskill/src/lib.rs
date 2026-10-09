@@ -6,7 +6,8 @@
 //!   vocation rank rules, translated from DDDA.exe.
 //! * [`vocation`]: vocation ids and the vocation-change rules.
 //! * [`catalogue`]: every skill and augment, joining `rSkillList`, tables read
-//!   at run time from the player's `DDDA.exe` ([`exe`]) and the game text.
+//!   at run time from the player's `DDDA.exe` (through `ddexe`) and the game
+//!   text.
 //!
 //! Every translated rule names its source address in DDDA.exe 2017-12-13 Steam
 //! (identity in `docs/METHODOLOGY.md`). Findings and open questions are in
@@ -14,7 +15,6 @@
 //! game.
 
 pub mod catalogue;
-pub mod exe;
 pub mod growth;
 pub mod skill_list;
 pub mod vocation;
@@ -29,3 +29,9 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<ddexe::Error> for Error {
+    fn from(e: ddexe::Error) -> Self {
+        Error(e.0)
+    }
+}

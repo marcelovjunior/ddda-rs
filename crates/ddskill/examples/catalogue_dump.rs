@@ -1,6 +1,7 @@
 //! Prints the skill and augment catalogue as tab-separated rows.
 //! Usage: cargo run -p ddskill --example catalogue_dump -- <nativePC> [DDDA.exe] [lang]
-//! The exe defaults to `<nativePC>\..\DDDA.exe`, the language to `eng`.
+//! The exe defaults to the one next to nativePC (`ddexe::locate`), the
+//! language to `eng`.
 use ddskill::catalogue::{Catalogue, ExeTables, Text};
 use ddskill::skill_list::SkillList;
 use std::path::PathBuf;
@@ -11,10 +12,11 @@ fn main() {
     let exe_path = args
         .get(2)
         .map(PathBuf::from)
-        .unwrap_or_else(|| native.parent().unwrap().join("DDDA.exe"));
+        .unwrap_or_else(|| ddexe::locate(&native).expect("DDDA.exe next to nativePC"));
     let lang = args.get(3).map(String::as_str).unwrap_or("eng");
     let vfs = ddvfs::Vfs::open(&native).expect("open install");
-    let exe = ExeTables::from_exe(&std::fs::read(&exe_path).expect("read DDDA.exe")).expect("exe tables");
+    let file = ddexe::ExeFile::open(&exe_path).expect("read DDDA.exe");
+    let exe = ExeTables::from_image(&file.image().expect("supported DDDA.exe")).expect("exe tables");
     let list = SkillList::from_bytes(
         &vfs.read(SkillList::PATH, mtarc::type_hash(SkillList::RESOURCE_CLASS)).unwrap(),
     )

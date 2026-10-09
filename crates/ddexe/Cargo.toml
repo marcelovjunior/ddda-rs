@@ -1,0 +1,9 @@
+[package]
+name = "ddexe"
+version = "0.1.0"
+description = "Read-only access to data tables in the player's installed DDDA.exe"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

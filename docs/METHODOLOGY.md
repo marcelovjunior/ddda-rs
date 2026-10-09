@@ -45,6 +45,32 @@ port it", and it is not matching decompilation.
 
 Every address in this repo refers to this build.
 
+## Reading tables from the installed exe
+
+Bulk tables that the exe holds as data (skill records, name tables, action
+tables, event tables) are never copied into the repo (constants policy in
+`AGENTS.md`). Code reads them at run time from the player's own
+`DDDA.exe` through the `ddexe` crate:
+
+- `ddexe::locate(native_pc)` finds `DDDA.exe` next to `nativePC`;
+  `ExeFile::open` / `ExeFile::next_to` read it.
+- `Exe::parse` refuses every build but PE timestamp 1513180209, with a
+  message naming both builds' dates. Addresses are the build's virtual
+  addresses, as everywhere in the repo.
+- `Exe::bytes(va, len)` maps an address to file bytes and refuses ranges
+  that leave the file-backed part of a section (the zero-filled tail of
+  `.data` is not in the file). Typed reads build on it: `u8`..`f32`,
+  `u16s`/`u32s`/`f32s`, `cstr`, `record` / `records` with typed field access.
+- `Exe::class_names()` names reflected classes: the `MtDTI` objects live in
+  uninitialised `.data`, so the names come from the registration calls
+  `push name; mov ecx, dti; call 0x00cf5780` in `.text`.
+
+The installed exe is wrapped by SteamStub, but `.text`, `.rdata` and the
+file-backed `.data` have the same bytes as the unpacked analysis copy
+(compared for every table read so far), so no unpacking is needed. Each
+reader names its table's address and its exe user, and has an install test
+that skips when the game is absent (`DDDA_NATIVE_PC`, `DDDA_EXE`).
+
 ## Tools
 
 - Ghidra 12.1.4 with JDK 21; the project is `E:\ddda-re\ghidra\DDDA.gpr`.

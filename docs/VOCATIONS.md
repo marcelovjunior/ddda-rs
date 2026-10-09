@@ -844,11 +844,11 @@ outside Mage and Sorcerer.
 - `vocation`: ids, names (labels), weapon categories, skill ranges, stamina
   tables, motion banks, change cost, unlock flags, offered lists. Tests:
   masks against the exe table values, costs, lists; install: names.
-- `exe::Exe`: read-only access to the player's DDDA.exe (PE timestamp
-  check, VA to file offset, strings, class names from `MtDTI` constructor
-  calls). The tables are the same bytes in the installed Steam exe and the
-  unpacked analysis copy. Nothing from the exe is committed.
-- `catalogue`: `ExeTables::from_exe` (skill records, text table, augment
+- The exe is read through the shared `ddexe` crate (PE timestamp check, VA
+  to file offset, typed reads, class names from `MtDTI` registration
+  calls; METHODOLOGY.md, "Reading tables from the installed exe"). Nothing
+  from the exe is committed.
+- `catalogue`: `ExeTables::from_exe` / `from_image` (skill records, text table, augment
   names, action tables, motion lists) and `Catalogue::build`, which joins
   them with `rSkillList` and the text into `Skill` (levels with names,
   commands, costs and ranks; vocations; weapons; action id, class and
