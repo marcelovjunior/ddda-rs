@@ -160,10 +160,13 @@ stops (cFSMOrder +0x70 bit 0; 0x0078c830).
 
 ### Per-state bookkeeping
 
-On every state change of the root machine the owner's vf05 runs
-(cBaseFSM ctor registers 0x00749820 through 0x00e05720 for level 0,
-called at 0x00e0940e). For cFSMOrder (0x005bacd0) it clears the 32
-**FreeFlag** bits and **mCntState**. Each frame 0x005bac30 adds
+On every state change, at any level (the root or a sub-machine), the
+owner's vf05 runs (cBaseFSM ctor 0x00749820 registers it through
+0x00e05720 as the core's callback [esi+0xa0], called from the driver
+0x00e092a0 at 0x00e0940e). For cFSMOrder (0x005bacd0) it clears the 32
+**FreeFlag** bits, **mCntState** and the event step counter (+0x6c).
+(An earlier version of this page said "root machine only"; the callback
+is per core, not per level.) Each frame 0x005bac30 adds
 `max(mDeltaTime, 0.01) / mFps` (seconds) to mCntState, mCntFSM and the
 active FreeReal timer. So `FreeFlag[n]` in a condition means "a process
 of this state reported result n", and `mCntState > 60.0` "60 s in this
@@ -378,7 +381,8 @@ shape is tested against `mDetectAttr` (bit 0 = the player) and
 `mBootType` decides when to fire: 0 every frame, 2 while inside, 3 once,
 4 on each entry, 5 on a button press inside (prompt), 6 the same once,
 8 once with a prompt, 10 on leaving (reading of 0x00797df0; the button
-source is untraced). Firing calls the task's handler (0x00798ce0):
+is the player's interact, uPlayerBase vf204 0x00b6eac0 setting sScenario
++0x108; boot type 7 is not translated). Firing calls the task's handler (0x00798ce0):
 GsfFlag 0x007997c0, BootFSM 0x00799ca0, Etc 0x0079d010, ...
 
 `AreaHit (task, no)` in a script addresses entry `no` of the current
@@ -467,6 +471,237 @@ night, stage 100):
 
 Not checked live: anything about events, QCT evaluation order, timing.
 
+## Runtime (`crates/ddstory`)
+
+A headless story runtime: world state plus the interpreters for scripts,
+QCT and scenarios. It never renders. Everything visible is a
+**request** to the host, and the host answers with **host events**.
+The host owns the one `Story`; with N players it feeds every player's
+position in and routes per-player requests (menus) back out
+(`docs/COOP_DESIGN.md`).
+
+### Contract
+
+`Story::tick(&Inputs, &dyn Host) -> Result<Vec<Request>, Error>`, once
+per frame.
+
+- **Inputs:** `time` (delta, fps), the Arisen `players` (position and
+  yaw), `pawns`, `npcs` (with ids), `enemies`, `interact` (which player
+  pressed interact) and `events`.
+- **HostEvent:** EventFinished, CameraFinished, MessageFinished,
+  MenuClosed, StageLoaded, FadeBlack, PlayerJob, and SetGsf /
+  SetQuestBit. SetGsf and SetQuestBit carry flags written by AI that the
+  host runs, e.g. the NPC script `q0002_n001_ai` (GSF 381) and the
+  dragon's `dragon_op` (q0000 bits 20, 21, 5).
+- **Host (queries):** layout and group state, enemy and NPC checks, unit
+  HP, player checks (`PlCheck` kinds 2-10), items held (QCT judgment
+  16), and whether an applied AI script has finished.
+- **Request:** PlayEvent {row, stage, event}, PlaceParty, JumpArea,
+  OpenMenu {menu, player}, Message, QuestBanner, Reward (from
+  rQuestReward), Marker, SetClock, Layout, PlaceName, Weather, Tutorial,
+  Placement, Group, NpcLife, ApplyScript, Collision, Camera, CameraEnd,
+  Scenario (ladder, cam and mes entries the story does not interpret,
+  and a notice after a pawn entry fires) and
+  Order (sound, music, shake, shell).
+- **Error::Unimplemented** names the order, variable, judgment or
+  branch that is not translated. Nothing is skipped silently.
+  **Error::Data** is a missing or bad file.
+
+`World` holds:
+- SceNo and its band;
+- the stage number and start position;
+- GSF (1536 bits);
+- quest bits (96 per quest);
+- layout flags per stage index (table 0x01530348);
+- AreaHit and AreaStay flags;
+- the clock;
+- NPC friend and death bits;
+- OM flags;
+- the player's sex and job.
+
+`World::save` / `load` write the "DDST" v1 format. This is our own
+format, not cSAVE_DATA_STAGE.
+
+### Frame order
+
+Each `tick`:
+1. Host events.
+2. A pending event request becomes "playing".
+3. Scenarios: detect, then evaluate (0x00797df0).
+4. The quest manager: QCT, one row per quest (0x007922f0).
+5. Stage scripts.
+6. Quest scripts.
+
+Each script runs one frame of the driver below, then the cFSMOrder
+wrapper (vf06 0x005babb0). Its timers advance (0x005bac30), the camera
+slot ticks (0x005c4340), and Finish stops it.
+
+The order of these system phases is **guessed**: the original runs them
+as separate task lists, and their relative order was not traced.
+
+### Script driver (0x00e092a0)
+
+Per level, root first:
+1. Transitions are checked (0x00e06710: the "from all" states, then the
+   links via 0x00e05800), unless the state's mSetting bit 1 is set.
+2. On a transition, a new level or the first frame:
+   - the levels below are exited (0x00e06800);
+   - the next state is entered (sub-levels via 0x00e06a50 / 0x00e06af0);
+   - the owner callback resets FreeFlags, mCntState and the event step;
+   - each process's **update** handler (record +0x50) runs once.
+3. Every frame, each process's **state** handler (+0x54) runs.
+4. With mSetting bit 1, transitions are checked after the handlers.
+5. Bit 2 (or bit 4 after a transition) runs the level again in the same
+   frame.
+
+Handlers are bound by name (cAIFSMNode vf05 0x010c9030): the first
+registered function is "update", the second is "state". Their return
+values are ignored.
+
+The condition evaluator follows the operation node 0x0117c040, the
+operator dispatch 0x0117bd30 and the typed compare, and/or and bit
+routines (0x01179d50, 0x0117ad10, 0x0117b200, 0x0117b590). One detail:
+a float's own truth value is false.
+
+Variables bind **by property name** on the running cFSMOrder, whichever
+owner class the condition names (cFSMOrderOM, cFSMEvent appear in quest
+files). This is *guessed*: the binder was not traced.
+
+### Translated orders
+
+Each handler in `src/orders.rs` cites its routine.
+
+- **Flag, SceNo, FreeIns, SetTimer, SetGameHour, TimeJump:** as in the
+  Orders table above.
+- **Event:** request, then a result once the stage reports the event
+  over (0x005bcb70, 0x00516ec0).
+- **SetLayout:** includes the stage-100 rule for flags 0x9e, 0xa8 and
+  0xaa (0x00443ca0).
+- **CheckLayout, QuestFlag, BootQuest (0x00484000), JumpArea, Message,
+  TutorialMessage (0x005c6430 main path), PlaceName, Weather,
+  CmcMessage:** as in the Orders table.
+- **Camera:** the simple event, slot states 0-3, and the SceNo raise at
+  the end (0x005c4790).
+- **AreaHit:** update mAct 0/1; state acts 2, 3, 4 and 6. Acts 5, 7 and
+  8 are errors.
+- **ClockCheck, PlCheck:** PlCheck kinds 0/1 are errors.
+- **Finish:** 0x007497e0.
+- **Placement orders:** EnemySet, NpcSet, ItemSet, OmSet and the
+  *Group orders (0x005bd6c0, 0x005bdec0).
+- **Checks and actor orders:** EnemyCheck (0x005bef10; the quest
+  sub-objective branch is an error), NpcCheck, NpcDieCheck, NpcAlive,
+  ApplyFSM, Collision, CheckHp.
+- **Passed to the host:** SE Request, BattleBGM, StartQuake, SetShell.
+
+Every other order of the 70 returns `Unimplemented`.
+
+### QCT and quests
+
+- **Evaluation:** one row per pass. A row fires when every judgment
+  holds and the row is not disabled. Its results then run (0x0078fbb0),
+  and the row is disabled unless one result is type 22. A first result
+  of type 1 jumps to another table.
+- **Judgments:** 0-4, 10-12, 16, 23, 24, 32 and 33.
+- **Results:** 1-9, 16, 17, 19, 20, 22, 23, 30, 31, 60 and 61.
+- **Other types:** `Unimplemented`.
+- **Quest boot** (0x00483f20) refuses a branch-0 story quest with bit 94
+  or 93 set.
+- **At stage 800 with SceNo 1000,** q0000 and q0031 boot (0x004827e0).
+- **Stage scripts that start on load** are every rAIFSM in the stage
+  archive whose path contains `fsm\fix`, in archive order (0x005081a0).
+  Stages 800-804 are skipped.
+
+### Scenarios
+
+- Each entry is first gated:
+  - its status (bit 4 = disabled);
+  - its GSF gate (0x00798620, reversed for task 9).
+- The shape is then hit-tested at unit position + 25 in y (0x007435b0):
+  - zones: area quad 0x00fca970, sphere 0x00d134f0, cylinder
+    0x00d19cb0, OBB 0x00d1bc60, AABB 0x00767a50;
+  - angle filter 0x00745380;
+  - toward filter vf10 0x007432f0 (atan2 operand order *guessed*).
+- Boot types 0-10 are implemented except 7, in priority order 0-8.
+- Task handlers:
+  - 1: AreaHit/AreaStay flags;
+  - 2: JumpArea;
+  - 3: GSF;
+  - 4: StartScript;
+  - 9: pawn flag lists (0x0079c970);
+  - 10: etc. Act 0 asks for the vocation menu (stage mode 0x19,
+    0x00512fb0). Closing it sets GSF 372.
+- Tasks 6-8 go to the host as `Request::Scenario`. Tasks 5 (chp) and
+  11 (npc) are `Unimplemented`.
+
+**Co-op rule (a design decision, not the original's):** detection bit 0
+("the player") is set when any Arisen is inside. The interact press and
+the menu it opens belong to the player who pressed it.
+
+### Prologue end
+
+0x00444c20 sets 27 GSF and 272 layout flags, and revives 6 NPCs. The
+values are `mov [esp+d], imm` immediates, decoded at run time from the
+player's DDDA.exe (`exe::PrologueEnd`, checked against the PE timestamp
+of the 2017-12-13 Steam build). They are never copied into the
+repository.
+
+The installed exe's `.text` is not encrypted: its bytes equal an
+unpacked copy at 0x00401000, 0x00444c20 and 0x005b7a60. Without the exe
+this step fails with `Unimplemented`.
+
+### The opening test
+
+Test `crates/ddstory/tests/opening.rs` (run it with
+`cargo test --release -p ddstory`). It skips when the install is absent;
+`DDDA_NATIVE_PC` and `DDDA_EXE` override the paths.
+
+`route::opening()` stands one Arisen in 22 scenario volumes in turn
+(positions come from the loaded rScenario data). `ScriptedHost` answers
+the requests with fixed delays: events 90 frames, cameras 60, messages
+30. It plays the AI the story waits on:
+- the dragon's quest bits at camera 17;
+- GSF 381 after `ApplyScript q0002_n001_ai`;
+- enemies defeated 600 frames after they are first counted;
+- the vocation menu closing with a job.
+
+The test asserts:
+- **SceNo ladder:** 100, 200, 350, 370, 650, 750, 800, 850, 1000, 1025,
+  1050, 1100, 1200, 1300, 1400.
+- **Quest boots:** 28, 0, 31, 1, 2.
+- **Event rows:** 62 (st380 ev00), 0 (st100 ev00), then 19-23 (st200
+  ev00, 01, 05, 10, 15).
+- **Checkpoints:**
+  - prologue end: SceNo 1000 at stage 800, q0028 bit 94 set;
+  - after st200 ev05: SceNo 1100, q0000 bits 2, 5, 20, 21 and 30;
+  - room exit: SceNo 1200, GSF 372, q0001 bits 3 and 95.
+- **End state, against claude-4's live read:**
+  - q0001's words equal the live words `[0x18000000, 0, 3]`;
+  - q0000's third word is 2, and its first word is a subset of the live
+    `0xe43e0c03` that includes bits 0 and 31;
+  - GSF 88, 372, 378 and 381 are set; 360, 377, 520 and 530 are clear;
+  - q0001's reward is gold 2000, exp 50, rift 3, items (64,1), (1,5),
+    (43,5);
+  - the world survives a save round trip.
+
+**Known differences and unverified points:**
+- **SceNo 150 and 600 never appear** on our ladder.
+  - 150: `set_00` sets 200 two frames in, before the `100ck_evmes`
+    camera ends.
+  - 600: the harpy simple camera ends on the tick after it reaches state
+    3 (0x005c4340). That is before its act-1 Camera order runs.
+  - Both follow the translated code but are not checked live.
+  - 900 is raised and forced to 1000 in the same frame.
+- **GSF 36, 92, 157, 203, 704 and 1257** are set in our run but clear in
+  the live save at SceNo 3400. They may be cleared later in the story;
+  checking needs a live read near SceNo 1400.
+- **Guessed:**
+  - the order of the system phases;
+  - the variable binder;
+  - the atan2 operand order;
+  - the request bit 0x20000 condition for the q0000 boot;
+  - the sGameSys +0xb8844 & 0x40000 test at the prologue end.
+- **Timing** is the scripted host's, not the original's.
+
 ## Open questions
 
 - The prologue's exact path to stage mode 0x11, and stage 800/801's
@@ -474,14 +709,16 @@ Not checked live: anything about events, QCT evaluation order, timing.
 - QCT judgment/result types not in the tables above; the QCT trailer;
   whether `mQuestCtrlFlg` saves the disabled-row mask.
 - How `Message` mMesId selects a line (GMD index or MSS row).
-- Scenario detection bits other than the player; the button source.
+- Scenario detection bits beyond the player (bits 1-3 pawns, 0x10 any
+  member, 0x20 enemies, 0x40 NPCs are read from 0x00797df0 but only
+  the player and NPC bits are exercised by the opening).
 - The GPL field that names a group's layout flag.
 - NPC think-script orders (cThinkFSM::*) and their handlers.
 - Board quests (rQuestInfinity) and sudden quests in detail.
 
 ## Proposed implementation briefs
 
-1. **quest-runtime** (core, `ddquest` -> new `ddstory` sim crate):
+1. **quest-runtime** (done: `crates/ddstory`, see Runtime) (core, `ddquest` -> new `ddstory` sim crate):
    `StoryFlags` + a cFSMOrder interpreter for the orders in the table
    above (Flag, QuestFlag, SceNo, SetLayout, CheckLayout, BootQuest,
    AreaHit, Event request, Finish), per-state FreeFlag/mCntState reset,
@@ -494,7 +731,7 @@ Not checked live: anything about events, QCT evaluation order, timing.
    motions (mtlmt), subtitles (mtgmd), fades; the stage event mode
    (request, freeze, place, raise SceNo). Done when st200 ev10 plays
    with camera cuts at frames 460, 670, ... and returns control.
-3. **scenario-triggers** (core): rScenario reader + per-frame evaluation
+3. **scenario-triggers** (done inside `ddstory`) (core): rScenario reader + per-frame evaluation
    (gate, shape test, boot types) for tasks fsm, gsf, flag, etc, mes,
    door. Done when st200's scenarios drive q0001 (shelf scene, weapon
    table, room exit) with a scripted walk.
