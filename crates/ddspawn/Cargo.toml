@@ -1,0 +1,16 @@
+[package]
+name = "ddspawn"
+version = "0.1.0"
+description = "Dragon's Dogma: Dark Arisen enemy spawns: layout groups by stage cell, gated by layout flags, clock, day and story"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtlot = { path = "../mtlot" }
+ddsave = { path = "../ddsave" }
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+ddmap = { path = "../ddmap" }

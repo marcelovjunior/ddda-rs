@@ -2365,8 +2365,10 @@ dependencies = [
  "ddprogress",
  "ddquest",
  "ddrift",
+ "ddsave",
  "ddsim",
  "ddskill",
+ "ddspawn",
  "ddstory",
  "ddvfs",
  "ddworld",
@@ -2549,6 +2551,17 @@ dependencies = [
  "ddvfs",
  "mtarc",
  "mtgmd",
+]
+
+[[package]]
+name = "ddspawn"
+version = "0.1.0"
+dependencies = [
+ "ddmap",
+ "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtlot",
 ]
 
 [[package]]
