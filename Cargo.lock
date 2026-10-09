@@ -2281,6 +2281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddcombat"
+version = "0.1.0"
+dependencies = [
+ "ddenemy",
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "ddenemy"
 version = "0.1.0"
 dependencies = [
