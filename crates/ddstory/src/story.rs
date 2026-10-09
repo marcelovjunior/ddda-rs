@@ -78,6 +78,9 @@ pub struct StageState {
     pub camera_running: bool,
     /// A message requested by an order is on screen.
     pub message_showing: bool,
+    /// Priority-1 pawn-message availability (0x00634090), or no GUI.
+    /// IsDispCmcMess is false only when exactly three slots are available.
+    pub pawn_message_slots: Option<u32>,
     /// A menu opened by a request is open (the stage is in its mode, e.g.
     /// 0x19 for the vocation menu).
     pub menu_open: bool,
@@ -141,6 +144,9 @@ impl<D: Data> Story<D> {
         world.stage_no = 380;
         world.start_pos = 0;
         world.set_sce_no(100, false);
+        // Translated from 0x00445be1 (DDDA.exe 2017-12-13 Steam):
+        // sGameSys+0xaee78 bit 31, stage-index 12's layout flag zero.
+        world.set_lot(380, 0, true);
         Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0 }
     }
 
@@ -323,6 +329,7 @@ impl<D: Data> Story<D> {
                 HostEvent::FadeBlack(b) => self.stage.fade_black = *b,
                 HostEvent::CameraFinished => self.stage.camera_running = false,
                 HostEvent::MessageFinished => self.stage.message_showing = false,
+                HostEvent::PawnMessageSlots(slots) => self.stage.pawn_message_slots = *slots,
                 HostEvent::MenuClosed(Menu::Vocation) => menu_closed = true,
                 HostEvent::SetGsf { no, value } => self.world.gsf.set(*no as usize, *value),
                 HostEvent::PlayerJob(j) => self.world.player_job = *j,
@@ -377,6 +384,13 @@ impl<D: Data> Story<D> {
         // (0x00516fc0).
         if self.stage.event.playing.is_none() {
             if let Some(req) = self.stage.event.pending.take() {
+                // Translated from event setup 0x0050c290, case 0x17,
+                // calling 0x00440190 (DDDA.exe 2017-12-13 Steam).
+                // Recruitment precedes the movie/event start: story stock
+                // 14 becomes pawn slot 1 (overall party member 2).
+                if req.row == 0x17 {
+                    out.push(Request::StoryPawn { stock: 14, slot: 1 });
+                }
                 out.push(Request::PlayEvent { row: req.row, stage: req.stage, event: req.event });
                 self.stage.event.playing = Some(req);
                 self.stage.event.started = true;

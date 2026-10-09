@@ -53,3 +53,26 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Still open: real encounter integration, field traversal, first-pawn
   dialogue, pawn party/body setup and original goblin visual comparison.
   The brief is not complete and q0002 is not yet playable through clear.
+
+### Implementation checkpoint after cable recovery
+
+- Event-table row 23 now emits `StoryPawn { stock: 14, slot: 1 }` before
+  `PlayEvent`, once per preparation (`0x0050c290`). Host recruitment reads
+  stock through the lightweight runtime reader, installs the shared Rift
+  party record and resets Rook's bag to the five equipped items plus one
+  item 64 (`0x00440190`, `0x0045ece0`, `0x0045e680`). It respects the guest's
+  reserved slot and repeat delivery cannot duplicate inventory. Equipment
+  derived active stats and a moving/rendered pawn body remain open.
+- q0002 rescue is optional: installed `scr\st100\fsm\q0002_event2` sets
+  bit 10 and boots q0003. The main script clears q0002 without any reported
+  enemy death; it waits until leaving stage 100 before raising SceNo 1450.
+  This is tested with explicit encounter facts, not timed fake kills.
+- Implemented `IsDispCmcMess` from `0x005bb320`: missing message GUI is
+  busy; otherwise priority-1 availability (`0x00634090`) must equal 3 to
+  report idle. `HostEvent::PawnMessageSlots` supplies that observation.
+- Also restores original new-game layout flag 380:0, from `0x00445be1`,
+  coordinated with the prologue brief; its source regression belongs there.
+- Tested: five story regressions and one host recruitment regression pass.
+  Rook's record round-trips through the existing Rift save, and two seats
+  share it. Not compared with an original recruitment capture; no claim
+  that the whole quest or goblin fight is playable yet.
