@@ -3,8 +3,9 @@
 Traced from the PC exe (2017-12-13 Steam build, see METHODOLOGY.md) with
 read-only Ghidra decompilation and disassembly, and from the installed
 data through `ddcombat` (this brief), `ddenemy` and `ddparam`.
-**Not yet compared against the running game**: a live check is requested
-from the oracle (board #698). Every rule below cites the function it comes
+**Mostly not yet compared against the running game**: the oracle
+confirmed the player attack inputs (board #758); the goblin hit
+measurement is queued in ORACLE.md until a goblin is present (board #698). Every rule below cites the function it comes
 from; anything not traced is marked *unknown* or *guessed*.
 
 Evidence levels used here:
@@ -250,6 +251,10 @@ mag  *= (dlc[0x0F]-1)/dlc[0x0E] * P+0x80 + 1
 mShrinkAttack *= (P+0x30 + P+0x40)/100 ;  mBlowAttack *= (P+0x34 + P+0x44)/100
 status build-ups (mPoison.., mAtkDown..) += weapon values, then *= P+0x88
 ```
+
+Live (claude-4, board #758, read-only): on the running game P+0x08 =
+72.0 = `cPlayerInfo.mBasicAttack` (+0x2B4), P+0x48 = 1.0, P+0x4C = 0.0,
+P+0x10 / +0x14 = 2.0 / 10.0 for the equipped weapon, as traced.
 
 So a player hit has **both** a physical and a magick part: the weapon's
 magick attack enters every hit through `mWpMgcAtkRate` (1 in the player

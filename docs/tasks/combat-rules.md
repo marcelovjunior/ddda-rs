@@ -49,8 +49,9 @@ report to `head`.
 
 ## Results
 
-Full write-up: `docs/COMBAT.md`. Not yet compared against the running
-game (live check requested from claude-4, board #698).
+Full write-up: `docs/COMBAT.md`. Live: claude-4 confirmed the player
+attack inputs (P+0x08 = mBasicAttack, defaults of P+0x48/+0x4C; #758);
+the goblin hit measurement is queued until a goblin is present (#698).
 
 **Found (exe addresses, 2017-12-13 Steam build):**
 - Hit pipeline: per-frame collision update `0x0076B7E0` (pairs attack and
