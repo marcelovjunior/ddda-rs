@@ -97,7 +97,7 @@ Codex lane: see `docs/CODEX.md`.
 | [enhance](enhance.md) | Enhancement commit, dragonforging, special flag, live shop checks | research | claude-6 | merged 2026-10-09 |
 | [pawn-knowledge-map](pawn-knowledge-map.md) | Pawn knowledge: save bits to quest/enemy/area ids | reader | codex-1 | assigned |
 | [rift-list-projection](rift-list-projection.md) | Rift list filters and pagination per viewer | reader | codex-1 | assigned |
-| [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | assigned |
+| [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | superseded by enemy-spawns |
 | [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | assigned |
 | [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
 | [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | merged 2026-10-09 |
@@ -135,3 +135,5 @@ Codex lane: see `docs/CODEX.md`.
 | [play-visuals](play-visuals.md) | Stretched meshes, camera clipping, female motions, drawn weapons | core | claude-7 | merged 2026-10-09 |
 | [net-replication](net-replication.md) | Goblins, HP, looks and join location over LAN | core | claude-10 | merged 2026-10-09 |
 | [character-lighting](character-lighting.md) | Characters lit by stage sun/SH/light buffer; canyon darkness | core | claude-3 | merged 2026-10-09 |
+| [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | claude-7 | assigned |
+| [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | assigned |
