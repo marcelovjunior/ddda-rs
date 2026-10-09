@@ -192,3 +192,23 @@ fn debug_trace() {
         );
     }
 }
+
+/// The inclination effect: Guardian at status 2 (value >= 750) adds 3 to
+/// the battle follow entry (Wait_Follow-01 code 4, `+3[5/2]` in
+/// `AI\PrioThink\cmc`), which drops it from level 1 to level 4, behind the
+/// battle entry (Enemy-04 code 7: same level, lower group). A pawn 25 m from
+/// its Arisen with a goblin next to it follows first when neutral and
+/// fights first as a Guardian.
+#[test]
+fn guardian_fights_before_following() {
+    let Some(data) = data() else { return };
+    let first_goal = |incl: [f32; 9]| {
+        let mut b = Bout::new(data.clone(), [0.0, 0.0, -2500.0], Some([0.0, 0.0, -2100.0]), incl);
+        b.frame(Input::default());
+        b.pawn().history[0].0
+    };
+    assert_eq!(first_goal(NEUTRAL), GOAL_FOLLOW);
+    let mut guardian = NEUTRAL;
+    guardian[ddpawnai::incl::GUARDIAN as usize] = 800.0;
+    assert_eq!(first_goal(guardian), GOAL_SWORD);
+}
