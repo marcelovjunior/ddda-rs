@@ -289,3 +289,8 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   The current installed controller regression's NPC 2 is deliberately a
   daily-graph suspension fixture, not a claim that its actor owns q2 talk.
   Scope extension for ddexe dependency is proposed on board #2328.
+
+- Replacement regression now changes identity while the old applied graph is
+  actively waiting for talk. A later old-actor TalkEnd cannot emit movement,
+  Finish or GSF381 during 600 further frames. All nine host story_pawns tests
+  pass; the separate normal-controller restoration regression remains intact.

@@ -131,6 +131,35 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
 }
 
 #[test]
+fn replacing_waiting_npc_retires_action_before_talk_can_advance_it() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ScriptedHost::default(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(
+        ddhost::ddnpcrt::InstallData::open(native, "eng").unwrap()));
+    let target = ddstory::Target { kind: 5, group: 1, index: 0 };
+    host.bind_story_npc(200, target, 1);
+    host.apply_story_npc(200, target, r"ai\fsm\npc\st200\quest\q0002_n001_ai");
+    for _ in 0..300 { host.tick(&Default::default()).unwrap(); }
+    assert!(!host.story_npc_action(1).unwrap().3, "replace while still waiting");
+    host.bind_story_npc(200, target, 304);
+    assert!(host.story_npc_action(1).is_none());
+    assert!(host.story_npc_action(304).is_none());
+    host.observe_story_npc_talk_end(1);
+    for _ in 0..600 {
+        let out = host.tick(&Default::default()).unwrap();
+        assert!(out.npc_requests.is_empty(), "retired graph cannot emit actor requests");
+        assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
+    }
+}
+
+#[test]
 fn installed_q2_goblin_script_indices_are_layout_record_ids() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)
