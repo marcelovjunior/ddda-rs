@@ -709,6 +709,12 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
     if let Some(b) = src.resource(&edit.human_edit, "rHumanEdit")? {
         look.body = Some(morph::body_morph(&morph::HumanEdit::parse(&b)?, &|_| true));
     }
+    // 0x0083fa60 loads the NPC body resource via 0x0080add0 but skips
+    // 0x0080bb10. Thus the separate bust value stays at the controller
+    // constructor's zero; edit.floats[18] is an eyebrow offset, not bust.
+    if let Some(b) = src.resource(&edit.body_edit, "rBodyEdit")? {
+        look.body_shape = Some(body::Edit::parse(&b, 0.0)?);
+    }
     // And the face edit (edp path 3); NPC face parameters stay zero
     // (0x0083fa60 does not call 0x0080bb10 for them).
     if let Some(b) = src.resource(&edit.face_edit, "rFaceEdit")? {

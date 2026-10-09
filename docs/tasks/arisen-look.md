@@ -73,3 +73,16 @@ passes its actual edit fields to `edit_look`; further investigation remains.
   skeleton measurement integration and special constraint types remain
   separate work. Bulk tables are read during character construction;
   caching can follow if profiling shows meaningful startup cost.
+
+### NPC body resource follow-up
+
+`0x0083fa60`'s NPC branch also invokes `0x0080add0` for the authored
+`rBodyEdit`. It skips `0x0080bb10`, so the bust parameter stays at the
+controller constructor's zero. In particular, the NPC edit floats at
++0x108 are eyebrow offsets and must not be interpreted as the player's
+bust field. The NPC look builder now parses its named body resource and
+uses the same renderer path. An installed male/female NPC regression
+checks 37 authored scales, zero bust, finite computed scales and their
+binding to the base skeleton. Both appearance integration tests and strict
+ddlook clippy pass. Release viewer build passed; no original
+NPC comparison is claimed.
