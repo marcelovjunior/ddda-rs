@@ -253,11 +253,99 @@ the sun, applies the linear depth fog, and turns off Bevy's tone mapping.
 
 **Compared** (claude-4's read-only day series, private
 `E:\ddda-re\shots\refs-lit`, same camera pose as the capture): the sunlit
-wedge and the shadow edge of the 09:46 capture line up; mean colour of a
-ground region (8-bit sRGB) ref vs ours: 09:46 (79,80,68)/(100,102,88),
-12:21 (30,39,40)/(36,47,48), 15:00 (26,34,34)/(43,55,56), 17:45
+wedge and the shadow edge of the 09:46 capture line up. Mean colour of a
+ground region (8-bit sRGB, box 400..1200 x 450..700 of 1600 x 900) ref vs
+ours, before the post chain: 09:46 (79,80,68)/(100,102,88), 12:21
+(30,39,40)/(36,47,48), 15:00 (26,34,34)/(43,55,56), 17:45
 (26,34,34)/(30,40,41), 20:21 (12,16,17)/(14,21,22), 23:04 (5,9,11)/(3,6,7).
-Ours is 15-25 % brighter by day, slightly darker at night.
+With the post chain (below): 09:46 (79,80,68)/(90,91,78), 12:21
+(30,39,40)/(31,40,41), 15:00 (26,34,34)/(37,48,48), 17:45
+(26,34,34)/(25,34,35), 20:21 (12,16,17)/(12,17,18), 23:04 (5,9,11)/(1,4,5).
+A second, character-free ground box (100..500 x 100..300) gives ours / ref
+sums of 1.17, 1.00, 1.39, 1.00, 0.98 for 09:46 .. 20:21: three of the five
+day captures match within 2 %, 09:46 is 13-17 % bright, 15:00 (all ground in
+the rock's shadow) 39 % bright; night is too dark (no moon or point lights).
+
+## Post chain — data + traced shaders
+
+Stage 100's filter scheduler `scr\st100\sdl\st100_f00` creates three
+filters (no bloom filter in it):
+- `ImagePlaneFilter` (priority 1): `scr\sky\camera_shadow_NOMIP_BM`, black
+  with a vignette in alpha, times `mColor` (1, 1, 1, 0.5), blended over the
+  frame (blend type 1, *assumed* SrcAlpha / InvSrcAlpha): a vignette in the
+  sRGB frame buffer.
+- `DOFFilter` (priority 16): not done.
+- `ColorCorrectFilter` (priority 26000): `ToneCurveRGB` is an
+  MtHermiteCurve (8 x, 8 y; here x 0, 0.2, 1 / y 0, 0.155738, 1) rendered
+  into a table by the pixel shader at file offset 0x47800C of
+  `sc\dx9\root` (`mtweather::post::tone_curve`, translated, regression
+  test against the shader), raised to `mGamma` (1) and applied per channel
+  to the linear colour; the colour matrix (`mCorrector`) is empty.
+
+The viewer (`post.rs`, `dd_post.wgsl`) runs both as one fullscreen pass
+under `--light`. *Assumed:* ascending priority order; the image plane
+covers the screen (its UV transform is not read); 256 table entries.
+
+## Sky — traced shaders, live sun
+
+The weather manager creates a `uSkyExt` with 256 x 256 optical depth maps
+(0x004c19f0). Each frame the sky renders the Rayleigh and Mie depth maps
+(when the atmosphere changes), Rayleigh and Mie scatter maps over the screen
+(`mDivX` x `mDivY` = 32 x 32, loop count by `mLoopCount` = 10) and the dome,
+which lights the scatter maps:
+`sun colour x (Rayleigh (1 + cos^2) + Mie (1 + g^2 - 2 g cos)^-1.5)`
+plus stars.
+- `CBSky` (44 floats, `mtweather::sky::constants`, translated from
+  0x00f33d50 and the tail of 0x00f36d60): Rayleigh scattering from the
+  `rSky` wavelengths (665 / 555 / 455 nm) and +0x90 (0x00e2c920, `l^-4`),
+  Mie from `mMieScattering` / `mMieDensity`, heights and earth radius from
+  `rSky` +0xA8..+0xBC (km), eccentricity 0.4 (constructor default),
+  `mHeightOffset` 30000, sun colour `mBaseSunColor`, which the weather
+  manager overwrites with the weather's `SunColor_F` (0x004c3d40).
+- Depth maps (`optical_depth_map`, translated from the pixel shaders at file
+  offsets 0x59745C and 0x38E804, regression test against them).
+- Scatter and dome: `sky.wgsl`, generated instruction for instruction from
+  the 10-step shaders at file offsets 0x5F9134 (Rayleigh) and 0x657A54
+  (Mie) and the dome shader 0x5B8D54. **Difference:** the scatter runs per
+  pixel on the pixel's own ray instead of on the 32 x 32 screen grid with
+  its horizon-weighted rows.
+- Sun direction (`sun_direction`): *reconstructed*, not translated: the
+  standard solar position for the resource's latitude (47 deg), tilt
+  (23.4 deg) and season angle (90 deg, declination `tilt x sin` assumed)
+  with noon at 12:00; it matches the live light direction at 09:46, 12:21,
+  15:00 and 17:45 within 0.006. At night the captured infinite light points
+  straight up, so the sky uses the clock.
+
+*Assumed:* fine weather and each track's first key. Not drawn: stars and
+the starry sky texture, the moon, the cloud domes (`uSkyCloudModel`,
+`sky_all_F/E/R/Belt`), the sky fog (`uSkyFog`, aerial perspective).
+Compared only by eye against ref004 (time unknown, lit with the 12:21
+capture): the gradient matches in shape; the upper sky is about 20 % darker
+than the reference, the horizon matches.
+
+## Water — data, partly traced
+
+The sea (`st100_sea00`, `MaterialStdEst`) and the rivers and lakes
+(`DDMaterialWater`) keep their MRL materials. `FTransparencyVolume` with a
+blend state blends with `fTransparency`; `FReflectCubeMap` /
+`FReflectWaterMap` add a Fresnel-Schlick reflection
+(`fFresnelSchlick`, F0 0.6 on the sea) of `fReflectiveColor`, masked by the
+specular map's G. **Stand-in:** the reflected environment is the fog colour
+times the SH ambient (the original reflects the `DDCube0_CM` cube render
+target / a planar reflection); normal maps, the sun's specular and the
+volume's depth fade are not done. The sea is lighter than the references'
+dark blue.
+
+## Distant terrain and landmarks — traced
+
+- Far ring: each far cell draws its terrain model
+  (`scr\st{stage}\model\m{A/10*10}\st{stage}_{a}m{b}n`) under its `fmfore`
+  scenery, so far trees stand on ground.
+- Landmarks (`uFmSetBase`): 15 entries placed from the exe table at
+  0x01873550 (radius, position; FUN_00c61bd0), each loading
+  `fm_index<i>_high.arc` within its radius and `_low.arc` beyond; entries 5
+  and 7 swap on story progress 0x1E78 (`--progress`). The castle in ref001
+  is now drawn.
 
 ## What the viewer does
 
@@ -277,7 +365,10 @@ Ours is 15-25 % brighter by day, slightly darker at night.
 | `FSpecularDisable` | `reflectance = 0` (Bevy fallback only) | derived |
 | SH + light buffer + fog | `--light`: own lighting in `dd_material.wgsl` | traced shaders; SH packing and light-group rule assumed |
 | sRGB-space blending | linear-space blending | **difference** (Bevy) |
-| post-processing (tone map, bloom, colour correction, DOF) | none | not traced |
+| post chain: vignette + tone curve | `--light`: `post.rs` | traced (order and blend assumed) |
+| DOF | none | not traced |
+| sky dome | `--light`: `sky.rs` | traced shaders, per-pixel; sun reconstructed |
+| water reflection | fog-colour stand-in | partial |
 
 Without `--light` the stage keeps Bevy's PBR with the placeholder sun and
 ambient.
@@ -286,12 +377,14 @@ ambient.
 
 - The SPK permutation lookup (feature set -> shader).
 - The SH packer and the light-group test in the exe (both assumed here).
-- Post-processing: the material pass writes colour x `fHDRCompressEncode`
-  (0.5); the tone map / colour correction / bloom / DOF chain that follows
-  is not traced (likely the remaining 15-25 % by day). config.ini on this
-  machine: HDR=DEFAULT, DofFilter=ON, Brightness=10, ShadowQuality=LOW.
-- Sky dome, water shading and the far terrain (distant hills; trees float
-  above missing far ground in ref001) are not drawn.
+- Post chain: `DOFFilter` (config.ini DofFilter=ON) is not traced; the
+  material pass's `fHDRCompressEncode` (0.5) and the chain order are not
+  traced. 09:46 is 13-17 % and 15:00 39 % brighter than the captures.
+- Sky: stars, moon, cloud domes and sky fog; the uSky sun matrix code
+  (0x00f36d60) is not translated; a same-time capture with sky in view is
+  needed to compare the sky's brightness.
+- Water: the reflection cube / planar reflection, normal maps, sun specular
+  and volume depth fade.
 - Wind sway of swing models; 8-byte swing records; the cylindrical
   billboard variant.
 - Night: the moon / group-0x10 lights and point lights (`st100_light`
