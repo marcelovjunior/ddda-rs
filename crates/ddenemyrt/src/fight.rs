@@ -65,10 +65,6 @@ pub struct Fight {
     roll_seed: u32,
 }
 
-/// The push-out distance between an Arisen and a goblin (35 + 35 cm,
-/// *placeholder*, see [`Fight::push_out`]).
-pub const PUSH_OUT: f32 = 70.0;
-
 /// Owner ids: seats keep their number, enemies count from here.
 pub const ENEMY_OWNER_BASE: u32 = 100;
 
@@ -245,31 +241,67 @@ impl Fight {
     }
 
     /// Step 38 (`0x004797E0`, after both move lines): characters pushed
-    /// out of each other. *Placeholder*: the routine is not traced; the
-    /// Arisen and each goblin keep their roots `PUSH_OUT` apart
-    /// horizontally (the radii of their push-out volumes, `mIsObjAdj`:
-    /// the Arisen's capsule r35 in `collision\pl\m0000` group 2, the
-    /// goblin's spheres r35 in `e0100` group 0), each moved half the
-    /// overlap.
+    /// out of each other (`crate::pushout`): per pair of overlapping
+    /// push-out volumes the higher rank gives way by the overlap; each
+    /// character keeps its deepest push of the frame (0x0076D420) and moves
+    /// by it horizontally (0x0076D6B0, pass C). Pairs are taken Arisen
+    /// first, then goblins in creation order.
     pub fn push_out(&mut self, sim: &mut ddsim::Sim) {
-        for &seat in self.arisen.keys() {
-            for g in &mut self.goblins {
-                let Some(p) = sim.player_mut(seat) else { continue };
-                let (dx, dz) = (g.pos[0] - p.position[0], g.pos[2] - p.position[2]);
-                let d = (dx * dx + dz * dz).sqrt();
-                if d >= PUSH_OUT {
-                    continue;
+        let abody = &self.data.arisen.body;
+        let gdata = &self.data.goblin;
+        let mut bodies: Vec<crate::pushout::PushBody> = Vec::new();
+        let mut seats = Vec::new();
+        for (&seat, a) in &self.arisen {
+            let Some(p) = sim.player(seat) else { continue };
+            let (motion, frame) = arisen_motion(abody, a, p);
+            let pose = abody.pose(motion, frame, p.position, p.yaw);
+            let acts = abody.activations(motion, frame);
+            let rank = if a.swing.is_some() {
+                arisen::SWORD_PUSH_RANK
+            } else {
+                p.state.push_rank()
+            };
+            bodies.push(crate::pushout::PushBody {
+                rank,
+                kind: 2,
+                volumes: abody.push_volumes(&acts, &pose),
+            });
+            seats.push(seat);
+        }
+        for g in &self.goblins {
+            let pose = gdata.body.pose(g.motion, g.frame, g.pos, g.yaw);
+            let acts = gdata.body.activations(g.motion, g.frame);
+            bodies.push(crate::pushout::PushBody {
+                rank: g.push_rank(gdata.obj_size),
+                kind: 0,
+                volumes: gdata.body.push_volumes(&acts, &pose),
+            });
+        }
+        // the deepest push per character
+        let mut pushes: Vec<Option<[f32; 2]>> = vec![None; bodies.len()];
+        for i in 0..bodies.len() {
+            for j in i + 1..bodies.len() {
+                if let Some((who, d)) = crate::pushout::push(&bodies[i], &bodies[j]) {
+                    let k = if who == 0 { i } else { j };
+                    let deeper =
+                        pushes[k].is_none_or(|q| d[0] * d[0] + d[1] * d[1] > q[0] * q[0] + q[1] * q[1]);
+                    if deeper {
+                        pushes[k] = Some(d);
+                    }
                 }
-                let (nx, nz) = if d > 1e-3 {
-                    (dx / d, dz / d)
-                } else {
-                    (g.yaw.sin(), g.yaw.cos())
-                };
-                let half = (PUSH_OUT - d) * 0.5;
-                g.pos[0] += nx * half;
-                g.pos[2] += nz * half;
-                p.position[0] -= nx * half;
-                p.position[2] -= nz * half;
+            }
+        }
+        for (k, d) in pushes.into_iter().enumerate() {
+            let Some(d) = d else { continue };
+            if k < seats.len() {
+                if let Some(p) = sim.player_mut(seats[k]) {
+                    p.position[0] += d[0];
+                    p.position[2] += d[1];
+                }
+            } else {
+                let g = &mut self.goblins[k - seats.len()];
+                g.pos[0] += d[0];
+                g.pos[2] += d[1];
             }
         }
     }
@@ -279,15 +311,7 @@ impl Fight {
         let body = &self.data.arisen.body;
         for (&seat, a) in &mut self.arisen {
             let Some(p) = sim.player(seat) else { continue };
-            let (motion, frame) = match a.swing {
-                Some(s) => (s.motion, s.frame),
-                None => {
-                    let id = p.state.motion_id();
-                    // ddsim counts a state's frames on; the motion wraps
-                    let m = MotionId::new((id >> 8) as u8, id & 0xff);
-                    (m, body.wrap_frame(m, p.frame))
-                }
-            };
+            let (motion, frame) = arisen_motion(body, a, p);
             self.positions.insert(u32::from(seat), p.position);
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
@@ -309,5 +333,19 @@ impl Fight {
             s += &g.digest();
         }
         s
+    }
+}
+
+/// The motion an Arisen shows: its scripted swing, else its ddsim state's
+/// motion (bank 0 `m0000_co`), the frame wrapped into it.
+fn arisen_motion(body: &crate::body::Body, a: &ArisenFighter, p: &ddsim::Player) -> (MotionId, f32) {
+    match a.swing {
+        Some(s) => (s.motion, s.frame),
+        None => {
+            let id = p.state.motion_id();
+            // ddsim counts a state's frames on; the motion wraps
+            let m = MotionId::new((id >> 8) as u8, id & 0xff);
+            (m, body.wrap_frame(m, p.frame))
+        }
     }
 }

@@ -2339,6 +2339,7 @@ dependencies = [
  "mtfsm",
  "mtlmt",
  "mtmod",
+ "mtxfs",
 ]
 
 [[package]]

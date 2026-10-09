@@ -27,6 +27,10 @@ pub const SWORD_BANK: u8 = 0x20;
 /// motions 200, 203 and 205 use them.
 pub const SWORD_ATTACK_1: MotionId = MotionId::new(SWORD_BANK, 0);
 
+/// The push rank the sword's ground attacks write (actor +0x1DF0 = 14,
+/// `cPlActWpnSwordAtckLandS1_1` 0x00B3C795 and the rest of the chain).
+pub const SWORD_PUSH_RANK: u32 = 14;
+
 /// `param\pl\level\lvfighter` row of a level-1 Fighter (COMBAT.md 8).
 pub const FIGHTER_LEVEL_ROW: usize = 1;
 /// The Iron Sword, item 301 (COMBAT.md 8; the Fighter actually starts with

@@ -178,6 +178,30 @@ impl Body {
     }
 }
 
+impl Body {
+    /// The push-out volumes of one frame: the nodes of the activated
+    /// groups with `mIsObjAdj` (docs/COMBAT.md, the push-out).
+    pub fn push_volumes(&self, acts: &[Activation], pose: &Posed) -> Vec<ddcombat::volumes::Volume> {
+        let mut out = Vec::new();
+        for c in &self.collision {
+            for act in acts.iter().filter(|a| a.resource_id == c.body.resource_id) {
+                let Some((group, _, _, _)) = volumes::activated(&c.body, None, act) else {
+                    continue;
+                };
+                if group.is_obj_adj {
+                    out.extend(
+                        group
+                            .nodes
+                            .iter()
+                            .filter_map(|n| volumes::build_volume(n, pose, self.scale)),
+                    );
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Loading from the install.
 pub mod load {
     use super::*;

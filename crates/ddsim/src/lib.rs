@@ -248,6 +248,23 @@ pub enum GrabPhase {
 
 impl State {
     /// Motion id (`bank << 8 | slot`, bank 0) the original plays.
+    /// The push-out rank the state's action writes to actor +0x1DF0 (the
+    /// character push-out 0x004797E0: the higher rank gives way): 13 for
+    /// `cPlActWait` (0x00AC9E67; 14 while its turn motion plays, not
+    /// modelled), 14 for `cPlActWalk` (0x00ACA205), 15 for the run, the
+    /// sprint and its stop, jumps, falls and landings (0x00ACA5E5,
+    /// 0x00ACAF2F, 0x00ACB671, 0x00ACC68A, 0x00ACD19E, 0x00ACD5A7, ...),
+    /// 0 (never pushed) while on a ledge (`cPlCliffHang*` vf05 0x00ADA908,
+    /// 0x00ADCD7B, 0x00ADDBC0).
+    pub fn push_rank(self) -> u32 {
+        match self {
+            State::Wait => 13,
+            State::Walk { .. } => 14,
+            State::LedgeGrab { .. } | State::LedgeHang { .. } | State::LedgeClimb { .. } => 0,
+            _ => 15,
+        }
+    }
+
     pub fn motion_id(self) -> u16 {
         match self {
             State::Wait => 0,

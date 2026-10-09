@@ -19,3 +19,4 @@ mtarc = { path = "../mtarc" }
 mtfsm = { path = "../mtfsm" }
 mtlmt = { path = "../mtlmt" }
 mtmod = { path = "../mtmod" }
+mtxfs = { path = "../mtxfs" }
