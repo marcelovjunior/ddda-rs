@@ -84,5 +84,5 @@ bust field. The NPC look builder now parses its named body resource and
 uses the same renderer path. An installed male/female NPC regression
 checks 37 authored scales, zero bust, finite computed scales and their
 binding to the base skeleton. Both appearance integration tests and strict
-ddlook clippy pass. Release viewer verification is queued; no original
+ddlook clippy pass. Release viewer build passed; no original
 NPC comparison is claimed.
