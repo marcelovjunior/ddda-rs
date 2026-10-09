@@ -3562,6 +3562,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mteffect"
+version = "0.1.0"
+dependencies = [
+ "ddvfs",
+ "mtarc",
+ "mtlmt",
+]
+
+[[package]]
 name = "mtfsm"
 version = "0.1.0"
 dependencies = [
