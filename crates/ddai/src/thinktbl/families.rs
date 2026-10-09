@@ -72,6 +72,42 @@ pub struct HarpyChecks {
     pub value_5860: f32,
 }
 
+/// Inputs for the first nine harpy think bytes. The unit writes these
+/// from its current action and the preceding action's movement flags.
+/// Later sensor/status bytes remain the caller's responsibility.
+#[derive(Debug, Clone, Copy)]
+pub struct HarpyThinkInputs {
+    pub grounded: bool,
+    /// Unit +0x2d70: 1 suspicious, 2 combat, otherwise idle.
+    pub alert: u32,
+    pub action: i32,
+    /// Unit +0x5ca8: bit0 airborne movement, bit1 the second movement mode.
+    pub movement_flags: u32,
+    /// Result of shared helper 0x008ec740 (classification not yet named).
+    pub movement_class: i32,
+}
+
+impl HarpyThinkInputs {
+    // Translated from 0x0093b470 and action query 0x009381e0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn write_flags(self, previous: u32) -> u32 {
+        let mut flags = previous & !0x1ff;
+        flags |= u32::from(self.grounded);
+        flags |= match self.alert {
+            1 => 1 << 2,
+            2 => 1 << 3,
+            _ => 1 << 1,
+        };
+        let hover = matches!(self.action, 15..=21 | 31 | 70..=72);
+        flags |= u32::from(hover) << 4;
+        flags |= (self.movement_flags & 1) << 5;
+        flags |= u32::from(self.movement_class == 1) << 6;
+        flags |= u32::from(self.movement_class == 2) << 7;
+        flags |= ((self.movement_flags >> 1) & 1) << 8;
+        flags
+    }
+}
+
 /// Wolf-local checks. Sensor/joint/line-of-sight queries remain host work.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WolfChecks {
@@ -125,6 +161,27 @@ impl HarpyChecks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harpy_think_flags_follow_action_and_previous_flight_mode() {
+        let mut input = HarpyThinkInputs {
+            grounded: false,
+            alert: 2,
+            action: 29,
+            movement_flags: 1,
+            movement_class: 0,
+        };
+        assert_eq!(input.write_flags(0xffff_ffff), 0xffff_fe00 | (1 << 3) | (1 << 5));
+        input.action = 15;
+        assert_ne!(input.write_flags(0) & (1 << 4), 0);
+        input.action = 22;
+        assert_eq!(input.write_flags(0) & (1 << 4), 0);
+        input.grounded = true;
+        input.alert = 1;
+        input.movement_flags = 2;
+        input.movement_class = 2;
+        assert_eq!(input.write_flags(0), 1 | (1 << 2) | (1 << 7) | (1 << 8));
+    }
 
     #[test]
     fn wolf_pack_query_counts_self_and_notice_is_consumed() {

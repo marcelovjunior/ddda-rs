@@ -580,3 +580,13 @@ contact. Tests pin the strict boundaries, wrapped turns and damping. Ground
 ray results remain supplied by the host. Full host sensing, remaining
 actions, death and presentation integration are still in progress; this is
 not a completed enemy fight or an original-game comparison.
+
+Harpy takeoff (`0x0093f580` / `0x0093f5e0`) plays motion 0x29,
+switches movement bits from 4 to 1 strictly after frame 18, enters motion
+0x1f at frame 57 on completion, and marks the action done on its following
+update. The first nine think flags now project from grounded/alert state,
+the action class query (`0x009381e0`), prior movement bits and common
+movement classification (`0x0093b470`). This explains the graph's grounded
+path when flight bit5 was absent from the earlier synthetic probe. Sensor
+collection, the shared movement classification and the other think bytes
+are still host inputs, not invented defaults.

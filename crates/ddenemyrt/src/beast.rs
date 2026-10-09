@@ -146,6 +146,60 @@ pub struct AirAttackStep {
     pub done: bool,
 }
 
+/// The grounded takeoff action, before the flight think takes over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HarpyTakeoff {
+    #[default]
+    TakingOff,
+    Hover,
+    Finished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TakeoffStep {
+    pub movement_flags: u32,
+    pub motion: Option<(MotionId, f32)>,
+    pub done: bool,
+}
+
+impl HarpyTakeoff {
+    // Translated from cEm0600ActGroundToHover::vf05 0x0093f580
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn initial_motion() -> MotionId {
+        MotionId::new(0, 0x29)
+    }
+
+    // Translated from cEm0600ActGroundToHover::vf06 0x0093f5e0
+    // (DDDA.exe 2017-12-13 Steam). Movement bit0 also disables the
+    // actor's grounded/gravity flags +0x1b6d/+0x1e80.
+    pub fn step(&mut self, frame: f32, motion_ended: bool) -> TakeoffStep {
+        match *self {
+            Self::TakingOff => {
+                let movement_flags = if frame <= 18.0 { 4 } else { 1 };
+                let motion = if motion_ended {
+                    *self = Self::Hover;
+                    Some((MotionId::new(0, 0x1f), 57.0))
+                } else {
+                    None
+                };
+                TakeoffStep {
+                    movement_flags,
+                    motion,
+                    done: false,
+                }
+            }
+            Self::Hover | Self::Finished => {
+                *self = Self::Finished;
+                TakeoffStep {
+                    movement_flags: 1,
+                    motion: None,
+                    done: true,
+                }
+            }
+        }
+    }
+}
+
 impl HarpyAirAttack {
     // Translated from cEm0600ActAirAttack::vf05 0x009453c0
     // (DDDA.exe 2017-12-13 Steam).
@@ -222,6 +276,20 @@ fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harpy_takeoff_releases_ground_after18_and_finishes_after_hover_entry() {
+        let mut takeoff = HarpyTakeoff::default();
+        assert_eq!(HarpyTakeoff::initial_motion(), MotionId::new(0, 0x29));
+        assert_eq!(takeoff.step(18.0, false).movement_flags, 4);
+        assert_eq!(takeoff.step(18.01, false).movement_flags, 1);
+        let transition = takeoff.step(40.0, true);
+        assert_eq!(transition.motion, Some((MotionId::new(0, 0x1f), 57.0)));
+        assert!(!transition.done);
+        assert_eq!(takeoff, HarpyTakeoff::Hover);
+        assert!(takeoff.step(57.0, false).done);
+        assert_eq!(takeoff, HarpyTakeoff::Finished);
+    }
 
     #[test]
     fn harpy_dive_boundaries_and_turn_window() {
