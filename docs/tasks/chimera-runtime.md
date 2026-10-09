@@ -3,7 +3,7 @@
 - **Owner:** Codex lane (codex-1 survey; implementation staffing via head)
 - **Branch:** `task/chimera-runtime`
 - **Board area:** `fight/chimera`
-- **Status:** open; survey authorized by head #2072
+- **Status:** in progress; codex-28 implementation assigned by head #2090 / codex-1 #2098
 
 ## Goal
 
@@ -73,6 +73,18 @@ MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 
 ## Results
 
-Initial source/data survey only. No chimera runtime is implemented by this
-brief. The first implementation action is to identify the two child units'
-life/death masks and the final persistent placement-kill producer.
+Source checkpoint: isolated body/child death and parent-reaction selectors
+are implemented with source addresses. Seven targeted regressions pass.
+`docs/CHIMERA.md` records ownership, common priority masks, child-01 guards,
+the persistent writer chain, action registration, and damage-routing leads.
+An installed catalogue reader resolves 317 action records and 147 resource
+requests; the installed regression locates combat resources and parses the
+three region files (5/4/2 sets). Runtime hit-region maps preserve pool IDs.
+Source-traced CRT flag fixups retain 41/28/27 bound resources; on-disk
+zero flag words are not mistaken for effective runtime flags.
+The normal body action 0x3a is a falling action before death action 0x57;
+the 180-unit death cleanup timer is not the persistent-kill producer.
+
+No host combat actor, placement kill, story progression or original-game
+comparison is claimed by this checkpoint. Next: the child-00 collision-link
+relay of already-valued hits to the body and exact body/child damage binding.
