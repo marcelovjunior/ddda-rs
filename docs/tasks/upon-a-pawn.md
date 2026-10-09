@@ -360,15 +360,14 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   goes to intel3e4 (7a32f0); they are never interchangeable.
 - Installed checks establish stage200 group1 record0 is NPC39, not NPC1.
   Stage100 group4 record0 is NPC304. Earlier q2 graph tests using target
-  group1/NPC2 were fixtures; actual first-pawn script target is still being
-  resolved. No production binding hardcodes those fixture identities.
+  group1/NPC2 were fixtures; actual first-pawn script target was subsequently resolved below. No production binding hardcodes those fixture identities.
 - Npc::intel owns consideration/action fields without requiring a loaded
   daily graph (bbd930 before bbdaa0). Explicit load_story_npc_intel creates
   that lifetime, retains allocation after graph-load failure, invalidates
   replacement/unload, and reports actual presence/readiness to live worlds.
   HP, body presence and NPC life are deliberately not inferred.
 - Candidate loading is not materialization: 762000 name-family selection,
-  persistent-life checks and archive readiness remain adapter prerequisites.
+  intel-pool capacity and archive readiness remain adapter prerequisites.
   The API is not yet invoked from viewer startup; GSF381 remains fixture.
 - Unsupported host graphs now halt their graph execution and retain the
   controller owner, instead of deleting it. This is port error recovery,
@@ -393,3 +392,23 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Next: resolve real q2 target/materialization prerequisites before wiring
   Guard talk to the route. Installed NPC1 candidates include stage200 group27
   record0 (authored q0002_n01); this is not yet a verified script binding.
+
+### First-pawn placement binding and materialization trace
+
+- Installed scr\st200\fsm\bootev_st200ev15, state `apply fsm`, applies
+  q0002_n001_AI to kind5/group27/index0. The matching stage200 NPC layout
+  record is NPC1, with authored initial action q0002_n01. Added that identity
+  to the installed-data regression; group1/NPC39 remains an independent
+  record-identity check, not a q2 actor binding.
+- Correction to materialization prerequisites: 0x004a76a0 is the 200-entry
+  intel allocation/eviction pool, not a persistent-life predicate. It searches
+  empty entries, then states3/4, then lower-priority entries. NPC vf15
+  0x00762000 selects priority101 or103. Life observations remain independent
+  and unresolved; no persistent-life gate is claimed from this call.
+- 0x007627e0 selects the longest case-insensitive name prefix from the runtime
+  table at0x0150f6f0. The stage100 NPC archive branch waits/queues when the
+  per-NPC archive reference exists; stage200 bypasses that branch.
+- 0x007a32f0 copies authored FSMPath into intel+0x3f0 via0x00bbf400;
+  0x00bbdaa0 starts that authored script before attempting the independent
+  daily controller graph. The current host placement API still only retains
+  authored_action metadata: script lifetime integration is the next action.

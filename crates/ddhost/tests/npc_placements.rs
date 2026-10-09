@@ -56,7 +56,7 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
     if !native.exists() { return; }
     let vfs = ddvfs::Vfs::open(native).unwrap();
-    for (stage, group, npc) in [(200, 1, 39), (100, 4, 304)] {
+    for (stage, group, npc) in [(200, 1, 39), (200, 27, 1), (100, 4, 304)] {
         let list = npc_placements::group_list(&vfs, stage).unwrap();
         let group = list.groups.iter().find(|g| g.slot == group).unwrap();
         let mut found = false;
@@ -72,7 +72,7 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
                 }
             }
         }
-        assert!(found, "q2 target {stage}:{group:?}");
+        assert!(found, "installed layout identity {stage}:{group:?}");
     }
 }
 

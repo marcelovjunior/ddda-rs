@@ -57,7 +57,7 @@ pub struct Candidates {
 /// Read one cell's eligible NPC layout candidates. cLayoutSetNpc vf12
 /// at vtable 0x01593f30 resolves to the common gate 0x0075faa0. The
 /// `_n` path follows the group format at 0x01562268. Materialization's
-/// name-family, persistent NPC life and archive readiness checks in
+/// name-family, intel-pool capacity and archive readiness checks in
 /// 0x00762000 remain the actor adapter's responsibility; candidates do
 /// not by themselves establish presence or controller readiness.
 pub fn candidates(
