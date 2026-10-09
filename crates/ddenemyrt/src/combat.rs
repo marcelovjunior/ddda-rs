@@ -319,7 +319,9 @@ pub fn status_pass(fighters: &mut [Fighter], dt: f32) -> Vec<StatusEvent> {
                 d
             }
             Victim::Player { hp, .. } => {
-                let d = poison_player(&mut f.dots, &f.statuses, dt) + burning(&f.statuses, step);
+                // the player's poison and burning run on the scaled frame step,
+                // not the unit step (0x00B75070, 0x00B75890)
+                let d = poison_player(&mut f.dots, &f.statuses, dt) + burning(&f.statuses, dt);
                 *hp = (*hp + d).max(0.0);
                 decay(&mut f.pools, step);
                 d
