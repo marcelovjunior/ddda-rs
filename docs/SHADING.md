@@ -274,7 +274,19 @@ filters (no bloom filter in it):
   with a vignette in alpha, times `mColor` (1, 1, 1, 0.5), blended over the
   frame (blend type 1, *assumed* SrcAlpha / InvSrcAlpha): a vignette in the
   sRGB frame buffer.
-- `DOFFilter` (priority 16): not done.
+- `DOFFilter` (priority 16, `mType` 1 "Light", traced: vf11 0x01013320,
+  shaders 0x89E474 / 0x775888 / 0x611C08 / 0x466ADC of `sc\dx9\root`):
+  the frame point-sampled down to 640 x 360 in sRGB, a separable 5-tap
+  Gaussian (sigma 1, step `mBlurSize`, point sampled, `mBlurCount`
+  times), blended over the frame with alpha min(0.385, (z - zf) / (zfar -
+  zf)) behind the focus and min(0.22, (zf - z) / (zf - zn)) in front; z,
+  zf, zn, zfar are post-projection depths (z/w) of the pixel, `mFocal`
+  1000 cm, `mNear` 50 (clamped to the near plane) and `mFar` 200000 cm.
+  Active only with the player's DofFilter=ON (0x0050adc0). The viewer's
+  frame is float and carries the view depth in alpha for it; the post
+  pass clamps the colour to 0..1 as the 8-bit frame did. *Assumed:* the
+  composite blends SrcAlpha / InvSrcAlpha; one fullscreen pass evaluates
+  the low-res image and blur per pixel (same result, more taps).
 - `ColorCorrectFilter` (priority 26000): `ToneCurveRGB` is an
   MtHermiteCurve (8 x, 8 y; here x 0, 0.2, 1 / y 0, 0.155738, 1) rendered
   into a table by the pixel shader at file offset 0x47800C of
@@ -316,25 +328,49 @@ plus stars.
   15:00 and 17:45 within 0.006. At night the captured infinite light points
   straight up, so the sky uses the clock.
 
-*Assumed:* fine weather and each track's first key. Not drawn: stars and
-the starry sky texture, the moon, the cloud domes (`uSkyCloudModel`,
-`sky_all_F/E/R/Belt`), the sky fog (`uSkyFog`, aerial perspective).
-Compared only by eye against ref004 (time unknown, lit with the 12:21
-capture): the gradient matches in shape; the upper sky is about 20 % darker
-than the reference, the horizon matches.
+- Cloud domes (`uSkyCloudModel`, 0x00c64620): the scheduler's
+  `SkyCloudModel_*` whose `mWeatherType` is the weather (`sky_all_F` and
+  the belt by fine weather), at the sky's height offset following the
+  camera, hidden by night when `mDayOnly`. Their light is the unit's sun
+  colour (the sun at `mSunColorHeight` x `mSunColorScale`, saturation x
+  `mSaturationScale`, x `mIntensityScale`) plus its ambient colour
+  (0x00f330a0: the in-scatter at `mAmbColorHeight`), both translated into
+  `mtweather::sky`; *assumed:* the cloud shader adds the two as a constant
+  light (it is not identified). Under the stage fog (beyond the fog end)
+  they turn the horizon from white to the fog's blue.
 
-## Water — data, partly traced
+*Assumed:* each track's first key. Not drawn: stars (the `ddstar` catalog
+billboards with `hoshi2_BM`, the `star_all` / `kosumo_BM` model), the
+starry sky texture (no `mpStarrySkyColorTexture` is set by the stage), the
+moon (`uSkyAstralBody`, the `rSky` moon texture); no night sky reference
+exists to check them against.
 
-The sea (`st100_sea00`, `MaterialStdEst`) and the rivers and lakes
-(`DDMaterialWater`) keep their MRL materials. `FTransparencyVolume` with a
-blend state blends with `fTransparency`; `FReflectCubeMap` /
-`FReflectWaterMap` add a Fresnel-Schlick reflection
-(`fFresnelSchlick`, F0 0.6 on the sea) of `fReflectiveColor`, masked by the
-specular map's G. **Stand-in:** the reflected environment is the fog colour
-times the SH ambient (the original reflects the `DDCube0_CM` cube render
-target / a planar reflection); normal maps, the sun's specular and the
-volume's depth fade are not done. The sea is lighter than the references'
-dark blue.
+## Water — traced shaders, partly inferred
+
+The sea (`st100_sea00`) and the rivers and lakes (`DDMaterialWater`) keep
+their MRL materials.
+- **Unlit forward materials:** every stage100 pixel shader with the sea's
+  sampler set (albedo, normal, detail normal, specular, environment cube;
+  e.g. file offset 0x4A0980) and every blended water shader reads no light
+  buffer. Their colour (0x4A0980) is albedo x `fAlbedoColor` x
+  `fDiffuseColor` x v1.rgb x v2.w + reflection x mean(v1.rgb) x v2.w. No
+  vertex shader outside the grass reads `fSHCoef` or a light, so v1 and
+  v2.w are *inferred* to be the layout's VertexColor and Occlusion: the sea
+  is unlit, with baked vertex colours (0.47 grey on the sea).
+- **Environment cubes:** `FReflectCubeMap` on `scr\sky\DDCube<i>_CM` (a
+  run-time target) is `DDBaseCube<i>_CM` (a 32 x 32 cube texture in the
+  data) times `mEnvMapBaseColor[i]` x lerp(1, `mEnvMapColor[i]`.rgb, .a)
+  of the weather manager (sEnvMapManager's SystemEnvCube pass 0x00434be0,
+  shader 0x912060; for cube 0: 0.3 x 0.25). The reflection is env x
+  `fReflectiveColor` x specular G x mean(vertex colour) x Fresnel-Schlick
+  (`fFresnelSchlick` 0.6). *Assumed:* the weather scales of the cube
+  colours are not applied, the blend factor is 0.
+- `FReflectWaterMap` (planar water reflection): the stage sky along the
+  reflected ray stands in for the mirrored scene (shared
+  `sky_scatter.wgsl`).
+- `FTransparencyVolume` blends with `fTransparency`. Not done: normal and
+  detail normal maps, the volume's depth fade, the coast foam (an effect
+  render target `effect\rtt\e_st100_10_BM`; those meshes are left out).
 
 ## Distant terrain and landmarks — traced
 
@@ -400,6 +436,21 @@ Without `--light` the viewer builds the lighting for `--clock` and
   equals the captured fog (the refs-lit series is cloudy: `st100_fog_e`;
   the weather manager's +0x268 holds 1).
 
+## Night: the sky spot light — traced
+
+The sky scheduler's `SkySpotLight` (`uSkySpotLight`) is a deferred spot
+light at `LightOffset` (0, 2000, 0.1) cm above the player (*assumed*
+anchor; the unit attaches to a tracked position, 0x00c92d10), pointing
+down. Its colour is `LightColor` (0.022, 0.057, 0.078) x clamp((night blend
+- 0.8) x 10, 0, 1) (0x00c69460), so it is lit only deep at night. The spot
+shader (file offset 0x9B1A70 of `sc\dx9\root`) adds colour x (1 -
+sat((d - mStart) / (mEnd - mStart)))^2 x sat((dot(-dir, L) - cos(cone/2)) /
+(cos((cone - spread)/2) - cos(cone/2)))^falloff x max(N.L, 0); its
+parameters come from 0x00e19850 (start 2000, end 3000, cone 90, spread 60).
+The `--light` captures did not read spot units, so it is added from the data
+there too. It lights the ground around the party at 23:04 as in the
+capture.
+
 ## What the viewer does
 
 `stage.rs` builds each material from `mtmrl::shading::describe`:
@@ -419,9 +470,11 @@ Without `--light` the viewer builds the lighting for `--clock` and
 | SH + light buffer + fog | `--light`: own lighting in `dd_material.wgsl` | traced shaders; SH packing and light-group rule assumed |
 | sRGB-space blending | linear-space blending | **difference** (Bevy) |
 | post chain: vignette + tone curve | `--light`: `post.rs` | traced (order and blend assumed) |
-| DOF | none | not traced |
+| DOF | `post.rs`, depth in the frame's alpha | traced (blend assumed) |
 | sky dome | `--light`: `sky.rs` | traced shaders, per-pixel; sun reconstructed |
-| water reflection | fog-colour stand-in | partial |
+| water | unlit forward + environment cubes | traced shaders, vertex inputs inferred |
+| cloud domes | `spawn_sky_model` | traced unit, shading assumed |
+| night spot light | `SpotLight` in `dd_material.wgsl` | traced |
 | stage low models, primitive pass/LOD | `spawn_low_models`, `spawn_parts` | traced |
 | lighting/fog by clock and weather | without `--light` | traced, sun checked live |
 
@@ -432,20 +485,21 @@ ambient.
 
 - The SPK permutation lookup (feature set -> shader).
 - The SH packer and the light-group test in the exe (both assumed here).
-- Post chain: `DOFFilter` (config.ini DofFilter=ON) is not traced; the
-  material pass's `fHDRCompressEncode` (0.5) and the chain order are not
-  traced. 09:46 is 13-17 % and 15:00 39 % brighter than the captures.
-- Sky: stars, moon, cloud domes and fog over the sky (the horizon sky is
-  whiter than ref001's); the uSky sun matrix code (0x00f36d60) is not
+- Post chain: the material pass's `fHDRCompressEncode` (0.5) and the
+  chain order are not traced. 09:46 is 13-17 % and 15:00 39 % brighter than
+  the captures.
+- Sky: stars, the moon and the cloud shader; the upper sky is about 12 %
+  darker than ref004's; the uSky sun matrix code (0x00f36d60) is not
   translated.
 - Landmarks beyond the fog end (the Bluemoon Tower at ref001) are a flat
   fog silhouette in ours but show structure in the original: not
   explained (both use the low model and linear fog).
-- Water: the reflection cube / planar reflection, normal maps, sun specular
-  and volume depth fade.
+- Water: the normal maps, the volume depth fade, the foam effect, the
+  planar reflection's scene; the sea is 9-20 % darker than refs 001-005.
 - Wind sway of swing models; 8-byte swing records; the cylindrical
   billboard variant.
-- Night: the moon / group-0x10 lights and point lights (`st100_light`
-  scheduler) are not used; the 23:04 capture is darker in ours.
+- Night: the moon light (the group-0x10 lights) and point lights of lamps
+  and the lantern are not used; the 23:04 ground matches in brightness
+  with the spot light, the far rock wall is darker in ours.
 - `FDiffuseVertexColor*`, `FTransparencyVolume`, `FAlbedoMapBlend` and the
   other variants: not traced.

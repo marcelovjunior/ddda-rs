@@ -550,6 +550,24 @@ mod tests {
     }
 
     #[test]
+    fn cloud_light_rules() {
+        let inp = SkyInputs { sun_color: [23.04, 23.936, 25.6], mie_scattering: [7.554876; 3], height_offset: 30000.0, ..SkyInputs::default() };
+        let unit = CloudUnit { sun_height: 600_000.0, sun_scale: 0.1, saturation: 0.0, intensity: 1.0, amb_height: 600_000.0, amb_scale: 1.0 };
+        let (sun, amb) = cloud_light(&sky_f(), &inp, [0.0, 1.0, 0.0], &unit);
+        // Saturation 0: grey at the lightness of the scaled sun colour.
+        assert!((sun[0] - sun[1]).abs() < 1e-6 && (sun[1] - sun[2]).abs() < 1e-6 && sun[0] > 1.0);
+        // The resource's +0x70 colour is zero: the ambient is the in-scatter,
+        // proportional to the scale.
+        let unit2 = CloudUnit { amb_scale: 2.0, ..unit };
+        let (_, amb2) = cloud_light(&sky_f(), &inp, [0.0, 1.0, 0.0], &unit2);
+        for i in 0..3 {
+            assert!(amb[i] > 0.0 && (amb2[i] - 2.0 * amb[i]).abs() < 1e-6);
+        }
+        // Blue scatters most.
+        assert!(amb[2] > amb[0]);
+    }
+
+    #[test]
     fn hls_round_trip() {
         for c in [[0.9f32, 0.5, 0.2, 1.0], [0.1, 0.2, 0.7, 1.0], [0.4, 0.4, 0.4, 1.0], [0.97, 0.94, 0.71, 1.0]] {
             let back = hls_to_rgb(rgb_to_hls(c));

@@ -131,11 +131,20 @@ the private `E:\ddda-re\shots`, rendered with `ddview --ref`):
 - refs-lit 12:21 and 17:45 (live lighting, cloudy weather found from the
   fog): ground (30,39,40) / (31,40,41) and (26,34,34) / (25,34,35); a
   second ground box matches to the level.
-- Gaps: depth of field; stars, moon, clouds and fog over the sky (the
-  horizon sky is whiter than the original's); the water's reflection
-  (stand-in, the sea is too light); night point lights; characters and
-  event objects. Captures with the clock and weather recorded would let
-  refs 001-005 be compared at their real time.
+- Night and water (2026-10-09, branch task/m1-night-water): the sea is
+  unlit forward with the environment cubes (traced shaders), the cloud
+  domes of the weather turn the horizon blue under the fog, the sky spot
+  light lights the ground at night, and the stage DOF is drawn. At 12:00
+  fine: sea ref / ours ref001 (63,78,96) / (48,62,77), ref004 (56,68,78) /
+  (44,55,62) (was (74,97,116)); horizon ref004 (142,166,189) /
+  (134,153,169) (was (184,184,184)), ref002 (138,160,183) / (129,146,163);
+  refs-lit 23:04 ground (5,9,11) / (5,13,14) (was (1,4,5)); the day
+  captures are unchanged (within 1-2 levels).
+- Gaps: stars and the moon; night point lights (lamps, lantern) and the
+  moon light; the water's normal maps and the foam effect; characters and
+  event objects. Captures with the clock and weather recorded (sea and
+  sky in view, a lamp-lit night) would let refs 001-005 be compared at
+  their real time.
 
 **Started: M2** (Walk), alongside the M1 shading gaps, at the maintainer's
 request (2026-10-08). See [ANIMATION.md](ANIMATION.md).
