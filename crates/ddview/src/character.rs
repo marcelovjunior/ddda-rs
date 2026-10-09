@@ -26,6 +26,113 @@ pub const RMOTIONLIST: u32 = 0x7682_0D81;
 /// Frames per second of motion data. *Assumed* 30 until traced in the exe.
 pub const MOTION_FPS: f32 = 30.0;
 
+#[derive(Default)]
+pub struct CameraFadeCache {
+    thresholds: Option<Option<[f32; 7]>>,
+    actors: HashMap<(Entity, Entity), mtcamera::fade::NearFade>,
+    dd: HashMap<Entity, (Handle<crate::stage::DdMaterial>, (f32, AlphaMode, Option<u8>, u32))>,
+    standard: HashMap<Entity, (Handle<StandardMaterial>, f32, AlphaMode)>,
+}
+
+/// Near-camera model opacity from 0x0088bdc0; run after joint propagation.
+/// Each process currently renders one followed view. State is keyed by both
+/// view and actor; multiple simultaneous views need per-view draw materials.
+/// This implements the ordinary distance path, not aiming-mode pawn fading,
+/// special-camera horizontal-only distance, or the original global bypasses.
+pub fn camera_fade(
+    time: Res<Time>, args: Res<crate::Args>,
+    state: Option<Res<crate::play::PlayState>>,
+    stream: Option<Res<crate::stream::Streamer>>,
+    pause: Res<crate::pause::PauseState>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform), With<crate::play::FollowCam>>,
+    actors: Query<&Playback>, transforms: Query<&GlobalTransform>,
+    mut meshes: Query<(Entity, &ChildOf, Option<&mut MeshMaterial3d<crate::stage::DdMaterial>>, Option<&mut MeshMaterial3d<StandardMaterial>>)>,
+    mut dd: ResMut<Assets<crate::stage::DdMaterial>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    mut cache: Local<CameraFadeCache>,
+) {
+    let Some(state) = state else { return };
+    let Ok((view, camera, eye)) = cameras.single() else { return };
+    if cache.thresholds.is_none() {
+        let read = (|| -> Result<[f32; 7], ddexe::Error> {
+            let file = ddexe::ExeFile::next_to(&args.native_pc)?;
+            let exe = file.image()?;
+            // 0x0088bdc0 selects these globals; never embed their table.
+            Ok(exe.f32s(0x0187_5de4, 7)?.try_into().unwrap())
+        })();
+        if let Err(e) = &read { warn!("camera fade disabled: {e}"); }
+        cache.thresholds = Some(read.ok());
+    }
+    let Some(thresholds) = cache.thresholds.flatten() else { return };
+    let stage = stream.as_ref().map_or(args.stage, |s| s.stage);
+    let frames = if pause.paused { 0.0 } else { time.delta_secs().min(0.1) * MOTION_FPS };
+    let mut opacity = HashMap::new();
+    for (&seat, &root) in &state.entities {
+        let Ok(actor) = actors.get(root) else { continue };
+        // uModel::vf22 0x00ff9a20 maps semantic bone ID 1, falling back
+        // to the model matrix if missing. These are current morphed joints.
+        let joint = actor.joints.get(&1).copied().unwrap_or(root);
+        let Ok(position) = transforms.get(joint) else { continue };
+        let delta = (eye.translation() - position.translation()) / UNIT;
+        let (inner, outer) = if seat >= 4 {
+            (thresholds[4], thresholds[3])
+        } else if stage == 100 {
+            (thresholds[2], 90.0) // Immediate in 0x0088bdc0.
+        } else { (thresholds[1], thresholds[0]) };
+        let alpha = cache.actors.entry((view, root)).or_default().step(
+            delta.length_squared(), delta.x * delta.x + delta.z * delta.z,
+            inner, outer, frames, !camera.is_active,
+        );
+        opacity.insert(root, alpha);
+    }
+    cache.actors.retain(|&(v, root), _| v == view && opacity.contains_key(&root));
+    for (mesh, parent, dd_handle, standard_handle) in &mut meshes {
+        let Some(&alpha) = opacity.get(&parent.parent()) else { continue };
+        if let Some(mut handle) = dd_handle {
+            // Clone only when fading first becomes necessary. A shared stage
+            // or another actor's material must never inherit this opacity.
+            if alpha < 1.0 && !cache.dd.contains_key(&mesh) {
+                if let Some(material) = dd.get(&handle.0).cloned() {
+                    let authored = (material.base.base_color.alpha(), material.base.alpha_mode,
+                        material.extension.depth, material.extension.params.flags);
+                    let own = dd.add(material);
+                    handle.0 = own.clone();
+                    cache.dd.insert(mesh, (own, authored));
+                }
+            }
+            if let Some((own, authored)) = cache.dd.get(&mesh) {
+                let wanted = authored.0 * alpha.min(1.0);
+                if dd.get(own).is_some_and(|m| m.base.base_color.alpha() != wanted) {
+                    if let Some(mut material) = dd.get_mut(own) {
+                        crate::stage::character_opacity(&mut material, alpha, *authored);
+                    }
+                }
+            }
+        }
+        if let Some(mut handle) = standard_handle {
+            if alpha < 1.0 && !cache.standard.contains_key(&mesh) {
+                if let Some(material) = standard.get(&handle.0).cloned() {
+                    let authored = (material.base_color.alpha(), material.alpha_mode);
+                    let own = standard.add(material);
+                    handle.0 = own.clone();
+                    cache.standard.insert(mesh, (own, authored.0, authored.1));
+                }
+            }
+            if let Some((own, original_alpha, original_mode)) = cache.standard.get(&mesh) {
+                let wanted = original_alpha * alpha.min(1.0);
+                if standard.get(own).is_some_and(|m| m.base_color.alpha() != wanted) {
+                    if let Some(mut material) = standard.get_mut(own) {
+                        material.base_color.set_alpha(wanted);
+                        material.alpha_mode = if alpha < 1.0 { AlphaMode::Blend } else { *original_mode };
+                    }
+                }
+            }
+        }
+    }
+    cache.dd.retain(|mesh, _| meshes.get(*mesh).is_ok());
+    cache.standard.retain(|mesh, _| meshes.get(*mesh).is_ok());
+}
+
 #[derive(Component)]
 pub struct Playback {
     pub motion: mtlmt::Motion,
@@ -753,6 +860,19 @@ pub fn spawn_look(
     // the weapons' drawn joints, by part index (the parts come first)
     let mut hands = vec![None; parts.len() - look.weapons.len()];
     hands.extend(look.weapons.iter().map(|w| w.hand));
+    // cBodyEdit is separate from cHumanEdit. Its joints (0xaa..0xce,
+    // 0x0080ad20) do not overlap the human or face controller joints.
+    // Read bulk body-shape tables from the player's installed executable.
+    let mut body = look.body.clone();
+    if let Some(shape) = &look.body_shape {
+        let file = ddexe::ExeFile::next_to(&loader.vfs.root).map_err(|e| e.to_string())?;
+        let exe = file.image().map_err(|e| e.to_string())?;
+        let tables = ddlook::body::Tables::read(&exe).map_err(|e| e.to_string())?;
+        let extra = tables.joints(look.sex, shape).map_err(|e| e.to_string())?;
+        body.get_or_insert_with(|| ddlook::morph::BodyMorph {
+            model_scale: [1.0; 3], joints: vec![],
+        }).joints.extend(extra);
+    }
     spawn_assembled_hands(
         commands,
         loader,
@@ -763,7 +883,7 @@ pub fn spawn_look(
         &look.base,
         look.skin_color,
         look.eyebrow,
-        look.body.as_ref(),
+        body.as_ref(),
         &look.face,
         &parts,
         &hands,
@@ -792,6 +912,32 @@ fn undummy(loader: &Loader, path: &str) -> String {
 
 #[cfg(test)]
 mod eyebrow_install_tests {
+    #[test]
+    fn near_fade_restores_authored_material_and_does_not_change_its_source() {
+        use super::*;
+        use crate::stage::{DdExt, DdMaterial, DdParams, SkyEnvParams};
+        let source = DdMaterial {
+            base: StandardMaterial { base_color: Color::srgba(0.5, 0.4, 0.3, 0.8),
+                alpha_mode: AlphaMode::Mask(0.5), ..default() },
+            extension: DdExt { depth: Some(15), params: DdParams::default(),
+                map: None, spec: None, sky: SkyEnvParams::default(),
+                sky_rayleigh: default(), sky_mie: default(), env_cube: None, albedo_blend: None },
+        };
+        let mut private = source.clone();
+        let authored = (0.8, source.base.alpha_mode, source.extension.depth, source.extension.params.flags);
+        crate::stage::character_opacity(&mut private, 0.25, authored);
+        assert_eq!(private.base.base_color.alpha(), 0.2);
+        assert_eq!(private.base.alpha_mode, AlphaMode::Blend);
+        assert_eq!(private.extension.depth, Some(13));
+        assert_eq!(source.base.base_color.alpha(), 0.8);
+        private.extension.params.flags |= 32; // A concurrent sky update survives restoration.
+        crate::stage::character_opacity(&mut private, 1.25, authored);
+        assert_eq!(private.base.base_color.alpha(), 0.8);
+        assert_eq!(private.base.alpha_mode, AlphaMode::Mask(0.5));
+        assert_eq!(private.extension.depth, Some(15));
+        assert_eq!(private.extension.params.flags, 32);
+    }
+
     #[test]
     fn npc_eyebrow_materials_are_selected_from_installed_mrl() {
         let path = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");

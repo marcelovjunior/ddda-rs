@@ -103,6 +103,34 @@ consumers are retained but not applied to HP/stamina/attack. These APIs
 provide baseline values, not fully modified combat actors.
 
 Source survey:
+`ddlook::morph::BodyMeasurements` now translates the paired skeleton
+measurements in `0x00cbbf00`, with instruction-level checks of the stores
+at `0x00cbc521..0x00cbc715` (the decompiler aliases several stack values
+incorrectly). Each result is the edited measurement divided by the same
+unmodified measurement, in this order:
+
+| rHumanEdit offset | Measurement (joint IDs, world positions) |
+| --- | --- |
+| +0x68 | joint4 Y minus model origin Y (+0xe4) |
+| +0x6c | distance joint6 to joint10 |
+| +0x70 | distance joint14 to joint18 |
+| +0x74 | joint13 Y minus model origin Y |
+| +0x78 | joint16 Y minus model origin Y |
+| +0x7c | distance joint6 to joint8 |
+| +0x80 | distance joint6 to joint7 |
+| +0x84 | distance joint7 to joint8 |
+| +0x88 | distance joint0 to joint8 |
+
+Two new synthetic regressions cover exact measurement ordering, nonuniform
+scaling, independent model origins, identity ratios and invalid/missing
+poses; all six morph unit tests pass. The helper takes evaluated joint
+positions and does not implement the model/constraint evaluation itself.
+It is not yet wired into saved looks, the sim, or the pawn body loader.
+In particular, viewer-only constraint approximations cannot establish
+original body fidelity. Initial neutral floats are no longer a guess:
+`0x0077d6f0` calls `rHumanEdit::vf14` at `0x00cbaed0`, which explicitly
+resets all nine floats to1 and the fixed flag to0 before presets/measurement.
+
 The isolated `SavedPawnBase::skill_level` query translates `0x00780ba0`
 with bit getters `0x0077c390`/`0x0077c400`. `0x00446a30` copies the saved
 level-one/two bitsets into active info +0x730/+0x768; the skill state begins

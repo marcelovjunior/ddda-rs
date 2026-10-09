@@ -47,6 +47,8 @@ pub struct Terrain {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialRayHit {
     pub hit: ddsim::RayHit,
+    /// First material word, retained also for flags-only geometry.
+    pub flags: u32,
     /// Raw SBC record, not an inferred material category. Query material +4
     /// is consumed by the original sound getter 0x00423b80; record binding
     /// comes from 0x01165820 / 0x011637f0.
@@ -411,6 +413,7 @@ impl Terrain {
             }
         }
         best.map(|(k, normal, id)| MaterialRayHit {
+            flags: self.flags[id],
             material: self.materials[id],
             attribute: self.attributes[id],
             hit: ddsim::RayHit {
@@ -505,6 +508,10 @@ impl ddsim_ground::Ground for Terrain {
 
     fn ray(&self, from: [f32; 3], to: [f32; 3]) -> Option<ddsim::RayHit> {
         self.ray_with_material(from, to).map(|hit| hit.hit)
+    }
+
+    fn ray_with_flags(&self, from: [f32; 3], to: [f32; 3]) -> Option<(ddsim::RayHit, u32)> {
+        self.ray_with_material(from, to).map(|hit| (hit.hit, hit.flags))
     }
 
     /// The triangles whose bounding boxes meet the box `lo`-`hi`.
@@ -614,6 +621,7 @@ mod tests {
         assert_eq!(t.ray_with_material(to, from).unwrap().material, Some(lower));
         assert_eq!(t.ray_with_material(to, from).unwrap().attribute, None);
         t.add_flagged(plane(75.0), 0x2000);
+        assert_eq!(t.ray_with_flags(from, to).unwrap().1, 0x2000);
         assert_eq!(t.ray_with_material(from, to).unwrap().material, None);
         assert_eq!(t.ray_with_material(from, to).unwrap().attribute, None);
         let mut faces = Vec::new();

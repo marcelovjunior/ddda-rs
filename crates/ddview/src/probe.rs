@@ -86,13 +86,13 @@ pub fn update(
         match st.terrain.ray(from.to_array(), to.to_array()) {
             Some(h) => info!(
                 "probe #{}: eye at {:?} cm (stage); collision hit at {:?} cm, {:.2} m away, normal {:?}",
-                *count + 1,
+                *count,
                 from,
                 h.point,
                 (Vec3::from(h.point) - from).length() * UNIT,
                 h.normal
             ),
-            None => info!("probe #{}: eye at {:?} cm (stage); no collision within 200 m", *count + 1, from),
+            None => info!("probe #{}: eye at {:?} cm (stage); no collision within 200 m", *count, from),
         }
     }
     let Some(first) = hits.first().map(|(_, h)| h.distance) else {

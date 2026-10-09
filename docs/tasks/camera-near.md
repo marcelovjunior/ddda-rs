@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/camera-near`
 - **Board area:** `play/camera-near`
-- **Status:** open
+- **Status:** in progress (codex-30)
 
 ## Goal
 
@@ -50,4 +50,52 @@ Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+2026-10-09, codex-30: traced the actor fade at **0x0088bdc0**, its
+semantic-joint lookup **0x00ff9a20**, draw consumer **0x00b6a070**, and
+explicit normal camera near96 initialization **0x007dc8a0**. Detailed
+source, thresholds, state transitions and limitations are in CAMERA.md.
+
+Implemented: `mtcamera::fade` ordinary distance state machine; viewer
+adapter for PlayState actors after joint propagation, installed-exe
+threshold reads, private material clones and restoration. Source global
+bypasses, aiming pawn cone and special camera variants remain open.
+
+Tested: two headless state-machine regressions and the viewer material
+restoration regression pass (release profile); `cargo build --release -p
+ddview` passes with two pre-existing warnings. A bounded hidden
+`--unattended --play --radius 0 --shot ... --shot-delay 8` run rendered a
+two-actor field screenshot and exited automatically without query/system
+errors. Its ordinary distant camera does not validate near-fade appearance.
+Compared against original: not yet; porch and wall acceptance remains open.
+
+Followup (head scope approval #2452): nonfield `stage_collision` now
+preserves authored SBC material records and triangle attributes. The
+installed Cassardis regression passes: unchanged triangle count and at
+least 100 surface casts retain their source metadata, including nonzero
+flags. No additional geometry was introduced.
+
+Sweep followup (head #2493): replaced inward bisection with the sourced
+target-outward nearest sphere cast, using existing character-contact
+geometry through a narrow `sphere_contact` wrapper. `Ground::ray_with_flags`
+and the Terrain override preserve nearest ray metadata. Both ray/sweep
+reject bit0x10 after selecting the hit, and sweep response stands 0.1 cm
+off the surface. Three geometric regressions cover a clear pocket past a
+thin wall, a flagged nearest wall with an unflagged wall behind it, and
+initial overlap. The three new and one existing follow-camera regression
+pass, as does the nearest-ray metadata regression. Release ddview build
+passes (two existing warnings). No new original/render comparison yet.
+
+Next: compare the corrected camera at the reported porch/room wall.
+Head's probe #2486 found a wall only 42 cm ahead of the eye (near96), with
+drawn st200_md12 about 10 cm beyond its SBC; this is not evidence for adding
+new scenery geometry. The porch pillar itself was not yet probed.
+No game or install changes; no live game control used for this checkpoint.
+
+Further source trace: CAMERA.md now records the +0xB98 producer chain
+from selected actor sphere/capsule contacts (0x00888750), per-frame maximum
+accumulator (0x00421d60/0x00420910), and exact scalar smoother
+(0x007bc800, vtable0x01599174). No behavior was added for this path: the
+viewer lacks the selected animated actor collision entries and eligibility
+state. It should not substitute guessed render bounds. Source review
+included disassembly because Ghidra prunes the producer's contact loop.
+This documentation checkpoint adds no tests or original comparison.

@@ -2416,6 +2416,7 @@ dependencies = [
 name = "ddlook"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "dditem",
  "ddnpc",
  "ddpawn",
@@ -2649,6 +2650,7 @@ dependencies = [
  "ddvfs",
  "ddworld",
  "mtarc",
+ "mtcamera",
  "mtgmd",
  "mtgui",
  "mtlmt",
