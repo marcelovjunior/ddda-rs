@@ -229,7 +229,7 @@ meanings in the different owning classes.
 Base entry cannot be omitted from an eventual driver. `0x009a67b0`,
 `0x009b4920`, and `0x009bd970` call `cActionBase::vf05` (`0x007f1890`),
 reset action state, and bind a checked class owner. The common entry
-clears action completion and actor +0x2370/+0x2374; the enemy-class branch
+clears action completion and actor +0x2370/+0x2374; the actor +0x206c bit-1 branch
 also resets +0x273c and restores/remaps the priority mask from +0x2e38 to
 +0x2e34 (0x40 to 0x100000 and 0x400 to 0x4000000). Body base entry further
 resets its +0x2578/+0x257c values and writes +0x2574 = 0x100. Child base
