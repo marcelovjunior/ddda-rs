@@ -366,7 +366,11 @@ fn hit_pass_inner(
                 // min damage: the attacker object's +0x14 (*not confirmed*
                 // to be the unit step), 1.0 here
                 let (out, valued) = resolve_enemy_hit_valued_with(merged, &def, regions, at, rates, &tables.game, 1.0,
-                    |pool_id, hit| after_mitigation(v.owner, pool_id, hit, &current_owners));
+                    |pool_id, hit| {
+                        if collision.is_some() {
+                            after_mitigation(v.owner, pool_id, hit, &current_owners);
+                        }
+                    });
                 // build-up on the hit region (0x007772B0; a main region
                 // exists, so it runs whatever the region's mAttr says)
                 let r = &mut regions[at];

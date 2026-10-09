@@ -466,6 +466,36 @@ mod linked_hits {
     }
 
     #[test]
+    fn configured_callback_cannot_modify_unconfigured_enemy() {
+        let (mut fighters, tables) = configured_scene(37);
+        let mut unconfigured = fighters[1].clone();
+        unconfigured.owner = 105;
+        unconfigured.hurts[0].side.owner = 105;
+        fighters.push(unconfigured);
+        let mut called = Vec::new();
+        let events = hit_pass_configured(
+            &mut fighters,
+            &tables,
+            1.0,
+            &mut || 1.0,
+            &|_| true,
+            &[config(104, vec![])],
+            &mut |owner, _, hit, _| {
+                called.push(owner);
+                hit.phys *= 2.0;
+            },
+        )
+        .unwrap();
+        assert_eq!(called, vec![104]);
+        assert_eq!(
+            events.iter().map(|e| (e.victim, e.total)).collect::<Vec<_>>(),
+            vec![(104, 80.0), (105, 40.0)]
+        );
+        assert_eq!(fighters[1].victim.hp(), 20.0);
+        assert_eq!(fighters[3].victim.hp(), 60.0);
+    }
+
+    #[test]
     fn three_simultaneous_owners_merge_once_before_linked_relay() {
         let (mut fighters, tables) = configured_scene(0);
         for owner in [1, 37] {
@@ -543,8 +573,8 @@ mod linked_hits {
                 if owner == 103 {
                     body_calls += 1;
                     assert_eq!(hit.mag, 40.0); // common defence already subtracted
-                    // This synthetic policy exercises hook ordering, not original
-                    // actor +0x5bd0 death-marker timing. Host policy must supply that.
+                                               // This synthetic policy exercises hook ordering, not original
+                                               // actor +0x5bd0 death-marker timing. Host policy must supply that.
                     let alive = state.iter().find(|s| s.owner == 104).unwrap().has_hp;
                     assert!(!alive);
                     bonus.apply(hit, pool, false, alive);
