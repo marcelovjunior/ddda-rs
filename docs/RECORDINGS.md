@@ -23,7 +23,7 @@ Field names come from the exe's reflection data (`research/dti/dti_props.py`).
 | `mFps` | +0x38 | 30.0, the base rate |
 | `mMaxFps` | +0x3C | 150.0 |
 | `mActualFps` | +0x44 | 46-96 measured (render rate) |
-| `mDeltaTime` | +0x70 | 30 / `mActualFps` in every sample (e.g. 0.312 at 96 fps, 0.54 at 56 fps) |
+| `mDeltaTime` | +0x70 | about 30 / `mActualFps`: 0.312 against 30/96.34 = 0.311 in one read. Across 2,165 samples of session 005707, dt × fps had a median of 28.3 and ranged widely, and no sample matched exactly (codex-11, board #488). `mActualFps` is probably a smoothed rate while dt is per frame; the reads were also sequential, not atomic. |
 | `mDeltaTimeBorder`, `mDeltaTimeLimite` | +0x74, +0x78 | 2.0 each |
 | `mGlobalSpeed` | +0x80 | 1.0 |
 
@@ -32,8 +32,10 @@ per-frame rules multiply by (e.g. `0x00AC51D0`, air movement).
 
 **Conclusions:**
 - The original simulates in units of 1/30-second frames, with a variable
-  step `mDeltaTime` = 30 / fps that is probably capped at 2.0 frames
-  (`mDeltaTimeLimite`).
+  per-frame step `mDeltaTime` that averages about 30 / fps and is probably
+  capped at 2.0 frames (`mDeltaTimeLimite`). The exact per-frame formula
+  (from the frame timer) is not traced; see the clock work in the Codex
+  lane's weather-clock-bindings brief.
 - So per-frame parameters (`pljumpparam`, `m_pl000_00` speeds, stamina
   rates) are per 1/30 s, and the game is frame-rate independent by
   scaling.
