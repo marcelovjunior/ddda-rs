@@ -83,8 +83,22 @@ pub struct HarpyThinkInputs {
     pub action: i32,
     /// Unit +0x5ca8: bit0 airborne movement, bit1 the second movement mode.
     pub movement_flags: u32,
-    /// Result of shared helper 0x008ec740 (classification not yet named).
-    pub movement_class: i32,
+    /// Tension-band result of shared helper 0x008ec740.
+    pub tension_band: i32,
+}
+
+/// Shared tension state: unit +0x5f0c against low +0x5efc and high
+/// +0x5f04. The wolf initializer 0x008f7b80 loads the thresholds from
+/// param/em0200_Tension; the caller supplies each family's values.
+// Translated from 0x008ec740 (DDDA.exe 2017-12-13 Steam).
+pub fn tension_band(value: f32, low: f32, high: f32) -> i32 {
+    if value <= low {
+        1
+    } else if high <= value {
+        2
+    } else {
+        0
+    }
 }
 
 impl HarpyThinkInputs {
@@ -101,8 +115,8 @@ impl HarpyThinkInputs {
         let hover = matches!(self.action, 15..=21 | 31 | 70..=72);
         flags |= u32::from(hover) << 4;
         flags |= (self.movement_flags & 1) << 5;
-        flags |= u32::from(self.movement_class == 1) << 6;
-        flags |= u32::from(self.movement_class == 2) << 7;
+        flags |= u32::from(self.tension_band == 1) << 6;
+        flags |= u32::from(self.tension_band == 2) << 7;
         flags |= ((self.movement_flags >> 1) & 1) << 8;
         flags
     }
@@ -163,13 +177,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tension_thresholds_are_inclusive_with_low_test_first() {
+        assert_eq!(tension_band(10.0, 10.0, 20.0), 1);
+        assert_eq!(tension_band(15.0, 10.0, 20.0), 0);
+        assert_eq!(tension_band(20.0, 10.0, 20.0), 2);
+        assert_eq!(tension_band(10.0, 10.0, 10.0), 1);
+        assert_eq!(tension_band(f32::NAN, 10.0, 20.0), 0);
+    }
+
+    #[test]
     fn harpy_think_flags_follow_action_and_previous_flight_mode() {
         let mut input = HarpyThinkInputs {
             grounded: false,
             alert: 2,
             action: 29,
             movement_flags: 1,
-            movement_class: 0,
+            tension_band: 0,
         };
         assert_eq!(input.write_flags(0xffff_ffff), 0xffff_fe00 | (1 << 3) | (1 << 5));
         input.action = 15;
@@ -179,7 +202,7 @@ mod tests {
         input.grounded = true;
         input.alert = 1;
         input.movement_flags = 2;
-        input.movement_class = 2;
+        input.tension_band = 2;
         assert_eq!(input.write_flags(0), 1 | (1 << 2) | (1 << 7) | (1 << 8));
     }
 

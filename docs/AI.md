@@ -586,7 +586,11 @@ switches movement bits from 4 to 1 strictly after frame 18, enters motion
 0x1f at frame 57 on completion, and marks the action done on its following
 update. The first nine think flags now project from grounded/alert state,
 the action class query (`0x009381e0`), prior movement bits and common
-movement classification (`0x0093b470`). This explains the graph's grounded
+tension classification (`0x0093b470`). This explains the graph's grounded
 path when flight bit5 was absent from the earlier synthetic probe. Sensor
-collection, the shared movement classification and the other think bytes
-are still host inputs, not invented defaults.
+collection, current tension and the other think bytes are still host
+inputs, not invented defaults. Shared helper `0x008ec740` classifies
+current +0x5f0c below/equal +0x5efc as band1, above/equal +0x5f04 as band2,
+and between as band0; its low test runs first. Those thresholds come from
+the family's Tension resource (wolf loader `0x008f7b80`). The helper and
+its inclusive boundary behavior now have a regression test.
