@@ -13,9 +13,14 @@
 //! freezes it there (for screenshots). Without `--exe` the exe is looked
 //! for next to `nativePC`.
 //!
-//! *Not shown yet:* stage lighting and effects, the camera's
-//! actor-joint adjustments and `mOffsetPos`, the actors' looks (every
-//! actor uses the base Arisen body as a stand-in), IK.
+//! NPC actors wear their event looks (`ddstory::look`: base body by sex,
+//! the NPC armour set, hair and beard); the player and pawns use the base
+//! Arisen body, since their looks are the players' own.
+//!
+//! *Not shown yet:* stage lighting and effects, body and face morphs,
+//! colours, the part on/off masks, IK. The camera's actor-joint
+//! adjustments are applied with zero displacement: the viewer has no IK
+//! or body morphs, so every joint sits where its local pose puts it.
 
 use std::path::PathBuf;
 
@@ -94,6 +99,29 @@ pub fn run_if_requested() -> bool {
     let stage_no = data.event_table().and_then(|t| t.rows.get(args.row)).map(|r| r.stage as u32).unwrap_or(0);
     let cfg = EventConfig { language: args.language, sex: args.sex, hour: args.hour, stage: stage_no };
     let mut player = EventPlayer::open(&data, args.row, cfg).expect("open event");
+    // Actor looks: NPCs from their edit data, everyone else the base body.
+    let mut looks = std::collections::HashMap::new();
+    {
+        let mut probe = EventPlayer::open(&data, args.row, cfg).expect("open event");
+        let f = probe.step(1.0).expect("event step");
+        for a in &f.actors {
+            let models = if a.unit_type == 2 {
+                match ddstory::look::npc_look(&data, a.unit_no as u32, a.unit_no as u32, args.row as u32) {
+                    Ok(l) => {
+                        println!("{}: NPC {} {} set {:#x} models {:?}", a.name, l.npc, l.edit_path, l.armor_set, l.models);
+                        std::iter::once(l.base.clone()).chain(l.models.iter().map(|(_, p)| p.clone())).collect()
+                    }
+                    Err(e) => {
+                        eprintln!("{}: look: {e}", a.name);
+                        vec![crate::play::BODY.to_string()]
+                    }
+                }
+            } else {
+                vec![crate::play::BODY.to_string()]
+            };
+            looks.insert(a.name.clone(), models);
+        }
+    }
     // Frames 0..=start_frame, so the first shown frame has its actors.
     let mut last = EventFrame::default();
     for _ in 0..=args.start_frame {
@@ -114,7 +142,7 @@ pub fn run_if_requested() -> bool {
         .add_plugins(stage::ShadingPlugin)
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 250.0, ..default() })
-        .insert_resource(Playing { player, last, stage: stage_no, args: args.clone() })
+        .insert_resource(Playing { player, last, stage: stage_no, args: args.clone(), looks })
         .add_systems(Startup, setup)
         .add_systems(Update, (drive, character::animate, shot).chain())
         .run();
@@ -127,6 +155,8 @@ struct Playing {
     last: EventFrame,
     stage: u32,
     args: EventArgs,
+    /// Model paths per actor name, base body first.
+    looks: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// One actor of the timeline and its motion list.
@@ -218,7 +248,8 @@ fn setup(
     }
     info!("stage {s}: {} models, {placed} placed objects", models.len());
 
-    // Actors: the base Arisen body as a stand-in for every look.
+    // Actors: one skeleton per model of the look, all driven by the same
+    // motion and placement.
     for a in &playing.last.actors {
         let Some(list_path) = a.motion_list.clone() else { continue };
         let motions = match vfs.read(&list_path, RMOTIONLIST).map_err(|e| e.to_string()).and_then(|b| {
@@ -230,23 +261,33 @@ fn setup(
                 continue;
             }
         };
-        match character::spawn(
-            &mut commands,
-            &mut loader,
-            &mut meshes,
-            &mut materials,
-            &mut images,
-            &mut bindposes,
-            crate::play::BODY,
-            &list_path,
-            a.motion_no.max(0) as usize,
-            Vec3::ZERO,
-            Some(a.motion_frame),
-        ) {
-            Ok(root) => {
-                commands.entity(root).insert(Actor { name: a.name.clone(), motions, shown: a.motion_no });
+        // A list holds motions only for the cuts the actor is drawn in
+        // (npc001_00 has none for cut 1): start from the cut's motion or
+        // the first one present.
+        let Some(slot) = present_slot(&motions, a.motion_no) else {
+            error!("{}: {list_path} has no motions", a.name);
+            continue;
+        };
+        let models = playing.looks.get(&a.name).cloned().unwrap_or_else(|| vec![crate::play::BODY.to_string()]);
+        for model in &models {
+            match character::spawn(
+                &mut commands,
+                &mut loader,
+                &mut meshes,
+                &mut materials,
+                &mut images,
+                &mut bindposes,
+                model,
+                &list_path,
+                slot,
+                Vec3::ZERO,
+                Some(a.motion_frame),
+            ) {
+                Ok(root) => {
+                    commands.entity(root).insert(Actor { name: a.name.clone(), motions: motions.clone(), shown: a.motion_no });
+                }
+                Err(e) => error!("{} {model}: {e}", a.name),
             }
-            Err(e) => error!("{}: {e}", a.name),
         }
     }
 
@@ -282,6 +323,15 @@ fn setup(
     ));
 }
 
+/// The motion slot to show: the requested one if the list has it, else the
+/// first present one.
+fn present_slot(motions: &[Option<mtlmt::Motion>], want: i32) -> Option<usize> {
+    match motions.get(want.max(0) as usize) {
+        Some(Some(_)) => Some(want.max(0) as usize),
+        _ => motions.iter().position(|m| m.is_some()),
+    }
+}
+
 fn log_frame(f: &EventFrame) {
     for c in &f.cues {
         info!("frame {:?}: sound cue {c:?}", f.frame);
@@ -315,7 +365,8 @@ fn drive(
     }
     let f = &playing.last;
     if let (Some(c), Ok((mut t, mut proj))) = (&f.camera, cams.single_mut()) {
-        if let Some(p) = c.pose {
+        // Zero joint displacements (see the module note).
+        if let Ok(Some(p)) = c.adjusted(&[]) {
             let eye = Vec3::from(p.position) * UNIT;
             let target = Vec3::from(p.target) * UNIT;
             *t = Transform::from_translation(eye).looking_at(target, Vec3::from(p.up));
