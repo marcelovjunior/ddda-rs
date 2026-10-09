@@ -13,6 +13,7 @@
 pub mod data;
 pub mod log;
 pub mod rift;
+pub mod save;
 
 pub use data::RiftData;
 pub use log::{HistoryEntry, PawnLog, PawnRef};

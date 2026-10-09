@@ -2416,6 +2416,7 @@ name = "ddrift"
 version = "0.1.0"
 dependencies = [
  "ddexe",
+ "ddid",
  "ddnpc",
  "ddparam",
  "ddpawn",
