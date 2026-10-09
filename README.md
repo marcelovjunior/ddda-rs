@@ -38,8 +38,11 @@ target/release/ddview <path to DDDA>/nativePC --play
 | Walk | Left Ctrl | Right Ctrl |
 | Jump | Space | Enter |
 
-Hold the right mouse button to turn the camera. F2 toggles the town/field
-walk.
+Move the mouse to turn the camera (right turns right; up looks up).
+The cursor is grabbed and hidden during play. Esc opens a viewer pause
+menu with Resume and Quit; Esc again resumes. Losing window focus also
+opens the menu. F2 toggles the town/field walk.
+`--paused` starts at the viewer menu.
 
 ## How to play
 
@@ -68,6 +71,12 @@ overrides it.
 
 The bars at the top left are a viewer overlay, not the game's GUI: HP and
 stamina, the pawn's HP, and the nearest goblin's HP.
+
+Offline, the viewer menu pauses simulation and animation. In a network
+session it stops only your controls: networking and the shared world
+continue. Release movement keys before resuming.
+
+Manual movement, jump or attack takes over `--demo`.
 
 `--demo` plays by itself: with goblins, the Arisen runs at the nearest one
 and attacks.

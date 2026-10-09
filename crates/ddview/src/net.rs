@@ -230,7 +230,7 @@ pub fn prejoin(mut args: crate::Args) -> crate::Args {
     args
 }
 
-fn take_prejoined() -> Option<Guest> {
+pub(crate) fn take_prejoined() -> Option<Guest> {
     let shared = PREJOINED.lock().unwrap().take()?;
     let mut g = shared.lock().unwrap();
     g.take()
@@ -471,6 +471,7 @@ fn show_enemies(
 /// One render frame: step the session at 30 Hz, then show every Arisen.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn step(
+    pause: Res<crate::pause::PauseState>,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -487,12 +488,15 @@ pub fn step(
 ) {
     let (Some(mut st), Some(net)) = (state, net) else { return };
     let st = &mut *st;
-    play::orbit(st, &buttons, &mouse);
-    let mut input = PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) };
-    if st.demo && !st.goblins.is_empty() && args.host.is_some() {
+    if !pause.paused { play::orbit(st, &buttons, &mouse); }
+    let mut input = if pause.paused { PlayerInput::default() } else {
+        PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) }
+    };
+    if play::active_input(&input.sim) || input.interact { st.demo = false; }
+    if !pause.paused && st.demo && !st.goblins.is_empty() && args.host.is_some() {
         // with goblins on the host, the demo's seat 0 fights them; walked
         // per host frame below
-    } else if st.demo {
+    } else if !pause.paused && st.demo {
         // Unattended: walk in a small circle near the spawn (about 1.3 m
         // radius at the walk speed).
         let t = time.elapsed_secs();
@@ -550,7 +554,7 @@ pub fn step(
                 }
                 let mut local = FrameInputs::new();
                 let mut i = input;
-                if st.demo && !st.goblins.is_empty() {
+                if !pause.paused && st.demo && !st.goblins.is_empty() {
                     let mut press = *demo_press;
                     i.sim = play::demo_attack(&server.host.sim, server.host.fight.as_ref(), 0, st.cam_yaw, &mut press);
                     *demo_press = press;

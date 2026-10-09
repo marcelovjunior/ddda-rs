@@ -11,7 +11,7 @@
 //! | light attack | J or left mouse | Numpad 1 |
 //! | heavy attack | K or middle mouse | Numpad 2 |
 //!
-//! The camera orbits P1 (hold right mouse to turn it). F2 switches every
+//! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
 //! area attribute that picks them in the original is not read yet.
 //!
@@ -319,7 +319,9 @@ pub fn setup(
 }
 
 fn stick(keys: &ButtonInput<KeyCode>, up: KeyCode, down: KeyCode, left: KeyCode, right: KeyCode) -> [f32; 2] {
-    let f = |k: KeyCode| if keys.pressed(k) { 1.0f32 } else { 0.0 };
+    // A press and release can both arrive before a render frame (e.g. a
+    // slow loading frame). Keep that edge until the next simulation tick.
+    let f = |k: KeyCode| if keys.pressed(k) || keys.just_pressed(k) { 1.0f32 } else { 0.0 };
     let v = [f(right) - f(left), f(up) - f(down)];
     let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
     if n > 1.0 {
@@ -437,6 +439,7 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
 /// One tick: input -> simulation -> character transforms and motions.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn step(
+    pause: Res<crate::pause::PauseState>,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -448,8 +451,10 @@ pub fn step(
     mut hud: ResMut<Hud>,
     mut projs: Query<&mut Projection, With<FollowCam>>,
     mut projected: Local<bool>,
+    mut pending: Local<HashMap<PlayerId, Input>>,
 ) {
     let Some(mut st) = state else { return };
+    if pause.paused { pending.clear(); return; }
     if !*projected {
         camera_projection(&mut projs);
         *projected = true;
@@ -475,6 +480,13 @@ pub fn step(
     if let Some(&p2) = locals.get(1) {
         local.insert(p2, p2_input(&keys, cam_yaw));
     }
+    // Explicit local input takes over an unattended --demo session.
+    if local.values().any(active_input) { st.demo = false; }
+    for (&seat, &input) in &local {
+        let queued = pending.entry(seat).or_default();
+        *queued = latch_input(*queued, input);
+    }
+    local.clone_from(&pending);
     let dt = time.delta_secs().min(0.25);
     st.acc += dt;
     let frame = 1.0 / ddsim::MOTION_FPS;
@@ -501,6 +513,7 @@ pub fn step(
             }
         }
         fixed_frame(st, &local);
+        pending.clear();
     }
     let shown: Vec<Shown> = st.sim.players.iter().map(Shown::of).collect();
     show(st, &shown, &mut roots, &mut cams);
@@ -510,14 +523,36 @@ pub fn step(
     st.fight = fight;
 }
 
-/// Turns the follow camera while the right mouse button is held.
-pub fn orbit(st: &mut PlayState, buttons: &ButtonInput<MouseButton>, mouse: &AccumulatedMouseMotion) {
-    if buttons.pressed(MouseButton::Right) {
-        st.cam_yaw -= mouse.delta.x * 0.004;
-        // mAngLimitXMin / Max -60 / 30 degrees in the player camera lists
-        // (sign *inferred*: up to 60 degrees above, 30 below)
-        st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-30f32.to_radians(), 60f32.to_radians());
+pub fn active_input(input: &Input) -> bool {
+    input.stick != [0.0; 2] || input.jump || input.light || input.heavy
+}
+
+/// Retain a short input until a fixed tick consumes it. Held input still
+/// refreshes direction and camera yaw every render frame.
+fn latch_input(previous: Input, mut latest: Input) -> Input {
+    if latest.stick == [0.0; 2] && previous.stick != [0.0; 2] {
+        latest.stick = previous.stick;
+        latest.walk = previous.walk;
+        latest.sprint = previous.sprint;
     }
+    latest.jump |= previous.jump;
+    latest.light |= previous.light;
+    latest.heavy |= previous.heavy;
+    latest
+}
+
+/// Turns the follow camera directly with the grabbed mouse.
+pub fn orbit(st: &mut PlayState, _buttons: &ButtonInput<MouseButton>, mouse: &AccumulatedMouseMotion) {
+    (st.cam_yaw, st.cam_pitch) = orbit_angles(st.cam_yaw, st.cam_pitch, mouse.delta);
+}
+
+fn orbit_angles(yaw: f32, pitch: f32, delta: Vec2) -> (f32, f32) {
+    // Viewer mouse sensitivity (radians/pixel), not an original-game constant.
+    let yaw = yaw + delta.x * 0.004;
+    // mAngLimitXMin / Max -60 / 30 degrees in the player camera lists
+    // (sign *inferred*: up to 60 degrees above, 30 below)
+    let pitch = (pitch + delta.y * 0.004).clamp(-60f32.to_radians(), 30f32.to_radians());
+    (yaw, pitch)
 }
 
 /// Player one's controls (W A S D, Ctrl, Shift, Space; light attack J or
@@ -922,6 +957,73 @@ mod tests {
             let p = std::array::from_fn(|k| from[k] + (to[k] - from[k]) * t);
             Some(ddsim::RayHit { point: p, normal: [0.0, 0.0, 1.0] })
         }
+    }
+
+    #[test]
+    fn short_w_press_is_retained_until_a_fixed_tick() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyW);
+        keys.release(KeyCode::KeyW);
+        let pressed = p1_input(&keys, &ButtonInput::default(), 0.0);
+        assert_eq!(pressed.stick, [0.0, 1.0]);
+        let buffered = latch_input(pressed, Input::default());
+        assert_eq!(buffered.stick, [0.0, 1.0]);
+        assert!(active_input(&buffered));
+        assert!(!active_input(&latch_input(Input::default(), Input::default())));
+    }
+
+    #[test]
+    fn held_wasd_moves_default_and_saved_spots() {
+        let path = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !path.exists() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(path).unwrap();
+        let mut spots = vec![(100, 58, 50, [215.9, 41054.3, 83921.1], 0.0)];
+        if let Some(save) = std::env::var_os("DDDA_TEST_SAVE") {
+            let save = ddsave::SaveFile::parse(&std::fs::read(save).unwrap()).unwrap();
+            let spot = saved_spot(&save.xml).unwrap();
+            spots.push((spot.stage, 50 + (spot.pos.z / 10000.0).floor() as i32,
+                50 + (spot.pos.x / 10000.0).floor() as i32, spot.pos.to_array(), spot.yaw));
+        }
+        for (stage, a, b, start, yaw) in spots {
+        let mut terrain = ddworld::Terrain::load_collision(&vfs, stage, a, b, 1);
+        terrain.add_scenery(&vfs, stage, a, b, 1);
+        for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
+            let mut sim = ddhost::install::sim(&vfs).unwrap();
+            sim.add_player(0, start, yaw);
+            sim.player_mut(0).unwrap().relaxed = true;
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            let buttons = ButtonInput::default();
+            let input = p1_input(&keys, &buttons, yaw);
+            let inputs = HashMap::from([(0, input)]);
+            for _ in 0..30 {
+                sim.step(1.0 / ddsim::MOTION_FPS, &inputs, &terrain);
+            }
+            let p = sim.player(0).unwrap();
+            let moved = (p.position[0] - start[0]).hypot(p.position[2] - start[2]);
+            eprintln!(
+                "{key:?}: {start:?} -> {:?}, {:?}, moved {moved}",
+                p.position, p.state
+            );
+            assert!(moved > 1.0, "{key:?} did not move: {:?}", p.position);
+        }
+        }
+    }
+
+    #[test]
+    fn mouse_orbit_is_direct_and_respects_pitch_limits() {
+        let (yaw, pitch) = orbit_angles(0.0, 0.0, Vec2::new(20.0, -20.0));
+        assert!(yaw > 0.0 && pitch < 0.0);
+        assert_eq!(
+            orbit_angles(0.0, 0.0, Vec2::new(0.0, -10000.0)).1,
+            -60f32.to_radians()
+        );
+        assert_eq!(
+            orbit_angles(0.0, 0.0, Vec2::new(0.0, 10000.0)).1,
+            30f32.to_radians()
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 - **Owner:** codex lane (PRIORITY 1)
 - **Branch:** `task/viewer-controls`
 - **Board area:** `play/controls`
-- **Status:** open
+- **Status:** controls ready for review; moving-camera wall validation pending
 
 ## The maintainer's report (2026-10-09)
 
@@ -47,4 +47,47 @@
 
 ## Results
 
-(filled in by the agent)
+Implemented on `task/viewer-controls` by codex-17:
+
+- Preserve short WASD presses (including press/release in one render frame)
+  until a fixed simulation tick consumes them. Manual movement/jump/attack
+  now takes over `--demo`, which previously overwrote it. The held-WASD
+  failure reported by the maintainer was **not reproduced** in the current
+  source: the basic key-to-seat mapping already worked. These are specific
+  sampling/demo fixes, not a proven explanation for every reported failure.
+- Direct mouse orbit without a button, flipped horizontal/vertical input,
+  with the play-visuals limits corrected to 60 degrees up / 30 down. Existing
+  0.004 radians/pixel sensitivity is explicitly a viewer choice.
+- Viewer-only Resume/Quit menu: Esc toggles it, focus loss opens it, cursor
+  hidden/locked in play and visible/free in the menu. Offline simulation and
+  animation pause. Network sessions keep pumping and advancing, with neutral
+  local input and no demo input while in the menu. Held keys/menu clicks are
+  cleared across transitions. `--paused` starts here for inspection/capture.
+- Stage rasterizer depth bias is mapped from forward Z to Bevy reverse Z.
+  Alpha-blended depth-tested/no-write layers get a minimum positive bias of
+  two depth units, explicitly a viewer adaptation. Opaque-before-transparent
+  ordering is retained; no world-space mesh displacement or alpha change.
+- Minimal `net.rs` edits were agreed with codex-18; `take_prejoined` is now
+  crate-visible for that agent's M5 integration.
+
+Validation:
+
+- `cargo build --release -p ddview` passes. `cargo test --release -p ddview`
+  passes 11 tests. New tests cover mouse signs/limits, short-key buffering,
+  and the actual pause ECS system (Esc, focus loss, Resume, Quit, cursor
+  options, menu visibility and clearing a Resume click).
+- Install-backed held-W/A/S/D regression uses Bevy input mapping and the
+  loaded collision/scenery terrain. At the default ref001 position, each
+  moves 331.8-347.5 cm over 30 frames. With `DDDA_TEST_SAVE` pointing to the
+  maintainer's backed-up save, its position moves 329.9-342.1 cm. This tests
+  the input/simulation path, not physical keyboard delivery through winit.
+- Timed CLI screenshot runs succeeded for `--play`, `--play --save --paused`
+  and both ref001/ref002 poses (before/after). Captures remain in OS TEMP,
+  `viewer-menu-save.png`, `viewer-ref00{1,2}-{before,after}.png`; none committed.
+  The pause screenshot shows the labelled viewer menu, Resume and Quit.
+- Static reference images show no obvious wall speckling before or after;
+  differences affect 2,430 pixels (ref001) / 758 (ref002) at 960x540. Thus
+  these captures **do not prove temporal z-fighting eliminated**. A bounded
+  scripted moving-camera check is the remaining action. No fresh original
+  game comparison was made. Native UI automation stopped when instructed;
+  subsequent validation used CLI screenshots and app/headless tests only.
