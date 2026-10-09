@@ -48,8 +48,7 @@ nine model placements and existence of their nine installed cell archives.
 Older ORACLE.md indices22/23 also resolve to its recorded 63m52n cell.
 This was a paused snapshot, not a boundary-crossing comparison. Probe
 operations were info/read only; live/game claim released. Scratch and raw
-data remain in OS TEMP. No engine/reader code or game data was committed;
-no build needed; git diff --check passed.
+data remain in OS TEMP. The initial batch committed no engine/reader code or game data; git diff --check passed.
 
 Follow-up assembly identified acos/sin and EDI kind 0/1/2 at all six
 model/collision/layout retention/construction call sites. A private Python
@@ -60,11 +59,26 @@ passive archive-list read found eight entries matching the collision set.
 This discrepancy remains open rather than treating desired candidates as
 resident models. Original SSE threshold rounding was not emulated.
 
-The full done-when is **not yet met**. Individual scenery/enemy/NPC drawing/sleep/despawn distance
-consumers remain unresolved. Group activation has authored shape gates
+The full done-when is **not yet met**. Individual scenery distances and the complete actor creation/removal
+lifecycle remain unresolved. Group activation has authored shape gates
 (`0x00cc5670`), so no universal class radius is claimed. No moving live
 comparison was requested or performed. The doc ends with an N-player
 interest/residency and per-view floating-origin design proposal.
 
 Next action: resolve the terrain archive/residency discrepancy, then trace per-class distance
 consumers and obtain maintainer-provided ordinary crossing observations.
+
+Further trace resolves enemy near/far update modes (`0x00853dc0`,
+`0x00aa8830`) and the NPC placement draw-distance consumer (`0x007a32f0`)
+into Intel thresholds, default 5000/25000 (`0x00bbc4e0`). Manager visibility,
+priority and active budgets intervene; full policy exceptions remain open.
+A passive registered-list read found 30 Intel entries; four sampled entries
+match 5000/25000/-1, with manager budgets 12/0. No enemy live match was
+validated. No original process control or writes occurred.
+
+Added `ddtool stream-survey <nativePC>` using the existing GPL reader.
+Actual corpus run passed: 199 lists, 3925 groups; 838 spatial-enabled
+across suffix e/t, 1525 cylinders, radius range 50..44525.98. Reports are
+aggregates only. Shared ddtool hookup adds ddspawn as a dependency; no
+engine code or private exports. Full brief remains partial, with threshold
+movement comparisons and terrain residency discrepancy still open.

@@ -139,12 +139,87 @@ are `0x00760a10` and `0x00762000`. The object implementation is
 `0x00762d30`. None of this establishes a universal per-class metric spawn
 distance: layout residency and authored group regions intervene first.
 
-`cSetInfoCoord.mDrawDistance` is reflected at +0x64, initialized to -1
-by `0x0079ec40`, and serialized by its virtual methods. Its name is not
-proof that it controls construction or unloading. **Its downstream drawing
-consumer, individual actor distance sleep/despawn rules, and complete
-class-specific exceptions remain open.** Do not present the 3-by-3 layout
-candidate window as an enemy/NPC spawn guarantee.
+### Authored group survey
+
+`ddtool stream-survey <nativePC>` reads all installed GPL resources and
+aggregates the second area list only for groups whose scalar 38 is nonzero.
+`0x00cc4690` loads this scalar into +0x70; `0x00cc5670` tests that field
+and the +0x78/+0x84 area count/list. The linked-group fields are
++0x130/+0x134. A linked group can therefore use another group's gate.
+The installed corpus contains 199 lists and 3925 groups:
+
+| Resource suffix | Lists | Groups | Spatial enabled | Linked | Enabled but empty |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| dlc01 | 2 | 6 | 0 | 0 | 0 |
+| e | 52 | 1169 | 837 | 14 | 4 |
+| n | 40 | 606 | 0 | 0 | 0 |
+| p | 52 | 1734 | 0 | 0 | 0 |
+| t | 53 | 410 | 1 | 0 | 1 |
+
+Enabled groups contain 1525 cylinder shapes, radii 50..44525.98 units.
+These are authored region sizes, not universal character spawn distances.
+Suffixes are reported literally, without inferring runtime classes.
+
+### Enemy reduced-update distances
+
+`0x00853dc0`, called by `uEnemy::vf08` (`0x00aa94d0`), classifies
+3D distance from actor reference +0xe0 to the first player reference.
+With near/far fields +0x2984/+0x2988, distance strictly below near selects
+mode 0; near through strictly below far selects mode 1; far or greater
+selects mode 2. A parent actor can supply its mode instead. On stage 100,
+the availability check through `0x005072e0` / `0x00c5f630` requires the
+matching **collision** cell in state 3; unavailable selects mode 3.
+The classifier itself has no distinct enter/exit radii. Modes 2/3 skip the
+full enemy/model update in `0x00aa94d0`; this is not proof of deletion.
+
+`uEnemy::vf05` (`0x00aa8830`) reads near from the float table at
+`0x014f9768 + 4 * actor[0x2d]`, multiplied by the quality factor 1/2/3.
+A nonnegative override at +0x2994 replaces it; far is near +20000.
+For example, subtype 5 (goblin) has base near 4000, hence near/far
+4000/24000 at quality 1 without an override. The table must be read from
+the player's installed exe, not copied as bulk data into the engine.
+The default character constructor (`0x0084a100`) supplies 10000/30000
+before class initialization and sets the override to -1.
+The placement-to-override path for enemies remains untraced.
+
+### Managed NPC distances and budgets
+
+`cSetInfoCoord.mDrawDistance` is at +0x64, initialized to -1 by
+`0x0079ec40`. Its NPC consumer is now traced: `cSetInfoNpc::vf08`
+(`0x007a32f0`) copies it into `uNpcIntel+0x4fc`. The Intel constructor
+`0x00bbbfa0` sets near +0x4f4 to 5000; initialization `0x00bbc4e0`
+uses the override if nonnegative and sets far +0x4f8 to near +20000.
+Thus the default initialized pair is **5000/25000**.
+
+`0x00bbece0` computes distance +0x4ec from Intel position to player or
+camera reference depending on its control flags, with availability,
+state and special-NPC exceptions. `sNpcIntelManager::vf10` (`0x00471d80`)
+selects `0x00472ad0` or `0x00473180` using game flags and `0x00421ce0`.
+These policies assign Intel mode +0x4f0 using the near/far distances,
+priority, and manager budgets +0x16dc/+0x16e0. They are not a single
+radial despawn rule. The first policy also uses six-plane sphere inclusion
+(`0x00dc16e0`), ray occlusion and previous mode; an inactive candidate
+outside the visibility test must be below 500 to enter one queue, while
+already-active candidates follow another queue. Queue sorting
+`0x00472910` uses ascending distance. The alternative policy prioritizes
+visible candidates inside near, then other candidates inside near, and
+can assign mode 1 inside far subject to the secondary budget.
+The full queue priority/exception logic is not translated here.
+
+`uNpc::vf08` (`0x00baf4f0`) reads this Intel mode through actor+0x5854;
+modes greater than 1 skip its full update. Without Intel it uses the
+character mode. These are update gates, distinct from layout construction
+and eventual destruction. Individual scenery distance consumers and the
+complete NPC creation/removal lifecycle remain open; the 3-by-3 layout
+window is not an enemy/NPC spawn guarantee.
+
+A second passive observation at 2026-10-09 15:33:38 UTC found 30 Intel
+entries registered with the manager. The first four registered entries
+all had near/far/override = 5000/25000/-1 and modes 0,0,0,2;
+manager budgets were 12 and 0. Vtable-only enemy scanning produced
+unvalidated matches and provides **no enemy threshold observation**.
+These sequential reads were non-atomic and used only read/scan operations;
+no game control, state writes, or boundary movement was performed.
 
 ## Floating origin
 
@@ -226,7 +301,7 @@ player's installed exe and layouts from their archives. Do not implement
 the angular expression as a plain circle.
 
 Next: resolve the remaining terrain archive/residency discrepancy and
-compare threshold boundaries with recorded ordinary movement. Trace
-`mDrawDistance` to its consumers and record
-ordinary boundary crossings when the maintainer supplies them. The brief's
+compare threshold boundaries with recorded ordinary movement. Trace remaining scenery/enemy override consumers and physical NPC
+creation/removal, then record ordinary boundary crossings under the
+current live-session safety protocol. The brief's
 full per-class distance and transition-comparison gate remains open.
