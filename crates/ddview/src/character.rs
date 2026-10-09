@@ -43,6 +43,20 @@ pub struct Playback {
     /// Body morph (ddlook::morph), applied after the motion by
     /// [`apply_morph`].
     pub morph: Option<Morph>,
+    /// Weapons drawn: each weapon with a hand joint hangs there instead of
+    /// on its sheathed row (0x0080be30's switch).
+    pub drawn: bool,
+}
+
+/// A rigid attachment (a weapon): its anchor under the root, the sheathed
+/// placement (bone index, uCnsAttach matrix) and the drawn bone (the
+/// weapon joint 0x96 / 0x99, no offset), if it has one.
+#[derive(Clone, Copy)]
+pub struct Attach {
+    pub anchor: Entity,
+    pub bone: usize,
+    pub local: Mat4,
+    pub hand: Option<usize>,
 }
 
 /// The base skeleton with its body morph.
@@ -57,9 +71,8 @@ pub struct Morph {
     /// The unmorphed local transforms of the last frame: the motion only
     /// writes the channels it keys, so the rest must come from here.
     pub base: Vec<Transform>,
-    /// Rigid attachments (sheathed weapons): anchor entity under the root,
-    /// bone index, local matrix (uCnsAttach mode 1).
-    pub attach: Vec<(Entity, usize, Mat4)>,
+    /// Rigid attachments (weapons).
+    pub attach: Vec<Attach>,
 }
 
 /// One uCnsEdit record (0x00860ac0).
@@ -83,7 +96,7 @@ pub struct Edit {
 /// size whatever their parents did (0x0086d180). The model scale is the
 /// skeleton's root. The result goes back into the local transforms (shear
 /// from non-uniform parent scales is dropped by the TRS decomposition).
-fn apply_morph(m: &mut Morph, joints: &mut Query<&mut Transform>) {
+fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
     let n = m.bones.len();
     let root = Mat4::from_scale(m.model_scale);
     let mut world: Vec<Mat4> = Vec::with_capacity(n);
@@ -125,7 +138,14 @@ fn apply_morph(m: &mut Morph, joints: &mut Query<&mut Transform>) {
     // uCnsAttach::vf24 (0x00859bb0, +0xac clear): the joint's world rows
     // are normalised before the attach matrix goes on them, so weapons
     // keep their size and offset whatever the joint's scale.
-    for &(a, i, local) in &m.attach {
+    // Drawn (0x00c1b460): the weapon joint with the constraint reset to no
+    // rotation, no offset, scale 1 (0x00859b10).
+    for at in &m.attach {
+        let (i, local) = match (drawn, at.hand) {
+            (true, Some(h)) => (h, Mat4::IDENTITY),
+            _ => (at.bone, at.local),
+        };
+        let a = at.anchor;
         let w = world[i];
         let unit = |v: Vec4| {
             let l = v.length();
@@ -219,6 +239,34 @@ pub fn spawn_assembled(
     translation: Vec3,
     hold_frame: Option<f32>,
 ) -> Result<Entity, String> {
+    spawn_assembled_hands(
+        commands, loader, meshes, materials, images, bindposes, model_path, base_tint, body, face, parts, &[], visible,
+        motion_path, slot, translation, hold_frame,
+    )
+}
+
+/// [`spawn_assembled`], with each attached part's drawn joint id (by part
+/// index; missing or `None`: stays on its row when drawn).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_assembled_hands(
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    model_path: &str,
+    base_tint: Option<[f32; 3]>,
+    body: Option<&ddlook::morph::BodyMorph>,
+    face: &[ddlook::face::FaceJoint],
+    parts: &[ExtraPart],
+    hands: &[Option<u8>],
+    visible: &dyn Fn(u16) -> bool,
+    motion_path: &str,
+    slot: usize,
+    translation: Vec3,
+    hold_frame: Option<f32>,
+) -> Result<Entity, String> {
     let bytes = loader.vfs.read(model_path, RMODEL)?;
     let model = mtmod::parse(&bytes).map_err(|e| format!("{model_path}: {e}"))?;
     if model.bones.is_empty() {
@@ -257,7 +305,7 @@ pub fn spawn_assembled(
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
     let mut attach = vec![];
     spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint);
-    for part in parts {
+    for (k, part) in parts.iter().enumerate() {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
             Ok(b) => b,
             Err(e) => {
@@ -286,7 +334,12 @@ pub fn spawn_assembled(
                 let local = Transform::from_translation(Vec3::from(pos)).with_rotation(Quat::from_euler(EulerRot::ZYX, r[2], r[1], r[0]));
                 let anchor = commands.spawn((local, Visibility::default(), Name::new(format!("attach {}", part.path)))).id();
                 commands.entity(root).add_child(anchor);
-                attach.push((anchor, bone, local.to_matrix()));
+                let hand = hands
+                    .get(k)
+                    .copied()
+                    .flatten()
+                    .and_then(|h| model.bones.iter().position(|b| b.anim_map_index == h));
+                attach.push(Attach { anchor, bone, local: local.to_matrix(), hand });
                 // Its own joints: weapon bone ids (0, 1, 2) are not body joints.
                 bind_skeleton(commands, &pm, anchor, &mut HashMap::new())
             }
@@ -350,6 +403,7 @@ pub fn spawn_assembled(
         blend_request: None,
         blend: None,
         morph,
+        drawn: false,
     });
     Ok(root)
 }
@@ -556,13 +610,21 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
     let step = time.delta_secs().min(0.1) * MOTION_FPS;
     for mut p in &mut players {
         if let Some(frames) = p.blend_request.take() {
-            // freeze the pose shown now (itself possibly mid-blend)
+            // freeze the pose shown now (itself possibly mid-blend), before
+            // the morph: the morph pass goes on top of the blend each frame,
+            // so freezing the morphed locals would morph them again at every
+            // motion change (a chain of attacks blew joints up)
+            let unmorphed: HashMap<Entity, Transform> = p
+                .morph
+                .as_ref()
+                .map(|m| m.bones.iter().zip(&m.base).map(|(&(e, _), &t)| (e, t)).collect())
+                .unwrap_or_default();
             p.blend = mtlmt::blend::Interpolation::start(frames).map(|b| {
                 let pose = p
                     .joints
                     .values()
                     .filter_map(|&e| {
-                        let t = joints.get(e).ok()?;
+                        let t = unmorphed.get(&e).copied().or_else(|| joints.get(e).ok().copied())?;
                         Some((e, t.rotation, t.translation, t.scale))
                     })
                     .collect();
@@ -610,8 +672,9 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
                 tr.scale = Vec3::from(mix_vector(tr.scale.to_array(), s.to_array(), b.weight));
             }
         }
+        let drawn = p.drawn;
         if let Some(m) = &mut p.morph {
-            apply_morph(m, &mut joints);
+            apply_morph(m, drawn, &mut joints);
         }
     }
 }
@@ -653,7 +716,10 @@ pub fn spawn_look(
         attach: Some((w.joint, w.rotation, w.offset)),
     }));
     let mask = look.mask;
-    spawn_assembled(
+    // the weapons' drawn joints, by part index (the parts come first)
+    let mut hands = vec![None; parts.len() - look.weapons.len()];
+    hands.extend(look.weapons.iter().map(|w| w.hand));
+    spawn_assembled_hands(
         commands,
         loader,
         meshes,
@@ -665,6 +731,7 @@ pub fn spawn_look(
         look.body.as_ref(),
         &look.face,
         &parts,
+        &hands,
         &move |g| mask.visible(g),
         motion_path,
         slot,

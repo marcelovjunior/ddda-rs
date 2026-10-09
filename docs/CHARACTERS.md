@@ -360,9 +360,30 @@ personal data).
     come from bank 0 / 6; attacks come from the weapon's `_co` / `_at`
     lists (sword `m0001`, staff `m0007`).
   - **Goblins** play `ddenemyrt`'s motion banks.
+  - **Motions:** female characters play the male lists, as in the
+    original. The exe names only `motion\pl\m\m00\...` player lists
+    (110 strings), and the install has no other player motion lists.
+  - **Drawn weapons:** each weapon has a drawn joint (`WeaponPart::hand`).
+    - The primary goes to joint 0x96 and the secondary to 0x99
+      (0x00840180 / 0x008404b0 -> 0x00c1b2d0), with no offset (0x00c1b460
+      resets the constraint, 0x00859bb0).
+    - A shield keeps its sheathed row (0x0080be30, category 8).
+    - The attack motions key 0x96 / 0x99 into the hand.
+    - The original draws while uPlayer +0x273C has bits 0x200 and
+      0x400 / 0x800 (uPlayerBase::vf93 0x00B63F70). Those bits' writers are
+      not traced, so the viewer draws during attack states (*inferred*).
+  - **Blending:** a motion change freezes the unmorphed pose. Freezing the
+    morphed one re-applied the morph at every change, so attack chains
+    stretched meshes.
+  - **Follow camera:**
+    - Distance 230 cm, target 140 cm above the feet, near plane 96 cm,
+      fov 55 + the CameraFov setting. These are measured on the seven
+      recorded reference poses, not traced.
+    - The eye is pulled in to the first surface between target and eye,
+      5 cm off it (`mMargin` of `param\cam\pl\*`).
+    - Pitch is limited to 60 degrees above and 30 below
+      (`mAngLimitXMin` / `Max`, sign inferred).
   - **Viewer choices:**
-    - every Arisen plays the male motion lists;
-    - the weapon stays sheathed during attacks;
     - enemy materials' 8x8 `d_` placeholder maps are swapped for the full
       map of the same name (the game's swap is not traced).
 
