@@ -136,6 +136,7 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     let input = |notify_attached| dragon::DragonStep {
         engine_step: 1.0,
         motion_step: 0.0,
+        root_translation_transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         think_target_y: 10.0,
         external_displacement: [0.0; 3],
         acceleration: [0.0; 3],

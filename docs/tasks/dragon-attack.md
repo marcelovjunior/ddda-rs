@@ -151,6 +151,12 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   owner-specific messages, collision projection and rejection before mutation.
   This prefix has not been compared against the original or wired into the
   host. Transitions 53/54 and TargetFly remain the next supported subset.
+- Review of 0x0105b740 confirmed root travel uses actor axis scales and
+  +0xDA0/+0xDA4/+0xDA8 multipliers with orientation. The prefix now requires
+  an explicit host-resolved root-translation transform, rather than silently
+  assuming unit scale and yaw only. A nonuniform rotated-transform regression
+  passes; all seven dragon tests pass. Single-track translation is supported;
+  animation blending and root rotation remain host work.
 - Still required: actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->

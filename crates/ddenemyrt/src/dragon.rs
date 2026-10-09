@@ -116,6 +116,12 @@ pub enum DragonError {
 pub struct DragonStep<'a> {
     pub engine_step: f32,
     pub motion_step: f32,
+    /// Resolved row-vector track-to-world translation transform. The host
+    /// must include actor scale, root multipliers and orientation; geometry's
+    /// mean `Body::scale` is insufficient. See the tail of 0x0105b740.
+    /// This prefix samples one unblended translation track; root rotation
+    /// and animation blending require host support and are not simulated.
+    pub root_translation_transform: [[f32; 3]; 3],
     pub think_target_y: f32,
     pub external_displacement: [f32; 3],
     pub acceleration: [f32; 3],
@@ -242,10 +248,10 @@ impl Dragon {
         } else {
             root.delta_once(self.frame, input.motion_step)
         };
-        let (sin, cos) = self.yaw.sin_cos();
-        self.pos[0] += delta[0] * cos + delta[2] * sin;
-        self.pos[1] += delta[1];
-        self.pos[2] += -delta[0] * sin + delta[2] * cos;
+        let travel = transform_root_translation(delta, input.root_translation_transform);
+        for axis in 0..3 {
+            self.pos[axis] += travel[axis];
+        }
         let next = self.frame + input.motion_step;
         let last = motion.frame_count.saturating_sub(1) as f32;
         self.motion_ended = if motion.loop_frame >= 0 {
@@ -262,6 +268,14 @@ impl Dragon {
         (self.fighter.attacks, self.fighter.hurts) = data.body.volumes(&acts, &pose, self.fighter.owner);
         Ok(effects)
     }
+}
+
+// Host boundary for the scaled/oriented root travel in 0x0105b740.
+// Do not infer this transform from the collision body's mean scale.
+fn transform_root_translation(delta: [f32; 3], transform: [[f32; 3]; 3]) -> [f32; 3] {
+    std::array::from_fn(|axis| {
+        delta[0] * transform[0][axis] + delta[1] * transform[1][axis] + delta[2] * transform[2][axis]
+    })
 }
 
 /// Loaded opening-dragon body and combat parameters. Action stepping is
@@ -444,6 +458,15 @@ impl DragonAiData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn root_translation_requires_resolved_scale_and_orientation() {
+        // Nonuniform scale followed by a quarter turn about Y.
+        let transform = [[0.0, 0.0, -2.0], [0.0, 3.0, 0.0], [4.0, 0.0, 0.0]];
+        assert_eq!(
+            super::transform_root_translation([1.0, 2.0, 3.0], transform),
+            [12.0, 6.0, -2.0]
+        );
+    }
     use super::initialized_resource_flags;
     use super::{CollisionRates, sync_collision_flags};
     use super::{HoverHeight, HoverUp, hover_transition_complete};
