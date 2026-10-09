@@ -49,6 +49,18 @@ fn st200_ev10_npcs() {
 }
 
 #[test]
+fn edit_pattern() {
+    let Some(v) = vfs() else { return };
+    let p = ddlook::pattern::EditPattern::load(&v).unwrap();
+    assert_eq!(p.pallets.len(), 3);
+    assert!(p.pallets.iter().all(|c| c.len() >= 63));
+    // Out-of-range indices take colour 0 (0x00780fa0).
+    assert_eq!(p.color(0, 200), p.color(0, 0));
+    assert_eq!(p.beard(0, 1), -1);
+    assert!(p.hair(0) >> 24 == 0x0f);
+}
+
+#[test]
 fn every_armour_piece_resolves() {
     let Some(v) = vfs() else { return };
     let t = ddlook::Tables::load(&v).unwrap();
@@ -124,6 +136,14 @@ fn saved_arisen_and_pawns_are_dressed() {
         for p in &l.look.parts {
             assert!(exists(&v, &p.path), "{}", p.path);
         }
+        // Weapons: the models exist; every character of the save carries
+        // at least one.
+        eprintln!("  weapons {:?}", l.look.weapons.iter().map(|w| (w.path.rsplit(char::from(92)).next().unwrap_or(""), w.joint)).collect::<Vec<_>>());
+        assert!(!l.look.weapons.is_empty(), "{} has no weapon", l.who);
+        for w in &l.look.weapons {
+            assert!(exists(&v, &w.path), "{}", w.path);
+        }
+        assert!(l.look.hair_color.is_some() && l.look.skin_color.is_some());
         // Clothes hide some of the body (rArmorPartsOff).
         assert!((0..200).any(|p| !l.look.mask.visible(p)));
     }

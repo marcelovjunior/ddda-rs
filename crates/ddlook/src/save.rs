@@ -8,12 +8,15 @@
 //! - equipment piece of an item: item record +0x40 (`rItemList`); it holds
 //!   an `m_parts` armour-table id (category 1-7 << 24 | number) for 640
 //!   items of the shipped list;
-//! - hair `0x0f000000 | mHairNo`, beard `0x10000000 | mBeardNo`: the
-//!   `h_parts` armour-table ids are 0x0f0000NN (hair) and 0x100000NN
-//!   (beard), and NPC edits use the same form (st200 n001: hair 104 ->
-//!   0x0f000068);
-//! - the beard only for male characters (*guessed*).
+//! - equipment slots 0 and 1 are the weapons, 2-11 the armour (the
+//!   save's slots hold weapon ids in 0/1 and armour ids after).
+//!
+//! Hair, beard and colours are traced (0x00780fa0, the save -> runtime
+//! edit conversion): hair `0x0f000000 | mHairId[mHairNo]`, beard
+//! `0x10000000 | mBeardId[mBeardNo]` for male characters only, colours
+//! from the editPattern pallets (`crate::pattern`).
 
+use crate::pattern::EditPattern;
 use crate::{dressed_look, Error, Look, Outfit, Source, Tables, Unit};
 use ddsave::xml::Node;
 
@@ -57,8 +60,10 @@ pub fn item_piece(items: &[[u8; 0x80]], item: i16) -> i32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn character<S: Source + ?Sized>(
     t: &Tables,
+    pat: &EditPattern,
     items: &[[u8; 0x80]],
     who: String,
     unit: Unit,
@@ -75,22 +80,35 @@ fn character<S: Source + ?Sized>(
         .collect();
     let mut pieces = [-1i32; 8];
     let mut k = 0;
-    for &it in &eq {
+    for &it in eq.iter().skip(2) {
         let p = item_piece(items, it);
         if p != -1 && k < 8 {
             pieces[k] = p;
             k += 1;
         }
     }
-    let hair = field(&f, "mHairNo").map_or(-1, |h| (0x0f00_0000 | h) as i32);
-    // *Guessed*: only male characters wear the beard model. Female records
-    // carry a beard number too (23 in the maintainer's save); the
-    // record -> runtime conversion that would decide it is not traced.
-    let beard = match field(&f, "mBeardNo") {
-        Some(b) if sex == 0 => (0x1000_0000 | b) as i32,
-        _ => -1,
+    let raw = |slot: usize| {
+        eq.get(slot).filter(|&&i| i >= 0).and_then(|&i| items.get(i as usize)).map_or(-1, |r| {
+            u32::from_le_bytes(r[0x40..0x44].try_into().unwrap()) as i32
+        })
     };
-    let look = dressed_look(t, unit, sex, &Outfit { pieces, hair, beard }, None);
+    // Translated from 0x00780fa0 (DDDA.exe 2017-12-13 Steam).
+    let hair = pat.hair(field(&f, "mHairNo").unwrap_or(0xff));
+    let beard = pat.beard(field(&f, "mBeardNo").unwrap_or(0xff), sex);
+    let col = |pallet: usize, name: &str| pat.color(pallet, field(&f, name).unwrap_or(0xff));
+    let h = col(0, "mColorHair");
+    let b = col(0, "mColorBeard");
+    let skin = col(1, "mColorBody");
+    let mut look = dressed_look(
+        t,
+        unit,
+        sex,
+        &Outfit { pieces, hair, beard },
+        Some([h[0] * 0.5 + 0.2, h[1] * 0.5 + 0.2, h[2] * 0.5 + 0.2]),
+    );
+    look.beard_color = Some([b[0] * 0.5 + 0.2, b[1] * 0.5 + 0.2, b[2] * 0.5 + 0.2]);
+    look.skin_color = Some([skin[0], skin[1], skin[2]]);
+    look.weapons = crate::weapon::weapons(raw(0), raw(1));
     Some(SavedLook { who, look, items: eq, edit: f })
 }
 
@@ -98,6 +116,7 @@ fn character<S: Source + ?Sized>(
 /// `mPlayerDataBase`).
 pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Result<Vec<SavedLook>, Error> {
     let t = Tables::load(src)?;
+    let pat = EditPattern::load(src)?;
     let itl = src
         .resource(r"etc\item\itemList", "rItemList")?
         .ok_or_else(|| Error::Data("itemList missing".into()))?;
@@ -113,6 +132,7 @@ pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Re
     let pl = ep.child("mPl").ok_or_else(|| Error::Data("no mPl".into()))?;
     out.extend(character(
         &t,
+        &pat,
         &items,
         "arisen".into(),
         Unit::Player,
@@ -123,7 +143,7 @@ pub fn save_looks<S: Source + ?Sized>(src: &S, save_xml: &str, slot: &str) -> Re
     if let Some(cmc) = ep.child("mCmc") {
         for (i, c) in cmc.children().enumerate() {
             if let (Some(e), Some(p)) = (c.child("mEdit"), c.child("mParam")) {
-                out.extend(character(&t, &items, format!("pawn{i}"), Unit::Pawn, e, p, src));
+                out.extend(character(&t, &pat, &items, format!("pawn{i}"), Unit::Pawn, e, p, src));
             }
         }
     }
