@@ -140,6 +140,17 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
 - Stage-gate integration is supplied by codex-26's 4a3d654, after event
   processing and before scenarios, with frame-stop guard and stage-reset
   baseline. Integrated regression passed on that branch.
+- Added an explicitly limited `Dragon` actor prefix for action 52: entry
+  validates support and motion before mutating state; phase 91 performs
+  HoverUp control and explicit host-resolved velocity integration, phase 92
+  uses the body root-motion driver, and phase 93 updates flags and volumes.
+  Common action bookkeeping, motion binding/blend, air control and attached
+  message 4 are typed effects that the host must apply. Unsupported actions
+  return an error rather than synthetic completion. The six dragon tests
+  pass, with installed regression coverage for next-frame height completion,
+  owner-specific messages, collision projection and rejection before mutation.
+  This prefix has not been compared against the original or wired into the
+  host. Transitions 53/54 and TargetFly remain the next supported subset.
 - Still required: actual dragon movement/actions,
   table callbacks, combat volumes and actor feedback; host-owned encounter
   facts and flag request application; playable ev00 -> fight -> ev01 ->

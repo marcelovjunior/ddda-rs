@@ -1,6 +1,6 @@
 //! Dragon AI definitions read from the player's executable.
 //!
-//! This is the sequence-4 data boundary, not yet a dragon action simulator.
+//! Sequence-4 data and an explicitly limited dragon action simulator.
 //! The entrance FSM is interpreted by ddai; movement and attack action
 //! implementations must supply its completion and motion feedback.
 
@@ -83,6 +83,185 @@ impl HoverUp {
 /// model +0x494 bit31 is the additional completion path.
 pub fn hover_transition_complete(motion_ended: bool, motion_flags: u32) -> bool {
     motion_ended || motion_flags & 0x8000_0000 != 0
+}
+
+/// Effects requiring authoritative host state; callers must apply these in
+/// order. The prefix does not pretend to simulate attachment or air control.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DragonEffect {
+    /// Common action-entry bookkeeping, 0x00a4db70, including +0x603B clear.
+    BaseActionEnter,
+    /// Common action-exit bookkeeping, 0x00a76c90, conditional host flags.
+    BaseActionExit,
+    /// vf06 0x00a6bb40: clear bytes +0x1B6D/+0x1E80, set +0x600C bit 1.
+    HoverAirControl,
+    /// 0x00aad0c0, gated by actor +0x679A == 0.
+    AttachedMessage { owner: u32, message: u32 },
+    /// vf08 0x00a6bc80 clears byte +0x1B6C.
+    ExitHover,
+    /// Primary-layer binding from 0x00a6ba90; blending remains host work.
+    BindMotion { id: u16, blend: f32, speed: f32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DragonError {
+    Unsupported(u32),
+    MissingMotion(u16),
+    NoAction,
+}
+
+/// Resolved inputs for phases 91..93. External displacement includes the
+/// host's push/correction; acceleration and clamps are actor state, not
+/// invented gravity. `engine_step` and `motion_step` are independently scaled.
+pub struct DragonStep<'a> {
+    pub engine_step: f32,
+    pub motion_step: f32,
+    pub think_target_y: f32,
+    pub external_displacement: [f32; 3],
+    pub acceleration: [f32; 3],
+    /// Ordered status multipliers from +0x26A0 bits 0x800/0x1000;
+    /// None means the corresponding condition is absent.
+    pub horizontal_status_multipliers: [Option<f32>; 2],
+    pub velocity_min: [f32; 3],
+    pub velocity_max: [f32; 3],
+    pub controller_flag_c: bool,
+    pub actor_flags: u32,
+    pub notify_attached: bool,
+    pub attached_owners: &'a [u32],
+}
+
+/// Supported actor prefix. Unsupported actions fail before cancelling the
+/// current action. This deliberately cannot run the whole entrance yet.
+pub struct Dragon {
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub fighter: Fighter,
+    pub frame: f32,
+    pub motion_ended: bool,
+    hover: Option<HoverUp>,
+}
+
+impl Dragon {
+    pub fn new(data: &DragonData, owner: u32, pos: [f32; 3], yaw: f32) -> Self {
+        Self {
+            pos,
+            yaw,
+            fighter: data.fighter(owner),
+            frame: 0.0,
+            motion_ended: false,
+            hover: None,
+        }
+    }
+
+    pub fn done(&self) -> bool {
+        self.hover.as_ref().is_some_and(|a| a.done)
+    }
+
+    pub fn velocity(&self) -> Option<[f32; 3]> {
+        self.hover.as_ref().map(|a| a.velocity)
+    }
+
+    /// Typed HoverUp modes avoid accepting unknown serialized mode values.
+    /// Entry/exit translated from 0x00a6ba90/0x00a6bc80.
+    pub fn start_action(
+        &mut self,
+        data: &DragonData,
+        action: u32,
+        scale_y: f32,
+        height: HoverHeight,
+    ) -> Result<Vec<DragonEffect>, DragonError> {
+        if action != 52 {
+            return Err(DragonError::Unsupported(action));
+        }
+        let id = crate::body::MotionId::new(0, HoverUp::MOTION);
+        if data.body.frames(id) == 0 {
+            return Err(DragonError::MissingMotion(HoverUp::MOTION));
+        }
+        let mut effects = Vec::new();
+        if let Some(previous) = &mut self.hover {
+            previous.exit();
+            effects.push(DragonEffect::ExitHover);
+            effects.push(DragonEffect::BaseActionExit);
+        }
+        self.hover = Some(HoverUp::enter(scale_y, height));
+        self.frame = 0.0;
+        self.motion_ended = false;
+        effects.push(DragonEffect::BaseActionEnter);
+        effects.push(DragonEffect::BindMotion {
+            id: 100,
+            blend: 5.0,
+            speed: 1.0,
+        });
+        Ok(effects)
+    }
+
+    /// Phase 91 action update (0x00a6bb40), velocity integration
+    /// (0x0084ccc0), phase 92 motion/root travel (0x010629f0/0x0105b740),
+    /// then phase 93 collision flags/volumes. DDDA.exe 2017-12-13 Steam.
+    /// The host must consume returned effects before advancing other actors.
+    pub fn step(
+        &mut self,
+        data: &DragonData,
+        input: DragonStep<'_>,
+    ) -> Result<Vec<DragonEffect>, DragonError> {
+        let id = crate::body::MotionId::new(0, HoverUp::MOTION);
+        let motion = data
+            .body
+            .motion(id)
+            .filter(|m| m.frame_count > 0)
+            .ok_or(DragonError::MissingMotion(HoverUp::MOTION))?;
+        let hover = self.hover.as_mut().ok_or(DragonError::NoAction)?;
+        let mut effects = vec![DragonEffect::HoverAirControl];
+        if input.notify_attached {
+            effects.extend(
+                input
+                    .attached_owners
+                    .iter()
+                    .map(|&owner| DragonEffect::AttachedMessage { owner, message: 4 }),
+            );
+        }
+        hover.update(self.pos[1], input.think_target_y);
+        for multiplier in input.horizontal_status_multipliers.into_iter().flatten() {
+            hover.velocity[0] *= multiplier;
+            hover.velocity[2] *= multiplier;
+        }
+        for axis in 0..3 {
+            self.pos[axis] += hover.velocity[axis] * input.engine_step + input.external_displacement[axis];
+            hover.velocity[axis] += input.acceleration[axis] * input.engine_step;
+            // Native upper-then-lower ordering; inputs must be finite actor state.
+            if hover.velocity[axis] > input.velocity_max[axis] {
+                hover.velocity[axis] = input.velocity_max[axis];
+            }
+            if hover.velocity[axis] < input.velocity_min[axis] {
+                hover.velocity[axis] = input.velocity_min[axis];
+            }
+        }
+        let root = ddsim::RootMotion::from_motion(motion);
+        let delta = if motion.loop_frame >= 0 {
+            root.delta(self.frame, input.motion_step)
+        } else {
+            root.delta_once(self.frame, input.motion_step)
+        };
+        let (sin, cos) = self.yaw.sin_cos();
+        self.pos[0] += delta[0] * cos + delta[2] * sin;
+        self.pos[1] += delta[1];
+        self.pos[2] += -delta[0] * sin + delta[2] * cos;
+        let next = self.frame + input.motion_step;
+        let last = motion.frame_count.saturating_sub(1) as f32;
+        self.motion_ended = if motion.loop_frame >= 0 {
+            next > last
+        } else {
+            next >= last
+        };
+        self.frame = data.body.wrap_frame(id, next);
+        if let Victim::Enemy { rates, .. } = &mut self.fighter.victim {
+            sync_collision_flags(rates, input.controller_flag_c, input.actor_flags);
+        }
+        let pose = data.body.pose(id, self.frame, self.pos, self.yaw);
+        let acts = data.body.activations(id, self.frame);
+        (self.fighter.attacks, self.fighter.hurts) = data.body.volumes(&acts, &pose, self.fighter.owner);
+        Ok(effects)
+    }
 }
 
 /// Loaded opening-dragon body and combat parameters. Action stepping is

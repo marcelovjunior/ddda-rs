@@ -116,4 +116,72 @@ fn registered_dragon_body_contains_the_entrance_motions() {
     assert_eq!(regions[0].hp, hp, "opening initialization blocks HP damage");
     regions[0].hp -= 1.0;
     assert_eq!(first.victim.hp(), hp, "owners must not share mutable HP pools");
+
+    // Prefix phase regression: vf06 sees the pre-integration height. A
+    // crossing completes on the following phase 91, with no position snap.
+    let mut actor = dragon::Dragon::new(&data, 42, [0.0; 3], 0.0);
+    let effects = actor
+        .start_action(&data, 52, 1.0, dragon::HoverHeight::ThinkTarget)
+        .unwrap();
+    assert!(effects.contains(&dragon::DragonEffect::BindMotion {
+        id: 100,
+        blend: 5.0,
+        speed: 1.0
+    }));
+    assert_eq!(
+        actor.start_action(&data, 54, 1.0, dragon::HoverHeight::ThinkTarget),
+        Err(dragon::DragonError::Unsupported(54))
+    );
+    assert_eq!(actor.velocity(), Some([0.0, 35.0, 0.0]));
+    let input = |notify_attached| dragon::DragonStep {
+        engine_step: 1.0,
+        motion_step: 0.0,
+        think_target_y: 10.0,
+        external_displacement: [0.0; 3],
+        acceleration: [0.0; 3],
+        horizontal_status_multipliers: [None; 2],
+        velocity_min: [-1000.0; 3],
+        velocity_max: [1000.0; 3],
+        controller_flag_c: false,
+        actor_flags: 0,
+        notify_attached,
+        attached_owners: &[80, 81],
+    };
+    let effects = actor.step(&data, input(true)).unwrap();
+    assert_eq!(
+        effects,
+        vec![
+            dragon::DragonEffect::HoverAirControl,
+            dragon::DragonEffect::AttachedMessage {
+                owner: 80,
+                message: 4
+            },
+            dragon::DragonEffect::AttachedMessage {
+                owner: 81,
+                message: 4
+            }
+        ]
+    );
+    assert!(!actor.done());
+    assert_eq!(actor.pos, [0.0, 35.0, 0.0]);
+    assert_eq!(
+        actor.step(&data, input(false)).unwrap(),
+        vec![dragon::DragonEffect::HoverAirControl]
+    );
+    assert!(actor.done());
+    assert_eq!(actor.pos, [0.0, 35.0, 0.0]);
+    let combat::Victim::Enemy { rates, .. } = &actor.fighter.victim else {
+        panic!()
+    };
+    assert_eq!(rates.flags & 0xf, 0);
+    // Invalid data must not cancel the running action or rewind its motion.
+    let mut missing = data.clone();
+    missing.body.banks.clear();
+    actor.frame = 7.0;
+    assert_eq!(
+        actor.start_action(&missing, 52, 1.0, dragon::HoverHeight::ThinkTarget),
+        Err(dragon::DragonError::MissingMotion(100))
+    );
+    assert!(actor.done());
+    assert_eq!(actor.frame, 7.0);
 }
