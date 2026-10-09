@@ -106,6 +106,11 @@ pub struct Inputs {
 /// Completions and facts the host reports back.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostEvent {
+    /// Available pawn-message slots at priority 1; None means the GUI
+    /// object is absent. IsDispCmcMess (0x005bb320) is true unless
+    /// 0x00634090 reports all three slots available. The presentation
+    /// adapter reports this state; quest scripts must not guess it.
+    PawnMessageSlots(Option<u32>),
     /// The cutscene requested by [`Request::PlayEvent`] has ended.
     EventFinished,
     /// A camera requested by [`Request::Camera`] has ended.
