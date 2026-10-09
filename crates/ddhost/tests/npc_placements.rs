@@ -56,6 +56,11 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
     if !native.exists() { return; }
+    let exe_file = ddexe::ExeFile::next_to(&native).unwrap();
+    let families = npc_placements::NameFamilies::from_exe(&exe_file.image().unwrap()).unwrap();
+    assert_eq!(families.select("nPc_fixture"), Some(false));
+    assert_eq!(families.select("MultiNpc_fixture"), Some(true));
+    assert_eq!(families.select("Enemy_fixture"), None);
     let vfs = ddvfs::Vfs::open(native).unwrap();
     for (stage, group, npc) in [(200, 1, 39), (200, 27, 1), (100, 4, 304)] {
         let list = npc_placements::group_list(&vfs, stage).unwrap();

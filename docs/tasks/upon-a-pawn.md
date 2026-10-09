@@ -428,3 +428,15 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - This API is still not called automatically by the viewer. Next action is
   materialization adapter integration, followed by real Guard interaction;
   no route-completion or original-game comparison claim.
+
+### NPC name-family reader
+
+- NameFamilies reads the null-terminated table at0x0150f6f0 from the installed
+  executable. Selector translated from0x007627e0 chooses the longest
+  case-insensitive nonempty prefix, retaining the first equal-length match.
+  0x00762000 identifies MultiNpc by record address0x0150f700.
+- Synthetic prefix/tie/no-match regression and installed normal/multi/unknown
+  family checks pass, along with all five placement tests. Targeted clippy
+  passes with the documented pre-existing lint allowed. No bulk table copied.
+- This closes name selection as a materialization prerequisite; intel-pool
+  lifecycle and the stage100 archive readiness adapter remain separate.

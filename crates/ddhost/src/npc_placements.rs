@@ -80,3 +80,57 @@ pub fn candidates(
     }
     Ok(out)
 }
+
+/// Recognized placement-name families. Entries are read from the player's
+/// executable rather than duplicating its name table in the port.
+#[derive(Debug)]
+pub struct NameFamilies(Vec<(String, bool)>);
+
+impl NameFamilies {
+    /// Table at 0x0150f6f0, traversed by 0x007627e0 in 16-byte records
+    /// until a null name pointer. 0x00762000 distinguishes MultiNpc by
+    /// the selected record's address, 0x0150f700.
+    pub fn from_exe(exe: &ddexe::Exe<'_>) -> Result<Self, ddexe::Error> {
+        let mut address = 0x0150_f6f0;
+        let mut entries = Vec::new();
+        loop {
+            let name = exe.u32(address)?;
+            if name == 0 { return Ok(Self(entries)); }
+            entries.push((exe.cstr(name)?, address == 0x0150_f700));
+            address = address.checked_add(16)
+                .ok_or_else(|| ddexe::Error("NPC name-family table overflow".into()))?;
+        }
+    }
+
+    /// Translated from 0x007627e0 (DDDA.exe 2017-12-13 Steam): longest
+    /// nonempty case-insensitive prefix wins, with first entry winning ties.
+    /// Installed names are ASCII. Returns the MultiNpc flag, or None when
+    /// this name cannot materialize as an NPC family.
+    pub fn select(&self, name: &str) -> Option<bool> {
+        let mut selected = None;
+        let mut longest = 0;
+        for (prefix, multi) in &self.0 {
+            if prefix.len() > longest && name.as_bytes().get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix.as_bytes())) {
+                longest = prefix.len();
+                selected = Some(*multi);
+            }
+        }
+        selected
+    }
+}
+
+#[cfg(test)]
+mod name_family_tests {
+    use super::NameFamilies;
+
+    #[test]
+    fn longest_prefix_first_tie_and_no_match() {
+        let families = NameFamilies(vec![("".into(), true), ("N".into(), false),
+            ("Npc".into(), true), ("NPC".into(), false)]);
+        assert_eq!(families.select("nPc_suffixed"), Some(true));
+        assert_eq!(families.select("n"), Some(false));
+        assert_eq!(families.select(""), None);
+        assert_eq!(families.select("OtherNpc"), None);
+    }
+}
