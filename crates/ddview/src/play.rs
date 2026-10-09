@@ -301,7 +301,8 @@ pub fn setup(
         entities,
         follow: 0,
         cam_yaw: party.arisen.first().map_or(0.0, |a| a.3),
-        cam_pitch: -0.25,
+        // the recordings look down 12-30 degrees
+        cam_pitch: 0.35,
         demo: false,
         shown: HashMap::new(),
         visible: HashMap::new(),
@@ -445,8 +446,14 @@ pub fn step(
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
+    mut projs: Query<&mut Projection, With<FollowCam>>,
+    mut projected: Local<bool>,
 ) {
     let Some(mut st) = state else { return };
+    if !*projected {
+        camera_projection(&mut projs);
+        *projected = true;
+    }
     // A network session (--host / --join) steps and shows the players itself.
     if net.is_some() {
         return;
@@ -507,7 +514,9 @@ pub fn step(
 pub fn orbit(st: &mut PlayState, buttons: &ButtonInput<MouseButton>, mouse: &AccumulatedMouseMotion) {
     if buttons.pressed(MouseButton::Right) {
         st.cam_yaw -= mouse.delta.x * 0.004;
-        st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-1.2, 0.4);
+        // mAngLimitXMin / Max -60 / 30 degrees in the player camera lists
+        // (sign *inferred*: up to 60 degrees above, 30 below)
+        st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-30f32.to_radians(), 60f32.to_radians());
     }
 }
 
@@ -604,19 +613,70 @@ pub fn show(
         // traced, so the attack states stand for them).
         pb.drawn = matches!(p.state, ddsim::State::Attack { .. } | ddsim::State::Shot { .. });
     }
-    // Follow camera: behind the followed player at the orbit angles,
-    // looking at the chest.
+    // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
-        let target = (Vec3::from(p.position) - st.origin + Vec3::new(0.0, 150.0, 0.0)) * UNIT;
-        let dist = 4.5;
-        let dir = Vec3::new(
-            st.cam_yaw.sin() * st.cam_pitch.cos(),
-            -st.cam_pitch.sin(),
-            st.cam_yaw.cos() * st.cam_pitch.cos(),
-        );
-        cam.translation = target - dir * dist;
-        cam.look_at(target, Vec3::Y);
+        let (eye, target) = follow_camera(&st.terrain, Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
+        cam.translation = (eye - st.origin) * UNIT;
+        cam.look_at((target - st.origin) * UNIT, Vec3::Y);
     }
+}
+
+/// The follow camera's target height above the feet and its distance (cm),
+/// measured on the original: in the seven recorded reference poses
+/// (`uCameraGame` eye and target with the player's position, 2026-10-08)
+/// the eye is 230 cm from the target every time and the target 127-144 cm
+/// above the feet (140 taken). The camera parameter that sets them was not
+/// identified (*measured*, not traced).
+pub const CAMERA_DISTANCE: f32 = 230.0;
+pub const CAMERA_TARGET_HEIGHT: f32 = 140.0;
+/// The near plane of the same recordings (cm).
+pub const CAMERA_NEAR: f32 = 96.0;
+/// The field camera's `mFov` in those recordings; the render adds the
+/// player's CameraFov setting (docs/SHADING.md).
+pub const CAMERA_FOV: f32 = 55.0;
+/// The camera parameters' collision margin `mMargin` (5 cm in the player
+/// lists `param\cam\pl\*`).
+pub const CAMERA_MARGIN: f32 = 5.0;
+
+/// Eye and target (stage frame, cm) for the followed feet `feet` at the
+/// orbit angles (`pitch` > 0: the eye above the target). The eye is pulled
+/// in to the first surface between the target and it, `CAMERA_MARGIN` off
+/// it (*inferred* from `mMargin`; the original's camera collision is not
+/// traced).
+pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
+    let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
+    let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+    let mut eye = target - dir * CAMERA_DISTANCE;
+    if let Some(hit) = ground.ray(target.to_array(), eye.to_array()) {
+        let h = Vec3::from(hit.point);
+        let d = (h - target).length() - CAMERA_MARGIN;
+        eye = target - dir * d.max(10.0);
+    }
+    (eye, target)
+}
+
+/// The follow camera's projection: `CAMERA_FOV` plus the player's
+/// CameraFov setting, and the recorded near plane.
+fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>) {
+    for mut p in cams.iter_mut() {
+        if let Projection::Perspective(pp) = &mut *p {
+            let fov = (CAMERA_FOV + config_camera_fov()).to_radians();
+            if pp.fov != fov {
+                pp.fov = fov;
+                pp.near = CAMERA_NEAR * UNIT;
+            }
+        }
+    }
+}
+
+/// `CameraFov` from the player's game settings (config.ini), else 0.
+fn config_camera_fov() -> f32 {
+    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 0.0 };
+    let path = std::path::PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("CameraFov=").and_then(|v| v.trim().parse().ok())))
+        .unwrap_or(0.0)
 }
 
 /// Places the goblins and plays their motions (`Goblin::motion` / `frame`,
