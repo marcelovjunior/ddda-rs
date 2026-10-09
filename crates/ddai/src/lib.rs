@@ -12,7 +12,10 @@
 //! * [`think`]: [`think::Thinker`], the `cThinkFSM` / `cAILevelAbstractFSM`
 //!   owner: its variables, its processes and its per-frame update
 //!   (vf06 0x007a9cb0). It reads an [`think::Inputs`] snapshot and emits
-//!   [`think::Request`]s for the host.
+//!   [`think::Request`]s for the host;
+//! * [`thinktbl`]: the built-in think tables the FSMs hand combat to
+//!   (CtrlThinkTbl): `cThinkMgr`'s interpreter 0x008b81a0 over the tables
+//!   read from `DDDA.exe`, and the goblin (uEm0100) unit side.
 //!
 //! `cond` and `core` are ports of `ddstory::cond` and `ddstory::script`
 //! (claude-7) with the owner made generic; the addresses and semantics are
@@ -23,6 +26,7 @@ pub mod cond;
 pub mod core;
 pub mod fields;
 pub mod think;
+pub mod thinktbl;
 
 use std::fmt;
 

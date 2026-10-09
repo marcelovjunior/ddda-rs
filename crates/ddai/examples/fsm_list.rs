@@ -18,7 +18,10 @@ fn main() {
     let mut ps: Vec<String> = vfs.paths_of_type(h).map(|s| s.to_string()).collect();
     ps.sort();
     for p in ps {
-        if !a[2..].iter().all(|s| p.to_lowercase().contains(&s.to_lowercase())) {
+        if !a[2..]
+            .iter()
+            .all(|s| p.to_lowercase().contains(&s.to_lowercase()))
+        {
             continue;
         }
         let g = mtfsm::Graph::parse(&vfs.read(&p, h).unwrap()).unwrap();
@@ -26,6 +29,14 @@ fn main() {
         if let Some(r) = &g.root {
             count(r, &mut n);
         }
-        println!("{p}\tattr={:#x}\tclusters={}\tstates={}\tlinks={}\tprocs={}\tconds={}", g.attribute, n[0], n[1], n[2], n[3], g.conditions.len());
+        println!(
+            "{p}\tattr={:#x}\tclusters={}\tstates={}\tlinks={}\tprocs={}\tconds={}",
+            g.attribute,
+            n[0],
+            n[1],
+            n[2],
+            n[3],
+            g.conditions.len()
+        );
     }
 }

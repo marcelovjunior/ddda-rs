@@ -32,7 +32,11 @@ const POINT_B: [f32; 3] = [1639.383, 35228.164, 74376.91];
 
 fn at(p: [f32; 3], dx: f32) -> Inputs {
     Inputs {
-        actor: Some(Actor { pos: p, world_pos: [p[0] + dx, p[1], p[2]], action_done: false }),
+        actor: Some(Actor {
+            pos: p,
+            world_pos: [p[0] + dx, p[1], p[2]],
+            action_done: false,
+        }),
         players: vec![[0.0; 3]],
         ..Inputs::default()
     }
@@ -79,7 +83,11 @@ fn gate_goblin_idle_approach_notice() {
     assert_eq!(names, ["s0000", "6秒後", "フリーフラグ0on", "Finish"]);
     assert_eq!(reqs, [Request::FreeCondition { bits: 1 }]);
     // Timer[0] keeps running through the last two states (nothing stops it).
-    assert!(t.fields.timers[0] > 6.0 && t.fields.timers[0] < 6.0 + 4.0 / 30.0, "{}", t.fields.timers[0]);
+    assert!(
+        t.fields.timers[0] > 6.0 && t.fields.timers[0] < 6.0 + 4.0 / 30.0,
+        "{}",
+        t.fields.timers[0]
+    );
     assert!((180..=186).contains(&frames), "{frames}");
     assert_eq!(t.fields.free_condition, 1);
     // 2. Approach: far from gate point B, it dashes there (escape point +
@@ -88,11 +96,21 @@ fn gate_goblin_idle_approach_notice() {
     let (names, reqs, _) = run(&mut t, &far, 10);
     assert_eq!(names, ["s0000", "ポジションチェック", "ダッシュ", "Finish"]);
     assert_eq!(reqs[0], Request::EscapePos { pos: POINT_B });
-    assert_eq!(reqs[1], Request::ThinkTable { table: 22, mode: 0, class: "uEm0100".into() });
+    assert_eq!(
+        reqs[1],
+        Request::ThinkTable {
+            table: 22,
+            mode: 0,
+            class: "uEm0100".into()
+        }
+    );
     // 3. At gate point B (within 200), it marks FreeCondition 2.
     t.restart().unwrap();
     let (names, reqs, _) = run(&mut t, &at(POINT_B, 150.0), 10);
-    assert_eq!(names, ["s0000", "ポジションチェック", "フリーフラグ0on", "Finish"]);
+    assert_eq!(
+        names,
+        ["s0000", "ポジションチェック", "フリーフラグ0on", "Finish"]
+    );
     assert_eq!(reqs, [Request::FreeCondition { bits: 2 }]);
     assert_eq!(t.fields.free_condition, 3);
     // 4. Notice and attack request: with FreeCondition 2 it checks gate
@@ -135,9 +153,21 @@ fn search_target_then_finish() {
         vec![],
         vec![],
         vec![
-            Candidate { id: 7, pos: [150.0, 0.0, 0.0], alive: true },
-            Candidate { id: 8, pos: [60.0, 0.0, 0.0], alive: true },
-            Candidate { id: 9, pos: [10.0, 0.0, 0.0], alive: false },
+            Candidate {
+                id: 7,
+                pos: [150.0, 0.0, 0.0],
+                alive: true,
+            },
+            Candidate {
+                id: 8,
+                pos: [60.0, 0.0, 0.0],
+                alive: true,
+            },
+            Candidate {
+                id: 9,
+                pos: [10.0, 0.0, 0.0],
+                alive: false,
+            },
         ],
     ];
     let mut reqs = vec![];
@@ -187,11 +217,62 @@ fn goblin_corpus_runs_or_names_the_gap() {
         match err {
             None => ran += 1,
             Some(Error::Unimplemented(s)) => {
-                gaps.insert(s.split(": ").nth(1).unwrap_or(&s).split(" in state").next().unwrap().to_string());
+                gaps.insert(
+                    s.split(": ")
+                        .nth(1)
+                        .unwrap_or(&s)
+                        .split(" in state")
+                        .next()
+                        .unwrap()
+                        .to_string(),
+                );
             }
             Some(e) => panic!("{p}: {e}"),
         }
     }
     eprintln!("{ran} of {} goblin graphs ran; gaps: {gaps:?}", paths.len());
     assert!(ran > 0);
+}
+
+/// The finish/restart cycle of the FSM controller (0x0059f440 parks a
+/// finished FSM at its start state, 0x00aa78b0 un-parks it once the unit's
+/// current action has its +0x50 set): the gate goblin restarts by itself
+/// and FreeCondition carries over.
+#[test]
+fn finished_fsm_restarts_when_the_action_allows() {
+    if vfs().is_none() {
+        return;
+    }
+    let mut t = thinker(GATE);
+    let far = at(POINT_A, 0.0);
+    let mut busy = far.clone();
+    busy.actor.as_mut().unwrap().action_done = false;
+    let mut idle = far.clone();
+    idle.actor.as_mut().unwrap().action_done = true;
+    let mut frames = 0;
+    while !t.paused {
+        for q in t.controlled_frame(&busy).unwrap() {
+            if let Request::FreeCondition { bits } = q {
+                t.or_free_condition(bits);
+            }
+        }
+        frames += 1;
+        assert!(frames < 400, "no finish");
+    }
+    // Parked at the start state with the finish bit still set.
+    assert!(t.finished());
+    assert_eq!(t.current_names(), ["s0000"]);
+    assert_eq!(t.fields.free_condition, 1);
+    for _ in 0..10 {
+        assert!(t.controlled_frame(&busy).unwrap().is_empty());
+        assert!(t.paused);
+    }
+    // The action allows it: the start state is entered again (SysCondition
+    // cleared) and the run goes on with FreeCondition 1.
+    t.controlled_frame(&idle).unwrap();
+    assert!(!t.paused);
+    let names = t.current_names();
+    assert_ne!(names, ["Finish"], "{names:?}");
+    assert!(!t.finished(), "{names:?}");
+    assert_eq!(t.fields.free_condition, 1);
 }

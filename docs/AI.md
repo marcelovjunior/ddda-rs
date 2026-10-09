@@ -290,17 +290,159 @@ data. Example, q0007_gate2goblin0000_ai, from synthetic inputs (test
 far from gate point B: s0000 -> "ポジションチェック" -> "ダッシュ"
 (EscapePos B, ThinkTable 22) -> Finish; at point B: FreeCondition 2 ->
 Finish; restarted with FreeCondition 3 at point A: "ポジションチェック" ->
-"発見～威嚇吠え" (found, threat roar: Action 72) -> Finish. Who restarts a
-finished FSM is not traced; the test does it.
+"発見～威嚇吠え" (found, threat roar: Action 72) -> Finish. The restart is
+the unit's own (next section); the test uses `Thinker::controlled_frame`
+or restarts by hand.
 
 Assumptions marked in the code: actor +0xe0 is a world-space position
 (**guessed** from the getters adding sWorldOffset); the target-search
 comparison traced for group 1 is used for every group, and group membership
 comes from the host; SetFreeFlg targets the actor's own FSM in the tests.
 
+## Think tables (`ddai::thinktbl`)
+
+The enemy FSMs hand combat to the unit's built-in think. CtrlThinkTbl
+(0x005a9240) gets the unit's `cThinkMgr` (uEm vf 0x2f4, uEm0100 0x008c7770:
+unit +0x6150) and a table (vf 0x2f8, 0x008eaf00: `0x017ebf78[index]`, 31
+tables in `.data`). The unit runs the table from its own think: uEm0100
+vf136 -> 0x008d2360, which first serves forced actions (damage, grabs),
+then, when the current action's record +0x50 is set or unit +0x7360,
+fills the target slots (0x008d2930), reloads the default table
+(0x008b80a0), runs the interpreter 0x008b81a0, rewrites the result
+(0x008d0fb0) and requests it as an action (vf132 0x008d11e0) if it differs
+from the current one or +0x6ff5 is set.
+
+**Records** (`cThinkMgrAct`, 0xa0 bytes; read at run time from the exe by
+`Tables::read`, 1062 records reachable from the 31 tables). Kind 1 records
+form AND chains (condition 0x008b9500 on each; code 9 ends a chain; then
+each runs as a command, 0x008ba2a0). Kind 0 rows are tried against the
+current target by 0x008b8bb0:
+- +0x08 flags: 1 end (pop a call or finish), 2 needs target +0x60 bit 0,
+  8 resume here next think, 0x10/0x20/0x40/0x80 compare +0x84 with
+  +0xe84, 0x100 sets +0x1210, 0x200 jump to the base table, 0x400 needs
+  +0x1211, 0x2000 call (else a jump), 0x4000 locks the table against the
+  default reload, 0x8000 delay +0x80 frames, 0x80000 pop a call at the
+  next row, 0x100000/0x200000 take a return, 0x400000 random block start,
+  0x40000000 block end, 0x4000000 sets +0x120f, 0x80000000 only when
+  resuming.
+- +0x0c: bit 31 not the last result again, 0x10 re-request the action.
+- +0x10 / +0x14: think flags required set / clear (0x008bbd30).
+- +0x18/+0x1c distance [min, max), +0x20/+0x24 angle (degrees, wraps when
+  min > max, 45..-45 is the back arc), +0x28/+0x2c height; FLT_MAX is no
+  limit; scaled by +0x44 when +0x48 (min side by min(scale, 1)).
+- +0x30 result: an action id, -1 none (continue), -2 return, -6 switch
+  table without an action; +0x34 the jump/call/switch table.
+- +0x38, +0x44, +0x50, +0x5c: four (op, a, b) triples. Op low 16 bits 1:
+  unit check callback `a` (think +0x4c; uEm0100 0x008ea7a0 -> 0x008ea7e0
+  below 1000, uEm 0x008ab100 from 1000), op high 16 bits 1 negates. Op 2:
+  unit set callback (+0x50, 0x008ac270 -> 0x008abfa0) on commit. Op low
+  byte 3: VM condition `op >> 20` as a check and VM command
+  `(op >> 8) & 0xfff` on commit (0x2f03003 = "timer a free" + "start
+  timer a at b frames").
+- +0x68 / +0x70: per-think (+0x1250) / persistent (+0x124c) state bits,
+  high dword require/forbid, low dword set/clear.
+- +0x78: four byte rules for the think bytes +0x60..+0x63 (0x008b7ff0,
+  0x008b8070).
+- +0x80..+0x9c: copied to the think's +0x24..+0x40; +0x88 is the random
+  weight in percent.
+
+**Random blocks**: the first row with 0x400000 rolls `rand * 2^-32 * 100`
+(0x00d00690); each row passes when the roll is in [sum, sum + weight).
+A row with both flags is a single "weight percent" chance.
+
+**Timers** (32 at +0xfac: two ids, a time in frames, flags): commands 0x30
+(start counting down), 0x49/0x4a (count up), 0x32 (keyed by the row's
+action, the per-action cooldown), 0x4d (stop); conditions 0x2f / 0x31
+(free), 0x50..0x53 (compare the time). Ticked by the unit's delta
+(0x008b7930 from uEm0100 vf08). A timer at 0 still counts as running.
+
+**Inputs the unit supplies** (host side in `ddai`):
+- target slots, 23 `cThinkMgrTargetData` (0x90 bytes) at +0x80, measured
+  by 0x008b6de0 (`Slot::measure`: XZ distance, height difference, bearing
+  `atan2(dx, dz) - yaw` in degrees). uEm0100 fills slot 0 with its target
+  (grab target, else +0x60c4, else the sensor's pick 0x00ab52e0, else
+  player 0), slot 1 with the escape point (SetEscapePos -> vf186
+  0x008c75d0 -> +0x60e0), slots 2..4 from +0x5f40 / +0x6140 / +0x5fb4
+  (0x008d2930);
+- 32 think flags (unit +0x6154..), written by 0x008d1280 and 0x008d2930;
+  flags 0..2 are the unit's alert state (0x008d1280, values 0/1/2; flag 2
+  sends the default table into combat table 1). Other flags used by the
+  melee rows (3, 8, 20, 21, 29) are not traced;
+- the check/set callbacks. Ported: ids that read only the current action
+  (0, 2..6, 12: walking, running, dashing, sitting, lying, guarding) and
+  the chances 10/11. The rest read the world (paths 1002/1003/1016/1017 in
+  0x008ab3b0 / 0x008ab5b0 / unit +0x5ca0, target state 16, ...) and are
+  the host's.
+
+**Goblin (uEm0100) tables**: default table 0x017e0858 (tables 0 and 2).
+With alert flag 2 it switches to table 1 (0x017db5d8), which sets state
+bit 2 (vf108 mode 2: 0x008d0fb0 then maps Wait 0 -> 1, turns 18..21 ->
+26..29, PutWeapon 30 -> 31) and goes to 0x017dac78: turn to face (75..150
+and 150..180 degrees each side), a 50/50 taunt (71 FindFinger / 72
+ThreatHowl, 0x017da138), then 0x017d95f8 -> 0x017d9058 by range: under 300
+(height +-150) 0x017d8798, under 700 0x017d8bf8, else 0x017d3838. Close
+range with the melee flags: 0x017cccb8, 30% 104 NAttack12, else 50/50 101
+NAttack1 / 102 NAttack2 (0x017cc7b8 adds 109 Swing, 106 LAttackV, 107
+LAttackH, 105 NAttack123 under flags 10/16). Mid range 0x017d0098: 40% 108
+JumpAttack at 350..450 within 15 degrees, 111 Thrust / 110 SwMove with
+other flags. Approach: 0x017cb9f8 dashes (13 DashTrace) under 2000, else
+runs (9 RunTrace); running counts timers 3/4 up and stumbles (11) after
+240 frames, or after 80 with chance 10. A downed target is kicked (112,
+0x017cbef8) with a 900-frame cooldown on timer 13 when flag 29 is set.
+Action ids name classes through the unit's action table 0x018335d0
+(0x44-byte records, DTI at +0x28, 237 entries).
+
+Table 22 (0x017e7798, the gate goblin's "dash" state) selects slot 1 (the
+escape point), queries a path every 30 frames (set 1002, timer 6), checks
+special moves (0x017c68b8, callbacks 1009..1013, 1025, 1027, 13), then
+dashes (13) when the point is within +-100 degrees, otherwise stops
+(WalkEnd 7 / RunEnd 10 / DashEnd 15) or turns (18..21) via 0x017c6e58.
+
+Tests (`tests/think_tables.rs`, the exe's tables with synthetic units)
+cover table 22, the taunt, close-range attack odds, the jump attack, the
+approach, the run stumble, the turns and the kick cooldown; the
+interpreter's own tests use synthetic records. Not ported: the slot
+orderings (0x008b71a0, commands 0x40..0x42), point targets (0x5c..0x60),
+commands 0x4e/0x4f/0x61/0x63/0x64/0x7a/0x7b and conditions 0x37..0x3e;
+they are errors when reached (the goblin tables do not reach them). The
+live comparison (a goblin fight's action ids per frame) is queued with
+claude-4 (board #1096).
+
+## FSM finish and restart
+
+`cAICtrl` (unit +0x2e64) embeds a `cAIFSMCtrl` at +0x44 (vtable
+0x0157836c): +4 active, +5 finished, +8 the FSM. Its per-frame 0x0059f440
+(cAICtrl mode +0x14 == 1, via 0x0059e070) runs the FSM; when the frame ends
+with SysCondition bit 0 (Finish) it rewinds the FSM to its start state
+(`cAIFSM` vf06 0x00e098a0 -> 0x00e09250: empty every layer's stack, push
+the node at resource +0x84, force a state entry) and sets finished. Nothing
+is unloaded and SysCondition stays set. 0x00aa78b0, the first call in
+`uEnemy::vf90` 0x00aa96e0, clears finished once the unit has a current
+action (+0x2dd4 != -1) whose record has +0x50 set (the same byte that
+lets the think run); it is the only store that clears it (scan of .text).
+The same frame's FSM update then enters the start state, whose entry hook
+(`cThinkFSM` vf05 0x007a9da0, via 0x00749820) clears SysCondition;
+FreeCondition and the timers carry over. So a finished enemy FSM restarts
+by itself as soon as its action allows (`Thinker::controlled_frame`, test
+`finished_fsm_restarts_when_the_action_allows`). Guessed: that resource
++0x84 is the initial state and that the hook's `this` is the FSM.
+
+A second path reloads an FSM by name: `cLinkUnitFSM` slot +0x20 0x00764f20
+queues `cScenarioArg_SetFSM` (callback 0x00765070), which loads through
+0x005a1370 / 0x00aad8f0 / 0x00bb45e0 -> `cBaseFSM::setupFSM` 0x00749740
+and sets SysCondition 0, active 1; a reload after a Finish still waits for
+0x00aa78b0. Kill (bit 0x10), 0x00e095c0 and `uEnemy::vf72` stop and unload
+instead. `sAICtrlManager` requests (0x00412910) are not involved.
+
 ## Next step
 
-Trace the native think tables (`uEm0100` vf+0x2f4 / +0x2f8) that do the
-actual approach and attack, the two missing goblin processes (`Check Area
-Hit` 0x007aafd0, `Set QuestFlag` 0x007aad90), and who restarts a finished
-enemy FSM; then compare one goblin run with the original through the oracle.
+- Compare a live goblin fight with `ddai::thinktbl` (board #1096, claude-4),
+  then pin the melee think flags (3, 8, 20, 21, 29) and the world callbacks
+  (paths 1002/1003/1016/1017, 9, 16, 17, 20) to their unit writers.
+- A second table set: each enemy family has its own array behind uEm vf
+  0x2f8, e.g. uEm0700 0x01751f3c, uEm2000 family 0x01751f08, uEm5100
+  0x017218a0, uEm5200 0x016cd234, uEm5400 0x016a12bc, uEm5500 0x016af8f0,
+  uEm6000 0x0166f760, uEm8300 0x0165d670; the interpreter is shared, the
+  unit sides (callbacks, result rewrite, action table) are per family.
+- The two missing goblin FSM processes (`Check Area Hit` 0x007aafd0, `Set
+  QuestFlag` 0x007aad90).
