@@ -122,7 +122,12 @@ impl<'a> Package<'a> {
             return Err("overlapping package sections".into());
         }
         for m in wave_metadata.chunks_exact(44) {
-            index(u32at(m, 40)?, nw)?;
+            // Translated from 0x00e21600 (DDDA.exe 2017-12-13 Steam):
+            // the metadata wave index is absent for every negative signed value.
+            let wave_index = u32at(m, 40)?;
+            if (wave_index as i32) >= 0 {
+                index(wave_index, nw)?;
+            }
         }
         Ok(Self {
             waves,
@@ -462,6 +467,26 @@ mod tests {
         put(&mut b, 76, 100);
         assert!(Package::parse(&b).is_err());
     }
+    #[test]
+    fn package_metadata_negative_wave_indices() {
+        let mut b = vec![0; 80];
+        b[..4].copy_from_slice(b"SPAC");
+        put(&mut b, 4, 12);
+        put(&mut b, 8, 1);
+        put(&mut b, 16, 1);
+        put(&mut b, 20, 36);
+        put(&mut b, 24, 36);
+        put(&mut b, 28, 80);
+        put(&mut b, 32, u32::MAX);
+        for value in [u32::MAX, (-2_i32) as u32, i32::MIN as u32, 0] {
+            put(&mut b, 76, value);
+            let package = Package::parse(&b).unwrap();
+            assert_eq!(u32at(package.wave_metadata, 40).unwrap(), value);
+        }
+        put(&mut b, 76, 1);
+        assert!(Package::parse(&b).is_err());
+    }
+
     #[test]
     fn safe_stream_paths() {
         assert_eq!(

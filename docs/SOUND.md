@@ -15,7 +15,7 @@ only inherited cResource fields, so unnamed serialized bytes remain raw.
 
 | Format | Tables and links confirmed in executable |
 | --- | --- |
-| SPAC | `0x00e21600`: 32-byte header; wave/program/metadata counts at +8/+12/+16; program/metadata/sample offsets at +20/+24/+28. Programs stride20, metadata stride44; metadata +40 is a wave index or -1. |
+| SPAC | `0x00e21600`: 32-byte header; wave/program/metadata counts at +8/+12/+16; program/metadata/sample offsets at +20/+24/+28. Programs stride20, metadata stride44; metadata +40 is a signed wave index; every negative value means absent. |
 | SREQ | `0x00f735b0`: 52-byte header, +8 request count, requests immediately follow with stride144. Request +128 indexes the package-path offset array addressed by header+28; -1 means no package. Request+132 indexes the section table. |
 | STRQ | `0x00dc0ef0`: 60-byte header; +8 source count and +12 request count, source/request offsets+32/+36. Sources stride24: absolute string offset followed by five raw words. Requests stride156: +140 source index, +144 section index; -1 means absent. |
 
@@ -65,7 +65,7 @@ a claim about when those cues play.
 ## Validation
 
 Measured against the maintainer's install on 2026-10-09:
-`cargo test -p mtsound -- --nocapture` passes five synthetic tests and one
+`cargo test -p mtsound -- --nocapture` passes six synthetic tests and one
 installation test. The latter visits every archive occurrence, not merely
 the first VFS-selected copy.
 
@@ -80,7 +80,7 @@ wave reconstructs into a bounded RIFF chunk sequence. The sample
 `sound/stream/bgm/wave/Bridge.sngw` passes all 108 Ogg page CRCs and
 identifies as six channels at 48,000 Hz. Synthetic cases cover truncated
 headers/strings, invalid source/auxiliary indices, split RIFF and empty
-wave slots, unsafe paths, and Ogg CRC corruption.
+wave slots, all-negative metadata wave sentinels versus nonnegative out-of-range indices, unsafe paths, and Ogg CRC corruption.
 
 The source tables contain 76,468 distinct stream paths; 285 resolve to
 loose SNGW files and 76,183 do not. This is **not** evidence of missing
