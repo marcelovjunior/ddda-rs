@@ -458,7 +458,10 @@ pub struct Look {
     pub mask: PartMask,
     /// Hair colour: actor +0x13d0..+0x13d8 x 0.5 + 0.2 (0x008407f0).
     pub hair_color: Option<[f32; 3]>,
-    /// Beard colour (actor +0x13f0), with the hair formula (*assumed*).
+    /// Beard colour: not applied. The runtime edit holds one (actor
+    /// +0x13f0, pallet 0), but the beard branch of 0x008407f0 sets no
+    /// colour and the formula is not traced (the hair formula on it gives
+    /// a green beard for st200 n001).
     pub beard_color: Option<[f32; 3]>,
     /// Skin colour (actor +0x13e0), raw (its use in the shader is not
     /// traced).
@@ -677,8 +680,6 @@ pub fn npc_look_with<S: Source + ?Sized>(src: &S, t: &Tables, npc: u32, unit_no:
         look
     };
     look.morphs = morphs;
-    let c = |i: usize| [f[i] * 0.5 + 0.2, f[i + 1] * 0.5 + 0.2, f[i + 2] * 0.5 + 0.2];
-    look.beard_color = Some(c(16));
     look.skin_color = Some([f[12], f[13], f[14]]);
     look.weapons = weapon::weapons(edit.weapons[0], edit.weapons[1]);
     Ok(NpcLook { npc, edit_path, edit, armor_set: set, look })

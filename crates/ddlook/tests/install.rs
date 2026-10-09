@@ -148,3 +148,16 @@ fn saved_arisen_and_pawns_are_dressed() {
         assert!((0..200).any(|p| !l.look.mask.visible(p)));
     }
 }
+
+#[test]
+fn stand_in_arisen_is_dressed() {
+    let Some(v) = vfs() else { return };
+    for sex in [0, 1] {
+        let l = ddlook::save::template_look(&v, sex).unwrap();
+        assert_eq!(l.sex, sex);
+        assert!(l.parts.iter().any(|p| !p.hair && !p.beard));
+        for p in &l.parts {
+            assert!(exists(&v, &p.path), "{}", p.path);
+        }
+    }
+}

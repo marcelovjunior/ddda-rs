@@ -99,7 +99,7 @@ pub struct WeaponPart {
     pub id: i32,
     pub path: String,
     pub joint: u8,
-    /// Degrees; the Euler order is not traced (*assumed* X, Y, Z).
+    /// Degrees, applied X then Y then Z (uCnsAttach 0x00859bb0, mode 1).
     pub rotation: [f32; 3],
     /// Centimetres, in the joint's frame.
     pub offset: [f32; 3],

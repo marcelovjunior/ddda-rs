@@ -13,6 +13,7 @@ mtarc = { path = "../mtarc" }
 ddsave = { path = "../ddsave" }
 dditem = { path = "../dditem" }
 mtxfs = { path = "../mtxfs" }
+ddpawn = { path = "../ddpawn" }
 
 [dev-dependencies]
 mtmod = { path = "../mtmod" }

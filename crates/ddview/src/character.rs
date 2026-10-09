@@ -57,6 +57,10 @@ impl Playback {
 pub struct ExtraPart {
     pub path: String,
     pub tint: Option<[f32; 3]>,
+    /// Rigidly attached (weapons): joint id of the base skeleton, rotation
+    /// in degrees (applied X, Y, Z: uCnsAttach 0x00859bb0) and offset in cm. The part
+    /// keeps its own small skeleton under that joint.
+    pub attach: Option<(u8, [f32; 3], [f32; 3])>,
 }
 
 /// Spawns `model_path` with its skeleton at `translation` (viewer units),
@@ -83,6 +87,7 @@ pub fn spawn(
         images,
         bindposes,
         model_path,
+        None,
         &[],
         &|_| true,
         motion_path,
@@ -106,6 +111,7 @@ pub fn spawn_assembled(
     images: &mut Assets<Image>,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     model_path: &str,
+    base_tint: Option<[f32; 3]>,
     parts: &[ExtraPart],
     visible: &dyn Fn(u16) -> bool,
     motion_path: &str,
@@ -148,7 +154,7 @@ pub fn spawn_assembled(
         .id();
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
-    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, None);
+    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint);
     for part in parts {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
             Ok(b) => b,
@@ -164,8 +170,32 @@ pub fn spawn_assembled(
                 continue;
             }
         };
-        let joints = bind_skeleton(commands, &pm, root, &mut joints_by_id);
-        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, visible, part.tint);
+        let joints = match part.attach {
+            Some((joint, rot, pos)) => {
+                let Some(&parent) = joints_by_id.get(&joint) else {
+                    warn!("{}: joint {joint} missing", part.path);
+                    continue;
+                };
+                let r = rot.map(f32::to_radians);
+                let anchor = commands
+                    .spawn((
+                        // uCnsAttach (0x00859bb0, attach mode 1) builds the row-vector
+                        // matrix Rx * Ry * Rz from degrees: X first, then Y,
+                        // then Z, i.e. Rz * Ry * Rx for column vectors.
+                        Transform::from_translation(Vec3::from(pos)).with_rotation(Quat::from_euler(EulerRot::ZYX, r[2], r[1], r[0])),
+                        Visibility::default(),
+                        Name::new(format!("attach {}", part.path)),
+                    ))
+                    .id();
+                commands.entity(parent).add_child(anchor);
+                // Its own joints: weapon bone ids (0, 1, 2) are not body joints.
+                bind_skeleton(commands, &pm, anchor, &mut HashMap::new())
+            }
+            None => bind_skeleton(commands, &pm, root, &mut joints_by_id),
+        };
+        let all = |_: u16| true;
+        let vis: &dyn Fn(u16) -> bool = if part.attach.is_some() { &all } else { visible };
+        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint);
     }
     commands.entity(root).insert(Playback {
         motion,
@@ -310,22 +340,42 @@ fn spawn_meshes(
                     reflectance: 0.3,
                     ..default()
                 };
+                if let (Some(list), Some(mat)) = (mrl.as_ref(), mrl.as_ref().and_then(|l| l.by_name(&name))) {
+                    // The traced material description (mtmrl::shading,
+                    // docs/SHADING.md): albedo map and colours, culling,
+                    // alpha test or blend. Cloth is mostly two-sided:
+                    // culling its back faces opened holes onto the body.
+                    let s = mtmrl::shading::describe(mat, list, mfx);
+                    if let Some(p) = s.textures.get("tAlbedoMap") {
+                        sm.base_color_texture = loader.texture(p, images);
+                    }
+                    let c: [f32; 3] = std::array::from_fn(|k| s.albedo_color[k] * s.diffuse_color[k]);
+                    let alpha = if s.uses_alpha() { s.transparency } else { 1.0 };
+                    sm.base_color = Color::linear_rgba(c[0], c[1], c[2], alpha);
+                    match s.raster.map(|r| r.cull) {
+                        Some(mtshader::Cull::None) => {
+                            sm.double_sided = true;
+                            sm.cull_mode = None;
+                        }
+                        Some(mtshader::Cull::Front) => sm.cull_mode = Some(bevy::render::render_resource::Face::Front),
+                        _ => sm.cull_mode = Some(bevy::render::render_resource::Face::Back),
+                    }
+                    let test = s.alpha_test.map(|t| t.reference_f32() + 0.5 / 255.0);
+                    sm.alpha_mode = if !s.uses_alpha() {
+                        AlphaMode::Opaque
+                    } else if s.blends_alpha() {
+                        AlphaMode::Blend
+                    } else if let Some(cutoff) = test {
+                        AlphaMode::Mask(cutoff)
+                    } else {
+                        AlphaMode::Opaque
+                    };
+                }
                 // *Approximation*: the edit's hair colour multiplies the
                 // albedo (the original sets a material constant, 0x008438f0).
                 if let Some(c) = tint {
-                    sm.base_color = Color::srgb(c[0], c[1], c[2]);
-                }
-                if let Some(mat) = mrl.as_ref().and_then(|l| l.by_name(&name)) {
-                    for c in &mat.commands {
-                        if c.kind == mtmrl::CommandKind::Texture
-                            && mfx.object(c.object).map(|o| o.name.as_str()) == Some("tAlbedoMap")
-                        {
-                            if let Some(t) = mrl.as_ref().and_then(|l| l.texture(c)) {
-                                let p = t.path.clone();
-                                sm.base_color_texture = loader.texture(&p, images);
-                            }
-                        }
-                    }
+                    let b = sm.base_color.to_linear();
+                    sm.base_color = Color::linear_rgba(b.red * c[0], b.green * c[1], b.blue * c[2], b.alpha);
                 }
                 materials.add(sm)
             })
