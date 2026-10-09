@@ -281,10 +281,14 @@ returns true or motion is 0x282, 0x283, 0x284, or 0x28C..0x28F. The
 existing `ddenemyrt::Body::push_volumes` builds activated authored
 object-adjustment groups, but does not represent all these callback
 gates or runtime-created entries. It is therefore a partial foundation,
-not yet an exact collection-1 provider. **0x0076b2c0**, called by actor
-virtual-slot9 paths, clears collection1's count; a provider must preserve
-the selected posed entries at the camera's phase rather than rebuilding
-an arbitrary set from a later motion frame.
+not yet an exact collection-1 provider. **0x0076b2c0** clears collection1's
+count (direct call at **0x00baf5cc**, player virtual-slot8 path). The offset
+producer itself is called at **0x00886850**, near the end of
+`uObjModel::vf09` (**0x00886530**). These call targets were checked from
+instruction bytes because Ghidra's reference query mixed references to
+the reset and producer. A provider must preserve the selected posed
+entries at this phase rather than rebuilding an arbitrary set from a
+later motion frame; other classes' reset paths remain to be established.
 
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
