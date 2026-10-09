@@ -22,6 +22,9 @@
 #[path = "post.rs"]
 pub mod post;
 
+#[path = "transparent_sort.rs"]
+pub mod transparent_sort;
+
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -69,6 +72,7 @@ impl Plugin for ShadingPlugin {
         // --event and --lineup run without the sky plugin.
         bevy::shader::load_shader_library!(app, "sky_scatter.wgsl");
         app.add_plugins(MaterialPlugin::<DdMaterial>::default())
+            .add_plugins(transparent_sort::OriginalSortPlugin)
             .add_plugins(bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin::<post::DdPost>::default())
             .init_resource::<StageLighting>()
             .add_systems(Update, resolve_dd_materials);

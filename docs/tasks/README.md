@@ -138,7 +138,7 @@ Codex lane: see `docs/CODEX.md`.
 | [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | codex-1 | merged 2026-10-09 |
 | [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | merged 2026-10-09 |
 | [viewer-controls](viewer-controls.md) | WASD broken, wall z-fighting, mouse look without button (not inverted), Esc pause UI | core | codex-1 | merged 2026-10-09 |
-| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | partial merges 692c37e, ed16e62; ear/brow + z-fight open |
+| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | merged 2026-10-09 |
 | [enemy-families](enemy-families.md) | Wolves and harpies: think tables, actions, flight | core | codex-1 | assigned (1) |
 | [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | merged 2026-10-09 |
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | merged 2026-10-09 |
