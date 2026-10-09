@@ -410,6 +410,9 @@ pub struct Part {
     pub casts_shadow: bool,
     /// The model's middle and far LOD distances (cm).
     pub lod_dist: [f32; 2],
+    /// The model's bounding-sphere centre (model space, viewer units): the
+    /// point its LOD distance is measured to (0x00ea3d00, 0x00ea5320).
+    pub sphere_centre: Vec3,
 }
 
 /// Pass mask of the scene's main colour pass (`FUN_00fedb80` pass masks:
@@ -796,6 +799,7 @@ impl Loader<'_> {
         let mut mat_cache: HashMap<(u16, bool, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
         let lod_dist = [model.mid_dist as f32, model.low_dist as f32];
+        let sphere_centre = Vec3::new(model.sphere[0], model.sphere[1], model.sphere[2]) * UNIT;
         for (mesh_index, m) in model.meshes.iter().enumerate() {
             // The draw mode is a mask of the render passes that draw the
             // primitive (0x00ea5320 tests it against the pass mask); meshes
@@ -895,6 +899,7 @@ impl Loader<'_> {
                 lod: m.lod,
                 casts_shadow: m.draw_mode & PASS_SHADOW != 0,
                 lod_dist,
+                sphere_centre,
             });
         }
         Some(parts)

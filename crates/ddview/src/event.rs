@@ -236,8 +236,7 @@ pub struct InfoText;
 /// The original's per-frame LOD choice for whole-stage models and their
 /// placed objects (`stage::lod_level`, 0x00ea5320): a part is drawn only
 /// while its mask has the level for the camera's distance to its model.
-/// *Assumed:* the model's centre is its parts' bounding-box centre (the
-/// original measures to the model's bounding sphere).
+/// The distance is to the model's bounding-sphere centre (its header).
 #[derive(Component)]
 pub struct Lod {
     pub mask: u8,
@@ -248,21 +247,10 @@ pub struct Lod {
     pub view_range: u32,
 }
 
-/// The centre (model space, viewer units) of a model's parts.
-fn model_centre(parts: &[stage::Part], meshes: &Assets<Mesh>) -> Vec3 {
-    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for p in parts {
-        let Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) =
-            meshes.get(&p.mesh).and_then(|m| m.attribute(Mesh::ATTRIBUTE_POSITION))
-        else {
-            continue;
-        };
-        for q in v {
-            lo = lo.min(Vec3::from(*q));
-            hi = hi.max(Vec3::from(*q));
-        }
-    }
-    if lo.x > hi.x { Vec3::ZERO } else { (lo + hi) * 0.5 }
+/// The centre (model space, viewer units) the LOD distance is measured to:
+/// the model's bounding sphere from its header, as 0x00ea3d00 transforms it.
+fn model_centre(parts: &[stage::Part], _meshes: &Assets<Mesh>) -> Vec3 {
+    parts.first().map_or(Vec3::ZERO, |p| p.sphere_centre)
 }
 
 /// Shows each [`Lod`] part only at its level.
@@ -403,15 +391,11 @@ pub fn spawn_stage_models(
     for m in &models {
         if let Some(parts) = loader.model(m, meshes, materials, images) {
             // Converted meshes are already in viewer units (stage.rs).
-            // *Interim:* the whole-stage models keep the near level (as the
-            // view range FARTHEST does). Measured from their centre, which
-            // can be tens of metres from the ground under the player, they
-            // dropped near ground (maintainer's probe, st200_md06).
-            // `uBaseModel.mLODType` (+0x108 bits 9-12, a fixed level when
-            // not negative) is the original's override; who sets it for
-            // stage models is not traced.
+            // By distance like any model: `uBaseModel.mLODType` (+0x108 bits
+            // 9-12) is -1 (automatic) from its constructor (0x00c25234 sets
+            // all four bits) and no code sets it for stage models.
             let centre = model_centre(&parts, meshes);
-            spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, 3);
+            spawn_parts(commands, &parts, Transform::IDENTITY, m, centre, loader.view_range);
         }
     }
     let mut placed = 0;
