@@ -152,4 +152,4 @@ Codex lane: see `docs/CODEX.md`.
 | [opening-movie](opening-movie.md) | Opening slice: WMV movie playback | core | codex-1 | assigned (slice 6) |
 | [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | assigned (slice 7) |
 | [skill-vfx](skill-vfx.md) | Opening slice: effects for attacks, skills, hits | core | codex-1 | assigned (slice 8) |
-| [pawn-actor](pawn-actor.md) | Saved/story pawns as active actors (Rook, prologue companions, Mage input) | core | codex-1 | partial merge f5d2ea7 (saved stats + equipment adapter); body, AI open |
+| [pawn-actor](pawn-actor.md) | Saved/story pawns as active actors (Rook, prologue companions, Mage input) | core | codex-1 | merged 2026-10-09 |

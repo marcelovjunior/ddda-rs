@@ -13,6 +13,7 @@ fn rook_and_prologue_records_keep_their_actual_stats_and_equipment() {
     let exe = ddexe::ExeFile::next_to(&native).unwrap();
     let vfs = ddvfs::Vfs::open(&native).unwrap();
     let data = EquipmentData::load(&vfs, &exe.image().unwrap()).unwrap();
+    let skills = ddskill::catalogue::ExeTables::from_image(&exe.image().unwrap()).unwrap();
     let story = ddstory::data::InstallData::open(&native, None).unwrap();
     for stock in 10..=14 {
         let record = ddstory::prologue::story_stock(&story, stock, 0).unwrap();
@@ -27,6 +28,15 @@ fn rook_and_prologue_records_keep_their_actual_stats_and_equipment() {
         );
         assert_eq!(actor.base_defender().base_defence, record.param.defend);
         assert!(actor.equipment.defence[0] > 0.0);
+        assert_eq!(actor.skill_level(&skills, u32::MAX, &[0; 14], false).unwrap(), 0);
+        assert!(actor.skill_level(&skills, 430, &[0; 14], false).is_err());
+        // Basic staff input command0xb4 has no learning-text metadata;
+        // 0x00780ba0 returns zero, so 0x00542620 selects the first tier.
+        assert_eq!(skills.skills[180].text, -1);
+        assert_eq!(
+            actor.skill_level(&skills, 180, &[u32::MAX; 14], false).unwrap(),
+            0
+        );
         if stock == 14 {
             assert_eq!((actor.record.param.job, actor.record.param.level), (3, 6));
             let staff = actor.equipped[0].unwrap();
