@@ -97,7 +97,7 @@ follow-up work.
 
 ## Remaining work
 
-Program selection, cue commands, volume/pan/pitch/delay fields, speaker
+General cue commands, volume/pan/pitch/delay fields, speaker
 settings, source metadata words and runtime loop behavior are not assigned
 semantics by this reader. Stream requests may reference assets absent from
 the loose installation; report these rather than substituting another sound.
@@ -128,3 +128,26 @@ Installed decoding checks produce six-channel 48 kHz audio, respectively
 61.183 and 56.757 seconds. The Arisen's separate SPAC grunt decodes as
 Microsoft ADPCM, mono 48019 Hz, 41344 samples. These are decode checks,
 not audible playback or comparison against the original.
+
+Base SREQ selection now follows request u16 keys (0x00f73b90), signed
+program/variation fields at +0x1e/+0x20 (0x00dd3510 / 0x00dd8dd0), and
+SPAC program and variation lookup (0x00e218e0, relocation 0x00e21600).
+Runtime request overrides are not applied by the base-key reader. Synthetic
+tests cover variation selection and absent waves; the installed ev10 Arisen
+request resolves and decodes through this lookup.
+
+The viewer now forwards event stream cues to a Bevy audio source in standalone
+events and opening cutscenes. Sources are cached and replaced per event unit;
+offline pause pauses the sinks. Six-channel Vorbis is provisionally folded to
+stereo, preserving the center dialogue channel and omitting LFE. This is
+explicitly not the original game's mixer, gain, reverb or positional model.
+The release viewer builds, and all 11 mtsound tests pass including the full
+installed reader corpus. Audible output and original-game timing comparison
+have not been verified. Conditional Arisen voices, footsteps, attack sounds
+and field BGM remain unconnected, so the audio-playback brief remains open.
+
+Motion-SFX trace leads: uSoundMotionSe constructor 0x00c71c20 chooses LMT
+event page 3; 0x00c73630 detects rising bits, 0x00c721c0 uses the group's u16
+remap, and 0x00c722d0 resolves a UniqueID in rSoundMotionSe. Request type 12
+uses the surface helper 0x00c72b60; direct requests use 0x00c724b0. Bank binding
+and surface selection still need tracing before motion cues can be played.

@@ -185,6 +185,7 @@ pub fn run_if_requested() -> bool {
             ..default()
         }))
         .add_plugins(stage::ShadingPlugin)
+        .add_plugins(crate::audio::GameAudioPlugin(args.native_pc.clone()))
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 250.0, ..default() })
         .insert_resource(Playing { player, last, stage: stage_no, args: args.clone(), looks })
@@ -244,6 +245,7 @@ fn setup(
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
     let args = &playing.args;
+    if !args.hold && args.start_frame == 0 { crate::audio::cues(&mut commands, &playing.last); }
     let vfs = ddvfs::Vfs::open(&args.native_pc).expect("open nativePC");
     let mfx_path = args.native_pc.join("usershader").join("BbsShaderPackage.mfx");
     let mfx = mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx");
@@ -651,6 +653,7 @@ fn log_frame(f: &EventFrame) {
 
 #[allow(clippy::too_many_arguments)]
 fn drive(
+    mut commands: Commands,
     time: Res<Time>,
     mut playing: ResMut<Playing>,
     mut acc: Local<f32>,
@@ -668,6 +671,7 @@ fn drive(
             *acc -= 1.0;
             let f = playing.player.step(1.0).expect("event step");
             log_frame(&f);
+            crate::audio::cues(&mut commands, &f);
             playing.last = f;
         }
     }

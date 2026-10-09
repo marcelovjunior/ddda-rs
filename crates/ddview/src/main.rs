@@ -26,6 +26,7 @@
 //! its spot, clock and weather, with its Arisen and main pawn dressed;
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
+mod audio;
 mod event;
 mod character;
 mod net;
@@ -565,6 +566,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(stage::ShadingPlugin)
+        .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)

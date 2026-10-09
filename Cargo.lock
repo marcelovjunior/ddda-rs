@@ -2649,6 +2649,7 @@ dependencies = [
  "mtmod",
  "mtmrl",
  "mtshader",
+ "mtsound",
  "mtswm",
  "mttex",
  "mtweather",
@@ -3948,6 +3949,7 @@ dependencies = [
  "ddvfs",
  "lewton",
  "mtarc",
+ "mtxfs",
  "symphonia",
 ]
 

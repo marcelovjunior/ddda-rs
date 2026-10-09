@@ -29,4 +29,13 @@ Attacks, footsteps and the st200 ev10 voice line play in `ddview`. Describe what
 
 ## Results
 
-(filled in by the agent)
+Buildable checkpoint, not complete. Event stream cues are forwarded in the
+standalone player and opening cutscenes, decoded into a cached Bevy source,
+and paused with offline play. The six-channel stereo fold is provisional.
+SREQ program/variation lookup and installed ev10 SPAC decoding are tested.
+Release ddview builds; all 11 mtsound tests pass, including the installed
+resource corpus. Source addresses and remaining mapping work are in SOUND.md.
+
+Audible playback and comparison against the original have not been verified.
+Conditional Arisen voice, motion footsteps/attacks and field BGM are still
+unconnected. Next: trace motion-event remap and request bank binding.

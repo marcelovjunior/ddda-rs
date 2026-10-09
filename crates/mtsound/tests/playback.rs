@@ -32,7 +32,10 @@ fn installed_ev10_streams_and_adpcm() {
         )
         .unwrap();
     let package = Package::parse(&bytes).unwrap();
-    let wave = package.waves.iter().flatten().next().unwrap();
+    let req = v.read(r"sound\se\vo_ev\st200ev10_vo_m0\st200ev10_vo_m0", mtarc::type_hash("rSoundRequest")).unwrap();
+    let requests = mtsound::Requests::parse(&req).unwrap();
+    let (program, variation) = requests.request(1).unwrap().wave_keys();
+    let wave = package.wave_for(program, variation).unwrap().unwrap();
     assert_eq!(wave.format_tag, 2);
     let pcm = decode::wave(&wave.riff(), 1_000_000).unwrap();
     assert_eq!((pcm.channels, pcm.sample_rate), (wave.channels, wave.sample_rate));
