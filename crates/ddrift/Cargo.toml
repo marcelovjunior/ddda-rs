@@ -1,0 +1,19 @@
+[package]
+name = "ddrift"
+version = "0.1.0"
+description = "Headless, host-owned Rift for Dragon's Dogma: Dark Arisen: pawn pool, Rift lists, summoning, hiring and dismissal bookkeeping"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddexe = { path = "../ddexe" }
+ddpawn = { path = "../ddpawn" }
+ddparam = { path = "../ddparam" }
+ddsave = { path = "../ddsave" }
+ddstory = { path = "../ddstory" }
+ddvfs = { path = "../ddvfs" }
+mtarc = { path = "../mtarc" }
+
+[dev-dependencies]
+ddnpc = { path = "../ddnpc" }
