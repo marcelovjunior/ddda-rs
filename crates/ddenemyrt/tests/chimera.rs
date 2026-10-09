@@ -3,6 +3,106 @@
 mod chimera;
 use chimera::*;
 
+#[test]
+fn installed_catalogues_keep_children_and_death_variants_distinct() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC"));
+    if !native.is_dir() {
+        eprintln!("DDDA install absent; skipped catalogue regression");
+        return;
+    }
+    let file = ddexe::ExeFile::next_to(&native).unwrap();
+    let exe = file.image().unwrap();
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    for (unit, count, resource_count, death, class) in [
+        (Unit::Body, 142, 86, 0x57, "cEm5200ActDie"),
+        (Unit::Child00, 85, 34, 0x32, "cEm5200_00ActDie"),
+        (Unit::Child01, 90, 27, 0x38, "cEm5200_01ActDie"),
+    ] {
+        let data = Catalogue::read(&exe, unit).unwrap();
+        assert_eq!(data.unit, unit);
+        assert_eq!(data.actions.len(), count);
+        assert_eq!(data.resources.len(), resource_count);
+        let expected_bound = match unit {
+            Unit::Body => 41,
+            Unit::Child00 => 28,
+            Unit::Child01 => 27,
+        };
+        assert_eq!(
+            data.resources.iter().filter(|r| r.flags & 1 != 0).count(),
+            expected_bound
+        );
+        assert!(data.resources.iter().all(|r| r.flags & 6 == 2));
+        assert_eq!(data.actions[death].class, class);
+        assert!(data.actions.iter().all(|r| r.class.starts_with('c')));
+        if unit == Unit::Body {
+            assert_eq!(data.actions[0x3a].class, "cEm5200ActFall");
+            assert_eq!(data.actions[0x3a].argument, 1);
+            for variant in 0..7 {
+                assert_eq!(data.actions[0x52 + variant].class, "cEm5200ActDie");
+                assert_eq!(data.actions[0x52 + variant].argument, variant as u32);
+            }
+        } else {
+            assert_eq!(data.actions[death].argument, 10);
+        }
+        let regions = data.regions(&vfs).unwrap();
+        assert_eq!(regions.len(), if unit == Unit::Body { 3 } else { 1 });
+        let own = regions[0].1.regions.iter().find(|r| r.kind == 0).unwrap();
+        assert_eq!(own.elements.len(), if unit == Unit::Body { 6 } else { 2 });
+        assert_eq!(data.hit_to_pool.len(), 12);
+        for hit_region in 0..12 {
+            let index = data.pool_index(hit_region, &own.elements).unwrap();
+            assert_eq!(own.elements[index].id, data.hit_to_pool[hit_region]);
+        }
+        let mut reordered = own.elements.clone();
+        reordered.reverse();
+        assert_eq!(data.pool_index(0, &reordered), Some(reordered.len() - 1));
+        assert_eq!(data.pool_index(12, &own.elements), None);
+        assert_eq!(data.pool_index(0, &[]), None);
+        for (path, region) in regions {
+            assert!(region.regions.iter().any(|r| r.kind == 0));
+            eprintln!("{unit:?} {path}: {} region sets", region.regions.len());
+        }
+        for request in &data.resources {
+            if matches!(request.class.as_str(), "rModel" | "rMotionList" | "rObjCollision") {
+                assert!(
+                    vfs.locate(&request.path, mtarc::type_hash(&request.class))
+                        .is_some(),
+                    "missing {request:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn resource_initializers_preserve_upper_flags_and_binding_exceptions() {
+    for (unit, index, bound) in [
+        (Unit::Body, 0, true),
+        (Unit::Body, 1, false),
+        (Unit::Body, 39, true),
+        (Unit::Body, 40, false),
+        (Unit::Body, 55, false),
+        (Unit::Body, 56, true),
+        (Unit::Body, 57, false),
+        (Unit::Body, 85, true),
+        (Unit::Child00, 25, true),
+        (Unit::Child00, 26, false),
+        (Unit::Child00, 31, false),
+        (Unit::Child00, 32, true),
+        (Unit::Child00, 33, true),
+        (Unit::Child01, 0, true),
+        (Unit::Child01, 26, true),
+    ] {
+        for stored in [0, 7, 0xffff_ffff, 0x1234_5678] {
+            let flags = initialized_resource_flags(unit, index, stored);
+            assert_eq!(flags & !7, stored & !7);
+            assert_eq!(flags & 7, if bound { 3 } else { 2 });
+        }
+    }
+}
+
 fn hit() -> DeathContext {
     DeathContext {
         has_damage_context: true,

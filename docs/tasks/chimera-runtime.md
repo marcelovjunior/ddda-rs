@@ -74,12 +74,17 @@ MILESTONES/ROADMAP; report evidence and next action for head to fold in.
 ## Results
 
 Source checkpoint: isolated body/child death and parent-reaction selectors
-are implemented with source addresses. Five targeted regressions pass.
+are implemented with source addresses. Seven targeted regressions pass.
 `docs/CHIMERA.md` records ownership, common priority masks, child-01 guards,
 the persistent writer chain, action registration, and damage-routing leads.
+An installed catalogue reader resolves 317 action records and 147 resource
+requests; the installed regression locates combat resources and parses the
+three region files (5/4/2 sets). Runtime hit-region maps preserve pool IDs.
+Source-traced CRT flag fixups retain 41/28/27 bound resources; on-disk
+zero flag words are not mistaken for effective runtime flags.
 The normal body action 0x3a is a falling action before death action 0x57;
 the 180-unit death cleanup timer is not the persistent-kill producer.
 
 No host combat actor, placement kill, story progression or original-game
-comparison is claimed by this checkpoint. Next: installed action/resources,
-life-pool writer and the exact body/child damage binding.
+comparison is claimed by this checkpoint. Next: the child-00 collision-link
+relay of already-valued hits to the body and exact body/child damage binding.

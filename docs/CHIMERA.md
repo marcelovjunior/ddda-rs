@@ -61,6 +61,22 @@ different from the goblin table's +0x28. Initialization `0x009a0880`,
 | child 01 | 0x01850630 | 90 |
 
 These are runtime-read bulk records, not constants to copy into the repo.
+The catalogue reader loads all 317 action records and all 147 non-null
+resource requests (including the separately appended collision requests)
+from the installed exe. Resource-list bases/counts come from
+`0x009a0820`, `0x009b0ef0`, and `0x009b8eb0`; the 12-byte request walker
+is `0x00889de0`. The body's list also prepares the two children, so its
+models and region resources must not all become one body's data.
+The on-disk resource flag words need CRT fixups: body initializer
+`0x0135a120..0x0135a6e0` sets binding on indices 0, 2..39 and 56;
+child 00 initializer `0x0135b8a0..0x0135badc` on 0..25 and 32;
+child 01 initializer `0x0135c440..0x0135c602` on all 26. The appended
+collision requests use `0x01371900` and `0x013716b0`. Binding entries
+apply `(flags & ~4) | 3`; preload-only entries `(flags & ~5) | 2`.
+The reader preserves upper bits. Effective binding counts, including
+appended requests, are 41/28/27. Bit 0 gates `0x008892b0` binding, so
+using the file's zero words directly would silently omit bound resources.
+
 Body action 0x3a is `cEm5200ActFall` variant 1, **not** `cEm5200ActDie`.
 Fall entry/update (`0x009ad030`/`0x009ad270`) start motion 0x2b7 and wait
 for the source's contact/displacement condition before requesting action
@@ -80,6 +96,26 @@ values to pool 0 for visual damage. Child post-hit callbacks
 These are post-hit visual consumers; they alone do not establish the full
 damage-routing algorithm.
 
+Initialization selects region **kind 0** in all three units: EAX is zero
+at calls `0x009a0bd1`, `0x009b1118`, `0x009b909c` to `0x00770910`.
+Installed files have 5/4/2 region kinds for body/00/01; kind zero contains
+6/2/2 life pools respectively. Pool IDs must remain separate from vector
+indices. The three 12-entry hit-region maps at `0x014fe1e0`, `0x014fde28`,
+`0x014fda78` are now read at runtime. Initializers write them to collision
++0xcf4 and set +0xd78 to 12. `0x00770f00` looks up the mapped **ID** in
+the selected pool list.
+
+Child 00 initialization at `0x009b116a` sets child +0x1da8 (collision
++0xcc8) to parent +0x10e0. Collision pass `0x0076b7e0` applies the local
+hit with `0x0076db10(..., false)`, then traverses that link and applies
+the same hit with `0x0076db10(..., true)`. The linked pass skips damage
+valuation/mitigation, optionally remaps the region through +0xd34/+0xd38,
+applies main-pool break/status effects, and applies HP only when its
+resolved region has attribute 8. It must not call `resolve_enemy_hit`
+again and mitigate twice. Child 01's initialization does not install this
+link; its lifecycle and any later link writer still need tracing. Existing
+within-actor region propagation is not this cross-actor relay.
+
 Child think roots depend on the parent's +0x5c14 and +0x5c18 == 2:
 child 00 uses 0x016fe6e8 or 0x016ff368; child 01 uses 0x016f8ee8 or
 0x016f9a28. Body array 0x016cd234 and fallback 0x0170f060 are selected
@@ -92,10 +128,15 @@ parent reactions, preserving the masks and early-return behavior. Five
 regressions pass: all arbitration bits in both masks, missing damage and
 dead-state rejection, body motion overrides, child-01 guards, and the two
 parent reaction families (including zero/negative/missing impact side).
+Seven regressions pass in total. The installed catalogue regression resolves every action DTI,
+checks the sourced death/fall variants, locates all referenced model,
+motion and object-collision resources, and parses all requested region files.
+It also verifies all mapped pool IDs, shuffled pool order and missing-region
+rejection. A CRT regression pins binding exceptions and upper-bit preservation.
 The integration test includes the module by path pending the shared
 `lib.rs` owner's export. No game observation was performed.
 
-Still open: installed resources and spawn binding; complete damage routing;
+Still open: assembling loaded resources into combat actors and spawn binding; complete damage routing;
 child anatomical mapping; action execution, root movement and collision;
 think driver and N-Arisen fight integration; story/live acceptance.
 Next action: load the three action/resource sets and trace the life-pool
