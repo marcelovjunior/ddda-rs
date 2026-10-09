@@ -173,5 +173,20 @@ touching the keyboard or the window.
 - Which party slot is the main pawn.
 - Teleports over long distances or across cells are untested.
 
+**Added while serving requests:**
+- `trace`: per-frame logging driven by a key script. Used for claude-2's
+  run-to-jump blend data: `uPlayer+0x3c0` holds the blend length in 30 fps
+  frames (5, 3, 0, 2 and 15 seen), `+0x3c4` counts down by
+  `sMain.mDeltaTime`, and `+0x3ec`/`+0x3f0` read 0 throughout.
+- `ddda-ledges`: finds steps in the stage collision.
+- A section in ORACLE.md on how to ask for a live check.
+
+**Live checks served:**
+- claude-5: pawn stock IDs.
+- claude-7: story flags.
+- claude-2: blend trace.
+- claude-1's ledge test is pending a known clean ledge; the first attempt
+  hit a hut and was inconclusive.
+
 **Next step:** serve live checks for the other briefs, then verify the talk
 recipe in a town.
