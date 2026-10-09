@@ -112,7 +112,7 @@ Codex lane: see `docs/CODEX.md`.
 | [host-architecture](host-architecture.md) | Original frame order, game host ADR, co-op protocol, ddhost | core + exe | claude-10 | assigned |
 | [combat-volumes](combat-volumes.md) | Hit volumes on joints, shape tests, hit history; then status | core | claude-8 | merged 2026-10-09 |
 | [m2-finish](m2-finish.md) | Body collision shape, landing hold, start-frame sync, load class, exhaustion | core | claude-1 | assigned |
-| [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-5 | assigned |
-| [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | assigned |
-| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | assigned |
-| [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | claude-8 | assigned |
+| [pawn-ai](pawn-ai.md) | Pawn decisions, inclinations, knowledge use, chatter | research | claude-5 | paused (usage) |
+| [enemy-ai-runtime](enemy-ai-runtime.md) | Headless FSM interpreter running a goblin | core | claude-9 | paused (usage) |
+| [npc-runtime](npc-runtime.md) | NPC schedules, talking, interaction lock | core | claude-6 | paused (usage) |
+| [combat-status](combat-status.md) | Status effects: durations, ticks, effects, cures | core | claude-8 | paused (usage) |
