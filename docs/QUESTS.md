@@ -352,14 +352,14 @@ player record +0xc == 0. The opening's flags:
 | GSF | Written by | Read by | Meaning (from the data; *guessed* where marked) |
 |---:|---|---|---|
 | 88 | q0000 QCT row 0 (player record +0xc == 0) | - | *male player* |
-| 280, 391, 392, 394, 398, 376, 325, 353 | q0000 state "FlagIni" | later quests | world setup after the dragon attack |
-| 360 | q0000, q0001, q0005, ... (on at start, off at events) | - | *quest scene in progress* |
+| 280, 391, 392, 394, 398, 376, 325, 353 | q0000 state "FlagIni" (and later quests/NPC scripts) | scenario gates in st601, st220, st240 for 280, 353, 391, 398 | *world setup after the dragon attack* |
+| 360 | q0000, q0001, q0005 and 19 more (on at start, off at events) | scenario gate `st706_gsf` | *quest scene in progress* |
 | 372 | vocation menu close 0x00512fb0; q0001 QCT row 3 (stage != 200) | q0001, `q0001_noSoubiNuke`, scenario `st200_etc[0]` gate | vocation chosen at the weapon table |
 | 377 | `soubiDanaMes` (on/off) | q0001 | equipment-shelf scene running |
-| 378, 379 | q0000 | q0000 | dragon fight phase checks |
+| 378, 379 | 378: q0000 (every frame of the fight phase); 379: no data writer (set in the live save: code or an unindexed source) | 379: q0000 | dragon-fight phase checks |
 | 381 | NPC script `ai\fsm\npc\st200\quest\q0002_n001_ai` | q0002 QCT row 0, `bootEv_st200ev15`, `fix\1400_chumes` | first pawn met (q0002 starts) |
 | 520 | q0000 (on/off) | - | *dragon camera* |
-| 622 | cleared by q0001 | scenario gates `st200_fsm[19,20]` | *chief's house first camera* |
+| 622 | cleared by q0001; set by `sontyoHouseHatudeCam` | `fixB5_chumes`, scenario gates `st200_fsm[19,20]` | *chief's house first camera* |
 | 704 | prologue `set_03` | - | |
 
 ## Scenarios and triggers (rScenario)
