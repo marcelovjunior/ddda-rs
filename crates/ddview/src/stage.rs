@@ -881,6 +881,17 @@ impl Loader<'_> {
             // Alpha computed but neither tested nor blended: no effect.
             AlphaMode::Opaque
         };
+        // The original uses forward Z; Bevy uses reverse Z (positive bias
+        // brings the surface forward). Preserve rasterizer bias with that
+        // sign conversion. Give coplanar alpha overlays two representable
+        // depth steps of separation in this renderer, not a world-space
+        // displacement or a change to the original material's alpha.
+        // This minimum is a viewer rendering choice (SHADING.md: DSZTest
+        // LessEqual/no-write on the bit-identical terrain overlay triangles).
+        sm.depth_bias = -s.raster.map_or(0.0, |r| r.depth_bias as f32);
+        if sm.alpha_mode == AlphaMode::Blend && s.depth.is_some_and(|d| d.depth_test && !d.depth_write) {
+            sm.depth_bias = sm.depth_bias.max(2.0);
+        }
         if let Some([r0, r1]) = s.uv_transform {
             sm.uv_transform = bevy::math::Affine2::from_cols(
                 Vec2::new(r0[0], r1[0]),
