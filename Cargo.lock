@@ -2605,10 +2605,13 @@ version = "0.1.0"
 dependencies = [
  "ddsim",
  "ddvfs",
+ "mtarc",
+ "mtlmt",
  "mtlot",
  "mtmod",
  "mtsbc",
  "mtshader",
+ "mtxfs",
 ]
 
 [[package]]

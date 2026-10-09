@@ -1827,10 +1827,23 @@ impl Sim {
             p.velocity[0] = 0.0;
             p.velocity[2] = 0.0;
         }
+        // ground rising above the new position within a step (a jump or a
+        // fall meeting a slope): on the way up the body is held back from
+        // it; on the way down it lands on it. Looking only below the body
+        // let a single-layer surface pass over it (#1149).
+        let rise = ground
+            .height(next[0], next[2], p.position[1].max(next[1]) + STEP_UP)
+            .filter(|&g| next[1] < g);
+        if rise.is_some() && p.velocity[1] > 0.0 {
+            next[0] = p.position[0];
+            next[2] = p.position[2];
+            p.velocity[0] = 0.0;
+            p.velocity[2] = 0.0;
+        }
         // landing: the ground under the new position, reached on the way down;
         // steep ground holds the character up without landing (as the
         // original stays in cPlActFall on a steep edge, docs/ACCEPTANCE.md)
-        match ground.height(next[0], next[2], p.position[1].max(next[1]) + 1.0) {
+        match ground.height(next[0], next[2], p.position[1].max(next[1]) + STEP_UP) {
             Some(g) if next[1] <= g && p.velocity[1] <= 0.0 && !is_floor(ground, [next[0], g, next[2]]) => {
                 p.position = [next[0], g, next[2]];
             }
@@ -2955,5 +2968,39 @@ mod tests {
         let w = run();
         let d = w.delta(8.0, 4.0);
         assert!((d[2] - 40.0).abs() < 1e-3, "{d:?}");
+    }
+
+    /// A single-layer ground: flat, then rising 1:1 east of x = 100 (no
+    /// triangles: the point rules).
+    struct Rise;
+    impl Ground for Rise {
+        fn height(&self, x: f32, _: f32, below_y: f32) -> Option<f32> {
+            let h = (x - 100.0).max(0.0);
+            (h <= below_y).then_some(h)
+        }
+    }
+
+    /// #1149 on the point rules: jumps into ground rising 1:1 used to pass
+    /// under the single-layer surface (the landing looked only below the
+    /// body) and fall without end; now they land on it and climb it.
+    #[test]
+    fn jumps_into_rising_ground_land_on_it() {
+        let mut s = sim();
+        let p = s.player_mut(0).unwrap();
+        p.yaw = std::f32::consts::FRAC_PI_2;
+        for f in 0..120 {
+            let input = Input {
+                // screen-left with the camera along +z: toward +x
+                stick: [-1.0, 0.0],
+                jump: f % 20 < 2,
+                ..Default::default()
+            };
+            s.step(1.0 / 30.0, &HashMap::from([(0, input)]), &Rise);
+            let p = s.player(0).unwrap();
+            let g = (p.position[0] - 100.0).max(0.0);
+            assert!(p.position[1] >= g - 1.0, "frame {f}: {:?} under {g}", p.position);
+        }
+        let p = s.player(0).unwrap();
+        assert!(p.position[0] > 300.0, "{:?}", p.position);
     }
 }
