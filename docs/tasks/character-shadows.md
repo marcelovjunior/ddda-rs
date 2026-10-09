@@ -51,6 +51,20 @@ mStartDecay 10, mEndDecay 50, mIntensity 1, mDir (0,0,1), types 0.
 collision ground under its joint, alpha = texture brightness x DARKEN
 (0.6, viewer choice) x a height fade (inferred). Arisen and pawns only.
 
+**Head, draw traced (follow-up 1, partly).** `uAmbientShadow::vf11`
+(0x00E7B6F0) draws a projected box. `mProjectionType` 0 (0x00E7AB30):
+look-at from the joint's world position straight down (target pos -
+(0,1,0), up (0,0,1); `mDir` unused), orthographic `mSize` x `mSize` full
+width (0x00CFC8B0), depth `mStart`..`mEnd`. Type 1 (0x00E7B110) is the
+perspective one (`mFov`). Constants 1/(`mEnd`-`mStart`) and the decays:
+fade in over `mStartDecay`, out over `mEndDecay` (shader not read).
+`mSpread` > 0 sets 2/`mSpread`. `mBlendType` picks draw-context blend state
++0x1520/+0x1528/+0x1530/+0x1538 (+0x1540.. with an ambient mask group).
+shadows.rs now uses the traced width and both fades; joints 0x10/0x14
+sit 8-10 cm above the floor (fade 0.65-0.93). Still open: the blend
+state's factors and the pixel shader (so DARKEN), NPC/enemy users,
+body scale, oracle compare.
+
 **Open follow-ups (Codex):**
 1. Trace the draw: the uAmbientShadow vtable's render/update, the
    shader it uses, its blend state, what mSize/mFov/mProjectionType/mDir

@@ -10,11 +10,22 @@
 //! `mStartDecay` 10, `mEndDecay` 50, `mIntensity` 1, `mDir` (0, 0, 1),
 //! `mProjectionType` 0, `mBlendType` 0.
 //!
+//! The draw (`uAmbientShadow::vf11`, 0x00E7B6F0) projects the texture
+//! onto the scene through a box: for `mProjectionType` 0 the view looks
+//! straight down from the joint's world position (0x00E7AB30: look-at
+//! toward pos - (0, 1, 0), up (0, 0, 1); `mDir` is not used) with an
+//! orthographic projection `mSize` wide and deep (full width, 0x00CFC8B0)
+//! from `mStart` to `mEnd` below the joint. The shader constants are
+//! 1 / (`mEnd` - `mStart`) and the two decays over that range, so the blob
+//! fades in over `mStartDecay` past `mStart` and out over `mEndDecay`
+//! before `mEnd` ([`height_fade`]; the shader itself is not read).
+//!
 //! Drawn here as a quad on the collision ground under each joint, darkening
 //! what is under it by the texture's colour (the blob is white in the
 //! middle, black at the edges). *Viewer approximation*: the original
-//! projects onto the drawn geometry; how it blends ([`DARKEN`]) and how
-//! the start/end/decay distances fade it ([`height_fade`]) are not traced.
+//! projects onto the drawn geometry, and its blend state (`mBlendType` 0
+//! selects state +0x1520 of the draw context) is not read, so the darkening
+//! ([`DARKEN`]) is a viewer choice.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -29,9 +40,11 @@ use crate::stage::UNIT;
 pub const TEXTURE: &str = r"effect\tex\cm\t_cm100_07_GM";
 /// `mParentNo` of the two units.
 pub const JOINTS: [u8; 2] = [0x10, 0x14];
-/// `mSize` default (cm), the blob's width here (*assumed*).
+/// `mSize` default (cm): the projection's full width (0x00CFC8B0).
 pub const SIZE: f32 = 50.0;
-/// `mEnd` and `mEndDecay` defaults (cm).
+/// `mStart`, `mStartDecay`, `mEnd` and `mEndDecay` defaults (cm).
+pub const START: f32 = 1.0;
+pub const START_DECAY: f32 = 10.0;
 pub const END: f32 = 100.0;
 pub const END_DECAY: f32 = 50.0;
 /// Darkening at the blob's centre at `mIntensity` 1 (*viewer choice*, to be
@@ -119,10 +132,13 @@ fn dxt_colours(b: [u8; 8]) -> [[u8; 3]; 4] {
     [c0, c1, [mix(c0[0], c1[0]), mix(c0[1], c1[1]), mix(c0[2], c1[2])], [mix(c1[0], c0[0]), mix(c1[1], c0[1]), mix(c1[2], c0[2])]]
 }
 
-/// Strength of a blob whose joint is `height` cm above the ground: full up
-/// to `mEnd - mEndDecay`, gone at `mEnd` (*inferred* from the field names).
+/// Strength of a blob on ground `height` cm below its joint: rising over
+/// `mStartDecay` past `mStart`, falling over `mEndDecay` before `mEnd`
+/// (*inferred* from the draw's constants; the shader is not read).
 pub fn height_fade(height: f32) -> f32 {
-    (1.0 - (height - (END - END_DECAY)) / END_DECAY).clamp(0.0, 1.0)
+    let rise = ((height - START) / START_DECAY).clamp(0.0, 1.0);
+    let fall = ((END - height) / END_DECAY).clamp(0.0, 1.0);
+    rise * fall
 }
 
 /// Gives the play characters (Arisen and pawns) their blobs and keeps the
@@ -175,6 +191,9 @@ pub fn update(
         let at = joint.translation() / UNIT + st.origin;
         let ground = st.terrain.height(at.x, at.z, at.y + 50.0);
         let fade = ground.map_or(0.0, |g| height_fade(at.y - g));
+        if std::env::var_os("DDVIEW_SHADOW_LOG").is_some() {
+            info!("shadows: joint {:?} at {at:?}, ground {ground:?}, fade {fade:.2}", blob.joint);
+        }
         let shown = owner_vis.get() && fade > 0.0;
         vis.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
         let Some(g) = ground.filter(|_| shown) else { continue };
@@ -192,7 +211,8 @@ pub fn update(
 mod tests {
     #[test]
     fn the_blob_fades_out_with_height() {
-        assert_eq!(super::height_fade(10.0), 1.0);
+        assert_eq!(super::height_fade(11.0), 1.0);
+        assert_eq!(super::height_fade(6.0), 0.5);
         assert_eq!(super::height_fade(75.0), 0.5);
         assert_eq!(super::height_fade(120.0), 0.0);
     }
