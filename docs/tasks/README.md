@@ -100,3 +100,4 @@ Codex lane: see `docs/CODEX.md`.
 | [enemy-placement](enemy-placement.md) | Enemy groups, gating, respawn per area | reader + exe | codex-1 | assigned |
 | [chara-edit](chara-edit.md) | Character creation data and gameplay effects | reader + exe | codex-1 | assigned |
 | [stream-rules](stream-rules.md) | World streaming radii, spawn distances, origin shifts | exe | codex-1 | assigned |
+| [m1-lighting](m1-lighting.md) | Sun, ambient, fog, foliage billboards, framing (M1 gate) | core | claude-3 | assigned |
