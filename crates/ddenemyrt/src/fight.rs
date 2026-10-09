@@ -483,7 +483,7 @@ impl Fight {
             let pose = abody.pose(motion, frame, p.position, p.yaw);
             let acts = abody.activations(motion, frame);
             bodies.push(crate::pushout::PushBody {
-                rank: p.state.push_rank(),
+                rank: p.push_rank(),
                 kind: 2,
                 volumes: abody.push_volumes(&acts, &pose),
             });

@@ -64,9 +64,18 @@ impl Sim {
 
     pub(super) fn skill_frame(&mut self, i: usize, ground: &dyn Ground, dt: f32) -> bool {
         let p = &mut self.players[i];
+        // Integration guard: a host-forced action replaces the skill. Full
+        // original cancel/interrupt slot arbitration is not implemented yet.
+        if p.skills.active.is_some() && p.state != State::Wait {
+            p.skills.active = None;
+        }
         if let Some(slot) = p.skills.request.take() {
             let id = p.skills.equipped.get(slot).copied().flatten();
-            if p.skills.active.is_none() && p.state.on_ground_for_attacks() && p.stamina > 0.0 {
+            // Until cancel slots are traced, do not let a key press bypass
+            // an existing basic attack or staff-shot action.
+            let available = p.state.on_ground_for_attacks()
+                && !matches!(p.state, State::Attack { .. } | State::Shot { .. });
+            if p.skills.active.is_none() && available && p.stamina > 0.0 {
                 if let Some((id, d)) = id.and_then(|id| self.skill_definitions.get(&id).map(|d| (id, d))) {
                     if d.weapon == p.weapon {
                         let (phase, motion) = match d.kind {

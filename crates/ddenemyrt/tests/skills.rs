@@ -48,6 +48,22 @@ fn installed_skill_banks_and_shells() {
         );
         assert_eq!(sim.player(1).unwrap().stamina, initial);
         assert!(sim.player(1).unwrap().skills.active.is_none());
+
+        // A new cast cannot override an unrelated staff attack, and a
+        // host-forced fall interrupts an active skill before another tick.
+        sim.player_mut(0).unwrap().state = ddsim::State::Shot {
+            phase: ddsim::ShotPhase::Start,
+        };
+        sim.request_skill(0, 0);
+        sim.step(1. / 120., &Default::default(), &Flat);
+        assert!(sim.player(0).unwrap().skills.active.is_none());
+        sim.player_mut(0).unwrap().state = ddsim::State::Wait;
+        sim.request_skill(0, 0);
+        sim.step(1. / 120., &Default::default(), &Flat);
+        assert!(sim.player(0).unwrap().skills.active.is_some());
+        sim.player_mut(0).unwrap().state = ddsim::State::Fall;
+        sim.step(1. / 120., &Default::default(), &Flat);
+        assert!(sim.player(0).unwrap().skills.active.is_none());
     }
     let mut spells = ddenemyrt::skills::spells::SpellWorld::default();
     let mut owner = 1000;

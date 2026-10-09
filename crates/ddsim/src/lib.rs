@@ -465,6 +465,15 @@ pub struct Player {
 }
 
 impl Player {
+    /// Action constructors set the push-out rank independently of motion:
+    /// Broad Cut 0x00B3E0E0, Tusk Toss 0x00B3E7D0 (Steam 2017-12-13).
+    pub fn push_rank(&self) -> u32 {
+        match self.skills.active.map(|a| a.id) {
+            Some(41) => 15,
+            Some(43) => 14,
+            _ => self.state.push_rank(),
+        }
+    }
     /// The active skill selects a per-character bank; ordinary actions keep
     /// their existing motion IDs.
     pub fn motion_id(&self) -> u16 {
