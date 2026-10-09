@@ -27,6 +27,64 @@ pub fn sync_collision_flags(rates: &mut CollisionRates, controller_flag_c: bool,
     rates.flags = (rates.flags & !0xf) | projected;
 }
 
+/// The two defined HoverUp height modes. The actor's current think target
+/// is read on every update; an explicit height is captured on entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HoverHeight {
+    ThinkTarget,
+    Explicit(f32),
+}
+
+/// Native HoverUp movement/completion state. This is the action's control
+/// portion, not the actor's frame scheduler: motion binding, attached-actor
+/// messages (0x00aad0c0), air flags and integration remain host work.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoverUp {
+    pub height: HoverHeight,
+    pub velocity: [f32; 3],
+    pub done: bool,
+}
+
+impl HoverUp {
+    /// Motion 100, blend 5, speed 1: 0x00a6ba90, DDDA.exe 2017-12-13 Steam.
+    pub const MOTION: u16 = 100;
+
+    /// Translated from cEm5800HoverUp::vf05 0x00a6ba90.
+    pub fn enter(scale_y: f32, height: HoverHeight) -> Self {
+        Self {
+            height,
+            velocity: [0.0, scale_y * 35.0, 0.0],
+            done: false,
+        }
+    }
+
+    /// Translated from vf06 0x00a6bb40. Called before velocity integration.
+    /// Completion stops velocity; it does not snap the actor to the height.
+    pub fn update(&mut self, actor_y: f32, think_target_y: f32) {
+        let height = match self.height {
+            HoverHeight::ThinkTarget => think_target_y,
+            HoverHeight::Explicit(height) => height,
+        };
+        if height <= actor_y {
+            self.velocity = [0.0; 3];
+            self.done = true;
+        }
+    }
+
+    /// Translated from vf08 0x00a6bc80: cancellation also stops velocity.
+    pub fn exit(&mut self) {
+        self.velocity = [0.0; 3];
+    }
+}
+
+/// Shared hover-transition completion test, not an action implementation.
+/// Both HoverKakku and KakkuHover use vf06 0x00a6be00 (Steam 2017-12-13).
+/// Disassembly confirms both calls are the same primary-layer end getter;
+/// model +0x494 bit31 is the additional completion path.
+pub fn hover_transition_complete(motion_ended: bool, motion_flags: u32) -> bool {
+    motion_ended || motion_flags & 0x8000_0000 != 0
+}
+
 /// Loaded opening-dragon body and combat parameters. Action stepping is
 /// separate; this type does not manufacture action completion or volumes.
 #[derive(Debug, Clone)]
@@ -209,6 +267,39 @@ impl DragonAiData {
 mod tests {
     use super::initialized_resource_flags;
     use super::{CollisionRates, sync_collision_flags};
+    use super::{HoverHeight, HoverUp, hover_transition_complete};
+
+    #[test]
+    fn hover_up_tracks_live_target_and_stops_before_integrating_again() {
+        let mut rise = HoverUp::enter(2.0, HoverHeight::ThinkTarget);
+        assert_eq!(HoverUp::MOTION, 100);
+        assert_eq!(rise.velocity, [0.0, 70.0, 0.0]);
+        rise.update(100.0, 120.0);
+        assert!(!rise.done);
+        // A moved think target is read on this frame; the controller does
+        // not retain the old 120 height or snap the actor down to 90.
+        rise.update(100.0, 90.0);
+        assert!(rise.done);
+        assert_eq!(rise.velocity, [0.0; 3]);
+        let mut fixed = HoverUp::enter(1.0, HoverHeight::Explicit(130.0));
+        fixed.update(129.0, 0.0);
+        assert!(!fixed.done);
+        fixed.update(130.0, 1000.0);
+        assert!(fixed.done);
+        let mut cancelled = HoverUp::enter(1.0, HoverHeight::ThinkTarget);
+        cancelled.update(100.0, f32::NAN);
+        assert!(!cancelled.done);
+        cancelled.exit();
+        assert_eq!(cancelled.velocity, [0.0; 3]);
+        assert!(!cancelled.done, "exit is not action completion");
+    }
+
+    #[test]
+    fn hover_transition_has_only_the_two_sourced_completion_paths() {
+        assert!(!hover_transition_complete(false, 0x7fff_ffff));
+        assert!(hover_transition_complete(true, 0));
+        assert!(hover_transition_complete(false, 0x8000_0000));
+    }
 
     #[test]
     fn phase93_keeps_controller_guard_and_projects_only_four_collision_bits() {

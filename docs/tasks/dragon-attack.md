@@ -108,6 +108,15 @@ From stage 200 the fight plays, the scripted loss triggers the heart-taken event
   inputs, no inferred defaults. The regression covers the guard, each
   mapping and unrelated-bit preservation; codex-1 independently ran all
   four dragon tests, passing. Runtime action/phase integration remains.
+- Added HoverUp's sourced control state (0x00a6ba90/0x00a6bb40/
+  0x00a6bc80): scale-Y times 35 velocity, live think-target or explicit
+  height, inclusive completion without position snapping, and cancellation
+  stopping velocity without manufacturing completion. Added the shared
+  hover-transition completion predicate from 0x00a6be00: primary motion
+  end or model flag bit 31. Six dragon tests pass, including both new
+  regressions. These are action controls, **not** a complete scheduler:
+  motion/layer binding, attached-actor notifications, air flags and the
+  host's integration phases remain required.
 
 - `scr\st200\etc\st200_00m00n_e00` contains placement id 1,
   `cSetInfoEnemy5800`, sequence mode 4, with the Dragon_OP FSM. The quest's
