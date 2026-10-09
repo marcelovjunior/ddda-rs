@@ -123,3 +123,4 @@ Codex lane: see `docs/CODEX.md`.
 | [m3-lan](m3-lan.md) | LAN co-op: ddnet over ddhost, host/join in ddview (M3) | core | claude-10 | assigned |
 | [character-assembly](character-assembly.md) | One skeleton, part masks, morphs/colours, equipment models | core | claude-7 | merged 2026-10-09 |
 | [character-polish](character-polish.md) | Skin gaps, morphs, colours, weapons | core | claude-7 | assigned |
+| [m1-gate](m1-gate.md) | Distance fog, horizon backdrop, floating chunks, white shapes; M1 gate write-up | core | claude-3 | assigned |
