@@ -24,6 +24,7 @@
 
 mod event;
 mod character;
+mod net;
 mod play;
 mod sky;
 mod stage;
@@ -72,6 +73,11 @@ struct Args {
     spawn: Vec3,
     /// The reference's player position (`"player"`), else `spawn`.
     player: Option<Vec3>,
+    /// `--host <port>` / `--join <addr>`: LAN co-op (net.rs); both imply
+    /// `--play`. `--profile <id>` names this player's Arisen.
+    host: Option<u16>,
+    join: Option<String>,
+    profile: Option<u64>,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -106,6 +112,9 @@ fn args() -> Args {
         play: false,
         demo: false,
         players: 2,
+        host: None,
+        join: None,
+        profile: None,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -159,6 +168,15 @@ fn args() -> Args {
             "--frame" => a.frame = Some(v.parse().unwrap()),
             "--players" => a.players = v.parse().unwrap(),
             "--spawn" => a.spawn = parse_vec3(&v),
+            "--host" => {
+                a.host = Some(v.parse().unwrap());
+                a.play = true;
+            }
+            "--join" => {
+                a.join = Some(v);
+                a.play = true;
+            }
+            "--profile" => a.profile = Some(v.parse().unwrap()),
             _ => panic!("unknown option {k}"),
         }
     }
@@ -420,7 +438,7 @@ fn main() {
             ..default()
         })
         .add_systems(Startup, setup)
-        .add_systems(Update, (fly_camera, shot, play::step, character::animate).chain())
+        .add_systems(Update, (fly_camera, shot, play::step, net::step, character::animate).chain())
         .run();
 }
 
@@ -567,6 +585,20 @@ fn setup(
         ) {
             Ok(mut state) => {
                 state.demo = args.demo;
+                let mode = match (&args.host, &args.join) {
+                    (Some(port), _) => Some(net::Mode::Host { port: *port }),
+                    (None, Some(addr)) => Some(net::Mode::Join { addr: addr.clone() }),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    let place = (args.stage, a0, b0, args.radius);
+                    let spawn = origin + args.spawn;
+                    if let Err(e) =
+                        net::setup(&mut commands, &vfs, &args.native_pc, mode, args.profile, place, spawn, &mut state)
+                    {
+                        error!("net: {e}");
+                    }
+                }
                 commands.insert_resource(state)
             }
             Err(e) => error!("play: {e}"),

@@ -2412,6 +2412,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddnet"
+version = "0.1.0"
+dependencies = [
+ "ddhost",
+ "ddid",
+ "ddsim",
+ "ddstory",
+]
+
+[[package]]
 name = "ddnpc"
 version = "0.1.0"
 dependencies = [
@@ -2567,7 +2577,10 @@ name = "ddview"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "ddexe",
+ "ddhost",
  "ddlook",
+ "ddnet",
  "ddquest",
  "ddsave",
  "ddsim",

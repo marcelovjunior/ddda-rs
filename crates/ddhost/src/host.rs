@@ -100,7 +100,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub story: Option<Story<D>>,
     /// The actors and presentation the story talks to.
     pub world: W,
-    pub ground: Box<dyn Ground>,
+    pub ground: Box<dyn Ground + Send>,
     pub locks: InteractionLocks,
     /// Wallets, bags, shops (ddeconomy).
     pub economy: ddeconomy::Economy,
@@ -128,7 +128,7 @@ pub struct Host<D: Data, W: StoryWorld> {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
-    pub fn new(sim: Sim, story: Option<Story<D>>, world: W, ground: Box<dyn Ground>) -> Self {
+    pub fn new(sim: Sim, story: Option<Story<D>>, world: W, ground: Box<dyn Ground + Send>) -> Self {
         Host {
             frame: 0,
             clock: FrameClock::default(),

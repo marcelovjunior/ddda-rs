@@ -64,6 +64,9 @@ pub struct PlayState {
     pub demo: bool,
     /// Motion each character's Playback currently shows.
     shown: HashMap<PlayerId, u16>,
+    /// Whether each character has an Arisen to show (network sessions
+    /// spawn characters for every seat up front).
+    pub visible: HashMap<Entity, bool>,
 }
 
 #[derive(Component)]
@@ -211,6 +214,7 @@ pub fn setup(
         cam_pitch: -0.25,
         demo: false,
         shown: HashMap::new(),
+        visible: HashMap::new(),
     })
 }
 
@@ -262,10 +266,15 @@ pub fn step(
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
+    net: Option<Res<crate::net::NetRes>>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
 ) {
     let Some(mut st) = state else { return };
+    // A network session (--host / --join) steps and shows the players itself.
+    if net.is_some() {
+        return;
+    }
     if keys.just_pressed(KeyCode::F2) {
         for p in &mut st.sim.players {
             p.relaxed = !p.relaxed;
@@ -276,23 +285,10 @@ pub fn step(
             if relaxed { "town (relaxed)" } else { "field" }
         );
     }
-    if buttons.pressed(MouseButton::Right) {
-        st.cam_yaw -= mouse.delta.x * 0.004;
-        st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-1.2, 0.4);
-    }
+    orbit(&mut st, &buttons, &mouse);
     let cam_yaw = st.cam_yaw;
     let mut inputs = HashMap::new();
-    inputs.insert(
-        0,
-        Input {
-            stick: stick(&keys, KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyA, KeyCode::KeyD),
-            walk: keys.pressed(KeyCode::ControlLeft),
-            sprint: keys.pressed(KeyCode::ShiftLeft),
-            jump: keys.pressed(KeyCode::Space),
-            camera_yaw: cam_yaw,
-            ..Default::default()
-        },
-    );
+    inputs.insert(0, p1_input(&keys, cam_yaw));
     inputs.insert(
         1,
         Input {
@@ -335,7 +331,59 @@ pub fn step(
     let dt = time.delta_secs().min(0.1);
     let st = &mut *st;
     st.sim.step(dt, &inputs, &st.terrain);
-    for p in &st.sim.players {
+    let shown: Vec<Shown> = st.sim.players.iter().map(Shown::of).collect();
+    show(st, &shown, &mut roots, &mut cams);
+}
+
+/// Turns the follow camera while the right mouse button is held.
+pub fn orbit(st: &mut PlayState, buttons: &ButtonInput<MouseButton>, mouse: &AccumulatedMouseMotion) {
+    if buttons.pressed(MouseButton::Right) {
+        st.cam_yaw -= mouse.delta.x * 0.004;
+        st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-1.2, 0.4);
+    }
+}
+
+/// Player one's controls (W A S D, Ctrl, Shift, Space).
+pub fn p1_input(keys: &ButtonInput<KeyCode>, cam_yaw: f32) -> Input {
+    Input {
+        stick: stick(keys, KeyCode::KeyW, KeyCode::KeyS, KeyCode::KeyA, KeyCode::KeyD),
+        walk: keys.pressed(KeyCode::ControlLeft),
+        sprint: keys.pressed(KeyCode::ShiftLeft),
+        jump: keys.pressed(KeyCode::Space),
+        camera_yaw: cam_yaw,
+        ..Default::default()
+    }
+}
+
+/// What the view needs of one Arisen.
+#[derive(Debug, Clone, Copy)]
+pub struct Shown {
+    pub id: PlayerId,
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub state: ddsim::State,
+    pub frame: f32,
+}
+
+impl Shown {
+    pub fn of(p: &ddsim::Player) -> Shown {
+        Shown { id: p.id, position: p.position, yaw: p.yaw, state: p.state, frame: p.frame }
+    }
+}
+
+/// Places every character at its Arisen, plays its motion, hides the
+/// characters without one, and puts the camera behind `st.follow`.
+pub fn show(
+    st: &mut PlayState,
+    bodies: &[Shown],
+    roots: &mut Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
+    cams: &mut Query<&mut Transform, With<FollowCam>>,
+) {
+    for (id, &e) in &st.entities {
+        let present = bodies.iter().any(|b| b.id == *id);
+        st.visible.insert(e, present);
+    }
+    for p in bodies {
         let Some(&e) = st.entities.get(&p.id) else {
             continue;
         };
@@ -361,8 +409,9 @@ pub fn step(
         let shown = st.motions.get(&id).map_or(p.frame, |m| display_frame(m, p.frame));
         pb.hold_frame = Some(shown);
     }
-    // Follow camera: behind P1 at the orbit angles, looking at the chest.
-    if let (Some(p), Ok(mut cam)) = (st.sim.player(st.follow), cams.single_mut()) {
+    // Follow camera: behind the followed player at the orbit angles,
+    // looking at the chest.
+    if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
         let target = (Vec3::from(p.position) - st.origin + Vec3::new(0.0, 150.0, 0.0)) * UNIT;
         let dist = 4.5;
         let dir = Vec3::new(
