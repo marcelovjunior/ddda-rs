@@ -120,6 +120,8 @@ enum ActionPhase {
     Bite(WolfBite),
     AttackRun,
     Howl,
+    Run,
+    Dash,
     Takeoff(HarpyTakeoff),
     GroundDeath,
     CommonDeath,
@@ -175,6 +177,9 @@ impl Beast {
             // 0x008fe110 / 0x009026a0; standard uninterrupted howl.
             (Family::Wolf, "cEm0200AttackRun", _) => (ActionPhase::AttackRun, MotionId::new(0, 0x24)),
             (Family::Wolf, "cEm0200Howling", _) => (ActionPhase::Howl, MotionId::new(0, 0x64)),
+            // 0x008fc720 / 0x008fca50: authored root-motion locomotion.
+            (Family::Wolf, "cEm0200Run", _) => (ActionPhase::Run, MotionId::new(0, 0x1a)),
+            (Family::Wolf, "cEm0200Dash", _) => (ActionPhase::Dash, MotionId::new(0, 0x24)),
             (Family::Harpy, "cEm0600ActGroundToHover", _) => (
                 ActionPhase::Takeoff(HarpyTakeoff::TakingOff),
                 HarpyTakeoff::initial_motion(),
@@ -196,7 +201,9 @@ impl Beast {
         self.phase = phase;
         self.done = false;
         self.motion = motion;
-        self.frame = 0.0;
+        // Dash starts at frame one (0x008fca50); other supported initial
+        // motions start at zero. Navigation/pack steering remain host work.
+        self.frame = if matches!(phase, ActionPhase::Dash) { 1.0 } else { 0.0 };
         self.motion_ended = false;
         Ok(())
     }
@@ -250,6 +257,18 @@ impl Beast {
                 // 0x009027c0. Pack sensor broadcast/forced interruption are
                 // not in this selected-action runner; the think host owns them.
                 self.done = self.motion_ended;
+            }
+            ActionPhase::Run => {
+                // Translated from 0x008fc770 (DDDA.exe 2017-12-13 Steam).
+                // This phase completes at motion end; target/path steering
+                // belongs to the family unit and is not fabricated here.
+                self.done = self.motion_ended;
+            }
+            ActionPhase::Dash => {
+                // Translated from 0x008fc960 (DDDA.exe 2017-12-13 Steam).
+                // Permit the next think immediately, while root travel keeps
+                // running. Think-node +0x124 bookkeeping is not connected.
+                self.done = true;
             }
             ActionPhase::Takeoff(takeoff) => {
                 let result = takeoff.step(self.frame, self.motion_ended);

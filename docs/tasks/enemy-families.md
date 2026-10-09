@@ -46,3 +46,10 @@ Not complete: autonomous family think/sensing, forced damage and conditional dea
 spawn/viewer/network integration and original-game fight comparisons. Normal
 wolf death uses common action 0x03000042 (0x008f6230), distinct from the local
 unsupported cEm0200Die motion. Next: family think host and harpy death selection.
+
+Selected wolf Run and Dash now execute their own sourced motions and start
+frames (0x008fc720 / 0x008fca50), with distinct completion timing. Installed
+action checks cover root travel and deterministic repetition. Navigation,
+TraceDash and autonomous think remain outside this checkpoint. Harpy common
+death overrides 0x5f/0x60 are confirmed as cEmActDieBreak rather than ordinary
+grounded death; the triggering field meanings are still unresolved.

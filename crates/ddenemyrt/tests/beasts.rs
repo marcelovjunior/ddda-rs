@@ -57,6 +57,8 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
         (Family::Wolf, "cEm0200Bite"),
         (Family::Wolf, "cEm0200Howling"),
         (Family::Wolf, "cEm0200AttackRun"),
+        (Family::Wolf, "cEm0200Run"),
+        (Family::Wolf, "cEm0200Dash"),
         (Family::Harpy, "cEm0600ActGroundToHover"),
         (Family::Harpy, "cEm0600ActDie"),
     ] {
@@ -69,11 +71,17 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
         let run = || {
             let mut actor = Beast::new(&data, 310, [0.0; 3], 0.0);
             actor.start_action(&data, id).unwrap();
+            if class == "cEm0200Dash" {
+                assert_eq!(actor.frame, 1.0);
+                assert_eq!(actor.motion, MotionId::new(0, 0x24));
+            }
             let mut motions = vec![actor.motion];
             let mut attack_frames = 0;
             let mut flew = false;
             for _ in 0..3000 {
+                let ended_before_update = actor.motion_ended;
                 actor.step_action(&data, Some([0.0, 0.0, 200.0]), &Flat, 0.5);
+                if class == "cEm0200Run" { assert_eq!(actor.done, ended_before_update); }
                 if motions.last() != Some(&actor.motion) {
                     motions.push(actor.motion);
                 }
@@ -85,6 +93,16 @@ fn selected_family_actions_advance_installed_motions_and_preserve_owner() {
                 }
             }
             assert!(actor.done, "{class} failed to complete");
+            if class == "cEm0200Run" || class == "cEm0200Dash" {
+                assert!(actor.pos[2] > 0.0, "{class} did not follow authored root travel");
+                assert_eq!(actor.yaw, 0.0);
+                assert!(!actor.attack_ready);
+                if class == "cEm0200Run" {
+                    assert_eq!(motions, vec![MotionId::new(0, 0x1a)]);
+                } else {
+                    assert_eq!(actor.frame, 1.5); // done on its first update
+                }
+            }
             if class == "cEm0200Bite" {
                 assert_eq!(
                     motions,

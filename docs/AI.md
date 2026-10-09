@@ -656,3 +656,21 @@ unhurt, and repeats each family run to compare deterministic digests.
 All 35 ddenemyrt tests pass (one debug probe ignored). This verifies shared
 combat plumbing; autonomous family fights and original-game comparison remain
 open. Next: connect the family think host and harpy death selection.
+# Wolf selected locomotion follow-up
+
+The selected-action runtime also supports cEm0200Run and cEm0200Dash.
+Run entry 0x008fc720 selects motion 0x1a at frame zero; update 0x008fc770
+sets done when the prior motion phase reports end. Dash entry 0x008fca50
+selects motion 0x24 at frame one; update 0x008fc960 sets done immediately,
+allowing the next think while its authored root travel continues. Installed
+action regressions verify the start frames, forward root displacement,
+completion timing and deterministic repetition. Unit navigation/pack steering
+and think-node +0x124 bookkeeping remain unconnected; TraceDash is not treated
+as plain Dash.
+
+Harpy death selector 0x0093c700 can override local actions 3/4 with common
+0x0300005f / 0x03000060. Both installed common records name cEmActDieBreak,
+with variants zero/one. Entry 0x008a7fb0 and update 0x008a8070 drive effects,
+hide/cleanup and a 60-frame removal timer; this is not the ordinary grounded
+death animation. The selector's +0x5cb4 and +0x27b0 conditions still need
+semantic binding before automatic harpy death dispatch is implemented.
