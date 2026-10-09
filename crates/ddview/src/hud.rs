@@ -19,7 +19,7 @@ enum Binding {
 pub(crate) struct Prompt {
     position: Vec2,
     size: Vec2,
-    font_size: f32,
+    local_binding: Option<usize>,
     converse: bool,
 }
 
@@ -53,7 +53,7 @@ fn spawn_prompts(
     images: &mut Assets<Image>,
 ) -> Result<(), String> {
     // uGUIActionPallet::vf58, 0x005ee480. Language selection currently English,
-    // as elsewhere in the viewer; rGUIFont playback remains a separate gap.
+    // as elsewhere in the viewer.
     let bytes = vfs.read("id/common/custskl0", mtarc::type_hash("rGUI"))?;
     let gui = mtgui::Gui::parse(&bytes)?;
     let bytes = vfs.read(
@@ -67,14 +67,23 @@ fn spawn_prompts(
         .find(|o| !o.texture_keys.is_empty())
         .ok_or("button texture track")?;
     let regions = gui.texture_regions()?;
+    let font_path = gui
+        .resources
+        .iter()
+        .find(|r| r.class == "rGUIFont")
+        .and_then(|r| r.path)
+        .ok_or("prompt font resource")?;
+    let font_bytes = vfs.read(font_path, mtarc::type_hash("rGUIFont"))?;
+    let bitmap_font = mtgui::font::Font::parse(&font_bytes)?;
+    let mut font_images: HashMap<u8, Handle<Image>> = HashMap::new();
     // The keyboard group in custskl0; role positions cross-checked with ref001.
-    // DIK codes follow the viewer bindings J/K/E/Space. Original selector is
+    // Virtual-key codes follow the viewer bindings J/K/E/Space. Original selector is
     // input binding +0x8c, uGUIActionPallet::vf05, 0x005ed3b0.
-    for (text_id, key_id, label, scan, converse) in [
-        (175, 178, "action_lightattack", 0x24, false),
-        (190, 193, "action_strongattack", 0x25, false),
-        (197, 200, "touch_action_talk", 0x12, true),
-        (204, 207, "action_jump", 0x39, false),
+    for (text_id, key_id, label, keys, converse) in [
+        (175, 178, "action_lightattack", [0x4a, 0x61], false),
+        (190, 193, "action_strongattack", [0x4b, 0x62], false),
+        (197, 200, "touch_action_talk", [0x45, 0x45], true),
+        (204, 207, "action_jump", [0x20, 0x0d], false),
     ] {
         let index = gui
             .nodes
@@ -82,85 +91,100 @@ fn spawn_prompts(
             .position(|n| n.id == text_id)
             .ok_or("prompt text node")?;
         let position = node_position(&gui, index)?;
-        let size = gui
-            .node_property(index, "Size")
-            .and_then(|p| gui.vector(p))
-            .ok_or("prompt text size")?;
         let font = gui
             .node_property(index, "FontSize")
             .and_then(|p| gui.vector(p))
             .ok_or("prompt font size")?;
         let text = messages.by_label(label).ok_or("prompt message label")?;
-        commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            Text::new(text),
-            TextFont {
-                font_size: bevy::text::FontSize::Px(font[1]),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-            GlobalZIndex(10),
-            Prompt {
-                position,
-                size: Vec2::new(size[0], size[1]),
-                font_size: font[1],
-                converse,
-            },
-        ));
+        for placed in bitmap_font.line(text, [font[0], font[1]])? {
+            let glyph = placed.glyph;
+            let image = if let Some(image) = font_images.get(&glyph.page) {
+                image.clone()
+            } else {
+                let path = bitmap_font.texture_path(glyph.page)?;
+                let image = images.add(stage::tex_to_image(
+                    &vfs.read(&path, mtarc::type_hash("rTexture"))?,
+                )?);
+                font_images.insert(glyph.page, image.clone());
+                image
+            };
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                ImageNode {
+                    image,
+                    rect: Some(Rect::new(
+                        glyph.x as f32 + 0.5,
+                        glyph.y as f32 + 0.5,
+                        (glyph.x + glyph.width) as f32 - 0.5,
+                        (glyph.y + glyph.height) as f32 - 0.5,
+                    )),
+                    ..default()
+                },
+                GlobalZIndex(10),
+                Prompt {
+                    position: position + Vec2::from_array(placed.position),
+                    size: Vec2::from_array(placed.size),
+                    local_binding: None,
+                    converse,
+                },
+            ));
+        }
         let index = gui
             .nodes
             .iter()
             .position(|n| n.id == key_id)
             .ok_or("prompt key node")?;
-        let frame = gui.control_range(index, scan + 0x8c)?.ok_or("prompt selector")?[0] as u32;
-        let id = object
-            .texture_keys
-            .iter()
-            .find(|(f, _)| *f == frame)
-            .ok_or("prompt key frame")?
-            .1;
-        let region = regions.iter().find(|r| r.id == id).ok_or("prompt atlas region")?;
-        let size = object
-            .vector_keys
-            .iter()
-            .find(|(n, f, _)| *n == "Size" && *f == frame)
-            .map(|(_, _, v)| *v)
-            .ok_or("prompt key size frame")?;
-        let size = Vec2::new(size[0], size[1]);
-        let position = node_position(&gui, index)?
-            + Vec2::from_array(mtgui::layout::anchor_offset(
-                size.to_array(),
-                object.integer("ControlPoint").unwrap_or(0),
+        for (local_binding, scan) in keys.into_iter().enumerate() {
+            let frame = gui.control_range(index, scan + 0x8c)?.ok_or("prompt selector")?[0] as u32;
+            let id = object
+                .texture_keys
+                .iter()
+                .find(|(f, _)| *f == frame)
+                .ok_or("prompt key frame")?
+                .1;
+            let region = regions.iter().find(|r| r.id == id).ok_or("prompt atlas region")?;
+            let size = object
+                .vector_keys
+                .iter()
+                .find(|(n, f, _)| *n == "Size" && *f == frame)
+                .map(|(_, _, v)| *v)
+                .ok_or("prompt key size frame")?;
+            let size = Vec2::new(size[0], size[1]);
+            let position = node_position(&gui, index)?
+                + Vec2::from_array(mtgui::layout::anchor_offset(
+                    size.to_array(),
+                    object.integer("ControlPoint").unwrap_or(0),
+                ));
+            let image = images.add(stage::tex_to_image(
+                &vfs.read(region.path, mtarc::type_hash("rTexture"))?,
+            )?);
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                ImageNode {
+                    image,
+                    rect: Some(Rect::new(
+                        region.rect[0],
+                        region.rect[1],
+                        region.rect[2],
+                        region.rect[3],
+                    )),
+                    ..default()
+                },
+                GlobalZIndex(10),
+                Prompt {
+                    position,
+                    size,
+                    local_binding: Some(local_binding),
+                    converse,
+                },
             ));
-        let image = images.add(stage::tex_to_image(
-            &vfs.read(region.path, mtarc::type_hash("rTexture"))?,
-        )?);
-        commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            ImageNode {
-                image,
-                rect: Some(Rect::new(
-                    region.rect[0],
-                    region.rect[1],
-                    region.rect[2],
-                    region.rect[3],
-                )),
-                ..default()
-            },
-            GlobalZIndex(10),
-            Prompt {
-                position,
-                size,
-                font_size: 0.0,
-                converse,
-            },
-        ));
+        }
     }
     Ok(())
 }
@@ -336,22 +360,40 @@ pub fn spawn(commands: &mut Commands, vfs: &ddvfs::Vfs, images: &mut Assets<Imag
 pub fn update(
     hud: Res<play::Hud>,
     state: Option<Res<play::PlayState>>,
+    opening: Option<Res<crate::opening::OpeningRes>>,
     windows: Query<&Window>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     playback: Query<&Playback>,
     transforms: Query<&GlobalTransform>,
     mut quads: Query<(&Quad, &mut Node, &mut ImageNode), Without<Prompt>>,
-    mut prompts: Query<(&Prompt, &mut Node, Option<&mut TextFont>), Without<Quad>>,
+    mut prompts: Query<(&Prompt, &mut Node), Without<Quad>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
     let scale = Vec2::new(window.width() / 1280.0, window.height() / 720.0);
     let row = |label: &str| hud.rows.iter().find(|r| r.0 == label);
-    for (prompt, mut node, font) in &mut prompts {
-        // Converse is hidden until connected to the exact opening interaction
-        // predicate; showing an unavailable action would be misleading.
-        node.display = if prompt.converse || state.is_none() {
+    let (event_active, can_talk) = opening
+        .as_ref()
+        .map(|opening| {
+            let session = opening.0.lock().unwrap();
+            (
+                session.event_active(),
+                state.as_ref().is_some_and(|s| session.can_talk(s.follow)),
+            )
+        })
+        .unwrap_or((false, false));
+    let local_binding = state
+        .as_ref()
+        .and_then(|s| s.locals.iter().position(|seat| *seat == s.follow));
+    for (prompt, mut node) in &mut prompts {
+        node.display = if (prompt.converse && !can_talk)
+            || local_binding.is_none()
+            || prompt
+                .local_binding
+                .is_some_and(|binding| Some(binding) != local_binding)
+            || event_active
+        {
             Display::None
         } else {
             Display::Flex
@@ -360,29 +402,24 @@ pub fn update(
         node.top = Val::Px(prompt.position.y * scale.y);
         node.width = Val::Px(prompt.size.x * scale.x);
         node.height = Val::Px(prompt.size.y * scale.y);
-        if let Some(mut font) = font {
-            font.font_size = bevy::text::FontSize::Px(prompt.font_size * scale.y);
-        }
     }
     let pawn_position = (|| {
         let st = state.as_ref()?;
         let entity = *st.entities.get(&play::pawn_seat(st.follow))?;
         let p = playback.get(entity).ok()?;
-        // Provisional: highest animated joint until the engine's source joint
-        // used to populate +0x2e0 is traced. No fixed guessed body height.
-        let point = p
-            .joints
-            .values()
-            .filter_map(|e| transforms.get(*e).ok())
-            .map(|t| t.translation())
-            .max_by(|a, b| a.y.total_cmp(&b.y))?;
+        // 0x007325d0: joint-map entry 4 +25cm Y. 0x00ffddb0 maps
+        // actor+368 to rModel+110; 0x00fa8fe0 loads the MOD remap there.
+        let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
         let (camera, transform) = cameras.single().ok()?;
-        // 0x00679a10 moves the anchor 70 cm toward the camera before projecting.
-        let point = point + (transform.translation() - point).normalize_or_zero() * 0.7;
+        let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0)) // original screen-space offset
     })();
     for (quad, mut node, mut image) in &mut quads {
+        if event_active {
+            node.display = Display::None;
+            continue;
+        }
         let data = match quad.binding {
             Binding::Health | Binding::Digit(_) => row("Arisen HP"),
             Binding::Stamina => row("Arisen stamina"),
@@ -433,9 +470,30 @@ pub fn update(
     }
 }
 
+// Translated from 0x007325d0 and 0x00679a10 (2017-12-13 Steam).
+fn pawn_anchor(joint: Vec3, camera: Vec3) -> Vec3 {
+    let point = joint + Vec3::Y * 0.25;
+    point + (camera - point).normalize_or_zero() * 0.7
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pawn_anchor_uses_authored_joint_and_camera_offset() {
+        let point = pawn_anchor(Vec3::new(1.0, 2.0, 3.0), Vec3::new(1.0, 2.25, 10.0));
+        assert!((point - Vec3::new(1.0, 2.25, 3.7)).length() < 1e-6);
+    }
+    #[test]
+    #[ignore = "requires DDDA_NATIVE_PC"]
+    fn human_joint_remap_matches_playback_id() {
+        let vfs = ddvfs::Vfs::open(std::env::var("DDDA_NATIVE_PC").unwrap()).unwrap();
+        for path in [play::BODY, r"model\pl\f\f_base\f000\f000"] {
+            let bytes = vfs.read(path, mtarc::type_hash("rModel")).unwrap();
+            let model = mtmod::parse(&bytes).unwrap();
+            assert_eq!(model.bones[model.bone_map.unwrap()[4] as usize].anim_map_index, 4);
+        }
+    }
     #[test]
     fn hp_digits_pack_left() {
         assert_eq!(number(455.9), "455");

@@ -623,7 +623,7 @@ pub fn step(
     play::show(st, &bodies, &mut roots, &mut cams);
     match &s.side {
         Side::Host(server) => {
-            play::show_goblins(st, server.host.fight.as_ref(), &mut roots);
+            play::show_goblins(st, server.host.fight.as_ref(), &mut roots, 1.0);
             hud.rows = play::hud_rows(st, &server.host.sim, server.host.fight.as_ref(), None);
         }
         Side::Guest { client, .. } => {

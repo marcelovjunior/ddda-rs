@@ -3,6 +3,31 @@ fn main() -> Result<(), String> {
     let root = args.get(1).ok_or("usage: inspect <nativePC> <GUI path>")?;
     let path = args.get(2).ok_or("usage: inspect <nativePC> <GUI path>")?;
     let vfs = ddvfs::Vfs::open(root)?;
+    if args.iter().any(|a| a == "--font-header") {
+        let bytes = vfs.read(path, mtarc::type_hash("rGUIFont"))?;
+        println!(
+            "len={} header={:?}",
+            bytes.len(),
+            bytes[..80]
+                .chunks_exact(4)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                .collect::<Vec<_>>()
+        );
+        let u32at = |p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) as usize;
+        let p = 44 + u32at(32) * 4;
+        let len = u32at(p);
+        let p = p + 4;
+        println!("texture base {:?}", std::str::from_utf8(&bytes[p..p + len]));
+        for r in bytes[p + len + 1..].chunks_exact(16).take(100) {
+            println!(
+                "glyph {:?}",
+                r.chunks_exact(2)
+                    .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--messages") {
         let bytes = vfs.read(path, mtarc::type_hash("rGUIMessage"))?;
         let messages = mtgmd::MessageFile::parse(&bytes).map_err(|e| e.to_string())?;

@@ -62,6 +62,14 @@ pub enum Attack {
     StaffStrike1,
     /// `cPlActWpnWandStrike2` (0x0107001F): heavy 2.
     StaffStrike2,
+    /// `cPlActWpnSwordAtckAirS` (0x01010003): light in the air.
+    SwordAirLight,
+    /// `cPlActWpnSwordAtckAirL` (0x01010005): heavy in the air, the plunge.
+    SwordAirHeavy,
+    /// The plunge's landing (its vf06 phase 2 plays motion 0x704 on ground).
+    SwordAirHeavyLand,
+    /// `cPlActWpnWandAirStrike` (0x01070020): the staff's heavy in the air.
+    StaffAirStrike,
 }
 
 /// The cancel slot the basic attacks request in (the rows' `slot`).
@@ -82,6 +90,26 @@ impl Attack {
             Attack::SwordHeavy => 0x0101_0004,
             Attack::StaffStrike1 => 0x0107_001E,
             Attack::StaffStrike2 => 0x0107_001F,
+            Attack::SwordAirLight => 0x0101_0003,
+            Attack::SwordAirHeavy | Attack::SwordAirHeavyLand => 0x0101_0005,
+            Attack::StaffAirStrike => 0x0107_0020,
+        }
+    }
+
+    /// Started in the air (the rows' 0x302 flag); played under air physics.
+    pub fn air(self) -> bool {
+        matches!(self, Attack::SwordAirLight | Attack::SwordAirHeavy | Attack::StaffAirStrike)
+    }
+
+    /// The `pljumpparam` row its vf06 loads with `0x00937CF0` (speed,
+    /// gravity, damping for the air): AirS 0x36 (0x00B3D3C0), AirL 0x37
+    /// (0x00B3DA8D), WandAirStrike 0x47 (0x00B515F0).
+    pub fn jump_row(self) -> Option<usize> {
+        match self {
+            Attack::SwordAirLight => Some(0x36),
+            Attack::SwordAirHeavy => Some(0x37),
+            Attack::StaffAirStrike => Some(0x47),
+            _ => None,
         }
     }
 
@@ -99,13 +127,19 @@ impl Attack {
             Attack::SwordHeavy => 0x713,
             Attack::StaffStrike1 => 0x723,
             Attack::StaffStrike2 => 0x724,
+            // cPlActWpnSwordAtckAirS::vf06 0x00B3D360, AirL::vf06 0x00B3DA10,
+            // cPlActWpnWandAirStrike::vf06 0x00B51590
+            Attack::SwordAirLight => 0x714,
+            Attack::SwordAirHeavy => 0x703,
+            Attack::SwordAirHeavyLand => 0x704,
+            Attack::StaffAirStrike => 0x725,
         }
     }
 
     /// The `m_pl000_00` id of its stamina cost (the vf05s above).
     pub fn cost_id(self) -> usize {
         match self {
-            Attack::StaffStrike1 | Attack::StaffStrike2 => ADJUST_STAFF_COST,
+            Attack::StaffStrike1 | Attack::StaffStrike2 | Attack::StaffAirStrike => ADJUST_STAFF_COST,
             _ => ADJUST_SWORD_COST,
         }
     }
@@ -132,6 +166,14 @@ pub mod shot {
     pub const SHELLS: u32 = 1;
     /// The push rank its vf05 writes (0x00B4E200: 13).
     pub const PUSH_RANK: u32 = 13;
+    /// The air shot (0x01070022): variant 1 of the table (0x014F7148),
+    /// motions 0x716 / 0x717 / 0x718, one volley (+0x3C = 1), no turn
+    /// motions. Its phases call no physics, so the caster hangs in the air.
+    pub const AIR_ACTION: u32 = 0x0107_0022;
+    pub const AIR_START: u16 = 0x716;
+    pub const AIR_LOOP: u16 = 0x717;
+    pub const AIR_END: u16 = 0x718;
+    pub const AIR_VOLLEYS: u32 = 1;
 }
 
 /// The phases of `cPlActWpnWandShot::vf06` (0x00B4F190) modelled here.
@@ -144,6 +186,10 @@ pub enum ShotPhase {
     /// Phase 3 (`0x00B50590`): the end motion. (Phase 2, the turn motions
     /// 0x713 / 0x714 for an aim beyond 90 degrees, is not modelled.)
     End,
+    /// The same phases of the air variant.
+    AirStart,
+    AirLoop,
+    AirEnd,
 }
 
 impl ShotPhase {
@@ -152,7 +198,14 @@ impl ShotPhase {
             ShotPhase::Start => shot::START,
             ShotPhase::Loop => shot::LOOP,
             ShotPhase::End => shot::END,
+            ShotPhase::AirStart => shot::AIR_START,
+            ShotPhase::AirLoop => shot::AIR_LOOP,
+            ShotPhase::AirEnd => shot::AIR_END,
         }
+    }
+
+    pub fn air(self) -> bool {
+        matches!(self, ShotPhase::AirStart | ShotPhase::AirLoop | ShotPhase::AirEnd)
     }
 }
 
@@ -172,6 +225,7 @@ pub struct ShotState {
 pub enum Request {
     Attack(Attack),
     Shot,
+    AirShot,
 }
 
 /// The ground rows of the transition lists for a press, first match wins.
@@ -183,8 +237,10 @@ pub enum Request {
 /// (check 24, an ability bit, *not identified*) and LandL's follow-up
 /// (0x0101000D, needs a learned ability) are left out. Staff list
 /// 0x014F8898: light -> WandShot; heavy after Strike1 -> Strike2 (check
-/// 22), otherwise heavy -> Strike1. Air rows (AirS, AirL, WandAirStrike,
-/// the air WandShot) are not modelled.
+/// 22), otherwise heavy -> Strike1. In the air (rows flagged 0x302): sword
+/// light -> AirS (slot 4), heavy -> AirL; staff light -> the air WandShot,
+/// heavy -> WandAirStrike. The staff's charged rows (command 0x0C, checks
+/// 8, 15, 16) are not modelled.
 // Translated from the lists 0x014F83B8 and 0x014F8898 scanned by 0x00ABA690
 // (DDDA.exe 2017-12-13 Steam).
 pub fn next(
@@ -193,8 +249,18 @@ pub fn next(
     light: bool,
     heavy: bool,
     chain_open: bool,
+    air: bool,
 ) -> Option<Request> {
     use Attack::*;
+    if air {
+        return match (weapon, light, heavy) {
+            (Weapon::Sword, true, _) => Some(Request::Attack(SwordAirLight)),
+            (Weapon::Sword, false, true) => Some(Request::Attack(SwordAirHeavy)),
+            (Weapon::Staff, true, _) => Some(Request::AirShot),
+            (Weapon::Staff, false, true) => Some(Request::Attack(StaffAirStrike)),
+            _ => None,
+        };
+    }
     match weapon {
         Weapon::None => None,
         Weapon::Sword => {
@@ -351,7 +417,7 @@ mod tests {
     #[test]
     fn chains_follow_the_lists() {
         use Attack::*;
-        let s = |c, l, h, o| next(Weapon::Sword, c, l, h, o);
+        let s = |c, l, h, o| next(Weapon::Sword, c, l, h, o, false);
         assert_eq!(s(None, true, false, true), Some(Request::Attack(SwordLight1)));
         assert_eq!(
             s(Some(SwordLight1), true, false, true),
@@ -373,7 +439,7 @@ mod tests {
             s(Some(SwordLight2), false, true, true),
             Some(Request::Attack(SwordHeavy))
         );
-        let w = |c, l, h, o| next(Weapon::Staff, c, l, h, o);
+        let w = |c, l, h, o| next(Weapon::Staff, c, l, h, o, false);
         assert_eq!(w(None, true, false, true), Some(Request::Shot));
         assert_eq!(w(None, false, true, true), Some(Request::Attack(StaffStrike1)));
         assert_eq!(
@@ -384,7 +450,13 @@ mod tests {
             w(Some(StaffStrike2), false, true, true),
             Some(Request::Attack(StaffStrike1))
         );
-        assert_eq!(next(Weapon::None, None, true, true, true), None);
+        assert_eq!(next(Weapon::None, None, true, true, true, false), None);
+        // the air rows (0x302) of both lists
+        assert_eq!(next(Weapon::Sword, None, true, false, true, true), Some(Request::Attack(Attack::SwordAirLight)));
+        assert_eq!(next(Weapon::Sword, None, false, true, true, true), Some(Request::Attack(Attack::SwordAirHeavy)));
+        assert_eq!(next(Weapon::Staff, None, true, false, true, true), Some(Request::AirShot));
+        assert_eq!(next(Weapon::Staff, None, false, true, true, true), Some(Request::Attack(Attack::StaffAirStrike)));
+        assert_eq!(next(Weapon::None, None, true, true, true, true), None);
     }
 
     #[test]

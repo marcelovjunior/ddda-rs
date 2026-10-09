@@ -138,9 +138,17 @@ Codex lane: see `docs/CODEX.md`.
 | [m5-cassardis](m5-cassardis.md) | Playable opening in Cassardis: cutscene, NPC talk, q0001 -> q0002 | core | codex-1 | merged 2026-10-09 |
 | [enemy-spawns](enemy-spawns.md) | World enemies by area/time/story from the data (takes over enemy-placement) | core | claude-9 | merged 2026-10-09 |
 | [viewer-controls](viewer-controls.md) | WASD broken, wall z-fighting, mouse look without button (not inverted), Esc pause UI | core | codex-1 | merged 2026-10-09 |
-| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | partial merges 692c37e, ed16e62; ear/brow + z-fight open |
+| [cutscene-visuals](cutscene-visuals.md) | Event camera fov offset + near plane, clipping, eyebrows, z-fighting | core | codex-1 | partial merges 692c37e, ed16e62, sort; ear/brow open |
 | [enemy-families](enemy-families.md) | Wolves and harpies: think tables, actions, flight | core | codex-1 | assigned (1) |
 | [item-use](item-use.md) | Using items: curatives, healing, inventory actions | core | codex-1 | merged 2026-10-09 |
 | [skills-runtime](skills-runtime.md) | Vocation skills in combat (Fighter, Mage spells) | core | codex-1 | merged 2026-10-09 |
-| [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | assigned (4) |
+| [game-hud](game-hud.md) | The original HUD from the GUI data | core | codex-1 | merged 2026-10-09 |
 | [audio-playback](audio-playback.md) | Sound and music playback | core | codex-1 | assigned (5) |
+| [movement-feel](movement-feel.md) | Opening slice: turning, locomotion blending, air attacks, falls (playtest) | core | codex-1 | assigned (slice 1) |
+| [dragon-attack](dragon-attack.md) | Opening slice: the dragon attack on Cassardis | core | codex-1 | assigned (slice 2) |
+| [upon-a-pawn](upon-a-pawn.md) | Opening slice: q0002, first pawn, goblins | core | codex-1 | assigned (slice 3) |
+| [opening-prologue](opening-prologue.md) | Opening slice: the playable prologue (stage 380) | core | codex-1 | assigned (slice 4) |
+| [chara-creation-ui](chara-creation-ui.md) | Opening slice: character creation (stage 801) | core | codex-1 | assigned (slice 5) |
+| [opening-movie](opening-movie.md) | Opening slice: WMV movie playback | core | codex-1 | assigned (slice 6) |
+| [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | assigned (slice 7) |
+| [skill-vfx](skill-vfx.md) | Opening slice: effects for attacks, skills, hits | core | codex-1 | assigned (slice 8) |
