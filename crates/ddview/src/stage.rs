@@ -1,11 +1,12 @@
 //! Converts stage cells (MOD + MRL + TEX from the user's install) into
-//! Bevy meshes, materials and images.
+//! Bevy meshes, materials and images, and places each cell's static
+//! scenery from its `_s00` layout (`mtlot`).
 //!
 //! Placement follows `docs/WORLD.md`: cell `st<S>_<A>m<B>n` sits at
 //! X = (B - B0) * 10000, Z = (A - A0) * 10000 game units from the origin
 //! cell (A0, B0). Game units are taken as centimetres and scaled by 0.01
 //! (*unresolved:* unit not yet confirmed). Axes are used as stored (Y up);
-//! *unresolved:* whether the original is left-handed (a mirror flip).
+//! the reference screenshots show no mirroring.
 
 use std::collections::HashMap;
 
@@ -21,21 +22,36 @@ use mtshader::ShaderPackage;
 pub const RMODEL: u32 = 0x58A1_5856;
 pub const RMATERIAL: u32 = 0x2749_C8A8;
 pub const RTEXTURE: u32 = 0x241F_5DEB;
+pub const RLAYOUT: u32 = 0x1530_2EF4;
 pub const UNIT: f32 = 0.01;
 
 #[derive(Default)]
 pub struct Stats {
     pub cells: usize,
+    pub instances: usize,
+    pub instances_without_model: usize,
     pub meshes: usize,
     pub triangles: usize,
     pub textures: usize,
     pub missing: Vec<String>,
 }
 
+/// One drawable piece of a converted model.
+#[derive(Clone)]
+pub struct Part {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
+    pub triangles: usize,
+}
+
 pub struct Loader<'a> {
     pub vfs: &'a Vfs,
     pub mfx: &'a ShaderPackage,
     pub textures: HashMap<String, Option<Handle<Image>>>,
+    /// Converted models by resource path, shared by every instance.
+    pub models: HashMap<String, Option<Vec<Part>>>,
+    /// Model resource path by its last path component (`om0528`).
+    pub model_names: HashMap<String, String>,
     pub stats: Stats,
 }
 
@@ -100,37 +116,50 @@ impl Loader<'_> {
         h
     }
 
-    /// Spawns one cell model with its materials. Returns false if absent.
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_cell(
+    /// Index of model resources by their last path component.
+    pub fn index_models(&mut self) {
+        for p in self.vfs.paths_of_type(RMODEL) {
+            let name = p.rsplit('\\').next().unwrap_or(p).to_string();
+            self.model_names.entry(name).or_insert_with(|| p.to_string());
+        }
+    }
+
+    /// Converts a model (MOD + its MRL) once; later calls reuse the result.
+    pub fn model(
         &mut self,
-        commands: &mut Commands,
+        path: &str,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
-        stage: u32,
-        a: i32,
-        b: i32,
-        offset: Vec3,
-    ) -> bool {
+    ) -> Option<Vec<Part>> {
+        if let Some(parts) = self.models.get(path) {
+            return parts.clone();
+        }
+        let parts = self.convert_model(path, meshes, materials, images);
+        self.models.insert(path.to_string(), parts.clone());
+        parts
+    }
+
+    fn convert_model(
+        &mut self,
+        path: &str,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+    ) -> Option<Vec<Part>> {
         let mfx = self.mfx;
-        // The folder is the cell's A (m) number rounded down to tens, e.g.
-        // scr\st100\model\m50\st100_58m49n (checked with ddtool arc-ls).
-        let path = format!("scr\\st{stage}\\model\\m{}\\st{stage}_{a}m{b}n", a / 10 * 10);
-        let Ok(mod_bytes) = self.vfs.read(&path, RMODEL) else {
-            return false;
-        };
+        let mod_bytes = self.vfs.read(path, RMODEL).ok()?;
         let model = match mtmod::parse(&mod_bytes) {
             Ok(m) => m,
             Err(e) => {
                 self.stats.missing.push(format!("{path}: {e}"));
-                return false;
+                return None;
             }
         };
-        let mrl_bytes = self.vfs.read(&path, RMATERIAL).ok();
+        let mrl_bytes = self.vfs.read(path, RMATERIAL).ok();
         let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
-        self.stats.cells += 1;
         let mut mat_cache: HashMap<u16, Handle<StandardMaterial>> = HashMap::new();
+        let mut parts = Vec::new();
         for m in &model.meshes {
             // LOD byte: bit 0 = highest detail (*assumed*), 255 = all.
             if m.lod & 1 == 0 {
@@ -159,8 +188,6 @@ impl Loader<'_> {
             mesh.insert_indices(Indices::U32(
                 tris.iter().flatten().map(|&i| u32::from(i)).collect(),
             ));
-            self.stats.meshes += 1;
-            self.stats.triangles += tris.len();
             let material = mat_cache
                 .entry(m.material)
                 .or_insert_with(|| {
@@ -202,13 +229,105 @@ impl Loader<'_> {
                     materials.add(sm)
                 })
                 .clone();
+            parts.push(Part {
+                mesh: meshes.add(mesh),
+                material,
+                triangles: tris.len(),
+            });
+        }
+        Some(parts)
+    }
+
+    fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {
+        for p in parts {
+            self.stats.meshes += 1;
+            self.stats.triangles += p.triangles;
             commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material),
-                Transform::from_translation(offset),
-                Name::new(format!("st{stage}_{a}m{b}n")),
+                Mesh3d(p.mesh.clone()),
+                MeshMaterial3d(p.material.clone()),
+                transform,
+                Name::new(name.to_string()),
             ));
         }
+    }
+
+    /// Spawns one cell's terrain model and its static scenery (`_s00`
+    /// layout). `offset` is the cell's position in viewer units. Returns
+    /// false if the cell has no model.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_cell(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        a: i32,
+        b: i32,
+        offset: Vec3,
+    ) -> bool {
+        // The folder is the cell's A (m) number rounded down to tens, e.g.
+        // scr\st100\model\m50\st100_58m49n (checked with ddtool arc-ls).
+        let path = format!("scr\\st{stage}\\model\\m{}\\st{stage}_{a}m{b}n", a / 10 * 10);
+        let Some(parts) = self.model(&path, meshes, materials, images) else {
+            return false;
+        };
+        self.stats.cells += 1;
+        let cell = format!("st{stage}_{a}m{b}n");
+        self.spawn_parts(commands, &parts, Transform::from_translation(offset), &cell);
+        self.spawn_scenery(commands, meshes, materials, images, stage, a, b, offset);
         true
+    }
+
+    /// Static models placed by the cell's `_s00` layout. Placement
+    /// positions are in a fixed stage frame whose origin is cell 50m50n:
+    /// x = (B - 50) * 10000 + local, z = (A - 50) * 10000 + local (checked
+    /// on cells 58m50n, 61m51n and 50m40n; see docs/WORLD.md).
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_scenery(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        stage: u32,
+        a: i32,
+        b: i32,
+        offset: Vec3,
+    ) {
+        let lot_path = format!("scr\\st{stage}\\etc\\st{stage}_{a}m{b}n_s00");
+        let Ok(bytes) = self.vfs.read(&lot_path, RLAYOUT) else {
+            return;
+        };
+        let records = match mtlot::parse(&bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                self.stats.missing.push(format!("{lot_path}: {e}"));
+                return;
+            }
+        };
+        let block = Vec3::new((b - 50) as f32 * 10000.0, 0.0, (a - 50) as f32 * 10000.0);
+        for r in &records {
+            let Some(p) = r.placement() else { continue };
+            let id = p.name.split('_').next().unwrap_or("").to_ascii_lowercase();
+            let Some(model_path) = self.model_names.get(&id).cloned() else {
+                self.stats.instances_without_model += 1;
+                continue;
+            };
+            let Some(parts) = self.model(&model_path, meshes, materials, images) else {
+                self.stats.instances_without_model += 1;
+                continue;
+            };
+            let local = Vec3::from(p.position) - block;
+            // *Unresolved:* Euler order of mAngle; XYZ assumed until traced in the exe.
+            let rotation = Quat::from_euler(EulerRot::XYZ, p.angle[0], p.angle[1], p.angle[2]);
+            let transform = Transform {
+                translation: offset + local * UNIT,
+                rotation,
+                scale: Vec3::from(p.scale),
+            };
+            self.stats.instances += 1;
+            self.spawn_parts(commands, &parts, transform, &p.name);
+        }
     }
 }

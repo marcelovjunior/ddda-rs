@@ -3,10 +3,14 @@
 //!
 //! ```text
 //! ddview <nativePC> [--stage 100] [--cell 58,50] [--radius 2]
-//!        [--pos x,y,z] [--look x,y,z] [--shot out.png] [--shot-delay secs]
+//!        [--pos x,y,z] [--look x,y,z] [--up x,y,z] [--fov deg] [--size WxH]
+//!        [--ref refNNN.json] [--shot out.png] [--shot-delay secs]
 //! ```
 //! `--pos`/`--look` are in game units (cm) in the origin cell's frame, the
 //! same frame as the live game's `uPlayer +0x40` (see docs/WORLD.md).
+//! `--ref` takes the eye, target, up, FOV and near/far planes from a
+//! reference pose recorded by the private screenshot watcher
+//! (`uCameraGame +0x30..+0x6c`). `--fov` is the vertical field of view.
 //! With `--shot` the viewer saves one frame after `--shot-delay` seconds
 //! (default 10: Bevy compiles pipelines asynchronously and draws nothing
 //! until they are ready) and exits.
@@ -30,6 +34,11 @@ struct Args {
     radius: i32,
     pos: Vec3,
     look: Vec3,
+    up: Vec3,
+    fov_deg: f32,
+    near: f32,
+    far: f32,
+    size: (u32, u32),
     shot: Option<PathBuf>,
     shot_delay: f32,
 }
@@ -53,6 +62,11 @@ fn args() -> Args {
         look: Vec3::new(205.4 + 1000.0, 41019.0 + 100.0, 3542.5),
         shot: None,
         shot_delay: 10.0,
+        up: Vec3::Y,
+        fov_deg: 45.0,
+        near: 10.0,
+        far: 2_000_000.0,
+        size: (1600, 900),
     };
     while let Some(k) = it.next() {
         let v = it.next().unwrap_or_else(|| panic!("{k} needs a value"));
@@ -67,19 +81,57 @@ fn args() -> Args {
             "--look" => a.look = parse_vec3(&v),
             "--shot" => a.shot = Some(PathBuf::from(v)),
             "--shot-delay" => a.shot_delay = v.parse().unwrap(),
+            "--up" => a.up = parse_vec3(&v),
+            "--fov" => a.fov_deg = v.parse().unwrap(),
+            "--size" => {
+                let p: Vec<u32> = v.split('x').map(|x| x.parse().unwrap()).collect();
+                a.size = (p[0], p[1]);
+            }
+            "--ref" => apply_ref(&mut a, &v),
             _ => panic!("unknown option {k}"),
         }
     }
     a
 }
 
+/// Reads a reference pose (JSON written by the screenshot watcher) and its
+/// camera into the arguments. Only the fields used here are parsed, with a
+/// minimal scanner, to keep the viewer free of a JSON dependency.
+fn apply_ref(a: &mut Args, path: &str) {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let nums_after = |key: &str, n: usize| -> Vec<f32> {
+        let i = text
+            .find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("{path}: no {key}"));
+        text[i + key.len() + 2..]
+            .split(|c: char| {
+                !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
+            })
+            .filter(|t| !t.is_empty() && t.parse::<f32>().is_ok())
+            .take(n)
+            .map(|t| t.parse().unwrap())
+            .collect()
+    };
+    let v3 = |key: &str| {
+        let v = nums_after(key, 3);
+        Vec3::new(v[0], v[1], v[2])
+    };
+    a.pos = v3("eye");
+    a.look = v3("target");
+    a.up = v3("up");
+    a.fov_deg = nums_after("fov_deg", 1)[0];
+    a.near = nums_after("near", 1)[0];
+    a.far = nums_after("far", 1)[0];
+}
+
 fn main() {
     let args = args();
+    let size = args.size;
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ddview".into(),
-                resolution: WindowResolution::new(1600, 900),
+                resolution: WindowResolution::new(size.0, size.1),
                 ..default()
             }),
             ..default()
@@ -116,8 +168,11 @@ fn setup(
         vfs: &vfs,
         mfx: &mfx,
         textures: Default::default(),
+        models: Default::default(),
+        model_names: Default::default(),
         stats: Default::default(),
     };
+    loader.index_models();
     let (a0, b0) = args.cell;
     for da in -args.radius..=args.radius {
         for db in -args.radius..=args.radius {
@@ -136,8 +191,10 @@ fn setup(
     }
     let s = &loader.stats;
     info!(
-        "cells {} meshes {} triangles {} textures {} problems {} ({:.1} s)",
+        "cells {} instances {} (no model {}) meshes {} triangles {} textures {} problems {} ({:.1} s)",
         s.cells,
+        s.instances,
+        s.instances_without_model,
         s.meshes,
         s.triangles,
         s.textures,
@@ -160,7 +217,13 @@ fn setup(
     let look = args.look * stage::UNIT;
     commands.spawn((
         Camera3d::default(),
-        Transform::from_translation(pos).looking_at(look, Vec3::Y),
+        Projection::Perspective(PerspectiveProjection {
+            fov: args.fov_deg.to_radians(),
+            near: args.near * stage::UNIT,
+            far: args.far * stage::UNIT,
+            ..default()
+        }),
+        Transform::from_translation(pos).looking_at(look, args.up),
         FlyCam,
     ));
 }

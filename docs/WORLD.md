@@ -39,6 +39,22 @@ read from the running Steam game (read-only memory access, see
 - For cell `st100_<A>m<B>n`: X = (B - B0) * 10000 and Z = (A - A0) * 10000, relative to the origin cell (A0, B0). Y is unchanged.
 - So a global frame is X = B * 10000 + x, Z = A * 10000 + z, up to a constant.
 
+**Layout positions (data):**
+- `rLayout` placements (`scr\st100\etc\st100_<A>m<B>n_<kind><N>`, read with `mtlot`) use a
+  **fixed stage frame with its origin at cell 50m50n**: x = (B - 50) * 10000 + local,
+  z = (A - 50) * 10000 + local, y absolute.
+- Checked on three cells: 58m50n (x 0..10000, z 80000..90000), 61m51n (x 11800..17800,
+  z 110800..117700), 50m40n (x about -98000, z about 9000).
+- The `_s00` layout holds a cell's static scenery (`cSetInfoInsModel`). A record's name
+  starts with its model id (`om0528_58m50n_U102` uses `model\om\om0525\model\om0528`).
+
+**Verification against the original (2026-10-08, reference screenshots):**
+- The reference poses' player positions sit on the terrain of the recorded origin cell
+  within 1 cm (ref001, 002, 004, 005), which confirms the cell placement rule.
+- A single placed prop (a sword in the ground, ref001) appears at the same place and angle
+  in our render, which supports the layout frame and the Euler order assumption so far.
+- No mirroring: sea and land sides match in every reference.
+
 ## Live object access
 
 **Addressing:**
