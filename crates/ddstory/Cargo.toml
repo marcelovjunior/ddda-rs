@@ -11,3 +11,5 @@ mtfsm = { path = "../mtfsm" }
 mtxfs = { path = "../mtxfs" }
 mtarc = { path = "../mtarc" }
 ddvfs = { path = "../ddvfs" }
+mtcamera = { path = "../mtcamera" }
+mtgmd = { path = "../mtgmd" }

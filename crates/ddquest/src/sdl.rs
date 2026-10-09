@@ -353,6 +353,230 @@ impl Scheduler {
     }
 }
 
+/// Playback state of one `uScheduler` unit: frame +0x34, previous frame
+/// +0x38, speed +0x3c, paused +0x40, loop +0x41, cut snapping +0x43.
+/// Defaults from the constructor 0x00dde6c0: frame 0, previous -1, speed
+/// 1, paused, looping, snapping on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clock {
+    pub frame: f32,
+    pub prev: f32,
+    pub speed: f32,
+    pub paused: bool,
+    pub looping: bool,
+    pub snap_cuts: bool,
+}
+
+impl Default for Clock {
+    // Translated from 0x00dde6c0 (DDDA.exe 2017-12-13 Steam).
+    fn default() -> Clock {
+        Clock { frame: 0.0, prev: -1.0, speed: 1.0, paused: true, looping: true, snap_cuts: true }
+    }
+}
+
+/// Where the tracks are evaluated in one update (0x00ddfd50).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Playhead {
+    /// The frame the tracks see (floored for integer-frame files, snapped
+    /// below a cut).
+    pub frame: f32,
+    /// The previous update's frame (floored likewise, never snapped).
+    pub prev: f32,
+    /// `frame` rounded to an integer: selects the key in force. The x87
+    /// conversion uses the FPU's rounding mode, *assumed* the default
+    /// round-to-nearest-even.
+    pub index_frame: u32,
+}
+
+impl Clock {
+    /// One update of the unit (`uScheduler::vf08` 0x00de02a0): the tracks
+    /// are evaluated at the current frame when it differs from the previous
+    /// update's (returned as `Some`), then the frame advances by
+    /// `speed * delta` unless paused and wraps (looping) or clamps at the
+    /// frame count.
+    // Translated from 0x00de02a0 and 0x00ddfd50 (DDDA.exe 2017-12-13 Steam).
+    pub fn step(&mut self, s: &Scheduler, delta: f32) -> Option<Playhead> {
+        let changed = self.frame != self.prev;
+        let head = changed.then(|| s.playhead(self.frame, self.prev, self.snap_cuts));
+        self.prev = self.frame;
+        if !self.paused {
+            self.frame += self.speed * delta;
+        }
+        let end = s.frames as f32;
+        if self.speed >= 0.0 || self.frame >= 0.0 {
+            if self.frame >= end {
+                self.frame = if self.looping { 0.0 } else { end };
+            }
+        } else {
+            self.frame = if self.looping { end } else { 0.0 };
+        }
+        head
+    }
+}
+
+/// x87 `fistp` in the default rounding mode (nearest, ties to even).
+fn round_even(x: f32) -> i64 {
+    let r = x.round();
+    if (x - x.trunc()).abs() == 0.5 && (r as i64) % 2 != 0 {
+        (r - x.signum()) as i64
+    } else {
+        r as i64
+    }
+}
+
+impl Scheduler {
+    /// The playhead of an update at `frame` after `prev` (0x00ddfd50).
+    // Translated from 0x00ddfd50 (DDDA.exe 2017-12-13 Steam).
+    pub fn playhead(&self, frame: f32, prev: f32, snap_cuts: bool) -> Playhead {
+        let (mut f, mut p) = (frame, prev);
+        if self.integer_frames {
+            f = f.floor();
+            p = p.floor();
+        }
+        if snap_cuts {
+            f = self.snap_to_cut(f);
+        }
+        Playhead { frame: f, prev: p, index_frame: round_even(f).clamp(0, u32::MAX as i64) as u32 }
+    }
+
+    /// With a cut track, a frame whose next integer frame is a cut key is
+    /// floored, so the frame before a cut is never interpolated into it.
+    // Translated from 0x00ddeb00 (DDDA.exe 2017-12-13 Steam).
+    pub fn snap_to_cut(&self, frame: f32) -> f32 {
+        let Some(t) = (self.cut_track != 0).then(|| self.tracks.get(self.cut_track as usize)).flatten() else {
+            return frame;
+        };
+        let floor = frame.floor() as i64;
+        for k in &t.keys {
+            let kf = k.frame as i64;
+            if kf == floor + 1 {
+                return floor as f32;
+            }
+            if floor + 1 < kf {
+                break;
+            }
+        }
+        frame
+    }
+
+    /// The value track `index` applies at the playhead, or `None` when it
+    /// applies nothing (no keys; a trigger key the playhead did not cross;
+    /// an int key of a mode the evaluator has no case for). Before its
+    /// first key a track applies its first key.
+    // Translated from 0x00ddee70 (DDDA.exe 2017-12-13 Steam).
+    pub fn eval(&self, index: usize, at: &Playhead) -> Option<Value> {
+        let t = self.tracks.get(index)?;
+        let keys = &t.keys;
+        if keys.is_empty() {
+            return None;
+        }
+        let i = keys.partition_point(|k| k.frame <= at.index_frame).saturating_sub(1);
+        let k = &keys[i];
+        let kf = k.frame as f32;
+        if k.mode == Mode::Trigger && !(at.prev <= kf && kf <= at.frame) {
+            return None;
+        }
+        let next = keys.get(i + 1);
+        let span = |n: &Key| (at.frame - kf) / (n.frame - k.frame) as f32;
+        let raw_mode = match k.mode {
+            Mode::Set => 0,
+            Mode::Count(m) => m,
+            Mode::Trigger => 2,
+            Mode::Linear => 3,
+            Mode::Curve => 5,
+            Mode::Other(m) => m,
+        };
+        Some(match (&k.value, raw_mode) {
+            (Value::Int(v), 0 | 2) => Value::Int(*v),
+            (Value::Int(v), 1 | 4) => Value::Int(v.wrapping_sub(k.frame as i32).wrapping_add(at.index_frame as i32)),
+            (Value::Int(v), 3 | 5) => match next.map(|n| (n, &n.value)) {
+                Some((n, Value::Int(w))) => {
+                    let s = span(n);
+                    Value::Int(((1.0 - s) * *v as f32 + *w as f32 * s) as i32)
+                }
+                _ => Value::Int(*v),
+            },
+            (Value::Int(_), _) => return None,
+            (Value::Float(v), 1 | 4) => Value::Float(at.frame - kf + v),
+            (Value::Float(v), 3) => match next.map(|n| (n, &n.value)) {
+                Some((n, Value::Float(w))) => {
+                    let s = span(n);
+                    Value::Float((1.0 - s) * v + w * s)
+                }
+                _ => Value::Float(*v),
+            },
+            (Value::Float(v), 5) => match next {
+                Some(n) => {
+                    let s = span(n);
+                    let f = |j: usize| match keys[j].value {
+                        Value::Float(x) => x,
+                        _ => 0.0,
+                    };
+                    let (p1, p2) = (*v, f(i + 1));
+                    let p0 = f(i.saturating_sub(1));
+                    let p3 = f(if i + 2 < keys.len() { i + 2 } else { i + 1 });
+                    let m0 = (p2 - p0) * 0.5;
+                    let m1 = (p3 - p1) * 0.5;
+                    Value::Float(
+                        (p1 * 2.0 - p2 * 2.0 + m0 + m1) * s * s * s
+                            + (p2 * 3.0 - p1 * 3.0 - m0 * 2.0 - m1) * s * s
+                            + m0 * s
+                            + p1,
+                    )
+                }
+                None => Value::Float(*v),
+            },
+            (Value::Vec4(v), 1 | 4) => Value::Vec4(v.map(|x| x + (at.frame - kf))),
+            (Value::Vec4(v), 3) => match next.map(|n| (n, &n.value)) {
+                Some((n, Value::Vec4(w))) => {
+                    let s = span(n);
+                    Value::Vec4(std::array::from_fn(|c| (1.0 - s) * v[c] + w[c] * s))
+                }
+                _ => Value::Vec4(*v),
+            },
+            (Value::Vec4(v), 5) => match next {
+                Some(n) => {
+                    let s = span(n);
+                    let f = |j: usize| match keys[j].value {
+                        Value::Vec4(x) => x,
+                        _ => [0.0; 4],
+                    };
+                    let (p1, p2) = (*v, f(i + 1));
+                    let p0 = f(i.saturating_sub(1));
+                    let p3 = f(if i + 2 < keys.len() { i + 2 } else { i + 1 });
+                    let (s2, s3) = (s * s, s * s * s);
+                    let h10 = s3 - 2.0 * s2 + s;
+                    let h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
+                    let h01 = 3.0 * s2 - 2.0 * s3;
+                    let h11 = s3 - s2;
+                    Value::Vec4(std::array::from_fn(|c| {
+                        h10 * ((p2[c] - p0[c]) * 0.5) + h00 * p1[c] + h01 * p2[c] + h11 * (p3[c] - p1[c]) * 0.5
+                    }))
+                }
+                None => Value::Vec4(*v),
+            },
+            (Value::Matrix(v), 3) => match next.map(|n| (n, &n.value)) {
+                Some((n, Value::Matrix(w))) => {
+                    let s = span(n);
+                    Value::Matrix(std::array::from_fn(|c| v[c] * (1.0 - s) + w[c] * s))
+                }
+                _ => Value::Matrix(*v),
+            },
+            (v, _) => v.clone(),
+        })
+    }
+
+    /// Track indices by their `path()` (several tracks can share a path,
+    /// e.g. two `mAdjustParamList` members).
+    pub fn paths(&self) -> std::collections::HashMap<String, Vec<usize>> {
+        let mut m: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+        for i in 0..self.tracks.len() {
+            m.entry(self.path(i)).or_default().push(i);
+        }
+        m
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +638,95 @@ mod tests {
         s.validate().unwrap();
         assert_eq!(Scheduler::key_at(&s.tracks[2], 9).unwrap().frame, 0);
         assert_eq!(Scheduler::key_at(&s.tracks[2], 10).unwrap().frame, 10);
+    }
+
+    fn track(kind: Kind, keys: Vec<(u32, Mode, Value)>) -> Track {
+        Track {
+            kind,
+            property_type: 0,
+            link: 1,
+            name: String::new(),
+            type_hash: 0,
+            keys: keys.into_iter().map(|(frame, mode, value)| Key { frame, mode, value }).collect(),
+        }
+    }
+
+    fn sched(tracks: Vec<Track>, cut_track: u32) -> Scheduler {
+        Scheduler { unknown_08: 0, frames: 20, integer_frames: false, frame_flags_high: 0, cut_track, tracks }
+    }
+
+    fn at(f: f32, p: f32) -> Playhead {
+        Playhead { frame: f, prev: p, index_frame: round_even(f) as u32 }
+    }
+
+    #[test]
+    fn key_modes() {
+        let s = sched(
+            vec![
+                track(Kind::Root, vec![]),
+                // count: value + frames since the key
+                track(Kind::Float, vec![(0, Mode::Count(1), Value::Float(0.0)), (10, Mode::Count(1), Value::Float(5.0))]),
+                // trigger: only when crossed
+                track(Kind::Int, vec![(4, Mode::Trigger, Value::Int(7))]),
+                // linear float, Catmull-Rom vec4
+                track(Kind::Float, vec![(0, Mode::Linear, Value::Float(0.0)), (10, Mode::Set, Value::Float(10.0))]),
+                track(
+                    Kind::Vec4,
+                    vec![
+                        (0, Mode::Curve, Value::Vec4([0.0; 4])),
+                        (10, Mode::Curve, Value::Vec4([1.0; 4])),
+                        (20, Mode::Curve, Value::Vec4([2.0; 4])),
+                    ],
+                ),
+                // first key after the playhead still applies
+                track(Kind::String, vec![(30, Mode::Set, Value::String(Some("x".into())))]),
+                // int count uses the rounded frame
+                track(Kind::Int, vec![(2, Mode::Count(4), Value::Int(100))]),
+            ],
+            0,
+        );
+        assert_eq!(s.eval(1, &at(3.5, 2.5)), Some(Value::Float(3.5)));
+        assert_eq!(s.eval(1, &at(12.0, 11.0)), Some(Value::Float(7.0)));
+        assert_eq!(s.eval(2, &at(3.0, 2.0)), None);
+        assert_eq!(s.eval(2, &at(4.0, 3.0)), Some(Value::Int(7)));
+        assert_eq!(s.eval(2, &at(6.0, 5.0)), None);
+        assert_eq!(s.eval(3, &at(2.5, 1.5)), Some(Value::Float(2.5)));
+        // Catmull-Rom with the end tangents clamped to the last key:
+        // p0 0, p1 1, p2 2, p3 2 at s = 0.5 gives 1.5625.
+        match s.eval(4, &at(15.0, 14.0)) {
+            Some(Value::Vec4(v)) => assert!((v[0] - 1.5625).abs() < 1e-6, "{v:?}"),
+            v => panic!("{v:?}"),
+        }
+        assert_eq!(s.eval(5, &at(0.0, -1.0)), Some(Value::String(Some("x".into()))));
+        // 4.5 rounds to 4 (ties to even): 100 - 2 + 4
+        assert_eq!(s.eval(6, &at(4.5, 3.5)), Some(Value::Int(102)));
+    }
+
+    #[test]
+    fn clock_and_cut_snapping() {
+        let s = sched(
+            vec![track(Kind::Root, vec![]), track(Kind::Int, vec![(0, Mode::Set, Value::Int(0)), (10, Mode::Set, Value::Int(1))])],
+            1,
+        );
+        // 9.5 is floored to 9 because frame 10 is a cut.
+        assert_eq!(s.snap_to_cut(9.5), 9.0);
+        assert_eq!(s.snap_to_cut(8.5), 8.5);
+        let mut c = Clock { paused: false, looping: false, ..Clock::default() };
+        // First update evaluates frame 0 (previous -1), then one per frame.
+        let heads: Vec<Option<f32>> = (0..25).map(|_| c.step(&s, 1.0).map(|p| p.frame)).collect();
+        assert_eq!(heads[0], Some(0.0));
+        assert_eq!(heads[20], Some(20.0));
+        // Clamped at the frame count: nothing changes any more.
+        assert_eq!(heads[21], None);
+        assert_eq!(c.frame, 20.0);
+        // Looping wraps to 0.
+        let mut l = Clock { paused: false, frame: 19.5, prev: 19.0, ..Clock::default() };
+        l.step(&s, 1.0);
+        assert_eq!(l.frame, 0.0);
+        // Paused: evaluated once if the frame moved, then never.
+        let mut p = Clock::default();
+        assert!(p.step(&s, 1.0).is_some());
+        assert!(p.step(&s, 1.0).is_none());
     }
 
     #[test]

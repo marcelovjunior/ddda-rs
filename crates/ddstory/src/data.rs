@@ -37,6 +37,12 @@ pub trait Data {
     fn rewards(&self) -> Result<Arc<mtxfs::Xfs>, Error>;
     /// The prologue-end world set-up decoded from DDDA.exe (0x00444c20).
     fn prologue_end(&self) -> Option<&crate::exe::PrologueEnd>;
+    /// A resource's bytes by path and class name (e.g. `rScheduler`);
+    /// `None` when the install has no such resource. Used by the event
+    /// player ([`crate::event`]).
+    fn resource(&self, path: &str, class: &str) -> Result<Option<Vec<u8>>, Error> {
+        Err(Error::Unimplemented(format!("resource reads ({class} {path}) in this Data")))
+    }
 }
 
 /// Reads from `nativePC` (and `DDDA.exe` for the event table).
@@ -130,6 +136,14 @@ impl Data for InstallData {
 
     fn prologue_end(&self) -> Option<&crate::exe::PrologueEnd> {
         self.prologue.as_ref()
+    }
+
+    fn resource(&self, path: &str, class: &str) -> Result<Option<Vec<u8>>, Error> {
+        let t = mtarc::type_hash(class);
+        if self.vfs.locate(path, t).is_none_or(|l| l.is_empty()) {
+            return Ok(None);
+        }
+        self.vfs.read(path, t).map(Some).map_err(data(path))
     }
 
     fn rewards(&self) -> Result<Arc<mtxfs::Xfs>, Error> {

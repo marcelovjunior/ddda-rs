@@ -153,7 +153,7 @@ fn event_table_from_the_installed_exe() {
     let missing: Vec<_> = t
         .rows
         .iter()
-        .filter(|r| v.locate(&format!("event\\{}", r.path), sdl).map_or(true, |l| l.is_empty()))
+        .filter(|r| v.locate(&format!("event\\{}", r.path), sdl).is_none_or(|l| l.is_empty()))
         .map(|r| r.path.clone())
         .collect();
     println!("event rows without a scheduler: {missing:?}");
