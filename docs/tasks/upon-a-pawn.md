@@ -326,3 +326,28 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   The baseline viewer remains the earlier executable and still freezes
   seven NPCs; rebuilt viewer comparison is pending. Other unsupported
   variables may still stop schedules; no full NPC behavior claim.
+
+### Tutorial route integration baseline (2026-10-09, codex-31)
+
+- Ran the 87843ee viewer plus codex-29's opt-in diagnostics at 1920x1080,
+  unattended. Intro run loaded st100ev00 (109.6 s movie), skipped after
+  2.4 s by unattended policy, auto-confirmed edit and reached stage200 /
+  SceNo1100. It saved a screenshot and exited; not a full movie acceptance.
+- Separate existing demo completed in about 224 wall seconds: Fighter class
+  select, ev10, Quina talk, collision-planned walk, ev15, then stage200 /
+  SceNo1400, GSF372/381 true, q1 words [18000000,0,3], q2 booted.
+  Seven step screenshots retained privately. Both processes exited.
+- This is not the requested end-to-end tutorial. Main skips intro when
+  demo is enabled; prepare fast-forwards beach dragon loss before rendering;
+  the vocation menu remains the labelled two-choice stub; opening setup
+  passes literal None fight data and no pawn/goblins. GSF381 still comes
+  from the scripted actor stand-in, not the new Guard actor adapter. Demo
+  ends before the actual Cassardis exit and the goblin rescue encounter.
+- Baseline also reproduced seven NPC schedule freezes from the missing
+  variables now translated in18f1466. New viewer validation is pending.
+  Concurrent builds exclude performance acceptance; no original-game
+  comparison claimed. Logs/captures: E:/ddda-re/notes/opening-route-codex31.
+- Next action: resolve actual NPC layout targets and own intel/controller
+  lifetimes, then connect guarded dialogue and sourced actor cleanup. Keep
+  fight data and spawned enemies authoritative in the host, not a second
+  independent viewer Fight.
