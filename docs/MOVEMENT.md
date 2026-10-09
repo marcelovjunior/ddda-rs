@@ -307,6 +307,91 @@ the result bits at +0x1A8.
   length-dependent thresholds (the stall rule, the 0.0625 undo, the crease)
   apply to quarter-frame moves.
 
+### Bodies lost below the ground (`Sim::record_safe`, `lost`, `warp_to_safe`)
+
+**#1149.** In a two-window demo (stage 100 by 58m50n), a body sank under
+the single-layer ground and fell without end. The cause was the build's
+ddsim, which branched before the capsule sweep (f892a7e). Its air move
+looked for landing ground only below the body (`height(next, y + 1)`).
+So a jump coming down into ground rising ahead passed under the surface,
+and nothing below it ever stopped the fall.
+
+Replaying the demo's inputs headlessly reproduces it:
+
+| ddsim | Result |
+|---|---|
+| that build's | loses bodies within seconds |
+| main's | lost none in 4,500 random 60-second demo runs (walk or run, jumps and double jumps every 2-5 s, any camera) |
+
+Main uses the sweep whenever the ground provides triangles, as
+`ddworld::Terrain` does. The regression test is
+`ddworld/tests/land.rs::demo_jumps_onto_higher_ground_stay_on_it`: two
+such runs, which the old build loses at frames 641 and 130.
+
+The point rules that test grounds without triangles still use now look a
+step (`STEP_UP`) above the body:
+- coming down, the body lands on rising ground;
+- going up, it is held back from it.
+
+Test: `jumps_into_rising_ground_land_on_it`.
+
+**What the original does with a lost body** (traced). It has no kill
+height. Instead it keeps a ring of safe positions and warps the body back
+to one of them.
+
+- **The ring.** `0x00B62980` keeps 4 safe positions, newest first, at
+  uPlayerBase +0x4A60, for the Arisen and pawns, every frame. It pushes the
+  position in front when all of these hold:
+  - the body is on the ground in the wait, walk, run or sprint (and a few
+    other actions);
+  - the position is at least 100 from the newest slot;
+  - there is ground within 50 under the feet;
+  - it is not in water, not latched in a kill zone, and the ground has no
+    attribute bits 0x80800.
+
+  Spawning and the stage-start placement seed all four slots (`0x00B628A0`).
+- **The check.** `0x00B63520`, from `uPlayerBase::vf90`, flags a body as
+  lost:
+  - in the air after a fall of more than 20,000 (uPlayer +0x207C, not on
+    stage 0x259);
+  - after 90 frames in the air without moving down (+0x4AA4, which restarts
+    whenever it moves down; climbing and some actions and flags stop it);
+  - when a slope slide stalls (+0x4AA8, `cPlActSlopeSlide::vf08`).
+- **The warp.** `0x00B62D20` picks the destination:
+  - the second newest slot, if the body is within 200 of the newest and the
+    two slots are that close;
+  - else the newest, if the body is within 200 of it;
+  - else the first slot with ground from 100 above to 50 below it, at the
+    higher of the two heights.
+
+  It sets velocity (0, -2, 0), requests action 0 (the wait) and starts the
+  fall measurement afresh. Pawns and NPCs are warped at once. The Arisen
+  goes through stage mode 0x27 (`0x005149E0`): a 15-frame fade, then the
+  same warp.
+- **Fall damage, not a warp.** Falls from 10 m up are ordinary HP damage
+  through `cPlActDmgGround` (action 0x19, `0x00B78A00` / `0x00B78BF0`):
+  `200 + 0.8 x (drop - 1000)`, halved with Resilience; the threshold is
+  15 m with Grace. Enough of it kills.
+- **Kill surfaces.** Surfaces with attribute bits 0x80800 (`0x008542C0` ->
+  `0x008559A0`) kill on contact: game over for the Arisen. That they are
+  deep water or the abyss is inferred.
+
+**ddsim models:**
+- the ring: the wait, walk, run and sprint, 100 apart, with ground within
+  50 above or below the feet (the original reads the body's last ground
+  hit);
+- the 20,000 fall and the 90-frame stuck check in `Air`, `SecondJump` and
+  `Fall`;
+- the warp, done at once. `Player::warps` counts warps, so a host can show
+  the fade.
+
+Not modelled: fall damage, kill surfaces and water, the slope-slide stall,
+and the check's action and status exemptions.
+
+Tests:
+- `a_body_falling_200_m_is_warped_back_to_safe_ground`
+- `a_body_stuck_in_the_air_is_warped_back`
+
 ### Attacks (`ddsim::attack`)
 
 The light and heavy buttons (`ddsim::Input::light` / `heavy`, held; a
