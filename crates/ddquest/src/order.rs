@@ -72,8 +72,8 @@ pub enum Order {
         /// `played.value` once the stage reports the event over.
         played: ResultFlag,
     },
-    /// "SceNo": set the scenario number (enter 0x005bc960), param
-    /// cFSMOrderParamS32.mS32.
+    /// "SceNo": raise the scenario number to mS32 (enter 0x005bc960 calls
+    /// the setter 0x0043d750 with raise-only set).
     SceNo(i32),
     /// "QuestFlag" (enter 0x005c5530, update 0x005c55d0).
     QuestFlag {
