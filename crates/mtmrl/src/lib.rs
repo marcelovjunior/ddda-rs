@@ -24,8 +24,16 @@
 //! `FAlbedo` = `FAlbedoMap`), 1 constant buffer (value = byte offset of its
 //! data from the command list start), 2 sampler state (value = id),
 //! 3 texture (value = 1-based index into the texture table, 0 = none).
+//!
+//! Constant-buffer data follows the command list, each buffer 16-byte
+//! aligned and laid out as its MFX `CB...` entry says (`mtshader`): checked
+//! on all 48,114 buffer commands of the 17,787 materials (one MRL per
+//! resource path), which tile the command block exactly. `shading` resolves a material into
+//! features, textures, constants and render states.
 
 use std::fmt;
+
+pub mod shading;
 
 pub const MAGIC: [u8; 4] = *b"MRL\0";
 pub const VERSION: u32 = 0x20;

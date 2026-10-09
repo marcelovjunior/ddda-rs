@@ -3516,6 +3516,9 @@ dependencies = [
 [[package]]
 name = "mtmrl"
 version = "0.1.0"
+dependencies = [
+ "mtshader",
+]
 
 [[package]]
 name = "mtsbc"
