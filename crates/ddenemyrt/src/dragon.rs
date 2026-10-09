@@ -16,13 +16,73 @@ pub const ACTION_TABLE: u32 = 0x0185_bcf8;
 /// Embedded count passed in EDI at 0x00a3f8a4 (DDDA.exe 2017-12-13 Steam).
 pub const ACTION_COUNT: u32 = 93;
 
+/// uEm5800::vf05 0x00a49ed0 passes this table and count to 0x00889de0
+/// (DDDA.exe 2017-12-13 Steam). Each descriptor occupies three words.
+pub const RESOURCE_TABLE: u32 = 0x0185_d5d8;
+pub const RESOURCE_COUNT: u32 = 57;
+
+/// A resource registration, preserving executable order without assuming
+/// that registration indices are motion-bank or collision-set indices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DragonResource {
+    pub path: String,
+    pub class: String,
+    /// Flags after the executable's static initializer has run.
+    pub flags: u32,
+}
+
+// Translated from 0x01363d50..0x0136412c (DDDA.exe 2017-12-13 Steam).
+// Startup enables binding for the first 49 descriptors; the remaining
+// effect/sound resources are preload-only. Disk flag words are zero.
+fn initialized_resource_flags(index: u32, disk_flags: u32) -> u32 {
+    if index < 49 {
+        (disk_flags & !4) | 3
+    } else {
+        (disk_flags & !5) | 2
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DragonAiData {
     pub tables: Tables,
     pub action_classes: Vec<String>,
+    pub resources: Vec<DragonResource>,
 }
 
 impl DragonAiData {
+    /// Binds the model, motion lists and collision resources selected by
+    /// the initialized descriptor table. Scale belongs to the actor's
+    /// placement; it is deliberately supplied by the caller.
+    ///
+    /// Translated from 0x008892b0 / 0x00889510 (DDDA.exe 2017-12-13 Steam):
+    /// bit 0 enables binding, motion banks advance in descriptor order.
+    /// Collision activations select the loaded file by its resource ID.
+    pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
+        use crate::body::{Body, load};
+        let bound: Vec<_> = self.resources.iter().filter(|r| r.flags & 1 != 0).collect();
+        let models: Vec<_> = bound.iter().filter(|r| r.class == "rModel").collect();
+        if models.len() != 1 {
+            return Err(format!("dragon: expected one bound model, got {}", models.len()));
+        }
+        let skeleton = load::skeleton(vfs, &models[0].path)?;
+        let banks = bound
+            .iter()
+            .filter(|r| r.class == "rMotionList")
+            .map(|r| load::bank(vfs, &r.path).map(Some))
+            .collect::<Result<_, _>>()?;
+        let collision = bound
+            .iter()
+            .filter(|r| r.class == "rObjCollision")
+            .map(|r| load::collision(vfs, &r.path, None))
+            .collect::<Result<_, _>>()?;
+        Ok(Body {
+            skeleton,
+            banks,
+            collision,
+            scale,
+        })
+    }
+
     /// Reads the Cassardis sequence's reachable think records and dragon
     /// action class names. No bulk game records are compiled into the port.
     pub fn opening(exe: &ddexe::Exe<'_>) -> Result<Self, Error> {
@@ -40,9 +100,42 @@ impl DragonAiData {
                 ))
             })?);
         }
+        let mut resources = Vec::new();
+        // Translated from 0x00889de0 (DDDA.exe 2017-12-13 Steam): null
+        // path entries are skipped, and surviving entries retain order.
+        for index in 0..RESOURCE_COUNT {
+            let address = RESOURCE_TABLE + index * 12;
+            let path = exe.u32(address).map_err(|e| Error::Data(e.0))?;
+            if path == 0 {
+                continue;
+            }
+            let dti = exe.u32(address + 4).map_err(|e| Error::Data(e.0))?;
+            resources.push(DragonResource {
+                path: exe.cstr(path).map_err(|e| Error::Data(e.0))?.to_owned(),
+                class: names
+                    .get(&dti)
+                    .cloned()
+                    .ok_or_else(|| Error::Data(format!("dragon resource {index}: unknown DTI {dti:#x}")))?,
+                flags: initialized_resource_flags(index, exe.u32(address + 8).map_err(|e| Error::Data(e.0))?),
+            });
+        }
         Ok(Self {
             tables,
             action_classes,
+            resources,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initialized_resource_flags;
+
+    #[test]
+    fn static_initialization_preserves_unrelated_flag_bits() {
+        assert_eq!(initialized_resource_flags(48, 0), 3);
+        assert_eq!(initialized_resource_flags(49, 0), 2);
+        assert_eq!(initialized_resource_flags(48, 0xffff_ffff), 0xffff_fffb);
+        assert_eq!(initialized_resource_flags(49, 0xffff_ffff), 0xffff_fffa);
     }
 }
