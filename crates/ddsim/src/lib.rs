@@ -58,11 +58,17 @@ pub const LOCOMOTION_RATE: f32 = 1.15;
 /// male Arisen; its writer is not traced. *Measured*.
 pub const GROUND_SPEED_FACTOR: f32 = 0.847_109;
 
-/// Sprint start reaches sprint speed this many frames after it begins,
-/// rising linearly (never below its entry speed, per
-/// `cPlActDashBegin::vf06`). *Measured* (4-5 frames in the recording); the
-/// original's ramp (`0x010571C0` with id 9) is not traced.
-pub const SPRINT_RAMP_FRAMES: f32 = 4.5;
+/// Sprint start reaches sprint speed this many motion frames after it
+/// begins, rising linearly. Used only when the sprint-start motion has no
+/// curve 9 (`SPEED_CURVE`); the game's motion (m0000_co slot 43) ramps 0 to
+/// 1 over motion frames 0-5, i.e. 4.35 game frames at the locomotion rate,
+/// as recorded (4-5 frames).
+pub const SPRINT_RAMP_FRAMES: f32 = 5.0;
+
+/// The motion curve the sprint start and the sprint stop scale their speed
+/// by (`0x010571C0(9)` in `cPlActDashBegin::vf06` 0x00ACAA50 and
+/// `cPlActRunEnd::vf06` 0x00ACB6C0).
+pub const SPEED_CURVE: usize = 9;
 
 /// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
 /// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
@@ -154,6 +160,8 @@ pub enum State {
     },
     SprintStart,
     Sprint,
+    /// Stopping after a sprint (`cPlActRunEnd`, action 3).
+    SprintStop,
     /// Takeoff; `standing` = no forward speed.
     JumpStart {
         standing: bool,
@@ -209,6 +217,8 @@ impl State {
             State::Run { relaxed: true } => 0x55,
             State::SprintStart => 43,
             State::Sprint => 20,
+            // cPlActRunEnd::vf05 (0x00ACB570), after the sprint's 0x14 / 0x4F
+            State::SprintStop => 0x15,
             State::JumpStart { sprint: true, .. } => 22,
             State::JumpStart { standing: true, .. } => 13,
             State::JumpStart { .. } => 10,
@@ -324,6 +334,8 @@ pub struct Hold {
 pub struct RootMotion {
     pub frame_count: u32,
     track: Option<mtlmt::Track>,
+    /// The motion's curves (`mtlmt::MotionList::curves`), read by index.
+    pub curves: Vec<mtlmt::Curve>,
 }
 
 impl RootMotion {
@@ -336,7 +348,20 @@ impl RootMotion {
         RootMotion {
             frame_count: m.frame_count,
             track,
+            curves: Vec::new(),
         }
+    }
+
+    /// The same motion with its curves (`mtlmt::MotionList::curves[slot]`).
+    pub fn with_curves(mut self, curves: Vec<mtlmt::Curve>) -> Self {
+        self.curves = curves;
+        self
+    }
+
+    /// Curve `k` at motion frame `frame`, if the motion has it and it has keys
+    /// (the game's `0x010571C0(k)`; a curve without keys reads 0 there).
+    pub fn curve(&self, k: usize, frame: f32) -> Option<f32> {
+        self.curves.get(k).filter(|c| !c.keys.is_empty()).map(|c| c.value(frame))
     }
 
     /// A motion of `frame_count` frames without root movement.
@@ -344,6 +369,7 @@ impl RootMotion {
         RootMotion {
             frame_count,
             track: None,
+            curves: Vec::new(),
         }
     }
 
@@ -442,6 +468,16 @@ fn wall_slide(ground: &dyn Ground, from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
         None => slid,
         Some(m) if (slid[0] - from[0]) * m[0] + (slid[2] - from[2]) * m[1] >= 0.0 => slid,
         Some(_) => from,
+    }
+}
+
+/// The player's own time per game time in `state`: `LOCOMOTION_RATE` while
+/// walking, running or sprinting, else 1 (cUnit +0x14 in the traces; the
+/// sprint stop runs at 1).
+fn time_rate(state: State) -> f32 {
+    match state {
+        State::Walk { .. } | State::Run { .. } | State::SprintStart | State::Sprint => LOCOMOTION_RATE,
+        _ => 1.0,
     }
 }
 
@@ -588,6 +624,7 @@ impl Sim {
             | State::Run { .. }
             | State::SprintStart
             | State::Sprint
+            | State::SprintStop
             | State::Land { .. }
             | State::SprintJumpLand => {
                 if pressed {
@@ -616,8 +653,8 @@ impl Sim {
                 {
                     return;
                 }
-                // a landing plays out unless the player moves
-                if matches!(state, State::Land { .. } | State::SprintJumpLand)
+                // a landing or a sprint stop plays out unless the player moves
+                if matches!(state, State::Land { .. } | State::SprintJumpLand | State::SprintStop)
                     && !moving
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
@@ -625,7 +662,9 @@ impl Sim {
                     return;
                 }
                 let next = if !moving {
-                    State::Wait
+                    // letting go of a sprint enters cPlActRunEnd (action 3,
+                    // recorded); a run stops at once
+                    if state == State::Sprint { State::SprintStop } else { State::Wait }
                 } else if input.sprint {
                     let start_done = self.players[i].frame >= self.period_of(State::SprintStart.motion_id());
                     match state {
@@ -889,11 +928,27 @@ impl Sim {
             State::Run { relaxed: false } => mp.run,
             State::Run { relaxed: true } => mp.run_relaxed,
             State::Sprint => mp.sprint,
-            // cPlActDashBegin::vf06: max(entry speed, ramp to sprint speed);
-            // the motion frame runs at LOCOMOTION_RATE
+            // cPlActDashBegin::vf06 (0x00ACAA50): max(entry speed, sprint
+            // speed x curve 9 of the motion at its frame) (x uPlayer +0x68,
+            // 1.0 here)
             State::SprintStart => {
-                let t = p.frame / LOCOMOTION_RATE / SPRINT_RAMP_FRAMES;
-                (mp.sprint * t.min(1.0)).max(p.sprint_entry)
+                let ramp = self
+                    .motions
+                    .get(&state.motion_id())
+                    .and_then(|m| m.curve(SPEED_CURVE, p.frame))
+                    .unwrap_or((p.frame / SPRINT_RAMP_FRAMES).min(1.0));
+                (mp.sprint * ramp).max(p.sprint_entry)
+            }
+            // cPlActRunEnd::vf06 (0x00ACB6C0): sprint speed x curve 9 (x
+            // uPlayer +0x68 x +0x29A8, both 1.0 in the recordings); no
+            // movement if the motion has no curve
+            State::SprintStop => {
+                mp.sprint
+                    * self
+                        .motions
+                        .get(&state.motion_id())
+                        .and_then(|m| m.curve(SPEED_CURVE, p.frame))
+                        .unwrap_or(0.0)
             }
             _ => return None,
         })
@@ -911,11 +966,12 @@ impl Sim {
             // velocity along the facing, in the player's own (scaled) time;
             // the motion only animates
             let (s, c) = p.yaw.sin_cos();
-            let step = along_ground(ground, p.position, [v * dt * LOCOMOTION_RATE * s, v * dt * LOCOMOTION_RATE * c]);
+            let rate = time_rate(state);
+            let step = along_ground(ground, p.position, [v * dt * rate * s, v * dt * rate * c]);
             target[0] += step[0];
             target[2] += step[1];
             p.speed = v;
-            let f = p.frame + dt * LOCOMOTION_RATE;
+            let f = p.frame + dt * rate;
             p.frame = if state.looping() { f.rem_euclid(period) } else { f };
         } else if let Some(m) = self.motions.get(&state.motion_id()) {
             p.speed = 0.0;
@@ -1060,6 +1116,7 @@ mod tests {
                     },
                 ],
             }),
+            curves: Vec::new(),
         }
     }
 
@@ -1694,6 +1751,65 @@ mod tests {
         }
         assert_eq!(LedgeParam::from_adjust(&t), Some(LEDGE_SHIPPED));
         assert_eq!(LedgeParam::from_adjust(&t[..0x191]), None);
+    }
+
+    /// m0000_co slot 21 curve 9 (the sprint stop's speed): 1 at 0, 0.5 at 5,
+    /// 0 from 25 (linear keys).
+    fn stop_curve() -> Vec<mtlmt::Curve> {
+        let key = |frame: u16, v: f32| mtlmt::CurveKey {
+            interp: 1,
+            frame,
+            value: v.to_bits(),
+            tangent_in: 0.0,
+            tangent_out: 0.0,
+        };
+        let mut c = vec![
+            mtlmt::Curve {
+                kind: 1,
+                keys: Vec::new()
+            };
+            16
+        ];
+        c[SPEED_CURVE].keys = vec![key(0, 1.0), key(5, 0.5), key(25, 0.0), key(29, 0.0)];
+        c
+    }
+
+    #[test]
+    fn releasing_a_sprint_slides_to_a_stop() {
+        let mut s = sim();
+        s.motions.insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let sprint = Input {
+            sprint: true,
+            ..fwd()
+        };
+        let mut inputs = HashMap::from([(0, sprint)]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().state, State::Sprint);
+        let z0 = s.player(0).unwrap().position[2];
+        inputs.clear();
+        s.step(TICK / MOTION_FPS, &inputs, &Flat(0.0));
+        assert_eq!(s.player(0).unwrap().state, State::SprintStop);
+        s.step(2.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        // 22.5 x (5 x 0.75 + 20 x 0.25) = 196.9 cm (recorded: 198.1), plus
+        // 2.8 cm from sampling the curve at the start of each quarter frame
+        let d = p.position[2] - z0;
+        assert!((d - 196.875 - 2.8125).abs() < 0.1, "{d}");
+    }
+
+    #[test]
+    fn a_run_stops_at_once() {
+        let mut s = sim();
+        s.motions.insert(0x15, RootMotion::none(31).with_curves(stop_curve()));
+        let mut inputs = HashMap::from([(0, fwd())]);
+        s.step(1.0, &inputs, &Flat(0.0));
+        let z0 = s.player(0).unwrap().position[2];
+        inputs.clear();
+        s.step(1.0, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state, State::Wait);
+        assert_eq!(p.position[2], z0);
     }
 
     #[test]

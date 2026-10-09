@@ -156,8 +156,8 @@ pub const MOTIONS: &str = r"motion\pl\m\m00\m0000_co\m0000_co";
 pub const DAGGER_MOTIONS: &str = r"motion\pl\m\m00\m0004_co\m0004_co";
 pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
 pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
-const USED_MOTIONS: [u16; 24] = [
-    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611,
+const USED_MOTIONS: [u16; 25] = [
+    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611,
 ];
 
 fn adjust_table(vfs: &ddvfs::Vfs, path: &str) -> Result<Vec<f32>, String> {
@@ -226,7 +226,8 @@ pub fn new_sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
             .cloned()
             .flatten()
             .ok_or(format!("{path}: slot {} missing", id & 0xFF))?;
-        roots.insert(id, RootMotion::from_motion(&m));
+        let curves = lists[&bank].curves[usize::from(id & 0xFF)].clone();
+        roots.insert(id, RootMotion::from_motion(&m).with_curves(curves));
     }
     let mut sim = Sim::new(roots);
     let jp = jump_params(vfs, &[0, 9])?;
