@@ -125,3 +125,4 @@ Codex lane: see `docs/CODEX.md`.
 | [character-polish](character-polish.md) | Skin gaps, morphs, colours, weapons | core | claude-7 | merged 2026-10-09 |
 | [m1-gate](m1-gate.md) | Distance fog, horizon backdrop, floating chunks, white shapes; M1 gate write-up | core | claude-3 | merged 2026-10-09 |
 | [character-morphs](character-morphs.md) | Face/body morphs from edit data; skin patches; shield placement | core | claude-7 | assigned |
+| [m1-night-water](m1-night-water.md) | Water reflections, clouds/stars/moon, night point lights, DoF | core | claude-3 | assigned |
