@@ -105,3 +105,6 @@ Codex lane: see `docs/CODEX.md`.
 | [skill-catalogue](skill-catalogue.md) | Skills/augments from the installed exe + data + text | research | claude-9 | merged 2026-10-09 |
 | [combat-damage](combat-damage.md) | Damage rules as pure functions; hit-group activation trace | research + core | claude-8 | assigned |
 | [ddexe](ddexe.md) | One reader for tables in the installed exe; port ddskill/ddpawn | core | claude-9 | assigned |
+| [event-player](event-player.md) | Play st200 ev10: cameras, actors, subtitles; return control | core | claude-7 | assigned |
+| [rift-sim](rift-sim.md) | The Rift as a host-owned system (summon, hire, dismiss) | core | claude-5 | assigned |
+| [economy-core](economy-core.md) | Wallets, shop sessions, stock, restock, enhancement | core | claude-6 | assigned |
