@@ -134,3 +134,43 @@ mod name_family_tests {
         assert_eq!(families.select("OtherNpc"), None);
     }
 }
+
+/// Parsed NPC layouts for cells the adapter has actually loaded. This cache
+/// avoids file reads on every host frame; it still produces only candidates.
+#[derive(Debug)]
+pub struct LoadedLayouts {
+    pub stage: u32,
+    groups: Vec<(ddspawn::gpl::Group, Vec<Placement>)>,
+}
+
+impl LoadedLayouts {
+    pub fn read(vfs: &ddvfs::Vfs, stage: u32, list: &GroupList, cells: &[(u16, u16)]) -> Result<Self, String> {
+        let mut groups = Vec::new();
+        for group in &list.groups {
+            let mut placements = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for cell in &group.cells {
+                if !cells.contains(&(cell.m, cell.n)) || !seen.insert((cell.m, cell.n)) { continue; }
+                let path = ddspawn::layout_path(stage, cell.m, cell.n, 'n', group.slot);
+                let bytes = vfs.read(&path, mtarc::type_hash("rLayout"))?;
+                for record in mtlot::parse(&bytes).map_err(|error| format!("{path}: {error}"))? {
+                    if record.class == "cSetInfoNpc" {
+                        placements.push(Placement::from_record(stage, group.slot, record)?);
+                    }
+                }
+            }
+            if !seen.is_empty() { groups.push((group.clone(), placements)); }
+        }
+        Ok(Self { stage, groups })
+    }
+
+    pub fn candidates(&self, world: &World<'_>) -> Candidates {
+        let mut out = Candidates::default();
+        for (group, placements) in &self.groups {
+            let gate = ddspawn::gate(group, world);
+            if gate == Gate::Spawn { out.placements.extend(placements.iter().cloned()); }
+            out.gates.push((group.slot, gate));
+        }
+        out
+    }
+}

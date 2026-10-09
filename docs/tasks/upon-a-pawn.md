@@ -493,3 +493,18 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   with the documented pre-existing host lint allowed.
 - Viewer release through951b5f0 passed and was copied privately. Current
   adapter work follows head2565 with codex29's separate route harness hooks.
+
+### Cached loaded layouts and canonical NPC positions
+
+- LoadedLayouts caches successfully parsed NPC records for supplied loaded
+  cells; group gates remain reevaluated from current story state without
+  repeated archive reads. Tests verify a true group flag cannot admit a cell
+  the adapter did not supply, and LOT32 admits the actual group27 NPC1 record.
+- Materialized NPC position now lives in the host independently of normal or
+  applied graphs. Placement initializes it, committed Place requests update
+  it, and explicit mover arrivals update it without presentation interpolation.
+  It is retired with the owner and participates in stable replay hashing.
+- Position/ownership/cache checks and existing story-pawn regressions pass
+  (placement7/story_pawns9); targeted host clippy passes with the documented
+  pre-existing lint allowed. Viewer adapter WIP is separate and compiled;
+  GUI smoke waits for codex29's uncontended route timing run.
