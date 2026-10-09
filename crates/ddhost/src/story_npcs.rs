@@ -193,6 +193,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
+    /// Synchronous arrival from the current owner only. An asynchronous mover
+    /// must validate its placement/lifetime token before calling this method;
+    /// an NPC id alone cannot distinguish a retired actor from its replacement.
     pub fn story_npc_arrived(&mut self, npc: u32, position: [f32; 3]) {
         if let Some(applied) = self.story_npcs.applied.get_mut(&npc).filter(|a| !a.action.applied_finished()) {
             applied.action.done(Some(position));
