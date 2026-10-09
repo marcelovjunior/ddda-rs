@@ -15,11 +15,13 @@
 pub mod body;
 pub mod client;
 pub mod link;
+pub mod mirror;
 pub mod proto;
 pub mod server;
 pub mod transport;
 
 pub use body::Body;
+pub use mirror::{Enemy, LookData, Spot, Vital};
 pub use client::Client;
 pub use server::{Server, ServerConfig};
 pub use transport::{Lossy, Transport, Udp};
@@ -31,6 +33,14 @@ pub fn bodies_hash(bodies: &[Body]) -> u64 {
     for b in bodies {
         h.debug(b);
     }
+    h.finish()
+}
+
+/// Hash of everything a snapshot replicates: bodies, HP, enemies (frame
+/// and delta fields excluded).
+pub fn snapshot_hash(s: &proto::Snapshot) -> u64 {
+    let mut h = ddhost::hash::StateHasher::default();
+    h.u64(bodies_hash(&s.bodies)).debug(&s.vitals).debug(&s.enemies);
     h.finish()
 }
 

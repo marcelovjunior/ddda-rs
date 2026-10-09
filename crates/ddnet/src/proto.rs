@@ -2,28 +2,38 @@
 //! decision; the original has no LAN co-op.
 
 use crate::body::{self, Body};
+use crate::mirror::{self, Enemy, LookData, Spot, Vital};
 use ddhost::PlayerInput;
 use ddid::{PlayerId, Reader, Result, Writer};
 
 /// Bumped on any incompatible change.
-pub const PROTOCOL: u16 = 1;
+///
+/// - 1: m3-lan (bodies only).
+/// - 2: light and heavy attack input, the Attack and Shot states; the
+///   guest's look in Hello; the host's spot in Welcome; Look events; HP
+///   and enemies in snapshots.
+pub const PROTOCOL: u16 = 2;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToHost {
     /// Join request. `build` is the exe's PE timestamp (1513180209 for the
     /// supported build); `data` a fingerprint of the install's archives.
-    Hello { protocol: u16, build: u32, data: u64, profile: u64 },
+    /// `look`: the guest's own Arisen as its save holds it.
+    Hello { protocol: u16, build: u32, data: u64, profile: u64, look: Option<LookData> },
     Bye,
 }
 
 /// Reliable messages from the host.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToClient {
-    Welcome { seat: PlayerId, frame: u64, delta: f32 },
+    /// `spot`: where the host's session is, for the guest to load.
+    Welcome { seat: PlayerId, frame: u64, delta: f32, spot: Option<Spot> },
     Refuse { reason: String },
     Joined { seat: PlayerId, profile: u64 },
     Left { seat: PlayerId },
+    /// The look of a seat (an Arisen, or a pawn's seat), once per seat.
+    Look { seat: PlayerId, look: LookData },
     /// A story request of host frame `frame` (its debug text until the
     /// views perform requests).
     Story { frame: u64, text: String },
@@ -49,6 +59,10 @@ pub struct Snapshot {
     /// the client's input lead).
     pub cmd_newest: Option<u64>,
     pub bodies: Vec<Body>,
+    /// HP of every seat in the fight (Arisen and pawns).
+    pub vitals: Vec<Vital>,
+    /// The fight's enemies.
+    pub enemies: Vec<Enemy>,
 }
 
 fn opt_u64(w: &mut Writer, v: Option<u64>) {
@@ -72,7 +86,13 @@ impl ToHost {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         match self {
-            ToHost::Hello { protocol, build, data, profile } => w.u8(0).u16(*protocol).u32(*build).u64(*data).u64(*profile),
+            ToHost::Hello { protocol, build, data, profile, look } => {
+                w.u8(0).u16(*protocol).u32(*build).u64(*data).u64(*profile).bool(look.is_some());
+                if let Some(l) = look {
+                    mirror::write_look(&mut w, l);
+                }
+                &mut w
+            }
             ToHost::Bye => w.u8(1),
         };
         w.finish()
@@ -80,7 +100,16 @@ impl ToHost {
     pub fn decode(b: &[u8]) -> Result<ToHost> {
         let mut r = Reader::new(b);
         let m = match r.u8()? {
-            0 => ToHost::Hello { protocol: r.u16()?, build: r.u32()?, data: r.u64()?, profile: r.u64()? },
+            0 => {
+                let (protocol, build, data, profile) = (r.u16()?, r.u32()?, r.u64()?, r.u64()?);
+                // A peer of another protocol may end here: answer it with a
+                // refusal rather than a decoding error.
+                if protocol != PROTOCOL {
+                    return Ok(ToHost::Hello { protocol, build, data, profile, look: None });
+                }
+                let look = if r.bool()? { Some(mirror::read_look(&mut r)?) } else { None };
+                ToHost::Hello { protocol, build, data, profile, look }
+            }
             1 => ToHost::Bye,
             k => return Err(format!("host message kind {k}")),
         };
@@ -93,7 +122,13 @@ impl ToClient {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         match self {
-            ToClient::Welcome { seat, frame, delta } => w.u8(0).u8(*seat).u64(*frame).f32(*delta),
+            ToClient::Welcome { seat, frame, delta, spot } => {
+                w.u8(0).u8(*seat).u64(*frame).f32(*delta).bool(spot.is_some());
+                if let Some(s) = spot {
+                    mirror::write_spot(&mut w, s);
+                }
+                &mut w
+            }
             ToClient::Refuse { reason } => {
                 w.u8(1);
                 string(&mut w, reason);
@@ -101,6 +136,11 @@ impl ToClient {
             }
             ToClient::Joined { seat, profile } => w.u8(2).u8(*seat).u64(*profile),
             ToClient::Left { seat } => w.u8(3).u8(*seat),
+            ToClient::Look { seat, look } => {
+                w.u8(5).u8(*seat);
+                mirror::write_look(&mut w, look);
+                &mut w
+            }
             ToClient::Story { frame, text } => {
                 w.u8(4).u64(*frame);
                 string(&mut w, text);
@@ -112,10 +152,15 @@ impl ToClient {
     pub fn decode(b: &[u8]) -> Result<ToClient> {
         let mut r = Reader::new(b);
         let m = match r.u8()? {
-            0 => ToClient::Welcome { seat: r.u8()?, frame: r.u64()?, delta: r.f32()? },
+            0 => {
+                let (seat, frame, delta) = (r.u8()?, r.u64()?, r.f32()?);
+                let spot = if r.bool()? { Some(mirror::read_spot(&mut r)?) } else { None };
+                ToClient::Welcome { seat, frame, delta, spot }
+            }
             1 => ToClient::Refuse { reason: read_string(&mut r)? },
             2 => ToClient::Joined { seat: r.u8()?, profile: r.u64()? },
             3 => ToClient::Left { seat: r.u8()? },
+            5 => ToClient::Look { seat: r.u8()?, look: mirror::read_look(&mut r)? },
             4 => ToClient::Story { frame: r.u64()?, text: read_string(&mut r)? },
             k => return Err(format!("client message kind {k}")),
         };
@@ -160,35 +205,40 @@ impl Inputs {
 }
 
 impl Snapshot {
-    /// Encodes against the baseline bodies of frame `self.base`.
-    pub fn encode(&self, base: &[Body]) -> Vec<u8> {
+    /// Encodes against `base`, the snapshot of frame `self.base`.
+    pub fn encode(&self, base: Option<&Snapshot>) -> Vec<u8> {
+        let (bodies, enemies) = base.map_or((&[][..], &[][..]), |b| (&b.bodies[..], &b.enemies[..]));
         let mut w = Writer::new();
         w.u64(self.frame);
         opt_u64(&mut w, self.base);
         opt_u64(&mut w, self.cmd_newest);
         w.len(self.bodies.len());
         for b in &self.bodies {
-            body::write(&mut w, b, base.iter().find(|x| x.id == b.id));
+            body::write(&mut w, b, bodies.iter().find(|x| x.id == b.id));
         }
+        mirror::write_vitals(&mut w, &self.vitals);
+        mirror::write_enemies(&mut w, &self.enemies, enemies);
         w.finish()
     }
 
-    /// Decodes; `baseline` gives the bodies of a base frame the client
-    /// still holds.
-    pub fn decode(b: &[u8], baseline: &dyn Fn(u64) -> Option<Vec<Body>>) -> Result<Snapshot> {
+    /// Decodes; `baseline` gives a base snapshot the client still holds.
+    pub fn decode(b: &[u8], baseline: &dyn Fn(u64) -> Option<Snapshot>) -> Result<Snapshot> {
         let mut r = Reader::new(b);
         let frame = r.u64()?;
         let base = read_opt_u64(&mut r)?;
         let cmd_newest = read_opt_u64(&mut r)?;
-        let bodies_base = match base {
-            Some(f) => baseline(f).ok_or_else(|| format!("snapshot {frame}: baseline {f} not held"))?,
-            None => vec![],
+        let held = match base {
+            Some(f) => Some(baseline(f).ok_or_else(|| format!("snapshot {frame}: baseline {f} not held"))?),
+            None => None,
         };
+        let bodies_base = held.as_ref().map_or(&[][..], |s| &s.bodies[..]);
         let n = r.len(3)?;
         let bodies = (0..n)
             .map(|_| body::read(&mut r, &|id| bodies_base.iter().find(|x| x.id == id).cloned()))
             .collect::<Result<_>>()?;
+        let vitals = mirror::read_vitals(&mut r)?;
+        let enemies = mirror::read_enemies(&mut r, held.as_ref().map_or(&[][..], |s| &s.enemies[..]))?;
         r.end()?;
-        Ok(Snapshot { frame, base, cmd_newest, bodies })
+        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies })
     }
 }

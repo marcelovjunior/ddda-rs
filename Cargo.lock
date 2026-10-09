@@ -2415,10 +2415,12 @@ dependencies = [
 name = "ddnet"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddhost",
  "ddid",
  "ddsim",
  "ddstory",
+ "ddvfs",
 ]
 
 [[package]]

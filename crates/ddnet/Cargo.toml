@@ -11,3 +11,7 @@ ddid = { path = "../ddid" }
 ddsim = { path = "../ddsim" }
 ddhost = { path = "../ddhost" }
 ddstory = { path = "../ddstory" }
+
+[dev-dependencies]
+ddvfs = { path = "../ddvfs" }
+ddexe = { path = "../ddexe" }

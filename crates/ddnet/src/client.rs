@@ -9,12 +9,13 @@
 
 use crate::body::Body;
 use crate::link::Link;
+use crate::mirror::{Enemy, LookData, Spot, Vital};
 use crate::proto::{Inputs, Snapshot, ToClient, ToHost, PROTOCOL};
 use crate::transport::Transport;
 use ddhost::{FrameClock, PlayerInput};
 use ddid::PlayerId;
 use ddsim::{Ground, Sim};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 
 /// Commands carried in each input packet: the newest and seven before it.
@@ -54,15 +55,31 @@ pub struct Client<T: Transport> {
     pub lead_changes: i64,
     hold: bool,
     pub events: Vec<ToClient>,
+    /// The host's spot, from Welcome.
+    pub spot: Option<Spot>,
+    /// Looks by seat, from Look events.
+    pub looks: BTreeMap<PlayerId, LookData>,
 }
 
 impl<T: Transport> Client<T> {
     /// Starts joining `server`. `sim` is configured like the host's (motions
     /// and parameters, `ddhost::install::sim`) and holds no players.
-    pub fn new(transport: T, server: SocketAddr, profile: u64, build: u32, data: u64, sim: Sim, ground: Box<dyn Ground + Send>, now: u64) -> Self {
+    /// `look` is this player's own Arisen as its save holds it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        transport: T,
+        server: SocketAddr,
+        profile: u64,
+        build: u32,
+        data: u64,
+        look: Option<LookData>,
+        sim: Sim,
+        ground: Box<dyn Ground + Send>,
+        now: u64,
+    ) -> Self {
         let conn = (profile ^ now.rotate_left(17) ^ 0x5bd1_e995) as u32 | 1;
         let mut link = Link::new(conn, now);
-        link.send_reliable(ToHost::Hello { protocol: PROTOCOL, build, data, profile }.encode());
+        link.send_reliable(ToHost::Hello { protocol: PROTOCOL, build, data, profile, look }.encode());
         Client {
             transport,
             server,
@@ -82,7 +99,15 @@ impl<T: Transport> Client<T> {
             lead_changes: 0,
             hold: false,
             events: vec![],
+            spot: None,
+            looks: BTreeMap::new(),
         }
+    }
+
+    /// Replaces the ground the prediction stands on (a guest that joined
+    /// before loading the host's world).
+    pub fn set_ground(&mut self, ground: Box<dyn Ground + Send>) {
+        self.ground = ground;
     }
 
     pub fn rtt_ms(&self) -> f32 {
@@ -98,19 +123,27 @@ impl<T: Transport> Client<T> {
             let Ok(d) = self.link.receive(&bytes, now) else { continue };
             for m in d.reliable {
                 match ToClient::decode(&m) {
-                    Ok(ToClient::Welcome { seat, frame, delta }) => {
+                    Ok(ToClient::Welcome { seat, frame, delta, spot }) => {
+                        self.spot = spot;
                         self.seat = Some(seat);
                         self.clock = FrameClock::new(delta).unwrap_or_default();
                         self.next_cmd = frame + 1 + LEAD_MAX as u64;
                     }
                     Ok(ToClient::Refuse { reason }) => self.refused = Some(reason),
+                    Ok(ToClient::Look { seat, look }) => {
+                        self.looks.insert(seat, look);
+                    }
+                    Ok(ToClient::Left { seat }) => {
+                        self.looks.remove(&seat);
+                        self.events.push(ToClient::Left { seat });
+                    }
                     Ok(e) => self.events.push(e),
                     Err(_) => {}
                 }
             }
             if let Some(u) = d.unreliable {
                 let snaps = &self.snaps;
-                let base = |f: u64| snaps.iter().find(|s| s.frame == f).map(|s| s.bodies.clone());
+                let base = |f: u64| snaps.iter().find(|s| s.frame == f).cloned();
                 if let Ok(s) = Snapshot::decode(&u, &base) {
                     if self.snaps.back().is_none_or(|b| s.frame > b.frame) {
                         self.apply(s);
@@ -244,6 +277,39 @@ impl<T: Transport> Client<T> {
                     .collect()
             }
         }
+    }
+
+    /// HP of every seat in the fight, from the newest snapshot.
+    pub fn vitals(&self) -> &[Vital] {
+        self.snaps.back().map_or(&[], |s| &s.vitals)
+    }
+
+    /// The fight's enemies at host time `t` (fractional frames),
+    /// interpolated like the other Arisen.
+    pub fn enemies_at(&self, t: f64) -> Vec<Enemy> {
+        let Some(last) = self.snaps.back() else { return vec![] };
+        match self.snaps.iter().position(|s| s.frame as f64 >= t) {
+            None => last.enemies.clone(),
+            Some(0) => self.snaps[0].enemies.clone(),
+            Some(i) => {
+                let (a, b) = (&self.snaps[i - 1], &self.snaps[i]);
+                let k = ((t - a.frame as f64) / (b.frame - a.frame) as f64) as f32;
+                b.enemies
+                    .iter()
+                    .map(|e| match a.enemies.iter().find(|x| x.id == e.id) {
+                        Some(p) => Enemy::lerp(p, e, k),
+                        None => *e,
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// The enemies where the views show them (as [`Client::others`]).
+    pub fn enemies(&self, since_ms: f64) -> Vec<Enemy> {
+        let Some(last) = self.snaps.back() else { return vec![] };
+        let frame_ms = 1000.0 * f64::from(self.clock.seconds());
+        self.enemies_at(last.frame as f64 - INTERP_FRAMES + (since_ms / frame_ms).min(1.0))
     }
 
     /// The others where the views show them: [`INTERP_FRAMES`] behind the

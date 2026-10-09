@@ -498,6 +498,7 @@ fn main() {
         return;
     }
     let mut args = args();
+    args = net::prejoin(args);
     resolve_lighting(&mut args);
     let size = args.size;
     // Under --light the sky dome (sky.rs) covers the background; where a

@@ -520,6 +520,56 @@ each way, 10% loss both ways):
   `--profile <id>`; `--demo` drives unattended input.
 - Both sides step at 30 Hz and show the other Arisen.
 
+### 8.10 Protocol 2 (net-replication)
+
+The join check refuses a client of another protocol, with a reason.
+Version 1 (m3-lan) carried only bodies. Version 2 adds:
+- the light and heavy attack input and the Attack and Shot states (head,
+  at the m3-lan merge);
+- the items below.
+
+**Looks, sent once.**
+- A look is what the save holds: the `cSAVE_DATA_EDIT` fields by name
+  and the equipped item numbers (`ddnet::LookData`).
+- The guest's comes in its `Hello`.
+- The host announces its own Arisen's and its pawn's with `Server::set_look`.
+- Every look goes to every guest as a reliable `Look { seat }` event: at
+  join for the seats present, later for new ones.
+- Each side rebuilds the dressed model from its own install
+  (`ddlook::save::edit_look`). Only a few hundred bytes cross the
+  network.
+
+**The host's spot.**
+- `Welcome` carries the host's stage, origin cell, position and yaw.
+- `ddview --join` joins before it builds its world (`net::prejoin`,
+  bounded to 5 s), loads the host's stage and cell, and keeps the
+  connection answered while it loads.
+
+**Fight state in every snapshot.**
+- Every seat's HP (the Arisen and the pawns of `Host::fight`; stamina
+  was already in the bodies).
+- Every enemy:
+  - owner id, place, yaw;
+  - action (the state);
+  - motion (bank, slot, frame);
+  - main-pool HP and maximum;
+  - death.
+
+  An enemy equal to its baseline costs five bytes.
+- The guest shows the enemies 100 ms behind, like the other Arisen.
+- `snapshot_hash` covers bodies, HP and enemies.
+
+**Measured** (`ddnet/tests/replicate.rs`, real UDP, 30 ms ± 10 ms each way,
+5% loss both ways):
+- the host's Arisen fights a goblin; the goblin's HP goes from 1,000 to
+  0 by blows, and it dies;
+- the guest's Arisen joins the fight;
+- after settling, the guest's newest snapshot hashes equal to the host's,
+  its enemies and HP equal the host's `Fight`, and the guest sees the
+  death;
+- both looks and the spot arrive intact;
+- a version-1 `Hello` is refused with "protocol 1, host speaks 2".
+
 ## Alternatives considered
 
 - **Deterministic lockstep:** every machine simulates; only inputs are

@@ -5,7 +5,7 @@
 
 use ddhost::data::NoStoryData;
 use ddhost::{Control, FrameInputs, Host, PlayerInput, ProfileId};
-use ddnet::{bodies_hash, Client, Lossy, Server, ServerConfig, Transport, Udp};
+use ddnet::{Client, Lossy, Server, ServerConfig, Transport, Udp};
 use ddsim::{Ground, Input, Sim};
 use ddstory::scripted::ScriptedHost;
 use std::collections::HashMap;
@@ -29,12 +29,12 @@ fn server(latency: u64, jitter: u64, loss: f64) -> Srv {
     let mut host = Host::new(Sim::new(HashMap::new()), None, ScriptedHost::default(), Box::new(Flat));
     host.join(ProfileId(1), Control::Local, [0.0, 0.0, 0.0], 0.0).unwrap();
     let t = Lossy::new(Udp::bind("127.0.0.1:0").unwrap(), latency, jitter, loss, 11);
-    Server::new(host, t, ServerConfig { build: BUILD, data: DATA, spawn: [0.0, 0.0, 500.0] })
+    Server::new(host, t, ServerConfig { build: BUILD, data: DATA, spawn: [0.0, 0.0, 500.0], spot: None })
 }
 
 fn client(srv: &Srv, profile: u64, data: u64, latency: u64, jitter: u64, loss: f64, seed: u64) -> Client<Lossy<Udp>> {
     let t = Lossy::new(Udp::bind("127.0.0.1:0").unwrap(), latency, jitter, loss, seed);
-    Client::new(t, srv.transport.local_addr(), profile, BUILD, data, Sim::new(HashMap::new()), Box::new(Flat), 0)
+    Client::new(t, srv.transport.local_addr(), profile, BUILD, data, None, Sim::new(HashMap::new()), Box::new(Flat), 0)
 }
 
 /// One frame of both sides at virtual time `now`.
@@ -102,7 +102,7 @@ fn prediction_under_latency_and_loss() {
     assert!(mean < 20.0, "mean prediction error {mean} cm");
     // Agreement after the input stopped.
     let snap = c.latest().unwrap();
-    assert_eq!(srv.hash_at(snap.frame), Some(bodies_hash(&snap.bodies)), "client's snapshot equals the host's state");
+    assert_eq!(srv.hash_at(snap.frame), Some(ddnet::snapshot_hash(snap)), "client's snapshot equals the host's state");
     assert!(srv.host.frame - snap.frame <= 6, "the client is current: host {} snapshot {}", srv.host.frame, snap.frame);
     let own = c.own().unwrap();
     let auth = snap.bodies.iter().find(|b| b.id == 1).unwrap();
