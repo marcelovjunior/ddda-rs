@@ -89,7 +89,7 @@ Codex lane: see `docs/CODEX.md`.
 | [enemy-resource-selection](enemy-resource-selection.md) | Which resources an enemy instance loads (reader side; rules are claude-8's) | reader | codex-1 | merged 2026-10-09 |
 | [travel-destination-consumer](travel-destination-consumer.md) | Fast-travel destination and arrival | exe | codex-1 | merged 2026-10-09 |
 | [pawn-builder](pawn-builder.md) | Pawn from ID: stats, skills, gear; the story pawns | research | claude-5 | assigned |
-| [save-pawns](save-pawns.md) | Typed pawn knowledge/equipment from the save | reader | codex-1 | assigned |
+| [save-pawns](save-pawns.md) | Typed pawn knowledge/equipment from the save | reader | codex-1 | merged 2026-10-09 |
 | [rift-ui](rift-ui.md) | The Rift menus: screens, strings, bindings | reader | codex-1 | assigned |
 | [m2-acceptance](m2-acceptance.md) | Recorded routes replayed through ddsim (M2 gate) | core + live | claude-4 | assigned |
 | [quest-runtime](quest-runtime.md) | Headless story interpreter running the opening | core | claude-7 | assigned |

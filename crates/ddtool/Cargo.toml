@@ -20,3 +20,4 @@ mtsbc = { path = "../mtsbc" }
 ddvfs = { path = "../ddvfs" }
 ddparam = { path = "../ddparam" }
 mtfsm = { path = "../mtfsm" }
+ddsave = { path = "../ddsave" }
