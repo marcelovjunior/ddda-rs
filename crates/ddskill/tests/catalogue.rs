@@ -1,6 +1,7 @@
 //! Catalogue checks against the player's install and DDDA.exe.
 //! `DDDA_NATIVE_PC` (default the maintainer's nativePC) and `DDDA_EXE`
-//! (default `<nativePC>\..\DDDA.exe`); skipped when either is absent.
+//! (default the exe next to nativePC, `ddexe::locate`); skipped when either
+//! is absent.
 use ddskill::catalogue::{Catalogue, ExeTables, SkillKind, Text};
 use ddskill::skill_list::SkillList;
 use ddskill::vocation::{Vocation, WeaponCategory};
@@ -18,14 +19,13 @@ fn install() -> Option<&'static Install> {
         let native = std::env::var_os("DDDA_NATIVE_PC")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("E:/SteamLibrary/steamapps/common/DDDA/nativePC"));
-        let exe = std::env::var_os("DDDA_EXE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| native.parent().unwrap_or(&native).join("DDDA.exe"));
-        if !native.exists() || !exe.exists() {
-            eprintln!("SKIP catalogue tests: {} or {} absent", native.display(), exe.display());
+        let exe = std::env::var_os("DDDA_EXE").map(PathBuf::from).or_else(|| ddexe::locate(&native).ok());
+        let Some(exe) = exe.filter(|e| native.exists() && e.is_file()) else {
+            eprintln!("SKIP catalogue tests: no install or DDDA.exe for {}", native.display());
             return None;
-        }
-        let exe = ExeTables::from_exe(&std::fs::read(&exe).unwrap()).expect("exe tables");
+        };
+        let file = ddexe::ExeFile::open(&exe).unwrap();
+        let exe = ExeTables::from_image(&file.image().unwrap()).expect("exe tables");
         Some(Install { vfs: ddvfs::Vfs::open(native).expect("index install"), exe })
     })
     .as_ref()

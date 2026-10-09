@@ -2300,6 +2300,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddexe"
+version = "0.1.0"
+
+[[package]]
 name = "dditem"
 version = "0.1.0"
 dependencies = [
@@ -2343,6 +2347,7 @@ dependencies = [
 name = "ddpawn"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddnpc",
  "ddparam",
  "ddsave",
@@ -2383,6 +2388,7 @@ dependencies = [
 name = "ddskill"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddparam",
  "ddvfs",
  "mtarc",

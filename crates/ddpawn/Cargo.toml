@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddexe = { path = "../ddexe" }
 ddparam = { path = "../ddparam" }
 ddsave = { path = "../ddsave" }
 mtxfs = { path = "../mtxfs" }

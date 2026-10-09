@@ -8,7 +8,7 @@
 //! * the game text (`skillName`, `skill_command`, `abilityName`,
 //!   `abilityInfo`), which gives every name.
 
-use crate::exe::Exe;
+use ddexe::Exe;
 use crate::skill_list::SkillList;
 use crate::vocation::{Vocation, WeaponCategory};
 use crate::Error;
@@ -96,7 +96,7 @@ pub struct SkillText {
 pub struct ActionRecord {
     /// Address of the class's `MtDTI` object; 0 = empty slot.
     pub dti: u32,
-    /// Class name, from [`Exe::dti_names`].
+    /// Class name, from [`Exe::class_names`].
     pub class: Option<String>,
     /// The 16 words after the class pointer. For a weapon skill word 0 is
     /// the skill id (read by the action's vf05, e.g. 0x00b23d50, into
@@ -128,7 +128,11 @@ pub struct ExeTables {
 impl ExeTables {
     /// Reads the tables from the bytes of the player's `DDDA.exe`.
     pub fn from_exe(bytes: &[u8]) -> Result<Self, Error> {
-        let exe = Exe::parse(bytes)?;
+        Self::from_image(&Exe::parse(bytes)?)
+    }
+
+    /// Reads the tables from a parsed image (see `ddexe::ExeFile::image`).
+    pub fn from_image(exe: &Exe) -> Result<Self, Error> {
         let mut skills = Vec::with_capacity(SKILL_COUNT);
         for id in 0..SKILL_COUNT as u32 {
             let r = SKILL_TABLE_VA + id * 0x20;
@@ -158,7 +162,7 @@ impl ExeTables {
             let m = exe.u8(AUGMENT_TEXT_VA + 2 * id)?;
             augments.push(((m != 0xff).then_some(m), exe.u8(AUGMENT_TEXT_VA + 2 * id + 1)?));
         }
-        let names = exe.dti_names();
+        let names = exe.class_names();
         let mut actions = Vec::with_capacity(ACTION_TABLES.len());
         for &(base, count) in &ACTION_TABLES {
             let mut table = Vec::with_capacity(count as usize);

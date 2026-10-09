@@ -30,11 +30,11 @@ fn install() -> Option<(ddvfs::Vfs, PathBuf)> {
     let root = std::env::var_os("DDDA_NATIVE_PC")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC"));
-    let exe = root.parent()?.join("DDDA.exe");
-    if !root.is_dir() || !exe.is_file() {
+    let exe = ddexe::locate(&root).ok().filter(|_| root.is_dir());
+    let Some(exe) = exe else {
         eprintln!("skipped: no install with DDDA.exe at {}", root.display());
         return None;
-    }
+    };
     Some((ddvfs::Vfs::open(root).unwrap(), exe))
 }
 

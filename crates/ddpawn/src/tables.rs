@@ -184,16 +184,14 @@ impl ItemSlots {
 /// records at `0x014f3660` in DDDA.exe's `.rdata` (bit `job` set = usable),
 /// read by `0x00796080`.
 ///
-/// The table is read at run time from the player's own `DDDA.exe`: its
-/// `.rdata` is not encrypted by the Steam wrapper (compared byte for byte
-/// with the unpacked analysis copy), so no exe bytes are kept in this repo.
+/// The table is read at run time from the player's own `DDDA.exe` through
+/// `ddexe` (build check, address mapping), so no exe bytes are kept in this
+/// repo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMasks {
     pub masks: Vec<u32>,
 }
 
-/// PE timestamp of the supported build (2017-12-13).
-pub const EXE_TIMESTAMP: u32 = 1_513_180_209;
 /// Address and record count of the skill table.
 pub const SKILL_TABLE_VA: u32 = 0x014f_3660;
 pub const SKILL_TABLE_LEN: usize = 430;
@@ -201,10 +199,13 @@ pub const SKILL_TABLE_LEN: usize = 430;
 impl SkillMasks {
     /// Reads the masks from the bytes of `DDDA.exe` (packed or unpacked).
     pub fn from_exe(exe: &[u8]) -> Result<SkillMasks, String> {
-        let bytes = rdata(exe, SKILL_TABLE_VA, SKILL_TABLE_LEN * 32)?;
-        let masks = (0..SKILL_TABLE_LEN)
-            .map(|i| u32::from_le_bytes(bytes[i * 32..i * 32 + 4].try_into().unwrap()))
-            .collect();
+        Self::from_image(&ddexe::Exe::parse(exe)?)
+    }
+
+    /// Reads the masks from a parsed image (`ddexe::ExeFile::image`).
+    pub fn from_image(exe: &ddexe::Exe) -> Result<SkillMasks, String> {
+        let records = exe.records(SKILL_TABLE_VA, 32, SKILL_TABLE_LEN)?;
+        let masks = records.iter().map(|r| r.u32(0)).collect::<Result<_, _>>()?;
         Ok(SkillMasks { masks })
     }
 }
@@ -222,40 +223,17 @@ pub const ITEM_KEY_TABLE_LEN: usize = 89;
 
 impl ItemKeyTable {
     pub fn from_exe(exe: &[u8]) -> Result<ItemKeyTable, String> {
-        let bytes = rdata(exe, ITEM_KEY_TABLE_VA, ITEM_KEY_TABLE_LEN * 12)?;
-        let h = |o: usize| u16::from_le_bytes([bytes[o], bytes[o + 1]]);
-        Ok(ItemKeyTable {
-            rows: (0..ITEM_KEY_TABLE_LEN).map(|i| (h(i * 12) as i16, h(i * 12 + 4), h(i * 12 + 8))).collect(),
-        })
+        Self::from_image(&ddexe::Exe::parse(exe)?)
+    }
+
+    /// Reads the rows from a parsed image (`ddexe::ExeFile::image`).
+    pub fn from_image(exe: &ddexe::Exe) -> Result<ItemKeyTable, String> {
+        let records = exe.records(ITEM_KEY_TABLE_VA, 12, ITEM_KEY_TABLE_LEN)?;
+        let rows = records
+            .iter()
+            .map(|r| Ok((r.i16(0)?, r.u16(4)?, r.u16(8)?)))
+            .collect::<Result<_, ddexe::Error>>()?;
+        Ok(ItemKeyTable { rows })
     }
 }
 
-/// Bytes at a virtual address of the supported `DDDA.exe` build.
-pub fn rdata(exe: &[u8], va: u32, len: usize) -> Result<&[u8], String> {
-    let u32_at = |o: usize| -> Result<u32, String> {
-        Ok(u32::from_le_bytes(exe.get(o..o + 4).ok_or("truncated PE")?.try_into().unwrap()))
-    };
-    let u16_at = |o: usize| -> Result<u16, String> {
-        Ok(u16::from_le_bytes(exe.get(o..o + 2).ok_or("truncated PE")?.try_into().unwrap()))
-    };
-    let pe = u32_at(0x3c)? as usize;
-    if exe.get(pe..pe + 4) != Some(&b"PE\0\0"[..]) {
-        return Err("not a PE file".into());
-    }
-    if u32_at(pe + 8)? != EXE_TIMESTAMP {
-        return Err(format!("unsupported DDDA.exe build (timestamp {})", u32_at(pe + 8)?));
-    }
-    let sections = u16_at(pe + 6)? as usize;
-    let opt = u16_at(pe + 20)? as usize;
-    let base = u32_at(pe + 24 + 28)?;
-    for s in 0..sections {
-        let h = pe + 24 + opt + 40 * s;
-        let (sva, raw_size, raw_off) = (u32_at(h + 12)?, u32_at(h + 16)?, u32_at(h + 20)?);
-        let start = base + sva;
-        if va >= start && va as u64 + len as u64 <= start as u64 + raw_size as u64 {
-            let off = (raw_off + va - start) as usize;
-            return exe.get(off..off + len).ok_or_else(|| "truncated section".to_string());
-        }
-    }
-    Err(format!("{va:#x} not inside a section"))
-}
