@@ -46,7 +46,8 @@ absolute offset (+10000,0,-80000), nine models/eight collision/six layouts.
 Python checks passed for origin reconstruction, all six live widths, all
 nine model placements and existence of their nine installed cell archives.
 Older ORACLE.md indices22/23 also resolve to its recorded 63m52n cell.
-This was a paused snapshot, not a boundary-crossing comparison. Probe
+Head reported a paused tutorial, but subsequent positions differed: these
+were sequential non-atomic reads, not a boundary-crossing comparison. Probe
 operations were info/read only; live/game claim released. Scratch and raw
 data remain in OS TEMP. The initial batch committed no engine/reader code or game data; git diff --check passed.
 
@@ -61,12 +62,12 @@ resident models. Original SSE threshold rounding was not emulated.
 
 The full done-when is **not yet met**. Individual scenery distances and the complete actor creation/removal
 lifecycle remain unresolved. Group activation has authored shape gates
-(`0x00cc5670`), so no universal class radius is claimed. No moving live
-comparison was requested or performed. The doc ends with an N-player
+(`0x00cc5670`), so no universal class radius is claimed. Scripted movement checks are now authorized under the updated safety
+protocol, but none have been performed. The doc ends with an N-player
 interest/residency and per-view floating-origin design proposal.
 
 Next action: resolve the terrain archive/residency discrepancy, then trace per-class distance
-consumers and obtain maintainer-provided ordinary crossing observations.
+consumers and obtain a safe scripted or recorded ordinary crossing comparison.
 
 Further trace resolves enemy near/far update modes (`0x00853dc0`,
 `0x00aa8830`) and the NPC placement draw-distance consumer (`0x007a32f0`)
@@ -82,3 +83,14 @@ across suffix e/t, 1525 cylinders, radius range 50..44525.98. Reports are
 aggregates only. Shared ddtool hookup adds ddspawn as a dependency; no
 engine code or private exports. Full brief remains partial, with threshold
 movement comparisons and terrain residency discrepancy still open.
+
+Initialization qualification: controller +0x4d begins 0 (`0x00c5bc92`)
+and becomes 1 after the first valid update (`0x00c5cb76`). Archive and
+model/collision/layout construction bypass their additional distance filter
+until then; retention does not share this bypass. `0x00c5dda0` rejects
+all four extra model candidates absent from the observed archive list,
+while existing model retention has no matching archive-presence check.
+This explains a permitted nine-model/eight-archive residence pattern, but
+its construction history and boundary transitions remain unobserved.
+Validation: cargo test -p ddtool passed (zero unit tests); the actual
+installed corpus CLI run is the substantive survey check. diff --check passed.

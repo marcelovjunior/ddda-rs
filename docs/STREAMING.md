@@ -45,6 +45,15 @@ Archive paths `0x00c5e210` and `0x00c5e740` use the collision and layout
 windows respectively. `0x00c5dda0` requires the matching archive entry to
 have completed its loading state before its dependent cell is constructed.
 
+The distance-filter construction gate has an initialization exception:
+controller byte +0x4d starts at 0 (`0x00c5bc92`) and is set to 1 at the
+end of each valid controller update (`0x00c5cb76`, `0x00c5ca60`).
+Archive loaders `0x00c5e210`/`0x00c5e740` and model/collision/layout
+construction `0x00c5f070`/`0x00c5f680`/`0x00c60510` bypass the additional
+distance predicate unless this byte is exactly 1. This makes the first
+valid update broader than later construction. Retention has its own
+predicate checks; do not apply the construction bypass to it.
+
 ### Additional distance filter
 
 `0x00507510` takes the party's first actor's position at +0xe0, falling
@@ -85,8 +94,8 @@ path. No claim is made about other night-specific systems.
 
 ## Unload delays and hysteresis
 
-The inspected model and collision paths use the same spatial interval and
-distance predicate for entry and retention; no second larger unload radius
+After the initialization bypass, the inspected model and collision paths
+use the same spatial interval and distance predicate for entry and retention; no second larger unload radius
 was found in those paths. They do have asynchronous lifetime state.
 
 * `0x00c5f680`: collision statuses 1/2/4/5 run transition helpers. Status 3
@@ -274,9 +283,15 @@ The same calculation selected 13 model candidates, four more than the
 resident set. Two additional cells (N47/M57 and N47/M58) have no installed
 cell archive; the other two (N48/M56 and N49/M56) do. A passive follow-up
 of the controller's main archive list (+0x108 count/+0x114 pointer) found
-eight entries matching the collision set. This supports the need to account
-for archive dependencies and residency history, but does not fully explain
-the terrain-model discrepancy. No boundary crossing, fade duration or
+eight entries matching the collision set. `0x00c5dda0` returns false when a candidate lacks a matching entry in that
+archive list, irrespective of whether its archive exists on disk. Thus all
+four extra model candidates fail the contemporaneous construction dependency
+gate. The ninth resident model can pass model retention after its archive
+entry leaves the narrower archive set: model retention does not call
+`0x00c5dda0`. Combined with the first-update bypass, this gives a traced
+mechanism compatible with the observed nine models versus eight archives.
+Its actual construction history was not recorded, so this is an explanation
+of permitted residency, not a reproduced transition sequence. No boundary crossing, fade duration or
 spawn transition was tested. The numerical check used host double precision,
 not a bit-exact emulator of the original SSE library.
 
