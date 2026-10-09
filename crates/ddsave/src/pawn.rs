@@ -103,8 +103,9 @@ impl Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub level: u8,
-    /// `mJob`: vocation number (1 Fighter, 2 Strider, 3 Mage for pawns;
-    /// matches the nora name lists and level tables, see docs/PAWNS.md).
+    /// `mJob`: vocation number. Pawns use 1 Fighter, 2 Strider, 3 Mage,
+    /// 7 Warrior, 8 Ranger, 9 Sorcerer (the level tables `0x00795610`
+    /// selects for them; see docs/PAWNS.md).
     pub job: u8,
     /// `mJobLevel`, ten entries indexed by vocation number - 1 (inferred).
     pub job_levels: Vec<u8>,

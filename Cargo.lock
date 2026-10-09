@@ -2288,6 +2288,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddpawn"
+version = "0.1.0"
+dependencies = [
+ "ddsave",
+ "ddvfs",
+ "mtarc",
+ "mtxfs",
+]
+
+[[package]]
 name = "ddsave"
 version = "0.1.0"
 dependencies = [
