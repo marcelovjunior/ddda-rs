@@ -440,6 +440,15 @@ editPattern (0x00780fa0 / 0x00cb5740). Bulk palette and 100 ordinary /
 first five fixed records. Regressions cover color multiplication, UV
 hide, slider/fixed offsets, installed presets and texture resolution.
 
+MRL depth writes and blending are independent. In particular hair104's
+first material uses `BSBlendAlpha` with `DSZTestWrite`, while the base
+eyebrow overlay uses `BSBlendAlpha` with `DSZTest`. The material pipeline
+now keys on the authored depth-state bits and converts the comparison
+to reverse Z (LessEqual becomes GreaterEqual), preserving writes even
+for blended materials. Blended alpha tests also retain the MRL reference
+and comparison (0x0112e4d0 / 0x00fee320). This corrects a material-state
+mismatch; it is not proof that all facial visibility defects are solved.
+
 ## Open
 
 - Morphs not translated:
