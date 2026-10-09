@@ -25,7 +25,7 @@ Lanes say who should take a system:
 | Map geometry (cells, scenery, water, distant ring) | working | core | WORLD.md; castle in ref001 missing, `_p` layouts unread | - |
 | Shading (terrain blending, lighting, fog, water) | started | core | MRL constant buffers unparsed; MFX feature switches known | map geometry |
 | Collision | working | core | `h` merged meshes + `_h00` scenery (MOVEMENT.md, WORLD.md) | - |
-| Day/night, weather | not started | exe + reader | sky/light params likely XFS under `scr\`, `rEnvironment*`? | shading |
+| Day/night, weather | researched (readers merged) | exe + reader | WEATHER.md: `mtweather` reads WEP/WFP/SKY; clock binding open | shading |
 | Loading screens / streaming | not started | core | cell streaming = `cSplitSbc` / split loader `0x00C5F680` | map geometry |
 
 ## The Arisen
@@ -36,10 +36,10 @@ Lanes say who should take a system:
 | Ledge grab and climb | started | core + exe | placeholder; `cPlCliffHangBegin::vf05` 0x00AD9180 | collision |
 | Turn rate, stop motions | not started | core + exe | recorded ~70°/s; `cPlActRunEnd` | movement |
 | Animation (playback, skinning) | working | core | ANIMATION.md, `mtlmt` | - |
-| Animation blending | not started | core | the original blends (FUN_00b80260's second arg = blend frames?) | animation |
-| Stamina | researched | exe + reader | `param\pl\stamina\plstamina_*` (rPlStamina, per weapon and action) | movement |
-| Weight / encumbrance | researched | exe + reader | `param\pl\weight\pltotalweight{ss,s,m,l,ll}`, `pleditweight` | inventory, customization |
-| Character customization (size, weight, effects) | not started | exe + reader | body model `model\pl\m\m_base\m000`; height factor? speed factor uPlayer+0xDA8 (0.847) untraced | weight |
+| Animation blending | working | core | ANIMATION.md: `mtlmt::blend` from `uModel::vf30` chain; start-frame sync open | animation |
+| Stamina | researched | exe + reader | PARAMS.md (`ddparam`, rules 0x00B81450..0x00B81E30); RECORDINGS.md drain 45/s, recovery 49/s | movement |
+| Weight / encumbrance | researched | exe + reader | PARAMS.md: body class 0x00B81120, encumbrance 0x00B81270 | inventory, customization |
+| Character customization (size, weight, effects) | started | exe + reader | speed factor uPlayer+0xDA8 written at 0x00B6B350 from edit records (0x0081C170), PARAMS.md | weight |
 | Dressed Arisen (face, hair, equipment models) | not started | core | equipment models under `model\pl\` | animation |
 | Vocations (classes), levels, skills | researched | reader + exe | `param\pl\level\lv*`, `param\pl\joblevel\joblv*`, per-weapon motion banks (`m000N_co/at`) | combat |
 | Inventory, items | not started | reader | item tables not located yet | - |
@@ -51,8 +51,8 @@ Lanes say who should take a system:
 |---|---|---|---|---|
 | Melee combat, hit detection | not started | exe + reader | `rObjCollision` (.ocl) shapes + attack data (Riftstone notes) | animation |
 | Magic (spells) | not started | exe + reader | `mag_item_act_param`, shot/bullet params | combat, vfx |
-| Enemy data (stats) | not started | reader | `rPropParam` (PRPZ), `rRegionStatus`, `rShlParamList` | - |
-| Enemy AI | not started | exe + reader | `rAIFSM` (XFS, 4,385 files), `rAIGoalPlanning` | enemy data |
+| Enemy data (stats) | researched (readers merged) | reader | ENEMIES.md: `mtprp`, `ddenemy`; damage consumer open | - |
+| Enemy AI | researched (FSM reader merged) | exe + reader | AI.md: `mtfsm`, interpreter 0x00E05800/0x00E092A0 | enemy data |
 | Climbing large enemies | not started | exe | grab data location unknown | combat |
 
 ## Pawns, NPCs, story
@@ -70,13 +70,13 @@ Lanes say who should take a system:
 |---|---|---|---|---|
 | VFX (effects) | not started | reader | effect lists (`rEffectList`, `.efl`) not surveyed | shading |
 | Sound and music | not started | reader | sound banks not surveyed | - |
-| UI, HUD, menus, settings | not started | reader | GUI formats (`rGUI*`) not surveyed | - |
-| World map, fast travel (portcrystals, ferrystones) | not started | reader + exe | map GUI and portcrystal data not located | UI |
+| UI, HUD, menus, settings | researched (reader merged) | reader | GUI.md: `mtgui`, node trees of loading/options | - |
+| World map, fast travel (portcrystals, ferrystones) | researched (reader merged) | reader + exe | MAP.md: `ddmap`, travel-item consumer traced | UI |
 
 ## Multiplayer and platform
 
 | System | Status | Lane | Evidence / notes | Depends on |
 |---|---|---|---|---|
 | Co-op (LAN, host-authoritative) | designed | core | COOP_DESIGN.md; `ddsim` already N-player and fixed-step | movement |
-| FPS unlock | working by design | core | simulation steps 120 Hz independent of render rate | - |
+| FPS unlock | working by design | core | original: `mDeltaTime` = 30/fps (RECORDINGS.md); ours: fixed 120 Hz steps | - |
 | Settings, saves | not started | reader | save format not surveyed | inventory, quests |
