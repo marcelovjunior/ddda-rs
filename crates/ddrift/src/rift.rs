@@ -683,3 +683,15 @@ mod tests {
         assert!(rift.release(1, 100, false).is_some());
     }
 }
+
+#[cfg(test)]
+mod live {
+    /// 0x0043eec0 called live in the original on a zeroed pawn record with
+    /// +0x700 = L and a built-in ID (oracle, claude-4, board #879).
+    #[test]
+    fn hire_cost_matches_the_original() {
+        for (p, l, cost) in [(7, 10, 171), (10, 20, 3018), (1, 200, 7_959_819), (50, 10, 0), (12, 31, 15_541)] {
+            assert_eq!(ddpawn::rift::hire_cost(p, l, 1.0, false), cost, "P {p} L {l}");
+        }
+    }
+}
