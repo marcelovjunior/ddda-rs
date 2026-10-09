@@ -18,6 +18,9 @@ use std::collections::BTreeSet;
 /// menus). Until those systems exist in headless crates, a stand-in
 /// answers (`ddstory::scripted::ScriptedHost`).
 pub trait StoryWorld: ddstory::Host {
+    /// Actual creation/destruction of a host-owned NPC intel and its
+    /// normal controller. This says nothing about HP or a rendered body.
+    fn observe_npc_intel(&mut self, _stage: u32, _target: ddstory::Target, _present: bool) {}
     /// Observe combat at the beginning of the story phase, before this
     /// frame's hit pass. Implementations bind actors to placement keys.
     fn observe_fight(&mut self, _fight: Option<&ddenemyrt::fight::Fight>) {}

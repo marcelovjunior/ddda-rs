@@ -16,6 +16,9 @@ struct Applied {
 
 #[derive(Default)]
 pub struct StoryNpcs {
+    /// Intels allocated by the real placement adapter, distinct from
+    /// externally supplied fixture bindings/observations.
+    intels: HashMap<(u32, Target), crate::npc_placements::Placement>,
     bindings: HashMap<(u32, Target), u32>,
     pending: HashMap<(u32, Target), String>,
     normal_controllers: HashMap<(u32, Target), bool>,
@@ -23,6 +26,52 @@ pub struct StoryNpcs {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Create an intel after the placement adapter has resolved the
+    /// 0x00762000 materialization prerequisites (name family, persistent
+    /// life and archive readiness). Reading Candidates alone is not enough.
+    /// 0x00bbd930 allocates normal controller state before daily graph load.
+    /// A graph load failure is returned as a diagnostic while retaining
+    /// that controller; it cannot be mistaken for an absent intel.
+    pub fn load_story_npc_intel(&mut self, placement: crate::npc_placements::Placement)
+        -> Result<Option<String>, HostError>
+    {
+        if !(0..900).contains(&placement.npc) {
+            return Err(HostError::Npc("nonstandard NPC intel id is not implemented".into()));
+        }
+        let npc = placement.npc as u32;
+        let key = (placement.stage, placement.target);
+        if self.story_npcs.bindings.iter().any(|(other, &id)| *other != key && id == npc) {
+            return Err(HostError::Npc("NPC already bound to another placement".into()));
+        }
+        if self.story_npcs.intels.get(&key) == Some(&placement) {
+            return Ok(None);
+        }
+        if self.story_npcs.bindings.contains_key(&key) {
+            self.unbind_story_npc(key.0, key.1);
+        } else if self.npcs.npcs.contains_key(&npc) {
+            return Err(HostError::Npc("NPC graph exists without a matching placement binding".into()));
+        }
+        let mut normal = Npc::intel(npc);
+        let scene = self.story.as_ref().map_or(0, |s| s.world.sce_no);
+        let mut diagnostic = None;
+        if let Some(path) = ddnpc::schedule_path(key.0 as i32, scene as i32, placement.npc, placement.use_24_schedule) {
+            if let Some(data) = &self.data.npc {
+                match Npc::scheduled(npc, &**data, &path) {
+                    Ok(loaded) => normal = loaded,
+                    Err(error) => diagnostic = Some(error.to_string()),
+                }
+            } else {
+                diagnostic = Some("NPC graph data unavailable".into());
+            }
+        }
+        self.npcs.npcs.insert(npc, normal);
+        self.bind_story_npc(key.0, key.1, npc);
+        self.story_npcs.intels.insert(key, placement);
+        self.observe_story_npc_normal_controller(key.0, key.1, Some(true));
+        self.world.observe_npc_intel(key.0, key.1, true);
+        Ok(diagnostic)
+    }
+
     /// The layout adapter supplies identity; no target/NPC-number heuristic.
     pub fn bind_story_npc(&mut self, stage: u32, target: Target, npc: u32) {
         assert_eq!(target.kind, 5, "NPC binding requires an NPC target");
@@ -36,6 +85,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub fn unbind_story_npc(&mut self, stage: u32, target: Target) {
+        if let Some(intel) = self.story_npcs.intels.remove(&(stage, target)) {
+            self.npcs.npcs.remove(&(intel.npc as u32));
+            self.world.observe_npc_intel(stage, target, false);
+        }
         if let Some(npc) = self.story_npcs.bindings.remove(&(stage, target)) {
             self.story_npcs.applied.remove(&npc);
         }
@@ -114,6 +167,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             return Ok(());
         };
         let stage = story.stage.stage_no;
+        let unloaded: Vec<_> = self.story_npcs.intels.keys().copied()
+            .filter(|(s, _)| *s != stage).collect();
+        for (old_stage, target) in unloaded {
+            self.unbind_story_npc(old_stage, target);
+        }
         self.story_npcs.applied.retain(|_, a| a.stage == stage);
         self.story_npcs.bindings.retain(|(s, _), _| *s == stage);
         self.story_npcs.pending.retain(|(s, _), _| *s == stage);

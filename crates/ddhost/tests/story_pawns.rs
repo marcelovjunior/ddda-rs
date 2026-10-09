@@ -233,7 +233,7 @@ fn live_camera_and_handoff_never_emit_scripted_quest_or_stage_callbacks() {
     };
     let mut world = ddhost::opening::OpeningWorld::new();
     // Include a callback already queued before activation.
-    world.handle(200, &[camera.clone()]);
+    world.handle(200, std::slice::from_ref(&camera));
     world.handle(
         200,
         &[ddstory::Request::JumpArea {

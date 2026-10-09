@@ -351,3 +351,29 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   lifetimes, then connect guarded dialogue and sourced actor cleanup. Keep
   fight data and spawned enemies authoritative in the host, not a second
   independent viewer Fight.
+
+### NPC placement / controller lifetime checkpoint
+
+- Added generic _n layout candidate reading through existing GPL/LOT readers.
+  cLayoutSetNpc vf12 (vtable01593f30) resolves to75faa0 shared gate.
+  Record identity uses SetInfo+4 -> intel5c8 (7624d0), while mNpcId
+  goes to intel3e4 (7a32f0); they are never interchangeable.
+- Installed checks establish stage200 group1 record0 is NPC39, not NPC1.
+  Stage100 group4 record0 is NPC304. Earlier q2 graph tests using target
+  group1/NPC2 were fixtures; actual first-pawn script target is still being
+  resolved. No production binding hardcodes those fixture identities.
+- Npc::intel owns consideration/action fields without requiring a loaded
+  daily graph (bbd930 before bbdaa0). Explicit load_story_npc_intel creates
+  that lifetime, retains allocation after graph-load failure, invalidates
+  replacement/unload, and reports actual presence/readiness to live worlds.
+  HP, body presence and NPC life are deliberately not inferred.
+- Candidate loading is not materialization: 762000 name-family selection,
+  persistent-life checks and archive readiness remain adapter prerequisites.
+  The API is not yet invoked from viewer startup; GSF381 remains fixture.
+- Unsupported host graphs now halt their graph execution and retain the
+  controller owner, instead of deleting it. This is port error recovery,
+  not an original completion. A synthetic error regression covers it.
+- Passed: placement/lifecycle3, story_pawns9, host NPC2, ddnpcrt12 tests.
+  Targeted host/NPC clippy has no new warnings with the pre-existing
+  install.rs chunks_exact lint allowed; broad all-target checks also find
+  the pre-existing replay.rs modulo lint. Viewer release build is queued.

@@ -10,7 +10,7 @@ pub mod guard;
 pub mod schedule;
 pub mod talk;
 
-use ddai::Error;
+pub use ddai::Error;
 use ddnpc::MessageSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};

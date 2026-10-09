@@ -405,8 +405,10 @@ pub struct Npc {
 }
 
 impl Npc {
-    /// An NPC with a daily controller (`path` from `ddnpc::schedule_path`).
-    pub fn scheduled(id: u32, graphs: &dyn Graphs, path: &str) -> Result<Npc, Error> {
+    /// Allocate the intel's consideration/action controller state before
+    /// any graph is loaded (0x00bbd930, DDDA.exe 2017-12-13 Steam).
+    /// `controller: None` means no loaded graph, not an absent controller.
+    pub fn intel(id: u32) -> Npc {
         let mk = || Think {
             npc: id,
             sys: 0,
@@ -421,16 +423,23 @@ impl Npc {
             strict: false,
             talk_end: false,
         };
-        Ok(Npc {
+        Npc {
             id,
-            controller: Some(core(path, graphs.graph(path)?)?),
+            controller: None,
             action: None,
             think: mk(),
             ctrl: mk(),
             action_path: None,
             applied: false,
             finished: false,
-        })
+        }
+    }
+
+    /// An NPC with a daily controller (`path` from `ddnpc::schedule_path`).
+    pub fn scheduled(id: u32, graphs: &dyn Graphs, path: &str) -> Result<Npc, Error> {
+        let mut npc = Self::intel(id);
+        npc.controller = Some(core(path, graphs.graph(path)?)?);
+        Ok(npc)
     }
 
     /// Run an explicitly applied action graph, without a daily controller.
@@ -482,6 +491,16 @@ impl Npc {
     /// Complete moves and motions at once (a host without an NPC mover).
     pub fn complete_moves(&mut self, on: bool) {
         self.think.complete_moves = on;
+    }
+
+    /// Port error recovery: stop unsupported graphs without destroying
+    /// their allocated controller fields or inventing action completion.
+    pub fn halt_graphs(&mut self) {
+        self.controller = None;
+        self.action = None;
+        self.ctrl.load = None;
+        self.think.out.clear();
+        self.ctrl.out.clear();
     }
 
     pub fn position(&self) -> Option<[f32; 3]> {
