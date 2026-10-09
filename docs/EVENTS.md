@@ -354,6 +354,111 @@ ddview <nativePC> --event 22 [--start-frame F --hold --shot out.png]
   where the player should lie in bed, probably because the event motions
   do not suit the base skeleton or because IK is missing.
 
+### Camera adjustment, NPC looks, script gate (event-polish)
+
+**Camera actor-joint adjustment.** `CameraView::adjusted(offsets)`
+applies the adjustment:
+
+- **Per-entry displacement** (0x007ed220): the joint's world position
+  minus the position given by its local pose chain, times the weight.
+  - The chain is recorded once by 0x007ed1c0: the joint and its parents
+    up to the root.
+  - The displacement is non-zero only where something moves joints after
+    the local pose, such as IK or body morphs.
+  - So it compensates for a player whose body differs from the one the
+    camera was authored for; it does not move the shot otherwise.
+- **Averaging per mask** (0x007ecc30): the live entries (target set,
+  joint >= 0, weight > 0) are combined with weight / total weight.
+- **Application** (`uOfsMotionCamera::vf09` 0x007ebba0): mask 1 moves
+  the target and mask 2 the eye. `mOption` bit 0 would smooth this
+  (0x007bc400); it is `Unimplemented`.
+- **In `ddview`:** the displacements are zero, because the viewer has no
+  IK or morphs.
+- **Cut 1 framing:** cut 1 of st200 ev10 framing the player's torso is
+  the authored shot.
+  - In cuts 0, 1 and 7 the player stands: `pl_00` motion 0 has its hips
+    108 cm above a root at y 1729.
+  - The list has motions only for cuts 0, 1 and 7.
+
+**`mOffsetPos`** (`uMotionCamera` +0x70, reflected by 0x00faa9d0) has no
+reader in the per-frame camera path:
+- `uMotionCamera::vf08` 0x00fab460;
+- `uOfsMotionCamera::vf08` / `vf09`;
+- `uCamera::vf09` 0x01128840;
+- `cSetInfoCoord::vf09` 0x005f35c0.
+
+It is reported and not applied.
+
+**Motion slots.** Event motion lists hold motions only for the cuts an
+actor is drawn in: `npc001_00` has none for cut 1, and `pl_00` has only
+cuts 0, 1 and 7. The viewer starts from the cut's slot or the first one
+present, and keeps the last motion while a slot is empty. This was the
+"slot 1 is empty or missing" error.
+
+**NPC looks** (`ddstory::look`, from `uActorModelPl::vf05` 0x0083e010):
+
+1. **Edit file:** the NPC's home stage comes from the ledger
+   (`etc\item\npclist`, lookup 0x004769c0). Then
+   `edit\stSSS\nNNN\stSSS_nNNN` is read as rEditPawn (0x00cb5ab0,
+   applied by 0x008442d0). It gives:
+   - sex;
+   - the armour set;
+   - weapons;
+   - equipment pieces;
+   - hair (+0xb0) and beard (+0xb4);
+   - colours.
+2. **Variant:** 0x00ba6dd0 sets it only for units 999, 0x3e3 and 0x3e4.
+   0x00ba6950 swaps sets per NPC (e.g. NPC 2: 0x89 -> 0x6d when a
+   variant is set).
+3. **Models:**
+   - **Base body** by sex (0x0083fa60): `f000` for 1, else `m000`.
+   - **Armour set** (0x00841960): `rArmorTableNpc` (`NTR`, 0x00cac350)
+     record -> up to two `rArmorModelNpc` (`nmr`, 0x00cab1c0) ids ->
+     model paths.
+   - **Hair and beard** (0x008407f0): `h_parts` `rArmorTable` (`atr`,
+     0x00cabbc0) -> `rArmorModel` (`amr`, 0x00caab30).
+   - **Assumed:** the per-sex table slots (sGameSys +0xbe244 / +0xbe24c)
+     are `m_parts` at index 0 and `f_parts` at index 1.
+4. **Weapons and equipment pieces** are `Unimplemented`.
+
+For st200 ev10:
+- NPC 1: male, set 0x8a, `e_npc004`, `hair104`, `beard104`.
+- NPC 2: female, set 0x89, `e_npc005`, `hair105`.
+
+Not read: body and face morphs (rBodyEdit, rFaceEdit), colours, and the
+part on/off masks of the set (0x00841e20).
+
+**Script gate** (0x0044d430, `ddstory::story::script_gate`):
+
+- **When it closes:** stage scripts (uFSMTask::vf08 0x005d1160), quest
+  scripts (uFSMQuest::vf08 0x0078eb50) and the QCT (quest update
+  0x0078c830 at 0x0078ca80) do not run while any of these holds:
+  - sGameSys +0xb883c bit 27;
+  - +0xb8848 bits 26, 27 or 28;
+  - +0xb8844 bit 23;
+  - +0x54 is non-zero;
+  - the stage (+0x34) is 801-804.
+- **Who sets the bits:** not traced. The host reports them with
+  `HostEvent::GameFlags`.
+- **The opening is unchanged:** it passes through stage 801, the
+  character editor, where no story script waits.
+
+**Viewer screenshots** (`ddview --event 22`, 2026-10-09, not committed),
+with Quina and the elder in their event outfits, hair and beard:
+
+- **frame 200 (cut 0):** both NPCs in the foreground, the player standing
+  behind them, line 1;
+- **460 (cut 1):** the player's torso and hand; NPCs hidden as keyed;
+- **670 (cut 2):** Quina face-on, the elder at the right edge;
+- **910 (cut 4):** Quina and the elder with line 8;
+- **1270 (cut 7):** both NPCs in front and the player behind.
+
+**Still differs from the original:**
+- base-body skin shows through the clothes (part masks);
+- no morphs and no lights;
+- each model of a look runs its own copy of the skeleton, all driven by
+  the same motion. The beard sits slightly off.
+
 ## Open questions
 
 - Header +0x08 constant and bits above 24 of +0x0c.

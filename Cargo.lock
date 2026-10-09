@@ -2466,12 +2466,14 @@ dependencies = [
 name = "ddstory"
 version = "0.1.0"
 dependencies = [
+ "ddnpc",
  "ddquest",
  "ddvfs",
  "mtarc",
  "mtcamera",
  "mtfsm",
  "mtgmd",
+ "mtlmt",
  "mtxfs",
 ]
 

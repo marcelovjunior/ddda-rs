@@ -175,3 +175,23 @@ fn opening_plays_st200_ev10_and_returns_control() {
     assert_eq!(w.sce_no, 1200);
     assert!(w.quest_bit(1, 3) && w.quest_bit(1, 95));
 }
+
+/// The two NPC actors of st200 ev10 get their event outfits: NPC 1 (male,
+/// armour set 0x8a) and NPC 2 (female, set 0x89), plus hair.
+#[test]
+fn st200_ev10_npc_looks() {
+    let Some(data) = install() else { return };
+    let a = ddstory::look::npc_look(&data, 1, 1, 22).unwrap();
+    let b = ddstory::look::npc_look(&data, 2, 2, 22).unwrap();
+    for l in [&a, &b] {
+        eprintln!("{} {:?} set {:#x} base {} models {:?} on {:?} off {:?}", l.npc, l.edit_path, l.armor_set, l.base, l.models, l.parts_on, l.parts_off);
+    }
+    assert_eq!((a.edit.sex, a.armor_set), (0, 0x8a));
+    assert_eq!((b.edit.sex, b.armor_set), (1, 0x89));
+    assert!(a.base.ends_with("m000") && b.base.ends_with("f000"));
+    assert!(a.models[0].1.ends_with(r"e_npc004\e_npc004"));
+    assert!(b.models[0].1.ends_with(r"e_npc005\e_npc005"));
+    // Hair from h_parts (edp +0xb0).
+    assert!(a.models.iter().any(|(_, p)| p.contains(r"\hair\")));
+    assert!(b.models.iter().any(|(_, p)| p.contains(r"\hair\")));
+}

@@ -129,3 +129,52 @@ fn script_states_replay() {
     assert!(s0.iter().any(|x| sa.iter().any(|y| y.path == x.path && y.states != x.states)));
     assert!(sa.iter().all(|s| s.cnt_fsm > 0.0));
 }
+
+/// The script gate 0x0044d430: while a stop flag is reported, no script
+/// moves (their timers stand still) and no QCT row fires; afterwards they
+/// run on.
+#[test]
+fn script_gate_stops_scripts() {
+    use ddstory::story::{script_gate, GameFlags};
+    use ddstory::{HostEvent, Inputs};
+    // The gate's conditions.
+    let none = GameFlags::default();
+    assert!(!script_gate(200, &none));
+    for f in [
+        GameFlags { b883c: 0x0800_0000, ..none },
+        GameFlags { b8848: 0x1000_0000, ..none },
+        GameFlags { b8848: 0x0800_0000, ..none },
+        GameFlags { b8848: 0x0400_0000, ..none },
+        GameFlags { b8844: 0x0080_0000, ..none },
+        GameFlags { s54: 1, ..none },
+    ] {
+        assert!(script_gate(200, &f), "{f:?}");
+    }
+    assert!(!script_gate(200, &GameFlags { b8844: 0x0040_0000, b8848: 0x0200_0000, ..none }));
+    for s in [801, 802, 803, 804] {
+        assert!(script_gate(s, &none));
+    }
+    assert!(!script_gate(800, &none) && !script_gate(805, &none));
+
+    let Some(data) = install() else { return };
+    let mut story = Story::new_game(data);
+    let mut host = ScriptedHost::opening();
+    let route = ddstory::route::opening();
+    ddstory::route::run(&mut story, &mut host, &route[..3], 240, 10_000, |_| true).unwrap();
+    let tick = |story: &mut Story<InstallData>, events: Vec<HostEvent>| {
+        story.tick(&Inputs { events, ..Default::default() }, &host).unwrap()
+    };
+    let before = story.script_states();
+    let world = story.world.clone();
+    let stop = GameFlags { b8844: 0x0080_0000, ..GameFlags::default() };
+    tick(&mut story, vec![HostEvent::GameFlags(stop)]);
+    for _ in 0..120 {
+        tick(&mut story, vec![]);
+    }
+    assert_eq!(story.script_states(), before, "scripts moved while gated");
+    assert_eq!(story.world, world);
+    tick(&mut story, vec![HostEvent::GameFlags(GameFlags::default())]);
+    tick(&mut story, vec![]);
+    let after = story.script_states();
+    assert!(after.iter().zip(&before).any(|(a, b)| a.cnt_fsm > b.cnt_fsm));
+}
