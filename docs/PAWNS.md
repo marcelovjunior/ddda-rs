@@ -928,3 +928,24 @@ Code still to trace:
 6. **lan-rental** (co-op, later): exchange main pawns between two LAN
    players as `cSAVE_DATA_CMC` records, with rewards that mirror
    `cNetRewardStock`. It depends on the COOP_DESIGN decisions in §10.
+
+## Opening recruitment (2026-10-09, upon-a-pawn)
+
+Rook joins before the first-pawn cutscene plays, not when q0002 clears.
+Event preparation `0x0050c290`, case event-table row `0x17` (st200 ev15),
+calls `0x00440190`. That routine takes story stock slot 14
+(`sGameSys + 0x13b90`, ID `0x2000000e`) and writes pawn-party slot 1
+(`sGameSys + 0xa9520`; overall party member 2). It invokes the hire
+bookkeeping `0x0043e5b0` with its last argument true, then copies the
+stock through `0x00447390`. It obtains the name from NPC ledger 504,
+equips items 414, 575, 634, 985 and 1062, grants item 64, and sets the
+party record's pawn type to 2. Event preparation subsequently activates
+the record. This is an original per-event special case, not a quest-ID
+heuristic. The copy routine takes parameters, knowledge, inclinations
+and pawn type from the stock; the existing stock builder already reads
+the player's `rRomPawnInfo` and applies the traced appearance overrides.
+
+This trace has not yet been compared against an ev15 live capture.
+The previously compared Rook records in the save substantiate the stock
+identity and appearance, but not the recruitment frame or full inventory
+side effects.
