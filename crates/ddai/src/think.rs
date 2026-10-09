@@ -158,6 +158,9 @@ pub struct Env<'a> {
 pub struct Thinker {
     core: Core,
     pub fields: ThinkFields,
+    /// `cAIFSMCtrl` +5 (cAICtrl +0x49): the FSM finished and waits for the
+    /// unit to clear it ([`Thinker::controlled_frame`]).
+    pub paused: bool,
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -480,6 +483,7 @@ impl Thinker {
         Ok(Thinker {
             core: Core::new(path, graph)?,
             fields: ThinkFields::default(),
+            paused: false,
         })
     }
 
@@ -489,6 +493,35 @@ impl Thinker {
     pub fn restart(&mut self) -> Result<(), Error> {
         self.core = Core::new(&self.core.path.clone(), self.core.graph().clone())?;
         Ok(())
+    }
+
+    /// One frame as the unit runs it, with the finish/restart cycle of the
+    /// FSM controller (`cAIFSMCtrl` embedded at cAICtrl +0x44):
+    /// - 0x00aa78b0 (first in `uEnemy::vf90` 0x00aa96e0) clears the paused
+    ///   flag once the unit has a current action (+0x2dd4 != -1) whose
+    ///   record has +0x50 set (`Actor::action_done`);
+    /// - 0x0059f440 then runs the FSM frame; when it ends with SysCondition
+    ///   bit 0 (a Finish) it rewinds the FSM to its start state (`cAIFSM`
+    ///   vf06 0x00e098a0 -> 0x00e09250) and pauses it. SysCondition stays
+    ///   set until the start state is entered again (vf05 0x007a9da0 clears
+    ///   it); FreeCondition and the timers carry over.
+    ///
+    /// So a finished enemy FSM restarts by itself from its start state as
+    /// soon as the unit's current action allows it; no request is needed.
+    // Translated from 0x00aa78b0 and 0x0059f440 (DDDA.exe 2017-12-13 Steam).
+    pub fn controlled_frame(&mut self, inputs: &Inputs) -> Result<Vec<Request>, Error> {
+        if self.paused {
+            if !inputs.actor.is_some_and(|a| a.action_done) {
+                return Ok(vec![]);
+            }
+            self.paused = false;
+        }
+        let requests = self.frame(inputs)?;
+        if self.finished() {
+            self.core = Core::new(&self.core.path.clone(), self.core.graph().clone())?;
+            self.paused = true;
+        }
+        Ok(requests)
     }
 
     pub fn current_states(&self) -> Vec<u32> {

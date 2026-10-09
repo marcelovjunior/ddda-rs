@@ -233,3 +233,46 @@ fn goblin_corpus_runs_or_names_the_gap() {
     eprintln!("{ran} of {} goblin graphs ran; gaps: {gaps:?}", paths.len());
     assert!(ran > 0);
 }
+
+/// The finish/restart cycle of the FSM controller (0x0059f440 parks a
+/// finished FSM at its start state, 0x00aa78b0 un-parks it once the unit's
+/// current action has its +0x50 set): the gate goblin restarts by itself
+/// and FreeCondition carries over.
+#[test]
+fn finished_fsm_restarts_when_the_action_allows() {
+    if vfs().is_none() {
+        return;
+    }
+    let mut t = thinker(GATE);
+    let far = at(POINT_A, 0.0);
+    let mut busy = far.clone();
+    busy.actor.as_mut().unwrap().action_done = false;
+    let mut idle = far.clone();
+    idle.actor.as_mut().unwrap().action_done = true;
+    let mut frames = 0;
+    while !t.paused {
+        for q in t.controlled_frame(&busy).unwrap() {
+            if let Request::FreeCondition { bits } = q {
+                t.or_free_condition(bits);
+            }
+        }
+        frames += 1;
+        assert!(frames < 400, "no finish");
+    }
+    // Parked at the start state with the finish bit still set.
+    assert!(t.finished());
+    assert_eq!(t.current_names(), ["s0000"]);
+    assert_eq!(t.fields.free_condition, 1);
+    for _ in 0..10 {
+        assert!(t.controlled_frame(&busy).unwrap().is_empty());
+        assert!(t.paused);
+    }
+    // The action allows it: the start state is entered again (SysCondition
+    // cleared) and the run goes on with FreeCondition 1.
+    t.controlled_frame(&idle).unwrap();
+    assert!(!t.paused);
+    let names = t.current_names();
+    assert_ne!(names, ["Finish"], "{names:?}");
+    assert!(!t.finished(), "{names:?}");
+    assert_eq!(t.fields.free_condition, 1);
+}
