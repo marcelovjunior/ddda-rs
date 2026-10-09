@@ -23,9 +23,36 @@ fn run_all() -> Option<Vec<Row>> {
     let mut worlds = std::collections::HashMap::new();
     for (name, t) in traces {
         let t = t.unwrap_or_else(|e| panic!("{name}: {e}"));
-        let world = worlds.entry((t.stage, t.cell)).or_insert_with(|| load_world(&vfs, t.stage, t.cell));
+        let world = worlds
+            .entry((t.stage, t.cell))
+            .or_insert_with(|| load_world(&vfs, t.stage, t.cell));
         let sim = new_sim(&vfs).expect("sim from the install");
         let r = replay(sim, world, &t);
+        // DDACCEPT_DUMP=<route>[,every]: per-frame original vs ours
+        if let Ok(d) = std::env::var("DDACCEPT_DUMP") {
+            let (name_d, every) = d
+                .split_once(',')
+                .map_or((d.as_str(), 5), |(a, b)| (a, b.parse().unwrap_or(5)));
+            if name_d == t.route {
+                println!("frame keys | original x y z action | ours x y z state | gap");
+                for (i, f) in t.frames.iter().enumerate().step_by(every) {
+                    let q = r.pos[i];
+                    println!(
+                        "{i:4} {:3} | {:9.1} {:8.1} {:9.1} {:3} | {:9.1} {:8.1} {:9.1} {:?} | {:6.1}",
+                        f.keys,
+                        f.pos[0],
+                        f.pos[1],
+                        f.pos[2],
+                        f.action,
+                        q[0],
+                        q[1],
+                        q[2],
+                        r.state[i],
+                        ((f.pos[0] - q[0]).powi(2) + (f.pos[2] - q[2]).powi(2)).sqrt()
+                    );
+                }
+            }
+        }
         rows.extend(compare(&t, &r));
     }
     println!("{}", table(&rows));
@@ -36,7 +63,10 @@ fn run_all() -> Option<Vec<Row>> {
 fn routes_replay() {
     let Some(rows) = run_all() else { return };
     let bad = rows.iter().filter(|r| !r.ok()).count();
-    println!("{bad} of {} quantities outside tolerance or not modelled", rows.len());
+    println!(
+        "{bad} of {} quantities outside tolerance or not modelled",
+        rows.len()
+    );
     assert!(!rows.is_empty());
 }
 
@@ -44,6 +74,10 @@ fn routes_replay() {
 #[ignore = "strict M2 gate: fails while any route quantity is outside tolerance"]
 fn routes_within_tolerance() {
     let Some(rows) = run_all() else { return };
-    let bad: Vec<_> = rows.iter().filter(|r| !r.ok()).map(|r| format!("{}: {}", r.route, r.quantity)).collect();
+    let bad: Vec<_> = rows
+        .iter()
+        .filter(|r| !r.ok())
+        .map(|r| format!("{}: {}", r.route, r.quantity))
+        .collect();
     assert!(bad.is_empty(), "outside tolerance: {bad:#?}");
 }

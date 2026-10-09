@@ -108,6 +108,31 @@ fn main() {
             }
         }
     }
+    if let Ok(spec) = std::env::var("LEDGES_LINES") {
+        // "length yaw1 yaw2 ...": for each yaw (radians, 0 = +Z, sin -> x),
+        // the walkable distance from (x, z): 50 cm samples with ground,
+        // inside the origin cell, no step above 25 cm
+        let v: Vec<f32> = spec.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        let length = v[0];
+        for &yaw in &v[1..] {
+            let (mut d, mut y) = (0.0f32, py);
+            while d + 50.0 <= length {
+                let (qx, qz) = (px + yaw.sin() * (d + 50.0), pz + yaw.cos() * (d + 50.0));
+                if !(0.0..CELL).contains(&qx) || !(0.0..CELL).contains(&qz) {
+                    break;
+                }
+                match surface_at(&tris, &grid, qx, qz, y) {
+                    Some(q) if (q - y).abs() <= 25.0 => {
+                        y = q;
+                        d += 50.0;
+                    }
+                    _ => break,
+                }
+            }
+            println!("{yaw} {d}");
+        }
+        return;
+    }
     if std::env::var("LEDGES_AT").is_ok() {
         // the walkable surface under (x, z) within 6 m of y, for teleports
         match surface_at(&tris, &grid, px, pz, py) {

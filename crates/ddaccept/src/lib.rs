@@ -79,7 +79,9 @@ pub fn parse_trace(text: &str) -> Result<Trace, String> {
             continue;
         }
         if let Some(h) = line.strip_prefix('#') {
-            let Some((k, v)) = h.trim().split_once('=') else { continue };
+            let Some((k, v)) = h.trim().split_once('=') else {
+                continue;
+            };
             let nums: Vec<i64> = v.split_whitespace().filter_map(|s| s.parse().ok()).collect();
             match k.trim() {
                 "route" => route = v.trim().to_string(),
@@ -122,7 +124,13 @@ pub fn parse_trace(text: &str) -> Result<Trace, String> {
     if frames.len() < 2 {
         return Err("trace has fewer than 2 frames".into());
     }
-    Ok(Trace { route, stage, cell, window, frames })
+    Ok(Trace {
+        route,
+        stage,
+        cell,
+        window,
+        frames,
+    })
 }
 
 /// The ddsim input for held keys: a unit stick (screen-right +x, forward +y;
@@ -158,8 +166,15 @@ fn adjust_table(vfs: &ddvfs::Vfs, path: &str) -> Result<Vec<f32>, String> {
         return Err(format!("{path}: not an ajp file"));
     }
     let n = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
-    let body = b.get(12..12 + 4 * n).ok_or(format!("{path}: {n} floats do not fit"))?;
-    Ok(body.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
+    let body = b
+        .get(12..12 + 4 * n)
+        .ok_or(format!("{path}: {n} floats do not fit"))?;
+    Ok(body
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect())
 }
 
 fn jump_params(vfs: &ddvfs::Vfs, indices: &[usize]) -> Result<Vec<JumpParam>, String> {
@@ -201,9 +216,9 @@ pub fn new_sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
             6 => DAGGER_MOTIONS,
             _ => return Err(format!("bank {bank}")),
         };
-        if !lists.contains_key(&bank) {
+        if let std::collections::hash_map::Entry::Vacant(e) = lists.entry(bank) {
             let bytes = vfs.read(path, rml)?;
-            lists.insert(bank, mtlmt::parse(&bytes).map_err(|e| e.to_string())?);
+            e.insert(mtlmt::parse(&bytes).map_err(|e| e.to_string())?);
         }
         let m = lists[&bank]
             .motions
@@ -232,8 +247,9 @@ pub fn load_world(vfs: &ddvfs::Vfs, stage: u32, cell: (i32, i32)) -> ddworld::Te
 
 // ------------------------------------------------------------------ replay
 
-/// Motions the original requests for the town (relaxed) walk and run.
-pub const RELAXED_MOTIONS: [u32; 2] = [0x54, 0x55];
+/// Original action ids (uPlayer +0x2DD4) of ground movement: 2 run/walk,
+/// 5 sprint, 125 sprint start, 3 stopping. *Observed* (docs/ACCEPTANCE.md).
+pub const ORIG_RUN: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Replay {
@@ -247,15 +263,29 @@ pub struct Replay {
 pub fn replay(mut sim: Sim, ground: &dyn ddsim::Ground, t: &Trace) -> Replay {
     let f0 = t.frames[0];
     sim.add_player(0, f0.pos, f0.yaw);
-    // the area's walk/run variant: the original requested a relaxed motion
-    let relaxed = t.frames.iter().any(|f| RELAXED_MOTIONS.contains(&f.motion) && f.keys & (KEY_W | KEY_A | KEY_S | KEY_D) != 0);
+    // The area's walk/run variant (town = relaxed) is not read from the
+    // original yet: take it from the recorded run velocity (|+0x2530|),
+    // whichever of our two run speeds it is closer to.
+    let runs: Vec<f32> = t
+        .frames
+        .iter()
+        .filter(|f| f.action == ORIG_RUN && f.keys & (KEY_SPRINT | KEY_WALK) == 0)
+        .map(|f| (f.vel[0] * f.vel[0] + f.vel[2] * f.vel[2]).sqrt())
+        .filter(|&v| v > 1.0)
+        .collect();
+    let relaxed = !runs.is_empty() && {
+        let v = runs.iter().sum::<f32>() / runs.len() as f32;
+        (v - sim.move_param.run_relaxed).abs() < (v - sim.move_param.run).abs()
+    };
     sim.player_mut(0).unwrap().relaxed = relaxed;
     let mut pos = vec![f0.pos];
     let mut state = vec![State::Wait];
     let mut inputs = HashMap::new();
     for f in &t.frames[1..] {
         inputs.insert(0, input_of(f.keys, f.cam_yaw));
-        sim.step(f.dt_unit / ddsim::MOTION_FPS, &inputs, ground);
+        // game time: sMain.mDeltaTime (the player's own delta is scaled by
+        // its motion rate, which ddsim models itself)
+        sim.step(f.dt_main / ddsim::MOTION_FPS, &inputs, ground);
         let p = sim.player(0).unwrap();
         pos.push(p.position);
         state.push(p.state);
@@ -267,7 +297,7 @@ pub fn replay(mut sim: Sim, ground: &dyn ddsim::Ground, t: &Trace) -> Replay {
 
 /// Original action ids (uPlayer +0x2DD4) seen in the air and on landing.
 /// *Observed* in oracle traces (docs/ORACLE.md), not read from the exe.
-pub const ORIG_AIR: [u32; 2] = [9, 13];
+pub const ORIG_AIR: [u32; 3] = [8, 9, 13];
 pub const ORIG_LAND: [u32; 1] = [14];
 
 fn sim_air(s: State) -> bool {
@@ -281,12 +311,12 @@ fn hdist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-/// Seconds elapsed at the end of each frame (from the player's deltas).
+/// Seconds of game time at the end of each frame (sMain.mDeltaTime).
 fn times(t: &Trace) -> Vec<f32> {
     let mut acc = 0.0;
     let mut out = vec![0.0];
     for f in &t.frames[1..] {
-        acc += f.dt_unit / ddsim::MOTION_FPS;
+        acc += f.dt_main / ddsim::MOTION_FPS;
         out.push(acc);
     }
     out
@@ -345,7 +375,11 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
     };
     let mut rows = Vec::new();
     let gaps: Vec<f32> = (0..n).map(|i| hdist(t.frames[i].pos, r.pos[i])).collect();
-    let (imax, max_gap) = gaps.iter().copied().enumerate().fold((0, 0.0f32), |m, (i, g)| if g > m.1 { (i, g) } else { m });
+    let (imax, max_gap) =
+        gaps.iter()
+            .copied()
+            .enumerate()
+            .fold((0, 0.0f32), |m, (i, g)| if g > m.1 { (i, g) } else { m });
     let travelled = |p: &dyn Fn(usize) -> [f32; 3]| (1..n).map(|i| hdist(p(i - 1), p(i))).sum::<f32>();
     rows.push(row(
         "path length",
@@ -358,7 +392,13 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
         quantity: format!("max path gap (frame {imax})"),
         ..row("", Some(0.0), Some(max_gap), tol::PATH, "cm")
     });
-    rows.push(row("final position gap", Some(0.0), Some(gaps[n - 1]), tol::FINAL, "cm"));
+    rows.push(row(
+        "final position gap",
+        Some(0.0),
+        Some(gaps[n - 1]),
+        tol::FINAL,
+        "cm",
+    ));
     rows.push(row(
         "final height",
         Some(t.frames[n - 1].pos[1] - t.frames[0].pos[1]),
@@ -371,7 +411,8 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
         let b = b.min(n - 1);
         if a < b {
             let dt = ts[b] - ts[a];
-            let sp = |p: &dyn Fn(usize) -> [f32; 3]| (a + 1..=b).map(|i| hdist(p(i - 1), p(i))).sum::<f32>() / dt;
+            let sp =
+                |p: &dyn Fn(usize) -> [f32; 3]| (a + 1..=b).map(|i| hdist(p(i - 1), p(i))).sum::<f32>() / dt;
             rows.push(row(
                 &format!("speed, frames {a}..{b}"),
                 Some(sp(&|i| t.frames[i].pos)),
@@ -385,7 +426,11 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
     if let Some(press) = t.frames.iter().position(|f| f.keys & KEY_JUMP != 0) {
         let y0o = t.frames[press - 1].pos[1];
         let y0s = r.pos[press - 1][1];
-        let apex_o = t.frames[press..].iter().map(|f| f.pos[1]).fold(f32::MIN, f32::max) - y0o;
+        let apex_o = t.frames[press..]
+            .iter()
+            .map(|f| f.pos[1])
+            .fold(f32::MIN, f32::max)
+            - y0o;
         let apex_s = r.pos[press..].iter().map(|p| p[1]).fold(f32::MIN, f32::max) - y0s;
         rows.push(row("jump apex", Some(apex_o), Some(apex_s), tol::APEX, "cm"));
         let first = |pred: &dyn Fn(usize) -> bool| (press..n).find(|&i| pred(i));
@@ -394,9 +439,27 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
         let air_s = first(&|i| sim_air(r.state[i]));
         let land_s = first(&|i| sim_land(r.state[i]));
         let span = |a: Option<usize>, b: Option<usize>| a.zip(b).map(|(a, b)| ts[b] - ts[a]);
-        rows.push(row("takeoff after press", span(Some(press - 1), air_o), span(Some(press - 1), air_s), tol::TIME, "s"));
-        rows.push(row("airtime", span(air_o, land_o), span(air_s, land_s), tol::TIME, "s"));
-        rows.push(row("landing after press", span(Some(press - 1), land_o), span(Some(press - 1), land_s), tol::TIME, "s"));
+        rows.push(row(
+            "takeoff after press",
+            span(Some(press - 1), air_o),
+            span(Some(press - 1), air_s),
+            tol::TIME,
+            "s",
+        ));
+        rows.push(row(
+            "airtime",
+            span(air_o, land_o),
+            span(air_s, land_s),
+            tol::TIME,
+            "s",
+        ));
+        rows.push(row(
+            "landing after press",
+            span(Some(press - 1), land_o),
+            span(Some(press - 1), land_s),
+            tol::TIME,
+            "s",
+        ));
         let fwd = |p: [f32; 3], q: [f32; 3]| hdist(p, q);
         rows.push(row(
             "jump distance (press to landing)",
@@ -411,8 +474,20 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
         let air_s = (1..n).find(|&i| sim_air(r.state[i]));
         let land_s = air_s.and_then(|a| (a..n).find(|&i| sim_land(r.state[i])));
         let span = |a: Option<usize>, b: Option<usize>| a.zip(b).map(|(a, b)| ts[b] - ts[a]);
-        rows.push(row("fall start", Some(ts[air]), air_s.map(|i| ts[i]), tol::TIME, "s"));
-        rows.push(row("fall time", span(Some(air), land_o), span(air_s, land_s), tol::TIME, "s"));
+        rows.push(row(
+            "fall start",
+            Some(ts[air]),
+            air_s.map(|i| ts[i]),
+            tol::TIME,
+            "s",
+        ));
+        rows.push(row(
+            "fall time",
+            span(Some(air), land_o),
+            span(air_s, land_s),
+            tol::TIME,
+            "s",
+        ));
         rows.push(row(
             "drop height",
             land_o.map(|l| t.frames[air - 1].pos[1] - t.frames[l].pos[1]),
@@ -434,12 +509,43 @@ pub fn compare(t: &Trace, r: &Replay) -> Vec<Row> {
             ));
         }
     }
+    // stamina after a sprint: the hold before recovery and the idle recovery rate
+    if let Some(last_sprint) = (0..n).rev().find(|&i| t.frames[i].keys & KEY_SPRINT != 0) {
+        let st: Vec<f32> = t.frames.iter().map(|f| f.stamina).collect();
+        let lo = (last_sprint..n).min_by(|&a, &b| st[a].total_cmp(&st[b])).unwrap();
+        if let Some(up) = (lo..n).find(|&i| st[i] > st[lo] + 1e-3) {
+            rows.push(row(
+                "stamina hold after sprint",
+                Some(ts[up] - ts[lo]),
+                None,
+                tol::TIME,
+                "s",
+            ));
+            let idle = (up..n).find(|&i| t.frames[i].action == 0).unwrap_or(up);
+            if ts[n - 1] > ts[idle] {
+                let rate = (st[n - 1] - st[idle]) / (ts[n - 1] - ts[idle]);
+                rows.push(row(
+                    "stamina recovery rate (idle)",
+                    Some(rate),
+                    None,
+                    tol::STAMINA,
+                    "/s",
+                ));
+            }
+        }
+    }
     // stamina: rate over the window (ddsim has no stamina)
     if let Some((a, b)) = t.window {
         let b = b.min(n - 1);
         if a < b && ts[b] > ts[a] {
             let rate = (t.frames[b].stamina - t.frames[a].stamina) / (ts[b] - ts[a]);
-            rows.push(row(&format!("stamina rate, frames {a}..{b}"), Some(rate), None, tol::STAMINA, "/s"));
+            rows.push(row(
+                &format!("stamina rate, frames {a}..{b}"),
+                Some(rate),
+                None,
+                tol::STAMINA,
+                "/s",
+            ));
         }
     }
     rows
@@ -450,7 +556,10 @@ pub fn table(rows: &[Row]) -> String {
     let mut s = String::from("| route | quantity | original | ours | difference | tolerance | ok |\n|---|---|---|---|---|---|---|\n");
     let f = |v: Option<f32>| v.map_or("not modelled".into(), |x| format!("{x:.3}"));
     for r in rows {
-        let d = r.original.zip(r.ours).map_or("-".into(), |(a, b)| format!("{:+.3}", b - a));
+        let d = r
+            .original
+            .zip(r.ours)
+            .map_or("-".into(), |(a, b)| format!("{:+.3}", b - a));
         s += &format!(
             "| {} | {} | {} | {} | {} | {} {} | {} |\n",
             r.route,
@@ -486,7 +595,9 @@ pub fn load_traces(dir: &Path) -> Vec<(String, Result<Trace, String>)> {
     v.into_iter()
         .map(|p| {
             let name = p.file_stem().unwrap().to_string_lossy().into_owned();
-            let r = std::fs::read_to_string(&p).map_err(|e| e.to_string()).and_then(|s| parse_trace(&s));
+            let r = std::fs::read_to_string(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|s| parse_trace(&s));
             (name, r)
         })
         .collect()
