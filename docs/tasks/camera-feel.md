@@ -56,4 +56,13 @@ report to `head`.
 
 ## Results
 
-(filled in by the agent)
+First checkpoint: the missing caller response was found in **0x007e1400**.
+At **0x007e1b11..0x007e1b68**, after **0x007de570** corrects the eye, the
+original adds the full eye delta to the look target. Disassembly confirms
+ESI is the eye pointer and EDI the collision anchor at the helper call.
+The viewer now translates both endpoints, preserving orientation through
+off-axis wall/ceiling penetration recovery. Six camera-filtered release
+tests pass, including the new wall/roof regression; release build passes
+with three existing warnings. This is source-verified and tested, not yet
+matched at the two requested original-game spots. Filter/active-camera
+near-plane investigation and live comparison continue.

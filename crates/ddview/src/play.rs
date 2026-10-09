@@ -790,7 +790,8 @@ pub const CAMERA_FOV: f32 = 55.0;
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
-    let mut eye = target - dir * CAMERA_DISTANCE;
+    let desired_eye = target - dir * CAMERA_DISTANCE;
+    let mut eye = desired_eye;
     if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
@@ -802,7 +803,12 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
             if flags & 0x10 == 0 { eye = stop - toward * CAMERA_NEAR; }
         }
     }
-    (eye, target)
+    // Translated from 0x007e1b11..0x007e1b68 (DDDA.exe 2017-12-13 Steam):
+    // the caller of 0x007de570 translates the look target by the complete
+    // eye correction, including off-axis penetration recovery. Keeping the
+    // target fixed here would turn every sideways/ceiling contact into a
+    // camera rotation when the presentation layer calls look_at.
+    (eye, target + (eye - desired_eye))
 }
 
 /// Translated query direction/response from 0x010fdea0 / 0x010fd710
@@ -1178,6 +1184,26 @@ mod tests {
         terrain.add([[-1000.0, -1000.0, -10.0], [1000.0, -1000.0, -10.0], [0.0, 1000.0, -10.0]]);
         let (stop, _) = camera_sphere_cast(&terrain, Vec3::ZERO, Vec3::new(0.0, 0.0, -50.0), 20.0).unwrap();
         assert!((stop.z - 10.1).abs() < 0.002, "{stop:?}");
+    }
+
+    #[test]
+    fn camera_wall_and_roof_recovery_translate_the_view_without_rotating() {
+        // 0x007e1400 translates both endpoints after the collision helper.
+        // These contacts push perpendicular to the viewing direction,
+        // exposing the missing caller response even with a zero-pitch view.
+        for triangle in [
+            [[-60.0, -1000.0, -1000.0], [-60.0, 1000.0, -1000.0], [-60.0, 0.0, 1000.0]],
+            [[-1000.0, 210.0, -1000.0], [1000.0, 210.0, -1000.0], [0.0, 210.0, 1000.0]],
+        ] {
+            let mut terrain = ddworld::Terrain::empty();
+            terrain.add(triangle);
+            let desired_target = Vec3::Y * CAMERA_TARGET_HEIGHT;
+            let desired_eye = desired_target - Vec3::Z * CAMERA_DISTANCE;
+            let (eye, target) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+            assert!(eye.distance(desired_eye) > 1.0);
+            assert!((target - desired_target - (eye - desired_eye)).length() < 0.001);
+            assert!((target - eye - Vec3::Z * CAMERA_DISTANCE).length() < 0.001);
+        }
     }
 
     #[test]

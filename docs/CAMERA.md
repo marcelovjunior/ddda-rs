@@ -216,6 +216,15 @@ sorting and shadows still require an original-frame comparison.
 
 ### Collision followups found during this trace
 
+Camera-feel correction (2026-10-09): **0x007e1400**, the caller of
+**0x007de570**, translates the look target by the complete eye correction
+at **0x007e1b11..0x007e1b68**. This includes off-axis initial-penetration
+recovery. Moving only the eye and then looking back at the old target
+incorrectly rotates the view. `follow_camera` now applies the caller's
+translation to both endpoints; a wall and low-ceiling overlap regression
+checks the preserved eye-target vector. Six camera-filtered release tests
+and the release viewer build pass. Live wall/roof comparison is pending.
+
 **0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
 or sweep result. It does not continue to the next surface. **0x007c6f90**
 resolves the collision result's material flag word for stage/static hits.
