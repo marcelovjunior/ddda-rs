@@ -337,6 +337,10 @@ pub struct Input {
     pub sprint: bool,
     /// Jump is held (a press is the rising edge).
     pub jump: bool,
+    /// The light attack button is held (a press is the rising edge).
+    pub light: bool,
+    /// The heavy attack button is held.
+    pub heavy: bool,
     /// Camera yaw (radians, 0 looks along +Z).
     pub camera_yaw: f32,
 }
