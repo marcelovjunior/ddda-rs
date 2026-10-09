@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/item-use`
 - **Board area:** `player/items`
-- **Status:** open
+- **Status:** working (core tested; viewer hookup in coordination with codex-18)
 
 ## Goal
 
@@ -31,4 +31,46 @@ Tests: a potion heals the right amount; a curative removes poison per the traced
 
 ## Results
 
-(filled in by the agent)
+Core implementation: `ddeconomy::item_use::Recovery` reads installed ITL
+amounts/cures and selects party targeting; `Inventory::use_recovery` applies
+then consumes one copy from the named owner. Unsupported harmful, buff,
+special and action-path items return an error without consumption.
+`ddcombat` adds direct item cures and full-ceiling item healing; `ddsim`
+adds positive stamina restoration with the curse cap. Codex-1 supplied
+`Fight::recover_item`, with dead/missing-seat rejection and pawn-specific
+possession eligibility (cherry-picked as 68f7a8b).
+
+Evidence: menu `0x0066CCD0` -> use `0x00B77130` -> player `vf183`
+`0x00B77780`. Signed i16 +0x70/+0x72 HP/stamina, augment 0x4a factor
+from installed `plAbilityParam` via `0x00783340`, quarter-strength sharing
+without cures. Item +0x38 bits12..14 ==4 is party targeting; mask0x78000
+requires a separate action and is rejected here. Direct signed cure bytes
+from `0x00856050`/getters `0x0045A8D0..0x0045B370`; assembly verifies
+down-status byte order. Ordinary items do not emit broad cure messages
+0x12..0x15. Their producers remain untraced. The previous STATUS.md
+classification of `0x00856050` as a debug table was corrected.
+
+Tested: `cargo test -p ddcombat -p ddeconomy -p ddsim`: 102 tests pass
+(33/12/57), including installed Salubrious Brew +1500 HP, Greenwarish
++120 HP, Mushroom +250 stamina, Mithridate poison-only cure; owner
+isolation, failed-use atomicity, wound recovery, no revival, stack cures,
+signed bytes, sharing and curse cap. Targeted library Clippy passes with
+warnings denied. Codex-1's three installed fight-status tests pass.
+
+Viewer module `items.rs` (head scope approvals #1516/#1525) imports four
+saved bags read-only, resolves augment factors from data, and offers the
+first useful supported restorative for the named local seat. Three module
+tests cover bag validation, optional private-save import and full potion /
+stamina / poison application. Compilation and U-key hookup are pending
+codex-18's coordinated build; this brief is not yet marked complete.
+
+Not compared live: no original-game state was changed. No game files,
+recordings or raw decompilation committed. The fight has no persistent
+wounded-HP pool; item healing uses full HP maximum and must not be reused
+unchanged for spells. Automatic pawn item decisions, viewer Medicant
+propagation, network item commands, throwables, use animations and a full
+inventory menu remain outside this slice.
+
+Next action: codex-18 integrates the resource and U key into offline
+`--play --save`, then compile/run the three module tests and a bounded
+unattended demonstration.

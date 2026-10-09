@@ -158,4 +158,38 @@ mod tests {
         assert_eq!(&first, items.inventory.bag(Owner::Arisen(1)).unwrap());
         assert!(items.factors.values().all(|f| f.is_finite() && *f > 0.0));
     }
+
+    #[test]
+    fn quick_use_consumes_one_and_applies_installed_potion_stamina_and_poison_cure() {
+        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(&native).unwrap();
+        let exe = ddexe::ExeFile::next_to(&native).unwrap();
+        let data = ddhost::ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap();
+        let mut fight = Fight::new(std::sync::Arc::new(data));
+        fight.add_arisen(0);
+        fight.add_arisen(1);
+        let mut sim = Sim::new(Default::default());
+        sim.add_player(0, [0.0; 3], 0.0);
+        let table = ItemList::parse(&vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList")).unwrap()).unwrap();
+        let mut inventory = Inventory::default();
+        inventory.bag_mut(Owner::Arisen(0)).slots = [99, 45, 48].map(|item| Slot { item, num: 1, flags: 1 }).to_vec();
+        let mut quick = QuickItems { inventory, items: table, factors: [(0,1.0)].into(), owners: [(0,Owner::Arisen(0))].into() };
+        if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut fight.arisen.get_mut(&0).unwrap().fighter.victim {
+            *hp = 100.0; *hp_max = 2000.0;
+        }
+        let other_hp = fight.arisen[&1].fighter.victim.hp();
+        assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 99);
+        assert_eq!(fight.arisen[&0].fighter.victim.hp(), 1600.0);
+        assert_eq!(fight.arisen[&1].fighter.victim.hp(), other_hp);
+        sim.players[0].stamina = 0.0;
+        assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 45);
+        assert_eq!(sim.players[0].stamina, 250.0);
+        fight.arisen.get_mut(&0).unwrap().fighter.statuses.add(0, &fight.data.tables.status_player);
+        assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 48);
+        assert!(!fight.arisen[&0].fighter.statuses.has(0));
+        assert!(quick.inventory.bag(Owner::Arisen(0)).unwrap().slots.is_empty());
+        assert!(quick.use_next(0, &mut sim, &mut fight).is_err());
+    }
 }
