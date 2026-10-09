@@ -154,3 +154,22 @@ event page 3; 0x00c73630 detects rising bits, 0x00c721c0 uses the group's u16
 remap, and 0x00c722d0 resolves a UniqueID in rSoundMotionSe. Request type 12
 uses the surface helper 0x00c72b60; direct requests use 0x00c724b0. Bank binding
 and surface selection still need tracing before motion cues can be played.
+
+`mtsound::motion` now reads all 92 installed rSoundMotionSe maps. It resolves
+entries by UniqueID, preserving the three signed request variants, bank type,
+joint/attachment, offset and surface-ray margins. Reflection is 0x00ce1250;
+0x00ce10a0 builds the lookup with the last duplicate ID winning. The request
+selector is 0x00c736f0 (selectors 0/1/2 use the three variants; other selectors
+return zero). Player-state selection is still a host input. The rising-edge
+helper follows 0x00c73630, and assembly at 0x00c72287 confirms the u16 LMT
+remap before 0x00c722d0. Tests cover held-bit suppression, remap ordering,
+the absent-ID sentinel and signed request variants. The existing ddcombat
+motion-event reader already retains all four remap pages, so another LMT
+parser is unnecessary.
+
+Direct request dispatch (0x00c724b0) selects sound-unit +0x80 for type 0,
++0x40..+0x64 for types 1..10, and stream +0x68 for type 11. AttributeSeFlag,
+rather than ReqType alone, routes to 0x00c72b60's surface lookup. That path
+also uses the authored joint/offset and vertical ray margins. The resource
+bindings and actual collision surface still need to be supplied before
+motion SFX can be presented faithfully.

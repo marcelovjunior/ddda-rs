@@ -40,4 +40,6 @@ errors. Source addresses and remaining mapping work are in SOUND.md.
 
 Audible playback and comparison against the original have not been verified.
 Conditional Arisen voice, motion footsteps/attacks and field BGM are still
-unconnected. Next: trace motion-event remap and request bank binding.
+unconnected. Motion-event remap and request variants now have a typed reader
+and regression, and all 92 installed motion sound maps parse. Next: bind the
+request banks and surface lookup to actor motion events.
