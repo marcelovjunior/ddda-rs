@@ -13,8 +13,11 @@
 //! data at the new clock (`stage::data_lighting`: the sky scheduler's light
 //! units at the sun, and the weather's fog) and written into every lit
 //! material. The original evaluates its scheduler every frame; once a
-//! game minute (2 real seconds) is the *viewer's* step. The sky domes and
-//! the night spot light keep their start values (not updated yet).
+//! game minute (2 real seconds) is the *viewer's* step. The sky dome's
+//! constants (`CBSky`, `mtweather::sky::constants` at the new sun) are
+//! renewed with it, for the dome and the materials that reflect it. Not
+//! updated yet: the cloud domes' light, the environment cube tint and the
+//! night spot light (they keep their start values).
 //!
 //! *Not modelled:* the pause predicate's cases (`0x0043f3d0`: events, SceNo
 //! up to 1099, stages 800-804 and others). Here the clock stops only while
@@ -38,11 +41,13 @@ pub struct GameClock {
     weather: usize,
     /// The minute the lighting was last built for.
     lit_minute: u32,
+    sky: Option<crate::sky::StageSky>,
 }
 
 impl GameClock {
     pub fn new(vfs: &'static ddvfs::Vfs, stage: u32, weather: usize, ms: u32) -> Self {
-        GameClock { ms: ms % DAY_MS, days: 0, vfs, stage, weather, lit_minute: ms / 60_000 }
+        let sky = crate::sky::StageSky::load(vfs, stage, weather);
+        GameClock { ms: ms % DAY_MS, days: 0, vfs, stage, weather, lit_minute: ms / 60_000, sky }
     }
 
     /// One frame of `seconds` real time.
@@ -71,6 +76,8 @@ pub fn update(
     pause: Res<crate::pause::PauseState>,
     mut lighting: ResMut<StageLighting>,
     mut materials: ResMut<Assets<DdMaterial>>,
+    mut skies: ResMut<Assets<crate::sky::SkyMaterial>>,
+    mut env: Option<ResMut<crate::stage::SkyEnv>>,
 ) {
     let Some(mut c) = clock else { return };
     if pause.paused {
@@ -86,8 +93,24 @@ pub fn update(
     // keep the night spot light the start set up (it follows the player)
     l.spot = lighting.spot;
     *lighting = l;
+    let sky_cb = c.sky.as_ref().map(|sky| {
+        let sun = mtweather::sky::sun_direction(&sky.sky, c.ms);
+        let cb = mtweather::sky::constants(&sky.sky, &sky.inputs, sun);
+        std::array::from_fn::<Vec4, 11, _>(|i| Vec4::from_slice(&cb[4 * i..4 * i + 4]))
+    });
     for (_, m) in materials.iter_mut() {
         m.extension.params = m.extension.params.relit(&lighting);
+        if let Some(cb) = sky_cb {
+            m.extension.set_sky_cb(cb);
+        }
+    }
+    if let Some(cb) = sky_cb {
+        for (_, m) in skies.iter_mut() {
+            m.params.cb = cb;
+        }
+        if let Some(env) = env.as_mut() {
+            env.params.cb = cb;
+        }
     }
 }
 

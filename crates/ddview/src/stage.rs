@@ -176,6 +176,16 @@ pub struct SkyFollow;
 #[derive(Resource, Clone, Debug)]
 pub struct EnvCubeColors(pub [Vec3; 5]);
 
+impl DdExt {
+    /// New sky constants for the materials that reflect the sky
+    /// (`FLAG_SKY_ENV`; the clock's sky update, clock.rs).
+    pub(crate) fn set_sky_cb(&mut self, cb: [Vec4; 11]) {
+        if self.params.flags & FLAG_SKY_ENV != 0 {
+            self.sky.cb = cb;
+        }
+    }
+}
+
 impl DdParams {
     /// The parameters relit by `l`: only materials drawn with the game's
     /// lighting change (the clock's relighting, clock.rs).
