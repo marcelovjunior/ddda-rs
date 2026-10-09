@@ -68,8 +68,7 @@ tolerance, and the mismatches are reported. Fill in Results and report.
 
 The tests:
 - `cargo test -p ddaccept` runs all 5 routes against the private traces
-  in `E:\ddda-re
-otescceptance\` and prints the table. It skips when
+  in `E:\ddda-re\notes\acceptance\` and prints the table. It skips when
   the traces are absent.
 - `-- --ignored` is the strict gate. It fails today.
 
