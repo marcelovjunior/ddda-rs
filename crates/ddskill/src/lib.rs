@@ -5,12 +5,16 @@
 //! * [`growth`]: level-up, experience curve, discipline (job points) and
 //!   vocation rank rules, translated from DDDA.exe.
 //! * [`vocation`]: vocation ids and the vocation-change rules.
+//! * [`catalogue`]: every skill and augment, joining `rSkillList`, tables read
+//!   at run time from the player's `DDDA.exe` ([`exe`]) and the game text.
 //!
 //! Every translated rule names its source address in DDDA.exe 2017-12-13 Steam
 //! (identity in `docs/METHODOLOGY.md`). Findings and open questions are in
-//! `docs/VOCATIONS.md`. Nothing here has been compared with the running game
-//! yet unless a test says so.
+//! `docs/VOCATIONS.md`. Tests say which values were compared with the running
+//! game.
 
+pub mod catalogue;
+pub mod exe;
 pub mod growth;
 pub mod skill_list;
 pub mod vocation;
