@@ -1,5 +1,6 @@
 use ddhost::{npc_placements::{self, Placement}, Host};
 use ddstory::{Host as _, Story};
+use graph_fixture::GraphsWithFault;
 
 struct Void;
 impl ddsim::Ground for Void {
@@ -55,8 +56,13 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
     if !native.exists() { return; }
+    let exe_file = ddexe::ExeFile::next_to(&native).unwrap();
+    let families = npc_placements::NameFamilies::from_exe(&exe_file.image().unwrap()).unwrap();
+    assert_eq!(families.select("nPc_fixture"), Some(false));
+    assert_eq!(families.select("MultiNpc_fixture"), Some(true));
+    assert_eq!(families.select("Enemy_fixture"), None);
     let vfs = ddvfs::Vfs::open(native).unwrap();
-    for (stage, group, npc) in [(200, 1, 39), (100, 4, 304)] {
+    for (stage, group, npc) in [(200, 1, 39), (200, 27, 1), (100, 4, 304)] {
         let list = npc_placements::group_list(&vfs, stage).unwrap();
         let group = list.groups.iter().find(|g| g.slot == group).unwrap();
         let mut found = false;
@@ -72,7 +78,7 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
                 }
             }
         }
-        assert!(found, "q2 target {stage}:{group:?}");
+        assert!(found, "installed layout identity {stage}:{group:?}");
     }
 }
 
@@ -117,9 +123,32 @@ fn unsupported_daily_action_halts_graph_without_destroying_allocated_intel() {
 
 #[test]
 fn later_owner_error_does_not_retry_or_discard_earlier_owner_progress() {
-    use ddnpcrt::{schedule::{Graphs, Npc, Request}, NpcData};
+    use ddnpcrt::schedule::{Npc, Request};
+    let story = Story::new_game(ddhost::data::NoStoryData);
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    host.npcs.npcs.insert(1, Npc::applied(1, &GraphsWithFault, "healthy").unwrap());
+    let mut broken = Npc::applied(2, &GraphsWithFault, "broken").unwrap();
+    broken.done(Some([7.0, 8.0, 9.0]));
+    host.npcs.npcs.insert(2, broken);
+    let first = host.tick(&Default::default()).unwrap();
+    assert_eq!(first.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }],
+        "the successful owner's entry callback must survive the later owner's failure");
+    assert_eq!(host.npcs.position(1), Some([4.0, 5.0, 6.0]));
+    assert!(host.npcs.npcs[&1].action.is_some());
+    assert!(host.npcs.npcs[&2].action.is_none());
+    assert_eq!(host.npc_parked[&2], [7.0, 8.0, 9.0]);
+    assert_eq!(host.npc_errors.len(), 1);
+    assert_eq!(host.npc_errors[0].0, 2);
+    assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty(), "entry callback is not replayed");
+    assert_eq!(host.npc_errors.len(), 1, "failed graph is halted, owner and diagnostic retained");
+}
+
+mod graph_fixture {
+    use ddnpcrt::{schedule::Graphs, NpcData};
     use mtfsm::{Parameter, Record};
-    struct GraphsWithFault;
+    pub struct GraphsWithFault;
     impl Graphs for GraphsWithFault {
         fn graph(&self, path: &str) -> Result<std::sync::Arc<mtfsm::Graph>, ddnpcrt::Error> {
             let healthy = path == "healthy";
@@ -144,23 +173,63 @@ fn later_owner_error_does_not_retry_or_discard_earlier_owner_progress() {
             Err(ddnpcrt::Error::Data("no talk fixture".into()))
         }
     }
-    let story = Story::new_game(ddhost::data::NoStoryData);
+}
+
+#[test]
+fn placement_action_suspends_normal_graph_and_later_apply_supersedes_default() {
+    use ddnpcrt::schedule::Request;
+    for explicit in [false, true] {
+        let mut story = Story::new_game(ddhost::data::NoStoryData);
+        story.stage.stage_no = 200;
+        story.world.stage_no = 200;
+        let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+            ddhost::opening::OpeningWorld::new(), Box::new(Void));
+        host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+        let mut p = placement(1);
+        p.authored_action = if explicit { "broken" } else { "healthy" }.into();
+        if explicit { host.apply_story_npc(200, p.target, "healthy"); }
+        host.load_story_npc_intel(p.clone()).unwrap();
+        assert!(host.npcs.npcs[&1].controller.is_some());
+        let frame = host.tick(&Default::default()).unwrap();
+        assert_eq!(frame.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }]);
+        assert_eq!(host.story_npc_action(1).unwrap().2, "healthy");
+        assert_eq!(host.story_npc_normal_graph_present(1), Some(true));
+        assert!(!host.npcs.npcs.contains_key(&1), "normal graph is suspended, not stepped alongside authored action");
+        assert!(host.npc_errors.is_empty(), "unsupported normal fixture must not execute while suspended");
+        host.unbind_story_npc(200, p.target);
+        assert!(host.story_npc_action(1).is_none());
+        assert!(!host.npcs.npcs.contains_key(&1), "unload cannot restore a retired normal owner");
+    }
+}
+
+#[test]
+fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
     let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
         ddhost::opening::OpeningWorld::new(), Box::new(Void));
-    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
-    host.npcs.npcs.insert(1, Npc::applied(1, &GraphsWithFault, "healthy").unwrap());
-    let mut broken = Npc::applied(2, &GraphsWithFault, "broken").unwrap();
-    broken.done(Some([7.0, 8.0, 9.0]));
-    host.npcs.npcs.insert(2, broken);
-    let first = host.tick(&Default::default()).unwrap();
-    assert_eq!(first.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }],
-        "the successful owner's entry callback must survive the later owner's failure");
-    assert_eq!(host.npcs.position(1), Some([4.0, 5.0, 6.0]));
-    assert!(host.npcs.npcs[&1].action.is_some());
-    assert!(host.npcs.npcs[&2].action.is_none());
-    assert_eq!(host.npc_parked[&2], [7.0, 8.0, 9.0]);
-    assert_eq!(host.npc_errors.len(), 1);
-    assert_eq!(host.npc_errors[0].0, 2);
-    assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty(), "entry callback is not replayed");
-    assert_eq!(host.npc_errors.len(), 1, "failed graph is halted, owner and diagnostic retained");
+    let first = placement(1);
+    let mut second = placement(2);
+    second.target.index = 18;
+    host.reconcile_story_npc_intels(200, vec![second.clone(), first.clone()]).unwrap();
+    host.npcs.npcs.get_mut(&1).unwrap().done(Some([9.0, 8.0, 7.0]));
+    host.reconcile_story_npc_intels(200, vec![first.clone(), second.clone()]).unwrap();
+    assert_eq!(host.npcs.position(1), Some([9.0, 8.0, 7.0]));
+    assert_eq!(host.story_npc_intels().count(), 2);
+    assert!(host.reconcile_story_npc_intels(200, vec![first.clone(), first]).is_err());
+    assert_eq!(host.story_npc_intels().count(), 2, "invalid snapshot cannot retire owners");
+    let external = ddstory::Target { kind: 5, group: 99, index: 0 };
+    host.bind_story_npc(200, external, 3);
+    let mut conflicting = placement(3);
+    conflicting.target.index = 19;
+    assert!(host.reconcile_story_npc_intels(200, vec![conflicting]).is_err());
+    assert_eq!(host.story_npc_intels().count(), 2, "external-owner conflict is validated before retirement");
+    host.unbind_story_npc(200, external);
+    host.reconcile_story_npc_intels(200, vec![second]).unwrap();
+    assert!(!host.npcs.npcs.contains_key(&1));
+    assert!(host.npcs.npcs.contains_key(&2));
+    host.reconcile_story_npc_intels(200, vec![]).unwrap();
+    assert_eq!(host.story_npc_intels().count(), 0);
+    assert!(host.npcs.npcs.is_empty());
 }
