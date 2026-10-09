@@ -21,4 +21,15 @@ fn installed_motion_sound_maps_parse_and_preserve_sparse_ids() {
     }
     assert!(count > 0);
     eprintln!("parsed {count} motion sound maps");
+    let hash = mtarc::type_hash("rSoundAttributeSe");
+    let mut attributes = 0;
+    for path in vfs.paths_of_type(hash) {
+        let bytes = vfs.read(path, hash).unwrap();
+        let map = mtsound::motion::SurfaceRequests::parse(&bytes)
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        assert!(!map.0.is_empty(), "{path}");
+        attributes += 1;
+    }
+    assert!(attributes > 0);
+    eprintln!("parsed {attributes} surface sound maps");
 }

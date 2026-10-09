@@ -151,7 +151,7 @@ and field BGM remain unconnected, so the audio-playback brief remains open.
 
 Motion-SFX trace leads: uSoundMotionSe constructor 0x00c71c20 chooses LMT
 event page 3; 0x00c73630 detects rising bits, 0x00c721c0 uses the group's u16
-remap, and 0x00c722d0 resolves a UniqueID in rSoundMotionSe. Request type 12
+remap, and 0x00c722d0 resolves a UniqueID in rSoundMotionSe. AttributeSeFlag
 uses the surface helper 0x00c72b60; direct requests use 0x00c724b0. Bank binding
 and surface selection still need tracing before motion cues can be played.
 
@@ -173,3 +173,21 @@ rather than ReqType alone, routes to 0x00c72b60's surface lookup. That path
 also uses the authored joint/offset and vertical ray margins. The resource
 bindings and actual collision surface still need to be supplied before
 motion SFX can be presented faithfully.
+
+Player initialization 0x00b5f880 binds pl_com_bmse and the type-0 request
+bank sound/se/pl_com/pl_com. It also binds mt_attri and the 30 surface banks
+from the installed executable's pointer table 0x01875288. Weapon helpers
+0x004b0ed0 and 0x004b11f0 build the primary and secondary sound-bank paths
+from the weapon model category and its model suffix modulo 100; the common
+and specific banks serve direct types 3/4 and 5/6. `weapon_banks` translates
+those helpers with regression coverage for primary/offhand categories and
+the exceptional suffixes, including war002.
+
+`SurfaceRequests` parses the installed rSoundAttributeSe map's 32 request
+IDs per row, bank type and UseFindIntersect. Selection 0x00ce00e0 uses the
+surface index, falling back to entry zero for indices outside 0..31; the
+absent-request sentinel remains intact. Three motion-audio unit tests and
+the installed 92-motion-map/one-surface-map scan pass. Actual surface queries
+are still pending: Terrain currently keeps only material word zero, while
+the sound ray getter 0x00423b80 reads query material +4. Its exact SBC
+material mapping needs confirmation before extending the world-query API.

@@ -27,6 +27,83 @@ impl MotionRequest {
 #[derive(Debug, Clone, Default)]
 pub struct MotionRequests(pub BTreeMap<u16, MotionRequest>);
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceRequest {
+    pub find_intersection: bool,
+    /// Surface-bank type 0, actor common type 1, then bound banks 2..11.
+    pub request_type: u32,
+    pub requests: [u32; 32],
+}
+
+impl SurfaceRequest {
+    // Translated from 0x00ce00e0 (DDDA.exe 2017-12-13 Steam).
+    pub fn request(&self, surface: u32) -> u32 {
+        self.requests.get(surface as usize).copied().unwrap_or(self.requests[0])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SurfaceRequests(pub Vec<Option<SurfaceRequest>>);
+
+impl SurfaceRequests {
+    /// rSoundAttributeSe XFS fields reflected by 0x00cdf460/0x00cdf760.
+    /// Entries are indexed by the motion request's selected SeReqNo.
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let x = mtxfs::parse(bytes).map_err(|e| e.to_string())?;
+        let values = x.get(&x.root, "mpAttributeSeData").ok_or("missing surface sound rows")?;
+        let mut rows = Vec::with_capacity(values.len());
+        for value in values {
+            let o = match value {
+                Value::Object(Some(o)) => o,
+                Value::Object(None) => { rows.push(None); continue; }
+                _ => return Err("invalid surface sound row".into()),
+            };
+            let mut requests = [0; 32];
+            for (n, value) in requests.iter_mut().enumerate() {
+                *value = u32::try_from(integer(&x, o, &format!("SeReqID_{n:02}"))?)
+                    .map_err(|_| "invalid surface sound request")?;
+            }
+            rows.push(Some(SurfaceRequest {
+                find_intersection: boolean(&x, o, "UseFindIntersect")?,
+                request_type: u32::try_from(integer(&x, o, "ReqType")?).map_err(|_| "invalid surface ReqType")?,
+                requests,
+            }));
+        }
+        Ok(Self(rows))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeaponBanks {
+    pub common: String,
+    pub specific: String,
+}
+
+/// Paths selected from the equipped weapon model ID, not its inventory ID.
+/// Primary banks bind direct request types 3/4; secondary banks bind 5/6.
+// Translated from 0x004b0ed0 / 0x004b11f0 (DDDA.exe 2017-12-13 Steam).
+pub fn weapon_banks(model: u32, secondary: bool) -> Option<WeaponBanks> {
+    let category = model >> 24;
+    let name = match (secondary, category) {
+        (false, 1) => "one", (false, 2) => "mac", (false, 3) => "two",
+        (false, 4) => "dag", (false, 5 | 6) => "wan", (false, 7) => "war",
+        (true, 8) => "sld", (true, 9) => "bld", (true, 10) => "bow",
+        (true, 11) => "bbw", (true, 12) => "mbw",
+        _ => return None,
+    };
+    let variant = match (model & 0x00ff_ffff) % 100 {
+        12 => 100,
+        13 => 200,
+        15 if !secondary => 300,
+        2 | 8 if !secondary && category == 7 => 2,
+        _ => 0,
+    };
+    Some(WeaponBanks {
+        common: format!(r"sound\se\wep\{name}_com\wep_{name}_com"),
+        specific: format!(r"sound\se\wep\{name}{variant:03}\wep_{name}{variant:03}"),
+    })
+}
+
 impl MotionRequests {
     /// XFS field names are reflected by 0x00ce1250. The UniqueID map is
     /// built by 0x00ce10a0: later entries replace earlier duplicate IDs.
@@ -106,6 +183,35 @@ pub fn rising_ids(previous: u32, current: u32, remap: &[u16; 32]) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn weapon_bank_paths_use_model_category_and_variant_suffix() {
+        assert_eq!(weapon_banks(0x0100_0000, false).unwrap().specific,
+            r"sound\se\wep\one000\wep_one000");
+        assert_eq!(weapon_banks(0x0400_0070, false).unwrap().specific,
+            r"sound\se\wep\dag100\wep_dag100"); // 112 % 100 == 12
+        assert_eq!(weapon_banks(0x0700_0008, false).unwrap().specific,
+            r"sound\se\wep\war002\wep_war002");
+        assert_eq!(weapon_banks(0x0600_000f, false).unwrap().specific,
+            r"sound\se\wep\wan300\wep_wan300");
+        assert_eq!(weapon_banks(0x0800_000f, true).unwrap().specific,
+            r"sound\se\wep\sld000\wep_sld000");
+        assert_eq!(weapon_banks(0x0a00_000d, true).unwrap().specific,
+            r"sound\se\wep\bow200\wep_bow200");
+        assert_eq!(weapon_banks(0x0100_0000, false).unwrap().common,
+            r"sound\se\wep\one_com\wep_one_com");
+        assert!(weapon_banks(u32::MAX, false).is_none());
+        assert!(weapon_banks(0x0100_0000, true).is_none());
+    }
+    #[test]
+    fn surface_lookup_preserves_sentinel_and_falls_back_only_for_unknown_surface() {
+        let mut r = SurfaceRequest { find_intersection: true, request_type: 0, requests: [71; 32] };
+        r.requests[2] = u32::MAX;
+        r.requests[31] = 89;
+        assert_eq!(r.request(2), u32::MAX);
+        assert_eq!(r.request(31), 89);
+        assert_eq!(r.request(32), 71);
+        assert_eq!(r.request(u32::MAX), 71);
+    }
     #[test]
     fn rising_edges_remap_and_do_not_repeat_held_bits() {
         let mut map = [u16::MAX; 32];
