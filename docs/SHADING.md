@@ -347,6 +347,59 @@ dark blue.
   and 7 swap on story progress 0x1E78 (`--progress`). The castle in ref001
   is now drawn.
 
+## Stage low models — traced
+
+The split controller (`uStageSplitCtrl`, 0x00c5c2d0) creates
+`uStageLowMdl` units: one for `scr\st100\model\st100_all00` (the whole
+map, 30 km wide, up to 1.8 km high: the horizon mountains) and, per area
+slot (0x00c5d7a0), `st100_area<NN>_h` or `_l` with NN from the table at
+0x014e9228 (0, 3, 5, 10, 20, 30). The table at 0x014e8d00 gives each cell
+(row A-40, column B-30) an area value; the player's cell's value marks two
+slots high (3: slots 0/1, 10: 3/0, 12: 3/4, 13: 3/5, 0x23: 1/2), the rest
+are low, and ViewRange FAR or FARTHEST (config object +0x38 >= 2) makes
+all high (0x00c58d60). The viewer places them at the stage origin
+(*assumed*: the creator sets no position) without the streaming fade.
+
+## Primitive pass mask and LOD — traced
+
+The model draw (0x00ea5320) draws a primitive when (1) its group is
+enabled, (2) its LOD byte has the model's current level bit, and (3) its
+draw mode (the primitive's first u16) shares a bit with the pass mask
+(render-pass begin 0x00fedb80: 1 the scene, 2 reflections, 8 / 0x200 the
+shadow casters, 0x10 environment cubes). The LOD level is 1 within the
+model's middle distance, 2 within its far distance, 4 beyond (both
+doubled for ViewRange FAR; FARTHEST keeps 1). The viewer picks the level
+at spawn from the start eye, skips primitives without bit 1, draws those
+with only a shadow bit into the shadow map (e.g. the white cypress shadow
+cards, draw mode 0xE6C8) and marks those without a shadow bit as not
+casting.
+
+## Lighting from the data — traced, checked live
+
+Without `--light` the viewer builds the lighting for `--clock` and
+`--weather` (fine, cloudy, very cloudy):
+- Sun direction: `mtweather::sky::sun_direction` (see Sky).
+- Sun colour (`uSkyInfiniteLight`, 0x00c688a0): the sky's sun colour
+  (the weather's `SunColor`) through the atmosphere to 100 cm above the
+  sky's height offset (Rayleigh, Mie and cloud-slab depth, 0x00f32840
+  with the 50-step integral 0x00f2ffc0), times `mLightScale` (0.1), HLS
+  saturation times `SaturationScale`, times `IntensityScale` (fine 3.0,
+  cloudy 3.6), times one minus the day/night blend (0x004c18c0: sun
+  height clamped to +-0.2, mapped to 0..1). It reproduces the four live
+  day reads within 1 % (regression test).
+- Fill light and hemisphere light: their `DayColor` / `DayRevColor` of the
+  weather blended to `NightColor` / `NightRevColor` by the day/night blend
+  (*assumed* linear; the 20:21 capture agrees within the sun-direction
+  error).
+- Fog: the weather's `scr\st<S>\etc\st<S>_fog_<w>` sampled at the clock
+  (0x00cead20). `uColorFog` (vf09 0x00e47f80) writes the colour, density,
+  start and `1 / (end - start)` for distance type 1 (linear); the stage
+  vertex shaders pass clip w as the fog depth, so the fog is linear in view
+  depth, as the viewer does it.
+- With `--light`, the weather is the one whose fog at the capture's clock
+  equals the captured fog (the refs-lit series is cloudy: `st100_fog_e`;
+  the weather manager's +0x268 holds 1).
+
 ## What the viewer does
 
 `stage.rs` builds each material from `mtmrl::shading::describe`:
@@ -369,6 +422,8 @@ dark blue.
 | DOF | none | not traced |
 | sky dome | `--light`: `sky.rs` | traced shaders, per-pixel; sun reconstructed |
 | water reflection | fog-colour stand-in | partial |
+| stage low models, primitive pass/LOD | `spawn_low_models`, `spawn_parts` | traced |
+| lighting/fog by clock and weather | without `--light` | traced, sun checked live |
 
 Without `--light` the stage keeps Bevy's PBR with the placeholder sun and
 ambient.
@@ -380,9 +435,12 @@ ambient.
 - Post chain: `DOFFilter` (config.ini DofFilter=ON) is not traced; the
   material pass's `fHDRCompressEncode` (0.5) and the chain order are not
   traced. 09:46 is 13-17 % and 15:00 39 % brighter than the captures.
-- Sky: stars, moon, cloud domes and sky fog; the uSky sun matrix code
-  (0x00f36d60) is not translated; a same-time capture with sky in view is
-  needed to compare the sky's brightness.
+- Sky: stars, moon, cloud domes and fog over the sky (the horizon sky is
+  whiter than ref001's); the uSky sun matrix code (0x00f36d60) is not
+  translated.
+- Landmarks beyond the fog end (the Bluemoon Tower at ref001) are a flat
+  fog silhouette in ours but show structure in the original: not
+  explained (both use the low model and linear fog).
 - Water: the reflection cube / planar reflection, normal maps, sun specular
   and volume depth fade.
 - Wind sway of swing models; 8-byte swing records; the cylindrical
