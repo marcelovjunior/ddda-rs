@@ -3573,6 +3573,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtcamera"
+version = "0.1.0"
+dependencies = [
+ "ddquest",
+ "ddvfs",
+ "mtarc",
+]
+
+[[package]]
 name = "mteffect"
 version = "0.1.0"
 dependencies = [

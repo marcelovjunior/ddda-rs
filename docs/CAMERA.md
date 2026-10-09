@@ -1,0 +1,169 @@
+# Cutscene camera lists
+
+`mtcamera` reads `rCameraList` (LCM version 3) and samples its base motion
+camera. Evidence: the 2017-12-13 Steam executable identified in
+[METHODOLOGY.md](METHODOLOGY.md), read-only Ghidra/disassembly and the
+installed resources, checked 2026-10-09. The MIT Riftstone format notes
+(`camera.py` section in the private reference tree) guided the initial
+survey; the Rust implementation was written from the loader and consumer,
+without copying reference code or game data.
+
+**Implemented:** bounded borrowed reader, raw per-frame access, fractional
+sampling and base pose reconstruction. **Tested:** five synthetic tests
+and two installed-data tests. **Compared with the original:** no camera
+playback or rendered-frame comparison. This does not implement an event
+player or the actor-relative adjustments of `uOfsMotionCamera`.
+
+## Binary layout
+
+All numbers are little-endian. All offsets are from the start of the
+file. Loader `rCameraList::vf10` **0x01127660** checks magic/version,
+relocates non-null camera table entries, then relocates their four sample
+arrays. Writer **0x01127710** confirms the layout and element strides.
+
+| Header offset | Type | Meaning |
+|---|---|---|
+| 0x00 | 4 bytes | `LCM\0` |
+| 0x04 | u16 | version 3 |
+| 0x06 | u16 | number of camera slots |
+| 0x08 | u32[slots] | camera block offsets; zero is an empty slot |
+
+Every installed list has 256 slots, but the reader accepts the count in
+the header. A cut number is a **slot index**, not the index in a compacted
+list of present cameras. `CameraList.cameras` therefore preserves nulls.
+The XML-to-binary builder **0x01127c30** explicitly creates 256 slots.
+
+Each non-null offset addresses a 44-byte block:
+
+| Block offset | Type | Meaning |
+|---|---|---|
+| 0x00 | i32[4] | user data, preserved; no application meaning established |
+| 0x10 | u32 | frame count N |
+| 0x14 | u32 | FOV type (0 vertical, 1 horizontal) |
+| 0x18 | u32 | opaque metadata, preserved without interpretation |
+| 0x1c | u32 offset | N eye positions, three f32 each |
+| 0x20 | u32 offset | N stored targets, three f32 each |
+| 0x24 | u32 offset | N XYZW rotations, four f32 each |
+| 0x28 | u32 offset | N FOV values, one f32 each, degrees |
+
+User data comes from `rCameraListXml::CameraInfo.mUserData[4]`: reflection
+**0x01128120** registers four signed integers at object +0x2c, using the
+name at **0x01441820**; **0x01127c30** copies them to block +0x00.
+All four are zero in the corpus. The +0x18 word comes from the XML source
+camera object +0x88; it is **not read by the base sampling consumer**.
+Its six observed bit patterns are 0x3faa9fbe, 0x3faaaaab, 0x3fe38bac,
+0x3fe38e39, 0x3fe38ef3 and 0x40066666. Its meaning remains unresolved.
+
+`uMotionCamera::vf08` **0x00fab460** identifies the arrays by their writes
+to reflected `uCamera.mCameraPos` +0x40, `mTargetPos` +0x60 and `mFov`
++0x3c. Element getters are **0x00fa97a0** (eye), **0x00fa97d0** (target),
+**0x00fa9800** (quaternion). `uMotionCamera::vf21` **0x00faa920** adds
+`mZoom`, clamps FOV to 0.01..179.99 degrees, converts by 0.017453292,
+then constructs projection; a nonzero FOV type adjusts it for horizontal
+FOV. Projection is documented, not implemented here. The FOV_V/FOV_H
+names also agree with the reference notes.
+
+The parser bounds-checks the header, offset table, every block and every
+sample array using checked arithmetic before allocation/indexing. It
+borrows sample arrays; a malicious frame count cannot request an enormous
+sample allocation. Zero-frame blocks and null slots remain representable.
+It accepts padding, overlapping in-bounds spans and trailing bytes because
+the loader does not prohibit them. It does not normalize quaternions,
+replace nonfinite values, or reject unknown metadata/enums. Those bytes
+must remain inspectable; the install test performs the numeric checks.
+
+## Keys and interpolation
+
+LCM v3 has **dense integer-frame samples**, without a sparse key or
+interpolation-mode table. The SDL timeline chooses `mCut` and `mFrame`.
+The following pure helpers translate the relevant portion of
+**0x00fab460**; tests cover boundaries, fractional time, antipodal
+quaternions and reconstructed directions.
+
+1. Skip a missing resource, out-of-range/null cut or zero-frame camera.
+2. Clamp negative local frame to zero. Without `mRepeat`, clamp to N-1.
+3. Truncate to the lower integer frame. The disassembly at
+   **0x00fab543..0x00fab580** changes x87 rounding to *toward zero*;
+   Ghidra's `ROUND` spelling is misleading here.
+4. For a nonzero fraction, choose the next row, wrapping to zero at N.
+   Eye and stored target use `a + (b-a)*fraction`; FOV uses
+   `b*fraction + a*(1-fraction)`.
+5. Quaternion interpolation follows the shorter arc. It takes the
+   absolute dot product and, for a negative dot, negates the **first**
+   endpoint's weight. Below **0x3f7ffffe** (0.9999998807907104, constant at
+   **0x0161c9e4**) it uses spherical weights; otherwise linear weights.
+   It does not normalize afterward. Rust uses standard `acos`/`sin`,
+   not the executable's vector math implementation, so this is not a
+   claim of bit-identical transcendental results.
+6. **0x00fab8e4..0x00faba6a** reconstructs up from the quaternion's Y axis
+   and target from its negative Z axis, scaled by the distance between
+   the interpolated eye and stored target. Thus `Sample.target` and
+   `Sample::pose().target` are intentionally distinct.
+
+`Camera::sample(frame, repeat)` returns `None` for nonfinite time or an
+empty camera. Repeating samples require frame < N; this deliberately
+does not invent modulo-time semantics for externally supplied oversized
+frames. The original advances time afterward by `mSpeed*mDeltaTime` and,
+when reaching N, resets to zero for repeat or clamps to N-1 otherwise.
+Cut advancement and `mCutRepeat` are caller state and are not implemented.
+
+The returned pose is still in the camera's resource coordinate system.
+`uOfsMotionCamera::vf08` **0x007eb9b0** calls the base sampler, adds
+`sWorldOffset` +0x50/+0x54/+0x58 to eye/target and may adjust for the
+actor. Its **0x007ebba0** late update adds further offsets and target
+adjustment. Those paths, parent transforms, roll/track offsets and the
+viewport binding are outside this reader. A future player must supply
+explicit per-view/player context rather than a global player.
+
+## st200 ev10: camera references resolve
+
+See [EVENTS.md](EVENTS.md) for the wake-up scene. The install test reads
+`event\st200\ev10\st200ev10` through `ddquest::sdl::Scheduler`, finds
+its actual `rCameraList` resource key and resolves
+`event\st200\ev10\list\camera\camera`. The list has 256 slots, with
+slots 0..7 populated. `mCut` keys select each slot, and the same camera's
+`mFrame` keys use count mode 1 starting from 0 at each cut.
+
+| Cut | SDL start | Next cut / timeline end | LCM frames |
+|---|---:|---:|---:|
+| 0 | 0 | 460 | 460 |
+| 1 | 460 | 670 | 210 |
+| 2 | 670 | 790 | 120 |
+| 3 | 790 | 910 | 120 |
+| 4 | 910 | 1030 | 120 |
+| 5 | 1030 | 1150 | 120 |
+| 6 | 1150 | 1270 | 120 |
+| 7 | 1270 | 1702 | 433 |
+
+The last camera has one more row than the 432-frame final timeline
+interval. The event ends at timeline frame 1701; the extra row is retained,
+not treated as a parser error. Scheduler cut snapping (EVENTS.md,
+**0x00ddeb00**) remains necessary to avoid fractional interpolation across
+a cut. Resolving the data does not establish final rendered camera poses,
+because this timeline also has actor adjustments.
+
+## Validation and next action
+
+`cargo test -p mtcamera -- --nocapture`:
+
+- Five synthetic regression tests: all truncation lengths of a complete
+  fixture; bad magic/version/count/offsets; zero frames; null slots;
+  preserved metadata; clamp/repeat boundaries; linear/spherical sampling;
+  antipodal quaternion sign; quaternion-derived target and up.
+- Full install: **109 paths, 195 archive copies, 49,920 slots, 1,411
+  non-null cameras, 195,024 frames**. Every copy parses. All numeric samples
+  are finite; every quaternion's squared norm differs from 1 by <0.0001.
+  Half-frame samples and reconstructed poses stay finite. FOV types are
+  exactly {0,1}. These totals include duplicate archive entries.
+- The actual st200 ev10 resource reference, all eight cut indices,
+  corresponding frame-count keys and LCM frame lengths are asserted.
+
+Set `DDDA_NATIVE_PC` to another install root. The install tests explicitly
+skip if the default root is unavailable, fail for a missing explicit root,
+and fail if an existing root contains no camera lists. No game bytes or
+external research exports are included.
+
+Open: +0x18 metadata semantics; user-data application meaning; final
+`uOfsMotionCamera` actor-adjusted pose; original playback comparison.
+Next action: integrate the sampler with an event-player timeline and trace
+the st200 ev10 adjustment targets before a recorded pose comparison.
