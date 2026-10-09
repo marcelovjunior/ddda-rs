@@ -209,6 +209,33 @@ selection, child special-root gates, manager fallback reset and scale guards.
 
 ## Implemented and tested
 
+### Wait action handoff (source traced, not implemented)
+
+The three Wait actions do not wait for motion completion to become
+replaceable. Body entry `0x009a6900` clears actor +0x2530/+0x2540 vectors
+and binds motion 0 with blend 5 and speed 1. Body update `0x009a69d0`
+sets action +0x50 to 1 immediately and, when the owner exists, ORs bit 0
+into both actor +0x2360 and +0x2370. The child Wait updates resolve through
+their installed vtables to `0x009c5b10`, which only sets action +0x50 to 1.
+All three vf07 slots resolve to the no-op `0x005f35c0`.
+
+Child 00 entry `0x009b4a40` binds motion 0 with blend 5. Child 01 entry
+`0x009bda90` uses its own actor +0x72e4: values 0/4/5/6 bind motion 0,
+1/8 bind 0xc9, 2/7 bind 0xca, each with blend 10 and speed 1. Other
+values do not issue a motion request; do not substitute motion 0. The
+body's +0x72e4 is a child pointer, so these same offsets have different
+meanings in the different owning classes.
+
+Base entry cannot be omitted from an eventual driver. `0x009a67b0`,
+`0x009b4920`, and `0x009bd970` call `cActionBase::vf05` (`0x007f1890`),
+reset action state, and bind a checked class owner. The common entry
+clears action completion and actor +0x2370/+0x2374; the enemy-class branch
+also resets +0x273c and restores/remaps the priority mask from +0x2e38 to
++0x2e34 (0x40 to 0x100000 and 0x400 to 0x4000000). Body base entry further
+resets its +0x2578/+0x257c values and writes +0x2574 = 0x100. Child base
+entries do not perform that body-specific reset. No new actor driver or
+completion behavior is claimed by this source handoff.
+
 Isolated `ddenemyrt::chimera` source primitives select body/child death and
 parent reactions, preserving the masks and early-return behavior. Five
 regressions pass: all arbitration bits in both masks, missing damage and
