@@ -28,6 +28,8 @@ pub struct FightData {
     pub arisen: ArisenData,
     /// A level-1 Mage with the starting staff.
     pub mage: ArisenData,
+    /// Per-skill bank-seven bodies; selected independently for each seat.
+    pub skills: crate::skills::SkillSet,
     /// The staff's shell.
     pub shell: ShellParam,
     /// The attacks' values from `param\pl\other\m_pl000_00`.
@@ -45,9 +47,13 @@ impl FightData {
             ddcombat::damage::Adjust::parse(&crate::body::load::read(vfs, p, "rAdjustParam")?)
                 .ok_or_else(|| format!("{p}: bad table"))
         };
+        let arisen = ArisenData::fighter(vfs)?;
+        let mage = ArisenData::mage(vfs)?;
+        let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
         Ok(FightData {
-            arisen: ArisenData::fighter(vfs)?,
-            mage: ArisenData::mage(vfs)?,
+            arisen,
+            mage,
+            skills,
             shell: ShellParam::load(vfs)?,
             attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
                 .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
@@ -199,6 +205,7 @@ impl Fight {
     pub fn equip(&self, sim: &mut ddsim::Sim, seat: u8) {
         if let Some(a) = self.arisen.get(&seat) {
             self.kit(a.kit).equip(sim, seat);
+            self.data.skills.install(sim);
             sim.attack_param = self.data.attack_param;
         }
     }
@@ -296,6 +303,7 @@ impl Fight {
             let data = self.kit(kit);
             if sim.player(seat).is_some_and(|p| p.weapon != data.weapon()) {
                 data.equip(sim, seat);
+                self.data.skills.install(sim);
                 sim.attack_param = self.data.attack_param;
             }
             let Some(p) = sim.player_mut(seat) else { continue };
@@ -410,7 +418,7 @@ impl Fight {
         let mut seats = Vec::new();
         for (&seat, a) in &self.arisen {
             let Some(p) = sim.player(seat) else { continue };
-            let abody = &self.kit(a.kit).body;
+            let abody = self.data.skills.body(p, &self.kit(a.kit).body);
             let (motion, frame) = arisen_motion(abody, p);
             let pose = abody.pose(motion, frame, p.position, p.yaw);
             let acts = abody.activations(motion, frame);
@@ -467,6 +475,7 @@ impl Fight {
                 Kit::Fighter => &self.data.arisen.body,
                 Kit::Mage => &self.data.mage.body,
             };
+            let body = self.data.skills.body(p, body);
             let (motion, frame) = arisen_motion(body, p);
             self.positions.insert(u32::from(seat), p.position);
             let pose = body.pose(motion, frame, p.position, p.yaw);
@@ -506,11 +515,11 @@ impl Fight {
     }
 }
 
-/// The motion an Arisen shows: its ddsim state's motion (bank 0
+/// The motion an Arisen shows: its active skill or ddsim state's motion (bank 0
 /// `m0000_co`, or bank 7 the weapon's `_at` list for the attacks), the
 /// frame wrapped into it.
 fn arisen_motion(body: &crate::body::Body, p: &ddsim::Player) -> (MotionId, f32) {
-    let id = p.state.motion_id();
+    let id = p.motion_id();
     // ddsim counts a state's frames on; the motion wraps
     let m = MotionId::new((id >> 8) as u8, id & 0xff);
     (m, body.wrap_frame(m, p.frame))
