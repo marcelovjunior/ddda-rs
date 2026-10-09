@@ -97,6 +97,8 @@ struct Args {
     cam_pitch: Option<f32>,
     /// Start at the viewer pause menu (also useful with --shot).
     paused: bool,
+    /// Automated runs never grab the cursor or pause on focus loss.
+    unattended: bool,
 }
 
 fn parse_vec3(s: &str) -> Vec3 {
@@ -140,6 +142,7 @@ fn args() -> Args {
         kit: None,
         cam_pitch: None,
         paused: false,
+        unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
         player: None,
@@ -150,6 +153,7 @@ fn args() -> Args {
         size: (1600, 900),
     };
     while let Some(k) = it.next() {
+        if k == "--unattended" { a.unattended = true; continue; }
         if k == "--paused" {
             a.play = true;
             a.paused = true;
