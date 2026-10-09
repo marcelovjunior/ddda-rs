@@ -1,6 +1,73 @@
 use ddenemyrt::chimera::*;
 
 #[test]
+fn installed_think_initializers_preserve_selected_and_fallback_roots() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC"));
+    if !native.is_dir() {
+        eprintln!("DDDA install absent; skipped chimera think regression");
+        return;
+    }
+    let file = ddexe::ExeFile::next_to(&native).unwrap();
+    let exe = file.image().unwrap();
+    for controller in [None, Some(0), Some(1), Some(2)] {
+        for unit in [Unit::Body, Unit::Child00, Unit::Child01] {
+            let init = ThinkInitialization::read(&exe, unit, controller).unwrap();
+            let (current, fallback) = match unit {
+                Unit::Body => (
+                    controller
+                        .map(|i| exe.u32(0x016c_d234 + i * 4).unwrap())
+                        .unwrap_or(0x0170_f060),
+                    0x0170_f060,
+                ),
+                Unit::Child00 => {
+                    let root = if controller == Some(2) {
+                        0x016f_f368
+                    } else {
+                        0x016f_e6e8
+                    };
+                    (root, root)
+                }
+                Unit::Child01 => {
+                    let root = if controller == Some(2) {
+                        0x016f_9a28
+                    } else {
+                        0x016f_8ee8
+                    };
+                    (root, root)
+                }
+            };
+            assert_eq!(
+                (init.current, init.default, init.base),
+                (current, fallback, fallback)
+            );
+            assert_eq!(init.tables.root(0), Some(current));
+            assert!(init.tables.get(current).is_ok() && init.tables.get(fallback).is_ok());
+            for scale in [0.0, 0.25, 1.0, 2.0, f32::NAN] {
+                let mut manager = init.manager(scale);
+                assert_eq!(
+                    (
+                        manager.table,
+                        manager.root,
+                        manager.default_table,
+                        manager.base_table
+                    ),
+                    (current, current, fallback, fallback)
+                );
+                assert_eq!(manager.lock, unit == Unit::Body && controller.is_some());
+                let scaled = scale > 0.0 && scale != 1.0;
+                assert_eq!(manager.scale_on, scaled);
+                assert_eq!(manager.scale, if scaled { scale } else { 1.0 });
+                manager.reset_to_base();
+                assert_eq!((manager.table, manager.root), (fallback, fallback));
+            }
+        }
+    }
+    assert!(ThinkInitialization::read(&exe, Unit::Body, Some(u32::MAX)).is_err());
+}
+
+#[test]
 fn installed_units_bind_bodies_and_keep_owner_pools_independent() {
     use ddcombat::damage::CollisionRates;
     use ddenemyrt::combat::Victim;
