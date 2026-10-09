@@ -159,7 +159,8 @@ steps, in order:
    - skipped if `+0x38 & 0xc00`.
 
    Items 0x74b..0x76c carry built-in skills (`0x0045e130`). A generator
-   seeded with `sItemManager+0x5b00` (`0x00d006c0`; seed origin untraced)
+   seeded with `sItemManager+0x5b00` (`0x00d006c0`; the seed read live as
+   0, its writer untraced)
    picks one of the item's rows at `.rdata` `0x01539f78`. The row's two
    numbers go to `mChgNum` and `mDay1` (`0x0045e510`). No pawn in the
    checked save carries such an item.
@@ -328,7 +329,8 @@ with shifts (15, 17, 4) (`0x00d00690`, tested).
 
 - A static initialiser at `0x0137e5c0` seeds it once at process start with
   0x1105 through `0x00d006c0` (traced). That seeding is translated as
-  `XorShift128::seeded`; a live check of it was requested (#661).
+  `XorShift128::seeded` and was compared live: a call of `0x00d006c0` with
+  seeds 0x1105 and 0 gave exactly the translation's state (#724).
 - No other reseed of this global was found.
 - It is shared by about 400 call sites. Its state when the pool is filled
   therefore depends on everything drawn since the game started, so a
@@ -422,8 +424,9 @@ Each row is an `nRim::cPawnInfoList` (0x18 bytes):
     active flag).
   - **The main pawn is slot 0**, and hired pawns are slots 1 and 2. The
     copy gives each item the owner id slot + 1 (`0x00447000`), and the
-    save's hired pawns carry owner ids 2 and 3 (compared). This matches the
-    save's `mCmc[0..3]`.
+    save's hired pawns carry owner ids 2 and 3 (compared). A live read
+    showed the main pawn in slot 0 and a hired pawn in slot 1 (#724). This
+    matches the save's `mCmc[0..3]`.
   - The Arisen is a separate record at sGameSys+0xa76d0; its +0x700 is the
     player level at sGameSys+0xa7dd0.
   - `cCmcInfo+0x7f4` is the pawn's `mPawnType`, not an occupied flag.
@@ -763,10 +766,10 @@ unless stated:
    "Base Cost": `(L+P)(L-P)^2+18`.
 3. Whether the GUI row filter (§4) matches the original's offline results
    (rift-ui).
-4. The xorshift state at `0x018d017c` just before a pool fill, and a check
-   of the `0x00d006c0` seeding translation (requested, #661).
+4. The xorshift state at `0x018d017c` just before a pool fill (the
+   seeding translation itself was confirmed live, #724).
 5. Whether a sixth summon into the Rift is refused (5-pawn cap).
-6. `sItemManager+0x5b00`, the seed of built-in item skills.
+6. Whether `sItemManager+0x5b00` (read live as 0) ever changes.
 
 Code still to trace:
 

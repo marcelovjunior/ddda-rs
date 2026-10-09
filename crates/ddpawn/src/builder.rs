@@ -20,8 +20,9 @@ pub struct BuilderData<'a> {
     pub masks: &'a SkillMasks,
     pub names: &'a PawnNames,
     pub item_keys: &'a ItemKeyTable,
-    /// The seed `0x0045e130` gives its generator: `sItemManager+0x5b00`,
-    /// whose origin is not traced. Only items 0x74b..0x76c depend on it.
+    /// The seed `0x0045e130` gives its generator: `sItemManager+0x5b00`
+    /// (read live as 0, board #724; its writer is not traced). Only items
+    /// 0x74b..0x76c depend on it.
     pub item_key_seed: u32,
     /// `sGameSys.mLanguage` (+0x16d8): 0 Japanese keeps the data's names.
     pub language: u32,

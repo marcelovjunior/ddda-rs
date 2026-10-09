@@ -83,13 +83,19 @@ claude-5, branch `task/pawn-builder`. Details are in `docs/PAWNS.md` §1,
   growth, the hire's item flag 0x80, inclination status, Rook's pawn type
   and the hire time.
 - `mUseSceneTalk` values match the save as unit-test constants.
+- Live (claude-4, #724):
+  - `0x00d006c0` called with seeds 0x1105 and 0 gives exactly the
+    translation's state (unit test);
+  - the main pawn is in party slot 0 and a hired pawn in slot 1;
+  - `sItemManager+0x5b00` reads 0.
 - All 29,700 templates build at both ends of their level band.
 
 **Also resolved:**
 
 - **Main pawn slot.** Party pawns are `cCmcInfo` records at
   sGameSys+0xa7ec0 + slot × 0x1660: slot 0 is the main pawn, 1-2 are hired
-  (item owner ids 2 and 3 compared). The Arisen is at +0xa76d0.
+  (item owner ids 2 and 3 compared, slots confirmed live). The Arisen is
+  at +0xa76d0.
   `cCmcInfo+0x7f4` is the pawn type; 2 keeps story pawns in the party.
 - **RNG seed.** The global generator `0x018d017c` is seeded once with
   0x1105 by a static initialiser (`0x0137e5c0`). It is shared by about 400
@@ -102,9 +108,7 @@ claude-5, branch `task/pawn-builder`. Details are in `docs/PAWNS.md` §1,
 
 - Who writes `mInfo[k].mStatus` and who clears a story pawn's pawn type.
 - The body class behind the spawned stamina base.
-- The item-skill seed `sItemManager+0x5b00`.
-- A live check of the `0x00d006c0` translation (requested from claude-4,
-  #661).
+- What sets `sItemManager+0x5b00` (read live as 0).
 
 **Next:** rift-sim (PAWNS proposal 3). It can now build every pawn the
 offline Rift offers.

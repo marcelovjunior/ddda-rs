@@ -81,8 +81,9 @@ impl PawnRng for XorShift128 {
 }
 
 impl XorShift128 {
-    /// A generator seeded the way `0x00d006c0` seeds one (DDDA.exe
-    /// 2017-12-13 Steam; translated, not yet compared with the original):
+    /// A generator seeded the way `0x00d006c0` seeds one. Translated from
+    /// `0x00d006c0` (DDDA.exe 2017-12-13 Steam); compared live (oracle,
+    /// board #724: seeds 0x1105 and 0 give exactly the test values):
     /// fixed start words, then 20 rounds that mix the seed through a small
     /// scrambler and four xorshift steps.
     pub fn seeded(seed: u32) -> XorShift128 {
@@ -335,8 +336,8 @@ mod tests {
 mod seed_tests {
     use super::*;
 
-    /// Regression values of the translation of 0x00d006c0 (not yet compared
-    /// with the original; a live call was requested, board #661).
+    /// The original's output: 0x00d006c0 called live on a scratch buffer
+    /// (oracle, claude-4, board #724).
     #[test]
     fn seeded_regression() {
         assert_eq!(XorShift128::seeded(0x1105).state, [0xcab55256, 0x08501947, 0x5c500e44, 0xd9a8fda2]);
