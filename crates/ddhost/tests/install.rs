@@ -17,10 +17,7 @@ fn sim_from_install() {
     let sim = ddhost::install::sim(&vfs).unwrap();
     // The motions the earlier hand lists named (ddview play.rs, ddaccept)
     // are all there, among every slot of both banks.
-    for id in [
-        0u16, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55,
-        0x611,
-    ] {
+    for id in [0u16, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 43, 45, 46, 47, 48, 49, 50, 0x54, 0x55, 0x611] {
         assert!(sim.motions.contains_key(&id), "motion {id:#x}");
     }
     eprintln!("{} motions", sim.motions.len());

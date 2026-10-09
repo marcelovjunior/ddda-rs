@@ -110,10 +110,7 @@ struct Outcome {
 
 fn run(data: InstallData) -> Outcome {
     let story = Story::new_game(data);
-    let world = World {
-        inner: ScriptedHost::opening(),
-        npcs: vec![],
-    };
+    let world = World { inner: ScriptedHost::opening(), npcs: vec![] };
     let mut h = Host::new(Sim::new(HashMap::new()), Some(story), world, Box::new(Void));
     h.join(ProfileId(1), Control::Local, AWAY, 0.0).unwrap();
     h.join(ProfileId(2), Control::Remote, AWAY, 0.0).unwrap();
@@ -132,26 +129,12 @@ fn run(data: InstallData) -> Outcome {
         p.position = pos;
         p.yaw = yaw;
         h.world.npcs = wp
-            .map(|w| {
-                w.npcs
-                    .iter()
-                    .map(|&id| NpcUnit {
-                        id,
-                        unit: ddstory::Player { pos, yaw: 0.0 },
-                    })
-                    .collect()
-            })
+            .map(|w| w.npcs.iter().map(|&id| NpcUnit { id, unit: ddstory::Player { pos, yaw: 0.0 } }).collect())
             .unwrap_or_default();
         let mut inputs = FrameInputs::new();
         // Press interact every other frame while the waypoint asks for it.
         let interact = wp.is_some_and(|w| w.interact) && frame % 2 == 0;
-        inputs.insert(
-            0,
-            PlayerInput {
-                interact,
-                ..Default::default()
-            },
-        );
+        inputs.insert(0, PlayerInput { interact, ..Default::default() });
         inputs.insert(1, PlayerInput::default());
         h.tick(&inputs).unwrap();
         let s = h.story.as_ref().unwrap();
@@ -170,13 +153,7 @@ fn run(data: InstallData) -> Outcome {
                     at_step = 0;
                 }
             }
-            None if s.quest(2).is_some() => {
-                return Outcome {
-                    ladder,
-                    hash: h.state_hash(),
-                    frames: frame,
-                }
-            }
+            None if s.quest(2).is_some() => return Outcome { ladder, hash: h.state_hash(), frames: frame },
             None => {}
         }
     }

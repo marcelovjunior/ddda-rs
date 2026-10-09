@@ -40,39 +40,16 @@ fn inputs(frame: u64, tweak: Option<u64>) -> FrameInputs {
         ..Default::default()
     };
     let mut m = FrameInputs::new();
-    m.insert(
-        0,
-        PlayerInput {
-            sim: p1,
-            interact: false,
-        },
-    );
-    m.insert(
-        1,
-        PlayerInput {
-            sim: p2,
-            interact: frame % 120 < 2,
-        },
-    );
+    m.insert(0, PlayerInput { sim: p1, interact: false });
+    m.insert(1, PlayerInput { sim: p2, interact: frame % 120 < 2 });
     m
 }
 
 fn session() -> Host<NoStoryData, ScriptedHost> {
     let story = Story::new_game(NoStoryData);
-    let mut h = Host::new(
-        Sim::new(HashMap::new()),
-        Some(story),
-        ScriptedHost::default(),
-        Box::new(Flat),
-    );
-    assert_eq!(
-        h.join(ProfileId(1), Control::Local, [0.0, 0.0, 0.0], 0.0),
-        Some(0)
-    );
-    assert_eq!(
-        h.join(ProfileId(2), Control::Remote, [300.0, 0.0, 0.0], 1.0),
-        Some(1)
-    );
+    let mut h = Host::new(Sim::new(HashMap::new()), Some(story), ScriptedHost::default(), Box::new(Flat));
+    assert_eq!(h.join(ProfileId(1), Control::Local, [0.0, 0.0, 0.0], 0.0), Some(0));
+    assert_eq!(h.join(ProfileId(2), Control::Remote, [300.0, 0.0, 0.0], 1.0), Some(1));
     h
 }
 
@@ -143,10 +120,7 @@ fn save_and_load_round_trip() {
     g.load(&file, NoStoryData).unwrap();
     assert_eq!(g.story.as_ref().unwrap().world, h.story.as_ref().unwrap().world);
     for id in [0, 1] {
-        assert_eq!(
-            g.sim.player(id).unwrap().position,
-            h.sim.player(id).unwrap().position
-        );
+        assert_eq!(g.sim.player(id).unwrap().position, h.sim.player(id).unwrap().position);
     }
 }
 
@@ -165,33 +139,13 @@ fn interact_reaches_the_story_one_frame_later_lower_seat_first() {
     let mut h = session();
     let press = |p1: bool, p2: bool| {
         let mut m = FrameInputs::new();
-        m.insert(
-            0,
-            PlayerInput {
-                interact: p1,
-                ..Default::default()
-            },
-        );
-        m.insert(
-            1,
-            PlayerInput {
-                interact: p2,
-                ..Default::default()
-            },
-        );
+        m.insert(0, PlayerInput { interact: p1, ..Default::default() });
+        m.insert(1, PlayerInput { interact: p2, ..Default::default() });
         m
     };
     assert_eq!(h.tick(&press(false, true)).unwrap().interact, None);
-    assert_eq!(
-        h.tick(&press(false, true)).unwrap().interact,
-        Some(1),
-        "held, not pressed again"
-    );
+    assert_eq!(h.tick(&press(false, true)).unwrap().interact, Some(1), "held, not pressed again");
     assert_eq!(h.tick(&press(false, false)).unwrap().interact, None);
     h.tick(&press(true, true)).unwrap();
-    assert_eq!(
-        h.tick(&press(false, false)).unwrap().interact,
-        Some(0),
-        "both pressed: seat 0"
-    );
+    assert_eq!(h.tick(&press(false, false)).unwrap().interact, Some(0), "both pressed: seat 0");
 }

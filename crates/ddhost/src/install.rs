@@ -30,13 +30,8 @@ pub fn adjust_table(vfs: &ddvfs::Vfs, path: &str) -> Result<Vec<f32>, String> {
         return Err(format!("{path}: not an ajp file"));
     }
     let n = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
-    let body = b
-        .get(12..12 + 4 * n)
-        .ok_or(format!("{path}: {n} floats do not fit"))?;
-    Ok(body
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-        .collect())
+    let body = b.get(12..12 + 4 * n).ok_or(format!("{path}: {n} floats do not fit"))?;
+    Ok(body.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
 }
 
 /// Rows `indices` of `pljumpparam`.
@@ -105,39 +100,26 @@ pub fn sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
 /// 784 and 156) and the Suasion factors (`plAbilityParam` record 0x54).
 pub fn catalog(vfs: &ddvfs::Vfs) -> Result<ddeconomy::Catalog, String> {
     let read = |class: &str, path: &str| vfs.read(path, mtarc::type_hash(class));
-    let items = dditem::itl::ItemList::parse(&read("rItemList", r"etc\item\itemList")?)
-        .map_err(|e| format!("{e:?}"))?;
-    let lvup = dditem::lvup::EquipLvUp::parse(&read("rEquipLvUp", r"etc\item\equipLvUp")?)
-        .map_err(|e| format!("{e:?}"))?;
+    let items = dditem::itl::ItemList::parse(&read("rItemList", r"etc\item\itemList")?).map_err(|e| format!("{e:?}"))?;
+    let lvup = dditem::lvup::EquipLvUp::parse(&read("rEquipLvUp", r"etc\item\equipLvUp")?).map_err(|e| format!("{e:?}"))?;
     let mut shops = std::collections::BTreeMap::new();
     let h = mtarc::type_hash("rShopList");
     for p in vfs.paths_of_type(h) {
         let name = p.rsplit('\\').next().unwrap_or("");
-        let Some(no) = name.get(1..4).and_then(|n| n.parse::<u32>().ok()) else {
-            continue;
-        };
+        let Some(no) = name.get(1..4).and_then(|n| n.parse::<u32>().ok()) else { continue };
         if (no == 784 || no == 156) != p.starts_with("dl1") {
             continue;
         }
-        shops.insert(
-            no,
-            dditem::shop::ShopList::parse(&vfs.read(p, h)?).map_err(|e| format!("{p}: {e:?}"))?,
-        );
+        shops.insert(no, dditem::shop::ShopList::parse(&vfs.read(p, h)?).map_err(|e| format!("{p}: {e:?}"))?);
     }
-    let x = mtxfs::parse(&read("rPlAbilityParam", r"param\pl\other\plAbilityParam")?)
-        .map_err(|e| e.to_string())?;
+    let x = mtxfs::parse(&read("rPlAbilityParam", r"param\pl\other\plAbilityParam")?).map_err(|e| e.to_string())?;
     let objs = x.walk();
     let rec = *objs.get(1 + 0x54).ok_or("plAbilityParam: no record 0x54")?;
     let f = |n: &str| match x.get(rec, n).and_then(|v| v.first()) {
         Some(mtxfs::Value::F(v)) => Ok(v[0] as f32),
         _ => Err(format!("plAbilityParam 0x54: no {n}")),
     };
-    Ok(ddeconomy::Catalog {
-        items,
-        shops,
-        lvup,
-        suasion: (f("mFVal0")?, f("mFVal1")?),
-    })
+    Ok(ddeconomy::Catalog { items, shops, lvup, suasion: (f("mFVal0")?, f("mFVal1")?) })
 }
 
 /// Progression's tables from the install and the player's `DDDA.exe`.
