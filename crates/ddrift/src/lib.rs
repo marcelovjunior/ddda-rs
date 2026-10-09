@@ -9,6 +9,10 @@
 //!
 //! Rules are translations of DDDA.exe (2017-12-13 Steam) cited per
 //! function. The offline game is modelled: network pawns never appear.
+//!
+//! Players are seats (`ddid::PlayerId`). [`Rift::save`] / [`Rift::load`]
+//! give the host's shared `RIFT` chunk; the stock is refilled on load, as
+//! the original does (`save` module; docs/adr/0002-game-host.md).
 
 pub mod data;
 pub mod log;

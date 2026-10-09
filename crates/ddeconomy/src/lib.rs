@@ -8,6 +8,10 @@
 //! are [`Session`]s holding an NPC interaction lock: one player per NPC
 //! (docs/COOP_DESIGN.md). Story state (flags, progress, affinity, the day
 //! counter) comes from `ddstory::World`.
+//!
+//! Players are seats (`ddid::PlayerId`, u8, 0 = the host). [`Economy::save`]
+//! / [`Economy::load`] give the host's `ECON` chunks: a shared part and one
+//! part per seat (`save` module; docs/adr/0002-game-host.md).
 
 pub mod inventory;
 pub mod save;

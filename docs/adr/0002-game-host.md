@@ -48,6 +48,8 @@ That is the host.
 | `world` | a `StoryWorld`: actors and presentation the story talks to |
 | `ground` | `ddsim::Ground` (stage collision from `ddworld`) |
 | `locks` | the NPC interaction locks (section 5) |
+| `economy`, `progression`, `rift` | `ddeconomy::Economy`, `ddprogress::Progression`, `ddrift::Rift` |
+| `data` | their game data (`SystemData`: catalog, tables, Rift data) |
 
 `Host::tick(&FrameInputs)` runs one frame. It is the only place that knows
 the system order. The systems never call each other: the host passes
@@ -105,11 +107,11 @@ stands for.
 | 1. step | 6 `sMain::vf06` (clock) | `FrameClock` |
 | 2. world completions | 18-20 (stage and event modes) | `StoryWorld::events` |
 | 3. story: QCT, events, scenarios, scripts | 20 (`aGameMain`, `aStage`, `sScenario`), 36 line 0 | `ddstory` |
-| 4. game clock, day, restock | 18 `sGameSys` | `ddstory::World`, `ddeconomy` (next) |
+| 4. restock once per new day | 20 `sNpcManager::vf06` 0x00475AD0, in aGameMain's managers before `sQuestManager` | `ddeconomy::Economy::update` |
 | 5. input latch | 22-25 `sQlocInput`, `sKeyboard`, `sMouse` | `input` |
 | 6. AI objects | 30 `sAI` | AI runtime (next) |
 | 7. hits from the last frame's volumes | 33 `0x004792C0` | `ddcombat` (next) |
-| 8. Arisen and pawns move | 36 line 10 "Player" | `ddsim` (Arisen done) |
+| 8. Arisen and pawns move; level-up and rank-up (phase 90) | 36 line 10 "Player" (0x00B5BD20, 0x00B5C230) | `ddsim` (Arisen done), `ddprogress::Progression::step` |
 | 9. enemies and NPCs move | 36 line 15 "Enemy" | next |
 | 10. push-out between characters | 38 `0x004797E0` | next |
 | 11. AI senses | 40 pass B | next |
@@ -166,14 +168,13 @@ inline.*
   - one hired pawn;
   - guest Arisen in the last hired slot (COOP_DESIGN.md).
 
-**Request to the owners (not done here):** the crates disagree on the id
-type:
-- ddsim and ddprogress use `u8`;
-- ddrift uses `struct PlayerId(u8)`;
-- ddeconomy uses `usize`.
+**One identity** (host-integration): the crate `ddid` defines
+`PlayerId = u8` (the seat; the same type as `ddsim::PlayerId`) and
+`ProfileId(u64)`. `ddeconomy`, `ddprogress`, `ddrift` and `ddhost` all use
+it. Before, they used `usize`, `u8` and `struct PlayerId(u8)`.
 
-The host converts for now. One type would be better: `u8` seats, or a
-shared tiny crate.
+System crates key their state by seat. Only the host knows profiles: it
+files each seat's save part under that seat's profile (section 6).
 
 ## 5. The interaction lock
 
@@ -189,9 +190,21 @@ uses is locked for the other. The original has nothing like this.
 - The interact prompt is not offered for an NPC another seat holds.
 - Leaving the session releases all of the seat's locks.
 
-`ddeconomy::Economy` keeps its own lock map for its sessions. With the
-host acquiring first, that map can only agree with the host's. It stays as
-a consistency check.
+How the systems use it (host-integration):
+- **Shops.** `Host::open_shop` takes the host lock first, then opens the
+  economy session. If the economy refuses (closed shop, no shop), the
+  lock is released. `Host::close_shop` releases both.
+  `ddeconomy::Economy` keeps its own lock map; with the host acquiring
+  first, the two can only agree.
+- **The Rift is not an NPC lock.**
+  - Both Arisen may stand at a Riftstone together (`Host::rift_enter`).
+    The first opens the room (uRim) and the last one out closes it.
+  - A room pawn being talked to is locked for the other Arisen through
+    ddrift's own talk lock (`RoomSlot::talking`).
+  - A hire is paid from the hiring seat's wallet, at the cost from that
+    Arisen's level (`Host::rift_hire`).
+- **Leaving.** A seat that leaves loses its NPC locks, its shop sessions
+  (`Economy::close_all`) and its place at the Riftstone.
 
 The story's scenario prompts (`sScenario` +0x108) take one player per
 frame. When both press on the same frame, the host gives the press to the
@@ -212,11 +225,47 @@ build that lacks a crate.
 
 | Tag | Owner | Content | Status |
 |---|---|---|---|
+| `HOST` | shared | frame count, the seats with their profiles, who hired each pawn | done |
 | `WRLD` | shared | `ddstory::World::save` ("DDST" v1) | done |
 | `PLCE` | profile | the Arisen's position and yaw | done |
-| `ECON` | profile; shared | wallet and bag; shop stock and restock day | requested from ddeconomy |
-| `PROG` | profile; shared (main pawn) | level, exp, vocation, skills | requested from ddprogress |
-| `RIFT` | shared; profile | pawn stock and log; hired pawns | requested from ddrift |
+| `ECON` | profile; shared | wallet, bag, storage; shop stock, restock day, buy-back, gates, pawn bags (`Economy::save`) | done |
+| `PROG` | profile; shared | the seat's Arisen record; pawns, character order, party roles (`Progression::save`) | done |
+| `RIFT` | shared | party pawns, pawn log, cost multiplier (`Rift::save`) | done |
+
+Each crate writes its parts with `ddid::Writer` as `ddid::Parts { shared,
+players }`, keyed by seat. Each part starts with a version byte. Floats
+are stored by bits, so a load gives back the exact state.
+
+**Loading on other seats.** The host saves the seat → profile table in
+`HOST`. On load:
+- it hands each crate the parts of the profiles seated now, under their
+  new seats;
+- it gives `Progression::load` a seat map (old → new), because its
+  shared part names the Arisen by seat;
+- a profile that is not seated now is left out, with its party slot.
+
+**Not saved, by design:**
+- **Open interactions.** `Host::save` refuses while any NPC lock, shop
+  session or Rift visit is open, as the original cannot save in a shop
+  or at a Riftstone.
+- **The Rift's stock.** It is rebuilt on every load, as the original does
+  (`Rift::refill`, 0x0047D330; `Host::refill_rift` with the Rift data and
+  an RNG).
+- **Running scripts**, as before.
+
+**Two hashes.**
+- `saved_hash` covers exactly what a save keeps:
+  - frame, seats, party, hirers;
+  - each Arisen's place;
+  - the story world, economy, progression;
+  - the Rift without its stock.
+
+  It is equal before a save and after its load (`tests/session.rs`).
+- `state_hash` adds what a load cannot restore and replays must compare:
+  - every body field;
+  - the story's stage, quests and script states
+    (`Story::script_states`);
+  - open interactions, pending presses and the request log.
 
 Policy (**decision**; COOP_DESIGN.md left it open):
 - The host's save holds everything.

@@ -12,6 +12,11 @@
 //! player: characters are addressed by id and party roles name their
 //! player. Shared story state (`ddstory::World`) is only mirrored for the
 //! fields the original keeps there (`sync_to_world`).
+//!
+//! Players are seats (`ddid::PlayerId`). [`Progression::save`] /
+//! [`Progression::load`] give the host's `PROG` chunks: each seat's Arisen
+//! record, and a shared part with the pawns and the party, loaded through a
+//! seat map (`save` module; docs/adr/0002-game-host.md).
 
 pub mod change;
 pub mod character;
