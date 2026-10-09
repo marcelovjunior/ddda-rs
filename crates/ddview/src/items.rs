@@ -1,0 +1,161 @@
+//! Local quick-use adapter. Reads the original save; never writes it.
+//! Inventory selection is viewer policy, recovery rules live in headless
+//! crates. LAN item requests are not yet part of the network protocol.
+
+use bevy::prelude::Resource;
+use ddeconomy::inventory::{Bag, Inventory, Owner, Slot};
+use ddeconomy::item_use::{Recovery, UseError};
+use ddhost::ddenemyrt::fight::Fight;
+use dditem::itl::ItemList;
+use ddsave::xml::{Document, Node};
+use ddsim::{PlayerId, Sim};
+use std::collections::BTreeMap;
+
+#[derive(Resource)]
+pub struct QuickItems {
+    pub inventory: Inventory,
+    items: ItemList,
+    factors: BTreeMap<PlayerId, f32>,
+    owners: BTreeMap<PlayerId, Owner>,
+}
+
+fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
+    let count: usize = node.get("mItemCount").ok_or("missing mItemCount")?;
+    let array = node.child("mItem").ok_or("missing bag mItem")?;
+    if count > 256 || array.count() != Some(256) || array.children().count() != 256 {
+        return Err("invalid saved bag size".into());
+    }
+    let mut slots = Vec::new();
+    for entry in array.children().take(count) {
+        let item = ddsave::pawn::Item::read(entry).ok_or("invalid saved item")?;
+        if item.num <= 0 || item.item_no < 0 { return Err("invalid occupied item slot".into()); }
+        slots.push(Slot { item: item.item_no, num: item.num, flags: item.flag });
+    }
+    Ok(Bag { slots })
+}
+
+impl QuickItems {
+    /// The original save has four bags in cSAVE_DATA_ITEM order. Each
+    /// local Arisen imports its own copy of bag 0, matching the viewer's
+    /// existing same-save character setup. Only the first local Arisen's
+    /// main pawn is bound here, to avoid duplicating the shared pawn bag.
+    pub fn load(vfs: &ddvfs::Vfs, xml: &str, locals: &[PlayerId]) -> Result<Self, String> {
+        let doc = Document::parse(xml).map_err(|e| e.to_string())?;
+        let player = doc.root().path("mPlayerDataManual/mPlCmcEditAndParam").ok_or("missing manual player data")?;
+        let bags = player.child("mItem").ok_or("missing saved bags")?;
+        let bags: Vec<_> = bags.children().map(read_bag).collect::<Result<_, _>>()?;
+        if bags.len() != 4 { return Err("expected four saved character bags".into()); }
+        let bytes = vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList"))?;
+        let items = ItemList::parse(&bytes).map_err(|e| e.to_string())?;
+        let bytes = vfs.read(r"param\pl\other\plAbilityParam", mtarc::type_hash("rPlAbilityParam"))?;
+        let xfs = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
+        let nodes = xfs.walk();
+        let row = nodes.get(1 + 0x4a).ok_or("missing recovery augment row")?;
+        let factor = |param: Node<'_, '_>| -> Result<f32, String> {
+            let abilities: Vec<i8> = param.array("mAbility").ok_or("missing augment slots")?;
+            let field = if abilities.contains(&0x4a) { "mFVal0" } else { "mFVal1" };
+            match xfs.get(row, field).and_then(|v| v.first()) {
+                Some(mtxfs::Value::F(v)) if v.len() == 1 => Ok(v[0] as f32),
+                _ => Err("invalid recovery augment factor".into()),
+            }
+        };
+        let arisen_factor = factor(player.path("mPl/mParam").ok_or("missing Arisen params")?)?;
+        let mut inventory = Inventory::default();
+        let mut owners = BTreeMap::new();
+        let mut factors = BTreeMap::new();
+        for &seat in locals {
+            owners.insert(seat, Owner::Arisen(seat));
+            factors.insert(seat, arisen_factor);
+            inventory.bags.insert(Owner::Arisen(seat), bags[0].clone());
+        }
+        if let Some(&seat) = locals.first() {
+            if let Some(pawn) = player.child("mCmc").and_then(|a| a.children().next()) {
+                let pawn_seat = crate::play::pawn_seat(seat);
+                factors.insert(pawn_seat, factor(pawn.child("mParam").ok_or("missing pawn params")?)?);
+                owners.insert(pawn_seat, Owner::Pawn(0));
+                inventory.bags.insert(Owner::Pawn(0), bags[1].clone());
+            }
+        }
+        Ok(Self { inventory, items, factors, owners })
+    }
+
+    fn needed(&self, effect: Recovery, seat: PlayerId, sim: &Sim, fight: &Fight) -> bool {
+        let Some(actor) = fight.arisen.get(&seat) else { return false };
+        if actor.fighter.victim.dead() { return false; }
+        let hp = match actor.fighter.victim {
+            ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } => hp < hp_max && effect.hp > 0.0,
+            _ => false,
+        };
+        let stamina = sim.players.iter().find(|p| p.id == seat).is_some_and(|p| {
+            let cursed = actor.fighter.statuses.has(9);
+            effect.stamina > 0.0 && p.stamina < p.stamina_max * if cursed { 0.6 } else { 1.0 }
+        });
+        hp || stamina || actor.fighter.statuses.mask() & effect.cures != 0
+    }
+
+    /// Viewer policy: first useful supported restorative in this seat's
+    /// bag. A missing/dead character or fully recovered party spends none.
+    /// Host calls this before its next frame; it must not run on a client.
+    pub fn use_next(&mut self, seat: PlayerId, sim: &mut Sim, fight: &mut Fight) -> Result<i16, String> {
+        if !fight.arisen.get(&seat).is_some_and(|a| !a.fighter.victim.dead()) {
+            return Err("item user is missing or dead".into());
+        }
+        let owner = *self.owners.get(&seat).ok_or("no saved bag for seat")?;
+        let bag = self.inventory.bag(owner).ok_or("no saved bag")?;
+        let (index, item, effect) = bag.slots.iter().enumerate().find_map(|(i, slot)| {
+            let effect = self.inventory.recovery(&self.items, owner, i).ok()?;
+            let useful = if effect.whole_party {
+                self.owners.keys().any(|&id| self.needed(effect, id, sim, fight))
+            } else { self.needed(effect, seat, sim, fight) };
+            useful.then_some((i, slot.item, effect))
+        }).ok_or("no useful supported restorative in this bag")?;
+        let recipients: Vec<_> = self.owners.iter().filter(|(id, _)| effect.whole_party || **id == seat)
+            .map(|(&id, _)| (id, self.factors[&id])).collect();
+        self.inventory.use_recovery(&self.items, owner, index, |effect| {
+            for (id, factor) in recipients {
+                let Some(actor) = fight.arisen.get(&id) else { continue };
+                if actor.fighter.victim.dead() { continue; }
+                let effect = effect.for_recipient(factor, false);
+                // B77780 applies stamina before cures (curse still caps it).
+                let cursed = actor.fighter.statuses.has(9);
+                if let Some(player) = sim.players.iter_mut().find(|p| p.id == id) {
+                    player.recover_item_stamina(effect.stamina, cursed);
+                }
+                fight.recover_item(id, effect.hp, effect.cures);
+            }
+            Ok::<_, UseError>(())
+        }).map_err(|e| format!("item use: {e:?}"))?;
+        Ok(item)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_bag_count_and_invalid_entries_are_checked() {
+        let entries = "<class type=\"sItemManager::cITEM_PARAM_DATA\"><s16 name=\"data.mNum\" value=\"2\"/><s16 name=\"data.mItemNo\" value=\"43\"/><u32 name=\"data.mFlag\" value=\"1\"/></class>".repeat(256);
+        let xml = format!("<class><u32 name=\"mItemCount\" value=\"1\"/><array name=\"mItem\" count=\"256\">{entries}</array></class>");
+        let doc = Document::parse(&xml).unwrap();
+        assert_eq!(read_bag(doc.root()).unwrap().slots, vec![Slot { item: 43, num: 2, flags: 1 }]);
+        let malformed = xml.replace("value=\"1\"/><array", "value=\"257\"/><array");
+        let doc = Document::parse(&malformed).unwrap();
+        assert!(read_bag(doc.root()).is_err());
+    }
+
+    #[test]
+    fn saved_bags_import_into_distinct_local_seats() {
+        let Some(path) = std::env::var_os("DDDA_TEST_SAVE") else { return };
+        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let save = ddsave::SaveFile::parse(&std::fs::read(path).unwrap()).unwrap();
+        let mut items = QuickItems::load(&vfs, &save.xml, &[0, 1]).unwrap();
+        let first = items.inventory.bag(Owner::Arisen(0)).unwrap().clone();
+        assert_eq!(&first, items.inventory.bag(Owner::Arisen(1)).unwrap());
+        items.inventory.bag_mut(Owner::Arisen(0)).slots.clear();
+        assert_eq!(&first, items.inventory.bag(Owner::Arisen(1)).unwrap());
+        assert!(items.factors.values().all(|f| f.is_finite() && *f > 0.0));
+    }
+}
