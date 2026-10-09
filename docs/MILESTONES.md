@@ -108,12 +108,34 @@ Reference comparison (2026-10-08, private `E:\ddda-re\shots\refs`):
   a ring of distant `fmfore` cell models are drawn. Water material is a
   placeholder.
 
-Missing for the M1 gate:
-- The castle seen in ref001 (not in the cell layouts; source not found).
-- Terrain layer blending (only the base albedo is drawn); the water and
-  stage lighting shaders (sun and ambient are placeholders); fog.
-- Euler order of layout angles is assumed XYZ (consistent so far, not
-  traced in the exe).
+M1 gate comparison (2026-10-09, branch task/m1-gate; side-by-sides in
+the private `E:\ddda-re\shots`, rendered with `ddview --ref`):
+- Since the list above: terrain layers, the original's lighting (SH,
+  sun with shadow map, linear fog), the stage filter chain (vignette and
+  tone curve), the Rayleigh/Mie sky dome, water materials, the castle and
+  the other `uFmSetBase` landmarks, the far cell terrain, the stage
+  low models (`st100_all00` and the area backdrops: the horizon mountains)
+  and the primitives' pass and LOD rules are drawn ([SHADING.md](SHADING.md)).
+- Without `--light` the lighting, fog and sky come from the game data for
+  a clock and weather (`--clock`, `--weather`; default 12:00, fine).
+  The sun light colour reproduces the four live day reads within 1 %.
+- ref001 (castle view, clock unknown, at 12:00 fine): mean colour of the
+  frame (8-bit sRGB) ref (97,103,103) / ours (100,107,107); distant
+  mountain (106,142,186) / (104,140,185); mid ground (110,127,139) /
+  (110,129,142). The haze, the horizon mountains and the cypresses match.
+- ref002 (coast cliff, 12:00 fine): frame (98,106,108) / (113,120,121);
+  the party, the HUD and the event chest are not drawn.
+- ref004 / ref005 (coast with a tree, 12:00 fine): frame (80,92,89) /
+  (113,122,111) and (105,116,119) / (119,129,130). The original's clock
+  is unknown; its tree shadow shows a lower sun than 12:00.
+- refs-lit 12:21 and 17:45 (live lighting, cloudy weather found from the
+  fog): ground (30,39,40) / (31,40,41) and (26,34,34) / (25,34,35); a
+  second ground box matches to the level.
+- Gaps: depth of field; stars, moon, clouds and fog over the sky (the
+  horizon sky is whiter than the original's); the water's reflection
+  (stand-in, the sea is too light); night point lights; characters and
+  event objects. Captures with the clock and weather recorded would let
+  refs 001-005 be compared at their real time.
 
 **Started: M2** (Walk), alongside the M1 shading gaps, at the maintainer's
 request (2026-10-08). See [ANIMATION.md](ANIMATION.md).

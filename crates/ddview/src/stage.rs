@@ -110,6 +110,8 @@ const FLAG_MAP: u32 = 1;
 const FLAG_DD_LIGHTING: u32 = 2;
 const FLAG_REFLECT: u32 = 4;
 const FLAG_SPEC_MAP: u32 = 8;
+/// Drawn into the shadow map only (draw mode without the main pass).
+const FLAG_SHADOW_ONLY: u32 = 16;
 
 impl DdParams {
     fn with_lighting(mut self, l: &StageLighting) -> Self {
@@ -205,6 +207,38 @@ pub struct Part {
     pub mesh: Handle<Mesh>,
     pub material: PartMaterial,
     pub triangles: usize,
+    /// The primitive's LOD mask (bit 0 near, 1 middle, 2 far; 255 all).
+    pub lod: u8,
+    /// Drawn into the shadow map (draw mode has a shadow-cast pass bit).
+    pub casts_shadow: bool,
+    /// The model's middle and far LOD distances (cm).
+    pub lod_dist: [f32; 2],
+}
+
+/// Pass mask of the scene's main colour pass (`FUN_00fedb80` pass masks:
+/// 1 for the scene and most named passes, also the reset value in
+/// 0x00fed710; 2 reflections, 0x10 environment cubes, 8 or 0x200 the
+/// shadow casters).
+const PASS_MAIN: u16 = 0x1;
+const PASS_SHADOW: u16 = 0x8 | 0x200;
+
+/// LOD level (1 near, 2 middle, 4 far) of a model at `dist` cm from the
+/// camera: the far level beyond its far distance, the middle one beyond
+/// its middle distance, both scaled by 2 for ViewRange FAR; FARTHEST
+/// always draws the near level.
+// Translated from 0x00ea5320 (DDDA.exe 2017-12-13 Steam)
+pub fn lod_level(dist: f32, mid: f32, low: f32, view_range: u32) -> u8 {
+    if view_range == 3 {
+        return 1;
+    }
+    let k = if view_range == 2 { 2.0 } else { 1.0 };
+    if low * k < dist {
+        4
+    } else if mid * k < dist {
+        2
+    } else {
+        1
+    }
 }
 
 /// Index into `Vertices::uvs` (the layout's `TexCoord` elements in order)
@@ -288,6 +322,73 @@ const LANDMARKS: [Landmark; 15] = [
     Landmark { radius: 20000.0, position: [-101490.0, 53800.0, -1200.0], gate: None },
 ];
 
+/// Area of each stage-100 cell for the low models: row `A - 40`, column
+/// `B - 30` (checked against the cell grid's outline), '.' none, '3' / 'a' /
+/// 'c' / 'd' / 'z' the values 3 / 10 / 12 / 13 / 0x23.
+// Translated from the table at 0x014e8d00 (DDDA.exe 2017-12-13 Steam)
+const LOW_MODEL_AREAS: [&str; 32] = [
+    "........................................",
+    "........................................",
+    ".......................ddddd............",
+    ".......................ddddd............",
+    "......................ddddddd...........",
+    ".....................ddddddddd..........",
+    ".....................ddddddddd..........",
+    ".....ccccccc.........ddddddddd..........",
+    ".....ccccccc.......ddddddd..ddd.........",
+    ".....cccccccccccccddddddd...ddddd.......",
+    ".....cccccccccccccddddddd....ddddd......",
+    "......ccccccccccccddddddd......dd.......",
+    "......ccccccccccccaaaaaaa......dd.......",
+    "......ccccccccccccaaaaaaaa......d.......",
+    ".......cccccccccccaaaaaaaa..............",
+    ".......cccccccccaaaaaaaaaa..............",
+    ".........cccc.ccaaaaaaaaaa..............",
+    "..................aaaaaaa...............",
+    "..................aaaaaa................",
+    "..................333333................",
+    "..........zzzzzz..3333333...............",
+    "..........zzzzzzzz33333333..............",
+    "..........zzzzzzzz33333333..............",
+    "..........zzzzzzzz33333333..............",
+    "..........zzzzzzzz33333333..............",
+    ".........zzzzzzzzz33333333..............",
+    ".........zzzzzzzzz3333..................",
+    ".........zzzzzzzzz3333..................",
+    ".........zzzzzzzzz3333..................",
+    ".........zzzzzzzzz3333..................",
+    ".........zzzzzzzzz3333..................",
+    ".........zzzz...........................",
+];
+
+/// `st100_area%02d` numbers of the six low-model slots.
+// Translated from the table at 0x014e9228 (DDDA.exe 2017-12-13 Steam)
+const LOW_MODEL_NUMBERS: [u32; 6] = [0, 3, 5, 10, 20, 30];
+
+/// Which low-model slots use the high model for the player's cell.
+// Translated from 0x00c5d7a0 (DDDA.exe 2017-12-13 Steam)
+fn low_model_high_slots(cell: (i32, i32)) -> [bool; 6] {
+    let (row, col) = (cell.0 - 40, cell.1 - 30);
+    let area = usize::try_from(row)
+        .ok()
+        .zip(usize::try_from(col).ok())
+        .and_then(|(r, c)| LOW_MODEL_AREAS.get(r)?.as_bytes().get(c).copied())
+        .unwrap_or(b'.');
+    let mut high = [false; 6];
+    let slots: &[usize] = match area {
+        b'3' => &[0, 1],
+        b'a' => &[3, 0],
+        b'c' => &[3, 4],
+        b'd' => &[3, 5],
+        b'z' => &[1, 2],
+        _ => &[],
+    };
+    for &i in slots {
+        high[i] = true;
+    }
+    high
+}
+
 /// Path of the first `rModel` entry of an archive.
 fn arc_model_path(arc: &std::path::Path) -> Option<String> {
     let (index, _) = mtarc::Archive::open(arc).ok()?;
@@ -306,6 +407,11 @@ pub struct Loader<'a> {
     /// (`XfB_N__EW...` materials) is not read yet.
     pub water: Option<Handle<StandardMaterial>>,
     pub stats: Stats,
+    /// Viewer eye (viewer units) for the models' LOD choice; `None` draws
+    /// the near level.
+    pub lod_eye: Option<Vec3>,
+    /// The config's ViewRange (1 NORMAL, 2 FAR, 3 FARTHEST).
+    pub view_range: u32,
 }
 
 /// Builds a Bevy image from a TEX file, sRGB for the formats the exe
@@ -421,11 +527,16 @@ impl Loader<'_> {
         let swm = swm_bytes.as_deref().and_then(|b| mtswm::parse(b).ok());
         // Keyed by (material index, drawn two-sided as a stand-in for an
         // undecoded billboard node).
-        let mut mat_cache: HashMap<(u16, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
+        let mut mat_cache: HashMap<(u16, bool, bool), (PartMaterial, Option<Shading>)> = HashMap::new();
         let mut parts = Vec::new();
+        let lod_dist = [model.mid_dist as f32, model.low_dist as f32];
         for (mesh_index, m) in model.meshes.iter().enumerate() {
-            // LOD byte: bit 0 = highest detail (*assumed*), 255 = all.
-            if m.lod & 1 == 0 {
+            // The draw mode is a mask of the render passes that draw the
+            // primitive (0x00ea5320 tests it against the pass mask); meshes
+            // without the main pass (e.g. the white shadow cards of the
+            // om0570 cypresses, draw mode 0xE6C8) only cast shadows.
+            let shadow_only = m.draw_mode & PASS_MAIN == 0;
+            if shadow_only && m.draw_mode & PASS_SHADOW == 0 {
                 continue;
             }
             let Some(layout) = mfx.layout(m.vertex_format) else {
@@ -457,7 +568,7 @@ impl Loader<'_> {
             });
             let undecoded_billboard = billboard.is_none() && node.is_some_and(|(_, n)| n.is_billboard());
             let (material, shading) = mat_cache
-                .entry((m.material, undecoded_billboard))
+                .entry((m.material, undecoded_billboard, shadow_only))
                 .or_insert_with(|| {
                     let name = model
                         .material_names
@@ -468,11 +579,14 @@ impl Loader<'_> {
                         .as_ref()
                         .and_then(|l| l.by_name(&name).map(|mat| mtmrl::shading::describe(mat, l, mfx)));
                     (
-                        self.material(shading.as_ref(), undecoded_billboard, materials, images),
+                        self.material(shading.as_ref(), undecoded_billboard, shadow_only, materials, images),
                         shading,
                     )
                 })
                 .clone();
+            if shadow_only && matches!(material, PartMaterial::Standard(_)) {
+                continue;
+            }
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
             mesh.insert_attribute(
                 Mesh::ATTRIBUTE_POSITION,
@@ -503,6 +617,9 @@ impl Loader<'_> {
                 mesh: meshes.add(mesh),
                 material,
                 triangles: tris.len(),
+                lod: m.lod,
+                casts_shadow: m.draw_mode & PASS_SHADOW != 0,
+                lod_dist,
             });
         }
         Some(parts)
@@ -526,6 +643,7 @@ impl Loader<'_> {
         &mut self,
         shading: Option<&Shading>,
         two_sided: bool,
+        shadow_only: bool,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
     ) -> PartMaterial {
@@ -597,6 +715,9 @@ impl Loader<'_> {
             );
         }
         let mut params = DdParams::default();
+        if shadow_only {
+            params.flags |= FLAG_SHADOW_ONLY;
+        }
         let mut map = None;
         let mut spec = None;
         if matches!(s.feature("FReflect"), Some("FReflectCubeMap") | Some("FReflectWaterMap")) {
@@ -632,7 +753,19 @@ impl Loader<'_> {
     }
 
     fn spawn_parts(&mut self, commands: &mut Commands, parts: &[Part], transform: Transform, name: &str) {
+        // The LOD level from the viewer's start eye (the original picks it
+        // per frame from the camera to the model position).
+        let level = match self.lod_eye {
+            Some(eye) => {
+                let dist = (transform.translation - eye).length() / UNIT;
+                parts.first().map_or(1, |p| lod_level(dist, p.lod_dist[0], p.lod_dist[1], self.view_range))
+            }
+            None => 1,
+        };
         for p in parts {
+            if p.lod & level == 0 {
+                continue;
+            }
             self.stats.meshes += 1;
             self.stats.triangles += p.triangles;
             let mut e = commands.spawn((Mesh3d(p.mesh.clone()), transform, Name::new(name.to_string())));
@@ -640,6 +773,9 @@ impl Loader<'_> {
                 PartMaterial::Standard(h) => e.insert(MeshMaterial3d(h.clone())),
                 PartMaterial::Dd(slot) => e.insert(PendingDd(slot.clone())),
             };
+            if !p.casts_shadow {
+                e.insert(bevy::light::NotShadowCaster);
+            }
         }
     }
 
@@ -802,6 +938,45 @@ impl Loader<'_> {
         n
     }
 
+    /// The stage-100 low models (`uStageLowMdl`, created by the split
+    /// controller, 0x00c5c2d0 and 0x00c5d7a0): the whole-map backdrop
+    /// `scr\st100\model\st100_all00` and six area models
+    /// `st100_area<NN>_h` / `_l`, all in the stage frame. An area slot uses
+    /// `_h` when the player's cell's area marks it (`low_model_high_slots`)
+    /// or when the config's ViewRange is FAR or FARTHEST (+0x38 >= 2,
+    /// 0x00c58d60), `_l` otherwise. `origin` is the viewer's origin cell
+    /// (A0, B0). *Assumed:* the models sit at the stage origin (their
+    /// `cSetInfoCoord` is not set by the creator) and are drawn without the
+    /// fade the unit runs while streaming in.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_low_models(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        origin: (i32, i32),
+        view_range: u32,
+    ) -> usize {
+        let shift = -Vec3::new((origin.1 - 50) as f32 * 10000.0, 0.0, (origin.0 - 50) as f32 * 10000.0);
+        let high = low_model_high_slots(origin);
+        let mut paths = vec!["scr\\st100\\model\\st100_all00".to_string()];
+        for (i, n) in LOW_MODEL_NUMBERS.iter().enumerate() {
+            let suffix = if high[i] || view_range >= 2 { "h" } else { "l" };
+            paths.push(format!("scr\\st100\\model\\st100_area{n:02}_{suffix}"));
+        }
+        let mut count = 0;
+        for path in paths {
+            let Some(parts) = self.model(&path, meshes, materials, images) else {
+                self.stats.missing.push(format!("low model {path}"));
+                continue;
+            };
+            self.spawn_parts(commands, &parts, Transform::from_translation(shift * UNIT), &path);
+            count += 1;
+        }
+        count
+    }
+
     /// Every water model of the stage (`scr\st<S>\model\water\`: the sea plane
     /// and the river, lake and wave models), all in the stage frame (origin
     /// cell 50m50n). `origin` is the viewer's origin cell (A0, B0).
@@ -860,5 +1035,31 @@ impl Loader<'_> {
             self.stats.water_models += 1;
             self.spawn_parts(commands, &parts, Transform::from_translation(shift), p);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lod_levels_follow_the_distances() {
+        // om0570: middle 3000 cm, far 8000 cm.
+        assert_eq!(lod_level(2000.0, 3000.0, 8000.0, 1), 1);
+        assert_eq!(lod_level(5000.0, 3000.0, 8000.0, 1), 2);
+        assert_eq!(lod_level(9000.0, 3000.0, 8000.0, 1), 4);
+        // FAR doubles both distances, FARTHEST keeps the near level.
+        assert_eq!(lod_level(9000.0, 3000.0, 8000.0, 2), 2);
+        assert_eq!(lod_level(90000.0, 3000.0, 8000.0, 3), 1);
+    }
+
+    #[test]
+    fn low_model_slots_by_cell() {
+        // ref001's cell 58m50n is in area 10: slots area10 and area00 high.
+        assert_eq!(low_model_high_slots((58, 50)), [true, false, false, true, false, false]);
+        // 42m53n (row 2, column 23) is area 13: area10 and area30.
+        assert_eq!(low_model_high_slots((42, 53)), [false, false, false, true, false, true]);
+        // Outside the map: all low.
+        assert_eq!(low_model_high_slots((10, 10)), [false; 6]);
     }
 }

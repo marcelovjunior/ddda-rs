@@ -3,7 +3,7 @@
 - **Owner:** claude-3
 - **Branch:** `task/m1-gate`
 - **Board area:** `render/shading`
-- **Status:** open
+- **Status:** review
 
 ## Goal
 
@@ -41,4 +41,34 @@ that edit for this brief).
 
 ## Results
 
-(filled in by the agent)
+Commits on `task/m1-gate`: d401bbe (stage low models, primitive pass
+mask and LOD), aae8b8a (lighting, fog and sky from the data by clock and
+weather), 6fe72e2 (shadow-only primitives), plus the docs commit. Details
+in `docs/SHADING.md` (Stage low models, Primitive pass mask and LOD,
+Lighting from the data) and the gate in `docs/MILESTONES.md` (M1).
+
+1. **Distance haze:** fixed. Our fog was already the original's linear
+   fog (traced: `uColorFog` vf09, clip-w fog depth), but ref001 is fine
+   weather while our lighting came from the cloudy refs-lit capture. The
+   weather's fog file at the clock (blue `st100_fog_f`) now gives the
+   haze: ref001's far mountain (106,142,186) / ours (104,140,185).
+2. **Horizon mountains:** fixed: the `uStageLowMdl` backdrop
+   (`st100_all00` and the area models) traced and drawn.
+3. **Floating far chunks (top right):** the flat-topped cliffs were the
+   missing low models' place; fixed with 2. Remaining at the top right:
+   the Bluemoon Tower's low landmark is a flat fog silhouette (the
+   original shows structure; not explained), and the sea plane ends
+   before the horizon.
+4. **White figures by the castle:** the cypresses' shadow cards (white
+   texture, draw mode 0xE6C8 without the main pass bit). Fixed by the
+   traced pass mask; they now cast the shadows only. The cypress
+   imposters follow the traced LOD distances.
+5. **Sky without --light:** lighting, fog and sky are built from the game
+   data for `--clock` (default 12:00) and `--weather` (default fine); the
+   sun colour reproduces the live reads within 1 % (test). Not applied
+   to `--play` and `--character` (unchanged).
+
+Gate comparison: see MILESTONES.md. ref001 within 3-4 % over the frame;
+refs 002/004/005 have no recorded clock (rendered at 12:00 fine; 004's
+shadows show a lower sun), refs-lit unchanged (within 1-3 levels).
+Open: DOF, stars/moon/clouds/sky fog, water reflection, night lights.

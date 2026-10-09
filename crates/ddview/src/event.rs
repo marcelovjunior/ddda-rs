@@ -236,6 +236,8 @@ fn setup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: None,
+        view_range: 1,
     };
     loader.index_models();
 
@@ -470,6 +472,8 @@ fn setup_lineup(
         model_names: Default::default(),
         water: None,
         stats: Default::default(),
+        lod_eye: None,
+        view_range: 1,
     };
     loader.index_models();
     let mut looks: Vec<(String, ddlook::Look)> = vec![];

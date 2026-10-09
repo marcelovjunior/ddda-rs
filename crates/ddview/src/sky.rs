@@ -83,10 +83,56 @@ impl Material for SkyMaterial {
 #[derive(Component)]
 pub struct SkyDome(pub Handle<SkyMaterial>);
 
-/// The stage's sky: the `rSky` resource and the sky unit's inputs.
+/// Weather suffixes of the weather manager's tracks (`mWeatherType` 0
+/// fine, 1 cloudy, 2 very cloudy; the darkness weather 3 is not handled).
+pub const WEATHERS: [&str; 3] = ["F", "E", "R"];
+
+/// Mie scattering and density of each weather: the weather manager's
+/// constructor values (0x004bb200 copies the tables at 0x01823b30,
+/// 0x01823ba0 and 0x01823c10); the stage schedulers do not set them.
+const WEATHER_MIE: [(f32, f32); 3] = [(7.554_876, 1.0), (7.55, 1.0), (7.554_877, 1.0)];
+
+/// The sky scheduler's light units, as the weather manager drives them.
+#[derive(Clone, Debug, Default)]
+pub struct SkyLights {
+    /// Sun (`uSkyInfiniteLight` with `IntensityScale_*`): `mLightScale`,
+    /// the weather's `IntensityScale` and `SaturationScale`.
+    pub sun_scale: f32,
+    pub sun_intensity: f32,
+    pub sun_saturation: f32,
+    /// Fill light (`uSkyInfiniteLight` with `DayColor_*`).
+    pub fill: Option<BlendLight>,
+    /// Hemisphere light (`uSkyHemiSphereLight`).
+    pub hemi: Option<BlendLight>,
+}
+
+/// A light with day and night colours (and a reverse, ground, colour for
+/// the hemisphere light).
+#[derive(Clone, Debug, Default)]
+pub struct BlendLight {
+    pub day: [f32; 3],
+    pub night: [f32; 3],
+    pub day_rev: [f32; 3],
+    pub night_rev: [f32; 3],
+    pub dir: [f32; 3],
+}
+
+impl BlendLight {
+    /// Colours at night blend `b`. *Assumed:* a linear blend from day to
+    /// night by the weather manager's day/night rate; it matches the 20:21
+    /// capture's hemisphere and fill colours within the sun-direction error.
+    fn at(&self, b: f32) -> ([f32; 3], [f32; 3]) {
+        let mix = |d: [f32; 3], n: [f32; 3]| std::array::from_fn(|i| d[i] + (n[i] - d[i]) * b);
+        (mix(self.day, self.night), mix(self.day_rev, self.night_rev))
+    }
+}
+
+/// The stage's sky: the `rSky` resource, the sky unit's inputs and the
+/// light units, for one weather.
 pub struct StageSky {
     pub sky: mtweather::Sky,
     pub inputs: SkyInputs,
+    pub lights: SkyLights,
 }
 
 /// First key of the track `name` under track `parent`.
@@ -120,8 +166,10 @@ fn vec3(s: &Scheduler, parent: usize, name: &str) -> Option<[f32; 3]> {
 }
 
 impl StageSky {
-    /// Reads the stage's sky scheduler. `None` if it or its sky is missing.
-    pub fn load(vfs: &ddvfs::Vfs, stage: u32) -> Option<StageSky> {
+    /// Reads the stage's sky scheduler for weather `weather` (index into
+    /// [`WEATHERS`]). `None` if it or its sky is missing.
+    pub fn load(vfs: &ddvfs::Vfs, stage: u32, weather: usize) -> Option<StageSky> {
+        let w = WEATHERS.get(weather)?;
         let path = format!("scr\\st{stage}\\sdl\\st{stage}_sky");
         let bytes = vfs.read(&path, mtarc::type_hash("rScheduler")).ok()?;
         let s = Scheduler::parse(&bytes).ok()?;
@@ -133,26 +181,112 @@ impl StageSky {
         let rsky = vfs.read(&res, mtarc::type_hash("rSky")).ok()?;
         let sky_res = mtweather::Sky::parse(&rsky).ok()?;
         let mut inp = SkyInputs::default();
-        // The sky unit's own tracks, then the weather manager's fine weather.
+        // The sky unit's own tracks, then the weather manager's values for
+        // the weather, which it writes into the sky unit (0x004c3d40).
         let own = |name, d| float(&s, sky, name).unwrap_or(d);
-        inp.mie_scattering = vec3(&s, sky, "mMieScattering").unwrap_or(inp.mie_scattering);
-        inp.mie_density = own("mMieDensity", inp.mie_density);
         inp.height_offset = own("mHeightOffset", inp.height_offset);
         inp.starry_sky_intensity = own("mStarrySkyIntensity", inp.starry_sky_intensity);
-        inp.sun_color = vec3(&s, sky, "mBaseSunColor").unwrap_or(inp.sun_color);
         let div = |name, d: u32| int(&s, sky, name).map(|v| v as u32).unwrap_or(d);
         inp.scatter_map_size = [div("mDivX", 32), div("mDivY", 32)];
-        let wmf = |name, d| float(&s, wm, name).unwrap_or(d);
-        inp.sun_color = vec3(&s, wm, "SunColor_F").unwrap_or(inp.sun_color);
-        inp.cloudiness = wmf("Cloudiness_F", own("mCloudiness", inp.cloudiness));
-        inp.cloud_height = wmf("CloudHeight_F", own("mCloudHeight", inp.cloud_height));
-        inp.cloud_thickness = wmf("CloudThickness_F", own("mCloudThickness", inp.cloud_thickness));
-        inp.cloud_scattering = wmf("CloudScattering_F", own("mCloudScattering", inp.cloud_scattering));
-        inp.cloud_eccentricity =
-            wmf("CloudEccentricity_F", own("mCloudEccentricity", inp.cloud_eccentricity));
-        Some(StageSky { sky: sky_res, inputs: inp })
+        let wmf = |name: &str, d| float(&s, wm, &format!("{name}_{w}")).unwrap_or(d);
+        inp.sun_color = vec3(&s, wm, &format!("SunColor_{w}"))
+            .or_else(|| vec3(&s, sky, "mBaseSunColor"))
+            .unwrap_or(inp.sun_color);
+        (inp.mie_scattering, inp.mie_density) = ([WEATHER_MIE[weather].0; 3], WEATHER_MIE[weather].1);
+        inp.cloudiness = wmf("Cloudiness", own("mCloudiness", inp.cloudiness));
+        inp.cloud_height = wmf("CloudHeight", own("mCloudHeight", inp.cloud_height));
+        inp.cloud_thickness = wmf("CloudThickness", own("mCloudThickness", inp.cloud_thickness));
+        inp.cloud_scattering = wmf("CloudScattering", own("mCloudScattering", inp.cloud_scattering));
+        inp.cloud_eccentricity = wmf("CloudEccentricity", own("mCloudEccentricity", inp.cloud_eccentricity));
+        let lights = Self::light_units(&s, w);
+        Some(StageSky { sky: sky_res, inputs: inp, lights })
     }
 
+    /// The light units of the scheduler by their tracks: the infinite
+    /// light with `IntensityScale_<w>` is the sun, the one with
+    /// `DayColor_<w>` the fill light, the hemisphere light has both colours.
+    fn light_units(s: &Scheduler, w: &str) -> SkyLights {
+        let infinite = mtarc::type_hash("uSkyInfiniteLight");
+        let hemisphere = mtarc::type_hash("uSkyHemiSphereLight");
+        let mut out = SkyLights::default();
+        for (i, t) in s.tracks.iter().enumerate() {
+            let day = vec3(s, i, &format!("DayColor_{w}"));
+            if t.type_hash == infinite {
+                if let Some(intensity) = float(s, i, &format!("IntensityScale_{w}")) {
+                    out.sun_scale = float(s, i, "mLightScale").unwrap_or(1.0);
+                    out.sun_intensity = intensity;
+                    out.sun_saturation = float(s, i, &format!("SaturationScale_{w}")).unwrap_or(1.0);
+                } else if let Some(day) = day {
+                    out.fill = Some(BlendLight {
+                        day,
+                        night: vec3(s, i, "NightColor").unwrap_or_default(),
+                        dir: vec3(s, i, "LightDir").unwrap_or([0.0, 1.0, 0.0]),
+                        ..Default::default()
+                    });
+                }
+            } else if t.type_hash == hemisphere {
+                if let Some(day) = day {
+                    out.hemi = Some(BlendLight {
+                        day,
+                        night: vec3(s, i, "NightColor").unwrap_or_default(),
+                        day_rev: vec3(s, i, &format!("DayRevColor_{w}")).unwrap_or_default(),
+                        night_rev: vec3(s, i, "NightRevColor").unwrap_or_default(),
+                        dir: vec3(s, i, "LightDir").unwrap_or([0.0, 1.0, 0.0]),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The light units for a sun direction: hemisphere lights as (sky rgb,
+    /// ground rgb, axis) and infinite lights as (colour, direction to the
+    /// light), the sun first, as in the `--light` JSON.
+    pub fn light_values(&self, sun_dir: [f32; 3]) -> (Vec<[f32; 9]>, Vec<[f32; 6]>) {
+        let b = mtweather::sky::night_blend(sun_dir);
+        let l = &self.lights;
+        let sun = mtweather::sky::sun_light_color(
+            &self.sky,
+            &self.inputs,
+            sun_dir,
+            l.sun_scale,
+            l.sun_intensity,
+            l.sun_saturation,
+        );
+        let mut lights = vec![[sun[0], sun[1], sun[2], sun_dir[0], sun_dir[1], sun_dir[2]]];
+        if let Some(f) = &l.fill {
+            let (c, _) = f.at(b);
+            lights.push([c[0], c[1], c[2], f.dir[0], f.dir[1], f.dir[2]]);
+        }
+        let mut hemis = Vec::new();
+        if let Some(h) = &l.hemi {
+            let (sky, ground) = h.at(b);
+            hemis.push([sky[0], sky[1], sky[2], ground[0], ground[1], ground[2], h.dir[0], h.dir[1], h.dir[2]]);
+        }
+        (hemis, lights)
+    }
+}
+
+/// The weather's fog at `minute` of the day
+/// (`scr\st<S>\etc\st<S>_fog_<w>`, sampled as 0x00cead20 does).
+pub fn weather_fog(vfs: &ddvfs::Vfs, stage: u32, weather: usize, minute: u32) -> Option<mtweather::FogValues> {
+    let w = WEATHERS.get(weather)?.to_lowercase();
+    let path = format!("scr\\st{stage}\\etc\\st{stage}_fog_{w}");
+    let bytes = vfs.read(&path, mtarc::type_hash("rWeatherFogParam")).ok()?;
+    mtweather::WeatherFog::parse(&bytes).ok()?.sample(minute)
+}
+
+/// The weather whose fog at `minute` equals a captured fog colour (within
+/// 1 %), e.g. the refs-lit series' fog is `st100_fog_e`'s.
+pub fn weather_of_fog(vfs: &ddvfs::Vfs, stage: u32, minute: u32, color: [f32; 3]) -> Option<usize> {
+    (0..WEATHERS.len()).find(|&w| {
+        weather_fog(vfs, stage, w, minute).is_some_and(|f| {
+            (0..3).all(|i| (f.color[i] - color[i]).abs() <= color[i].abs() * 0.01 + 1e-4)
+        })
+    })
+}
+
+impl StageSky {
     /// Spawns the dome for a sun direction (unit, towards the sun) with
     /// radius `radius` (viewer units; keep it inside the far plane).
     pub fn spawn(
