@@ -338,6 +338,7 @@ mod linked_hits {
     use ddcombat::volumes::{AttackVolume, HurtVolume, Side, Volume};
     use ddenemyrt::combat::{apply_linked_enemy_hit, Attacker, Fighter, HitEvent, Victim};
     use ddenemyrt::combat::{hit_pass, hit_pass_configured, EnemyCollisionConfig, Tables};
+    use ddenemyrt::combat::{hit_pass_configured_with_policy, CombatOwnerState, EnemyHitPolicy};
 
     fn config(owner: u32, linked_owners: Vec<u32>) -> EnemyCollisionConfig {
         EnemyCollisionConfig {
@@ -472,21 +473,33 @@ mod linked_hits {
         unconfigured.owner = 105;
         unconfigured.hurts[0].side.owner = 105;
         fighters.push(unconfigured);
-        let mut called = Vec::new();
-        let events = hit_pass_configured(
+        #[derive(Default)]
+        struct Policy {
+            modified: Vec<u32>,
+            observed: Vec<u32>,
+        }
+        impl EnemyHitPolicy for Policy {
+            fn after_mitigation(&mut self, owner: u32, _: u32, hit: &mut MergedHit, _: &[CombatOwnerState]) {
+                self.modified.push(owner);
+                hit.phys *= 2.0;
+            }
+            fn after_hit(&mut self, event: &HitEvent) {
+                self.observed.push(event.victim);
+            }
+        }
+        let mut policy = Policy::default();
+        let events = hit_pass_configured_with_policy(
             &mut fighters,
             &tables,
             1.0,
             &mut || 1.0,
             &|_| true,
             &[config(104, vec![])],
-            &mut |owner, _, hit, _| {
-                called.push(owner);
-                hit.phys *= 2.0;
-            },
+            &mut policy,
         )
         .unwrap();
-        assert_eq!(called, vec![104]);
+        assert_eq!(policy.modified, vec![104]);
+        assert_eq!(policy.observed, vec![104]);
         assert_eq!(
             events.iter().map(|e| (e.victim, e.total)).collect::<Vec<_>>(),
             vec![(104, 80.0), (105, 40.0)]
@@ -620,6 +633,109 @@ mod linked_hits {
                 assert_eq!(regions(a), regions(&b));
                 assert_eq!(a.history, b.history);
             }
+        }
+    }
+
+    #[test]
+    fn immediate_policy_distinguishes_accepted_and_priority_blocked_death() {
+        struct Policy {
+            priority: super::Priorities,
+            accepted: bool,
+            order: Vec<(&'static str, u32)>,
+        }
+        impl EnemyHitPolicy for Policy {
+            fn after_mitigation(
+                &mut self,
+                owner: u32,
+                pool: u32,
+                hit: &mut MergedHit,
+                state: &[CombatOwnerState],
+            ) {
+                self.order.push(("mitigate", owner));
+                if owner == 103 {
+                    assert!(!state.iter().find(|s| s.owner == 104).unwrap().has_hp);
+                    // HP is zero in both cases. Use accepted actor state instead.
+                    super::BodyDamageBonus {
+                        child00_alive: 2.0,
+                        child00_missing_or_dead: 3.0,
+                    }
+                    .apply(hit, pool, false, !self.accepted);
+                }
+            }
+            fn after_hit(&mut self, event: &HitEvent) {
+                self.order.push(("observe", event.victim));
+                if event.victim == 104 && event.killed {
+                    let action = super::child_death(
+                        super::Child::Unit00,
+                        &mut self.priority,
+                        super::DeathContext {
+                            has_damage_context: true,
+                            already_dead: self.accepted,
+                        },
+                        super::Child01State::default(),
+                    );
+                    if action.is_some() {
+                        // Accepted child vf72 calls common vf72 -> vf119,
+                        // 0x00ab37d0, which writes actor +0x5bd0 before relay.
+                        self.accepted = true;
+                    }
+                }
+            }
+        }
+        for blocked in [false, true] {
+            let (mut fighters, tables) = configured_scene(0);
+            fighters[0].attacker = Attacker::Enemy(EnemyAttacker::new(60.0, 60.0));
+            let mut spell = fighters[0].attacks[0].clone();
+            spell.volume = Volume::Sphere {
+                c: [10.0, 0.0, 0.0],
+                r: 1.0,
+            };
+            spell.key = 0x20000;
+            spell.row.attack_rate = 0.0;
+            spell.row.mgc_attack_rate = 1.0;
+            fighters[0].attacks.push(spell.clone());
+            regions_mut(&mut fighters[1])[0].hp = 15.0;
+            fighters[2].hurts.push(HurtVolume {
+                side: Side { owner: 103, kind: 1 },
+                volume: spell.volume,
+                region_id: 1,
+                hit_prio: 0,
+            });
+            if let Victim::Enemy { defender, rates, .. } = &mut fighters[2].victim {
+                *defender = EnemyDefender::new(10000.0, 20.0);
+                *rates = CollisionRates::default();
+            }
+            let mut policy = Policy {
+                priority: super::Priorities {
+                    current: u32::from(blocked),
+                    pending: 0,
+                },
+                accepted: false,
+                order: Vec::new(),
+            };
+            let events = hit_pass_configured_with_policy(
+                &mut fighters,
+                &tables,
+                1.0,
+                &mut || 1.0,
+                &|_| true,
+                &[config(104, vec![103]), config(103, vec![])],
+                &mut policy,
+            )
+            .unwrap();
+            assert_eq!(fighters[1].victim.hp(), 0.0);
+            assert_eq!(policy.accepted, !blocked);
+            assert_eq!(events[2].total, if blocked { 80.0 } else { 120.0 });
+            assert_eq!(
+                policy.order,
+                vec![
+                    ("mitigate", 104),
+                    ("observe", 104),
+                    ("observe", 103),
+                    ("mitigate", 103),
+                    ("observe", 103)
+                ]
+            );
         }
     }
 

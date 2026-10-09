@@ -201,6 +201,28 @@ pub struct CombatOwnerState {
     pub has_hp: bool,
 }
 
+/// Actor-specific callbacks in collision execution order. The policy owns
+/// actor observations such as accepted-death markers; HP snapshots do not
+/// substitute for those markers. Callbacks run only for configured enemies.
+pub trait EnemyHitPolicy {
+    fn after_mitigation(
+        &mut self,
+        _owner: u32,
+        _pool_id: u32,
+        _hit: &mut ddcombat::damage::MergedHit,
+        _owners: &[CombatOwnerState],
+    ) {}
+
+    /// Runs immediately after a configured local or mirrored result, before
+    /// the next collision is processed. `killed` is HP depletion; accepting
+    /// an actor's death still requires its source-derived guards/selector.
+    /// In the original, 0x0076e7c0 dispatches death during 0x0076db10, and
+    /// common vf72 calls vf119 (0x00ab37d0) before 0x00aab4e4 writes the kill.
+    fn after_hit(&mut self, _event: &HitEvent) {}
+}
+
+impl EnemyHitPolicy for () {}
+
 /// Configured enemy collision pass. Configuration errors are rejected before
 /// HP, status, history or RNG changes. Ordinary unmapped hurt regions are not
 /// supported: 0x0076db10 skips local valuation there, leaving a carried total
@@ -219,6 +241,28 @@ pub fn hit_pass_configured(
     holds: &dyn Fn(u32) -> bool,
     config: &[EnemyCollisionConfig],
     after_mitigation: &mut dyn FnMut(u32, u32, &mut ddcombat::damage::MergedHit, &[CombatOwnerState]),
+) -> Result<Vec<HitEvent>, String> {
+    struct CallbackOnly<'a>(&'a mut dyn FnMut(u32, u32, &mut ddcombat::damage::MergedHit, &[CombatOwnerState]));
+    impl EnemyHitPolicy for CallbackOnly<'_> {
+        fn after_mitigation(&mut self, owner: u32, pool_id: u32, hit: &mut ddcombat::damage::MergedHit, owners: &[CombatOwnerState]) {
+            self.0(owner, pool_id, hit, owners);
+        }
+    }
+    hit_pass_configured_with_policy(fighters, tables, dt, roll, holds, config, &mut CallbackOnly(after_mitigation))
+}
+
+/// The configured pass with immediate actor observation in addition to the
+/// post-mitigation extension. Validation and unsupported-input behavior are
+/// identical to [`hit_pass_configured`]. This does not assign layout kills,
+/// actor actions or death markers; the policy handles its actor state.
+pub fn hit_pass_configured_with_policy(
+    fighters: &mut [Fighter],
+    tables: &Tables,
+    dt: f32,
+    roll: &mut dyn FnMut() -> f32,
+    holds: &dyn Fn(u32) -> bool,
+    config: &[EnemyCollisionConfig],
+    policy: &mut dyn EnemyHitPolicy,
 ) -> Result<Vec<HitEvent>, String> {
     let mut owners = std::collections::BTreeSet::new();
     for fighter in fighters.iter() {
@@ -254,7 +298,7 @@ pub fn hit_pass_configured(
             }
         }
     }
-    Ok(hit_pass_inner(fighters, tables, dt, roll, holds, config, after_mitigation))
+    Ok(hit_pass_inner(fighters, tables, dt, roll, holds, config, policy))
 }
 
 /// Runs the hit pass over `fighters`: each victim's hits from everyone's
@@ -272,7 +316,7 @@ pub fn hit_pass(
     roll: &mut dyn FnMut() -> f32,
     holds: &dyn Fn(u32) -> bool,
 ) -> Vec<HitEvent> {
-    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut |_, _, _, _| {})
+    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut ())
 }
 
 fn hit_pass_inner(
@@ -282,7 +326,7 @@ fn hit_pass_inner(
     roll: &mut dyn FnMut() -> f32,
     holds: &dyn Fn(u32) -> bool,
     config: &[EnemyCollisionConfig],
-    after_mitigation: &mut dyn FnMut(u32, u32, &mut ddcombat::damage::MergedHit, &[CombatOwnerState]),
+    policy: &mut dyn EnemyHitPolicy,
 ) -> Vec<HitEvent> {
     let attacks: Vec<AttackVolume> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
     // the attacker's status multipliers (0x0088B530 / 0x0088AA20)
@@ -368,7 +412,7 @@ fn hit_pass_inner(
                 let (out, valued) = resolve_enemy_hit_valued_with(merged, &def, regions, at, rates, &tables.game, 1.0,
                     |pool_id, hit| {
                         if collision.is_some() {
-                            after_mitigation(v.owner, pool_id, hit, &current_owners);
+                            policy.after_mitigation(v.owner, pool_id, hit, &current_owners);
                         }
                     });
                 // build-up on the hit region (0x007772B0; a main region
@@ -418,6 +462,9 @@ fn hit_pass_inner(
             }
         };
         events.push(event.clone());
+        if collision.is_some() {
+            policy.after_hit(&event);
+        }
         // 0x0076b7e0 runs each linked collision immediately after its local
         // hit, preserving the already-valued payload and original region.
         if let (Some(collision), Some(valued)) = (collision, carried) {
@@ -427,6 +474,7 @@ fn hit_pass_inner(
                 let Victim::Enemy { regions, .. } = &target.victim else { unreachable!("validated linked enemy") };
                 let mapped = target_config.pool_index(event.region, regions, true);
                 if let Some(linked) = apply_linked_enemy_hit(target, &event, &valued, mapped, target_config.status_rates, &tables.status_enemy, roll) {
+                    policy.after_hit(&linked);
                     events.push(linked);
                 }
             }

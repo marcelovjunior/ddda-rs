@@ -108,7 +108,8 @@ call at `0x00aab4e4` follows. Body and child-00 use this same vf119.
 Vf118 `0x00ab3790` separately tests marker != 1 and main HP <= 0, making
 pending HP depletion and accepted death observably distinct. The host must
 apply accepted death synchronously after each local/linked result before
-later modifiers; the current callback/snapshot alone does not perform this.
+later modifiers; the immediate policy observer provides this ordering,
+while the HP snapshot alone cannot establish acceptance.
 Body post-hit `0x009a4560` maps
 HitInfo +0x6c values 1/2 to life pool 1, 8..11 to pools 2..5, and other
 values to pool 0 for visual damage. Child post-hit callbacks
@@ -162,6 +163,16 @@ That snapshot is an HP observation, **not** the original actor death marker.
 The regression policy uses HP to exercise ordering only; real body bonus
 policy must use the actor +0x5bd0 observation. Legacy public wrappers retain
 their previous signatures and behavior.
+
+`EnemyHitPolicy` and `hit_pass_configured_with_policy` add `after_hit` to the
+post-mitigation hook. Execution is local hit, local observer, each linked hit
+and its observer, then the next local victim. Both callbacks remain exclusive
+to configured enemies. Actor state is owned by the caller policy, allowing
+the observer to run the sourced death selector and retain accepted markers
+before a later modifier. A regression gives child 00 identical zero HP in
+two runs but blocks priority acceptance in one: the later body's loaded-rule
+modifier sees the different accepted state. This is a synthetic policy test;
+the host's action, placement and persistence integration is still absent.
 
 Configured validation rejects missing/duplicate owner bindings, invalid
 chains and unmapped ordinary hurt regions before changing HP, history or RNG.
