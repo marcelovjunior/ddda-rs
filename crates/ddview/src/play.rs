@@ -446,6 +446,7 @@ pub fn step(
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
     net: Option<Res<crate::net::NetRes>>,
+    opening: Option<Res<crate::opening::OpeningRes>>,
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
@@ -459,8 +460,9 @@ pub fn step(
         camera_projection(&mut projs);
         *projected = true;
     }
-    // A network session (--host / --join) steps and shows the players itself.
-    if net.is_some() {
+    // A network session (--host / --join) and the opening (opening.rs)
+    // step and show the players themselves.
+    if net.is_some() || opening.is_some() {
         return;
     }
     if keys.just_pressed(KeyCode::F2) {
@@ -529,7 +531,7 @@ pub fn active_input(input: &Input) -> bool {
 
 /// Retain a short input until a fixed tick consumes it. Held input still
 /// refreshes direction and camera yaw every render frame.
-fn latch_input(previous: Input, mut latest: Input) -> Input {
+pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     if latest.stick == [0.0; 2] && previous.stick != [0.0; 2] {
         latest.stick = previous.stick;
         latest.walk = previous.walk;
@@ -707,7 +709,7 @@ fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>) {
 }
 
 /// `CameraFov` from the player's game settings (config.ini), else 0.
-fn config_camera_fov() -> f32 {
+pub(crate) fn config_camera_fov() -> f32 {
     let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 0.0 };
     let path = std::path::PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
     std::fs::read_to_string(path)

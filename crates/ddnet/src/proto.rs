@@ -2,7 +2,7 @@
 //! decision; the original has no LAN co-op.
 
 use crate::body::{self, Body};
-use crate::mirror::{self, Enemy, LookData, Spot, Vital};
+use crate::mirror::{self, Enemy, LookData, NpcBody, Spot, Vital};
 use ddhost::PlayerInput;
 use ddid::{PlayerId, Reader, Result, Writer};
 
@@ -12,7 +12,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 2: light and heavy attack input, the Attack and Shot states; the
 ///   guest's look in Hello; the host's spot in Welcome; Look events; HP
 ///   and enemies in snapshots.
-pub const PROTOCOL: u16 = 2;
+/// - 3: NPC bodies in snapshots; PlayEvent (cutscenes).
+pub const PROTOCOL: u16 = 3;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +38,10 @@ pub enum ToClient {
     /// A story request of host frame `frame` (its debug text until the
     /// views perform requests).
     Story { frame: u64, text: String },
+    /// The story asked for cutscene `row` (ddstory `Request::PlayEvent`) on
+    /// host frame `frame`: every view plays it from the data; the host's
+    /// own playback reports it over.
+    PlayEvent { frame: u64, row: u32 },
 }
 
 /// The unreliable input upload: the newest commands, oldest first; the
@@ -63,6 +68,8 @@ pub struct Snapshot {
     pub vitals: Vec<Vital>,
     /// The fight's enemies.
     pub enemies: Vec<Enemy>,
+    /// The NPCs on their schedules (`Host::npcs`).
+    pub npcs: Vec<NpcBody>,
 }
 
 fn opt_u64(w: &mut Writer, v: Option<u64>) {
@@ -146,6 +153,7 @@ impl ToClient {
                 string(&mut w, text);
                 &mut w
             }
+            ToClient::PlayEvent { frame, row } => w.u8(6).u64(*frame).u32(*row),
         };
         w.finish()
     }
@@ -162,6 +170,7 @@ impl ToClient {
             3 => ToClient::Left { seat: r.u8()? },
             5 => ToClient::Look { seat: r.u8()?, look: mirror::read_look(&mut r)? },
             4 => ToClient::Story { frame: r.u64()?, text: read_string(&mut r)? },
+            6 => ToClient::PlayEvent { frame: r.u64()?, row: r.u32()? },
             k => return Err(format!("client message kind {k}")),
         };
         r.end()?;
@@ -218,6 +227,7 @@ impl Snapshot {
         }
         mirror::write_vitals(&mut w, &self.vitals);
         mirror::write_enemies(&mut w, &self.enemies, enemies);
+        mirror::write_npcs(&mut w, &self.npcs);
         w.finish()
     }
 
@@ -238,7 +248,8 @@ impl Snapshot {
             .collect::<Result<_>>()?;
         let vitals = mirror::read_vitals(&mut r)?;
         let enemies = mirror::read_enemies(&mut r, held.as_ref().map_or(&[][..], |s| &s.enemies[..]))?;
+        let npcs = mirror::read_npcs(&mut r)?;
         r.end()?;
-        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies })
+        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies, npcs })
     }
 }

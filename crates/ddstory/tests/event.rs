@@ -71,6 +71,7 @@ fn st200_ev10_headless() {
     let mut cuts = vec![];
     for f in &frames {
         let c = f.camera.as_ref().unwrap();
+        assert_eq!((c.near_cm, c.far_cm, c.zoom_degrees), (16.0, 4_000_000.0, 0.0));
         assert!(c.pose.is_some(), "pose at {:?}", f.frame);
         if cuts.last().map(|(_, k)| *k) != Some(c.cut) {
             cuts.push((f.frame.unwrap() as u32, c.cut));
