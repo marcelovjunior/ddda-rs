@@ -81,3 +81,40 @@ Each step's gate is the original's state after it:
 
 The whole slice passes when two players on a LAN play steps 1–9 without
 fast-forwards or teleports, and the end state matches the original's.
+
+## Steps 8-9: what the data says (head, 2026-10-09)
+
+**Stages connect through door scenarios** (`scr\stSSS\etc\stSSS_door`,
+`cScenarioArg_AreaJump` `mStageNo` / `mPosNo`; 0x00799480 jumps when the
+Arisen is inside the volume; `ddstory::scenario` already emits
+`Request::JumpArea`):
+- Cassardis `st200_door` record 0 leads to stage 100, start position 2:
+  the gate to the field. Records 1-5 lead to 700 and 610.
+- The field's `st100_door` leads to 210 (positions 0 and 1), 200, 300 (both
+  positions), 220, 310, 320, 700, 702 and 6.
+- The Encampment's `st210_door` leads to stage 100, positions 1 and 3, and
+  within 210 to positions 3 and 14.
+
+So the walk is: Cassardis gate → field position 2 → field door into
+210 → q0003. `stream::Streamer::enter` does the handoff (test
+`the_cassardis_gate_arrives_on_field_ground`). The opening's host must
+evaluate the current stage's door scenarios (stage 100's too) to emit
+them.
+
+**q0003 happens at the Encampment** (`quest\q0003_b00`; Japanese state
+names in brackets). In order:
+- the encampment check (宿営地チェック): AreaHit 3/4;
+- the mysterious voice (謎の声): a message;
+- the simple event that shows the Rift (リムを見せるシンプルイベント:
+  camera 8, timers, SE);
+- leave the tent (テントの外に出る): AreaHit 5/9/10 and SceNo;
+- the NPC simple event (camera 9, layouts 210:68 and 63, NPC group 18,
+  battle BGM, quest marker bit 17);
+- the encampment clean-up (layouts 210:100-115 off);
+- the road block (道ふさぎ: AreaHit 0/1/3);
+- listening to the Rift (bit 20, camera 21, BGM control);
+- the st210 checks.
+
+"リム" is the Riftstone, so the first Rift contact is in q0003. To trace
+next: its QCT, the AreaHit volumes, and how q0002 hands over to q0003.
+
