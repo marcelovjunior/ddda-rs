@@ -7,6 +7,14 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddid = { path = "../ddid" }
+ddeconomy = { path = "../ddeconomy" }
+ddprogress = { path = "../ddprogress" }
+ddrift = { path = "../ddrift" }
+dditem = { path = "../dditem" }
+ddskill = { path = "../ddskill" }
+ddexe = { path = "../ddexe" }
+ddpawn = { path = "../ddpawn" }
 ddsim = { path = "../ddsim" }
 ddstory = { path = "../ddstory" }
 ddquest = { path = "../ddquest" }

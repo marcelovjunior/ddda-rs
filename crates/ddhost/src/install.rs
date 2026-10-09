@@ -94,3 +94,37 @@ pub fn sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
     sim.ledge_param = LedgeParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: no ledge params"))?;
     Ok(sim)
 }
+
+/// The economy's data from the install: item list, upgrade table, shop
+/// lists as `uNpc::vf32` (0x00BACE50) picks them (the `dl1` copies for NPCs
+/// 784 and 156) and the Suasion factors (`plAbilityParam` record 0x54).
+pub fn catalog(vfs: &ddvfs::Vfs) -> Result<ddeconomy::Catalog, String> {
+    let read = |class: &str, path: &str| vfs.read(path, mtarc::type_hash(class));
+    let items = dditem::itl::ItemList::parse(&read("rItemList", r"etc\item\itemList")?).map_err(|e| format!("{e:?}"))?;
+    let lvup = dditem::lvup::EquipLvUp::parse(&read("rEquipLvUp", r"etc\item\equipLvUp")?).map_err(|e| format!("{e:?}"))?;
+    let mut shops = std::collections::BTreeMap::new();
+    let h = mtarc::type_hash("rShopList");
+    for p in vfs.paths_of_type(h) {
+        let name = p.rsplit('\\').next().unwrap_or("");
+        let Some(no) = name.get(1..4).and_then(|n| n.parse::<u32>().ok()) else { continue };
+        if (no == 784 || no == 156) != p.starts_with("dl1") {
+            continue;
+        }
+        shops.insert(no, dditem::shop::ShopList::parse(&vfs.read(p, h)?).map_err(|e| format!("{p}: {e:?}"))?);
+    }
+    let x = mtxfs::parse(&read("rPlAbilityParam", r"param\pl\other\plAbilityParam")?).map_err(|e| e.to_string())?;
+    let objs = x.walk();
+    let rec = *objs.get(1 + 0x54).ok_or("plAbilityParam: no record 0x54")?;
+    let f = |n: &str| match x.get(rec, n).and_then(|v| v.first()) {
+        Some(mtxfs::Value::F(v)) => Ok(v[0] as f32),
+        _ => Err(format!("plAbilityParam 0x54: no {n}")),
+    };
+    Ok(ddeconomy::Catalog { items, shops, lvup, suasion: (f("mFVal0")?, f("mFVal1")?) })
+}
+
+/// Progression's tables from the install and the player's `DDDA.exe`.
+pub fn tables(vfs: &ddvfs::Vfs, exe: &std::path::Path) -> Result<ddprogress::Tables, String> {
+    let file = ddexe::ExeFile::open(exe).map_err(|e| e.0)?;
+    let image = file.image().map_err(|e| e.0)?;
+    ddprogress::Tables::load(vfs, &image)
+}

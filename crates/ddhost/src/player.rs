@@ -7,12 +7,7 @@
 //! - [`ProfileId`] names an Arisen across sessions and saves: the guest's
 //!   character keeps its profile whichever seat it gets next time.
 
-pub use ddsim::PlayerId;
-
-/// Persistent identity of one Arisen (made when the character is
-/// created; how is a design decision, not the original's).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ProfileId(pub u64);
+pub use ddid::{PlayerId, ProfileId};
 
 /// Where a seat's input comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

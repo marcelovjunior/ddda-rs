@@ -2320,8 +2320,16 @@ version = "0.1.0"
 name = "ddhost"
 version = "0.1.0"
 dependencies = [
+ "ddeconomy",
+ "ddexe",
+ "ddid",
+ "dditem",
+ "ddpawn",
+ "ddprogress",
  "ddquest",
+ "ddrift",
  "ddsim",
+ "ddskill",
  "ddstory",
  "ddvfs",
  "mtarc",

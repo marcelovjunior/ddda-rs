@@ -240,6 +240,11 @@ impl Economy {
         }
     }
 
+    /// Ends every session `player` holds (the player left the session).
+    pub fn close_all(&mut self, player: PlayerId) {
+        self.locks.retain(|_, p| *p != player);
+    }
+
     fn may_use(player: PlayerId, party: &Party, o: Owner) -> bool {
         match o {
             Owner::Arisen(p) | Owner::Storage(p) => p == player,

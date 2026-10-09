@@ -114,7 +114,7 @@ fn save_and_load_round_trip() {
     for f in 0..200 {
         h.tick(&inputs(f, None)).unwrap();
     }
-    let bytes = h.save().to_bytes();
+    let bytes = h.save().unwrap().to_bytes();
     let file = ddhost::save::SaveFile::from_bytes(&bytes).unwrap();
     let mut g = session();
     g.load(&file, NoStoryData).unwrap();
