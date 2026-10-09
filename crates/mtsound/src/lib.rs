@@ -199,6 +199,21 @@ pub struct Requests<'a> {
     pub auxiliary: AuxTables<'a>,
 }
 impl<'a> Requests<'a> {
+    /// Resolve one ordinary play command. Stop/fade, random selection and
+    /// multi-request chains need a stateful mixer and are rejected here.
+    /// Translated from 0x00ddb340 / 0x00dda9f0 (DDDA.exe 2017-12-13 Steam).
+    pub fn single_wave(&self, id: u16) -> Result<&Request<'a>, String> {
+        let request = self.request(id).ok_or("sound request absent")?;
+        if u32at(request.raw, 8)? != 1 {
+            return Err("sound request is not an ordinary play command".into());
+        }
+        let next = u16::from_le_bytes(request.raw[28..30].try_into().unwrap());
+        if next != u16::MAX && next != id {
+            return Err("sound request chain needs a stateful mixer".into());
+        }
+        if request.source.is_none() { return Err("sound request has no package".into()); }
+        Ok(request)
+    }
     /// Translated from 0x00f73b90 (DDDA.exe 2017-12-13 Steam).
     pub fn request(&self, id: u16) -> Option<&Request<'a>> {
         self.requests.iter().find(|r| u16::from_le_bytes(r.raw[..2].try_into().unwrap()) == id)
@@ -477,6 +492,27 @@ mod tests {
         put(&mut bad, 52 + 128, 0);
         put(&mut bad, 52 + 132, 0);
         assert!(Requests::parse(&bad).is_err());
+    }
+    #[test]
+    fn single_wave_rejects_control_random_and_chained_requests() {
+        let mut b = requests();
+        put(&mut b, 52, 17);
+        put(&mut b, 60, 1);
+        b[80..82].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_ok());
+        assert!(Requests::parse(&b).unwrap().single_wave(0).is_err());
+        b[80..82].copy_from_slice(&17_u16.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_ok());
+        b[80..82].copy_from_slice(&18_u16.to_le_bytes());
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
+        b[80..82].copy_from_slice(&u16::MAX.to_le_bytes());
+        for command in [0, 2, 3, 4, u32::MAX] {
+            put(&mut b, 60, command);
+            assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
+        }
+        put(&mut b, 60, 1);
+        put(&mut b, 52 + 128, u32::MAX);
+        assert!(Requests::parse(&b).unwrap().single_wave(17).is_err());
     }
     #[test]
     fn package_program_and_variation_keys() {

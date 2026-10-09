@@ -78,29 +78,54 @@ fn stereo(mut pcm: mtsound::decode::Pcm) -> Result<DecodedAudio, String> {
 
 #[derive(Component)]
 struct EventSound(String);
+#[derive(Component)]
+struct OneShotSe;
 
-fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound)>) {
+fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut assets: ResMut<Assets<DecodedAudio>>, playing: Query<(Entity, &EventSound), Without<OneShotSe>>) {
     // Commands are deferred: include sources queued earlier in this batch so
     // two cues for one unit cannot leave two voices playing simultaneously.
     let mut units: HashMap<String, Vec<Entity>> = HashMap::new();
     for (entity, sound) in &playing { units.entry(sound.0.clone()).or_default().push(entity); }
     for cue in std::mem::take(&mut audio.pending) {
-        let Cue::Stream { unit, path, stream_id, prepare_id, .. } = cue else {
-            // Conditional Arisen voice selection and SREQ programs still being traced.
-            continue;
+        let (unit, key) = match &cue {
+            Cue::Stream { unit, path, stream_id, prepare_id, .. } =>
+                (unit, format!("{path}:{stream_id}:{prepare_id}")),
+            Cue::Se { unit, path, se_id, conditional: None } =>
+                (unit, format!("se:{path}:{se_id}")),
+            // Selecting every authored variant would layer multiple voices.
+            Cue::Se { conditional: Some(_), .. } => continue,
         };
-        let key = format!("{path}:{stream_id}:{prepare_id}");
         if audio.failed.contains(&key) { continue; }
         let handle = if let Some(h) = audio.cache.get(&key) { h.clone() } else {
             let decoded = (|| {
                 let v = audio.vfs.as_ref().ok_or("audio VFS unavailable")?;
-                let bytes = v.read(&path, mtarc::type_hash("rSoundStreamRequest"))?;
+                let pcm = match &cue {
+                Cue::Stream { path, stream_id, prepare_id, .. } => {
+                let bytes = v.read(path, mtarc::type_hash("rSoundStreamRequest"))?;
                 let requests = mtsound::StreamRequests::parse(&bytes)?;
-                let source = requests.event_source(u16::try_from(stream_id).map_err(|_| "invalid stream ID")?, u16::try_from(prepare_id).map_err(|_| "invalid prepare ID")?)?;
+                let source = requests.event_source(u16::try_from(*stream_id).map_err(|_| "invalid stream ID")?, u16::try_from(*prepare_id).map_err(|_| "invalid prepare ID")?)?;
                 let source_path = mtsound::stream_path(source.path)?;
                 let bytes = std::fs::read(v.root.join(&source_path)).map_err(|e| format!("{source_path}: {e}"))?;
                 let pcm = mtsound::decode::vorbis(&bytes, 40_000_000)?;
                 info!("audio resolved {key} -> {source_path} ({} samples)", pcm.samples.len());
+                pcm
+                }
+                Cue::Se { path, se_id, .. } => {
+                    let bytes = v.read(path, mtarc::type_hash("rSoundRequest"))?;
+                    let requests = mtsound::Requests::parse(&bytes)?;
+                    let request = requests.single_wave(u16::try_from(*se_id).map_err(|_| "invalid SE ID")?)?;
+                    let source_path = request.source.ok_or("sound request has no package")?;
+                    let package_bytes = v.read(source_path, mtarc::type_hash("rSoundPackage"))?;
+                    let package = mtsound::Package::parse(&package_bytes)?;
+                    // Default program/variation only: runtime overrides, gain,
+                    // pitch, delay and spatial sends remain unimplemented.
+                    let (program, variation) = request.wave_keys();
+                    let wave = package.wave_for(program, variation)?.ok_or("sound wave absent")?;
+                    let pcm = mtsound::decode::wave(&wave.riff(), 4_000_000)?;
+                    info!("audio resolved {key} -> {source_path} ({} samples)", pcm.samples.len());
+                    pcm
+                }
+                };
                 stereo(pcm)
             })();
             match decoded {
@@ -108,9 +133,16 @@ fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut asset
                 Err(e) => { warn!("audio {key}: {e}"); audio.failed.insert(key); continue; }
             }
         };
-        for entity in units.remove(&unit).unwrap_or_default() { commands.entity(entity).despawn(); }
+        if matches!(cue, Cue::Se { .. }) {
+            // SEs may overlap. Original priority/group limits still need a
+            // mixer; stream-unit replacement is not applicable to them.
+            commands.spawn((AudioPlayer(handle), PlaybackSettings::DESPAWN,
+                EventSound(unit.clone()), OneShotSe));
+            continue;
+        }
+        for entity in units.remove(unit).unwrap_or_default() { commands.entity(entity).despawn(); }
         let entity = commands.spawn((AudioPlayer(handle), PlaybackSettings::DESPAWN, EventSound(unit.clone()))).id();
-        units.insert(unit, vec![entity]);
+        units.insert(unit.clone(), vec![entity]);
     }
 }
 
@@ -127,6 +159,28 @@ mod tests {
         let sound = stereo(mtsound::decode::Pcm { channels: 6, sample_rate: 48000, samples: vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0] }).unwrap();
         assert_eq!(&*sound.samples, &[std::f32::consts::FRAC_1_SQRT_2; 2]);
         assert_eq!(sound.decoder().count(), 2);
+    }
+
+    #[test]
+    fn unconditional_effects_overlap_and_conditional_variants_are_not_guessed() {
+        let mut assets = Assets::<DecodedAudio>::default();
+        let handle = assets.add(stereo(mtsound::decode::Pcm {
+            channels: 1, sample_rate: 48000, samples: vec![0.0],
+        }).unwrap());
+        let effect = |conditional| Cue::Se {
+            unit: "effect".into(), path: "cached".into(), se_id: 1, conditional,
+        };
+        let mut app = App::new();
+        app.insert_resource(assets).insert_resource(AudioState {
+            vfs: None, pending: vec![effect(None), effect(Some(0)), effect(None)],
+            cache: HashMap::from([("se:cached:1".into(), handle)]),
+            failed: HashSet::new(),
+        }).add_systems(Update, play_pending);
+        app.update();
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<Entity, With<OneShotSe>>();
+        assert_eq!(query.iter(world).count(), 2);
+        assert!(world.resource::<AudioState>().failed.is_empty());
     }
 
     #[test]

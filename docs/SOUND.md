@@ -211,3 +211,23 @@ selector starts at zero and becomes two when getter 0x00423be0 reports bit
 1; that bit's physical meaning remains unresolved. Five motion unit tests
 pass, including the distinct numberings, high-bit exclusion and simultaneous
 material bits. Actor bindings and playback remain the next integration step.
+
+### Ordinary event sound effects
+
+SREQ dispatch 0x00ddb340 / 0x00dda9f0 reads command +8: one plays through
+0x00dd8dd0, two/three call the control path, and four selects via the random
+resource. The next-request key is +0x1c; 0xffff or the current key terminates
+the chain. `Requests::single_wave` accepts only command one with a terminal
+chain and a referenced package. It rejects commands needing a stateful mixer.
+Its regression covers missing IDs/packages, control/random commands, a
+self-terminating key and a chain to another request.
+
+The viewer now plays unconditional event SE cues through that checked path,
+following the request's package reference and decoding its base program and
+variation. Effects are separate one-shots and may overlap; stream-unit
+replacement applies only to streams. Conditional cues are skipped rather than
+playing all alternatives. Runtime overrides, original priority/group limits,
+gain/pitch/delay and spatial processing remain unimplemented. Fifteen mtsound
+unit tests and the installed ev10 stream/ADPCM regression pass; the ev10 SE
+request is confirmed to be an ordinary terminal play. Audible comparison is
+still pending.

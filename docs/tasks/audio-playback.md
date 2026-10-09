@@ -48,3 +48,9 @@ The material ray API and explicit direct/attribute bank routing are ready.
 Five motion unit tests pass; material columns and bank selectors remain
 separate, including the original's low-29-bit material scan. No footsteps
 or weapon sounds are yet claimed audible.
+
+Unconditional event SE cues now resolve ordinary terminal SREQ play commands
+to their referenced SPAC wave and play as overlapping one-shots. Stop/fade,
+random requests, multi-request chains and conditional event variants are
+explicitly unsupported. Fifteen reader tests and the installed ev10 decode
+pass. Original mixer behavior and audible comparison remain open.
