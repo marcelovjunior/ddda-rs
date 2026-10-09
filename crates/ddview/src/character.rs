@@ -240,7 +240,7 @@ pub fn spawn_assembled(
     hold_frame: Option<f32>,
 ) -> Result<Entity, String> {
     spawn_assembled_hands(
-        commands, loader, meshes, materials, images, bindposes, model_path, base_tint, body, face, parts, &[], visible,
+        commands, loader, meshes, materials, images, bindposes, model_path, base_tint, None, body, face, parts, &[], visible,
         motion_path, slot, translation, hold_frame,
     )
 }
@@ -257,6 +257,7 @@ pub fn spawn_assembled_hands(
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     model_path: &str,
     base_tint: Option<[f32; 3]>,
+    eyebrow: Option<ddlook::eyebrow::Eyebrow>,
     body: Option<&ddlook::morph::BodyMorph>,
     face: &[ddlook::face::FaceJoint],
     parts: &[ExtraPart],
@@ -304,7 +305,7 @@ pub fn spawn_assembled_hands(
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
     let mut attach = vec![];
-    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint);
+    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint, eyebrow);
     for (k, part) in parts.iter().enumerate() {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
             Ok(b) => b,
@@ -347,7 +348,7 @@ pub fn spawn_assembled_hands(
         };
         let all = |_: u16| true;
         let vis: &dyn Fn(u16) -> bool = if part.attach.is_some() { &all } else { visible };
-        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint);
+        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint, None);
     }
     // Every assembled character runs the morph pass (it also places the
     // attachments); without edit data it is the identity.
@@ -458,6 +459,7 @@ fn spawn_meshes(
     root: Entity,
     visible: &dyn Fn(u16) -> bool,
     tint: Option<[f32; 3]>,
+    eyebrow: Option<ddlook::eyebrow::Eyebrow>,
 ) {
     // Inverse binds from the rest pose (world = parent world x local in
     // column-vector form). The stored `inverse_bind` matrices are not used:
@@ -548,8 +550,29 @@ fn spawn_meshes(
                 // with its shadow, the fog), so characters are lit as the
                 // stage is. Cloth is mostly two-sided: culling its back
                 // faces opened holes onto the body.
+                let mut is_eyebrow = false;
                 let shading = mrl.as_ref().and_then(|l| {
-                    let mut s = mtmrl::shading::describe(l.by_name(&name)?, l, mfx);
+                    let mat = l.by_name(&name)?;
+                    let mut s = mtmrl::shading::describe(mat, l, mfx);
+                    // rMaterial::vf09 0x0112e4d0 copies these bits unchanged
+                    // to draw material +0x18. 0x00843940 identifies colour
+                    // groups 5/6 here; group 6 also has eyebrow texture/UVs.
+                    let group = (mat.bits[0] >> 23) & 0xff;
+                    if let Some(brow) = eyebrow.filter(|_| group == 5 || group == 6) {
+                        is_eyebrow = true;
+                        s.albedo_color = brow.color;
+                        if group == 6 {
+                            if let Some(path) = brow.albedo_path() { s.textures.insert("tAlbedoMap".into(), path); }
+                            // 0x01067570 / 0x010675f0 replace only the
+                            // translation and diagonal of CBMaterial's UV rows.
+                            let mut uv = s.uv_transform.unwrap_or([
+                                [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+                            ]);
+                            uv[0][0] = brow.uv_scale[0]; uv[1][1] = brow.uv_scale[1];
+                            uv[0][3] = brow.uv_offset[0]; uv[1][3] = brow.uv_offset[1];
+                            s.uv_transform = Some(uv);
+                        }
+                    }
                     if let Some(p) = s.textures.get("tAlbedoMap") {
                         let p = undummy(loader, p);
                         s.textures.insert("tAlbedoMap".into(), p);
@@ -559,7 +582,7 @@ fn spawn_meshes(
                 let mut material = loader.character_material(shading.as_ref(), materials, images);
                 // *Approximation*: the edit's hair colour multiplies the
                 // albedo (the original sets a material constant, 0x008438f0).
-                if let (Some(c), PartMaterial::Dd(slot)) = (tint, &material) {
+                if let (Some(c), PartMaterial::Dd(slot)) = (tint.filter(|_| !is_eyebrow), &material) {
                     let mut m = slot.material.clone();
                     let b = m.base.base_color.to_linear();
                     m.base.base_color = Color::linear_rgba(b.red * c[0], b.green * c[1], b.blue * c[2], b.alpha);
@@ -710,6 +733,7 @@ pub fn spawn_look(
         bindposes,
         &look.base,
         look.skin_color,
+        look.eyebrow,
         look.body.as_ref(),
         &look.face,
         &parts,
@@ -734,5 +758,40 @@ fn undummy(loader: &Loader, path: &str) -> String {
         full
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod eyebrow_install_tests {
+    #[test]
+    fn npc_eyebrow_materials_are_selected_from_installed_mrl() {
+        let path = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !path.is_dir() { return; }
+        let v = ddvfs::Vfs::open(path).unwrap();
+        let mfx = mtshader::ShaderPackage::parse(&std::fs::read(path.join("usershader/BbsShaderPackage.mfx")).unwrap()).unwrap();
+        for n in 1..=2 {
+            let look = ddlook::npc_look(&v, n, n, 22).unwrap().look;
+            let bytes = v.read(&look.base, super::RMATERIAL).unwrap();
+            let mrl = mtmrl::parse(&bytes).unwrap();
+            assert!(look.eyebrow.is_some());
+            let model_bytes = v.read(&look.base, super::RMODEL).unwrap();
+            let model = mtmod::parse(&model_bytes).unwrap();
+            let mut brows = 0;
+            for mesh in &model.meshes {
+                let name = &model.material_names[mesh.material as usize];
+                let mat = mrl.by_name(name).unwrap();
+                let group = (mat.bits[0] >> 23) & 0xff;
+                if group == 6 && mesh.draw_mode & 1 != 0 {
+                    brows += 1;
+                    assert_eq!(look.mask.visible(mesh.group), n == 2);
+                    let s = mtmrl::shading::describe(mat, &mrl, &mfx);
+                    assert!(s.blends_alpha());
+                    assert!(!s.depth.unwrap().depth_write);
+                    assert_eq!(s.raster.unwrap().depth_bias, 0);
+                    assert!(s.uv_transform.is_some());
+                }
+            }
+            assert_eq!(brows, 1);
+        }
     }
 }

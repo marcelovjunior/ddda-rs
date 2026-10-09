@@ -58,6 +58,14 @@ fn edit_pattern() {
     assert_eq!(p.color(0, 200), p.color(0, 0));
     assert_eq!(p.beard(0, 1), -1);
     assert!(p.hair(0) >> 24 == 0x0f);
+    assert_eq!(p.eyebrows.len(), 100);
+    assert_eq!(p.fixed_eyebrows.len(), 8); // save conversion selects the first five
+    assert_eq!(p.eyebrow(100), Some((p.eyebrows[0].0, 0)));
+    assert_eq!(p.eyebrow(204), Some(p.fixed_eyebrows[4]));
+    for texture in 1..=3 {
+        let brow = ddlook::eyebrow::Eyebrow::from_edit([1.0; 4], [0.0; 2], [0.0; 2], texture);
+        assert!(v.locate(&brow.albedo_path().unwrap(), mtarc::type_hash("rTexture")).is_some());
+    }
 }
 
 #[test]
