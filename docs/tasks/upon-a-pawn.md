@@ -518,3 +518,29 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   prerequisite, not complete Guard eligibility or automatic UI cleanup.
 - All five Guard release tests and ddnpcrt clippy --no-deps pass.
   The predicate remains ready for actor-state adapter wiring.
+
+### Cassardis NPC viewer materialization checkpoint (codex-31)
+
+- Opening now caches actually parsed whole-stage Cassardis NPC layouts,
+  evaluates their authored gates each host tick, recognizes installed name
+  families and reconciles materialized intel owners. Model enumeration follows
+  those owners even when their normal graph is suspended. It no longer creates
+  every daily-FSM filename as an NPC with an invented one-HP lifetime.
+- Place requests use canonical host positions; Guard configuration is retained
+  and Goto waits for a real headless mover. Visual interpolation does not report
+  arrival. Stage unload retires Cassardis owners. Field NPC admission still
+  awaits actual layout/archive readiness; MultiNpc and pool priority eviction
+  remain explicit unsupported cases. Current Cassardis admission covers the
+  fresh-slot path within the original 200-slot cap, not a shared eviction pool.
+- Release build and viewer clippy passed (existing warnings only). Bounded
+  1080p unattended demo smoke drew 31 initial NPCs, completed weapon-table
+  interaction and started ev10. Screenshot at 25 seconds shows SceNo1100,
+  cutscene row22 frame597, GSF372=true and GSF381=false. No timing acceptance
+  was taken while another build ran. Private screenshot/logs remain outside
+  the repo; no original comparison or full-route acceptance is claimed.
+- The run exposed q0001 NPC1/NPC2 applied actions requiring missing
+  cAIActionFSMDemo.SceNo; they quarantine without losing their actor. Nine
+  daily Goto requests correctly remain pending. Guard actor eligibility,
+  actual talk cleanup, headless locomotion and field NPC admission are still
+  outstanding. Next: translate the source-backed SceNo variable, then rerun
+  the bounded route to expose the next real prerequisite.
