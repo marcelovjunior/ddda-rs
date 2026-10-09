@@ -407,17 +407,11 @@ pub fn update(
         let st = state.as_ref()?;
         let entity = *st.entities.get(&play::pawn_seat(st.follow))?;
         let p = playback.get(entity).ok()?;
-        // Provisional: highest animated joint until the engine's source joint
-        // used to populate +0x2e0 is traced. No fixed guessed body height.
-        let point = p
-            .joints
-            .values()
-            .filter_map(|e| transforms.get(*e).ok())
-            .map(|t| t.translation())
-            .max_by(|a, b| a.y.total_cmp(&b.y))?;
+        // 0x007325d0: joint-map entry 4 +25cm Y. 0x00ffddb0 maps
+        // actor+368 to rModel+110; 0x00fa8fe0 loads the MOD remap there.
+        let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
         let (camera, transform) = cameras.single().ok()?;
-        // 0x00679a10 moves the anchor 70 cm toward the camera before projecting.
-        let point = point + (transform.translation() - point).normalize_or_zero() * 0.7;
+        let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0)) // original screen-space offset
     })();
@@ -476,9 +470,30 @@ pub fn update(
     }
 }
 
+// Translated from 0x007325d0 and 0x00679a10 (2017-12-13 Steam).
+fn pawn_anchor(joint: Vec3, camera: Vec3) -> Vec3 {
+    let point = joint + Vec3::Y * 0.25;
+    point + (camera - point).normalize_or_zero() * 0.7
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pawn_anchor_uses_authored_joint_and_camera_offset() {
+        let point = pawn_anchor(Vec3::new(1.0, 2.0, 3.0), Vec3::new(1.0, 2.25, 10.0));
+        assert!((point - Vec3::new(1.0, 2.25, 3.7)).length() < 1e-6);
+    }
+    #[test]
+    #[ignore = "requires DDDA_NATIVE_PC"]
+    fn human_joint_remap_matches_playback_id() {
+        let vfs = ddvfs::Vfs::open(std::env::var("DDDA_NATIVE_PC").unwrap()).unwrap();
+        for path in [play::BODY, r"model\pl\f\f_base\f000\f000"] {
+            let bytes = vfs.read(path, mtarc::type_hash("rModel")).unwrap();
+            let model = mtmod::parse(&bytes).unwrap();
+            assert_eq!(model.bones[model.bone_map.unwrap()[4] as usize].anim_map_index, 4);
+        }
+    }
     #[test]
     fn hp_digits_pack_left() {
         assert_eq!(number(455.9), "455");

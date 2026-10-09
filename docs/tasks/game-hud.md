@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/game-hud`
 - **Board area:** `ui/hud`
-- **Status:** working (geometry/binding checkpoint; comparison gate open)
+- **Status:** working (final screenshot verification)
 
 ## Goal
 
@@ -29,26 +29,36 @@ The `--play --save` HUD shows the game's bars and prompts at the original positi
 
 ## Results
 
-First checkpoint: `mtgui::layout` exposes the authored animation objects,
-texture atlas rectangles, colour/texture keys and control selector ranges.
-`ddview::hud` loads cockpit bars, numeric HP and keyboard action artwork;
-the old overlay remains temporarily for value comparison. Release viewer
-build passed; 13 GUI tests including the installed cockpit/palette and all
-216 GUI archive occurrences passed. The first bounded screenshot verified
-HP digits 410 against the old overlay's 410/410; it exposed animation-driven
-colours, which the next build corrected. No original process was controlled.
+Implemented installed cockpit health/stamina bars, numeric HP, the simulated
+main pawn's world bar and action prompts. The renderer reads authored geometry,
+atlas regions, colour keys, GMD labels and GFD bitmap glyphs at runtime. It
+replaces the temporary viewer overlay. Bindings follow the selected Arisen;
+local P1/P2 prompt artwork uses the corresponding input slot. Converse/event
+visibility queries reflect the opening session's current availability.
 
-Still open: reference image comparison after colour/prompt corrections,
-font rendering, exact pawn anchor, Converse availability/event visibility,
-followed-seat key artwork and final old-overlay removal. Not a completed HUD.
+Evidence and validation:
 
-Second checkpoint: installed GFD bitmap fonts now render prompt text; traced
-VK binding selectors fix J/K/Space artwork. Local keyboard slot selects the
-corresponding P1 or P2 key art rather than assuming seat zero; remote followed
-seats have no local key prompts. Opening-session read-only queries suppress
-Converse when unavailable and HUD during events. Original interaction remains
-host-seat-only, reflected explicitly in its availability query. All 16 mtgui
-tests passed, including installed resources and missing/truncated animation
-pools. Screenshot `ddda-hud-third.png` (private TEMP) visually verifies original
-font, corrected key art, green health and faded full stamina with HP410.
-Pawn projection, final reference comparison and overlay removal remain open.
+- 16 mtgui tests pass, including all 216 installed GUI occurrences, cockpit/
+  palette geometry, font pages and malformed/missing pool checks.
+- 26 viewer release tests pass, including the installed male/female joint-map
+  check and exact pawn-anchor regression. Release viewer build passes.
+- Pawn anchor: 0x007325d0 uses mapped joint4 +25cm Y. uModel::vf23 at
+  0x00ffddb0 maps actor+368 to model+110; rModel::vf10 at 0x00fa8fe0 reads
+  the 256-byte bone remap there. 0x00679a10 adds 70cm toward the camera and
+  the screen offset. No highest-joint guess remains.
+- Private TEMP/ddda-hud-final.png (1920x1080, --play --save, --unattended,
+  eight-second bounded capture) compared with private ref001.jpg. HP starts
+  around (364,959), full width 228px, matching the reference layout. Numeral,
+  stamina strip and Heavy/Light/Jump row positions align. J/K replace the
+  reference's mouse bindings. Save HP 410 differs from ref001's 455 and world/
+  camera state differs; this compares HUD geometry/artwork, not whole-scene
+  pixel identity. No original process control or installation writes occurred.
+
+Commits 86f981c/f5401aa established geometry/fonts; merge 65905f8 brings in
+main's item/skill hooks. Final anchor/overlay changes follow that merge.
+
+Limitations: recruited pawn entities, pawn names/status icons, recoverable HP
+and status/flash animation remain incomplete; minimap is deferred. Original
+GUI font filters are not executed, so text edge treatment differs. Pawn
+world anchoring has source, unit and installed-model verification; a matching
+visible-pawn screenshot remains to be captured. Head owns shared milestone updates.
