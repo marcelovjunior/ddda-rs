@@ -590,8 +590,9 @@ fn main() {
         Some(l) => Color::linear_rgb(l.fog_color.x, l.fog_color.y, l.fog_color.z),
         None => Color::srgb(0.55, 0.68, 0.85),
     };
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let perf_enabled = args.perf;
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ddview".into(),
                 resolution: WindowResolution::new(size.0, size.1),
@@ -617,10 +618,22 @@ fn main() {
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain())
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain());
 
-        .add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate))
-        .run();
+    app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
+    // Diagnostics are opt-in: render queries themselves have a cost, so
+    // ordinary play must not pay for a profiling run.
+    if perf_enabled {
+        app.add_plugins((
+            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
+            bevy::render::diagnostic::RenderDiagnosticsPlugin,
+            bevy::diagnostic::LogDiagnosticsPlugin {
+                wait_duration: std::time::Duration::from_secs(5),
+                ..default()
+            },
+        ));
+    }
+    app.run();
 }
 
 /// The opening session until setup moves it into its resource.
