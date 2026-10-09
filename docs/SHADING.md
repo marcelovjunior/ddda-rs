@@ -451,6 +451,85 @@ The `--light` captures did not read spot units, so it is added from the data
 there too. It lights the ground around the party at 23:04 as in the
 capture.
 
+## Characters — traced shaders, partly inferred
+
+Character models carry light group 64 (bit 6). The sun (`uSkyInfiniteLight`,
+group 0x10C7), the fill light (0x10C5), the hemisphere light (0x10C7) and
+the sky spot light (0x10C5) all include that bit, so characters get the
+same lights as the stage; the viewer gives them the stage's SH, sun, shadow,
+spot light and fog (`stage::Loader::character_material`, skinned in the
+vertex stage of `dd_material.wgsl`).
+
+Of the 1946 materials of the `model\pl` lists, 1673 use `FAlbedoMapAdd`,
+1681 `FUVAlbedoBlendMap = FUVViewNormal` (on `model\textures\fs003_BM`),
+1655 `FReflectCubeMapShadowLight` (1585 on `scr\sky\DDCube2_CM`), 1918
+`FSpecularMap`, and all `FAmbientSH`, `FLighting`, `FBRDF`,
+`FIntegratedOutlineColor`. Their pixel shaders (file offsets 0x31BEA8 and
+0x40C494 of `sc\dx9\root`; 0x4BB2DC is the rare `FAlbedoMapBlendMaxAlpha`
+variant) compute:
+
+```
+A     = albedo * fAlbedoColor + blend.rgb * blend.a * fAlbedoBlendColor.rgb * fAlbedoBlendColor.w
+        blend = tAlbedoBlendMap at the view-normal UV:
+        vn = normalize(fView3x3 * N) ; uv = (0.5 + 0.5 vn.x, 0.5 - 0.5 vn.y)
+diff  = (SH(N) + light buffer diffuse + DL0 diffuse) * fDiffuseColor * occlusion
+spec  = ((light buffer specular + DL0 specular) * fSpecularColor + env) * specular map.rgb * occlusion
+F     = lerp(fFresnelSchlick, 1, (1 - N.V)^5)
+lit   = A * diff + spec * F
+out   = outline select (below), fog, * fHDRCompressEncode
+DL0   = the forward infinite light sLightParamDL0 (uInfiniteLight 0x00e15c70):
+        colour * (1 - max(mask a * ShadowGroup0, mask b * ShadowGroup1)) *
+        (max(N.L, 0) for diffuse, (N.normalize(L + V))^fShininess for specular)
+env   = cube(reflect(V, N)) * fReflectiveColor *
+        (1 + 7 fAppShadowLightScale (N.normalize(fAppReflectShadowDir + V))^fShininess
+           - fEnvMapMask * shadow mask)
+```
+
+- `fAlbedoColor` is (1.139, 1.035, 0.932) in 335 of the materials (skin);
+  `fAlbedoBlendColor` is (0,0,0,0) in 1298 and (1,1,1,0) in 268, so the
+  blend map adds nothing there; it is (1,1,1,1) in 273.
+- The outline term is off in normal play: every `model\pl` material and
+  the MFX default hold `fOutlineBlendMask` (1,0,0,0) (keep the lit colour);
+  the exe writes the mask from the identity table 0x01874640 by
+  `mOutlineBlendType` (0x00c87c30 / 0x00c87ca0, called from the
+  material-effect callbacks of uArmor, uWeapon, uObjModel and
+  uDDMCActorModel); modes 1 and 2 (`cOutlineParam`, `param\outline`,
+  timed) turn on a view-angle rim lerp(inner, outer,
+  sat(pow(1 - N.V, 5))).
+- DL0 is bound only for lights with a forward technique (`uLight::vf20`
+  0x00e135d0). That the sun is DL0 for characters is *inferred* (light
+  groups, the shadowed infinite light), not traced at run time.
+
+The viewer applies `fAlbedoColor` for `FAlbedoMapAdd` /
+`FAlbedoMapBlendMaxAlpha`, the blend map on the view-normal UV, the sun as
+DL0 (diffuse with its shadow, Blinn-Phong specular), the environment cube
+(`DDBaseCube<i>_CM` times the weather's cube colour, as for the stage) with
+the shadow-light factor at the MFX defaults (fAppShadowLightScale 1,
+fAppReflectShadowDir (0, 1, 0), fEnvMapMask 1; their run-time writers are
+not found), and Fresnel. *Not done:* the light buffer's specular, the
+vertex occlusion (1), normal maps, the burn/damage/edit albedo variants
+and the eye materials' `FUVSecondary` blend map.
+
+`--event` lights its stage and actors the same way from the data at
+`--hour` in fine weather (`stage::data_lighting`), when the stage has a sky
+scheduler.
+
+### The canyon at the saved spot (st100 58m49n, 12:35, fine)
+
+The canyon floor there lies in the walls' shadow at 12:35, so it gets only
+the SH. In fine weather that is small: the hemisphere light's
+`DayColor_F` (0.055, 0.112, 0.165) over `DayRevColor_F` (0.03, 0.061,
+0.09) and the fill light's `DayColor_F` (0.055, 0.112, 0.165), against
+(0.21, 0.336, 0.39) for the cloudy weather's colours, 2.4 to 3.8 times
+weaker by channel. The direct sun is strong (fine `IntensityScale` 3.0), so
+sunlit rock is bright and shade is dark. In our render (`--play --save`)
+the shaded floor averages (9, 16, 19) of 255 after the post chain and the
+lit wall (62, 63, 57); with `--weather e` the floor is (18, 26, 26). The
+refs-lit capture at 12:21 in cloudy weather at the same canyon matched our
+cloudy render (30, 39, 40 there), so the rules hold for cloudy weather;
+the fine-weather darkness follows the same traced rules but is **not
+compared live** (needs a capture by the maintainer at the saved spot).
+
 ## What the viewer does
 
 `stage.rs` builds each material from `mtmrl::shading::describe`:
@@ -477,6 +556,8 @@ capture.
 | night spot light | `SpotLight` in `dd_material.wgsl` | traced |
 | stage low models, primitive pass/LOD | `spawn_low_models`, `spawn_parts` | traced |
 | lighting/fog by clock and weather | without `--light` | traced, sun checked live |
+| character shaders: albedo add, sun specular, env cube, Fresnel | `character_material` + `FLAG_ALBEDO_ADD` / `FLAG_CHARACTER` | traced shaders; DL0 = sun inferred; env constants at MFX defaults |
+| character outline (`FIntegratedOutlineColor`) | not drawn | traced: off in normal play |
 
 Without `--light` the stage keeps Bevy's PBR with the placeholder sun and
 ambient.
@@ -501,5 +582,9 @@ ambient.
 - Night: the moon light (the group-0x10 lights) and point lights of lamps
   and the lantern are not used; the 23:04 ground matches in brightness
   with the spot light, the far rock wall is darker in ours.
+- Characters: which light is DL0 at run time; the writers of
+  `fAppReflectShadowDir`, `fLightMaskSelector` and the shadow groups; the
+  light buffer's specular; the outline modes 1 and 2; a live comparison of
+  the fine-weather canyon at the saved spot.
 - `FDiffuseVertexColor*`, `FTransparencyVolume`, `FAlbedoMapBlend` and the
   other variants: not traced.
