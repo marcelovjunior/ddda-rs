@@ -180,3 +180,14 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   variants. The installed host regression now retains a real daily graph,
   proves it remains suspended throughout the applied action, and verifies
   restoration without an early normal-graph step on the cleanup frame.
+
+- Parent ApplyFSM pointer trace: NPC materialization `0x00bbe070` writes
+  actor+0x2e64 = intel+0x110 at `0x00bbe545`. Intel initialization
+  `0x00bbd930` creates the daily consideration FSM at intel+0x15c, which
+  is that controller's +0x4c. Applied loading `0x00bb45e0` retains it and
+  uses the separate +0x58 wrapper. Actor detach `0x00bbe670` clears the
+  actor/controller link. The parent check `0x005c8460` counts a present
+  NPC-derived actor with nonnull +0x4c as ready, independently of applied
+  Finish. Existing Host::applied_script_finished naming is misleading;
+  a shared API correction and actor-type observation adapter are proposed,
+  not implemented. No action-Finish shortcut should feed that predicate.
