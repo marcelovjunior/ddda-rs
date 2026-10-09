@@ -9,13 +9,15 @@
 //! | sprint | Left Shift | Right Shift |
 //! | jump (twice: double jump) | Space | Enter |
 //!
-//! The camera orbits P1 (hold right mouse to turn it).
+//! The camera orbits P1 (hold right mouse to turn it). F2 switches every
+//! player between the town (relaxed) walk and run and the field ones; the
+//! area attribute that picks them in the original is not read yet.
 
 use std::collections::HashMap;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use ddsim::{Input, JumpParam, PlayerId, RootMotion, Sim};
+use ddsim::{Input, JumpParam, MoveParam, PlayerId, RootMotion, Sim};
 
 use crate::character::{Playback, RMOTIONLIST};
 use crate::stage::{Loader, UNIT};
@@ -24,9 +26,24 @@ use crate::stage::{Loader, UNIT};
 pub const MOTIONS: &str = r"motion\pl\m\m00\m0000_co\m0000_co";
 pub const BODY: &str = r"model\pl\m\m_base\m000\m000";
 pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
+/// Player tuning floats read by id (ground speeds; docs/MOVEMENT.md).
+pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 
 /// Every motion the controller uses (ddsim::State::motion_id).
-const USED_MOTIONS: [u16; 16] = [0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 43, 47, 48];
+const USED_MOTIONS: [u16; 19] = [
+    0, 3, 4, 7, 10, 11, 12, 13, 14, 15, 20, 22, 23, 43, 47, 48, 0x54, 0x55, 0x611,
+];
+
+/// Motion list of a bank: 0 is the common set; 6 is the equipped weapon
+/// set's, here the dagger set's `m0004_co` (bank table at 0x014F1D30;
+/// which group is the dagger's is not traced, docs/MOVEMENT.md).
+fn bank_list(bank: u16) -> Option<&'static str> {
+    match bank {
+        0 => Some(MOTIONS),
+        6 => Some(r"motion\pl\m\m00\m0004_co\m0004_co"),
+        _ => None,
+    }
+}
 
 #[derive(Resource)]
 pub struct PlayState {
@@ -76,6 +93,23 @@ fn jump_params(loader: &Loader, indices: &[usize]) -> Result<Vec<JumpParam>, Str
         .collect()
 }
 
+/// The float table of an `rAdjustParam` (docs/FORMATS.md): "ajp\0", u32
+/// version, u32 count, then `count` f32.
+fn adjust_table(loader: &Loader, path: &str) -> Result<Vec<f32>, String> {
+    let b = loader.vfs.read(path, mtarc::type_hash("rAdjustParam"))?;
+    if b.len() < 12 || &b[..4] != b"ajp\0" {
+        return Err(format!("{path}: not an ajp file"));
+    }
+    let n = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
+    let body = b
+        .get(12..12 + 4 * n)
+        .ok_or(format!("{path}: {n} floats do not fit"))?;
+    Ok(body
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .collect())
+}
+
 /// Builds the simulation around `spawn` (stage frame, cm) and spawns one
 /// character per player.
 #[allow(clippy::too_many_arguments)]
@@ -91,18 +125,23 @@ pub fn setup(
     spawn: Vec3,
     players: u8,
 ) -> Result<PlayState, String> {
-    let bytes = loader.vfs.read(MOTIONS, RMOTIONLIST)?;
-    let list = mtlmt::parse(&bytes).map_err(|e| e.to_string())?;
+    let mut lists: HashMap<u16, mtlmt::MotionList> = HashMap::new();
     let mut motions = HashMap::new();
     let mut roots = HashMap::new();
     for id in USED_MOTIONS {
+        let bank = id >> 8;
+        let path = bank_list(bank).ok_or(format!("motion bank {bank} not mapped"))?;
+        if !lists.contains_key(&bank) {
+            let bytes = loader.vfs.read(path, RMOTIONLIST)?;
+            lists.insert(bank, mtlmt::parse(&bytes).map_err(|e| e.to_string())?);
+        }
         let slot = usize::from(id & 0xFF);
-        let m = list
+        let m = lists[&bank]
             .motions
             .get(slot)
             .cloned()
             .flatten()
-            .ok_or(format!("{MOTIONS}: slot {slot} missing"))?;
+            .ok_or(format!("{path}: slot {slot} missing"))?;
         roots.insert(id, RootMotion::from_motion(&m));
         motions.insert(id, m);
     }
@@ -111,6 +150,9 @@ pub fn setup(
     let jp = jump_params(loader, &[0, 9])?;
     sim.jump_normal = jp[0];
     sim.jump_sprint = jp[1];
+    let adjust = adjust_table(loader, ADJUST_PARAMS)?;
+    sim.move_param = MoveParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: too short"))?;
+    info!("ground speeds from {ADJUST_PARAMS}: {:?}", sim.move_param);
     info!(
         "jump params from {JUMP_PARAMS}: normal {:?}, sprint {:?}",
         jp[0], jp[1]
@@ -120,8 +162,11 @@ pub fn setup(
         // players side by side, 1.5 m apart
         let pos = spawn + Vec3::new(150.0 * f32::from(id), 0.0, 0.0);
         sim.add_player(id, pos.to_array(), 0.0);
+        let p = sim.player_mut(id).unwrap();
         // as a dagger vocation: the second jump is available
-        sim.player_mut(id).unwrap().double_jump = true;
+        p.double_jump = true;
+        // the start area was recorded with the relaxed run (docs/MOVEMENT.md)
+        p.relaxed = true;
         let e = crate::character::spawn(
             commands,
             loader,
@@ -189,6 +234,16 @@ pub fn step(
     mut cams: Query<&mut Transform, With<FollowCam>>,
 ) {
     let Some(mut st) = state else { return };
+    if keys.just_pressed(KeyCode::F2) {
+        for p in &mut st.sim.players {
+            p.relaxed = !p.relaxed;
+        }
+        let relaxed = st.sim.players.first().is_some_and(|p| p.relaxed);
+        info!(
+            "{} walk and run",
+            if relaxed { "town (relaxed)" } else { "field" }
+        );
+    }
     if buttons.pressed(MouseButton::Right) {
         st.cam_yaw -= mouse.delta.x * 0.004;
         st.cam_pitch = (st.cam_pitch - mouse.delta.y * 0.004).clamp(-1.2, 0.4);

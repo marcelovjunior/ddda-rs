@@ -12,7 +12,11 @@
 //!   jump takeoff 10 (moving) / 13 (standing), airborne 11 / 14, landing
 //!   12 / 15, sprint start 43, sprint 20, sprint-jump takeoff 22, sprint-jump
 //!   airborne 23, ledge hang 47, ledge climb 48 (`cPlAct*::vf05`);
-//! - ground movement is each motion's root track (joint 255);
+//! - walking, running and sprinting move by a velocity set in code, not
+//!   by root motion: facing x a speed from `param\pl\other\m_pl000_00`
+//!   (`rAdjustParam`, a float table read by id) (`cPlActWalk::vf06`,
+//!   `cPlActRun::vf06`, `cPlActDash::vf06`, `cPlActDashBegin::vf06`); other
+//!   ground motions (takeoff, landing) move by their root track (joint 255);
 //! - jumps are physics from `param\pl\other\pljumpparam`: at takeoff the
 //!   velocity is SpeedY up plus SpeedZ forward along the facing (standing
 //!   jumps get no SpeedZ), Gravity is the per-frame acceleration, and each
@@ -27,8 +31,75 @@
 use std::collections::HashMap;
 
 /// Motion frames per second. *Assumed* 30 (not traced). Supporting
-/// evidence: walk root motion then gives 1.57 m/s.
+/// evidence: the recorded jump peaks 0.325 s after takeoff (9.5 frames at
+/// 30 fps gives 0.317 s), and non-locomotion motions advance 30 frames/s.
 pub const MOTION_FPS: f32 = 30.0;
+
+/// Playback rate of the walk, run and sprint motions: recorded at 34.5
+/// frames/s (the motion frame counter, uPlayer motion +0x3CC) against 30.0
+/// for other motions. *Measured*; where the rate is set is not traced.
+pub const LOCOMOTION_RATE: f32 = 1.15;
+
+/// Factor on walk and run speed (uPlayer +0xDA8, multiplied in
+/// `0x00B80690` / `0x00B80710`). Recorded as 0.8471090 on the ground for a
+/// male Arisen; its writer is not traced. *Measured*.
+pub const GROUND_SPEED_FACTOR: f32 = 0.847_109;
+
+/// Sprint start reaches sprint speed this many frames after it begins,
+/// rising linearly (never below its entry speed, per
+/// `cPlActDashBegin::vf06`). *Measured* (4-5 frames in the recording); the
+/// original's ramp (`0x010571C0` with id 9) is not traced.
+pub const SPRINT_RAMP_FRAMES: f32 = 4.5;
+
+/// Indices into the `rAdjustParam` float table (`rAdjustParam::vf15` at
+/// 0x00CA47D0 returns `floats[id]`) used for ground speeds. The relaxed ids
+/// apply where the area query `0x0043DAC0` reports flag 0x50 (towns and
+/// some quest areas).
+pub const ADJUST_WALK: usize = 0xFE;
+pub const ADJUST_WALK_RELAXED: usize = 0xFF;
+pub const ADJUST_RUN: usize = 0x100;
+pub const ADJUST_RUN_RELAXED: usize = 0x101;
+pub const ADJUST_SPRINT: usize = 0xF1;
+
+/// Ground speeds, cm per frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoveParam {
+    pub walk: f32,
+    pub walk_relaxed: f32,
+    pub run: f32,
+    pub run_relaxed: f32,
+    pub sprint: f32,
+}
+
+impl MoveParam {
+    /// Speeds from the `rAdjustParam` float table: walk and run get
+    /// `GROUND_SPEED_FACTOR`, sprint does not (`cPlActDash::vf06`).
+    pub fn from_adjust(table: &[f32]) -> Option<Self> {
+        let get = |i: usize| table.get(i).copied();
+        Some(MoveParam {
+            walk: get(ADJUST_WALK)? * GROUND_SPEED_FACTOR,
+            walk_relaxed: get(ADJUST_WALK_RELAXED)? * GROUND_SPEED_FACTOR,
+            run: get(ADJUST_RUN)? * GROUND_SPEED_FACTOR,
+            run_relaxed: get(ADJUST_RUN_RELAXED)? * GROUND_SPEED_FACTOR,
+            sprint: get(ADJUST_SPRINT)?,
+        })
+    }
+}
+
+/// `m_pl000_00` as shipped: walk 5.0, run 15.0, relaxed run 12.0, sprint 22.5.
+pub const MOVE_SHIPPED: MoveParam = MoveParam {
+    walk: 5.0 * GROUND_SPEED_FACTOR,
+    walk_relaxed: 5.0 * GROUND_SPEED_FACTOR,
+    run: 15.0 * GROUND_SPEED_FACTOR,
+    run_relaxed: 12.0 * GROUND_SPEED_FACTOR,
+    sprint: 22.5,
+};
+
+/// Simulation step in motion frames: 120 steps per second. Per-frame values
+/// (velocities, gravity, damping, air control) are scaled by the step, as
+/// the original scales them by its frame delta (`0x00AC51D0` multiplies by
+/// the object's delta).
+pub const TICK: f32 = 0.25;
 
 pub type PlayerId = u8;
 
@@ -61,8 +132,13 @@ pub const JUMP_SPRINT: JumpParam = JumpParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum State {
     Wait,
-    Walk,
-    Run,
+    /// `relaxed`: the town variant (area flag 0x50), other motion and speed.
+    Walk {
+        relaxed: bool,
+    },
+    Run {
+        relaxed: bool,
+    },
     SprintStart,
     Sprint,
     /// Takeoff; `standing` = no forward speed.
@@ -74,6 +150,8 @@ pub enum State {
         standing: bool,
         sprint: bool,
     },
+    /// Dagger vocations' second jump: a forward roll (`cPlActWpnDaggerJumpSecond`).
+    SecondJump,
     Fall,
     Land {
         standing: bool,
@@ -87,8 +165,10 @@ impl State {
     pub fn motion_id(self) -> u16 {
         match self {
             State::Wait => 0,
-            State::Walk => 3,
-            State::Run => 4,
+            State::Walk { relaxed: false } => 3,
+            State::Walk { relaxed: true } => 0x54,
+            State::Run { relaxed: false } => 4,
+            State::Run { relaxed: true } => 0x55,
             State::SprintStart => 43,
             State::Sprint => 20,
             State::JumpStart { sprint: true, .. } => 22,
@@ -97,6 +177,8 @@ impl State {
             State::Air { sprint: true, .. } => 23,
             State::Air { standing: true, .. } => 14,
             State::Air { .. } => 11,
+            // bank 6 slot 0x11: the dagger weapon set's roll (m0004_co, docs/MOVEMENT.md)
+            State::SecondJump => 0x611,
             State::Fall => 7,
             State::Land { standing: true } => 15,
             State::Land { .. } => 12,
@@ -110,8 +192,8 @@ impl State {
         matches!(
             self,
             State::Wait
-                | State::Walk
-                | State::Run
+                | State::Walk { .. }
+                | State::Run { .. }
                 | State::Sprint
                 | State::Air { .. }
                 | State::Fall
@@ -152,6 +234,13 @@ pub struct Player {
     pub jumps_left: u8,
     /// Dagger vocations can jump again in the air.
     pub double_jump: bool,
+    /// In an area with the relaxed walk and run (towns; area flag 0x50 of
+    /// `0x0043DAC0`). Set by the host from the player's area.
+    pub relaxed: bool,
+    /// Ground speed of the last frame, cm per frame.
+    pub speed: f32,
+    /// Ground speed when the sprint start began.
+    sprint_entry: f32,
     jump_held: bool,
     /// Ledge being climbed: hanging and standing feet positions.
     climb: Option<([f32; 3], [f32; 3])>,
@@ -253,6 +342,7 @@ pub struct Sim {
     pub motions: HashMap<u16, RootMotion>,
     pub jump_normal: JumpParam,
     pub jump_sprint: JumpParam,
+    pub move_param: MoveParam,
     /// Fraction of a frame not yet simulated.
     pending: f32,
 }
@@ -268,6 +358,7 @@ impl Sim {
             motions,
             jump_normal: JUMP_NORMAL,
             jump_sprint: JUMP_SPRINT,
+            move_param: MOVE_SHIPPED,
             pending: 0.0,
         }
     }
@@ -283,6 +374,9 @@ impl Sim {
             jump: JUMP_NORMAL,
             jumps_left: 0,
             double_jump: false,
+            relaxed: false,
+            speed: 0.0,
+            sprint_entry: 0.0,
             jump_held: false,
             climb: None,
         });
@@ -300,14 +394,14 @@ impl Sim {
         self.motions.get(&motion).map_or(30.0, RootMotion::period)
     }
 
-    /// Advances every player by `dt` seconds, in whole motion frames.
+    /// Advances every player by `dt` seconds, in steps of `TICK` motion frames.
     pub fn step(&mut self, dt: f32, inputs: &HashMap<PlayerId, Input>, ground: &dyn Ground) {
         self.pending += dt * MOTION_FPS;
-        while self.pending >= 1.0 {
-            self.pending -= 1.0;
+        while self.pending >= TICK {
+            self.pending -= TICK;
             for i in 0..self.players.len() {
                 let input = inputs.get(&self.players[i].id).copied().unwrap_or_default();
-                self.frame(i, input, ground);
+                self.frame(i, input, ground, TICK);
             }
         }
     }
@@ -319,8 +413,8 @@ impl Sim {
         }
     }
 
-    /// One motion frame for player `i`.
-    fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground) {
+    /// One step of `dt` motion frames for player `i`.
+    fn frame(&mut self, i: usize, input: Input, ground: &dyn Ground, dt: f32) {
         let (jn, js) = (self.jump_normal, self.jump_sprint);
         let moving = len2(input.stick) >= MOVE_THRESHOLD;
         // Stick x is screen-right; looking along +Z with +Y up, screen-right
@@ -335,8 +429,8 @@ impl Sim {
         let state = self.players[i].state;
         match state {
             State::Wait
-            | State::Walk
-            | State::Run
+            | State::Walk { .. }
+            | State::Run { .. }
             | State::SprintStart
             | State::Sprint
             | State::Land { .. } => {
@@ -362,7 +456,7 @@ impl Sim {
                     && !moving
                     && self.players[i].frame < self.period_of(state.motion_id())
                 {
-                    self.ground_move(i, state, ground);
+                    self.ground_move(i, state, ground, dt);
                     return;
                 }
                 let next = if !moving {
@@ -375,21 +469,28 @@ impl Sim {
                         _ => State::SprintStart,
                     }
                 } else if input.walk {
-                    State::Walk
+                    State::Walk {
+                        relaxed: self.players[i].relaxed,
+                    }
                 } else {
-                    State::Run
+                    State::Run {
+                        relaxed: self.players[i].relaxed,
+                    }
                 };
                 let p = &mut self.players[i];
+                if next == State::SprintStart && p.state != State::SprintStart {
+                    p.sprint_entry = p.speed;
+                }
                 Self::set_state(p, next);
                 if moving {
                     // *Placeholder*: the original turns over time.
                     p.yaw = input_yaw;
                 }
-                self.ground_move(i, next, ground);
+                self.ground_move(i, next, ground, dt);
             }
             State::JumpStart { standing, sprint } => {
                 // takeoff motion (the sprint takeoff carries root motion), then launch
-                self.ground_move(i, state, ground);
+                self.ground_move(i, state, ground, dt);
                 let len = self.period_of(state.motion_id());
                 let p = &mut self.players[i];
                 if p.state == state && p.frame >= len {
@@ -399,7 +500,7 @@ impl Sim {
                     Self::set_state(p, State::Air { standing, sprint });
                 }
             }
-            State::Air { .. } | State::Fall => {
+            State::Air { .. } | State::Fall | State::SecondJump => {
                 if pressed && self.players[i].jumps_left > 0 {
                     let p = &mut self.players[i];
                     p.jumps_left -= 1;
@@ -412,19 +513,19 @@ impl Sim {
                         p.velocity[0] = jn.speed_z * s;
                         p.velocity[2] = jn.speed_z * c;
                     }
-                    Self::set_state(
-                        p,
-                        State::Air {
-                            standing: !moving,
-                            sprint: false,
-                        },
-                    );
+                    Self::set_state(p, State::SecondJump);
                 }
-                self.air_move(i, moving.then_some(input_yaw), ground);
+                // the roll plays once, then the falling loop
+                if self.players[i].state == State::SecondJump
+                    && self.players[i].frame >= self.period_of(State::SecondJump.motion_id())
+                {
+                    Self::set_state(&mut self.players[i], State::Fall);
+                }
+                self.air_move(i, moving.then_some(input_yaw), ground, dt);
             }
             State::LedgeHang => {
                 let p = &mut self.players[i];
-                p.frame += 1.0;
+                p.frame += dt;
                 // *placeholder*: forward or jump climbs, back lets go
                 let back = moving && (input_yaw - p.yaw).cos() < -0.5;
                 if back {
@@ -439,7 +540,7 @@ impl Sim {
             State::LedgeClimb => {
                 let len = self.period_of(State::LedgeClimb.motion_id());
                 let p = &mut self.players[i];
-                p.frame += 1.0;
+                p.frame += dt;
                 if let Some((from, to)) = p.climb {
                     // *placeholder*: rise during the first 60%, step onto the top after
                     let t = (p.frame / len).min(1.0);
@@ -461,33 +562,70 @@ impl Sim {
         }
     }
 
-    /// Root-motion movement on the ground, with step-up / step-down rules.
-    fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground) {
+    /// Ground speed (cm per frame) of a velocity-driven state, or None for
+    /// states that move by root motion.
+    fn ground_speed(&self, p: &Player, state: State) -> Option<f32> {
+        let mp = &self.move_param;
+        Some(match state {
+            State::Walk { relaxed: false } => mp.walk,
+            State::Walk { relaxed: true } => mp.walk_relaxed,
+            State::Run { relaxed: false } => mp.run,
+            State::Run { relaxed: true } => mp.run_relaxed,
+            State::Sprint => mp.sprint,
+            // cPlActDashBegin::vf06: max(entry speed, ramp to sprint speed);
+            // the motion frame runs at LOCOMOTION_RATE
+            State::SprintStart => {
+                let t = p.frame / LOCOMOTION_RATE / SPRINT_RAMP_FRAMES;
+                (mp.sprint * t.min(1.0)).max(p.sprint_entry)
+            }
+            _ => return None,
+        })
+    }
+
+    /// Movement on the ground (velocity or root motion), with step-up /
+    /// step-down rules.
+    fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32) {
         let jn = self.jump_normal;
+        let speed = self.ground_speed(&self.players[i], state);
+        let period = self.period_of(state.motion_id());
         let p = &mut self.players[i];
         let mut target = p.position;
-        if let Some(m) = self.motions.get(&state.motion_id()) {
+        if let Some(v) = speed {
+            // velocity along the facing; the motion only animates
+            let (s, c) = p.yaw.sin_cos();
+            target[0] += v * dt * s;
+            target[2] += v * dt * c;
+            p.speed = v;
+            let f = p.frame + dt * LOCOMOTION_RATE;
+            p.frame = if state.looping() { f.rem_euclid(period) } else { f };
+        } else if let Some(m) = self.motions.get(&state.motion_id()) {
+            p.speed = 0.0;
             let d = if state.looping() {
-                m.delta(p.frame, 1.0)
+                m.delta(p.frame, dt)
             } else {
-                m.delta_once(p.frame, 1.0)
+                m.delta_once(p.frame, dt)
             };
             let (s, c) = p.yaw.sin_cos();
             target[0] += d[0] * c + d[2] * s;
             target[2] += -d[0] * s + d[2] * c;
             p.frame = if state.looping() {
-                (p.frame + 1.0).rem_euclid(m.period())
+                (p.frame + dt).rem_euclid(m.period())
             } else {
-                p.frame + 1.0
+                p.frame + dt
             };
         } else {
-            p.frame += 1.0;
+            p.speed = 0.0;
+            p.frame += dt;
         }
         match ground.height(target[0], target[2], p.position[1] + STEP_UP) {
             Some(h) if h >= p.position[1] - STEP_DOWN => p.position = [target[0], h, target[2]],
             Some(_) if !matches!(state, State::JumpStart { .. }) => {
-                // walked off an edge: fall, keeping the ground speed
-                p.velocity = [target[0] - p.position[0], 0.0, target[2] - p.position[2]];
+                // walked off an edge: fall, keeping the ground speed (per frame)
+                p.velocity = [
+                    (target[0] - p.position[0]) / dt,
+                    0.0,
+                    (target[2] - p.position[2]) / dt,
+                ];
                 p.position = [target[0], p.position[1], target[2]];
                 p.jump = jn;
                 p.jumps_left = u8::from(p.double_jump);
@@ -499,7 +637,7 @@ impl Sim {
     }
 
     /// One airborne frame: damping, air control, gravity, walls, ledges, landing.
-    fn air_move(&mut self, i: usize, steer: Option<f32>, ground: &dyn Ground) {
+    fn air_move(&mut self, i: usize, steer: Option<f32>, ground: &dyn Ground, dt: f32) {
         let p = &mut self.players[i];
         let jp = p.jump;
         let gravity = if matches!(p.state, State::Fall) {
@@ -509,26 +647,27 @@ impl Sim {
         };
         // horizontal speed loses DampingZ per frame (0x00AC51D0)
         let h = (p.velocity[0].powi(2) + p.velocity[2].powi(2)).sqrt();
-        if h <= jp.damping_z {
+        let damp = jp.damping_z * dt;
+        if h <= damp {
             p.velocity[0] = 0.0;
             p.velocity[2] = 0.0;
         } else {
-            let k = (h - jp.damping_z) / h;
+            let k = (h - damp) / h;
             p.velocity[0] *= k;
             p.velocity[2] *= k;
         }
         // *Assumed* integration order: position += velocity, then velocity += gravity.
         let mut next = [
-            p.position[0] + p.velocity[0],
-            p.position[1] + p.velocity[1],
-            p.position[2] + p.velocity[2],
+            p.position[0] + p.velocity[0] * dt,
+            p.position[1] + p.velocity[1] * dt,
+            p.position[2] + p.velocity[2] * dt,
         ];
-        p.velocity[1] += gravity;
+        p.velocity[1] += gravity * dt;
         if let Some(y) = steer {
-            next[0] += jp.add_move_xz * y.sin();
-            next[2] += jp.add_move_xz * y.cos();
+            next[0] += jp.add_move_xz * dt * y.sin();
+            next[2] += jp.add_move_xz * dt * y.cos();
         }
-        p.frame += 1.0;
+        p.frame += dt;
         // a wall ahead: nothing to stand on within a step of the body, but
         // ground above it
         let wall = ground.height(next[0], next[2], p.position[1] + STEP_UP).is_none()
@@ -604,9 +743,10 @@ mod tests {
 
     fn sim() -> Sim {
         let mut m = HashMap::new();
-        for id in [3u16, 4, 20] {
+        for id in [3u16, 4, 20, 0x54, 0x55] {
             m.insert(id, run());
         }
+        m.insert(43, RootMotion::none(15));
         for id in [10u16, 13, 22] {
             m.insert(id, RootMotion::none(5));
         }
@@ -624,15 +764,19 @@ mod tests {
         }
     }
 
+    const RUN5: f32 = 5.0 * MOVE_SHIPPED.run;
+
     #[test]
-    fn running_moves_forward_by_root_motion() {
+    fn running_moves_forward_at_the_run_speed() {
         let mut s = sim();
         let mut inputs = HashMap::new();
         inputs.insert(0, fwd());
         s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
-        assert_eq!(p.state, State::Run);
-        assert!((p.position[2] - 50.0).abs() < 1e-3, "{:?}", p.position);
+        assert_eq!(p.state, State::Run { relaxed: false });
+        assert!((p.position[2] - RUN5).abs() < 1e-3, "{:?}", p.position);
+        // the motion plays faster than the simulation's frames
+        assert!((p.frame - 5.0 * LOCOMOTION_RATE).abs() < 1e-3, "{}", p.frame);
         let q = s.player(1).unwrap();
         assert_eq!(q.state, State::Wait);
         assert_eq!(q.position[0], 500.0);
@@ -652,7 +796,7 @@ mod tests {
         s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert!(
-            p.position[0] < -49.0 && p.position[2].abs() < 1e-3,
+            (p.position[0] + RUN5).abs() < 1e-3 && p.position[2].abs() < 1e-3,
             "{:?}",
             p.position
         );
@@ -673,7 +817,7 @@ mod tests {
         s.step(5.0 / MOTION_FPS, &inputs, &Flat(0.0));
         let p = s.player(0).unwrap();
         assert!(
-            (p.position[0] - 50.0).abs() < 1e-3 && p.position[2].abs() < 1e-3,
+            (p.position[0] - RUN5).abs() < 1e-3 && p.position[2].abs() < 1e-3,
             "{:?}",
             p.position
         );
@@ -688,7 +832,11 @@ mod tests {
         for _ in 0..200 {
             s.step(1.0 / MOTION_FPS, &inputs, &Flat(0.0));
             let z = s.player(0).unwrap().position[2];
-            assert!((z - last - 10.0).abs() < 1e-2, "moved {} in one frame", z - last);
+            assert!(
+                (z - last - MOVE_SHIPPED.run).abs() < 1e-2,
+                "moved {} in one frame",
+                z - last
+            );
             last = z;
         }
     }
@@ -710,8 +858,9 @@ mod tests {
             apex = apex.max(s.player(0).unwrap().position[1]);
         }
         let p = s.player(0).unwrap();
-        // SpeedY 19, Gravity -2 per frame: apex 19 + 17 + ... + 1 = 100 cm
-        assert!((apex - 100.0).abs() < 1e-3, "apex {apex}");
+        // SpeedY 19, Gravity -2 per frame: 90.25 cm in continuous time, plus
+        // v * dt / 2 = 2.4 cm with quarter-frame steps
+        assert!((apex - 92.6).abs() < 0.5, "apex {apex}");
         assert!(
             matches!(p.state, State::Land { standing: true } | State::Wait),
             "{:?}",
@@ -827,6 +976,58 @@ mod tests {
             }
         }
         assert!(climbed, "{:?}", s.player(0).unwrap());
+    }
+
+    #[test]
+    fn relaxed_run_uses_the_town_motion_and_speed() {
+        let mut s = sim();
+        s.player_mut(0).unwrap().relaxed = true;
+        let mut inputs = HashMap::new();
+        inputs.insert(0, fwd());
+        s.step(10.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        let p = s.player(0).unwrap();
+        assert_eq!(p.state.motion_id(), 0x55);
+        // 12.0 x 0.8471 = 10.165 cm per frame, as recorded (uPlayer +0x2530)
+        assert!((p.speed - 10.165).abs() < 1e-3, "{}", p.speed);
+        assert!((p.position[2] - 101.65).abs() < 1e-2, "{:?}", p.position);
+    }
+
+    #[test]
+    fn sprint_start_ramps_from_the_run_speed_to_the_sprint_speed() {
+        let mut s = sim();
+        let mut inputs = HashMap::new();
+        inputs.insert(0, fwd());
+        s.step(10.0 / MOTION_FPS, &inputs, &Flat(0.0));
+        inputs.insert(
+            0,
+            Input {
+                sprint: true,
+                ..fwd()
+            },
+        );
+        let mut speeds = Vec::new();
+        for _ in 0..20 {
+            s.step(1.0 / MOTION_FPS, &inputs, &Flat(0.0));
+            speeds.push(s.player(0).unwrap().speed);
+        }
+        // never slower than the run it started from, sprint speed by frame 5
+        assert!(speeds.iter().all(|&v| v >= MOVE_SHIPPED.run - 1e-3), "{speeds:?}");
+        assert!(speeds[1] < MOVE_SHIPPED.sprint, "{speeds:?}");
+        assert!((speeds[5] - MOVE_SHIPPED.sprint).abs() < 1e-3, "{speeds:?}");
+        // the start motion (14 frames at the locomotion rate) gives way to the sprint
+        assert_eq!(s.player(0).unwrap().state, State::Sprint);
+    }
+
+    #[test]
+    fn move_param_reads_the_adjust_table() {
+        let mut t = vec![0.0f32; 0x110];
+        t[ADJUST_WALK] = 5.0;
+        t[ADJUST_WALK_RELAXED] = 5.0;
+        t[ADJUST_RUN] = 15.0;
+        t[ADJUST_RUN_RELAXED] = 12.0;
+        t[ADJUST_SPRINT] = 22.5;
+        assert_eq!(MoveParam::from_adjust(&t), Some(MOVE_SHIPPED));
+        assert_eq!(MoveParam::from_adjust(&t[..0x100]), None);
     }
 
     #[test]

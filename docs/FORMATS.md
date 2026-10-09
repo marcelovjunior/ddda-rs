@@ -135,3 +135,17 @@ Inspection: `ddtool tex-dds <arc> <entry> <out.dds>` writes a legacy DDS
 - The two state-bit words.
 - The animation block.
 - The blend, depth and rasterizer state ids.
+
+## `rAdjustParam` ("ajp", read in `ddview::play`)
+
+A flat table of player tuning values read by index:
+`rAdjustParam::vf15` (0x00CA47D0) returns `floats[id]`.
+
+- 4 bytes `ajp\0`, u32 `0x0201` (version, *assumed*), u32 count, then count × f32.
+- `param\pl\other\m_pl000_00` holds 570 floats. The weapon files
+  (`m_pl000_dagger`, `_wand`, ...) hold 17-145.
+- Ids in use: walk 0xFE / 0xFF (relaxed), run 0x100 / 0x101 (relaxed),
+  sprint 0xF1 / 0xF2. See docs/MOVEMENT.md.
+
+**Unresolved:** how the weapon files combine with `m_pl000_00`, and the
+meaning of most ids.
