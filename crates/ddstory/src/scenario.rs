@@ -847,6 +847,10 @@ fn task_callback(env: &mut Env, e: &Entry) -> Result<u32, Error> {
             env.out.push(Request::Scenario { task: e.param.task, name: e.name.clone(), arg: e.arg.as_deref().cloned() });
             Ok(0)
         }
+        // Translated from 0x00798ce0 / 0x00798250 (DDDA.exe 2017-12-13 Steam):
+        // only IDs 1..=11 have callbacks. A null callback retains result zero,
+        // so it neither disables nor ends the scenario and emits no action.
+        0 | 12.. => Ok(0),
         other => Err(Error::Unimplemented(format!("scenario task {other}"))),
     }
 }
@@ -883,6 +887,30 @@ fn collect(r: &Record, out: &mut Vec<Record>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_task_callbacks_preserve_status_and_emit_no_actions() {
+        let host = crate::scripted::ScriptedHost::default();
+        let mut world = crate::World::default();
+        let mut stage = crate::story::StageState::default();
+        let mut out = vec![];
+        let mut cmds = vec![];
+        let mut env = Env { world: &mut world, stage: &mut stage, host: &host,
+            time: Default::default(), out: &mut out, cmds: &mut cmds, events: None };
+        let mut areas = enemy_area([0.0; 3]);
+        for task in [0, 12, 13, u32::MAX] {
+            areas.tasks[0][0].param.task = task;
+            areas.tasks[0][0].status = 0x18;
+            areas.fire(&mut env, 0, 0).unwrap();
+            assert_eq!(areas.tasks[0][0].status, 0x19, "only the caller's fired bit changes");
+            assert!(!areas.tasks[0][0].ended);
+        }
+        assert!(env.out.is_empty());
+        assert!(env.cmds.is_empty());
+        // Known non-null callbacks must still expose missing implementations.
+        areas.tasks[0][0].param.task = 11;
+        assert!(matches!(task_callback(&mut env, &areas.tasks[0][0]), Err(Error::Unimplemented(_))));
+    }
 
     fn enemy_area(anchor: [f32; 3]) -> Scenarios {
         Scenarios { tasks: vec![vec![Entry {

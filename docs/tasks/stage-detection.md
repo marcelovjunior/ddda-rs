@@ -50,4 +50,20 @@ with that specific allowance passed. Release viewer build passed (two
 existing viewer warnings and the coordinated layout accessor not yet used
 by the NPC adapter).
 No original-game comparison or full route acceptance is claimed yet.
-Next: rerun the gate-to-field benchmark after head merges this fix.
+
+### Clean route and null task dispatch follow-up
+
+The clean route run on 2026-10-09 reached stage 100/start 2 through the
+actual gate with this detection change, then stopped on task 13. Source
+`0x00798ce0` returns a null callback outside task IDs 1 through 11;
+`0x00798250` leaves the callback result zero in that case. The dispatcher
+now preserves this no-action result, without setting terminal bits or
+inventing a request. Known non-null callbacks that remain unsupported
+still report an error. Eight scenario unit tests pass, including task
+0/12/13/UINT_MAX status/request checks and the still-unsupported task 11.
+Targeted strict clippy passes with the existing chunks_exact allowance;
+dependency-wide strict clippy encounters an unrelated existing ddsave
+field_reassign_with_default warning. The null-dispatch follow-up has not
+yet been rerun through the viewer route.
+
+Next: rerun the field route after camera-feel's higher-priority capture.
