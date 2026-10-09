@@ -251,6 +251,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             self.boot = false;
         }
+        for request in &requests {
+            if let Request::StoryPawn { stock, slot } = request {
+                self.recruit_story_pawn(*stock, *slot)?;
+            }
+        }
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let presses = self.edges.interact_presses(inputs);

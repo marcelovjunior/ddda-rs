@@ -22,8 +22,10 @@ pub mod lock;
 pub mod npcs;
 pub mod opening;
 pub mod player;
+pub mod prologue;
 pub mod save;
 pub mod spawns;
+pub mod story_pawns;
 pub mod systems;
 
 /// The fight runtime the host composes (`Host::fight`), for views.
