@@ -147,7 +147,7 @@ Codex lane: see `docs/CODEX.md`.
 | [movement-feel](movement-feel.md) | Opening slice: turning, locomotion blending, air attacks, falls (playtest) | core | codex-1 | assigned (slice 1) |
 | [dragon-attack](dragon-attack.md) | Opening slice: the dragon attack on Cassardis | core | codex-1 | partial merge 6e7c80b (AI requests, completion check); fight + host open |
 | [upon-a-pawn](upon-a-pawn.md) | Opening slice: q0002, first pawn, goblins | core | codex-1 | assigned (slice 3) |
-| [opening-prologue](opening-prologue.md) | Opening slice: the playable prologue (stage 380) | core | codex-1 | merged 2026-10-09 |
+| [opening-prologue](opening-prologue.md) | Opening slice: the playable prologue (stage 380) | core | codex-1 | partial merge (setup, encounter facts); chimera + playable route open |
 | [chara-creation-ui](chara-creation-ui.md) | Opening slice: character creation (stage 801) | core | codex-1 | assigned (slice 5) |
 | [opening-movie](opening-movie.md) | Opening slice: WMV movie playback | core | codex-1 | assigned (slice 6) |
 | [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | assigned (slice 7) |
