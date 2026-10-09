@@ -255,6 +255,13 @@ greater than **32 cm** (constant **0x01517928**). Actor eligibility has
 additional state/type gates; this is not a query against every visible
 actor or a replacement for the stage SBC query.
 
+The entry mask 0x10 is the authored group's **mIsObjAdj** flag: reflection
+**0x00ccd510** places it at group +0x0E, and **0x0076fab0** translates it
+into entry +0x1C0 bit0x10. Existing `ddcombat::ObjCollision` already reads
+these groups; `ddcombat::volumes::build_volume` supplies the source-backed
+joint placement. Integration therefore needs the live selected entries
+and actor eligibility, rather than a new collision resource parser.
+
 The initial overlap gate tests these shapes against a capsule from the
 desired eye (+0x310) to the current eye (+0x40), radius read from installed
 global **0x01875dec** (80 cm). Once any eligible shape overlaps, the
