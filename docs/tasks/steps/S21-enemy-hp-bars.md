@@ -42,7 +42,7 @@ following source/data findings are preserved for continuation:
   / id142, and `enmy_gauge_back`, node34 / id164. It is not the blue
   `id/cockpit/npc_gauge` widget: that separate class is created by NPC and
   uEm8300 paths (**0x00bb8c10**, **0x00a9c2ca**).
-- Damage handling **0x00aaa...** (`uEnemy::vf69`, callsite **0x00aaafbf**)
+- Damage handling `uEnemy::vf69` (callsite **0x00aaafbf**)
   enters manager wrapper **0x00452ee0**, then **0x0067c110**. For a small
   enemy, it sets the single actor pointer at gauge +0x400 and refreshes
   +0x404 to **450 frames**. Large-enemy primary/additional pointers and
