@@ -192,6 +192,9 @@ pub struct SkyShadow {
     pub distribution: f32,
     /// WeatherManager.mShadowLimit, independent of direct sunlight.
     pub direction_limit: f32,
+    /// Constructor0x00c6c7a0 initializes +0x194 to10cm. Weather update
+    /// 0x00c6c970 copies it to the depth bias unless a scripted override is on.
+    pub depth_bias_cm: f32,
 }
 
 /// A `uSkyCloudModel` of the sky scheduler.
@@ -275,6 +278,9 @@ impl StageSky {
                 // sWeatherManager ctor0x004bb200 initializes +0xe0 to0.5;
                 // reflection0x004bca80 names it mShadowLimit.
                 direction_limit: float(&s, wm, "mShadowLimit").unwrap_or(0.5),
+                // Not reflected as an Ex property by0x00c6c850; the
+                // constructor value is retained by the normal weather path.
+                depth_bias_cm: 10.0,
             })
         });
         // The arrays' tracks repeat the name; the type hash field holds the
