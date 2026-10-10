@@ -9,7 +9,7 @@
 //! - the **party placement** after an event (`PlaceParty`: a start position
 //!   of `scr\st200\etc\st200`);
 //! - the **vocation menu** at the weapon table (stage mode 0x19): a
-//!   labelled stub, 1 Fighter, 2 Strider or 3 Mage; the host then gives the
+//!   installed uGUIJobChange list, Fighter, Strider or Mage; the host then gives the
 //!   Arisen that vocation's fight kit (`Host::apply_job_kit`);
 //! - **talks** (`Host::talk`): E next to an NPC, lines as subtitles, E for
 //!   the next line, digits for choices;
@@ -245,6 +245,7 @@ pub struct Session {
     pub host: HostHandle,
     /// Save-free bags; actual story rewards and menu choices deliver items.
     quick_items: crate::items::QuickItems,
+    vocation_menu: crate::vocation_menu::Selection,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
     pending_input: PlayerInput,
@@ -298,6 +299,17 @@ pub struct Session {
 
 #[derive(Resource)]
 pub struct OpeningRes(pub Mutex<Session>);
+
+impl OpeningRes {
+    pub(crate) fn vocation_snapshot(&self) -> Option<(usize, usize, bool, bool)> {
+        let session = self.0.lock().unwrap();
+        let (_, owner) = session.world_menu().filter(|(menu, _)| *menu == Menu::Vocation)?;
+        // The host may request the menu during this frame's tick, after
+        // input was sampled. Draw its native initial row immediately so a
+        // same-frame screenshot doesn't miss the newly opened UI.
+        Some(session.vocation_menu.snapshot().unwrap_or((owner,0,false,true)))
+    }
+}
 
 /// Walk the stand-in prologue to an awaited movie, or q0001 when intro is bypassed.
 pub fn prepare(
@@ -394,6 +406,7 @@ pub fn prepare(
             server: None,
         },
         quick_items,
+        vocation_menu: crate::vocation_menu::Selection::default(),
         guest: None,
         network_ready: false,
         pending_input: PlayerInput::default(),
@@ -1293,6 +1306,7 @@ pub fn step(
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
     mut hud: ResMut<play::Hud>,
+    vocation_view: Option<Res<crate::vocation_menu::View>>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
     let keys = &order_devices.keys;
@@ -1407,15 +1421,14 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-        let pick = if !pause.paused && keys.just_pressed(KeyCode::Digit1) {
-            Some(ddskill_fighter())
-        } else if !pause.paused && keys.just_pressed(KeyCode::Digit2) {
-            Some(ddskill_strider())
-        } else if !pause.paused && keys.just_pressed(KeyCode::Digit3) {
-            Some(ddskill_mage())
-        } else {
-            None
-        };
+        let owner = s.world_menu().unwrap().1;
+        s.vocation_menu.open(owner);
+        let pick = if !pause.paused {
+            vocation_view.as_ref().and_then(|view| {
+                let input = s.vocation_menu.controls(&keys, &gamepads);
+                view.catalog.input(&mut s.vocation_menu, input)
+            })
+        } else { None };
         if let Some(j) = pick {
             close_menu(s, j);
         }
@@ -1470,7 +1483,7 @@ pub fn step(
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
-            demo_input(s, now, &st.terrain)
+            demo_input(s, now, &st.terrain, vocation_view.as_ref().map(|view| &view.catalog))
         };
     }
     if pause.paused {
@@ -1763,17 +1776,11 @@ impl Session {
 fn ddskill_fighter() -> u32 {
     1
 }
-fn ddskill_strider() -> u32 {
-    2
-}
-fn ddskill_mage() -> u32 {
-    3
-}
-
 /// The view closed the vocation menu with `job` (Fighter 1, Strider 2, Mage 3:
 /// `ddskill::vocation::Vocation`).
 fn close_menu(s: &mut Session, job: u32) {
-    info!("opening: vocation menu (stub) closed with job {job}");
+    info!("opening: vocation menu closed with job {job}");
+    s.vocation_menu.close();
     let selecting = s.world_menu().is_some();
     s.host.world.close_menu(Some(job));
     if selecting {
@@ -1947,8 +1954,8 @@ pub fn cutscene(
     }
     if s.cut.is_none() {
         if let Ok(mut t) = subs.single_mut() {
-            t.0 = if let Some((menu, _)) = s.world_menu() {
-                format!("{menu:?} menu (viewer stub, not uGUIJobChange): 1 Fighter   2 Strider   3 Mage")
+            t.0 = if s.world_menu().is_some() {
+                String::new()
             } else if let Some(talk) = &s.talk {
                 let mut l = format!("[NPC {}] {}", talk.npc, talk.line);
                 for (k, c) in talk.choices.iter().enumerate() {
@@ -2130,7 +2137,7 @@ fn w_bit(s: &Session, bit: usize) -> bool {
     s.world().quest_bits(2).is_some_and(|b| b.get(bit))
 }
 
-fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
+fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocation_catalog: Option<&crate::vocation_menu::Catalog>) -> PlayerInput {
     let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else {
         return PlayerInput::default();
     };
@@ -2413,7 +2420,19 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         // DDVIEW_DEMO_JOB picks another vocation (2 Strider, 3 Mage) for
         // unattended checks of the other kits
         let job = std::env::var("DDVIEW_DEMO_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(ddskill_fighter());
-        close_menu(s, job);
+        if let Some(catalog) = vocation_catalog {
+            s.vocation_menu.open(menu.unwrap().1);
+            match catalog.demo_select(&mut s.vocation_menu,job) {
+                Ok(()) => {
+                    let confirm = crate::vocation_menu::Input { confirm:true, ..default() };
+                    let confirmed = catalog.input(&mut s.vocation_menu,confirm)
+                        .or_else(|| catalog.input(&mut s.vocation_menu,confirm));
+                    if let Some(job) = confirmed { close_menu(s,job); }
+                    else { s.failure=Some("unattended vocation confirmation did not accept".into()); }
+                }
+                Err(error) => s.failure=Some(error),
+            }
+        } else { s.failure=Some("vocation GUI catalog is unavailable".into()); }
     }
     if talk_due {
         if s.talk.is_some() {
@@ -3031,7 +3050,7 @@ mod tests {
         let position = (target + Vec3::X * 1000.0).to_array(); // Explicit isolated position fixture.
         session.host.sim.player_mut(0).unwrap().position = position;
         session.demo.as_mut().unwrap().step = Step::RescueApproach;
-        let input = demo_input(&mut session, 1.0, &DriverGround);
+        let input = demo_input(&mut session, 1.0, &DriverGround, None);
         assert_eq!(input.sim.stick, [0.0, 1.0], "ordinary movement heads toward installed Area");
         assert_eq!(session.host.sim.player(0).unwrap().position, position, "driver never places the body");
         assert_eq!(session.demo.as_ref().unwrap().step, Step::RescueApproach);
@@ -3039,7 +3058,7 @@ mod tests {
         assert!(!session.world().quest_bit(2, 20));
         // Explicit observation fixture: actual event1 entry supplies this in production.
         session.host.story.as_mut().unwrap().world.set_quest_bit(2, 25, true);
-        demo_input(&mut session, 2.0, &DriverGround);
+        demo_input(&mut session, 2.0, &DriverGround, None);
         assert_eq!(session.demo.as_ref().unwrap().step, Step::Rescue);
         assert!(session.host.fight.as_ref().unwrap().goblins.is_empty());
         demo_rescue(&mut session, 3.0);
