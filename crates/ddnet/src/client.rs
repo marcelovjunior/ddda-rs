@@ -551,7 +551,6 @@ impl<T: Transport> Client<T> {
                         self.events.push(ToClient::Joined { seat, profile });
                     }
                     Ok(ToClient::Retry(notice)) => self.retry_notice(notice),
-                    Ok(e) => self.events.push(e),
                     Err(_) => {}
                 }
             }

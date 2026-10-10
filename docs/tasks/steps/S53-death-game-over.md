@@ -321,3 +321,15 @@ target. This is required by the wire policy's terminal-only spectator
 invariant. The existing server retry regression now encodes/decodes its
 actual living host report as both whole and unchanged-report delta snapshots.
 The 47-name count is unchanged; these assertions remain unrun.
+
+The first continuation full-core attempt on `fb63f1e` exited 101 before
+running any tests: the shared target reused stale ddsim/Fight artifacts from
+another worktree despite the APIs being in this frozen source. Refreshing
+only the two owned source timestamps preserved their content hashes and
+caused both libraries to compile. That full repeat (session 48394) also
+exited 101 before tests, exposing a network unit fixture's illegal access
+to private `Runtime.session`. The fixture now poisons the old body through
+public Sim APIs; installed host regressions remain responsible for actual
+fatal HP/profile policy. An unreachable client match arm was removed.
+Both private failure logs are preserved. No passing continuation test or
+release result is claimed; the exact full-package command is rerunning.

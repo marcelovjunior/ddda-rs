@@ -557,14 +557,20 @@ mod retry_tests {
         fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
     }
     fn setup() -> (TestServer, ddhost::save::SaveFile, SocketAddr) {
-        let mut host = TestHost::new(ddsim::Sim::new(Default::default()), None,
+        let mut host = TestHost::new(ddsim::Sim::new(
+            [(0x109, ddsim::RootMotion::none(4))].into_iter().collect()), None,
             Default::default(), Box::new(Flat));
         host.join(ProfileId(100), Control::Local, [0.0; 3], 0.0).unwrap();
         host.join(ProfileId(200), Control::Remote, [400.0, 0.0, 0.0], 0.0).unwrap();
         host.frame = 7;
         let checkpoint = host.save().unwrap();
         host.frame = 900;
-        host.death.session.enter_dead(ProfileId(100));
+        // Poison the old body action through the public Sim API. This
+        // headless network fixture has no Fight HP; actual fatal-profile
+        // policy and all-dead retry are tested by ddhost's installed fixture.
+        host.sim.begin_grounded_death(0, false, true).unwrap();
+        host.sim.player_mut(0).unwrap().state = ddsim::State::Death {
+            phase: ddsim::DeathPhase::ArisenDead };
         let mut server = TestServer::new(host, Udp::bind("127.0.0.1:0").unwrap(),
             ServerConfig { build: 1, data: 2, spawn: [0.0; 3], spot: None });
         let remote_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
