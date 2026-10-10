@@ -76,3 +76,55 @@ constant objects and the selected control's texture/color/visibility keys;
 this is not a general GUI animation VM. Character preview, font filters,
 the tutorial popup, and the native input legend are still open. No
 original-game visual comparison or GPU acceptance is claimed yet.
+
+## Result checkpoint (codex-67, 2026-10-10)
+
+Source commit **`f60827e`**, branch `step/s35-vocation-menu`, worktree
+`E:/ddda-rs-wt/s35-vocation-menu`; based on reviewed committed main
+`c7c0505`. Head approved the viewer hooks in board #5995 and the narrow
+GUI Boolean-track extension in #6120.
+
+Implemented the installed three-row vocation list, descriptions, cursor,
+bitmap glyphs, and the original `sys_wind` Yes/No confirmation. The menu
+state belongs to its opening session and uses the actual request owner for
+local device input. Confirmation continues through the existing
+`OpeningWorld::close_menu` / `PlayerJob` / `Host::apply_job_kit` path.
+The digit-key stub is removed. The unattended driver uses the same
+installed list navigation and confirmation operations before that handoff.
+
+`mtgui::layout::Object` now reads Boolean animation keys from the byte
+pool and samples authored visibility. This is necessary for the cursor's
+normally hidden overlay, rather than discarding that object by hand.
+
+Verified, all with actual process exit 0:
+
+- Full `cargo test -p mtgui`: **12 passed, 5 existing ignored**;
+  2.53 seconds compilation. The new synthetic regression covers byte-pool
+  offsets, key frame transitions, and truncated Boolean data.
+- Explicit installed `cargo test -p mtgui --test hud -- --ignored`:
+  **3 passed**, 0.48 seconds compilation, 5.60 seconds tests.
+- Final full `cargo test --release -p ddview`: **82 passed, 2 existing
+  ignored**, 22.82 seconds compilation, 14.16 seconds tests. Three menu
+  tests cover all three confirmed jobs, rejection, list boundaries and
+  owner changes, plus actual installed layout/text/font/atlas projection
+  and confirmation selector frames without a GPU window.
+- `cargo build --release -p ddview`: **passed**, 46.65 seconds. Existing
+  `opening_world`/`Args` visibility and unused audio method warnings remain.
+
+Private binary pin:
+`E:/ddda-re/notes/steps/S35/ddview-s35-f60827e.exe`, SHA-256
+`1793A335057233648AF2DA6D1F9D58A492D14093647414E8E6EDFEF2F7459709`.
+The pin was copied after the actual release build exited, before releasing
+the shared target to the next agent. No game files or private exports were
+committed.
+
+**Open:** one bounded menu capture and actual kit log check (board #6177),
+independent lane review, and original-game visual comparison. The general
+GUI animation/filter VM, character preview, tutorial popup, input legend,
+and native hold-repeat timing remain explicitly unported. LAN guest menu
+replication is not added here; this checkpoint preserves the existing
+host menu/kit policy. This is a source checkpoint, not full S35 acceptance.
+
+Next action: inspect the requested `2-vocation-menu.png` and confirm that
+the unattended Strider selection reaches the existing kit handoff; record
+the capture's owned PID, actual exit, and image hash before closing S35.
