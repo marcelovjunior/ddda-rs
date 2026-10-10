@@ -2919,10 +2919,10 @@ fn guest_step(
         }
     }
     for event in events {
-        if let ddnet::proto::ToClient::PawnMessage(message) = &event {
+        if let ddnet::proto::ToClient::PawnMessage { message, .. } = &event {
             crate::pawn_chatter::queue(&mut view.commands, std::slice::from_ref(message));
         }
-        if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
+        if let ddnet::proto::ToClient::PlayEvent { row, frame, .. } = event {
             start_cut(s, row as usize);
             if let Some(cut) = &mut s.cut {
                 // Catch up a delayed start or late join to the last received host frame.

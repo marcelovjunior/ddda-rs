@@ -39,6 +39,9 @@ pub struct FightData {
     pub bow: BowData,
     /// The attacks' values from `param\pl\other\m_pl000_00`.
     pub attack_param: ddsim::AttackParam,
+    /// Installed player adjust values, also consumed by death actions.
+    /// Bulk data stays in the player's resources, not translated constants.
+    pub player_adjust: Vec<f32>,
     pub goblin: GoblinData,
     pub tables: Tables,
     /// The pawns' AI data (`crate::pawn`).
@@ -61,13 +64,21 @@ impl FightData {
             ddcombat::damage::Adjust::parse(&crate::body::load::read(vfs, p, "rAdjustParam")?)
                 .ok_or_else(|| format!("{p}: bad table"))
         };
-        let arisen = ArisenData::fighter(vfs)?;
-        let mage = ArisenData::mage(vfs)?;
+        let mut arisen = ArisenData::fighter(vfs)?;
+        let mut mage = ArisenData::mage(vfs)?;
         let mut strider = ArisenData::strider(vfs)?;
+        // Native damage-bank requests: 0x00AD57CD (collapse),
+        // 0x00AFD110 (near-death), 0x00AFD8D0 (return), Steam 2017-12-13.
+        // Read the player's installed data; no copied durations or poses.
+        let damage_bank = crate::body::load::bank(vfs, r"motion\pl\m\m00\m0000_dm\m0000_dm")?;
+        for kit in [&mut arisen, &mut mage, &mut strider] {
+            kit.body.banks[1] = Some(damage_bank.clone());
+        }
         let bow = BowData::load(vfs)?;
         strider.body.banks.resize(10, None);
         strider.body.banks[9] = Some(bow.player_bank.clone());
         let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
+        let player_adjust = adjust(ADJUST_PARAMS)?.0;
         Ok(FightData {
             arisen,
             mage,
@@ -76,8 +87,9 @@ impl FightData {
             shell: ShellParam::load(vfs)?,
             arrow: ArrowData::load(vfs)?,
             bow,
-            attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
+            attack_param: ddsim::AttackParam::from_adjust(&player_adjust)
                 .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
+            player_adjust,
             goblin: GoblinData::load(vfs, exe)?,
             tables: Tables {
                 game: adjust(r"param\game")?,
@@ -129,6 +141,10 @@ pub struct ArisenFighter {
     /// The character level whose stats the fighter carries
     /// ([`Fight::apply_level`]); the kit's data is level 1.
     pub level: u32,
+    /// Native cSAVE_DATA_PARAM.mHpMaxWhite, separate from current/max HP.
+    /// Save/curative retention is supported; damage wound-pool reduction
+    /// remains untranslated and must not be claimed from this field alone.
+    pub hp_max_white: f32,
     /// ddsim's attack and volley counts last seen.
     pub attacks_seen: u32,
     pub volleys_seen: u32,
@@ -281,18 +297,15 @@ impl Fight {
     /// (uPlayerBase::vf183, 0x00b77780, 2017-12-13 Steam).
     pub fn recover_item(&mut self, seat: u8, hp_amount: f32, cure_mask: u64) -> Option<(f32, Vec<u32>)> {
         let pawn = self.pawns.contains_key(&seat);
-        let fighter = &mut self.arisen.get_mut(&seat)?.fighter;
+        let actor = self.arisen.get_mut(&seat)?;
+        let fighter = &mut actor.fighter;
         let Victim::Player { hp, hp_max, .. } = &mut fighter.victim else {
             return None;
         };
         if *hp <= 0.0 {
             return None;
         }
-        // The fight does not yet retain a recoverable-wound pool. Items
-        // may restore all the way to maximum HP, so this ceiling is exact
-        // for item recovery; it must not be reused for healing spells.
-        let mut recoverable = *hp_max;
-        let restored = ddcombat::cstatus::recover_item_hp(hp, &mut recoverable, *hp_max, hp_amount);
+        let restored = ddcombat::cstatus::recover_item_hp(hp, &mut actor.hp_max_white, *hp_max, hp_amount);
         let removed = fighter.statuses.cure_item(cure_mask, pawn);
         Some((restored, removed))
     }
@@ -308,6 +321,7 @@ impl Fight {
         self.arisen.insert(
             seat,
             ArisenFighter {
+                hp_max_white: a.hp_max,
                 fighter: Fighter {
                     owner: u32::from(seat),
                     attacker: Attacker::Player(a.attacker),
@@ -392,8 +406,10 @@ impl Fight {
             *max = hp_max;
             if rose && *hp > 0.0 {
                 *hp = hp_max;
+                a.hp_max_white = hp_max;
             }
             *hp = hp.min(hp_max);
+            a.hp_max_white = a.hp_max_white.min(hp_max);
         }
     }
 
@@ -596,6 +612,18 @@ impl Fight {
     pub fn players_moved(&mut self, sim: &mut ddsim::Sim, _ground: &dyn ddsim::Ground, step: f32) {
         let seats: Vec<u8> = self.arisen.keys().copied().collect();
         for seat in seats {
+            let blocked = self.arisen[&seat].fighter.victim.dead()
+                || sim.player(seat).is_some_and(ddsim::Player::incapacitated);
+            if blocked {
+                if let Some(p) = sim.player_mut(seat) {
+                    p.cancel_attack_actions();
+                    let a = self.arisen.get_mut(&seat).expect("seat listed");
+                    a.attacks_seen = p.attacks_started;
+                    a.volleys_seen = p.volleys_fired;
+                    a.fighter.attacks.clear();
+                }
+                continue;
+            }
             let kit = self.arisen[&seat].kit;
             let data = self.kit(kit);
             if sim.player(seat).is_some_and(|p| p.weapon != data.weapon()) {
@@ -669,6 +697,10 @@ impl Fight {
     fn fire_arrows(&mut self, sim: &mut ddsim::Sim) {
         for (&seat, _) in &self.arisen {
             let Some(p) = sim.player_mut(seat) else { continue };
+            if self.arisen[&seat].fighter.victim.dead() || p.incapacitated() {
+                p.bow_shots.clear();
+                continue;
+            }
             for shot in std::mem::take(&mut p.bow_shots) {
                 let result = (|| {
                     let context = self
@@ -895,6 +927,11 @@ impl Fight {
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
             (a.fighter.attacks, a.fighter.hurts) = body.volumes(&acts, &pose, u32::from(seat));
+            // Fatal replacement owns the action slot. Never let a previous
+            // skill/weapon activation continue emitting attacks at zero HP.
+            if a.fighter.victim.dead() || p.incapacitated() {
+                a.fighter.attacks.clear();
+            }
         }
         for g in &mut self.goblins {
             self.positions.insert(g.fighter.owner, g.pos);
