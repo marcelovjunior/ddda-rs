@@ -37,3 +37,4 @@ ddquest = { path = "../ddquest" }
 mttex = { path = "../mttex" }
 mtgui = { path = "../mtgui" }
 mtgmd = { path = "../mtgmd" }
+dddoor = { path = "../dddoor" }

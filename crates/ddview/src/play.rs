@@ -152,6 +152,7 @@ pub struct GoblinView {
 pub struct PlayState {
     pub sim: Sim,
     pub terrain: ddworld::Terrain,
+    pub door_collision: dddoor::collision::Set,
     /// Stage-frame position (cm) of the viewer's origin.
     pub origin: Vec3,
     pub motions: ViewMotions,
@@ -304,6 +305,7 @@ pub fn setup(
         warn!("play: no fight data (DDDA.exe next to nativePC?): no attacks, pawn or goblins");
     }
     Ok(PlayState {
+        door_collision: Default::default(),
         sim,
         terrain,
         origin,
@@ -753,7 +755,7 @@ pub fn show(
     }
     // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
-        let (eye, target) = follow_camera(&st.terrain, Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
+        let (eye, target) = follow_camera(&st.door_collision.over(&st.terrain), Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
         cam.translation = (eye - st.origin) * UNIT;
         cam.look_at((target - st.origin) * UNIT, Vec3::Y);
     }

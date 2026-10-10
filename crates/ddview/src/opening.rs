@@ -391,6 +391,16 @@ impl Session {
         }
         self.shots = None;
     }
+    pub(crate) fn door_npc_coverage(&self) -> bool {
+        let stage=self.world().stage_no;
+        if stage!=self.npc_adapter.layouts.stage{return false;}
+        let (scene,hour,flag)=ddhost::spawns::world_inputs(self.world(),stage);
+        let candidates=self.npc_adapter.layouts.candidates(&ddhost::ddspawn::World{scene,hour,flag:&flag});
+        !candidates.gates.iter().any(|(_,gate)|matches!(gate,ddhost::ddspawn::Gate::Unported(_)))
+            && candidates.placements.iter().all(|p|
+                self.npc_adapter.families.select(&p.transform.name)==Some(false)
+                    && self.host.story_npc_position(p.npc as u32).is_some())
+    }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
         // Opening interaction currently routes E only to host seat 0.
@@ -724,7 +734,7 @@ pub fn step(
         if let Some(terrain) = streamer.take_terrain() {
             // the camera's copy too (play::follow_camera)
             st.terrain = terrain.clone();
-            s.host.ground = Box::new(terrain);
+            s.host.set_ground_with_doors(Box::new(terrain));
         }
     }
     if !s.network_ready {
@@ -900,8 +910,10 @@ pub fn step(
                         let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
                             &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
                             *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        s.host.doors = None;
+                        st.door_collision = Default::default();
                         st.terrain = terrain.clone();
-                        s.host.ground = Box::new(terrain);
+                        s.host.set_ground_with_doors(Box::new(terrain));
                         s.starts = starts.entries.iter().map(|e| (
                             [e.position[0], e.position[1], e.position[2]], e.angle,
                             e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),

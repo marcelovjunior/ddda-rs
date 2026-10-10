@@ -75,3 +75,36 @@ read from the running Steam game (read-only memory access, see
 2. Match each u32 against the 4,343 known vtables.
 
 **Resources:** a resource object (e.g. `rModel`) holds its path as a C string at `+0x08`.
+
+## Hinged doors
+
+`dddoor` resolves authored `_p` object layouts through the installed
+name/class table (0x0150fe40, longest-prefix lookup 0x0075f0a0). Regular
+`uOmObj7010` hinged variants use the source phases at 0x00c3f130:
+closed → opening → open → closing → reset. An actor's message 0x1a opens
+them; player proximity alone does not issue that message. Authored LMT
+slots 3/4 open from either side, 1/2 hold open, 5/6 close, and 0 holds
+closed. The opening/closing actions disable collision immediately on
+opening and restore it only after closing completes. Small embedded
+variant and excluded-enemy lists carry source addresses in the crate.
+
+`ddhost::doors` owns requests, motion time, all-seat occupancy, policy
+observations and replay state. Its h00 collision layer overlays existing
+terrain and shares enable state with the camera. `ddview::doors` presents
+host models/motions and reconciles loaded cells; it does not decide when
+the animation completes or which player keeps a door open.
+
+Cassardis's reported floor gap is authored and also appears in the
+original; group18/record2 om7121 normally covers it. At scene1400/noon,
+23 eligible hinged doors occur in groups17/18/19. The opening viewer
+materializes these. Its interaction focus is currently an explicit
+nearest-door stand-in on an interact press. Ambient enemy occupancy uses
+GPL-authored spawn positions by head's explicit authorization (#2725),
+pending the ambient-creatures runtime; the source enemy-kind filter still
+applies. Missing population coverage prevents automatic closing. This is
+implemented/tested behavior, not yet compared live against the original.
+
+Unsupported: saved persistent startup poses, tilted/sliding variants,
+full original focus arbitration, and LAN door snapshots. The opening host
+supports N seats; guests do not locally invent door simulation. Details,
+validation and remaining work are in `docs/tasks/doors.md`.

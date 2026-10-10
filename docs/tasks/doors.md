@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/doors`
 - **Board area:** `world/doors`
-- **Status:** open
+- **Status:** review (codex-32, opening hinged-door checkpoint)
 
 ## Goal
 
@@ -46,4 +46,140 @@ original. Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+### Source and headless checkpoint (2026-10-09)
+
+- The absent Cassardis objects are in `_p` layouts, whereas the viewer
+  loaded only `s00/s10`: 23 eligible door candidates at scene 1400/noon,
+  in groups 17/18/19. The reported doorway resolves to group 18 record 2,
+  `om7121`. No floor LOD change is needed (maintainer's original check).
+- New `dddoor` reads the player's executable object table at `0x0150fe40`
+  (32-byte rows, null-terminated), selecting the longest case-insensitive
+  prefix as `0x0075f0a0` does. `0x00762d30` selects the concrete class at
+  row+8: `om7120/7121` use `uOmObj7010`, DTI `0x019a5b64`.
+  `cLayoutSetOm` vf12 shares the existing `0x0075faa0` GPL gate.
+- `0x00c3e700` initializes hinged variants. `0x00c3f130` runs the door
+  phases; `0x00c3fba0` latches auto-close after all occupancy observations,
+  including paired leaves. `0x0049e920/0x00c3fb00` choose a nearest matching
+  leaf within twice the class half-width and 250cm vertically, then test
+  its closed state. An already-open nearest leaf does not fall through
+  to a farther closed leaf.
+- `0x00c3f870` searches players (including pawns), NPCs, enemies (with an
+  embedded excluded-kind list) and human enemies. `0x00422650` tests an
+  inclusive 400cm horizontal / 250cm vertical cylinder. Runtime accepts
+  all eligible actors, with no global player.
+- Opening is an actor request `0x1a`, sent by `cPlActOpenDoor` at
+  `0x00afc730`. The player interaction path `0x00b6eac0` tests input bit
+  `0x1000`; proximity alone is not treated as an opening request.
+- Open action `0x00c1f220/0x00c1f420` chooses motion 3 or 4 from the
+  actor's side, disables both h00/e00 collision objects immediately,
+  and selects hold motion 1/2 on authored motion completion. Close action
+  `0x00c1f4c0/0x00c1f5a0` chooses 5/6, restores collision only on completion,
+  and returns to motion 0. Each motion switch requests 5-frame blending;
+  sound requests are 0x28/0x29. Installed Cassardis types 7060/7120/7121
+  have all seven slots (holds: 2 frames; transitions: 61 frames).
+
+Validation: headless phase/pair/occupancy/name tests and installed
+candidate/model/collision/motion checks pass; strict targeted clippy
+passes. No original-game input or viewer render comparison performed yet.
+
+Remaining: host ownership/frame hooks, presentation of authored models
+and clips, dynamic player/camera collision, per-seat interaction selection,
+lock/key/night/save conditions, sliding/special door variants, and bounded
+original/viewer comparison. Core candidates deliberately do not pretend
+to resolve persistent object records or resource readiness. Next action:
+wire the regular hinged doors into the host and the stage renderer.
+
+### Host/collision checkpoint
+
+The host now owns door requests, authored clip frames, occupancy, and replay
+hash state. A shared h00 terrain overlay toggles player and camera geometry
+without duplicating base terrain; streamed base-ground replacement has an
+explicit wrapper API. Canonical loaded NPC positions join all player/pawn
+seats in occupancy. Other enemy manager admission remains unwired.
+
+Validation: 7 dddoor + 7 ddhost unit tests pass. Installed Cassardis house
+regression opens the real group18/record2 door, holds it open with a second
+actor, closes after departure, restores collision, and refuses unresolved
+persistence. dddoor strict all-target clippy passes; ddhost lib/door-test
+clippy passes with existing install.rs chunks_exact_to_as_chunks lint
+allowed (unrelated all-target replay lint also predates this change).
+The nearest interaction adapter is explicitly opt-in and provisional:
+original focus/angle arbitration still needs connection. Viewer rendering
+and original-game comparison remain pending; the brief is not complete.
+
+### Presentation checkpoint
+
+The opening adapter instantiates 23 authored hinged models and clips in
+Cassardis; the host collision Arc is also used by the follow camera.
+Loaded `_p` layouts are cached and GPL gates remain live. Static stage
+inspection can show authored closed door poses with explicit preview
+scene/hour and clear layout flags. Stage handoff clears the old runtime;
+retained candidates keep their host motion state on a gate/cell rebuild.
+
+Paired-message review confirmed `0x00c3fb00` queues `0x1a` through
+`0x00887250`, and `0x00c3f130` accepts it without an availability check.
+A regression therefore checks that a known locked leaf follows its
+unlocked partner. Unknown persistence is conservatively excluded.
+
+Host occupancy now includes fight goblins and explicitly marks missing
+manager coverage. The fresh Cassardis `_e` audit finds admitted uEm8300
+and uEm8600-family actors; the former's ctor `0x00a9bd00` writes kind
+0x65, the latter's `0x00aa0050` writes 0x6b (excluded by door queries).
+Head #2725 explicitly authorized authored ambient spawn positions as a
+viewer stand-in until the ambient-creatures brief supplies moving actors.
+The adapter labels this stand-in; unknown admitted families still prevent
+closing. This is not an original-game actor simulation comparison.
+
+Validation: 7 door + 7 host unit tests and installed host regression pass,
+including unknown-coverage hold, second actor occupancy and paired locked
+leaf. Cached placement candidates equal the uncached installed candidates.
+Release build passed. Hidden bounded opening smoke loaded all 23 doors
+with coverage=true, then hit the older NPC Set Disable Flag blocker;
+updating to the already-merged NPC fix precedes the next smoke. Static
+capture confirmed the real door mesh, but its stage inspection path needed
+the same nonfield stage-model hook used by opening (now added, pending
+capture). Private captures/logs remain under E:/ddda-re/notes/doors-codex32.
+
+### Final checkpoint validation (2026-10-10)
+
+- Final merged release build passes. A merge-created duplicate NPC helper
+  block was removed, preserving main's canonical definitions.
+- Hidden `--unattended` full-stage capture at eye (3330,100,-2239), looking
+  at (2853,50,-2455), shows the closed om7121 correctly filling the reported
+  house entrance. The capture includes 31 stage models, 315 placed objects
+  and 23 doors. Private evidence: `door-scene.png` and `scene.stderr.log`
+  under `E:/ddda-re/notes/doors-codex32`.
+- A second hidden opening smoke with current NPC fixes ran to its requested
+  12-second capture and exited normally. It logged 23 doors and occupancy
+  covered=true (ambient spawn-position stand-in), with no ERROR/panic.
+  `opening-final.png` / `opening-final.stderr.log` are private. Existing NPC
+  unsupported-action/movement warnings remain separate limitations.
+- Final targeted verification: 7 dddoor unit tests, 7 ddhost unit tests,
+  installed host door regression and installed placement/resource/cache
+  regression pass (16 total). dddoor all-target strict clippy passes;
+  ddhost lib/door-test clippy passes with only the pre-existing
+  `chunks_exact_to_as_chunks` install.rs lint allowed.
+
+Review/merge `task/doors`; code checkpoints are da4f519, f11c642, e162103,
+b076233 plus main synchronization and final validation cleanup. No game
+install/save changes, original-process control, pushes or main edits.
+
+**Explicit remaining scope:** the core/data API is stage-general for the
+supported hinged variants; the active viewer adapter currently serves the
+opening host and static stage inspection. Ordinary standalone `--play`
+and LAN guest door snapshots are not connected. Original focus arbitration
+is a labeled nearest-door interaction stand-in; ambient occupancy uses
+head-authorized authored spawn positions pending `ambient-creatures`.
+Saved permanent startup poses, tilted and sliding/special variants, sound
+request playback, and a live-original open/close comparison remain
+unimplemented/unverified. The visual missing-door checkpoint is validated;
+this is not a claim that every door variant or campaign/LAN path is done.
+
+Head #2755 merge follow-up: synchronized current main at 2d302b1,
+including the later NPC and renderer checkpoints. `opening.rs` now has
+exactly one `sync_npc_intels`, one `npc_requests`, and a separate
+`door_npc_coverage`; main's canonical NPC definitions are preserved.
+Requested `cargo test -p ddview --release`: 47 passed, 0 failed, 1 existing
+ignored install-dependent HUD test. Requested release build also passes
+(two pre-existing warnings: private Args interface, unused audio method).
+Shared M5/core targets released; no viewer process owned by codex-32.
