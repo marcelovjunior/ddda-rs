@@ -21,6 +21,33 @@ pub struct TalkOutcome {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Ordinary NPC control selection before the base/shop conversation.
+    /// Called only after the materialized lifetime and dialogue slot are
+    /// admitted. Missing/unsupported data never fabricates a reward.
+    pub(crate) fn talk_quest_or_base(&mut self, player: PlayerId, npc: u32) -> Result<TalkOutcome, HostError> {
+        let data = self.npc_data()?;
+        // Preload the item rules before phase1: phase2 cannot lose its grant
+        // due to a late missing data source after consuming the once row.
+        if data.quest_control(npc).map_err(|error| HostError::Npc(error.to_string()))?.is_some() {
+            if let Err(error) = data.quest_items() {
+                return Err(HostError::Npc(error.to_string()));
+            }
+        }
+        let world = &self.story.as_ref().ok_or(HostError::NoData("story"))?.world;
+        let story = ddnpcrt::Story { world, equip_menus: false };
+        self.locks.acquire(npc, player).map_err(HostError::Lock)?;
+        let result = self.npcs.talk_quest(&*data, &story, player, npc, None);
+        match result {
+            Ok(Some(events)) => {
+                self.after_talk(player, events)
+            }
+            Ok(None) => self.talk(player, npc),
+            Err(error) => {
+                let _ = self.locks.release(npc, player);
+                Err(HostError::Npc(error.to_string()))
+            }
+        }
+    }
     pub(crate) fn talk_authored(&mut self, player: PlayerId, npc: u32,
         set: std::sync::Arc<ddnpcrt::TalkSet>, conversation: i32) -> Result<TalkOutcome, HostError> {
         self.locks.acquire(npc, player).map_err(HostError::Lock)?;
@@ -148,6 +175,25 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut end_npc = None;
         let mut guard_exit = false;
         for e in &events {
+            if let TalkEvent::QuestEffects { player: owner, effects, .. } = e {
+                if *owner != player { return Err(HostError::UnknownPlayer(*owner)); }
+                let data = self.npc_data()?;
+                let items = data.quest_items().map_err(|error| HostError::Npc(error.to_string()))?;
+                for effect in effects {
+                    match *effect {
+                        ddnpcrt::quest_talk::Effect::Item { item, count, level } => {
+                            self.economy.inventory.add(&items, ddeconomy::inventory::Owner::Arisen(player),
+                                player, item, count, level, &mut self.economy.buyback);
+                        }
+                        ddnpcrt::quest_talk::Effect::QuestBit { quest, bit, value } => {
+                            self.story.as_mut().ok_or(HostError::NoData("story"))?.world.set_quest_bit(quest, bit, value);
+                        }
+                        ddnpcrt::quest_talk::Effect::Gsf { flag, value } => {
+                            self.story.as_mut().ok_or(HostError::NoData("story"))?.world.gsf.set(flag, value);
+                        }
+                    }
+                }
+            }
             match *e {
                 TalkEvent::Action { npc, action: Action::Shop { mode }, .. } => {
                     session = Some(match mode {
