@@ -906,3 +906,95 @@ queue and coordination of reviewed-main integration. Head #7286 separately
 approves one reverse-order ON→OFF replication under the same original
 39acf70 pin after root's actual GPU release. No new quality/clock setting,
 renderer ABI experiment or game probe is part of that pair.
+
+### Reverse-order x1 replication complete; default validation underway
+
+After root's actual MEDIUM/HIGH exits and GPU release #7355, a normal
+live/ddview claim preceded the head #7286 approved reverse pair. Same
+39acf70 default executable, v1 FieldSettle, hardened harness, x1, camera,
+geometry/material counts and explicit absent diagnostic flags as r2;
+only ON→OFF order and fresh r3 output names changed. All four actual
+field PNGs (r2/r3) were viewed by this agent and independently by parent
+#7282/#7384: matching terrain/two clothed textured characters/HUD, no
+apparent deformation, missing parts or culling loss. No original-game
+visual equivalence or exhaustive motion coverage is claimed.
+
+- ON PID **30992 actual exit 0 / 61.8992287 s**; OFF PID **22656 actual
+  exit 0 / 61.1123812 s**. Both owned viewers absent, original 23408 at
+  its verified install path running. Normal GPU lease released #7377.
+- Actual steady upload again **2,052,992 ON versus 17,809,664 OFF bytes**,
+  32,078 versus 278,276 staging matrices, **671 palettes both**. All warm
+  scene counts again match r2 exactly. All-spawn diagnostic logs record
+  3,457 compacted / 26 unchanged parts, with median retained 15 joints;
+  this spawn statistic is not a live-visible/upload sum.
+- Warm median reports ON **11.1 / 11.0 / 11.1 / 11.1 ms**, OFF
+  **15.4 / 15.7 / 14.3 / 14.1 ms**. Median reports **11.1 versus 14.85 ms**,
+  25.25% lower observed wall time for ON; both orders reproduce improvement.
+  ON p99 12.9/12.4/13.3/13.3 ms; OFF 21.6/18.4/16.9/15.7 ms.
+  Frames over 16.67 ms total 0 versus 106; over 33/50 ms zero both.
+- **Frequency still covaries:** ON graphics 1230–1260 MHz, OFF 825–900 MHz,
+  P3/memory 5001 MHz both; original 3D share zero all warm samples. No
+  power/clock settings changed. Reverse order rules out a simple second-run
+  warm-up explanation, but does not isolate a frequency-independent gain
+  or assign the full difference to prepare_skins. Upload reduction remains
+  directly measured; head accepted default promotion on this checkpoint.
+
+Default source `a7b9d90` was then dependency-integrated with reviewed main
+7ea18c9 as **ae70239**, automatic merge with no conflict/manual resolution,
+under head #7309's explicit dependency-integration exception. Parent's
+reviewed ASCII settings labels 66c210d were cherry-picked as **4f8f726**.
+No main/other worktree/WIP changes occurred. Branch is clean, source hooks
+and new default-selection regression present. Head #7352 approves fresh
+full default/profile suites plus default/trace releases in one normal M5
+window, then private pins/checksums before actual release. **That fresh
+integrated acceptance is underway; no Ready claim yet.**
+
+### Ready: compact defaults on current main; full acceptance complete
+
+Normal M5 claim #7381 followed empty global Cargo/rustc preflight and
+parent/head #7352/#7355 queue approval. **All checks actually exited 0**
+before M5 release #7400; both private executables were copied/checksummed
+before release and no Cargo/rustc remained. Code source is **4f8f726**
+(default promotion a7b9d90, reviewed-main merge ae70239, ASCII dependency
+4f8f726); this final documentation update does not change compiled source.
+
+- Default suite session **39633: 109 passed / 0 failed / 2 existing ignored**,
+  fresh compile **31.66 s**, tests **13.03 s**. All three palette regressions
+  explicitly pass: default/empty/opt-out actual index/bind/joint selection,
+  exact animated skinning/Bevy posed bounds, invalid/full-palette fallback.
+- Profile suite session **82521: 114 passed / 0 failed / 2 existing ignored**,
+  fresh compile **25.17 s**, tests **13.58 s**. The same palette tests, all
+  five cached-span/name/window regressions, and all three mesh-builder
+  resource/order regressions explicitly pass. GPU remains the default;
+  rejected legacy CPU captures do not become valid from these tests.
+- Default release session **96356: actual exit 0 / 39.84 s**.
+  Private `E:/ddda-re/notes/steps/s41/ddview-palettes-default-4f8f726.exe`,
+  SHA-256 **7978950F4F315D3C6DB333E2FA209525A97A7DAFD144EF45ACF97CBA30CD645B**.
+- Trace release session **88897: actual exit 0 / 41.35 s**.
+  Private `ddview-trace-palettes-default-4f8f726.exe`, SHA-256
+  **1A7288FA365464BCDC9010EC5B58BF920D9D9293D79DFC3885FF5F07717C7611**.
+  No trace GUI has run from this pin. Previous accepted 39acf70 trace pin
+  is removed only after this replacement's actual exit/hash and this
+  committed summary, under head #7352. Previous capture summaries remain.
+- Only existing Args/private-interface and audio forget_actor warnings.
+  No clean/new target, quality/clock changes or additional original-game
+  probe. E: free space about **33.9 GB** after compilation.
+
+**Ready for parent review/head merge** on `step/s41-frame-rate`: exact
+compact palettes now default, explicit zero opts out, startup palette
+diagnostics require their own flag. Field upload/fidelity was validated
+against the same frozen executable in both orders; promotion/current-main
+integration has the complete fresh suites and release checks above.
+Observed wall-time benefit reproduces, but GPU clock covariance remains
+documented and no frequency-independent or 180 fps claim is made.
+
+Next head #7280/#7352 action: one bounded named CPU trace on the accepted
+compact-default source to choose between shadow bin-buffer writing and
+preprocessing bind-group preparation. No additional optimization is
+implemented. Source inspection confirms a finite native caster extent
+would need both CPU directional visibility (Bevy ignores near plane) and
+GPU extracted shadow frusta (prepare_lights pushes it to infinity); a
+simple cascade far-range change is insufficient. Native per-stage
+back-forward properties must be loaded from stage SDL, not copied as bulk
+constants. That follow-up needs normal source/GPU leases and queue timing;
+root S30/core and the queued children received this actual build handoff.
