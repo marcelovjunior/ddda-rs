@@ -247,3 +247,14 @@ fn every_extended_action_constructor_matches_the_original() {
         assert_eq!(obj, hex(c["out"].as_str().unwrap()), "constructor {:#010x}", u(c, "addr"));
     }
 }
+
+#[test]
+fn every_action_constructor_with_8c_matches_the_original() {
+    use ddnative::action;
+    let Some(cases) = vectors("action_ctor_8c_family") else { return };
+    for c in &cases {
+        let mut obj = hex(c["in"].as_str().unwrap());
+        assert!(action::construct_with_8c(Some(&mut obj), u(c, "vtable")));
+        assert_eq!(obj, hex(c["out"].as_str().unwrap()), "constructor {:#010x}", u(c, "addr"));
+    }
+}

@@ -120,3 +120,14 @@ pub fn construct_extended(obj: &mut [u8], vtable: u32) {
         obj[off..off + 4].fill(0);
     }
 }
+
+/// The constructor of [`construct`] plus `+0x8C = +0.0` (cEm5400, cEm5500
+/// and other classes with a float at +0x8C).
+// Translated from 0x004DFA00 (DDDA.exe 2017-12-13 Steam), and every
+// same-body constructor in the private family file.
+pub fn construct_with_8c(memory: Option<&mut [u8]>, vtable: u32) -> bool {
+    let Some(obj) = memory else { return false };
+    NewAction { vtable }.write(obj);
+    obj[0x8C..0x90].fill(0);
+    true
+}
