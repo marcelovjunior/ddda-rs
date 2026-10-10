@@ -116,6 +116,8 @@ pub struct Animation {
     /// Native range stores start and length, not start and end.
     pub cant_act_frames: [f32; 2],
     pub world_slow: bool,
+    /// Reflected by 0x007b6080 at cCamExParam+0x20c.
+    pub cinesco: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,6 +185,7 @@ impl List {
                         cant_act_flags: unsigned(x, o, "mCantActFlag")?,
                         cant_act_frames: floats(x, o, "mPlCantActFrame")?,
                         world_slow: boolean(x, o, "mIsUseWorldSlow")?,
+                        cinesco: boolean(x, o, "mIsCinesco")?,
                     }))
                 }
                 Value::Object(_) => Ok(None),
@@ -213,6 +216,7 @@ impl Animation {
         self.camera_target == 2
             && self.option_flags & !1 == 0
             && !self.world_slow
+            && !self.cinesco
             && blend_supported(&self.start)
             && blend_supported(&self.end)
             && input_supported

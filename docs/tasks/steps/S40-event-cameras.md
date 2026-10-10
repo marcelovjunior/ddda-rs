@@ -130,7 +130,14 @@ type2/3 positive blends and frame-type0 are admitted. Partial input-domain
 flags1/2 and CantActPlayer-only blocks are rejected instead of collapsed.
 Actor-relative variants, templates, world slow, camera-request force
 timers, simple-event fade/skip/placement, collision along transitions,
-keep-angle resume options, non-16:9 native FOV adjustment, and overlapping
+keep-angle resume options, cinema framing/FOV policy, and overlapping
 camera-owner identity completions remain open. Unsupported requests fail
 explicitly and never receive a fabricated completion. The next action is
 the final integrated viewer validation and ordinary-route camera12 capture.
+
+Further FOV tracing: **0x007B77E0** multiplies the key FOV by 16/9 and
+`sCameraExt+0xD04`; **0x00420910** sets that factor to0.5625 normally,
+or0.475 for its cinema branch. This is a cinema policy, not an inferred
+inverse viewport aspect. Both installed 12/149 have `mIsCinesco=false`;
+cinema requests are rejected until that policy is ported. The reflection
+registration of this field is **0x007B6080** (+0x20C).
