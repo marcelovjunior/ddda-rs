@@ -20,9 +20,63 @@ pub fn adjust_durations_for_owner(durations: [u16; 3], owner_flags: u16) -> [u16
     durations.map(|duration| if duration == 0 { 0 } else { (duration >> shift).max(1) })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PathSample {
+    pub position: [f32; 3],
+    /// Native 0x400 result. Lifetime4's separate end policy decides retirement.
+    pub at_end: bool,
+}
+
+/// Sample the actual constructed type4 path, before the separate spawn-offset
+/// transform. This helper cannot construct a path from guessed fire geometry.
+// Translated from 0x010E2EB0's path walk (DDDA.exe 2017-12-13 Steam).
+pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
+    emitter_position: [f32; 3]) -> Result<PathSample, String> {
+    if points.len() < 2 || !total_length.is_finite() || total_length < 0.0
+        || !distance.is_finite() || points.iter().flatten().chain(emitter_position.iter()).any(|v| !v.is_finite()) {
+        return Err("invalid native collision path input".into());
+    }
+    if total_length <= distance {
+        let last = points.last().unwrap();
+        return Ok(PathSample { position: std::array::from_fn(|i| last[i] + emitter_position[i]), at_end: true });
+    }
+    let mut cumulative = 0.0;
+    let mut index = 0;
+    let mut delta = [0.0; 3];
+    for segment in points.windows(2) {
+        delta = std::array::from_fn(|i| segment[1][i] - segment[0][i]);
+        let before = cumulative;
+        cumulative += delta.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if before < cumulative && distance < cumulative {
+            let fraction = (distance - before) / (cumulative - before);
+            for value in &mut delta { *value *= fraction; }
+            break;
+        }
+        index += 1;
+    }
+    // Keep the source's unclamped walk/fraction; the caller supplies its real
+    // runtime length field, which normally equals the constructed segment sum.
+    Ok(PathSample { position: std::array::from_fn(|i| points[index][i] + emitter_position[i] + delta[i]), at_end: false })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_walk_uses_segment_lengths_and_native_end_flag_without_time_clamping() {
+        let path = [[0.0; 3], [2.0, 0.0, 0.0], [2.0, 4.0, 0.0]];
+        let sample = |distance| sample_path(&path, 6.0, distance, [10.0, 20.0, 30.0]).unwrap();
+        assert_eq!(sample(3.0), PathSample { position: [12.0, 21.0, 30.0], at_end: false });
+        assert_eq!(sample(2.0), PathSample { position: [12.0, 20.0, 30.0], at_end: false });
+        assert_eq!(sample(-1.0), PathSample { position: [9.0, 20.0, 30.0], at_end: false });
+        assert_eq!(sample(6.0), PathSample { position: [12.0, 24.0, 30.0], at_end: true });
+        assert_eq!(sample(8.0), sample(6.0));
+        let duplicate = [[0.0; 3], [0.0; 3], [0.0, 2.0, 0.0]];
+        assert_eq!(sample_path(&duplicate, 2.0, 1.0, [0.0; 3]).unwrap().position, [0.0, 1.0, 0.0]);
+        assert!(sample_path(&[], 0.0, 0.0, [0.0; 3]).is_err());
+        assert!(sample_path(&path, 6.0, f32::NAN, [0.0; 3]).is_err());
+    }
 
     #[test]
     fn owner_duration_reduction_preserves_zero_and_positive_minimum() {

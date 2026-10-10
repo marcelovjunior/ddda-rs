@@ -211,3 +211,13 @@ durations; mode0 shifts by2 and other modes by1, retaining zero and
 clamping positive results to at least1. The caller must provide the actual
 parent state; no quality mode is guessed. One focused regression passed
 (1.97s compile, actual exit0). Runtime parent-state selection remains open.
+
+The constructed path's distance sampler is translated from `0x010E2EB0`.
+It walks actual segment lengths, skips degenerate segments, preserves the
+source's unclamped fraction and emits the separate 0x400 end result at
+the runtime total-length boundary. It accepts supplied native path points
+and emitter position; it does not construct guessed fire geometry or
+decide lifetime retirement. One regression passed (2.42s compile, actual
+exit0), covering corners, negative distance, zero-length segments, exact
+end/overshoot and missing/nonfinite input. Path construction/binding remains
+the next unresolved runtime dependency.
