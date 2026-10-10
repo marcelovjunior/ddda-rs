@@ -116,3 +116,26 @@ listed above. Whole S36 remains open.
 **Next action:** submit this checkpoint for independent review, integrate
 reviewed committed main, then trace the native support/formation actors
 (0x00589ED0 / 0x00597060) before adding their behaviours.
+
+**Handoff:** checkpoint `16c4726` is preserved in merge `eb4347b`, which
+integrates reviewed committed main `3401d9b`. Head's read-only NPC body
+accessor is included; the temporary duplicate accessor commit is absent.
+Only the brief's appended Results conflicted and both source correction
+and Results were retained. The integrated merge has not been retested;
+the test counts above apply to the feature checkpoint. Root reviews/tests
+it independently. S36 support/formation/shout follow-up returns to head
+while the lane prioritizes S47, then S41 (head #5693).
+
+Further read-only tracing found that the decompiler removed real branches
+from `0x00589ED0`: its disassembly filters pawn-family candidates to
+action `0x80`, selects one relative to the Arisen, checks squared distance
+250000..9000000, then offers goal 12. The installed GOAP table
+`0x014F3430` identifies that goal as `AI/Goap/Cmc/HelpAction`; the installed
+resource names interface 73 `cCmcHelpAction`, whose vf18 is `0x0055FFB0`.
+`0x00599DB0` fills the candidate vector through hidden ESI, which explains
+the misleading decompiler's unreachable branches. This is source evidence
+for a future support-actor port, not an implementation or a proof that
+the Help order forces that goal. `0x0059E7D0` marks the active goal's stop
+field after a command change; translating its real stop protocol remains
+necessary before adding pre-emption. Private raw exports stay outside
+the repository.
