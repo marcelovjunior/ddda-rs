@@ -854,3 +854,100 @@ it does not execute the original full creation chain or establish a
 production emitter, real birth/world query, fire rendering or ordinary
 party damage. Next: connect the actual manager creation stages in native
 order, retaining the post-initialization counter reset before path/birth.
+
+### Ordinary life4 birth sampling prepared; uncompiled/unrun
+
+The next owned source batch connects birth ranges to the existing generator
+counters. Bounded original disassembly `0x010EDC90` confirms the first
+three unconditional float-table reads for speed, acceleration and initial
+distance; the uncurved angular branch consumes three further float reads
+even when all angular ranges are zero. `0x010EE1EC..0x010EE28E` then
+advances once and loads a word-table entry for secondary-effect delay,
+including zero variation. Delay sampling uses the native inclusive modulo
+and low16-bit addition. Curves and nonzero angular birth reject before
+sampling until their actual context/rotation adapters exist. The alternate
+particle-owned u16 counter branch is not implemented by this helper.
+
+The installed collision resource was independently read in a bounded
+private probe: its angular ranges and these three curve references are
+zero. Values remain runtime resource reads, never embedded gameplay
+constants. Importantly the delay belongs to secondary effect dispatch in
+`0x010F7190`; it does not postpone path movement, and is distinct from the
+world-query delay already read from the collision descriptor.
+
+`life4_birth_consumes_six_float_samples_then_one_word_without_touching_path`
+checks the ordered float/word draws, wrap across the table boundary,
+distinct sampled ranges, signed delay addition, the zero-variation word
+read, untouched path counter and rejection before mutation for unported
+curves/angular modes. This new regression is **uncompiled/unrun**; the
+192-pass gate belongs to `b112b92`. The actual particle/path update, world
+query, secondary effects and ordinary damage remain open. Next: validate
+this batch's complete package gate, then connect sampled birth values to
+the actual path and particle lifetime rather than a delay-based admission.
+
+The birth-sampling batch now passed its full package gate at frozen
+`e0deee8a42b58e462d588f3b3a5f737d38dd7ee6`. Session38499 and Cargo
+actually exited0 for complete `mteffect` and `ddenemyrt`, jobs2 on the
+existing core target: **193 passed, 0 failed**, the same 2 ignored
+diagnostics, 0 filtered, 33 summaries. All eight required regression
+names appeared once, including the new six-float/one-word birth test;
+canonical install/exe were set, no check reported SKIP, and the source
+stayed clean with the same module hash. The normal core lease was released
+after actual completion. Parent independently parsed the raw log and
+verified its SHA256 against the retained proof JSON.
+
+Private log `full-generator-path-e0deee8.private.log` SHA256:
+`C9B06C84C4B3503E37FABF7121811C25B3D7FBB996BCBF7B2432DEA94CE689CA`.
+The preceding unrun labels record preparation before this gate. This
+checks Rust birth sampling and runtime resource reads; original whole
+birth execution, production particle/path ownership, world queries,
+secondary effects, fire rendering and ordinary party damage remain open.
+Next: connect the sampled values to the actual path and particle update
+while preserving the verified counter reset and draw order.
+
+### Birth-to-travel buffers prepared; Rust uncompiled/unrun
+
+The next owned adapter retains both distance buffers initialized by
+`0x010EDE1D..0x010EDE22`. The admitted uncurved travel phase selects
+previous/current from particle-context+0C bits25/24 (`0x010F71F2`),
+writes previous distance plus old speed, then adds acceleration to speed
+before sampling the existing path (`0x010F74EE..0x010F7524`). Neither
+speed nor distance is clamped, and secondary delay does not gate travel.
+Admission, speed curves, spawn rotation, query/end/secondary policy and
+production lifetime remain outside this adapter.
+
+One bounded private proof executed whole original `0x010F7190` and its
+real `0x010E2EB0` sampler for four synthetic fixtures: positive/negative
+speed, distance beyond path end and reversed buffer selection. Actual
+exit0, all four passed in 0.08045s, 306/277/237/306 instructions; normal
+RET, stack, all callee-saved registers, canaries and original pages stayed
+valid. Existing movement state2 excludes world queries; delay1 prevents
+secondary dispatch on that update; coordinate is unbound, path already
+generated, spawn offset zero and angular mode absent. Runtime BSS fallback
+vector `0x018CFE80..88` was explicitly poisoned as synthetic input and
+overwritten by positive path segments, never invented as a native constant.
+Private proof `life4-travel-native-first.proof.private.json` SHA256:
+`67A5956949D18B48B266357C59473D47ED5B32340634D18B9EE00A9CE736A898`.
+
+`life4_travel_uses_native_buffers_old_speed_and_path_end_without_delaying_motion`
+checks those fixtures, both birth buffers, successive buffer switches,
+motion despite a positive secondary delay, and atomic rejection of invalid
+input. This Rust source is **uncompiled/unrun**; the preceding193-pass
+gate covers only the earlier birth sampler. Next: run its full package
+gate, then bind real particle ownership and the subsequent query policy.
+
+The travel batch subsequently passed its full package gate at frozen
+`cad92bf88bc833b175643ee18c5b8157a03ad7b9`, after integrating accepted
+main `814c549`. Session89565/Cargo actual exit0, complete `mteffect` and
+`ddenemyrt`: **196 passed, 0 failed**, 2 existing ignored diagnostics,
+0 filtered, 33 summaries. All nine required names passed once, no SKIP;
+jobs2/existing core target/canonical install and exe, source clean and
+unchanged module hash. The normal lease was released after actual exit.
+Parent independently parsed the raw results and verified the log hash.
+Private log `full-generator-path-cad92bf.private.log` SHA256:
+`AAA2D126A3D97A690DDA3B8FE10354DAF4FA3359F457A7E711220879A8B25508`.
+This accepts the translated travel phase and its regression, alongside the
+earlier reader/birth helpers and accepted main's body additions. The earlier
+unrun labels describe preparation; complete emitter lifetime, world query,
+secondary dispatch and ordinary fire damage remain open. Next: attach the
+verified birth/travel state to native particle creation/update ownership.

@@ -2469,6 +2469,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddnav"
+version = "0.1.0"
+dependencies = [
+ "mtarc",
+]
+
+[[package]]
 name = "ddnet"
 version = "0.1.0"
 dependencies = [
