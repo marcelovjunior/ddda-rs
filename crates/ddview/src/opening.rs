@@ -249,6 +249,10 @@ pub struct Session {
     enemy_stage: u32,
     enemy_groups: Option<ddhost::ddspawn::gpl::GroupList>,
     enemy_cells: std::collections::HashSet<(u16, u16)>,
+    /// Placements spawned this stage visit (group, record id) and the story
+    /// world the gates last saw.
+    enemy_spawned: std::collections::HashSet<(u32, i32)>,
+    enemy_world: Option<(u32, u32, Option<ddquest::story::MsbBits>)>,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -381,6 +385,8 @@ pub fn prepare(
         enemy_stage: 0,
         enemy_groups: None,
         enemy_cells: Default::default(),
+        enemy_spawned: Default::default(),
+        enemy_world: None,
         gone: vec![],
     };
     let start = f
@@ -577,6 +583,9 @@ impl Session {
                 p.drop_from = p.position[1];
             }
         }
+        // the hired pawns travel with the party (else their bodies stay at the
+        // old stage's coordinates and the field streams cells around them)
+        self.host.place_hired_pawns();
         if let Some(server) = &mut self.host.server {
             server.config.spawn = pos;
             if let Some(spot) = &mut server.config.spot {
@@ -878,17 +887,23 @@ pub struct OpeningStage<'w, 's> {
     bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 }
 
-/// Spawns the enemy groups of newly loaded layout cells of `stage` into the
-/// host's fight (`ddhost::spawns::spawn_cells`: the group list's gates on
-/// SceNo, hour and layout flags; goblins run, other enemies are reported as
-/// placeholders) and gives each goblin its body.
-/// *Not yet*: despawning when cells unload, kill records (a new game has
-/// none), the other enemy families.
+/// Spawns the enemy groups of the loaded layout cells of `stage` into the
+/// host's fight: `ddspawn::spawns` per cell (the group list's gates on SceNo,
+/// hour and layout flags; dead units of the kill records left out), each
+/// placement once. Cells are checked again whenever new cells load or the
+/// story world changes (a gate opening later, e.g. a quest's layout flag).
+/// Goblins run and get a body and their encounter binding; other enemies
+/// have no runtime here.
+/// *Not yet*: despawning on cell unload or a closing gate, kill records (a
+/// new game has none), the record's think/equipment/stat options
+/// (`Fight::add_goblin` uses the goblin defaults), other enemy families.
 fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, stage: u32) {
     let Some(streamer) = view.streamer.as_mut() else { return };
     if s.enemy_stage != stage {
         s.enemy_stage = stage;
         s.enemy_cells.clear();
+        s.enemy_spawned.clear();
+        s.enemy_world = None;
         s.enemy_groups = match ddhost::spawns::group_list(streamer.loader.vfs, stage) {
             Ok(list) => Some(list),
             Err(e) => {
@@ -898,33 +913,62 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
         };
     }
     let Some(list) = s.enemy_groups.as_ref() else { return };
-    let new: Vec<(u16, u16)> = streamer
+    let cells: Vec<(u16, u16)> = streamer
         .loaded_layout_cells()
         .iter()
         .filter_map(|&(m, n)| Some((u16::try_from(m).ok()?, u16::try_from(n).ok()?)))
-        .filter(|c| !s.enemy_cells.contains(c))
         .collect();
-    if new.is_empty() {
+    let new_cells = cells.iter().any(|c| !s.enemy_cells.contains(c));
+    // the gates read SceNo, the hour and the stage's layout flags
+    let gate_key = {
+        let w = s.world();
+        (w.sce_no, w.hour, w.lot_bits(stage).cloned())
+    };
+    let world_changed = s.enemy_world.as_ref() != Some(&gate_key);
+    if !new_cells && !world_changed {
         return;
     }
-    s.enemy_cells.extend(new.iter().copied());
-    // the gates read the story world; the fight is the host's too
+    s.enemy_cells = cells.iter().copied().collect();
     let world = s.world().clone();
     let (scene, hour, flag) = ddhost::spawns::world_inputs(&world, stage);
     let gate_world = ddhost::ddspawn::World { scene, hour, flag: &flag };
-    let Some(fight) = s.host.fight.as_mut() else { return };
-    let before = fight.goblins.len();
-    let out = match ddhost::spawns::spawn_cells(fight, streamer.loader.vfs, stage, list, &new, &gate_world, &[]) {
-        Ok(out) => out,
-        Err(e) => {
-            warn!("opening: stage {stage} cells {new:?} enemies: {e}");
-            return;
+    let vfs = streamer.loader.vfs;
+    let read = |p: &str| vfs.read(p, mtarc::type_hash("rLayout")).ok();
+    let mut goblins = vec![];
+    let mut others = 0;
+    for &cell in &cells {
+        let spawns = match ddhost::ddspawn::spawns(stage, list, cell, &read, &gate_world, &[]) {
+            Ok((_, spawns)) => spawns,
+            Err(e) => {
+                warn!("opening: stage {stage} cell {cell:?} enemies: {e}");
+                continue;
+            }
+        };
+        for spawn in spawns {
+            if !s.enemy_spawned.insert((spawn.group, spawn.set_id)) {
+                continue;
+            }
+            if spawn.class == "cSetInfoEnemy0100" {
+                goblins.push(spawn);
+            } else {
+                others += 1;
+            }
         }
-    };
+    }
+    drop(gate_world);
+    s.enemy_world = Some(gate_key);
+    if goblins.is_empty() && others == 0 {
+        return;
+    }
+    let Some(fight) = s.host.fight.as_mut() else { return };
     if st.fight_data.is_none() {
         st.fight_data = Some(fight.data.clone());
     }
-    for (k, (_, spawn)) in out.goblins.iter().enumerate() {
+    let mut owners = vec![];
+    for spawn in &goblins {
+        let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
+        let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
+        owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
         match crate::character::spawn(
             &mut view.commands,
@@ -939,17 +983,24 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
             at,
             Some(0.0),
         ) {
-            Ok(e) => {
-                let hp = fight.goblins.get(before + k).map_or(1.0, |g| g.fighter.victim.hp());
-                st.goblins.push(play::GoblinView::new(e, hp));
+            Ok(e) => st.goblins.push(play::GoblinView::new(e, hp)),
+            Err(e) => {
+                // keep the fight's and the view's goblin orders paired
+                warn!("opening: goblin body: {e}");
+                st.goblins.push(play::GoblinView::new(Entity::PLACEHOLDER, hp));
             }
-            Err(e) => warn!("opening: goblin body: {e}"),
         }
     }
+    // Each goblin's layout identity binds it to the story's encounter
+    // targets (EnemyCheck reads its HP and death through observe_fight):
+    // 0x007613d0 / 0x00cc1f60 / 0x007643d0, OpeningWorld::bind_spawned_goblin.
+    for (spawn, owner) in goblins.iter().zip(owners) {
+        s.host.world.bind_spawned_goblin(spawn, owner);
+    }
     info!(
-        "opening: stage {stage} cells {new:?}: {} goblins, {} other enemies without a runtime",
-        out.goblins.len(),
-        out.placeholders.len()
+        "opening: stage {stage}: {} goblins spawned (groups {:?}), {others} other enemies without a runtime",
+        goblins.len(),
+        goblins.iter().map(|g| (g.group, g.set_id)).collect::<Vec<_>>()
     );
 }
 

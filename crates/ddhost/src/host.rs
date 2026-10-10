@@ -247,10 +247,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 Some(ddskill::vocation::Vocation::Mage) => Kit::Mage,
                 _ => Kit::Fighter,
             };
-            let (pos, yaw) = at;
-            let (s, c) = yaw.sin_cos();
-            let side = if index == 0 { 80.0 } else { -80.0 };
-            let place = [pos[0] - s * 200.0 + c * side, pos[1], pos[2] - c * 200.0 - s * side];
+            let place = Self::hired_pawn_place(index, at.0, at.1);
             // the record's inclination values (mInfo); the fight's pawn AI
             // takes nine
             let mut inclinations = hired.pawn.info_value;
@@ -259,7 +256,32 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 // balanced 500 the play view's pawn uses
                 inclinations = [500.0; 9];
             }
-            fight.add_pawn_as(&mut self.sim, seat, owner, place, yaw, inclinations, 7 + seat as u32, kit);
+            fight.add_pawn_as(&mut self.sim, seat, owner, place, at.1, inclinations, 7 + seat as u32, kit);
+        }
+    }
+
+    /// Where hired pawn `index` stands beside an owner at `pos` facing `yaw`.
+    /// *Assumed*: 2 m behind, 80 cm to either side.
+    fn hired_pawn_place(index: usize, pos: [f32; 3], yaw: f32) -> [f32; 3] {
+        let (s, c) = yaw.sin_cos();
+        let side = if index == 0 { 80.0 } else { -80.0 };
+        [pos[0] - s * 200.0 + c * side, pos[1], pos[2] - c * 200.0 - s * side]
+    }
+
+    /// Moves the hired pawns' bodies to their owner (the first Arisen seat),
+    /// as the party travels together when an area jump places it. Call after
+    /// placing the Arisen.
+    pub fn place_hired_pawns(&mut self) {
+        let Some(owner) = self.roster.ids().next() else { return };
+        let Some((pos, yaw)) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { return };
+        for index in 0..2 {
+            let seat = Self::hired_pawn_seat(index);
+            if let Some(p) = self.sim.player_mut(seat) {
+                p.position = Self::hired_pawn_place(index, pos, yaw);
+                p.yaw = yaw;
+                p.velocity = [0.0; 3];
+                p.drop_from = p.position[1];
+            }
         }
     }
 

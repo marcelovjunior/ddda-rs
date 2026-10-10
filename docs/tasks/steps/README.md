@@ -70,8 +70,12 @@ without an "after" can run in parallel, one agent each.
 | S26 | the bow 2: arrows that hit | S25 |
 | S27 | the bow 3: in the viewer | S26 |
 | S28 | the new-game inventory in the opening (quick use) | - |
+| S29 | the beach dragon as a host actor, with its entrance | S24 |
+| S30 | the dragon lands (PressAttack) and breathes fire (BreathWide) | S29 |
+| S31 | ev00 -> dragon fight -> ev01 -> ev05 in the opening | S30 |
+| S32 | NPC authored motions (Reynard's rescue script) | S23 |
 
-Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S24 (dragon attack map, then the steps it produces), S22, S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19. S18 (cyclops) is ON HOLD.
+Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19. S18 (cyclops) is ON HOLD.
 
 The cutscene command used by S01-S04:
 
