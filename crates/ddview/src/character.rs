@@ -423,7 +423,7 @@ pub fn spawn_assembled_hands(
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
     let mut attach = vec![];
-    spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint, eyebrow);
+    let mut diagnostic_groups = spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint, eyebrow);
     for (k, part) in parts.iter().enumerate() {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
             Ok(b) => b,
@@ -466,7 +466,17 @@ pub fn spawn_assembled_hands(
         };
         let all = |_: u16| true;
         let vis: &dyn Fn(u16) -> bool = if part.attach.is_some() { &all } else { visible };
-        spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint, None);
+        diagnostic_groups.extend(spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint, None));
+    }
+    if std::env::var_os("DDVIEW_GROUP_COLOURS").is_some() {
+        diagnostic_groups.sort_unstable();
+        diagnostic_groups.dedup();
+        let legend = diagnostic_groups.iter().map(|&group| {
+            let rgb = diagnostic_group_colour(group).to_srgba();
+            format!("{group} -> #{:02X}{:02X}{:02X}", (rgb.red * 255.0).round() as u8,
+                (rgb.green * 255.0).round() as u8, (rgb.blue * 255.0).round() as u8)
+        }).collect::<Vec<_>>().join(", ");
+        eprintln!("[group-colours] actor={root:?} model={model_path} motion={motion_path} {legend}");
     }
     // Every assembled character runs the morph pass (it also places the
     // attachments); without edit data it is the identity.
@@ -564,7 +574,13 @@ fn bind_skeleton(
     out
 }
 
+// Viewer diagnostic palette, not an original-game material rule.
+fn diagnostic_group_colour(group: u16) -> Color {
+    Color::hsl((f32::from(group) * 0.13).fract() * 360.0, 1.0, 0.5)
+}
+
 /// Spawns the skinned meshes of one model on `joints` (one per bone).
+/// Returns the drawn groups only when the diagnostic is enabled.
 #[allow(clippy::too_many_arguments)]
 fn spawn_meshes(
     commands: &mut Commands,
@@ -580,7 +596,10 @@ fn spawn_meshes(
     visible: &dyn Fn(u16) -> bool,
     tint: Option<[f32; 3]>,
     eyebrow: Option<ddlook::eyebrow::Eyebrow>,
-) {
+) -> Vec<u16> {
+    let group_colours = std::env::var_os("DDVIEW_GROUP_COLOURS").is_some();
+    let mut drawn_groups = Vec::new();
+    let mut group_materials = HashMap::new();
     // Inverse binds from the rest pose (world = parent world x local in
     // column-vector form). The stored `inverse_bind` matrices are not used:
     // they carry a uniform scale (270.48 on the male body) and a translation
@@ -669,7 +688,19 @@ fn spawn_meshes(
         mesh.insert_indices(Indices::U32(
             tris.iter().flatten().map(|&i| u32::from(i)).collect(),
         ));
-        let material = mats
+        let material = if group_colours {
+            drawn_groups.push(m.group);
+            PartMaterial::Standard(group_materials.entry(m.group).or_insert_with(|| {
+                materials.add(StandardMaterial {
+                    base_color: diagnostic_group_colour(m.group),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Opaque,
+                    cull_mode: None,
+                    double_sided: true,
+                    ..Default::default()
+                })
+            }).clone())
+        } else { mats
             .entry(m.material)
             .or_insert_with(|| {
                 let name = model
@@ -723,7 +754,7 @@ fn spawn_meshes(
                 }
                 material
             })
-            .clone();
+            .clone() };
         let mut e = commands.spawn((
             Mesh3d(meshes.add(mesh)),
             SkinnedMesh {
@@ -755,6 +786,7 @@ fn spawn_meshes(
         let e = e.id();
         commands.entity(root).add_child(e);
     }
+    drawn_groups
 }
 
 /// Samples each playing motion and writes its joints' local transforms,
