@@ -109,6 +109,31 @@ impl NpcBounds {
 }
 
 impl NpcBody {
+    /// Ordinary HumanEdit mode3 scenery capsule. The host supplies its
+    /// actual installed shared adjustment table, not an estimated height.
+    /// Missing HumanEdit leaves this adapter unsupported (`None`), preserving
+    /// the existing policy for other NPC loads. Dynamic collision overrides
+    /// and the other capsule modes are separate, unsupported providers.
+    ///
+    /// The inline collision object is body+0x10E0. Mode3 height+0xD88
+    /// (body+0x1E68) is adjustment D3, written by 0x00AC50B2..0x00AC50BA
+    /// and 0x00B5F0A0. HumanEdit max(F74,F78) writes the distinct +0xD84
+    /// factor; 0x0076C785's mode3 branch bypasses its mode1 multiplication.
+    /// The same entry writes installed D4 at body+0x1E6C / collision+0xD8C;
+    /// this active radius supersedes the constructor's ordinary35 value.
+    // Translated from 0x0080B450, 0x0076C72D..0x0076C78D and 0x00CCE580
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn mode3_scenery_capsule(&self, installed_adjust: &[f32])
+        -> Result<Option<ddsim::sweep::CapsuleSegment>, String>
+    {
+        if self.look.body.is_none() { return Ok(None); }
+        let height = *installed_adjust.get(0xd3)
+            .ok_or("ordinary NPC scenery capsule needs installed adjustment D3")?;
+        let radius = *installed_adjust.get(0xd4)
+            .ok_or("ordinary NPC scenery capsule needs installed adjustment D4")?;
+        ordinary_mode3_capsule(height, radius).map(Some)
+    }
+
     /// `npc_type` is cNpcInfo.mNpcType, not the ledger NPC ID; the
     /// ordinary constructor initializes it to zero (0x00784880).
     /// These bank registrations mirror the reviewed host S32 Banks.
@@ -289,6 +314,32 @@ impl NpcBody {
         ddcombat::volumes::hurt_volumes(&self.body.collision[0].body, &activations, pose,
             (scale[0] + scale[1] + scale[2]) / 3.0, owner)
     }
+}
+
+/// Source scalar constructor for the ordinary vertical mode3 capsule.
+/// Height/radius are the caller's actual body adjustments D3/D4. They are not
+/// multiplied by the HumanEdit factor, model scale or a player capsule.
+// Translated from 0x0076C72D..0x0076C78D and 0x00CCE580
+// (DDDA.exe 2017-12-13 Steam).
+pub fn ordinary_mode3_capsule(height: f32, radius: f32) -> Result<ddsim::sweep::CapsuleSegment, String> {
+    // Validation is project policy; invalid data is not a default capsule.
+    if !height.is_finite() || height < 0.0 || !radius.is_finite() || radius <= 0.0
+        || !(2.0 * radius).is_finite() {
+        return Err("ordinary NPC scenery capsule height/radius is invalid".into());
+    }
+    // 0x00CCE580 normalizes the actual bottom->top span before shortening
+    // each endpoint by radius. Short spans collapse to the lower centre.
+    // Below its squared-length epsilon, the default vector at0x01629540
+    // supplies +Y, including an exactly zero height.
+    let squared_length = height * height;
+    if !squared_length.is_finite() { return Err("ordinary NPC scenery capsule height overflows".into()); }
+    let length = squared_length.sqrt();
+    let direction = if 2.0 * radius <= length || f32::EPSILON < squared_length {
+        (1.0 / length) * height
+    } else { 1.0 };
+    let lower = direction * radius;
+    let upper = if 2.0 * radius <= length { height + lower * -1.0 } else { lower };
+    Ok(ddsim::sweep::CapsuleSegment { start: [0.0, lower, 0.0], end: [0.0, upper, 0.0], radius })
 }
 
 fn scaled_bounds(spheres: impl IntoIterator<Item = (Mat4, f32)>) -> Result<NpcBounds, String> {

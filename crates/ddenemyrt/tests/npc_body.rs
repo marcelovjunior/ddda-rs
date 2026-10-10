@@ -15,6 +15,64 @@ fn center(v: &Volume) -> [f32; 3] {
 }
 
 #[test]
+fn ordinary_mode3_capsule_shortens_real_height_and_collapses_short_spans() {
+    use ddenemyrt::npc_body::{ordinary_mode3_capsule, ORDINARY_NPC_SCENERY_RADIUS};
+    let radius = ORDINARY_NPC_SCENERY_RADIUS;
+    let tall = ordinary_mode3_capsule(200.0, radius).unwrap();
+    assert_eq!((tall.start, tall.end, tall.radius), ([0.0, radius, 0.0], [0.0, 200.0 - radius, 0.0], radius));
+    for height in [0.0, 20.0, radius * 2.0] {
+        let short = ordinary_mode3_capsule(height, radius).unwrap();
+        assert_eq!(short.start, short.end);
+        assert!((short.start[1] - radius).abs() < 0.0001);
+    }
+    for invalid in [f32::NAN, f32::INFINITY, f32::MAX, -1.0] {
+        assert!(ordinary_mode3_capsule(invalid, radius).is_err());
+        assert!(ordinary_mode3_capsule(200.0, invalid).is_err());
+    }
+    let changed_radius = ordinary_mode3_capsule(200.0, 20.0).unwrap();
+    assert_eq!((changed_radius.start[1], changed_radius.end[1], changed_radius.radius), (20.0, 180.0, 20.0));
+    assert!(ordinary_mode3_capsule(200.0, 0.0).is_err());
+}
+
+#[test]
+fn installed_beach_mode3_capsule_uses_shared_adjustment_height_not_human_factor() {
+    let Some((vfs, file)) = installed() else { return };
+    let exe = file.image().unwrap();
+    // Manager0x0047E6F8..0x0047E71A loads table163E660 into+970;
+    // 0x00B5B950 binds that first resource to each NPC's body+3348.
+    let path = exe.cstr(exe.u32(0x0163_e660).unwrap()).unwrap();
+    let bytes = vfs.read(&path, mtarc::type_hash("rAdjustParam")).unwrap();
+    assert_eq!(&bytes[..4], b"ajp\0");
+    let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let adjust: Vec<f32> = bytes[12..12 + count * 4].chunks_exact(4)
+        .map(|word| f32::from_le_bytes(word.try_into().unwrap())).collect();
+    let mut body = NpcBody::load(&vfs, &exe, 704, 704, 0, 0, 0).unwrap();
+    let expected = ddenemyrt::npc_body::ordinary_mode3_capsule(adjust[0xd3], adjust[0xd4]).unwrap();
+    assert_eq!(body.mode3_scenery_capsule(&adjust).unwrap(), Some(expected));
+    let look = ddlook::npc_look(&vfs, 704, 704, 0).unwrap();
+    let human_bytes = vfs.read(&look.edit.human_edit, mtarc::type_hash("rHumanEdit")).unwrap();
+    let human = ddlook::morph::HumanEdit::parse(&human_bytes).unwrap();
+    let human_factor = human.floats[1].max(human.floats[2]);
+    assert_ne!(human_factor, adjust[0xd3], "installed HumanEdit D84 and body heightD88 have distinct values");
+    assert_ne!(expected, ddenemyrt::npc_body::ordinary_mode3_capsule(human_factor, adjust[0xd4]).unwrap(),
+        "HumanEdit factor must not supply the mode3 height");
+    // Changing the model's HumanEdit factor cannot mutate the mode3 height:
+    // native mode3 jumps past the D84 multiplication used by mode1.
+    body.look.body.as_mut().unwrap().model_scale = [0.25, 5.0, 2.0];
+    assert_eq!(body.mode3_scenery_capsule(&adjust).unwrap(), Some(expected));
+    assert!(body.mode3_scenery_capsule(&[]).is_err());
+    let mut changed = adjust.clone();
+    changed[0xd4] = 20.0;
+    let changed_capsule = body.mode3_scenery_capsule(&changed).unwrap().unwrap();
+    assert_eq!(changed_capsule.radius, 20.0, "active D4 replaces the constructor radius");
+    let mut invalid = adjust;
+    invalid[0xd3] = f32::NAN;
+    assert!(body.mode3_scenery_capsule(&invalid).is_err());
+    body.look.body = None;
+    assert_eq!(body.mode3_scenery_capsule(&invalid).unwrap(), None, "unsupported controller preserves existing load policy");
+}
+
+#[test]
 fn installed_npc_inherits_actual_player_base_motion_registrations() {
     let Some((vfs, file)) = installed() else { return };
     let exe = file.image().unwrap();

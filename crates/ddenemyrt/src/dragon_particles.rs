@@ -44,6 +44,46 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// The two independently advanced generator counters. Seed selection uses
+/// the installed resource's seed list and the actual effect RNG selector;
+/// it does not choose a project-wide seed or merge birth and path draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratorCounters {
+    initial_seed: u16,
+    pub birth: u32,
+    pub path: u32,
+}
+
+impl GeneratorCounters {
+    /// The caller supplies the resource seed entries, including its first
+    /// entry when the native count is zero. An absent list is unsupported.
+    /// `global_random` must use the effect manager's actual selected stream.
+    // Translated from 0x010FA600..0x010FA66E
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn select(seeds: &[i32], effect_flags: u32,
+        mut global_random: impl FnMut(u32) -> u32) -> Result<Self, String> {
+        if seeds.is_empty() || seeds.len() > usize::from(u8::MAX) {
+            return Err("generator seed list is absent or exceeds its native byte count".into());
+        }
+        let selector = effect_flags & 8;
+        let index = if seeds.len() < 2 { 0 }
+            else { (global_random(selector) % seeds.len() as u32) as usize };
+        let selected = seeds[index];
+        let initial_seed = if selected < 0 { (global_random(selector) & 0xFFF) as u16 }
+            else { selected as u16 };
+        Ok(Self { initial_seed, birth: u32::from(initial_seed), path: u32::from(initial_seed) })
+    }
+
+    /// Reuse resets both draw positions to the original low-16-bit seed.
+    /// Resetting the generator must not consume another global RNG value.
+    // Translated from 0x010FA570 and 0x010FA580
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn reset(&mut self) {
+        self.birth = u32::from(self.initial_seed);
+        self.path = u32::from(self.initial_seed);
+    }
+}
+
 /// Installed per-coordinate resource, separate from every generator payload.
 /// Dynamic curve offsets are retained; this reader does not execute curves,
 /// choose a global seed, compose transforms or create an effect.
@@ -82,6 +122,91 @@ pub struct CoordinateTransform {
     pub secondary: mtlmt::pose::Mat4,
     pub scale: [f32; 3],
     pub largest_scale: f32,
+}
+
+/// Generator-owned scaled basis used by native life4 path setup. This is
+/// distinct from the coordinate's normalized primary/secondary matrices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeneratorTransform {
+    pub matrix: mtlmt::pose::Mat4,
+    pub axis_scale: [f32; 3],
+    pub particle_scale: f32,
+}
+
+/// Uncurved zero-angular life4 setup, ready for real emitter displacement.
+/// Points remain relative to the coordinate anchor, as in the native buffer.
+#[derive(Debug, Clone)]
+pub struct BoundPath {
+    pub path: ParticlePath,
+    pub dynamics: PathDynamics,
+}
+
+impl GeneratorTransform {
+    /// The ordinary 0x010F1230 caller supplies +Z, transformed through the
+    /// generator's scaled basis. Force keeps that unnormalized direction;
+    /// only the initial point spacing normalizes it. Particle scalar scales
+    /// the authored total length separately from those generator axis scales.
+    // Translated from 0x010F1230 -> 0x010E5620 -> 0x012A1330
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn bind_path(&self, point_count: u8, parameters: &PathParameters,
+        sampled: SampledPath) -> Result<BoundPath, String> {
+        if point_count < 2 || parameters.flags != 0 || parameters.curves != [0; 4]
+            || sampled.angular_velocity != 0.0 || sampled.length_velocity != 0.0
+            || sampled.rotation != [0.0; 3] {
+            return Err("unsupported curved, angular or changing-length path binding".into());
+        }
+        if self.matrix.iter().flatten().chain([self.particle_scale, sampled.length,
+            sampled.force, sampled.damping, sampled.spring].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite native path binding".into());
+        }
+        let direction = [self.matrix[2][0], self.matrix[2][1], self.matrix[2][2]];
+        let dynamics = PathDynamics {
+            segment_length: (sampled.length.max(0.0) / f32::from(point_count - 1))
+                * self.particle_scale,
+            damping: sampled.damping, spring: sampled.spring,
+            taper_points: parameters.taper_points,
+            force: direction.map(|component| component * sampled.force),
+        };
+        let path = ParticlePath::construct(point_count, direction, dynamics, parameters.iterations)?;
+        Ok(BoundPath { path, dynamics })
+    }
+}
+
+impl CoordinateTransform {
+    /// Caller supplies the actual uEffect +1A0/+1B0 values and generator
+    /// +134 sample. `coordinate_scale_mode` is resource flags bits16..19:
+    /// 10FBEC0..10FBED5 pack it into coordinate +10C bits20..23.
+    /// `world_axes` is the generator's actual +10C bit12; it is not inferred
+    /// from a particle's shape or the effect's quality.
+    // Translated from 0x010D79F0 (DDDA.exe 2017-12-13 Steam).
+    pub fn generator_transform(&self, effect_axis_scale: [f32; 3],
+        effect_particle_scale: f32, sampled_generator_scale: f32,
+        coordinate_scale_mode: u8, world_axes: bool) -> Result<GeneratorTransform, String> {
+        if coordinate_scale_mode > 15
+            || effect_axis_scale.iter().chain([effect_particle_scale,
+                sampled_generator_scale, self.largest_scale].iter())
+                .chain(self.scale.iter()).chain(self.primary.iter().flatten())
+                .any(|v| !v.is_finite()) {
+            return Err("invalid generator transform input".into());
+        }
+        let mut particle_scale = effect_particle_scale * sampled_generator_scale;
+        let mut axis_scale = effect_axis_scale.map(|axis| axis * particle_scale);
+        if coordinate_scale_mode == 0 {
+            particle_scale *= self.largest_scale;
+            for axis in 0..3 { axis_scale[axis] *= self.scale[axis]; }
+        }
+        // The native world-axis constants are the identity rows at016294A0.
+        let mut matrix = if world_axes { mtlmt::pose::IDENTITY } else { self.primary };
+        for axis in 0..3 {
+            for value in &mut matrix[axis] { *value *= axis_scale[axis]; }
+        }
+        // The world-axis branch also retains the actual coordinate anchor.
+        matrix[3] = self.primary[3];
+        if !particle_scale.is_finite() || matrix.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("generator transform overflow".into());
+        }
+        Ok(GeneratorTransform { matrix, axis_scale, particle_scale })
+    }
 }
 
 impl CoordinateDefinition {
@@ -545,7 +670,10 @@ pub struct SampledPath {
 
 impl PathParameters {
     /// Supported uncurved, unconstrained native setup. Each draw advances
-    /// the actual generator counter even when its variation is zero.
+    /// the caller's actual selected counter even when its variation is zero.
+    /// Ordinary life4 setup uses generator +48, separately from the +44
+    /// counter used by initializer and particle birth. Native path-state
+    /// mode0x1000 selects +44 instead; resource flags alone do not select it.
     // Translated from 0x010E5620 (DDDA.exe 2017-12-13 Steam).
     pub fn sample(&self, counter: &mut u32,
         mut random_float: impl FnMut(usize) -> f32) -> Result<SampledPath, String> {
@@ -720,6 +848,65 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_seed_selection_preserves_global_draw_order_and_separate_reset_counters() {
+        let mut fixed = GeneratorCounters::select(&[0x1234_ABCD], 8,
+            |_| panic!("single fixed entry must not consume global RNG")).unwrap();
+        assert_eq!((fixed.birth, fixed.path), (0xABCD, 0xABCD),
+            "fixed seed is truncated to16 bits, not masked to12");
+        fixed.birth += 4;
+        fixed.path += 9;
+        assert_ne!(fixed.birth, fixed.path);
+        fixed.reset();
+        assert_eq!((fixed.birth, fixed.path), (0xABCD, 0xABCD));
+
+        let mut calls = Vec::new();
+        let mut values = [1, 0x1234_FABC].into_iter();
+        let selected = GeneratorCounters::select(&[17, -1, 19], 0xFFFF,
+            |selector| { calls.push(selector); values.next().unwrap() }).unwrap();
+        assert_eq!(calls, [8, 8], "entry selection precedes the negative-seed draw");
+        assert_eq!((selected.birth, selected.path), (0xABC, 0xABC));
+        assert_eq!(values.next(), None);
+        let mut calls = Vec::new();
+        let selected = GeneratorCounters::select(&[17, 18, 19], 0x10,
+            |selector| { calls.push(selector); 5 }).unwrap();
+        assert_eq!(calls, [0]);
+        assert_eq!((selected.birth, selected.path), (19, 19), "selection uses modulo count");
+        let random = GeneratorCounters::select(&[-17], 8, |selector| {
+            assert_eq!(selector, 8); 0xFFFF_FFFF
+        }).unwrap();
+        assert_eq!((random.birth, random.path), (0xFFF, 0xFFF));
+        assert!(GeneratorCounters::select(&[], 0, |_| panic!("invalid list must not draw")).is_err());
+        assert!(GeneratorCounters::select(&vec![0; 256], 0,
+            |_| panic!("invalid list must not draw")).is_err());
+    }
+
+    #[test]
+    fn generator_binding_keeps_coordinate_anchor_and_distinct_scale_modes() {
+        let primary = [[0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]];
+        let coordinate = CoordinateTransform { primary,
+            secondary: mtlmt::pose::IDENTITY, scale: [-2.0, 5.0, -4.0], largest_scale: 5.0 };
+        let inherited = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 0, false).unwrap();
+        assert_eq!(inherited.particle_scale, 3.125);
+        assert_eq!(inherited.axis_scale, [-2.5, 9.375, -10.0]);
+        assert_eq!(inherited.matrix, [[0.0, 0.0, 2.5, 0.0], [0.0, 9.375, 0.0, 0.0],
+            [-10.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]]);
+        // A nonzero native coordinate scale mode bypasses coordinate scales,
+        // but does not itself discard coordinate orientation or translation.
+        let separate = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 2, false).unwrap();
+        assert_eq!(separate.particle_scale, 0.625);
+        assert_eq!(separate.axis_scale, [1.25, 1.875, 2.5]);
+        assert_eq!(separate.matrix[0], [0.0, 0.0, -1.25, 0.0]);
+        assert_eq!(separate.matrix[3], primary[3]);
+        let world = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 2, true).unwrap();
+        assert_eq!(world.matrix, [[1.25, 0.0, 0.0, 0.0], [0.0, 1.875, 0.0, 0.0],
+            [0.0, 0.0, 2.5, 0.0], [11.0, 22.0, 33.0, 1.0]]);
+        assert!(coordinate.generator_transform([1.0; 3], 1.0, 1.0, 16, false).is_err());
+        assert!(coordinate.generator_transform([1.0; 3], f32::NAN, 1.0, 0, false).is_err());
+        assert!(coordinate.generator_transform([f32::MAX; 3], 2.0, 2.0, 0, false).is_err());
+    }
 
     #[test]
     fn static_parent_binding_separates_axis_scale_offset_and_both_matrix_blocks() {
@@ -1175,12 +1362,36 @@ mod tests {
         list.payload.truncate(0x130 + 0x78);
         assert!(CollisionUnit::read("synthetic".into(), &list).is_err());
     }
+
+    #[test]
+    fn collision_generator_seeds_are_bounded_payload_reads_including_native_zero_count() {
+        let mut list = synthetic_list();
+        let base = list.units[0].offsets[0] as usize;
+        list.payload[base + 0x10..base + 0x14].copy_from_slice(&0x1234_ABCDu32.to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        assert_eq!(unit.generator_seeds, [0x1234_ABCD]);
+        assert_eq!(unit.generator_counters(0, |_| panic!("zero count still uses its first fixed entry"))
+            .unwrap().birth, 0xABCD);
+        list.payload[base + 0xF] = 2;
+        list.payload[base + 0x14..base + 0x18].copy_from_slice(&(-1i32).to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        assert_eq!(unit.generator_seeds, [0x1234_ABCD, -1]);
+        let mut draws = [1, 0xABC].into_iter();
+        assert_eq!(unit.generator_counters(8, |_| draws.next().unwrap()).unwrap().path, 0xABC);
+        assert_eq!(draws.next(), None);
+        list.payload[base + 0xF] = 255;
+        assert!(CollisionUnit::read("synthetic".into(), &list).is_err(),
+            "corrupt count cannot read beyond the installed payload");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollisionUnit {
     pub path: String,
     pub generator: GeneratorParams,
+    /// Generator payload+0xF count and +0x10 signed entries. Native count
+    /// zero still reads the first entry; no game seed table is embedded.
+    pub generator_seeds: Vec<i32>,
     pub capacity: u16,
     /// Generator+0x30's two axis-selector nibbles; not an actor joint ID.
     /// 0x010EC540 copies them into runtime+0x108 bits8..15.
@@ -1261,8 +1472,17 @@ impl CollisionUnit {
             Some(WorldCollision { flags: word(base, 0)?, radius_growth: float(base, 4)?,
                 radius: float(base, 8)?, radius_limit_extra: float(base, 0xC)? })
         };
+        // 0x010FA330 binds runtime+2C to this generator payload;
+        // 0x010FA600 selects its count+F and entries+10. Count0/1 both
+        // read entry0, rather than treating count0 as an absent seed.
+        let seed_count_at = generator.checked_add(0xF).ok_or("generator seed offset overflow")?;
+        let seed_count = usize::from(*bytes.get(seed_count_at).ok_or("truncated generator seed count")?).max(1);
+        let generator_seeds = (0..seed_count).map(|index|
+            word(generator, 0x10 + index * 4).map(|value| value as i32))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
+            generator_seeds,
             capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
             emission_shape: word(generator, 0x78)? as u8,
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
@@ -1280,6 +1500,11 @@ impl CollisionUnit {
                     word(life, 0x108)?, word(life, 0x10C)?] }, world_collision })
     }
 
+    pub fn generator_counters(&self, effect_flags: u32,
+        global_random: impl FnMut(u32) -> u32) -> Result<GeneratorCounters, String> {
+        GeneratorCounters::select(&self.generator_seeds, effect_flags, global_random)
+    }
+
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction
     /// exposed above. Curved hold durations require their native context first.
     pub fn sample_raw_durations(&self, counter: &mut u32,
@@ -1294,3 +1519,29 @@ impl CollisionUnit {
         }))
     }
 }
+    #[test]
+    fn path_binding_separates_scaled_direction_force_spacing_and_relative_anchor() {
+        let generator = GeneratorTransform {
+            matrix: [[0.0, 0.0, 2.5, 0.0], [0.0, 9.375, 0.0, 0.0],
+                [-10.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]],
+            axis_scale: [-2.5, 9.375, -10.0], particle_scale: 3.125,
+        };
+        let parameters = PathParameters { flags: 0, iterations: 1, selectors: 0x4444,
+            taper_points: 3, ranges: [[0.0; 2]; 6], rotation: [[0.0; 2]; 3], curves: [0; 4] };
+        let sampled = SampledPath { length: 12.0, length_velocity: 0.0,
+            angular_velocity: 0.0, force: 2.0, damping: 0.0, spring: 0.0, rotation: [0.0; 3] };
+        let bound = generator.bind_path(4, &parameters, sampled).unwrap();
+        assert_eq!(bound.dynamics.segment_length, 12.5);
+        assert_eq!(bound.dynamics.force, [-20.0, 0.0, 0.0],
+            "native force uses scaled direction before the constructor normalizes spacing");
+        assert_eq!(bound.path.points,
+            vec![[0.0; 3], [-12.5, 0.0, 0.0], [-25.0, 0.0, 0.0], [-37.5, 0.0, 0.0]]);
+        assert_eq!(bound.path.velocities[1], [-20.0, 0.0, 0.0]);
+        assert_eq!(bound.path.total_length, 37.5);
+        assert!(generator.bind_path(1, &parameters, sampled).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { angular_velocity: 1.0, ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { length_velocity: 1.0, ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { rotation: [0.0, 1.0, 0.0], ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { force: f32::NAN, ..sampled }).is_err());
+    }
+

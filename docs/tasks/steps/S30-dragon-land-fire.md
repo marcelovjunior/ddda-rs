@@ -656,3 +656,150 @@ or regression execution follows from that source audit. Bulk effect fields
 and native random tables continue to be read from the installation.
 Next: bind the tested coordinate accessor/parent result to the actual
 shape0 birth and generator-owned path setup, then emission/query/damage.
+
+### Prepared generator-owned basis for production integration
+
+After head merged the parent/accessor checkpoint as `710aa28`, bounded
+instruction review resolved the next scale owner at `0x010D79F0`.
+Generator +134's sampled scalar multiplies effect +1B0, then effect
++1A0/+1A4/+1A8 scale the three basis rows. Coordinate scales and signed
+maximum are additionally inherited only when coordinate +10C bits20..23
+are zero. `0x010FBEC0..0x010FBED5` pack those bits from resource flags
+bits16..19; the raw resource's bits20..23 are a different selector and
+must not be tested directly. Generator +10C bit12 chooses world identity
+axes instead of coordinate primary orientation; both branches keep the
+coordinate primary anchor. Identity rows at `0x016294A0` were checked
+against the original constant table. The coordinate's secondary matrix
+does not supply this generator basis.
+
+`CoordinateTransform::generator_transform` and its meaningful synthetic
+regression are now **source-prepared, uncompiled/unexecuted**. The test
+covers inherited signed scales, nonzero scale mode, coordinate versus
+world axes, retained anchor and invalid inputs. This is the next actual
+path/birth input adapter; it does not yet create an emitter or damage.
+Effect fields, sampled scalar and runtime flags remain explicit caller
+inputs until their actual creation/update owners are integrated. The
+previous185-pass result belongs to `2ca38ae`, not this new source.
+
+Original-instruction validation of `0x010D79F0` now passes four bounded
+calls: inherited coordinate scale versus nonzero mode, each with local
+versus world axes. Each executes the real `0x010FCFE0` post-binding call
+and returns normally, restoring ESP and ESI. All sixteen matrix words,
+three axis scales plus the zero tail, and the separate particle scalar
+match the independently calculated signed-scale expectations exactly.
+The secondary coordinate matrix was deliberately different to detect an
+incorrect binding. No original instruction, return value or output was
+patched, and no callback was stubbed. Private evidence is retained outside
+the repo; this is native scalar evidence, not a running-game fire capture.
+
+The Rust regression remains **uncompiled/unrun** pending its coordinated
+full package gate. The earlier185 passes still belong to `2ca38ae`.
+Next: validate this source batch, then integrate actual generator creation,
+coordinate/effect clocks, birth and the world query into ordinary damage.
+
+Production frame-order tracing also distinguishes the two generator RNG
+counters. `0x010F9B10` refreshes vf15 binding, advances the generator gate,
+initializes or advances the life4 path, then admits a particle and updates
+existing particles. In `0x010E5620`, ordinary life4 path sampling selects
+generator +48; path-state mode0x1000 selects +44 instead. Initializer
+`0x010EC540` and ordinary particle birth `0x010EDC90` use +44. The manager
+constructor `0x010FA1D0` initializes both independently; do not feed path
+sampling through the birth counter simply because both use the same native
+tables. The path helper's caller contract now states that distinction.
+Runtime initialization owners and their later seed writes remain to be
+integrated; these source findings do not establish an active fire emitter.
+
+`GeneratorTransform::bind_path` now connects the verified scaled +Z basis
+to ordinary uncurved life4 construction (`0x010F1230 -> 0x010E5620 ->
+0x012A1330`). Authored total length divided by point-count minus one uses
+the separate particle scalar; force retains the scaled, unnormalized
+direction while point spacing normalizes that direction. Points remain
+relative to the coordinate anchor. Nonzero angular or length velocity,
+rotations and curves reject until their native update adapters exist.
+The new regression distinguishes those two scales and force magnitude,
+relative versus world positions and unsupported modes. Both this test and
+the generator-transform test remain **uncompiled/unrun** at this freeze.
+This is a path input adapter; the production effect lifetime, actual birth,
+world collision query and ordinary damage connection remain open.
+
+Bounded instruction review now resolves generator seed creation at
+`0x010FA600..0x010FA66E`. Multiple installed seed entries consume a global
+draw to select an entry by modulo count; a negative selected entry consumes
+another draw and masks it to12 bits. A nonnegative entry instead retains
+its low16 bits. Both global calls pass the actual owning effect flags&8
+to `0x00FB52A0`, preserving its stream selection. Generator birth+44 and
+path+48 start equal but advance independently. `0x010FA570/0x010FA580`
+restore both from the original low16-bit seed without another global draw.
+
+`GeneratorCounters` translates this contract with explicit installed seed
+entries and a caller-owned RNG callback. Its new regression distinguishes
+single fixed seeds, multi-entry selection, negative seed draws, the two
+mask widths, stream selectors and independent counters/reset. This test
+and the two new basis/path tests are **uncompiled/unrun**. Resource loading,
+actual global RNG ownership and production emitter admission remain open;
+the helper does not choose a new seed policy for gameplay.
+
+The installed seed read is now connected to `CollisionUnit::read`.
+`0x010FA330` binds runtime+2C to the selected unit's actual generator
+payload, so the count+F and signed entries+10 belong to that payload.
+Count0 still supplies the first entry, as does count1; larger counts are
+read with payload bounds checks. No EFL header field or coordinate seed
+is substituted. A fourth new regression verifies zero-count behavior,
+multiple entries, the bound against a corrupt255-entry count and use of
+the runtime selection helper. All four new tests remain **uncompiled/unrun**.
+
+Bounded original-instruction validation now covers four single fixed seed
+cases (0, 1, low16 bits set, and distinct high/low16 bits). Each executes
+the real `0x010FA600` selection and both `0x010FA570/0x010FA580` reset
+functions, twelve calls total, returning normally with restored stack and
+preserved ESI. Both counters exactly retain the expected low16 bits after
+their independent mutation and reset. No instruction/output was patched
+and no callback was substituted. This proof does **not** execute the
+multi-entry or negative-seed global RNG branches, and it does not establish
+the Rust gate or production emitter. Evidence remains private.
+
+### Generator input checkpoint verified (2026-10-10)
+
+Frozen source `6db86faff47078cbba75aacbece19194b60e050c` now passed the
+complete `cargo test --jobs 2 -p mteffect -p ddenemyrt` on the prescribed
+existing core target. Session52444 and Cargo actually exited0: 189 passed,
+0 failed, 2 existing ignored diagnostics, 0 filtered, across 33 summaries
+(31 nonempty and 2 doc suites). Compile took 24.40s; test-summary durations
+totaled 110.19s. Canonical nativePC/DDDA.exe were supplied and no installed
+check reported SKIP. Both ignored tests remain the existing
+`installed_reynard_rescue_contact_trace` and `debug_trace` diagnostics.
+
+All four new exact regressions passed once:
+
+- `generator_binding_keeps_coordinate_anchor_and_distinct_scale_modes`
+- `path_binding_separates_scaled_direction_force_spacing_and_relative_anchor`
+- `generator_seed_selection_preserves_global_draw_order_and_separate_reset_counters`
+- `collision_generator_seeds_are_bounded_payload_reads_including_native_zero_count`
+
+The prior static-parent and coordinate-index regressions also passed once.
+Source remained clean and unchanged, including the particle module hash;
+only its owned timestamp was refreshed to invalidate shared-target stale
+artifacts. Private full log `full-generator-path-6db86fa.private.log` has
+SHA256 `B68D2DF4BDB56994D60B64A86516792C9A07774C0993CDE482FE46E1B9B89BF0`.
+The strict proof and native comparison evidence remain private. The normal
+core lease was released after actual completion. Earlier unrun labels
+describe preparation before this gate; this result verifies this source
+batch, not production fire or a running-original comparison.
+
+A separate four-case bounded original-instruction proof executed
+`0x00FB52A0 -> 0x00D00690`, with two distinct RNG state pairs and selectors
+0/8. Returned values and the selected four-word state matched, while the
+unselected state stayed unchanged; all calls returned normally and
+preserved stack/callee-saved registers. Instructions and outputs were
+not patched and no callback was stubbed. This establishes stream routing:
+selector0 uses global state at `0x018D017C`, selector8 the actual effect
+manager's state at +0x24. `0x00FB5300` stores its seed at +0x20 and tails
+into `0x00D006C0` for that manager state. Locking and manager initialization
+were not executed; this scalar proof does not initialize a production
+stream or justify aliasing it to Fight's appearance RNG.
+
+The production emitter, real effect/coordinate lifetime, generator birth,
+path sampling, scenery queries and ordinary party damage remain open.
+Next action: integrate the verified inputs with their actual creation and
+update owners, preserving native RNG draw order and the existing generator
+gate before connecting collision samples to ordinary damage.

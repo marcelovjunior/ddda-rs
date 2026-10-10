@@ -190,8 +190,8 @@ impl<D: Data> Story<D> {
         }
         self.world.stage_no = stage;
         // 0x004827e0: stage 800 with SceNo 1000 boots q0000 and q0031. The
-        // game also requires sGameSys +0xb8844 bit 0x20000 here; which
-        // routine sets it after the prologue is untraced (assumed set).
+        // native context bit sGameSys+0xb8844 mask0x20000 is supplied by
+        // the post-prologue writer 0x00444b6e -> 0x004373c0 (index0x0e).
         if stage == 800 && self.world.sce_no == 1000 {
             cmds.push(Command::BootQuest { quest: 0, branch: 0, start: false });
             cmds.push(Command::BootQuest { quest: 31, branch: 0, start: false });
@@ -298,6 +298,10 @@ impl<D: Data> Story<D> {
             self.world.stage_no = 800;
             self.world.start_pos = 0;
             self.world.set_sce_no(1000, false);
+            // Translated from 0x00444b6e -> 0x00444b83 -> 0x004373c0
+            // (DDDA.exe 2017-12-13 Steam): request index14 sets the upper
+            // word's bit17. Preserve all unrelated native request flags.
+            self.stage.game_flags.b8844 |= 0x0002_0000;
             // 0x00444c20 (called by 0x00444b20): the post-prologue world.
             // Not modelled: the party-record resets of 0x00444840 and the
             // clock/inventory calls of 0x00444b20.
