@@ -178,6 +178,37 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
+    /// Explicit co-op policy: a newly occupied seat starts from the current
+    /// saved opening phase and selected vocation, with no past quest rewards.
+    /// Existing bags are retained. The inherited late-join fight-kit and
+    /// global story-vocation limitations are separate from inventory ownership.
+    pub(crate) fn joined_items(&mut self, seat: PlayerId) {
+        let (Some(phase), Some(data)) = (self.economy.opening_phase, self.item_data.as_ref()) else {
+            return;
+        };
+        if self.economy.inventory.bag(Owner::Arisen(seat)).is_some() {
+            return;
+        }
+        self.economy
+            .inventory
+            .bags
+            .insert(Owner::Arisen(seat), ddeconomy::new_game::bag(phase));
+        if phase != ddeconomy::new_game::Phase::BeforeCreation {
+            if let Some(vocation) = self
+                .story
+                .as_ref()
+                .and_then(|s| ddskill::vocation::Vocation::from_id(s.world.player_job))
+            {
+                self.economy.opening_grants.first_choice(
+                    &mut self.economy.inventory,
+                    &data.items,
+                    seat,
+                    &ddprogress::change::starting_items(vocation),
+                );
+            }
+        }
+    }
+
     pub fn character_created_items(&mut self) {
         if self.economy.opening_phase != Some(ddeconomy::new_game::Phase::BeforeCreation) {
             return;
@@ -495,5 +526,98 @@ mod tests {
             b.economy, expected,
             "neither callback may recreate already delivered items on load"
         );
+    }
+    #[test]
+    fn installed_late_join_gets_phase_and_current_kit_without_past_rewards() {
+        let native = std::env::var_os("DDDA_NATIVE_PC")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !native.is_dir() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(&native).unwrap();
+        let data = std::sync::Arc::new(ItemData::load(&vfs).unwrap());
+        let story_data = ddstory::data::InstallData::open(&native, None).unwrap();
+        let reward = ddstory::orders::reward(&story_data, 1).unwrap();
+        let mut story = ddstory::Story::new_game(crate::data::NoStoryData);
+        story.world.player_job = ddskill::vocation::Vocation::Strider.id();
+        let mut h = Host::new(
+            ddsim::Sim::new(Default::default()),
+            Some(story),
+            ddstory::scripted::ScriptedHost::default(),
+            Box::new(Void),
+        );
+        h.join(crate::ProfileId(1), crate::Control::Local, [0.0; 3], 0.0)
+            .unwrap();
+        h.new_game_items(data.clone(), ddeconomy::new_game::Phase::NewlyArisen);
+        h.first_choice_items(ddskill::vocation::Vocation::Strider);
+        h.story_item_requests(&reward);
+        let original = h.economy.inventory.bag(Owner::Arisen(0)).unwrap().clone();
+        assert_eq!(
+            h.join(crate::ProfileId(2), crate::Control::Remote, [0.0; 3], 0.0),
+            Some(1)
+        );
+        let late = h.economy.inventory.bag(Owner::Arisen(1)).unwrap();
+        assert_eq!(late.count(43), 0);
+        assert_eq!(late.count(0x4a1), 1);
+        for item in ddprogress::change::starting_items(ddskill::vocation::Vocation::Strider) {
+            assert_eq!(late.count(item as i16), 1);
+        }
+        assert_eq!(h.economy.inventory.bag(Owner::Arisen(0)).unwrap(), &original);
+        let before = h.economy.clone();
+        h.joined_items(1);
+        assert_eq!(h.economy, before);
+    }
+    #[test]
+    fn installed_legacy_import_checks_occupied_entries_and_keeps_local_bags_distinct() {
+        let native = std::env::var_os("DDDA_NATIVE_PC")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !native.is_dir() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(&native).unwrap();
+        let entry = r#"<class type="sItemManager::cITEM_PARAM_DATA"><s16 name="data.mNum" value="2"/><s16 name="data.mItemNo" value="43"/><u32 name="data.mFlag" value="1"/></class>"#;
+        let bag = format!(
+            r#"<class><u32 name="mItemCount" value="1"/><array name="mItem" count="256">{}</array></class>"#,
+            entry.repeat(256)
+        );
+        let xml = format!(
+            r#"<class><class name="mPlayerDataManual"><class name="mPlCmcEditAndParam"><array name="mItem" count="4">{}</array><class name="mPl"><class name="mParam"><array name="mAbility" count="6">{}</array></class></class></class></class></class>"#,
+            bag.repeat(4),
+            r#"<s8 value="-1"/>"#.repeat(6)
+        );
+        let mut imported = ImportedItems::load(&vfs, &xml, &[0, 1]).unwrap();
+        let original = imported.economy.inventory.bag(Owner::Arisen(1)).unwrap().clone();
+        assert_eq!(
+            original.slots,
+            vec![Slot {
+                item: 43,
+                num: 2,
+                flags: 1
+            }]
+        );
+        imported.economy.inventory.bag_mut(Owner::Arisen(0)).slots.clear();
+        assert_eq!(
+            imported.economy.inventory.bag(Owner::Arisen(1)).unwrap(),
+            &original
+        );
+        assert!(imported
+            .recipients
+            .iter()
+            .all(|r| r.factor.is_finite() && r.factor > 0.0));
+        for malformed in [
+            xml.replace(
+                r#"name="mItemCount" value="1""#,
+                r#"name="mItemCount" value="257""#,
+            ),
+            xml.replace(r#"name="data.mNum" value="2""#, r#"name="data.mNum" value="0""#),
+            xml.replace(
+                r#"name="data.mItemNo" value="43""#,
+                r#"name="data.mItemNo" value="-1""#,
+            ),
+        ] {
+            assert!(ImportedItems::load(&vfs, &malformed, &[0, 1]).is_err());
+        }
     }
 }

@@ -320,6 +320,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
         self.economy.wallet(id);
+        self.joined_items(id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
         Some(id)

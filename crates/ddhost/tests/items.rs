@@ -79,7 +79,8 @@ fn installed_reynard_reward_checkpoint_restores_real_bag_and_host_quick_use() {
     story.world.set_quest_bit(2, 95, true);
     story.world.set_quest_bit(2, 20, true);
     a.story = Some(story);
-    a.data.npc = Some(Arc::new(ddnpcrt::InstallData::open(&native, "eng").unwrap()));
+    let npcs = Arc::new(ddnpcrt::InstallData::open(&native, "eng").unwrap());
+    a.data.npc = Some(npcs.clone());
     let groups = ddhost::npc_placements::group_list(&vfs, 100).unwrap();
     let layouts = ddhost::npc_placements::LoadedLayouts::read(&vfs, 100, &groups, &[(0, 0)]).unwrap();
     let world = ddspawn::World {
@@ -131,6 +132,7 @@ fn installed_reynard_reward_checkpoint_restores_real_bag_and_host_quick_use() {
     let save = a.save().unwrap();
     let hash = a.saved_hash();
     let mut b = host(data.clone(), fight.clone(), false);
+    b.data.npc = Some(npcs.clone());
     b.load(&save, NoStoryData).unwrap();
     assert_eq!(b.saved_hash(), hash);
     assert_eq!(b.economy.inventory.bag(Owner::Arisen(0)).unwrap().count(1058), 1);
@@ -141,6 +143,7 @@ fn installed_reynard_reward_checkpoint_restores_real_bag_and_host_quick_use() {
     assert_eq!(b.economy.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 4);
     assert_eq!(b.economy.inventory.bag(Owner::Arisen(1)).unwrap(), &other);
     let mut remapped = host(data, fight, true);
+    remapped.data.npc = Some(npcs);
     remapped.load(&save, NoStoryData).unwrap();
     assert_eq!(
         remapped
@@ -222,4 +225,61 @@ fn installed_item_requests_check_owner_expected_slot_and_failed_use_spends_nothi
     let before = h.saved_hash();
     assert!(h.load(&bad, NoStoryData).is_err());
     assert_eq!(h.saved_hash(), before);
+}
+
+#[test]
+fn installed_host_potion_stamina_and_poison_cure_keep_original_recovery_order() {
+    let Some((native, vfs)) = install() else {
+        return;
+    };
+    let data = Arc::new(ItemData::load(&vfs).unwrap());
+    let exe = ddexe::ExeFile::next_to(&native).unwrap();
+    let fight = Arc::new(ddhost::ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap());
+    let mut h = host(data, fight, false);
+    // S28 installed-resource regression retained at the new authoritative API.
+    // 0x00B77780 immediate HP/stamina/cures; fixture item ids read in ItemList.
+    h.economy.inventory.bag_mut(Owner::Arisen(0)).slots = [99, 45, 48]
+        .map(|item| ddeconomy::inventory::Slot {
+            item,
+            num: 1,
+            flags: 1,
+        })
+        .to_vec();
+    if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut h
+        .fight
+        .as_mut()
+        .unwrap()
+        .arisen
+        .get_mut(&0)
+        .unwrap()
+        .fighter
+        .victim
+    {
+        *hp = 100.0;
+        *hp_max = 2000.0;
+    }
+    let other_hp = h.fight.as_ref().unwrap().arisen[&1].fighter.victim.hp();
+    assert_eq!(h.item_request(0, ItemRequest::QuickUse).unwrap(), 99);
+    assert_eq!(h.fight.as_ref().unwrap().arisen[&0].fighter.victim.hp(), 1600.0);
+    assert_eq!(h.fight.as_ref().unwrap().arisen[&1].fighter.victim.hp(), other_hp);
+    h.sim.player_mut(0).unwrap().stamina = 0.0;
+    assert_eq!(h.item_request(0, ItemRequest::QuickUse).unwrap(), 45);
+    assert_eq!(h.sim.player(0).unwrap().stamina, 250.0);
+    let f = h.fight.as_mut().unwrap();
+    f.arisen
+        .get_mut(&0)
+        .unwrap()
+        .fighter
+        .statuses
+        .add(0, &f.data.tables.status_player);
+    assert_eq!(h.item_request(0, ItemRequest::QuickUse).unwrap(), 48);
+    assert!(!h.fight.as_ref().unwrap().arisen[&0].fighter.statuses.has(0));
+    assert!(h
+        .economy
+        .inventory
+        .bag(Owner::Arisen(0))
+        .unwrap()
+        .slots
+        .is_empty());
+    assert!(h.item_request(0, ItemRequest::QuickUse).is_err());
 }

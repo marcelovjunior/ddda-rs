@@ -54,3 +54,16 @@ and no viewer path manufactures items.
 - Next: full ddeconomy/ddhost/ddnet checks under the shared core lease, followed
   by full viewer suite and release build under the M5 lease; resume S38 on this
   host request API only after accepted source tests.
+
+
+### Source follow-up before full acceptance
+
+Head #6662 approved inventory-only late joining from saved opening phase and
+current vocation, without past quest rewards. Implemented and covered by the
+installed late-join regression; inherited fight-kit/global-vocation and leaving
+seat/profile inventory retention remain separate follow-up limits.
+
+The initial full-core attempt exited 1 at the new Reynard restore fixture:
+its fresh host omitted installed NPC data. Fixed the fixture. Focused runs
+then exited 0 with 3 authoritative item tests and 3 item-module tests passing,
+including retained S28 recovery/import coverage. Full acceptance remains pending.
