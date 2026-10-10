@@ -108,6 +108,8 @@ struct Demo {
     perf_route: bool,
     field_cell: Option<(i32, i32)>,
     planning: Option<RoutePlan>,
+    /// When the fight demo last used a curative.
+    last_heal: f32,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -393,6 +395,7 @@ pub fn prepare(
             perf_route: false,
             field_cell: None,
             planning: None,
+            last_heal: f32::NEG_INFINITY,
         }),
         shots,
         shot_queue: vec![],
@@ -1923,9 +1926,44 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             d.since = now;
         }
     }
+    demo_heal(s, now);
     let d = s.demo.as_mut().unwrap();
     let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
     PlayerInput { sim, interact: false }
+}
+
+/// The fight demo uses the next curative of the Arisen's bag (S28's quick
+/// use, the same path as the U key) below 40% HP, at most every 5 seconds.
+fn demo_heal(s: &mut Session, now: f32) {
+    let hurt = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).is_some_and(|a| {
+        let max = match &a.fighter.victim {
+            ddhost::ddenemyrt::combat::Victim::Player { hp_max, .. } => *hp_max,
+            _ => return false,
+        };
+        let v = &a.fighter.victim;
+        !v.dead() && v.hp() < 0.4 * max
+    });
+    let d = s.demo.as_mut().unwrap();
+    if !hurt || now - d.last_heal < 5.0 {
+        return;
+    }
+    d.last_heal = now;
+    let (items, host) = (&mut s.quick_items, &mut s.host);
+    let host = &mut **host;
+    if let Some(fight) = host.fight.as_mut() {
+        match items.use_next(0, &mut host.sim, fight) {
+            Ok(item) => info!("opening demo: used item {item}"),
+            Err(e) => info!("opening demo: no curative: {e}"),
+        }
+    }
+}
+
+/// Whether a live goblin is within `range` cm (horizontal) of the Arisen.
+fn demo_goblin_near(s: &Session, range: f32) -> bool {
+    let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) else { return false };
+    f.goblins
+        .iter()
+        .any(|g| !g.dead() && (g.pos[0] - p.position[0]).hypot(g.pos[2] - p.position[2]) < range)
 }
 
 fn w_bit(s: &Session, bit: usize) -> bool {
@@ -1947,6 +1985,18 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
     let step = d.step;
     if step == Step::Rescue {
         return demo_rescue(s, now);
+    }
+    // With DDVIEW_DEMO_FIGHT the Arisen defends itself in the field: once
+    // a live goblin is within 10 m it fights with ordinary inputs (the
+    // goblins run in and attack; an idle Arisen would die before Rescue).
+    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RoadWalk)
+        && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
+        && demo_goblin_near(s, 1000.0)
+    {
+        demo_heal(s, now);
+        let d = s.demo.as_mut().unwrap();
+        let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
+        return PlayerInput { sim, interact: false };
     }
     let route = ddstory::route::opening();
     let place = |name: &str| -> Option<Vec3> {
