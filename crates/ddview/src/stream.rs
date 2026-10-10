@@ -66,6 +66,9 @@ pub struct Streamer {
     pub driver: Driver,
     /// The followed player's stage-frame position; nothing streams without it.
     pub focus: Option<[f32; 3]>,
+    /// Authoritative simulation interests, independent of this view's focus.
+    /// Co-op collision/layout residency is the union for all current actors.
+    pub actors: Vec<[f32; 3]>,
     /// The viewer origin's cell `(m, n)` (viewer offset zero).
     origin: (i32, i32),
     /// The predicate's quality multiplier (*assumed*: the config's
@@ -105,6 +108,7 @@ impl Streamer {
             stage,
             driver,
             focus: None,
+            actors: Vec::new(),
             origin,
             quality,
             far,
@@ -175,6 +179,7 @@ impl Streamer {
         self.ready = None;
         self.stage = stage;
         self.focus = Some(at);
+        self.actors.clear();
         if stage == FIELD {
             // the stage frame's own origin cell, so viewer and stage frames
             // differ only by UNIT
@@ -200,10 +205,11 @@ impl Streamer {
     }
 
     fn collision_cells(&self, pos: [f32; 3]) -> Built {
-        let mut collision = self.grid.wanted(Kind::Collision, pos, self.quality);
-        let mut layouts = self.grid.wanted(Kind::Layout, pos, self.quality);
-        collision.sort();
-        layouts.sort();
+        // The handoff has only its authored arrival pose until the driver
+        // supplies the newly placed party on its next frame.
+        let positions = if self.actors.is_empty() { std::slice::from_ref(&pos) } else { &self.actors };
+        let collision = self.grid.wanted_for_players(Kind::Collision, positions, self.quality);
+        let layouts = self.grid.wanted_for_players(Kind::Layout, positions, self.quality);
         (collision, layouts)
     }
 
@@ -247,6 +253,7 @@ pub fn play_hookup(streamer: Option<ResMut<Streamer>>, st: Option<ResMut<PlaySta
         return;
     }
     s.focus = st.sim.player(st.follow).map(|p| p.position);
+    s.actors = st.sim.players.iter().map(|p| p.position).collect();
     if let Some(t) = s.take_terrain() {
         st.terrain = t;
     }

@@ -146,6 +146,16 @@ impl Grid {
             .filter(|&c| self.near(kind, c, pos, quality))
             .collect()
     }
+
+    /// Authoritative co-op interest: retain every cell needed by any
+    /// current actor. Each actor uses the sourced single-player rule;
+    /// the union and stable ordering are our multiplayer design.
+    pub fn wanted_for_players(&self, kind: Kind, positions: &[[f32; 3]], quality: f32) -> Vec<(i32, i32)> {
+        let mut cells: Vec<_> = positions.iter().flat_map(|&pos| self.wanted(kind, pos, quality)).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        cells
+    }
 }
 
 #[cfg(test)]
@@ -195,5 +205,20 @@ mod tests {
             let k = G.centre(c);
             ((k[0] - pos[0]).powi(2) + (k[1] - pos[2]).powi(2)).sqrt() < 15151.6 + 4143.0
         }));
+    }
+
+    #[test]
+    fn separated_players_keep_both_residency_windows() {
+        let a = [5000.0, 0.0, 85000.0];
+        let b = [45000.0, 0.0, 145000.0];
+        for kind in Kind::ALL {
+            let both = G.wanted_for_players(kind, &[a, b], 1.0);
+            assert!(both.contains(&G.name(G.index(a))));
+            assert!(both.contains(&G.name(G.index(b))));
+            assert!(!G.wanted(kind, a, 1.0).contains(&G.name(G.index(b))));
+            assert_eq!(both, G.wanted_for_players(kind, &[b, a, b], 1.0));
+            assert!(G.wanted_for_players(kind, &[], 1.0).is_empty());
+            assert!(G.wanted_for_players(kind, &[b], 1.0).len() < both.len());
+        }
     }
 }
