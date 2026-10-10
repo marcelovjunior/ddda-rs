@@ -617,4 +617,13 @@ this task branch as `51183b4`. No sibling work-in-progress was copied.
 The prepared native parent proof now checks the complete two output
 matrices, signed scale, optional offset scaling and normal RET4 stack
 restoration on four synthetic cases. Earlier unmapped constant reads were
-rejected; the mapped original constant pages have not yet been rerun.
+rejected. After mapping the original constant pages, the bounded native
+proof **actually exited0 on all four cases**: diagonal and rotated parents,
+each with offset scaling off/on. Both complete matrix blocks, signed
+axis scale/maximum and normal RET4 stack restoration match the independent
+expected results. The initial retry used a Python environment without
+Capstone and failed before emulation; the research pyenv completed the
+proof. Instructions and outputs were not patched or substituted. Evidence
+remains private in `coordinate-parent-native.json` under the S29 directory.
+The new Rust parent/accessor full-package gates remain unexecuted; this
+native proof does not establish production particle emission or damage.
