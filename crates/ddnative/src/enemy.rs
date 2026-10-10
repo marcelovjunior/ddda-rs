@@ -32,3 +32,35 @@ pub fn blend(sources: Option<&[BlendSource]>, targets: Option<&mut [BlendTarget]
         t.value_118 = one_minus * s.values[1] + s.values[3] * s.t;
     }
 }
+
+/// The goblin (uEm0100) fields the goblin action entry resets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GoblinMotion {
+    /// +0x2530: velocity (x, y, z, w); +0x2540: acceleration.
+    pub velocity_2530: [f32; 4],
+    pub accel_2540: [f32; 4],
+    /// +0x2574 (u16), +0x2578 / +0x257C (f32), +0x5C7C (byte).
+    pub word_2574: u16,
+    pub value_2578: f32,
+    pub value_257c: f32,
+    pub byte_5c7c: u8,
+}
+
+/// `cEm0100Action::vf05`, the entry of every goblin action: the
+/// enemy-family entry ([`crate::action::enemy_action_enter`]) against the
+/// goblin class, then velocity and acceleration set to the globals vector
+/// (0x018CFE80..88, w = 0), +0x2578 = +0x257C, +0x2574 = 0x100 and
+/// +0x5C7C = 0. The original writes these through the is-a result without
+/// a null check, so the owner must be a goblin (precondition).
+// Translated from 0x008D4840 (DDDA.exe 2017-12-13 Steam), cEm0100Action::vf05.
+pub fn goblin_action_enter(act: &mut crate::action::EnemyAction, owner_addr: u32,
+    owner: &mut crate::action::Owner, owner_2ba0: &mut u32, owner_is_goblin: impl FnOnce() -> bool,
+    g: &mut GoblinMotion, globals: [f32; 3]) {
+    crate::action::enemy_action_enter(act, owner_addr, owner, owner_2ba0, owner_is_goblin);
+    assert!(act.owner_74 != 0, "cEm0100Action::vf05 requires a goblin owner (the original faults)");
+    g.velocity_2530 = [globals[0], globals[1], globals[2], 0.0];
+    g.accel_2540 = [globals[0], globals[1], globals[2], 0.0];
+    g.value_2578 = g.value_257c;
+    g.word_2574 = 0x100;
+    g.byte_5c7c = 0;
+}
