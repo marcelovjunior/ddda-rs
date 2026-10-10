@@ -757,3 +757,49 @@ their independent mutation and reset. No instruction/output was patched
 and no callback was substituted. This proof does **not** execute the
 multi-entry or negative-seed global RNG branches, and it does not establish
 the Rust gate or production emitter. Evidence remains private.
+
+### Generator input checkpoint verified (2026-10-10)
+
+Frozen source `6db86faff47078cbba75aacbece19194b60e050c` now passed the
+complete `cargo test --jobs 2 -p mteffect -p ddenemyrt` on the prescribed
+existing core target. Session52444 and Cargo actually exited0: 189 passed,
+0 failed, 2 existing ignored diagnostics, 0 filtered, across 33 summaries
+(31 nonempty and 2 doc suites). Compile took 24.40s; test-summary durations
+totaled 110.19s. Canonical nativePC/DDDA.exe were supplied and no installed
+check reported SKIP. Both ignored tests remain the existing
+`installed_reynard_rescue_contact_trace` and `debug_trace` diagnostics.
+
+All four new exact regressions passed once:
+
+- `generator_binding_keeps_coordinate_anchor_and_distinct_scale_modes`
+- `path_binding_separates_scaled_direction_force_spacing_and_relative_anchor`
+- `generator_seed_selection_preserves_global_draw_order_and_separate_reset_counters`
+- `collision_generator_seeds_are_bounded_payload_reads_including_native_zero_count`
+
+The prior static-parent and coordinate-index regressions also passed once.
+Source remained clean and unchanged, including the particle module hash;
+only its owned timestamp was refreshed to invalidate shared-target stale
+artifacts. Private full log `full-generator-path-6db86fa.private.log` has
+SHA256 `B68D2DF4BDB56994D60B64A86516792C9A07774C0993CDE482FE46E1B9B89BF0`.
+The strict proof and native comparison evidence remain private. The normal
+core lease was released after actual completion. Earlier unrun labels
+describe preparation before this gate; this result verifies this source
+batch, not production fire or a running-original comparison.
+
+A separate four-case bounded original-instruction proof executed
+`0x00FB52A0 -> 0x00D00690`, with two distinct RNG state pairs and selectors
+0/8. Returned values and the selected four-word state matched, while the
+unselected state stayed unchanged; all calls returned normally and
+preserved stack/callee-saved registers. Instructions and outputs were
+not patched and no callback was stubbed. This establishes stream routing:
+selector0 uses global state at `0x018D017C`, selector8 the actual effect
+manager's state at +0x24. `0x00FB5300` stores its seed at +0x20 and tails
+into `0x00D006C0` for that manager state. Locking and manager initialization
+were not executed; this scalar proof does not initialize a production
+stream or justify aliasing it to Fight's appearance RNG.
+
+The production emitter, real effect/coordinate lifetime, generator birth,
+path sampling, scenery queries and ordinary party damage remain open.
+Next action: integrate the verified inputs with their actual creation and
+update owners, preserving native RNG draw order and the existing generator
+gate before connecting collision samples to ordinary damage.
