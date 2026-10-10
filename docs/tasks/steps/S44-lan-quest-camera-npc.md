@@ -47,7 +47,8 @@ documented.
   main `3ecd13e` integration `70d02f4`, centimetre skeleton transform fix
   `b44c5bf`, stage hook `888f820`, stage prediction/interpolation fix
   `2865b70`, permanent retirement `10ddfd4`, first-join collision
-  readiness fix `5faead3`. **Core passed; viewer acceptance remains pending.**
+  readiness fix `5faead3`. **Core and viewer suites passed; LAN visual
+  comparison remains pending.**
 - Protocol 9 projects the host's stage, camera stage/id/generation/seconds
   and authored input lock. Every snapshot carries the active camera or an
   explicit absent camera. The guest never advances the ownership clock or
@@ -90,12 +91,29 @@ documented.
   installed UDP camera12/HP/gauge/motion fixture. The HP-loss fixture is
   explicit and does not claim a natural-hit original-game comparison.
   Private full log: `E:/ddda-re/notes/steps/S44/full-core.log`.
-  Viewer-only installed token/transform/camera-ownership regressions and
-  release binary pin remain pending; no outcome is predicted.
+  Full downstream viewer: actual session35333 exit0, fresh22.65s compile,
+  **92PASS, 2 existing ignored, 0 failed**, 11.67s tests. All three new
+  viewer regressions executed by their exact source names: centimetre-root
+  transform, installed remote token/frame and guest camera ownership.
+  Private full log: `E:/ddda-re/notes/steps/S44/full-viewer.log`.
+  Release build: actual session59507 exit0, 35.84s. Before releasing
+  `build/m5`, copied private pin
+  `E:/ddda-re/notes/steps/S44/ddview-s44-lan-5faead3.exe` (94,590,976 bytes),
+  SHA-256 `E74881A3B272C6AFFF89BC6B47024F66A0B5A4ADC879CC864782694DE5D286A1`.
+  Both build leases are released; no GPU lease or owned process remains.
 - Open: S47 appearance replication is a separate schema extension;
   the original visual/LAN comparison, broader NPC specialized body banks,
   corpse alpha presentation (also absent on the local host view), and
   guest dialogue/menu and door state replication are not claimed by this checkpoint.
-- Next action: full ddnet/ddhost and
-  downstream ddview tests plus a release build under the existing leased
-  targets; request one nearest-checkpoint LAN camera/gauge capture.
+- Follow-up (head #6837): `clock::GameClock` retains the initial
+  `args.stage` across both host and guest opening stage handoffs. Its
+  installed lighting lookup therefore remains on that initial stage;
+  lighting-stage synchronization and host clock/weather replication are
+  inherited presentation gaps outside this camera/NPC snapshot change.
+- Capture preflight: the guest can request the actual camera12 midpoint
+  and production gauge screenshots. Its disposable local story does not
+  reach host q2:5, so the existing camera helper cannot terminate the guest
+  automatically; use a bounded paired CLI harness that records both owned
+  process exits. Do not resume the host checkpoint independently on the guest.
+- Next action: independent source review of `5faead3`, then one bounded
+  nearest-checkpoint LAN camera/gauge capture from the private pin.
