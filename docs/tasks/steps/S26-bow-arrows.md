@@ -107,8 +107,7 @@ Next action: integrate after S25 review using an ordered per-seat shot
 queue, explicit bow-joint origin/camera-target/random-sample inputs,
 runtime arrow parameters and the secondary attacker slot. Preserve
 previous-frame hit-pass ordering and validate the 10 m hit, a deliberate
-miss and two independent shooters. Fast-flight collision interpretation,
-accuracy smoothing/rotation, terrain contacts and augment defaults are
+miss and two independent shooters. Accuracy smoothing, terrain contacts and augment defaults are
 still source checks, not silently assumed completed systems.
 
 ### Independent arrow checkpoint
@@ -131,7 +130,14 @@ test verifies the arrow's resource 6 collision, phase falloff,
 supplemental attack rows, trajectory order and death on accepted contact.
 No original live-game comparison or Sim/Fight acceptance is claimed.
 
-S25's reviewed shot-phase handoff and S29's `fight.rs` ownership still
-gate integration. The current-sphere adapter explicitly leaves the
-original fast-flight narrow-phase unresolved; terrain contacts, actual
-bow-joint posing and accuracy-state smoothing remain caller boundaries.
+S25 is now reviewed and merged into this branch; the narrow DDSIM shot
+claim is active. S29's `fight.rs` ownership still gates Fight integration.
+Terrain contacts and actual bow-joint posing remain caller boundaries.
+
+The fast-flight geometry is translated from `0x00BD8E40`: each moving
+authored sphere becomes a capsule from its current world center to that
+center minus shell displacement (`0x00BCC870`). Original-function
+emulation confirmed both endpoints for a synthetic trajectory. The final
+focused **5 unit + 2 installed tests** pass, including a 10 m contact
+and deliberate miss against runtime goblin hurt volumes. This verifies
+projectile geometry, not the remaining normal-input Fight/damage gate.

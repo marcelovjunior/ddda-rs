@@ -1,6 +1,7 @@
 //! Installed basic-arrow data and distance-dependent collision bindings.
 //! This is the arrow module gate; the S26 Sim/Fight input gate is separate.
 
+use ddcombat::volumes::{Volume, contacts};
 use ddenemyrt::arrow::{Arrow, ArrowAim, ArrowData};
 
 fn data() -> Option<ArrowData> {
@@ -67,6 +68,71 @@ fn installed_basic_arrow_reads_its_own_collision_and_falloff() {
     );
     assert_eq!(arrow.speed, p.speed + p.acceleration);
     assert_eq!(arrow.gravity, p.gravity + p.gravity_acceleration);
+    // Synthetic moving-node fixture executed through original BD8E40,
+    // with the attack-row callback suppressed only to isolate geometry.
+    arrow.position = [10.0, 80.0, 1100.0];
+    arrow.previous_position = [10.0, 76.0, 950.0];
+    assert_eq!(
+        arrow.volumes(&data)[0].volume,
+        Volume::Capsule {
+            p0: [10.0, 80.0, 1100.0],
+            p1: [10.0, 76.0, 950.0],
+            r: 10.0,
+        }
+    );
     arrow.contact(&p, true, false);
     assert!(!arrow.alive && arrow.volumes(&data).is_empty());
+}
+
+#[test]
+fn installed_arrow_crosses_the_goblins_ten_metre_hurt_volume_and_can_miss() {
+    let Some(data) = data() else {
+        return;
+    };
+    let path = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    let vfs = ddvfs::Vfs::open(&path).unwrap();
+    let exe = ddexe::ExeFile::next_to(&path).unwrap();
+    let goblin_data = ddenemyrt::goblin::GoblinData::load(&vfs, &exe.image().unwrap()).unwrap();
+    let mut goblin =
+        ddenemyrt::goblin::Goblin::new(&goblin_data, 200, [0.0, 0.0, 1000.0], std::f32::consts::PI);
+    goblin.volumes(&goblin_data);
+    let Volume::Sphere { c: target, .. } = goblin.fighter.hurts[0].volume else {
+        panic!("expected authored goblin sphere");
+    };
+    // The supplied origin is a synthetic bow-joint fixture. Actual posed
+    // bow-joint integration and normal Sim release remain the S26 gate.
+    let aim = ArrowAim {
+        bow_origin: [target[0], target[1], 0.0],
+        target,
+        accuracy: 0.25,
+        cone_random: 0x80000000,
+        polar_random: 0x80000000,
+        steady: false,
+    };
+    let mut aimed = Arrow::aimed(&data.param, 500, 0, aim, 1.0).unwrap();
+    let mut missed = Arrow::aimed(
+        &data.param,
+        501,
+        1,
+        ArrowAim {
+            target: [target[0] + 1000.0, target[1], target[2]],
+            ..aim
+        },
+        1.0,
+    )
+    .unwrap();
+    let mut hit = false;
+    for _ in 0..30 {
+        if aimed.step(&data.param, 1.0) && !contacts(&aimed.volumes(&data), &goblin.fighter.hurts).is_empty()
+        {
+            hit = true;
+            aimed.contact(&data.param, true, false);
+        }
+        missed.step(&data.param, 1.0);
+        assert!(contacts(&missed.volumes(&data), &goblin.fighter.hurts).is_empty());
+    }
+    assert!(hit && !aimed.alive);
+    assert_eq!((aimed.shooter, missed.shooter), (0, 1));
 }

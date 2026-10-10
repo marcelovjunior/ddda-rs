@@ -9,7 +9,7 @@
 use crate::body::{CollisionSet, load, model_matrix};
 use ddcombat::damage::AttackRow;
 use ddcombat::events::Activation;
-use ddcombat::volumes::{AttackVolume, Mat4, Pose, attack_volumes};
+use ddcombat::volumes::{AttackVolume, Mat4, Pose, Volume, attack_volumes};
 
 /// Secondary category 10 in uPlayerBase::vf198, 0x00B5BA20.
 pub const PARAM_PATH: &str = r"param\shl_param_06";
@@ -333,9 +333,10 @@ impl Arrow {
     }
 
     /// Current attack sequence, using the installed geometry and attack row.
-    /// Shell collision projection: 0x00BD8C60 / 0x00BD8E40. This current
-    /// sphere adapter uses the existing fight volume path; the original
-    /// fast-flight narrow-phase remains to be established before integration.
+    /// Shell collision projection: 0x00BD8C60 / 0x00BD8E40. A moving
+    /// sphere becomes a capsule from its current to previous world point
+    /// (0x00BD8FA1..0x00BD9057, vf113 0x00BCC870, joint -2 identity
+    /// 0x00CCE190). The special world-hit +0x2704 bit 4 branch is excluded.
     pub fn volumes(&self, data: &ArrowData) -> Vec<AttackVolume> {
         if !self.alive {
             return Vec::new();
@@ -353,6 +354,16 @@ impl Arrow {
         );
         for volume in &mut volumes {
             volume.row = data.project_attack(volume.row, self.distance);
+            let delta = std::array::from_fn::<_, 3, _>(|k| self.position[k] - self.previous_position[k]);
+            if delta.iter().map(|v| v * v).sum::<f32>() > f32::EPSILON {
+                if let Volume::Sphere { c, r } = volume.volume {
+                    volume.volume = Volume::Capsule {
+                        p0: c,
+                        p1: std::array::from_fn(|k| c[k] - delta[k]),
+                        r,
+                    };
+                }
+            }
         }
         volumes
     }
