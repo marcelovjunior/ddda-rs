@@ -10,9 +10,10 @@ fn installed_skill_banks_and_shells() {
     let file = ddexe::ExeFile::next_to(native).unwrap();
     let sword = ArisenData::fighter(&vfs).unwrap();
     let mage = ArisenData::mage(&vfs).unwrap();
-    let skills = SkillSet::load(&vfs, &file.image().unwrap(), &sword, &mage).unwrap();
+    let strider = ArisenData::strider(&vfs).unwrap();
+    let skills = SkillSet::load(&vfs, &file.image().unwrap(), &sword, &mage, &strider).unwrap();
 
-    assert_eq!(skills.0.len(), 4);
+    assert_eq!(skills.0.len(), 5);
     for id in [41, 43, 210, 212] {
         let mut sim = ddsim::Sim::new(Default::default());
         sim.add_player(0, [0.; 3], 0.);
@@ -117,5 +118,83 @@ struct Flat;
 impl ddsim::Ground for Flat {
     fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
         Some(0.)
+    }
+}
+
+#[test]
+fn installed_scarlet_kisses_plays_native_phases_and_cost_edges_for_each_owner() {
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    assert!(
+        native.exists(),
+        "installed gate requires the player's installation"
+    );
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let file = ddexe::ExeFile::next_to(native).unwrap();
+    let sword = ArisenData::fighter(&vfs).unwrap();
+    let mage = ArisenData::mage(&vfs).unwrap();
+    let strider = ArisenData::strider(&vfs).unwrap();
+    let skills = SkillSet::load(&vfs, &file.image().unwrap(), &sword, &mage, &strider).unwrap();
+    let skill = &skills.0[&152];
+    let ddsim::skills::Kind::DaggerSeries {
+        rate, maximum_cycles, ..
+    } = skill.definition.kind
+    else {
+        panic!("Scarlet Kisses has no native series definition")
+    };
+    assert!(rate > 0.0 && maximum_cycles >= 1);
+    for motion in [0x71e, 0x71f, 0x726, 0x727, 0x720] {
+        assert!(skill.definition.motions[&motion].frame_count > 1);
+    }
+    assert!(skill.magic.is_none() && skill.spell.is_none());
+    for owner in [0, 1] {
+        let other = 1 - owner;
+        let mut sim = ddsim::Sim::new(Default::default());
+        sim.add_player(0, [0.0; 3], 0.0);
+        sim.add_player(1, [1000.0, 0.0, 0.0], 0.0);
+        skills.install(&mut sim);
+        for seat in [0, 1] {
+            let p = sim.player_mut(seat).unwrap();
+            p.weapon = ddsim::Weapon::Dagger;
+            p.skills.equipped[0] = Some(152);
+        }
+        let initial = sim.player(owner).unwrap().stamina;
+        sim.request_skill(owner, 0);
+        let mut sequence = Vec::new();
+        let mut debits = 0.0;
+        let mut previous_stamina = initial;
+        for tick in 0..4000 {
+            sim.step(1.0 / 120.0, &Default::default(), &Flat);
+            let p = sim.player(owner).unwrap();
+            if previous_stamina - p.stamina > skill.definition.cost * 0.5 {
+                debits += previous_stamina - p.stamina;
+            }
+            previous_stamina = p.stamina;
+            if let Some(active) = p.skills.active {
+                if sequence.last() != Some(&active.motion) {
+                    sequence.push(active.motion);
+                }
+            } else if tick > 0 {
+                break;
+            }
+        }
+        // B23F10: one press plays intro -> one strike -> end. It does not
+        // silently repeat, fire a spell, or charge another stable owner.
+        assert_eq!(sequence, [0x71e, 0x71f, 0x720]);
+        assert!(sim.player(owner).unwrap().skills.active.is_none());
+        assert!(sim.player(owner).unwrap().skills.released.is_empty());
+        let mut falling_edges = 0;
+        for motion in sequence {
+            let root = &skill.definition.motions[&motion];
+            let mut previous = 0;
+            for frame in 0..root.frame_count {
+                let current = root.event_bits(1, frame as i32, frame as i32);
+                falling_edges += usize::from(ddskill::magic::weapon_cost_edge(previous, current));
+                previous = current;
+            }
+        }
+        assert!(falling_edges > 0, "native dagger bank has no cost edge");
+        assert!((debits - falling_edges as f32 * skill.definition.cost).abs() < 0.1);
+        assert_eq!(sim.player(other).unwrap().stamina, initial);
+        assert!(sim.player(other).unwrap().skills.active.is_none());
     }
 }

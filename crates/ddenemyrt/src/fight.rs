@@ -77,7 +77,7 @@ impl FightData {
         let bow = BowData::load(vfs)?;
         strider.body.banks.resize(10, None);
         strider.body.banks[9] = Some(bow.player_bank.clone());
-        let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
+        let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage, &strider)?;
         let player_adjust = adjust(ADJUST_PARAMS)?.0;
         Ok(FightData {
             arisen,

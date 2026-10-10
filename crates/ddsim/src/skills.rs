@@ -7,6 +7,15 @@ use std::collections::HashMap;
 pub enum Kind {
     /// Broad Cut and Tusk Toss: vf06 B3E290 / B3E9A0.
     Sword { motion: u16 },
+    /// Scarlet Kisses base-level phases (0x00B23F10). Parameters are read
+    /// from m_pl000_Dagger, rather than copied from that resource.
+    DaggerSeries {
+        intro: u16,
+        strikes: [u16; 3],
+        end: u16,
+        rate: f32,
+        maximum_cycles: u32,
+    },
     /// Ground cast, base level, no manual targeting/chant sharing yet.
     Spell {
         start: u16,
@@ -28,6 +37,7 @@ pub struct Definition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    Intro,
     Strike,
     Chant,
     Release,
@@ -42,6 +52,10 @@ pub struct Active {
     pub elapsed: f32,
     pub previous_cost_word: u32,
     pub paid: bool,
+    /// cPlActWpnDaggerCstmHyakuretsu +0x74/+0x78/+0x7C.
+    pub cycles: u32,
+    pub presses: u32,
+    pub variant: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -71,6 +85,20 @@ impl Sim {
         }
         if let Some(slot) = p.skills.request.take() {
             let id = p.skills.equipped.get(slot).copied().flatten();
+            // 0x00B242CE/AC6320: only presses of this action's mapped
+            // equipped input during its strike phase count toward repeats.
+            // Intro presses are not carried into the first strike.
+            if let Some(active) = p.skills.active.as_mut() {
+                if id == Some(active.id)
+                    && active.phase == Phase::Strike
+                    && self
+                        .skill_definitions
+                        .get(&active.id)
+                        .is_some_and(|d| matches!(d.kind, Kind::DaggerSeries { .. }))
+                {
+                    active.presses = active.presses.saturating_add(1);
+                }
+            }
             // Until cancel slots are traced, do not let a key press bypass
             // an existing basic attack or staff-shot action.
             let available = p.state.on_ground_for_attacks()
@@ -80,6 +108,7 @@ impl Sim {
                     if d.weapon == p.weapon {
                         let (phase, motion) = match d.kind {
                             Kind::Sword { motion } => (Phase::Strike, motion),
+                            Kind::DaggerSeries { intro, .. } => (Phase::Intro, intro),
                             Kind::Spell { start, .. } => (Phase::Chant, start),
                         };
                         p.skills.active = Some(Active {
@@ -89,6 +118,9 @@ impl Sim {
                             elapsed: 0.,
                             previous_cost_word: 0,
                             paid: false,
+                            cycles: 0,
+                            presses: 0,
+                            variant: 0,
                         });
                         p.state = State::Wait;
                         p.frame = 0.;
@@ -119,13 +151,18 @@ impl Sim {
             return false;
         };
         let from = p.frame;
-        let to = from + dt;
+        let rate = match (kind, active.phase) {
+            (Kind::DaggerSeries { rate, .. }, Phase::Intro | Phase::Strike) => rate,
+            _ => 1.0,
+        };
+        let to = from + dt * rate;
         let word = motion.event_bits(0, to as i32, to as i32);
         let cost_word = motion.event_bits(1, to as i32, to as i32);
         let done = word & attack::ACTION_END_BIT != 0 || to >= motion.period();
+        let loop_terminal = to >= motion.period();
         // Reuse the collision-aware ground movement. It selects this
         // player's skill motion through `playing`, not another seat's bank.
-        self.ground_move(i, State::Wait, ground, dt);
+        self.ground_move_clock(i, State::Wait, ground, dt, dt * rate);
         let p = &mut self.players[i];
         if p.state != State::Wait {
             p.skills.active = None;
@@ -137,7 +174,49 @@ impl Sim {
         active.elapsed += dt;
         let mut next = None;
         let mut finish = false;
+        if matches!(kind, Kind::DaggerSeries { .. }) {
+            // B60F10/B60F70 charge the actual motion's group-1 bit-30
+            // falling edge. New motions reset that event history.
+            if !active.paid
+                && (cost_word ^ active.previous_cost_word) & active.previous_cost_word & (1 << 30) != 0
+            {
+                Self::spend(p, cost);
+                active.paid = true;
+            }
+            active.previous_cost_word = cost_word;
+        }
         match (kind, active.phase) {
+            // Translated from 0x00B23F10 (DDDA.exe 2017-12-13 Steam):
+            // phases 1/2/3, +74 completed cycles, +78 pressed edges and
+            // +7C variant. Native target-turn helper B24330 is not yet
+            // translated; this slice keeps the host-provided start facing.
+            (Kind::DaggerSeries { strikes, .. }, Phase::Intro) if done => {
+                next = Some((Phase::Strike, strikes[0]));
+                active.presses = 0;
+            }
+            (
+                Kind::DaggerSeries {
+                    strikes,
+                    end,
+                    maximum_cycles,
+                    ..
+                },
+                Phase::Strike,
+            ) => {
+                // B240E2 uses 10570F0 (the actual loop terminal), rather
+                // than the action-end sequence counter used by intro/end.
+                // The endpoint comes from this installed LMT motion.
+                if loop_terminal {
+                    active.cycles += 1;
+                    if active.cycles < maximum_cycles && active.presses >= 2 {
+                        active.variant = (active.variant + 1) % strikes.len();
+                        next = Some((Phase::Strike, strikes[active.variant]));
+                    } else {
+                        next = Some((Phase::End, end));
+                    }
+                    active.presses = 0;
+                }
+            }
             (Kind::Sword { .. }, Phase::Strike) => {
                 // Translated from B60F10/B60F70: group 1 bit 30 FALLS.
                 if !active.paid
@@ -182,6 +261,10 @@ impl Sim {
             _ => {}
         }
         if let Some((phase, motion)) = next {
+            if matches!(kind, Kind::DaggerSeries { .. }) {
+                active.previous_cost_word = 0;
+                active.paid = false;
+            }
             active.phase = phase;
             active.motion = motion;
             p.frame = 0.;

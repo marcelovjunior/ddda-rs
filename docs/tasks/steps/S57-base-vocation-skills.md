@@ -115,7 +115,7 @@ overwrites. Their names are:
 - `installed_free_skill_grants_preserve_custom_empty_slots_and_independent_characters`
 - `installed_active_skill_refresh_preserves_primary_tail_under_empty_secondary_slots`
 
-**Native action tracing, not yet a port:** Blink Strike starts motion
+**Native action tracing:** Blink Strike starts motion
 `0x729` (`0x00b3dbd0`) and uses real travel distance plus installed sword
 adjust limits in `0x00b3de40`; Scarlet Kisses has start `0x71e`, strike
 `0x71f`, end `0x720` and input/motion-completion-driven repeat variants
@@ -125,6 +125,33 @@ finishes on that installed motion's actual completion
 operation, called with installed shield adjustment values. The layer-9
 bank must remain distinct from the primary layer-7 bank. No stand-in
 motion, guessed timing, or attack effect has been installed.
+
+**Scarlet Kisses source port, UNRUN:** the runtime now loads skill 152's
+own dagger bank and stamina row, uses the installed dagger adjustment
+`0xC` as animation rate and `0xA` as maximum cycles, and follows native
+`0x00b23f10` intro/strike/end decisions. Two matching skill presses during
+a strike permit the next variant; intro presses do not count. The
+animation clock is separate from collision/physics time; the default
+rate path remains 1.0. Motion completion comes from the installed LMT
+endpoint and authored action-end events, with no invented duration.
+Native target-turn helper `0x00b24330` remains untranslated: the action
+currently retains the host-supplied starting facing. Hit/damage against
+the original and the whole S57 gate remain OPEN. Added regression source:
+
+- `ground_motion_clock_one_preserves_default_and_rate_changes_only_motion`
+- `scarlet_kisses_requires_two_strike_presses_and_keeps_other_seat_independent`
+- `scarlet_kisses_repeat_variants_stop_at_resource_cycle_limit`
+- `installed_scarlet_kisses_plays_native_phases_and_cost_edges_for_each_owner`
+
+**Support-effect receipt trace, not yet a port:** `0x00887360` delivers
+queued messages to actor vf98 during pass C and then frees them. Anodyne's
+message `0x10` accumulates HP in `0x00b79fc0`; `0x00b5c3b0` applies that
+gain on the next update using the global simulation/WorkRate delta.
+`0x00b7a960` caps ordinary positive healing at saved white HP minus current
+HP. Shield Summons message `0x22` routes from enemy `0x00aac5a0` to
+`0x00aaca80`: ordinary goblin kind 5 receives additive evaluation type 5,
+separate from distance influence type 4. No forced target or damage has
+been substituted for that effect.
 
 Threefold Arrow's base-level native selector `0x00b16dc0` joins the runtime
 triples at `0x014f1910` to `rBowActParamList`: skill 350, learned level 1

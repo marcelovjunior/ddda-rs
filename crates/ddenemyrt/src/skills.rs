@@ -24,6 +24,7 @@ impl SkillData {
         let motion = match self.definition.kind {
             Kind::Spell { release, .. } => release,
             Kind::Sword { motion } => motion,
+            Kind::DaggerSeries { strikes, .. } => strikes[0],
         };
         let root = &self.definition.motions[&motion];
         let frame = (0..root.frame_count)
@@ -46,13 +47,14 @@ impl SkillData {
 pub struct SkillSet(pub HashMap<u32, SkillData>);
 
 impl SkillSet {
-    /// The four supported base-level skills. Selection is a runtime support
+    /// Supported base-level skills. Selection is a runtime support
     /// list, not an unlock grant: equipped slots are supplied separately.
     pub fn load(
         vfs: &ddvfs::Vfs,
         exe: &ddexe::Exe<'_>,
         sword: &ArisenData,
         mage: &ArisenData,
+        strider: &ArisenData,
     ) -> Result<Self, String> {
         let tables = ExeTables::from_image(exe).map_err(|e| e.to_string())?;
         let magic = MagicList::parse(&load::read(
@@ -73,9 +75,27 @@ impl SkillSet {
             "rPlAbilityParam",
         )?)
         .map_err(|e| e.to_string())?;
+        let dagger_stamina = ddparam::Stamina::from_bytes(&load::read(
+            vfs,
+            r"param\pl\stamina\PlStamina_Dagger",
+            "rPlStamina",
+        )?)
+        .map_err(|e| e.to_string())?;
+        let dagger_adjust = ddcombat::damage::Adjust::parse(&load::read(
+            vfs,
+            r"param\pl\other\m_pl000_Dagger",
+            "rAdjustParam",
+        )?)
+        .ok_or("bad dagger adjustment table")?;
         let mut out = HashMap::new();
-        for id in [41u32, 43, 210, 212] {
-            let (category, first, base) = if id < 100 { (1, 40, sword) } else { (5, 210, mage) };
+        for id in [41u32, 43, 152, 210, 212] {
+            let (category, first, base) = if id < 100 {
+                (1, 40, sword)
+            } else if id < 210 {
+                (4, 150, strider)
+            } else {
+                (5, 210, mage)
+            };
             let entry = &tables.motion_lists[category][(id - first) as usize];
             let bank = load::bank(vfs, &entry.path)?;
             let mut body = base.body.clone();
@@ -105,6 +125,35 @@ impl SkillSet {
                 let proficiency = ability.entries[62].float_1;
                 (
                     Kind::Sword { motion },
+                    row.stamina * (100. - proficiency) * 0.01,
+                    None,
+                )
+            } else if id == 152 {
+                // Translated from 0x00B23F10 (DDDA.exe 2017-12-13 Steam).
+                // Base level: adjust 0xC playback rate, 0xA repeat limit.
+                let rate = *dagger_adjust.0.get(0xC).ok_or("no dagger motion rate")?;
+                let maximum = *dagger_adjust.0.get(0xA).ok_or("no dagger cycle limit")?;
+                if !rate.is_finite()
+                    || rate <= 0.0
+                    || !maximum.is_finite()
+                    || maximum < 1.0
+                    || maximum > u32::MAX as f32
+                {
+                    return Err("unsupported dagger motion rate/cycle limit".into());
+                }
+                let row = &dagger_stamina.entries[(id - first) as usize];
+                if row.frame > 1.0 {
+                    return Err("sustained dagger cost not supported".into());
+                }
+                let proficiency = ability.entries[62].float_1;
+                (
+                    Kind::DaggerSeries {
+                        intro: 0x71e,
+                        strikes: [0x71f, 0x726, 0x727],
+                        end: 0x720,
+                        rate,
+                        maximum_cycles: maximum as u32,
+                    },
                     row.stamina * (100. - proficiency) * 0.01,
                     None,
                 )
