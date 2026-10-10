@@ -114,6 +114,7 @@ without an "after" can run in parallel, one agent each.
 | S52 | pawn chatter: Rook's lines (CMC messages, voices) | S36 |
 | S53 | when the Arisen falls: death, pawn revival, game over, retry | S48 |
 | S54 | **the rescue and friendly fire: what protects Reynard?** | - |
+| S55 | seats and profiles: leave/rejoin without inheriting state; LAN late join | S51, S44 |
 
 Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19, S23, S25, S26, S28, S29, S33; S32 source merged (route gate open); S37 core (head). S18 (cyclops) is ON HOLD.
 
