@@ -1145,3 +1145,47 @@ remains opt-in; **no image, performance or default-promotion gate is
 claimed yet**. Next: both bounded x1 captures with this one pin/checkpoint,
 no concurrent Cargo/CPU diagnostic, then inspect both actual images and
 telemetry before any promotion decision.
+
+### Matched finite extent OFF/ON completed; keep opt-in
+
+Both x1 GPU-builder/Vulkan/1920x1080 captures used the executable and new
+canonical checkpoint hashes above, default compact palettes and identical
+geometry/material/quality/camera arguments. Only finite extent changed:
+OFF absent, ON `1`, recorded in each private case manifest. No Cargo or
+native diagnostic overlapped either capture. OFF session92269/PID33108
+actually exited0 after63.3138837 s; ON session19067/PID7360 actually
+exited0 after63.0371166 s. Both normal GPU leases were released only after
+the owned viewer was absent and original DDDA PID23408 was verified alive.
+
+Root personally inspected both actual PNGs. The same dressed Arisen,
+second body, terrain, trees, flag/cart, HUD and visible shadow boundaries
+are retained. This is one field pose, not a claim of every caster/view
+configuration or original-game rendering parity. The ON log confirms
+current stage100 and an installed caster extension of30000 cm; no fallback
+constant supplies it. The plan uses the new route-v2 checkpoint rather
+than an old capture mislabeled as current.
+
+| Warm report at elapsed seconds | OFF median/p95 ms | ON median/p95 ms |
+| --- | ---: | ---: |
+| 25 | 10.6 / 12.2 | 10.6 / 12.6 |
+| 30 | 10.8 / 11.7 | 10.5 / 11.2 |
+| 35 | 10.8 / 12.4 | 10.7 / 12.4 |
+| 40 | 10.9 / 12.5 | 10.6 / 12.5 |
+
+Mesh allocations1423, DD material allocations1975 and UI entities141
+match. Cross-view visible meshes fluctuate689..692 with actor animation;
+bin-unpacking compute invocations remain approximately48,500 in both.
+The four GPU telemetry samples covering the corresponding20..40 s windows
+show original-game 3D utilization0%. OFF graphics clocks2400..2460 MHz,
+ON2475..2550 MHz; both memory8501 MHz/P0. These clocks covary with the
+small wall-time difference, and p95 is not consistently better. **No
+frequency-independent speedup or default promotion is justified.**
+
+Private evidence prefix is
+`E:/ddda-re/notes/steps/s41/field-shadow-extent-{off,on}-e338193-r1`, with
+actual PNG/run/case/exit/PID/GPU/diagnostic files. No images or game records
+are committed. This is a fully tested/captured **opt-in experiment ready
+for head review**, not S41 completion or a demonstrated performance win.
+Next proposed performance target is the named preprocessing bind-group
+preparation cost; reducing this authored caster distance by eye would
+violate the research method. Source/runtime scope remains head's decision.
