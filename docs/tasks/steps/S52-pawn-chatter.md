@@ -30,13 +30,21 @@ text and voice from the install, sources documented.
 
 ## Results: core checkpoint, S52 still in progress
 
-Implemented and tested headless CMC readers/selectors in `ddpawnai::chatter`
-and the authored story `Request::PawnMessage`. This checkpoint does **not**
-complete S52: host composition, installed GUI/audio consumption, opening
-combat-list/low-HP producers and the bounded capture remain outstanding.
-The separate `ddhost/pawn_chatter.rs` adapter is source preparation and has
-not been compiled or tested at this first checkpoint. The subsequent full
-core and viewer results are recorded below; actual capture is still pending.
+Implemented headless CMC selection, authored `Request::PawnMessage`, an
+admission-aware host/network producer and installed GUI/STRQ consumption.
+The latest core freeze `2612c06` integrates reviewed S53 main `6b621e6`
+(protocol 11): the full five-package gate actually passed 306 tests,
+including five new packed-voice/localized-name regressions and the prior
+17 follow-up checks. Earlier release-viewer gates and a genuine functional
+text capture passed; that capture exposed the two fidelity failures below.
+
+The packed voice reader and localized-name fix now have actual core
+validation. Fresh viewer tests/default-release build and a new verified pin
+are still required before root's audible-voice/localized-name capture.
+This is **not whole S52 Done**: remaining sensor/combat producers, low-HP
+and hire producers, broader native GUI behavior and voice pitch are open.
+The earlier checkpoint evidence below is historical, not a claim that its
+old viewer pin validates the latest voice/name source.
 
 Native sources (DDDA.exe 2017-12-13 Steam):
 
@@ -86,7 +94,8 @@ that rejection, and the full rerun passed. Private log:
 chatter `C248B4E0E7983374412430E03DC54220841ED990C5E8C46847305F325DE5B12D`,
 orders `86CB7694D08C457EEE22219874EFA776FC037B57232B62994DAEA6E1D208F2E6`.
 
-No original-game comparison or GUI/audio capture yet. Ghidra stayed down;
+At that initial core checkpoint there was no original-game comparison or
+GUI/audio capture. Ghidra stayed down;
 research used the private analysis exe with Capstone and installed-resource
 readers. No computer use, game control, save writes, installation writes or
 private assets were committed. Next action: compose the admitted-pawn host
@@ -94,7 +103,7 @@ adapter with the typed authored request, then installed native GUI/voice
 consumption; run full downstream tests and a release viewer build before
 requesting the single nearest-checkpoint capture from the GPU holder.
 
-### Follow-up source preparation (not compiled or tested)
+### Earlier follow-up preparation (subsequently validated)
 
 The next source batch adds host admission bindings, `FrameReport.pawn_messages`,
 reliable `ToClient::PawnMessage` with persistent-profile hearing and monotonic
@@ -368,10 +377,173 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
-Next action: parent reviews the fresh ce212d7 gate/pin, then root performs
-one bounded genuine-line capture from the regenerated route-v2
+At the ce212d7 gate, the next action was parent review followed by one
+bounded genuine-line capture from the regenerated route-v2
 `RescueApproach.ddhs` (SHA-256
 `CD6931B58EBA6B7A6674F4F80DAF39AB06C5EEFCA02A8A45F4F23CD94FA176AE`).
 Only the real `S52_CAPTURE_SAVED` callback and inspected PNG establish that
 presentation result. Earlier failures are preserved; no GPU work, original
-process control or capture has occurred in this agent's lane.
+process control or capture had occurred in this agent's lane at that gate.
+
+### Actual text capture and fidelity failures
+
+Root ran the reviewed ce212d7 private pin under its normal GPU lease,
+session 50673 / PID33272, and reported actual exit0 after 70.2268 seconds.
+The genuine host event was id1/frame13832/pawn-slot1/message1000. Its
+real positioned glyphs triggered `S52_CAPTURE_REQUEST` and the actual
+`S52_CAPTURE_SAVED` callback at 1280x720. Root, parent and this agent
+inspected the private PNG: the installed English line `Goblin!` is visible
+during the stage100/Sce1410 rescue fight. The PNG SHA-256 is
+`704C203CCBE3E4D3918EFF16DE8A20BA0A766AEE8E73C5DCD2D45A039C213732`.
+Capture logs, PNG and process proof remain private under
+`E:/ddda-re/notes/steps/S52/capture-ce212d7-20261010-112300`.
+
+This establishes functional text capture, with two fidelity failures:
+the name is Japanese despite English speech text, and voice playback failed
+because the selected stream was absent as a loose file. Neither localized
+name fidelity nor audible voice is PASS from this capture.
+
+### Packed voice backend (core tested, viewer/capture pending)
+
+The failing installed STRQ event0/selector0 resolves the exact path
+`sound\\stream\\pwn\\m1\\wave09\\pwn_9780_m1.sngw`. Native resource routing
+`0x00D0EC00` sends `.sngw` paths to a bank chosen by the six embedded short
+names at `0x01408C08..0x01408C44`, with the Japanese names considered first.
+The packed reader at `0x00D0EA80` checks magic `0x58284039`, reads a count
+and 12-byte `(key, offset, length)` rows, searches the key and bounds reads
+to that payload. Its hash `0x00D01B60`, seeded with -1 at `0x00D0EB33`,
+uses exact relative path bytes including backslashes and extension, without
+case folding or a final complement. The reflected polynomial is confirmed
+by native table word `0x014077C0 = 0xEDB88320`.
+
+A bounded private index probe found the exact key `0xEB961C30` in installed
+`rom/sound/pwn.pck`: row23962, offset729047513, length11799. A bounded
+64-byte header read identifies Ogg/Vorbis mono48000; no decoding or playing
+was performed by that probe. Thus the captured STRQ mapping is correct and
+the missing packed backend caused the voice failure.
+
+Head8326/8335 approved a new `mtsound::packed` module and one stream read
+site in `ddview/audio.rs`. It preserves the existing loose-file preference
+as explicit project compatibility policy, then uses native bank/hash routing
+when that file is absent. Native itself checks packed banks before its loose
+fallback. Reader allocation and malformed-index checks are safety policy;
+all index rows and compressed payloads remain installed. Three source-present
+regressions cover exact hash/routing/bounded selection, malformed indices and
+the installed captured cue decoded to finite nonzero PCM. All three actually
+passed in the full five-package gate recorded below, including full mtsound
+installation validation. Fresh downstream viewer/default-release gates and
+one actual audible-voice follow-up remain required.
+
+### Localized name lookup (core tested, capture pending)
+
+Chatter setup `0x00413DC9` calls `0x00B837B0` to derive the native party
+display index, then `0x00413DDE` calls `0x005DDE50` with force1. The returned
+display string is stored at request+14 (`0x00413DEF`) and supplied to the
+GUI at `0x0063335E`. Hired indices2/3 dispatch to `0x005DDF00`, whose
+`0x00767450` check searches five embedded shorts at `0x0155DAB8`:880..884.
+For these overrides Japanese uses the stored name, while other languages
+use the installed nickname GMD and the full `mNickname` index
+(`0x005DDF1D..0x005DDF2A`). Installed `nickname_eng` entry884 supplies the
+localized Rook name. No stock record, game resource or hardcoded display
+name is changed by this research. Normal-name metadata/platform branches
+and main-pawn stage-dependent name logic remain open.
+
+Head8373 approved the host producer and one existing `mtgmd` dependency.
+`DisplayNames` reads the five shorts from the installed exe and loads the
+available installed nickname tables by the traced language suffix. Host
+speech uses the same `self.data.rift` configured language index as its
+story-pawn builder, with that builder's existing English default when no
+RiftData is configured. Standalone `Runtime::step` preserves its English
+compatibility; the host calls the internal explicit-language entry point.
+The existing Message.name wire field carries the localized display string.
+No network format, stock builder or stored Edit is changed. Missing required
+localized indices suppress the unsupported emission and record a diagnostic;
+the native fallback string is untraced and no replacement is invented.
+
+Two additional source-present regressions exercise the hired/main/Japanese/
+English distinction, the native short-check versus full-index lookup,
+unavailable languages and the installed stock14/ledger504 record's emitted
+order reply under both Japanese and English without changing its saved Edit.
+These two and the three new packed reader regressions actually passed in
+the full gate below. The earlier 233-core/124-viewer gates do not validate
+this new source. No audible-voice or localized-name capture PASS has been
+claimed.
+
+### Full packed-voice/name core gate
+
+Only reviewed main `6b621e66f0b21a4916c5c1740a7750bc668f76c1` was integrated
+into the task branch, producing clean merge `a4efa2e`. First full session
+96282 actually exited outer1/Cargo101 with E0716 in the new installed-name
+test: the ledger borrowed a temporary VFS byte vector. No tests executed.
+Its first log is preserved privately as
+`full-core-a4efa2e-voice-name-first.private.log`, SHA-256
+`71E62A2048416EF8241FFC00C9DCBEA08CEC4801CA0B3B6479504E2659BCB195`.
+Correction `2612c06` only binds those ledger bytes locally before parsing;
+no production behavior or assertion was changed.
+
+At clean frozen `2612c067469908a895ed4f2683248e1ed8200e9b`, full
+`cargo test -p mtsound -p ddpawnai -p ddstory -p ddhost -p ddnet -- --test-threads=1`
+session 32582 actually exited **0** (both Cargo and outer process):
+**306 passed, 0 failed, 0 ignored, 64 successful summaries** comprising
+59 nonempty suites and five empty doc-test suites. The five new regression
+names and all prior 17 follow-up names were source-present and appeared
+exactly once as PASS. Protocol11 death/epoch/retry and reliable chatter
+tests passed. The canonical install and executable were available, no
+installation test was skipped, and the existing full sound-installation
+test itself passed in 99.81 seconds. Jobs2 used only the existing shared
+core target; normal build ownership was released after actual exit/proof.
+
+Private full log:
+`E:/ddda-re/notes/steps/S52/full-core-2612c06-voice-name-second.private.log`,
+SHA-256 `FC74B351AD9D4A4D2A9DF7DD1C03B5A5397B276B66015FF201413C80949C4EC5`.
+Separate new-five and prior-17 proofs retain their exact name manifests.
+Working source hashes were unchanged before/after the successful run:
+
+- packed reader: `175AC0E68B8F1A3E9D686720EE8239316AC4E0ADF2574E99508ED3A3C693CB1B`;
+- host chatter: `4BE001C23BACD08C1C93971F68B9836AE341DA4E2E37AF0C070B6267950DB560`;
+- viewer audio read site: `7FF6180DF548140BE507258BD52D1E54D2CC0FD54BD1D0ED98646DF5BA737ACE`.
+
+This proves installed packed-cue decoding to finite, nonzero mono48000 PCM
+and the localized installed Rook name policy without changing saved Edit.
+It does not establish actual audible playback or a new localized-name PNG.
+
+### Additional source-only producer and pitch findings
+
+No implementation or regression PASS is claimed for these findings.
+Actor phase `0x005AABD0` calls injury producer `0x005AB8E0` before copying
+current HP into previous-HP chatter field+114 at `0x005AAC30`. Damage is
+therefore measured over the preceding actor-update interval, not accumulated
+since the last spoken line. Fallback `0x005ABAD0` uses a strict normalized
+loss comparison to embedded 0.2, otherwise native health-tier probability
+and cooldown rows. Caller `0x005ABA57` can substitute the selected phrase
+using injury talk style `mUseSceneTalk[5]` (AI+198 is the six-word array
+base, not a header) and the runtime list at `0x017F3D78`, with another RNG
+draw. Exact runtime HP/AI flag adapters remain open; no fallback radius,
+invented phrase or low-HP producer was added.
+
+Save conversion `0x00780FA0` accepts saved voice byte+29 only below12
+(`0x00781CE7`), writes `cPlayerInfo.mVoiceType`+294 and selects an embedded
+pitch table by `(mGender & 1)*12 + voice`, writing signed `mVoicePitch`+298
+at `0x00781D2C`/`0x00781D48`. Invalid voice preserves prior type and pitch.
+The alternate table is specifically Japanese voice: native routing
+`0x00449992..0x004499B1` tests the same sSave/depot/option condition and
+selects `pwn_jp` format literal `0x0155D354`, versus ordinary `pwn` at
+`0x0155D384`. `0x0044DD20` returns that same condition. The saved byte is
+`mSystemData.mOption.mFlag2` at sSave+20E77B; `0x0048BEAA..0x0048BEE4`
+confirms its option-relative offset1F. sApp+2564 is set when the native
+Steam depot enumeration finds ID367505 (`0x00DF3113..0x00DF3183`).
+
+GUI `0x006333F9` reads the same pitch field; control opcode2A reaches
+stream resampler `0x00DCD280`. It clamps signed pitch to +/-1200, rounds
+to the nearest100 with ties away from zero, then computes target sample
+rate as `floor(rate * 2^(rounded_pitch/1200) + 0.5)`. Source scalar
+`0x0142ACC4`, base2 `0x0161CA50` and native positive-floor `0x012F0390`
+were checked. A bounded private static extractor reconstructed all48
+immediate table entries and initializer addresses, actual exit0; it neither
+emulated nor executed the original. Native resampling, pitch presentation
+and broader voice/language options remain unimplemented and open.
+
+Next action: parent review of the actual 306-test core evidence, then fresh
+full viewer tests/default-release build in its separately granted window.
+Root performs the subsequent bounded genuine-speech capture only from the
+verified new pin; audible voice and localized-name fidelity remain gated.

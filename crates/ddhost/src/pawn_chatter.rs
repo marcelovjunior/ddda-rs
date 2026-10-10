@@ -19,6 +19,7 @@ pub struct Data {
     pub situations: SituationTables,
     aliases: [[u32; 3]; 2],
     configs: BTreeMap<i32, Config>,
+    display_names: DisplayNames,
 }
 impl Data {
     pub fn load(vfs: &ddvfs::Vfs) -> Result<Self, String> {
@@ -45,12 +46,58 @@ impl Data {
                 *value = exe.u32(0x0153_D8B8 + group as u32 * 12 + slot as u32 * 4)?;
             }
         }
-        Ok(Self { orders: OrderTables::from_exe(&exe)?, aliases,
+        let display_names = DisplayNames::load(vfs, &exe)?;
+        Ok(Self { orders: OrderTables::from_exe(&exe)?, aliases, display_names,
             enemies: EnemyTables::from_exe(&exe)?, situations: SituationTables::from_exe(&exe)?, configs })
     }
 
     fn config(&self, message: i32) -> Config {
         self.configs.get(&message).copied().unwrap_or_else(|| Configs(Vec::new()).get(message))
+    }
+}
+
+/// Names are presentation data, never replacements for the saved Edit name.
+#[derive(Debug)]
+struct DisplayNames {
+    story_overrides: [u16; 5],
+    languages: BTreeMap<u32, Vec<String>>,
+}
+impl DisplayNames {
+    fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>) -> Result<Self,String> {
+        let mut story_overrides = [0;5];
+        // Five embedded shorts searched by 0x00767450. Keep the actual
+        // installed values; bulk nickname messages also remain installed.
+        for (index, value) in story_overrides.iter_mut().enumerate() {
+            *value = exe.u16(0x0155_DAB8 + index as u32 * 2).map_err(|error| error.to_string())?;
+        }
+        let mut languages = BTreeMap::new();
+        let kind = mtarc::type_hash("rGUIMessage");
+        for (language, suffix) in ddstory::event::LANGUAGES.iter().enumerate() {
+            // Native nickname format string at 0x0155C8FC; language suffixes
+            // reuse the traced table in ddstory::event::LANGUAGES.
+            let path = format!(r"id\message\common\nickname_{suffix}");
+            if vfs.find(&path).is_empty() { continue; }
+            let bytes = vfs.read(&path,kind)?;
+            let messages = mtgmd::MessageFile::parse(&bytes).map_err(|error| error.to_string())?;
+            if messages.language != language as u32 { return Err("nickname language header disagrees with configured index".into()); }
+            languages.insert(language as u32,messages.messages.iter().map(|text| (*text).to_owned()).collect());
+        }
+        Ok(Self { story_overrides, languages })
+    }
+
+    // Translated from hired display getter 0x005DDF00 -> 0x00767450
+    // (DDDA.exe 2017-12-13 Steam), specifically its five-short override.
+    // Other names depend on native name metadata/platform policy that this
+    // port does not yet model. Main-pawn stage-dependent naming is also OPEN.
+    fn name(&self, edit: &ddpawn::cmc::Edit, identity: &Identity, language: u32) -> Result<String,String> {
+        if language == 0 || !matches!(identity, Identity::Hired { .. })
+            || !self.story_overrides.contains(&(edit.nickname as u16)) {
+            return Ok(edit.name_str());
+        }
+        // 767450 compares CX, but 5DDF1D passes the FULL saved nickname to
+        // DDE5F0's zero-based lookup. Do not truncate the lookup to the short.
+        self.languages.get(&language).and_then(|messages| messages.get(edit.nickname as usize)).cloned()
+            .ok_or_else(|| format!("installed nickname missing: language{language} index{}; native fallback untraced", edit.nickname))
     }
 }
 
@@ -212,6 +259,14 @@ impl Runtime {
     pub fn step(&mut self, frame: u64, frames: f32, clock_runs: bool,
         pawns: &[Pawn<'_>], authored: &[ddstory::Request], enemies: &[EnemyEvent], situations: &[SituationEvent],
         audience: &[ProfileId]) -> Vec<Message> {
+        // Compatibility for standalone adapters: same English default as
+        // Host::story_stock without RiftData. Host passes its real setting.
+        self.step_localized(1, frame, frames, clock_runs, pawns, authored, enemies, situations, audience)
+    }
+
+    fn step_localized(&mut self, language: u32, frame: u64, frames: f32, clock_runs: bool,
+        pawns: &[Pawn<'_>], authored: &[ddstory::Request], enemies: &[EnemyEvent], situations: &[SituationEvent],
+        audience: &[ProfileId]) -> Vec<Message> {
         use ddpawn::rift::PawnRng;
         let Some(data) = self.data.clone() else { return Vec::new(); };
         self.bindings.retain(|slot, binding| pawns.iter().any(|pawn|
@@ -311,10 +366,14 @@ impl Runtime {
         let Some(selected) = self.queue.step(frames, clock_runs, |_| true,
             || chatter::random_unit(self.rng.next_u32())) else { return Vec::new(); };
         let Some(pawn) = pawns.iter().find(|pawn| pawn.slot == selected.speaker) else { return Vec::new(); };
+        let name = match data.display_names.name(&pawn.record.edit, &pawn.identity, language) {
+            Ok(name) => name,
+            Err(error) => { self.error(error); return Vec::new(); }
+        };
         self.next_id = self.next_id.checked_add(1).expect("host speech ID exhausted");
         vec![Message { id: self.next_id, frame, pawn_slot: pawn.slot,
             pawn_seat: pawn.seat, pawn_identity: pawn.identity.clone(), message: selected.message as u32,
-            name: pawn.record.edit.name_str(), gender: pawn.record.edit.get("mGender").unwrap(),
+            name, gender: pawn.record.edit.get("mGender").unwrap(),
             voice: pawn.record.edit.get("mVoice").unwrap(), audience: audience.to_vec() }]
     }
 }
@@ -443,7 +502,9 @@ impl<D: ddstory::data::Data, W: crate::StoryWorld> crate::Host<D, W> {
         // adapter's clocks; per-actor locks gate ordinary actor fetch above.
         // Native global sound/main flags are not represented yet.
         let clock_runs = self.world.quest_camera_active().is_none();
-        self.pawn_chatter.step(self.frame, frames, clock_runs, &pawns, authored, enemies, situations, &audience)
+        // Same configured index used by the host's story-pawn builder.
+        let language = self.data.rift.as_ref().map_or(1, |data| data.language);
+        self.pawn_chatter.step_localized(language, self.frame, frames, clock_runs, &pawns, authored, enemies, situations, &audience)
     }
 }
 
@@ -451,6 +512,62 @@ impl<D: ddstory::data::Data, W: crate::StoryWorld> crate::Host<D, W> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn localized_hired_story_name_keeps_japanese_main_and_full_nickname_index() {
+        let mut messages: Vec<_> = (0..885).map(|i| format!("synthetic-name-{i}")).collect();
+        messages[884] = "synthetic-localized-name".into();
+        let names = DisplayNames { story_overrides: [880,881,882,883,884],
+            languages: BTreeMap::from([(1,messages)]) };
+        let mut edit = ddpawn::cmc::Cmc::initial().edit;
+        edit.set_name(b"synthetic-stored-name");
+        edit.nickname = 884;
+        let hired = Identity::Hired { hirer: ProfileId(41), rom_id: 0,
+            network_id: vec![], hired_at: 0 };
+        assert_eq!(names.name(&edit,&hired,1).unwrap(),"synthetic-localized-name");
+        assert_eq!(names.name(&edit,&hired,0).unwrap(),"synthetic-stored-name");
+        assert_eq!(names.name(&edit,&Identity::Main { profile: ProfileId(41) },1).unwrap(),"synthetic-stored-name");
+        assert!(names.name(&edit,&hired,6).is_err(),"unavailable language cannot silently use English");
+        edit.nickname += 1 << 16;
+        assert!(names.name(&edit,&hired,1).is_err(),"native short check does not truncate full GMD lookup");
+        edit.nickname = 879;
+        assert_eq!(names.name(&edit,&hired,1).unwrap(),"synthetic-stored-name","metadata-dependent ordinary names remain OPEN");
+    }
+
+    #[test]
+    fn installed_rook_chatter_uses_localized_nickname_without_mutating_saved_name() {
+        let root = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !root.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(&root).unwrap();
+        let info = ddpawn::RomPawnInfo::parse(&vfs.read(r"etc\editPattern\romPawnInfo",
+            mtarc::type_hash("rRomPawnInfo")).unwrap()).unwrap();
+        let mut record = info.records[14].clone();
+        assert_eq!(record.edit.nickname,884,"installed Rook stock uses the final native story-name override");
+        let ledger_bytes = vfs.read(r"etc\item\npclist",mtarc::type_hash("rNpcLedgerList")).unwrap();
+        let ledger = ddnpc::Ledger::parse(&ledger_bytes).unwrap();
+        let saved_name = ledger.entries.iter().find(|entry| entry.id == 504).unwrap().name_j;
+        record.edit.set_name(saved_name); // Native stock14 override796420.
+        record.info_ex_value[0] = 1000.0;
+        let before = record.edit.clone();
+        let data = Arc::new(Data::load(&vfs).unwrap());
+        let bytes = vfs.read(r"id\message\common\nickname_eng",mtarc::type_hash("rGUIMessage")).unwrap();
+        let expected = mtgmd::MessageFile::parse(&bytes).unwrap().message(record.edit.nickname).unwrap().to_owned();
+        assert_ne!(expected,record.edit.name_str(),"installed English name differs from saved Japanese name");
+        fn pawn(record: &ddpawn::cmc::Cmc, command: Command) -> Pawn<'_> {
+            Pawn { slot:1, seat:6, record, identity: Identity::Hired { hirer: ProfileId(41),
+                rom_id:record.rom_id, network_id:vec![], hired_at:0 }, living:true, ready:true, command, goal:None }
+        }
+        for language in [0,1] {
+            let mut runtime = Runtime::with_data(data.clone());
+            let audience = [ProfileId(41),ProfileId(42)];
+            assert!(runtime.step_localized(language,1,1.0,true,&[pawn(&record,Command::None)],&[],&[],&[],&audience).is_empty());
+            let events = runtime.step_localized(language,2,1.0,true,&[pawn(&record,Command::Go)],&[],&[],&[],&audience);
+            assert_eq!(events.len(),1);
+            assert_eq!(events[0].name,if language==0 { record.edit.name_str() } else { expected.clone() });
+            assert_eq!(events[0].audience,audience);
+        }
+        assert_eq!(record.edit,before,"display lookup cannot overwrite the native saved name");
+    }
     struct Flat;
     impl ddsim::Ground for Flat {
         fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> {
