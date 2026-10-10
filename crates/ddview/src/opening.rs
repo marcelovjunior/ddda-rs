@@ -687,6 +687,8 @@ impl Session {
         if let Some(demo) = &mut self.demo {
             demo.perf_route = true;
         }
+        // explicit --shots are kept: a route with screenshots is a labelled
+        // visual capture (main.rs), not a timing benchmark
     }
     /// Both endpoints supply the same installed gauge pose renderer.
     pub(crate) fn npc_gauge_actors(&self) -> Vec<GaugeActor> {
