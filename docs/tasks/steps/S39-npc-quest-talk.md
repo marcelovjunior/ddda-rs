@@ -90,8 +90,26 @@ actually passed (13.76 s, 7.43 s compile), including reconstruction without a
 second reward and old-save absence; the existing seven replay and two profile
 save/session tests also passed. No hardcoded q2:88 skip is used.
 
-The remaining work is viewer validation and an ordinary route. The opening
-adapter is written but not yet source-compiled in this checkpoint. Full route
+After clean main integration `34ea2f3` (including source-exact goblin rates
+`322456e`, S37/S33/S27), the source-compiled release viewer suite actually
+passed **70 tests, 2 existing ignored** (29.18 s compile, 11.53 s tests).
+The approved `QuickItems::npc_grant` mirrors only the host's typed item grant
+into the interacting local seat's S28 opening bag, using its installed item
+list; the new installed adapter test verifies another seat's bag is unchanged.
+Selection, reward-once decisions and q2:88 remain in the headless host. The
+existing split between host economy and viewer quick-use bags remains; general
+inventory unification and remote NPC-talk replication are outside this brief.
+
+Manual local NPC talk now keeps the seat through the text cursor and menu
+answers: E/number keys for seat0, numpad Enter/number keys for seat1. These
+bindings are viewer policy. The demo retains head's fight/heal/stats driver
+and adds ordinary thanks/repeat-talk steps before RoadWalk. It first waits
+for the actual NPC actor's authored Loop+Talk state (Reynard's 3074), then
+reads actual conversation12 lines; only host phase2 supplies q2:88 and item1058.
+After actual text end it talks again for conversation13. No timed flag or
+generic completion bypass is added. Head approved these demo steps in #4828.
+
+The remaining work is release build and an ordinary route. Full route
 acceptance still depends on head's normal
 combat driver and NPC combat body work; S32's three actual ordinary attempts
 did not reach its complete motion chain. No original-game comparison is
