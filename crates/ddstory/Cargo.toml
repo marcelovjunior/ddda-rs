@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddid = { path = "../ddid" }
 ddpawn = { path = "../ddpawn" }
 ddquest = { path = "../ddquest" }
 mtfsm = { path = "../mtfsm" }

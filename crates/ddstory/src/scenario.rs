@@ -329,7 +329,7 @@ pub struct Entry {
     pub mask: u32,
     pub prev: u32,
     /// End done (+0x24 bit 4).
-    ended: bool,
+    pub(crate) ended: bool,
 }
 
 impl Entry {
