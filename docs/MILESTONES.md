@@ -407,3 +407,31 @@ character-shadows, skill-vfx.
 
 Next: doors (codex-32), field detection rule (codex-1), NPC adapter in the
 opening (codex-31), route perf (codex-29).
+
+**Batch 2026-10-10 (head + Codex on Sol 6.1 with step tasks):**
+- **Process:** the Codex lane now runs on step tasks (`docs/tasks/steps/`,
+  S01-S28): one moderate problem each, with known facts and a done check;
+  head reviews, merges and writes the next ones from the Results.
+- **Classes:** the Strider (dagger list 0x014F86B8, AirS1/AirS2/AirL, rows
+  0x38-0x3A, cost 0x1BA, check 10 height 0x75; kit lvstrider + dagger
+  0x195); the weapon table's choice applies the vocation's kit
+  (`Host::apply_job_kit`) and starting weapons on the body. The bow is
+  traced (secondary list 0x014F8198, command 7 / bit 0x8, `cPlActWpnBow`
+  vtable 0x015E2F08) and queued (S25-S27).
+- **Combat in the opening:** the opening host has a fight; field cells'
+  gated enemy groups spawn into it; party HUD; the small-enemy gauge
+  (last damaged goblin, 450 frames, 0x0067C110); hired pawns (Rook) get a
+  body, a fight seat and their record's look.
+- **Cutscene faces:** skinned parts were culled by rest-pose bounds (S10,
+  S11: ear, hair, brows); the face's special constraints and their joint
+  order (S12, 0x00812330, 0x01054540..0x01054690).
+- **Opening flow:** the movie at q0000's awaited PlayEvent with the traced
+  skip input (S08, S16) and its subtitles (S19); field NPC admission
+  including the global (0,0) layouts (S13); the second Arisen dressed (S20).
+- **Cyclops (on hold with the Encampment):** action enter, placement HP/legs,
+  think driver, navigation services (S05, S06, S14, S17).
+- **Blocker found:** after ev15 the story waits for NPC 1's Guard TalkEnd
+  (S23, in progress: the authentic bb3290 fallback).
+- **Plan:** the prologue is for later; the dragon attack is required (S24);
+  the Encampment waits for the maintainer's playtest.
+- **Disk:** E: fell to 27 GB; the 43 GB stale debug target was removed.
