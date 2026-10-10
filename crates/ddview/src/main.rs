@@ -129,6 +129,10 @@ struct Args {
     perf: bool,
     /// Script the opening through the gate and a field cell boundary, without captures.
     perf_route: bool,
+    /// `--no-vsync` (implied by `--perf` / `--perf-route`): present without
+    /// waiting for the display, so frame times are not capped at its
+    /// refresh rate.
+    no_vsync: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -185,6 +189,7 @@ fn args() -> Args {
         light_from_data: false,
         perf: false,
         perf_route: false,
+        no_vsync: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -201,6 +206,7 @@ fn args() -> Args {
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
         if k == "--skip-intro" { a.skip_intro = true; continue; }
         if k == "--perf" { a.perf = true; continue; }
+        if k == "--no-vsync" { a.no_vsync = true; continue; }
         if k == "--perf-route" { a.perf_route = true; continue; }
         if k == "--probe" { stage::KEEP_MESHES.store(true, std::sync::atomic::Ordering::Relaxed); continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
@@ -608,12 +614,18 @@ fn main() {
         None => Color::srgb(0.55, 0.68, 0.85),
     };
     let perf_enabled = args.perf;
+    let no_vsync = args.no_vsync || args.perf || args.perf_route;
     let unattended = args.unattended;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ddview".into(),
                 resolution: WindowResolution::new(size.0, size.1),
+                present_mode: if no_vsync {
+                    bevy::window::PresentMode::AutoNoVsync
+                } else {
+                    bevy::window::PresentMode::AutoVsync
+                },
                 ..default()
             }),
             ..default()
