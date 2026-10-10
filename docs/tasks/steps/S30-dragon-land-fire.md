@@ -355,3 +355,22 @@ using the ushort at life+6; `0x010CD1C0` copies its byte2 into the particle's
 collision delay. `0x010F7190` advances travel with the old speed before
 adding acceleration. Production effect ownership, this actual scene query,
 and normal fire HP damage remain the next integration work.
+
+
+### Shared contact projection and full core acceptance
+
+Head approved this shared adapter on board6073. `ddsim::sweep::ground_contact`
+now projects the real axis-present flag and ground mode using the native
+`0x00885E30` masks: an enabled axis with `0x400` rejects contact; the
+ground-mode mask is `0x100003`, otherwise `3`. `Swept::grounded` retains
+its existing enabled-axis/non-ground-mode behaviour. Dragon delegates to
+the shared helper. The preceding scenery flags and actor update gate
+remain caller-owned; this does not invent terrain contact for NPCs.
+
+After integrating reviewed main7a5c414 (task HEAD e6f88ae), the complete
+`cargo test -p ddsim -p ddenemyrt -p ddhost` run finished with actual exit0:
+DDSIM79 passed, enemy164 passed/2 existing ignored, host95 passed. Compile
+35.19s. Private log: E:/ddda-re/notes/steps/S29/full-core-e6f88ae-contact.log.
+This accepts the point binding, path sampling, target identity and shared
+contact checkpoint; production fire and downstream viewer acceptance
+remain open. No new original-game comparison was performed.

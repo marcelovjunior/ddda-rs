@@ -406,8 +406,18 @@ impl Swept {
     /// derives from the result: a floor or slope met, unless the axis check
     /// found no ground.
     pub fn grounded(&self) -> bool {
-        self.met & NO_AXIS_GROUND == 0 && self.met & (FLOOR | SLOPE) != 0
+        ground_contact(true, self.met, false)
     }
+}
+
+/// Project the actual preceding scenery flags into the character's contact
+/// byte. Axis presence and ground mode are native actor facts, not inferred
+/// from an axis result of zero. The caller owns the actor's update gate.
+// Translated from uObjModel::vf90 0x00885E30
+// (DDDA.exe 2017-12-13 Steam).
+pub fn ground_contact(axis_enabled: bool, flags: u32, ground_mode: bool) -> bool {
+    if axis_enabled && flags & NO_AXIS_GROUND != 0 { return false; }
+    flags & if ground_mode { 0x10_0003 } else { FLOOR | SLOPE } != 0
 }
 
 /// The axis check: the category of the nearest triangle facing up that a
@@ -744,6 +754,20 @@ fn slide(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_contact_projection_distinguishes_disabled_axis_and_ground_mode() {
+        let mut result = Swept { position: [0.0; 3], met: FLOOR | NO_AXIS_GROUND,
+            floor_normal: None, axis: 0 };
+        assert!(!result.grounded(), "legacy player result retains its axis guard");
+        assert!(ground_contact(false, result.met, false));
+        assert!(!ground_contact(true, result.met, false));
+        result.met = 0x10_0000;
+        assert!(!result.grounded());
+        assert!(!ground_contact(true, result.met, false));
+        assert!(ground_contact(true, result.met, true));
+        assert!(!ground_contact(true, WALL | CEILING, true));
+    }
 
     /// A floor at y = 0 and a wall x = 100 (two triangles each).
     fn world(lo: V3, hi: V3, out: &mut Vec<Face>) {
