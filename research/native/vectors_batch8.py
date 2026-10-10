@@ -10,7 +10,7 @@ f2b = lambda f: struct.unpack("<I", struct.pack("<f", f))[0]
 FL = [0.0, -0.0, 1.0, -2.5, 3e9, 1e-38]
 cases = []
 for k in range(80):
-    img = bytearray(rnd.getrandbits(8) for _ in range(0x6000))
+    img = bytearray(rnd.getrandbits(8) for _ in range(0x7000))
     cat = rnd.choice([0, 2, 0x80, 0x82, 0xFFFFFFFF]); pending = rnd.choice([0, 0x40, 0x400, rnd.getrandbits(32)])
     struct.pack_into("<I", img, 0x44, S + OWN); struct.pack_into("<I", img, OWN, S + VT)
     struct.pack_into("<I", img, VT + 0x10, S + CODE)

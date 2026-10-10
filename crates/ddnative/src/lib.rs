@@ -16,6 +16,7 @@
 pub mod action;
 pub mod character;
 pub mod enemy;
+pub mod generated;
 pub mod model;
 pub mod particle;
 pub mod player_action;

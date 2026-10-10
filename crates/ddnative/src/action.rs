@@ -200,3 +200,41 @@ pub fn enemy_action_enter(act: &mut EnemyAction, owner_addr: u32, owner: &mut Ow
     }
     act.owner_74 = if owner_is_class() { owner_addr } else { 0 };
 }
+
+/// One argument of a motion entry's request: a constant from the code
+/// (an integer or a float's bit pattern) or a field of the action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionArg {
+    Const(u32),
+    Field(u32),
+}
+
+/// A "motion entry": an action `vf05` that runs its species' base entry and
+/// then makes one motion request on its owner (`[this+0x74]` vtable
+/// +0x90) with six arguments: motion id, two integers, three floats
+/// (as bit patterns). The per-class constants are in
+/// `generated::motion_entries` (research/native/gen_motion_entries.py).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotionEntry {
+    pub addr: u32,
+    pub base: u32,
+    pub args: [MotionArg; 6],
+}
+
+/// The owner's motion request (vtable +0x90), taking the raw argument words.
+pub trait MotionOwner {
+    fn request_motion(&mut self, args: [u32; 6]);
+}
+
+/// Runs a motion entry: `base` (the species' verified base entry), then the
+/// owner's motion request with the entry's arguments, fields read after
+/// the base ran.
+pub fn motion_entry(e: &MotionEntry, base: impl FnOnce(), field: impl Fn(u32) -> u32,
+    owner: &mut impl MotionOwner) {
+    base();
+    let args = e.args.map(|a| match a {
+        MotionArg::Const(v) => v,
+        MotionArg::Field(off) => field(off),
+    });
+    owner.request_motion(args);
+}
