@@ -455,7 +455,7 @@ impl EventPlayer {
                 p.camera.insert(path, b);
             }
         }
-        if let Some(m) = &p.msg {
+        for m in [Some(&p.main), p.msg.as_ref()].into_iter().flatten() {
             let mut files = vec![];
             for t in &m.sched.tracks {
                 if t.name == "MessageResourcePath" {
@@ -619,11 +619,39 @@ impl EventPlayer {
     }
 
     fn subtitle(&self) -> Result<Option<Subtitle>, Error> {
-        let Some(t) = &self.msg else { return Ok(None) };
-        let Some(&(_, n)) = t.units("uGUISubtitlesExt2").first() else {
-            return Ok(None);
-        };
+        for t in [self.msg.as_ref(), Some(&self.main)].into_iter().flatten() {
+            let units = [t.units("uGUISubtitlesExt2"), t.units("uGUISubtitlesExt")];
+            for (_, n) in units.into_iter().flatten() {
+                if let Some(subtitle) = self.timeline_subtitle(t, n)? {
+                    return Ok(Some(subtitle));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Evaluate subtitle tracks at an absolute scheduler frame. Movie
+    /// presentation uses its sound/video clock, with the same 30 Hz frame
+    /// units as normal event playback. This does not finish the event or
+    /// emit actor, camera or audio cues.
+    pub fn subtitle_at(&mut self, frame: f32) -> Result<Option<Subtitle>, Error> {
+        for t in [Some(&mut self.main), self.msg.as_mut()].into_iter().flatten() {
+            t.clock.frame = frame.clamp(0.0, t.sched.frames as f32);
+            t.step(0.0);
+        }
+        self.subtitle()
+    }
+
+    fn timeline_subtitle(&self, t: &Timeline, n: &str) -> Result<Option<Subtitle>, Error> {
         if !t.boolean(&format!("{n}.Subtitles.Visible")).unwrap_or(false) {
+            return Ok(None);
+        }
+        // Translated from 0x007263a0 (DDDA.exe 2017-12-13 Steam):
+        // Language is a bit mask, not a language index; 255 includes the
+        // opening movie's first eight languages. Constructor 0x00726490
+        // initializes each Subtitles.Language mask to zero.
+        let mask = t.int(&format!("{n}.Subtitles.Language")).unwrap_or(0) as u32;
+        if mask & (1u32 << (self.config.language & 31)) == 0 {
             return Ok(None);
         }
         let Some(label) = t.string(&format!("{n}.Subtitles.IndexName")) else {

@@ -7,6 +7,32 @@ use ddstory::event::{Cue, EventConfig, EventFrame, EventPlayer};
 use ddstory::scripted::ScriptedHost;
 use ddstory::{Request, Story};
 
+#[test]
+fn installed_movie_subtitles_follow_main_timeline_and_language_mask() {
+    use ddstory::data::Data;
+    let Some(data) = install() else { return };
+    let row = data.event_table().unwrap().rows.iter().position(|r| r.path == r"st100\ev00\st100ev00").unwrap();
+    let authored = r"id\message\event\st200ev99_jpn";
+    let english = data.resource(&ddstory::event::localize_path(authored, 1), "rGUIMessage").unwrap().unwrap();
+    let messages = mtgmd::MessageFile::parse(&english).unwrap();
+    let mut movie = EventPlayer::open(&data, row, EventConfig { language: 1, sex: 0, hour: 8, stage: 800 }).unwrap();
+    assert!(movie.msg.is_none(), "movie subtitle unit belongs to the main scheduler");
+    for (frame, label) in [(0.0, None), (119.0, None), (119.49, None), (119.5, Some("1")), (120.0, Some("1")), (299.0, Some("1")),
+                           (300.0, None), (554.0, None), (555.0, Some("0")), (818.0, Some("0")), (819.0, None)] {
+        let line = movie.subtitle_at(frame).unwrap();
+        assert_eq!(line.as_ref().map(|s| s.label.as_str()), label, "frame {frame}");
+        if let Some(line) = line { assert_eq!(line.text.as_deref(), messages.by_label(&line.label)); }
+    }
+    // Seeking backward re-evaluates set keys instead of retaining a later label.
+    assert_eq!(movie.subtitle_at(180.0).unwrap().unwrap().label, "1");
+    let mut excluded = EventPlayer::open(&data, row, EventConfig { language: 9, sex: 0, hour: 8, stage: 800 }).unwrap();
+    assert!(excluded.subtitle_at(180.0).unwrap().is_none(), "authored Language mask 255 excludes bit 9");
+    let mut german = EventPlayer::open(&data, row, EventConfig { language: 4, sex: 0, hour: 8, stage: 800 }).unwrap();
+    let de = german.subtitle_at(180.0).unwrap().unwrap();
+    assert!(de.text.as_ref().is_some_and(|s| !s.is_empty()));
+    assert_ne!(de.text.as_deref(), messages.by_label("1"));
+}
+
 fn install() -> Option<InstallData> {
     let np = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)
