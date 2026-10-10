@@ -2295,6 +2295,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         d.check = (now, p);
     }
     let step = d.step;
+    let elapsed = now - d.since;
+    let road_terminal = step == Step::RoadWalk && (s.world().quest_bit(2, 10)
+        || s.host.story.as_ref().is_some_and(|story| story.quest(3).is_some())
+        || elapsed > 300.0);
     if step == Step::Rescue {
         return demo_rescue(s, now);
     }
@@ -2302,6 +2306,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
     // a live goblin is within 10 m it fights with ordinary inputs (the
     // goblins run in and attack; an idle Arisen would die before Rescue).
     if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RescueApproach | Step::ThankReynard | Step::ReynardRepeat | Step::RoadWalk)
+        && !road_terminal
         && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
         && demo_goblin_near(s, 1000.0)
     {
@@ -2316,7 +2321,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         let st = &s.host.story.as_ref()?.stage;
         w.place(&st.scenarios).map(|(p, _)| Vec3::from(p))
     };
-    let target = match step {
+    let mut target = match step {
         Step::WeaponTable => place("cassardis: weapon table"),
         Step::RoomExit => place("cassardis: room exit"),
         Step::TalkQuina => s.npcs.get(&2).map(|n| n.1),
@@ -2367,11 +2372,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
     let d = s.demo.as_mut().unwrap();
     // A pending collision search must not hide a real quest outcome or
     // the demo's existing road deadline. These checks do not write flags.
-    if step == Step::RoadWalk && (w.quest_bit(2, 10) || quests.contains(&3)
-        || now - d.since > 300.0)
-    {
+    if road_terminal {
         d.planning = None;
         d.path.clear();
+        target = None;
     }
     // A closed hinged door changes the collision topology. A human would
     // press interact before trying to plan around it. Use the host's
