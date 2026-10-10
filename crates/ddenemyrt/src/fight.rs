@@ -407,8 +407,13 @@ impl Fight {
 
     /// Adds a goblin; returns its owner id.
     pub fn add_goblin(&mut self, pos: [f32; 3], yaw: f32) -> u32 {
+        self.add_goblin_placed(pos, yaw, Default::default())
+    }
+
+    /// Adds a goblin with its placement's stat rates.
+    pub fn add_goblin_placed(&mut self, pos: [f32; 3], yaw: f32, rates: crate::goblin::PlacementRates) -> u32 {
         let owner = self.allocate_enemy_owner();
-        self.goblins.push(Goblin::new(&self.data.goblin, owner, pos, yaw));
+        self.goblins.push(Goblin::placed(&self.data.goblin, owner, pos, yaw, rates));
         owner
     }
 

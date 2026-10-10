@@ -241,8 +241,40 @@ pub struct Goblin {
     pub fsm_error: Option<String>,
 }
 
+/// A placement's stat rates (`cSetInfoPawn`: `HP倍率設定の有無` /
+/// `HPの倍率`, `攻撃力倍率設定の有無` / `攻撃力の変化倍率`), copied to the
+/// unit by the set-info apply (vf08, 0x007A4BCD: +0x74/+0x7C -> unit
+/// +0x209E/+0x20A0, +0x75/+0x80 -> +0x20A4/+0x20A8). `None` = not set.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PlacementRates {
+    pub hp: Option<f32>,
+    pub attack: Option<f32>,
+}
+
+/// `uEm0100::vf33` (0x008CDD80) defaults for rates a placement did not
+/// set: HP x2 (0x014F9E04) and attack x1.3 (0x0161C874).
+pub const DEFAULT_HP_RATE: f32 = 2.0;
+pub const DEFAULT_ATTACK_RATE: f32 = 1.3;
+
 impl Goblin {
+    /// A goblin placed without stat rates (the vf33 defaults apply).
     pub fn new(data: &GoblinData, owner: u32, pos: [f32; 3], yaw: f32) -> Self {
+        Self::placed(data, owner, pos, yaw, PlacementRates::default())
+    }
+
+    /// A goblin with its placement's rates: the HP rate multiplies the
+    /// main pool's HP and maximum (0x00889040 on the first region of
+    /// actor+0x1D18), the attack rate becomes the attacker's multiplier
+    /// (actor+0x20A8, read by `enemy_attack` 0x0088B530).
+    pub fn placed(data: &GoblinData, owner: u32, pos: [f32; 3], yaw: f32, rates: PlacementRates) -> Self {
+        let hp_rate = rates.hp.unwrap_or(DEFAULT_HP_RATE);
+        let mut regions = data.regions.clone();
+        if let Some(main) = regions.first_mut() {
+            main.hp *= hp_rate;
+            main.hp_max *= hp_rate;
+        }
+        let mut attacker = data.attacker;
+        attacker.attack_mul = Some(rates.attack.unwrap_or(DEFAULT_ATTACK_RATE));
         Goblin {
             sensor_mask: 1,
             sensor_error: None,
@@ -268,10 +300,10 @@ impl Goblin {
             exp: data.exp,
             fighter: Fighter {
                 owner,
-                attacker: Attacker::Enemy(data.attacker),
+                attacker: Attacker::Enemy(attacker),
                 victim: Victim::Enemy {
                     defender: data.defender,
-                    regions: data.regions.clone(),
+                    regions,
                     rates: CollisionRates::default(),
                 },
                 attacks: vec![],
