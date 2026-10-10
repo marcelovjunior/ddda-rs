@@ -233,6 +233,8 @@ pub struct Morph {
     /// Base-model bones in file order (parents first): entity and parent
     /// index.
     pub bones: Vec<(Entity, Option<usize>)>,
+    /// Original dependency ranks: parents and constraint pivots first.
+    pub order: Vec<usize>,
     /// Per bone: its uCnsEdit records in order (body, then face).
     pub joint: Vec<Vec<Edit>>,
     /// uModel +0x60.
@@ -249,6 +251,8 @@ pub struct Morph {
 pub struct Edit {
     /// Semantic model joint ID, used by type-0xb's joint-2 exception.
     pub joint_id: u8,
+    /// Bone index of the semantic eye/ear pivot (0x00812330 +0xac).
+    pub pivot: Option<usize>,
     /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 human
     /// hand absolute size; 0xc remains approximated as plain.
     pub kind: u32,
@@ -271,14 +275,25 @@ pub struct Edit {
 fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
     let n = m.bones.len();
     let root = Mat4::from_scale(m.model_scale);
-    let mut world: Vec<Mat4> = Vec::with_capacity(n);
-    for i in 0..n {
+    let mut world = vec![Mat4::IDENTITY; n];
+    for &i in &m.order {
         let (e, parent) = m.bones[i];
         let local = joints.get(e).copied().unwrap_or_default();
         m.base[i] = local;
         let pw = parent.map_or(root, |p| world[p]);
         let mut w = pw * local.to_matrix();
         for e in &m.joint[i] {
+            if matches!(e.kind, 0xd..=0x10) {
+                let (z, y, x) = e.rotation.to_euler(EulerRot::ZYX);
+                let pivot = e.pivot.map(|p| world[p].to_cols_array());
+                if let Some(corrected) = ddlook::face_constraint::apply(
+                    e.kind, w.to_cols_array(), pw.to_cols_array(), pivot,
+                    e.offset.to_array(), e.scale.to_array(), [x, y, z],
+                ) {
+                    w = Mat4::from_cols_array(&corrected);
+                }
+                continue;
+            }
             let k = if e.kind == 0xb {
                 Vec3::from_array(ddlook::morph::human_absolute_axis_factors(
                     e.joint_id, e.scale.to_array(), e.child.to_array(), m.model_scale.to_array(), [
@@ -296,7 +311,7 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
             // column form W x T(offset) x R x S(k).
             w = w * Mat4::from_translation(e.offset) * Mat4::from_quat(e.rotation) * Mat4::from_scale(k);
         }
-        world.push(w);
+        world[i] = w;
     }
     // Only bones under an edit are written back: the TRS decomposition
     // would garble the others (mirrored bones, shear) for nothing.
@@ -552,10 +567,9 @@ pub fn spawn_assembled_hands(
                 (joint_entities[i], (x.parent != 255 && p < i).then_some(p))
             })
             .collect();
-        // Body edits (ddlook::morph), then face edits (ddlook::face; the eye
-        // joints' special types are not translated and are left out). Joint
+        // Body edits (ddlook::morph), then face edits (ddlook::face). Joint
         // 0x90 gets both; their order is *assumed*.
-        let joint = model
+        let joint: Vec<Vec<Edit>> = model
             .bones
             .iter()
             .map(|x| {
@@ -564,6 +578,7 @@ pub fn spawn_assembled_hands(
                 if let Some((_, m)) = body.and_then(|b| b.joints.iter().find(|(j, _)| *j == id)) {
                     v.push(Edit {
                         joint_id: id,
+                        pivot: None,
                         kind: m.kind,
                         scale: Vec3::from(m.scale),
                         child: Vec3::from(m.child),
@@ -571,11 +586,16 @@ pub fn spawn_assembled_hands(
                         rotation: Quat::IDENTITY,
                     });
                 }
-                if let Some(f) = face.iter().find(|f| f.id == id && ddlook::face::special_kind(id).is_none()) {
+                // 0x00812820 resets +0x61, then 0x0081e590/0x0081a7c0/
+                // 0x0081a700 activate nondefault records only. Preserve
+                // face_morph's gating; an absent identity edit stays off.
+                if let Some(f) = face.iter().find(|f| f.id == id) {
                     let r = f.rotation.map(f32::to_radians);
+                    let (kind, pivot_id) = ddlook::face_constraint::binding(id).unwrap_or((0, None));
                     v.push(Edit {
                         joint_id: id,
-                        kind: 0,
+                        pivot: pivot_id.and_then(|pivot| model.bones.iter().position(|b| b.anim_map_index == pivot)),
+                        kind,
                         scale: Vec3::from(f.scale),
                         child: Vec3::ONE,
                         offset: Vec3::from(f.offset),
@@ -587,7 +607,11 @@ pub fn spawn_assembled_hands(
             .collect();
         let base = model.bones.iter().map(|x| Transform::from_matrix(Mat4::from_cols_array(&x.local))).collect();
         let model_scale = body.map_or(Vec3::ONE, |b| Vec3::from(b.model_scale));
-        Morph { bones, joint, model_scale, base, attach }
+        let order = ddlook::face_constraint::order(
+            &bones.iter().map(|&(_, parent)| parent).collect::<Vec<_>>(),
+            &joint.iter().map(|edits| edits.iter().find_map(|edit| edit.pivot)).collect::<Vec<_>>(),
+        );
+        Morph { bones, order, joint, model_scale, base, attach }
     });
     commands.entity(root).insert(Playback {
         motion,
@@ -1151,6 +1175,51 @@ mod bounds_tests {
 
 #[cfg(test)]
 mod eyebrow_install_tests {
+    #[test]
+    fn eyelid_uses_later_mod_eye_pivot_without_accumulating_morphs() {
+        use super::*;
+        use bevy::ecs::system::SystemState;
+        let mut world = World::new();
+        let parent_pose = Transform::from_translation(Vec3::new(10.0, -5.0, 8.0))
+            .with_rotation(Quat::from_rotation_z(0.37)).with_scale(Vec3::new(1.3, 0.7, 1.1));
+        let eye_pose = Transform::from_translation(Vec3::new(1.0, 2.0, 3.0))
+            .with_rotation(Quat::from_rotation_z(0.4)).with_scale(Vec3::new(1.1, 0.8, 1.3));
+        let lid_pose = Transform::from_translation(Vec3::new(2.0, 3.0, 4.0))
+            .with_rotation(Quat::from_rotation_z(-0.2)).with_scale(Vec3::new(0.9, 1.2, 0.8));
+        let parent = world.spawn(parent_pose).id();
+        let eye = world.spawn(eye_pose).id();
+        let lid = world.spawn(lid_pose).id();
+        let mut morph = Morph {
+            bones: vec![(parent, None), (lid, Some(0)), (eye, Some(0))],
+            order: ddlook::face_constraint::order(&[None, Some(0), Some(0)], &[None, Some(2), None]),
+            joint: vec![vec![], vec![Edit {
+                joint_id: 82, pivot: Some(2), kind: 0xd,
+                scale: Vec3::new(1.2, 0.85, 1.1), child: Vec3::ONE,
+                offset: Vec3::new(0.2, -0.3, 0.5), rotation: Quat::IDENTITY,
+            }], vec![]],
+            model_scale: Vec3::ONE, base: vec![parent_pose, lid_pose, eye_pose], attach: vec![],
+        };
+        let mut state: SystemState<Query<&mut Transform>> = SystemState::new(&mut world);
+        let mut first = None;
+        for _ in 0..3 {
+            let mut joints = state.get_mut(&mut world).unwrap();
+            // Same motion-only restore as animate, before each morph pass.
+            for (i, &(entity, _)) in morph.bones.iter().enumerate() {
+                *joints.get_mut(entity).unwrap() = morph.base[i];
+            }
+            apply_morph(&mut morph, false, &mut joints);
+            let local = *joints.get(lid).unwrap();
+            let pose = parent_pose.to_matrix() * local.to_matrix();
+            // Full vf24 0x00860ac0 synthetic fixture: type d target position
+            // is independent of its rotation. This also checks pivot mapping.
+            assert!(pose.w_axis.truncate().distance(Vec3::new(12.238449, -2.356826, 13.115)) < 0.000_01);
+            if let Some(previous) = first {
+                assert_eq!(local, previous);
+            } else { first = Some(local); }
+            assert_eq!(morph.base[1], lid_pose);
+        }
+    }
+
     #[test]
     fn near_fade_restores_authored_material_and_does_not_change_its_source() {
         use super::*;

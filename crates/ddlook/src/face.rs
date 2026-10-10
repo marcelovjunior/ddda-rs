@@ -26,7 +26,7 @@
 //!    translation row and applies `W' = C x W` to the joint. The eye joints
 //!    get other types (0x00812330): 0x51 and 0x58 type 0x10, 0x52-0x57 and
 //!    0x59-0x5e type 0xd, 0xe2-0xe3 type 0xf, 0xe4-0xe9 type 0xe; those are
-//!    not translated ([`special_kind`]).
+//!    applied by [`crate::face_constraint`] when active ([`special_kind`]).
 
 use crate::Error;
 
@@ -260,8 +260,8 @@ const CONTROLLER_JOINTS: [(i16, i16); CONTROLLERS] = [
     (225, 232), (225, 233), (0, 0),
 ];
 
-/// The uCnsEdit type 0x00812330 gives an eye joint (not translated: the
-/// viewer leaves these joints alone). `None` for the plain type 0.
+/// The uCnsEdit type 0x00812330 gives an eye/ear joint. Configured active
+/// records are applied by `face_constraint`. `None` for the plain type 0.
 pub fn special_kind(id: u8) -> Option<u32> {
     match id {
         0x51 | 0x58 => Some(0x10),
