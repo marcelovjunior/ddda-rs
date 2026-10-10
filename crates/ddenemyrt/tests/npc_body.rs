@@ -15,6 +15,37 @@ fn center(v: &Volume) -> [f32; 3] {
 }
 
 #[test]
+fn installed_npc_inherits_actual_player_base_motion_registrations() {
+    let Some((vfs, file)) = installed() else { return };
+    let exe = file.image().unwrap();
+    let body = NpcBody::load(&vfs, &exe, 304, 304, 0, 0, 0).unwrap();
+    let ledger_bytes = vfs.read(r"etc\item\npclist", mtarc::type_hash("rNpcLedgerList")).unwrap();
+    let ledger = ddnpc::Ledger::parse(&ledger_bytes).unwrap();
+    assert_eq!(body.civilian, ledger.entries.iter().find(|npc| npc.id == 304).unwrap().civilian);
+    let mut entry = 0x014f_1d30;
+    let mut registered = Vec::new();
+    loop {
+        let key = exe.u32(entry).unwrap();
+        if key == u32::MAX { break; }
+        let bank = ((key >> 8) & 15) as usize;
+        let path = exe.cstr(exe.u32(entry + 4).unwrap()).unwrap();
+        let resource = body.body.banks[bank].as_ref().expect("inherited resource must be registered");
+        assert_eq!(resource.path, path);
+        assert!(resource.list.motions.iter().any(Option::is_some));
+        registered.push(bank);
+        entry += 8;
+    }
+    assert_eq!(registered, [0, 1, 2]);
+    assert!(body.body.banks[7].is_none(), "collision survey must not manufacture a motion bank7");
+    // The correction is independent of the authored NPC family banks.
+    for authored in [3226, 3270, 3271] {
+        let motion = body.resolve(authored).unwrap();
+        assert_eq!(motion.bank, 12);
+        assert!(body.body.motion(motion).is_some());
+    }
+}
+
+#[test]
 fn installed_reynard_authored_motions_pose_real_hurt_nodes() {
     let Some((vfs, exe)) = installed() else { return };
     let body = NpcBody::load(&vfs, &exe.image().unwrap(), 304, 304, 0, 0, 0).unwrap();

@@ -47,6 +47,32 @@ pub fn ordinary_region(vfs: &ddvfs::Vfs, game: &Adjust, hp_max: f32) -> Result<R
 // Translated from 0x00BBBFA0 (DDDA.exe 2017-12-13 Steam).
 pub const ORDINARY_NPC_HP: f32 = 1000.0;
 
+/// Native ordinary intel HP/max, independent of its materialized actor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntelHp { pub current: f32, pub maximum: f32 }
+
+impl Default for IntelHp {
+    fn default() -> Self { Self { current: ORDINARY_NPC_HP, maximum: ORDINARY_NPC_HP } }
+}
+
+impl IntelHp {
+    /// Ordinary intel vf05 applies the stored placement multiplier during
+    /// initialization. The saved-current flag+44F keeps damage intact;
+    /// maximum is still recomputed, not multiplied from its previous value.
+    /// Type1 at+3D0 skips this branch. Party and special-ID overrides that
+    /// follow it are not represented by this ordinary body helper.
+    // Translated from 0x00BBC4E0 at 0x00BBC70A..0x00BBC755
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn initialize(&mut self, intel_kind: u8, preserve_current: bool, rate: Option<f32>) {
+        if intel_kind == 1 { return; }
+        if let Some(rate) = rate {
+            let hp = ORDINARY_NPC_HP * rate;
+            if !preserve_current { self.current = hp; }
+            self.maximum = hp;
+        }
+    }
+}
+
 /// Defence of an ordinary NPC without a runtime stat override. NPCs use
 /// `uPlayerBase::vf68`, not the enemy defence curve. Its NPC class bit
 /// skips the equipment sum in 0x00B87450; the two addition arrays cleared
@@ -54,6 +80,64 @@ pub const ORDINARY_NPC_HP: f32 = 1000.0;
 // Translated from 0x0077FA50 and 0x00B7AD90 (DDDA.exe 2017-12-13 Steam).
 pub fn ordinary_defender() -> PlayerDefender {
     PlayerDefender::new(1.0, 1.0)
+}
+
+/// Last resolved damage owner class stored at uNpc+0x6F5C. Shell and
+/// other proxy ownership must be resolved before classifying these bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageOwnerClass { Player, Pawn, Npc, Enemy, Class4, Unknown }
+
+/// Host-selected policy shared by every NPC and every player seat.
+/// 0x0041E230 maps Steam country JP to0; only that native region enables
+/// the safeguard. The source's other regional modes all disable it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Region { Japan, #[default] Other }
+
+// Translated from uNpc::vf66 0x00BB6EC0 (DDDA.exe 2017-12-13 Steam).
+pub fn damage_owner_class(bits_206c: u8, bits_206d: u8, bits_206e: u8) -> DamageOwnerClass {
+    if bits_206d & 2 != 0 { DamageOwnerClass::Player }
+    else if bits_206d & 4 != 0 { DamageOwnerClass::Pawn }
+    else if bits_206d & 8 != 0 {
+        if bits_206e & 0x10 == 0 { DamageOwnerClass::Npc } else { DamageOwnerClass::Enemy }
+    }
+    else if bits_206c & 0x80 != 0 { DamageOwnerClass::Enemy }
+    else if bits_206d & 0x10 != 0 { DamageOwnerClass::Class4 }
+    else { DamageOwnerClass::Unknown }
+}
+
+/// Inputs to the civilian *lethal-hit* dispatch, not a general damage floor.
+/// `region` represents native DAT018750F0: JP returns0, US/default1,
+/// EU2 and AS3. It is not gameplay difficulty.
+#[derive(Debug, Clone, Copy)]
+pub struct CivilianDeathContext {
+    pub region: Region,
+    pub intel_type: Option<u8>,
+    pub human_enemy: bool,
+    pub ledger_civilian: Option<i8>,
+    pub damage_owner: DamageOwnerClass,
+    pub current_action: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CivilianSurvival {
+    pub hp: f32,
+    /// A request for cNpcActEscape; the scalar helper does not fabricate
+    /// navigation, a motion or completion of the previous authored graph.
+    pub action: Option<u32>,
+}
+
+/// Called only after real HP application reaches zero. Returning None
+/// takes ordinary uPlayerBase death; every native guard must be present.
+// Translated from uNpc::vf72 0x00BB7410 (DDDA.exe 2017-12-13 Steam).
+pub fn civilian_lethal_response(context: CivilianDeathContext) -> Option<CivilianSurvival> {
+    if context.region != Region::Japan || context.intel_type.is_some_and(|kind| kind != 0)
+        || context.human_enemy || context.ledger_civilian != Some(1)
+        || !matches!(context.damage_owner,
+            DamageOwnerClass::Player | DamageOwnerClass::Pawn | DamageOwnerClass::Class4) {
+        return None;
+    }
+    Some(CivilianSurvival { hp: 1.0,
+        action: (![0x0300_0044, 0xa6].contains(&context.current_action)).then_some(0x0300_0044) })
 }
 
 /// Convert the canonical NPC intel flags (+0x5C0, obtained by vf180
