@@ -803,3 +803,54 @@ path sampling, scenery queries and ordinary party damage remain open.
 Next action: integrate the verified inputs with their actual creation and
 update owners, preserving native RNG draw order and the existing generator
 gate before connecting collision samples to ordinary damage.
+
+### Next initialization batch prepared; not yet compiled or run
+
+After accepting main `21a4549`, instruction review of
+`0x010EC54C..0x010EC5FA` resolved generator vf07's four unconditional
+float-table draws. Its actual birth counter+44 advances before each
+lookup in installed table `0x01625420`, even for zero variation; path+48
+stays independent. Generator payload+40/+44 supplies runtime scalar+134;
++88/+8C, +90/+94 and +98/+9C supply auxiliary+1A0/+1A4/+1A8. Those
+auxiliary values must not replace the owning effect's axis scales in vf15.
+The reader now retains these installed ranges and the sampler consumes
+the existing `GeneratorCounters`, connecting the actual sampled scalar
+to the verified basis adapter without introducing another RNG policy.
+
+`generator_initialization_reads_real_ranges_and_consumes_four_birth_draws`
+is a new meaningful regression source: distinct range results, zero
+variation draw consumption, u32 rollover, unchanged path counter, actual
+scalar-to-basis composition and rejection of a nonfinite installed range.
+It is **uncompiled/unrun**. The prior189-pass gate belongs to `6db86fa`.
+Native initialization lifecycle/callback execution and production emission
+remain open. Next: coordinate the complete package gate after higher
+priority viewer/skill work, then bind the actual owner lifecycle and birth.
+
+The subsequent bounded creation audit resolves an essential intervening
+reset. `0x00E6E130` walks the effect's actual manager list+1F0, calling
+seed selection `0x010FA600`, then vf07, vf08 and vf14 in that order.
+Generator vf08 `0x010D7210 -> 0x010FA570` resets both counters after
+the four initialization draws and before allocation/path/birth. The
+sampled scalar stays retained. Thus the first birth must not simply
+continue at seed+4. The regression now also checks this reset and retained
+sample; no manager-list lifecycle port or native full-creation execution
+has been claimed. This source remains uncompiled/unrun.
+
+The initialization batch now passed its full package gate at frozen
+`b112b92b46083a31d436f3f9bb7f111ae3dbb0a8`. Session55381 and Cargo
+actually exited0 for complete `mteffect` and `ddenemyrt`, jobs2 on the
+existing core target: 192 passed, 0 failed, the same 2 ignored diagnostics,
+0 filtered, 33 summaries. Installed paths were explicitly canonical,
+no check reported SKIP, and all seven required names passed once,
+including the new initialization/range/read/reset regression. Test-summary
+durations totaled 107.94s. Source stayed clean with the same module hash;
+the core lease was released after actual completion.
+
+Private full log `full-generator-path-b112b92.private.log` SHA256:
+`64B13368A3FF81D18D3B5553873674981CAAF123B51E2132F1B45BDAC7141F40`.
+The earlier unrun labels describe this batch's preparation before this
+gate. The result verifies the new Rust sampler and installed range read;
+it does not execute the original full creation chain or establish a
+production emitter, real birth/world query, fire rendering or ordinary
+party damage. Next: connect the actual manager creation stages in native
+order, retaining the post-initialization counter reset before path/birth.
