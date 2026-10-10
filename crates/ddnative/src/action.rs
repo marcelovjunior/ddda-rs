@@ -131,3 +131,32 @@ pub fn construct_with_8c(memory: Option<&mut [u8]>, vtable: u32) -> bool {
     obj[0x8C..0x90].fill(0);
     true
 }
+
+/// `cPlActTired::vf09`, the action's message handler: message 0x11 sets
+/// the byte at +0x84, 0x12 the byte at +0x85; it returns 0 for every
+/// message (four stack arguments, only the first read).
+// Translated from 0x00ACC4A0 (DDDA.exe 2017-12-13 Steam), cPlActTired::vf09.
+pub fn tired_message(msg: u32, byte_84: &mut u8, byte_85: &mut u8) -> u32 {
+    match msg {
+        0x11 => *byte_84 = 1,
+        0x12 => *byte_85 = 1,
+        _ => {}
+    }
+    0
+}
+
+/// `cPlActWpnWandBase::vf10`: drops the dead unit references at +0x74 and
+/// +0x78 (see `unit::drop_dead_refs`), then the one at +0x1E4 unless its
+/// target's count at +0x50 is at most 0 (signed) and its byte at +0x4C is
+/// nonzero. `target` reads (count_50, byte_4c) of the +0x1E4 target.
+// Translated from 0x00B44FB0 (DDDA.exe 2017-12-13 Steam), cPlActWpnWandBase::vf10.
+pub fn wand_base_refs(refs_74_78: &mut [u32; 2], ref_1e4: &mut u32,
+    state_word: impl Fn(u32) -> u32, target: impl Fn(u32) -> (i32, u8)) {
+    crate::unit::drop_dead_refs(refs_74_78, state_word);
+    if *ref_1e4 != 0 {
+        let (count, flag) = target(*ref_1e4);
+        if count > 0 || flag == 0 {
+            *ref_1e4 = 0;
+        }
+    }
+}

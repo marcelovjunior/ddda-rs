@@ -271,3 +271,38 @@ fn every_drop_dead_refs_function_matches_the_original() {
         assert_eq!(refs, u32s(&c["out"]), "function {:#010x}: {c}", u(c, "addr"));
     }
 }
+
+#[test]
+fn tired_message_matches_the_original() {
+    let Some(cases) = vectors("tired_vf09") else { return };
+    for c in &cases {
+        let (mut b84, mut b85) = (u(c, "b84") as u8, u(c, "b85") as u8);
+        let ret = ddnative::action::tired_message(u(c, "msg"), &mut b84, &mut b85);
+        assert_eq!((ret, u32::from(b84), u32::from(b85)), (u(c, "ret"), u(c, "o84"), u(c, "o85")), "{c}");
+    }
+}
+
+#[test]
+fn npc_death_once_matches_the_original() {
+    let Some(cases) = vectors("npc_vf118") else { return };
+    for c in &cases {
+        let mut mark = u(c, "mark") as u8;
+        let got = ddnative::character::npc_death_once(&mut mark, u(c, "fat") as u8, u(c, "dead") as u8);
+        assert_eq!((u32::from(got), u32::from(mark)), (u(c, "al"), u(c, "omark")), "{c}");
+    }
+}
+
+#[test]
+fn wand_base_refs_match_the_original() {
+    let Some(cases) = vectors("wand_base_vf10") else { return };
+    for c in &cases {
+        let refs = u32s(&c["refs"]);
+        let states = u32s(&c["states"]);
+        let mut r2 = [refs[0], refs[1]];
+        let mut t = u(c, "t");
+        ddnative::action::wand_base_refs(&mut r2, &mut t,
+            |r| states[refs.iter().position(|&a| a == r).unwrap()],
+            |_| (u(c, "cnt") as i32, u(c, "flag") as u8));
+        assert_eq!(vec![r2[0], r2[1], t], u32s(&c["out"]), "{c}");
+    }
+}

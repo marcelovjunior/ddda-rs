@@ -104,3 +104,18 @@ pub fn player_joint3_position(map_byte3: u8, joints_364: u32,
     let row = if idx == 0xFF || joint == 0 { origin } else { joint_row(joint) };
     row.map(crate::x87_copy)
 }
+
+/// `uNpc::vf118`: reports an NPC's death once. Returns false if the
+/// once-mark at +0x5851 is already 1; otherwise, when the fatal latch
+/// +0x31ED or the dead marker +0x31EA is 1, sets the mark and returns true.
+// Translated from 0x00BB2150 (DDDA.exe 2017-12-13 Steam), uNpc::vf118.
+pub fn npc_death_once(mark_5851: &mut u8, fatal_31ed: u8, dead_31ea: u8) -> bool {
+    if *mark_5851 == 1 {
+        return false;
+    }
+    if fatal_31ed == 1 || dead_31ea == 1 {
+        *mark_5851 = 1;
+        return true;
+    }
+    false
+}
