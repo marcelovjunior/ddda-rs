@@ -583,6 +583,9 @@ impl Session {
                 p.drop_from = p.position[1];
             }
         }
+        // the hired pawns travel with the party (else their bodies stay at the
+        // old stage's coordinates and the field streams cells around them)
+        self.host.place_hired_pawns();
         if let Some(server) = &mut self.host.server {
             server.config.spawn = pos;
             if let Some(spot) = &mut server.config.spot {
