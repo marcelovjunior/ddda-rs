@@ -609,3 +609,51 @@ checkpoints are untouched. This keeps the pin's host schema reproducible
 when head regenerates canonical checkpoints for S51/ECON v2. Actual named
 system spans, bounded window/scope completeness and the largest bottleneck
 remain unverified until that diagnostic run. No renderer gain is claimed.
+
+### Actual cached spans restored; release system names require one more fix
+
+Head #6759 approved the corrected `35812f0` pin/frozen FieldWalk diagnostic
+run with the retained-handle harness. Own session 93854 **actually exited
+0**; owned PID 26260 was verified absent after **31.2239855 s**, while
+original 23408 remained running. The GPU lease was released immediately
+to root #6775. Root's independent headless compilation overlapped this
+x4 instrumented run by agreement: **all timings are contaminated diagnostic
+values and cannot be used as FPS acceptance or optimization gains**.
+
+Private `field-checkpoint-trace-35812f0.trace.json` is **835,125,572 bytes**.
+It records **474,080 actual system entries**, confirming the callback gate
+fixed the missing cached spans. Start/end markers are
+14.4022971 / 24.4082144 trace seconds (**10.0059173 s**). The committed
+streaming analyzer reports **no terminal open scopes** without an override
+and 575 complete frames in the trimmed 14.5–24.3 s interval. The normal
+numeric exit file was written by the hardened harness. No new screenshot
+was requested or fidelity assertion made for this diagnostic run.
+
+However, the actual **named-system gate failed**: every ordinary system
+name is `<Enable the debug feature to see the name>`. In Bevy 0.19.1,
+`bevy_utils::DebugName` erases function-derived names in release when its
+`debug` feature is disabled; preserving the span is not enough. The prior
+Chrome-output test manually named its probe span, which bypassed this
+release contract. All system costs therefore collapse into the same
+anonymous label and still do not identify the largest specific cost.
+
+Head #6783 approved source `0aa60e8`: add `bevy/debug` to **profile-trace
+only**, keep the default build unchanged, assert a real function-derived
+System name in the App regression, and have the actual Chrome writer test
+run a real App system off/on/off and find its default function name in
+paired B/E output. No manual name override remains in that output test.
+Full suites/release/new pin and one bounded named-system trace are pending
+the normal queue after root, codex-71 and codex-72. Head #6811's low-memory
+notice is respected: no Ghidra restart/new instance or new target, and
+heavy Cargo should run one at a time where possible.
+
+Separate low-priority source branch `step/s41-camera-settings` at
+`203ad96` (`44b3f0a` main hook, reviewed base `959f6a9`) implements the
+head-approved standalone settings cache; its full results live in that
+branch's `docs/tasks/steps/S41-camera-settings-notes.md`. Source claims
+were released. It is **untested** until its queued full viewer/release
+acceptance and is not presented as an opening gain.
+
+Next: validate the profile-only names correction, obtain real named
+system costs, and propose the first actual opening optimization with
+matched x1 FieldSettle before/after captures. The 180 fps gate remains open.
