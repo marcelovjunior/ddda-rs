@@ -148,42 +148,46 @@ fn the_goblin_approaches_and_its_hits_land_in_the_windows() {
             .find(|(g, a, _, _)| g.is_attack && a.is_some())
             .and_then(|(_, a, _, _)| a)
             .unwrap_or_else(|| panic!("hit at {frame} outside a window: motion {m:?} frame {f}"));
-        let hit = enemy_attack(&data.goblin.attacker, &AttackRow::from_attack(attack));
+        // the unit's attacker: the vf33 default attack rate 1.3
+        let mut attacker = data.goblin.attacker;
+        attacker.attack_mul = Some(ddenemyrt::goblin::DEFAULT_ATTACK_RATE);
+        let hit = enemy_attack(&attacker, &AttackRow::from_attack(attack));
         let mut merged = merge_frame(&[hit]).unwrap();
         player_mitigate(&mut merged, &data.arisen.defender, &data.tables.game);
         assert!((e.total - (merged.phys + merged.mag)).abs() < 1e-3, "{e:?}");
     }
     // The first is NAttack1 (e0100_at motion 1): its window is frames
-    // 45..48 (sequence 2, attack 0: 0.8 x attack 250 = 200 strike), and a
-    // level-1 Fighter (basic defence 80, no armour) takes
-    // 200 x (1 - 80 / (80 + 100)) = 111.1 (COMBAT.md 8).
+    // 45..48 (sequence 2, attack 0: 0.8 x attack 250 = 200 strike, x the
+    // vf33 attack rate 1.3 = 260), and a level-1 Fighter (basic defence 80,
+    // no armour) takes 260 x (1 - 80 / (80 + 100)) = 144.4 (COMBAT.md 8).
     let (frame, first) = on_arisen[0];
     let (m, f) = r.goblin_motion[*frame as usize - 2];
     assert_eq!(m, MotionId::new(1, 1));
     assert!((45.0..49.0).contains(&f), "{f}");
-    assert!((first.total - 200.0 * 100.0 / 180.0).abs() < 1e-3, "{first:?}");
+    assert!((first.total - 260.0 * 100.0 / 180.0).abs() < 1e-3, "{first:?}");
 }
 
 /// The Arisen's light attack S1_1 deals the worked example's 105 per hit; the
-/// goblin flinches at each and dies on the tenth (HP 1000).
+/// goblin flinches at each and dies on the twentieth (main pool 1000 x the
+/// vf33 default HP rate 2 = 2000).
 #[test]
-fn ten_sword_hits_kill_the_goblin() {
+fn twenty_sword_hits_kill_the_goblin() {
     if data().is_none() {
         return;
     }
-    let r = fight(700, true);
+    let r = fight(1400, true);
     let on_goblin: Vec<&HitEvent> = r
         .hits
         .iter()
         .filter(|(_, e)| e.victim == 100)
         .map(|(_, e)| e)
         .collect();
-    assert_eq!(on_goblin.len(), 10, "{:?}", r.hits);
+    assert_eq!(on_goblin.len(), 20, "{:?}", r.hits);
     assert!(on_goblin
         .iter()
         .all(|e| e.total == 105.0 && e.attacker == 0 && e.reaction.stagger));
-    assert!(on_goblin[..9].iter().all(|e| !e.killed));
-    assert!(on_goblin[9].killed);
+    assert!(on_goblin[..19].iter().all(|e| !e.killed));
+    assert!(on_goblin[19].killed);
     assert!(r.goblin_hp <= 0.0);
     // every hit but the last made it flinch (front or back: the attack's
     // lunge carries the Arisen around the goblin); the last one plays its
@@ -197,7 +201,7 @@ fn ten_sword_hits_kill_the_goblin() {
                 || [action::SHRINK_PLAIN_FRONT, action::SHRINK_PLAIN_BACK].contains(x)
         })
         .count();
-    assert_eq!(flinches, 9, "{a:?}");
+    assert_eq!(flinches, 19, "{a:?}");
     assert!(
         [action::DIE_FRONT, action::DIE_BACK].contains(a.last().unwrap()),
         "{a:?}"
