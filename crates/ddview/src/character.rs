@@ -248,6 +248,8 @@ pub struct Morph {
 pub struct Edit {
     /// Semantic model joint ID, used by type-0xb's joint-2 exception.
     pub joint_id: u8,
+    /// Bone index of the semantic eye/ear pivot (0x00812330 +0xac).
+    pub pivot: Option<usize>,
     /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 human
     /// hand absolute size; 0xc remains approximated as plain.
     pub kind: u32,
@@ -278,6 +280,17 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
         let pw = parent.map_or(root, |p| world[p]);
         let mut w = pw * local.to_matrix();
         for e in &m.joint[i] {
+            if matches!(e.kind, 0xd..=0x10) {
+                let (z, y, x) = e.rotation.to_euler(EulerRot::ZYX);
+                let pivot = e.pivot.and_then(|p| world.get(p)).map(Mat4::to_cols_array);
+                if let Some(corrected) = ddlook::face_constraint::apply(
+                    e.kind, w.to_cols_array(), pw.to_cols_array(), pivot,
+                    e.offset.to_array(), e.scale.to_array(), [x, y, z],
+                ) {
+                    w = Mat4::from_cols_array(&corrected);
+                }
+                continue;
+            }
             let k = if e.kind == 0xb {
                 Vec3::from_array(ddlook::morph::human_absolute_axis_factors(
                     e.joint_id, e.scale.to_array(), e.child.to_array(), m.model_scale.to_array(), [
@@ -551,8 +564,7 @@ pub fn spawn_assembled_hands(
                 (joint_entities[i], (x.parent != 255 && p < i).then_some(p))
             })
             .collect();
-        // Body edits (ddlook::morph), then face edits (ddlook::face; the eye
-        // joints' special types are not translated and are left out). Joint
+        // Body edits (ddlook::morph), then face edits (ddlook::face). Joint
         // 0x90 gets both; their order is *assumed*.
         let joint = model
             .bones
@@ -563,6 +575,7 @@ pub fn spawn_assembled_hands(
                 if let Some((_, m)) = body.and_then(|b| b.joints.iter().find(|(j, _)| *j == id)) {
                     v.push(Edit {
                         joint_id: id,
+                        pivot: None,
                         kind: m.kind,
                         scale: Vec3::from(m.scale),
                         child: Vec3::from(m.child),
@@ -570,11 +583,16 @@ pub fn spawn_assembled_hands(
                         rotation: Quat::IDENTITY,
                     });
                 }
-                if let Some(f) = face.iter().find(|f| f.id == id && ddlook::face::special_kind(id).is_none()) {
+                // 0x00812820 resets +0x61, then 0x0081e590/0x0081a7c0/
+                // 0x0081a700 activate nondefault records only. Preserve
+                // face_morph's gating; an absent identity edit stays off.
+                if let Some(f) = face.iter().find(|f| f.id == id) {
                     let r = f.rotation.map(f32::to_radians);
+                    let (kind, pivot_id) = ddlook::face_constraint::binding(id).unwrap_or((0, None));
                     v.push(Edit {
                         joint_id: id,
-                        kind: 0,
+                        pivot: pivot_id.and_then(|pivot| model.bones.iter().position(|b| b.anim_map_index == pivot)),
+                        kind,
                         scale: Vec3::from(f.scale),
                         child: Vec3::ONE,
                         offset: Vec3::from(f.offset),
