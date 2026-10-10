@@ -14,6 +14,7 @@
 //! I/O) are not translated here: Rust's own facilities replace them.
 
 pub mod action;
+pub mod character;
 pub mod model;
 pub mod particle;
 pub mod player_action;

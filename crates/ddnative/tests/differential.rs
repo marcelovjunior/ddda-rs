@@ -116,3 +116,65 @@ fn particle_counters_and_flag_match_the_original() {
         assert_eq!(u(c, "esp10"), 4, "ret 4: one stack argument");
     }
 }
+
+#[test]
+fn character_damage_edges_match_the_original() {
+    use ddnative::character::{damage_edges, DamageEdges};
+    let Some(cases) = vectors("character_vf111") else { return };
+    for c in &cases {
+        let mut e = DamageEdges {
+            category_206d: u(c, "cat") as u8, action_2360: u(c, "a2360"), flags_273c: u(c, "f273c"),
+            prev_2ea0: u(c, "prev") as u8, start_2ea1: 0xAA, end_2ea2: 0xBB, byte_2ea3: 0xCC,
+        };
+        damage_edges(&mut e, || u(c, "flag") as u8);
+        let out: Vec<u8> = c["out"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
+        assert_eq!(vec![e.prev_2ea0, e.start_2ea1, e.end_2ea2, e.byte_2ea3], out, "{c}");
+    }
+}
+
+#[test]
+fn npc_flag_location_matches_the_original() {
+    use ddnative::character::{npc_flags, NpcFlags};
+    let Some(cases) = vectors("npc_vf180") else { return };
+    for c in &cases {
+        let addr = match npc_flags(u(c, "intel")) {
+            NpcFlags::Intel(a) => a,
+            NpcFlags::Own => u(c, "this").wrapping_add(0x2738),
+        };
+        assert_eq!(addr, u(c, "ret"), "{c}");
+    }
+}
+
+#[test]
+fn player_predicates_and_table_match_the_original() {
+    use ddnative::{action, character as ch};
+    if let Some(cases) = vectors("player_vf18") {
+        for c in &cases { assert_eq!(u32::from(ch::player_vf18(u(c, "state"))), u(c, "al"), "{c}"); }
+    }
+    if let Some(cases) = vectors("player_vf207") {
+        for c in &cases { assert_eq!(u32::from(ch::player_vf207(u(c, "w"), u(c, "a"))), u(c, "al"), "{c}"); }
+    }
+    if let Some(cases) = vectors("player_vf187") {
+        for c in &cases {
+            let mut v = f32::from_bits(u(c, "val"));
+            ch::player_vf187(u(c, "state"), &mut v);
+            assert_eq!(v.to_bits(), u(c, "out"), "{c}");
+            assert_eq!(u(c, "esp"), 4, "ret 4");
+        }
+    }
+    if let Some(cases) = vectors("player_vf100") {
+        for c in &cases {
+            let (row, arg, want) = (u(c, "row"), u(c, "arg"), u(c, "table") as u8);
+            let got = ch::player_vf100(row, arg, |i| { assert_eq!(i, (row << 8) + arg); want });
+            assert_eq!(u32::from(got), u(c, "al"), "{c}");
+        }
+    }
+    if let Some(cases) = vectors("action_vf08") {
+        for c in &cases {
+            let mut o = action::Owner { category_206c: u(c, "cat"), word_2370: 0, word_2374: 0,
+                flags_273c: 0, status_2e34: 0xDEAD_BEEF, pending_2e38: 0 };
+            action::base_exit_status(&mut o);
+            assert_eq!(o.status_2e34, u(c, "status"), "{c}");
+        }
+    }
+}

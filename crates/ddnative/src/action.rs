@@ -67,3 +67,12 @@ pub fn demo_state(owner: Option<&mut DemoOwner>) -> u32 {
     }
     4
 }
+
+/// `cActionBase::vf08`: clears the owner's current status bits (player
+/// category only).
+// Translated from 0x0089EFE0 (DDDA.exe 2017-12-13 Steam), cActionBase::vf08.
+pub fn base_exit_status(o: &mut Owner) {
+    if o.category_206c & 2 != 0 {
+        o.status_2e34 = 0;
+    }
+}

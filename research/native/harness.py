@@ -55,7 +55,7 @@ def code(address, length):
     raise KeyError(hex(address))
 
 
-def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=100000):
+def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=100000, poke=None):
     """Call `address`. Returns dict(eax, edx, scratch, insns)."""
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     base, secs = image()
@@ -68,6 +68,8 @@ def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=1000
     uc.mem_map(SCRATCH, SCRATCH_SIZE)
     uc.mem_map(RET & ~0xFFF, 0x1000)
     uc.mem_write(SCRATCH, scratch)
+    for addr, value in (poke or {}).items():  # test fixture: a global pointer
+        uc.mem_write(addr, struct.pack("<I", value & 0xFFFFFFFF))
     esp = STACK + STACK_SIZE - 0x1000
     frame = struct.pack("<I", RET) + b"".join(struct.pack("<I", a & 0xFFFFFFFF) for a in args)
     uc.mem_write(esp, frame)
