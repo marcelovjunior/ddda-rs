@@ -249,3 +249,31 @@ checks the Wait motions and resolves both think graphs.
 **Not yet implemented or compared:** generic host population, action/AI
 execution, motion movement, despawn and visual species identification.
 The authored placement feed remains a stand-in until those execute.
+
+
+### Ambient live identity and wait callbacks
+
+Read-only snapshot of PID23408 (private
+`ambient-creatures-codex34/population-paused.json`) found two active
+uEm8300 and eight loaded uEm8602, corroborating kinds0x65/0x6d. This does
+not mean all seventeen authored birds were loaded. The ground actors
+selected first tables6/5: roots0x0165d0d0/0x0165ce50, read through
+0x0165d670. Current actions were bank1 indices3/4 and motions0x0a/0x0b;
+birds used bank1 index3, motion0x0a. Paused/bgOff remained unchanged.
+
+Shared action bank1 is installed by uEnemy::vf05 (0x00aa8830):79
+descriptors at0x018635d0. 0x007f1ea0 selects bank from bits24..31 and
+index from bits0..15. 0x004c9e50 copies descriptor+0x14..0x20 to action
++4..0x10. Shared cEmActWait reads motion from copied+4 (0x0089c2f0),
+not descriptor argument+4. Completion0x0089c3b0 waits motion-end only
+when think+0x120f was set on action entry; it ORs body2360/2370 bit0.
+
+Family em8300 Wait vf06 at0x00907620 waits motion-end and ORs those
+bits; em8600 Wait/WaitAir vf06 at0x009c5b10 completes immediately.
+FlyStart inherits WaitAir entry0x00aa0e20 but waits motion-end through
+0x0095bb80. Supported callbacks preserve these distinctions; unsupported
+actions return None. Installed ddspawn regression confirms scene1100
+admits2/17 and preserves first-table6/5; scene0 does not admit birds.
+
+Three unit tests and two installed tests pass. Host frame-loop execution
+and moving-creature visual comparison remain outstanding.

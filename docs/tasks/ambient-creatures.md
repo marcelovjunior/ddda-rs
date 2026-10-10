@@ -54,3 +54,13 @@ names em8602. Root/head notified for door stand-in correction.
 Source details in ENEMIES.md. No live original comparison yet. Next:
 resolve family action entry/think inputs, then canonical host population
 and viewer bodies; authored positions alone are not runtime behavior.
+
+
+### Checkpoint66a5435
+
+Read-only live identity snapshot confirms kind65/6d and authored first
+tables6/5. Added shared bank reader and sourced Wait/WaitAir/FlyStart
+callbacks. Three unit tests, one installed resource/action test and one
+installed spawn regression pass. Strict no-deps clippy passes with the
+pre-existing combat type_complexity allowance. ENEMIES.md has sources
+and live limitations. Host/renderer hookup and movement remain open.
