@@ -4,8 +4,9 @@
 //! hired ownership follows the hirer's ProfileId, never a reused seat.
 //! Rejoining uses the caller's current-stage spawn; a parked position is
 //! retained in PLCE and restored when that profile is seated during load.
-//! Runtime HP/status/endurance survive rejoin; existing saves do not persist
-//! them, so save/load reconstructs combat from installed vocation/stats.
+//! Runtime HP/status/endurance survive rejoin. Optional VITL preserves
+//! Arisen HP/white ceiling/stamina; status and active combat remain transient.
+//! Legacy saves reconstruct combat from installed vocation/stats.
 
 use crate::save::{self, Owner, SaveFile};
 use crate::{Host, PlayerId, ProfileId, StoryWorld};
@@ -20,6 +21,7 @@ pub(crate) struct Parked {
     pub place: Option<([f32; 3], f32)>,
     pub endurance: Option<(f32, f32, usize, usize, bool)>,
     pub hired: Vec<ParkedPawn>,
+    pub vitals: Option<crate::vitals::Vitals>,
 }
 
 #[derive(Debug)]
@@ -97,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn parked_health_and_status_change_runtime_hash_but_not_saved_hash() {
+    fn parked_health_changes_saved_hash_but_status_remains_transient() {
         let native = std::env::var_os("DDDA_NATIVE_PC")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
@@ -134,7 +136,8 @@ mod tests {
             *hp = 37.0;
         }
         assert_ne!(host.state_hash(), before);
-        assert_eq!(host.saved_hash(), saved);
+        assert_ne!(host.saved_hash(), saved);
+        let saved = host.saved_hash();
         let health_changed = host.state_hash();
         let fighter = &mut host
             .profiles
@@ -195,8 +198,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.sim.players.retain(|p| p.id != seat);
             }
         }
-        // Existing save policy reconstructs combat from installed kit/stats;
-        // HP/status and in-flight attacks are not durable save fields.
+        // Reconstruct combat from installed kit/stats. Optional VITL applies
+        // afterwards; status and in-flight attacks are never durable fields.
         for seat in ids {
             self.joined_fighter(seat);
         }
@@ -204,7 +207,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     /// Co-op admission uses this profile's vocation/stats when present,
     /// otherwise the current opening vocation. Existing saves still rebuild
-    /// combat from data; they do not persist HP/status or active attacks.
+    /// combat from data; optional VITL follows reconstruction. Status and
+    /// active attacks remain transient.
     pub(crate) fn joined_fighter(&mut self, seat: PlayerId) {
         use ddenemyrt::fight::Kit;
         use ddskill::vocation::Vocation;
@@ -222,6 +226,20 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     character = self.character_of(ddprogress::Role::Arisen(seat)).cloned();
                 }
             }
+        }
+        if let Some(body) = self.sim.player_mut(seat) {
+            // Native construction adds vocation level stamina to the
+            // installed body-weight base (docs/PAWNS.md, builder::build).
+            // Without installed Rift tables, retain the existing sim base;
+            // this legacy admission is not an installed-value comparison.
+            let was_full = body.stamina == body.stamina_max;
+            if let Some(base) = self.data.rift.as_ref().and_then(|data|
+                data.stamina.entries.get(body.body_class)).map(|row| row.stamina) {
+                body.stamina_base = base;
+            }
+            body.stamina_lv = character.as_ref().map_or(0.0, |c| c.progress.stats.stamina_lv);
+            body.stamina_max = body.stamina_base + body.stamina_lv;
+            body.stamina = if was_full { body.stamina_max } else { body.stamina.min(body.stamina_max) };
         }
         let Some(fight) = &mut self.fight else { return };
         if fight.arisen.contains_key(&seat) {
@@ -264,6 +282,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn detach_profile(&mut self, profile: ProfileId, seat: PlayerId) {
+        let vitals = self.seat_vitals(seat);
         let mut hired = Vec::new();
         for index in 0..2 {
             if self.hired_by[index] != Some(profile) {
@@ -330,14 +349,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     .player(seat)
                     .map(|p| (p.stamina, p.stamina_max, p.body_class, p.load_class, p.ran_out)),
                 hired,
+                vitals,
             },
         );
     }
 
-    pub(crate) fn attach_profile(&mut self, profile: ProfileId, seat: PlayerId) {
-        let Some(state) = self.profiles.remove(&profile) else {
-            return;
-        };
+    pub(crate) fn attach_profile(&mut self, profile: ProfileId, seat: PlayerId) -> Option<crate::vitals::Vitals> {
+        let state = self.profiles.remove(&profile)?;
+        let vitals = Self::parked_vitals(&state);
         if let Some(economy) = state.economy {
             self.economy.attach_player(seat, economy);
         }
@@ -393,6 +412,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 let restored = self.sim.player_mut(body.id).unwrap();
                 restored.stamina = body.stamina;
                 restored.stamina_max = body.stamina_max;
+                restored.stamina_base = body.stamina_base;
+                restored.stamina_lv = body.stamina_lv;
                 restored.body_class = body.body_class;
                 restored.load_class = body.load_class;
                 restored.ran_out = body.ran_out;
@@ -403,6 +424,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 fight.equip(&mut self.sim, body.id);
             }
         }
+        // Host::join applies these after its final fighter/body construction;
+        // otherwise that constructor can overwrite the saved stamina gain.
+        vitals
     }
 
     pub(crate) fn save_parked_profiles(&self, file: &mut SaveFile) {
@@ -433,7 +457,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     return Err(crate::HostError::Save("invalid profile PLCE".into()));
                 }
             }
-            if ![save::TAG_ECON, save::TAG_PROG, save::TAG_PLACE].contains(&chunk.tag) {
+            if ![save::TAG_ECON, save::TAG_PROG, save::TAG_PLACE, save::TAG_VITALS].contains(&chunk.tag) {
                 continue;
             }
             if let Owner::Profile(profile) = chunk.owner {
@@ -488,6 +512,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                         economy,
                         character,
                         place,
+                        vitals: file.get(save::TAG_VITALS, owner).map(crate::vitals::Vitals::from_bytes).transpose()?,
                         ..Default::default()
                     },
                 ))

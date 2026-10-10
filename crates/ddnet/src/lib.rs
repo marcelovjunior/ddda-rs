@@ -13,6 +13,7 @@
 //! - [`body`]: an Arisen's replicated state and its delta encoding.
 
 pub mod body;
+pub mod death;
 pub mod client;
 pub mod link;
 pub mod mirror;
@@ -42,7 +43,7 @@ pub fn bodies_hash(bodies: &[Body]) -> u64 {
 /// and delta fields excluded).
 pub fn snapshot_hash(s: &proto::Snapshot) -> u64 {
     let mut h = ddhost::hash::StateHasher::default();
-    h.u64(bodies_hash(&s.bodies)).debug(&s.vitals).debug(&s.enemies).debug(&s.npcs).debug(&s.quest_camera).debug(&s.stage);
+    h.u64(s.epoch).u64(bodies_hash(&s.bodies)).debug(&s.vitals).debug(&s.enemies).debug(&s.npcs).debug(&s.quest_camera).debug(&s.stage).debug(&s.death);
     h.finish()
 }
 

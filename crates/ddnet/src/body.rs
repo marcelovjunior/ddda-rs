@@ -12,7 +12,7 @@
 use ddid::{Reader, Result, Writer};
 use ddsim::ledge::{Hang, Ledge};
 use ddsim::attack::{Attack, BowLayer, BowMovement, BowPhase, BowState, BowUnsupported, ShotPhase, Weapon};
-use ddsim::{GrabPhase, Hold, JumpParam, Player, PlayerId, State};
+use ddsim::{DeathPhase, GrabPhase, Hold, JumpParam, Player, PlayerId, State};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
@@ -91,6 +91,11 @@ impl Body {
         p.secondary_weapon = self.secondary_weapon;
         p.bow = self.bow;
         p.bow_latched = self.bow_latched;
+        if p.incapacitated() {
+            // Authority replaced the action slot; client prediction must not
+            // retain an attack/skill request hidden behind the replicated pose.
+            p.cancel_attack_actions();
+        }
     }
 
     /// A body between `a` and `b` at `t` in 0..1, for showing other
@@ -197,12 +202,37 @@ fn state(w: &mut Writer, s: State) {
             w.u8(18).u8(phase as u8).u16(motion);
             return;
         }
+        State::Death { phase } => {
+            // Project wire schema (protocol11), not a native multiplayer tag.
+            let tag = match phase {
+                DeathPhase::Collapse { pawn: false } => 0,
+                DeathPhase::Collapse { pawn: true } => 1,
+                DeathPhase::ArisenDead => 2,
+                DeathPhase::PawnDownStart => 3,
+                DeathPhase::PawnDown => 4,
+                DeathPhase::PawnReturn => 5,
+            };
+            w.u8(19).u8(tag);
+            return;
+        }
     };
     w.u8(tag).bool(a).bool(b);
 }
 
 fn read_state(r: &mut Reader) -> Result<State> {
     let tag = r.u8()?;
+    if tag == 19 {
+        let phase = match r.u8()? {
+            0 => DeathPhase::Collapse { pawn: false },
+            1 => DeathPhase::Collapse { pawn: true },
+            2 => DeathPhase::ArisenDead,
+            3 => DeathPhase::PawnDownStart,
+            4 => DeathPhase::PawnDown,
+            5 => DeathPhase::PawnReturn,
+            tag => return Err(format!("death phase {tag}")),
+        };
+        return Ok(State::Death { phase });
+    }
     if tag == 18 { return Ok(State::Bow { phase: read_bow_phase(r)?, motion: r.u16()? }); }
     if tag == 15 {
         let attack = match r.u8()? {
@@ -587,5 +617,54 @@ mod tests {
         let m = Body::lerp(&a, &b, 0.5);
         assert!((m.yaw.abs() - std::f32::consts::PI).abs() < 0.01);
         assert_eq!(m.position, [6.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn death_whole_delta_and_apply_clear_predicted_attack_slots() {
+        let phases = [DeathPhase::Collapse { pawn: false },
+            DeathPhase::Collapse { pawn: true }, DeathPhase::ArisenDead,
+            DeathPhase::PawnDownStart, DeathPhase::PawnDown, DeathPhase::PawnReturn];
+        let mut base = body();
+        for phase in phases {
+            let mut current = base.clone();
+            current.state = State::Death { phase };
+            current.frame += 0.25;
+            current.velocity = [0.0; 3];
+            let mut w = Writer::new();
+            write(&mut w, &current, None);
+            write(&mut w, &current, Some(&base));
+            let bytes = w.finish();
+            let mut r = Reader::new(&bytes);
+            assert_eq!(read(&mut r, &|_| None).unwrap(), current);
+            let restored = read(&mut r, &|_| Some(base.clone())).unwrap();
+            assert_eq!(restored, current);
+            r.end().unwrap();
+            let mut sim = ddsim::Sim::new(HashMap::new());
+            sim.add_player(current.id, [0.0; 3], 0.0);
+            let player = sim.player_mut(current.id).unwrap();
+            player.skills.request = Some(123);
+            player.skills.released.push(123);
+            player.bow_latched = true;
+            restored.apply(player);
+            assert_eq!(Body::of(player), current);
+            assert!(player.skills.request.is_none());
+            assert!(player.skills.released.is_empty());
+            assert!(!player.bow_latched);
+            base = current;
+        }
+    }
+
+    #[test]
+    fn death_phase_rejects_unknown_and_truncated_payload() {
+        for bytes in [vec![19], vec![19, 6], vec![19, 255]] {
+            assert!(read_state(&mut Reader::new(&bytes)).is_err());
+        }
+        for phase in 0..6 {
+            let bytes = [19, phase];
+            let mut r = Reader::new(&bytes);
+            let decoded = read_state(&mut r).unwrap();
+            assert!(matches!(decoded, State::Death { .. }));
+            r.end().unwrap();
+        }
     }
 }

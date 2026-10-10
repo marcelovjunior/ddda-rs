@@ -5,6 +5,7 @@ use crate::body::{self, Body};
 use crate::mirror::{self, Enemy, LookData, NpcBody, Spot, Vital};
 use ddhost::PlayerInput;
 use ddid::{PlayerId, Reader, Result, Writer};
+use std::collections::BTreeMap;
 
 /// Bumped on any incompatible change.
 ///
@@ -19,7 +20,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 9: loaded story stage; authored quest camera clock/explicit end/input lock; NPC lifetime,
 ///   pose/motion, gauge and health/death state with masked deltas.
 /// - 10: reliable host-selected pawn speech with persistent-profile audiences.
-pub const PROTOCOL: u16 = 10;
+/// - 11: grounded death bodies and transactional retry attempt epochs.
+pub const PROTOCOL: u16 = 11;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +37,7 @@ pub enum ToHost {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToClient {
     /// `spot`: where the host's session is, for the guest to load.
-    Welcome { seat: PlayerId, frame: u64, delta: f32, spot: Option<Spot> },
+    Welcome { seat: PlayerId, epoch: u64, frame: u64, delta: f32, spot: Option<Spot> },
     Refuse { reason: String },
     Joined { seat: PlayerId, profile: u64 },
     Left { seat: PlayerId },
@@ -43,18 +45,31 @@ pub enum ToClient {
     Look { seat: PlayerId, look: LookData },
     /// A story request of host frame `frame` (its debug text until the
     /// views perform requests).
-    Story { frame: u64, text: String },
+    Story { epoch: u64, frame: u64, text: String },
     /// The story asked for cutscene `row` (ddstory `Request::PlayEvent`) on
     /// host frame `frame`: every view plays it from the data; the host's
     /// own playback reports it over.
-    PlayEvent { frame: u64, row: u32 },
-    PawnMessage(ddhost::pawn_chatter::Message),
+    PlayEvent { epoch: u64, frame: u64, row: u32 },
+    PawnMessage { epoch: u64, message: ddhost::pawn_chatter::Message },
+    Retry(RetryNotice),
+}
+
+/// Project co-op policy: one reliable attempt replacement notice. A whole
+/// epoch-tagged snapshot follows with no prior-attempt delta baseline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetryNotice {
+    pub epoch: u64,
+    pub frame: u64,
+    pub spot: Option<Spot>,
+    pub looks: BTreeMap<PlayerId, LookData>,
+    pub dismissals: Vec<ddhost::death::ProfileNotice>,
 }
 
 /// The unreliable input upload: the newest commands, oldest first; the
 /// last is for host frame `newest`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Inputs {
+    pub epoch: u64,
     pub newest: u64,
     pub cmds: Vec<PlayerInput>,
     /// Newest snapshot frame the client has applied (the delta baseline).
@@ -64,6 +79,7 @@ pub struct Inputs {
 /// The unreliable state upload: every Arisen after host frame `frame`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
+    pub epoch: u64,
     pub frame: u64,
     /// Loaded story stage; no story hosts leave this absent.
     pub stage: Option<u32>,
@@ -81,6 +97,7 @@ pub struct Snapshot {
     pub npcs: Vec<NpcBody>,
     /// None explicitly releases the host-owned camera on the guest.
     pub quest_camera: Option<crate::quest_camera::QuestCamera>,
+    pub death: ddhost::death::Report,
 }
 
 fn opt_u64(w: &mut Writer, v: Option<u64>) {
@@ -140,8 +157,8 @@ impl ToClient {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         match self {
-            ToClient::Welcome { seat, frame, delta, spot } => {
-                w.u8(0).u8(*seat).u64(*frame).f32(*delta).bool(spot.is_some());
+            ToClient::Welcome { seat, epoch, frame, delta, spot } => {
+                w.u8(0).u8(*seat).u64(*epoch).u64(*frame).f32(*delta).bool(spot.is_some());
                 if let Some(s) = spot {
                     mirror::write_spot(&mut w, s);
                 }
@@ -159,15 +176,15 @@ impl ToClient {
                 mirror::write_look(&mut w, look);
                 &mut w
             }
-            ToClient::Story { frame, text } => {
-                w.u8(4).u64(*frame);
+            ToClient::Story { epoch, frame, text } => {
+                w.u8(4).u64(*epoch).u64(*frame);
                 string(&mut w, text);
                 &mut w
             }
-            ToClient::PlayEvent { frame, row } => w.u8(6).u64(*frame).u32(*row),
-            ToClient::PawnMessage(message) => {
+            ToClient::PlayEvent { epoch, frame, row } => w.u8(6).u64(*epoch).u64(*frame).u32(*row),
+            ToClient::PawnMessage { epoch, message } => {
                 use ddhost::pawn_chatter::Identity;
-                w.u8(7).u64(message.id).u64(message.frame).u8(message.pawn_slot).u8(message.pawn_seat);
+                w.u8(7).u64(*epoch).u64(message.id).u64(message.frame).u8(message.pawn_slot).u8(message.pawn_seat);
                 match &message.pawn_identity {
                     Identity::Main { profile } => { w.u8(0).u64(profile.0); }
                     Identity::Hired { hirer, rom_id, network_id, hired_at } => {
@@ -180,6 +197,19 @@ impl ToClient {
                 for profile in &message.audience { w.u64(profile.0); }
                 &mut w
             }
+            ToClient::Retry(notice) => {
+                w.u8(8).u64(notice.epoch).u64(notice.frame).bool(notice.spot.is_some());
+                if let Some(spot) = notice.spot { mirror::write_spot(&mut w, &spot); }
+                w.len(notice.looks.len());
+                for (seat, look) in &notice.looks { w.u8(*seat); mirror::write_look(&mut w, look); }
+                w.len(notice.dismissals.len());
+                for dismissal in &notice.dismissals {
+                    let pawn = &dismissal.released;
+                    w.u64(dismissal.profile.0).u8(dismissal.slot).u32(pawn.rom_id).bytes(&pawn.net_id);
+                    for count in [pawn.with_time, pawn.employ, pawn.die, pawn.clear_quest, pawn.lent] { w.u32(count); }
+                }
+                &mut w
+            }
         };
         w.finish()
     }
@@ -187,18 +217,19 @@ impl ToClient {
         let mut r = Reader::new(b);
         let m = match r.u8()? {
             0 => {
-                let (seat, frame, delta) = (r.u8()?, r.u64()?, r.f32()?);
+                let (seat, epoch, frame, delta) = (r.u8()?, r.u64()?, r.u64()?, r.f32()?);
                 let spot = if r.bool()? { Some(mirror::read_spot(&mut r)?) } else { None };
-                ToClient::Welcome { seat, frame, delta, spot }
+                ToClient::Welcome { seat, epoch, frame, delta, spot }
             }
             1 => ToClient::Refuse { reason: read_string(&mut r)? },
             2 => ToClient::Joined { seat: r.u8()?, profile: r.u64()? },
             3 => ToClient::Left { seat: r.u8()? },
             5 => ToClient::Look { seat: r.u8()?, look: mirror::read_look(&mut r)? },
-            4 => ToClient::Story { frame: r.u64()?, text: read_string(&mut r)? },
-            6 => ToClient::PlayEvent { frame: r.u64()?, row: r.u32()? },
+            4 => ToClient::Story { epoch: r.u64()?, frame: r.u64()?, text: read_string(&mut r)? },
+            6 => ToClient::PlayEvent { epoch: r.u64()?, frame: r.u64()?, row: r.u32()? },
             7 => {
                 use ddhost::{pawn_chatter::{Identity, Message}, ProfileId};
+                let epoch = r.u64()?;
                 let (id, frame, pawn_slot, pawn_seat) = (r.u64()?, r.u64()?, r.u8()?, r.u8()?);
                 if id == 0 || pawn_slot >= 3 { return Err("invalid pawn message identity/slot".into()); }
                 let pawn_identity = match r.u8()? {
@@ -212,8 +243,38 @@ impl ToClient {
                 let (gender, voice) = (r.u8()?, r.u8()?);
                 let count = r.len(8)?;
                 let audience = (0..count).map(|_| r.u64().map(ProfileId)).collect::<Result<_>>()?;
-                ToClient::PawnMessage(Message { id, frame, pawn_slot, pawn_seat, pawn_identity,
-                    message, name, gender, voice, audience })
+                ToClient::PawnMessage { epoch, message: Message { id, frame, pawn_slot, pawn_seat, pawn_identity,
+                    message, name, gender, voice, audience } }
+            }
+            8 => {
+                let epoch = r.u64()?;
+                let frame = r.u64()?;
+                if epoch == 0 { return Err("retry epoch must advance".into()); }
+                let spot = if r.bool()? { Some(mirror::read_spot(&mut r)?) } else { None };
+                if spot.is_some_and(|s| !s.yaw.is_finite() || s.pos.iter().any(|v| !v.is_finite())) {
+                    return Err("invalid retry spot".into());
+                }
+                let mut looks = BTreeMap::new();
+                for _ in 0..r.len(1)? {
+                    if looks.insert(r.u8()?, mirror::read_look(&mut r)?).is_some() {
+                        return Err("duplicate retry look seat".into());
+                    }
+                }
+                let mut dismissals = Vec::new();
+                for _ in 0..r.len(33)? {
+                    let profile = ddhost::ProfileId(r.u64()?);
+                    let slot = r.u8()?;
+                    let rom_id = r.u32()?;
+                    let net_id = r.bytes()?;
+                    if !(1..=2).contains(&slot) || net_id.len() != 64 {
+                        return Err("invalid retry dismissal slot/identity".into());
+                    }
+                    let released = ddhost::death::PawnRef { rom_id, net_id,
+                        with_time: r.u32()?, employ: r.u32()?, die: r.u32()?,
+                        clear_quest: r.u32()?, lent: r.u32()? };
+                    dismissals.push(ddhost::death::ProfileNotice { profile, slot, released });
+                }
+                ToClient::Retry(RetryNotice { epoch, frame, spot, looks, dismissals })
             }
             k => return Err(format!("client message kind {k}")),
         };
@@ -272,7 +333,7 @@ mod bow_input_tests {
                 pawn_orders: ddsim::PawnOrderButtons { up: bits & 1 != 0, down: bits & 2 != 0,
                     left: bits & 4 != 0, right: bits & 8 != 0 }, ..Default::default()
             }, ..Default::default() };
-            let upload = Inputs { newest: 42, cmds: vec![command, PlayerInput::default()], snapshot_ack: Some(37) };
+            let upload = Inputs { epoch: 0, newest: 42, cmds: vec![command, PlayerInput::default()], snapshot_ack: Some(37) };
             assert_eq!(Inputs::decode(&upload.encode()).unwrap(), upload);
             let mut writer = Writer::new();
             input(&mut writer, &command);
@@ -286,7 +347,7 @@ mod bow_input_tests {
 impl Inputs {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
-        w.u64(self.newest).len(self.cmds.len());
+        w.u64(self.epoch).u64(self.newest).len(self.cmds.len());
         for c in &self.cmds {
             input(&mut w, c);
         }
@@ -295,23 +356,30 @@ impl Inputs {
     }
     pub fn decode(b: &[u8]) -> Result<Inputs> {
         let mut r = Reader::new(b);
+        let epoch = r.u64()?;
         let newest = r.u64()?;
         let n = r.len(16)?;
+        if newest.checked_add(1).is_none_or(|frames| frames < n as u64) {
+            return Err("input command frame range overflow".into());
+        }
         let cmds = (0..n).map(|_| read_input(&mut r)).collect::<Result<_>>()?;
         let snapshot_ack = read_opt_u64(&mut r)?;
         r.end()?;
-        Ok(Inputs { newest, cmds, snapshot_ack })
+        Ok(Inputs { epoch, newest, cmds, snapshot_ack })
     }
 }
 
 impl Snapshot {
     /// Encodes against `base`, the snapshot of frame `self.base`.
     pub fn encode(&self, base: Option<&Snapshot>) -> Vec<u8> {
+        // Never reuse another attempt's actor/NPC baseline. A missing or
+        // mismatched supplied baseline produces an explicit whole snapshot.
+        let base = base.filter(|b| self.base == Some(b.frame) && b.epoch == self.epoch);
         let (bodies, enemies) = base.map_or((&[][..], &[][..]), |b| (&b.bodies[..], &b.enemies[..]));
         let mut w = Writer::new();
-        w.u64(self.frame);
+        w.u64(self.epoch).u64(self.frame);
         w.bool(self.stage.is_some()).u32(self.stage.unwrap_or(0));
-        opt_u64(&mut w, self.base);
+        opt_u64(&mut w, base.map(|b| b.frame));
         opt_u64(&mut w, self.cmd_newest);
         w.len(self.bodies.len());
         for b in &self.bodies {
@@ -321,12 +389,14 @@ impl Snapshot {
         mirror::write_enemies(&mut w, &self.enemies, enemies);
         mirror::write_npcs(&mut w, &self.npcs, base.map_or(&[], |s| &s.npcs));
         crate::quest_camera::write(&mut w, self.quest_camera);
+        crate::death::write(&mut w, &self.death, base.map(|b| &b.death));
         w.finish()
     }
 
     /// Decodes; `baseline` gives a base snapshot the client still holds.
     pub fn decode(b: &[u8], baseline: &dyn Fn(u64) -> Option<Snapshot>) -> Result<Snapshot> {
         let mut r = Reader::new(b);
+        let epoch = r.u64()?;
         let frame = r.u64()?;
         let stage = if r.bool()? { Some(r.u32()?) } else { r.u32()?; None };
         let base = read_opt_u64(&mut r)?;
@@ -335,6 +405,9 @@ impl Snapshot {
             Some(f) => Some(baseline(f).ok_or_else(|| format!("snapshot {frame}: baseline {f} not held"))?),
             None => None,
         };
+        if held.as_ref().is_some_and(|s| s.epoch != epoch) {
+            return Err("snapshot baseline belongs to another attempt".into());
+        }
         let bodies_base = held.as_ref().map_or(&[][..], |s| &s.bodies[..]);
         let n = r.len(3)?;
         let bodies = (0..n)
@@ -344,8 +417,9 @@ impl Snapshot {
         let enemies = mirror::read_enemies(&mut r, held.as_ref().map_or(&[][..], |s| &s.enemies[..]))?;
         let npcs = mirror::read_npcs(&mut r, held.as_ref().map_or(&[], |s| &s.npcs))?;
         let quest_camera = crate::quest_camera::read(&mut r)?;
+        let death = crate::death::read(&mut r, held.as_ref().map(|s| &s.death))?;
         r.end()?;
-        Ok(Snapshot { frame, stage, base, cmd_newest, bodies, vitals, enemies, npcs, quest_camera })
+        Ok(Snapshot { epoch, frame, stage, base, cmd_newest, bodies, vitals, enemies, npcs, quest_camera, death })
     }
 }
 
@@ -359,16 +433,67 @@ mod pawn_message_tests {
         for pawn_identity in [Identity::Main { profile: ProfileId(41) },
             Identity::Hired { hirer: ProfileId(42), rom_id: u32::MAX,
                 network_id: vec![7; 64], hired_at: 99 }] {
-            let event = ToClient::PawnMessage(Message { id: u64::MAX, frame: 110,
+            let event = ToClient::PawnMessage { epoch: 9, message: Message { id: u64::MAX, frame: 110,
                 pawn_slot: 1, pawn_seat: 6, pawn_identity, message: 300_123,
                 name: "Synthetic pawn".into(), gender: 1, voice: 11,
-                audience: vec![ProfileId(41), ProfileId(42), ProfileId(43)] });
+                audience: vec![ProfileId(41), ProfileId(42), ProfileId(43)] } };
             let bytes = event.encode();
             assert_eq!(ToClient::decode(&bytes).unwrap(), event);
             for cut in [0, 1, bytes.len() - 1] { assert!(ToClient::decode(&bytes[..cut]).is_err()); }
             let mut invalid = bytes.clone();
-            invalid[17] = 3; // opcode + id + frame = pawn slot offset.
+            invalid[25] = 3; // opcode + epoch + id + frame = pawn slot offset.
             assert!(ToClient::decode(&invalid).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod retry_epoch_tests {
+    use super::*;
+    fn snapshot(epoch: u64, frame: u64) -> Snapshot {
+        Snapshot { epoch, frame, stage: Some(100), base: None, cmd_newest: None,
+            bodies: Vec::new(), vitals: Vec::new(), enemies: Vec::new(), npcs: Vec::new(), quest_camera: None, death: Default::default() }
+    }
+    #[test]
+    fn retry_notice_preserves_epoch_restored_looks_and_typed_owner_dismissal() {
+        let notice = RetryNotice { epoch: 2, frame: 7, spot: Some(Spot { stage: 100,
+            cell: (0, 0), pos: [1.0, 2.0, 3.0], yaw: 0.5 }),
+            looks: [(1, LookData { edit: vec![("fixture".into(), 3)], items: vec![7] })].into_iter().collect(),
+            dismissals: vec![ddhost::death::ProfileNotice { profile: ddhost::ProfileId(200),
+                slot: 1, released: ddhost::death::PawnRef::rom(7) }] };
+        let message = ToClient::Retry(notice.clone());
+        let bytes = message.encode();
+        assert_eq!(ToClient::decode(&bytes).unwrap(), message);
+        for cut in 0..bytes.len() { assert!(ToClient::decode(&bytes[..cut]).is_err()); }
+        let mut trailing = bytes; trailing.push(0);
+        assert!(ToClient::decode(&trailing).is_err());
+        let mut invalid = notice.clone(); invalid.epoch = 0;
+        assert!(ToClient::decode(&ToClient::Retry(invalid).encode()).is_err());
+        let mut invalid = notice.clone(); invalid.dismissals[0].slot = 0;
+        assert!(ToClient::decode(&ToClient::Retry(invalid).encode()).is_err());
+        let mut invalid = notice; invalid.dismissals[0].released.net_id.pop();
+        assert!(ToClient::decode(&ToClient::Retry(invalid).encode()).is_err());
+    }
+    #[test]
+    fn snapshot_epoch_separates_whole_and_delta_baselines_after_frame_rollback() {
+        let old = snapshot(0, 900);
+        let mut new = snapshot(1, 7); new.base = Some(900);
+        let decoded = Snapshot::decode(&new.encode(Some(&old)), &|_| Some(old.clone())).unwrap();
+        assert_eq!((decoded.epoch, decoded.frame, decoded.base), (1, 7, None));
+        let mut old_delta = snapshot(0, 901); old_delta.base = Some(900);
+        let bytes = old_delta.encode(Some(&old));
+        let mut wrong_epoch = old.clone(); wrong_epoch.epoch = 1;
+        assert!(Snapshot::decode(&bytes, &|_| Some(wrong_epoch.clone())).unwrap_err()
+            .contains("another attempt"));
+        assert_eq!(Snapshot::decode(&bytes, &|_| Some(old.clone())).unwrap(), old_delta);
+    }
+    #[test]
+    fn input_epoch_roundtrip_rejects_command_frame_underflow_and_overflow() {
+        let input = Inputs { epoch: 2, newest: 8, cmds: vec![PlayerInput::default(); 2], snapshot_ack: Some(7) };
+        assert_eq!(Inputs::decode(&input.encode()).unwrap(), input);
+        for newest in [0, u64::MAX] {
+            let invalid = Inputs { newest, ..input.clone() };
+            assert!(Inputs::decode(&invalid.encode()).unwrap_err().contains("overflow"));
         }
     }
 }
