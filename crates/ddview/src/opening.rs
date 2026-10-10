@@ -205,6 +205,8 @@ impl NpcAdapter {
 
 /// The session (host frame stepping, the cutscene, the talk, the demo).
 pub struct Session {
+    /// Authored event movie currently awaited by the story (if intro enabled).
+    pub intro_movie: Option<PathBuf>,
     pub host: HostHandle,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
@@ -244,13 +246,14 @@ pub struct Session {
 #[derive(Resource)]
 pub struct OpeningRes(pub Mutex<Session>);
 
-/// Builds the host and walks it to q0001 (before the window opens).
+/// Walk the stand-in prologue to an awaited movie, or q0001 when intro is bypassed.
 pub fn prepare(
     native_pc: &std::path::Path,
     exe: &std::path::Path,
     players: u8,
     demo: bool,
     shots: Option<PathBuf>,
+    intro: bool,
 ) -> Result<Session, String> {
     let t = std::time::Instant::now();
     let data = InstallData::open(native_pc, Some(exe)).map_err(|e| e.to_string())?;
@@ -276,12 +279,23 @@ pub fn prepare(
         host.join(ProfileId(u64::from(k) + 1), Control::Local, ddhost::opening::AWAY, 0.0)
             .ok_or("cannot seat")?;
     }
-    let f = fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| {
-        h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
-    })
-    .map_err(|e| e.to_string())?;
-    host.world.live(CASSARDIS_ROWS);
-    host.world.manual_stages = true;
+    let movies = if intro {
+        crate::movie::event_paths(&host.story.as_ref().unwrap().data)?
+    } else { HashMap::new() };
+    host.world.inner.play_rows.extend(movies.keys().copied());
+    let route = to_newly_arisen();
+    // Split the existing stand-in route, retaining its sourced scenario volumes.
+    // The stop itself is the quest's PlayEvent request, never elapsed time.
+    let route_end = if intro { route.iter().position(|w| w.stage == STAGE).unwrap_or(route.len()) } else { route.len() };
+    let f = fast_forward(&mut host, &route[..route_end], 240, 30_000, |h| {
+        if intro { h.world.inner.awaiting.is_some_and(|row| movies.contains_key(&row)) }
+        else { h.story.as_ref().is_some_and(|s| s.quest(1).is_some()) }
+    }).map_err(|e| e.to_string())?;
+    let intro_movie = host.world.inner.awaiting.and_then(|row| movies.get(&row).cloned());
+    if !intro {
+        host.world.live(CASSARDIS_ROWS);
+        host.world.manual_stages = true;
+    }
     let w = &host.story.as_ref().unwrap().world;
     info!(
         "opening: fast-forwarded {} frames in {:.1} s: SceNo ladder {:?}; now stage {}, SceNo {}, start position {}, {:02}:{:02}",
@@ -308,6 +322,7 @@ pub fn prepare(
     let sce = w.sce_no;
     let npc_adapter = NpcAdapter::cassardis(&vfs, exe)?;
     let mut s = Session {
+        intro_movie,
         host: HostHandle {
             local: Some(Box::new(host)),
             server: None,
@@ -357,11 +372,40 @@ pub fn prepare(
         .arrival
         .filter(|(stage, _)| *stage == STAGE)
         .map_or(s.world().start_pos, |(_, n)| n);
-    s.place_party(start);
+    if !intro { s.place_party(start); }
     Ok(s)
 }
 
 impl Session {
+    /// Finish the actual awaited movie, then wait for the quest's editor jump.
+    pub fn intro_movie_done(&mut self) -> Result<(), String> {
+        if self.intro_movie.is_none() { return Err("no intro movie awaiting completion".into()); }
+        self.host.world.inner.awaiting.take().ok_or("no movie event awaited")?;
+        self.host.world.event_done();
+        fast_forward(&mut self.host, &[], 240, 30_000, |h| {
+            h.story.as_ref().is_some_and(|s| s.world.stage_no == 801)
+        }).map_err(|e| e.to_string())?;
+        self.intro_movie = None;
+        info!("opening: movie EventFinished -> authored editor stage 801");
+        Ok(())
+    }
+
+    /// Editor confirmation resumes the remaining stand-in dragon route.
+    pub fn intro_edit_done(&mut self) -> Result<(), String> {
+        if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
+        let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
+        let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
+            h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
+        }).map_err(|e| e.to_string())?;
+        self.host.world.live(CASSARDIS_ROWS);
+        self.host.world.manual_stages = true;
+        self.last_sce = self.world().sce_no;
+        let start = f.arrival.filter(|(stage, _)| *stage == STAGE)
+            .map_or(self.world().start_pos, |(_, n)| n);
+        self.place_party(start);
+        Ok(())
+    }
+
     fn sync_npc_intels(&mut self) -> Result<(), String> {
         let stage = self.world().stage_no;
         // Retire old-stage owners before admitting the new stage, including
@@ -2084,7 +2128,7 @@ mod tests {
         let grid = crate::stream::Streamer::field_grid(native).unwrap();
         let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
         assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
-        let mut session = prepare(native, &exe, 2, false, None).unwrap();
+        let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
         // Fixture observations satisfy this installed group's authored gates;
         // this is not a claim that the full opening route has reached them.
         let story = session.host.story.as_mut().unwrap();
@@ -2130,6 +2174,36 @@ mod tests {
         assert_eq!(session.host.roster.ids().count(), 2);
         assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
         assert!(!session.npc_adapter.layouts.contains_key(&100));
+    }
+
+    #[test]
+    fn installed_intro_waits_on_quest_movie_then_editor_before_q0001() {
+        use ddstory::data::Data;
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.exists() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let mut session = prepare(native, &exe, 2, false, None, true).unwrap();
+        let row = session.host.world.inner.awaiting.unwrap();
+        let event = &session.host.story.as_ref().unwrap().data.event_table().unwrap().rows[row];
+        assert_eq!((event.stage, event.event), (100, 0));
+        assert_eq!(session.world().stage_no, 800);
+        assert_eq!(session.world().sce_no, 1000);
+        assert!(session.host.story.as_ref().unwrap().quest(0).is_some());
+        assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
+        assert!(session.intro_movie.as_ref().unwrap().ends_with("movie/event/st100ev00.wmv"));
+        assert!(session.intro_edit_done().is_err(), "editor cannot confirm during the movie");
+        for _ in 0..120 { session.host.tick(&FrameInputs::new()).unwrap(); }
+        assert_eq!(session.host.world.inner.awaiting, Some(row), "movie never auto-completes");
+        assert_eq!(session.world().stage_no, 800);
+        session.intro_movie_done().unwrap();
+        assert_eq!(session.world().stage_no, 801);
+        assert!(session.intro_movie_done().is_err(), "movie completion is consumed once");
+        assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
+        session.intro_edit_done().unwrap();
+        assert_eq!(session.world().stage_no, STAGE);
+        assert!(session.host.story.as_ref().unwrap().quest(1).is_some());
+        assert_eq!(session.host.roster.ids().count(), 2);
+        assert!(session.intro_edit_done().is_err(), "editor completion is consumed once");
     }
 
     use super::*;

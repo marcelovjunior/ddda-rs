@@ -8,8 +8,8 @@
 //! or is skipped, [`MovieFinished`] is set for the caller (the opening's
 //! q0000 waits on its event).
 //!
-//! *Viewer choices:* Enter or Esc skips (the original's skip input is not
-//! traced). The picture keeps its 16:9 aspect, letterboxed on black.
+//! Escape or any connected pad's Start press skips (0x004367c0).
+//! Viewer choice: preserve the picture aspect, letterboxed on black.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, TryRecvError};
@@ -31,7 +31,36 @@ pub fn path(native_pc: &Path, name: &str) -> PathBuf {
     native_pc.join("movie").join(dir).join(format!("{name}.wmv"))
 }
 
-/// Set by a caller to skip the playing movie (as Enter / Esc do).
+/// Resolve movie resources from each installed event scheduler, not an
+/// assumed filename/order. The original prepare handler 0x00435d90 finds
+/// the timeline-created uMovie named Movie and starts that resource.
+pub fn event_paths(data: &ddstory::data::InstallData) -> Result<std::collections::HashMap<usize, PathBuf>, String> {
+    use ddstory::data::Data;
+    use ddquest::sdl::{Scheduler, Value};
+    let mut movies = std::collections::HashMap::new();
+    let table = data.event_table().ok_or("movie events need the installed event table")?;
+    for (row, event) in table.rows.iter().enumerate() {
+        let path = format!("event\\{}", event.path);
+        let Some(bytes) = data.resource(&path, "rScheduler").map_err(|e| e.to_string())? else { continue };
+        let sched = Scheduler::parse(&bytes).map_err(|e| e.to_string())?;
+        for track in &sched.tracks {
+            for key in &track.keys {
+                if let Value::Resource(Some((hash, resource))) = &key.value {
+                    if *hash == mtarc::type_hash("rMovieOnDisk") {
+                        let mut path = data.native_pc.clone();
+                        path.extend(resource.split(['\\', '/']));
+                        path.set_extension("wmv");
+                        if let Some(previous) = movies.insert(row, path.clone()) {
+                            if previous != path { return Err(format!("event {row} has multiple movie resources")); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(movies)
+}
+/// Explicit automation request, separate from the original input bindings.
 #[derive(Resource, Default)]
 pub struct MovieSkip(pub bool);
 
@@ -120,6 +149,7 @@ pub fn start(commands: &mut Commands, images: &mut Assets<Image>, path: &Path) -
         })
         .id();
     commands.insert_resource(MovieFinished(false));
+    commands.insert_resource(MovieSkip(false));
     commands.insert_resource(MoviePlayer {
         name,
         frames: Mutex::new(frames),
@@ -154,13 +184,13 @@ pub fn update(
     mut finished: ResMut<MovieFinished>,
     time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
     mut skip_request: ResMut<MovieSkip>,
     mut images: ResMut<Assets<Image>>,
     mut sounds: ResMut<Assets<DecodedAudio>>,
 ) {
     let Some(mut m) = player else { return };
     let now = time.elapsed_secs_f64();
-    let skip = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Escape) || std::mem::take(&mut skip_request.0);
     if m.start.is_none() {
         // wait for the soundtrack so picture and sound start together
         let ready = match m.sound.as_mut().map(|r| r.get_mut().unwrap().try_recv()) {
@@ -178,12 +208,15 @@ pub fn update(
             Some(Err(TryRecvError::Disconnected)) | None => true,
             Some(Err(TryRecvError::Empty)) => false,
         };
-        if !ready && !skip {
+        if !ready {
             return;
         }
         m.sound = None;
         m.start = Some(now);
     }
+    // 0x00435fb0 polls skip only in playing state, after preparation.
+    let requested = std::mem::take(&mut skip_request.0);
+    let skip = skip_input(&keys, pads.iter()) || requested;
     let elapsed = now - m.start.unwrap_or(now);
     // the newest frame due now (late frames are dropped)
     let mut due = None;
@@ -217,5 +250,72 @@ pub fn update(
         }
         commands.remove_resource::<MoviePlayer>();
         finished.0 = true;
+    }
+}
+
+/// Translated from 0x004367c0 / 0x0040d200 (DDDA.exe 2017-12-13 Steam).
+/// Escape (fixed ID_CANCEL) or a Start press; no seen-before gate. Bevy
+/// provides connected devices rather than the original four physical slots.
+fn skip_input<'a>(keys: &ButtonInput<KeyCode>, pads: impl Iterator<Item = &'a Gamepad>) -> bool {
+    keys.just_pressed(KeyCode::Escape) || pads.into_iter().any(|pad| pad.just_pressed(GamepadButton::Start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exercise the real playback system without a decoder/window: input
+    /// completion must remove playback and acknowledge its caller.
+    #[test]
+    fn playback_skip_finishes_the_movie_and_releases_its_entities() {
+        for use_pad in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<Time<Real>>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<Assets<Image>>()
+                .init_resource::<Assets<DecodedAudio>>()
+                .init_resource::<MovieSkip>()
+                .init_resource::<MovieFinished>()
+                .add_systems(Update, update);
+            let root = app.world_mut().spawn_empty().id();
+            let (_tx, frames) = sync_channel(AHEAD);
+            app.insert_resource(MoviePlayer {
+                name: "test".into(), frames: Mutex::new(frames), sound: None,
+                image: Handle::default(), root, start: Some(0.0), next: None,
+                voice: None, ended: false,
+            });
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+            app.update();
+            assert!(!app.world().resource::<MovieFinished>().0);
+            assert!(app.world().contains_resource::<MoviePlayer>());
+            if use_pad {
+                app.world_mut().spawn(Gamepad::default());
+                let mut second = Gamepad::default();
+                second.digital_mut().press(GamepadButton::Start);
+                app.world_mut().spawn(second);
+            } else {
+                app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            }
+            app.update();
+            assert!(app.world().resource::<MovieFinished>().0);
+            assert!(!app.world().contains_resource::<MoviePlayer>());
+            assert!(app.world().get_entity(root).is_err());
+        }
+    }
+
+    #[test]
+    fn first_movie_accepts_escape_and_any_pad_start_edges_only() {
+        let mut keys = ButtonInput::default();
+        let mut pads = [Gamepad::default(), Gamepad::default()];
+        keys.press(KeyCode::Enter);
+        assert!(!skip_input(&keys, pads.iter()));
+        keys.press(KeyCode::Escape);
+        assert!(skip_input(&keys, pads.iter()));
+        keys.clear();
+        assert!(!skip_input(&keys, pads.iter()), "held Escape is not a press edge");
+        pads[1].digital_mut().press(GamepadButton::Start);
+        assert!(skip_input(&keys, pads.iter()));
+        pads[1].digital_mut().clear();
+        assert!(!skip_input(&keys, pads.iter()), "held Start is not a press edge");
     }
 }

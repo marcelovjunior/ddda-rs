@@ -827,6 +827,7 @@ pub fn apply_actors(
             a.shown = v.motion_no;
         }
         pb.hold_frame = Some(v.motion_frame);
+        pb.event_frame = f.frame;
         // Joint 255 carries the actor's placement in stage coordinates
         // (character::animate skips it); *assumed* from the data: the
         // event motions' root tracks hold absolute positions near the

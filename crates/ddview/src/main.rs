@@ -578,11 +578,11 @@ fn main() {
     }
     let mut args = args();
     args = net::prejoin(args);
-    // --opening: the host walks to q0001 before the window opens; the
-    // stage, clock and camera start come from it.
+    // --opening: stand-ins walk to the awaited movie (or q0001 when the
+    // intro is bypassed); stage, clock and camera start come from the host.
     let session = args.opening.then(|| {
         let exe = args.native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default();
-        let mut s = opening::prepare(&args.native_pc, &exe, if args.host.is_some() || args.join.is_some() { 1 } else { args.players }, args.demo, args.shots.clone())
+        let mut s = opening::prepare(&args.native_pc, &exe, if args.host.is_some() || args.join.is_some() { 1 } else { args.players }, args.demo, args.shots.clone(), !args.skip_intro && args.save_xml.is_none() && !args.demo && args.host.is_none() && args.join.is_none())
             .unwrap_or_else(|e| panic!("--opening: {e}"));
         if args.perf_route { s.enable_perf_route(); }
         let w = &s.host.story.as_ref().unwrap().world;
@@ -748,8 +748,8 @@ fn setup(
         return;
     }
     if let Some(session) = slot.0.lock().unwrap().take() {
-        // The movie and the editor first (intro.rs), unless the run has its
-        // own Arisen or is unattended or networked.
+        // Present the awaited movie and editor unless the run supplies its
+        // own Arisen, bypasses the intro, or is networked.
         let intro = !args.skip_intro && args.save_xml.is_none() && !args.demo && args.host.is_none() && args.join.is_none();
         if intro {
             intro::start(&mut commands, &mut images, &args.native_pc, session, vfs, mfx);
