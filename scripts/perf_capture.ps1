@@ -46,7 +46,9 @@ $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
 try {
     $env:DDVIEW_PERF_SECONDS = [string]$Seconds
-    $env:TRACE_CHROME = if ($Trace) { "$outputPath.trace.json" } else { $null }
+    # A trace-feature binary records automatically. Always send its output to
+    # the private directory, even if -Trace was omitted; normal builds ignore it.
+    $env:TRACE_CHROME = "$outputPath.trace.json"
     $env:DDVIEW_NO_SHADOWS = if ($NoShadows) { '1' } else { $null }
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
     [ordered]@{
