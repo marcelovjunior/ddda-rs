@@ -115,6 +115,16 @@ r = h.run(addr, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=10000
 - `poke={addr: value}` writes a 32-bit value into the image before the
   run: use it to point a global (e.g. a manager singleton at 0x018FA4BC)
   at a fake object in scratch.
+- **Verified callees run for real.** When a function calls one that is
+  already verified (e.g. every enemy action entry calls `cActionBase::vf05`
+  0x007F1890), pass `allow={0x007F1890}`: the original callee executes
+  inside the vectors, and the port calls the verified Rust function at the
+  same point. This is how ports compose.
+- **Scratch is executable.** For a *virtual* callee that is not the code
+  under test (e.g. an owner's `getDTI` at vtable +0x10), write a tiny
+  fixture into scratch (`B8 <imm32> C3` = `mov eax, imm32; ret`) and point
+  the fake vtable at it. The port takes that callee's result as a closure.
+  Say so in the generator's docstring.
 
 ## Workflow
 
@@ -207,6 +217,37 @@ member is still replayed by the family test.
   constructors); the vectors record each member's value
   (`struct.unpack_from("<I", h.code(addr + slot_offset, 4))`).
 
+## Pattern families
+
+Some code repeats one block with a varying *field offset* (not an
+in-image constant), so `families.py` does not group it. `research/native/
+patterns.py` holds strict recognizers: each parses the disassembly
+instruction by instruction and returns the per-function parameters, or
+None if anything falls outside the pattern.
+
+| pattern | functions | port |
+|---|---:|---|
+| `drop_dead_refs`: clear each held unit reference whose unit's state (+4, low 3 bits) is not 1 or 2 | 23 | `unit::drop_dead_refs` |
+
+`python patterns.py drop_dead_refs` writes the matches to
+`E:/ddda-re/notes/native/patterns/drop_dead_refs.json` (list of
+`{addr, name, offsets}`); `python patterns.py vectors` records vectors;
+a family file `families/drop_dead_refs_family.json` (representative =
+lowest address) lets the tracker credit every member. Raw pattern lists
+must stay out of `families/` (the tracker reads every file there as
+`{representative, members}`).
+
+## Private file layout
+
+```
+E:/ddda-re/notes/inventory/  inventory.sqlite, functions.tsv, calls.tsv,
+                             shape_families.json, exact_families.json
+E:/ddda-re/notes/native/     platform.json
+    families/*.json          {"representative", "members", "rule"}: tracker credit
+    patterns/*.json          raw recognizer output (per-function parameters)
+    vectors/*.json           differential vectors, one file per test
+```
+
 ## The platform layer
 
 Code Rust replaces instead of translating. `families.py platform` and
@@ -265,6 +306,11 @@ only allocation, freeing and type registration are replaced.
 | 0x008C7780 + 956 | action in-place constructor family (957 classes) | `action::construct` | 957 |
 | 0x004CBBE0 + 271 | extended action constructor family (272) | `action::construct_extended` | 272 |
 | 0x004DFA00 + 29 | action constructor with +0x8C (30) | `action::construct_with_8c` | 30 |
+| 0x00ACC4A0 | cPlActTired::vf09 (message handler) | `action::tired_message` | 7 |
+| 0x00B44FB0 | cPlActWpnWandBase::vf10 (held references) | `action::wand_base_refs` | 60 |
+| 0x00BB2150 | uNpc::vf118 (death reported once) | `character::npc_death_once` | 27 |
+| 0x004F57E0 + 22 | drop_dead_refs pattern (23 action vf10s) | `unit::drop_dead_refs` | 276 |
+| 0x004E0EB0 + 15 | enemy-family action entry (cEm0600 ... cEm9807, cEmDieBone) | `action::enemy_action_enter` | 160 |
 
 `python scripts/inventory.py summary` gives the live count.
 
