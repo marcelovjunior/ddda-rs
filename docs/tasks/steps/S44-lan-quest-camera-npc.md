@@ -51,7 +51,11 @@ documented.
   explicit absent camera. The guest never advances the ownership clock or
   emits CameraFinished: its installed resource exhaustion cannot release
   the host's owner. Client lock is applied before pending command replay
-  and subsequent prediction. The S40 source remains 0x005C4600,
+  and subsequent prediction. Stage changes suspend prediction until the
+  new installed collision is ready; the held commands replay once. Remote
+  interpolation clamps to the new stage boundary while old snapshots are
+  retained as wire baselines. Ordinary terrain refreshes do not replay
+  already predicted commands. The S40 source remains 0x005C4600,
   0x007B77E0/0x007BA2D0; the replication policy is a co-op decision.
 - NPC snapshots use groups for position, lifetime/yaw/scale, gauge,
   motion token (command/launch/bank/slot/frame/blend), and HP/max/death

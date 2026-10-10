@@ -60,6 +60,8 @@ pub struct Client<T: Transport> {
     /// Looks by seat, from Look events.
     pub looks: BTreeMap<PlayerId, LookData>,
     quest_camera: Option<crate::quest_camera::QuestCamera>,
+    ground_pending: bool,
+    stage_start_frame: u64,
 }
 
 #[cfg(test)]
@@ -94,7 +96,73 @@ mod camera_prediction_tests {
             bodies: vec![own], vitals: vec![], enemies: vec![], npcs: vec![], quest_camera: None });
         assert!(!client.actions_blocked());
         client.predict(1, 13, moving);
-        assert_ne!(client.own().unwrap().position, replayed.position, "explicit host end unlocks prediction");
+        assert_ne!(client.own().unwrap().state, replayed.state, "explicit host end admits movement/jump input before prediction");
+    }
+
+    fn snap(frame: u64, stage: u32, bodies: Vec<Body>, enemies: Vec<Enemy>) -> Snapshot {
+        Snapshot { frame, stage: Some(stage), base: None, cmd_newest: None,
+            bodies, enemies, vitals: vec![], npcs: vec![], quest_camera: None }
+    }
+    #[test]
+    fn stage_change_suspends_old_ground_then_replays_each_command_once() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        struct CountGround { floor: f32, calls: Arc<AtomicUsize> }
+        impl Ground for CountGround {
+            fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> {
+                self.calls.fetch_add(1, Ordering::Relaxed); (self.floor <= below).then_some(self.floor)
+            }
+        }
+        let mut sim = Sim::new(Default::default()); sim.add_player(1, [0.0; 3], 0.0);
+        let mut own = Body::of(sim.player(1).unwrap());
+        let old_calls = Arc::new(AtomicUsize::new(0));
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(),
+            Udp::bind("127.0.0.1:0").unwrap().local_addr(), 2, 1, 2, None, sim,
+            Box::new(CountGround { floor: 0.0, calls: old_calls.clone() }), 0);
+        client.seat = Some(1);
+        client.apply(snap(10, 100, vec![own.clone()], vec![]));
+        let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], ..Default::default() }, ..Default::default() };
+        client.cmds.push_back((21, moving));
+        own.position = [3000.0, 0.0, 0.0];
+        client.apply(snap(20, 200, vec![own.clone()], vec![]));
+        assert!(client.ground_pending);
+        assert_eq!(old_calls.load(Ordering::Relaxed), 0, "apply never replays on old stage collision");
+        client.predict(1, 21, moving);
+        assert_eq!(client.own().unwrap(), own, "new command waits with authoritative body");
+        let new_calls = Arc::new(AtomicUsize::new(0));
+        client.set_ground(Box::new(CountGround { floor: -100.0, calls: new_calls.clone() }));
+        assert!(!client.ground_pending);
+        assert!(new_calls.load(Ordering::Relaxed) > 0);
+        assert_eq!(client.predicted.iter().filter(|(f, _)| *f == 21).count(), 1);
+        assert_eq!(client.cmds.len(), 1, "reconciliation does not upload or duplicate a command");
+        let predicted = client.own().unwrap();
+        assert_eq!(predicted.state, ddsim::State::Fall, "new lower ground controls the replayed state");
+        let calls = new_calls.load(Ordering::Relaxed);
+        client.set_ground(Box::new(CountGround { floor: -100.0, calls: new_calls.clone() }));
+        assert_eq!(new_calls.load(Ordering::Relaxed), calls, "ordinary terrain refresh does not replay twice");
+        assert_eq!(client.own().unwrap(), predicted);
+    }
+    #[test]
+    fn remote_players_and_enemies_never_interpolate_across_stage_boundary() {
+        use crate::mirror::{EnemyIdentity, EnemyFamily, EnemyRotation};
+        let mut sim = Sim::new(Default::default()); sim.add_player(1, [0.0; 3], 0.0);
+        let mut remote = Body::of(sim.player(1).unwrap()); remote.id = 2;
+        let mut enemy = Enemy { id: 256, identity: EnemyIdentity { family: EnemyFamily::Goblin,
+            model: "fixture/model".into(), banks: vec![] }, pos: [0.0; 3], rotation: EnemyRotation::Yaw(0.0),
+            scale: [1.0; 3], action: 0, bank: 0, slot: 0, frame: 0.0, hp: 1.0, hp_max: 1.0, dead: false };
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(),
+            Udp::bind("127.0.0.1:0").unwrap().local_addr(), 2, 1, 2, None, sim, Box::new(Flat), 0);
+        client.seat = Some(1);
+        client.apply(snap(10, 100, vec![remote.clone()], vec![enemy.clone()]));
+        remote.position = [10000.0; 3]; enemy.pos = [10000.0; 3];
+        client.apply(snap(12, 200, vec![remote.clone()], vec![enemy.clone()]));
+        assert_eq!(client.others_at(11.0)[0].position, remote.position);
+        assert_eq!(client.enemies_at(11.0)[0].pos, enemy.pos);
+        // Previous-stage snapshots remain available as wire delta baselines.
+        assert_eq!(client.snaps.front().unwrap().frame, 10);
+        remote.position = [20000.0; 3]; enemy.pos = [20000.0; 3];
+        client.apply(snap(14, 200, vec![remote], vec![enemy]));
+        assert_eq!(client.others_at(13.0)[0].position, [15000.0; 3]);
+        assert_eq!(client.enemies_at(13.0)[0].pos, [15000.0; 3]);
     }
 }
 
@@ -139,6 +207,8 @@ impl<T: Transport> Client<T> {
             spot: None,
             looks: BTreeMap::new(),
             quest_camera: None,
+            ground_pending: false,
+            stage_start_frame: 0,
         }
     }
 
@@ -146,8 +216,10 @@ impl<T: Transport> Client<T> {
     /// before loading the host's world).
     pub fn set_ground(&mut self, ground: Box<dyn Ground + Send>) {
         self.ground = ground;
-        // A newly received stage used the previous collision until its local
-        // install was loaded. Replay against the new ground immediately.
+        if !std::mem::take(&mut self.ground_pending) { return; }
+        // Commands were suspended at the stage boundary. Reapply the latest
+        // host body and replay them exactly once on the newly loaded ground.
+        // Ordinary collision refreshes never replay already predicted commands.
         if let Some((frame, own)) = self.snaps.back().and_then(|s|
             self.seat.and_then(|id| s.bodies.iter().find(|b| b.id == id)).map(|b| (s.frame, b.clone()))) {
             if let Some(player) = self.sim.player_mut(own.id) { own.apply(player); }
@@ -202,6 +274,13 @@ impl<T: Transport> Client<T> {
 
     fn apply(&mut self, s: Snapshot) {
         self.snapshots += 1;
+        let stage_changed = self.snaps.back().is_some_and(|last| last.stage != s.stage);
+        if stage_changed {
+            // Until the view loads the new installed collision, show the host
+            // body and keep commands queued rather than run them on old ground.
+            self.ground_pending = true;
+            self.stage_start_frame = s.frame;
+        }
         // Apply before replay as well as the next prediction step.
         self.quest_camera = s.quest_camera;
         if let (Some(seat), Some(n)) = (self.seat, s.cmd_newest) {
@@ -217,7 +296,7 @@ impl<T: Transport> Client<T> {
             let _ = seat;
         }
         if let Some(own) = self.seat.and_then(|id| s.bodies.iter().find(|b| b.id == id)).cloned() {
-            if let Some(&(_, p)) = self.predicted.iter().find(|(f, _)| *f == s.frame) {
+            if let Some(&(_, p)) = self.predicted.iter().find(|(f, _)| *f == s.frame).filter(|_| !stage_changed) {
                 let d: f32 = (0..3).map(|i| (p[i] - own.position[i]).powi(2)).sum::<f32>().sqrt();
                 self.last_error = d;
                 self.max_error = self.max_error.max(d);
@@ -243,6 +322,7 @@ impl<T: Transport> Client<T> {
     }
 
     fn predict(&mut self, id: PlayerId, frame: u64, c: PlayerInput) {
+        if self.ground_pending { return; }
         let input = if self.actions_blocked() { ddsim::Input::default() } else { c.sim };
         let inputs = HashMap::from([(id, input)]);
         self.sim.step(self.clock.seconds(), &inputs, self.ground.as_ref());
@@ -317,12 +397,14 @@ impl<T: Transport> Client<T> {
     pub fn others_at(&self, t: f64) -> Vec<Body> {
         let own = self.seat;
         let Some(last) = self.snaps.back() else { return vec![] };
+        let t = t.max(self.stage_start_frame as f64);
         let after = self.snaps.iter().position(|s| s.frame as f64 >= t);
         let pick = |s: &Snapshot| s.bodies.iter().filter(|b| Some(b.id) != own).cloned().collect::<Vec<_>>();
         match after {
             Some(0) | None => pick(if after.is_none() { last } else { &self.snaps[0] }),
             Some(i) => {
                 let (a, b) = (&self.snaps[i - 1], &self.snaps[i]);
+                if a.frame < self.stage_start_frame { return pick(b); }
                 let k = ((t - a.frame as f64) / (b.frame - a.frame) as f64) as f32;
                 pick(b)
                     .into_iter()
@@ -344,11 +426,13 @@ impl<T: Transport> Client<T> {
     /// interpolated like the other Arisen.
     pub fn enemies_at(&self, t: f64) -> Vec<Enemy> {
         let Some(last) = self.snaps.back() else { return vec![] };
+        let t = t.max(self.stage_start_frame as f64);
         match self.snaps.iter().position(|s| s.frame as f64 >= t) {
             None => last.enemies.clone(),
             Some(0) => self.snaps[0].enemies.clone(),
             Some(i) => {
                 let (a, b) = (&self.snaps[i - 1], &self.snaps[i]);
+                if a.frame < self.stage_start_frame { return b.enemies.clone(); }
                 let k = ((t - a.frame as f64) / (b.frame - a.frame) as f64) as f32;
                 b.enemies
                     .iter()
