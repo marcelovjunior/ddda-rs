@@ -311,3 +311,48 @@ then test the largest measured cost without changing presentation quality.
   use this pin: the old failed CPU picture is never a performance baseline.
   **Pending:** actual corrected PNG fidelity and timings, default selection,
   full-route/room measurements and 180 fps acceptance. Default remains GPU.
+
+### Second actual CPU/GPU comparison: still rejected; startup ordering fixed
+
+- Head completed the `a35a00c` batch on board #6153: GPU PID 24464,
+  exit 0 / 58.2 s; CPU PID 8516, exit 0 / 52.4 s. Both `.run.json`
+  files record the same pinned SHA-256 above, identical scene/camera/two
+  players/default backend, and both `.exit.txt` files contain zero.
+- Both PNGs were actually inspected by codex-66 and independently codex-1.
+  GPU has intact terrain and both bodies; CPU still has mostly sky,
+  sliced/deformed terrain and no recognizable bodies. **Fidelity FAIL.**
+  All CPU timing is invalid as an optimization result. Warm 20–40 s
+  windows ending approximately 25/30/35/40 s have GPU medians
+  7.2/7.1/7.3/7.1 ms (median of medians 7.15 ms), p99
+  11.1/10.2/10.9/11.7 ms. Broken CPU medians are 2.9/2.3/2.2/3.0 ms,
+  p99 7.3/4.6/5.1/6.0 ms; they do not represent equivalent rendering.
+  Visibility counters still match 365 meshes / 263 unique / 208 visible
+  DD materials / 745 allocated. Original PID 23408 remains listed and
+  has 0% Windows 3D-engine share in all four UTC-aligned warm samples.
+- The preceding build-time capability correction was insufficient.
+  Pinned Bevy 0.19.1 `bevy_render/src/lib.rs:220` shows
+  `init_gpu_resource` unconditionally constructs and replaces a resource,
+  unlike `init_resource`. `GpuPreprocessingPlugin::finish`
+  (`batching/gpu_preprocessing.rs:91`) registers this for
+  `GpuPreprocessingSupport` in `RenderStartup`. It overwrites our build-time
+  `None`; the actual CPU log at line 24 again reports full GPU support.
+  Earlier queue tests did not execute startup, so they could not detect it.
+- Source correction `b41e62d` retains the initial capability override and
+  adds a CPU-only `RenderStartup` cap system ordered **after the actual
+  `init_gpu_resource::<GpuPreprocessingSupport>`**. It logs the final
+  `None` after device initialization. Bevy's `RenderStartup` documentation
+  explicitly reruns this schedule on each new `RenderDevice`, so the same
+  ordering handles device recovery. A new headless regression reproduces
+  unconditional device-capability replacement twice, then queues an actual
+  opaque phase each time and verifies the CPU batchable bucket. It
+  reproduces resource replacement without constructing a headless GPU.
+- Full `cargo test --release -p ddview`: **82 passed, 0 failed, 2 existing
+  ignored**, compilation 20.22 s / tests 9.67 s. Default release build:
+  **exit 0**, 35.00 s. Combined session 28929 actually exited 0; M5 lease
+  released after private pin `ddview-builder-b41e62d.exe`, SHA-256
+  `A4D3E774E29172DDEC548BF77D651D7D78A38FF5A347DF0988C95253F9AEFC87`.
+- **Pending:** independent source review and actual final resource-mode
+  log/picture validation. No further CPU capture was requested before that
+  review. Neither passing startup tests nor the new source establishes
+  visual correctness or a gain. Default remains GPU; the approved shader
+  specialization hypothesis continues on its own separate branch.
