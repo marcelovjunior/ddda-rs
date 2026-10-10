@@ -19,6 +19,50 @@ pub const DAGGER_MOTIONS: &str = r"motion\pl\m\m00\m0004_co\m0004_co";
 pub const JUMP_PARAMS: &str = r"param\pl\other\pljumpparam";
 /// `rAdjustParam` of the player: ground speeds and ledge values by id.
 pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
+/// Shortbow action records selected by 0x00B16DC0; record zero is basic aim.
+pub const BOW_PARAMS: &str = r"param\bow_act_param_06";
+pub const BOW_MOTIONS: &str = r"motion\pl\m\m00\m0006_at\m0006_at";
+
+/// Typed projection of all installed bow records. The nesting is
+/// rBowActParamList.mParamList -> MtArray.mpArray, not a flattened object
+/// count (each record also contains its shoot-controller array).
+pub fn bow_params(vfs: &ddvfs::Vfs) -> Result<Vec<ddsim::BowParam>, String> {
+    use mtxfs::Value;
+    let x = mtxfs::parse(&vfs.read(BOW_PARAMS, mtarc::type_hash("rBowActParamList"))?)
+        .map_err(|e| format!("{BOW_PARAMS}: {e}"))?;
+    let Some(Value::Object(Some(array))) = x.get(&x.root, "mParamList").and_then(|v| v.first()) else {
+        return Err(format!("{BOW_PARAMS}: no mParamList"));
+    };
+    let rows = x.get(array, "mpArray").ok_or(format!("{BOW_PARAMS}: no mpArray"))?;
+    rows.iter().enumerate().map(|(index, row)| {
+        let Value::Object(Some(o)) = row else { return Err(format!("{BOW_PARAMS}: null row {index}")) };
+        let byte = |name: &str| -> Result<u8, String> {
+            match x.get(o, name).and_then(|v| v.first()) {
+                Some(Value::U(v)) => u8::try_from(*v).map_err(|_| format!("{BOW_PARAMS}[{index}].{name}: not u8")),
+                _ => Err(format!("{BOW_PARAMS}[{index}]: no {name}")),
+            }
+        };
+        let boolean = |name: &str| -> Result<bool, String> {
+            match x.get(o, name).and_then(|v| v.first()) {
+                Some(Value::Bool(v)) => Ok(*v),
+                _ => Err(format!("{BOW_PARAMS}[{index}]: no {name}")),
+            }
+        };
+        let float = |name: &str| -> Result<f32, String> {
+            match x.get(o, name).and_then(|v| v.first()) {
+                Some(Value::F(v)) if v.first().is_some_and(|f| f.is_finite()) => Ok(v[0] as f32),
+                _ => Err(format!("{BOW_PARAMS}[{index}]: no finite {name}")),
+            }
+        };
+        Ok(ddsim::BowParam {
+            draw_upper: byte("motBgn_Up")?, draw_lower: byte("motBgn_Low")?,
+            release_upper: byte("motEnd_Up")?, release_lower: byte("motEnd_Low")?,
+            wait_upper: byte("motWait_Up")?, wait_lower: byte("motWait_Low")?,
+            fall: byte("motFall")?, end_at_zero_stamina: boolean("isEndStamina0Wait")?,
+            wait_stamina: float("statminaWait")?,
+        })
+    }).collect()
+}
 
 /// Motion banks ddsim uses, by bank number (`motion id >> 8`).
 /// The damage motions (bank 1 of the common bank table 0x014F1D30).
@@ -94,6 +138,18 @@ pub fn sim(vfs: &ddvfs::Vfs) -> Result<Sim, String> {
     let adjust = adjust_table(vfs, ADJUST_PARAMS)?;
     sim.move_param = MoveParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: too short"))?;
     sim.ledge_param = LedgeParam::from_adjust(&adjust).ok_or(format!("{ADJUST_PARAMS}: no ledge params"))?;
+    sim.bow_param = Some(*bow_params(vfs)?.first().ok_or("bow parameters: empty list")?);
+    let list = mtlmt::parse(&vfs.read(BOW_MOTIONS, mtarc::type_hash("rMotionList"))?)
+        .map_err(|e| format!("{BOW_MOTIONS}: {e}"))?;
+    let mut bow = HashMap::new();
+    for (slot, motion) in list.motions.iter().enumerate() {
+        let Some(motion) = motion else { continue };
+        let slot = u8::try_from(slot).map_err(|_| format!("{BOW_MOTIONS}: slot {slot} exceeds bank width"))?;
+        bow.insert(0x900 | u16::from(slot), RootMotion::from_motion(motion)
+            .with_curves(list.curves[usize::from(slot)].clone())
+            .with_events(list.events[usize::from(slot)].clone()));
+    }
+    sim.weapon_motions.insert(ddsim::Weapon::Bow, bow);
     Ok(sim)
 }
 
