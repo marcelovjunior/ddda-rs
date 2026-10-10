@@ -794,16 +794,23 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
     let desired_eye = target - dir * CAMERA_DISTANCE;
+    collide_camera(ground, desired_eye, target, CAMERA_NEAR)
+}
+
+/// Collision-only pose update, separated from the measured follow offset
+/// so original candidate poses can be compared without assuming its lag,
+/// authored target height or actor avoidance offset.
+fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, near: f32) -> (Vec3, Vec3) {
     let mut eye = desired_eye;
     if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
     let toward = (target - eye).normalize_or_zero();
-    let radius = CAMERA_NEAR * 1.3;
-    let centre = eye + toward * CAMERA_NEAR;
+    let radius = near * 1.3;
+    let centre = eye + toward * near;
     if sphere_hits(ground, centre, radius) {
         if let Some((stop, flags)) = camera_sphere_cast(ground, target, centre, radius) {
-            if flags & 0x10 == 0 { eye = stop - toward * CAMERA_NEAR; }
+            if flags & 0x10 == 0 { eye = stop - toward * near; }
         }
     }
     // Translated from 0x007e1b11..0x007e1b68 (DDDA.exe 2017-12-13 Steam):
@@ -1220,6 +1227,24 @@ mod tests {
         let (eye, target) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
         assert_eq!(eye, Vec3::new(0.0, CAMERA_TARGET_HEIGHT, -CAMERA_DISTANCE));
         assert_eq!(target, Vec3::Y * CAMERA_TARGET_HEIGHT);
+    }
+
+    #[test]
+    #[ignore = "requires private original camera pose samples and game installation"]
+    fn camera_compare_private_original_poses() {
+        // Each private row: candidate eye, candidate target, actual eye,
+        // actual target, active near. No recordings are embedded in repo.
+        let path = std::env::var("DDDA_CAMERA_POSES").expect("private pose file");
+        let native = std::env::var("DDDA_NATIVE_PC").expect("nativePC path");
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let terrain = ddhost::install::stage_collision(&vfs, 200).unwrap();
+        for (index, line) in std::fs::read_to_string(path).unwrap().lines().enumerate() {
+            let v: Vec<f32> = line.split(',').map(|s| s.parse().unwrap()).collect();
+            assert_eq!(v.len(), 13);
+            let point = |start| Vec3::new(v[start], v[start + 1], v[start + 2]);
+            let (eye, target) = collide_camera(&terrain, point(0), point(3), v[12]);
+            eprintln!("camera sample {index}: eye={eye:?} target={target:?}; errors eye={} target={}", eye.distance(point(6)), target.distance(point(9)));
+        }
     }
 
     #[test]

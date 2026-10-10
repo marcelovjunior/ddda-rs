@@ -233,6 +233,20 @@ translation to both endpoints; a wall and low-ceiling overlap regression
 checks the preserved eye-target vector. Six camera-filtered release tests
 and the release viewer build pass. Live wall/roof comparison is pending.
 
+The subsequent Cassardis wall comparison records the candidate eye/target
+on entry to **0x007e1400**, then its final pose after that frame. This
+avoids confusing authored target height, camera lag or actor avoidance
+with the collision correction. A real rock-wall contact moved eye and
+target by the same approximately `(-58.379, -16.552, 0.013)` cm. Replaying
+that candidate through the viewer collision helper and the installed
+stage200 SBC gave **0.000788 cm** eye/target error; two neighboring clear
+angles gave zero error. The private opt-in diagnostic
+`camera_compare_private_original_poses` reads externally supplied samples
+and prints errors; it does not claim an automatic tolerance gate.
+No capture data is embedded in the repository. The low-roof contact and
+full viewer pose comparison remain pending. The normal target height
+still uses the earlier measured 140 cm approximation.
+
 **0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
 or sweep result. It does not continue to the next surface. **0x007c6f90**
 resolves the collision result's material flag word for stage/static hits.

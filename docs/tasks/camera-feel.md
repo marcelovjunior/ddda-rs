@@ -79,3 +79,18 @@ backup made before unpausing; no movement/save writes; pause and bgOff
 restored. Follow collision and projection now use16. Seven camera-filtered
 release tests pass, including clear sidewall/roof that the old radius
 wrongly hit. Updated release build and exact live wall/roof tests pending.
+
+Third checkpoint: clean release build passed (27.11s, three existing
+warnings). A genuine Cassardis rock-wall collision was captured with a
+bounded, main-thread-installed entry snapshot at **0x007e1400**. Original
+instruction bytes were restored and read back after each capture. Player
+position and camera angles were restored; the game is paused/bgOff.
+Replaying the exact candidate pose against installed stage200 collision
+matches final eye and target within **0.000788 cm**; two clear angles
+match exactly. The collision-only helper accepts explicit candidate
+eye/target/near to avoid the viewer's assumed target height contaminating
+the comparison. An opt-in ignored diagnostic reads private CSV samples
+(`DDDA_CAMERA_POSES`, `DDDA_NATIVE_PC`) and reports errors, with no raw
+game capture embedded. One diagnostic run completed; this is a measured
+wall match, not a low-roof or full rendered-pose acceptance claim.
+Low-roof contact selection and full viewer comparison remain next.
