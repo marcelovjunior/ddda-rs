@@ -494,8 +494,17 @@ opening (codex-31), route perf (codex-29).
   the scenery sweep), so a goblin push uphill buried the body 17 cm under
   the slope and froze RoadWalk (`Sim::push_player`, cbc5b85). Route-v2
   checkpoints regenerated from this run, Done included.
-- **Merged on the way:** S30 static coordinate basis, S52 chatter tables
-  (core/story), S53 death helper with atomic `Host::load` prevalidation.
-- **Open:** dragon fire/route (S30/S31), death/game over runtime (S53), pawn
-  chatter runtime (S52), character creation (S56), shadow extent (S41),
-  Ghidra MCP down since the low-memory stop.
+- **Merged on the way:** S30 static coordinate basis and primary parent
+  binding, S53 death helper with atomic `Host::load` prevalidation, S41
+  finite shadow caster extent (opt-in; no measured gain).
+- **Pawn chatter (S52, protocol 10):** the installed situation/message
+  tables, native recognition clocks from the seated cameras' views (union
+  over local seats, no proximity fallback), reliable per-profile
+  PawnMessage, and the opening's presenter hooks (de93e84).
+- **Character creation (S56):** the installed editor flow: sex, name with
+  the exe's charset/blacklist rules, 16 installed presets, confirmation;
+  per-profile EDIT in the save; names on the S35/S43 GUIs. Two-profile
+  capture checked.
+- **Open:** dragon fire (S30) and beach scene (S31, codex-80), death/game
+  over + retry + vitals (S53, protocol 11), frame rate toward 180 fps (S41:
+  ~10.6 ms field frame vs 5.5 ms), Ghidra MCP down since the low-memory stop.
