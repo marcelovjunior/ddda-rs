@@ -7,11 +7,20 @@ impl ddsim::Ground for Flat {
     fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> { Some(below.min(0.0)) }
 }
 
-#[test]
-fn installed_host_npc_hp_observations_keep_lifetime_and_death_stages_separate() {
+type TestHost = Host<ddhost::data::NoStoryData, ddhost::opening::OpeningWorld>;
+struct Fixture {
+    host: TestHost,
+    placement: ddhost::npc_placements::Placement,
+    lifetime: ddhost::story_npcs::NpcLifetime,
+    owner: u32,
+    body: Arc<ddhost::ddenemyrt::npc_body::NpcBody>,
+    region: ddcombat::damage::RegionPool,
+}
+
+fn fixture() -> Option<Fixture> {
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
-    if !native.is_dir() { eprintln!("SKIP: no installed game data"); return; }
+    if !native.is_dir() { eprintln!("SKIP: no installed game data"); return None; }
     let vfs = ddvfs::Vfs::open(&native).unwrap();
     let exe = ddexe::ExeFile::next_to(&native).unwrap();
     let image = exe.image().unwrap();
@@ -31,12 +40,18 @@ fn installed_host_npc_hp_observations_keep_lifetime_and_death_stages_separate() 
     let layouts = ddhost::npc_placements::LoadedLayouts::read(&vfs, 100, &groups, &[(0, 0)]).unwrap();
     let gates = ddspawn::World { scene: 1410, hour: 12, flag: &|f| f == 3 };
     let placement = layouts.candidates(&gates).placements.into_iter().find(|p| p.npc == 304).unwrap();
-    let target = placement.target;
     host.load_story_npc_intel(placement.clone()).unwrap();
     let lifetime = host.story_npc_lifetime(304).unwrap();
     host.bind_story_npc_motion_body(lifetime, banks).unwrap();
     let combat = host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap())
         .unwrap().unwrap();
+    Some(Fixture { host, placement, lifetime, owner: combat, body, region })
+}
+
+#[test]
+fn installed_host_npc_hp_observations_keep_lifetime_and_death_stages_separate() {
+    let Some(Fixture { mut host, placement, lifetime, owner: combat, body, region }) = fixture() else { return };
+    let target = placement.target;
     let same = host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap());
     assert_eq!(same.unwrap(), Some(combat));
     for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
@@ -67,4 +82,56 @@ fn installed_host_npc_hp_observations_keep_lifetime_and_death_stages_separate() 
     assert_ne!(replacement, lifetime);
     assert!(host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap()).unwrap().is_none());
     assert!(!host.observe_story_npc_death(lifetime, DeathObservation::FadeFinished));
+}
+
+#[test]
+fn installed_host_npc_death_uses_real_layer_then_intel_wait_then_body_retirement() {
+    use ddhost::ddenemyrt::npc_death::DeathPhase;
+    let Some(Fixture { mut host, placement, lifetime, owner, body, region }) = fixture() else { return };
+    for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
+    assert!(host.story_npc_death_state(lifetime).is_none());
+    let death = body.resolve(0xcc6 + i32::from(body.look.sex != 0)).unwrap();
+    let length = body.body.motion(death).unwrap().frame_count.saturating_sub(1);
+    assert!(length > 0);
+    // Explicit HP-loss fixture isolates actor dispatch. Natural installed
+    // goblin damage and NoDamage behavior are covered by npc_sensor tests.
+    let npc = host.fight.as_mut().unwrap().npcs.get_mut(&owner).unwrap();
+    let ddhost::ddenemyrt::combat::Victim::Npc { region: live, .. } = &mut npc.fighter.victim else { unreachable!() };
+    live.hp = 0.0;
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().phase, DeathPhase::Motion);
+    let actor = host.story_npc_motion(304).unwrap();
+    assert_eq!(actor.motion, (u16::from(death.bank) << 8) | death.slot);
+    assert_eq!((actor.frame, actor.authored.blend_frames, actor.authored.speed), (0.0, 15.0, 1.0));
+    assert!(!host.story.as_ref().unwrap().world.npc_app_die.get(304));
+    for elapsed in 1..=length {
+        host.tick(&Default::default()).unwrap();
+        assert_eq!(host.story.as_ref().unwrap().world.npc_app_die.get(304), elapsed == length);
+        assert!(!host.story.as_ref().unwrap().world.npc_die.get(304));
+    }
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().wait, 1800.0,
+        "line12 ran before the line15 apparent-death write");
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().phase, DeathPhase::CorpseWait);
+    // Explicit accelerated host-clock fixture, not an ordinary-route timing
+    // measurement: native independent clocks still consume frame units.
+    host.clock.delta = 30.0;
+    for _ in 0..59 { host.tick(&Default::default()).unwrap(); }
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().wait, 30.0);
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().alpha, 1.0);
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().phase, DeathPhase::Fade);
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().alpha, 1.0);
+    assert!(!host.story_npc_body_retired(304));
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_death_state(lifetime).unwrap().phase, DeathPhase::Finished);
+    assert!(host.story.as_ref().unwrap().world.npc_die.get(304));
+    assert!(host.story_npc_body_retired(304));
+    assert!(!host.fight.as_ref().unwrap().npcs.contains_key(&owner));
+    assert_eq!(host.story_npc_lifetime(304), Some(lifetime), "intel survives body removal");
+    assert_eq!(host.story_npc_combat_facts(lifetime).unwrap().hp, 0.0);
+    assert!(!host.world.npc_intel(100, &placement.target).unwrap().hp_positive);
+    assert_eq!(host.bind_story_npc_combat(lifetime, body.clone(), region, death).unwrap(), None,
+        "same intel lifetime cannot rematerialize its permanently removed body");
+    host.tick(&Default::default()).unwrap();
+    assert!(!host.fight.as_ref().unwrap().npcs.contains_key(&owner));
 }
