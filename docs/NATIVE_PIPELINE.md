@@ -221,6 +221,77 @@ member is still replayed by the family test.
   constructors); the vectors record each member's value
   (`struct.unpack_from("<I", h.code(addr + slot_offset, 4))`).
 
+## The lifter (main engine)
+
+`research/native/lift.py` translates **leaf functions** (no `call`, no
+indirect jump, no jump out of the function) into literal Rust, one Rust
+statement group per x86 instruction, and `harness.run_sparse` verifies
+them with automatic vectors. This is how most functions get verified; the
+hand-written ports above are for the important ones, where a readable
+typed API matters.
+
+**Generated code.** `crates/ddnative/src/generated/lifted_NNN.rs` (400
+functions per module) and `lifted.rs` (`all()` lookup). Each function is
+`fn(&mut dyn Mem, Entry) -> Exit`:
+
+- `Entry`/`Exit` (ddnative::x86) carry the eight general registers, the
+  low lane of xmm0 and (Exit) the x87 top of stack. Calling conventions
+  disappear: arguments are wherever the original reads them (registers,
+  or the stack, which lives in `Mem` at `esp`).
+- Registers are locals; 8/16-bit registers are masked views (`al` =
+  `eax & 0xFF`). Basic blocks become `loop { match pc { ... } }`.
+- Flags: each flag-setting instruction stores `Flags::new(kind, a, b,
+  result, bits)`; `jcc`/`setcc` call `fl.cond("be")` etc., which computes
+  CF/ZF/SF/OF/PF exactly (add, sub/cmp/neg, logic/test, inc/dec keeping
+  CF, shl/shr/sar, comiss/ucomiss). Flags after `imul` are not modelled
+  (panic if used).
+- SSE scalar ops use `x86::addss(a, b)` etc. (std::arch intrinsics): the
+  original's operand order, so NaN propagation matches the CPU. Packed
+  add/sub/mul run the scalar op per lane.
+- x87: only copies (`fld`/`fstp`/`fst` dword, `fld1`, `fldz`, `fchs`,
+  `fabs`, `fstp st(0)`); the stack is a `Vec<u32>` of single bits with the
+  hardware signalling-NaN rule (`x87_copy`). x87 arithmetic rejects the
+  function (precision control: see below).
+
+**Sparse vectors** (`harness.run_sparse(addr, seed)`): every general
+register random, ESP in a random stack page holding the return address,
+every page mapped on first touch (exe pages from the image, any other
+page seeded random bytes). Hooks record each byte read before it was
+written (the inputs) and the final value of each byte written (the
+outputs), plus all registers, xmm0 and the x87 top (read with an `fstp`
+run on a fresh page afterwards). Rust replays them over `mem::Sparse`,
+which **panics on any read of a byte the original did not read**; the
+test compares all eight registers, xmm0, st0 and the exact set of written
+bytes.
+
+Cases are rejected (another seed is tried) when the original loads a NaN
+or infinity float from memory (Unicorn's NaN behaviour differs from the
+CPU's), when it runs more than 20,000 instructions on random data
+(runaway loops over garbage counts), or when the emulator faults.
+Functions with no usable case are dropped from the batch, not counted.
+
+**Commands.** `PY lift.py scan` (lift every non-platform leaf; prints the
+rejection reasons), `PY lift.py vectors` (parallel, all cores), `python
+lift.py gen`, then `scripts/native_gate.sh`. `PY lift.py one 0xADDR`
+prints one function's Rust.
+
+**Extending it.** Rejections are counted by reason (`call` dominates:
+functions that call others are the next stage). To support a new
+instruction, add a branch in `lift()` that emits its exact semantics
+(including flags), regenerate, and let the vectors judge. Ideas in order
+of yield: calls to already-verified or lifted functions (inline the call
+as a Rust call with the same Entry/Exit), `mul`/`div`, `rep movs/stos`,
+`movsx`/`cwde`, `sbb`/`adc`, `shld`/`shrd`, x87 arithmetic (needs the
+game's x87 precision control word: DirectX 9 sets single precision unless
+the device was created with FPU_PRESERVE; check the original's control
+word live before modelling it).
+
+**Pitfalls.** Unicorn caches translated code per page: never write new
+code into a page that has already been executed or translated (the st0
+capture first ran on the return page and silently executed stale bytes).
+Generated code is literal, not idiomatic; refactoring a function into a
+typed API is welcome later, but the vectors must keep passing.
+
 ## Pattern families
 
 Some code repeats one block with a varying *field offset* (not an
