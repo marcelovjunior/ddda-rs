@@ -739,7 +739,10 @@ mod tests {
         clock.transition(2.0, true);
         assert_eq!(clock.phase, Phase::Hold);
         assert_eq!(clock.hold, 120.0);
-        clock.transition(119.5, false);
+        for _ in 0..119 {
+            clock.transition(1.0, false);
+        }
+        clock.transition(0.5, false);
         assert_eq!(clock.phase, Phase::Hold);
         assert_eq!(clock.hold, 0.5);
         clock.transition(1.0, false);
