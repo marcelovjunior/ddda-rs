@@ -109,6 +109,33 @@ pub struct HitEvent {
     pub killed: bool,
 }
 
+/// Optional headless evidence for an accepted NPC contact. No IO or RNG
+/// lives in this observer; the caller chooses where to retain its output.
+#[derive(Debug, Clone)]
+pub struct NpcContactTrace {
+    pub attacker: u32,
+    pub key: u32,
+    pub relation: u32,
+    pub multi_hit: bool,
+    pub reset_time: f32,
+    pub attacker_values: Attacker,
+    pub raw: HitValue,
+}
+
+#[derive(Debug, Clone)]
+pub struct NpcHitTrace {
+    pub victim: u32,
+    pub region: u32,
+    pub contacts: Vec<NpcContactTrace>,
+    pub before_mitigation: ddcombat::damage::MergedHit,
+    pub after_region: ddcombat::damage::MergedHit,
+    pub defender: PlayerDefender,
+    pub rates: CollisionRates,
+    pub valued_total: f32,
+    pub hp_before: f32,
+    pub hp_after: f32,
+}
+
 /// Apply a hit already valued on another enemy collision to this linked
 /// collision. The host resolves the destination's optional region remap
 /// (+0xd34/+0xd38) and region-ID map (+0xcf4) before passing `mapped_pool`.
@@ -308,7 +335,7 @@ pub fn hit_pass_configured_with_policy(
             }
         }
     }
-    Ok(hit_pass_inner(fighters, tables, dt, roll, holds, config, policy))
+    Ok(hit_pass_inner(fighters, tables, dt, roll, holds, config, policy, None))
 }
 
 /// Runs the hit pass over `fighters`: each victim's hits from everyone's
@@ -326,7 +353,17 @@ pub fn hit_pass(
     roll: &mut dyn FnMut() -> f32,
     holds: &dyn Fn(u32) -> bool,
 ) -> Vec<HitEvent> {
-    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut ())
+    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut (), None)
+}
+
+/// Same ordinary pass, with per-contact NPC values exposed for source
+/// verification. Observation never changes hit selection or valuation.
+pub fn hit_pass_with_npc_trace(
+    fighters: &mut [Fighter], tables: &Tables, dt: f32,
+    roll: &mut dyn FnMut() -> f32, holds: &dyn Fn(u32) -> bool,
+    trace: &mut Vec<NpcHitTrace>,
+) -> Vec<HitEvent> {
+    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut (), Some(trace))
 }
 
 fn hit_pass_inner(
@@ -337,6 +374,7 @@ fn hit_pass_inner(
     holds: &dyn Fn(u32) -> bool,
     config: &[EnemyCollisionConfig],
     policy: &mut dyn EnemyHitPolicy,
+    mut npc_trace: Option<&mut Vec<NpcHitTrace>>,
 ) -> Vec<HitEvent> {
     let attacks: Vec<AttackVolume> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
     // the attacker's status multipliers (0x0088B530 / 0x0088AA20)
@@ -379,15 +417,23 @@ fn hit_pass_inner(
             continue;
         };
         let mut values: Vec<HitValue> = Vec::new();
+        let mut npc_contacts = (npc_trace.is_some() && matches!(v.victim, Victim::Npc { .. }))
+            .then(Vec::new);
         for &(ai, _) in &hits {
             let a = &attacks[ai];
             let Some((_, att)) = attackers.iter().find(|(o, _)| *o == a.side.owner) else {
                 continue;
             };
-            values.push(match att {
+            let value = match att {
                 Attacker::Enemy(e) => enemy_attack(e, &a.row),
                 Attacker::Player(p) => player_attack(p, &a.row, roll(), &tables.dlc),
-            });
+            };
+            if let Some(contacts) = &mut npc_contacts {
+                contacts.push(NpcContactTrace { attacker: a.side.owner, key: a.key,
+                    relation: a.relation, multi_hit: a.flags.multi_hit, reset_time: a.reset_time,
+                    attacker_values: att.clone(), raw: value });
+            }
+            values.push(value);
         }
         let Some(mut merged) = merge_frame(&values) else {
             continue;
@@ -399,6 +445,7 @@ fn hit_pass_inner(
             mag: merged.mag,
         };
         let hits_n = merged.hits;
+        let npc_unmitigated = npc_contacts.as_ref().map(|_| merged.clone());
         let attacker = attacks[first].side.owner;
         let collision = config.iter().find(|c| c.owner == v.owner);
         let mut carried = None;
@@ -489,6 +536,7 @@ fn hit_pass_inner(
                 // As in the existing enemy pass, attacker+0x14 is not
                 // yet carried by Fighter: its minimum is assumed 1.
                 let total = scale_for_region(&mut h, pool, rates, &tables.game, None, 1.0);
+                let hp_before = pool.hp;
                 let was_alive = pool.hp > 0.0;
                 apply_break(pool, &h, rates);
                 let npc_status = StatusHit { element: h.element, element_buildup: h.element_buildup,
@@ -499,6 +547,13 @@ fn hit_pass_inner(
                 // NoDamage affects HP alone. It does not discard this
                 // hit, its status build-up, or the contact history.
                 apply_hp(pool, total, rates, h.row.is_no_death);
+                if let (Some(trace), Some(contacts), Some(before_mitigation)) =
+                    (npc_trace.as_mut(), npc_contacts.take(), npc_unmitigated)
+                {
+                    trace.push(NpcHitTrace { victim: v.owner, region, contacts,
+                        before_mitigation, after_region: h.clone(), defender: *defender,
+                        rates: *rates, valued_total: total, hp_before, hp_after: pool.hp });
+                }
                 HitEvent {
                     attacker,
                     victim: v.owner,

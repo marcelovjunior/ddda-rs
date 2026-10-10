@@ -2379,10 +2379,12 @@ dependencies = [
  "ddstory",
  "ddvfs",
  "mtarc",
+ "mteffect",
  "mtfsm",
  "mtlmt",
  "mtlot",
  "mtmod",
+ "mtprp",
  "mtxfs",
 ]
 

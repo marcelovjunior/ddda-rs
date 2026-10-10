@@ -15,7 +15,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 3: NPC bodies in snapshots; PlayEvent (cutscenes).
 /// - 6: per-seat bow held/toggle input and bow layers/secondary slot in bodies.
 /// - 7: enemy resource identity, full rotation/scale and field-group deltas.
-pub const PROTOCOL: u16 = 7;
+/// - 8: four held pawn-order direction bits in each per-seat input.
+pub const PROTOCOL: u16 = 8;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +185,7 @@ fn input(w: &mut Writer, i: &PlayerInput) {
     let s = &i.sim;
     w.f32(s.stick[0]).f32(s.stick[1]).bool(s.walk).bool(s.sprint).bool(s.jump).f32(s.camera_yaw);
     w.bool(s.light).bool(s.heavy).bool(s.bow).bool(s.bow_toggle).bool(i.interact);
+    w.u8((s.pawn_orders.native_bits() >> 19) as u8);
 }
 
 fn read_input(r: &mut Reader) -> Result<PlayerInput> {
@@ -191,8 +193,15 @@ fn read_input(r: &mut Reader) -> Result<PlayerInput> {
     let (walk, sprint, jump, camera_yaw) = (r.bool()?, r.bool()?, r.bool()?, r.f32()?);
     let (light, heavy) = (r.bool()?, r.bool()?);
     let (bow, bow_toggle) = (r.bool()?, r.bool()?);
-    let sim = ddsim::Input { stick, walk, sprint, jump, camera_yaw, light, heavy, bow, bow_toggle };
-    Ok(PlayerInput { sim, interact: r.bool()? })
+    let interact = r.bool()?;
+    let bits = r.u8()?;
+    if bits & 0xf0 != 0 { return Err(format!("unknown pawn order direction bits {bits:#x}")); }
+    let pawn_orders = ddsim::PawnOrderButtons {
+        up: bits & 1 != 0, down: bits & 2 != 0,
+        left: bits & 4 != 0, right: bits & 8 != 0,
+    };
+    let sim = ddsim::Input { stick, walk, sprint, jump, camera_yaw, light, heavy, bow, bow_toggle, pawn_orders };
+    Ok(PlayerInput { sim, interact })
 }
 
 #[cfg(test)]
@@ -213,6 +222,23 @@ mod bow_input_tests {
         assert_eq!(read_input(&mut r).unwrap(), first);
         assert_eq!(read_input(&mut r).unwrap(), second);
         r.end().unwrap();
+    }
+
+    #[test]
+    fn order_directions_round_trip_and_unknown_bits_are_rejected() {
+        for bits in 0..16 {
+            let command = PlayerInput { sim: ddsim::Input {
+                pawn_orders: ddsim::PawnOrderButtons { up: bits & 1 != 0, down: bits & 2 != 0,
+                    left: bits & 4 != 0, right: bits & 8 != 0 }, ..Default::default()
+            }, ..Default::default() };
+            let upload = Inputs { newest: 42, cmds: vec![command, PlayerInput::default()], snapshot_ack: Some(37) };
+            assert_eq!(Inputs::decode(&upload.encode()).unwrap(), upload);
+            let mut writer = Writer::new();
+            input(&mut writer, &command);
+            let mut malformed = writer.finish();
+            *malformed.last_mut().unwrap() |= 0x80;
+            assert!(read_input(&mut Reader::new(&malformed)).unwrap_err().contains("unknown pawn order"));
+        }
     }
 }
 

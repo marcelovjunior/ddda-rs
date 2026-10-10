@@ -118,12 +118,13 @@ while SceNo < 9000.
 - Nexus, Medicant and Guardian lower the PL_Party support codes (13, 15).
 - Acquisitor lowers the gathering codes.
 
-**Commands (D/G):**
-- Value 8 means none. The data uses 9, 10 and 11; G: 10 = Go, 11 = Help,
-  9 = Wait.
+**Commands (T/D, S36 correction):**
+- Value 8 means none. Native sender 0x00B768E0 and the installed cockpit
+  labels establish 9 = Go, 10 = Come, 11 = Help; left/right both select Help.
 - Path (T, 0x005927F0): the mailbox `uCmc+0x4ABC` (written by
   `uPlayerBase::vf98`) → pending (+0x53C) → applied after the delay
-  +0x540 → expires after +0x530 (about 20 s, G).
+  +0x540 → expires after +0x530. Constructor 0x00581C20 initializes duration 600 actor frames
+  and delay 0; the feedback window is 6 actor frames.
 
 **Follow distance (T, 0x00598390; table 0x0152DAB8).** The mode depends on
 the inclination and the command:
@@ -254,7 +255,7 @@ two runs give the same digests.
 - The goblin's `rAIEnemyActionParameter` entries (goal 4 or 0x10, masks).
 - The staff (`cCmcMagicUserCombo`, 0x00557040..) and the skills.
 - The branches of 0x0057F050.
-- Command delay and duration values.
+- Full support-goal handlers, authored shout playback and chatter selection.
 - `uPawnIntel` (0x005D1220).
 - Chatter selection: not traced (scene talk 0x00CA7320 not reached).
 - The battle flag's writer; when the think runs and pre-empts a goal.

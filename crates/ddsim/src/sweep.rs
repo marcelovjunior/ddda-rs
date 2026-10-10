@@ -58,6 +58,25 @@ pub struct Capsule {
     pub radius: f32,
 }
 
+/// A posed capsule's two centres, relative to the origin being moved.
+/// cScrAdjust +0xD0/+0xE0/+0xF0 accepts arbitrary endpoints (0x0079DAB0),
+/// including the dragon's installed horizontal scenery capsule.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapsuleSegment {
+    pub start: V3,
+    pub end: V3,
+    pub radius: f32,
+}
+
+/// Explicit optional sphere axis query. A disabled native axis check
+/// (cScrAdjust +0x1A0 == 0) supplies `None`, not a failed ground query.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AxisQuery {
+    pub center: V3,
+    pub radius: f32,
+    pub motion: V3,
+}
+
 pub const PLAYER_CAPSULE: Capsule = Capsule {
     bottom: 35.0,
     top: 145.0,
@@ -372,7 +391,7 @@ pub fn sphere_contact(center: V3, radius: f32, motion: V3, triangle: &Tri) -> Op
 /// The result of a sweep.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Swept {
-    /// Where the feet end.
+    /// Where the moved origin ends (the feet for the player wrapper).
     pub position: V3,
     /// The categories met (`FLOOR`, `SLOPE`, `WALL`, `CEILING`).
     pub met: u32,
@@ -442,6 +461,42 @@ pub fn sweep(
     ground_check: bool,
     tris: &dyn Fn(V3, V3, &mut Vec<Face>),
 ) -> Swept {
+    // Preserve the player's type2 axis query from 0x0079E200: old lower
+    // centre, down by radius * sqrt2 and the airborne move's drop.
+    let axis_len = cap.radius * std::f32::consts::SQRT_2 - if ground_check { 0.0 } else { motion[1] };
+    sweep_capsule(
+        p,
+        &CapsuleSegment {
+            start: [0.0, cap.bottom, 0.0],
+            end: [0.0, cap.top, 0.0],
+            radius: cap.radius,
+        },
+        feet,
+        motion,
+        ground_check,
+        Some(AxisQuery {
+            center: [feet[0], feet[1] + cap.bottom.min(cap.top), feet[2]],
+            radius: p.axis_radius,
+            motion: [0.0, -axis_len, 0.0],
+        }),
+        tris,
+    )
+}
+
+/// The existing native slide loop with arbitrary posed capsule endpoints.
+/// Geometry remains the documented exact-distance replacement; the optional
+/// axis check preserves the disabled branch of 0x0079E200/0x010B0CA0.
+/// Slide parameters still cover only the branches documented by `slide`.
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_capsule(
+    p: &SweepParam,
+    cap: &CapsuleSegment,
+    feet: V3,
+    motion: V3,
+    ground_check: bool,
+    axis_query: Option<AxisQuery>,
+    tris: &dyn Fn(V3, V3, &mut Vec<Face>),
+) -> Swept {
     let mut pos = feet;
     let mut m = motion;
     let first_dir = norm([motion[0], 0.0, motion[2]]);
@@ -456,26 +511,16 @@ pub fn sweep(
     let mut floor_normal = None;
     let mut list = Vec::new();
     let pad = cap.radius + 1.0;
-    // the axis check (0x0079E200, mAxisCheckType 2): from the lower centre
-    // at the old position, down by radius * sqrt 2, in the air plus the
-    // move's drop
-    let low = feet[1] + cap.bottom.min(cap.top);
-    let axis_center = [feet[0], low, feet[2]];
-    let axis_len = cap.radius * std::f32::consts::SQRT_2 - if ground_check { 0.0 } else { motion[1] };
-    let axis_cast = [0.0, -axis_len, 0.0];
-    let axis = {
-        let r = p.axis_radius;
-        let (y0, y1) = (low.min(low - axis_len), low.max(low - axis_len));
-        tris(
-            [feet[0] - r - 1.0, y0 - r - 1.0, feet[2] - r - 1.0],
-            [feet[0] + r + 1.0, y1 + r + 1.0, feet[2] + r + 1.0],
-            &mut list,
-        );
-        axis_check(p, axis_center, r, axis_cast, &list)
-    };
+    let axis = axis_query.map_or(0, |query| {
+        let pad = query.radius + 1.0;
+        let lo = std::array::from_fn(|i| query.center[i].min(query.center[i] + query.motion[i]) - pad);
+        let hi = std::array::from_fn(|i| query.center[i].max(query.center[i] + query.motion[i]) + pad);
+        tris(lo, hi, &mut list);
+        axis_check(p, query.center, query.radius, query.motion, &list)
+    });
     // the first contact checks the axis result: no ground under the axis
     // marks the result, no floor turns floors into slopes for the rest
-    let mut axis_pending = true;
+    let mut axis_pending = axis_query.is_some();
     let mut no_floor = false;
     // the last wall plane slid along (adjust info +0x2B5 / +0x2C0)
     let mut crease: Option<(V3, V3)> = None;
@@ -484,20 +529,12 @@ pub fn sweep(
             break;
         }
         // the triangles near the swept capsule
-        let lo = [
-            pos[0].min(pos[0] + m[0]) - pad,
-            pos[1] + cap.bottom.min(cap.top) + m[1].min(0.0) - pad,
-            pos[2].min(pos[2] + m[2]) - pad,
-        ];
-        let hi = [
-            pos[0].max(pos[0] + m[0]) + pad,
-            pos[1] + cap.top.max(cap.bottom) + m[1].max(0.0) + pad,
-            pos[2].max(pos[2] + m[2]) + pad,
-        ];
+        let lo = std::array::from_fn(|i| pos[i] + cap.start[i].min(cap.end[i]) + m[i].min(0.0) - pad);
+        let hi = std::array::from_fn(|i| pos[i] + cap.start[i].max(cap.end[i]) + m[i].max(0.0) + pad);
         list.clear();
         tris(lo, hi, &mut list);
-        let a = add(pos, [0.0, cap.bottom, 0.0]);
-        let b = add(pos, [0.0, cap.top, 0.0]);
+        let a = add(pos, cap.start);
+        let b = add(pos, cap.end);
         let mut hit: Option<(f32, V3, f32)> = None;
         let mut hit_flags = 0;
         for (t, flags) in &list {
@@ -752,6 +789,39 @@ mod tests {
         assert_eq!(p.category(1.0), FLOOR);
         assert_eq!(p.category(0.5), WALL);
         assert_eq!(p.category(-0.9), CEILING);
+    }
+
+    #[test]
+    fn horizontal_capsule_lands_with_axis_disabled_but_not_with_a_failed_axis() {
+        let p = SweepParam::default();
+        let cap = CapsuleSegment { start: [-80.0, 10.0, 0.0], end: [80.0, 10.0, 0.0], radius: 5.0 };
+        let start = [0.0, 50.0, 0.0];
+        let motion = [0.0, -80.0, 0.0];
+        let disabled = sweep_capsule(&p, &cap, start, motion, false, None, &world);
+        assert!((disabled.position[1] - (-5.0 + p.skin + p.back_off)).abs() < 0.02, "{disabled:?}");
+        assert_eq!(disabled.met & FLOOR, FLOOR);
+        assert_eq!(disabled.axis, 0);
+        assert!(disabled.grounded());
+        // An enabled query that never reaches terrain is different from
+        // mAxisCheckType0, even though both return axis category zero.
+        let failed = sweep_capsule(&p, &cap, start, motion, false,
+            Some(AxisQuery { center: [0.0, 60.0, 0.0], radius: 1.0, motion: [0.0, -1.0, 0.0] }), &world);
+        assert_eq!(failed.axis, 0);
+        assert_ne!(failed.met & NO_AXIS_GROUND, 0);
+        assert!(!failed.grounded());
+    }
+
+    #[test]
+    fn horizontal_capsule_broad_phase_contains_the_moving_far_endpoint() {
+        let p = SweepParam::default();
+        let cap = CapsuleSegment { start: [-80.0, 50.0, 0.0], end: [80.0, 50.0, 0.0], radius: 5.0 };
+        let query = |lo: V3, hi: V3, out: &mut Vec<Face>| {
+            assert!(lo[0] <= -86.0 && hi[0] >= 100.0, "{lo:?}..{hi:?}");
+            world(lo, hi, out);
+        };
+        let hit = sweep_capsule(&p, &cap, [0.0; 3], [50.0, 0.0, 0.0], false, None, &query);
+        assert_eq!(hit.met & WALL, WALL);
+        assert!((hit.position[0] - (100.0 - 80.0 - 5.0 - p.skin - p.back_off)).abs() < 0.02, "{hit:?}");
     }
 
     #[test]

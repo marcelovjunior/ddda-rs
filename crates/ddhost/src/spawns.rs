@@ -82,11 +82,27 @@ pub fn placement_rates(record: &mtlot::Record) -> ddenemyrt::goblin::PlacementRa
     }
 }
 
+/// cSetInfoEnemy0100 +0x110..0x116, native apply at 0x008AEBB0.
+/// Keep placement state distinct from the leader-clamped runtime type.
+pub fn placement_equipment(record: &mtlot::Record) -> ddenemyrt::goblin::equipment::Placement {
+    let value = |field: &str| match record.get(field) {
+        Some(&mtlot::Value::Int(value)) => value as u32,
+        _ => 0,
+    };
+    ddenemyrt::goblin::equipment::Placement {
+        equip_type: value("mEquipType"),
+        leader: value("mIsLeader") != 0,
+        weapon_hand_start: value("mIsWeaponHandStart") != 0,
+        ballista_license: value("mIsBallistaLicense") != 0,
+    }
+}
+
 /// Adds the goblin of placement `s` to `fight` with the record's stat
 /// rates and experience override (`mExperienceOW`, cSetInfoEnemy +0xEC ->
 /// unit +0x5C24, 0x007A012C; 0 keeps the goblin's own). Returns its owner.
 pub fn add_placed_goblin(fight: &mut ddenemyrt::fight::Fight, s: &ddspawn::Spawn) -> u32 {
-    let owner = fight.add_goblin_placed(s.position, s.angle[1], placement_rates(&s.record));
+    let owner = fight.add_goblin_equipped(s.position, s.angle[1], placement_rates(&s.record),
+        placement_equipment(&s.record));
     if let Some(&mtlot::Value::Int(exp)) = s.record.get("mExperienceOW") {
         if exp > 0 {
             fight.goblins.last_mut().expect("just added").exp = exp as u32;

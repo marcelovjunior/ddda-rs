@@ -670,11 +670,32 @@ fn main() {
             },
         ));
     }
+    // DDVIEW_TIME_SCALE (unattended tests only): run the virtual clock N
+    // times faster. Every Res<Time> consumer (the 30 Hz host frames, event
+    // frames, camera blends) speeds up together; the simulation itself is
+    // unchanged and deterministic, only more host frames run per rendered
+    // frame. Not for play: audio and movies keep real time.
+    if let Some(scale) = Some(time_scale()).filter(|v| *v != 1.0) {
+        app.add_systems(Startup, move |mut time: ResMut<Time<Virtual>>| {
+            time.set_relative_speed(scale);
+            time.set_max_delta(std::time::Duration::from_secs_f32(0.25 * scale.max(1.0)));
+            info!("ddview: virtual time x{scale} (DDVIEW_TIME_SCALE)");
+        });
+    }
     // an AppExit::Error (e.g. "opening failed") must fail the process, so
     // unattended runs and harnesses see it
     if let AppExit::Error(code) = app.run() {
         std::process::exit(i32::from(code.get()));
     }
+}
+
+/// `DDVIEW_TIME_SCALE` (unattended tests): the virtual clock's speed, 1
+/// when unset. Catch-up caps scale with it so faster runs don't stall.
+pub fn time_scale() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        std::env::var("DDVIEW_TIME_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v > 0.0).unwrap_or(1.0)
+    })
 }
 
 /// The opening session until setup moves it into its resource.

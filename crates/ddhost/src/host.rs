@@ -105,6 +105,7 @@ pub struct FrameReport {
     pub interact: Option<PlayerId>,
     /// The NPCs' requests to the actor layer (ddnpcrt schedules).
     pub npc_requests: Vec<ddnpcrt::schedule::Request>,
+    pub pawn_order_requests: Vec<crate::pawn_orders::Delivery>,
 }
 
 pub struct Host<D: Data, W: StoryWorld> {
@@ -148,6 +149,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// Seats standing at a Riftstone; the room is open while any do.
     pub(crate) rift_visitors: BTreeSet<PlayerId>,
     edges: Edges,
+    pub(crate) pawn_orders: crate::pawn_orders::Orders,
     /// The interact press made last frame, for this frame's scenarios.
     scenario_press: Option<PlayerId>,
     /// The story's stage is not loaded yet: ask the world to load it.
@@ -191,6 +193,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             hired_by: [None; 2],
             rift_visitors: BTreeSet::new(),
             edges: Edges::default(),
+            pawn_orders: Default::default(),
             scenario_press: None,
             boot: true,
             request_log: StateHasher::default(),
@@ -454,6 +457,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             f.volumes(&self.sim);
         }
         self.step_opening_dragon_c(step)?;
+        // 0x00B768E0 queues orders with 0x00887250; 0x00887360
+        // delivers vf98 in pass C. The pawn already chose this frame's
+        // virtual pad, so its mailbox affects the next move frame.
+        let cooling = self.advance_pawn_order_cooldowns(step);
+        let pawn_order_requests = self.dispatch_pawn_orders(inputs, &cooling);
         self.ambient
             .step(step, &self.sim.players, self.ground.as_ref());
         // Same line, phase 90 of each character: at most one level-up
@@ -505,7 +513,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests })
+        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests })
     }
 
     /// A hash of the whole simulated state, for replays.
@@ -538,8 +546,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.story_npc_lifetime(placement.npc as u32)));
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
+        h.debug(&self.pawn_orders);
         if let Some(f) = &self.fight {
             h.debug(&f.digest());
+            for (&seat, pawn) in &f.pawns {
+                h.u64(u64::from(seat)).debug(&pawn.brain.orders);
+            }
         }
         if let Some(doors) = &self.doors { h.debug(&doors.digest()); }
         h.u64(self.ambient.digest());
