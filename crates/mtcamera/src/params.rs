@@ -16,6 +16,44 @@ pub struct Normal {
     pub screen_adjust_height: f32,
 }
 
+impl Normal {
+    /// Normal gameplay branch of 0x007e1400 (2017-12-13 Steam).
+    /// Actor positions are supplied by the caller selected for this view:
+    /// world position first, model position second. Special camera targets,
+    /// per-camera override parameters and the overlap query stay with callers.
+    pub fn collision_anchor(
+        &self,
+        target: [f32; 3],
+        actor: Option<([f32; 3], [f32; 3])>,
+        original_pitch: f32,
+        advancing: bool,
+        actor_overlap: bool,
+    ) -> Option<[f32; 3]> {
+        if self.screen_adjust_flags & 1 == 0 {
+            return None;
+        }
+        let mut anchor = match (self.screen_adjust_type, actor) {
+            (1, Some((world, _))) => [
+                world[0],
+                if self.screen_adjust_flags & 4 != 0 {
+                    target[1]
+                } else {
+                    world[1] + self.screen_adjust_height
+                },
+                world[2],
+            ],
+            (2, Some((_, model))) => model,
+            _ => target,
+        };
+        if let Some((_, model)) = actor {
+            if advancing && (actor_overlap || original_pitch < -0.8) {
+                anchor = [model[0], model[1] + self.height, model[2]];
+            }
+        }
+        Some(anchor)
+    }
+}
+
 /// Slots preserve the authored array indices, including null and other
 /// camera types. This reader does not select a gameplay camera policy.
 #[derive(Debug, PartialEq)]
@@ -169,5 +207,40 @@ mod tests {
         xfs.classes[2].hash = mtarc::type_hash("cCamExParamTps");
         assert_eq!(Parameters::from_xfs(&xfs).unwrap().normal, vec![None, None]);
         assert!(Parameters::parse(b"XFS").is_err());
+    }
+
+    #[test]
+    fn collision_anchor_respects_pitch_boundary_and_authored_modes() {
+        let mut normal = Parameters::from_xfs(&fixture()).unwrap().normal[1].unwrap();
+        let target = [20.0, 80.0, 30.0];
+        let actor = Some(([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]));
+        assert_eq!(
+            normal.collision_anchor(target, actor, -0.8, true, false),
+            Some([1.0, 80.0, 3.0])
+        );
+        assert_eq!(
+            normal.collision_anchor(target, actor, -0.81, true, false),
+            Some([4.0, 128.0, 6.0])
+        );
+        assert_eq!(
+            normal.collision_anchor(target, actor, 0.0, true, true),
+            Some([4.0, 128.0, 6.0])
+        );
+        normal.screen_adjust_flags = 1;
+        assert_eq!(
+            normal.collision_anchor(target, actor, -0.81, false, false),
+            Some([1.0, 44.0, 3.0])
+        );
+        normal.screen_adjust_type = 2;
+        assert_eq!(
+            normal.collision_anchor(target, actor, 0.0, true, false),
+            Some([4.0, 5.0, 6.0])
+        );
+        assert_eq!(
+            normal.collision_anchor(target, None, -1.0, true, true),
+            Some(target)
+        );
+        normal.screen_adjust_flags = 0;
+        assert_eq!(normal.collision_anchor(target, actor, -1.0, true, true), None);
     }
 }

@@ -467,3 +467,28 @@ adjustment type/flags/height. No authored table is copied. Two synthetic
 reader tests pass, installed-resource validation reads **60 unique paths /
 167 normal records**, and strict crate clippy passes. Viewer integration
 and anchor-selection translation are the next step.
+
+The follow adapter now loads the default normal record per PlayState and
+uses its authored distance and collision-anchor settings. `Normal::collision_anchor`
+translates the normal-gameplay branch of **0x007e1400**, with explicit
+actor world/model positions, advancement and overlap inputs. Its tests
+cover screen-adjust modes, bit4 target-height retention, disabled collision,
+missing actor and the strict pitch<-0.8 boundary. The viewer converts its
+opposite pitch convention before selecting the actor-height anchor; a
+presentation regression verifies the conversion and authored distance.
+Its current adapter supplies the followed actor's simulation position for
+both model/world positions and treats active presentation as advancing;
+actor-overlap query and special target selection remain unimplemented.
+The pre-existing140 cm look-target estimate is retained: authored mHeight
+is not silently substituted for the entire target/lag/avoidance pipeline.
+
+Three parameter unit tests and strict clippy pass. Nine filtered viewer
+tests pass (eight camera and one HUD), with the private replay ignored by
+default. `DDDA_CAMERA_TOLERANCE_CM` optionally gates replay; all six accepted
+wall/lintel samples pass at0.01 cm (max0.001041 cm), comfortably above float
+roundoff but far below a visually meaningful displacement. Release build
+passes. A bounded `--opening --skip-intro --unattended` capture verifies
+runtime parameter loading, stage200 rendering and collision, exit0. This
+is a setup/render smoke, not full original-pose acceptance. A prior direct
+`--play --stage200` smoke used the field origin and fell outside collision;
+it is not counted as Cassardis validation.

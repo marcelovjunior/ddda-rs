@@ -140,3 +140,17 @@ resources with167 normal records, preserving authored array slots. Strict
 clippy passes. Source **0x00420e90** loads `param\cam_param`;
 **0x007dc8a0** picks slot0 for default normal camera. Runtime adapter and
 translated anchor selection still pending; no game parameter table copied.
+
+Seventh checkpoint: default authored settings now load per PlayState;
+normal anchor selection is translated and the viewer's reversed pitch sign
+is covered by a regression. Authored distance is used; model/world actor
+position currently share simulation position, actor-overlap/special-target
+selection and target-height/lag pipeline remain explicit limitations.
+Three parameter tests and strict clippy pass; nine filtered viewer tests
+pass, one private test ignored by default. Six accepted live samples pass
+optional0.01 cm replay gate (max0.001041 cm). Production build passes34.27s.
+Bounded opening/skip-intro unattended Cassardis smoke loads data, probes
+installed geometry, writes private screenshot and exits0. Direct play
+stage200 instead used field origin and is excluded from visual validation.
+Next: trace target-height/actor-avoidance pipeline before claiming full
+follow-pose equivalence. The original wall/roof collision responses match.
