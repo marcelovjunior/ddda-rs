@@ -209,6 +209,34 @@ pub struct PlayState {
 #[derive(Component)]
 pub struct FollowCam;
 
+/// The player's resolved CameraFov setting (degrees added to the native lens).
+/// Initialize once from Args, which already reads config.ini and applies CLI
+/// overrides. S42 can mutate this resource when applying new camera settings.
+#[derive(Resource)]
+pub(crate) struct CameraConfig {
+    pub fov_offset_degrees: f32,
+}
+
+impl FromWorld for CameraConfig {
+    fn from_world(world: &mut World) -> Self {
+        Self { fov_offset_degrees: world.resource::<crate::Args>().camera_fov }
+    }
+}
+
+impl CameraConfig {
+    fn fov(&self, native_degrees: f32) -> f32 {
+        (native_degrees + self.fov_offset_degrees).to_radians()
+    }
+}
+
+// The play step already has Bevy's maximum function-parameter count. Group
+// only its camera inputs, leaving the shared pawn/input parameter unchanged.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CameraProjection<'w, 's> {
+    projections: Query<'w, 's, &'static mut Projection, With<FollowCam>>,
+    config: Res<'w, CameraConfig>,
+}
+
 impl PlayState {
     /// Forgets the motion shown for `id`, so the next frame poses a freshly
     /// spawned body.
@@ -543,19 +571,17 @@ pub fn step(
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
-    mut projs: Query<&mut Projection, With<FollowCam>>,
-    mut projected: Local<bool>,
+    camera: CameraProjection,
+    mut projected: Local<Option<f32>>,
     mut pending: Local<HashMap<PlayerId, Input>>,
     mut sounds: Option<ResMut<crate::audio::PlayerMotionSounds>>,
 ) {
+    let CameraProjection { projections: mut projs, config: camera_config } = camera;
     let keys = &order_devices.keys;
     let gamepads = &order_devices.gamepads;
     let Some(mut st) = state else { return };
     if pause.paused { pending.clear(); return; }
-    if !*projected {
-        camera_projection(&mut projs);
-        *projected = true;
-    }
+    refresh_camera_projection(&mut projs, &camera_config, &mut projected);
     // A network session (--host / --join) and the opening (opening.rs)
     // step and show the players themselves.
     if net.is_some() || opening.is_some() {
@@ -658,8 +684,9 @@ pub fn step(
     let aiming = st.sim.player(st.follow).is_some_and(|p| p.bow.is_some_and(|b| b.phase != ddsim::BowPhase::Released));
     for mut projection in &mut projs {
         if let Projection::Perspective(camera) = &mut *projection {
-            camera.fov = (if aiming { st.bow_view.camera.as_ref().map_or(CAMERA_FOV, |c| c.normal.fov_degrees) }
-                else { CAMERA_FOV } + config_camera_fov()).to_radians();
+            camera.fov = camera_config.fov(if aiming {
+                st.bow_view.camera.as_ref().map_or(CAMERA_FOV, |c| c.normal.fov_degrees)
+            } else { CAMERA_FOV });
         }
     }
     let fight = st.fight.take();
@@ -1079,10 +1106,10 @@ fn sphere_hits(ground: &dyn ddsim::Ground, c: Vec3, r: f32) -> bool {
 
 /// The follow camera's projection: `CAMERA_FOV` plus the player's
 /// CameraFov setting, and the recorded near plane.
-fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>) {
+fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>, config: &CameraConfig) {
     for mut p in cams.iter_mut() {
         if let Projection::Perspective(pp) = &mut *p {
-            let fov = (CAMERA_FOV + config_camera_fov()).to_radians();
+            let fov = config.fov(CAMERA_FOV);
             if pp.fov != fov {
                 pp.fov = fov;
                 pp.near = CAMERA_NEAR * UNIT;
@@ -1091,14 +1118,14 @@ fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>) {
     }
 }
 
-/// `CameraFov` from the player's game settings (config.ini), else 0.
-pub(crate) fn config_camera_fov() -> f32 {
-    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 0.0 };
-    let path = std::path::PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| t.lines().find_map(|l| l.trim().strip_prefix("CameraFov=").and_then(|v| v.trim().parse().ok())))
-        .unwrap_or(0.0)
+/// A settings edit can happen while paused. Bevy's Changed tick can expire
+/// before play resumes, so compare the last applied offset instead of relying
+/// on one frame's resource change flag (S42).
+fn refresh_camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>, config: &CameraConfig, applied: &mut Option<f32>) {
+    if *applied != Some(config.fov_offset_degrees) {
+        camera_projection(cams, config);
+        *applied = Some(config.fov_offset_degrees);
+    }
 }
 
 /// Places the goblins and plays their motions (`Goblin::motion` / `frame`,
@@ -1265,6 +1292,67 @@ pub fn saved_spot(xml: &str) -> Option<SavedSpot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_settings_update_all_follow_views_and_preserve_other_lenses() {
+        fn apply(config: Res<CameraConfig>, mut cameras: Query<&mut Projection, With<FollowCam>>) {
+            camera_projection(&mut cameras, &config);
+        }
+        let mut app = App::new();
+        app.insert_resource(CameraConfig { fov_offset_degrees: 8.0 });
+        app.add_systems(Update, apply);
+        let views: Vec<_> = [1.0, 1.3].into_iter().map(|fov| app.world_mut().spawn((
+            FollowCam, Projection::Perspective(PerspectiveProjection {
+                fov, near: 9.0, far: 1234.0, aspect_ratio: 1.5, ..default()
+            }),
+        )).id()).collect();
+        let other = app.world_mut().spawn(Projection::Perspective(PerspectiveProjection {
+            fov: 1.8, near: 7.0, far: 4321.0, ..default()
+        })).id();
+        let orthographic = app.world_mut().spawn((FollowCam,
+            Projection::Orthographic(OrthographicProjection::default_3d()))).id();
+        for offset in [8.0, -5.0] {
+            app.world_mut().resource_mut::<CameraConfig>().fov_offset_degrees = offset;
+            app.update();
+            for &view in &views {
+                let Projection::Perspective(lens) = app.world().get::<Projection>(view).unwrap() else { panic!() };
+                assert!((lens.fov - (CAMERA_FOV + offset).to_radians()).abs() < 1e-6);
+                assert_eq!(lens.near, CAMERA_NEAR * UNIT);
+                assert_eq!(lens.far, 1234.0);
+                assert_eq!(lens.aspect_ratio, 1.5);
+            }
+            let Projection::Perspective(lens) = app.world().get::<Projection>(other).unwrap() else { panic!() };
+            assert_eq!((lens.fov, lens.near, lens.far), (1.8, 7.0, 4321.0));
+            assert!(matches!(app.world().get::<Projection>(orthographic).unwrap(), Projection::Orthographic(_)));
+            // The aiming lens uses its native value plus the same mutable
+            // setting, rather than re-reading config.ini for each camera.
+            assert!((app.world().resource::<CameraConfig>().fov(50.0)
+                - (50.0 + offset).to_radians()).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn paused_camera_setting_edit_is_applied_when_the_follow_view_resumes() {
+        fn refresh(config: Res<CameraConfig>, mut cameras: Query<&mut Projection, With<FollowCam>>, mut applied: Local<Option<f32>>) {
+            refresh_camera_projection(&mut cameras, &config, &mut applied);
+        }
+        let mut app = App::new();
+        app.insert_resource(CameraConfig { fov_offset_degrees: 15.0 })
+            .init_resource::<crate::pause::PauseState>()
+            .add_systems(Update, refresh.run_if(crate::pause::playing));
+        let view = app.world_mut().spawn((FollowCam, Projection::Perspective(PerspectiveProjection::default()))).id();
+        app.update();
+        app.world_mut().resource_mut::<crate::pause::PauseState>().paused = true;
+        app.world_mut().resource_mut::<CameraConfig>().fov_offset_degrees = 0.0;
+        app.update();
+        app.update();
+        let Projection::Perspective(lens) = app.world().get::<Projection>(view).unwrap() else { panic!() };
+        assert_eq!(lens.fov, (CAMERA_FOV + 15.0).to_radians());
+        app.world_mut().resource_mut::<crate::pause::PauseState>().paused = false;
+        app.update();
+        let Projection::Perspective(lens) = app.world().get::<Projection>(view).unwrap() else { panic!() };
+        assert_eq!(lens.fov, CAMERA_FOV.to_radians());
+    }
 
     #[test]
     fn native_order_keys_and_second_local_keys_survive_short_presses() {
