@@ -452,11 +452,90 @@ masks of 0x00B79AE0 / 0x00B79B70 (bow command 0x0C rows). Bit 0x8 is set
 by 0x00B52A00 from the bow-mode toggle (+0x1085 of 0x018D8BB0, while a
 bow, longbow or magick bow is the secondary weapon).
 
-**The bow (not modelled yet).** The secondary-weapon list at 0x014F8198
+**The bow (S25: stationary draw, ready and release modelled).** The secondary-weapon list at 0x014F8198
 holds `cPlActWpnBow` 0x02060000 on command 7 held, check 34, slot 1, on
 ground and in the air (0x014F81F8: 0x02060002); bow skills share the
-class (0x014F621C..). Needs the bow mode toggle, aiming, arrows (shells)
-and its own vf05/vf06.
+class (0x014F621C..). The shortbow is secondary category 10; the opening
+Strider's item is 0x1F8. It does not replace the primary daggers. Longbow
+uses the same action class; magick bow has a separate class. Those two
+weapons are not implemented by this slice.
+
+`uPlayer::vf188` 0x00B72DB0 **check 34** succeeds when unit +0x2DD4 is
+not 15, or when stage getter `0x00535CB0(0)` returns 2. It is not a
+vocation test. The command is held, rather than an attack-button edge;
+the ordinary slot-1 execute gate still applies. `0x00B52A00` produces
+bit 0x8 from secondary-weapon input and a bow-mode latch (input manager
++0x1085). Its toggle branch additionally checks vocation values
+2/5/6/8 and secondary categories 10/11/12, input availability, player
+action restrictions `0x00B87EF0` / `0x00B87F40` and stage != 0x267.
+The inspected local PC config stores `STG_TOGGLE_BOW_MODE=16` and
+`STG_SUB_WEP=56`; these are config values, not viewer bindings. Input
+mode/controller-specific latch branches remain outside S25's normalized
+per-seat input projection.
+
+`cPlActWpnBow::vf05` **0x00B16FE0** passes -1 to parameter selector
+**0x00B16DC0**, which takes the first installed record, copies it to
+action +0x90/+0xA8, and starts phase 0. The host reads
+`param/bow_act_param_06` (`rBowActParamList`, 30 records in `game_main.arc`)
+through `mParamList -> MtArray.mpArray`; nested shoot-controller records
+are not bow-action indices. Bank 9 is `motion/pl/m/m00/m0006_at/m0006_at`.
+The action creates a `uAimCheck`, sets action id 0x14A and push rank 13.
+Grounded stationary entry plays record `motBgn_Up` on **layer 1** at
+rate 1, interpolation 3 frames, and `motBgn_Low` on **layer 0**, interpolation
+10. Record zero currently names slots 0 and 1. Air entry plays `motFall`
+(slot 68) on the lower layer and sets the independent movement state to 3.
+These slots are read at runtime, not shipped constants in ddsim.
+
+There are **two state machines**, not one five-motion sequence. The upper
+action phase is +0xC4; +0xC8 is its subphase. Movement/aim mode is +0xB8
+(0 standing, 1 moving, 2 jumping, 3 falling), with its own subphase +0xBC.
+
+| +0xC4 | Source and behavior | S25 |
+|---|---|---|
+| 0 draw | vf25 **0x00B1C220** tests the upper draw motion's end, then sets phase 1 and resets +0xC8. **0x00B1C7D0** selects ready upper `motWait_Up` (+0xF6, slot 6), interpolation 10. | Implemented for standing shortbow |
+| 1 ready | **0x00B1C7D0** maintains a wait upper motion selected by movement mode; standing lower helper **0x00B18CB0** uses `motWait_Low` (+0xF5, slot 7). | Implemented for standing shortbow |
+| 2 shot | vf26 **0x00B1C2C0** takes subphase 1 to 0, counts down +0xCC, plays selected shot motion via **0x00B1CAC0** (`motWaitShot_Up` +0xF7 or movement shot), resets shot scheduling through **0x00B1BE20**, charges adjust 0x1BC once, passes the strict record +0x78 frame gate, then returns to ready on motion end or ends at zero stamina. Shell scheduling **0x00B1BF90** follows phase dispatch. | Deferred to S26; firing input reports unsupported |
+| 3 change | vf27 **0x00B1C6C0** plays `motChange_UpWait` (+0xFB) or directional `motChange_Up` through **0x00B1CC00**, at runtime `changeSpeed`; strict record +0x7C frame gate resets state, then motion end returns to ready. | Deferred; explicit unsupported phase |
+| 4 released | vf06 **0x00B17940** can enter this only from phases 1/2/3, when bit 0x8 is released and vf16 **0x00B182E0** permits it. It plays `motEnd_Up` (+0xEA, slot 4) at **1.2**; **0x00B18CB0** selects lower `motEnd_Low` (+0xEB, slot 5), also 1.2. **0x00B1AC90** completes the action on upper motion end, with additional movement/cancel exits. | Implemented stationary motion-end exit |
+
+The draw gate is specifically **layer 1**: disassembly at 0x00B1C253
+passes `[actor+0xF0C]+0x4C0` to **0x01057100**, which tests motion flag
+byte +6 &5. `uModel::mMotion` starts at +0x380 with stride 0x140, so
++0x4C0 is layer 1 (see ANIMATION.md). A lower motion finishing does not
+finish draw. Releasing bow mode during draw also does not skip it: vf06
+excludes phase 0 from the release test; release begins after ready is
+reached. The release predicate tests global event/area restrictions and
+phase-2 motion bit 0x04000000. The host supplies those unresolved global
+restrictions as explicit context rather than treating them as universally
+permitted game logic.
+
+Aim/movement helpers **0x00B17C20 / 0x00B17DA0** run before the upper
+phase dispatcher. Standing uses the camera-derived aim vector; a yaw
+delta beyond pi/4 starts the lower `motTurnL/R` motion, with a 27-frame
+counter and motion/end-bit handling. **0x00B1AC90** normalizes the target
+direction, interpolates draw/release orientation using upper motion
+progress, and updates actor aim +0x3860. Moving/jumping/falling use
+separate lower motions, collision and physics. Full aim, turn, movement,
+air, target-lock and camera behavior remain unimplemented; S25 exposes
+unsupported movement/shot requests instead of substituting dagger actions.
+
+`ddsim::Input::{bow,bow_toggle}` enters the ordinary per-seat simulation
+path. `Player::secondary_weapon` and `Player::bow` preserve primary
+daggers and independent upper/lower motion clocks; `State::Bow` identifies
+the action and its runtime lower motion. `BowParam` is data-free; the
+existing `ddhost::install::sim` reads it and loads every bank-9 motion.
+LAN protocol **6** carries both input bits, secondary slot, latch and
+full bow layer state in whole and delta snapshots. The viewer constructors
+default new controls to false; actual key mapping, rendering layer masks,
+equipment selection and aim presentation are subsequent integration work.
+Stamina wait drain uses the runtime record; full recovery/status frame
+integration is not yet modeled while this restricted action slice runs.
+
+Verified: seven synthetic ddsim regressions (unequal upper/lower lengths,
+draw release delay, independent seat latch, check 34, restrictions,
+unsupported input and missing-motion behavior), installed record/motion
+draw-ready-release regression, and bow input/body snapshot regressions.
+**Not compared against the running original.**
 
 **Air attacks** (rows flagged 0x302; records are 8 words, the last -1).
 The jump, sprint-jump and fall motions (11, 14, 23, 7) keep slots 1 and 4
