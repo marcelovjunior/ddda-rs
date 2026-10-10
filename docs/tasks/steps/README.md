@@ -66,8 +66,11 @@ without an "after" can run in parallel, one agent each.
 | S23 | **the opening stalls at SceNo 1400 after ev15** (tutorial blocker) | - |
 | S24 | map the beach dragon fight (research; S25+ follow from it) | - |
 | S18 | (ON HOLD: cyclops belongs to the Encampment, after the playtest) | |
+| S25 | the bow 1: bow mode and the action's phases | - |
+| S26 | the bow 2: arrows that hit | S25 |
+| S27 | the bow 3: in the viewer | S26 |
 
-Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S24 (dragon attack map, then the steps it produces), S21, S22, S12, S19. S18 (cyclops) is ON HOLD.
+Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S24 (dragon attack map, then the steps it produces), S22, S25-S27 (the Strider's bow). Done: S21 (head), S12, S19. S18 (cyclops) is ON HOLD.
 
 The cutscene command used by S01-S04:
 
