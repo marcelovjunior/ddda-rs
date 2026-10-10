@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/ambient-creatures`
 - **Board area:** `fight/ambient`
-- **Status:** open
+- **Status:** in progress
 
 ## Goal
 
@@ -39,4 +39,18 @@ positions. Fill in Results and report to `head`.
 
 ## Results
 
-(filled in by the agent)
+### First source checkpoint
+
+Added installed resource/action readers and concrete kind identity in
+`ddenemyrt::ambient`. Both models and three motion banks each load; Wait
+motions exist; default think roots parse. One installed-data test and
+one kind regression pass. Strict crate-only clippy passes with the
+pre-existing `combat.rs` `type_complexity` lint allowed.
+
+Important correction: uEm8602 constructor `0x00aa0000` writes kind 0x6d,
+not its parent uEm8600 kind 0x6b. Layout e03 says `cSetInfoEnemy8600` but
+names em8602. Root/head notified for door stand-in correction.
+
+Source details in ENEMIES.md. No live original comparison yet. Next:
+resolve family action entry/think inputs, then canonical host population
+and viewer bodies; authored positions alone are not runtime behavior.

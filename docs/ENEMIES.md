@@ -218,3 +218,34 @@ Next action: trace one common enemy's resource-list selection and damage
 consumer, joining the PRP resistances to selected RST region/element IDs.
 That will establish units, effect thresholds and the base-HP selector
 needed by M4 without prematurely baking guesses into simulation.
+
+
+## Cassardis ambient units (2026-10-09, source checkpoint)
+
+`uEm8300::vf33` at `0x00a9be40` loads 17 resource descriptors at
+`0x01861b68`, 18 family action descriptors at `0x018616a0`, and installs
+ordinary think root `0x0164e5d0`. Explicit first-table selections instead
+index `0x0165d670`; this checkpoint does not substitute the ordinary root
+for those quest variants. The constructor `0x00a9bd00` writes unit kind
+`0x65` to the byte at `+0x2d`.
+
+`uEm8602::vf33` at `0x00aa1b80` loads 15 resources at `0x018627e0`,
+15 actions at `0x01862270`, and think root `0x01645228`. The two first
+motion-bank requests intentionally share the e8600 common list. Its
+constructor `0x00aa0000` overwrites the parent uEm8600 kind (`0x6b`) with
+**`0x6d`**. The Cassardis e03 layouts have class `cSetInfoEnemy8600` but
+name `em8602`: class alone cannot select the concrete unit's search kind.
+This matters to the door occupancy exclusion of kind `0x6b`.
+
+`ddenemyrt::ambient` reads resource paths/classes and action descriptors
+from the player's executable; no bulk lists are embedded. Descriptor
+word +4 is an action-specific argument, not universally a motion. Wait
+entries use it as the motion ID (`0x00a9dcf0`, `0x00aa0d40`, `0x00aa0e20`),
+with start frame 0, blend 5, rate 1. Other action classes interpret it
+differently. A test loads both models, all three banks for each unit,
+checks the Wait motions and resolves both think graphs.
+
+**Implemented/tested:** identity and installed resource/action readers.
+**Not yet implemented or compared:** generic host population, action/AI
+execution, motion movement, despawn and visual species identification.
+The authored placement feed remains a stand-in until those execute.
