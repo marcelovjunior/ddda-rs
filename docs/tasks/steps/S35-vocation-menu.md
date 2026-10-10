@@ -154,13 +154,20 @@ are nested under animation objects; their hierarchy/name binding and
 the remaining grey control still need a sourced projection. Full GUI VM,
 original visual comparison and a corrected-menu capture remain open.
 
-### First-choice visibility source checkpoint (tests pending)
+### First-choice visibility source checkpoint
 
 The opening presenter now applies the four native vf05 cost-control
 visibility overrides by instance ordinal before drawing authored keys.
 The installed regression distinguishes instance ordinals2/3/4/6 from
 object IDs4/5/15/7 and retains description object6. No title, font or
-layout value is invented. This source checkpoint is **untested** until
-the parent's queued full viewer suite/release acceptance after S43.
+layout value is invented. Parent integration435a027 on the S47 branch
+passed the full viewer suite: 92 passed, two existing ignored, including
+this installed visibility regression (28.63s compile, 11.35s tests).
+The default release build completed in48.12s; process94503 actually
+exited zero. Private logs are in E:/ddda-re/notes/steps/S47/
+full-combined-viewer-fresh-release-deps.log and
+build-combined-viewer-fresh-release-deps.log. A source-present equipment
+field exposed stale release dependencies first; narrowly rebuilding the
+affected packages with the matching --release profile corrected them.
 The remaining grey shadow/header/name/hierarchy and capture gates stay
 open; hiding the native cost controls does not imply they are resolved.
