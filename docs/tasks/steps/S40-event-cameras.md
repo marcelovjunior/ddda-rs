@@ -41,3 +41,96 @@ is emitted too.
 Walking into the roadside scene in `--opening` plays the authored camera
 12 close-up, then control returns; the story advances on its real end;
 the Result names the resources and functions.
+
+## Results (source checkpoint; capture pending)
+
+**Implemented:** `mtcamera::quest` reads indexed `cCamExParamAnim` entries
+from installed `rCameraParamList scr/stNNN/etc/stNNN`. Stage loader
+**0x00501020** requests this class (DTI **0x01993FF8**) into stage+0x964
+at **0x00501F80/87**; the resource loader is **0x007D01B0**. Empty Anim
+sequences have no pose (native initialization **0x007B76B0** ends them);
+the reader preserves their array slots as unsupported, rather than
+rejecting the entire stage list. Keys are never copied into the repo.
+
+Camera 12 of stage100 is a world-space sequence with two eye/target keys,
+last time **3.0000005 seconds**, FOV **55 degrees**, entry interpolation
+**15 frames** and return **30 frames**, both type3/frame-type0. These
+values are read from the installation. Camera149, requested by q0002
+after leaving Cassardis, uses the same supported class with no input
+block. Sampling translates the eight independent channels and tangent
+construction **0x007B9F20 / 0x007BA2D0**; equal tangents take the native
+linear shortcut, including equal zero tangents. The final time is still
+active; exhaustion is strictly after it (**0x007B77E0**). Type2 world
+position and type3 shortest-angle/target/distance interpolation follow
+**0x007E3C70 / 0x007D6150 / 0x007DE430**, with the installed 8-point ease
+curve sampled by **0x00D4EC50**.
+
+The headless `OpeningWorld` owns camera playback and advances its resource
+clock before story completion checks. Camera requests never reach
+`ScriptedHost`'s 60-frame timer; previously queued camera timer callbacks
+are discarded. Resource exhaustion supplies `CameraFinished`, the
+existing order slot observes EndCamera, and the authored task sets q2:5.
+Native ownership/end sources are **0x005C37C0 / 0x005C41D0 / 0x005C4340 /
+0x005C4600 / 0x007DFD40**. A stage handoff invalidates the old camera's
+identity and releases its controls, reporting one completion.
+
+Camera12's order has `mSimpleEv=false`, `mForceTimer=-1`, `StopSelf=false`;
+its camera has `mIsCantActPlayer=true`, `mCantActFlag=3`, no world slow.
+**0x007E0D50** applies the authored input range through the two native
+input domains (**0x00437480 / 0x004374D0**, bit indices6/7). The adapter
+blocks movement/attack/interact input for every occupied roster seat;
+the host's world/actor phases keep advancing. This is the explicit co-op
+extension of the original stage-global camera and input flags: every
+local seat shares the shot; the host blocks remote seats too. **Remote
+camera pose replication is still open** in the LAN protocol.
+
+The event is a camera move, with no LCM show-motion or new actor animation.
+The existing NPC/enemy adapters continue their authored actions. A
+non-simple end clears the slot (**0x005C4790**) and preserves party
+positions. Its end order does **not** emit the simple-event CameraEnd
+placement request. Simple-event mode is different: **0x00517050** enters
+the stage4 **0x0050DCD0** loading/fade flow, and its ending can apply
+`set_pos_type/start_pos`; those fades/placement/skip paths remain unsupported.
+Camera12 has no simple-event skip path. Gameplay resumes with the current
+follow-camera target/position and saved projection through the authored
+return transition.
+
+The viewer applies the host sample with its stage origin, real followed
+body target, roll and FOV. `DDVIEW_EVENT_CAMERA_CAPTURE=<private png>`
+optionally captures camera12's real midpoint and exits only after the
+authored q2:5 plus the return blend; it injects no camera request, position,
+combat outcome or quest flag. Ordinary opening uses the same playback.
+Reviewed S39 RescueApproach **8dc80e3** is integrated: production demo
+input walks into the installed event1 Area and waits for real q2:25.
+Reviewed S34 source checkpoint main **10da58b** is integrated, preserving
+NPC combat observations beside the new camera hooks.
+
+**Tested:** core command `cargo test -p mtcamera --test quest -p ddhost
+--test quest_camera` exited0: **4 host + 4 reader tests pass**, compile
+5.18s, suites8.12s/3.54s. Tests cover installed camera12/149, native curve
+branches, unsupported blend/input-domain rejection, both-seat input
+blocking, stale timer suppression, installed stage200 handoff, and the
+installed q0002_event1 task's q2:25 → actual exhaustion → cleared camera
+slot → q2:5. That task test begins at its admitted-task/QCT95 boundary;
+it does not claim to walk the original Area. The separate S39 installed
+driver regression supplies normal movement toward that Area.
+
+Before the S34 merge/audit, the integrated viewer passed **71 tests,
+2 existing ignored** (compile20.74s, tests12.30s) and its release build
+exited0 in51.68s; the private binary is under `E:/ddda-re/notes/steps/S40`.
+**Final integrated viewer rerun/rebuild and actual close-up capture are
+pending** the shared build/GPU queue. Head owns the current ordinary route
+run; no competing viewer was launched.
+
+**Compared against the original:** static executable/data tracing only.
+No original-game visual comparison or live camera recording was performed.
+
+**Limits:** only non-simple, world-target2 Anim sequences with supported
+type2/3 positive blends and frame-type0 are admitted. Partial input-domain
+flags1/2 and CantActPlayer-only blocks are rejected instead of collapsed.
+Actor-relative variants, templates, world slow, camera-request force
+timers, simple-event fade/skip/placement, collision along transitions,
+keep-angle resume options, non-16:9 native FOV adjustment, and overlapping
+camera-owner identity completions remain open. Unsupported requests fail
+explicitly and never receive a fabricated completion. The next action is
+the final integrated viewer validation and ordinary-route camera12 capture.
