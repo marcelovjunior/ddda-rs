@@ -150,6 +150,50 @@ impl ProviderBinding {
     }
 }
 
+/// Clock in an effect-owned coordinate block, separate from the effect's
+/// fractional clock and every generator's random/update counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordinateClock {
+    initial_delay: u16,
+    remaining: u16,
+    elapsed: u32,
+    phase: CoordinatePhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoordinatePhase { Uninitialized, Waiting, Active }
+
+impl CoordinateClock {
+    /// `initial_delay` is the already-sampled native short at block+0x11C,
+    /// including the owning effect's offset. This does not select its seed.
+    pub fn new(initial_delay: u16) -> Self {
+        Self { initial_delay, remaining: 0, elapsed: 0, phase: CoordinatePhase::Uninitialized }
+    }
+
+    pub fn elapsed(&self) -> u32 { self.elapsed }
+
+    /// One integer coordinate update. The 1->0 delay update remains waiting;
+    /// the following update enters active state and counts its first frame.
+    /// Even a negative native short is a nonzero wrapping counter here.
+    // Translated from 0x010FA010 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self) -> bool {
+        if self.phase == CoordinatePhase::Uninitialized {
+            self.elapsed = 0;
+            self.remaining = self.initial_delay;
+            self.phase = CoordinatePhase::Waiting;
+        }
+        if self.phase == CoordinatePhase::Waiting {
+            if self.remaining != 0 {
+                self.remaining = self.remaining.wrapping_sub(1);
+                return false;
+            }
+            self.phase = CoordinatePhase::Active;
+        }
+        self.elapsed = self.elapsed.wrapping_add(1);
+        true
+    }
+}
+
 /// Effect-owned integer updates and the fractional collision-sample clock.
 /// Generator clocks advance only once per returned integer update.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -461,6 +505,31 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinate_delay_does_not_admit_the_last_wait_update() {
+        let mut delayed = CoordinateClock::new(2);
+        assert!(!delayed.advance());
+        assert_eq!((delayed.remaining, delayed.elapsed()), (1, 0));
+        assert!(!delayed.advance());
+        assert_eq!((delayed.remaining, delayed.elapsed()), (0, 0));
+        assert!(delayed.advance());
+        assert_eq!(delayed.elapsed(), 1);
+        assert!(delayed.advance());
+        assert_eq!(delayed.elapsed(), 2);
+
+        let mut immediate = CoordinateClock::new(0);
+        assert!(immediate.advance());
+        assert_eq!(immediate.elapsed(), 1);
+        immediate.elapsed = u32::MAX;
+        assert!(immediate.advance());
+        assert_eq!(immediate.elapsed(), 0, "native integer clock wraps");
+
+        let mut negative_short = CoordinateClock::new((-1i16) as u16);
+        assert!(!negative_short.advance());
+        assert_eq!(negative_short.remaining, u16::MAX - 1);
+        assert_eq!(negative_short.elapsed(), 0);
+    }
 
     #[test]
     fn world_query_delay_and_geometry_follow_descriptor_not_secondary_delay() {

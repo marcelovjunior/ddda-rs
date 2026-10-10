@@ -438,3 +438,28 @@ enable production fire or establish an original-game comparison.
 Next: connect the actual effect coordinate blocks and generator clocks,
 then issue native-shaped scene queries and ordinary fire damage. Effect
 ownership, full landing/fire/state6 and visual acceptance remain open.
+
+### Native coordinate clock checkpoint
+
+The effect-owned coordinate block has its own integer clock at+0x118 and
+short delay at+0x11C/+0x11E. `CoordinateClock` translates `0x010FA010`:
+initialization copies the already-sampled delay, every initially nonzero
+delay suppresses this update (including1->0), and the first active update
+increments elapsed to1. Negative short bit patterns and elapsed overflow
+retain native wrapping semantics. The caller supplies the sampled delay;
+resource seed selection, effect offsets and generator clocks are separate.
+
+The complete enemy suite actually exited zero in parent81744:170 passed,
+two existing diagnostics ignored, fresh compile14.43s. All71 library tests
+included the new delay/activation/wrapping regression. Private log:
+E:/ddda-re/notes/steps/S29/full-coordinate-clock-fresh-ddsim.log.
+The first attempt exited101 because a cached older DDSIM artifact lacked
+the source-present ground_contact API; rebuilding only DDSIM selected the
+current source. The failed run is not counted as acceptance.
+
+This is an unused headless ownership helper; it does not create an effect,
+issue queries, change existing caller behaviour or enable production fire.
+Next: resolve installed per-coordinate payloads and the native initialization
+draw order, then bind the real parent/effect transform without double scale.
+Ghidra is stopped for memory pressure; continue from existing private source
+notes rather than starting a server.
