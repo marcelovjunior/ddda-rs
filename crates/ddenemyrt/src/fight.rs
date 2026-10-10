@@ -136,6 +136,8 @@ pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 /// An Arisen in the fight (the body moves and attacks in ddsim).
 #[derive(Debug, Clone)]
 pub struct ArisenFighter {
+    /// Port actor-lifetime token: a reused seat cannot inherit queued effects.
+    pub generation: u64,
     pub fighter: Fighter,
     pub kit: Kit,
     /// The character level whose stats the fighter carries
@@ -195,6 +197,11 @@ pub struct Fight {
     pub bow_errors: BTreeMap<u8, String>,
     /// Equipped spell projectiles and their impact children.
     pub spells: crate::skills::spells::SpellWorld,
+    /// B81600 queues at action entry; 887360 delivers in pass C.
+    /// (enemy owner, source seat, source generation, amount, decay flag).
+    provoke_messages: Vec<(u32, u8, u64, u32, u32)>,
+    next_arisen_generation: u64,
+    pub skill_errors: BTreeMap<u8, String>,
     /// The Arisen each shell owner id was fired by (kept after the shell).
     pub shooters: BTreeMap<u32, u32>,
     next_shell: u32,
@@ -238,6 +245,9 @@ impl Fight {
             bow_contexts: BTreeMap::new(),
             bow_errors: BTreeMap::new(),
             spells: Default::default(),
+            provoke_messages: Vec::new(),
+            next_arisen_generation: 0,
+            skill_errors: BTreeMap::new(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
             pawns: BTreeMap::new(),
@@ -317,10 +327,17 @@ impl Fight {
 
     /// Adds seat `seat`'s Arisen with `kit`, at full HP.
     pub fn add_arisen_as(&mut self, seat: u8, kit: Kit) {
+        let generation = self.next_arisen_generation;
+        self.next_arisen_generation = self.next_arisen_generation.checked_add(1)
+            .expect("Arisen actor lifetime counter exhausted");
+        self.provoke_messages.retain(|(_, source, _, _, _)| *source != seat);
+        self.skill_errors.remove(&seat);
+        for goblin in &mut self.goblins { goblin.distance_hate.retire(u32::from(seat)); }
         let a = self.kit(kit);
         self.arisen.insert(
             seat,
             ArisenFighter {
+                generation,
                 hp_max_white: a.hp_max,
                 fighter: Fighter {
                     owner: u32::from(seat),
@@ -640,6 +657,7 @@ impl Fight {
             let (started, volleys) = (p.attacks_started, p.volleys_fired);
             let (feet, yaw) = (p.position, p.yaw);
             let released = std::mem::take(&mut p.skills.released);
+            let entered = std::mem::take(&mut p.skills.entered);
             let a = self.arisen.get_mut(&seat).expect("seat listed");
             let new_attack = started != a.attacks_seen;
             let fired = volleys.saturating_sub(a.volleys_seen);
@@ -647,6 +665,28 @@ impl Fight {
             a.volleys_seen = volleys;
             if new_attack {
                 self.release(u32::from(seat));
+            }
+            for id in entered {
+                let Some(skill) = self.data.skills.0.get(&id) else { continue };
+                let ddsim::skills::Kind::ShieldProvoke { radius, amount, .. } = skill.definition.kind
+                    else { continue };
+                // Translated from B81600 -> AAC5A0/AACA80 (Steam 2017-12-13).
+                // A zero-vector Summons message has no amount normalization
+                // under these installed positive thresholds. Other parameter
+                // branches are observable, rather than substituted silently.
+                if !self.data.tables.game.0.get(0x14).is_some_and(|v| *v > 0.0)
+                    || !self.data.tables.game.0.get(0x16).is_some_and(|v| *v > 0.0)
+                {
+                    self.skill_errors.insert(seat, "unsupported provoke game thresholds".into());
+                    continue;
+                }
+                let generation = self.arisen[&seat].generation;
+                for goblin in &self.goblins {
+                    let distance = (0..3).map(|i| (goblin.pos[i] - feet[i]).powi(2)).sum::<f32>().sqrt();
+                    if distance < radius {
+                        self.provoke_messages.push((goblin.fighter.owner, seat, generation, amount, 1));
+                    }
+                }
             }
             for _ in 0..fired {
                 let owner = self.next_shell;
@@ -918,6 +958,14 @@ impl Fight {
 
     /// Pass C: everyone's pose and the volumes for the next frame's hits.
     pub fn volumes(&mut self, sim: &ddsim::Sim) {
+        // Translated from 0x00887360's pass-C vf98 delivery. A message
+        // changes evaluation, not HP or the enemy's current action target.
+        for (victim, source, generation, amount, decay) in std::mem::take(&mut self.provoke_messages) {
+            if !self.arisen.get(&source).is_some_and(|actor| actor.generation == generation) { continue; }
+            if let Some(goblin) = self.goblins.iter_mut().find(|g| g.fighter.owner == victim) {
+                goblin.receive_provoke(u32::from(source), amount, decay);
+            }
+        }
         for (&seat, a) in &mut self.arisen {
             let Some(p) = sim.player(seat) else { continue };
             let body = &self.data.kit(a.kit).body;

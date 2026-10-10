@@ -153,6 +153,35 @@ HP. Shield Summons message `0x22` routes from enemy `0x00aac5a0` to
 separate from distance influence type 4. No forced target or damage has
 been substituted for that effect.
 
+**Shield Summons and provoke source ports, UNRUN:** the existing `DistanceHate`
+now retains native type-5 provoke separately from refreshed type-4
+distance influence, sums them for selection, caps additive provoke at
+900 (`0x00aaca80`) and decays it by the message's unsigned decay value
+once per enemy update (`0x00ab5860`). Target slots retain their original
+order and retire both contributions together. Summons' zero damage-vector
+message keeps its installed amount unchanged because installed
+`param/game[0x14]` and `[0x16]` are positive. Skill 272 loads its own bank 9,
+plays native base motion `0x92f` and emits the provoke queue only at entry.
+Admission requires an actual secondary `Weapon::Shield`, projected from
+the equipped category passed to the host refresh. Fighter vocation alone
+does not grant a shield. Fight captures the strict full-3D sphere before
+enemy movement and delivers messages in pass C, leaving current target,
+alert and damage untouched. Actor lifetime tokens prevent pending source
+messages or old hate from carrying across a reused seat. Production item
+equipment and viewer bank-9 binding callers remain OPEN. Additional UNRUN sources:
+
+- `provoke_is_additive_capped_and_decays_separately_from_distance`
+- `provoke_preserves_first_native_target_slot_and_does_not_require_sight`
+- `shield_summons_requires_equipped_secondary_and_emits_entry_once`
+- `installed_shield_summons_queues_pass_c_provoke_with_strict_sphere_and_no_damage`
+
+Read-only installed motion metadata confirms Summons `0x92f` has no
+group-2 collision activation runs; Scarlet Kisses' cost edge is in intro
+`0x71e`, with repeat strikes `0x71f/0x726/0x727` lacking additional cost
+edges. Blink's `0x729` has an authored loop frame, which its distance-driven
+port must preserve rather than holding the final pose. The private motion
+metadata is not copied into production code.
+
 Threefold Arrow's base-level native selector `0x00b16dc0` joins the runtime
 triples at `0x014f1910` to `rBowActParamList`: skill 350, learned level 1
 selects record 1, rather than the basic-arrow record 0. The installed

@@ -50,6 +50,14 @@ fn installed_equipped_skill_refresh_is_owned_by_profiles_across_seat_reuse() {
     assert_eq!(host.progression.characters[fighter_record].active, fighter_slots);
     assert_eq!(host.progression.characters[mage_record].active, mage_slots);
     assert_eq!(
+        host.sim.player(fighter).unwrap().secondary_weapon,
+        ddsim::Weapon::Shield
+    );
+    assert_eq!(
+        host.sim.player(mage).unwrap().secondary_weapon,
+        ddsim::Weapon::None
+    );
+    assert_eq!(
         host.sim.player(mage).unwrap().skills.equipped,
         mage_slots.map(|skill| skill.map(u32::from))
     );
@@ -80,6 +88,10 @@ fn installed_equipped_skill_refresh_is_owned_by_profiles_across_seat_reuse() {
         .refresh_equipped_skills(strider, WeaponCategory::Dagger, Some(WeaponCategory::Bow))
         .unwrap();
     assert_eq!(strider_slots, [Some(152), None, None, Some(350), None, None]);
+    assert_eq!(
+        host.sim.player(strider).unwrap().secondary_weapon,
+        ddsim::Weapon::Bow
+    );
     assert_eq!(host.sim.player(mage).unwrap().skills.equipped, mage_before);
     // The current two-Arisen policy needs one vacant seat. The returning
     // Fighter takes Mage's old seat; Strider still owns Fighter's old seat.

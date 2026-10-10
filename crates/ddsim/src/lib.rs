@@ -617,6 +617,7 @@ impl Player {
         self.skills.request = None;
         self.skills.active = None;
         self.skills.released.clear();
+        self.skills.entered.clear();
         self.shot = attack::ShotState::default();
         self.bow = None;
         self.bow_latched = false;

@@ -1,6 +1,6 @@
 //! The ordinary em0100 sensor branch used by the roadside rescue.
 //! Sphere rows, pose-relative FOV/LOS and the ordinary distance influence.
-//! Other shapes and non-distance hate contributions remain unsupported.
+//! Other shapes and hate contributions beyond distance/provoke remain unsupported.
 
 use crate::goblin::Target;
 
@@ -114,10 +114,13 @@ impl Sensor {
     }
 }
 
-/// Native 16-target distance influence entries. Additional damage/augment
+/// Native 16-target distance and provoke influence entries. Additional damage/augment
 /// influences and the special grabbed/cached-target overrides are unported.
 #[derive(Debug, Clone, Default)]
-pub struct DistanceHate(pub Vec<(u32, f32)>, Vec<usize>);
+pub struct DistanceHate(pub Vec<(u32, f32)>, Vec<usize>, Vec<Provoke>);
+
+#[derive(Debug, Clone)]
+struct Provoke { owner: u32, score: f32, decay: f32 }
 
 /// Ordinary direct-detection branch of the goblin alert update. Ally alert
 /// propagation, noises and damage notifications require explicit future inputs.
@@ -154,6 +157,34 @@ impl Alert {
 }
 
 impl DistanceHate {
+    /// Ordinary goblin's message 0x22, with no damage-vector payload.
+    /// The caller supplies the installed adjustment amount, already truncated
+    /// as B81600 does. This zero-vector branch requires positive installed
+    /// param/game[0x14] and [0x16]; nonzero damage vectors remain unsupported.
+    /// Distance influence remains independently refreshed.
+    // Translated from 0x00AAC5A0/0x00AACA80 and 0x00AB5860
+    // (DDDA.exe 2017-12-13 Steam). Evaluation type 5 has cap 900.
+    pub fn provoke(&mut self, owner: u32, amount: u32, decay: u32) {
+        if !self.0.iter().any(|(id, _)| *id == owner) {
+            if self.0.len() == 16 { return; }
+            let slot = (0..16).find(|slot| !self.1.contains(slot)).unwrap();
+            let index = self.1.binary_search(&slot).unwrap_err();
+            self.1.insert(index, slot);
+            self.0.insert(index, (owner, 0.0));
+        }
+        if let Some(entry) = self.2.iter_mut().find(|entry| entry.owner == owner) {
+            entry.score = (entry.score + amount as f32).min(900.0);
+            entry.decay = decay as f32;
+        } else {
+            self.2.push(Provoke { owner, score: (amount as f32).min(900.0), decay: decay as f32 });
+        }
+    }
+
+    /// Sum of the two supported native influence types (AB52E0).
+    pub fn score(&self, owner: u32) -> f32 {
+        self.0.iter().find(|(id, _)| *id == owner).map_or(0.0, |(_, score)| *score)
+            + self.2.iter().find(|entry| entry.owner == owner).map_or(0.0, |entry| entry.score)
+    }
     // Translated from 0x00AB5A50 and 0x00AB52E0 (DDDA.exe 2017-12-13 Steam).
     pub fn select(&mut self, admitted: &[Target], all: &[Target], from: [f32; 3]) -> Option<Target> {
         for target in admitted.iter().filter(|t| t.alive) {
@@ -174,7 +205,8 @@ impl DistanceHate {
         }
         let mut best = None;
         let mut maximum = 0.0;
-        for &(owner, score) in &self.0 {
+        for &(owner, _) in &self.0 {
+            let score = self.score(owner);
             let Some(target) = all.iter().find(|t| t.id == owner && t.alive) else { continue };
             if score > maximum { maximum = score; best = Some(*target); }
         }
@@ -182,6 +214,7 @@ impl DistanceHate {
     }
 
     pub fn retire(&mut self, owner: u32) {
+        self.2.retain(|entry| entry.owner != owner);
         for index in (0..self.0.len()).rev() {
             if self.0[index].0 == owner { self.0.remove(index); self.1.remove(index); }
         }
@@ -191,9 +224,54 @@ impl DistanceHate {
     /// independently of the actor delta (0x00AB5860 from 0x00AA96E0).
     // Translated from 0x00AB5860 (DDDA.exe 2017-12-13 Steam).
     pub fn tick(&mut self) {
-        for (_, score) in &mut self.0 { *score -= 1.0; }
+        for (_, score) in &mut self.0 { *score = (*score - 1.0).max(0.0); }
+        for entry in &mut self.2 { entry.score -= entry.decay; }
+        self.2.retain(|entry| entry.score > 0.0);
         for index in (0..self.0.len()).rev() {
-            if self.0[index].1 <= 0.0 { self.0.remove(index); self.1.remove(index); }
+            if self.0[index].1 <= 0.0 && !self.2.iter().any(|entry| entry.owner == self.0[index].0) {
+                self.0.remove(index); self.1.remove(index);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod provoke_tests {
+    use super::*;
+
+    #[test]
+    fn provoke_is_additive_capped_and_decays_separately_from_distance() {
+        let near = Target { id: 10, pos: [0.0; 3], alive: true };
+        let far = Target { id: 20, pos: [0.0, 0.0, 2000.0], alive: true };
+        let all = [near, far];
+        let mut hate = DistanceHate::default();
+        assert_eq!(hate.select(&all, &all, [0.0; 3]).unwrap().id, 10);
+        // B81600's installed base amount and fixed message decay flag1.
+        hate.provoke(20, 500, 1);
+        assert_eq!(hate.select(&all, &all, [0.0; 3]).unwrap().id, 20);
+        let distance = hate.0.iter().find(|(id, _)| *id == 20).unwrap().1;
+        assert_eq!(hate.score(20), distance + 500.0);
+        hate.provoke(20, 500, 1);
+        assert_eq!(hate.score(20), distance + 900.0);
+        hate.tick();
+        assert_eq!(hate.score(20), distance - 1.0 + 899.0);
+        assert_eq!(hate.select(&all, &all, [0.0; 3]).unwrap().id, 20);
+        assert_eq!(hate.score(20), distance + 899.0);
+        hate.retire(20);
+        assert_eq!(hate.score(20), 0.0);
+        assert_eq!(hate.select(&[], &all, [0.0; 3]).unwrap().id, 10);
+    }
+
+    #[test]
+    fn provoke_preserves_first_native_target_slot_and_does_not_require_sight() {
+        let first = Target { id: 11, pos: [0.0; 3], alive: true };
+        let second = Target { id: 22, ..first };
+        let mut hate = DistanceHate::default();
+        hate.provoke(11, 500, 1);
+        hate.provoke(22, 500, 1);
+        assert_eq!(hate.select(&[], &[second, first], [0.0; 3]).unwrap().id, 11);
+        for _ in 0..500 { hate.tick(); }
+        assert!(hate.select(&[], &[second, first], [0.0; 3]).is_none());
+        assert!(hate.0.is_empty());
     }
 }

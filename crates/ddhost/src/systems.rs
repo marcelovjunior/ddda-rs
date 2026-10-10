@@ -108,8 +108,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             .ok_or(HostError::NoData("Arisen progression record"))?;
         let active = ddprogress::learn::active_skills(record, primary, secondary);
         record.active = active;
-        self.sim.player_mut(player).expect("live simulation seat checked")
-            .skills.equipped = active.map(|skill| skill.map(u32::from));
+        let actor = self.sim.player_mut(player).expect("live simulation seat checked");
+        actor.skills.equipped = active.map(|skill| skill.map(u32::from));
+        // Project the real equipped secondary category supplied by the host.
+        // This grants no item and does not infer a shield from a vocation.
+        actor.secondary_weapon = match secondary {
+            Some(ddskill::vocation::WeaponCategory::Shield) => ddsim::Weapon::Shield,
+            Some(ddskill::vocation::WeaponCategory::Bow) => ddsim::Weapon::Bow,
+            _ => ddsim::Weapon::None,
+        };
         Ok(active)
     }
 

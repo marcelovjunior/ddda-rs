@@ -123,3 +123,41 @@ fn scarlet_kisses_repeat_variants_stop_at_resource_cycle_limit() {
     );
     assert!(sim.player(0).unwrap().skills.released.is_empty());
 }
+
+#[test]
+fn shield_summons_requires_equipped_secondary_and_emits_entry_once() {
+    let mut sim = series();
+    sim.skill_definitions.insert(
+        272,
+        Definition {
+            weapon: Weapon::Sword,
+            kind: Kind::ShieldProvoke {
+                motion: 0x92f,
+                radius: 3000.0,
+                amount: 500,
+            },
+            cost: 0.0,
+            motions: [(0x92f, RootMotion::none(6))].into_iter().collect(),
+        },
+    );
+    let actor = sim.player_mut(0).unwrap();
+    actor.weapon = Weapon::Sword;
+    actor.skills.equipped[3] = Some(272);
+    sim.request_skill(0, 3);
+    frame(&mut sim);
+    assert!(sim.player(0).unwrap().skills.active.is_none());
+    assert!(sim.player(0).unwrap().skills.entered.is_empty());
+    sim.player_mut(0).unwrap().secondary_weapon = Weapon::Shield;
+    sim.request_skill(0, 3);
+    frame(&mut sim);
+    assert_eq!(sim.player(0).unwrap().skills.active.unwrap().motion, 0x92f);
+    assert_eq!(sim.player(0).unwrap().skills.entered, [272]);
+    sim.request_skill(0, 3); // A press cannot replace an active Summons.
+    for _ in 0..30 {
+        frame(&mut sim);
+    }
+    assert!(sim.player(0).unwrap().skills.active.is_none());
+    assert_eq!(sim.player(0).unwrap().skills.entered, [272]);
+    assert!(sim.player(0).unwrap().skills.released.is_empty());
+    assert!(sim.player(1).unwrap().skills.entered.is_empty());
+}

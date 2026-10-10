@@ -7,6 +7,9 @@ use std::collections::HashMap;
 pub enum Kind {
     /// Broad Cut and Tusk Toss: vf06 B3E290 / B3E9A0.
     Sword { motion: u16 },
+    /// Base Shield Summons: provoke at entry, then the real shield motion.
+    /// Radius and amount are loaded from m_pl000_Shield (B38240/B38490).
+    ShieldProvoke { motion: u16, radius: f32, amount: u32 },
     /// Scarlet Kisses base-level phases (0x00B23F10). Parameters are read
     /// from m_pl000_Dagger, rather than copied from that resource.
     DaggerSeries {
@@ -66,6 +69,8 @@ pub struct Skills {
     pub active: Option<Active>,
     /// Spell releases, drained by the host after player movement.
     pub released: Vec<u32>,
+    /// Native entry effects (B38240), distinct from spell release events.
+    pub entered: Vec<u32>,
 }
 
 impl Sim {
@@ -105,9 +110,12 @@ impl Sim {
                 && !matches!(p.state, State::Attack { .. } | State::Shot { .. });
             if p.skills.active.is_none() && available && p.stamina > 0.0 {
                 if let Some((id, d)) = id.and_then(|id| self.skill_definitions.get(&id).map(|d| (id, d))) {
-                    if d.weapon == p.weapon {
+                    let secondary =
+                        !matches!(d.kind, Kind::ShieldProvoke { .. }) || p.secondary_weapon == Weapon::Shield;
+                    if d.weapon == p.weapon && secondary {
                         let (phase, motion) = match d.kind {
                             Kind::Sword { motion } => (Phase::Strike, motion),
+                            Kind::ShieldProvoke { motion, .. } => (Phase::Strike, motion),
                             Kind::DaggerSeries { intro, .. } => (Phase::Intro, intro),
                             Kind::Spell { start, .. } => (Phase::Chant, start),
                         };
@@ -131,6 +139,9 @@ impl Sim {
                             p.yaw = yaw;
                         }
                         p.attacks_started += 1;
+                        if matches!(d.kind, Kind::ShieldProvoke { .. }) {
+                            p.skills.entered.push(id);
+                        }
                         return true;
                     }
                 }
@@ -217,7 +228,7 @@ impl Sim {
                     active.presses = 0;
                 }
             }
-            (Kind::Sword { .. }, Phase::Strike) => {
+            (Kind::Sword { .. } | Kind::ShieldProvoke { .. }, Phase::Strike) => {
                 // Translated from B60F10/B60F70: group 1 bit 30 FALLS.
                 if !active.paid
                     && (cost_word ^ active.previous_cost_word) & active.previous_cost_word & (1 << 30) != 0

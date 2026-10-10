@@ -1,5 +1,5 @@
 //! Equipped-skill data from the player's installation. A skill replaces
-//! bank 7 for its owner (0x00AC65A0), never a shared global motion bank.
+//! bank 7 or 9 for its owner (0x00AC65A0), never a shared global motion bank.
 use crate::arisen::ArisenData;
 use crate::body::{load, Body};
 use ddsim::skills::{Definition, Kind};
@@ -11,6 +11,8 @@ pub mod spells;
 #[derive(Debug, Clone)]
 pub struct SkillData {
     pub id: u32,
+    /// Native primary/secondary binding chosen by this skill's category.
+    pub bank: u8,
     pub body: Body,
     pub definition: Definition,
     pub magic: Option<Magic>,
@@ -24,6 +26,7 @@ impl SkillData {
         let motion = match self.definition.kind {
             Kind::Spell { release, .. } => release,
             Kind::Sword { motion } => motion,
+            Kind::ShieldProvoke { motion, .. } => motion,
             Kind::DaggerSeries { strikes, .. } => strikes[0],
         };
         let root = &self.definition.motions[&motion];
@@ -35,7 +38,7 @@ impl SkillData {
             })
             .unwrap_or(root.frame_count.saturating_sub(1));
         self.body.pose(
-            crate::body::MotionId::new(7, motion & 255),
+            crate::body::MotionId::new((motion >> 8) as u8, motion & 255),
             frame as f32,
             feet,
             yaw,
@@ -87,25 +90,41 @@ impl SkillSet {
             "rAdjustParam",
         )?)
         .ok_or("bad dagger adjustment table")?;
+        let shield_stamina = ddparam::Stamina::from_bytes(&load::read(
+            vfs,
+            r"param\pl\stamina\PlStamina_Shield",
+            "rPlStamina",
+        )?)
+        .map_err(|e| e.to_string())?;
+        let shield_adjust = ddcombat::damage::Adjust::parse(&load::read(
+            vfs,
+            r"param\pl\other\m_pl000_Shield",
+            "rAdjustParam",
+        )?)
+        .ok_or("bad shield adjustment table")?;
         let mut out = HashMap::new();
-        for id in [41u32, 43, 152, 210, 212] {
+        for id in [41u32, 43, 152, 210, 212, 272] {
             let (category, first, base) = if id < 100 {
                 (1, 40, sword)
             } else if id < 210 {
                 (4, 150, strider)
+            } else if id == 272 {
+                (8, 270, sword)
             } else {
                 (5, 210, mage)
             };
             let entry = &tables.motion_lists[category][(id - first) as usize];
             let bank = load::bank(vfs, &entry.path)?;
             let mut body = base.body.clone();
-            body.banks[7] = Some(bank);
+            let bank_key = if id == 272 { 9 } else { 7 };
+            body.banks.resize(body.banks.len().max(bank_key + 1), None);
+            body.banks[bank_key] = Some(bank);
             let mut motions = HashMap::new();
-            let bank = body.banks[7].as_ref().unwrap();
+            let bank = body.banks[bank_key].as_ref().unwrap();
             for (slot, motion) in bank.list.motions.iter().enumerate() {
                 if let Some(m) = motion {
                     motions.insert(
-                        0x700 | slot as u16,
+                        (bank_key as u16) << 8 | slot as u16,
                         ddsim::RootMotion::from_motion(m)
                             .with_curves(bank.list.curves[slot].clone())
                             .with_events(bank.list.events[slot].clone()),
@@ -157,6 +176,33 @@ impl SkillSet {
                     row.stamina * (100. - proficiency) * 0.01,
                     None,
                 )
+            } else if id == 272 {
+                // Translated from 0x00B38240/0x00B38490 and B81600
+                // (DDDA.exe 2017-12-13 Steam), learned base level only.
+                let radius = *shield_adjust.0.get(0xA).ok_or("no provoke radius")?;
+                let amount = *shield_adjust.0.get(0xB).ok_or("no provoke amount")?;
+                if !radius.is_finite()
+                    || radius < 0.0
+                    || !amount.is_finite()
+                    || amount < 0.0
+                    || amount >= u32::MAX as f32
+                {
+                    return Err("unsupported provoke radius/amount".into());
+                }
+                let row = &shield_stamina.entries[(id - first) as usize];
+                if row.frame > 1.0 {
+                    return Err("sustained shield cost not supported".into());
+                }
+                let proficiency = ability.entries[62].float_1;
+                (
+                    Kind::ShieldProvoke {
+                        motion: 0x92f,
+                        radius,
+                        amount: amount as u32,
+                    },
+                    row.stamina * (100. - proficiency) * 0.01,
+                    None,
+                )
             } else {
                 let action = &tables.actions[category][(tables.skills[id as usize].action & 0xffff) as usize];
                 // cPlActWpnWandBase::vf18 B44AC0: params[1] selects
@@ -190,6 +236,7 @@ impl SkillSet {
                 id,
                 SkillData {
                     id,
+                    bank: bank_key as u8,
                     body,
                     definition: Definition {
                         weapon: base.weapon(),
