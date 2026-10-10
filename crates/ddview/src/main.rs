@@ -1096,11 +1096,11 @@ fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
 #[derive(Resource)]
 struct SkyShadowSetting(Option<sky::SkyShadow>);
 
-/// The original's sun shadow is a `uSkyStableShadow`: one shadow map over
-/// `mShadowViewDistanceEx` (6000 cm on stages 100 and 200), not Bevy's
-/// default four cascades over 1 km, which drew every caster of a stage
-/// several times a frame. `mShadowDistribution` (0.25) is not applied (its
-/// use is not traced).
+/// Current approximation: one map over the authored view distance (6000 cm
+/// on stages 100/200). The original constructor 0x00eefc60 enables three
+/// cascades; 0x00ee5ce0 splits their ranges using mShadowDistribution.
+/// mtweather::shadow contains that split rule, but matching the original
+/// projection, quality-dependent atlas and receiver filtering is still open.
 fn sky_shadow(
     mut commands: Commands,
     setting: Option<Res<SkyShadowSetting>>,
