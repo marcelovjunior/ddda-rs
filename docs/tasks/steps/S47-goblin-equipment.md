@@ -230,3 +230,24 @@ the evidence. The accelerated screenshot run has no valid FPS result.
 
 Next: one coordinated bounded retry with a precreated screenshot directory
 and the corrected process-handle watchdog, then inspect actual PNGs.
+
+The one head-approved retry includes main959f6a9's directory creation at
+source d5567f8. Full default viewer92 passed/two existing ignored, fresh
+compile20.37s/tests10.99s and release40.03s, actual79457 exit0. Private pin
+ddview-s47-combined-d5567f8.exe SHA256
+83CCCD16CCA88D814F6688C5E422C428C8F9B5AAB19D19C465714440EEFFECBD.
+
+The corrected handle watchdog obtained numeric exit-1 for owned viewer15908
+after180.7952s (harness1596 exit1). Its executable was confirmed absent and
+original23408 still running before lease release. Only1-newly-arisen.png
+was saved; independent viewing found pre-pipeline sky/HUD without terrain
+or the equipment body. This run failed the rescue (q2:20 false/q2:30 true),
+stayed at level2/experience420 and produced no S43 notice PNG. The final
+NPC304/owner106 ledger records Arisen0 five hits/990.099 and hired pawn6
+five hits/633.6634, plus goblin/projectile damage. Friendly fire is present;
+arrival timing and the exact successful-run difference need comparison.
+Head received the timestamps, complete ledger and goblin lines on the board.
+No new capture retry is planned and no visual/original/FPS PASS is claimed.
+Private combined-rescue-d5567f8.run.json/err.txt and the saved PNG retain
+the evidence. Next: establish a stable real route and render-ready capture
+before equipment appearance acceptance; keep the source checkpoint separate.

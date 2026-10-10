@@ -148,3 +148,13 @@ absent before lease release. No notice visual/original acceptance is claimed.
 Private combined-rescue-42576fd.err.txt and pin provenance in S47 preserve
 the evidence. Next: repeat once with the directory prepared and inspect
 the genuine notice PNG; no manufactured progression or event replay.
+
+The approved retry at source d5567f8 includes directory creation; its full
+viewer92 tests/two existing ignored and release40.03s actually passed.
+Screenshot saving now works, but this route failed the rescue and stayed
+at level2/experience420. The single step PNG contains pre-pipeline sky/HUD;
+there is no notice PNG. Owned viewer15908 exited-1 via the retained-handle
+watchdog after180.7952s; its executable was absent before lease release.
+The earlier42576fd genuine level3 event remains log evidence, not visual
+acceptance. Next: a stable real progression route with render-ready capture,
+coordinated with head; no further speculative GUI retry is planned.
