@@ -139,7 +139,7 @@ impl HostHandle {
 
 /// Loaded NPC layouts and real actor requests, independent of graph-map membership.
 struct NpcAdapter {
-    layouts: ddhost::npc_placements::LoadedLayouts,
+    layouts: HashMap<u32, ddhost::npc_placements::LoadedLayouts>,
     families: ddhost::npc_placements::NameFamilies,
     guards: HashMap<u32, ddnpcrt::schedule::Guard>,
     goto: HashMap<u32, [f32; 3]>,
@@ -161,7 +161,7 @@ impl NpcAdapter {
         let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
-        Ok(Self { layouts, families, guards: HashMap::new(), goto: HashMap::new(),
+        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), families, guards: HashMap::new(), goto: HashMap::new(),
             placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
     }
 }
@@ -323,7 +323,7 @@ pub fn prepare(
 impl Session {
     fn sync_npc_intels(&mut self) -> Result<(), String> {
         let stage = self.world().stage_no;
-        if stage != self.npc_adapter.layouts.stage {
+        let Some(layouts) = self.npc_adapter.layouts.get(&stage) else {
             if self.npc_adapter.reported_stage != stage {
                 warn!("opening: stage {stage} NPC materialization waits for loaded-layout/archive readiness adapter");
                 self.npc_adapter.reported_stage = stage;
@@ -337,11 +337,11 @@ impl Session {
             self.npc_adapter.owners.clear();
             self.npc_adapter.bindings.clear();
             return Ok(());
-        }
+        };
         let candidates = {
             let (scene, hour, flag) = ddhost::spawns::world_inputs(self.world(), stage);
             let world = ddhost::ddspawn::World { scene, hour, flag: &flag };
-            self.npc_adapter.layouts.candidates(&world)
+            layouts.candidates(&world)
         };
         let mut admitted = Vec::new();
         for placement in candidates.placements {
@@ -404,9 +404,9 @@ impl Session {
     }
     pub(crate) fn door_npc_coverage(&self) -> bool {
         let stage=self.world().stage_no;
-        if stage!=self.npc_adapter.layouts.stage{return false;}
+        let Some(layouts)=self.npc_adapter.layouts.get(&stage) else {return false;};
         let (scene,hour,flag)=ddhost::spawns::world_inputs(self.world(),stage);
-        let candidates=self.npc_adapter.layouts.candidates(&ddhost::ddspawn::World{scene,hour,flag:&flag});
+        let candidates=layouts.candidates(&ddhost::ddspawn::World{scene,hour,flag:&flag});
         !candidates.gates.iter().any(|(_,gate)|matches!(gate,ddhost::ddspawn::Gate::Unported(_)))
             && candidates.placements.iter().all(|p|
                 self.npc_adapter.families.select(&p.transform.name)==Some(false)
