@@ -3,7 +3,7 @@
 //! handles the enter/exit tracks and settled panel; local flashes, font filters,
 //! general GUI sequencing and other key interpolation modes remain unported.
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use ddhost::ddprogress::{Progression, Role};
 use std::collections::{HashMap, VecDeque};
 
@@ -31,6 +31,7 @@ struct Notice {
 
 #[derive(Default)]
 struct Observer {
+    profiles: HashMap<u8, ddhost::ProfileId>,
     seen: HashMap<(u8, bool), (usize, u32)>,
     queue: VecDeque<Notice>,
 }
@@ -40,7 +41,27 @@ impl Observer {
     /// the main pawn's entries belong to its progression owner. Remote seats and
     /// support pawns are excluded. Source B5BD20 only notifies the Arisen or a
     /// pawn with +5854 == 0; support pawns do not earn levels (ddprogress).
-    fn observe(&mut self, progression: &Progression, locals: &[u8], pawn_name: &str, arisen_names: &HashMap<u8, String>) {
+    fn observe(
+        &mut self,
+        progression: &Progression,
+        locals: &[u8],
+        pawn_name: &str,
+        arisen_names: &HashMap<u8, (ddhost::ProfileId, String)>,
+    ) -> Vec<u8> {
+        // Project identity policy: a new occupant establishes a baseline and
+        // cannot consume an earlier profile's pending or active notification.
+        let mut replaced: Vec<_> = self.profiles.keys().chain(arisen_names.keys()).copied().collect();
+        replaced.sort_unstable();
+        replaced.dedup();
+        replaced.retain(|owner| {
+            self.profiles.get(owner).copied() != arisen_names.get(owner).map(|(profile, _)| *profile)
+        });
+        self.seen.retain(|(owner, _), _| !replaced.contains(owner));
+        self.queue.retain(|notice| !replaced.contains(&notice.owner));
+        self.profiles = arisen_names
+            .iter()
+            .map(|(&owner, (profile, _))| (owner, *profile))
+            .collect();
         let mut changes = Vec::new();
         let mut present = Vec::new();
         for member in progression.party.iter().flatten() {
@@ -49,7 +70,7 @@ impl Observer {
                 Role::MainPawn { owner } => (owner, true),
                 Role::Support { .. } => continue,
             };
-            if !locals.contains(&owner) {
+            if !locals.contains(&owner) || !arisen_names.contains_key(&owner) {
                 continue;
             }
             let Some(character) = progression.characters.get(member.character) else {
@@ -69,7 +90,14 @@ impl Observer {
                             level,
                             // vf60 0x006772F0 binds the notification's name at
                             // +0x290; co-op resolves it by this notice's owner.
-                            name: if pawn { pawn_name.to_owned() } else { arisen_names.get(&owner).cloned().unwrap_or_default() },
+                            name: if pawn {
+                                pawn_name.to_owned()
+                            } else {
+                                arisen_names
+                                    .get(&owner)
+                                    .map(|(_, name)| name.clone())
+                                    .unwrap_or_default()
+                            },
                         });
                     }
                 }
@@ -89,6 +117,7 @@ impl Observer {
             self.queue.insert(at, notice);
             self.queue.truncate(16);
         }
+        replaced
     }
 }
 
@@ -304,6 +333,9 @@ struct Active {
 #[derive(Default)]
 struct Consumers(HashMap<u8, Active>);
 impl Consumers {
+    fn replace_profiles(&mut self, owners: &[u8]) -> Vec<Active> {
+        owners.iter().filter_map(|owner| self.0.remove(owner)).collect()
+    }
     // Co-op presentation policy: a follow switch suspends that owner's panel
     // and clock, while the new followed owner can consume its own queue.
     // Resuming does not spend hidden time or alter the native clock ordering.
@@ -641,9 +673,25 @@ fn update(
         .as_ref()
         .map(|pawn| pawn.pawn.edit.name_str())
         .unwrap_or_default();
-    let arisen_names = state.locals.iter().map(|&owner| (owner, session.host.character_name(owner))).collect();
-    view.observer
-        .observe(&session.host.progression, &state.locals, &pawn_name, &arisen_names);
+    let arisen_names = state
+        .locals
+        .iter()
+        .filter_map(|&owner| {
+            let profile = session.host.roster.seat(owner)?.profile;
+            Some((owner, (profile, session.host.character_name(owner))))
+        })
+        .collect();
+    let replaced = view.observer.observe(
+        &session.host.progression,
+        &state.locals,
+        &pawn_name,
+        &arisen_names,
+    );
+    for active in view.consumers.replace_profiles(&replaced) {
+        for entity in active.entities {
+            commands.entity(entity).despawn();
+        }
+    }
     let event_active = session.event_active();
     drop(session);
     let visible = !pause.paused && !event_active;
@@ -772,6 +820,50 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recycled_local_seat_drops_only_previous_profile_pending_and_active_names() {
+        let notice = |owner, name: &str| Notice {
+            owner,
+            pawn: false,
+            level: 3,
+            name: name.into(),
+        };
+        let mut observer = Observer {
+            profiles: HashMap::from([(0, ddhost::ProfileId(11)), (1, ddhost::ProfileId(22))]),
+            seen: HashMap::from([((0, false), (0, 3)), ((1, false), (1, 3))]),
+            queue: VecDeque::from([notice(0, "Alba"), notice(1, "Beren")]),
+        };
+        let mut consumers = Consumers::default();
+        for (owner, name) in [(0, "Alba"), (1, "Beren")] {
+            consumers.0.insert(
+                owner,
+                Active {
+                    notice: notice(owner, name),
+                    clock: Clock::default(),
+                    quads: vec![],
+                    entities: vec![],
+                },
+            );
+        }
+        let names = HashMap::from([
+            (0, (ddhost::ProfileId(33), "Celia".into())),
+            (1, (ddhost::ProfileId(22), "Beren".into())),
+        ]);
+        let replaced = observer.observe(&Progression::new(), &[0, 1], "", &names);
+        assert_eq!(replaced, [0]);
+        let removed = consumers.replace_profiles(&replaced);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].notice.name, "Alba");
+        assert!(!consumers.0.contains_key(&0));
+        assert_eq!(consumers.0[&1].notice.name, "Beren");
+        assert_eq!(observer.queue, VecDeque::from([notice(1, "Beren")]));
+        assert!(
+            observer
+                .observe(&Progression::new(), &[0, 1], "", &names)
+                .is_empty()
+        );
+        assert_eq!(consumers.next(&mut observer, 0, true), None);
+    }
     #[test]
     fn followed_owner_switch_suspends_clock_without_blocking_other_owner() {
         // Synthetic panels isolate co-op consumption from the installed GUI.
@@ -911,15 +1003,23 @@ mod tests {
         let mut observer = Observer::default();
         let mut characters = ddhost::character_creation::Characters::default();
         for (profile, name) in [(11, "Alba"), (22, "Beren")] {
-            let mut edit = ddpawn::cmc::Edit { name: [0; 25], nickname: 0, fields: [0; 41] };
+            let mut edit = ddpawn::cmc::Edit {
+                name: [0; 25],
+                nickname: 0,
+                fields: [0; 41],
+            };
             edit.set_name(name.as_bytes());
             characters.confirm(ddhost::ProfileId(profile), edit).unwrap();
         }
         let mut saved = ddhost::save::SaveFile::default();
         characters.save(&mut saved);
-        let characters = ddhost::character_creation::Characters::default().loaded(
-            &ddhost::save::SaveFile::from_bytes(&saved.to_bytes()).unwrap()).unwrap();
-        let names = HashMap::from([(0, characters.name(ddhost::ProfileId(11))), (1, characters.name(ddhost::ProfileId(22)))]);
+        let characters = ddhost::character_creation::Characters::default()
+            .loaded(&ddhost::save::SaveFile::from_bytes(&saved.to_bytes()).unwrap())
+            .unwrap();
+        let names = HashMap::from([
+            (0, (ddhost::ProfileId(11), characters.name(ddhost::ProfileId(11)))),
+            (1, (ddhost::ProfileId(22), characters.name(ddhost::ProfileId(22)))),
+        ]);
         observer.observe(&progression, &[0], "Synthetic Pawn", &names);
         assert!(observer.queue.is_empty());
         for c in &mut progression.characters {
@@ -947,10 +1047,12 @@ mod tests {
         assert_eq!(observer.queue.len(), 4, "new local seat establishes baseline");
         progression.characters[1].progress.level += 1;
         observer.observe(&progression, &[0, 1], "", &names);
-        assert!(observer
-            .queue
-            .iter()
-            .any(|n| n.owner == 1 && !n.pawn && n.level == 4 && n.name == "Beren"));
+        assert!(
+            observer
+                .queue
+                .iter()
+                .any(|n| n.owner == 1 && !n.pawn && n.level == 4 && n.name == "Beren")
+        );
     }
     #[test]
     fn installed_text_panel_tracks_and_font_match_native_bindings() {

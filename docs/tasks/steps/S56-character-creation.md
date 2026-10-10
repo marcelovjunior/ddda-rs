@@ -63,8 +63,13 @@ Prepared implementation:
 - Keyboard entry follows `0x0075D71E..0x0075D73A`: 12 single-byte
   characters, otherwise eight. Normalization follows `0x007676E0`,
   blacklist loading/matching `0x00CACAD0` / `0x00CACCC0` / `0x00CACDD0`,
-  and the native 25-byte save copy `0x0060F0B2`. Replacement/punctuation
-  tables are read from the installed exe at runtime; blacklist rows stay
+  and the native 25-byte save copy `0x0060F0B2`.
+  The callback counts the existing UTF-8 buffer through `0x0075D71E` /
+  `0x00D88F30`; `0x00D88F7C..0x00D88FA1` counts a four-byte sequence once,
+  matching Rust scalar counts for valid UTF-8. Native upstream IME and
+  surrogate admission (`0x0075D76C` / `0x00D89EE0`) remains **open**;
+  Bevy's committed-text input is not a port of that conversion path.
+  Replacement/punctuation tables are read from the installed exe at runtime; blacklist rows stay
   installed. The editor requires a nonempty normalized name as a project
   admission gate. Unattended input requires explicit
   `DDVIEW_CHARACTER_NAME_<seat>` or `DDVIEW_CHARACTER_NAME` fixtures.
@@ -88,6 +93,10 @@ Prepared implementation:
   S43 resolves each Arisen notice's name separately; the existing pawn
   name and queue rules remain intact. A regression round-trips named
   profile EDIT records and asserts the level-up text field.
+  Head7784 approved a narrow identity correction: observing a changed
+  local `ProfileId` discards that seat's prior baseline and pending/active
+  notices while leaving other profiles' notices intact. A recycled-seat
+  regression covers the old name not reaching the new occupant.
 
 Prepared regressions cover profile save/load and seat remapping, an offline
 record surviving departure/reentry, recycled-seat isolation, malformed

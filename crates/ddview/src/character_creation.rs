@@ -91,6 +91,9 @@ impl Editor {
     }
 
     /// Committed keyboard text, separate from IME composition and key repeat.
+    /// The native limit counts UTF-8 leading sequences via 0x00D88F30,
+    /// including four-byte sequences as one. Native admission of non-BMP
+    /// keyboard/IME input upstream of this buffer is still unresolved.
     // Translated from 0x0075D71E..0x0075D7B2 (DDDA.exe 2017-12-13 Steam).
     pub fn type_text(&mut self, text: &str) {
         for c in text.chars().filter(|&c| u32::from(c) >= 0x20) {
