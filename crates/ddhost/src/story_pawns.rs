@@ -71,7 +71,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             hire_time,
             quests_cleared: 0,
         });
-        self.hired_by[index] = Some(owner);
+        self.hired_by[index] = self.roster.seat(owner).map(|s| s.profile);
         if stock == 14 && slot == 1 {
             *self
                 .economy

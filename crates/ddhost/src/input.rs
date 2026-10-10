@@ -31,6 +31,7 @@ pub(crate) struct Edges {
 }
 
 impl Edges {
+    pub(crate) fn forget(&mut self, seat: PlayerId) { self.interact_held.remove(&seat); }
     /// Players who pressed interact this frame, in seat order.
     pub(crate) fn interact_presses(&mut self, inputs: &FrameInputs) -> Vec<PlayerId> {
         let mut out = vec![];
