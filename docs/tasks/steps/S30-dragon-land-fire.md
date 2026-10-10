@@ -422,3 +422,19 @@ new world-query regression and S49 sensor tests executed. Private log:
 E:/ddda-re/notes/steps/S29/full-current-core-collision.log. Core lease was
 released after actual exit. Downstream viewer for this S30 dependency set
 and production fire acceptance remain pending.
+
+### Downstream viewer acceptance of the collision checkpoint
+
+With reviewed main3ecd13e integrated (source47a1518), the complete default
+viewer release suite and build actually exited zero in parent process38841.
+All89 tests passed, with two existing diagnostics ignored; compile30.51s,
+tests11.81s, release build38.57s. Private logs:
+E:/ddda-re/notes/steps/S29/full-current-viewer-47a1518.log and
+E:/ddda-re/notes/steps/S29/build-current-viewer-47a1518.log.
+Together with the preceding346-test core run, this accepts the sourced
+world-collision reader/shared contact checkpoint for review. It does not
+enable production fire or establish an original-game comparison.
+
+Next: connect the actual effect coordinate blocks and generator clocks,
+then issue native-shaped scene queries and ordinary fire damage. Effect
+ownership, full landing/fire/state6 and visual acceptance remain open.
