@@ -275,9 +275,11 @@ unexecuted** until the next full viewer/default-release window after S56 and
 head's opening-hook gate. No new pin or capture result is claimed yet.
 
 Head reported reviewed protocol10 merged to main **6afbc3c** (board8123),
-and has prepared the opening hooks below. Those head edits remain uncommitted
-until their own full gate; this branch does not copy or edit that work in
-progress. Network and declaration/story claims were normally handed back;
+then committed the opening hooks below as **de93e84** after an actual full
+viewer result of 121 passed/two existing ignored and a successful release
+build (board8168). That reviewed committed main was cleanly integrated into
+this task branch as **28fb15a**, with no sibling work-in-progress or direct
+opening edits. Network and declaration/story claims were normally handed back;
 protocol11 is now S53's coordinated scope.
 
 Presentation currently covers plain single-line glyphs with native ordinary
