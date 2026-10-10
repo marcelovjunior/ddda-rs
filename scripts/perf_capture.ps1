@@ -15,6 +15,7 @@ param(
     [ValidateRange(10, 1800)][int]$WatchdogSeconds = 120,
     [ValidateSet('auto', 'vulkan', 'dx12')][string]$Backend = 'auto',
     [ValidateSet('gpu', 'cpu')][string]$MeshBuilder = 'gpu',
+    [ValidateSet('off', 'on')][string]$MaterialSpecialization = 'off',
     [switch]$Trace,
     [switch]$NoShadows
 )
@@ -47,6 +48,7 @@ $oldTrace = $env:TRACE_CHROME
 $oldShadows = $env:DDVIEW_NO_SHADOWS
 $oldBackend = $env:WGPU_BACKEND
 $oldMeshBuilder = $env:DDVIEW_MESH_BUILDER
+$oldMaterialSpecialization = $env:DDVIEW_MATERIAL_SPECIALIZATION
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
@@ -58,12 +60,14 @@ try {
     $env:DDVIEW_NO_SHADOWS = if ($NoShadows) { '1' } else { $null }
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
     $env:DDVIEW_MESH_BUILDER = $MeshBuilder
+    $env:DDVIEW_MATERIAL_SPECIALIZATION = if ($MaterialSpecialization -eq 'on') { '1' } else { $null }
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
         watchdog_seconds = $WatchdogSeconds
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
         mesh_builder = $MeshBuilder
+        material_specialization = $MaterialSpecialization
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
     $captureProcess = Start-Process -FilePath $viewerPath -ArgumentList ($quotedArguments -join ' ') `
@@ -109,6 +113,7 @@ try {
     $env:DDVIEW_NO_SHADOWS = $oldShadows
     $env:WGPU_BACKEND = $oldBackend
     $env:DDVIEW_MESH_BUILDER = $oldMeshBuilder
+    $env:DDVIEW_MATERIAL_SPECIALIZATION = $oldMaterialSpecialization
     if ($captureProcess -and -not $captureProcess.HasExited) {
         Write-Warning "Viewer PID $($captureProcess.Id) still running: retain live/ddview lease until actual exit."
     }
