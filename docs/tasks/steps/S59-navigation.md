@@ -18,6 +18,11 @@ copies only the authored fields. Completion: 0x0056DCC0 maps trace result
 navigation data or answers path queries; straight-line movement would
 not match the source and is not allowed as a substitute.
 
+Start from codex-80's handoff notes (private):
+`E:/ddda-re/notes/steps/S31/S59-incoming-handoff.private.md` (Trace exports,
+the seven installed graph reads, owner modes, the Nav/controller call sites
+0x0059F990 / 0x0059F840 / 0x0059F8E0, capsule/sweep constraints).
+
 ## Do
 
 1. Find the navigation resource(s): their class (DTI), archive paths per
