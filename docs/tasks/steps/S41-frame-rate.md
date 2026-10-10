@@ -767,3 +767,23 @@ The object is valid and draw-enabled, but current-scene selection and the
 source script and save backup stay private; head #7050 was informed.
 Next caster work requires active-scene ownership/override evidence before
 any opt-in geometry cull. Palette compaction stays the first optimization.
+
+Further read-only installed-data research resolves the constructor override:
+`scr/st100/sdl/st100_sky` authors `mBackforwardViewDistance` **30000 cm**;
+`scr/st200/sdl/st200_sky` authors **21000 cm**, matching the observed object.
+Both author view distance 6000 cm and distribution 0.25. A header-only
+inventory of all **8,536 archives** finds exactly one rScheduler copy of
+each path, in its corresponding stage archive, so these are the same
+resources selected by ddvfs's sorted first-copy rule. SDL magic/version,
+ARC version and inflated size were verified; scalar survey and resource
+hashes remain private. Future implementation must read these properties
+from the player's stage scheduler, not embed this runtime data as constants.
+
+The effective 10 cm distance is also plausible from source, though its
+current cause is not proven by the one approved probe: 0x00c6c970 uses
+WeatherManager +0x80, which reflection's string at 0x015658d4 names
+`mDayNightBlendRate`, not sun elevation. Without the scripted override,
+effective distance is the scripted distance multiplied by the clamped
+day/night factor `(blend - 0.7) * -5.0000005`, with a 10 cm minimum.
+The active blend/override and current-scene object ownership were not read;
+no second game probe or shadow implementation follows from this source.
