@@ -54,6 +54,34 @@ pub struct GeneratorCounters {
     pub path: u32,
 }
 
+/// Bulk static effect samples read from the player's executable. These tables
+/// are distinct from either advancing global/manager RNG stream, and from
+/// each generator's independent birth/path indices. No values are embedded.
+#[derive(Debug, Clone)]
+pub struct GeneratorRandomTables {
+    floats: Vec<f32>,
+    words: Vec<u32>,
+}
+
+impl GeneratorRandomTables {
+    /// Native float/word lookups mask their incremented index with0xFFF.
+    /// Addresses are the supported executable's file-backed data tables,
+    /// reached by0x010EC54C, 0x010E5620 and0x010EDC90.
+    pub fn read(exe: &ddexe::Exe<'_>) -> Result<Self, String> {
+        let floats = exe.f32s(0x0162_5420, 0x1000)?;
+        let words = exe.u32s(0x0162_1420, 0x1000)?;
+        if floats.iter().any(|value| !value.is_finite()) {
+            return Err("nonfinite installed effect random table".into());
+        }
+        Ok(Self { floats, words })
+    }
+
+    /// The native sampler supplies an already-masked index. Out-of-range
+    /// caller inputs are rejected rather than silently changing its draw order.
+    pub fn float(&self, index: usize) -> Option<f32> { self.floats.get(index).copied() }
+    pub fn word(&self, index: usize) -> Option<u32> { self.words.get(index).copied() }
+}
+
 /// Values sampled by generator vf07 before the first binding/birth.
 /// The auxiliary triplet is not the effect's axis scale used by vf15.
 #[derive(Debug, Clone, Copy, PartialEq)]

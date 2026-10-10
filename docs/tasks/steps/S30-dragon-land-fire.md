@@ -951,3 +951,21 @@ earlier reader/birth helpers and accepted main's body additions. The earlier
 unrun labels describe preparation; complete emitter lifetime, world query,
 secondary dispatch and ordinary fire damage remain open. Next: attach the
 verified birth/travel state to native particle creation/update ownership.
+
+### Installed static RNG-table adapter prepared; uncompiled/unrun
+
+The next owned reader loads all4096 floats at `0x01625420` and4096 u32
+words at `0x01621420` through `ddexe`, retaining no bulk table in the repo.
+A bounded private storage probe confirmed both are file-backed `.data`,
+with finite float values. These static sample tables are distinct from
+advancing global/manager stream state and generator birth/path indices.
+
+`installed_effect_random_tables_feed_initialization_reset_path_birth_and_travel`
+uses the player's actual tables and collision resource through initialization,
+the actual intervening reset, independent nine path/six birth float draws,
+one birth word, path construction and travel with no extra random draw.
+Seed, identity binding and zero anchor are explicit synthetic fixture
+inputs; global creation order and production emission are not claimed.
+This new Rust source is **uncompiled/unrun**; the196-pass gate above
+accepts the preceding travel batch. Next: coordinate its full package
+gate, then supply real effect/generator/particle owners and world queries.
