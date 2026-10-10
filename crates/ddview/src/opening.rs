@@ -1179,8 +1179,10 @@ pub fn step(
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
-    if args.perf_route && now > 600.0 {
-        s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
+    // the fight demo adds the rescue (up to 240 s) and the road walk (300 s)
+    let limit = if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { 1200.0 } else { 600.0 };
+    if args.perf_route && now > limit {
+        s.failure = Some(format!("performance route exceeded {limit} seconds without completing the walk"));
         return;
     }
     kit_weapons(&mut stage_view, st, s);
@@ -2477,6 +2479,9 @@ struct RoutePlan {
     open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
     nodes: HashMap<RouteCell, RouteNode>,
     visited: std::collections::HashSet<(i32, i32)>,
+    /// The grid step: the body radius, coarser for far goals so the node
+    /// cap still covers a detour (the field road: 125 m uphill).
+    cell: f32,
 }
 
 impl RoutePlan {
@@ -2490,6 +2495,8 @@ impl RoutePlan {
             .into(),
             nodes: [((0, 0), (from, 0.0, (0, 0)))].into(),
             visited: Default::default(),
+            cell: ddsim::BODY_RADIUS
+                * ((from.x - target.x).hypot(from.z - target.z) / 3000.0).clamp(1.0, 3.0),
         }
     }
 
@@ -2507,9 +2514,10 @@ impl RoutePlan {
             open,
             nodes,
             visited,
+            cell,
         } = self;
+        let cell = *cell;
         let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
-        let cell = ddsim::BODY_RADIUS;
         let start = std::time::Instant::now();
         let mut expanded = false;
         loop {
@@ -2535,7 +2543,7 @@ impl RoutePlan {
                 path.reverse();
                 return Some(path);
             }
-            if visited.len() > 20000 {
+            if visited.len() > 60000 {
                 return Some(vec![]);
             }
             for dx in -1..=1i32 {
