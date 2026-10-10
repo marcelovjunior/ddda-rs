@@ -193,3 +193,42 @@ using the frozen pin and isolated project config. The whole S42
 Done gate remains open for native menu drawing, unsupported options, live
 range reload and original comparisons. Head updates MILESTONES; no shared
 docs edited.
+
+### Parent integrated captures and viewer-label correction
+
+Head's integrated main `7ea18c9` contains the reviewed settings source plus
+the current rescue and equipment fixes. Private executable SHA-256
+`F4DD8720AF28FE1AFE76E7793B9D468B7A79182F3DF2F3F74EE7DCCC0EF85E64`
+was checked before each case. The bounded MENU and LOW cases actually
+exited zero (owned processes 30576 and 4884, 47.72 and 47.38 seconds).
+Both PNGs were independently inspected: terrain had loaded; the plain
+menu showed supported values, unavailable controls and the restart-only
+range label. These are presentation checks, not live interaction,
+performance or original-game comparisons. Each case used its own private
+project INI, importing the original GRAPHICS/DISPLAY sections read-only.
+Private evidence: `E:/ddda-re/notes/steps/S42/main-7ea18c9-menu-low`.
+The original process 23408 remained running; both owned viewers exited
+before the normal GPU lease was released.
+
+The menu PNG exposed missing-glyph boxes for the viewer-owned em dash and
+degree suffix. Under head's board #7309 follow-up, these three temporary
+labels now use ASCII separators and `deg`; installed option messages are
+unchanged. This is a small presentation correction, not a native font or
+GUI interpreter implementation. Its rebuilt visual check is pending.
+MEDIUM/HIGH shadow-resolution captures and the whole original comparison
+remain open; the completed LOW capture alone does not close those gates.
+
+The subsequent MEDIUM/HIGH batch completed with actual exit zero for
+owned viewers 30084/30376 (47.12/47.19 seconds). Both actual PNGs were
+independently inspected at the same stage100/noon/1920x1080 overlook pose;
+the three isolated project INIs select LOW/MEDIUM/HIGH. Loaded terrain,
+vegetation and distant buildings remain intact. This supplies a capture
+for each implemented shadow-resolution quality level, but the wide pose
+does not establish close shadow-edge fidelity or an original-quality
+match. No FPS conclusion is drawn. Private evidence:
+`E:/ddda-re/notes/steps/S42/main-7ea18c9-medium-high`.
+Original 23408 remained running and the normal GPU lease was released
+after both actual exits. Source review confirms the first settings apply
+sets DirectionalLightShadowMap from the imported quality; explicit
+PowerShell checks distinguish absent flags from empty environment values.
+The ASCII correction's rebuilt menu image remains the next visual action.
