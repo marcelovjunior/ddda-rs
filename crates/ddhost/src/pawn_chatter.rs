@@ -320,12 +320,13 @@ impl Runtime {
 }
 
 // Translated from 0x004142B7..0x00414307 (DDDA.exe 2017-12-13 Steam).
-// Only later combat-list entries can select Additional; it is not a count
-// of arbitrary world enemies, nearby actors or earlier encounters.
+// Only later combat-list entries can select Additional. Native quirk:
+// 4142E3/4142F0 look up and recheck the CURRENT kind in its alias triple,
+// so an aliased current kind accepts any later actor, even an unrelated one.
 fn combat_notice(list: &[(u32,u32)], index: usize, aliases: &[[u32;3];2]) -> EnemyNotice {
     let kind = list[index].0;
     if kind != 0 && list[index+1..].iter().any(|other| other.0 == kind
-        || aliases.iter().any(|group| group.contains(&kind) && group.contains(&other.0))) {
+        || aliases.iter().any(|group| group.contains(&kind))) {
         EnemyNotice::Additional
     } else { EnemyNotice::FirstSeen }
 }
@@ -464,7 +465,9 @@ mod tests {
         assert_eq!(combat_notice(&[(7,0),(8,9)], 1, &aliases), EnemyNotice::FirstSeen);
         assert_eq!(combat_notice(&[(5,0),(5,1)], 0, &aliases), EnemyNotice::Additional);
         assert_eq!(combat_notice(&[(0,0),(0,0)], 0, &aliases), EnemyNotice::FirstSeen);
-        assert_eq!(combat_notice(&[(7,0),(9,0)], 0, &aliases), EnemyNotice::FirstSeen);
+        assert_eq!(combat_notice(&[(7,0),(9,0)], 0, &aliases), EnemyNotice::Additional,
+            "native rechecks current alias member, not the later actor's family");
+        assert_eq!(combat_notice(&[(5,0),(9,0)], 0, &aliases), EnemyNotice::FirstSeen);
     }
 
     #[test]

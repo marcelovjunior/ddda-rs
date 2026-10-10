@@ -149,8 +149,12 @@ state; it leaves the current attempt untouched.
 
 `0x00414130` processes at most one supported new enemy family per phase.
 `0x008BC6A0` checks installed first-seen row presence without knowledge
-gating; `0x004142B7..0x00414307` chooses Additional only from later equal or
-aliased combat entries. Alias triples (`0x0153D8B8`, caller `0x00412F60`)
+gating; `0x004142B7..0x00414307` chooses Additional from later equal entries
+or the current family's alias membership. Native quirk: `0x004142E3` calls
+`0x00412F60` with ESI=current kind, and `0x004142F0` rechecks that same ESI
+in the returned triple. Thus an aliased current kind accepts any later actor,
+even an unrelated kind; the regression preserves this behavior. Alias
+triples (`0x0153D8B8`, caller `0x00412F60`)
 stay installed runtime data. No eligible speaker leaves the family unseen;
 an eligible speaker marks it even without a matching phrase. Global combat
 notices use list1 (`0x00414365`); an own-pawn dead-foe notice uses list0
@@ -179,6 +183,14 @@ three fixture tests failed before downstream suites ran. The fixture now
 uses two local cameras, with a separate second-seat replacement for guest
 rejection. The full rerun is pending; no passing follow-up gate is claimed.
 Private failure log: `E:/ddda-re/notes/steps/S52/full-core-8db0d07-first.private.log`.
+The corrected fixture's full rerun exited 101 in the existing network
+quest-camera suite: its protocol golden assertion still expected 9 rather
+than the newly implemented 10. All ten chatter host tests and both new
+network tests passed before that failure. The narrowly claimed assertion
+was updated to 10; the native alias correction above is in the same source
+batch. The next full run must cover the final source, with both earlier
+failure logs preserved. Second log:
+`E:/ddda-re/notes/steps/S52/full-core-1298761-second.private.log`.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
@@ -217,5 +229,5 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
 Next actual gate: obtain the normal full touched/downstream Cargo window
-and viewer release window. No follow-up
-Cargo run, GPU work, original process control or capture has occurred.
+and viewer release window. The follow-up Cargo failures above are preserved;
+no GPU work, original process control or capture has occurred.
