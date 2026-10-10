@@ -356,3 +356,62 @@ then test the largest measured cost without changing presentation quality.
   review. Neither passing startup tests nor the new source establishes
   visual correctness or a gain. Default remains GPU; the approved shader
   specialization hypothesis continues on its own separate branch.
+
+### Shader hypothesis rejected; current opening/town measurements next
+
+Separate approved experiment branch `step/s41-material-specialization`,
+checkpoint `5d19d88` (feature source `1a0911b`), completed its full viewer
+suite (**84 passed / 2 existing ignored**) and default release build, then
+head's bounded off/on capture (board #6266). Both modes used the same
+private pin SHA-256
+`9B9BD7C428AC8C2200AB33AB1387EB7C1143A82A7EEA942E83887D7A77E097CE`
+and GPU mesh builder. Owned PIDs 33632/33512 actually exited 0 after
+52.4/52.5 s. Both pictures were viewed before comparing timings and retain
+the terrain/two bodies/shadows/HUD; 2,019 of 2,073,600 pixels differ, only
+23 by more than 10 in any channel, so this static snapshot is visually
+equivalent, not byte-identical. Warm visibility/counts match.
+
+Warm 20–40 s frame medians are off 6.7/6.7/6.7/6.7 ms and on
+6.9/6.7/6.6/6.7 ms: both median-of-medians **6.7 ms**. Opaque GPU
+average-report medians are 3.395866/3.420587 ms. There is **no useful
+measured gain**, and specialization remains off/unmerged per head #6283.
+Its detailed results remain in the separate branch's
+`docs/tasks/steps/S41-material-specialization-notes.md`. This does not
+establish full-route/fading/night fidelity or meet the 5.5 ms target.
+
+Head #6283 refocuses S41 on the maintainer's actual opening/road scene
+(historically ~22 ms, ~1050 visible meshes / ~2000 materials / ~4800
+entities) and Cassardis town. Reviewed committed main `5426528` has been
+integrated into this task branch; main was not edited.
+
+Head #6350 approved opt-in stage-specific CPU tracing, source `752c101`:
+a `profile-trace` build can set `DDVIEW_TRACE_STAGE`, wait a configurable
+wall delay (default 5 s), and record a short span window (default 10 s).
+Ordinary events/logs remain enabled before/after it; the window ends in
+normal app exit. Default logging is unchanged. Dynamic callsite interest
+is essential: a span first seen disabled must be reevaluated when the
+window opens. Three regressions cover actual repeated callsites/events,
+stage transitions and loading hitches. **Tests/build/capture pending.**
+The one-line main hook was normally claimed, committed and released for
+codex-70; no opening/play files were edited. The harness records/restores
+stage/delay/duration parameters and passed PowerShell parse/diff checks.
+
+`DDVIEW_PERF_SECONDS` uses `Instant` wall time after its first update;
+`--shot-delay` uses virtual time. This distinction was verified in pinned
+S47 `2dd8b15`, whose early screenshot ended its x4 run before the field;
+it was not the wall-time perf timer. The harness's independent hard OS
+watchdog can be shorter than the requested benchmark duration.
+
+Source-supported candidate to investigate **after measurement**: streamed
+`Loader::spawn_parts` permanently chooses one LOD at load using actor
+focus/transform origin, while the whole-stage event path follows the
+active camera and transformed model sphere centre each frame. Read-only
+canonical Ghidra `0x00ea5320` confirms integer-truncated camera-to-centre
+distance, model-header mid/low thresholds, FAR x2 and FARTHEST near;
+`0x00ea3d00` transforms the model sphere. No LOD/draw distance/content has
+been changed, and the discrepancy is not yet a measured dominant cost.
+
+Next action: run full default/trace viewer acceptance under the normal
+shared-target lease after root's integration checks, then obtain current
+route/town baselines and a bounded field trace. Keep GPU default and all
+performance acceptance open; no CPU mode or shader optimization accepted.
