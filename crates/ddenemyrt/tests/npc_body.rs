@@ -28,6 +28,9 @@ fn installed_reynard_authored_motions_pose_real_hurt_nodes() {
         let hurts = body.hurts(id, 0.0, &pose, 501, [1.0; 3]);
         assert!(!hurts.is_empty(), "authored {authored} must enable its installed hurt nodes");
         assert!(hurts.iter().all(|h| h.side.owner == 501 && h.side.kind == 3 && h.region_id == 0));
+        let bounds = body.bounds(&pose, 3).unwrap();
+        assert!(bounds.center.iter().chain(&bounds.extents).all(|v| v.is_finite()));
+        assert!(bounds.extents.iter().all(|v| *v > 0.0));
     }
 }
 
@@ -39,6 +42,13 @@ fn installed_reynard_pose_keeps_unit_transform_and_owner_separate() {
     let original = body.pose(id, 0.0, [0.0; 3], 0.0, [1.0; 3]).unwrap();
     let offset = [200.0, 10.0, -300.0];
     let translated = body.pose(id, 0.0, offset, 0.0, [1.0; 3]).unwrap();
+    let base_bounds = body.bounds(&original, 3).unwrap();
+    let moved_bounds = body.bounds(&translated, 3).unwrap();
+    for axis in 0..3 {
+        assert!((moved_bounds.center[axis] - base_bounds.center[axis] - offset[axis]).abs() < 0.001);
+        assert!((moved_bounds.extents[axis] - base_bounds.extents[axis]).abs() < 0.001);
+    }
+    assert!(body.bounds(&original, 4).is_err());
     let a = body.hurts(id, 0.0, &original, 501, [1.0; 3]);
     let b = body.hurts(id, 0.0, &translated, 502, [1.0; 3]);
     assert_eq!(a.len(), b.len());
@@ -57,6 +67,11 @@ fn installed_reynard_pose_keeps_unit_transform_and_owner_separate() {
     // Native hurt radius uses the actor's mean unit scale (0x00773830),
     // including HumanEdit's writes to uCoord, not merely LOT scale1.
     let doubled_pose = body.pose(id, 0.0, [0.0; 3], 0.0, [2.0; 3]).unwrap();
+    let doubled_bounds = body.bounds(&doubled_pose, 3).unwrap();
+    for axis in 0..3 {
+        assert!((doubled_bounds.center[axis] - 2.0 * base_bounds.center[axis]).abs() < 0.001);
+        assert!((doubled_bounds.extents[axis] - 2.0 * base_bounds.extents[axis]).abs() < 0.001);
+    }
     let doubled = body.hurts(id, 0.0, &doubled_pose, 503, [2.0; 3]);
     let radius = |volume: &Volume| match volume { Volume::Sphere { r, .. } | Volume::Capsule { r, .. } => *r };
     for (one, two) in a.iter().zip(&doubled) {

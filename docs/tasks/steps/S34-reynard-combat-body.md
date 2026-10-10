@@ -236,6 +236,33 @@ radius from **0x005371B0** is the scenery capsule radius at inline
 cObjCollision+0x9D0, not a model AABB radius. Active-joint-mask source
 and viewer materialization remain the next source inputs.
 
+Bounds follow-up: `NpcBody::bounds` now reads MOD bone radii and four
+native detail-mask rows from the player's install/executable at runtime;
+no active joint list or bulk mask is copied. `uPlayerBase::vf100`
+**0x00B531B0** reads **0x014F2AF0 + detail x 256**, selected by
+actor+0x5720; **0x00B8D980** writes the active flags. Detail3 matches
+all 42 active joint IDs in each of the private NPC1/7/4 live samples.
+The detail row remains an explicit adapter input: dynamic LOD selection
+and constraint overrides are not implemented. The bounds port covers
+the scaled active-joint branch of **0x00FFA620**, including the fourth
+component in each axis norm; the unscaled branch's parent spheres remain
+outside this adapter. `NpcBounds::gauge_anchor` translates
+**0x0069FB00 / 0x0067C970 / 0x0067C870**, taking each view's camera,
+local offset and actual scenery capsule radius explicitly. It does not
+substitute model extents for that radius. Two pure regressions passed
+(compile3.67s/test0.00s), and the two installed Reynard pose tests passed
+with bounds translation/scaling assertions (compile7.48s/test4.80s),
+all actual exit0 under a valid exclusive core lease, then released.
+Viewer gauge placement and original NPC304 comparison remain open.
+Bounds review follow-up: the mask key is the MOD `anim_map_index`, not
+the bone array index: **0x00B8D980** passes joint+0x93 to vf100, and
+uModel vf23 copies MOD record byte0 into that field. Matrix/radius arrays
+stay in parallel MOD order. Invalid negative radii or any nonfinite
+matrix input now fail explicitly before bounds calculation. The two
+pure tests and two installed pose tests passed again, actual exit0
+(unit compile6.48s/test0.00s, installed compile3.39s/test4.61s); core
+was actually released after process completion.
+
 Next action: compose actual death-action playback/stages and materialize
 the combat body in the opening adapter; finish the sourced bounds and
 collision-radius inputs before wiring the viewer gauge.

@@ -2416,6 +2416,7 @@ dependencies = [
  "ddvfs",
  "ddworld",
  "mtarc",
+ "mtcamera",
  "mtfsm",
  "mtlmt",
  "mtlot",

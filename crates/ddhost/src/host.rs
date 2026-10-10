@@ -18,6 +18,10 @@ use std::collections::BTreeSet;
 /// menus). Until those systems exist in headless crates, a stand-in
 /// answers (`ddstory::scripted::ScriptedHost`).
 pub trait StoryWorld: ddstory::Host {
+    /// Advance host-owned authored cameras before story completion checks.
+    fn camera_step(&mut self, _seconds: f32) {}
+    /// Stage event camera input policy, applied independently to every seat.
+    fn player_actions_blocked(&self, _seat: PlayerId) -> bool { false }
     /// Actual creation/destruction of a host-owned NPC intel and its
     /// normal controller. This says nothing about HP or a rendered body.
     fn observe_npc_intel(&mut self, _stage: u32, _target: ddstory::Target, _present: bool) {}
@@ -336,6 +340,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.frame += 1;
         // Step 6, sMain::vf06 (0x00DBFA90): the step. Constant here.
         let time = self.clock.story_time();
+        self.world.camera_step(self.clock.seconds());
         // Steps 18-20, sGameSys::vf06 then sAreaExt::vf06: the managers of
         // aGameMain (sQuestManager's QCT), aStage's mode (events) and
         // sScenario, then (step 36, line 0) the story scripts. ddstory runs
@@ -395,6 +400,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.sync_hired_pawn_bodies();
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
+        let effective_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
+            (id, if self.world.player_actions_blocked(id) { Default::default() } else { input })
+        }).collect();
+        let inputs = &effective_inputs;
         let presses = self.edges.interact_presses(inputs);
         // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
         // from the volumes the fight switched on last frame, damage applied,
