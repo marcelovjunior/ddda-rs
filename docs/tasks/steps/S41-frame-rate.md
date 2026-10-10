@@ -1049,3 +1049,44 @@ must handle both CPU directional visibility and GPU extracted shadow
 frusta, and obtain native stage properties at runtime. Head must assign
 that source scope before implementation; no culling or quality change is
 claimed here.
+
+### Prepared opt-in finite caster adapter (not yet compiled)
+
+Head #7581 approved the next source scope. Source **a60a6c9**, on the owned
+branch after reviewed-main integration **faceaee**, adds a small viewer
+adapter without modifying Bevy, its registry sources or shadow-map quality.
+It is enabled only by `DDVIEW_FINITE_SHADOW_EXTENT=1`; absence/empty/zero
+retain the accepted renderer. No default promotion or performance gain is
+claimed before the agreed full suites, release and matched x1 A/B.
+
+`SkyShadow` now reads the installed scheduler's
+`mBackforwardViewDistance` as an optional finite nonnegative value, with
+no constructor/bulk-value fallback. The native depth boundary from
+`0x00EE5CE0` uses the camera-view slice's AABB centre and enclosing radius,
+then extends toward the light by that radius plus the authored distance.
+The viewer adapts this near boundary to the existing Bevy cascades; native
+XY projection fitting/texel snapping and depth projection remain separate.
+Using a world-space AABB instead would wrongly change the sphere radius
+as the camera turns.
+
+CPU cascade entity lists are filtered after Bevy's light visibility pass,
+with the finite near plane enabled in OBB intersection. Explicit
+`NoFrustumCulling` and missing bounds remain conservative. The same planes,
+keyed by light, camera and cascade, are extracted into the render world.
+Directional shadow frusta are repaired after `prepare_lights`' deferred
+view insertion and before view-uniform preparation, restoring the finite
+GPU near halfspace for `NoCpuCulling` meshes too. Point/spot lights and
+unmapped views are unchanged. Missing stage data clears the extracted
+plane map rather than retaining stale data.
+
+Four meaningful regressions are prepared, **unexecuted**: camera/light
+rotation and native sphere boundary; remote versus crossing caster OBB;
+render-world repair for two cameras, unmapped cascades and point lights;
+and actual CPU entity-list filtering preserving opt-outs/missing bounds,
+plus clearing planes when the authored setting disappears. The existing
+installed sky regression also checks valid authored caster distances for
+both opening stages. No Cargo/GPU work overlapped head's combined-main
+checks; the root source is frozen pending its queue window after the
+children's first headless checks. Next: compile and run the full viewer
+suite with all four names present, then build/pin one executable for the
+opt-in OFF/ON identical-picture x1 comparison.
