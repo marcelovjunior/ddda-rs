@@ -657,3 +657,58 @@ acceptance and is not presented as an opening gain.
 Next: validate the profile-only names correction, obtain real named
 system costs, and propose the first actual opening optimization with
 matched x1 FieldSettle before/after captures. The 180 fps gate remains open.
+
+### Named renderer trace gate passed (0aa60e8)
+
+Normal M5 acceptance session 74551 actually exited 0 before release #6891:
+full default **86 passed / 2 existing ignored**, full profile **91 passed /
+2 existing ignored**, including all five cached-span/window/actual App
+name tests. Fresh compiles were 20.53 s / 3m51s; release builds exited 0
+in 38.82 s (trace) and 37.94 s (default). Profile-only Bevy debug restores
+function-derived names without changing the default feature graph.
+Private trace pin `ddview-trace-0aa60e8.exe` SHA-256
+`85B0AA93B9E646B4562A6883570C33A8BE7BED3F03E79950A03A959174223E18`;
+default pin SHA-256
+`F9F123F511336F0259644B67CA4396166C70B105C4C4758EBE06EDED919FD0BB`.
+
+Head-approved three-second diagnostic session 96754 actually exited 0,
+owned viewer PID 32748 was absent after 24.3667739 s, original PID 23408
+remained running, and the GPU lease was released #6903. The retained-handle
+harness recorded the numeric exit. No screenshot or fidelity claim was
+requested. This was **instrumented x4 with independent head compilation
+overlap**, so its 20.56 ms median is contaminated and is not FPS acceptance.
+
+Actual trace: 217,446,490 bytes, 116,784 system entries, **731 unique real
+system names**. Window markers 14.1935162–17.2021869 span 3.0086707 s.
+The strict streaming summary trims to 14.3–17.1 s, 132 complete main-thread
+frames, **zero terminal open scopes**, without an override. Actual Render
+thread is tid 2; tid 1 is a compute worker. Summary, logs and run/exit
+metadata stay private under `field-checkpoint-trace-0aa60e8`; raw Chrome
+JSON is deleted after this result, per head #6862 disk policy.
+
+Largest normal system costs, summed across workers and normalized by
+complete main frames, are CPU core wall time and **not additive critical
+path**: `prepare_skins` 3.1707 ms/frame; shadow
+`write_binned_instance_buffers` 2.8715; `opening::step` 2.6469 (x4 host);
+`prepare_preprocess_bind_groups` 2.0611; opaque bin writing 1.1142;
+`character::animate` 0.6987; `extract_skins` 0.4860. Main RenderExtract
+exclusive ~10 ms still includes pipelined synchronization wait.
+Bevy 0.19.1 `skin.rs:176` shows prepare_skins predominantly uploads its
+staging buffer through RenderQueue, while extraction calculates matrices.
+Calling that 3.17 ms animation computation would be incorrect.
+
+Head #6923 requests source-backed palette sharing/part reduction and
+native shadow-caster culling research before matched x1 A/B. Bevy allocates
+each visible SkinnedMesh's full palette independently (`skin.rs:add_skin`);
+our `character::spawn_meshes` passes the model's full joint vector to every
+submesh. Sharing only the bind-pose asset does not share the renderer
+allocation. Bevy already removes invisible skins, but its staging vector
+does not shrink when allocation is freed; culling alone does not prove
+upload savings. Actual upload byte counts/part palettes and safe material
+grouping remain to investigate; no optimization or gain is claimed yet.
+
+Compatible real v1 FieldSettle is frozen privately as
+`FieldSettle-84ed50f.ddhs`, SHA-256
+`D2EA9F3946E6460216B8C04F11BEEA11CC74FD6C195152A28C85744136B34543`.
+Canonical checkpoints are untouched and may now become ECON v2 after S51;
+older S41 pins must use only their matching frozen v1 saves.
