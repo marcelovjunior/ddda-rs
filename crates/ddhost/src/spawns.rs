@@ -103,6 +103,27 @@ pub fn placement_equipment(record: &mtlot::Record) -> ddenemyrt::goblin::equipme
 pub fn add_placed_goblin(fight: &mut ddenemyrt::fight::Fight, s: &ddspawn::Spawn) -> u32 {
     let owner = fight.add_goblin_equipped(s.position, s.angle[1], placement_rates(&s.record),
         placement_equipment(&s.record));
+    // Translated from cSetInfoEnemy::vf08 0x007A0000 (+0x107/+0xFC)
+    // and sensor radius apply 0x005AF1F0 (DDDA.exe 2017-12-13 Steam).
+    if let (Some(mtlot::Value::Int(enabled)), Some(mtlot::Value::F32(scale))) =
+        (s.record.get("センサー半径倍率を使用する"), s.record.get("センサー半径倍率")) {
+        if *enabled != 0 { fight.goblins.last_mut().expect("just added").sensor_radius_scale = Some(*scale); }
+    }
+    // 0x008CDD80 initializes current/root from the authored start table,
+    // then keeps native default/base table0 (DDDA.exe 2017-12-13 Steam).
+    if let (Some(mtlot::Value::Int(enabled)), Some(mtlot::Value::Int(table))) =
+        (s.record.get("mUseFirstSetThinkTbl"), s.record.get("mStartTableNo")) {
+        if *enabled != 0 {
+            if let Ok(index) = u32::try_from(*table) {
+                if let Some(root) = fight.data.goblin.tables.root(index) {
+                    let manager = &mut fight.goblins.last_mut().expect("just added").driver.mgr;
+                    manager.table = root;
+                    manager.root = root;
+                    manager.auto_default = true;
+                }
+            }
+        }
+    }
     if let Some(&mtlot::Value::Int(exp)) = s.record.get("mExperienceOW") {
         if exp > 0 {
             fight.goblins.last_mut().expect("just added").exp = exp as u32;

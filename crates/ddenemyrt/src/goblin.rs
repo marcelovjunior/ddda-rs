@@ -207,6 +207,9 @@ pub struct Goblin {
     /// vf115 initializes group mask1. Dynamic sensor-mask writes from
     /// later AI states have not yet been ported.
     pub sensor_mask: u32,
+    /// cSetInfoEnemy +0x107/+0xFC -> actor +0x5E70/+0x5E74.
+    pub sensor_radius_scale: Option<f32>,
+    pub alert: crate::npc_sensor::Alert,
     pub sensor_error: Option<String>,
     pub distance_hate: crate::npc_sensor::DistanceHate,
     pub pos: [f32; 3],
@@ -285,6 +288,8 @@ impl Goblin {
         Goblin {
             appearance: None,
             sensor_mask: 1,
+            sensor_radius_scale: None,
+            alert: Default::default(),
             sensor_error: None,
             distance_hate: Default::default(),
             pos,
@@ -370,7 +375,7 @@ impl Goblin {
     /// A replay digest of the unit.
     pub fn digest(&self) -> String {
         format!(
-            "g{}:{:?}:{:?}:{}:{:?}:{}:{}:sensor{}:{:?}:{:?};",
+            "g{}:{:?}:{:?}:{}:{:?}:{}:{}:sensor{}:{:?}:{:?}:{:?}:{:?};",
             self.fighter.owner,
             self.pos.map(f32::to_bits),
             self.yaw.to_bits(),
@@ -378,7 +383,7 @@ impl Goblin {
             self.motion,
             self.frame.to_bits(),
             self.fighter.victim.hp().to_bits(),
-            self.sensor_mask, self.distance_hate, self.sensor_error
+            self.sensor_mask, self.distance_hate, self.sensor_error, self.sensor_radius_scale, self.alert
         )
     }
 
@@ -514,8 +519,8 @@ fn turn_toward(yaw: f32, goal: f32, step: f32) -> f32 {
 /// Think flags the host sets while the goblin fights a target: the alert
 /// state 2 (flag 2, written by 0x008d1280, which sends the default table
 /// into combat table 1) and the flags the melee rows require (3, 8, 20).
-/// *Placeholder*: their writers are not traced (docs/AI.md); a goblin that
-/// has a live target is taken as alerted.
+/// Flags 3/8/20 remain placeholders (docs/AI.md). The alert flag2 is now
+/// supplied separately by the native sensor update, never target presence.
 pub const COMBAT_FLAGS: u32 = 1 << 2 | 1 << 3 | 1 << 8 | 1 << 20;
 
 /// The turn rate of DashTrace: unit +0x6008, 120 degrees per second
@@ -645,37 +650,79 @@ impl Goblin {
     /// Keeps NPC sensor candidates out of the FSM's player-position roster.
     pub fn step_with_npcs(&mut self, data: &GoblinData, players: &[Target], npcs: &[Target],
         ground: &dyn ddsim::Ground, step: f32) {
+        self.step_with_subtypes(data, players, npcs, &[], ground, step);
+    }
+
+    /// Pawn combat owners use native proxy subtype2, Arisen1 and NPC4.
+    pub fn step_with_subtypes(&mut self, data: &GoblinData, players: &[Target], npcs: &[Target],
+        pawn_owners: &[u32], ground: &dyn ddsim::Ground, step: f32) {
         self.frames += 1;
+        // Phase90 controller/FSM requests precede the unit's own think.
+        self.run_fsm(data, players);
         let all: Vec<_> = players.iter().chain(npcs).copied().collect();
         let mut admitted = vec![];
         self.sensor_error = None;
-        for (target, subtype) in players.iter().map(|t| (t, 1)).chain(npcs.iter().map(|t| (t, 4))) {
+        self.distance_hate.tick();
+        let mode = em0100::mode(self.driver.mgr.state, self.driver.map.vf117);
+        let pose = data.body.pose(self.motion, self.frame, self.pos, self.yaw);
+        let radius_scale = self.sensor_radius_scale.unwrap_or(1.0);
+        let mut noticed = None;
+        let mut noticed_distance = f32::INFINITY;
+        for (target, subtype) in players.iter().map(|t| (t, if pawn_owners.contains(&t.id) { 2 } else { 1 }))
+            .chain(npcs.iter().map(|t| (t, 4))) {
             if !target.alive { continue; }
-            match data.sensor.admits(self.sensor_mask, self.pos, self.yaw, *target, subtype) {
+            match data.sensor.query(self.sensor_mask, u32::MAX, 2, &pose, radius_scale, *target, subtype, ground) {
                 Ok(true) => admitted.push(*target),
                 Ok(false) => {},
                 Err(error) => { self.sensor_error = Some(error); break; }
             }
+            let seen = if mode == 1 {
+                data.sensor.query(self.sensor_mask, u32::MAX, 1, &pose, radius_scale, *target, subtype, ground)
+                    .and_then(|visible| if visible { Ok(true) } else {
+                        data.sensor.query(self.sensor_mask, 4, u32::MAX, &pose, radius_scale, *target, subtype, ground)
+                    })
+            } else { Ok(admitted.iter().any(|t| t.id == target.id)) };
+            match seen {
+                Ok(true) => {
+                    // 0x00AB46B0 preserves the first strict nearest search point.
+                    let distance = (0..3).map(|i| (target.pos[i] - self.pos[i]).powi(2)).sum::<f32>();
+                    if distance < noticed_distance { noticed = Some(target.pos); noticed_distance = distance; }
+                },
+                Err(error) => { self.sensor_error = Some(error); break; }
+                _ => {},
+            }
         }
-        let target = if self.sensor_error.is_none() {
-            self.distance_hate.select(&admitted, &all, self.pos)
-                // 0x008D2930 falls back to the primary Arisen if hate is
-                // empty. Co-op policy: first live registered Arisen.
-                .or_else(|| players.iter().find(|t| t.alive).copied())
-        } else { None };
+        if mode == 0 {
+            // 0x008D1280 -> 0x007B0580: downcast from y+100 to y-1000.
+            // Ground's height adapter omits the original collision layer/slope
+            // mask; the finite vertical interval is retained.
+            noticed = noticed.and_then(|point| ground.height(point[0], point[2], point[1] + 100.0)
+                .filter(|height| *height >= point[1] - 1000.0)
+                .map(|height| [point[0], height, point[2]]));
+        }
+        let ordinary_think = self.pending.is_none() && !self.dead();
+        if ordinary_think && self.sensor_error.is_none() { self.alert.update(mode, noticed, self.pos, step); }
+        // 0x008D2360 calls8D1280 before checking action+50, but8D2930
+        // (distance influence/pick/slot replacement) only after that gate.
+        let target = if self.sensor_error.is_some() { None }
+            else if ordinary_think && self.done { self.distance_hate.select(&admitted, &all, self.pos) }
+            else { self.target.and_then(|owner| all.iter().find(|t| t.id == owner && t.alive).copied()) };
         self.target = target.map(|t| t.id);
+        // Genuine native8D2930 fallback populates the think slot; it does not
+        // establish perception or alert. In co-op this is first live Arisen.
+        let slot_target = target.or_else(|| players.iter().find(|t| t.alive && !pawn_owners.contains(&t.id)).copied());
         // phase 90: the AI controller runs the FSM (0x0059f440, restarting a
         // finished one once the action allows, `controlled_frame`), then
         // the unit's think (0x008D2360)
-        self.run_fsm(data, players);
         // the think: forced actions first, then the table when the current
         // action allows (its done byte)
         if let Some(a) = self.pending.take() {
             self.driver.mgr.reset_to_base();
             self.start(data, a);
         } else if self.done && !self.dead() {
-            self.driver.mgr.flags = if target.is_some() { COMBAT_FLAGS } else { 0 };
-            self.driver.mgr.slots[0] = target.map_or_else(Slot::default, |t| slot(self, &t));
+            self.driver.mgr.flags = 1 << self.alert.state;
+            if self.alert.state == 2 { self.driver.mgr.flags |= COMBAT_FLAGS & !(1 << 2); }
+            self.driver.mgr.slots[0] = slot_target.map_or_else(Slot::default, |t| slot(self, &t));
             self.answers.action = self.action;
             if let Ok(Some(a)) = self.driver.think(&data.tables, &mut self.answers) {
                 self.start(data, a);
@@ -688,6 +735,11 @@ impl Goblin {
         self.act(data, target, step);
         // phase 92: the motion advance and its root travel
         self.advance(data, step);
+        // 0x009BB750 runs after think and switches resource groups according
+        // to the table's resulting native mode.
+        if ordinary_think {
+            self.sensor_mask = crate::npc_sensor::Alert::group(em0100::mode(self.driver.mgr.state, self.driver.map.vf117));
+        }
         // the unit stays on the ground (the goblin's own scenery sweep,
         // capsule r44 from 44 to 106 cm, is *not run*: the height under it)
         if let Some(h) = ground.height(self.pos[0], self.pos[2], self.pos[1] + ddsim::STEP_UP) {
