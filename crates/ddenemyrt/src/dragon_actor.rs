@@ -15,9 +15,14 @@ pub struct OpeningDragon {
     pub world_requests: Vec<Request>,
     pub error: Option<String>,
     pub scale: [f32; 3],
-    /// Condition projection is accepted only when the host has real actor
-    /// and controller words. Missing state preserves initialized rates.
+    /// Explicit native-state override, when supplied by a host adapter.
     pub collision_conditions: Option<(bool, u32)>,
+    /// uCharacterBase ctor 0x0084A100 initializes actor+0x2738 to zero.
+    /// Scripted condition changes must update this canonical word.
+    pub condition_flags: u32,
+    /// cAICtrl ctor 0x0059DA00 initializes +0x0C's low byte to one.
+    /// The active FSM update owns subsequent changes (0x0059F440).
+    controller_flag_c: bool,
     /// Prior pass-C terrain result, read by the next phase90. None carries
     /// the constructor's zero result word, not an inferred ground height.
     pub scenery_result: Option<ddsim::sweep::Swept>,
@@ -60,6 +65,8 @@ impl OpeningDragon {
             error: None,
             scale,
             collision_conditions: None,
+            condition_flags: 0,
+            controller_flag_c: true,
             scenery_result: None,
             landing_notification_disabled: false,
             cached_matrix,
@@ -115,6 +122,9 @@ impl OpeningDragon {
                 .thinker
                 .controlled_frame(&inputs)
                 .map_err(|e| e.to_string())?;
+            // 0x0059F440 clears +0x0C before the active FSM frame and
+            // restores it on Finish/Kill; paused/disabled calls retain it.
+            self.controller_flag_c = self.thinker.paused || self.thinker.disabled;
             for request in requests {
                 match request {
                     Request::TargetPos { pos } => self.target = pos,
@@ -186,9 +196,8 @@ impl OpeningDragon {
         }
         let transform =
             std::array::from_fn(|i| std::array::from_fn(|j| self.cached_matrix[i][j] * self.scale[i]));
-        // If condition/controller integration is absent, do not fabricate
-        // it to remove the sequence-4 initial HP protection.
-        let (controller_flag_c, actor_flags) = self.collision_conditions.unwrap_or((true, 0));
+        let (controller_flag_c, actor_flags) = self.collision_conditions
+            .unwrap_or((self.controller_flag_c, self.condition_flags));
         self.effects.extend(
             self.actor
                 .step(

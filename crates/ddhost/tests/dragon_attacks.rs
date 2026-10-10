@@ -41,6 +41,13 @@ fn installed_entrance_continues_to_press_using_prior_host_terrain_and_gsf() {
     for _ in 0..1800 {
         host.tick(&Default::default()).unwrap();
         let dragon = host.fight.as_mut().unwrap().dragon.as_mut().unwrap();
+        if states.is_empty() {
+            // The actual controlled FSM frame clears cAICtrl+C; native
+            // ctor condition word0 then removes initialization-only HP lock.
+            let ddenemyrt::combat::Victim::Enemy { rates, .. } = &dragon.actor.fighter.victim else { panic!() };
+            assert_eq!(rates.flags & 1, 0);
+            assert_eq!(dragon.condition_flags, 0);
+        }
         let current = dragon.thinker.current_states();
         if states.last() != current.first() { states.extend(current); }
         if dragon.entrance_complete() {

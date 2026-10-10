@@ -250,3 +250,26 @@ moving sideways while its trail bends. All eight particle tests passed
 connected to the host's BreathWide query or normal damage pass. Provider
 birth orientation, sampled runtime fields and effect ownership remain the
 next integration step; full S30 acceptance stays open.
+
+The production controller/condition projection now follows its actual
+constructor and FSM state. `cAICtrl::ctor` (`0x0059DA00`) initializes
++0x0C's low byte to one. `0x0059F440` clears it for an active FSM frame
+and restores it on Finish/Kill; the existing thinker's paused/disabled
+states represent those outcomes. `uCharacterBase::ctor` (`0x0084A100`)
+initializes actor +0x2738 to zero. OpeningDragon owns this condition word
+and the controller guard, while retaining the explicit native-state
+override for adapters. Its phase93 no longer keeps the constructor HP
+protection solely because a host override was absent.
+
+The installed entrance-to-Press host regression now observes the initial
+HP lock cleared after the actual first controlled FSM frame. It passed
+(10.06s compile, 6.49s run), actual exit0, alongside the existing landing,
+real motion-end and GSF463 checks. The first compile used another branch's
+cached DDSIM without the S30 capsule API; a narrow DDSIM rebuild restored
+the correct source. This does not inject HP, completion or condition bits.
+Runtime scripted condition changes must update the canonical word; the
+full fire/damage route and original comparison remain open.
+After integrating reviewed main `104fa88` into this task branch, all 32
+dragon library tests passed (3.43s compile, 0.00s run), and the existing
+installed entrance host test passed (2.90s compile, 5.60s run), actual
+exit0. Main was not modified.
