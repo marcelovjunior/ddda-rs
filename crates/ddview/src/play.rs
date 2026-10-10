@@ -149,6 +149,12 @@ pub struct GoblinView {
     pub hp_max: f32,
 }
 
+impl GoblinView {
+    pub fn new(entity: Entity, hp_max: f32) -> Self {
+        GoblinView { entity, shown: None, hp_max }
+    }
+}
+
 #[derive(Resource)]
 pub struct PlayState {
     pub sim: Sim,

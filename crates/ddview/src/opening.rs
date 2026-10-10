@@ -244,6 +244,11 @@ pub struct Session {
     party_looks: Vec<Option<ddlook::Look>>,
     /// The vocation whose starting weapons the Arisen show (0: none yet).
     weapons_job: u32,
+    /// The stage whose enemy groups [`field_enemies`] spawned, its group
+    /// list and the cells done.
+    enemy_stage: u32,
+    enemy_groups: Option<ddhost::ddspawn::gpl::GroupList>,
+    enemy_cells: std::collections::HashSet<(u16, u16)>,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -373,6 +378,9 @@ pub fn prepare(
         arisen_look: None,
         party_looks: vec![],
         weapons_job: 0,
+        enemy_stage: 0,
+        enemy_groups: None,
+        enemy_cells: Default::default(),
         gone: vec![],
     };
     let start = f
@@ -821,6 +829,81 @@ pub struct OpeningStage<'w, 's> {
     bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 }
 
+/// Spawns the enemy groups of newly loaded layout cells of `stage` into the
+/// host's fight (`ddhost::spawns::spawn_cells`: the group list's gates on
+/// SceNo, hour and layout flags; goblins run, other enemies are reported as
+/// placeholders) and gives each goblin its body.
+/// *Not yet*: despawning when cells unload, kill records (a new game has
+/// none), the other enemy families.
+fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, stage: u32) {
+    let Some(streamer) = view.streamer.as_mut() else { return };
+    if s.enemy_stage != stage {
+        s.enemy_stage = stage;
+        s.enemy_cells.clear();
+        s.enemy_groups = match ddhost::spawns::group_list(streamer.loader.vfs, stage) {
+            Ok(list) => Some(list),
+            Err(e) => {
+                warn!("opening: stage {stage} enemy groups: {e}");
+                None
+            }
+        };
+    }
+    let Some(list) = s.enemy_groups.as_ref() else { return };
+    let new: Vec<(u16, u16)> = streamer
+        .loaded_layout_cells()
+        .iter()
+        .filter_map(|&(m, n)| Some((u16::try_from(m).ok()?, u16::try_from(n).ok()?)))
+        .filter(|c| !s.enemy_cells.contains(c))
+        .collect();
+    if new.is_empty() {
+        return;
+    }
+    s.enemy_cells.extend(new.iter().copied());
+    // the gates read the story world; the fight is the host's too
+    let world = s.world().clone();
+    let (scene, hour, flag) = ddhost::spawns::world_inputs(&world, stage);
+    let gate_world = ddhost::ddspawn::World { scene, hour, flag: &flag };
+    let Some(fight) = s.host.fight.as_mut() else { return };
+    let before = fight.goblins.len();
+    let out = match ddhost::spawns::spawn_cells(fight, streamer.loader.vfs, stage, list, &new, &gate_world, &[]) {
+        Ok(out) => out,
+        Err(e) => {
+            warn!("opening: stage {stage} cells {new:?} enemies: {e}");
+            return;
+        }
+    };
+    if st.fight_data.is_none() {
+        st.fight_data = Some(fight.data.clone());
+    }
+    for (k, (_, spawn)) in out.goblins.iter().enumerate() {
+        let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
+        match crate::character::spawn(
+            &mut view.commands,
+            &mut streamer.loader,
+            &mut view.meshes,
+            &mut view.materials,
+            &mut view.images,
+            &mut view.bindposes,
+            play::GOBLIN_MODEL,
+            ddhost::ddenemyrt::goblin::BANKS[0].1,
+            0,
+            at,
+            Some(0.0),
+        ) {
+            Ok(e) => {
+                let hp = fight.goblins.get(before + k).map_or(1.0, |g| g.fighter.victim.hp());
+                st.goblins.push(play::GoblinView::new(e, hp));
+            }
+            Err(e) => warn!("opening: goblin body: {e}"),
+        }
+    }
+    info!(
+        "opening: stage {stage} cells {new:?}: {} goblins, {} other enemies without a runtime",
+        out.goblins.len(),
+        out.placeholders.len()
+    );
+}
+
 /// When the story's vocation changes (the weapon table's menu, then
 /// `Host::apply_job_kit` gives the fight kit), each local Arisen is respawned
 /// with that vocation's starting weapons sheathed: the first-choice items of
@@ -895,6 +978,7 @@ pub fn step(
     mut roots: Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
+    mut hud: ResMut<play::Hud>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
     let (Some(mut st), Some(res)) = (state, res) else {
@@ -925,6 +1009,9 @@ pub fn step(
             Ok(true) => info!("opening: stage {stage} NPC layout cells {:?}", s.npc_adapter.field_cells),
             Ok(false) => {}
             Err(error) => { s.failure = Some(format!("NPC layouts: {error}")); return; }
+        }
+        if loaded_stage != 0 {
+            field_enemies(&mut stage_view, st, s, loaded_stage);
         }
     }
     if !s.network_ready {
@@ -1234,6 +1321,17 @@ pub fn step(
         st.follow = u8::MAX;
     }
     play::show(st, &bodies, &mut roots, &mut cams);
+    play::show_goblins(st, s.host.fight.as_ref(), &mut roots, 1.0);
+    // The party's bars once the fight has its Arisen (the vocation's kit):
+    // each seat's maximum from its kit, as play::setup records it.
+    if let Some(f) = s.host.fight.as_ref() {
+        for (&seat, a) in &f.arisen {
+            if let ddhost::ddenemyrt::combat::Victim::Player { hp_max, .. } = a.fighter.victim {
+                st.hp_max.insert(seat, hp_max);
+            }
+        }
+    }
+    hud.rows = play::hud_rows(st, &s.host.sim, s.host.fight.as_ref(), None);
     st.follow = follow;
     let hide = s.cut.is_some();
     for (&e, &on) in &st.visible {
