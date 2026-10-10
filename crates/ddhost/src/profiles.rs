@@ -292,6 +292,22 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             self.sim.players.retain(|p| p.id != pawn_seat);
         }
+        // Older release adapters can leave a pawn body after its Rift slot
+        // was dismissed. Such an actor is no longer an owned hire to park,
+        // but its stale AI owner must never point at the next seat occupant.
+        if let Some(fight) = &mut self.fight {
+            let detached: Vec<_> = fight
+                .pawns
+                .iter()
+                .filter_map(|(&id, pawn)| (id != Self::main_pawn_seat() && pawn.owner == seat).then_some(id))
+                .collect();
+            for id in detached {
+                cancel_attacks(fight, id);
+                fight.pawns.remove(&id);
+                fight.arisen.remove(&id);
+                self.sim.players.retain(|player| player.id != id);
+            }
+        }
         let fighter = self.fight.as_mut().and_then(|fight| {
             cancel_attacks(fight, seat);
             let mut fighter = fight.arisen.remove(&seat)?;

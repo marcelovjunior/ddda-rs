@@ -495,4 +495,10 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
             1
         );
     }
+    // The old Rift-release adapter may leave a body after dismissal. It
+    // must still lose its stale seat owner before the next occupant joins.
+    assert!(h.rift_release(1).is_some());
+    h.leave(a2);
+    assert!(!h.fight.as_ref().unwrap().pawns.contains_key(&pawn_seat));
+    assert!(h.sim.player(pawn_seat).is_none());
 }

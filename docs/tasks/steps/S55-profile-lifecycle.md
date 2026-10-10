@@ -49,6 +49,9 @@ state, and LAN late join is coherent, with tests.
   New or saved profiles receive their own reconstructed combat actor,
   independent of the shared `apply_job_kit` early return. Parked runtime
   fighters/pawns/endurance participate in `state_hash`.
+- Pawn bodies left behind by the older Rift-release adapter also lose
+  their old owner's seat on departure; they cannot become a replacement
+  profile's hire or continue under its AI owner id.
 - A fresh profile also receives its own level-1 progression record when
   tables/current vocation are available. Arisen progression members are
   aligned to the current roster's party slots after leave/join/load; a
