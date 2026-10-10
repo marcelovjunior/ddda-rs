@@ -20,6 +20,7 @@ pub struct QuickItems {
     items: ItemList,
     factors: BTreeMap<PlayerId, f32>,
     owners: BTreeMap<PlayerId, Owner>,
+    opening: Option<(ddeconomy::new_game::Phase, ddeconomy::new_game::Grants)>,
 }
 
 fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
@@ -44,6 +45,65 @@ fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
 }
 
 impl QuickItems {
+    /// Save-free opening bags. Phase is an explicit story boundary: the
+    /// challenge carries the editor's temporary items; NewlyArisen has
+    /// the event-row-21 replacement. Neither phase starts with curatives.
+    pub fn new_game(vfs: &ddvfs::Vfs, locals: &[PlayerId], phase: ddeconomy::new_game::Phase) -> Result<Self, String> {
+        let items = ItemList::parse(&vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList"))?)
+            .map_err(|e| e.to_string())?;
+        let xfs = mtxfs::parse(&vfs.read(r"param\pl\other\plAbilityParam", mtarc::type_hash("rPlAbilityParam"))?)
+            .map_err(|e| e.to_string())?;
+        let nodes = xfs.walk();
+        let row = nodes.get(1 + 0x4a).ok_or("missing recovery augment row")?;
+        // 0x00444840 clears all six augment ids at the prologue boundary.
+        let factor = match xfs.get(row, "mFVal1").and_then(|v| v.first()) {
+            Some(mtxfs::Value::F(v)) if v.len() == 1 => v[0] as f32,
+            _ => return Err("invalid unaugmented recovery factor".into()),
+        };
+        let mut inventory = Inventory::default();
+        let mut owners = BTreeMap::new();
+        let mut factors = BTreeMap::new();
+        for &seat in locals {
+            inventory.bags.insert(Owner::Arisen(seat), ddeconomy::new_game::bag(phase));
+            owners.insert(seat, Owner::Arisen(seat));
+            factors.insert(seat, factor);
+        }
+        Ok(Self { inventory, items, factors, owners, opening: Some((phase, Default::default())) })
+    }
+
+    /// Deliver event row 21 once (the host's actual PlayEvent request).
+    pub fn heart_taken(&mut self) {
+        let Some((phase, _)) = &mut self.opening else { return };
+        if *phase == ddeconomy::new_game::Phase::NewlyArisen { return; }
+        *phase = ddeconomy::new_game::Phase::NewlyArisen;
+        for &seat in self.owners.keys() {
+            ddeconomy::new_game::heart_taken(&mut self.inventory, &self.items, seat);
+        }
+    }
+
+    /// Called when the real first vocation menu closes. The original has
+    /// one Arisen; each local Arisen receives that first-choice equipment.
+    pub fn first_choice(&mut self, vocation: ddhost::ddskill::vocation::Vocation) {
+        let Some((_, grants)) = &mut self.opening else { return };
+        let equipment = ddhost::ddprogress::change::starting_items(vocation);
+        for &seat in self.owners.keys() {
+            grants.first_choice(&mut self.inventory, &self.items, seat, &equipment);
+        }
+    }
+
+    /// The host report supplies the installed reward's item pairs at the
+    /// authored clear row, including q1's first restoratives after ev10.
+    pub fn rewards(&mut self, requests: &[ddstory::Request]) {
+        let Some((_, grants)) = &mut self.opening else { return };
+        for request in requests {
+            if let ddstory::Request::Reward { quest, items, .. } = request {
+                for &seat in self.owners.keys() {
+                    grants.reward(&mut self.inventory, &self.items, seat, *quest, items);
+                }
+            }
+        }
+    }
+
     /// The original save has four bags in cSAVE_DATA_ITEM order. Each
     /// local Arisen imports its own copy of bag 0, matching the viewer's
     /// existing same-save character setup. Only the first local Arisen's
@@ -105,6 +165,7 @@ impl QuickItems {
             items,
             factors,
             owners,
+            opening: None,
         })
     }
 
@@ -133,8 +194,8 @@ impl QuickItems {
         if !fight.arisen.get(&seat).is_some_and(|a| !a.fighter.victim.dead()) {
             return Err("item user is missing or dead".into());
         }
-        let owner = *self.owners.get(&seat).ok_or("no saved bag for seat")?;
-        let bag = self.inventory.bag(owner).ok_or("no saved bag")?;
+        let owner = *self.owners.get(&seat).ok_or("no bag for seat")?;
+        let bag = self.inventory.bag(owner).ok_or("no bag")?;
         let (index, item, effect) = bag
             .slots
             .iter()
@@ -182,6 +243,40 @@ impl QuickItems {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_quick_use_waits_for_authored_reward_and_heals_only_its_seat() {
+        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(&native).unwrap();
+        let exe = ddexe::ExeFile::next_to(&native).unwrap();
+        let data = ddhost::ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap();
+        let mut fight = Fight::new(std::sync::Arc::new(data));
+        let mut sim = Sim::new(Default::default());
+        for seat in [0, 1] { fight.add_arisen(seat); sim.add_player(seat, [0.0; 3], 0.0); }
+        let mut quick = QuickItems::new_game(&vfs, &[0, 1], ddeconomy::new_game::Phase::DragonChallenge).unwrap();
+        quick.heart_taken();
+        quick.heart_taken();
+        quick.first_choice(ddhost::ddskill::vocation::Vocation::Strider);
+        quick.first_choice(ddhost::ddskill::vocation::Vocation::Strider);
+        if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut fight.arisen.get_mut(&0).unwrap().fighter.victim {
+            *hp = 20.0; *hp_max = 1000.0;
+        }
+        assert!(quick.use_next(0, &mut sim, &mut fight).is_err());
+        let story = ddstory::data::InstallData::open(&native, None).unwrap();
+        let reward = ddstory::orders::reward(&story, 1).unwrap();
+        quick.rewards(&reward);
+        quick.rewards(&reward);
+        let other_hp = fight.arisen[&1].fighter.victim.hp();
+        let other_bag = quick.inventory.bag(Owner::Arisen(1)).unwrap().clone();
+        assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 5);
+        assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 43);
+        assert!(fight.arisen[&0].fighter.victim.hp() > 20.0);
+        assert_eq!(fight.arisen[&1].fighter.victim.hp(), other_hp);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 4);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(1)).unwrap(), &other_bag);
+    }
 
     #[test]
     fn saved_bag_count_and_invalid_entries_are_checked() {
@@ -253,6 +348,7 @@ mod tests {
             items: table,
             factors: [(0, 1.0)].into(),
             owners: [(0, Owner::Arisen(0))].into(),
+            opening: None,
         };
         if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } =
             &mut fight.arisen.get_mut(&0).unwrap().fighter.victim
