@@ -252,7 +252,7 @@ remain open. Parent authorized a subsequent source-only private actual-line
 capture hook, with a new full viewer/build gate after S56's queued window.
 The pin above predates that future hook; it is not a captured speech result.
 
-### Actual-line capture source preparation (uncompiled/unexecuted)
+### Actual-line capture source preparation and subsequent validation
 
 Parent authorized a separate source-only capture hook after the verified
 5557883 gate. `DDVIEW_S52_CAPTURE_DIR` names an **already existing** directory
@@ -270,9 +270,10 @@ the canonical directory and refuses an existing output (including symlinks)
 at callback time. A new headless regression delivers a synthetic CPU image
 to that real observer and checks PNG dimensions, actual success/failure state,
 outside-root rejection and preserved existing output. That synthetic test is
-not a captured game scene. The new hook and regression are **uncompiled and
-unexecuted** until the next full viewer/default-release window after S56 and
-head's opening-hook gate. No new pin or capture result is claimed yet.
+not a captured game scene. At that source-preparation checkpoint the new
+hook and regression were **uncompiled and unexecuted**, pending the next
+full viewer/default-release window after S56 and head's opening-hook gate.
+That checkpoint established no new pin or capture result.
 
 Head reported reviewed protocol10 merged to main **6afbc3c** (board8123),
 then committed the opening hooks below as **de93e84** after an actual full
@@ -281,6 +282,55 @@ build (board8168). That reviewed committed main was cleanly integrated into
 this task branch as **28fb15a**, with no sibling work-in-progress or direct
 opening edits. Network and declaration/story claims were normally handed back;
 protocol11 is now S53's coordinated scope.
+
+The subsequently reviewed main **5192882**, including S56's installed editor,
+was cleanly integrated into this branch as **ce212d7**. Under parent board8220's
+exclusive CPU window, full `cargo test --release -p ddview`, session **82202**,
+actually exited **0**: **124 passed, zero failed, two existing ignored**.
+All three S52 viewer names were source-present and present exactly once as
+PASS, including
+`private_capture_callback_acknowledges_png_save_and_refuses_overwrite_or_outside_root`.
+Sequential `cargo build --release -p ddview`, session **85351**, actually exited
+**0** in 1m56s. The worktree remained clean at frozen ce212d7 throughout both
+commands; the viewer source SHA-256 remained
+`1FEB2F7531B2AFBD442BED25A3B93CE9D652061663ED8E88C9F09E037D565E5B`.
+There are now **20** individually verified follow-up names across the earlier
+17-name full core gate and this three-name full viewer gate.
+
+Private executable `E:/ddda-re/notes/steps/S52/ddview-s52-capture-ce212d7.exe`,
+95,588,352 bytes, matches the built executable's SHA-256
+`E0C374BD0399C9B058962EA2D73477253EAAB731418DC64681AB155577D34CAF`.
+Private test/build logs are `viewer-full-ce212d7-capture-first.private.log`
+and `viewer-default-ce212d7-capture.private.log`, with SHA-256 values
+`FD952828D2BBF726E652A0EA996B684C59E018C209A6144D71547FEB03C654D2`
+and `7F4BE9108903E4A26D71D8BDC3D098FC64F70570E0A2820A1C91E00F44127DE5`.
+`viewer-capture-gate-ce212d7.private.json` records the actual exits, names,
+frozen source and pin checks. The normal M5 lease was released after these
+checks. No GPU process or actual speech screenshot has been launched by this
+agent; the callback regression only establishes synthetic PNG save behavior.
+
+### Additional sensor2 provenance (researched, not implemented)
+
+`cAICtrl` constructor `0x0059DA44..0x0059DA76` initializes its embedded
+`cAIUserList` at +1C8, with count+1D4 and storage+1E0. Pawn resource loading
+`0x00B5452F..0x00B54552` loads installed `AI\\Sensor\\Cmc\\cmc_normal`
+(path address `0x015E83FC`) into the geometry sensor and activates group1.
+The separate path at `0x015E8418` is `AI\\SensorTarget\\cmc`.
+
+Ordinary pawn update `0x0059E8CF..0x0059E8E4` queues request kinds1/2 through
+`0x005A0D50`. `sAICtrlManager::vf06` at `0x00412840` processes one queued
+request per call; kind2 dispatch `0x0041293A` invokes situation vf11 at
+`0x00584780`. That list2 producer queries sensor geometry with type mask8
+(`0x005847F3` / `0x00584823`), filters actor readiness and squared distance
+<=4,000,000 cm² (`0x005848A8`, embedded float `0x0150929C`), then separately
+unions recognized enemies (`0x0058497A..0x00584A24`) and shared combat actors
+(`0x00584A6E`, subject to actor+26A0/+26A4 guards). Existing target wrappers
+are retained; new installed model entries become wrappers through
+`0x00584C03` / `0x005838F0`. Thus a single 20-metre admission rule would
+lose the separate recognition/shared-list branches and their deferred phase.
+No sensor2 adapter or regression is claimed from this trace. Exact wrapper
+flags, model admission and manager ordering remain open; bounded raw exports
+remain private.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
@@ -318,7 +368,10 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
-Next action: prepare the parent-approved actual-line capture hook and
-coordinate head's opening hooks, then obtain the next full viewer/build gate
-before asking root for one bounded capture. Earlier failures are preserved;
-no GPU work, original process control or capture has occurred.
+Next action: parent reviews the fresh ce212d7 gate/pin, then root performs
+one bounded genuine-line capture from the regenerated route-v2
+`RescueApproach.ddhs` (SHA-256
+`CD6931B58EBA6B7A6674F4F80DAF39AB06C5EEFCA02A8A45F4F23CD94FA176AE`).
+Only the real `S52_CAPTURE_SAVED` callback and inspected PNG establish that
+presentation result. Earlier failures are preserved; no GPU work, original
+process control or capture has occurred in this agent's lane.
