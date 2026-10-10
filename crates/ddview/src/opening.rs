@@ -142,7 +142,8 @@ struct NpcAdapter {
     guards: HashMap<u32, ddnpcrt::schedule::Guard>,
     goto: HashMap<u32, [f32; 3]>,
     placed: HashMap<u32, ([f32; 3], Option<[f32; 3]>)>,
-    bindings: HashMap<u32, (u32, ddstory::Target)>,
+    owners: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
+    bindings: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
     reported_stage: u32,
 }
 
@@ -159,7 +160,7 @@ impl NpcAdapter {
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
         Ok(Self { layouts, families, guards: HashMap::new(), goto: HashMap::new(),
-            placed: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+            placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
     }
 }
 
@@ -326,6 +327,7 @@ impl Session {
             self.npc_adapter.guards.clear();
             self.npc_adapter.goto.clear();
             self.npc_adapter.placed.clear();
+            self.npc_adapter.owners.clear();
             self.npc_adapter.bindings.clear();
             return Ok(());
         }
@@ -349,14 +351,16 @@ impl Session {
             warn!("opening: NPC placement {target:?}: {diagnostic}");
         }
         let owned: HashMap<_, _> = self.host.story_npc_intels()
-            .map(|p| (p.npc as u32, (p.stage, p.target))).collect();
-        for (&npc, old) in &self.npc_adapter.bindings {
+            .filter_map(|p| self.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
+        // Request ownership is independent of successful model creation.
+        for (&npc, old) in &self.npc_adapter.owners {
             if owned.get(&npc) != Some(old) {
                 self.npc_adapter.guards.remove(&npc);
                 self.npc_adapter.goto.remove(&npc);
                 self.npc_adapter.placed.remove(&npc);
             }
         }
+        self.npc_adapter.owners = owned;
         Ok(())
     }
 
@@ -536,7 +540,8 @@ fn sync_npc_models(
     bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
 ) {
     let placements: Vec<_> = session.host.story_npc_intels().cloned().collect();
-    let wanted: HashMap<_, _> = placements.iter().map(|p| (p.npc as u32, (p.stage, p.target))).collect();
+    let wanted: HashMap<_, _> = placements.iter().filter_map(|p|
+        session.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
     let retired: Vec<_> = session.npcs.keys().copied().filter(|id|
         !wanted.contains_key(id) || wanted.get(id) != session.npc_adapter.bindings.get(id)).collect();
     for id in retired {
@@ -554,7 +559,7 @@ fn sync_npc_models(
             bindposes, &look, play::MOTIONS, 0, pos * UNIT, Some(yaw)) {
             Ok(entity) => {
                 session.npcs.insert(id, (entity, pos, yaw));
-                session.npc_adapter.bindings.insert(id, (placement.stage, placement.target));
+                if let Some(&owner) = wanted.get(&id) { session.npc_adapter.bindings.insert(id, owner); }
             }
             Err(error) => warn!("opening: NPC {id} body unavailable: {error}"),
         }

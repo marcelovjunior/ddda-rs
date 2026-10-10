@@ -663,3 +663,15 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   sync_npc_intels/npc_requests are identical to the existing NPC checkpoint.
   Next: lifetime-bound presentation cleanup, then real actor/movement/Guard
   prerequisites; route planner doorway handling needs its owning lane.
+
+
+### Viewer lifetime ownership follow-up (2026-10-09)
+
+- Viewer request caches now follow all canonical NpcLifetime owners,
+  independently of successful model creation. Retiring or replacing an
+  unrendered actor clears its Guard/Goto/Place caches as well.
+- Render bindings use the same allocation token, so replacing the same NPC
+  id at the same authored target retires the old body instead of reusing it.
+- Validation: release ddview check passes (three existing warnings).
+  Host token rejection already has the active replacement regression in
+  0edc13e. No live movement/Guard completion is introduced by this adapter.
