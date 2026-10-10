@@ -32,11 +32,22 @@ geometry, animation, LOD and fixed 30 Hz simulation remain unchanged.
 
 ## Verification status
 
-Three headless regressions are implemented for actual character fade/restore
+Source `1a0911b` passed the full `cargo test --release -p ddview` suite:
+**84 passed, 0 failed, 2 existing ignored**, compilation 43.71 s / tests
+14.24 s. This includes the three regressions for actual character fade/restore
 and concurrent sky-flag changes, stable keys under lighting-value changes,
 and matching vertex/fragment definitions (including vertex-only descriptors
-and zero flags). They have not yet run. Full viewer tests and release build
-remain pending; these tests do not compile the WGSL on a real adapter.
+and zero flags). Default `cargo build --release -p ddview` completed **exit
+0**, 59.93 s; combined session 97776 actually exited 0. Existing
+private-interface and unused audio-method warnings remain. These headless
+tests do not compile the WGSL on a real adapter.
+
+Private pin: `E:/ddda-re/notes/steps/s41/ddview-material-1a0911b.exe`, SHA-256
+`9B9BD7C428AC8C2200AB33AB1387EB7C1143A82A7EEA942E83887D7A77E097CE`.
+The M5 lease was released after actual exit and pinning. Harness commit
+`f98aad7` adds explicit `-MaterialSpecialization off|on` (default off), records
+the mode in `.run.json` and restores the caller's environment. PowerShell
+parse and `git diff --check` passed; no additional product source changed.
 
 The separate CPU experiment's two captures both failed visual equivalence;
 their lower frame times are invalid as optimization evidence. They are not
@@ -47,6 +58,12 @@ PNGs before comparing preselected warm frame/pass windows. New feature keys
 may increase pipeline compilation and cache size; startup/stutter numbers
 must be reported alongside steady-state frame times.
 
-Next action: run the full touched viewer suite and release build under the
-normal shared-target lease, then request one bounded identical-picture batch
-from head after its integration route releases the GPU. No gain claimed.
+One bounded off/on request is queued with head, after its integration route:
+same pin and GPU builder on both sides, default backend, stage 100/cell64,54,
+same spawn/camera/two players/clock12 as the previous field comparison,
+1080p, screenshot at 45 s, timer 50 s and watchdog 90 s per process. Private
+prefixes `field-material-{off,on}-1a0911b` keep the baseline and candidate
+separate. Require PNG fidelity and identical counts before comparing warm
+20–40 s frames, GPU passes and stutters. CPU mode is not part of this batch.
+Next action: independently review the source, then inspect the queued
+batch's actual images/exits and measurements. No gain claimed.
