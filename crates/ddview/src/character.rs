@@ -606,7 +606,16 @@ fn spawn_meshes(
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
     let mut bound_offset = 0;
-    for m in &model.meshes {
+    let part_log = std::env::var_os("DDVIEW_PART_LOG").is_some();
+    for (mesh_index, m) in model.meshes.iter().enumerate() {
+        // Diagnostic only: skipped meshes never build a material, so report
+        // that explicitly rather than constructing one just for logging.
+        let log_part = |outcome: &str, alpha: &str| {
+            if part_log {
+                let name = model.material_names.get(m.material as usize).map(String::as_str).unwrap_or("<missing>");
+                info!("PART actor={root:?} model={model_path} mesh={mesh_index} group={} lod={} draw_mode={:#x} material={name} alpha={alpha} vertices={} {outcome}", m.group, m.lod, m.draw_mode, m.vertex_count);
+            }
+        };
         let first_bound = (m.weight_bound_count > 0)
             .then(|| model.weight_bounds.get(bound_offset..bound_offset + 144))
             .flatten();
@@ -617,16 +626,32 @@ fn spawn_meshes(
         // 1 (0x00daf0a8); ShadowCast pushes 8 or 0x200 (0x00ede86c), so
         // the low-poly shadow bodies (draw_mode 0xe6c8) and the outline
         // and velocity shells (0x1020) never draw in colour.
-        if m.draw_mode & 1 == 0 || m.flags & 1 == 0 || m.lod & 1 == 0 || !visible(m.group) {
+        let skip = if m.draw_mode & 1 == 0 { Some("skipped:no-colour-pass") }
+            else if m.flags & 1 == 0 { Some("skipped:display-disabled") }
+            else if m.lod & 1 == 0 { Some("skipped:lod0-disabled") }
+            else if !visible(m.group) { Some("skipped:part-group-hidden") }
+            else { None };
+        if let Some(reason) = skip {
+            log_part(reason, "not-built");
             continue;
         }
         let Some(layout) = mfx.layout(m.vertex_format) else {
+            log_part("skipped:vertex-layout-missing", "not-built");
             continue;
         };
-        let (Ok(v), Ok(tris)) = (model.decode(m, layout), model.triangles(m)) else {
-            continue;
+        let decoded = model.decode(m, layout);
+        let triangles = model.triangles(m);
+        let (v, tris) = match (decoded, triangles) {
+            (Ok(v), Ok(tris)) => (v, tris),
+            (Err(_), _) => { log_part("skipped:vertex-decode-error", "not-built"); continue; }
+            (_, Err(_)) => { log_part("skipped:triangle-decode-error", "not-built"); continue; }
         };
-        if tris.is_empty() || v.uvs[0].is_empty() || v.joints.len() != v.positions.len() {
+        let skip = if tris.is_empty() { Some("skipped:empty-triangles") }
+            else if v.uvs[0].is_empty() { Some("skipped:uv0-missing") }
+            else if v.joints.len() != v.positions.len() { Some("skipped:joint-count-mismatch") }
+            else { None };
+        if let Some(reason) = skip {
+            log_part(reason, "not-built");
             continue;
         }
         let usage = if crate::stage::KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed) {
@@ -724,6 +749,13 @@ fn spawn_meshes(
                 material
             })
             .clone();
+        if part_log {
+            let alpha = match &material {
+                PartMaterial::Standard(h) => materials.get(h).map(|m| format!("{:?}", m.alpha_mode)).unwrap_or_else(|| "missing-material".into()),
+                PartMaterial::Dd(slot) => format!("{:?}", slot.material.base.alpha_mode),
+            };
+            log_part("spawned", &alpha);
+        }
         let mut e = commands.spawn((
             Mesh3d(meshes.add(mesh)),
             SkinnedMesh {

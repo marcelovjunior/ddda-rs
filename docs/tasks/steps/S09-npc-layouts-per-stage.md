@@ -33,3 +33,22 @@ layouts from `loaded_layout_cells()`.
 
 `cargo test --release -p ddview` passes, the release build passes, and
 the Result shows the diff stat.
+
+## Result
+
+codex-1, 2026-10-09: complete, implementation commit `e3671d5`. `NpcAdapter.layouts` is now a
+`HashMap<u32, LoadedLayouts>` initially containing only Cassardis (200).
+NPC synchronization and door coverage query the current stage's entry.
+Missing stages retain the existing warning, retirement and false coverage;
+candidate selection and admission are unchanged. No field layouts are
+loaded yet; S13 is the next step.
+
+Code diff stat: `crates/ddview/src/opening.rs | 14 +++++++-------`.
+
+Validation with shared target `E:/ddda-rs-wt/m5-cassardis/target`:
+
+- `cargo test --release -p ddview`: 52 passed, 2 existing ignored,
+  0 failed (25.05 s build, 3.32 s tests).
+- `cargo build --release -p ddview`: passed (50.19 s), two existing
+  warnings (`private_interfaces`, `audio::forget_actor` dead code).
+- `git diff --check`: passed. No new tests or GUI run for this refactor.

@@ -1067,7 +1067,13 @@ impl Sim {
         };
         let state = self.players[i].state;
         // the transition lists come before the default list (the jump)
-        if state.on_ground_for_attacks() && self.attack_input(i, light, heavy, moving.then_some(input_yaw)) {
+        // the dagger's air attacks read the list too (AirS1 -> AirS2); the
+        // sword's and staff's air rows have no chain from an air attack
+        let air_chain = matches!(state, State::Attack { attack } if attack.air())
+            && self.players[i].weapon == Weapon::Dagger;
+        if (state.on_ground_for_attacks() || air_chain)
+            && self.attack_input(i, light, heavy, moving.then_some(input_yaw), ground)
+        {
             return;
         }
         match state {
@@ -1183,7 +1189,7 @@ impl Sim {
                 // the transition lists' air rows (0x302) come before the
                 // default list (the second jump); the jump and fall motions
                 // keep the attack slots open throughout
-                if self.attack_input(i, light, heavy, moving.then_some(input_yaw)) {
+                if self.attack_input(i, light, heavy, moving.then_some(input_yaw), ground) {
                     return;
                 }
                 if pressed && self.players[i].jumps_left > 0 {
@@ -1404,10 +1410,20 @@ impl Sim {
     /// when an attack started.
     // Translated from 0x00B6D510 (the request loops at 0x00B6DC10), 0x00ABA690
     // and 0x00ABAAC0 (DDDA.exe 2017-12-13 Steam).
-    fn attack_input(&mut self, i: usize, light: bool, heavy: bool, stick: Option<f32>) -> bool {
+    fn attack_input(&mut self, i: usize, light: bool, heavy: bool, stick: Option<f32>, ground: &dyn Ground) -> bool {
         if self.players[i].weapon == Weapon::None {
             return false;
         }
+        // check 10 (uPlayer::vf188 0x00B72DB0): the height above ground of
+        // 0x0084FEA0's ray (from 100 above to 1000 below) reaches
+        // m_pl000_00[0x75]; *assumed* high when the ray finds no ground
+        let high = {
+            let at = self.players[i].position;
+            ground
+                .height(at[0], at[2], at[1] + 100.0)
+                .filter(|g| *g >= at[1] - 1000.0)
+                .is_none_or(|g| at[1] - g >= self.attack_param.air_heavy_height)
+        };
         let (word, chain_open) = self.attack_events(i);
         let slot = attack::slot_state(word, attack::ATTACK_SLOT);
         let p = &mut self.players[i];
@@ -1419,8 +1435,9 @@ impl Sim {
             _ => None,
         };
         if (light || heavy) && slot != 0 && p.stamina > 0.0 {
-            let air = matches!(p.state, State::Air { .. } | State::Fall | State::SecondJump);
-            if let Some(r) = attack::next(p.weapon, current, light, heavy, chain_open, air) {
+            let air = matches!(p.state, State::Air { .. } | State::Fall | State::SecondJump)
+                || current.is_some_and(Attack::air);
+            if let Some(r) = attack::next(p.weapon, current, light, heavy, chain_open, air, high) {
                 p.request = Some(r);
             }
         }
@@ -1584,7 +1601,7 @@ impl Sim {
                 self.players[i].frame += dt;
                 self.shot_frame(i, phase, light);
             }
-            State::Attack { attack: Attack::SwordAirHeavy } => {
+            State::Attack { attack } if attack.hangs() => {
                 let closed = |s: &Self, f: f32| {
                     s.playing(i)
                         .is_some_and(|m| m.event_bits(0, 0, f as i32) & attack::CHAIN_CLOSED_BIT != 0)
@@ -1598,11 +1615,16 @@ impl Sim {
                     return;
                 }
                 self.air_move(i, None, ground, dt);
-                let p = &mut self.players[i];
-                if p.state != state {
-                    // landed: phase 2's motion, standing still
-                    p.velocity = [0.0; 3];
-                    Self::set_state(p, State::Attack { attack: Attack::SwordAirHeavyLand });
+                if self.players[i].state != state {
+                    // landed: phase 2's motion, standing still (AirL); AirS2
+                    // lands like any other (+0x35E8 bit 1)
+                    if let Some(land) = attack.landing() {
+                        let p = &mut self.players[i];
+                        p.velocity = [0.0; 3];
+                        Self::set_state(p, State::Attack { attack: land });
+                    }
+                } else if attack.landing().is_none() && self.attack_motion_done(i) {
+                    Self::set_state(&mut self.players[i], State::Fall);
                 }
             }
             State::Attack { .. } => {
