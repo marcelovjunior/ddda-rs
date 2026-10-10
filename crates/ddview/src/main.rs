@@ -581,7 +581,7 @@ fn main() {
     // stage, clock and camera start come from it.
     let session = args.opening.then(|| {
         let exe = args.native_pc.parent().map(|p| p.join("DDDA.exe")).unwrap_or_default();
-        let mut s = opening::prepare(&args.native_pc, &exe, 1, args.demo, args.shots.clone())
+        let mut s = opening::prepare(&args.native_pc, &exe, if args.host.is_some() || args.join.is_some() { 1 } else { args.players }, args.demo, args.shots.clone())
             .unwrap_or_else(|e| panic!("--opening: {e}"));
         if args.perf_route { s.enable_perf_route(); }
         let w = &s.host.story.as_ref().unwrap().world;

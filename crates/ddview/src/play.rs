@@ -380,7 +380,7 @@ fn interpolation_frames(default: f32, motion: u16) -> f32 {
 
 /// Player two's controls (arrow keys, Right Ctrl / Shift, Enter, Numpad 1
 /// and 2).
-fn p2_input(keys: &ButtonInput<KeyCode>, cam_yaw: f32) -> Input {
+pub(crate) fn p2_input(keys: &ButtonInput<KeyCode>, cam_yaw: f32) -> Input {
     Input {
         stick: stick(keys, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight),
         walk: keys.pressed(KeyCode::ControlRight),

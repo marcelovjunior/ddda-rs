@@ -419,9 +419,18 @@ the wanted cells from the followed player every frame:
 Checked with `--radius 0`: the streamer fills in the neighbouring cells,
 scenery and distant ring from a single loaded cell.
 
+Opening now uses the stage streamer and its stage handoff. Collision and
+layout collision residency use `Grid::wanted_for_players`: the sorted,
+deduplicated union of the sourced single-actor windows for every current
+simulation actor. This union is a co-op design choice. Rendering still
+follows the view's focus. Handoffs discard old-stage actor interests and
+start from the authored arrival until the newly placed party is observed.
+Scenario admission uses completed collision/layout cells, not merely
+requested cells. A separated-party regression checks both windows,
+permutation invariance, duplicates and the empty input.
+
 Not yet:
-- `--opening` and LAN sessions (they load their own stage);
-- stage transitions (Cassardis st200 to the field);
+- LAN guest live stage handoff (the current Spot transfer is at welcome);
 - the initialization bypass of the first update (the viewer's start square
   stands in for it).
 

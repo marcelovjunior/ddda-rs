@@ -86,6 +86,8 @@ enum Step {
 struct Demo {
     step: Step,
     since: f32,
+    step_origin: Vec3,
+    last_door_press: f32,
     /// Where the Arisen was at the last progress check.
     check: (f32, Vec3),
     path: std::collections::VecDeque<Vec3>,
@@ -227,8 +229,9 @@ pub fn prepare(
         ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
     ));
     for k in 0..players.max(1) {
-        let control = if k == 0 { Control::Local } else { Control::Remote };
-        host.join(ProfileId(u64::from(k) + 1), control, ddhost::opening::AWAY, 0.0)
+        // The network prepare path seats only its local host. Additional
+        // seats here are explicitly local; LAN peers join through Server.
+        host.join(ProfileId(u64::from(k) + 1), Control::Local, ddhost::opening::AWAY, 0.0)
             .ok_or("cannot seat")?;
     }
     let f = fast_forward(&mut host, &to_newly_arisen(), 240, 30_000, |h| {
@@ -285,6 +288,8 @@ pub fn prepare(
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
             since: 0.0,
+            step_origin: Vec3::ZERO,
+            last_door_press: f32::NEG_INFINITY,
             check: (0.0, Vec3::ZERO),
             path: Default::default(),
             press: false,
@@ -736,6 +741,7 @@ pub fn step(
     }
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
+        streamer.actors = s.host.sim.players.iter().map(|p| p.position).collect();
         if let Some(terrain) = streamer.take_terrain() {
             // the camera's copy too (play::follow_camera)
             st.terrain = terrain.clone();
@@ -852,7 +858,7 @@ pub fn step(
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
-            demo_input(s, now)
+            demo_input(s, now, &st.terrain)
         };
     }
     if pause.paused {
@@ -864,6 +870,11 @@ pub fn step(
     s.pending_input.sim = play::latch_input(s.pending_input.sim, input.sim);
     s.pending_input.interact |= input.interact;
     input = s.pending_input;
+    let local_second = if s.host.server.is_none() && !pause.paused && s.cut.is_none()
+        && s.talk.is_none() && s.world_menu().is_none()
+    {
+        PlayerInput { sim: play::p2_input(&keys, st.cam_yaw), interact: false }
+    } else { PlayerInput::default() };
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
@@ -889,7 +900,7 @@ pub fn step(
         let mut inputs = FrameInputs::new();
         let seats: Vec<_> = s.host.roster.ids().collect();
         for id in seats {
-            inputs.insert(id, if id == 0 { input } else { PlayerInput::default() });
+            inputs.insert(id, if id == 0 { input } else if id == 1 { local_second } else { PlayerInput::default() });
         }
         input.interact = false;
         s.host.scenario_field_cells = stage_view.streamer.as_ref().and_then(|streamer| streamer.scenario_field_cells());
@@ -1336,7 +1347,7 @@ pub fn cutscene(
 
 /// The demo's input for this frame: walk to the step's target, press E,
 /// answer the menu and the talk.
-fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
+fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
     let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else {
         return PlayerInput::default();
     };
@@ -1345,6 +1356,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
     };
     if d.since == 0.0 {
         d.since = now;
+        d.step_origin = p;
         d.check = (now, p);
     }
     let step = d.step;
@@ -1358,7 +1370,13 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         Step::WeaponTable => place("cassardis: weapon table"),
         Step::RoomExit => place("cassardis: room exit"),
         Step::TalkQuina => s.npcs.get(&2).map(|n| n.1),
-        Step::WalkOut => place("cassardis: 1300"),
+        // The SceNo1300 OBB is in the doorway, not outside the house.
+        // Continue through its far boundary from the approach side. This
+        // is demo navigation geometry, not an original quest condition.
+        Step::WalkOut => s.host.story.as_ref().and_then(|story| {
+            let shape = story.stage.scenarios.entry(4, 7)?.shape.as_ref()?;
+            demo_through_box(&shape.zone, s.demo.as_ref()?.step_origin)
+        }),
         Step::Q0002Event => place("cassardis: q0002 event"),
         // Installed st200_door entry 0 is the stage100/start2 gate.
         // Coordinates and angle are read from that scenario at runtime.
@@ -1391,10 +1409,34 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         .map(|q| q.number())
         .collect();
     let d = s.demo.as_mut().unwrap();
+    // A closed hinged door changes the collision topology. A human would
+    // press interact before trying to plan around it. Use the host's
+    // explicitly labelled nearest-door adapter through ordinary input;
+    // never remove its collision or declare its motion finished here.
+    let closed_door_nearby = target.is_some() && !talking && menu.is_none()
+        && s.host.doors.as_ref().is_some_and(|doors| doors.states.values().any(|door| {
+            let entry = &doors.entries[&door.id];
+            door.phase == dddoor::runtime::Phase::Closed
+                && entry.policy.resolve(entry.observed) == Some(dddoor::policy::Availability::Unlocked)
+                && Vec2::new(p.x - door.position[0], p.z - door.position[2]).length() <= 400.0
+                && (p.y - door.position[1]).abs() <= 250.0
+        }));
+    if closed_door_nearby && now - d.check.0 > 1.0 && (p - d.check.1).length() < 60.0
+        && now - d.last_door_press > 1.0
+    {
+        d.last_door_press = now;
+        d.planning = None;
+        // The plan already allows this unlocked-door transition. Preserve
+        // its exit direction while the real leaf opens; dropping the path
+        // here would send the direct goal heading back into the building.
+        info!("opening demo: interacting with closed door at {p:?}, retaining route");
+        return PlayerInput { interact: true, ..Default::default() };
+    }
     if let Some(plan) = &mut d.planning {
         let _timing = crate::perf::Section::start("demo route planning");
+        let ground = DemoPlanningGround::new(stage_ground, s.host.doors.as_ref());
         match plan.advance(
-            s.host.ground.as_ref(),
+            &ground,
             &s.host.sim.sweep_param,
             std::time::Duration::from_millis(1),
         ) {
@@ -1488,7 +1530,11 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
             }
         }
         Step::WalkOut if w.sce_no >= 1400 || quests.contains(&2) => next = Some(Step::Q0002Event),
-        Step::WalkOut if w.sce_no >= 1300 && now - d.since > 6.0 => next = Some(Step::Q0002Event),
+        Step::WalkOut if w.sce_no >= 1300 && target.is_some_and(|goal| {
+            Vec2::new(goal.x - p.x, goal.z - p.z).length() <= 60.0
+        }) && s.host.story.as_ref().and_then(|story| story.stage.scenarios.entry(4, 7))
+            .and_then(|entry| entry.shape.as_ref()).is_some_and(|shape| !shape.hit(p.to_array(), 0.0))
+            => next = Some(Step::Q0002Event),
         Step::Q0002Event if quests.contains(&2) => {
             next = Some(if d.perf_route { Step::Gate } else { Step::Done });
         }
@@ -1522,6 +1568,7 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
         d.path.clear();
         d.planning = None;
         d.since = now;
+        d.step_origin = p;
         d.check = (now, p);
         d.last_talk = 0.0;
     }
@@ -1588,6 +1635,18 @@ fn demo_input(s: &mut Session, now: f32) -> PlayerInput {
 
 fn benchmark_cell(p: Vec3) -> (i32, i32) {
     (50 + (p.z / 10_000.0).floor() as i32, 50 + (p.x / 10_000.0).floor() as i32)
+}
+
+/// Demo-only goal past the far support plane of an authored doorway box.
+/// The approach chooses the exit side; dimensions come from the install.
+fn demo_through_box(zone: &ddstory::scenario::Zone, from: Vec3) -> Option<Vec3> {
+    let ddstory::scenario::Zone::Obb { m, ext } = zone else { return None };
+    let center = Vec3::new(m[3][0], from.y, m[3][2]);
+    let direction = (center - from).try_normalize()?;
+    let support: f32 = (0..3).map(|i| {
+        direction.dot(Vec3::new(m[i][0], m[i][1], m[i][2])).abs() * ext[i]
+    }).sum();
+    Some(center + direction * (support + 2.0 * ddsim::BODY_RADIUS))
 }
 
 fn benchmark_place(s: &Session, task: u32, no: u32) -> Option<(Vec3, f32)> {
@@ -1760,6 +1819,38 @@ impl GameplayProjection {
 
 type RouteCell = (i32, i32);
 type RouteNode = (Vec3, f32, RouteCell);
+
+/// Demo navigation treats an unlocked door as an interaction transition.
+/// The real host ground retains its closed leaf and requires an actual E
+/// press before movement can pass. Unknown/locked doors remain obstacles
+/// even for planning. No shared collision enable bit is changed here.
+struct DemoPlanningGround<'a> { parts: Vec<&'a dyn ddsim::Ground> }
+impl<'a> DemoPlanningGround<'a> {
+    fn new(base: &'a dyn ddsim::Ground, doors: Option<&'a ddhost::doors::Doors>) -> Self {
+        let mut parts = vec![base];
+        if let Some(doors) = doors {
+            for (id, leaf) in doors.collision.0.iter() {
+                if leaf.enabled.load(std::sync::atomic::Ordering::Relaxed)
+                    && doors.entries.get(id).is_none_or(|entry|
+                        entry.policy.resolve(entry.observed) != Some(dddoor::policy::Availability::Unlocked))
+                {
+                    parts.push(&leaf.terrain);
+                }
+            }
+        }
+        Self { parts }
+    }
+}
+impl ddsim::Ground for DemoPlanningGround<'_> {
+    fn height(&self, x: f32, z: f32, below: f32) -> Option<f32> {
+        self.parts.iter().filter_map(|ground| ground.height(x, z, below)).max_by(f32::total_cmp)
+    }
+    fn triangles_in(&self, lo: [f32; 3], hi: [f32; 3], out: &mut Vec<ddsim::sweep::Face>) -> bool {
+        let mut found = false;
+        for ground in &self.parts { found |= ground.triangles_in(lo, hi, out); }
+        found
+    }
+}
 
 /// Demo navigation only, not a translated NPC/pathfinding rule. An A* search
 /// samples capsule sweeps against the installed collision mesh. Resolution
@@ -1952,6 +2043,55 @@ mod tests {
             Vec3::new(8231.768, 1708.3849, -6733.37),
         );
         assert!(!path.is_empty(), "walk around recorded demo blockage");
+    }
+    #[test]
+    fn doorway_demo_goal_is_beyond_the_opposite_face() {
+        let zone = ddstory::scenario::Zone::Obb {
+            m: Mat4::from_rotation_y(0.7).to_cols_array_2d(), ext: [100.0, 200.0, 80.0],
+        };
+        for from in [Vec3::new(0.0, 0.0, -500.0), Vec3::new(0.0, 0.0, 500.0)] {
+            let goal = demo_through_box(&zone, from).unwrap();
+            assert!(!zone.contains(goal.to_array()));
+            assert!(goal.dot(from) < 0.0, "the route must cross to the far side");
+            // Walking can stop up to60cm before the target; that point
+            // must still have crossed the shape, not merely entered it.
+            let stop = goal - goal.normalize() * 60.0;
+            assert!(!zone.contains(stop.to_array()));
+        }
+    }
+    #[test]
+    fn demo_door_planning_preserves_real_collision_and_rejects_unknown_locks() {
+        use ddsim::Ground;
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.exists() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let exe = ddexe::ExeFile::next_to(native).unwrap();
+        let families = dddoor::placement::Families::read(&exe.image().unwrap()).unwrap();
+        let groups = dddoor::placement::groups(&vfs, STAGE).unwrap();
+        let world = ddhost::ddspawn::World { scene: 1400, hour: 12, flag: &|_| false };
+        let placements = dddoor::placement::candidates(&vfs, &families, STAGE, &groups, &[(0, 0)], &world).unwrap();
+        let door = placements.doors.into_iter().find(|door| door.id.group == 18 && door.id.record == 2).unwrap();
+        let id = door.id;
+        let mut doors = ddhost::doors::Doors::load(&vfs, STAGE, vec![door], |_| dddoor::policy::Observed::fresh(12)).unwrap();
+        let base = ddworld::Terrain::empty();
+        let lo = [-100_000.0; 3]; let hi = [100_000.0; 3];
+        let mut faces = Vec::new();
+        DemoPlanningGround::new(&base, Some(&doors)).triangles_in(lo, hi, &mut faces);
+        assert!(faces.is_empty(), "an unlocked door may be planned as an interaction transition");
+        doors.collision.over(&base).triangles_in(lo, hi, &mut faces);
+        assert!(!faces.is_empty(), "the actual closed leaf still blocks movement");
+        faces.clear();
+        doors.entries.get_mut(&id).unwrap().observed.permanently_open = None;
+        DemoPlanningGround::new(&base, Some(&doors)).triangles_in(lo, hi, &mut faces);
+        assert!(!faces.is_empty(), "unknown policy cannot authorize a planned crossing");
+        faces.clear();
+        let entry = doors.entries.get_mut(&id).unwrap();
+        entry.observed.permanently_open = Some(false);
+        entry.observed.key_present = Some(false);
+        entry.policy.mode = 1;
+        DemoPlanningGround::new(&base, Some(&doors)).triangles_in(lo, hi, &mut faces);
+        assert!(!faces.is_empty(), "a locked leaf remains a planning obstacle");
+        assert!(doors.states[&id].collision);
     }
     #[test]
     fn demo_navigation_cassardis_village() {

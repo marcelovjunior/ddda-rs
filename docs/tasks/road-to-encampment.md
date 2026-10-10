@@ -54,3 +54,28 @@ Two players walk from Cassardis to the Encampment without a load break or telepo
   chunks_exact_to_as_chunks allowance). No original comparison yet.
 - Next: bounded real doorway/door-interaction route, then field walk and
   stage210 handoff; full cyclops/Rift/NPC systems are separate prerequisites.
+
+### Doorway and party residency checkpoint (2026-10-09)
+
+- The demo no longer treats SceNo1300 plus elapsed time as leaving the
+  house. Its goal crosses the far support plane of the installed doorway
+  OBB, and completion requires the actual actor outside that shape.
+  This is labelled demo navigation geometry, not an original quest rule.
+- Blocked demo movement can issue ordinary interaction at an unlocked
+  closed door. Planning treats such a door as an interaction transition;
+  real movement retains the leaf collision. Locked or unresolved doors
+  remain obstacles. No completion flags or collision bits are forged.
+- Collision/layout residency unions every actor's sourced window. Local
+  opening honors --players and reuses the second keyboard movement input;
+  LAN preparation keeps one local seat and lets peers join via Server.
+  Second-seat conversation interaction and live LAN guest stage handoff
+  remain unsupported.
+- Verified: five viewer doorway/navigation tests, four ddworld streaming
+  tests, strict ddworld clippy and release viewer build. A bounded hidden
+  run physically crossed the starting house door after ordinary interact.
+  Its later street blockage exposed another closed-door planning issue;
+  a second two-seat run found a 196-waypoint exit path, then exposed a
+  path-discard loop on door interaction. Interaction now retains that
+  path; a fresh bounded run is checking it. P2 is idle in these
+  automated runs: this is not two-player route acceptance or an
+  original-game comparison.
