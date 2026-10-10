@@ -27,7 +27,7 @@
 #else
 #import bevy_pbr::{
     mesh_functions,
-    forward_io::{Vertex, VertexOutput, FragmentOutput},
+    forward_io::{Vertex, FragmentOutput},
     mesh_view_bindings::view,
     view_transformations::position_world_to_clip,
     pbr_fragment::pbr_input_from_standard_material,
@@ -36,6 +36,34 @@
     mesh_view_types,
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
     shadows,
+}
+#import bevy_pbr::forward_io as forward_io
+
+// Keep the original's interpolated bitangent: reconstructing it per pixel
+// from normalized axes changes its length and loses mirrored-basis behavior.
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+    @location(1) world_normal: vec3<f32>,
+#ifdef VERTEX_UVS_A
+    @location(2) uv: vec2<f32>,
+#endif
+#ifdef VERTEX_UVS_B
+    @location(3) uv_b: vec2<f32>,
+#endif
+#ifdef VERTEX_TANGENTS
+    @location(4) world_tangent: vec4<f32>,
+    @location(8) world_bitangent: vec3<f32>,
+#endif
+#ifdef VERTEX_COLORS
+    @location(5) color: vec4<f32>,
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    @location(6) @interpolate(flat) instance_index: u32,
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    @location(7) @interpolate(flat) visibility_range_dither: i32,
+#endif
 }
 #endif
 
@@ -69,6 +97,8 @@ struct DdParams {
     albedo_blend: vec4<f32>,
     // rgb: fSpecularColor, w: fShininess (FLAG_CHARACTER)
     spec: vec4<f32>,
+    normal_uv0: vec4<f32>,
+    normal_uv1: vec4<f32>,
 };
 
 const FLAG_MAP: u32 = 1u;
@@ -92,6 +122,7 @@ const FLAG_ALBEDO_ADD: u32 = 1024u;
 // The character pixel shaders' specular and environment terms.
 const FLAG_CHARACTER: u32 = 2048u;
 const FLAG_ALPHA_TEST: u32 = 4096u;
+const FLAG_NORMAL_MAP: u32 = 8192u;
 
 struct SkyEnvParams {
     cb: array<vec4<f32>, 11>,
@@ -110,6 +141,8 @@ struct SkyEnvParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var env_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(110) var albedo_blend_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(111) var albedo_blend_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(112) var normal_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(113) var normal_sampler: sampler;
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
@@ -160,6 +193,18 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 #else
 #ifdef VERTEX_NORMALS
     out.world_normal = normal;
+#ifdef VERTEX_TANGENTS
+    // Translated from sc/DX9/Stage200 VS 0x1381d4. Biased-byte XYZ/W
+    // were decoded once by mtmod. Preserve the raw transformed T and B;
+    // normalize only N before interpolation, as the source does.
+    let imported_n = (world_from_local * vec4<f32>(vertex.normal, 0.0)).xyz;
+    let imported_t = (world_from_local * vec4<f32>(vertex.tangent.xyz, 0.0)).xyz;
+    out.world_tangent = vec4<f32>(imported_t, vertex.tangent.w);
+    out.world_bitangent = cross(imported_t, imported_n) * vertex.tangent.w;
+    if ((dd.flags & FLAG_NORMAL_MAP) != 0u) {
+        out.world_normal = normalize(imported_n);
+    }
+#endif
 #endif
 #endif
 #ifdef VERTEX_UVS_A
@@ -198,7 +243,49 @@ fn fragment(
     if ((dd.flags & FLAG_SHADOW_ONLY) != 0u) {
         discard;
     }
-    var pbr_input = pbr_input_from_standard_material(in, is_front);
+    var standard: forward_io::VertexOutput;
+    standard.position = in.position;
+    standard.world_position = in.world_position;
+    standard.world_normal = in.world_normal;
+#ifdef VERTEX_UVS_A
+    standard.uv = in.uv;
+#endif
+#ifdef VERTEX_UVS_B
+    standard.uv_b = in.uv_b;
+#endif
+#ifdef VERTEX_TANGENTS
+    standard.world_tangent = in.world_tangent;
+#endif
+#ifdef VERTEX_COLORS
+    standard.color = in.color;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    standard.instance_index = in.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    standard.visibility_range_dither = in.visibility_range_dither;
+#endif
+    var pbr_input = pbr_input_from_standard_material(standard, is_front);
+    let geometric_n = pbr_input.N;
+#ifdef VERTEX_TANGENTS
+#ifdef VERTEX_UVS_A
+    if ((dd.flags & FLAG_NORMAL_MAP) != 0u) {
+        let source_uv = vec4<f32>(in.uv, 0.0, 1.0);
+        let uv = vec2<f32>(dot(dd.normal_uv0, source_uv), dot(dd.normal_uv1, source_uv));
+        let rgba = textureSample(normal_texture, normal_sampler, uv);
+        // Translated from sc/DX9/Stage200 PS 0x6171f8 (also 0x318e0c,
+        // 0x5f3000): DXT5 alpha/green, midpoint 127/255, strict Z branch.
+        let xy = (rgba.ag - vec2<f32>(127.0 / 255.0)) * 2.0;
+        let zz = 1.0 - dot(xy, xy);
+        let z = select(0.01, sqrt(max(zz, 0.0)), zz > 0.0001);
+        // Retain the source's interpolated N length. Use the existing
+        // material's face convention without normalizing N before the sum.
+        let geometric = in.world_normal * select(-1.0, 1.0, dot(in.world_normal, pbr_input.N) >= 0.0);
+        pbr_input.N = normalize(in.world_tangent.xyz * xy.x
+            + in.world_bitangent * xy.y + geometric * z);
+    }
+#endif
+#endif
 
     if ((dd.flags & FLAG_MAP) != 0u) {
 #ifdef VERTEX_UVS_B
@@ -276,7 +363,7 @@ fn fragment(
             // game's view axes are *assumed* to match Bevy's (x right, y
             // up). The normal is the vertex normal (normal maps are not
             // applied).
-            let vn = normalize((view_bindings::view.view_from_world * vec4<f32>(n, 0.0)).xyz);
+            let vn = normalize((view_bindings::view.view_from_world * vec4<f32>(geometric_n, 0.0)).xyz);
             let buv = vec2<f32>(0.5 + 0.5 * vn.x, 0.5 - 0.5 * vn.y);
             let b = textureSample(albedo_blend_texture, albedo_blend_sampler, buv);
             albedo += b.rgb * b.a * dd.albedo_blend.rgb;

@@ -63,8 +63,25 @@ Installed `sc\\DX9\\Stage200` shader evidence, disassembled privately:
   DXT5. Feeding these textures straight into an RGB normal decoder would
   therefore be incorrect.
 
-No renderer change or visual match is claimed by this evidence checkpoint.
-Next: select the supported MRL bump/UV variants, preserve their tangent
-basis and sample/decode the normal map in the custom material; verify
-the WGSL pipeline and compare the requested poses. Detail-normal, skin
-edit blends, AO and shadow differences remain separate investigations.
+Implementation checkpoint: stage meshes retain decoded tangents; the
+custom forward material binds and decodes the map with the source basis.
+Selection is deliberately limited to `FBumpNormalMap`, primary normal UV
+and primary albedo UV. Normal UV uses the material's transform. Other
+variants keep their previous geometric-normal path. Character meshes now
+retain tangents, but character bump remains disabled: the original
+skinned basis is not yet traced, and the viewer's skin matrices include
+centimetre conversion that must not distort tangent lengths.
+
+Validation: decoder/channel/Z-floor and basis handedness/length regression
+tests pass, as do material-selection tests and strict mtshader/mtmrl
+Clippy. Release ddview build passed (43.17 s). A bounded private field100
+capture rendered 480 meshes / 397 instances with no WGSL pipeline errors.
+This is rendering validation, not comparison against the original. The
+recorded Cassardis street capture initially omitted the buildings because
+the existing static preview does not load nonfield stage models; codex-32
+has fixed that hook in the doors branch. No same-pose match is claimed yet.
+
+Next: apply that preview fix and compare the recorded Cassardis pose.
+Detail-normal, skinned bases, normal prepass, AO and shadow differences
+remain separate investigations. Three requested comparison pairs are
+still outstanding; this brief remains in progress.
