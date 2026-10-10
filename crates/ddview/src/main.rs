@@ -303,6 +303,12 @@ fn args() -> Args {
             _ => panic!("unknown option {k}"),
         }
     }
+    // screenshots fail silently into a missing directory: create it
+    if let Some(dir) = &a.shots {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ddview: --shots {}: {e}", dir.display());
+        }
+    }
     if a.perf_route {
         // Screenshots stall frames, so a route with shots is a visual
         // capture, not a timing benchmark (its perf numbers are invalid).
