@@ -74,6 +74,9 @@ pub struct NpcBody {
     order: Vec<usize>,
     bone_radii: Vec<f32>,
     detail_masks: Vec<Vec<u8>>,
+    /// Installed rModel bone-ID map (uModel+0x368). This is not an
+    /// animation-map index table or a collision-node map.
+    bone_map: Option<Vec<u8>>,
 }
 
 /// Native world model bounds in centimetres, used by the ordinary NPC gauge.
@@ -109,6 +112,22 @@ impl NpcBounds {
 }
 
 impl NpcBody {
+    /// Apply common damage entry to the current runtime model-joint mAttr
+    /// bytes. The caller owns these bytes for this materialized lifetime;
+    /// this method never creates a fresh all-zero snapshot on each action.
+    /// `blocking_goods` is the actual 0x0080D550 result, including linked
+    /// intel/goods observations. Unknown goods must not be treated as absent.
+    // Translated from 0x0080D500 -> 0x00B86010 (DDDA.exe 2017-12-13 Steam).
+    pub fn damage_joint_attributes(&self, attributes: &mut [u8], saved_flags: u32,
+        blocking_goods: bool) -> Result<(), String> {
+        if attributes.len() != self.body.skeleton.joints.len() {
+            return Err("damage entry needs this body's current model-joint attributes".into());
+        }
+        damage_joint_attributes(self.bone_map.as_deref()
+            .ok_or("damage entry needs the installed model bone map")?,
+            attributes, saved_flags, blocking_goods)
+    }
+
     /// Ordinary HumanEdit mode3 scenery capsule. The host supplies its
     /// actual installed shared adjustment table, not an estimated height.
     /// Missing HumanEdit leaves this adapter unsupported (`None`), preserving
@@ -156,6 +175,10 @@ impl NpcBody {
         let skeleton = mtlmt::pose::Skeleton::from_bones(
             model.bones.iter().map(|b| (b.anim_map_index, b.parent, b.local)));
         let bone_radii = model.bones.iter().map(|b| b.length).collect();
+        // uModel::vf23 0x00FFDDB0 writes loaded rModel+0x110 to body+0x368
+        // at0x00FFE00A. Keep the player's installed map; do not regenerate
+        // it from the unrelated joint+0x93 animation-map indices.
+        let bone_map = model.bone_map.map(<[u8]>::to_vec);
         // uPlayerBase::vf100 0x00B531B0 reads these masks by actor+0x5720.
         // 0x00B8D980 writes each joint's active flag. This bulk table stays
         // in the player's executable; dynamic LOD selection is not ported.
@@ -207,7 +230,7 @@ impl NpcBody {
         let order = ddlook::face_constraint::order(&parents, &pivots);
         Ok(Self { body: Body { skeleton, banks,
             collision: vec![load::collision(vfs, r"collision\npc\m0000", None)?], scale: 1.0 },
-            look, civilian, morph, order, bone_radii, detail_masks })
+            look, civilian, morph, order, bone_radii, detail_masks, bone_map })
     }
 
     /// The event-action bank12 -> bank11 fallback of 0x0080D750.
@@ -313,6 +336,62 @@ impl NpcBody {
         let scale = self.unit_scale(scale);
         ddcombat::volumes::hurt_volumes(&self.body.collision[0].body, &activations, pose,
             (scale[0] + scale[1] + scale[2]) / 3.0, owner)
+    }
+}
+
+/// Current runtime mAttr+0x90 bytes, selected by the installed bone-ID map.
+/// The native four IDs are code-embedded; the mapping and attributes are not.
+/// Invalid input validation is adapter policy, performed before any writes.
+// Translated from 0x0080D500 and 0x00B86010 (DDDA.exe 2017-12-13 Steam).
+fn damage_joint_attributes(bone_map: &[u8], attributes: &mut [u8], saved_flags: u32,
+    blocking_goods: bool) -> Result<(), String> {
+    let mut targets = [None; 4];
+    for (target, bone_id) in targets.iter_mut().zip([0x96, 0x97, 0x99, 0x9b]) {
+        let index = *bone_map.get(bone_id).ok_or("truncated installed model bone map")?;
+        if index != 0xff {
+            if usize::from(index) >= attributes.len() {
+                return Err("damage bone map points outside this body's model joints".into());
+            }
+            *target = Some(usize::from(index));
+        }
+    }
+    let clear = !blocking_goods && saved_flags & 0x200 != 0
+        && saved_flags & (0x10 | 0x6000) == 0;
+    for index in targets.into_iter().flatten() {
+        if clear { attributes[index] &= !0x40; }
+        else { attributes[index] |= 0x40; }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod damage_joint_tests {
+    use super::damage_joint_attributes;
+
+    #[test]
+    fn demo_damage_entry_changes_mapped_joint_attributes_and_preserves_other_bits() {
+        let mut map = [0xff; 256];
+        map[0x96] = 2;
+        map[0x97] = 0;
+        map[0x99] = 2; // Two native IDs may alias the same model joint.
+        let initial = [0x85, 0x27, 0x19, 0xd3];
+        let mut attributes = initial;
+        damage_joint_attributes(&map, &mut attributes, 0x200, false).unwrap();
+        assert_eq!(attributes, initial, "clearing preserves unrelated bits and unmapped joints");
+        damage_joint_attributes(&map, &mut attributes, 0x200, true).unwrap();
+        assert_eq!(attributes, [0xc5, 0x27, 0x59, 0xd3]);
+        damage_joint_attributes(&map, &mut attributes, 0x200, false).unwrap();
+        assert_eq!(attributes, initial);
+        for saved_flags in [0, 0x210, 0x2200, 0x4200, 0x6200] {
+            damage_joint_attributes(&map, &mut attributes, saved_flags, false).unwrap();
+            assert_eq!(attributes, [0xc5, 0x27, 0x59, 0xd3]);
+        }
+        map[0x9b] = 4;
+        let before = attributes;
+        assert!(damage_joint_attributes(&map, &mut attributes, 0x200, false).is_err());
+        assert_eq!(attributes, before, "a missing last joint cannot partially mutate earlier joints");
+        assert!(damage_joint_attributes(&map[..0x9b], &mut attributes, 0x200, false).is_err());
+        assert_eq!(attributes, before);
     }
 }
 

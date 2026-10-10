@@ -31,6 +31,52 @@ each exit, and the route continues to q0001 as before.
 
 ## Results
 
+**2026-10-10, codex-80: real-body scenery/joint entry source batch,
+UNRUN.** Head8627 and parent8655 authorize the real-body continuation;
+accepted main `d02c0cf` was integrated before this batch. `NpcBody` now
+retains the installed model bone-ID map. The common damage joint write
+uses current lifetime-owned attribute bytes and preserves unrelated bits:
+`0x0080D500 -> 0x00B86010` selects model joints through map IDs96/97/99/9B,
+then sets or clears mAttr40. These are **model-joint attributes**, not
+collision records. `uModel::vf23 0x00FFDDB0` copies rModel+110 to body368
+at `0x00FFE00A` and initializes joint+90 at `0x00FFE257`; subsequent
+`0x01054460` and `0x00FFD5D0` do not change that byte. Runtime updates
+such as `0x00B8D980` remain distinct and must retain their current values.
+The API accepts actual held-goods predicate observations; it cannot assume
+that a body has no held goods. Missing/truncated maps or wrong joint count
+reject before any mutation.
+
+The independent `npc_demo_reaction` module queries the existing
+`ddsim::sweep::sweep_capsule` for the actual `NpcFighter`, runtime D3/D4
+capsule, target origin and cScrAdjust settings. Command/launch/generation
+checks precede queries. Missing geometry at the initial provider check or
+any subsequent query preserves the body position. Axis type2 uses the
+actual separate sphere radius and lower capsule endpoint;
+`0x0079E58A..0x0079E6C3` widens capsule radius to f64, multiplies the
+original `0x0161C9F0` double **1.41421356**, narrows to f32, then adds the
+airborne oldY-targetY difference. Type0 disables the axis, while other
+types remain unsupported. The returned scenery observation is deliberately
+separate from vf90 ground-byte projection, preserving frame-order work
+still required. Geometry remains the shared documented exact-distance
+replacement for native MtCollision GJK/MPR.
+
+Four new regressions are authored but **not run**, pending the parent's
+shared CPU grant: `demo_damage_entry_changes_mapped_joint_attributes_and_preserves_other_bits`,
+`installed_beach_damage_entry_uses_model_bone_map_and_current_joint_attributes`,
+`demo_scenery_axis_uses_current_radius_native_double_and_airborne_target`,
+and `installed_demo_scenery_moves_current_body_only_with_available_triangle_provider`.
+The last uses an installed NPC body with an explicit triangle/pool fixture;
+it is not an original scenery observation or production-route replay.
+Only source inspection and `git diff --check` have been performed on this
+batch. No Cargo, viewer, original game or save was used.
+
+**Next:** fulfill common cPlAction/cEventAct entry and raw layer clock,
+then consume Damage requests on the exact body lifetime and coordinate
+the host frame hook. This module is not scheduled by Host yet. GotoEx
+awaits accepted S59 navigation; the production editor/ev00 patch remains
+disabled and unapplied. No whole S31 route or safe DragonFight checkpoint
+is claimed by this batch.
+
 **2026-10-10, codex-63: source checkpoint; S31 remains open.**
 
 - `OpeningWorld::enable_dragon_scene` disables the q0 camera/quest-bit
