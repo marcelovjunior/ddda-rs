@@ -827,7 +827,8 @@ fn sync_npc_models(
     images: &mut Assets<Image>,
     bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
 ) {
-    let placements: Vec<_> = session.host.story_npc_intels().cloned().collect();
+    let placements: Vec<_> = session.host.story_npc_intels()
+        .filter(|placement| !session.host.story_npc_body_retired(placement.npc as u32)).cloned().collect();
     let wanted: HashMap<_, _> = placements.iter().filter_map(|p|
         session.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
     let retired: Vec<_> = session.npcs.keys().copied().filter(|id|
