@@ -124,6 +124,8 @@ struct Demo {
     /// Damage dealt to NPC combat bodies, by (victim, attacker) owner:
     /// (hits, valued total). Diagnostic for the rescue log.
     npc_damage: std::collections::BTreeMap<(u32, u32), (u32, f32)>,
+    /// Started from a route checkpoint (S46): no Gate entry cell recorded.
+    resumed: bool,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -444,6 +446,7 @@ pub fn prepare(
             planning: None,
             last_heal: f32::NEG_INFINITY,
             npc_damage: Default::default(),
+            resumed: false,
         }),
         shots,
         shot_queue: vec![],
@@ -1177,6 +1180,9 @@ fn resume_checkpoint(
         };
         d.path.clear();
         d.planning = None;
+    }
+    if let Some(d) = s.demo.as_mut() {
+        d.resumed = true;
     }
     info!("opening: resumed checkpoint {} at stage {stage} (SceNo {})", path.display(), s.world().sce_no);
     Ok(())
@@ -2571,7 +2577,8 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 quests.contains(&2)
             );
             let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
-                w.stage_no == 100 && s.demo.as_ref().and_then(|d| d.field_cell).is_some_and(|cell| cell != benchmark_cell(p))
+                w.stage_no == 100 && s.demo.as_ref().is_some_and(|d| d.resumed
+                    || d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)))
             } else { w.sce_no == 1400
                 && w.gsf.get(372)
                 && w.gsf.get(381)
