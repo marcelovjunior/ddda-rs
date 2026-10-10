@@ -78,6 +78,8 @@ without an "after" can run in parallel, one agent each.
 | S34 | Reynard as a combat body (HP, goblins target him, his gauge) | S32 (viewer part) |
 | S35 | the real vocation menu at the weapon table (uGUIJobChange) | - |
 | S36 | pawn commands Go!/Wait!/Help!/Come! | - |
+| S37 | experience from kills, level-ups in the fight, level-up notice | - |
+| S38 | the item menu (pause menu: Items) | S28 |
 
 Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19, S23, S25, S28, S29. S18 (cyclops) is ON HOLD.
 
