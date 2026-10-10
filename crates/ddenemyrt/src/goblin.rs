@@ -360,6 +360,12 @@ pub mod action {
     pub const WAIT: i32 = 0;
     pub const WAIT_ATCK: i32 = 1;
     pub const WAIT_ATCK_END: i32 = 2;
+    /// cEm0100ActRunTrace (vtable 0x015A4C8C), the approach beyond 20 m.
+    pub const RUN_TRACE: i32 = 9;
+    /// cEm0100ActRunEnd (vtable 0x015A4CD4).
+    pub const RUN_END: i32 = 10;
+    /// cEm0100ActRunStumble (vtable 0x015A4D1C).
+    pub const RUN_STUMBLE: i32 = 11;
     pub const DASH_TRACE: i32 = 13;
     pub const DASH_TRACE_1: i32 = 14;
     pub const N_ATTACK1: i32 = 101;
@@ -392,6 +398,11 @@ pub fn first_motion(action: i32) -> Option<u16> {
         action::WAIT_ATCK => 0x000,
         action::WAIT_ATCK_END => 0x013,
         action::DASH_TRACE | action::DASH_TRACE_1 => 0x02c,
+        // vf05 0x008D62C0 / 0x008D64B0 / 0x008D65E0 (0x323 / 0x325 for a
+        // record variant the goblin's records 9/10 don't set)
+        action::RUN_TRACE => 0x023,
+        action::RUN_END => 0x025,
+        action::RUN_STUMBLE => 0x027,
         // turns: Turn90 0x39 + (v & 1), 0x35 + (v & 1) with variant bit 1;
         // Turn180 the same from 0x3b / 0x37
         18 => 0x39,
@@ -448,6 +459,10 @@ pub const COMBAT_FLAGS: u32 = 1 << 2 | 1 << 3 | 1 << 8 | 1 << 20;
 /// The turn rate of DashTrace: unit +0x6008, 120 degrees per second
 /// (uEm0100 constructor 0x008CD5B0).
 pub const DASH_TURN_DEG_PER_S: f32 = 120.0;
+
+/// The turn rate of RunTrace: unit +0x6004, 90 degrees per second (ctor
+/// 0x008CD5B0 from 0x01516F38).
+pub const RUN_TURN_DEG_PER_S: f32 = 90.0;
 /// NAttack1/2/12 track their target at 0.0523599 rad (3 degrees) per frame
 /// (0x008DC820 via 0x00964550).
 pub const ATTACK_TRACK_RAD: f32 = 0.052_359_9;
@@ -703,6 +718,24 @@ impl Goblin {
                     self.yaw = turn_toward(self.yaw, g, DASH_TURN_DEG_PER_S * DEG * step / 30.0);
                 }
             }
+            action::RUN_TRACE => {
+                // 0x008D6340: the start motion, then the loop 0x24 (done
+                // from then on); turns toward the goal at unit +0x6004
+                if self.motion == motion_id(0x023) && self.motion_ended {
+                    self.play(data, 0x024, 0.0);
+                    self.done = true;
+                }
+                if let Some(g) = goal {
+                    self.yaw = turn_toward(self.yaw, g, RUN_TURN_DEG_PER_S * DEG * step / 30.0);
+                }
+            }
+            // RunEnd / RunStumble keep the base vf06 0x0091FB60: done at
+            // the motion's end
+            action::RUN_END | action::RUN_STUMBLE => {
+                if self.motion_ended {
+                    self.done = true;
+                }
+            }
             18..=21 | 26..=29 => {
                 // 0x008D6FA0: 90 (or 180) degrees over the motion's frames
                 let angle = if matches!(self.action, 19 | 21 | 27 | 29) {
@@ -817,6 +850,8 @@ mod tests {
         assert_eq!(first_motion(action::N_ATTACK1), Some(0x101));
         assert_eq!(first_motion(action::N_ATTACK2), Some(0x102));
         assert_eq!(first_motion(action::DASH_TRACE), Some(0x02c));
+        assert_eq!(first_motion(action::RUN_TRACE), Some(0x023));
+        assert_eq!(first_motion(action::RUN_STUMBLE), Some(0x027));
         assert_eq!(first_motion(28), Some(0x36));
         assert_eq!(first_motion(action::DIE_FRONT), Some(0x239));
         assert_eq!(first_motion(500), None);

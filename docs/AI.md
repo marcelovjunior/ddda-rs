@@ -465,6 +465,8 @@ the common damage and death actions).
 |---|---|---|---|---|
 | 0 | Wait 0x008D4A10 / 0x008D4B90 | 0x0A (random start 0..179 on the first entry), idle variants 0x0F / 0x0B / 0x0C | no | every frame |
 | 1 | WaitAtck 0x008D4DD0 / 0x008D5000 | 0 and 1..4 in two phases | no | every frame |
+| 9 | RunTrace 0x008D62C0 / 0x008D6340 | 0x23, then loop 0x24 | root travel; turns to its goal at 90 deg/s (+0x6004, ctor 0x008CD5B0 from 0x01516F38) | once looping |
+| 10 / 11 | RunEnd 0x008D64B0 / RunStumble 0x008D65E0, base vf06 0x0091FB60 | 0x25 / 0x27 | root travel | motion end |
 | 13 | DashTrace 0x008D6920 / 0x008D69B0 | 0x2C, then loop 0x2D | root travel; turns to its goal at 120 deg/s (+0x6008, ctor 0x008CD5B0) | once looping |
 | 26-29 | Turn90 / Turn180 0x008D6E90 / 0x008D7190, vf06 0x008D6FA0 | 0x35..0x38 (0x39..0x3C outside combat mode) | 90 or 180 degrees over the motion | motion end |
 | 101 | NAttack1 0x008DD200 / 0x008DC820 | 0x101 | root travel; tracks 3 deg/frame to frame 42 | motion end |
