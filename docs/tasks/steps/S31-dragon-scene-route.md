@@ -125,3 +125,24 @@ unsupported camera adapters remain explicitly labelled stand-ins.
 **Next:** source/port the beach Demo callbacks using native actor
 observations and real motion clocks, then enter ev00 after editor
 confirmation instead of fast-forwarding through the fight.
+
+**Guard integration regression (head5837):** commit `dae5292` selected the
+new Demo adapter from the process container alone. Installed
+`ai\fsm\npc\st200\quest\q0002_n001_ai` uses `SetInterfaceDemo` for
+`cAIActionInterfaceDemoSetPos`, which the existing NPC adapter already
+handles before inherited NPC Guard dialogue. The new adapter rejected that
+placement interface and quarantined the graph; body readiness was not the
+cause. Selection now reads the authored interface payload, preserving
+DemoSetPos and inherited NPC callbacks on the existing adapter while beach
+Demo commands still use the dedicated owner. Native dispatch
+`0x00533A90 -> 0x0056C940` uses the interface object's type. Unsupported
+interfaces remain explicit errors; there is no runtime fallback.
+
+The fix is isolated on `step/s31-demo-regression` from committed main
+`861c94e`. Full `cargo test -p ddhost` on the prescribed shared core target
+actually exited0: 9 unit and 84 integration tests passed across all29
+integration binaries (compile20.16s, no failures). Both reported failures
+now pass: Guard dialogue/quest boot and applied NPC observation/restoration.
+Existing beach body-readiness, Reynard, unsupported-error, NPC combat,
+motion, opening and co-op regressions also passed. This is installed-data
+host acceptance, not an original-game comparison or full playable S31 route.
