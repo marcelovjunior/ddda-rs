@@ -194,6 +194,10 @@ impl JudgmentState for Judge<'_> {
 pub struct Economy {
     pub wallets: BTreeMap<PlayerId, Wallet>,
     pub inventory: Inventory,
+    /// Explicit opening boundary, absent for imported/legacy economy saves.
+    /// Loading never reconstructs a bag from quest flags.
+    pub opening_phase: Option<new_game::Phase>,
+    pub opening_grants: new_game::Grants,
     pub buyback: BuyBack,
     pub stock: StockBook,
     pub gates: Gates,
