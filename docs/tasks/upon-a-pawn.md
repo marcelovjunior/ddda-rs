@@ -605,3 +605,21 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   Finish. The host regression checks selected-bit clear/set, unrelated-bit
   retention and retirement. Touched-crate clippy passes with the previously
   documented install.rs lint allowance. No new viewer run yet.
+
+### Guard candidate cleanup and unit readiness (codex-31)
+
+- Added matching-owner candidate removal from0x0043de30, called by
+  Guard dispatch0x00bb0470 when the actor loses eligibility. It cannot clear
+  another seat's candidate or an active dialogue, and never emits TalkEnd.
+- Guard's0x0049ace0 unit readiness consumes cUnit+4: low status bits must
+  equal2 and bits0x4800 must both be present. This differs from generic
+  cUnit::vf02 at0x00403830, which accepts low bits1 or2. The new helper
+  preserves unknown status as unavailable; it does not infer readiness from
+  NPC intel flags or a rendered mesh.
+- Further constructor trace: uNpc ctor (instruction0x00bab3b1) sets motion
+  mode+0x57e4 to3 and intel link+0x5854 to null pending setup. Do not default
+  its motion mode to0. Clarified that bb4f90 false chooses Guard's manual
+  candidate path when permitted; true chooses automatic launch. False is
+  not universal ineligibility, although actual talk exit does require true.
+- Seven Guard release tests and ddnpcrt clippy pass. Body initialization,
+  eligibility observations and active action cleanup still need integration.
