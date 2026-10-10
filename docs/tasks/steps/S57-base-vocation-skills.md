@@ -176,8 +176,9 @@ gate remains UNRUN. Production item equipment callers remain OPEN. Additional UN
 - `shield_summons_requires_equipped_secondary_and_emits_entry_once`
 - `installed_shield_summons_queues_pass_c_provoke_with_strict_sphere_and_no_damage`
 
-Read-only installed motion metadata confirms Summons `0x92f` has no
-group-2 collision activation runs; Scarlet Kisses' cost edge is in intro
+Read-only installed motion metadata confirms Summons `0x92f` activates
+only body hurt sequences 1/2 in collision group 0 (the earlier group-2
+observation was not proof about attack activation); Scarlet Kisses' cost edge is in intro
 `0x71e`, with repeat strikes `0x71f/0x726/0x727` lacking additional cost
 edges. Blink's `0x729` has an authored loop frame, which its distance-driven
 port must preserve rather than holding the final pose. The private motion
@@ -203,6 +204,54 @@ received the correction and exact DDSIM/Fight/host hookup scope in head
 #8524; unclaimed shared files remain untouched. **Next action:** port the
 individually traced action and effect paths and run the
 coordinated full package gates before the final batched GPU checks.
+
+**Blink source port and raw contact observer, UNRUN:** action
+`0x00b3dbd0/0x00b3de40` plays dash `0x729`, preserving its installed
+nonzero loop frame and real root displacement, then native end `0x72a`.
+Distance counts actual post-collision 3D travel; a wall does not supply
+a hit acknowledgement or end the dash by elapsed time. Initial target
+turn uses the existing common attack angle rate, then installed Sword
+adjust 0 in degrees converted to radians (`0x00b3de40`, `0x00797470`).
+The installed Sword adjust 1 supplies the distance endpoint. Target
+selection itself remains the existing host placeholder; status-slow
+rotator branches remain unported.
+
+The attacker vf60 acknowledgement is **separate from damage HitEvent**:
+`0x0076bca9` calls it after deduplicated pair selection, before persistent
+history `0x0076bd27`, invincibility `0x0076bd76` and victim vf59/vf66.
+An authored `Group.mIsCheck` gate is copied by `0x0076fab0` and
+`0x00773ee0`. The observer therefore retains guarded, repeated and
+zero-damage contacts without changing their damage outcome. Native
+`0x00b7cf69..0x00b7d01d` builds the contact bits from attack kind,
+target character/enemy class, target vf117 and faction helper
+`0x008571d0`. Ordinary Goblin vf117 is sourced from `0x004c7590` and
+the existing actor marker; faction/status/Intel facts remain explicit
+`None`, so no unsourced bits 0x40/0x80 are inferred. Blink's independent
+enemy/vf117-false mask 0x18 is supported. Other actor facts, optional LOS
+`0x00779270` and ignore-zone `0x00779b10` providers remain unsupported.
+Fight captures authored checking keys from the actual pass-C body,
+queues per-lifetime acknowledgements and consumes them before Sim::step.
+The head-approved host.rs bridge (#8794) is exactly that call after
+step33 hits; the standalone viewer call has been sent to head as a patch.
+Seat replacement discards pending contacts and old checking entries.
+Additional regression sources, all **uncompiled/unrun**:
+
+- `blink_uses_authored_loop_root_distance_and_finishes_with_real_end_motion`
+- `blink_turns_at_source_rates_and_native_contact_selects_end_without_cancel`
+- `installed_blink_uses_native_dash_loop_and_distance_for_each_owner`
+- `native_contact_flags_use_actor_callback_facts_and_keep_unknown_faction_explicit`
+- `checking_contact_precedes_invincibility_history_and_victim_damage_guard`
+- `installed_blink_goblin_contact_ends_dash_but_world_wall_does_not_acknowledge`
+
+The new S57 Rust manifest now contains 18 names, all UNRUN. Bounded
+read-only Capstone source tracing completed with actual exit 0; no
+original-process calls, Cargo, GPU or additional native emulation were
+run for this batch. rustfmt parsed the new sources, but broad
+`rustfmt --check` on compact-style combat.rs/fight.rs returned 1 for
+format differences (including baseline lines); that is neither a Rust
+gate pass nor a typecheck. git diff --check passed. Anodyne, Threefold,
+automatic equipment callers, full runtime gates and original behavior
+comparison remain open; this checkpoint does not mark S57 Ready.
 ## Head scope note (2026-10-10, #8501/#8504)
 
 Starters traced by codex-81 (0x006749A0/0x00674A60): Fighter 40 + 272,

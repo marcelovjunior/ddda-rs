@@ -200,6 +200,10 @@ pub struct Fight {
     /// B81600 queues at action entry; 887360 delivers in pass C.
     /// (enemy owner, source seat, source generation, amount, decay flag).
     provoke_messages: Vec<(u32, u8, u64, u32, u32)>,
+    /// Authored checking entries emitted by the previous pass C, by lifetime.
+    contact_checks: BTreeMap<u8, (u64, Vec<u32>)>,
+    /// Step33 vf60 acknowledgements consumed before the next player update.
+    skill_contacts: BTreeMap<u8, (u64, ddsim::skills::Contact)>,
     next_arisen_generation: u64,
     pub skill_errors: BTreeMap<u8, String>,
     /// The Arisen each shell owner id was fired by (kept after the shell).
@@ -246,6 +250,8 @@ impl Fight {
             bow_errors: BTreeMap::new(),
             spells: Default::default(),
             provoke_messages: Vec::new(),
+            contact_checks: BTreeMap::new(),
+            skill_contacts: BTreeMap::new(),
             next_arisen_generation: 0,
             skill_errors: BTreeMap::new(),
             shooters: BTreeMap::new(),
@@ -331,6 +337,8 @@ impl Fight {
         self.next_arisen_generation = self.next_arisen_generation.checked_add(1)
             .expect("Arisen actor lifetime counter exhausted");
         self.provoke_messages.retain(|(_, source, _, _, _)| *source != seat);
+        self.contact_checks.remove(&seat);
+        self.skill_contacts.remove(&seat);
         self.skill_errors.remove(&seat);
         for goblin in &mut self.goblins { goblin.distance_hate.retire(u32::from(seat)); }
         let a = self.kit(kit);
@@ -565,8 +573,41 @@ impl Fight {
         self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
-        self.events = crate::combat::hit_pass_with_npc_guards(
-            &mut fighters, &self.data.tables, dt, &mut roll, &|_| true, &guards, &owners, trace);
+        let mut raw_contacts = Vec::new();
+        let checks = &self.contact_checks;
+        let arisen = &self.arisen;
+        let goblins = &self.goblins;
+        let checking = |attack: &ddcombat::volumes::AttackVolume| {
+            u8::try_from(attack.side.owner).ok().and_then(|seat| checks.get(&seat))
+                .is_some_and(|(generation, keys)| arisen.get(&(attack.side.owner as u8))
+                    .is_some_and(|a| a.generation == *generation) && keys.contains(&attack.key))
+        };
+        let actor = |owner| goblins.iter().find(|g| g.fighter.owner == owner)
+            .map(|g| crate::combat::ContactActor {
+                character: true, enemy: true, vf117: g.driver.map.vf117,
+                // 8571D0's Intel/status faction provider is not yet represented
+                // for these bodies. Mask18 is independently known; do not
+                // fabricate faction40/80 from collision kind or owner number.
+                faction: None,
+            });
+        self.events = crate::combat::hit_pass_with_npc_guards_and_contacts(
+            &mut fighters, &self.data.tables, dt, &mut roll, &|_| true, &guards, &owners, trace,
+            Some(crate::combat::ContactObserver {
+                is_check: &checking, actor: &actor, output: &mut raw_contacts,
+            }));
+        self.skill_contacts.clear();
+        for contact in raw_contacts {
+            let Ok(seat) = u8::try_from(contact.attacker) else { continue };
+            let Some(a) = self.arisen.get(&seat) else { continue };
+            if contact.target.is_none() {
+                self.skill_errors.insert(seat, "unsupported skill contact actor facts".into());
+                continue;
+            }
+            let pending = self.skill_contacts.entry(seat)
+                .or_insert((a.generation, ddsim::skills::Contact::default()));
+            pending.1.valid = true;
+            pending.1.flags |= contact.known_flags();
+        }
         self.roll_seed = seed;
         let mut it = fighters.into_iter();
         for a in self.arisen.values_mut() {
@@ -619,6 +660,21 @@ impl Fight {
             }
         }
         &self.events
+    }
+
+    /// Consume step33 acknowledgements BEFORE Sim::step, once per engine
+    /// frame. Native vf93 clears +3CB0/+3CB4 after that player's update
+    /// (0x00B64516/24); a replaced actor cannot inherit the old callback.
+    pub fn apply_skill_contacts(&mut self, sim: &mut ddsim::Sim) {
+        for (&seat, a) in &self.arisen {
+            if let Some(p) = sim.player_mut(seat) {
+                p.skills.contact = ddsim::skills::Contact::default();
+                if let Some((generation, contact)) = self.skill_contacts.remove(&seat) {
+                    if generation == a.generation { p.skills.contact = contact; }
+                }
+            }
+        }
+        self.skill_contacts.clear();
     }
 
     /// After the players moved (line 10): each Arisen's weapon is put in
@@ -975,6 +1031,13 @@ impl Fight {
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
             (a.fighter.attacks, a.fighter.hurts) = body.volumes(&acts, &pose, u32::from(seat));
+            let keys = a.fighter.attacks.iter().filter(|attack| {
+                body.collision.iter().any(|set| set.body.seq_index.iter().any(|seq| {
+                    set.body.groups.get(seq.group_no as usize).is_some_and(|group|
+                        group.is_check && ((seq.no << 8 | group.no) << 16) == attack.key)
+                }))
+            }).map(|attack| attack.key).collect();
+            self.contact_checks.insert(seat, (a.generation, keys));
             // Fatal replacement owns the action slot. Never let a previous
             // skill/weapon activation continue emitting attacks at zero HP.
             if a.fighter.victim.dead() || p.incapacitated() {

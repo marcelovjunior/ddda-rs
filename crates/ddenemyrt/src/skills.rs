@@ -26,6 +26,7 @@ impl SkillData {
         let motion = match self.definition.kind {
             Kind::Spell { release, .. } => release,
             Kind::Sword { motion } => motion,
+            Kind::Blink { end, .. } => end,
             Kind::ShieldProvoke { motion, .. } => motion,
             Kind::DaggerSeries { strikes, .. } => strikes[0],
         };
@@ -102,8 +103,14 @@ impl SkillSet {
             "rAdjustParam",
         )?)
         .ok_or("bad shield adjustment table")?;
+        let sword_adjust = ddcombat::damage::Adjust::parse(&load::read(
+            vfs,
+            r"param\pl\other\m_pl000_Sword",
+            "rAdjustParam",
+        )?)
+        .ok_or("bad sword adjustment table")?;
         let mut out = HashMap::new();
-        for id in [41u32, 43, 152, 210, 212, 272] {
+        for id in [40u32, 41, 43, 152, 210, 212, 272] {
             let (category, first, base) = if id < 100 {
                 (1, 40, sword)
             } else if id < 210 {
@@ -134,7 +141,39 @@ impl SkillSet {
             let (kind, cost, spell) = if id < 100 {
                 // cPlActWpnSwordCstmIchidoriKiri::vf06 B3E290 and
                 // cPlActWpnSwordCstmKiriAge::vf06 B3E9A0, base level.
-                let motion = if id == 41 { 0x73a } else { 0x740 };
+                let kind = if id == 40 {
+                    // Translated from B3DBD0/B3DE40, Steam 2017-12-13.
+                    // Sword adjust0 is angular rate (7975D0), not velocity.
+                    let maximum_distance = *sword_adjust.0.get(1).ok_or("no Blink distance")?;
+                    let turn_rate = *sword_adjust.0.get(0).ok_or("no Blink turn rate")?;
+                    let motion = bank
+                        .list
+                        .motions
+                        .get(0x29)
+                        .and_then(Option::as_ref)
+                        .ok_or("no Blink dash motion")?;
+                    let loop_frame = motion.loop_frame as f32;
+                    if !maximum_distance.is_finite()
+                        || maximum_distance < 0.0
+                        || !turn_rate.is_finite()
+                        || turn_rate < 0.0
+                        || loop_frame < 0.0
+                        || loop_frame >= motion.frame_count.saturating_sub(1) as f32
+                    {
+                        return Err("unsupported Blink movement parameters".into());
+                    }
+                    Kind::Blink {
+                        dash: 0x729,
+                        end: 0x72a,
+                        loop_frame,
+                        maximum_distance,
+                        turn_rate: turn_rate.to_radians(),
+                    }
+                } else {
+                    Kind::Sword {
+                        motion: if id == 41 { 0x73a } else { 0x740 },
+                    }
+                };
                 let row = &stamina.entries[(id - first) as usize];
                 if row.frame > 1.0 {
                     return Err("sustained sword cost not supported".into());
@@ -142,11 +181,7 @@ impl SkillSet {
                 // B60F70/B79500, no Proficiency equipped; resolve the
                 // *unequipped* value from the resource (not assumed zero).
                 let proficiency = ability.entries[62].float_1;
-                (
-                    Kind::Sword { motion },
-                    row.stamina * (100. - proficiency) * 0.01,
-                    None,
-                )
+                (kind, row.stamina * (100. - proficiency) * 0.01, None)
             } else if id == 152 {
                 // Translated from 0x00B23F10 (DDDA.exe 2017-12-13 Steam).
                 // Base level: adjust 0xC playback rate, 0xA repeat limit.

@@ -161,3 +161,125 @@ fn shield_summons_requires_equipped_secondary_and_emits_entry_once() {
     assert!(sim.player(0).unwrap().skills.released.is_empty());
     assert!(sim.player(1).unwrap().skills.entered.is_empty());
 }
+
+fn blink() -> Sim {
+    let mut sim = series();
+    let root = RootMotion::from_motion(&mtlmt::Motion {
+        frame_count: 11,
+        loop_frame: 4,
+        end_position: [0.0, 0.0, 100.0, 0.0],
+        end_rotation: [0.0; 4],
+        flags: 0,
+        tracks: vec![mtlmt::Track {
+            codec: 3,
+            usage: mtlmt::Usage::AbsolutePosition,
+            bone_type: 0,
+            joint: 255,
+            weight: 1.0,
+            reference: [0.0; 4],
+            keys: vec![
+                mtlmt::Key {
+                    frame: 0,
+                    value: [0.0; 4],
+                },
+                mtlmt::Key {
+                    frame: 10,
+                    value: [0.0, 0.0, 100.0, 0.0],
+                },
+            ],
+        }],
+    });
+    sim.skill_definitions.insert(
+        40,
+        Definition {
+            weapon: Weapon::Sword,
+            kind: Kind::Blink {
+                dash: 0x729,
+                end: 0x72a,
+                loop_frame: 4.0,
+                maximum_distance: 160.0,
+                turn_rate: 0.05,
+            },
+            cost: 0.0,
+            motions: [(0x729, root), (0x72a, RootMotion::none(6))]
+                .into_iter()
+                .collect(),
+        },
+    );
+    let p = sim.player_mut(0).unwrap();
+    p.weapon = Weapon::Sword;
+    p.skills.equipped[0] = Some(40);
+    sim
+}
+
+#[test]
+fn blink_uses_authored_loop_root_distance_and_finishes_with_real_end_motion() {
+    let mut sim = blink();
+    sim.request_skill(0, 0);
+    frame(&mut sim);
+    let mut looped = false;
+    let mut previous = 0.0;
+    for _ in 0..100 {
+        frame(&mut sim);
+        let p = sim.player(0).unwrap();
+        let active = p.skills.active.unwrap();
+        if active.phase == Phase::End {
+            assert_eq!(active.motion, 0x72a);
+            assert_eq!(active.distance, 160.0);
+            assert_eq!(p.position[2], 160.0);
+            break;
+        }
+        assert_eq!(active.motion, 0x729);
+        if p.frame < previous {
+            assert!(p.frame >= 4.0);
+            looped = true;
+        }
+        previous = p.frame;
+    }
+    assert!(looped, "dash must keep moving across its authored loop");
+    assert_eq!(sim.player(0).unwrap().skills.active.unwrap().phase, Phase::End);
+    for _ in 0..30 {
+        frame(&mut sim);
+    }
+    assert!(sim.player(0).unwrap().skills.active.is_none());
+    assert_eq!(sim.player(1).unwrap().position, [1000.0, 0.0, 0.0]);
+}
+
+#[test]
+fn blink_turns_at_source_rates_and_native_contact_selects_end_without_cancel() {
+    use ddsim::skills::Contact;
+    assert!(!Contact {
+        valid: false,
+        flags: 0x80
+    }
+    .ends_blink());
+    assert!(!Contact {
+        valid: true,
+        flags: 0x10
+    }
+    .ends_blink());
+    assert!(Contact {
+        valid: true,
+        flags: 0x18
+    }
+    .ends_blink());
+    let mut sim = blink();
+    sim.attack_param.turn_deg = 30.0;
+    sim.player_mut(0).unwrap().attack_heading = Some(0.1);
+    sim.request_skill(0, 0);
+    frame(&mut sim);
+    assert_eq!(sim.player(0).unwrap().yaw, 0.0); // Never snap to target.
+    frame(&mut sim);
+    assert_eq!(sim.player(0).unwrap().yaw, 0.1);
+    sim.player_mut(0).unwrap().attack_heading = Some(1.0);
+    frame(&mut sim);
+    assert!((sim.player(0).unwrap().yaw - 0.1125).abs() < 0.00001);
+    sim.player_mut(0).unwrap().skills.contact = Contact {
+        valid: true,
+        flags: 0x80,
+    };
+    frame(&mut sim);
+    let active = sim.player(0).unwrap().skills.active.unwrap();
+    assert_eq!((active.phase, active.motion), (Phase::End, 0x72a));
+    assert!(!sim.player(0).unwrap().skills.entered.contains(&40));
+}

@@ -515,6 +515,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(f) = self.fight.as_mut() {
             f.hits(step);
             kills = f.kill_awards();
+            // Step33 attacker vf60 acknowledges contact before line10 actions.
+            f.apply_skill_contacts(&mut self.sim);
         }
         self.start_npc_deaths()?;
         self.start_arisen_deaths();

@@ -2540,7 +2540,17 @@ impl Sim {
         } else if let Some(m) = p.skills.active.and_then(|a| self.skill_definitions.get(&a.id)?.motions.get(&a.motion))
             .or_else(|| lookup(&self.motions, &self.weapon_motions, weapon, state.motion_id())) {
             p.speed = 0.0;
-            let d = if looping {
+            let blink_loop = p.skills.active.and_then(|active| {
+                if active.phase != skills::Phase::Strike { return None; }
+                match self.skill_definitions.get(&active.id)?.kind {
+                    skills::Kind::Blink { loop_frame, .. } => Some(loop_frame),
+                    _ => None,
+                }
+            });
+            let advanced = blink_loop.map(|loop_frame|
+                skills::loop_delta(m, p.frame, motion_dt, loop_frame));
+            let d = if let Some((delta, _)) = advanced { delta }
+            else if looping {
                 m.delta(p.frame, motion_dt)
             } else {
                 m.delta_once(p.frame, motion_dt)
@@ -2548,7 +2558,8 @@ impl Sim {
             let (s, c) = p.yaw.sin_cos();
             target[0] += d[0] * c + d[2] * s;
             target[2] += -d[0] * s + d[2] * c;
-            p.frame = if looping {
+            p.frame = if let Some((_, frame)) = advanced { frame }
+            else if looping {
                 (p.frame + motion_dt).rem_euclid(m.period())
             } else {
                 p.frame + motion_dt

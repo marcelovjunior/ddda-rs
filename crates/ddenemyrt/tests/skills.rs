@@ -1,6 +1,143 @@
 use ddenemyrt::{arisen::ArisenData, skills::SkillSet};
 
 #[test]
+fn native_contact_flags_use_actor_callback_facts_and_keep_unknown_faction_explicit() {
+    use ddenemyrt::combat::{AcceptedContact, ContactActor};
+    let mut contact = AcceptedContact {
+        attacker: 0,
+        victim: 100,
+        key: 0,
+        region: 0,
+        attack_kind: 0,
+        target: Some(ContactActor {
+            character: true,
+            enemy: true,
+            vf117: false,
+            faction: None,
+        }),
+        attacker_faction: None,
+    };
+    assert_eq!(contact.known_flags(), 0x19);
+    contact.target.as_mut().unwrap().vf117 = true;
+    assert_eq!(contact.known_flags(), 0x29);
+    contact.target.as_mut().unwrap().enemy = false;
+    contact.target.as_mut().unwrap().vf117 = false;
+    contact.target.as_mut().unwrap().faction = Some(true);
+    contact.attacker_faction = Some(false);
+    assert_eq!(contact.known_flags(), 0xd1);
+    contact.target.as_mut().unwrap().character = false;
+    assert_eq!(contact.known_flags(), 1);
+}
+
+#[test]
+fn checking_contact_precedes_invincibility_history_and_victim_damage_guard() {
+    use ddcombat::damage::{AttackRow, EnemyAttacker, PlayerAttacker, RegionPool};
+    use ddcombat::volumes::{AttackVolume, HurtVolume, Side, Volume};
+    use ddenemyrt::combat::{Attacker, ContactActor, ContactObserver, Fighter, Tables, Victim};
+    use ddenemyrt::npc_combat::{
+        ordinary_collision_rates, ordinary_defender, DamageOwnerClass, GaugeHitGuard,
+    };
+    // Synthetic volumes isolate callback ordering; installed Blink below
+    // independently uses the actual authored groups and posed skeletons.
+    let attacker = Fighter {
+        owner: 100,
+        attacker: Attacker::Enemy(EnemyAttacker::new(0.0, 0.0)),
+        victim: Victim::Player {
+            defender: ordinary_defender(),
+            hp: 100.0,
+            hp_max: 100.0,
+        },
+        attacks: vec![AttackVolume {
+            side: Side { owner: 100, kind: 1 },
+            volume: Volume::Sphere { c: [0.0; 3], r: 1.0 },
+            row: AttackRow {
+                blow_type: 3,
+                ..Default::default()
+            },
+            flags: Default::default(),
+            reset_time: 0.0,
+            key: 1 << 16,
+            relation: 2,
+        }],
+        hurts: vec![],
+        history: Default::default(),
+        statuses: Default::default(),
+        dots: Default::default(),
+        pools: Default::default(),
+    };
+    let victim = Fighter {
+        owner: 500,
+        attacker: Attacker::Player(PlayerAttacker::new(0.0, 0.0, 0.0, 0.0)),
+        victim: Victim::Npc {
+            defender: ordinary_defender(),
+            region: RegionPool::from_element(0, 100.0, 100.0, 0.3, 100.0, 0.3, 1.0, 1.0, 1, 0, 75.0, 30.0),
+            rates: ordinary_collision_rates(0),
+        },
+        attacks: vec![],
+        hurts: vec![HurtVolume {
+            side: Side { owner: 500, kind: 3 },
+            volume: Volume::Sphere { c: [0.0; 3], r: 1.0 },
+            region_id: 0,
+            hit_prio: 0,
+        }],
+        history: Default::default(),
+        statuses: Default::default(),
+        dots: Default::default(),
+        pools: Default::default(),
+    };
+    let actor = |_| {
+        Some(ContactActor {
+            character: true,
+            enemy: false,
+            vf117: false,
+            faction: None,
+        })
+    };
+    let guards = [(
+        500,
+        GaugeHitGuard {
+            gauge_enabled: true,
+            ..Default::default()
+        },
+    )];
+    let owners = [(100, DamageOwnerClass::Enemy, false)];
+    let mut fighters = vec![attacker, victim];
+    for pass in 0..4 {
+        if pass == 2 {
+            let Victim::Npc { rates, .. } = &mut fighters[1].victim else {
+                unreachable!()
+            };
+            rates.flags |= 4; // Native collision Invincible gate, after vf60.
+        }
+        let mut observed = Vec::new();
+        let events = ddenemyrt::combat::hit_pass_with_npc_guards_and_contacts(
+            &mut fighters,
+            &Tables::default(),
+            0.25,
+            &mut || 0.0,
+            &|_| true,
+            &guards,
+            &owners,
+            None,
+            Some(ContactObserver {
+                is_check: &|_| pass != 3,
+                actor: &actor,
+                output: &mut observed,
+            }),
+        );
+        assert!(events.is_empty()); // Gauge rejects zero damage; then history/Invincible.
+        assert_eq!(observed.len(), usize::from(pass != 3));
+        assert_eq!(fighters[1].victim.hp(), 100.0);
+        if let Some(contact) = observed.first() {
+            assert_eq!(
+                (contact.attacker, contact.victim, contact.key),
+                (100, 500, 1 << 16)
+            );
+        }
+    }
+}
+
+#[test]
 fn installed_skill_banks_and_shells() {
     let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
     if !native.exists() {
@@ -13,7 +150,7 @@ fn installed_skill_banks_and_shells() {
     let strider = ArisenData::strider(&vfs).unwrap();
     let skills = SkillSet::load(&vfs, &file.image().unwrap(), &sword, &mage, &strider).unwrap();
 
-    assert_eq!(skills.0.len(), 6);
+    assert_eq!(skills.0.len(), 7);
     for id in [41, 43, 210, 212] {
         let mut sim = ddsim::Sim::new(Default::default());
         sim.add_player(0, [0.; 3], 0.);
@@ -297,5 +434,179 @@ fn installed_shield_summons_queues_pass_c_provoke_with_strict_sphere_and_no_dama
         assert_ne!(fight.arisen[&owner].generation, generation);
         fight.volumes(&sim);
         assert_eq!(fight.goblins[0].distance_hate.score(u32::from(owner)), 0.0);
+    }
+}
+
+#[test]
+fn installed_blink_uses_native_dash_loop_and_distance_for_each_owner() {
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    assert!(
+        native.exists(),
+        "installed gate requires the player's installation"
+    );
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let file = ddexe::ExeFile::next_to(native).unwrap();
+    let sword = ArisenData::fighter(&vfs).unwrap();
+    let mage = ArisenData::mage(&vfs).unwrap();
+    let strider = ArisenData::strider(&vfs).unwrap();
+    let skills = SkillSet::load(&vfs, &file.image().unwrap(), &sword, &mage, &strider).unwrap();
+    let skill = &skills.0[&40];
+    let ddsim::skills::Kind::Blink {
+        loop_frame,
+        maximum_distance,
+        ..
+    } = skill.definition.kind
+    else {
+        panic!("missing Blink definition")
+    };
+    assert_eq!(
+        loop_frame,
+        skill.body.banks[7].as_ref().unwrap().list.motions[0x29]
+            .as_ref()
+            .unwrap()
+            .loop_frame as f32
+    );
+    for owner in [0, 1] {
+        let mut sim = ddsim::Sim::new(Default::default());
+        for seat in [0, 1] {
+            sim.add_player(seat, [seat as f32 * 10000.0, 0.0, 0.0], 0.0);
+            let p = sim.player_mut(seat).unwrap();
+            p.weapon = ddsim::Weapon::Sword;
+            p.skills.equipped[0] = Some(40);
+        }
+        skills.install(&mut sim);
+        let origin = sim.player(owner).unwrap().position;
+        let initial_stamina = sim.player(owner).unwrap().stamina;
+        sim.request_skill(owner, 0);
+        let mut phases = Vec::new();
+        let mut travelled = 0.0;
+        let mut last_position = origin;
+        let mut debits = 0;
+        let mut stamina = initial_stamina;
+        for tick in 0..4000 {
+            sim.step(1.0 / 120.0, &Default::default(), &Flat);
+            let p = sim.player(owner).unwrap();
+            if stamina - p.stamina > skill.definition.cost * 0.5 {
+                debits += 1;
+            }
+            stamina = p.stamina;
+            if let Some(active) = p.skills.active {
+                if phases.last() != Some(&active.motion) {
+                    phases.push(active.motion);
+                }
+                if active.phase == ddsim::skills::Phase::Strike {
+                    travelled += (0..3)
+                        .map(|i| (p.position[i] - last_position[i]).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    assert!((active.distance - travelled).abs() < 0.01);
+                } else {
+                    assert!(travelled >= maximum_distance);
+                    assert_eq!(active.distance, maximum_distance);
+                }
+            } else if tick > 0 {
+                break;
+            }
+            last_position = p.position;
+        }
+        assert_eq!(phases, [0x729, 0x72a]);
+        assert_eq!(debits, 1);
+        assert!(sim.player(owner).unwrap().skills.active.is_none());
+        assert_eq!(sim.player(1 - owner).unwrap().stamina, initial_stamina);
+        assert_eq!(
+            sim.player(1 - owner).unwrap().position,
+            [(1 - owner) as f32 * 10000.0, 0.0, 0.0]
+        );
+    }
+}
+
+#[test]
+fn installed_blink_goblin_contact_ends_dash_but_world_wall_does_not_acknowledge() {
+    use ddenemyrt::fight::{Fight, FightData};
+    use ddsim::skills::Phase;
+    struct Wall;
+    impl ddsim::Ground for Wall {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
+            Some(0.0)
+        }
+        fn wall(&self, _: [f32; 3], _: f32, _: f32, _: f32) -> Option<[f32; 2]> {
+            Some([0.0, -1.0])
+        }
+    }
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    assert!(
+        native.exists(),
+        "installed gate requires the player's installation"
+    );
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let file = ddexe::ExeFile::next_to(native).unwrap();
+    let data = std::sync::Arc::new(FightData::load(&vfs, &file.image().unwrap()).unwrap());
+    for owner in [0, 1] {
+        let mut fight = Fight::new(data.clone());
+        let mut sim = ddsim::Sim::new(Default::default());
+        for seat in [0, 1] {
+            sim.add_player(seat, [seat as f32 * 10000.0, 0.0, 0.0], 0.0);
+            fight.add_arisen(seat);
+            fight.equip(&mut sim, seat);
+        }
+        let origin = sim.player(owner).unwrap().position;
+        fight.add_goblin([origin[0], 0.0, 100.0], std::f32::consts::PI);
+        sim.player_mut(owner).unwrap().skills.equipped[0] = Some(40);
+        sim.request_skill(owner, 0);
+        let mut acknowledged = false;
+        for _ in 0..1000 {
+            fight.hits(0.25);
+            fight.apply_skill_contacts(&mut sim);
+            if sim.player(owner).unwrap().skills.contact.ends_blink() {
+                let active = sim.player(owner).unwrap().skills.active.unwrap();
+                assert_eq!(active.phase, Phase::Strike);
+                let ddsim::skills::Kind::Blink { maximum_distance, .. } = data.skills.0[&40].definition.kind
+                else {
+                    unreachable!()
+                };
+                assert!(
+                    active.distance < maximum_distance,
+                    "contact proof reached distance endpoint first"
+                );
+                sim.step(1.0 / 120.0, &Default::default(), &Flat);
+                let active = sim.player(owner).unwrap().skills.active.unwrap();
+                assert_eq!((active.phase, active.motion), (Phase::End, 0x72a));
+                acknowledged = true;
+                break;
+            }
+            sim.step(1.0 / 120.0, &Default::default(), &Flat);
+            fight.players_moved(&mut sim, &Flat, 0.25);
+            fight.volumes(&sim);
+        }
+        assert!(
+            acknowledged,
+            "installed checking attack never acknowledged goblin contact"
+        );
+        assert!(!sim.player(1 - owner).unwrap().skills.contact.valid);
+
+        // Source retirement between callback and consumption drops the old
+        // lifetime's ack. It cannot finish a replacement profile's skill.
+        fight.hits(0.25); // Raw checking ack repeats even with hit history held.
+        fight.add_arisen(owner);
+        fight.apply_skill_contacts(&mut sim);
+        assert!(!sim.player(owner).unwrap().skills.contact.valid);
+
+        let mut fight = Fight::new(data.clone());
+        let mut sim = ddsim::Sim::new(Default::default());
+        sim.add_player(owner, [0.0; 3], 0.0);
+        fight.add_arisen(owner);
+        fight.equip(&mut sim, owner);
+        sim.player_mut(owner).unwrap().skills.equipped[0] = Some(40);
+        sim.request_skill(owner, 0);
+        for _ in 0..500 {
+            fight.hits(0.25);
+            fight.apply_skill_contacts(&mut sim);
+            assert!(!sim.player(owner).unwrap().skills.contact.valid);
+            sim.step(1.0 / 120.0, &Default::default(), &Wall);
+            fight.players_moved(&mut sim, &Wall, 0.25);
+            fight.volumes(&sim);
+        }
+        let active = sim.player(owner).unwrap().skills.active.unwrap();
+        assert_eq!((active.phase, active.motion), (Phase::Strike, 0x729));
     }
 }
