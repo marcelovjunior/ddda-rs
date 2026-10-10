@@ -978,3 +978,29 @@ unlike the unconditional word read in life4 birth. The meaningful new
 `generator_restart_gate_shares_birth_counter_and_keeps_path_independent`
 regression interleaves birth and restart and rejects a stale clock seed.
 It remains **uncompiled/unrun**, along with the new installed-table test.
+
+### Wrap-up handoff (head8885, 2026-10-10)
+
+Stopping new work under the coordinator's quota wrap-up. The tested birth
+and travel checkpoints above are accepted on main `1ed3477`; no further
+research or Cargo/GPU gate was started after that instruction. Current
+owned source `a1d4428fc7876948bea1618dd3040a772c5fd064` adds the runtime
+static RNG-table reader and shared birth/restart counter bridge. Both new
+regressions remain **uncompiled/unrun**; they are not part of the196-pass
+gate. Prepared source stays on `step/s30-dragon-land-fire` for later review.
+
+Exact next action: review this unrun source, then run complete `mteffect`
+and `ddenemyrt` suites with both new names required, canonical install/exe,
+jobs2, the existing core target and the normal CPU lease. After actual
+acceptance, connect the verified sampling/travel phases to native effect,
+generator and particle owners before any world query or ordinary damage.
+Global/manager RNG state, creation/update order and production fire remain
+open; do not replace their ownership with a fresh per-emitter RNG.
+
+Private evidence/prepared files are under `E:/ddda-re/notes/steps/S29`:
+`effect-rng-table-storage.private.json`,
+`life4-travel-native-first.proof.private.json`,
+`full-generator-path-cad92bf.private.log` and its proof JSON,
+and `validate-generator-path.private.ps1`. The last helper accepted the
+earlier nine-name travel gate; extend it for both new names before using it
+again. Source and raw game material remain private and are not redistributed.
