@@ -140,3 +140,59 @@ Next: translate the NPC304 Invincible callback and remaining encounter
 prerequisites, then extend the authored q0002 route through its rescue/exit.
 Replace the explicit body-eligibility assumption with original actor status
 and talk-motion observations before claiming general Guard fidelity.
+
+### NPC304 continuation (head message 3883)
+
+- Current implementation `1deb4cc`, after task-only integration of main
+  `cb300d8`. `Set Invincible` translates `0x007aa040`: Bool toggles
+  mask0x10000000 in the validated body's vf180 word, or intel+0x5c0 when
+  no linked body exists. The existing canonical ActorFlag path now accepts
+  this process and preserves all unrelated bits; no immunity/damage
+  consumer is claimed for an NPC combat body that does not yet exist.
+- The next immediate callback was `SetGaugeDisp`. Registration
+  `0x005342c0` binds **state** callback `0x00534bc0`, with no entry callback.
+  It writes intel+0x547; linked-body helpers `0x00bb8c10` / `0x00bb8ca0`
+  update the same byte and create/remove `uGUINpcGauge`. The headless port
+  emits a typed Gauge request on state polling and stores its desired
+  boolean per canonical intel lifetime. Constructor `0x00bbbfa0` clears
+  that byte; unload clears the matching port owner. Actual NPC gauge
+  allocation/drawing and HP/death facts remain separate, unimplemented
+  consumers. Merely accepting this callback does not draw a health bar.
+- Installed Reynard regression uses actual stage100 NPC304 group4 record0
+  with authored `q0002_n304`. The graph remains active in its trembling
+  state, sets Invincible/NoDamage/FixPos, and requests its gauge. Explicit
+  **test fixture** observations of q0002 bits25/20 then execute authored
+  protection clear and gauge-off transitions. Unrelated bits survive; the
+  nonloop motion remains pending without an actor completion. No production
+  quest bit, HP, enemy death, motion end or Goto arrival is manufactured.
+- Full required checks on this integrated source: **57 host + 28 NPC tests
+  passed**, none ignored; both installed Guard/Reynard tests pass. Viewer
+  **61 passed, 2 existing ignored**, 12.65s (29.73s compile); release build
+  passed in **41.90s** with the same two existing warnings. Private binary
+  `E:/ddda-re/notes/steps/s23/ddview-npc304-1deb4cc.exe`.
+- Final two-player ordinary replay used the same 600-second watchdog,
+  private logs `npc304-route-600s.err.txt` / `.out.txt`, PID32560. It reached
+  stage100, admitted NPC304, and emitted **no Invincible/SetGaugeDisp
+  quarantine**. It then stopped at a new **application failure**, not a
+  completed benchmark: `NPC materialization: NPC MultiNpc materialization
+  not implemented` at02:53:23.748 UTC. Immediately before this, streaming
+  unexpectedly added origin-near cells49/50 to the arrival cells63..65.
+  That streaming/admission cause is unresolved; no MultiNpc placement was
+  silently skipped to finish the benchmark. Logged interval233.16s.
+- The OS process reported exit0 despite the failure. `main.rs` calls
+  `app.run()` and discards its returned AppExit (line659); the log therefore
+  matters to acceptance. The prior complete route remains specifically
+  evidence for the earlier `bfedf90` binary. The integrated `1deb4cc`
+  replay passed the Guard/gate/NPC304 callback boundary but did not reach
+  field-cell walk/settle or rescue completion. No original game access.
+- Next source leads, not implemented here: `Set No Talk` callback
+  `0x007aa670` toggles vf180/intel mask0x00800000; `0x00bb4060` rejects that
+  bit during talk promotion. NPC motion requests currently retain only an
+  interface class name, losing authored motion3226 parameters; the actual
+  interface `0x00576e10` and parameter copy `0x00576ef0` are the starting
+  points for a body-motion adapter and genuine motion-end observations.
+
+Next: head approved [S32](S32-npc-authored-motions.md) in board3999 for
+Reynard's authored motion pipeline. Separately investigate the unexpected
+origin-cell streaming and actual MultiNpc admission, and propagate AppExit
+to the process exit code so failed unattended routes cannot appear green.
