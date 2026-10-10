@@ -367,8 +367,8 @@ impl Painter<'_, '_, '_, '_> {
             None => 0,
         };
         let regions = gui.texture_regions()?;
-        for object in gui.animation_objects(animation.name)? {
-            if !object.visible_at(frame) {
+        for (ordinal, object) in gui.animation_objects(animation.name)?.into_iter().enumerate() {
+            if !first_choice_object_visible(index, ordinal) || !object.visible_at(frame) {
                 continue;
             }
             let vector = |name: &str| {
@@ -612,8 +612,34 @@ fn text_lines(text: &str) -> String {
     text.replace("\r\r\n", "\n").replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// This presenter implements the opening's first vocation choice. Native
+/// vf05 hides cost controls by instance ordinal, independently of authored
+/// visibility keys. These are not object IDs or a replacement menu title.
+// Translated from 0x006722CC..0x00672363 (DDDA.exe 2017-12-13 Steam).
+fn first_choice_object_visible(node: usize, ordinal: usize) -> bool {
+    node != 1 || !matches!(ordinal, 2 | 3 | 6 | 4)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_first_choice_hides_cost_instances_and_keeps_description() {
+        let root = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !root.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(root).unwrap();
+        let bytes = vfs.read(LAYOUT, mtarc::type_hash("rGUI")).unwrap();
+        let gui = mtgui::Gui::parse(&bytes).unwrap();
+        let animation = gui.local_animation(1).unwrap();
+        let objects = gui.animation_objects(animation.name).unwrap();
+        let hidden: Vec<_> = objects.iter().enumerate()
+            .filter(|(ordinal, _)| !first_choice_object_visible(1, *ordinal))
+            .map(|(_, object)| object.id).collect();
+        // Installed IDs differ from the vf05 instance ordinals. The cost
+        // background (7) disappears; description (6) must remain visible.
+        assert_eq!(hidden, [4, 5, 15, 7]);
+        assert!(first_choice_object_visible(1, objects.iter().position(|o| o.id == 6).unwrap()));
+        assert!((0..objects.len()).all(|ordinal| first_choice_object_visible(2, ordinal)));
+    }
     use super::*;
     #[test]
     fn authored_line_endings_do_not_insert_extra_description_rows() {
