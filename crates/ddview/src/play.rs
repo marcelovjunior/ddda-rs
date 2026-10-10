@@ -447,7 +447,21 @@ pub fn demo_attack(sim: &Sim, fight: Option<&Fight>, seat: PlayerId, cam_yaw: f3
     };
     let heading = (g[0] - p.position[0]).atan2(g[2] - p.position[2]);
     let mut i = Input { camera_yaw: heading, ..Default::default() };
-    if d > 220.0 {
+    // A careful player doesn't swing through a bystander: with a live NPC
+    // body (e.g. Reynard) within 3 m and inside 60 degrees of the swing,
+    // step sideways instead (friendly fire is real outside Japan, S34).
+    let bystander = fight.is_some_and(|f| {
+        f.npcs.values().any(|n| {
+            let (dx, dz) = (n.position[0] - p.position[0], n.position[2] - p.position[2]);
+            let mut a = dx.atan2(dz) - heading;
+            a = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            !n.fighter.victim.dead() && dx.hypot(dz) < 300.0 && a.abs() < 60f32.to_radians()
+        })
+    });
+    if bystander && d <= 400.0 {
+        i.stick = [1.0, 0.0];
+        *press = false;
+    } else if d > 220.0 {
         i.stick = [0.0, 1.0];
         *press = false;
     } else {
