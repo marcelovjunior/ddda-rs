@@ -23,6 +23,7 @@ pub mod particle;
 pub mod player_action;
 pub mod species;
 pub mod unit;
+pub mod x86;
 
 /// An `fld dword` / `fstp dword` pair: the value is kept, except that a
 /// signalling NaN becomes quiet (the x87 load raises the masked invalid

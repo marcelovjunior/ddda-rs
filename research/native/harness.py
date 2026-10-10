@@ -117,3 +117,147 @@ def disasm(address, length=0x200, stop_at_ret=True):
         if stop_at_ret and i.mnemonic.startswith("ret"):
             break
     return "\n".join(out)
+
+
+# --- sparse runs: any function, automatic inputs --------------------------
+from unicorn import UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_XMM0, UC_X86_REG_FPSW  # noqa: E402
+
+GPR = [("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX), ("ebx", UC_X86_REG_EBX),
+       ("esp", UC_X86_REG_ESP), ("ebp", UC_X86_REG_EBP), ("esi", UC_X86_REG_ESI), ("edi", UC_X86_REG_EDI)]
+FLOAT_LOADS = {"movss", "comiss", "ucomiss", "addss", "subss", "mulss", "divss", "minss", "maxss", "sqrtss",
+               "fld", "cvtss2sd", "cvttss2si", "cvtss2si"}
+
+
+class Rejected(Exception):
+    """The case is not a valid vector (NaN float input, runaway loop, ...)."""
+
+
+def run_sparse(address, seed, max_insn=20000):
+    """Run `address` with every general register random (ESP points into a
+    random stack page holding the return address), every untouched page
+    mapped on first access and filled with seeded random bytes. Returns
+    {"regs_in", "pages_in", "regs_out", "pages_out", "xmm0_out", "st0_out"};
+    pages are {page_address: hex}. Raises Rejected for unusable cases."""
+    import random
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    rnd = random.Random(seed)
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    base, secs = image()
+    pages_in = {}
+
+    def fill(page):
+        """Image pages hold the exe; any other page seeded random bytes."""
+        for va, b in secs:
+            if va & ~0xFFF <= page < va + len(b):
+                lo = max(page, va)
+                hi = min(page + 0x1000, va + len(b))
+                buf = bytearray(0x1000)
+                buf[lo - page:hi - page] = b[lo - va:hi - va]
+                return bytes(buf)
+        prnd = random.Random((seed << 32) ^ page)
+        return prnd.randbytes(0x1000)
+
+    def on_unmapped(uc_, access, addr, size, value, _):
+        page = addr & ~0xFFF
+        for p in {page, (addr + size - 1) & ~0xFFF}:
+            try:
+                uc_.mem_map(p, 0x1000)
+            except UcError:
+                pass
+            if p not in pages_in:
+                content = fill(p)
+                uc_.mem_write(p, content)
+                pages_in[p] = content
+        return True
+
+    reads, written = {}, set()
+
+    def note(uc_, access, addr, size, value, _):
+        for p in {addr & ~0xFFF, (addr + size - 1) & ~0xFFF}:
+            if p not in pages_in:
+                pages_in[p] = bytes(uc_.mem_read(p, 0x1000))
+        if access == 16:  # UC_MEM_READ: record bytes read before any write
+            cur = bytes(uc_.mem_read(addr, size))
+            for k in range(size):
+                if addr + k not in written and addr + k not in reads:
+                    reads[addr + k] = cur[k]
+        else:
+            written.update(range(addr, addr + size))
+
+    decoded = {}
+
+    def check_float(uc_, access, addr, size, value, _):
+        eip = uc_.reg_read(UC_X86_REG_EIP)
+        if eip not in decoded:
+            decoded[eip] = next(md.disasm(bytes(uc_.mem_read(eip, 15)), eip)).mnemonic
+        if decoded[eip] in FLOAT_LOADS and size in (4, 8):
+            raw = bytes(uc_.mem_read(addr, size))
+            bits = int.from_bytes(raw, "little")
+            nan = ((bits >> 23) & 0xFF) == 0xFF if size == 4 else ((bits >> 52) & 0x7FF) == 0x7FF
+            if nan:
+                bad.append("NaN/Inf float input")
+                uc_.emu_stop()
+
+    count, bad = [0], []
+
+    def on_code(uc_, addr, size, _):
+        count[0] += 1
+        if count[0] > max_insn:
+            bad.append("runaway")
+            uc_.emu_stop()
+
+    uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
+    uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
+    uc.hook_add(UC_HOOK_MEM_READ, check_float)
+    uc.hook_add(UC_HOOK_CODE, on_code)
+    uc.mem_map(RET & ~0xFFF, 0x1000)
+    regs_in = {}
+    for name, r in GPR:
+        v = rnd.getrandbits(32)
+        if name == "esp":
+            v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
+        regs_in[name] = v
+        uc.reg_write(r, v)
+    # the return address at [esp]; the rest of the stack page is random
+    on_unmapped(uc, None, regs_in["esp"], 4, 0, None)
+    stack_page = regs_in["esp"] & ~0xFFF
+    page = bytearray(pages_in[stack_page])
+    struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
+    pages_in[stack_page] = bytes(page)
+    uc.mem_write(stack_page, bytes(page))
+    try:
+        uc.emu_start(address, RET)
+    except UcError as e:
+        bad.append(str(e))
+    if bad:
+        raise Rejected("; ".join(bad))
+    regs_out = {name: uc.reg_read(r) for name, r in GPR}
+    xmm0 = uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFF
+    # x87 values left on the stack: depth from TOP; read st0 as a single
+    # with an `fstp dword [cap]` run from the return page
+    top = (uc.reg_read(UC_X86_REG_FPSW) >> 11) & 7
+    depth = (8 - top) % 8
+    st0 = None
+    if depth:
+        cap, tramp = 0x0DEAE000, 0x0DEAF000
+        uc.mem_map(cap, 0x1000)
+        uc.mem_map(tramp, 0x1000)  # a fresh page: Unicorn caches code it has already translated
+        uc.mem_write(tramp, bytes([0xD9, 0x1D]) + struct.pack("<I", cap) + bytes([0x90]))
+        uc.emu_start(tramp, tramp + 6)
+        st0 = struct.unpack("<I", bytes(uc.mem_read(cap, 4)))[0]
+        written.difference_update(range(cap, cap + 4))
+    # the return address read by `ret` is part of the inputs
+    def runs(d):
+        out, cur = [], None
+        for a in sorted(d):
+            if cur and a == cur[0] + len(cur[1]):
+                cur[1].append(d[a])
+            else:
+                cur = [a, [d[a]]]
+                out.append(cur)
+        return [[a, bytes(b).hex()] for a, b in out]
+    final = {a: uc.mem_read(a, 1)[0] for a in written}
+    return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
+            "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth}

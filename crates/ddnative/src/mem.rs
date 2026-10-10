@@ -6,6 +6,9 @@
 pub trait Mem {
     fn u8(&self, addr: u32) -> u8;
     fn set_u8(&mut self, addr: u32, v: u8);
+    fn u16(&self, addr: u32) -> u16 {
+        u16::from_le_bytes([0, 1].map(|i| self.u8(addr.wrapping_add(i))))
+    }
     fn u32(&self, addr: u32) -> u32 {
         u32::from_le_bytes([0, 1, 2, 3].map(|i| self.u8(addr.wrapping_add(i))))
     }
@@ -34,5 +37,25 @@ impl Mem for Image {
     fn set_u8(&mut self, addr: u32, v: u8) {
         let i = (addr - self.base) as usize;
         self.bytes[i] = v;
+    }
+}
+
+/// A Mem holding only the bytes a vector recorded: reading any other byte
+/// panics (the port read something the original did not).
+#[derive(Default)]
+pub struct Sparse {
+    pub bytes: std::collections::HashMap<u32, u8>,
+    pub written: std::collections::BTreeMap<u32, u8>,
+}
+
+impl Mem for Sparse {
+    fn u8(&self, addr: u32) -> u8 {
+        if let Some(v) = self.written.get(&addr) {
+            return *v;
+        }
+        *self.bytes.get(&addr).unwrap_or_else(|| panic!("read of {addr:#010x}, which the original did not read"))
+    }
+    fn set_u8(&mut self, addr: u32, v: u8) {
+        self.written.insert(addr, v);
     }
 }
