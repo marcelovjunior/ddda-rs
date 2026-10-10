@@ -108,6 +108,7 @@ pub struct FrameReport {
     /// The NPCs' requests to the actor layer (ddnpcrt schedules).
     pub npc_requests: Vec<ddnpcrt::schedule::Request>,
     pub pawn_order_requests: Vec<crate::pawn_orders::Delivery>,
+    pub pawn_messages: Vec<crate::pawn_chatter::Message>,
 }
 
 pub struct Host<D: Data, W: StoryWorld> {
@@ -156,6 +157,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub(crate) rift_visitors: BTreeSet<PlayerId>,
     edges: Edges,
     pub(crate) pawn_orders: crate::pawn_orders::Orders,
+    pub pawn_chatter: crate::pawn_chatter::Runtime,
     /// The interact press made last frame, for this frame's scenarios.
     scenario_press: Option<PlayerId>,
     /// The story's stage is not loaded yet: ask the world to load it.
@@ -202,6 +204,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             rift_visitors: BTreeSet::new(),
             edges: Edges::default(),
             pawn_orders: Default::default(),
+            pawn_chatter: Default::default(),
             scenario_press: None,
             boot: true,
             request_log: StateHasher::default(),
@@ -337,6 +340,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Unseats an Arisen: its body leaves the world and its locks go.
     pub fn leave(&mut self, id: PlayerId) {
         if let Some(seat) = self.roster.leave(id) {
+            self.pawn_chatter.forget_profile(seat.profile);
             self.detach_profile(seat.profile, id);
             self.sim.players.retain(|p| p.id != id);
             self.edges.forget(id);
@@ -482,6 +486,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // virtual pad, so its mailbox affects the next move frame.
         let cooling = self.advance_pawn_order_cooldowns(step);
         let pawn_order_requests = self.dispatch_pawn_orders(inputs, &cooling);
+        let pawn_messages = self.step_pawn_chatter(step, &requests, &[], &[]);
         self.ambient
             .step(step, &self.sim.players, self.ground.as_ref());
         // Same line, phase 90 of each character: at most one level-up
@@ -533,7 +538,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests })
+        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests, pawn_messages })
     }
 
     /// A hash of the whole simulated state, for replays.
@@ -567,6 +572,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
         h.debug(&self.pawn_orders);
+        self.pawn_chatter.hash_into(&mut h);
         self.hash_parked_fighters(&mut h);
         if let Some(f) = &self.fight {
             h.debug(&f.digest());
@@ -808,6 +814,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.restore_npc_quest_controls(loaded_npc_controls);
         self.refresh_party();
         self.rebuild_profile_fighters();
+        // All fallible chunk parsing must succeed before transient speech is
+        // retired. Failed loads preserve its queue and monotonic identity.
+        self.pawn_chatter.clear_pending();
         Ok(())
     }
 }

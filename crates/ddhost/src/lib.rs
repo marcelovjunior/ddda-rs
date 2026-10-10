@@ -33,6 +33,7 @@ pub mod quest_camera;
 pub mod player;
 pub mod profiles;
 pub mod pawn_orders;
+pub mod pawn_chatter;
 pub mod prologue;
 pub mod save;
 pub mod spawns;
