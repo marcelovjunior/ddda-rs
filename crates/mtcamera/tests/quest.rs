@@ -17,7 +17,8 @@ fn native_sequence_channels_and_strict_exhaustion() {
     assert!(!a.sample(3.01).1);
     assert_eq!(a.sample(3.01).0.eye[0],12.0);
     let a=animation(&[(0.0,0.0,1),(3.0,12.0,0)]);
-    assert_eq!(a.sample(0.75).0.eye[0],1.875); // zero tangents: smoothstep
+    // Native equal-tangent shortcut is linear, including two zero tangents.
+    assert_eq!(a.sample(0.75).0.eye[0],3.0);
     let a=animation(&[(0.0,4.0,2),(3.0,12.0,0)]);
     assert_eq!(a.sample(1.5).0.eye[0],4.0); // type2 holds preceding value
     let a=animation(&[(0.0,0.0,0),(1.0,4.0,0),(3.0,8.0,0)]);

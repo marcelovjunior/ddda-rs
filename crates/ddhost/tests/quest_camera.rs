@@ -39,7 +39,15 @@ fn q2_event1_waits_for_installed_camera_exhaustion_before_q5() {
         world.handle(100,&requests);
         assert!(world.cameras.as_ref().unwrap().error.is_none());
         if started && !ended {assert!(!story.world.quest_bit(2,5),"premature q5 at frame{frame}");}
-        if story.world.quest_bit(2,5) {assert!(started&&ended&&camera_end);return;}
+        if story.world.quest_bit(2,5) {
+            assert!(started&&ended);
+            // CameraEnd placement is a simple-event operation. The start
+            // record for12 is non-simple, so its end order clears the slot
+            // and preserves the party positions without emitting placement.
+            assert!(!camera_end);
+            assert_eq!(story.tasks[0].owner.camera.state,0);
+            return;
+        }
     }
     panic!("installed event1 failed: started{started} ended{ended}, {:?}",story.tasks.iter().map(|s|s.current_names()).collect::<Vec<_>>());
 }

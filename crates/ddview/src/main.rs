@@ -649,7 +649,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, opening::cutscene, quest_camera::show,
+        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, hud::update).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));

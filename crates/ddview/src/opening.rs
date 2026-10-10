@@ -934,6 +934,9 @@ pub fn setup(
     // Whole-stage data is now loaded; actor observations replace scripted
     // actor completion from this point onward.
     s.host.world.enable_live_encounters();
+    if let Err(error) = crate::quest_camera::install(&mut s.host.world, vfs, STAGE) {
+        s.failure = Some(format!("stage event camera load: {error}"));
+    }
     if let Err(error) = s.sync_npc_intels() { s.failure = Some(error); }
     // NPCs with their looks, idle until their schedule moves them.
     let list = mtlmt::parse(&vfs.read(play::MOTIONS, crate::character::RMOTIONLIST).ok()?).ok()?;
@@ -1469,6 +1472,10 @@ pub fn step(
                 break;
             }
         };
+        if let Some(error) = s.host.world.cameras.as_ref().and_then(|c|c.error.as_ref()) {
+            s.failure = Some(format!("authored camera request: {error}"));
+            break;
+        }
         s.npc_requests(&report.npc_requests);
         s.quick_items.rewards(&report.requests);
         for r in &report.requests {
@@ -1485,6 +1492,7 @@ pub fn step(
                         let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
                             &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
                             *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, *stage)?;
                         s.host.doors = None;
                         st.door_collision = Default::default();
                         st.terrain = terrain.clone();

@@ -14,6 +14,8 @@ pub struct View {
     end: Option<Blend>,
     return_frames: f32,
     projection: Option<Projection>,
+    capture_queued: bool,
+    q5: bool,
 }
 
 pub fn install(world: &mut ddhost::opening::OpeningWorld, vfs:&ddvfs::Vfs, stage:u32)->Result<(),String> {
@@ -21,6 +23,7 @@ pub fn install(world: &mut ddhost::opening::OpeningWorld, vfs:&ddvfs::Vfs, stage
 }
 
 pub fn show(
+    mut commands:Commands,
     time:Res<Time>,
     pause:Res<crate::pause::PauseState>,
     state:Option<Res<PlayState>>,
@@ -28,6 +31,7 @@ pub fn show(
     mut camera:Query<(&mut Transform,&mut Projection),With<FollowCam>>,
     bodies:Query<&Transform,Without<FollowCam>>,
     mut view:Local<View>,
+    mut exit:MessageWriter<bevy::app::AppExit>,
 ) {
     let (Some(state),Some(opening))=(state,opening) else{return};
     let guard=opening.0.lock().unwrap();
@@ -58,6 +62,14 @@ pub fn show(
         }
         view.last=Some(pose);view.end=Some(active.camera.end.clone());
         apply(pose,state.origin,&mut transform,&mut projection);
+        if active.stage==100 && active.camera_id==12 && active.seconds>=active.camera.duration()*0.5 && !view.capture_queued {
+            if let Some(path)=std::env::var_os("DDVIEW_EVENT_CAMERA_CAPTURE") {
+                commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+                    .observe(bevy::render::view::screenshot::save_to_disk(std::path::PathBuf::from(path)));
+                view.capture_queued=true;
+                info!("opening authored camera12: midpoint screenshot requested from real playback");
+            }
+        }
     } else if view.generation.take().is_some() || view.end.is_some() {
         if !pause.paused {view.return_frames+=time.delta_secs()*ddsim::MOTION_FPS;}
         if let Some(saved)=&view.projection { *projection=saved.clone(); }
@@ -71,6 +83,17 @@ pub fn show(
             view.end=None;view.entry=None;view.last=None;view.projection=None;
             info!("opening authored camera: return transition complete");
         }
+    }
+    let q5=guard.host.story.as_ref().is_some_and(|s|s.world.quest_bit(2,5));
+    if q5 && !view.q5 {
+        info!("opening authored camera12: story observed q2:5 after resource exhaustion");
+    }
+    view.q5=q5;
+    // Optional bounded evidence run: stop only after actual camera capture,
+    // authored q5 and the return blend. No story/combat fact is injected.
+    if q5 && view.capture_queued && view.end.is_none() && cameras.active.is_none()
+        && std::env::var_os("DDVIEW_EVENT_CAMERA_CAPTURE").is_some() {
+        exit.write(bevy::app::AppExit::Success);
     }
 }
 
