@@ -16,6 +16,7 @@
 //!    rArmorTable / rArmorModel of `h_parts`).
 
 pub mod face;
+pub mod face_constraint;
 pub mod body;
 pub mod eyebrow;
 #[rustfmt::skip]
