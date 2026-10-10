@@ -155,6 +155,9 @@ pub struct Fight {
     /// By seat.
     pub arisen: BTreeMap<u8, ArisenFighter>,
     pub goblins: Vec<Goblin>,
+    /// Ordinary NPCs keyed by their distinct combat owner, never by seat.
+    pub npcs: BTreeMap<u32, crate::npc_body::NpcFighter>,
+    pub npc_errors: BTreeMap<u32, String>,
     pub dragon: Option<crate::dragon::OpeningDragon>,
     next_enemy: u32,
     /// The hits of the last [`Fight::hits`].
@@ -202,6 +205,8 @@ impl Fight {
             data,
             arisen: BTreeMap::new(),
             goblins: Vec::new(),
+            npcs: BTreeMap::new(),
+            npc_errors: BTreeMap::new(),
             dragon: None,
             next_enemy: ENEMY_OWNER_BASE,
             events: Vec::new(),
@@ -223,6 +228,23 @@ impl Fight {
     /// The data of a kit.
     pub fn kit(&self, kit: Kit) -> &ArisenData {
         self.data.kit(kit)
+    }
+
+    /// Registers an already-loaded ordinary NPC and returns its combat owner.
+    /// Host lifetime replacement/unloading must call `unbind_npc`; retirement
+    /// is not a death and does not create a kill award.
+    pub fn bind_npc(&mut self, npc: u32, generation: u64, body: Arc<crate::npc_body::NpcBody>,
+        region: ddcombat::damage::RegionPool, motion: MotionId) -> u32 {
+        let owner = self.allocate_enemy_owner();
+        self.npcs.insert(owner, crate::npc_body::NpcFighter::new(npc, generation, owner, body, region, motion));
+        owner
+    }
+
+    pub fn unbind_npc(&mut self, owner: u32) {
+        self.npcs.remove(&owner);
+        self.npc_errors.remove(&owner);
+        self.positions.remove(&owner);
+        for goblin in &mut self.goblins { goblin.distance_hate.retire(owner); }
     }
 
     /// Applies the simulation's queued landing damage directly to one living
@@ -423,7 +445,8 @@ impl Fight {
             .arisen
             .values_mut()
             .map(|a| &mut a.fighter)
-            .chain(self.goblins.iter_mut().map(|g| &mut g.fighter));
+            .chain(self.goblins.iter_mut().map(|g| &mut g.fighter))
+            .chain(self.npcs.values_mut().map(|n| &mut n.fighter));
         for v in victims {
             v.history
                 .entries
@@ -437,6 +460,7 @@ impl Fight {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         fighters.extend(self.dragon.iter().map(|d|d.actor.fighter.clone()));
+        fighters.extend(self.npcs.values().map(|n| n.fighter.clone()));
         let shell_fighters = self.shell_fighters();
         fighters.extend(shell_fighters);
         fighters.extend(self.arrow_fighters());
@@ -464,6 +488,9 @@ impl Fight {
         }
         if let Some(dragon) = &mut self.dragon {
             dragon.actor.fighter = it.next().expect("one fighter per dragon");
+        }
+        for npc in self.npcs.values_mut() {
+            npc.fighter = it.next().expect("one fighter per NPC");
         }
         // the small-enemy gauge (0x0067C110 / 0x0067AC40): counts down by
         // the frame step, then follows the latest damaged goblin. *Assumed*:
@@ -725,10 +752,13 @@ impl Fight {
                 })
             })
             .collect();
+        let npcs: Vec<Target> = self.npcs.iter().map(|(&owner, npc)| Target {
+            id: owner, pos: npc.position, alive: !npc.fighter.victim.dead(),
+        }).collect();
         let mut started = vec![];
         for g in &mut self.goblins {
             let before = g.log.len();
-            g.step(&self.data.goblin, &targets, ground, step);
+            g.step_with_npcs(&self.data.goblin, &targets, &npcs, ground, step);
             if g.log.len() > before && g.attacking() {
                 started.push(g.fighter.owner);
             }
@@ -815,6 +845,13 @@ impl Fight {
             self.positions.insert(g.fighter.owner, g.pos);
             g.volumes(&self.data.goblin);
         }
+        for (&owner, npc) in &mut self.npcs {
+            self.positions.insert(owner, npc.position);
+            match npc.volumes() {
+                Ok(()) => { self.npc_errors.remove(&owner); }
+                Err(error) => { self.npc_errors.insert(owner, error); }
+            }
+        }
         for s in &self.shells {
             self.positions.insert(s.owner, s.pos);
         }
@@ -869,6 +906,11 @@ impl Fight {
         }
         for g in &self.goblins {
             s += &g.digest();
+        }
+        for (&owner, npc) in &self.npcs {
+            s += &format!("npc{owner}:{}:{}:{:?}:{}:{:?}:{}:{:?}:{}:{:?}:{:?};",
+                npc.npc, npc.generation, npc.motion, npc.frame, npc.position,
+                npc.yaw, npc.scale, npc.flags, npc.fighter, self.npc_errors.get(&owner));
         }
         for (seat, p) in &self.pawns {
             s += &format!("p{seat}:{:?}:{};", p.brain.goal, p.brain.history.len());

@@ -54,7 +54,7 @@ A headless installed test shows goblins damaging Reynard (and NoDamage
 holding while set), NpcCheck reading his HP, and the viewer showing his
 gauge after SetGaugeDisp. The Result lists each value's source.
 
-## Results (source checkpoint; acceptance incomplete)
+## Results (body/Fight checkpoint; acceptance incomplete)
 
 Implemented in this checkpoint:
 
@@ -65,8 +65,22 @@ Implemented in this checkpoint:
   valuation gate while still recording contact history. NPC status
   build-up and stagger/knockdown run independently of the HP gate.
 - Runtime reading of `param/pl/other/PlDefendParam` row zero and the
-  source gauge fill calculation. The host/body/gauge adapters are not
-  wired yet.
+  source gauge fill calculation.
+- Installed `NpcBody` reads NPC304's Look, skeleton, HumanEdit and
+  BodyShape edits, NPC common/damage/authored motion banks and collision
+  events. `NpcFighter` binds a distinct owner and generation in Fight;
+  host motion/frame/placement remain explicit inputs. NPCs participate
+  in hit/status/history passes, and unload retirement removes the owner
+  without death or a kill award. Pose errors clear stale hurt volumes.
+- `rAISensorExt` SNR2 records are read at runtime. The initial em0100
+  group1 sphere admits NPC subtype4; a 16-target native distance-hate
+  subset preserves strict ties and influences after sensor exit. NPCs
+  stay out of the FSM player roster. Dynamic sensor-mask writers,
+  non-spherical geometry, FOV/LOS and other hate contributions/overrides
+  remain unported. Unsupported active geometry reports an error and
+  selects no target. The source fallback to the primary Arisen is
+  generalized to the first live registered seat as an explicit co-op
+  policy. Host quest observations and viewer gauge are not wired yet.
 
 Tested: seven focused regressions passed with actual exit 0 under the
 exclusive core target lease, after a narrow `ddenemyrt` cleanup removed
@@ -75,7 +89,21 @@ reads the native NPC main pool and confirms that `collision/npc/m0000`
 has damage groups of kind 3 and main-region indices. Synthetic overlap
 fixtures separately check NoDamage's status/reaction/history behavior,
 Invincible's recorded contacts, and independent owner HP floor/death.
-They do not claim installed posed NPC/goblin contact acceptance.
+The later body/Fight checkpoint additionally passes two installed pose
+tests (all four q0002 motions, actual hurt nodes and independent owner /
+unit placement), three sensor tests (native tie/memory/death gates,
+unsupported active geometry, and installed natural goblin combat),
+three goblin unit regressions, nine installed Arisen attack regressions,
+and three status regressions. All ran under the actual exclusive core
+lease and exited 0. The natural combat test runs 360 frames for each of
+ordinary, NoDamage and Invincible: the goblin selects Reynard, actual
+posed attack/hurt volumes damage ordinary HP, NoDamage holds HP while
+events remain, and Invincible holds HP without valuation events while
+contact history is observed. Final sensor compile 1.88 s / test 7.99 s;
+body tests 3.63 s, attacks 5.01 s, status 5.56 s. Two intermediate test
+failures corrected the archive class name to `rAISensorExt` and changed
+the history assertion to observe contacts throughout the attack cycle
+(release correctly clears history before the next attack).
 
 Compared against the original: source tracing only; no live original-game
 recording or complete original rescue comparison yet.
@@ -103,8 +131,12 @@ recording or complete original rescue comparison yet.
   thresholds 18/19 retain **999/999.9** from **0x00776BA0**.
 - Body collision resource `collision/npc/m0000`: NPC constructor
   **0x00BAB3A0**, table **0x014EAC20**, and loader **0x00B5F0A0**.
-  Volumes must still be posed from the canonical NPC's actual motion,
-  skeleton and body-edit scale, not a synthetic capsule.
+  `NpcBody` now poses the installed canonical motion, skeleton and
+  body-edit scale. Look/base-model selection is **0x0083FA60**; the
+  reviewed S32 bank registration is **0x00BB6060**, authored bank12
+  fallback **0x0080D750**. Skeleton sampling and constraints use
+  **0x01051B60** / **0x00860AC0** and existing source-marked ddlook
+  HumanEdit/BodyShape/face constraint helpers.
 - Canonical flag pointer: `uNpc::vf180` **0x00BB4730** uses intel +0x5C0
   when present. `uNpc::vf93` **0x00BB21E0** maps NoDamage `0x08000000`
   to inline collision +0xCFC bit **1**, NoDeath `0x04000000` to **2**,
@@ -124,16 +156,25 @@ recording or complete original rescue comparison yet.
   Target constructor **0x005B0790** initializes active bit 2 and class
   mask 7. `uEm0100` **0x008D2930** queries **0x005AFC50** with class mask
   **2**, subtype mask **0x16** (including NPC subtype 4). Candidate
-  geometry/admission and weighting are still being translated before
-  replacing the current nearest-Arisen runtime approximation.
+  Geometry **0x005AF1F0** and resource transformation **0x00CA8EC0**
+  implement the installed initial simple sphere branch. Resource reader
+  **0x00CA8D90** uses 16-byte header / 80-byte records; **0x005B0160**
+  enables groups, initialized to mask1 by uEm0100 vf115. Distance
+  influence **0x00AB5A50** uses strict distance below **3000 cm**, score
+  `abs((distance / 3000 - 1) * 300)` capped at **300**, and 16 target
+  records. **0x00AB52E0** preserves the first strict maximum; the
+  implemented ordinary distance subset retains influences until owner
+  retirement and rejects dead candidates. Other influence types,
+  grabbed/cached targets and dynamic sensor groups remain explicit limits.
 
 Remaining limits: the hit minimum inherits the existing pass's untraced
 attacker +0x14 assumption of 1; script gating of damage-over-time is not
 traced. NPC death-bank behavior must be sourced separately from HP zero;
-retiring an unloaded owner must never fabricate a death. No Fight, host
-NpcCheck/NpcDieCheck, posed NPC body, goblin target-list or viewer gauge
-acceptance is claimed by this checkpoint.
+retiring an unloaded owner must never fabricate a death. No host
+NpcCheck/NpcDieCheck or viewer gauge acceptance is claimed by this
+checkpoint. The headless installed body/Fight combat acceptance passes;
+full rescue/original recording comparison remains open.
 
-Next action: merge reviewed S32 from main, construct the combat body from
-the same installed Look assets and canonical motion/lifetime, then bind
-the NPC main pool to Fight and quest observations.
+Next action: bind the reviewed S32 host lifetime/motion to the Fight NPC
+body, trace death-bank writes, and expose real HP to quest observations;
+then wire the sourced viewer gauge.
