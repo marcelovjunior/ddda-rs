@@ -47,6 +47,33 @@ pages, synthetic inputs, outputs compared with the Rust port) or a live
 oracle reading. Stand-ins are not allowed: a missing piece is an explicit
 "not yet", never a shortcut that makes a route pass.
 
+**The 1:1 pipeline (first run 2026-10-10).** A function moves to
+`verified` only through these steps:
+1. pick it from the frontier (`inventory.py next`); skip platform-layer
+   code (allocators such as 0x00CF5E20 / 0x00DE0B80, the CRT, threads,
+   device I/O), which Rust replaces rather than translates;
+2. disassemble the original (`research/native/harness.py disasm`);
+3. port the WHOLE function into `crates/ddnative`: original branch order,
+   state as named fields at the original offsets, every callee it does not
+   own behind an explicit trait (e.g. `player_action::Effects` for the
+   effect release 0x00427560), no stand-ins;
+4. record vectors from the original instructions in Unicorn
+   (`research/native/vectors_*.py`, private output under
+   `E:/ddda-re/notes/native/vectors`), including the paths that reach an
+   unowned callee (the vector records the arguments it was reached with);
+5. replay them in `crates/ddnative/tests/differential.rs` (skips when the
+   vectors are absent) and run `inventory.py build`: ddnative citations
+   count as `verified`.
+
+Known emulator limit: Unicorn keeps a signalling NaN through x87
+`fld`/`fstp`; real hardware quiets it (checked on the maintainer's CPU).
+x87 paths use quiet NaNs in the vectors, and `ddnative::x87_copy` is tested
+against the CPU itself with inline assembly.
+
+First ports: `cPlAction::vf06` (0x00AC5100, the base update of every player
+action: 720 vectors, 120 through the effect release) and `uObjModel::vf85`
+(0x004C6B50, world origin: 25 vectors).
+
 **Phase 3, wiring.** Connect the rebuilt pieces to the host's game state;
 the hand-written glue (ScriptedHost shortcuts, the demo driver, route-only
 adapters) is retired as the rebuilt systems take over.

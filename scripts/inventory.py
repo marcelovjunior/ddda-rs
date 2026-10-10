@@ -59,6 +59,10 @@ def build():
     db.executemany("INSERT INTO cites VALUES (?,?,?)", cites)
     db.execute("UPDATE functions SET status='documented' WHERE address IN (SELECT address FROM cites WHERE kind='doc')")
     db.execute("UPDATE functions SET status='translated' WHERE address IN (SELECT address FROM cites WHERE kind='code')")
+    # crates/ddnative holds whole 1:1 ports, each with a differential test
+    # against the original (docs/METHODOLOGY.md, "The 1:1 pipeline")
+    db.execute("UPDATE functions SET status='verified' WHERE address IN "
+               "(SELECT address FROM cites WHERE file LIKE 'crates%ddnative%src%')")
     db.execute("CREATE INDEX calls_caller ON calls(caller)")
     db.execute("CREATE INDEX calls_callee ON calls(callee)")
     db.commit()
