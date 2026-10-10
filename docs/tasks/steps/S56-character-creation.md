@@ -106,9 +106,9 @@ Prepared regressions cover profile save/load and seat remapping, an offline
 record surviving departure/reentry, recycled-seat isolation, malformed
 offline EDIT rejection preserving the entire host state, installed preset
 look application, native name normalization, and installed GUI name hierarchy.
-They have **not been compiled or executed at this checkpoint**. No original
-game comparison or GUI capture has run. Cargo/GPU work waits for the shared
-machine window; this checkpoint is not Ready.
+Core validation now passed; viewer regressions remain uncompiled/unexecuted.
+No original-game GUI comparison or bounded editor capture has run.
+This checkpoint is not Ready until the viewer gate completes.
 
 Native subset checked 2026-10-10 in the coordinator's quiet window:
 private Unicorn runs executed the original, unmodified `0x007676E0`
@@ -128,8 +128,29 @@ Evidence stays private in `E:/ddda-re/notes/steps/S56/`:
 `name-proof-20261010-095321.log` / `preset-proof-20261010-095329.log`.
 No failed attempts, patched instructions, injected output callbacks,
 or live-game memory were involved. This is original-code subset
-comparison, not a GUI or full opening-route acceptance. Rust integration
-regressions remain unexecuted pending the shared Cargo window.
+comparison, not a GUI or full opening-route acceptance.
+
+Full core gate on source `1859799` (code `6205e36`, later Results only):
+`cargo test -p ddlook -p ddhost -p ddnet --target-dir
+E:/ddda-rs-wt/item-use-review-target -- --test-threads=1` completed with
+**193 PASS, zero failed/ignored across50 suites, actual exit0** in session6638.
+All eight new core test names are explicitly present and pass once.
+The installed test applies all32 full presets through dressed look creation;
+the actual Host tests cover swapped/recycled seats, parked profile reentry,
+and malformed offline EDIT rejection preserving save bytes/runtime hash.
+
+The first attempt exited101 at compile: the installed test could not see
+`ddlook::creation` despite its committed module declaration. A package-only
+`cargo clean -p ddlook` on the verified shared target corrected stale
+artifacts; no source changed before the full successful rerun. Both attempts
+are retained privately: `full-core-1859799.log` and
+`full-core-1859799-rerun-ddlook-clean.log`. The latter SHA-256 is
+`6cef422b51f6052ea69fb21727e5a58e34b3785eed6ada2a64033b59aa652d45`;
+`full-core-1859799.summary.private.json` records counts and all eight names.
+
+Next action: obtain the shared release-only viewer window, run the full
+viewer tests and default release build, then capture a bounded stage801
+flow with explicit name fixtures. GUI/native-page parity remains separate.
 
 Later milestones still need detailed face/body/color/voice/personality and
 moniker pages, native page/selector animations, scene/background and editor
