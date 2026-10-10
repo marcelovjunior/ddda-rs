@@ -678,7 +678,8 @@ impl Session {
         if let Some(demo) = &mut self.demo {
             demo.perf_route = true;
         }
-        self.shots = None;
+        // explicit --shots are kept: a route with screenshots is a labelled
+        // visual capture (main.rs), not a timing benchmark
     }
     /// The rendered body entity of NPC `npc`, if it has one (read-only, for
     /// diagnostics such as the NPC gauge anchor telemetry).
