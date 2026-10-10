@@ -36,7 +36,7 @@ Arisen's sex, name and basic look from the installed editor data, saved
 with the profile, shown in the existing GUIs; the Result lists what of
 uGUIEdit remains for later milestones.
 
-## Results (CPU validation complete; bounded capture pending)
+## Results (first milestone ready for review; full native editor remains open)
 
 The native class is `uGUICharacterEdit`; `uGUIEdit` above is shorthand.
 Its loader `0x0060C100` loads the installed character-edit messages,
@@ -107,8 +107,8 @@ record surviving departure/reentry, recycled-seat isolation, malformed
 offline EDIT rejection preserving the entire host state, installed preset
 look application, native name normalization, and installed GUI name hierarchy.
 Core and full release viewer validation passed.
-No original-game GUI comparison or bounded editor capture has run.
-This checkpoint is not Ready until the viewer gate completes.
+The bounded two-profile editor capture below passed; original-game GUI
+comparison has not run. This is the first milestone, not the full native editor.
 
 Native subset checked 2026-10-10 in the coordinator's quiet window:
 private Unicorn runs executed the original, unmodified `0x007676E0`
@@ -169,10 +169,50 @@ The worktree was clean throughout both jobs. The CPU lease is released;
 no viewer/GPU capture was launched under that lease. Head's later opening
 chatter hooks are outside this compiled committed baseline.
 
-Next action: obtain the explicit GPU window and capture a bounded stage801
-flow with two local profile fixtures. GUI/native-page parity remains separate.
+Bounded installed-data GPU gate (head8157; explicitly non-benchmark):
+unchanged pinned source `2cbcc65` ran two local profiles sequentially,
+seat0/profile1 female preset index1/nameAlba and seat1/profile2 male preset
+index2/nameBeren. Final session69668/PID35552 completed with **actual exit0**
+in79.153s, without timeout. All eight page screenshots and the Cassardis
+screenshot are1280x720. Actual image-save acknowledgments admitted each
+next page; logs show both stable profile confirmations before the single
+`S56-confirmed.ddhs` write and Cassardis handoff. The private checker
+independently parsed the installed XFS rows and native617420/787010 binding
+audit, then verified both profile owners, names/nickname and **all41 saved
+edit fields**, the nine PNGs and the confirmation/checkpoint/handoff logs.
+It rejects an opening failure even if a process exits successfully.
 
-Compiled capture preparation (actual GPU capture still pending): unattended
+All nine final images were viewed: Female/Alba/picker2of16/confirmation,
+Male/Beren/picker3of16/confirmation, then stage200/SceNo1100. They establish
+the bounded flow and different chosen appearances. The preview is dark
+and includes a visible panel texture effect; native scene/background,
+lighting and GUI filter/animation parity remain open. No visual tuning,
+original-game GUI comparison or frame-rate claim accompanies this gate.
+
+Final private evidence is in `capture-2cbcc65-20261010-envfix/` beneath
+`E:/ddda-re/notes/steps/S56/`: `viewer-process.private.json`, both viewer
+logs, `capture-gate.private.json`, the nine PNGs and `S56-confirmed.ddhs`.
+The checkpoint SHA-256 is
+`92e7fcd392eb194208e850414014f6fb510a8a83589e33c33a3099ffe7aeebb4`;
+its logged saved hash is `8fd10fb891dc0f59`. The strict gate summary SHA-256
+is `3c117df5a4c2857388f914f4b0092b3c8024858f26c3a62d6dc9df725d59299c`.
+
+The first capture session46535/PID34324 exited1 in41.849s: the private
+PowerShell runner's attempt to clear an environment variable with .NET
+and null left an empty `DDVIEW_OPENING_FROM`, causing the viewer to reject
+an empty checkpoint path after creation. That failed attempt is retained
+in `capture-2cbcc65-20261010-1053/`. Only the private runner changed:
+absent negative environment flags now use literal `Remove-Item Env:...`
+with absence assertions and corresponding restoration. The retry used the
+same executable/source/hash; no Rust gate was rerun without a source change.
+The GPU lease was released at each actual exit. The original process23408
+remained alive, and neither original-game memory nor install files changed.
+
+Next action: parent reviews the first-milestone gate, then head alone merges.
+The separately assigned S31 continuation replaces the existing dragon
+stand-ins; GUI/native-page parity remains separate.
+
+Capture automation: unattended
 pages now dwell for at least three successful GUI draws and 0.75 real seconds
 after their fixture is prepared. With an explicit, existing private
 `DDVIEW_CHARACTER_CAPTURE_DIR` inside `E:/ddda-re`, every page requests an
