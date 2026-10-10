@@ -348,12 +348,12 @@ fn read_bow(r: &mut Reader) -> Result<Option<BowState>> {
 
 fn weapon(w: &mut Writer, weapon: Weapon) {
     w.u8(match weapon { Weapon::None => 0, Weapon::Sword => 1, Weapon::Staff => 2,
-        Weapon::Dagger => 3, Weapon::Bow => 4 });
+        Weapon::Dagger => 3, Weapon::Bow => 4, Weapon::Shield => 5 });
 }
 
 fn read_weapon(r: &mut Reader) -> Result<Weapon> {
     Ok(match r.u8()? { 0 => Weapon::None, 1 => Weapon::Sword, 2 => Weapon::Staff,
-        3 => Weapon::Dagger, 4 => Weapon::Bow, tag => return Err(format!("weapon {tag}")) })
+        3 => Weapon::Dagger, 4 => Weapon::Bow, 5 => Weapon::Shield, tag => return Err(format!("weapon {tag}")) })
 }
 
 fn hold(w: &mut Writer, h: &Option<Hold>) {

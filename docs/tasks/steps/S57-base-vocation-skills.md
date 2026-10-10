@@ -349,3 +349,18 @@ and `S53`. None are committed or copied into this repository. No new
 research, testing, merges or rebases followed the wrap-up instruction.
 All claims are released in the accompanying board report. No processes
 or services are owned by codex-81.
+
+## Head gate (2026-10-10 evening, after the wrap-up)
+
+Head ran the core gate (ddsim, ddenemyrt, ddprogress, ddhost, ddnet) on
+d78989b. First blocker, fixed here: ddnet's weapon codec lacked
+`Weapon::Shield` (tag 5); protocol bumped to 12 for it. Second blocker,
+**open**: every fight fails to load with `missing normal arrow row 123`.
+`ArrowData::load_parameter` now resolves the supplement rows from
+`param.sequences` (main used fixed phases 0/1/2 -> rows 120..122); for the
+basic arrow (group 0, index 0) one sequence lands on a row the installed
+attack table does not have. Check in the source (0x00BCF1E0 / vf112
+0x00C13290) whether the supplement row is resolved lazily from the
+current sequence (then store `Option` per sequence and fail only when used)
+or whether group 0's sequences really are 0/1/2. Result: 422 passed, many
+existing combat suites failing on this one load error. Not merged.
