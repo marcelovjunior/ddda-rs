@@ -110,6 +110,27 @@ They have **not been compiled or executed at this checkpoint**. No original
 game comparison or GUI capture has run. Cargo/GPU work waits for the shared
 machine window; this checkpoint is not Ready.
 
+Native subset checked 2026-10-10 in the coordinator's quiet window:
+private Unicorn runs executed the original, unmodified `0x007676E0`
+sanitizer against eight synthetic UTF-16 cases (8/8, actual exit0) and
+`0x00617420` full-preset copying against four asymmetric sex/index cases
+(4/4, actual exit0). Each asserted arrival at the normal return address
+and the expected RET4/RET8 stack cleanup. Preset runs checked all38
+destinations using `0x00787010` serializer field offsets and preserved
+the unrelated identity prefix/tail. Explicit eye/beard/brow assertions
+confirmed the corrected eye-color binding. Supplementary-character
+coverage establishes two surrogate replacements in the sanitizer;
+it does not establish keyboard/IME admission.
+
+Evidence stays private in `E:/ddda-re/notes/steps/S56/`:
+`preset-field-bindings.private.json`, `name-harness.private.json`,
+`preset-copy-harness.private.json`, and actual-exit logs
+`name-proof-20261010-095321.log` / `preset-proof-20261010-095329.log`.
+No failed attempts, patched instructions, injected output callbacks,
+or live-game memory were involved. This is original-code subset
+comparison, not a GUI or full opening-route acceptance. Rust integration
+regressions remain unexecuted pending the shared Cargo window.
+
 Later milestones still need detailed face/body/color/voice/personality and
 moniker pages, native page/selector animations, scene/background and editor
 motions, GUI font filters/icons/IME composition and input-repeat behavior,
