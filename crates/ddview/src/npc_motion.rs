@@ -6,11 +6,37 @@ use ddhost::story_npcs::NpcLifetime;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub fn remote_transform(npc: &ddnet::npc::NpcBody, origin: bevy::prelude::Vec3) -> bevy::prelude::Transform {
+    use bevy::prelude::*;
+    let unit = crate::stage::UNIT;
+    // Character skeleton vertices remain centimetres; UNIT lives on the
+    // root (character::spawn_assembled_hands), separate from the body morph.
+    Transform::from_translation((Vec3::from(npc.pos) - origin) * unit)
+        .with_rotation(Quat::from_rotation_y(npc.yaw))
+        .with_scale(Vec3::from(npc.scale) * unit)
+}
+
 pub struct View {
     banks: Arc<Banks>,
     bound: HashMap<u32, NpcLifetime>,
     shown: HashMap<u32, Token>,
     remote_shown: HashMap<u32, (u64, u64, u64, u8, u16)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn remote_actor_root_keeps_centimetre_skeleton_conversion_and_origin() {
+        use bevy::prelude::*;
+        let mut npc = ddnet::npc::NpcBody::position(304, [1100.0, 200.0, 300.0]);
+        npc.scale = [1.0, 1.2, 0.8];
+        let transform = remote_transform(&npc, Vec3::new(1000.0, 0.0, 0.0));
+        assert_eq!(transform.translation, Vec3::new(1.0, 2.0, 3.0));
+        let top = transform.transform_point(Vec3::new(0.0, 100.0, 0.0));
+        assert!((top.y - 3.2).abs() < 1e-6, "100cm local joint becomes 1.2m above root");
+        assert_eq!(transform.scale, Vec3::from(npc.scale) * crate::stage::UNIT);
+    }
 }
 
 impl View {

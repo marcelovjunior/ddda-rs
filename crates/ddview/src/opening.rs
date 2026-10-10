@@ -2830,9 +2830,7 @@ fn guest_step(
     for (&id, &(entity, _, _)) in &s.npcs {
         let at = s.guest_npcs.get(&id);
         if let (Some(at), Ok((mut t, mut playback))) = (at, roots.get_mut(entity)) {
-            t.translation = (Vec3::from(at.pos) - st.origin) * UNIT;
-            t.rotation = Quat::from_rotation_y(at.yaw);
-            t.scale = Vec3::from(at.scale);
+            *t = npc_motion::remote_transform(at, st.origin);
             if let Err(error) = s.npc_authored_motion.show_remote(at, &mut playback) {
                 s.failure = Some(format!("guest NPC {id} motion: {error}"));
             }
