@@ -45,6 +45,8 @@ pub enum Weapon {
     Sword,
     /// Staff (category 5): `m0007_co` / `m0007_at`.
     Staff,
+    /// Dagger (category 4): `m0005_co` / `m0005_at`.
+    Dagger,
 }
 
 /// A basic attack action.
@@ -70,6 +72,21 @@ pub enum Attack {
     SwordAirHeavyLand,
     /// `cPlActWpnWandAirStrike` (0x01070020): the staff's heavy in the air.
     StaffAirStrike,
+    /// `cPlActWpnDaggerAtckLandS` (0x01050000, 0x01050001, 0x01050002):
+    /// lights 1-3; the record's word 0 is the motion (0x70A, 0x70B, 0x70C).
+    DaggerLight1,
+    DaggerLight2,
+    DaggerLight3,
+    /// `cPlActWpnDaggerAtckLandL` (0x01050003): the heavy attack, 0x715.
+    DaggerHeavy,
+    /// `cPlActWpnDaggerAtckAirS1` (0x01050005): light in the air.
+    DaggerAirLight1,
+    /// `cPlActWpnDaggerAtckAirS2` (0x01050006): the second air light.
+    DaggerAirLight2,
+    /// `cPlActWpnDaggerAtckAirL` (0x01050004): heavy in the air.
+    DaggerAirHeavy,
+    /// AirL's landing (its vf06 phase 2 plays 0x71D on ground).
+    DaggerAirHeavyLand,
 }
 
 /// The cancel slot the basic attacks request in (the rows' `slot`).
@@ -93,12 +110,46 @@ impl Attack {
             Attack::SwordAirLight => 0x0101_0003,
             Attack::SwordAirHeavy | Attack::SwordAirHeavyLand => 0x0101_0005,
             Attack::StaffAirStrike => 0x0107_0020,
+            Attack::DaggerLight1 => 0x0105_0000,
+            Attack::DaggerLight2 => 0x0105_0001,
+            Attack::DaggerLight3 => 0x0105_0002,
+            Attack::DaggerHeavy => 0x0105_0003,
+            Attack::DaggerAirHeavy | Attack::DaggerAirHeavyLand => 0x0105_0004,
+            Attack::DaggerAirLight1 => 0x0105_0005,
+            Attack::DaggerAirLight2 => 0x0105_0006,
         }
     }
 
     /// Started in the air (the rows' 0x302 flag); played under air physics.
     pub fn air(self) -> bool {
-        matches!(self, Attack::SwordAirLight | Attack::SwordAirHeavy | Attack::StaffAirStrike)
+        matches!(
+            self,
+            Attack::SwordAirLight
+                | Attack::SwordAirHeavy
+                | Attack::StaffAirStrike
+                | Attack::DaggerAirLight1
+                | Attack::DaggerAirLight2
+                | Attack::DaggerAirHeavy
+        )
+    }
+
+    /// Air attacks that hang (no physics) until their motion's first bit-31
+    /// frame, then take their jump row's SpeedY and gravity (`0x00AC5830`):
+    /// the sword's AirL (0x00B3DA10), the dagger's AirS2 (0x00B224E0) and
+    /// AirL (0x00B22130).
+    pub fn hangs(self) -> bool {
+        matches!(self, Attack::SwordAirHeavy | Attack::DaggerAirLight2 | Attack::DaggerAirHeavy)
+    }
+
+    /// The motion played after a hanging air attack touches ground, standing
+    /// still (its vf06 phase 2), if it has one; the others land normally
+    /// (their vf05s set uPlayer +0x35E8 bit 1).
+    pub fn landing(self) -> Option<Attack> {
+        match self {
+            Attack::SwordAirHeavy => Some(Attack::SwordAirHeavyLand),
+            Attack::DaggerAirHeavy => Some(Attack::DaggerAirHeavyLand),
+            _ => None,
+        }
     }
 
     /// The `pljumpparam` row its vf06 loads with `0x00937CF0` (speed,
@@ -109,6 +160,11 @@ impl Attack {
             Attack::SwordAirLight => Some(0x36),
             Attack::SwordAirHeavy => Some(0x37),
             Attack::StaffAirStrike => Some(0x47),
+            // cPlActWpnDaggerAtckAirS1::vf06 0x00B222F0 (ECX = 0x38),
+            // AirS2::vf06 0x00B224E0 (0x39), AirL::vf06 0x00B22130 (0x3A)
+            Attack::DaggerAirLight1 => Some(0x38),
+            Attack::DaggerAirLight2 => Some(0x39),
+            Attack::DaggerAirHeavy => Some(0x3A),
             _ => None,
         }
     }
@@ -133,6 +189,17 @@ impl Attack {
             Attack::SwordAirHeavy => 0x703,
             Attack::SwordAirHeavyLand => 0x704,
             Attack::StaffAirStrike => 0x725,
+            // cPlActWpnDaggerAtckLandS::vf05 0x00B218C0 plays its record's
+            // word 0; LandL::vf05 0x00B21AC0 0x715; AirS1 / AirS2 / AirL
+            // vf06 phase 0: 0x719 / 0x71A / 0x71C; AirL phase 2: 0x71D
+            Attack::DaggerLight1 => 0x70A,
+            Attack::DaggerLight2 => 0x70B,
+            Attack::DaggerLight3 => 0x70C,
+            Attack::DaggerHeavy => 0x715,
+            Attack::DaggerAirLight1 => 0x719,
+            Attack::DaggerAirLight2 => 0x71A,
+            Attack::DaggerAirHeavy => 0x71C,
+            Attack::DaggerAirHeavyLand => 0x71D,
         }
     }
 
@@ -140,6 +207,15 @@ impl Attack {
     pub fn cost_id(self) -> usize {
         match self {
             Attack::StaffStrike1 | Attack::StaffStrike2 | Attack::StaffAirStrike => ADJUST_STAFF_COST,
+            // every dagger vf05 charges m_pl000_00[0x1BA]
+            Attack::DaggerLight1
+            | Attack::DaggerLight2
+            | Attack::DaggerLight3
+            | Attack::DaggerHeavy
+            | Attack::DaggerAirLight1
+            | Attack::DaggerAirLight2
+            | Attack::DaggerAirHeavy
+            | Attack::DaggerAirHeavyLand => ADJUST_DAGGER_COST,
             _ => ADJUST_SWORD_COST,
         }
     }
@@ -241,8 +317,18 @@ pub enum Request {
 /// light -> AirS (slot 4), heavy -> AirL; staff light -> the air WandShot,
 /// heavy -> WandAirStrike. The staff's charged rows (command 0x0C, checks
 /// 8, 15, 16) are not modelled.
-// Translated from the lists 0x014F83B8 and 0x014F8898 scanned by 0x00ABA690
-// (DDDA.exe 2017-12-13 Steam).
+///
+/// Dagger list 0x014F86B8: on ground heavy -> LandL; light after LandS 0 ->
+/// 1 -> 2 (check 22), otherwise light -> 0x01050000. In the air heavy ->
+/// AirL only while `high` (check 10: the height above ground from the ray
+/// of `0x0084FEA0` is at least `m_pl000_00[0x75]`); light after AirS1 ->
+/// AirS2 (check 22), otherwise light -> AirS1. Left out: the rows behind
+/// check 27 (uPlayer +0x206E bit 0x10, *assumed* the clinging state: LandS
+/// variant 0x01050007 with motion 0x301), Engrave's chain (check 24) and
+/// Double Vault (command 8, a learned skill).
+// Translated from the lists 0x014F83B8, 0x014F8898 and 0x014F86B8 scanned
+// by 0x00ABA690, with the checks of uPlayer::vf188 0x00B72DB0 (DDDA.exe
+// 2017-12-13 Steam).
 pub fn next(
     weapon: Weapon,
     current: Option<Attack>,
@@ -250,6 +336,7 @@ pub fn next(
     heavy: bool,
     chain_open: bool,
     air: bool,
+    high: bool,
 ) -> Option<Request> {
     use Attack::*;
     if air {
@@ -258,6 +345,12 @@ pub fn next(
             (Weapon::Sword, false, true) => Some(Request::Attack(SwordAirHeavy)),
             (Weapon::Staff, true, _) => Some(Request::AirShot),
             (Weapon::Staff, false, true) => Some(Request::Attack(StaffAirStrike)),
+            // list order: AirL (heavy, check 10) before the lights
+            (Weapon::Dagger, _, true) if high => Some(Request::Attack(DaggerAirHeavy)),
+            (Weapon::Dagger, true, _) => Some(Request::Attack(match current {
+                Some(DaggerAirLight1) if chain_open => DaggerAirLight2,
+                _ => DaggerAirLight1,
+            })),
             _ => None,
         };
     }
@@ -272,6 +365,20 @@ pub fn next(
                 }))
             } else if heavy {
                 Some(Request::Attack(SwordHeavy))
+            } else {
+                None
+            }
+        }
+        Weapon::Dagger => {
+            // list order: heavy (LandL) before the light rows
+            if heavy {
+                Some(Request::Attack(DaggerHeavy))
+            } else if light {
+                Some(Request::Attack(match current {
+                    Some(DaggerLight1) if chain_open => DaggerLight2,
+                    Some(DaggerLight2) if chain_open => DaggerLight3,
+                    _ => DaggerLight1,
+                }))
             } else {
                 None
             }
@@ -311,6 +418,10 @@ pub fn slot_state(word: u32, slot: usize) -> u8 {
 pub const ADJUST_TURN: usize = 0xAE;
 pub const ADJUST_SWORD_COST: usize = 0x1B8;
 pub const ADJUST_STAFF_COST: usize = 0x1BB;
+/// Stamina per dagger attack (the dagger vf05s).
+pub const ADJUST_DAGGER_COST: usize = 0x1BA;
+/// Check 10's minimum height above ground (cm) for the dagger's AirL.
+pub const ADJUST_AIR_HEAVY_HEIGHT: usize = 0x75;
 /// Level-gap thresholds of tiers 1, 2, 3 (read 0x1B0, 0x1AF, 0x1AE, from
 /// tier 3 down).
 pub const ADJUST_TIER_GAP: usize = 0x1AE;
@@ -325,6 +436,10 @@ pub struct AttackParam {
     /// Stamina per sword attack (0x1B8) and per staff strike or volley (0x1BB).
     pub sword_cost: f32,
     pub staff_cost: f32,
+    /// Stamina per dagger attack (0x1BA).
+    pub dagger_cost: f32,
+    /// Minimum height above ground for an air heavy behind check 10 (0x75).
+    pub air_heavy_height: f32,
     /// Level gaps of tiers 1-3 (0x1AE..0x1B0).
     pub tier_gap: [f32; 3],
     /// Cost factors of tiers 1-3 (0x1B4..0x1B6).
@@ -336,6 +451,8 @@ pub const ATTACK_SHIPPED: AttackParam = AttackParam {
     turn_deg: 45.0,
     sword_cost: 80.0,
     staff_cost: 30.0,
+    dagger_cost: 70.0,
+    air_heavy_height: 25.0,
     tier_gap: [15.0, 20.0, 25.0],
     tier_factor: [1.0, 1.5, 2.0],
 };
@@ -347,6 +464,8 @@ impl AttackParam {
             turn_deg: g(ADJUST_TURN)?,
             sword_cost: g(ADJUST_SWORD_COST)?,
             staff_cost: g(ADJUST_STAFF_COST)?,
+            dagger_cost: g(ADJUST_DAGGER_COST)?,
+            air_heavy_height: g(ADJUST_AIR_HEAVY_HEIGHT)?,
             tier_gap: [
                 g(ADJUST_TIER_GAP)?,
                 g(ADJUST_TIER_GAP + 1)?,
@@ -361,10 +480,10 @@ impl AttackParam {
     }
 
     pub fn cost_of(&self, id: usize) -> f32 {
-        if id == ADJUST_STAFF_COST {
-            self.staff_cost
-        } else {
-            self.sword_cost
+        match id {
+            ADJUST_STAFF_COST => self.staff_cost,
+            ADJUST_DAGGER_COST => self.dagger_cost,
+            _ => self.sword_cost,
         }
     }
 }
@@ -417,7 +536,7 @@ mod tests {
     #[test]
     fn chains_follow_the_lists() {
         use Attack::*;
-        let s = |c, l, h, o| next(Weapon::Sword, c, l, h, o, false);
+        let s = |c, l, h, o| next(Weapon::Sword, c, l, h, o, false, true);
         assert_eq!(s(None, true, false, true), Some(Request::Attack(SwordLight1)));
         assert_eq!(
             s(Some(SwordLight1), true, false, true),
@@ -439,7 +558,7 @@ mod tests {
             s(Some(SwordLight2), false, true, true),
             Some(Request::Attack(SwordHeavy))
         );
-        let w = |c, l, h, o| next(Weapon::Staff, c, l, h, o, false);
+        let w = |c, l, h, o| next(Weapon::Staff, c, l, h, o, false, true);
         assert_eq!(w(None, true, false, true), Some(Request::Shot));
         assert_eq!(w(None, false, true, true), Some(Request::Attack(StaffStrike1)));
         assert_eq!(
@@ -450,13 +569,39 @@ mod tests {
             w(Some(StaffStrike2), false, true, true),
             Some(Request::Attack(StaffStrike1))
         );
-        assert_eq!(next(Weapon::None, None, true, true, true, false), None);
+        assert_eq!(next(Weapon::None, None, true, true, true, false, true), None);
         // the air rows (0x302) of both lists
-        assert_eq!(next(Weapon::Sword, None, true, false, true, true), Some(Request::Attack(Attack::SwordAirLight)));
-        assert_eq!(next(Weapon::Sword, None, false, true, true, true), Some(Request::Attack(Attack::SwordAirHeavy)));
-        assert_eq!(next(Weapon::Staff, None, true, false, true, true), Some(Request::AirShot));
-        assert_eq!(next(Weapon::Staff, None, false, true, true, true), Some(Request::Attack(Attack::StaffAirStrike)));
-        assert_eq!(next(Weapon::None, None, true, true, true, true), None);
+        assert_eq!(next(Weapon::Sword, None, true, false, true, true, true), Some(Request::Attack(Attack::SwordAirLight)));
+        assert_eq!(next(Weapon::Sword, None, false, true, true, true, true), Some(Request::Attack(Attack::SwordAirHeavy)));
+        assert_eq!(next(Weapon::Staff, None, true, false, true, true, true), Some(Request::AirShot));
+        assert_eq!(next(Weapon::Staff, None, false, true, true, true, true), Some(Request::Attack(Attack::StaffAirStrike)));
+        assert_eq!(next(Weapon::None, None, true, true, true, true, true), None);
+    }
+
+    #[test]
+    fn the_dagger_rows_of_list_0x014f86b8() {
+        use Attack::*;
+        let g = |c, l, h, o| next(Weapon::Dagger, c, l, h, o, false, true);
+        assert_eq!(g(None, true, false, true), Some(Request::Attack(DaggerLight1)));
+        assert_eq!(g(Some(DaggerLight1), true, false, true), Some(Request::Attack(DaggerLight2)));
+        assert_eq!(g(Some(DaggerLight2), true, false, true), Some(Request::Attack(DaggerLight3)));
+        assert_eq!(g(Some(DaggerLight3), true, false, true), Some(Request::Attack(DaggerLight1)));
+        // bit 31 seen: the chain starts over
+        assert_eq!(g(Some(DaggerLight1), true, false, false), Some(Request::Attack(DaggerLight1)));
+        // heavy comes first in the list, even with light held
+        assert_eq!(g(Some(DaggerLight2), true, true, true), Some(Request::Attack(DaggerHeavy)));
+        let a = |c, l, h, o, high| next(Weapon::Dagger, c, l, h, o, true, high);
+        assert_eq!(a(None, true, false, true, true), Some(Request::Attack(DaggerAirLight1)));
+        assert_eq!(a(Some(DaggerAirLight1), true, false, true, true), Some(Request::Attack(DaggerAirLight2)));
+        assert_eq!(a(Some(DaggerAirLight1), true, false, false, true), Some(Request::Attack(DaggerAirLight1)));
+        assert_eq!(a(None, false, true, true, true), Some(Request::Attack(DaggerAirHeavy)));
+        // check 10: too low for AirL, and no other heavy air row
+        assert_eq!(a(None, false, true, true, false), None);
+        assert_eq!(DaggerLight2.motion(), 0x70B);
+        assert_eq!(DaggerAirHeavy.jump_row(), Some(0x3A));
+        assert_eq!(DaggerHeavy.cost_id(), ADJUST_DAGGER_COST);
+        assert!(DaggerAirLight2.hangs() && DaggerAirLight2.landing().is_none());
+        assert_eq!(DaggerAirHeavy.landing(), Some(DaggerAirHeavyLand));
     }
 
     #[test]

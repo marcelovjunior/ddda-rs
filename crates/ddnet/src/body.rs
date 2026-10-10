@@ -159,6 +159,14 @@ fn state(w: &mut Writer, s: State) {
                 Attack::SwordAirHeavy => 7,
                 Attack::SwordAirHeavyLand => 8,
                 Attack::StaffAirStrike => 9,
+                Attack::DaggerLight1 => 10,
+                Attack::DaggerLight2 => 11,
+                Attack::DaggerLight3 => 12,
+                Attack::DaggerHeavy => 13,
+                Attack::DaggerAirLight1 => 14,
+                Attack::DaggerAirLight2 => 15,
+                Attack::DaggerAirHeavy => 16,
+                Attack::DaggerAirHeavyLand => 17,
             };
             w.u8(15).u8(a);
             return;
@@ -193,6 +201,14 @@ fn read_state(r: &mut Reader) -> Result<State> {
             7 => Attack::SwordAirHeavy,
             8 => Attack::SwordAirHeavyLand,
             9 => Attack::StaffAirStrike,
+            10 => Attack::DaggerLight1,
+            11 => Attack::DaggerLight2,
+            12 => Attack::DaggerLight3,
+            13 => Attack::DaggerHeavy,
+            14 => Attack::DaggerAirLight1,
+            15 => Attack::DaggerAirLight2,
+            16 => Attack::DaggerAirHeavy,
+            17 => Attack::DaggerAirHeavyLand,
             a => return Err(format!("attack {a}")),
         };
         return Ok(State::Attack { attack });
