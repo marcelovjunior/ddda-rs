@@ -117,6 +117,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub clock: FrameClock,
     pub roster: Roster,
     pub party: Party,
+    /// Stage-801 appearance and name, keyed by persistent Arisen profile.
+    pub characters: crate::character_creation::Characters,
     /// Movement of every Arisen (ddsim; the `Player` move line).
     pub sim: Sim,
     /// The session's story (ddstory; the `Pre Process` move line). `None`
@@ -183,6 +185,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             clock: FrameClock::default(),
             roster: Roster::default(),
             party: Party::default(),
+            characters: Default::default(),
             sim,
             story,
             world,
@@ -605,7 +608,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(s) = &self.story {
             h.bytes(&s.world.save());
         }
-        h.debug(&self.economy).debug(&self.progression);
+        h.debug(&self.economy).debug(&self.progression).debug(&self.characters);
         for (profile, state) in &self.profiles {
             h.debug(profile).debug(&state.economy).debug(&state.character).debug(&state.place);
         }
@@ -669,6 +672,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.save_parked_profiles(&mut f);
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
         self.save_npc_quest_controls(&mut f);
+        self.characters.save(&mut f);
         Ok(f)
     }
 
@@ -681,6 +685,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
         let err = HostError::Save;
+        let loaded_characters = self.characters.loaded(f).map_err(err)?;
         // Validate economy/inventory before the first host mutation. ECON's
         // player parts are keyed by persistent profile, so delivery metadata
         // remaps together with its bag and never follows an old seat number.
@@ -790,6 +795,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // Every fallible chunk parser has completed. Applying the validated
         // candidate below cannot leave half of a shared retry installed.
         self.frame = saved_frame;
+        self.characters = loaded_characters;
         if let Some(story) = loaded_story {
             self.story = Some(story);
             self.boot = true;
