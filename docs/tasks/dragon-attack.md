@@ -217,3 +217,196 @@ with the existing `combat.rs` callback `type_complexity` warnings allowed;
 exact executable angle constants are marked deliberately, and the touched
 root-travel loop was simplified without changing arithmetic. Release
 viewer build passed, with two existing viewer warnings.
+
+### S24 encounter map (2026-10-10, codex-55; branch `step/s24-dragon-map`)
+
+This is a source/data map, not a played fight. The new installed regression
+`dragon_opening_reachability.rs` follows the sequence-4 root's table
+references and Dragon_OP's enabled state links. It finds **18 commanded
+action IDs**: 13 in the think tables and six in the entrance FSM, with 21
+shared. World/actor predicates still decide which table rows execute.
+The test does not manufacture those predicates or claim every candidate
+occurs during one playthrough.
+
+The 52 records reachable from `0x01699518` include four end rows. Their
+`+0x30` words are labels, not action requests: `cThinkMgr::think`
+`0x008b81a0` checks row flag bit 0 before selecting an action
+(`0x008b8528`). Filtering only by a nonnegative `+0x30` would incorrectly
+include 1112, 52931, 56710 and 81630. The installed test excludes these and
+asserts the 13 table IDs `{0,4,6,19,21,26,27,28,29,34,72,74,86}`, the six
+FSM IDs `{10,21,33,52,53,54}`, and every commanded descriptor's class from
+the installed `0x0185bcf8` table. Bulk records remain runtime reads.
+
+#### Ordered actions and dependencies for follow-up briefs
+
+First implement the actual **Dragon_OP entrance** in this order. State IDs
+are installed data; dispatch is `CtrlAction` `0x005a8950` /
+`CtrlActionEx` `0x005a89e0`. Motion IDs below are source bindings, encoded
+as `bank << 8 | slot`, not invented animation choices.
+
+| Order / FSM state | Action / class | Motion and source | Have / missing |
+| --- | --- | --- | --- |
+| 1 / 4, rise | 52 `cEm5800HoverUp` | 100; entry/update/exit `0x00a6ba90/0x00a6bb40/0x00a6bc80` | **Have:** tested local height/velocity/completion prefix. **Missing:** host scheduling, live feedback/effects. |
+| 2 / 5, change to glide | 54 `cEm5800HoverKakku` | 103; `0x00a6bf00`, completion `0x00a6be00` | **Have:** tested local yaw/speed/control prefix. **Missing:** host flight/layer integration. |
+| 3 / 1, fly | 10 `cEm5800TargetFly` | 126; entry `0x00a60b70`, pass-C movement `0x00a61590`, exit `0x00a62150` | **Have:** isolated travel substep. **Missing:** supported action, steering, side-turn layers, rider effects, phase-97 orchestration. |
+| 4 / 3, hover | 53 `cEm5800KakkuHover` | 121; `0x00a6bd80/0x00a6be00` | **Have:** tested prefix and reset effect. **Missing:** host applying flight/layer reset. |
+| 5 / 0, land/press | 33 `cEm5800PressAttack` | 298 then 299; `0x00a6aed0/0x00a6af70` | **Missing:** falling/ground contact, parameter-driven acceleration, motion transition, landing consequences. |
+| 6 / 2, fire | 21 `cEm5800BreathWide` | sequence-4 263 then 264; `0x00a56a30/0x00a56d10`, exit `0x00a57270` | **Missing:** frame-gated breath collisions, emitter/joint targeting, damage and effect state. |
+
+The state path is `4 -> 5 -> 1 -> 3 -> 0 -> 7 -> 8 -> 2 -> 9 -> 10 -> 6`.
+The first four transitions await action completion; landing's state 0
+awaits `FSMAreaStayFlag[0]`, then state 7 waits for motion frame >= 10 and
+state 8 for motion end. State 2 sets stage LOT 80 and q0 bit 20; state 9
+starts timer 0 and waits for >= 5.3 seconds; state 10 sets q0 bit 21;
+state 6 sets q0 bit 5 and **Kill**. State 1 already sets q0 bit 1.
+GSF 282 is cleared at rise and set at landing's force-point state 8.
+The existing synthetic-feedback ddai regression covers this path and its
+Kill lifecycle (`0x0059f440`), but does not provide the actor inputs.
+
+Next supply the native unit driver and **conditional combat-table actions**.
+`uEmDragonBase::vf136` `0x00a40f20` calls vf196 `0x00a40f70`, which handles
+pending action requests, senses/selects targets, builds think slots, runs
+`0x008b80a0 -> 0x008b81a0`, and dispatches its result through actor vf132.
+The opening root branches into `0x01697f38` and `0x01698b18`, the latter
+also calling `0x01695d78`. **Have:** installed definitions and general
+ThinkMgr interpreter. **Missing:** dragon-specific callbacks, target/slot
+production, think/action handoff and driver guards. Do not substitute an
+always-true callback host or assume the FSM's Kill despawns the enemy.
+
+| Table candidate | Source motion bindings / routines | Runtime status |
+| --- | --- | --- |
+| 0 `cEm5800Wait` | primary 0 and layer-3 motion 3; `0x00a4dca0/0x00a4ddc0` | Missing |
+| 6 `cEm5800Walk`, 86 `cEm5800TargetWalk` | 20; `0x00a50360/0x00a50570`, `0x00a691b0/0x00a69270` | Missing |
+| 19 `cEm5800Turn` | ground turn 50..56, flight 101; `0x00a52350/0x00a52890` (other-family bindings 150/151 are not opening-dragon choices) | Missing |
+| 21 `cEm5800BreathWide` | 263 -> 264 in opening sequence; sources above | Missing |
+| 26 `cEm5800HabatakiAttack` | 269; `0x00a5a100/0x00a5a1e0/0x00a5a2d0` | Missing |
+| 27 `cEm5800Humitsuke` | 270 or 271, actor-state dependent; `0x00a5b540/0x00a5b5b0` | Missing |
+| 4 / 28 `cEm5800Scratch` | 272 or 273, descriptor parameter dependent; `0x00a5bdd0/0x00a5beb0/0x00a5bf70` | Missing |
+| 29 `cEm5800Catch` | entry 276 or 312; subsequent 277..281 and 313/314, conditional; `0x00a5c030/0x00a5c1a0/0x00a5ce20` | Missing; requires captured-actor ownership, constraint and release logic |
+| 34 `cEm5800Huriotoshi` | 267/268/306 depend on attached occupants; `0x00a5ff00/0x00a60100` (307 is other-family branch) | Missing; rider/attached-actor state |
+| 72 `cEm5800Houkou` | 286; `0x00a76d50/0x00a76db0` | Missing |
+| 74 `cEm5800HabatakiBreath` | entry 71, then 262 or 264; `0x00a5a680/0x00a5a820/0x00a5ad00` | Missing; flight/breath continuation |
+
+There are additional **conditional action-to-action continuations** outside
+the commanded set. These are source leads, not a proof that every guard
+is satisfiable in sequence 4 before ev01:
+
+- PressAttack update `0x00a6af70` can dispatch **60 EscapeFly** after its
+  150-frame branch, repositioning the actor 500 cm above its resolved pose.
+  `cEm5800EscapeFly` `0x00a73980/0x00a73bc0/0x00a74180` binds 100, then
+  conditional 103/120/121, and dispatches **16 Landing**, whose entry/update
+  `0x00a54c90/0x00a54d40` bind 100 then 61. These actions are missing.
+- Catch update `0x00a5c1a0` can dispatch **31 Magic** if actor +0x679A is
+  zero, action parameter +0x14 is nonzero and actor +0x637C is nonzero.
+  `0x00a5d710/0x00a5e320` starts motion 287, with a conditional 289
+  selection. Magic/emitter behavior is missing; the guard is not asserted
+  true for the default opening Catch descriptor.
+- HabatakiBreath update `0x00a5a820` dispatches **77 BreathWide**, another
+  descriptor of the same class, after binding 262 or 264. Its distinct
+  parameters must be read from the installed table; implementing only
+  descriptor 21 does not cover this continuation.
+
+Finally wire **per-owner encounter facts and original frame phases**:
+resource readiness/binding (`0x008892b0/0x00889510`), common entry/exit
+(`0x00a4db70/0x00a76c90`), condition projection (`0x00aa9bf0`), motion
+feedback (`0x007ab900/0x007ab8c0`), requests for quest/GSF/LOT
+(`0x007aad90/0x007aad10/0x007ab650`), and actual final-pose combat volumes
+after terrain and vf97 (`0x0084c800`). **Have:** readers, local prefix,
+typed effects, explicit `finish_pass_c`, generic request interpreter and
+stage GSF379 check. **Missing:** authoritative dragon actor in ddhost,
+effects/callbacks connected to its state, combat damage/results, viewer
+body/animation and real ev00 -> fight -> ev01 -> ev05 route. Every player
+target and captured occupant needs an owner identity for co-op.
+
+#### Fight end, event prerequisites and NPC actors
+
+The installed `quest/q0000_b00` distinguishes the stage HP trigger from
+the quest's other exits. After ev00 finishes it raises SceNo **1025**
+(requested start position 3), runs camera 17 with GSF520, then reaches
+state 16. Its `EnemyCheck` targets the dragon's persistent killed-state
+flag, not a guessed "HP is zero" predicate (order `0x005bef10`, group
+count `0x005bf4d0`, per-target predicate `0x005bf3d0`). State 16's condition 20 starts
+ev01 for **GSF379 OR FreeFlag[0] (EnemyCheck) OR NOT AreaStayFlag[1]**.
+Otherwise condition 8 changes to state 5 only after `mCntState > 17`.
+State 5 repeatedly sets GSF378 and its condition 22 adds the independent
+**`mCntState > 43`** exit. Thus there is a roughly 17+43-second fallback
+from entry into state 16, as well as damage/death and leaving-area exits;
+it is not a single mandatory scripted hit or an HP-only fight end.
+Times use `0x005bac30`'s `max(delta,0.01)/fps`, with the counter reset at
+state entry (`0x00749820`), so the 43-second counter starts anew in state 5.
+
+The separate stage writer remains `aStage200::vf12` **0x0051ccc0**:
+while GSF378 enables the dragon branch, capture initial first-life-region
+HP and request GSF379 only for **HP < baseline - 4**, strictly. The valid
+Arisen's life HP <= 1/missing-life-region with positive effective maximum
+HP is an independent branch. **Have:** sourced/tested stage rule and
+quest expression interpreter. **Missing:** actual dragon/player snapshots
+and authoritative EnemyCheck/area feedback. The current ScriptedHost's
+20-second enemy death and fixed q0-bit injections are explicit stand-ins.
+
+At the quest level the player can satisfy the damage/life/area predicates
+or let the state timers expire: no particular attack command or successful
+hit is required. States 16 and 5 issue EnemyCheck/Flag orders, not a forced
+player attack. **Have:** general per-player locomotion and basic sword/
+staff attack stepping (`uPlayerBase::vf136` `0x00b6d510`, sword ground
+entry/update `0x00b3c570/0x00b3cc20`) in ddsim. **Missing evidence:** the
+exact original player kit/input restrictions during SceNo1025, including
+whether climbing, guard or skills are admitted here. Generic implemented
+combat controls are not proof of those encounter-specific permissions.
+
+The q0 heart-taking state 1 requests **ev01**, whose end raises SceNo
+**1050**. State 19 then clears stage LOT0/80 and GSF520 and waits for
+`!IsEvent` (condition 13) before state 2 requests **ev05**, end SceNo
+**1100**, placement type 2/start position 2. After ev05 comes 08:00
+TimeJump, weather, the flag/setup states and q0001. Event completion must
+come from the event player (`0x00435fb0`), not treating action completion
+or GSF379 as proof that ev01/ev05 finished. This quest/event map was
+independently surveyed by codex-1 from the installed graph and interpreter.
+
+q0 initially revives **NPC704..710**. Their installed placement is group
+3, records 0..6 of `scr/st200/etc/st200_00m00n_n03`, gated by stage LOT1;
+q0 state 9 enables LOT1, and state 8 clears it during cleanup. The NPC
+ledger (`etc/item/npclist`, loader `0x00ccac90`) names them Wyndar, Nicolas,
+Cortese, Jorgen, Esme, Nessa and Hera respectively. Their authored
+`AI/FSM/Npc/st200/quest/q0000_n704_AI` through `n708_AI` and shared
+`q0000_n709_n710_AI` are **cAIActionFSMDemo** graphs: Wait, SetMotion,
+GotoEx and SetDamage, with no Attack process found. These are scripted
+fleeing/reaction victims, not evidence for an invented soldier fight.
+They set q0 bits 10..13 as readiness signals and wait for q0 bit 1.
+**Have:** general NPC layout/GPL readers and FSM interpreter.
+**Missing:** real demo movement, authored damage/reaction/death callbacks
+and readiness produced by those actors. Their coordinate/motion records
+must continue to come from the player's install. Source reader boundaries:
+LOT `0x00cc1790/0x00cc1f60`, NPC ID copy `0x007a32f0`, common NPC GPL
+gate `0x0075faa0`. Codex-1 surveyed all NPC LOTs with exact consumption;
+group 3 has no authored scene/hour restriction, disabled gate or enabled
+unported condition in the checked GPL fields.
+
+The dragon's sole `e00` record/id **1** is `cSetInfoEnemy5800`, sequence
+**4**, scale `[1,1,1]`, position approximately
+`[14217.957,401.787,-2243.004]` cm and yaw **-0.909578** radians. These
+coordinates are an evidence summary, not constants to add to the port:
+read `scr/st200/etc/st200_00m00n_e00` at runtime. Dragon_OP first targets
+height 1500, then the authored flight point approximately
+`[8315.152,1365.787,1401.075]` cm with speed parameter 115 and arrival
+radius 300. Both are installed FSM parameters, offset by the general
+SetTargetPos process (`0x005a90e0`); an arbitrary beach placement or fixed
+flight delay would bypass the source behavior. Grounding/landing still
+needs the original area's terrain/contact feedback.
+
+**Verified:** the new installed ddenemyrt regression passed, 1 test, against
+the maintainer's actual DDDA.exe/nativePC (compile 0.91 s, execution
+2.88 s); `git diff --check` is clean. This batch changes only this Results
+section and the installed test. **Not verified:** live original action
+selection, player combat controls in this phase, satisfaction of the four
+conditional continuation guards, and a playable/repeated/co-op fight.
+The listed motion bindings cover sourced entries and the identified
+continuations, not every possible nested emitter/magic animation.
+
+**Next briefs:** host resource/phase/action ownership and TargetFly first;
+PressAttack with real landing feedback next; BreathWide, authored NPC
+demo callbacks and q0 flag/area feedback next; then the dragon combat
+driver/callbacks and conditional table actions. The final gate must run
+the actual quest/event path, exercise both damage and timed/area exits,
+and compare flags/SceNo against the original. No feature completion is
+claimed by this research map.
