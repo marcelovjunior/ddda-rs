@@ -5,6 +5,56 @@
 /// Enemy kind written by constructor 0x009780d0 (2017-12-13 Steam).
 pub const ENEMY_KIND: u8 = 0x3f;
 
+/// Placement fields copied to actor +0x6095/+0x609c/+0x60a0/+0x60a4.
+/// Values come from cSetInfoEnemy5000, not constructor defaults.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementValues {
+    pub arisen_proof: bool,
+    pub remaining_hp_ratio: f32,
+    pub leg_stagger: f32,
+    pub leg_knockdown: f32,
+}
+
+/// Apply the placement-specific health and leg writes to this actor's pools.
+/// Pools must already have their ordinary initialization and any common HP
+/// multiplier applied (0x00889040). This translates the health/leg portion
+/// only; equipment, experience, think and rendering setup remain separate.
+// Translated from 0x00978820, specifically 0x009790ca..0x0097916d
+// (DDDA.exe 2017-12-13 Steam).
+pub fn initialize_placement(
+    exe: &ddexe::Exe<'_>,
+    values: PlacementValues,
+    regions: &mut [ddcombat::damage::RegionPool],
+) -> Result<(), String> {
+    if !values.arisen_proof {
+        return Ok(());
+    }
+    // Validate both installed table reads before changing caller state.
+    let leg_ids = [exe.u32(0x014f_f680 + 5 * 4)?, exe.u32(0x014f_f680 + 6 * 4)?];
+    // 0x004c6af0 (owner vf82) reads the first array slot's maximum,
+    // not a sum of region HP or a search by pool identity.
+    if let Some(main) = regions.first_mut() {
+        let remaining = main.hp_max * values.remaining_hp_ratio;
+        // The source clamps only above the maximum; negative authored values
+        // are not silently clamped to zero.
+        main.hp = if remaining > main.hp_max {
+            main.hp_max
+        } else {
+            remaining
+        };
+    }
+    // 0x00770f00 resolves hurt-region indices through the installed mapping
+    // and searches by pool +4 identity. These are current DP/BP (+14/+20),
+    // leaving their maxima (+18/+24) and recovery speeds unchanged.
+    for pool_id in leg_ids {
+        if let Some(leg) = regions.iter_mut().find(|pool| pool.id == pool_id) {
+            leg.dp = values.leg_stagger;
+            leg.bp = values.leg_knockdown;
+        }
+    }
+    Ok(())
+}
+
 /// The small callback subset whose motion request and completion conditions
 /// are traced. Base-enter effects and the action manager remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +121,7 @@ impl Catalogue {
     // Translated from 0x008892b0 / 0x00889510, called by 0x00978820
     // (DDDA.exe 2017-12-13 Steam).
     pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
-        use crate::body::{Body, load};
+        use crate::body::{load, Body};
         let bound = || self.resources.iter().filter(|resource| resource.flags & 1 != 0);
         let mut models = bound().filter(|resource| resource.class == "rModel");
         let model = models.next().ok_or("cyclops: missing body model")?;
