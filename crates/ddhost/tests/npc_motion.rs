@@ -196,6 +196,13 @@ fn installed_host_reynard_moves_past_real_motion_waits_only_with_a_body_and_targ
     assert!(idle.loop_count > 0);
     assert_eq!(host.story_npc_intel_flags(304).unwrap() & 0x20, 0x20);
     assert!(host.npc_errors.is_empty(), "{:?}", host.npc_errors);
+    let idle_observation = idle.observation();
+    host.story.as_mut().unwrap().world.set_quest_bit(2, 88, true); // Explicit departure fixture.
+    for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
+    assert!(host.story_npc_motion(304).is_none(),
+        "the installed Goto interface retires the old 3074 presentation layer");
+    assert!(!host.observe_story_npc_motion(idle_observation));
+    assert!(host.npc_errors.is_empty(), "{:?}", host.npc_errors);
     host.unbind_story_npc(100, target);
     host.load_story_npc_intel(placement).unwrap();
     assert!(!host.bind_story_npc_motion_body(owner, banks).unwrap());

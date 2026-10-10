@@ -92,8 +92,37 @@ Private logs and the pinned executable are under
 `E:/ddda-re/notes/steps/s32/` (`core-tests.txt`, `viewer-tests.txt`,
 `viewer-build.txt`, `ddview-f7ab591.exe`). No private data was committed.
 
-The remaining acceptance check is the ordinary `DDVIEW_DEMO_FIGHT` rescue
-route against actual goblin deaths and authored q2 flags. GPU access is
-queued behind head's current route and codex-1's bounded dragon capture.
+The ordinary `DDVIEW_DEMO_FIGHT` rescue replay used the pinned `f7ab591`
+executable, two players and the authorized 600-second watchdog. It reached
+the real q2:20 success flag through authored enemy checks: NPC304 played
+3226, then started 3089 (command 3, launch 28). About one second later the
+field intel reconciliation removed NPC304. The installed 3089 resource is
+152 frames at speed 1.3; its real terminal therefore was not reached before
+owner retirement. No 3073/3074 transition was observed on this route.
+The replay subsequently hit the application watchdog, with two unrelated
+goblins still alive. The process actually exited; the PowerShell monitor
+failed to retain a numeric OS exit code. This is an application failure,
+not a route pass. Private evidence is `route-f7ab591.err.txt` (motion start
+and owner removal at lines 3221/3222).
+
+The next blocker is the layout owner release path. Installed event1 state
+22 clears LOT100:3/7 after success/death, while the viewer currently removes
+any owner absent from freshly gated candidates. The original per-frame
+`cLayoutSetCharaBase::vf06` (`0x0075F860`) also checks layout gates when its
+byte +0x43 is clear, and calls NPC vf10 (`0x007625F0`) to queue intel release,
+notify the linked body's manager and set unit bit0x2000/intel+0x4e9. The
+meaning of +0x43 and the linked-body notification must be resolved before
+choosing a retention rule; an unconditional retention fix is not justified
+by this trace. This acceptance gap is reported to head for coordination.
+
+A final audit also retires the cached motion when a real Goto/Wait or
+unsupported ActionEx interface replaces it, and before a new motion launch
+that may fail resource resolution. Interface replacement destroys the old
+instance at `0x0056C940`, invoked by `0x00533A90`. The installed host test
+extends its explicitly labeled q2:88 departure fixture to verify that 3074
+no longer overrides the following Goto and its old completion is rejected.
+All five motion regressions actually passed (6.78 s compile, 5.87 s tests).
+
 This checkpoint is implemented/tested against installed data and static
-exe logic; it is not yet a route pass or comparison with the original game.
+exe logic. Its real route reached rescue success and 3089, but did not
+satisfy the motion-chain acceptance gate or compare with the original game.

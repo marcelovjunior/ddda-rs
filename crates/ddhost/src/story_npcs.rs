@@ -447,9 +447,26 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                         self.story_npcs.motion_requests.insert(*npc, (crate::npc_motion::Token {
                             owner, command: *command, launch,
                         }, motion.clone()));
+                        self.story_npcs.motions.remove(npc);
                         if let Err(error) = self.start_story_npc_motion(*npc) {
                             self.npc_errors.push((*npc, error.to_string()));
                         }
+                    }
+                }
+                Request::Goto { npc, .. } | Request::Wait { npc, .. } => {
+                    // Interface replacement destroys the previous instance
+                    // before constructing its successor (0x0056c940, called
+                    // by 0x00533a90; DDDA.exe 2017-12-13 Steam). A retired
+                    // motion must not keep overriding the body's next action.
+                    if self.story_npc_motion_command(*npc).is_none() {
+                        self.story_npcs.motion_requests.remove(npc);
+                        self.story_npcs.motions.remove(npc);
+                    }
+                }
+                Request::Motion { npc, command, motion: None, .. } => {
+                    if self.story_npc_motion_command(*npc) == Some(*command) {
+                        self.story_npcs.motion_requests.remove(npc);
+                        self.story_npcs.motions.remove(npc);
                     }
                 }
                 Request::Gauge { npc, visible } => {
