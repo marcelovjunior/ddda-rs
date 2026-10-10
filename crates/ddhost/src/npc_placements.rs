@@ -173,4 +173,16 @@ impl LoadedLayouts {
         }
         out
     }
+
+    /// An already materialized owner is independent of fresh admission.
+    /// cLayoutSetCharaBase::vf06 (0x0075f860, DDDA.exe 2017-12-13 Steam)
+    /// removes an existing group only through its separate +0x54 bits;
+    /// vf12 (0x0075faa0) is the gate for constructing new owners. A layout
+    /// no longer loaded, or a changed placement identity, cannot retain one.
+    pub fn retains_existing(&self, world: &World<'_>, owner: &Placement) -> bool {
+        owner.stage == self.stage && self.groups.iter().any(|(group, placements)| {
+            !ddspawn::should_despawn(group, world) && placements.iter().any(|placement|
+                placement.target == owner.target && placement.npc == owner.npc)
+        })
+    }
 }

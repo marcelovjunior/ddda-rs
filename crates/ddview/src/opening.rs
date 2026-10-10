@@ -510,7 +510,15 @@ impl Session {
         let candidates = {
             let (scene, hour, flag) = ddhost::spawns::world_inputs(self.world(), stage);
             let world = ddhost::ddspawn::World { scene, hour, flag: &flag };
-            layouts.candidates(&world)
+            let mut candidates = layouts.candidates(&world);
+            for owner in self.host.story_npc_intels() {
+                if layouts.retains_existing(&world, owner)
+                    && !candidates.placements.iter().any(|placement| placement.target == owner.target)
+                {
+                    candidates.placements.push(owner.clone());
+                }
+            }
+            candidates
         };
         let mut admitted = Vec::new();
         for placement in candidates.placements {

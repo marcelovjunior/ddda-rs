@@ -152,6 +152,35 @@ impl ddsim::Ground for Void {
 }
 
 #[test]
+fn installed_reynard_closed_admission_retains_only_existing_loaded_owners() {
+    let Some((_, vfs, _)) = installed() else { return };
+    use ddhost::npc_placements::{group_list, LoadedLayouts};
+    let mut groups = group_list(&vfs, 100).unwrap();
+    let group = groups.groups.iter().find(|g| g.slot == 4).unwrap();
+    assert_eq!(group.layout_flag, Some(3));
+    assert_eq!(group.despawn, 0, "installed rescue owner has no automatic gate removal bits");
+    let layouts = LoadedLayouts::read(&vfs, 100, &groups, &[(0, 0)]).unwrap();
+    let open = ddspawn::World { scene: 1410, hour: 12, flag: &|flag| flag == 3 };
+    let closed = ddspawn::World { scene: 1410, hour: 12, flag: &|_| false };
+    let owner = layouts.candidates(&open).placements.into_iter()
+        .find(|p| p.npc == 304 && p.target.group == 4 && p.target.index == 0).unwrap();
+    assert!(!layouts.candidates(&closed).placements.iter().any(|p| p.npc == 304),
+        "LOT3 still gates fresh admission");
+    assert!(layouts.retains_existing(&closed, &owner), "closing admission is not actor removal");
+    let mut wrong = owner.clone(); wrong.stage = 200;
+    assert!(!layouts.retains_existing(&closed, &wrong));
+    wrong = owner.clone(); wrong.target.index += 1;
+    assert!(!layouts.retains_existing(&closed, &wrong));
+    wrong = owner.clone(); wrong.npc += 1;
+    assert!(!layouts.retains_existing(&closed, &wrong));
+    let unloaded = LoadedLayouts::read(&vfs, 100, &groups, &[]).unwrap();
+    assert!(!unloaded.retains_existing(&closed, &owner), "actual layout unload retires its owner");
+    groups.groups.iter_mut().find(|g| g.slot == 4).unwrap().despawn |= 1; // Explicit removal-bit fixture.
+    let removing = LoadedLayouts::read(&vfs, 100, &groups, &[(0, 0)]).unwrap();
+    assert!(!removing.retains_existing(&closed, &owner), "enabled source removal bit observes LOT3clear");
+}
+
+#[test]
 fn installed_host_reynard_moves_past_real_motion_waits_only_with_a_body_and_target() {
     let Some((data, vfs, exe)) = installed() else { return };
     use std::sync::Arc;
