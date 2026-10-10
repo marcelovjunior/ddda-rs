@@ -18,6 +18,10 @@ pub const VERSION: u32 = 1;
 
 /// The story world (`ddstory::World::save`, "DDST").
 pub const TAG_WORLD: [u8; 4] = *b"WRLD";
+/// Running quest/task state (`ddstory::Story::save_scripts`), shared and optional.
+pub const TAG_STORY: [u8; 4] = *b"STOR";
+/// Optional versioned project continuation beyond native script-save state.
+pub const TAG_STORY_CONTINUATION: [u8; 4] = *b"STCX";
 /// One Arisen's place in the world: stage-frame position and facing.
 pub const TAG_PLACE: [u8; 4] = *b"PLCE";
 /// The host's own state: frame count, seats with profiles, hirers.

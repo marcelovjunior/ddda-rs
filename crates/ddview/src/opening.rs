@@ -9,7 +9,7 @@
 //! - the **party placement** after an event (`PlaceParty`: a start position
 //!   of `scr\st200\etc\st200`);
 //! - the **vocation menu** at the weapon table (stage mode 0x19): a
-//!   labelled stub, 1 Fighter, 2 Strider or 3 Mage; the host then gives the
+//!   installed uGUIJobChange list, Fighter, Strider or Mage; the host then gives the
 //!   Arisen that vocation's fight kit (`Host::apply_job_kit`);
 //! - **talks** (`Host::talk`): E next to an NPC, lines as subtitles, E for
 //!   the next line, digits for choices;
@@ -121,6 +121,11 @@ struct Demo {
     planning: Option<RoutePlan>,
     /// When the fight demo last used a curative.
     last_heal: f32,
+    /// Damage dealt to NPC combat bodies, by (victim, attacker) owner:
+    /// (hits, valued total). Diagnostic for the rescue log.
+    npc_damage: std::collections::BTreeMap<(u32, u32), (u32, f32)>,
+    /// Started from a route checkpoint (S46): no Gate entry cell recorded.
+    resumed: bool,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -242,6 +247,7 @@ pub struct Session {
     pub host: HostHandle,
     /// Save-free bags; actual story rewards and menu choices deliver items.
     quick_items: crate::items::QuickItems,
+    vocation_menu: crate::vocation_menu::Selection,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
     pending_input: PlayerInput,
@@ -264,6 +270,9 @@ pub struct Session {
     npc_authored_motion: npc_motion::View,
     npc_adapter: NpcAdapter,
     demo: Option<Demo>,
+    /// `DDVIEW_OPENING_FROM`: a route checkpoint (Host::save) to load once
+    /// the opening is up, and `DDVIEW_OPENING_STEP` the demo step to resume.
+    resume: Option<PathBuf>,
     /// `--shots <dir>`: a screenshot per step.
     shots: Option<PathBuf>,
     shot_queue: Vec<String>,
@@ -295,6 +304,17 @@ pub struct Session {
 
 #[derive(Resource)]
 pub struct OpeningRes(pub Mutex<Session>);
+
+impl OpeningRes {
+    pub(crate) fn vocation_snapshot(&self) -> Option<(usize, usize, bool, bool)> {
+        let session = self.0.lock().unwrap();
+        let (_, owner) = session.world_menu().filter(|(menu, _)| *menu == Menu::Vocation)?;
+        // The host may request the menu during this frame's tick, after
+        // input was sampled. Draw its native initial row immediately so a
+        // same-frame screenshot doesn't miss the newly opened UI.
+        Some(session.vocation_menu.snapshot().unwrap_or((owner,0,false,true)))
+    }
+}
 
 /// Walk the stand-in prologue to an awaited movie, or q0001 when intro is bypassed.
 pub fn prepare(
@@ -391,6 +411,7 @@ pub fn prepare(
             server: None,
         },
         quick_items,
+        vocation_menu: crate::vocation_menu::Selection::default(),
         guest: None,
         network_ready: false,
         pending_input: PlayerInput::default(),
@@ -409,6 +430,7 @@ pub fn prepare(
         npc_moving: HashMap::new(),
         npc_authored_motion: npc_motion::View::load(&vfs, exe)?,
         npc_adapter,
+        resume: std::env::var_os("DDVIEW_OPENING_FROM").map(PathBuf::from),
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
             since: 0.0,
@@ -423,6 +445,8 @@ pub fn prepare(
             field_cell: None,
             planning: None,
             last_heal: f32::NEG_INFINITY,
+            npc_damage: Default::default(),
+            resumed: false,
         }),
         shots,
         shot_queue: vec![],
@@ -1041,6 +1065,129 @@ pub fn setup(
     Some(st)
 }
 
+/// Loads `stage` into the view and the host (streamer, collision, quest
+/// cameras, start positions), clears the previous stage's NPCs and reports
+/// StageLoaded to the story: what a JumpArea does. `keep_places` keeps each
+/// seat where it is (a loaded checkpoint) instead of placing the party at
+/// start position `pos`.
+fn enter_stage(
+    stage_view: &mut OpeningStage,
+    st: &mut PlayState,
+    s: &mut Session,
+    stage: u32,
+    pos: u32,
+    keep_places: bool,
+) -> Result<(), String> {
+    let kept: Vec<(ddsim::PlayerId, [f32; 3], f32)> = s.host.sim.players.iter()
+        .map(|p| (p.id, p.position, p.yaw)).collect();
+    let streamer = stage_view.streamer.as_mut().ok_or("opening stage streamer absent")?;
+    let starts = ddhost::install::start_positions(streamer.loader.vfs, stage)?;
+    let start = starts.entries.get(pos as usize).ok_or("stage start position absent")?;
+    let focus = if keep_places {
+        s.host.sim.player(0).map(|p| p.position).unwrap_or([start.position[0], start.position[1], start.position[2]])
+    } else {
+        [start.position[0], start.position[1], start.position[2]]
+    };
+    let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
+        &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
+        stage, focus)?;
+    crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, stage)?;
+    s.host.doors = None;
+    st.door_collision = Default::default();
+    st.terrain = terrain.clone();
+    s.host.set_ground_with_doors(Box::new(terrain));
+    s.starts = starts.entries.iter().map(|e| (
+        [e.position[0], e.position[1], e.position[2]], e.angle,
+        e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),
+    )).collect();
+    s.place_party(pos);
+    if keep_places {
+        for (id, position, yaw) in kept {
+            if let Some(p) = s.host.sim.player_mut(id) {
+                p.position = position;
+                p.yaw = yaw;
+                p.drop_from = position[1];
+            }
+        }
+    }
+    if let Some(server) = &mut s.host.server {
+        if let Some(spot) = &mut server.config.spot {
+            spot.stage = stage;
+        }
+    }
+    s.between.snapshot(&s.host.sim);
+    for (_, (entity, _, _)) in s.npcs.drain() {
+        stage_view.commands.entity(entity).despawn();
+    }
+    s.npc_moving.clear();
+    s.host.npcs.npcs.clear();
+    s.host.npc_parked.clear();
+    s.host.world.npcs.clear();
+    s.host.world.report(ddstory::HostEvent::StageLoaded { stage });
+    Ok(())
+}
+
+/// S46: saves the host as a route checkpoint `<dir>/<name>.ddhs` (the
+/// original's save content: world, places, progression, economy, Rift,
+/// NPC quest masks, running scripts). Refused while an interaction is open,
+/// as in the original; logged, never fatal.
+fn write_checkpoint(s: &Session, dir: &std::path::Path, name: &str) {
+    let result = (|| -> Result<PathBuf, String> {
+        let file = s.host.save().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{name}.ddhs"));
+        std::fs::write(&path, file.to_bytes()).map_err(|e| e.to_string())?;
+        Ok(path)
+    })();
+    match result {
+        Ok(path) => info!("opening: checkpoint written {}", path.display()),
+        Err(e) => warn!("opening: checkpoint {name} not written: {e}"),
+    }
+}
+
+/// S46: loads a route checkpoint the way the original loads a save:
+/// restores the host (flags, quests, running scripts, places, bags,
+/// progression), enters the saved stage keeping each seat at its saved
+/// place, and resumes the demo at `DDVIEW_OPENING_STEP` if given. Layouts,
+/// NPCs and enemies admit from their gates as usual; nothing is forced.
+fn resume_checkpoint(
+    stage_view: &mut OpeningStage,
+    st: &mut PlayState,
+    s: &mut Session,
+    path: &std::path::Path,
+    native_pc: &std::path::Path,
+) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let file = ddhost::save::SaveFile::from_bytes(&bytes)?;
+    let exe = ddexe::locate(native_pc).map_err(|e| e.to_string())?;
+    let data = InstallData::open(native_pc, Some(&exe)).map_err(|e| e.to_string())?;
+    s.host.load(&file, data).map_err(|e| e.to_string())?;
+    let (stage, start) = (s.world().stage_no, s.world().start_pos);
+    if stage == STAGE {
+        s.host.world.report(ddstory::HostEvent::StageLoaded { stage });
+    } else {
+        enter_stage(stage_view, st, s, stage, start, true)?;
+    }
+    if let (Some(d), Some(name)) = (s.demo.as_mut(), std::env::var("DDVIEW_OPENING_STEP").ok()) {
+        d.step = match name.as_str() {
+            "FieldWalk" => Step::FieldWalk,
+            "FieldSettle" => Step::FieldSettle,
+            "RescueApproach" => Step::RescueApproach,
+            "Rescue" => Step::Rescue,
+            "ThankReynard" => Step::ThankReynard,
+            "RoadWalk" => Step::RoadWalk,
+            other => return Err(format!("DDVIEW_OPENING_STEP {other} not resumable")),
+        };
+        d.path.clear();
+        d.planning = None;
+    }
+    if let Some(d) = s.demo.as_mut() {
+        d.resumed = true;
+    }
+    info!("opening: resumed checkpoint {} at stage {stage} (SceNo {})", path.display(), s.world().sce_no);
+    Ok(())
+}
+
 /// The step part: host frames, inputs, the party, NPCs, talks, the menu.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 /// Assets and world entities needed by an actual stage load.
@@ -1289,6 +1436,7 @@ pub fn step(
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut vis: Query<&mut Visibility, Without<Actor>>,
     mut hud: ResMut<play::Hud>,
+    vocation_view: Option<Res<crate::vocation_menu::View>>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
     let keys = &order_devices.keys;
@@ -1305,6 +1453,12 @@ pub fn step(
     if args.perf_route && now > limit {
         s.failure = Some(format!("performance route exceeded {limit} seconds without completing the walk"));
         return;
+    }
+    if let Some(path) = s.resume.take() {
+        if let Err(e) = resume_checkpoint(&mut stage_view, st, s, &path, &args.native_pc) {
+            s.failure = Some(format!("checkpoint {}: {e}", path.display()));
+            return;
+        }
     }
     kit_weapons(&mut stage_view, st, s);
     hired_pawn_bodies(&mut stage_view, st, s);
@@ -1403,15 +1557,14 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-        let pick = if !pause.paused && keys.just_pressed(KeyCode::Digit1) {
-            Some(ddskill_fighter())
-        } else if !pause.paused && keys.just_pressed(KeyCode::Digit2) {
-            Some(ddskill_strider())
-        } else if !pause.paused && keys.just_pressed(KeyCode::Digit3) {
-            Some(ddskill_mage())
-        } else {
-            None
-        };
+        let owner = s.world_menu().unwrap().1;
+        s.vocation_menu.open(owner);
+        let pick = if !pause.paused {
+            vocation_view.as_ref().and_then(|view| {
+                let input = s.vocation_menu.controls(&keys, &gamepads);
+                view.catalog.input(&mut s.vocation_menu, input)
+            })
+        } else { None };
         if let Some(j) = pick {
             close_menu(s, j);
         }
@@ -1466,7 +1619,7 @@ pub fn step(
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
-            demo_input(s, now, &st.terrain)
+            demo_input(s, now, &st.terrain, vocation_view.as_ref().map(|view| &view.catalog))
         };
     }
     if pause.paused {
@@ -1535,6 +1688,13 @@ pub fn step(
                 break;
             }
         };
+        if let (Some(f), Some(d)) = (s.host.fight.as_ref(), s.demo.as_mut()) {
+            for e in f.events.iter().filter(|e| f.npcs.contains_key(&e.victim)) {
+                let acc = d.npc_damage.entry((e.victim, e.attacker)).or_default();
+                acc.0 += 1;
+                acc.1 += e.total;
+            }
+        }
         if let Some(error) = s.host.world.cameras.as_ref().and_then(|c|c.error.as_ref()) {
             s.failure = Some(format!("authored camera request: {error}"));
             break;
@@ -1548,40 +1708,7 @@ pub fn step(
                 } => s.place_party(*n),
                 Request::PlaceParty { pos: Some(p), .. } => info!("opening: party placed at {p:?}"),
                 Request::JumpArea { stage, pos, .. } => {
-                    let result = (|| -> Result<(), String> {
-                        let streamer = stage_view.streamer.as_mut().ok_or("opening stage streamer absent")?;
-                        let starts = ddhost::install::start_positions(streamer.loader.vfs, *stage)?;
-                        let start = starts.entries.get(*pos as usize).ok_or("stage start position absent")?;
-                        let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
-                            &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
-                            *stage, [start.position[0], start.position[1], start.position[2]])?;
-                        crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, *stage)?;
-                        s.host.doors = None;
-                        st.door_collision = Default::default();
-                        st.terrain = terrain.clone();
-                        s.host.set_ground_with_doors(Box::new(terrain));
-                        s.starts = starts.entries.iter().map(|e| (
-                            [e.position[0], e.position[1], e.position[2]], e.angle,
-                            e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),
-                        )).collect();
-                        s.place_party(*pos);
-                        if let Some(server) = &mut s.host.server {
-                            if let Some(spot) = &mut server.config.spot {
-                                spot.stage = *stage;
-                            }
-                        }
-                        s.between.snapshot(&s.host.sim);
-                        for (_, (entity, _, _)) in s.npcs.drain() {
-                            stage_view.commands.entity(entity).despawn();
-                        }
-                        s.npc_moving.clear();
-                        s.host.npcs.npcs.clear();
-                        s.host.npc_parked.clear();
-                        s.host.world.npcs.clear();
-                        s.host.world.report(ddstory::HostEvent::StageLoaded { stage: *stage });
-                        Ok(())
-                    })();
-                    if let Err(e) = result {
+                    if let Err(e) = enter_stage(&mut stage_view, st, s, *stage, *pos, false) {
                         s.failure = Some(format!("stage {stage} handoff failed: {e}"));
                     }
                 }
@@ -1752,17 +1879,11 @@ impl Session {
 fn ddskill_fighter() -> u32 {
     1
 }
-fn ddskill_strider() -> u32 {
-    2
-}
-fn ddskill_mage() -> u32 {
-    3
-}
-
 /// The view closed the vocation menu with `job` (Fighter 1, Strider 2, Mage 3:
 /// `ddskill::vocation::Vocation`).
 fn close_menu(s: &mut Session, job: u32) {
-    info!("opening: vocation menu (stub) closed with job {job}");
+    info!("opening: vocation menu closed with job {job}");
+    s.vocation_menu.close();
     let selecting = s.world_menu().is_some();
     s.host.world.close_menu(Some(job));
     if selecting {
@@ -1936,8 +2057,8 @@ pub fn cutscene(
     }
     if s.cut.is_none() {
         if let Ok(mut t) = subs.single_mut() {
-            t.0 = if let Some((menu, _)) = s.world_menu() {
-                format!("{menu:?} menu (viewer stub, not uGUIJobChange): 1 Fighter   2 Strider   3 Mage")
+            t.0 = if s.world_menu().is_some() {
+                String::new()
             } else if let Some(talk) = &s.talk {
                 let mut l = format!("[NPC {}] {}", talk.npc, talk.line);
                 for (k, c) in talk.choices.iter().enumerate() {
@@ -2043,6 +2164,9 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
         );
+        if let Some(d) = s.demo.as_ref().filter(|d| !d.npc_damage.is_empty()) {
+            info!("opening demo: rescue: damage on NPC bodies by (victim, attacker): (hits, total) {:?}", d.npc_damage);
+        }
         // each live goblin: owner, action, target, distance to the Arisen
         // (m) and its last actions, to see why one never reaches or hurts it
         if let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) {
@@ -2116,7 +2240,7 @@ fn w_bit(s: &Session, bit: usize) -> bool {
     s.world().quest_bits(2).is_some_and(|b| b.get(bit))
 }
 
-fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
+fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocation_catalog: Option<&crate::vocation_menu::Catalog>) -> PlayerInput {
     let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else {
         return PlayerInput::default();
     };
@@ -2390,6 +2514,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         d.last_talk = 0.0;
         if matches!(n, Step::ThankReynard | Step::ReynardRepeat) { d.talked = false; }
     }
+    if let (Some(n), Some(dir)) = (next, std::env::var_os("DDVIEW_CHECKPOINT_DIR")) {
+        write_checkpoint(s, std::path::Path::new(&dir), &format!("{n:?}"));
+    }
     if let (Some(yaw), Some(pl)) = (face, s.host.sim.player_mut(0)) {
         // the demo turns the Arisen to the table (the scenario's angle
         // filter), as a player would with the stick
@@ -2399,7 +2526,19 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         // DDVIEW_DEMO_JOB picks another vocation (2 Strider, 3 Mage) for
         // unattended checks of the other kits
         let job = std::env::var("DDVIEW_DEMO_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(ddskill_fighter());
-        close_menu(s, job);
+        if let Some(catalog) = vocation_catalog {
+            s.vocation_menu.open(menu.unwrap().1);
+            match catalog.demo_select(&mut s.vocation_menu,job) {
+                Ok(()) => {
+                    let confirm = crate::vocation_menu::Input { confirm:true, ..default() };
+                    let confirmed = catalog.input(&mut s.vocation_menu,confirm)
+                        .or_else(|| catalog.input(&mut s.vocation_menu,confirm));
+                    if let Some(job) = confirmed { close_menu(s,job); }
+                    else { s.failure=Some("unattended vocation confirmation did not accept".into()); }
+                }
+                Err(error) => s.failure=Some(error),
+            }
+        } else { s.failure=Some("vocation GUI catalog is unavailable".into()); }
     }
     if talk_due {
         if s.talk.is_some() {
@@ -2438,7 +2577,8 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
                 quests.contains(&2)
             );
             let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
-                w.stage_no == 100 && s.demo.as_ref().and_then(|d| d.field_cell).is_some_and(|cell| cell != benchmark_cell(p))
+                w.stage_no == 100 && s.demo.as_ref().is_some_and(|d| d.resumed
+                    || d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)))
             } else { w.sce_no == 1400
                 && w.gsf.get(372)
                 && w.gsf.get(381)
@@ -2957,7 +3097,8 @@ mod tests {
         session.bind_npc_combat(&vfs, &[304]).unwrap();
         let combat_owner = session.host.story_npc_combat_owner(owner).expect("real motion/body binds combat");
         session.host.tick(&Default::default()).unwrap();
-        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 1000.0);
+        // 1000 x his n04 placement HP rate 2.5 (uNpcIntel::vf05 0x00BBC4E0)
+        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 2500.0);
         let combat = &session.host.fight.as_ref().unwrap().npcs[&combat_owner];
         assert!(!combat.fighter.hurts.is_empty());
         assert!(session.host.fight.as_ref().unwrap().npc_errors.is_empty());
@@ -3016,7 +3157,7 @@ mod tests {
         let position = (target + Vec3::X * 1000.0).to_array(); // Explicit isolated position fixture.
         session.host.sim.player_mut(0).unwrap().position = position;
         session.demo.as_mut().unwrap().step = Step::RescueApproach;
-        let input = demo_input(&mut session, 1.0, &DriverGround);
+        let input = demo_input(&mut session, 1.0, &DriverGround, None);
         assert_eq!(input.sim.stick, [0.0, 1.0], "ordinary movement heads toward installed Area");
         assert_eq!(session.host.sim.player(0).unwrap().position, position, "driver never places the body");
         assert_eq!(session.demo.as_ref().unwrap().step, Step::RescueApproach);
@@ -3024,7 +3165,7 @@ mod tests {
         assert!(!session.world().quest_bit(2, 20));
         // Explicit observation fixture: actual event1 entry supplies this in production.
         session.host.story.as_mut().unwrap().world.set_quest_bit(2, 25, true);
-        demo_input(&mut session, 2.0, &DriverGround);
+        demo_input(&mut session, 2.0, &DriverGround, None);
         assert_eq!(session.demo.as_ref().unwrap().step, Step::Rescue);
         assert!(session.host.fight.as_ref().unwrap().goblins.is_empty());
         demo_rescue(&mut session, 3.0);

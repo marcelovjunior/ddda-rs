@@ -23,7 +23,7 @@ fn distance_hate_preserves_native_ties_memory_and_dead_gate() {
 fn unsupported_sensor_branches_are_reported_and_binary_rows_are_checked() {
     assert!(Sensor::parse(b"SNR2").is_err());
     let mut sensor = Sensor(vec![SensorRow { class: 2, types: 0x16, enabled_by: 1,
-        shape: 5, radius: 100.0, fov: 360.0, flags: 0, joint: -1, offset: [0.0; 3] }]);
+        shape: 5, radius: 100.0, fov: 360.0, flags: 0, joint: -1, offset: [0.0; 3], direction: [0.0, 0.0, 1.0] }]);
     assert!(sensor.admits(1, [0.0; 3], 0.0, target(501, 50.0), 4).unwrap());
     assert!(!sensor.admits(2, [0.0; 3], 0.0, target(501, 50.0), 4).unwrap());
     assert!(!sensor.admits(1, [0.0; 3], 0.0, target(501, 50.0), 3).unwrap());

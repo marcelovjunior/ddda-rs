@@ -16,6 +16,7 @@ pub struct Object<'a> {
     pub properties: &'a [Property<'a>],
     pub texture_keys: Vec<(u32, u32)>,
     pub vector_keys: Vec<(&'a str, u32, [f32; 4])>,
+    pub boolean_keys: Vec<(&'a str, u32, bool)>,
 }
 
 impl<'a> Gui<'a> {
@@ -119,6 +120,7 @@ impl<'a> Gui<'a> {
                 .ok_or("object properties outside pool")?;
             let mut texture_keys = Vec::new();
             let mut vector_keys = Vec::new();
+            let mut boolean_keys = Vec::new();
             // Sequence spans are packed into a8; b0 uses a 16-bit key count.
             // Fixups and pool selection: rGUI::vf15, 0x01076170.
             let sequences = a.words[1] >> 16;
@@ -132,7 +134,7 @@ impl<'a> Gui<'a> {
                 for t in 0..n as usize {
                     let t = (first_track + t) * 20;
                     let flags = word(tracks, t)?;
-                    if flags & 255 != 7 && flags & 255 != 4 {
+                    if flags & 255 != 7 && flags & 255 != 4 && flags & 255 != 3 {
                         continue;
                     }
                     let name_offset = word(tracks, t + 8)?;
@@ -153,6 +155,15 @@ impl<'a> Gui<'a> {
                                 value + k * 4,
                             )?;
                             texture_keys.push((frame, value));
+                        } else if flags & 255 == 3 {
+                            // rGUI::vf15, 0x01076170: kind 3 relocates to
+                            // the byte-valued Boolean pool, not the word pool.
+                            let values = self.section(0xf8).ok_or("missing boolean pool")?.bytes;
+                            let boolean = *values
+                                .get(value.checked_add(k).ok_or("boolean key overflow")?)
+                                .ok_or("boolean key outside pool")?
+                                != 0;
+                            boolean_keys.push((name, frame, boolean));
                         } else if flags & 255 == 4 {
                             let values = self.section(0x100).ok_or("missing vector pool")?.bytes;
                             let mut vector = [0.0; 4];
@@ -170,6 +181,7 @@ impl<'a> Gui<'a> {
                 properties,
                 texture_keys,
                 vector_keys,
+                boolean_keys,
             });
         }
         Ok(out)
@@ -177,6 +189,16 @@ impl<'a> Gui<'a> {
 }
 
 impl Object<'_> {
+    /// Discrete authored visibility keys (0x01076170 / cGUI animation data).
+    /// No interpolation: a Boolean key takes effect at its recorded frame.
+    pub fn visible_at(&self, frame: u32) -> bool {
+        self.boolean_keys
+            .iter()
+            .filter(|(name, key, _)| *name == "Visible" && *key <= frame)
+            .last()
+            .map(|(_, _, value)| *value)
+            .unwrap_or_else(|| self.integer("Visible").unwrap_or(1) != 0)
+    }
     pub fn property(&self, name: &str) -> Option<&Property<'_>> {
         self.properties.iter().find(|p| p.name == name)
     }
@@ -214,6 +236,65 @@ pub fn gauge_width(full: f32, ratio: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boolean_animation_uses_byte_pool_and_discrete_visibility() {
+        let words = |words: &[u32]| words.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<_>>();
+        let sections = [
+            (0xa4, words(&[7, 0, 0, 0, 0, 0, 0, 0])),
+            (0xa8, words(&[1 << 24, 0, 0, 0])),
+            (0xb0, words(&[(3 << 8) | 3, 0, 0, 0, 1])),
+            (0xf0, b"Visible\0".to_vec()),
+            (0xf4, words(&[0x07000000, 0, 133, 0, 140, 0])),
+            (0xf8, vec![9, 0, 1, 0]),
+        ];
+        let mut gui = Gui {
+            width: 0,
+            height: 0,
+            root: None,
+            nodes: vec![],
+            properties: vec![],
+            resources: vec![],
+            animations: vec![crate::Animation {
+                id: 1,
+                name: "fixture",
+                words: [1, (1 << 16) | 1, 0, 0, 0, 0],
+            }],
+            sections: sections
+                .iter()
+                .map(|(header_offset, bytes)| crate::Section {
+                    header_offset: *header_offset,
+                    offset: 0,
+                    count: None,
+                    stride: None,
+                    bytes,
+                })
+                .collect(),
+        };
+        let objects = gui.animation_objects("fixture").unwrap();
+        assert_eq!(
+            objects[0].boolean_keys,
+            [
+                ("Visible", 0, false),
+                ("Visible", 133, true),
+                ("Visible", 140, false)
+            ]
+        );
+        assert!(!objects[0].visible_at(132));
+        assert!(objects[0].visible_at(133));
+        assert!(objects[0].visible_at(139));
+        assert!(!objects[0].visible_at(140));
+        drop(objects);
+        gui.sections
+            .iter_mut()
+            .find(|s| s.header_offset == 0xf8)
+            .unwrap()
+            .bytes = &[9, 0, 1];
+        assert_eq!(
+            gui.animation_objects("fixture").unwrap_err(),
+            "boolean key outside pool"
+        );
+    }
     #[test]
     fn packed_anchor() {
         assert_eq!(anchor_offset([152.0, 8.0], 4), [0.0, -4.0]);

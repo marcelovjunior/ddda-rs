@@ -594,6 +594,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// - `HOST`: the frame count, the seats with their profiles, and who
     ///   hired each pawn;
     /// - `WRLD`: the story world;
+    /// - `STOR`: native-derived quest/task graph and register state;
+    /// - optional `STCX`: versioned project continuation (clocks/scratch),
+    ///   beyond the original's state re-entry behavior;
     /// - `PLCE`: each Arisen's place, by profile;
     /// - `ECON`, `PROG`: shared parts, and per-seat parts filed by profile;
     /// - `RIFT`: the shared Rift.
@@ -616,6 +619,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         f.put(save::TAG_HOST, Owner::Shared, w.finish());
         if let Some(s) = &self.story {
             f.put(save::TAG_WORLD, Owner::Shared, s.world.save());
+            f.put(save::TAG_STORY, Owner::Shared, s.save_scripts().map_err(HostError::Save)?);
+            f.put(save::TAG_STORY_CONTINUATION, Owner::Shared, s.save_continuation().map_err(HostError::Save)?);
         }
         for seat in self.roster.seats() {
             if let Some(p) = self.sim.player(seat.id) {
@@ -645,6 +650,20 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
         let err = HostError::Save;
+        // Build/validate the complete script candidate before touching this
+        // host, including its frame or player places. Old WRLD-only saves
+        // still use from_world. A script chunk cannot stand without its world.
+        let loaded_story = match f.get(save::TAG_WORLD, Owner::Shared) {
+            Some(b) => {
+                let world = ddstory::World::load(b).map_err(err)?;
+                Some(Story::from_save_with_continuation(data, world, f.get(save::TAG_STORY, Owner::Shared),
+                    f.get(save::TAG_STORY_CONTINUATION, Owner::Shared)).map_err(err)?)
+            }
+            None if f.get(save::TAG_STORY, Owner::Shared).is_some()
+                || f.get(save::TAG_STORY_CONTINUATION, Owner::Shared).is_some() =>
+                return Err(err("STOR script chunk without WRLD".into())),
+            None => None,
+        };
         // Old seat -> profile, from HOST; then -> the seat it has now.
         let mut old: Vec<(PlayerId, ProfileId)> = vec![];
         let mut hired_old = [None; 2];
@@ -666,9 +685,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             let p = old.iter().find(|(o, _)| *o == s)?.1;
             roster.seats().iter().find(|x| x.profile == p).map(|x| x.id)
         };
-        if let Some(b) = f.get(save::TAG_WORLD, Owner::Shared) {
-            let world = ddstory::World::load(b).map_err(HostError::Save)?;
-            self.story = Some(Story::from_world(data, world));
+        if let Some(story) = loaded_story {
+            self.story = Some(story);
             self.boot = true;
         }
         for seat in self.roster.seats() {
