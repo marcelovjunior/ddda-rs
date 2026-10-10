@@ -27,6 +27,126 @@ pub struct PathSample {
     pub at_end: bool,
 }
 
+/// Sampled native path fields; scale/orientation and RNG belong to the caller.
+#[derive(Debug, Clone, Copy)]
+pub struct PathDynamics {
+    pub segment_length: f32,
+    pub damping: f32,
+    pub spring: f32,
+    pub taper_points: u8,
+    pub force: [f32; 3],
+}
+
+/// Unconstrained type4 path state. Collision-constrained and angular paths
+/// have separate native routines and must not be routed through this one.
+#[derive(Debug, Clone)]
+pub struct ParticlePath {
+    pub points: Vec<[f32; 3]>,
+    pub velocities: Vec<[f32; 3]>,
+    pub total_length: f32,
+}
+
+impl ParticlePath {
+    /// Supported zero-angular, unconstrained path's emitter update. The
+    /// caller supplies its real current-minus-prior emitter displacement.
+    // Translated from 0x010E6720's anchor assignment and final relative
+    // coordinate conversion (DDDA.exe 2017-12-13 Steam).
+    pub fn advance_emitter(&mut self, dynamics: PathDynamics, displacement: [f32; 3]) -> Result<(), String> {
+        if displacement.iter().any(|v| !v.is_finite()) || self.points.len() < 2 {
+            return Err("invalid collision emitter displacement".into());
+        }
+        validate_dynamics(dynamics)?;
+        if self.points.len() > u8::MAX as usize || self.points.len() != self.velocities.len()
+            || self.points.iter().chain(self.velocities.iter()).flatten().any(|v| !v.is_finite()) {
+            return Err("invalid native collision path state".into());
+        }
+        self.points[0] = displacement;
+        self.advance(dynamics)?;
+        for point in &mut self.points {
+            for axis in 0..3 { point[axis] -= displacement[axis]; }
+        }
+        Ok(())
+    }
+
+    /// Construct from the actual transformed direction and sampled force.
+    /// Zero relaxation iterations are not represented by this adapter.
+    // Translated from 0x012A1330 (DDDA.exe 2017-12-13 Steam).
+    pub fn construct(point_count: u8, direction: [f32; 3], dynamics: PathDynamics,
+        iterations: u16) -> Result<Self, String> {
+        if point_count < 2 || iterations == 0 || direction.iter().any(|v| !v.is_finite()) {
+            return Err("unsupported collision path construction input".into());
+        }
+        validate_dynamics(dynamics)?;
+        let length = vector_length(direction);
+        let unit = if length >= f32::EPSILON { direction.map(|v| v / length) } else { direction };
+        let delta = unit.map(|v| v * dynamics.segment_length);
+        let mut position = [0.0; 3];
+        let mut points = Vec::with_capacity(point_count as usize);
+        for _ in 0..point_count {
+            points.push(position);
+            for axis in 0..3 { position[axis] += delta[axis]; }
+        }
+        let mut path = Self { points, velocities: vec![[0.0; 3]; point_count as usize], total_length: 0.0 };
+        for _ in 0..iterations { path.advance(dynamics)?; }
+        Ok(path)
+    }
+
+    /// One native update, without a guessed delta-time multiplier. The outer
+    /// 0x010E6720 adapter must apply the actual emitter displacement first.
+    // Translated from 0x0129AF50 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, dynamics: PathDynamics) -> Result<(), String> {
+        validate_dynamics(dynamics)?;
+        if self.points.len() < 2 || self.points.len() > u8::MAX as usize
+            || self.points.len() != self.velocities.len()
+            || self.points.iter().chain(self.velocities.iter()).flatten().any(|v| !v.is_finite()) {
+            return Err("invalid native collision path state".into());
+        }
+        let taper = u32::from(dynamics.taper_points);
+        let inverse_taper_squared = if taper == 0 { 0.0 } else { 1.0 / (taper * taper) as f32 };
+        let mut total = 0.0;
+        for index in 1..self.points.len() {
+            let squared_index = (index * index) as f32;
+            let weight = squared_index * inverse_taper_squared;
+            let damping = if index < taper as usize {
+                dynamics.damping * squared_index * inverse_taper_squared + (1.0 - weight)
+            } else { dynamics.damping };
+            for axis in 0..3 {
+                self.velocities[index][axis] = dynamics.force[axis] + self.velocities[index][axis] * damping;
+            }
+            let predecessor = self.points[index - 1];
+            let delta = std::array::from_fn(|axis| predecessor[axis] - self.points[index][axis]);
+            let length = vector_length(delta);
+            if dynamics.segment_length < length {
+                let correction = ((length - dynamics.segment_length) / length) * dynamics.spring;
+                for axis in 0..3 { self.velocities[index][axis] += correction * delta[axis]; }
+            }
+            for axis in 0..3 { self.points[index][axis] += self.velocities[index][axis]; }
+            let delta = std::array::from_fn(|axis| predecessor[axis] - self.points[index][axis]);
+            let length = vector_length(delta);
+            if length > 1e-8 {
+                let correction = (length - dynamics.segment_length) / length;
+                for axis in 0..3 {
+                    self.points[index][axis] += correction * delta[axis];
+                    self.velocities[index][axis] += delta[axis] * correction * dynamics.spring;
+                }
+            }
+            total += vector_length(std::array::from_fn(|axis| predecessor[axis] - self.points[index][axis]));
+        }
+        self.total_length = total;
+        Ok(())
+    }
+}
+
+fn vector_length(v: [f32; 3]) -> f32 { (v[1] * v[1] + v[0] * v[0] + v[2] * v[2]).sqrt() }
+
+fn validate_dynamics(d: PathDynamics) -> Result<(), String> {
+    if [d.segment_length, d.damping, d.spring].iter().chain(d.force.iter()).any(|v| !v.is_finite())
+        || d.segment_length < 0.0 {
+        return Err("invalid native collision path dynamics".into());
+    }
+    Ok(())
+}
+
 /// Sample the actual constructed type4 path, before the separate spawn-offset
 /// transform. This helper cannot construct a path from guessed fire geometry.
 // Translated from 0x010E2EB0's path walk (DDDA.exe 2017-12-13 Steam).
@@ -62,6 +182,64 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_path_spring_projection_preserves_velocity_and_handles_compression() {
+        let dynamics = PathDynamics { segment_length: 1.0, damping: 1.0, spring: 0.5,
+            taper_points: 0, force: [0.0; 3] };
+        let mut path = ParticlePath { points: vec![[0.0; 3], [2.0, 0.0, 0.0]],
+            velocities: vec![[0.0; 3]; 2], total_length: 0.0 };
+        path.advance(dynamics).unwrap();
+        assert_eq!(path.points[1], [1.0, 0.0, 0.0]);
+        assert_eq!(path.velocities[1], [-0.75, 0.0, 0.0]);
+        assert_eq!(path.total_length, 1.0);
+        path.advance(dynamics).unwrap();
+        assert_eq!(path.points[1], [1.0, 0.0, 0.0]);
+        assert_eq!(path.velocities[1], [-0.375, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn native_path_taper_and_degenerate_segment_keep_source_boundaries() {
+        let dynamics = PathDynamics { segment_length: 1.0, damping: 0.0, spring: 0.5,
+            taper_points: 2, force: [0.0; 3] };
+        let mut path = ParticlePath { points: vec![[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            velocities: vec![[0.0; 3], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], total_length: 0.0 };
+        path.advance(dynamics).unwrap();
+        assert_eq!(path.velocities[1], [0.375, 0.0, 0.0]);
+        assert_eq!(path.velocities[2], [0.0; 3]);
+        assert_eq!(path.total_length, 2.0);
+        let mut degenerate = ParticlePath { points: vec![[0.0; 3]; 2],
+            velocities: vec![[0.0; 3]; 2], total_length: 99.0 };
+        degenerate.advance(dynamics).unwrap();
+        assert_eq!(degenerate.points, vec![[0.0; 3]; 2]);
+        assert_eq!(degenerate.total_length, 0.0);
+    }
+
+    #[test]
+    fn native_path_constructor_normalizes_direction_and_relaxes_actual_force() {
+        let dynamics = PathDynamics { segment_length: 2.0, damping: 0.0, spring: 0.1,
+            taper_points: 0, force: [0.0, 0.0, 1.0] };
+        let path = ParticlePath::construct(3, [0.0, 0.0, 4.0], dynamics, 2).unwrap();
+        assert_eq!(path.points, vec![[0.0; 3], [0.0, 0.0, 2.0], [0.0, 0.0, 4.0]]);
+        assert_eq!(path.total_length, 4.0);
+        assert!(path.velocities[1][2] > 0.0);
+        assert!(ParticlePath::construct(3, [0.0; 3], dynamics, 0).is_err());
+        assert!(ParticlePath::construct(3, [f32::NAN; 3], dynamics, 1).is_err());
+    }
+
+    #[test]
+    fn native_emitter_motion_bends_path_then_restores_relative_anchor() {
+        let dynamics = PathDynamics { segment_length: 2.0, damping: 0.0, spring: 0.1,
+            taper_points: 0, force: [0.0; 3] };
+        let mut path = ParticlePath::construct(3, [0.0, 0.0, 1.0], dynamics, 1).unwrap();
+        path.advance_emitter(dynamics, [1.0, 0.0, 0.0]).unwrap();
+        assert_eq!(path.points[0], [0.0; 3]);
+        assert!(path.points[1][0] < -0.8, "path must retain prior trailing positions");
+        assert!(path.points[1][2] > 1.7);
+        assert!((path.total_length - 4.0).abs() < 1e-6);
+        assert!((vector_length(path.points[1]) - 2.0).abs() < 1e-6);
+        assert_ne!(path.velocities[1], [0.0; 3]);
+    }
 
     #[test]
     fn path_walk_uses_segment_lengths_and_native_end_flag_without_time_clamping() {

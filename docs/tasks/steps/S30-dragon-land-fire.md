@@ -232,3 +232,21 @@ decide lifetime retirement. One regression passed (2.42s compile, actual
 exit0), covering corners, negative distance, zero-length segments, exact
 end/overshoot and missing/nonfinite input. Path construction/binding remains
 the next unresolved runtime dependency.
+
+The unconstrained, zero-angular type4 path constructor and spring update
+are translated from `0x012A1330/0x0129AF50`. They use caller-supplied
+sampled fields and transformed direction/force, preserve the native
+per-update velocity, taper damping, stretch correction, fixed segment
+projection and total-length accumulation. No game path table is embedded.
+The supported `0x010E6720` emitter update moves the first point by the
+actual emitter displacement and restores relative coordinates afterward.
+Collision-constrained, angular and zero-iteration construction paths are
+explicitly outside this adapter.
+
+Four new regressions cover stretching/compression, taper boundaries,
+degenerate segments, normalized construction/relaxation and an emitter
+moving sideways while its trail bends. All eight particle tests passed
+(3.15s compile, 0.00s test run), actual exit0. These helpers are not yet
+connected to the host's BreathWide query or normal damage pass. Provider
+birth orientation, sampled runtime fields and effect ownership remain the
+next integration step; full S30 acceptance stays open.
