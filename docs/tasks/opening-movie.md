@@ -53,3 +53,53 @@ Open:
 - subtitles, if the movie has any outside its picture;
 - the hookup to q0000's event st100 ev00 in `--opening` (after the
   prologue, stage 800).
+
+### S08: original movie skip input (codex-1, 2026-10-09)
+
+**Answer:** the event movie accepts a newly pressed **Start** button from
+any of four pads, or keyboard **Escape**. There is **no seen-before gate**
+in the event playback/skip path; first playback is skippable once the
+event enters its playing state. Enter is not the keyboard skip binding.
+This is executable tracing plus a read-only binding snapshot, not a live
+first-playback comparison.
+
+- `sEventManager` play handler `0x00435fb0` calls `0x004367c0` every update
+  before testing timeline completion; success switches to state 4 (skip).
+  Movie preparation `0x00435d90` finds `uMovie` named `Movie`, starts it
+  through `0x00f7a720`, and enters that same state 3. The movie is not a
+  separate input-policy path.
+- Pad test in `0x004367c0`: for slots 0..3, at
+  `sQlocInput + 0x1774 + slot * 0x2e8`, test `pad[+0x14] & pad[+0x220]`.
+  Reflection `0x0040bf00` identifies `+0x14` as `mBtn.trg` (press edge).
+  Constructor `0x0040a3d0` sets `+0x220` to **0x00000008**. This is the
+  engine's internal mask, not an XInput mask. The binding array starts at
+  `+0x218`; index 2 is `ID_START`, named by `0x0040a6c0` (string
+  `0x01558ffc`). The constructor's later configurable action-table copy
+  does not overwrite index 2. `sQlocInput + 0x232d != 0` suppresses the pad
+  path; that is an input suppression check, not movie history.
+- If no pad triggered, the disassembly calls `0x0040d200` with EAX=1,
+  ECX=`sQlocInput`, and stack argument 0. These are binding **ID_CANCEL**
+  (index 1) and trigger mode 0. The helper reads its key vector at
+  `sQlocInput + 0x12fc + 1 * 0x14`, tests keyboard bits at
+  `sKeyboard + 0x160`, or the corresponding mouse-trigger mask.
+- Default-key builder `0x0040ab20`, instructions `0x0040ab33..0x0040ab75`,
+  initializes that index with scan code **0x01** through `0x0040b460`
+  (`MapVirtualKeyA(scan, 1)`), yielding **VK_ESCAPE = 0x1b**. It sets the
+  binding's editable flag to 0; `0x00408600` only loads configuration for
+  editable bindings. Thus Enter is not an alternate default here.
+- After a successful input, `0x004367c0` optionally sets sGameSys
+  `+0xac6f0` bit `0x01000000` when `0x04000000` is already set. This occurs
+  after acceptance and never rejects the skip; it is not a seen gate.
+
+Validation: decompile and disassembly agree on the input offsets, masks,
+register arguments and state transition. A read-only oracle snapshot of
+the paused running game found all four skip masks equal to `0x8`, the
+index-1 key vector containing only `0x1b`, and input suppression byte 0.
+No game state was changed; no capture or game assets were added. No Rust
+changed, so crate tests/builds are not applicable to this research step.
+
+Next: S16 should use Escape and each connected pad's Start press edge,
+allow the first playback to skip, and hook movie completion/skip into the
+existing event lifecycle. Fade/cleanup `0x00436070`/`0x004361a0` remain
+separate from the input findings; do not claim their presentation timing
+has been matched by this step.
