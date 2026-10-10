@@ -21,6 +21,7 @@ struct Item {
 
 pub(crate) struct Catalog {
     items: Vec<Item>,
+    categories: Vec<u32>,
     use_label: String,
 }
 
@@ -68,6 +69,9 @@ impl Catalog {
         }
         Ok(Self {
             items,
+            // 0x0066EEC0 populates twelve lists by the installed enum map;
+            // its thirteenth reserved quest list remains unported.
+            categories: exe.u32s(0x017F15E8, 12).map_err(String::from)?,
             use_label: messages.message(2).ok_or("Use message missing")?.to_owned(),
         })
     }
@@ -76,6 +80,9 @@ impl Catalog {
     /// for use; display order currently preserves bag order (native sort and
     /// placeholder/equipment exclusion are explicitly not reproduced).
     fn entries(&self, bag: &Bag, category: u32) -> Vec<Entry> {
+        let Some(&category) = self.categories.get(category as usize) else {
+            return Vec::new();
+        };
         bag.slots
             .iter()
             .copied()
@@ -131,7 +138,8 @@ impl Selection {
         }
         self.bag = self.bag.min(bags.len() - 1);
         if input.category != 0 {
-            self.category = (self.category as i32 + input.category as i32).rem_euclid(12) as u32;
+            self.category = (self.category as i32 + input.category as i32)
+                .rem_euclid(catalog.categories.len() as i32) as u32;
             self.cursor = 0;
         }
         let rows = catalog.entries(&bags[self.bag].bag, self.category);
@@ -893,6 +901,29 @@ mod tests {
             .unwrap();
         assert_eq!(selected.0, Owner::Arisen(7));
         assert_eq!(selected.1.slot, data.bags[0].bag.slots[selected.1.index]);
+        // A tab must keep its bag identity even when an actor seat would
+        // differ (the hired-pawn pool uses seats 6/7, bags 1/2).
+        let mut tabs = data.bags.clone();
+        tabs.push(BagView {
+            owner: Owner::Pawn(1),
+            bag: tabs[0].bag.clone(),
+        });
+        let pawn = menus
+            .owners
+            .get_mut(&7)
+            .unwrap()
+            .apply(
+                Input {
+                    bag: 1,
+                    use_item: true,
+                    ..default()
+                },
+                &tabs,
+                &catalog,
+            )
+            .unwrap();
+        assert_eq!(pawn.0, Owner::Pawn(1));
+        assert_eq!(pawn.1.slot, tabs[1].bag.slots[pawn.1.index]);
         menus.close(1);
         assert!(menus.blocks(7) && !menus.blocks(1));
     }
