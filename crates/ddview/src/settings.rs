@@ -260,14 +260,12 @@ fn menu_setup(
             ] {
                 let label = options.text(id).unwrap_or("");
                 panel
-                    .spawn(
-                        (Node {
-                            width: Val::Px(780.0),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::SpaceBetween,
-                            ..default()
-                        }),
-                    )
+                    .spawn(Node {
+                        width: Val::Px(780.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceBetween,
+                        ..default()
+                    })
                     .with_children(|row| {
                         row.spawn((
                             Text::new(label),
@@ -719,7 +717,7 @@ impl Graphics {
         }
         let camera_fov = ini
             .get(GRAPHICS, "CameraFov")
-            .map(|v| {
+            .map(|v| -> Result<f32, String> {
                 let value = v
                     .parse::<f32>()
                     .map_err(|_| "CameraFov is not a number".to_string())?;
