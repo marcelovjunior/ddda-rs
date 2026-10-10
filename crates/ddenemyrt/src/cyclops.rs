@@ -482,6 +482,225 @@ impl ThinkDriver {
     }
 }
 
+/// Status codes returned by the optional services through 0x0059f8e0.
+/// The callback leaves state untouched for status2 (request pending).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NavigationResult {
+    Unavailable,        // 0: absent/disabled services, or unsuccessful request.
+    Direct,             // 1: direct target, no intermediate waypoint.
+    Pending,            // 2: no waypoint ready.
+    Waypoint([f32; 3]), // 3: next path node.
+    Complete,           // 4: path exhausted.
+}
+
+/// Headless boundary for 0x0059f840 (request), 0x0059f8e0 (poll),
+/// 0x0059f7a0 (cancel), and 0x005ad120 (path behavior configuration).
+/// Each actor owns its provider; service internals are not translated here.
+pub trait NavigationProvider {
+    fn begin(&mut self, from: [f32; 3], destination: [f32; 3]) -> bool;
+    fn poll(&mut self, from: [f32; 3], arrival_distance: f32) -> NavigationResult;
+    fn cancel(&mut self);
+    fn configure_path(&mut self) {}
+}
+
+/// Sourced absent/disabled-service return0 path (0x0059f840/0x0059f8e0).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoNavigationServices;
+impl NavigationProvider for NoNavigationServices {
+    fn begin(&mut self, _: [f32; 3], _: [f32; 3]) -> bool {
+        false
+    }
+    fn poll(&mut self, _: [f32; 3], _: f32) -> NavigationResult {
+        NavigationResult::Unavailable
+    }
+    fn cancel(&mut self) {}
+}
+
+/// *Viewer choice*: one straight segment, checked against stage collision.
+/// This is not the original FieldWayPoint/NavigationMesh path finder.
+/// Callers supply the cast height in cm; no cyclops capsule radius, step
+/// clearance, detour, or ground projection is guessed. A blocked segment
+/// stays pending, so it never supplies a waypoint through a wall.
+pub struct StraightLineNavigation<'a> {
+    pub ground: &'a dyn ddsim::Ground,
+    pub cast_height: f32,
+    destination: Option<[f32; 3]>,
+}
+impl<'a> StraightLineNavigation<'a> {
+    pub fn new(ground: &'a dyn ddsim::Ground, cast_height: f32) -> Self {
+        Self {
+            ground,
+            cast_height,
+            destination: None,
+        }
+    }
+}
+impl NavigationProvider for StraightLineNavigation<'_> {
+    fn begin(&mut self, _: [f32; 3], destination: [f32; 3]) -> bool {
+        self.destination = Some(destination);
+        true
+    }
+    fn poll(&mut self, from: [f32; 3], arrival_distance: f32) -> NavigationResult {
+        let Some(destination) = self.destination else {
+            return NavigationResult::Unavailable;
+        };
+        let mut cast_from = from;
+        let mut cast_to = destination;
+        cast_from[1] += self.cast_height;
+        cast_to[1] += self.cast_height;
+        if self.ground.ray(cast_from, cast_to).is_some() {
+            return NavigationResult::Pending;
+        }
+        let distance2: f32 = from.iter().zip(destination).map(|(a, b)| (b - a) * (b - a)).sum();
+        // The authored trace's inclusive >= threshold returns3 even at
+        // equality (0x010c5620); the straight segment keeps that convention.
+        if distance2 >= arrival_distance * arrival_distance {
+            NavigationResult::Waypoint(destination)
+        } else {
+            self.destination = None;
+            NavigationResult::Complete
+        }
+    }
+    fn cancel(&mut self) {
+        self.destination = None;
+    }
+}
+
+/// Canonical actor observations used by the common navigation callbacks.
+/// Positions are all in the host's stage frame (the source subtracts and
+/// re-adds sWorldOffset around service calls). The host supplies +0xe0,
+/// +0x5c90 and model yaw rather than guessing them from party index0.
+#[derive(Debug, Clone, Default)]
+pub struct NavigationActor {
+    pub position: [f32; 3],
+    pub destination: [f32; 3],
+    pub yaw: f32,
+    /// +0x206c bit0x80, required by common checks1016/1017.
+    pub checks_enabled: bool,
+    /// Actor bytes +0x5ca0, +0x5ca1, +0x5ca2.
+    pub path_flags: [u8; 3],
+    /// The opaque actor +0x5e2c byte, tested by check1027.
+    pub check1027: u8,
+    /// Actor +0x5c80: waypoint heading, or model yaw for a direct target.
+    pub path_yaw: f32,
+}
+
+/// Common callbacks owned by this actor. Unrelated callbacks and rand are
+/// delegated to `fallback`, preserving explicit unsupported diagnostics.
+pub struct NavigationWorld<P, H> {
+    pub actor: NavigationActor,
+    pub provider: P,
+    pub fallback: H,
+}
+impl<P: NavigationProvider, H: ddai::thinktbl::Host> ddai::thinktbl::Host for NavigationWorld<P, H> {
+    // Translated from 0x008aac60/0x008aaca0/0x008ab100
+    // (DDDA.exe 2017-12-13 Steam).
+    fn check(&mut self, id: u32, argument: u32) -> Result<bool, ddai::Error> {
+        match id {
+            1016 => Ok(self.actor.checks_enabled && self.actor.path_flags[0] != 0),
+            1017 => Ok(self.actor.checks_enabled && self.actor.path_flags[1] != 0),
+            1027 => Ok(self.actor.check1027 != 0),
+            _ => self.fallback.check(id, argument),
+        }
+    }
+
+    // Translated from 0x008ab3b0 (DDDA.exe 2017-12-13 Steam).
+    fn set(&mut self, id: u32, argument: u32) -> Result<u32, ddai::Error> {
+        match id {
+            1002 => {
+                let initialized = self.provider.begin(self.actor.position, self.actor.destination);
+                let result = if initialized {
+                    self.provider.poll(self.actor.position, 0.0)
+                } else {
+                    NavigationResult::Unavailable
+                };
+                match result {
+                    NavigationResult::Unavailable => {
+                        self.provider.cancel();
+                        self.actor.path_flags[..2].fill(0);
+                    }
+                    NavigationResult::Direct => self.actor.path_flags[..2].fill(0),
+                    _ => {
+                        self.provider.configure_path();
+                        self.actor.path_flags[0] = 0;
+                        self.actor.path_flags[1] = 1;
+                    }
+                }
+                Ok(0)
+            }
+            1003 => Err(ddai::Error::Unimplemented(
+                "navigation set1003 requires the executing think manager".into(),
+            )),
+            _ => self.fallback.set(id, argument),
+        }
+    }
+
+    // Translated from 0x008ab5b0 (DDDA.exe 2017-12-13 Steam).
+    fn set_with_manager(
+        &mut self,
+        id: u32,
+        argument: u32,
+        manager: &mut ddai::thinktbl::ThinkMgr,
+    ) -> Result<u32, ddai::Error> {
+        if id != 1003 {
+            if id == 1002 {
+                return self.set(id, argument);
+            }
+            return self.fallback.set_with_manager(id, argument, manager);
+        }
+        let result = self.provider.poll(self.actor.position, argument as f32);
+        match result {
+            NavigationResult::Waypoint(position) => {
+                let mut slot =
+                    ddai::thinktbl::Slot::measure(self.actor.position, self.actor.yaw, position, 0.0, 0);
+                // The source passes the same full 3D length to both fields.
+                slot.dist = slot.dist3;
+                // The literal0x10 argument is slot +0x7c, not its category;
+                // 0x008b72a0 clears +0x68 and categorization bit1.
+                slot.x7c = 0x10;
+                manager.slots[7] = slot;
+                self.actor.path_yaw =
+                    (position[0] - self.actor.position[0]).atan2(position[2] - self.actor.position[2]);
+                self.actor.path_flags[0] = 0;
+                self.actor.path_flags[1] = 1;
+            }
+            NavigationResult::Unavailable | NavigationResult::Direct | NavigationResult::Complete => {
+                if result == NavigationResult::Complete {
+                    self.actor.path_flags[0] = 1;
+                    self.actor.path_flags[2] = 1;
+                } else {
+                    // Source clears only +0x5ca1, not +0x5ca0/+0x5ca2.
+                    self.actor.path_flags[1] = 0;
+                }
+                self.actor.path_yaw = self.actor.yaw;
+                let slot = manager.slots[0];
+                // 0x008b80d0 copies the slot0 measurements and masks, but
+                // installs a point with radius/angle/object/category zero.
+                manager.slots[7] = ddai::thinktbl::Slot {
+                    valid: true,
+                    radius: 0.0,
+                    angle: 0.0,
+                    obj: 0,
+                    category: 0,
+                    categorized: false,
+                    kind: 0,
+                    id: 0,
+                    x80: 1,
+                    ..slot
+                };
+            }
+            NavigationResult::Pending => {}
+        }
+        Ok(0)
+    }
+    fn row_target(&mut self, slot: usize) -> bool {
+        self.fallback.row_target(slot)
+    }
+    fn rand(&mut self) -> u32 {
+        self.fallback.rand()
+    }
+}
+
 struct ThinkCallbacks<'a> {
     local: &'a mut LocalChecks,
     world: &'a mut dyn ddai::thinktbl::Host,
@@ -506,6 +725,19 @@ impl ddai::thinktbl::Host for ThinkCallbacks<'_> {
             self.local.elapsed_frames = 0.0;
         }
         Ok(0)
+    }
+
+    fn set_with_manager(
+        &mut self,
+        id: u32,
+        argument: u32,
+        manager: &mut ddai::thinktbl::ThinkMgr,
+    ) -> Result<u32, ddai::Error> {
+        if id >= 1000 {
+            self.world.set_with_manager(id, argument, manager)
+        } else {
+            self.set(id, argument)
+        }
     }
 
     fn row_target(&mut self, slot: usize) -> bool {
