@@ -22,6 +22,7 @@ mtarc = { path = "../mtarc" }
 mtfsm = { path = "../mtfsm" }
 mtlmt = { path = "../mtlmt" }
 mtmod = { path = "../mtmod" }
+mtprp = { path = "../mtprp" }
 mtxfs = { path = "../mtxfs" }
 
 [dev-dependencies]
