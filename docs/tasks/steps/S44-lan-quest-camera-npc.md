@@ -117,3 +117,26 @@ documented.
   process exits. Do not resume the host checkpoint independently on the guest.
 - Next action: independent source review of `5faead3`, then one bounded
   nearest-checkpoint LAN camera/gauge capture from the private pin.
+- Parent review (2026-10-10): source checkpoint accepted and merged by head;
+  paired visual acceptance remains open. Approved bounded x1 capture used the
+  same `5faead3` pin and frozen ECONv1 RescueApproach checkpoint (SHA-256
+  `EB56492CDE6B56C86EADDEE6C971757FE8087964040D6899EA880C3998F9A608`).
+  Private valid output: `E:/ddda-re/notes/steps/S44/pair-5faead3-r2`.
+  Actual harness exit0; owned host31444 exit0 after30.957s and guest28016
+  exit0 after63.104s. Both owned processes were absent before releasing
+  `live/ddview`; original DDDA23408 remained running. These are execution
+  results, not an FPS comparison.
+  Host camera12 ran09:57:53.240..56.375UTC, midpoint PNG saved54.821UTC.
+  Parent inspected the PNG: terrain, Reynard, goblins and the blue NPC gauge
+  render during the actual authored camera. Separate gauge screenshot was
+  skipped by Bevy's duplicate-render-target check on that same frame.
+  Guest prejoin obtained stage100, but its resource bootstrap did not present
+  that stage until09:58:05.257UTC, after the host exited09:57:57UTC. No guest
+  camera/gauge PNG exists; a short camera delivered before resource startup
+  does not establish paired visual playback. Next action: coordinate a real
+  quest trigger after both viewers finish bootstrapping, then capture both
+  views with one screenshot request per render target.
+  Earlier `pair-5faead3` output is rejected: a refused normal lease was
+  accidentally followed by a launch. Only those private owned processes were
+  stopped; no head/original process was touched. The private paired harness
+  now checks normal claim success internally before launching either job.
