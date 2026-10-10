@@ -283,3 +283,31 @@ then test the largest measured cost without changing presentation quality.
   No shader ABI change or default performance claim follows from the failed
   batch. Next: test that paired contract and queue a corrected CPU picture
   comparison before deciding whether CPU preparation is useful.
+
+### Paired CPU capability and mesh-buffer correction
+
+- Feature commits `1e86872` / `e9eb9e0` add `MeshBuilderPlugin`, installed
+  after DefaultPlugins build and before their finish hooks. Opt-in CPU
+  mode sets the render-app `GpuPreprocessingSupport` capability to `None`
+  alongside the CPU mesh-builder flag. GPU mode leaves device capabilities
+  unchanged. The environment choice is cached once so both decisions agree.
+  This makes main and shadow phase selection use the CPU batching contract;
+  it does not alter custom vertex shader indexing or model data.
+- Two meaningful headless regressions construct a real Bevy render sub-app,
+  then queue an opaque mesh through `ViewBinnedRenderPhases<Opaque3d>`:
+  forced CPU mode puts it in `batchable_meshes` (which CPU batching visits)
+  and never in `multidrawable_meshes`; unchanged GPU capability retains the
+  multidraw bucket. This catches the failed capture's actual omission path.
+- Main-hook ownership was coordinated with codex-67 on board #6025/#6029
+  and released immediately after the one-line insertion. Reviewed committed
+  main `c7c0505` (NPC HP/gauge fix) integrated as source `a35a00c`.
+- Frozen `a35a00c`: full `cargo test --release -p ddview` **81 passed,
+  0 failed, 2 existing ignored**, compilation 47.50 s / tests 14.31 s;
+  `cargo build --release -p ddview` **exit 0**, 52.00 s. Combined session
+  89093 actually exited 0. M5 lease released after the executable was pinned.
+- Corrected private pin `E:/ddda-re/notes/steps/s41/ddview-builder-a35a00c.exe`,
+  SHA-256 `2DC0A5AD98ABFA1A4D067E5584F6DFC9032815A131BC9D9D0E8118A08D248857`.
+  A fresh bounded GPU/CPU request is queued on the board. Both sides must
+  use this pin: the old failed CPU picture is never a performance baseline.
+  **Pending:** actual corrected PNG fidelity and timings, default selection,
+  full-route/room measurements and 180 fps acceptance. Default remains GPU.
