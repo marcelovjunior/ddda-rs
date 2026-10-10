@@ -47,6 +47,9 @@ pages, synthetic inputs, outputs compared with the Rust port) or a live
 oracle reading. Stand-ins are not allowed: a missing piece is an explicit
 "not yet", never a shortcut that makes a route pass.
 
+The working manual for porting is **docs/NATIVE_PIPELINE.md** (tools, workflow,
+conventions, families, platform rules, pitfalls, the catalogue of ports).
+
 **The 1:1 pipeline (first run 2026-10-10).** A function moves to
 `verified` only through these steps:
 1. pick it from the frontier (`inventory.py next`); skip platform-layer
