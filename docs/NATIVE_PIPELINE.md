@@ -76,6 +76,7 @@ Python (stdlib only).
 | `classes N` | coverage per DTI class |
 | `attribute` | infers classes for unlabelled (`Global`) functions by contiguity and callers |
 | `systems` | coverage per game system (families of class names) |
+| `ready N` | non-platform functions whose direct callees are all verified (or none): portable now |
 
 ### research/native/families.py (pyenv Python)
 
@@ -311,11 +312,14 @@ only allocation, freeing and type registration are replaced.
 | 0x00BB2150 | uNpc::vf118 (death reported once) | `character::npc_death_once` | 27 |
 | 0x004F57E0 + 22 | drop_dead_refs pattern (23 action vf10s) | `unit::drop_dead_refs` | 276 |
 | 0x004E0EB0 + 15 | enemy-family action entry (cEm0600 ... cEm9807, cEmDieBone) | `action::enemy_action_enter` | 160 |
+| 0x00AC4F70 | cPlAction::vf05 (entry of every player action: landing bits, push rank 13, capsule from adjust 0xD3/0xD4) | `player_action::enter` | 200 |
 
 `python scripts/inventory.py summary` gives the live count.
 
 ## What to do next
 
+0. `python scripts/inventory.py ready 30`: functions whose direct callees
+   are all verified (portable now). Each verified base unlocks its callers.
 1. Families first (`families.py show 40`): each is one port for many
    verified functions. The geometry wrappers (`MtGeomSphere::vf*`, 61/46/25
    members) and the per-enemy `uEm7000::vf115` (59) are the largest.

@@ -326,3 +326,34 @@ fn every_enemy_action_entry_matches_the_original() {
              u(o, "o74"), u(o, "o2ba0"), u(o, "status"), u(o, "flags")), "entry {:#010x}: {c}", u(c, "addr"));
     }
 }
+
+#[test]
+fn player_action_enter_matches_the_original() {
+    use ddnative::player_action::{enter, EnterPlayer};
+    let Some(cases) = vectors("player_action_vf05") else { return };
+    let f = |b: u32| f32::from_bits(b);
+    for c in &cases {
+        let mut p = EnterPlayer {
+            category_206c: u(c, "cat"), word_2370: u(c, "w2370"), word_2374: u(c, "w2374"),
+            flags_273c: u(c, "flags"), saved_2740: u(c, "saved"), status_2e34: u(c, "status"),
+            pending_2e38: u(c, "pending"), window_4be1: u(c, "window") as u8, word_3558: u(c, "w3558"),
+            word_35e8: 1, byte_49c0: 1, word_2fb0: 1, word_3068: 1, float_306c: 1.0, word_3064: 1,
+            value_2654: f(u(c, "v2654")), push_rank_1df0: 0, vec_1ac0: [1.0; 4],
+            capsule_1e68: 1.0, radius_31b4: 1.0, radius_1e6c: 1.0, byte_31b3: 1,
+        };
+        let g = u32s(&c["globals"]);
+        let (d3, d4) = (u(c, "d3"), u(c, "d4"));
+        let (b50, a5c, a60, a64) = enter(&mut p, [f(g[0]), f(g[1]), f(g[2])],
+            |id| match id { 0xD3 => ddnative::x87_copy(f(d3)), 0xD4 => ddnative::x87_copy(f(d4)), _ => panic!() });
+        let o = &c["out"];
+        let got = [u32::from(b50), a5c, a60.to_bits(), a64, p.word_2370, p.word_2374, p.flags_273c, p.status_2e34,
+            p.word_35e8, p.word_2fb0, p.word_3068, p.float_306c.to_bits(), p.word_3064, p.push_rank_1df0,
+            p.vec_1ac0[0].to_bits(), p.vec_1ac0[1].to_bits(), p.vec_1ac0[2].to_bits(), p.vec_1ac0[3].to_bits(),
+            p.capsule_1e68.to_bits(), p.radius_31b4.to_bits(), p.radius_1e6c.to_bits(),
+            u32::from(p.byte_49c0), u32::from(p.byte_31b3)];
+        let want = ["b50", "a5c", "a60", "a64", "w2370", "w2374", "flags", "status", "w35e8", "w2fb0", "w3068",
+            "f306c", "w3064", "rank", "v0", "v1", "v2", "v3", "h1e68", "r31b4", "r1e6c", "b49c0", "b31b3"]
+            .map(|k| u(o, k));
+        assert_eq!(got, want, "{c}");
+    }
+}

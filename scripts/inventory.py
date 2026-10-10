@@ -264,8 +264,27 @@ def systems():
         print(f"{fam:24} {n:9} {sz:10} {100*ts/sz:10.1f}%")
 
 
+def ready(n=30):
+    """Not-yet-verified, non-platform functions whose direct callees are
+    all verified (or that call nothing directly): portable now without a
+    trait for any direct callee. Virtual calls are not in the call graph;
+    check the code."""
+    db = connect()
+    q = """SELECT f.address, f.namespace, f.name, f.size, f.callers,
+               (SELECT COUNT(*) FROM calls c JOIN functions g ON g.address=c.callee
+                WHERE c.caller=f.address AND g.status='verified') AS vcalls
+           FROM functions f
+           WHERE f.status NOT IN ('verified','platform') AND NOT f.thunk AND f.size >= 12
+             AND NOT EXISTS (SELECT 1 FROM calls c JOIN functions g ON g.address=c.callee
+                             WHERE c.caller=f.address AND g.status!='verified' AND NOT g.thunk)
+           ORDER BY vcalls DESC, f.callers DESC, f.size LIMIT ?"""
+    for a, ns, nm, size, callers, vcalls in db.execute(q, (n,)):
+        print(f"0x{a:08X} {size:5} B {callers:4} callers {vcalls} verified callees  {ns}::{nm}")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "summary"
     {"build": build, "summary": summary, "partial": partial, "split": split, "attribute": attribute, "systems": systems,
+     "ready": lambda: ready(int(sys.argv[2]) if len(sys.argv) > 2 else 30),
      "classes": lambda: classes(int(sys.argv[2]) if len(sys.argv) > 2 else 40),
      "next": lambda: next_up(int(sys.argv[2]) if len(sys.argv) > 2 else 25)}[cmd]()
