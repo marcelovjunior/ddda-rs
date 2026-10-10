@@ -94,6 +94,16 @@ released only after the actual exit (session73447, board6243). Downstream
 viewer unit/build integration is delegated to codex-1's shared M5 review
 batch; S48 itself requires no GUI capture.
 
+Final review corrected the minimum quest-record size from 15 to 14 bytes;
+otherwise a dense valid batch of quests without scripts/control tables
+could be refused. A 12-quest regression covers this boundary. After that
+one-line decoder correction, the **complete story suite passed 46 tests**,
+none failed or ignored, actual exit0 (2.90 s compile, 30.28 s summed runner
+time, session29148, `final-story-count.log`). Codex-1 independently passed
+both installed host regressions on the earlier implementation (3.21 s
+compile, 30.13 s run, actual15768 exit0); those results are distinguished
+from the final count-bound correction.
+
 Private source exports and test log stay under
 `E:/ddda-re/notes/steps/S48/`; no game/save bytes or raw exports are in this
 branch. Original-game save comparison has not been performed. External

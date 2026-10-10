@@ -440,7 +440,7 @@ impl<D: Data> Story<D> {
             read_stage(&mut r, &mut story.stage)?;
         }
         let mut ids = HashSet::new();
-        for _ in 0..r.len(15)? {
+        for _ in 0..r.len(14)? {
             let (id, mut flags) = (r.u32()?, r.u32()?);
             if !ids.insert(id) || !continuation && flags & 1 == 0 {
                 return Err("duplicate or unloaded saved quest".into());
@@ -619,6 +619,26 @@ mod tests {
         assert!(!task_saved(r"scr\st100\fsm\fix_nosave\sunrise"));
         assert!(!task_saved(r"event\st100\stage_FSM\stage_005"));
         assert!(task_saved(r"scr\st100\fsm\q0002_event1"));
+    }
+
+    #[test]
+    fn dense_quests_without_script_or_control_round_trip() {
+        let mut story = Story::from_world(fixture(), World::default());
+        for number in 0..12 {
+            story.quests.push(Quest {
+                id: number << 16,
+                flags: 1,
+                log: vec![],
+                ctrl: None,
+                script: None,
+            });
+        }
+        let bytes = story.save_scripts().unwrap();
+        let restored = Story::from_save(fixture(), story.world.clone(), Some(&bytes)).unwrap();
+        assert_eq!(
+            restored.quests.iter().map(|q| q.id).collect::<Vec<_>>(),
+            story.quests.iter().map(|q| q.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
