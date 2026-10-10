@@ -465,3 +465,27 @@ opening (codex-31), route perf (codex-29).
   menu, S40 event cameras (camera 12 = cCamExParamAnim, 3 s, blocks the
   player), S41 frame rate (180 fps target), S42 graphics settings, S43
   level-up notice.
+
+**Batch 2026-10-10, evening (head + Codex 61..78):**
+- **Rescue playable as authored:** enemy perception (S49: sensor queries,
+  alert states, hate decay); Reynard's HP from his placement (x2.5 = 2500,
+  0x00BBC4E0); the native gauge veto of party hits on gauged NPCs (S54,
+  0x00BB7680, region-independent; the HP1/escape civilian rule is Japan-only).
+  From the RescueApproach checkpoint: q2:20, only rescue goblins hurt him.
+- **Tutorial UI from the install:** vocation menu (S35, uGUIJobChange),
+  level-up notice (S43), item menu over host bags (S38), graphics settings
+  (S42: own INI, read-only import, live VSync/DoF/shadow/sampler/FOV),
+  goblin appearance and equipment by placement (S47: early goblins bare).
+- **State and co-op:** host-owned bags saved with checkpoints (S51); running
+  quest scripts saved/restored (S48, native STOR + optional STCX); profile
+  parking on leave/rejoin (S55); LAN quest cameras, NPC combat state and
+  stage (S44, protocol 9); pawn orders Go/Come/Help (S36, protocol 8).
+- **Tooling:** route checkpoints and resume (S46, `DDVIEW_OPENING_FROM`),
+  `DDVIEW_TIME_SCALE` for unattended runs, GPU check policy (one batched
+  run, bounded, from checkpoints), board status fix.
+- **Performance (S41):** named Bevy traces; compact per-submesh skin palettes
+  by default: skin upload 17.8 -> 2.05 MB/frame (-88%), field median
+  14.2 -> ~11 ms (GPU clocks covary; no isolated fps claim).
+- **Open:** dragon fire/route (S30/S31), road to q0003 (S50), death/game over
+  (S53), pawn chatter (S52), Arisen name (character creation), Ghidra MCP
+  down since the low-memory stop.
