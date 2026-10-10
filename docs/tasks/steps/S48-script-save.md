@@ -35,6 +35,9 @@ running quest scripts as the original does, with sources documented.
 
 ## Result (headless implementation complete; review)
 
+Implementation commit: `7484fc5295df994fbe596bc82b23966fedd23792`, on
+`step/s48-script-save` (`E:/ddda-rs-wt/s48-script-save`).
+
 `0x00495150` is the **restore** function. The matching serializer is
 `0x00493AA0`, which saves quests through `0x00484750` and restores them
 through `0x00484910`. Quest records carry their ordered id/branch, flags,
