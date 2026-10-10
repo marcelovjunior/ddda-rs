@@ -42,6 +42,52 @@ pub trait StoryWorld: ddstory::Host {
     }
 }
 
+#[cfg(test)]
+mod retry_controls_tests {
+    use super::*;
+    use crate::data::NoStoryData;
+    type TestHost = Host<NoStoryData, ddstory::scripted::ScriptedHost>;
+    struct Flat;
+    impl Ground for Flat {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+    }
+    #[test]
+    fn retry_poisoned_candidate_hidden_controls_are_reconstructed() {
+        let mut live = TestHost::new(Sim::new(Default::default()), None,
+            Default::default(), Box::new(Flat));
+        live.join(ProfileId(1), Control::Local, [0.0; 3], 0.0).unwrap();
+        let checkpoint = live.save().unwrap();
+        let template = live.sim.fresh_attempt();
+        let inputs = [(0, crate::PlayerInput { interact: true,
+            sim: ddsim::Input { pawn_orders: ddsim::PawnOrderButtons { up: true,
+                ..Default::default() }, ..Default::default() } })].into_iter().collect();
+        live.prepare_retry(&checkpoint, NoStoryData, |seed| {
+            let mut candidate = TestHost::new(seed.sim(&template, &Default::default())?, None,
+                Default::default(), Box::new(Flat));
+            candidate.roster = seed.roster.clone();
+            candidate.edges.interact_presses(&inputs);
+            candidate.pawn_orders.presses(&inputs);
+            candidate.rift_visitors.insert(0);
+            candidate.scenario_press = Some(0);
+            candidate.request_log.u64(123);
+            candidate.kit_job = 3;
+            candidate.boot = false;
+            candidate.locks.acquire(123, 0).unwrap();
+            Ok(candidate)
+        }).unwrap().commit_retry();
+        assert_eq!(live.edges, Edges::default());
+        assert_eq!(live.pawn_orders, crate::pawn_orders::Orders::default());
+        assert!(live.rift_visitors.is_empty());
+        assert_eq!(live.scenario_press, None);
+        assert_eq!(live.request_log, StateHasher::default());
+        assert_eq!(live.kit_job, 0);
+        assert!(live.boot);
+        assert_eq!(live.locks, InteractionLocks::default());
+        assert_eq!(live.edges.interact_presses(&inputs), vec![0]);
+        assert_eq!(live.pawn_orders.presses(&inputs), vec![(0, ddenemyrt::pawn::Command::Go)]);
+    }
+}
+
 impl StoryWorld for ddstory::scripted::ScriptedHost {
     fn handle(&mut self, stage: u32, requests: &[Request]) {
         ddstory::scripted::ScriptedHost::handle(self, stage, requests)
@@ -57,6 +103,8 @@ pub enum HostError {
     /// Input for a seat that is not in the roster.
     UnknownPlayer(PlayerId),
     Save(String),
+    /// Public checkpoints require all currently seated Arisen alive.
+    DeadCheckpoint(ProfileId),
     /// Another Arisen holds the NPC (the interaction lock).
     Lock(LockError),
     Economy(ddeconomy::Error),
@@ -77,6 +125,7 @@ impl std::fmt::Display for HostError {
             HostError::Story(e) => write!(f, "story: {e}"),
             HostError::UnknownPlayer(p) => write!(f, "input for unseated player {p}"),
             HostError::Save(e) => write!(f, "save: {e}"),
+            HostError::DeadCheckpoint(profile) => write!(f, "cannot checkpoint dead profile {profile:?}"),
             HostError::Lock(e) => write!(f, "interaction lock: {e:?}"),
             HostError::Economy(e) => write!(f, "economy: {e:?}"),
             HostError::Talk(e) => write!(f, "talk: {e:?}"),
@@ -108,6 +157,7 @@ pub struct FrameReport {
     /// The NPCs' requests to the actor layer (ddnpcrt schedules).
     pub npc_requests: Vec<ddnpcrt::schedule::Request>,
     pub pawn_order_requests: Vec<crate::pawn_orders::Delivery>,
+    pub death: crate::death::Report,
     pub pawn_messages: Vec<crate::pawn_chatter::Message>,
 }
 
@@ -169,6 +219,9 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
+    pub death: crate::death::Runtime,
+    /// Stored stamina base mismatches are reported without changing saved values.
+    pub vitals_diagnostics: Vec<crate::vitals::BaseMismatch>,
     pub opening_dragon_data: Option<crate::dragon::OpeningDragonData>,
     pub doors: Option<crate::doors::Doors>,
     /// Ambient enemy ownership; admission and view lifetimes are separate.
@@ -212,11 +265,26 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             boot: true,
             request_log: StateHasher::default(),
             fight: None,
+            death: Default::default(),
+            vitals_diagnostics: Vec::new(),
             opening_dragon_data: None,
             doors: None,
             ambient: Default::default(),
             kit_job: 0,
         }
+    }
+
+    /// Project retry reconstruction: clear hidden controls on the independent
+    /// candidate before loading the checkpoint. Ordinary load does not use
+    /// this operation. Installed stage data belongs to the fresh factory.
+    pub(crate) fn reset_attempt_controls(&mut self) {
+        self.rift_visitors.clear();
+        self.edges = Default::default();
+        self.pawn_orders = Default::default();
+        self.scenario_press = None;
+        self.request_log = Default::default();
+        self.boot = true;
+        self.kit_job = 0;
     }
 
     /// Gives the Arisen seats the fight kit of the story's current vocation
@@ -331,10 +399,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
         self.refresh_party();
-        self.attach_profile(profile, id);
+        let restored_vitals = self.attach_profile(profile, id);
         self.economy.wallet(id);
         self.joined_items(id);
         self.joined_fighter(id);
+        if let Some(value) = restored_vitals {
+            self.apply_profile_vitals(profile, id, value);
+        }
+        self.restore_arisen_death_on_join(profile, id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
         Some(id)
@@ -390,7 +462,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // The scenario prompt reads sScenario +0x108, which the player's move
         // (line 10, uPlayerBase vf204 0x00B6EAC0) set during the last frame:
         // a press reaches the story one frame after it was made.
-        let interact = self.scenario_press.take();
+        let interact = self.scenario_press.take().filter(|&seat| !self.player_actions_blocked(seat));
         if let Some(story) = self.story.as_mut() {
             let seats: Vec<PlayerId> = self.roster.ids().collect();
             let players = seats
@@ -431,10 +503,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let effective_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
-            (id, if self.world.player_actions_blocked(id) { Default::default() } else { input })
+            (id, if self.player_actions_blocked(id) { Default::default() } else { input })
         }).collect();
         let inputs = &effective_inputs;
-        let presses = self.edges.interact_presses(inputs);
+        let mut presses = self.edges.interact_presses(inputs);
         // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
         // from the volumes the fight switched on last frame, damage applied,
         // before anyone moves (FRAME.md 5.1).
@@ -445,6 +517,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             kills = f.kill_awards();
         }
         self.start_npc_deaths()?;
+        self.start_arisen_deaths();
+        // This frame's hit pass can kill an actor after input sampling.
+        // Gate every downstream consumer, including doors and pawn orders.
+        let living_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
+            (id, if self.player_actions_blocked(id) { Default::default() } else { input })
+        }).collect();
+        let inputs = &living_inputs;
+        presses.retain(|&id| !self.player_actions_blocked(id));
+        let dead_at_start = self.dead_actions_at_move_start();
         // A goblin's death gives the party its experience (0x00443470);
         // without progression data (or party records) there is no one to
         // award.
@@ -470,6 +551,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        self.step_arisen_death_clocks(step, &dead_at_start);
         // uNpcIntel line12 precedes the NPC actor/action on line15.
         self.step_npc_death_intels()?;
         self.step_opening_dragon_a(step)?;
@@ -541,7 +623,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests, pawn_messages })
+        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests, pawn_messages,
+            death: self.death.report(&self.roster) })
     }
 
     /// A hash of the whole simulated state, for replays.
@@ -556,7 +639,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Equal hashes after the same inputs are the replay property.
     pub fn state_hash(&self) -> u64 {
         let mut h = StateHasher::default();
-        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press);
+        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press).debug(&self.death);
         for p in &self.sim.players {
             h.debug(p);
         }
@@ -605,12 +688,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for p in &self.sim.players {
             h.debug(&(p.id, p.position, p.yaw));
         }
+        for seat in self.roster.seats() { h.debug(&self.seat_vitals(seat.id)); }
         if let Some(s) = &self.story {
             h.bytes(&s.world.save());
         }
         h.debug(&self.economy).debug(&self.progression).debug(&self.characters);
         for (profile, state) in &self.profiles {
             h.debug(profile).debug(&state.economy).debug(&state.character).debug(&state.place);
+            h.debug(&Self::parked_vitals(state));
         }
         h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
         h.debug(&self.saved_npc_quest_rows());
@@ -631,6 +716,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// - optional `STCX`: versioned project continuation (clocks/scratch),
     ///   beyond the original's state re-entry behavior;
     /// - `PLCE`: each Arisen's place, by profile;
+    /// - optional `VITL`: native-derived Arisen HP/white ceiling/stamina;
     /// - `ECON`, `PROG`: shared parts, and per-seat parts filed by profile;
     /// - `RIFT`: the shared Rift.
     ///
@@ -640,6 +726,26 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if self.interacting() {
             return Err(HostError::Busy);
         }
+        for seat in self.roster.seats() {
+            if self.death.is_dead(seat.profile) || self.seat_vitals(seat.id).is_some_and(|v| v.hp <= 0.0) {
+                return Err(HostError::DeadCheckpoint(seat.profile));
+            }
+        }
+        let mut file = self.export_durable_state()?;
+        // Head8082: a disconnected dead profile cannot make a future
+        // checkpoint unusable. It is admitted with fresh kit vitals after
+        // that checkpoint is restored; other durable profile chunks stay.
+        file.chunks.retain(|chunk| chunk.tag != save::TAG_VITALS
+            || !matches!(chunk.owner, Owner::Profile(profile)
+                if !self.roster.seats().iter().any(|seat| seat.profile == profile)
+                    && crate::vitals::Vitals::from_bytes(&chunk.bytes).is_ok_and(|value| value.hp <= 0.0)));
+        Ok(file)
+    }
+
+    /// Internal retry merge snapshot, never a public checkpoint/autosave.
+    /// Accepts dead/open-interaction live state; all serialization remains
+    /// fallible and the candidate closes those attempt lifetimes.
+    pub(crate) fn export_durable_state(&self) -> Result<SaveFile, HostError> {
         let mut f = SaveFile::default();
         let mut w = ddid::Writer::new();
         w.u8(2).u64(self.frame).len(self.roster.len());
@@ -672,6 +778,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.save_parked_profiles(&mut f);
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
         self.save_npc_quest_controls(&mut f);
+        self.save_vitals(&mut f)?;
         self.characters.save(&mut f);
         Ok(f)
     }
@@ -685,6 +792,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
         let err = HostError::Save;
+        let loaded_vitals = crate::vitals::read(f)?;
+        if self.fight.is_none() && self.roster.seats().iter().any(|seat| loaded_vitals.contains_key(&seat.profile)) {
+            return Err(HostError::NoData("VITL fight"));
+        }
         let loaded_characters = self.characters.loaded(f).map_err(err)?;
         // Validate economy/inventory before the first host mutation. ECON's
         // player parts are keyed by persistent profile, so delivery metadata
@@ -820,6 +931,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.restore_npc_quest_controls(loaded_npc_controls);
         self.refresh_party();
         self.rebuild_profile_fighters();
+        self.vitals_diagnostics.clear();
+        self.apply_loaded_vitals(&loaded_vitals);
         // All fallible chunk parsing must succeed before transient speech is
         // retired. Failed loads preserve its queue and monotonic identity.
         self.pawn_chatter.clear_pending();

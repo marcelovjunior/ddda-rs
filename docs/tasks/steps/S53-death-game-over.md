@@ -81,32 +81,136 @@ disconnected profiles do not veto shared game over, and the host retries
 all active players through an atomic shared save replacement. This is
 project policy; the original supports one Arisen.
 
-## Results (not ready for review)
+## Results: core checkpoint ready for review; production S53 incomplete
 
-Source helpers and ten named regressions are prepared in `ddhost::death`.
-The first full host/network run on `db730fa` compiled in 45.71 seconds and
-exited 101: nine new regressions passed, including whole-save preservation
-after malformed late chunks; the installed-data regression failed because
-it incorrectly required a positive game-over delay. Targeted resource
-inspection confirmed a valid zero delay in this installation, so that test
-now exercises the actual installed threshold inclusively. The corrected
-full run on source `178c1a0a5fb5c0114508a8d3c2553f2860c2757b` completed
-with process exit zero: 149 tests passed, none failed or were ignored,
-across 44 result summaries (including two empty doc-test summaries). All
-ten new death and late-chunk regressions passed against the installed
-resources. The command was `cargo test -p ddhost -p ddnet --target-dir
-E:/ddda-rs-wt/item-use-review-target -- --test-threads=1`; its private log is
-`E:/ddda-re/notes/steps/S53/full-host-net-corrected.log`. This verifies the
-helper and atomic-loader checkpoint only. No runtime death, revival, GUI,
-default release build or comparison against the original is claimed yet.
-An authorized narrow save-loader change parses
-Rift, NPC row controls and player places before applying any candidate
-state, so malformed late chunks cannot partially replace a retry. Its
-regression passed in both full runs. Runtime retry still needs a host
-checkpoint adapter, complete attempt-state replacement and presentation
-restoration; the loader regression alone does not establish those features.
+Branch `step/s53-death-game-over` has a tested core/network checkpoint on
+source `486219519af13d48136e11c34f5e608aae5a8a56`. Reviewed main
+`6afbc3c` (S52 chatter/protocol 10) and `5192882` (S56 EDIT) were
+integrated before the final gates. This is not the whole brief's Done gate:
+production retry presentation, native pawn revival contact and game-over
+GUI/comparison remain open.
 
-Next action: integrate the proven grounded action/pose chain and real pawn
-revive interactions, then run all touched/downstream suites and the default
-release build. Native GUI/save-choice tracing and original comparison are
-still required. No game install/process writes, pushes or main edits.
+The checkpoint implements the ordinary grounded collapse/Dead and pawn
+down/return motion phases using actual installed damage-bank layers for
+all three starting kits. Zero-HP/fatal replacement clears queued actions
+and outgoing melee/skill/bow activations; existing projectiles remain
+independent until an attempt replacement. The host observes actual roster
+Arisen HP, blocks personal input/orders/doors, retains death action/clock by
+persistent profile across reconnect, and counts the native delay only after
+actual Dead entry. Active survivors continue; disconnected profiles do not
+veto game over. Unsupported air, held and stone paths remain explicit errors
+and never turn into a grounded branch after landing. Personal death does
+not affect the shared authored-camera input lock.
+
+Optional per-profile VITL retains current/max/white HP and
+current/base/level stamina. Reflection `0x00785790` and original save XML
+source these fields; level stamina is a gain added to the body-weight base.
+Chunks validate before mutation and apply after fighter construction, both
+during load and reconnect. Stored-base/installed-table disagreement is
+reported and retained. Legacy saves without VITL retain installed/progression
+reconstruction. Public saves refuse seated dead actors and omit dead parked
+VITL; internal durable export allows real all-dead retry and deterministic
+dead-host hashing. White HP/item-recovery ceilings are retained; generating
+the native damage wound pool and pawn save vitals remain open.
+
+Dedicated `Host::prepare_retry` constructs a fresh independent host through
+a factory without Clone bounds on story data/world. Every fallible check
+precedes the exclusively borrowed `PreparedAttempt::commit_retry`, an
+infallible ownership swap. Live roster seats/holes/profiles/control persist;
+checkpoint profiles restore durable state and absent active/parked profiles
+retain live state. An absent active profile requires an observed installed
+checkpoint party place. Dead absent newcomers revive at installed/progression
+maxima. Checkpoint shared Rift slots remain authoritative; conflicting
+absent-owner hires use ordinary departure bookkeeping and a typed notice
+without invented RC/items, preserving the restored Rift room and hirers.
+Fight/projectiles/enemies/pawn brains, Sim time/actions, private input/order/
+interaction queues and attempt locks are reconstructed. Reviewed S52
+`fork_for_retry` retains installed data/RNG/monotonic speech IDs while
+retiring its attempt queues. EDIT restores by profile, retains absent and
+legacy records, rejects malformed records atomically and cannot follow a
+reused seat.
+
+Protocol 11 carries death body tag 19, authoritative per-profile DeathReport,
+and attempt epochs on inputs, snapshots and reliable story/cutscene/pawn
+messages. Clients infer no game-over/spectator policy from HP or motion.
+A compact reliable RetryNotice precedes replacement whole snapshots; stale
+epochs/acks/events and duplicate/old Welcome cannot roll back the attempt.
+Server preparation stages exact existing Link clones under an exclusive
+borrow, retaining connections, reliable IDs/sequence/ack state and transport.
+All notices/looks/stage validation and allocation happen before commit;
+commit clears commands/baselines/history without rebuilding Server/socket.
+Only head-delegated mechanical viewer patterns changed: PawnMessage struct
+matches in net.rs/opening.rs and PlayEvent accepting the epoch field.
+
+All final gates ran against the same clean source above:
+
+- Full core command:
+  `cargo test -p ddsim -p ddenemyrt -p ddhost -p ddnet --no-fail-fast --target-dir E:/ddda-rs-wt/item-use-review-target -- --test-threads=1`.
+  Session 77480 exited **0**, with **460 passed, 0 failed, 2 existing ignored,
+  0 filtered**, across 79 summaries (including four empty doc suites).
+  All **47 S53 regression names passed exactly once**, with no SKIP/errors.
+  Suite durations summed to 666.60 seconds. The existing ignored tests are
+  `installed_reynard_rescue_contact_trace` and `debug_trace`.
+- Full downstream command:
+  `cargo test --release -p ddview --target-dir E:/ddda-rs-wt/m5-cassardis/target -- --test-threads=1`.
+  Session 6166 exited **0**: **123 passed, 0 failed, 2 existing ignored,
+  0 filtered**, in 86.74 seconds. The ignored tests require private human
+  joint-remap/camera reference poses.
+- Default build:
+  `cargo build --release -p ddview --target-dir E:/ddda-rs-wt/m5-cassardis/target`.
+  Session 56491 exited **0**. Jobs were capped at two and normal global
+  core/M5 leases were released only after actual exits. Existing viewer
+  private-interface/dead-code warnings remain; no warnings were suppressed.
+
+Private evidence stays outside the repo:
+`E:/ddda-re/notes/steps/S53/full-core-4862195-gate.private.json` records the
+source, exact 47-name manifest and core log hash
+`2942FEBFE1652917A087969C87BCCDABC64835AD23D6E3B1611B048BAE23734F`.
+`viewer-release-4862195-gate.private.json` records viewer/build actual exits,
+log hashes, clean source and matching built/private executable.
+The viewer log hash is
+`EAD459BADDFE222336EC4611D74AF2A54703E39A30D8BD2030028E801F1390C5`;
+the build log hash is
+`551166EDC0639CD34CD4C82DAEB295F0C7F5B3545D3031D3BCECDCAA3031B00C`.
+Private pin `ddview-s53-core-4862195.exe` is **95,747,072 bytes**, SHA-256
+`8839B5E3FB1B17B499C0BA5B06C0A5AFABEB13F995B3EFF9C1DD746AA9E886D6`.
+No GUI/capture/original-game run is claimed for this pin.
+
+Failures were preserved and corrected before full reruns: an initial
+shared-cache API mismatch (only owned source timestamps refreshed, content
+unchanged, no clean/new target); a fixture accessing private Runtime state;
+a chatter assertion that omitted the prior real profile-leave lifecycle;
+a real reconnect bug applying VITL before final stamina construction; and
+an existing legacy-health assertion expanded to both VITL and explicit
+no-VITL saves in both seat orders. Exact six-field assertions remain intact.
+The earlier helper run (178c1a0/session 67590, 149 passed) remains evidence
+for its original ten names, superseded by the final full gate above.
+
+Head owns the next production viewer milestone (board 8307). Its resources
+must be staged before commit: installed terrain/camera/start positions and
+restored looks, fresh OpeningWorld, followed by infallible ownership moves
+retiring cut/talk/NPC adapters/guest bodies/streamer lifetimes. Calling
+fallible `enter_stage` after swapping the host would mutate live state and
+clear chatter a second time. PreparedAttempt exposes candidate() and
+notices(); its candidate provides saved story stage/start, exact roster/
+party/Sim places, EDIT/progression/equipment. RetryNotice carries epoch,
+frame, observed Spot, restored looks and owner-filtered dismissals.
+Spot.cell comes from actual staged terrain/grid data. Resource preflight
+outside the exclusive Server borrow must check roster/epoch freshness.
+
+Remaining native limits: living revive-probe activation/Check-owner geometry,
+real pawn contact admission/HP restoration/get-up arbitration, airborne/
+stone/special fatal branches and external signed actor completion;
+latest/checkpoint load consumers after native aGameMain teardown; authored
+game-over scheduler/atlas geometry and Wakestone branch. Confirmed option
+mapping is latest, Normal, Easy, checkpoint, title; 0x0064FB10 changes
+difficulty, and controller codes 0x25/0x26 request latest/checkpoint.
+Native teardown 0x0050EF80 -> 0x0050B5E0 removes aGameMain at 0x0050B67E.
+Pawn near-death CMC is situation six/list one, not priority; conscious and
+special huge-death situations must preserve their native action contexts.
+
+Next action: head integrates this reviewed core checkpoint and stages the
+production retry/game-over presentation; native pawn-contact tracing and
+comparison remain separate unfinished S53 work. No main edits, pushes,
+installation modifications, computer-use or original-process control were
+performed by this agent.

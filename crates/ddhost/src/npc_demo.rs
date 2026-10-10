@@ -4,6 +4,8 @@
 use ddnpcrt::{demo::{self, ActorInputs, Demo, Interface, WorldRequest},
     schedule::{Clock, Graphs, Npc, Request}, Error};
 use ddquest::order::Fields;
+#[path = "npc_demo_physics.rs"]
+mod physics;
 
 pub(super) enum Action {
     Npc(Npc),

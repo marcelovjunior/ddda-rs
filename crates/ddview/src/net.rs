@@ -555,7 +555,7 @@ pub fn step(
             client.pump(now);
             let mut retained = Vec::new();
             for event in std::mem::take(&mut client.events) {
-                if let ddnet::proto::ToClient::PawnMessage(message) = event {
+                if let ddnet::proto::ToClient::PawnMessage { message, .. } = event {
                     crate::pawn_chatter::queue(&mut d.commands, &[message]);
                 } else { retained.push(event); }
             }

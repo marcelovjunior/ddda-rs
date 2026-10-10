@@ -24,6 +24,8 @@ pub const TAG_STORY: [u8; 4] = *b"STOR";
 pub const TAG_STORY_CONTINUATION: [u8; 4] = *b"STCX";
 /// One Arisen's place in the world: stage-frame position and facing.
 pub const TAG_PLACE: [u8; 4] = *b"PLCE";
+/// Optional native-derived Arisen vitals, by persistent profile.
+pub const TAG_VITALS: [u8; 4] = *b"VITL";
 /// The host's own state: frame count, seats with profiles, hirers.
 pub const TAG_HOST: [u8; 4] = *b"HOST";
 /// `ddeconomy::Economy::save` parts.
