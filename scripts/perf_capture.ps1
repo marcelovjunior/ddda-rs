@@ -19,9 +19,9 @@ param(
     [switch]$NoShadows
 )
 $ErrorActionPreference = 'Stop'
-if ($WatchdogSeconds -le $Seconds) {
-    throw 'WatchdogSeconds must exceed the measured duration and allow startup.'
-}
+# DDVIEW_PERF_SECONDS uses Instant (wall time after the first perf update).
+# Screenshot/route delays may instead follow scaled virtual time. Keep the
+# launch-relative hard watchdog independent; it may intentionally be shorter.
 $viewerPath = (Resolve-Path -LiteralPath $Viewer).Path
 $outputPath = [IO.Path]::GetFullPath($OutputBase)
 $privateRoot = [IO.Path]::GetFullPath('E:/ddda-re') + [IO.Path]::DirectorySeparatorChar
@@ -63,6 +63,7 @@ try {
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
         watchdog_seconds = $WatchdogSeconds
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
+        time_scale_env = $env:DDVIEW_TIME_SCALE
         mesh_builder = $MeshBuilder
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
