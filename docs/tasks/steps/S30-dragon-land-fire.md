@@ -413,3 +413,12 @@ Source `0x00E6DD90/0x00E6E030/0x00E73720` establishes per-coordinate0x130
 blocks; a generator's +0x14 points to that block, not the effect's final
 matrix. This avoids applying parent/effect scaling twice. Full S30
 landing/fire/state6/original-comparison acceptance remains open.
+
+The subsequent current-main integration is f5017cb (reviewed maina24c1ed,
+including S48 save and S49 perception). Complete DDSIM/enemy/host suites
+actually exited zero in process46000: DDSIM79, enemy169/two existing
+ignored, host98 passed; compile32.38s, tests0.01/97.18/200.82s. Both the
+new world-query regression and S49 sensor tests executed. Private log:
+E:/ddda-re/notes/steps/S29/full-current-core-collision.log. Core lease was
+released after actual exit. Downstream viewer for this S30 dependency set
+and production fire acceptance remain pending.
