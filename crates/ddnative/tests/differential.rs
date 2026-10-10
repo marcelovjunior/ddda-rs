@@ -258,3 +258,16 @@ fn every_action_constructor_with_8c_matches_the_original() {
         assert_eq!(obj, hex(c["out"].as_str().unwrap()), "constructor {:#010x}", u(c, "addr"));
     }
 }
+
+#[test]
+fn every_drop_dead_refs_function_matches_the_original() {
+    use ddnative::unit::drop_dead_refs;
+    let Some(cases) = vectors("drop_dead_refs") else { return };
+    for c in &cases {
+        let mut refs = u32s(&c["refs"]);
+        let states = u32s(&c["states"]);
+        let lookup: Vec<(u32, u32)> = refs.iter().copied().zip(states.iter().copied()).collect();
+        drop_dead_refs(&mut refs, |r| lookup.iter().find(|(a, _)| *a == r).unwrap().1);
+        assert_eq!(refs, u32s(&c["out"]), "function {:#010x}: {c}", u(c, "addr"));
+    }
+}
