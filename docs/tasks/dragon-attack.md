@@ -344,6 +344,16 @@ quest expression interpreter. **Missing:** actual dragon/player snapshots
 and authoritative EnemyCheck/area feedback. The current ScriptedHost's
 20-second enemy death and fixed q0-bit injections are explicit stand-ins.
 
+At the quest level the player can satisfy the damage/life/area predicates
+or let the state timers expire: no particular attack command or successful
+hit is required. States 16 and 5 issue EnemyCheck/Flag orders, not a forced
+player attack. **Have:** general per-player locomotion and basic sword/
+staff attack stepping (`uPlayerBase::vf136` `0x00b6d510`, sword ground
+entry/update `0x00b3c570/0x00b3cc20`) in ddsim. **Missing evidence:** the
+exact original player kit/input restrictions during SceNo1025, including
+whether climbing, guard or skills are admitted here. Generic implemented
+combat controls are not proof of those encounter-specific permissions.
+
 The q0 heart-taking state 1 requests **ev01**, whose end raises SceNo
 **1050**. State 19 then clears stage LOT0/80 and GSF520 and waits for
 `!IsEvent` (condition 13) before state 2 requests **ev05**, end SceNo
