@@ -728,3 +728,43 @@ not establish that this PCF path consumes them: map-type and shader dispatch
 remain to be traced. Bias reflection **0x00ef9880** and weather application
 **0x00c6c970** distinguish depth, slope-scaled and distance-scaled biases;
 copying these numbers into Bevy's differently defined bias is unsupported.
+
+Further tracing resolves the **constant depth bias** conversion (the slope
+and distance-scaled terms remain open). Constructor **0x00c6c7a0** sets
++0x194 to 10 cm; reflection **0x00c6c850** does not expose a depth-bias Ex
+property. Weather update copies that constant to +0xb4 except for its
+explicit scripted override. **0x00efd240** uploads it as CBShadowCast.x,
+and **0x00edf810** uploads the negated shadow direction to
+CBShadowLight at float offsets 5..7. Installed `sc/DX9/root` vertex shader
+**0x0a75e0** adds their product to the caster world position before view
+projection. Thus this term is a world-space displacement away from light,
+not a normalized-depth constant. Bevy 0.19.1 `shadows.wgsl` applies its
+directional depth bias to the receiver towards light, also in world units;
+0.1 m is the equivalent constant term. Normal/slope bias equivalence is
+still unimplemented, and scripted weather overrides remain unsupported.
+
+Filter dispatch **0x00edf9b0** selects shader IDs 0x25edb664,
+0x4539e665 and 0xd2da36f5 for three cascades with +0x178 enabled.
+The installed MFX resolves them to FShadowReceiveSmoothCascadeSSMRT,
+FShadowReceiveSmoothCascadeSSMLite and FShadowMultiReceiveLSMRT. At
+map type 0, +0x7a=0 and +0xcc=1, it selects 0xd024d64b:
+**FShadowFilterPCF3x3Comp**. This distinguishes the active PCF selection
+from the separate Gaussian coefficient array. Exact PCF taps and cascade
+transition sampling still need shader-level comparison.
+
+Viewer checkpoint now applies the three automatic ranges using the actual
+perspective camera near/far planes, and uses the sourced 10 cm world-depth
+bias. A subsequent read found nonzero color/depth texture pointers, draw
+enable +0x7b=1, cascade enable +0x170=1 and custom mode +0x180=0 on the
+paused Cassardis unit. This confirms more than constructor defaults alone.
+
+Validation: release builds passed (35.67 s for cascades, 39.48 s with bias).
+The shared target twice reused an older mtweather artifact; rebuilding only
+that dependency resolved the missing-symbol compile failures. Private
+same-pose captures exited normally without shader errors. The street's
+shadow edge is substantially sharper than the one-cascade capture and
+closer to the original. The finer maps also expose dark patches on the
+right wall that are absent from the original; the sourced depth bias does
+not resolve them. Caster selection, source slope bias and projection/filter
+differences remain candidate causes, not established diagnoses. No full
+image match, performance gate or new three-pose acceptance is claimed.

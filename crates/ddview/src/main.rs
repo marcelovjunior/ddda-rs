@@ -1096,34 +1096,41 @@ fn party(vfs: &ddvfs::Vfs, args: &Args, origin: Vec3) -> play::Party {
 #[derive(Resource)]
 struct SkyShadowSetting(Option<sky::SkyShadow>);
 
-/// Current approximation: one map over the authored view distance (6000 cm
-/// on stages 100/200). The original constructor 0x00eefc60 enables three
-/// cascades; 0x00ee5ce0 splits their ranges using mShadowDistribution.
-/// mtweather::shadow contains that split rule, but matching the original
-/// projection, quality-dependent atlas and receiver filtering is still open.
+/// The original constructor 0x00eefc60 enables three cascades; 0x00ee5ce0
+/// splits their ranges using mShadowDistribution. We apply those ranges to
+/// Bevy's projection; the original projection fitting, quality-dependent
+/// atlas and receiver filtering remain separate fidelity work.
 fn sky_shadow(
     mut commands: Commands,
     setting: Option<Res<SkyShadowSetting>>,
-    mut lights: Query<(Entity, &mut Transform), (With<DirectionalLight>, Without<ShadowSet>)>,
+    cameras: Query<&Projection, With<Camera3d>>,
+    mut lights: Query<(Entity, &mut Transform, &mut DirectionalLight), Without<ShadowSet>>,
 ) {
     let Some(setting) = setting else { return };
     let Some(sh) = setting.0 else { return };
-    for (e, mut transform) in &mut lights {
+    let Ok(Projection::Perspective(camera)) = cameras.single() else { return };
+    let near = camera.near;
+    let far = camera.far.min(sh.view_distance * stage::UNIT);
+    // Three automatic cascades, ctor0x00eefc60 (+0x170/+0x174/+0x180).
+    // These settings are not exposed by the stable-shadow reflection.
+    let Some(bounds) = mtweather::shadow::cascade_boundaries(near, far, 3, sh.distribution) else { return };
+    for (e, mut transform, mut light) in &mut lights {
         // The custom stage material retains the direct sun direction.
         // This Bevy light provides its shadow map: weather0x004c1110 and
         // uSkyStableShadow0x00c6c970 use the separately elevated direction.
         let sun = transform.rotation * Vec3::Z;
         let shadow = Vec3::from(mtweather::sky::shadow_direction(sun.to_array(), sh.direction_limit));
         transform.rotation = Transform::IDENTITY.looking_to(-shadow, Vec3::Y).rotation;
-        let far = sh.view_distance * stage::UNIT;
-        let config = bevy::light::CascadeShadowConfigBuilder {
-            num_cascades: 1,
-            minimum_distance: 0.1,
-            maximum_distance: far,
-            first_cascade_far_bound: far,
+        // Root shader VS0x0a75e0 displaces the caster away from light by
+        // depth-bias cm;0x00edf810 supplies -shadow direction. Bevy's
+        // equivalent receiver bias is towards light, in world units.
+        // Its separate normal bias still approximates the source slope bias.
+        light.shadow_depth_bias = sh.depth_bias_cm * stage::UNIT;
+        let config = bevy::light::CascadeShadowConfig {
+            bounds: bounds.clone(),
+            minimum_distance: near,
             overlap_proportion: 0.0,
-        }
-        .build();
+        };
         commands.entity(e).insert((config, ShadowSet));
     }
 }

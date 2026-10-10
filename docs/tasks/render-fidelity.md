@@ -125,3 +125,13 @@ Quality-dependent atlas allocation, filter dispatch and bias semantics are
 documented in SHADING.md; paused unit fields are explicitly distinguished
 from active draw state. Next: resolve the active atlas/filter configuration
 before replacing the viewer's one-cascade approximation.
+
+Adapter follow-up: three automatic bounds now use the actual perspective
+near/far and authored distance/distribution. Constant depth bias is traced
+through constructor c6c7a0, upload efd240/edf810 and root VS0a75e0 to a
+10 cm caster shift, equivalent to Bevy's 0.1 m receiver depth bias. Builds
+35.67/39.48 s and two bounded same-pose captures pass. The street edge is
+sharper and closer to the reference; newly visible dark right-wall patches
+remain unresolved and are explicitly **not** an accepted image match.
+No normal-bias or filter constant was tuned to hide those patches. Next:
+trace caster inclusion and slope/filter behavior, then the other poses.
