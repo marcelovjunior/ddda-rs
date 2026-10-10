@@ -247,9 +247,16 @@ No capture data is embedded in the repository. The low-roof contact and
 full viewer pose comparison remain pending. The normal target height
 still uses the earlier measured 140 cm approximation.
 
-**0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
-or sweep result. It does not continue to the next surface. **0x007c6f90**
-resolves the collision result's material flag word for stage/static hits.
+**0x007de570** retains a post-query bit-0x10 rejection, but this is not
+its entire filter. The camera sets `sCollision::Param +0xc` to
+**0x4081d01c** through **0x007e178d / 0x00de4710**. Static SBC triangle
+filter **0x01165660** calls `sCollisionExt::vf10` **0x00422f40**: bit
+0x40000000 selects exclusion, rejecting any material with bits in
+**0x0081d01c** before nearest-contact selection. Thus an excluded nearer
+surface must not hide an eligible farther one. The ray wrapper
+**0x00dea870**, sweep traversal **0x01166b10**, and overlap traversal
+**0x01166c00** share this filtering. **0x007c6f90** resolves the resulting
+material flag word for the final post-query check.
 The sphere wrapper **0x010fe5e0** calls **0x010fdea0**, which supplies the
 target as the start and `near-plane-centre - target` as displacement.
 Thus this is a sweep outward from target toward the candidate centre,
@@ -260,8 +267,14 @@ nearest-contact cast and applies that response. Contact geometry reuses
 `ddsim::sweep` conservative advancement, already used for character
 collision. It is a geometric replacement for the original GJK callbacks;
 degenerate contacts, tied contacts and collision-category prefilters have
-not been compared. Ray and sweep both reject bit0x10 only after selecting
-the nearest result, preserving the source's no-search-past behavior.
+not been comprehensively compared. Camera-local ray, sweep and overlap
+now apply the sourced material exclusion before selecting their result.
+The ray retains its existing fast path when the nearest hit is eligible;
+otherwise it recollects triangles and uses Terrain's existing two-sided
+Moller-Trumbore geometry policy. This duplicates a query on excluded hits;
+a shared filtered Ground API is a future optimization, not part of this
+checkpoint. Ground providers without triangle data cannot search beyond
+an excluded hit. Backface/degenerate behavior remains unverified.
 
 Field stage 100 already includes layout-object collision through
 `Terrain::add_scenery_cells`. Nonfield loading uses only the stage merged

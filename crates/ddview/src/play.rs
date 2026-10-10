@@ -787,8 +787,9 @@ pub const CAMERA_FOV: f32 = 55.0;
 ///    the same here, so the radius is `1.3 x near`. If it overlaps
 ///    collision, it is swept from the target toward that centre (`0x010fe5e0`) and the eye
 ///    goes one near-plane distance behind the sweep's stop.
-/// Nearest ray/sweep hits whose material has bit 0x10 are discarded after
-/// querying (0x007c6f90). Convex contact uses the same geometric replacement
+/// Static surfaces matching the exclusion mask 0x0081d01c are skipped
+/// before querying (0x00422f40); the caller retains its final bit-0x10
+/// check (0x007c6f90). Convex contact uses the same geometric replacement
 /// as character collision, not the original GJK callback implementation.
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
@@ -802,7 +803,7 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
 /// authored target height or actor avoidance offset.
 fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, near: f32) -> (Vec3, Vec3) {
     let mut eye = desired_eye;
-    if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
+    if let Some((hit, flags)) = camera_ray(ground, target, eye) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
     let toward = (target - eye).normalize_or_zero();
@@ -821,9 +822,53 @@ fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, n
     (eye, target + (eye - desired_eye))
 }
 
+/// Translated from camera Param setup 0x007e178d / 0x00de4710 and
+/// sCollisionExt::vf10 0x00422f40 (DDDA.exe 2017-12-13 Steam).
+/// Bit 0x40000000 selects exclusion; the remaining low 30 bits test the
+/// triangle material before nearest-contact selection (0x01165660).
+fn camera_surface(flags: u32) -> bool {
+    flags & 0x0081_d01c == 0
+}
+
+fn camera_ray(ground: &dyn ddsim::Ground, from: Vec3, to: Vec3) -> Option<(ddsim::RayHit, u32)> {
+    let nearest = ground.ray_with_flags(from.to_array(), to.to_array())?;
+    if camera_surface(nearest.1) { return Some(nearest); }
+    let mut faces = Vec::new();
+    ground.triangles_in(from.min(to).to_array(), from.max(to).to_array(), &mut faces);
+    let motion = to - from;
+    let mut best = None;
+    // Same two-sided Moller-Trumbore geometry policy as Terrain's ray.
+    // The original per-triangle geometric callback remains a replacement;
+    // the source-backed change here is filtering before nearest selection.
+    for (triangle, flags) in faces {
+        if !camera_surface(flags) { continue; }
+        let a = Vec3::from(triangle[0]);
+        let edge1 = Vec3::from(triangle[1]) - a;
+        let edge2 = Vec3::from(triangle[2]) - a;
+        let cross = motion.cross(edge2);
+        let determinant = edge1.dot(cross);
+        if determinant.abs() < 1e-9 { continue; }
+        let inverse = determinant.recip();
+        let offset = from - a;
+        let u = offset.dot(cross) * inverse;
+        if !(0.0..=1.0).contains(&u) { continue; }
+        let q = offset.cross(edge1);
+        let v = motion.dot(q) * inverse;
+        if v < 0.0 || u + v > 1.0 { continue; }
+        let fraction = edge2.dot(q) * inverse;
+        if !(1e-4..=1.0).contains(&fraction) || best.is_some_and(|(previous, _, _)| previous <= fraction) { continue; }
+        let normal = edge1.cross(edge2).normalize_or_zero();
+        let normal = if normal.dot(motion) > 0.0 { -normal } else { normal };
+        best = Some((fraction, normal, flags));
+    }
+    best.map(|(fraction, normal, flags)| (ddsim::RayHit {
+        point: (from + motion * fraction).to_array(), normal: normal.to_array(),
+    }, flags))
+}
+
 /// Translated query direction/response from 0x010fdea0 / 0x010fd710
 /// (DDDA.exe 2017-12-13 Steam). The queried start is the target. Only the
-/// nearest contact's flags are returned, even if the camera will ignore it.
+/// nearest eligible contact's flags are returned after material exclusion.
 fn camera_sphere_cast(ground: &dyn ddsim::Ground, start: Vec3, end: Vec3, radius: f32) -> Option<(Vec3, u32)> {
     let mut faces = Vec::new();
     let pad = Vec3::splat(radius);
@@ -831,6 +876,7 @@ fn camera_sphere_cast(ground: &dyn ddsim::Ground, start: Vec3, end: Vec3, radius
     let motion = end - start;
     let mut nearest: Option<(f32, Vec3, f32, u32)> = None;
     for (face, flags) in &faces {
+        if !camera_surface(*flags) { continue; }
         let Some((fraction, normal, gap)) = ddsim::sweep::sphere_contact(start.to_array(), radius, motion.to_array(), face) else { continue };
         if nearest.is_none_or(|hit| fraction < hit.0) {
             nearest = Some((fraction, Vec3::from(normal), gap, *flags));
@@ -850,7 +896,7 @@ fn sphere_hits(ground: &dyn ddsim::Ground, c: Vec3, r: f32) -> bool {
     if !ground.triangles_in(lo, hi, &mut tris) {
         return false;
     }
-    tris.iter().any(|(t, _)| Vec3::from(ddsim::sweep::closest_on_triangle(c.to_array(), t)).distance_squared(c) < r * r)
+    tris.iter().any(|(t, flags)| camera_surface(*flags) && Vec3::from(ddsim::sweep::closest_on_triangle(c.to_array(), t)).distance_squared(c) < r * r)
 }
 
 /// The follow camera's projection: `CAMERA_FOV` plus the player's
@@ -1177,15 +1223,19 @@ mod tests {
     }
 
     #[test]
-    fn camera_discards_nearest_flagged_hit_without_searching_past_it() {
+    fn camera_prefilters_excluded_material_before_nearest_contact() {
         let mut terrain = ddworld::Terrain::empty();
         for (z, flags) in [(-150.0, 0x10), (-190.0, 0)] {
             terrain.add_flagged([[-1000.0, -1000.0, z], [1000.0, -1000.0, z], [0.0, 1000.0, z]], flags);
         }
         let (eye, _) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+        assert!((eye.z + 185.1).abs() < 0.002, "{eye:?}");
+        let (_, flags) = camera_sphere_cast(&terrain, Vec3::new(0.0, 140.0, 0.0), Vec3::new(0.0, 140.0, -214.0), 20.8).unwrap();
+        assert_eq!(flags, 0);
+        let mut excluded = ddworld::Terrain::empty();
+        excluded.add_flagged([[-1000.0, -1000.0, -190.0], [1000.0, -1000.0, -190.0], [0.0, 1000.0, -190.0]], 0x0080_0000);
+        let (eye, _) = follow_camera(&excluded, Vec3::ZERO, 0.0, 0.0);
         assert!((eye.z + CAMERA_DISTANCE).abs() < 0.001, "{eye:?}");
-        let (_, flags) = camera_sphere_cast(&terrain, Vec3::new(0.0, 140.0, 0.0), Vec3::new(0.0, 140.0, -134.0), 124.8).unwrap();
-        assert_eq!(flags, 0x10);
     }
 
     #[test]
