@@ -30,6 +30,7 @@ find it within one hour of tracing, write down where you looked and stop.
 
 codex-1, 2026-10-09: complete. The detailed source chain and validation are
 in `docs/tasks/opening-movie.md`, Results / S08.
+Research commit: `adcfff6`.
 
 - Handler `0x004367c0`, called from event play `0x00435fb0`: Start press
   edge from any of four pads (internal mask `0x8`) or keyboard Escape
