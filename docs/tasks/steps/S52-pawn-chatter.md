@@ -28,7 +28,7 @@ quests. Rook says nothing today. Known anchors: `uGUICmcMessage`
 Rook speaks the original's lines in the opening's fight and on orders, with
 text and voice from the install, sources documented.
 
-## Results: core checkpoint, S52 still in progress
+## Results: tested text/voice checkpoint, broader S52 still open
 
 Implemented headless CMC selection, authored `Request::PawnMessage`, an
 admission-aware host/network producer and installed GUI/STRQ consumption.
@@ -39,8 +39,12 @@ including five new packed-voice/localized-name regressions and the prior
 text capture passed; that capture exposed the two fidelity failures below.
 
 The packed voice reader and localized-name fix now have actual core
-validation. Fresh viewer tests/default-release build and a new verified pin
-are still required before root's audible-voice/localized-name capture.
+validation. Fresh full release-viewer tests passed 124 tests, and the
+default release build exited successfully at frozen `4ad1837`. Root's
+single follow-up actually exited 0 and captured localized `Rook` / `Goblin!`
+during combat. The installed packed stream decoded without an observed
+audio warning; hardware-audible playback and original comparison remain
+unverified.
 This is **not whole S52 Done**: remaining sensor/combat producers, low-HP
 and hire producers, broader native GUI behavior and voice pitch are open.
 The earlier checkpoint evidence below is historical, not a claim that its
@@ -543,7 +547,97 @@ immediate table entries and initializer addresses, actual exit0; it neither
 emulated nor executed the original. Native resampling, pitch presentation
 and broader voice/language options remain unimplemented and open.
 
-Next action: parent review of the actual 306-test core evidence, then fresh
-full viewer tests/default-release build in its separately granted window.
-Root performs the subsequent bounded genuine-speech capture only from the
-verified new pin; audible voice and localized-name fidelity remain gated.
+The Arisen-down reaction is a separate source-only producer:
+`cCmcPlConscious` callback `0x00562A20`, vtable slot17 (+44), calls
+`0x00599BB0` at `0x00562A9B` with situation5 and request-list1. Native
+dispatch `0x00540E18..0x00540E21` passes the `cAICtrl` controller and its
+linked actor, rather than storing this state on the interface itself.
+Its one-shot latch is controller byte+10, tested at `0x00562A69` and set
+even if owner/readiness guards reject the request. The controller
+constructor `0x0059DA00` clears that byte at `0x0059DB39`. The callback
+requires the original Arisen body; it admits absent/nonpositive life data
+or actor flag+2360 bit20000, and otherwise skips positive-HP actors.
+Later rearming/reset, controller reuse across retry, and N-profile reaction
+policy remain unresolved. No per-frame polling or per-interface latch was
+implemented. This situation5 producer is separate from a pawn's own
+near-death situation6.
+
+### Fresh voice/name release-viewer gate
+
+At clean frozen `4ad1837ccd31f0b553024bf1c5f7974310022708` (documentation
+only over the tested source `2612c06`), full
+`cargo test --release -p ddview -- --test-threads=1` session 88882 actually
+exited **0**: **124 passed, 0 failed, two existing ignored tests**. All
+three chatter regressions were source-present and passed exactly once:
+installed native GUI/font/text/voice binding, game-coordinate recognition
+planes/sphere, and actual screenshot-save callback/overwrite protection.
+The two ignored tests are the existing human-joint remap and private
+original-camera comparison tests; none of the three chatter checks was
+skipped. Canonical installed resources and executable were available.
+
+A strict stage proof checked the actual successful exit, all three names,
+effective installed paths, clean HEAD and unchanged source hashes before
+the separate default `cargo build --release -p ddview` session 91055
+started. That build actually exited **0**. Both jobs used jobs2 and only
+the existing shared M5 target. Normal build ownership was released after
+actual exits and final proof; no child GUI or GPU process was launched.
+
+Private logs and SHA-256:
+
+- `viewer-test-4ad1837-voice-name-first.private.log`:
+  `A668322F624C8A5A344FC8D9ED58A44B099979CDB1D70FAC72DF21B406D78151`;
+- `viewer-build-4ad1837-voice-name-first.private.log`:
+  `BB1F37D18872BA79A2C783E9DFC5C778A9205D33556F58F50FC8D11206D355DD`.
+
+The final strict proof is
+`E:/ddda-re/notes/steps/S52/viewer-capture-gate-4ad1837.private.json`.
+It records both actual sessions/exits, exact source hashes, all three
+passing names, and byte identity between the release build and private pin
+`E:/ddda-re/notes/steps/S52/ddview-s52-capture-4ad1837.exe`:
+95,785,472 bytes, SHA-256
+`2838B22AADBDCA2DF2832AB8B3B80204C818D076C108C89028F5949902E38ABC`.
+The source remained clean and unchanged before/after both gates.
+
+### Actual localized-name / packed-stream follow-up
+
+Root's single owned capture session 8305, viewer PID33876, used the exact
+pin above and private `RescueApproach.ddhs` checkpoint, SHA-256
+`CD6931B58EBA6B7A6674F4F80DAF39AB06C5EEFCA02A8A45F4F23CD94FA176AE`.
+The viewer actually exited **0** in 72.108 seconds without timeout; the
+original game PID23408 remained alive before/after and was untouched.
+Root released normal live-viewer ownership after completion. No child
+capture or scene rerun was launched.
+
+At host message1/frame13833, party slot1/message1000, the admitted pawn
+name was `Rook`. Actual `S52_CAPTURE_REQUEST` and successful
+`S52_CAPTURE_SAVED` acknowledged a 1280x720 image. Parent and codex-78
+inspected both images: `Rook` / `Goblin!` appears in the live stage100,
+Sce1410, q0002 fight, and the endpoint continues combat after the line
+expires (HP450 then408). This validates the localized presentation;
+there is no hardcoded Rook-name substitution.
+
+Private artifacts under
+`E:/ddda-re/notes/steps/S52/capture-4ad1837-20261010-161100`:
+
+- `S52-pawn-chatter.png`: SHA-256
+  `784E0890EE252F0113D34CA42847E3701AFFB746D863BF6786C5E394F3159006`;
+- `S52-endpoint.png`: SHA-256
+  `0E4F42A20E4F8E16A5005D9E739B218B0E58D1F4F379F02117F88D0F6D19EA4C`;
+- `viewer.stderr.log`: SHA-256
+  `338FB7FA0952F04A11E8BE84902FF5F582221355B63B9D0C7BE7E6C603C3020E`.
+
+The actual INFO log resolved `em0100_m1:0:0` to installed
+`pwn_9780_m1.sngw` and decoded 31,590 samples. No audio warning/error was
+observed. The first outer capture wrapper exited1 because its broad
+audio/pawn regex misclassified that INFO success as an error; the actual
+viewer exit remained0. That validation failure is preserved. The corrected
+independent artifact validator actually exited0 against the same artifacts,
+recorded in `parent-followup-artifact-gate.private.json`; no scene was rerun.
+
+These results establish installed packed-stream resolution/decoding and
+localized-name capture, not heard or recorded audio or original GUI parity.
+Next action for head: retain this tested checkpoint and assign separately
+scoped original-audio comparison, native pitch/presentation, and the
+remaining source-backed situation producers. Hire and low-HP adapters,
+broader native GUI behavior, and camera observations from LAN guests remain
+open; the full brief's Done condition is not claimed.
