@@ -15,6 +15,9 @@ use ddstory::route::Waypoint;
 use ddstory::scripted::ScriptedHost;
 use ddstory::{HostEvent, Menu, NpcIntel, NpcUnit, Request, Target};
 
+#[path = "dragon_route.rs"]
+pub mod dragon_route;
+
 /// The story world of an opening session.
 pub struct OpeningWorld {
     /// Answers everything the view does not (timings, host-run AI,
@@ -27,6 +30,10 @@ pub struct OpeningWorld {
     /// Explicit placement-to-fight bindings supplied by the layout
     /// adapter. Target index is not guessed from a layout record id.
     enemy_bindings: std::collections::HashMap<(u32, Target), u32>,
+    /// Installed placement identity of the scene's single opening dragon.
+    /// Presence/HP come from its real fight component, persistent death from
+    /// the placement lifecycle. No target is guessed from the enemy family.
+    dragon_target: Option<(u32, Target)>,
     /// NPC units for the scenario volumes that detect NPCs.
     pub npcs: Vec<NpcUnit>,
     /// Menus wait for the view ([`OpeningWorld::close_menu`]) instead of
@@ -55,6 +62,7 @@ impl OpeningWorld {
             inner: ScriptedHost::opening(),
             encounters: None,
             enemy_bindings: Default::default(),
+            dragon_target: None,
             npcs: vec![],
             manual_menus: false,
             manual_stages: false,
@@ -78,6 +86,17 @@ impl OpeningWorld {
     pub fn enable_live_encounters(&mut self) -> &mut ddstory::encounter::EncounterFacts {
         self.inner.on_camera.clear();
         self.encounters.get_or_insert_with(Default::default)
+    }
+
+    /// Enter the live authored dragon scene. The caller resolves its enemy
+    /// target from the installed layout and plays all three actual events.
+    /// Camera compatibility remains the separately labelled S40 adapter.
+    pub fn enable_dragon_scene(&mut self, stage: u32, target: Target) {
+        assert_eq!(stage, 200);
+        assert_eq!(target.kind, 2);
+        self.dragon_target = Some((stage, target));
+        self.enable_live_encounters();
+        self.live([19, 20, 21]);
     }
 
     /// Report an actual host-system completion (AI, dialogue, UI).
@@ -178,6 +197,23 @@ impl StoryWorld for OpeningWorld {
     }
     fn observe_fight(&mut self, fight: Option<&ddenemyrt::fight::Fight>) {
         let Some(facts) = &mut self.encounters else { return };
+        (facts.challenge_dragon, facts.challenge_players) = dragon_route::challenge_actors(fight);
+        if let Some((stage, target)) = self.dragon_target {
+            let mut unit = facts.unit(stage, &target);
+            let dragon = fight.and_then(|fight| fight.dragon.as_ref());
+            unit.layout_loaded = true; // Caller resolved the installed layout.
+            unit.present = dragon.is_some();
+            unit.apply_fsm_ready = dragon.is_some();
+            let pool = dragon.and_then(|dragon| match &dragon.actor.fighter.victim {
+                ddenemyrt::combat::Victim::Enemy { regions, .. } => regions.first(),
+                _ => None,
+            });
+            unit.hp = pool.map(|pool| pool.hp);
+            unit.max_hp = pool.map(|pool| pool.hp_max);
+            // Keep separately reported persistent death; HP0 or unload alone
+            // never fabricates the killed bit consumed by EnemyCheck(flag1).
+            facts.report_unit(stage, target, unit);
+        }
         for (&(stage, target), &owner) in &self.enemy_bindings {
             let mut unit = facts.unit(stage, &target);
             let goblin = fight.and_then(|f| f.goblins.iter().find(|g| g.fighter.owner == owner));
