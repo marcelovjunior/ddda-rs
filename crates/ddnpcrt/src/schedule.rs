@@ -47,6 +47,78 @@ pub struct Guard {
     pub start_position: u32,
 }
 
+/// Reflected NPC wrapper and generic motion parameters, copied by
+/// 0x00576ef0 / 0x0057e290 (DDDA.exe 2017-12-13 Steam).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Motion {
+    pub number: i32,
+    pub blend_frames: f32,
+    pub start_frame: f32,
+    pub speed: f32,
+    pub looping: bool,
+    pub fix_angle: bool,
+    pub fix_translation: bool,
+    pub translation_off: bool,
+    pub symmetry: bool,
+    pub target: bool,
+    pub target_type: u32,
+    pub target_position: [f32; 3],
+    pub target_group: u32,
+    pub target_id: u32,
+    pub arrive_length: f32,
+    pub rotation_speed: f32,
+    pub look_start_frame: f32,
+    pub look_time: f32,
+    pub stop: bool,
+    pub fall: bool,
+    pub force: bool,
+    pub talk: bool,
+    pub wait_in_intel: bool,
+    pub object_priority: u32,
+}
+
+impl Motion {
+    pub fn from_record(wrapper: &mtfsm::Record) -> Result<Self, Error> {
+        let motion = wrapper.object("mpMotion")
+            .filter(|r| r.class_name == Some("cAIActionInterfaceMotion"))
+            .ok_or_else(|| Error::Data("NPC motion missing generic mpMotion".into()))?;
+        let missing = |name| Error::Data(format!("NPC motion missing {name}"));
+        let float = |name| motion.f(name).filter(|f| f.is_finite()).ok_or_else(|| missing(name));
+        let boolean = |name| motion.b(name).ok_or_else(|| missing(name));
+        let uint = |name| motion.u(name).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| missing(name));
+        Ok(Self {
+            number: motion.s("Motion No").and_then(|n| i32::try_from(n).ok()).ok_or_else(|| missing("Motion No"))?,
+            blend_frames: float("Hokan Frame")?, start_frame: float("Start Frame")?, speed: float("Motion Speed")?,
+            looping: boolean("Loop")?, fix_angle: boolean("Null Angle Fix")?,
+            fix_translation: boolean("Null Tranx Fix")?, translation_off: boolean("Null Tranx Off")?,
+            symmetry: boolean("Symmetry")?, target: boolean("Target Flag")?,
+            target_type: uint("Target Type")?, target_position: motion.vec3("Target Position")
+                .filter(|p| p.iter().all(|f| f.is_finite())).ok_or_else(|| missing("Target Position"))?,
+            target_group: uint("Target Group")?, target_id: uint("Target ID")?,
+            arrive_length: float("Arrive Length")?, rotation_speed: float("Rot Speed")?,
+            look_start_frame: float("Look Start Frame")?, look_time: float("Look Time")?,
+            stop: boolean("Stop")?, fall: boolean("Fall")?, force: boolean("Force")?,
+            talk: wrapper.b("会話可能フラグ").ok_or_else(|| missing("talk"))?,
+            wait_in_intel: wrapper.b("Intel状態で再生待ちをする").ok_or_else(|| missing("wait in intel"))?,
+            object_priority: wrapper.u("ＯＢＪ補正優先").and_then(|n| u32::try_from(n).ok()).ok_or_else(|| missing("object priority"))?,
+        })
+    }
+
+    /// Translated from 0x0057db10, passed to 0x008500a0.
+    pub fn attributes(&self) -> u32 {
+        u32::from(self.translation_off) | if self.looping { 0 } else { 4 }
+            | if self.speed == 0.0 { 0x10 } else { 0 }
+            | if self.fix_translation { 0x20 } else { 0 }
+            | if self.fix_angle { 0x80 } else { 0 }
+            | if self.symmetry { 0x100 } else { 0 }
+    }
+
+    /// Translated from 0x00576e10: NPC body+0x2e98.
+    pub fn ground_mode(&self) -> u32 {
+        match self.object_priority { 0 => 0, 3 => 14, _ => 13 }
+    }
+}
+
 /// Translated actor-flag callbacks (DDDA.exe 2017-12-13 Steam; addresses
 /// beside each mask). The body adapter must also implement the
 /// FixedPosition(false) ground-mode side effect described below.
@@ -125,10 +197,12 @@ pub enum Request {
         dir: Option<[f32; 3]>,
     },
     /// `cAIActionInterfaceNpcSetMotion` / `SetActionEx`: play the motion the
-    /// record names (passed through unread).
+    /// record names. ActionEx remains a distinct, unported payload.
     Motion {
         npc: u32,
         interface: String,
+        command: u64,
+        motion: Option<Motion>,
     },
     /// Placed at once (`SetInitPosNpc`, `cAIActionInterfaceDemoSetPos`).
     Place {
@@ -202,6 +276,8 @@ struct Think {
     actor: ActorObservations,
     scene: Option<u32>,
     goal: Goal,
+    command: u64,
+    motion_active: bool,
     pos: Option<[f32; 3]>,
     load: Option<String>,
     out: Vec<Request>,
@@ -259,6 +335,11 @@ impl Think {
             .object("Interface")
             .ok_or_else(|| Error::Data("interface missing".into()))?;
         let npc = self.npc;
+        // Port protocol identity, not a game field. Every replacement
+        // interface invalidates an asynchronous completion of its predecessor.
+        self.command = self.command.checked_add(1)
+            .ok_or_else(|| Error::Data("NPC interface command exhausted".into()))?;
+        self.motion_active = false;
         match i.class_name.unwrap_or("") {
             "cAIActionInterfaceNpcSetGoto" => {
                 let pos = i
@@ -289,8 +370,13 @@ impl Think {
                 self.out.push(Request::Motion {
                     npc,
                     interface: c.to_string(),
+                    command: self.command,
+                    motion: if c == "cAIActionInterfaceNpcSetMotion" {
+                        Some(Motion::from_record(i)?)
+                    } else { None },
                 });
                 self.goal = Goal::Motion;
+                self.motion_active = true;
             }
             "cAIActionInterfaceDemoSetPos" => {
                 let pos = if i.b("ポジションセットOn/Off").unwrap_or(false) {
@@ -343,6 +429,9 @@ impl Owner for Think {
     /// here is **guessed**: without it a finished interface would satisfy
     /// the next state's links at once.
     fn state_changed(&mut self, _env: &mut Env<'_>) {
+        // A completion of a state's old interface cannot complete another
+        // state's interface. Playback itself may remain visible in the host.
+        self.motion_active = false;
         if self.strict {
             // Translated from cThinkFSM::vf05 0x007a9da0.
             self.sys = 0;
@@ -525,6 +614,8 @@ impl Npc {
             flags: [0; 4],
             actor: ActorObservations::default(), scene: None,
             goal: Goal::None,
+            command: 0,
+            motion_active: false,
             pos: None,
             load: None,
             out: vec![],
@@ -643,6 +734,18 @@ impl Npc {
         self.think.finish();
     }
 
+    /// Current command only while this graph owns an unfinished motion.
+    pub fn motion_command(&self) -> Option<u64> {
+        (self.action.is_some() && self.think.motion_active && self.think.sys & 4 == 0)
+            .then_some(self.think.command)
+    }
+
+    pub fn motion_done(&mut self, command: u64) -> bool {
+        if self.motion_command() != Some(command) { return false; }
+        self.think.finish();
+        true
+    }
+
     /// One frame: the controller, then the action graph it selected.
     pub fn step(&mut self, graphs: &dyn Graphs, clock: Clock) -> Result<Vec<Request>, Error> {
         self.step_observed(graphs, clock, None)
@@ -691,7 +794,7 @@ mod variable_tests {
     use super::*;
     fn fields() -> Think {
         Think { npc: 1, sys: 0, free: u32::MAX, flags: [0; 4],
-            actor: ActorObservations::default(), scene: None, goal: Goal::None, pos: None,
+            actor: ActorObservations::default(), scene: None, goal: Goal::None, command: 0, motion_active: false, pos: None,
             load: None, out: vec![], complete_moves: false, strict: true, talk_end: false }
     }
     fn value(fields: &Think, owner: &str, property: &str, index: Option<u32>) -> Value {
