@@ -1485,7 +1485,8 @@ pub fn step(
     let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
-    s.acc = (s.acc + time.delta_secs()).min(0.25);
+    // the catch-up cap follows the virtual clock's own (DDVIEW_TIME_SCALE)
+    s.acc = (s.acc + time.delta_secs()).min(0.25 * crate::time_scale().max(1.0));
     while s.acc >= frame {
         if s.dragon_capture && s.host.fight.as_ref().and_then(|f|f.dragon.as_ref())
             .is_some_and(|d|d.thinker.current_states()==[1] && d.actor.frame>=15.0)
@@ -1838,7 +1839,7 @@ pub fn cutscene(
     let mut finished = None;
     if let Some(c) = &mut s.cut {
         // mDeltaTime: frames at 30 per second.
-        c.acc += time.delta_secs().min(0.1) * 30.0;
+        c.acc += time.delta_secs().min(0.1 * crate::time_scale().max(1.0)) * 30.0;
         while c.acc >= 1.0 && !c.player.finished() {
             c.acc -= 1.0;
             match c.player.step(1.0) {
