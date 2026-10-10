@@ -184,6 +184,8 @@ impl NameRules {
             .encode_utf16()
             .take_while(|&w| w != 0)
             .filter(|&w| w >= 0x20)
+            // 0x007678A0 limits the native UTF-16 scan to 0x100 words.
+            .take(256)
             .collect();
         let mut limit = 12;
         let mut spaces_only = true;
