@@ -34,6 +34,8 @@ pub struct OpeningWorld {
     pub manual_menus: bool,
     /// StageLoaded is reported only after the caller installs its world.
     pub manual_stages: bool,
+    /// Installed authored event cameras, with a host-owned completion clock.
+    pub cameras: Option<crate::quest_camera::Cameras>,
     /// The menu waiting for the view: menu and the seat index it opened
     /// for.
     pub menu: Option<(Menu, usize)>,
@@ -52,6 +54,7 @@ impl OpeningWorld {
             npcs: vec![],
             manual_menus: false,
             manual_stages: false,
+            cameras: None,
             menu: None,
             pending: vec![],
         }
@@ -140,6 +143,14 @@ impl Default for OpeningWorld {
 }
 
 impl StoryWorld for OpeningWorld {
+    fn camera_step(&mut self, seconds: f32) {
+        if self.cameras.as_mut().is_some_and(|c| c.step(seconds)) {
+            self.pending.push(HostEvent::CameraFinished);
+        }
+    }
+    fn player_actions_blocked(&self, _seat: crate::PlayerId) -> bool {
+        self.cameras.as_ref().is_some_and(|c| c.blocks_actions())
+    }
     fn observe_npc_intel(&mut self, stage: u32, target: Target, present: bool) {
         let Some(facts) = &mut self.encounters else { return };
         let mut unit = facts.unit(stage, &target);
@@ -167,12 +178,18 @@ impl StoryWorld for OpeningWorld {
         }
     }
     fn handle(&mut self, stage: u32, requests: &[Request]) {
-        if !self.manual_menus && !self.manual_stages && self.encounters.is_none() {
+        if !self.manual_menus && !self.manual_stages && self.encounters.is_none() && self.cameras.is_none() {
             return self.inner.handle(stage, requests);
         }
         let mut rest = Vec::with_capacity(requests.len());
         for r in requests {
             match r {
+                Request::Camera { cam_id, simple, .. } if self.cameras.is_some() => {
+                    let cameras = self.cameras.as_mut().unwrap();
+                    if let Err(error) = cameras.request(stage, *cam_id, *simple) {
+                        cameras.error = Some(error);
+                    }
+                }
                 Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
                 Request::JumpArea { .. } if self.manual_stages || self.encounters.is_some() => {}
                 Request::Placement { .. }
@@ -192,6 +209,11 @@ impl StoryWorld for OpeningWorld {
     }
     fn events(&mut self) -> Vec<HostEvent> {
         let mut e = self.inner.events();
+        if self.cameras.is_some() {
+            // Discard any camera timer queued before real playback activation.
+            // Actual resource exhaustion is delivered through pending below.
+            e.retain(|event| !matches!(event, HostEvent::CameraFinished));
+        }
         if self.manual_stages {
             e.retain(|event| !matches!(event, HostEvent::StageLoaded { .. }));
         }
