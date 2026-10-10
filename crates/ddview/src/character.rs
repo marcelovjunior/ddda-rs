@@ -639,6 +639,9 @@ fn spawn_meshes(
         if !v.normals.is_empty() {
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.normals.clone());
         }
+        if !v.tangents.is_empty() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, v.tangents.clone());
+        }
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v.uvs[0].clone());
         // Bevy skins with four influences; layouts with up to eight keep the
         // four largest, renormalised (an approximation of the original).
@@ -933,7 +936,7 @@ mod eyebrow_install_tests {
                 alpha_mode: AlphaMode::Mask(0.5), ..default() },
             extension: DdExt { depth: Some(15), params: DdParams::default(),
                 map: None, spec: None, sky: SkyEnvParams::default(),
-                sky_rayleigh: default(), sky_mie: default(), env_cube: None, albedo_blend: None },
+                sky_rayleigh: default(), sky_mie: default(), env_cube: None, albedo_blend: None, normal: None },
         };
         let mut private = source.clone();
         let authored = (0.8, source.base.alpha_mode, source.extension.depth, source.extension.params.flags);

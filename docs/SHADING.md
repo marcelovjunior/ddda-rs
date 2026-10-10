@@ -588,3 +588,28 @@ ambient.
   the fine-weather canyon at the saved spot.
 - `FDiffuseVertexColor*`, `FTransparencyVolume`, `FAlbedoMapBlend` and the
   other variants: not traced.
+
+### Primary stage normal maps (render-fidelity checkpoint)
+
+The ordinary stage forward shader now supports `FBumpNormalMap` with
+primary normal/albedo UVs. Source: installed `sc/DX9/Stage200` PS file
+0x6171f8 (confirmed by 0x318e0c and 0x5f3000), VS file 0x1381d4.
+The linear DXT5 map uses alpha/green: XY = 2 * (AG - 127/255),
+Z = sqrt(1 - dot(XY, XY)) when the radicand is greater than 0.0001,
+otherwise 0.01. The decoded biased-byte tangent W multiplies
+cross(transformed tangent, transformed normal). Only N is normalized
+before interpolation; T and B retain their source lengths. The final
+weighted sum is normalized. UVs use the material transform.
+
+The implementation preserves geometric-normal UVs for the separate
+character albedo blend term. Character bump is disabled pending a traced
+skinned basis; the viewer unit conversion in skin matrices cannot be
+blindly applied to this raw ordinary-world basis. Detail normals,
+secondary/procedural UV variants and a normal prepass are not implemented
+by this checkpoint. Existing face orientation is retained pending the
+same-pose comparison. AO and shadow matching remain unresolved.
+
+Decoder/basis and material-selection regressions pass. A release build
+and bounded field capture (480 meshes, 397 instances) passed without WGSL
+pipeline errors. This does not establish visual agreement with the
+original; see the render-fidelity brief for the comparison status.
