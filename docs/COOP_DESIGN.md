@@ -13,6 +13,13 @@ single-player design is the expensive mistake to avoid.
   hired pawn. The original party is four slots (Arisen, main pawn, two
   hired pawns), so P2 takes the second hired-pawn slot.
 - **The main pawn is shared.** Either player can give it commands.
+- Pawn orders issued in one host frame are delivered in ascending seat
+  order. Each pawn's mailbox retains the last authorized order, so the
+  highest valid seat wins a simultaneous shared-main-pawn tie. Hired and
+  support pawns obey their owning seat. This is a co-op decision; the
+  original has one commanding Arisen. Held input uploads do not repeat an
+  order, and conflicting directions on one seat are suppressed according
+  to the native sender (both Help directions together remain valid).
 - **NPC interaction lock:** while one player is talking to, trading with or
   otherwise interacting with an NPC, that NPC is locked for the other player.
 - **LAN play**, each player on their own PC with their own copy of the game
