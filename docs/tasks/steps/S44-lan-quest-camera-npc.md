@@ -45,7 +45,9 @@ documented.
 - Branch `step/s44-lan-camera-npc`, initial implementation `15c12c3`,
   host getter `4935051` (same two-line source as S51 `201ec44`), reviewed
   main `3ecd13e` integration `70d02f4`, centimetre skeleton transform fix
-  `b44c5bf`. **No Cargo acceptance yet; this is not Ready.**
+  `b44c5bf`, stage hook `888f820`, stage prediction/interpolation fix
+  `2865b70`, permanent retirement `10ddfd4`, first-join collision
+  readiness fix `5faead3`. **Core passed; viewer acceptance remains pending.**
 - Protocol 9 projects the host's stage, camera stage/id/generation/seconds
   and authored input lock. Every snapshot carries the active camera or an
   explicit absent camera. The guest never advances the ownership clock or
@@ -78,11 +80,18 @@ documented.
   and collision using Streamer::enter at received positions; locally
   disposable host actor adapters are bypassed on subsequent guest frames. No guest StageLoaded, quest advance or party
   placement is authorized by this adapter.
-- Prepared tests cover whole/delta camera/NPC state, explicit camera end,
+- Tests cover whole/delta camera/NPC state, explicit camera end,
   malformed payloads, position-only/no-story defaults, native camera12 and
   Reynard actor state over UDP loopback, prediction suppression/release,
-  installed token sampling and centimetre-root transforms. Test results
-  and release binary pin will be added only after actual process exits.
+  installed token sampling and centimetre-root transforms. Focused library
+  acceptance: actual session40284 exit0, 9.24s compile, 10PASS. Full core:
+  actual session94820 exit0, 41.14s compile, **98 ddhost +25 ddnet =123PASS**,
+  no failed/ignored. All eight new network regressions ran, including the
+  installed UDP camera12/HP/gauge/motion fixture. The HP-loss fixture is
+  explicit and does not claim a natural-hit original-game comparison.
+  Private full log: `E:/ddda-re/notes/steps/S44/full-core.log`.
+  Viewer-only installed token/transform/camera-ownership regressions and
+  release binary pin remain pending; no outcome is predicted.
 - Open: S47 appearance replication is a separate schema extension;
   the original visual/LAN comparison, broader NPC specialized body banks,
   corpse alpha presentation (also absent on the local host view), and
