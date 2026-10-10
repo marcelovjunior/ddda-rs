@@ -15,6 +15,7 @@
 pub mod ambient;
 pub mod clock;
 pub mod doors;
+pub mod dragon;
 pub mod data;
 pub mod hash;
 pub mod host;

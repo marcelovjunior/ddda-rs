@@ -150,6 +150,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
+    pub opening_dragon_data: Option<crate::dragon::OpeningDragonData>,
     pub doors: Option<crate::doors::Doors>,
     /// Ambient enemy ownership; admission and view lifetimes are separate.
     pub ambient: crate::ambient::Population,
@@ -186,6 +187,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             boot: true,
             request_log: StateHasher::default(),
             fight: None,
+            opening_dragon_data: None,
             doors: None,
             ambient: Default::default(),
             kit_job: 0,
@@ -368,6 +370,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.boot = false;
         }
         self.apply_job_kit();
+        self.sync_opening_dragon()?;
         for request in &requests {
             if let Request::StoryPawn { stock, slot } = request {
                 self.recruit_story_pawn(*stock, *slot)?;
@@ -397,6 +400,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        self.step_opening_dragon_a(step)?;
         // Line 10 continued (fight): scripted attacks advance and move their
         // Arisen; line 15: the enemies think, act and move; step 38: the
         // push-out between characters; pass C (step 42): poses and the hit
@@ -407,6 +411,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             f.push_out(&mut self.sim);
             f.volumes(&self.sim);
         }
+        self.step_opening_dragon_c(step)?;
         self.ambient
             .step(step, &self.sim.players, self.ground.as_ref());
         // Same line, phase 90 of each character: at most one level-up

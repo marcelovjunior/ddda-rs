@@ -51,6 +51,9 @@ use crate::event::{Actor, EventCam, FadePlane, InfoText, SubtitleText};
 use crate::play::{self, FollowCam, PlayState, Shown};
 use crate::stage::{Loader, UNIT};
 
+#[path = "dragon.rs"]
+mod dragon_view;
+
 /// The Cassardis stage.
 pub const STAGE: u32 = 200;
 /// NPCs within this distance (cm, horizontal) of the Arisen answer E.
@@ -87,6 +90,10 @@ enum Step {
     /// `DDVIEW_DEMO_FIGHT`: after the settle, fight the field's goblins
     /// with ordinary inputs (play::demo_attack) and log the quest state.
     Rescue,
+    /// After the rescue's outcome (q2:20 or q2:30): walk the road toward
+    /// the authored `q0002_event2` volume, which sets q2:10 and boots
+    /// q0003 (docs/tasks/q0002-roadside.md, sequence 5).
+    RoadWalk,
     Done,
 }
 
@@ -211,9 +218,14 @@ impl NpcAdapter {
 
 /// The session (host frame stepping, the cutscene, the talk, the demo).
 pub struct Session {
+    dragon_view: Option<dragon_view::DragonView>,
+    /// Explicit S29 actor capture fixture, never a claimed opening route.
+    dragon_capture: bool,
     /// Authored event movie currently awaited by the story (if intro enabled).
     pub intro_movie: Option<PathBuf>,
     pub host: HostHandle,
+    /// Save-free bags; actual story rewards and menu choices deliver items.
+    quick_items: crate::items::QuickItems,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
     pending_input: PlayerInput,
@@ -342,12 +354,20 @@ pub fn prepare(
         .collect();
     let sce = w.sce_no;
     let npc_adapter = NpcAdapter::cassardis(&vfs, exe)?;
+    // The preparation route can stop before the dragon challenge or after
+    // the actual heart-taking event. Prologue consumables were erased.
+    let bag_phase = if sce >= 1050 { ddeconomy::new_game::Phase::NewlyArisen }
+        else if matches!(w.stage_no, 800 | 801) { ddeconomy::new_game::Phase::BeforeCreation }
+        else { ddeconomy::new_game::Phase::DragonChallenge };
+    let seats: Vec<_> = host.roster.ids().collect();
+    let quick_items = crate::items::QuickItems::new_game(&vfs, &seats, bag_phase)?;
     let mut s = Session {
         intro_movie,
         host: HostHandle {
             local: Some(Box::new(host)),
             server: None,
         },
+        quick_items,
         guest: None,
         network_ready: false,
         pending_input: PlayerInput::default(),
@@ -396,12 +416,35 @@ pub fn prepare(
         enemy_spawned: Default::default(),
         enemy_world: None,
         gone: vec![],
+        dragon_view: None,
+        dragon_capture: std::env::var_os("DDVIEW_DRAGON_ENTRANCE_CAPTURE").is_some(),
     };
     let start = f
         .arrival
         .filter(|(stage, _)| *stage == STAGE)
         .map_or(s.world().start_pos, |(_, n)| n);
     if !intro { s.place_party(start); }
+    // S29 owns admission/body independently. S31 will enter the live
+    // authored scene instead of the stand-in fast-forward above.
+    let exe_file=ddexe::ExeFile::next_to(native_pc).map_err(|e|e.to_string())?;
+    s.host.set_opening_dragon_data(ddhost::dragon::OpeningDragonData::load(&vfs,
+        &exe_file.image().map_err(|e|e.to_string())?)?);
+    if s.dragon_capture {
+        s.demo=None;
+        s.place_party(3);
+        let story=s.host.story.as_mut().unwrap();
+        // Presentation fixture starts at the documented post-ev00 gate;
+        // actual story sequencing is S31. Stop its unrelated q1 scripts.
+        story.quests.clear();
+        story.tasks.clear();
+        story.stage.scenarios=Default::default();
+        story.stage.event=Default::default();
+        s.host.world.enable_live_encounters();
+        let story=s.host.story.as_mut().unwrap();
+        story.world.set_sce_no(1025,false);
+        story.world.set_lot(200,0,true);
+        info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
+    }
     Ok(s)
 }
 
@@ -422,10 +465,14 @@ impl Session {
     /// Editor confirmation resumes the remaining stand-in dragon route.
     pub fn intro_edit_done(&mut self) -> Result<(), String> {
         if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
+        self.quick_items.character_created();
         let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
         let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
             h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
         }).map_err(|e| e.to_string())?;
+        // The existing preparation route can bypass ev01 headless. Apply
+        // only its completed boundary; a live challenge leaves this pending.
+        if self.world().sce_no >= 1050 { self.quick_items.heart_taken(); }
         self.host.world.live(CASSARDIS_ROWS);
         self.host.world.manual_stages = true;
         self.last_sce = self.world().sce_no;
@@ -1141,8 +1188,10 @@ pub fn step(
     let mut guard = res.0.lock().unwrap();
     let s = &mut *guard;
     let now = time.elapsed_secs();
-    if args.perf_route && now > 600.0 {
-        s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
+    // the fight demo adds the rescue (up to 240 s) and the road walk (300 s)
+    let limit = if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { 1200.0 } else { 600.0 };
+    if args.perf_route && now > limit {
+        s.failure = Some(format!("performance route exceeded {limit} seconds without completing the walk"));
         return;
     }
     kit_weapons(&mut stage_view, st, s);
@@ -1205,6 +1254,20 @@ pub fn step(
             &mut vis,
         );
         return;
+    }
+    // Like --play, quick use is local host input. Opening menus/events
+    // suppress it; LAN clients cannot consume an unsynchronised local bag.
+    if !pause.paused && s.cut.is_none() && s.talk.is_none() && s.world_menu().is_none() {
+        let (items, host) = (&mut s.quick_items, &mut s.host);
+        let host = &mut **host;
+        if let Some(fight) = host.fight.as_mut() {
+            for (seat, result) in items.pressed(&keys, &st.locals, &mut host.sim, fight) {
+                match result {
+                    Ok(item) => info!("opening quick-use: seat {seat} used item {item}"),
+                    Err(error) => info!("opening quick-use: seat {seat}: {error}"),
+                }
+            }
+        }
     }
     if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
         play::orbit(st, &buttons, &mouse);
@@ -1304,6 +1367,14 @@ pub fn step(
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
     while s.acc >= frame {
+        if s.dragon_capture && s.host.fight.as_ref().and_then(|f|f.dragon.as_ref())
+            .is_some_and(|d|d.thinker.current_states()==[1] && d.actor.frame>=15.0)
+        {
+            // Hold a frame reached by real simulation while GPU pipelines
+            // warm up. This never reports completion to the actor/FSM.
+            s.acc=0.0;
+            break;
+        }
         let _timing = crate::perf::Section::start("opening host frame");
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
@@ -1340,6 +1411,7 @@ pub fn step(
             }
         };
         s.npc_requests(&report.npc_requests);
+        s.quick_items.rewards(&report.requests);
         for r in &report.requests {
             match r {
                 Request::PlaceParty {
@@ -1482,6 +1554,18 @@ pub fn step(
     }
     play::show(st, &bodies, &mut roots, &mut cams);
     play::show_goblins(st, s.host.fight.as_ref(), &mut roots, 1.0);
+    dragon_view::sync(&mut stage_view,st,s);
+    dragon_view::show(st,s,&mut roots);
+    if s.dragon_capture {
+        if let Some(dragon)=s.host.fight.as_ref().and_then(|f|f.dragon.as_ref()) {
+            let target=(Vec3::from(dragon.actor.pos)-st.origin)*UNIT;
+            // Capture camera choice, not a claim about the original camera.
+            for mut camera in &mut cams {
+                *camera=Transform::from_translation(target+Vec3::new(40.0,20.0,60.0))
+                    .looking_at(target,Vec3::Y);
+            }
+        }
+    }
     // The party's bars once the fight has its Arisen (the vocation's kit):
     // each seat's maximum from its kit, as play::setup records it.
     if let Some(f) = s.host.fight.as_ref() {
@@ -1549,7 +1633,13 @@ fn ddskill_mage() -> u32 {
 /// `ddskill::vocation::Vocation`).
 fn close_menu(s: &mut Session, job: u32) {
     info!("opening: vocation menu (stub) closed with job {job}");
+    let selecting = s.world_menu().is_some();
     s.host.world.close_menu(Some(job));
+    if selecting {
+        if let Some(vocation) = ddhost::ddskill::vocation::Vocation::from_id(job) {
+            s.quick_items.first_choice(vocation);
+        }
+    }
 }
 
 fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize, sex: u8) -> EventConfig {
@@ -1557,6 +1647,9 @@ fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize,
 }
 
 fn start_cut(s: &mut Session, row: usize) {
+    // Translated from 0x0050c290 case 0x15: the real ev01 request
+    // replaces the challenge gear before the movie, once per session.
+    if row == 21 && s.guest.is_none() { s.quick_items.heart_taken(); }
     let w = s.world();
     let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
@@ -1806,7 +1899,10 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let d = s.demo.as_ref().unwrap();
         (d.since, d.check.0)
     };
-    if now - last_log >= 5.0 || alive == 0 || now - since > 240.0 {
+    // q2:20 (rescued) or q2:30 (Reynard died): event1's outcomes. Ordinary
+    // field goblins left alive don't hold the road walk up.
+    let outcome = s.world().quest_bits(2).is_some_and(|b| b.get(20) || b.get(30));
+    if now - last_log >= 5.0 || alive == 0 || outcome || now - since > 240.0 {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
@@ -1815,10 +1911,29 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
         );
+        // each live goblin: owner, action, target, distance to the Arisen
+        // (m) and its last actions, to see why one never reaches or hurts it
+        if let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) {
+            for g in f.goblins.iter().filter(|g| !g.dead()) {
+                let d = ((g.pos[0] - p.position[0]).powi(2) + (g.pos[2] - p.position[2]).powi(2)).sqrt() / 100.0;
+                let recent: Vec<i32> = g.log.iter().rev().take(6).map(|x| x.1).collect();
+                info!(
+                    "opening demo: rescue: goblin {} action {} target {:?} {d:.1} m away, height {:.0} vs {:.0}, recent {recent:?}",
+                    g.fighter.owner, g.action, g.target, g.pos[1], p.position[1]
+                );
+            }
+        }
         let d = s.demo.as_mut().unwrap();
         d.check.0 = now;
-        if alive == 0 || now - since > 240.0 {
-            info!("opening demo: Rescue done -> Done");
+        if outcome {
+            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> RoadWalk", w_bit(s, 20), w_bit(s, 30));
+            let d = s.demo.as_mut().unwrap();
+            d.step = Step::RoadWalk;
+            d.since = now;
+            d.path.clear();
+            d.planning = None;
+        } else if alive == 0 || now - since > 240.0 {
+            info!("opening demo: Rescue done without an outcome -> Done");
             d.step = Step::Done;
             d.since = now;
         }
@@ -1826,6 +1941,10 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
     let d = s.demo.as_mut().unwrap();
     let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
     PlayerInput { sim, interact: false }
+}
+
+fn w_bit(s: &Session, bit: usize) -> bool {
+    s.world().quest_bits(2).is_some_and(|b| b.get(bit))
 }
 
 fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
@@ -1871,6 +1990,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         // encounter outcome. No fixture NPC or quest state is changed.
         Step::FieldWalk => s.host.story.as_ref().and_then(|story| {
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
+            benchmark_place(s, 4, n as u32).map(|v| v.0)
+        }),
+        Step::RoadWalk => s.host.story.as_ref().and_then(|story| {
+            let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event2")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
         Step::Gate | Step::FieldSettle | Step::Rescue | Step::Done => None,
@@ -2034,6 +2157,14 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         }
         Step::FieldSettle if now - d.since >= 30.0 => {
             next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::Rescue } else { Step::Done })
+        }
+        Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
+            info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
+            next = Some(Step::Done);
+        }
+        Step::RoadWalk if now - d.since > 300.0 => {
+            warn!("opening demo: road: q0002_event2 not reached in 300 s");
+            next = Some(Step::Done);
         }
         _ => {}
     }
@@ -2363,6 +2494,9 @@ struct RoutePlan {
     open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
     nodes: HashMap<RouteCell, RouteNode>,
     visited: std::collections::HashSet<(i32, i32)>,
+    /// The grid step: the body radius, coarser for far goals so the node
+    /// cap still covers a detour (the field road: 125 m uphill).
+    cell: f32,
 }
 
 impl RoutePlan {
@@ -2376,6 +2510,8 @@ impl RoutePlan {
             .into(),
             nodes: [((0, 0), (from, 0.0, (0, 0)))].into(),
             visited: Default::default(),
+            cell: ddsim::BODY_RADIUS
+                * ((from.x - target.x).hypot(from.z - target.z) / 3000.0).clamp(1.0, 3.0),
         }
     }
 
@@ -2393,9 +2529,10 @@ impl RoutePlan {
             open,
             nodes,
             visited,
+            cell,
         } = self;
+        let cell = *cell;
         let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
-        let cell = ddsim::BODY_RADIUS;
         let start = std::time::Instant::now();
         let mut expanded = false;
         loop {
@@ -2421,7 +2558,7 @@ impl RoutePlan {
                 path.reverse();
                 return Some(path);
             }
-            if visited.len() > 20000 {
+            if visited.len() > 60000 {
                 return Some(vec![]);
             }
             for dx in -1..=1i32 {
@@ -2535,6 +2672,8 @@ mod tests {
         let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
         assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
         let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
+        assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap(),
+            &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
         // Fixture observations satisfy this installed group's authored gates;
         // this is not a claim that the full opening route has reached them.
         let story = session.host.story.as_mut().unwrap();
@@ -2589,6 +2728,7 @@ mod tests {
         if !native.exists() { return; }
         let exe = native.parent().unwrap().join("DDDA.exe");
         let mut session = prepare(native, &exe, 2, false, None, true).unwrap();
+        assert!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().slots.is_empty());
         let row = session.host.world.inner.awaiting.unwrap();
         let event = &session.host.story.as_ref().unwrap().data.event_table().unwrap().rows[row];
         assert_eq!((event.stage, event.event), (100, 0));
@@ -2606,6 +2746,10 @@ mod tests {
         assert!(session.intro_movie_done().is_err(), "movie completion is consumed once");
         assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
         session.intro_edit_done().unwrap();
+        for seat in [0, 1] {
+            assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(seat)).unwrap(),
+                &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
+        }
         assert_eq!(session.world().stage_no, STAGE);
         assert!(session.host.story.as_ref().unwrap().quest(1).is_some());
         assert_eq!(session.host.roster.ids().count(), 2);

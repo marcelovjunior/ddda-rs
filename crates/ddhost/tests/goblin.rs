@@ -62,6 +62,11 @@ struct Run {
 /// facing it. With `swing`, the Arisen presses light attack whenever it
 /// waits and the goblin is within 2.5 m (the attack turns it to the goblin).
 fn fight(frames: u64, swing: bool) -> Run {
+    fight_from(600.0, frames, swing)
+}
+
+/// [`fight`] with the goblin `start` cm ahead.
+fn fight_from(start: f32, frames: u64, swing: bool) -> Run {
     let data = data().unwrap();
     let mut h = Host::new(
         Sim::new(HashMap::new()),
@@ -73,7 +78,7 @@ fn fight(frames: u64, swing: bool) -> Run {
     let mut f = Fight::new(data);
     f.add_arisen(0);
     f.equip(&mut h.sim, 0);
-    f.add_goblin([0.0, 0.0, 600.0], std::f32::consts::PI);
+    f.add_goblin([0.0, 0.0, start], std::f32::consts::PI);
     h.fight = Some(f);
     let mut press = false;
     let mut run = Run {
@@ -247,4 +252,26 @@ fn an_fsm_goblin_hands_over_to_its_think_tables() {
     let a: Vec<i32> = g.log.iter().map(|x| x.1).collect();
     assert_eq!(&a[..3], [action::WAIT_ATCK, 71, action::DASH_TRACE], "{a:?}");
     assert!(a.contains(&action::N_ATTACK1), "{a:?}");
+}
+
+/// A goblin 30 m away runs (9 RunTrace, beyond the 2000 cm dash range of
+/// table 0x017cb9f8) instead of standing: it closes in, switches to the
+/// dash and attacks.
+#[test]
+fn a_far_goblin_runs_in_then_dashes_and_attacks() {
+    if data().is_none() {
+        return;
+    }
+    let r = fight_from(3000.0, 900, false);
+    let a: Vec<i32> = r.actions.iter().map(|x| x.1).collect();
+    let run = a.iter().position(|&x| x == action::RUN_TRACE).unwrap_or_else(|| panic!("{a:?}"));
+    let dash = a.iter().position(|&x| x == action::DASH_TRACE).unwrap_or_else(|| panic!("{a:?}"));
+    assert!(run < dash, "{a:?}");
+    assert!(
+        a[dash..]
+            .iter()
+            .any(|&x| [action::N_ATTACK1, action::N_ATTACK2, action::N_ATTACK12].contains(&x)),
+        "{a:?}"
+    );
+    assert!(r.hits.iter().any(|(_, e)| e.victim == 0), "{a:?}");
 }
