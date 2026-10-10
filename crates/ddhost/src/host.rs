@@ -20,6 +20,8 @@ use std::collections::BTreeSet;
 pub trait StoryWorld: ddstory::Host {
     /// Advance host-owned authored cameras before story completion checks.
     fn camera_step(&mut self, _seconds: f32) {}
+    /// Read-only projection of the authoritative camera clock for guests.
+    fn quest_camera_active(&self) -> Option<&crate::quest_camera::Active> { None }
     /// Stage event camera input policy, applied independently to every seat.
     fn player_actions_blocked(&self, _seat: PlayerId) -> bool { false }
     /// Actual creation/destruction of a host-owned NPC intel and its
@@ -125,6 +127,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub locks: InteractionLocks,
     /// Wallets, bags, shops (ddeconomy).
     pub economy: ddeconomy::Economy,
+    /// Installed recovery catalogue (not saved); bags are in economy.
+    pub item_data: Option<std::sync::Arc<crate::items::ItemData>>,
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
     pub story_npcs: crate::story_npcs::StoryNpcs,
@@ -181,6 +185,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             ground,
             locks: InteractionLocks::default(),
             economy: ddeconomy::Economy::default(),
+            item_data: None,
             npcs: ddnpcrt::NpcRuntime::default(),
             story_npcs: Default::default(),
             npc_combat: Default::default(),
@@ -240,6 +245,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     let _ = self.create_arisen(id, v);
                 }
             }
+            self.first_choice_items(v);
         }
     }
 
@@ -314,6 +320,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
         self.economy.wallet(id);
+        self.joined_items(id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
         Some(id)
@@ -400,6 +407,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.recruit_story_pawn(*stock, *slot)?;
             }
         }
+        self.story_item_requests(&requests);
         self.sync_hired_pawn_bodies();
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
@@ -650,6 +658,21 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
         let err = HostError::Save;
+        // Validate economy/inventory before the first host mutation. ECON's
+        // player parts are keyed by persistent profile, so delivery metadata
+        // remaps together with its bag and never follows an old seat number.
+        let loaded_economy = if let Some(shared) = f.get(save::TAG_ECON, Owner::Shared) {
+            let players = self.roster.seats().iter().filter_map(|s|
+                Some((s.id, f.get(save::TAG_ECON, Owner::Profile(s.profile))?.to_vec()))).collect();
+            let candidate = ddeconomy::Economy::load(&ddid::Parts { shared: shared.to_vec(), players }).map_err(err)?;
+            if let Some(items) = &self.item_data {
+                if candidate.inventory.bags.values().flat_map(|b| &b.slots)
+                    .any(|s| items.items.get(s.item as u32).is_none()) {
+                    return Err(err("ECON item outside installed catalogue".into()));
+                }
+            }
+            Some(candidate)
+        } else { None };
         // Build/validate the complete script candidate before touching this
         // host, including its frame or player places. Old WRLD-only saves
         // still use from_world. A script chunk cannot stand without its world.
@@ -707,8 +730,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 .collect();
             Some(ddid::Parts { shared, players })
         };
-        if let Some(p) = parts(save::TAG_ECON) {
-            self.economy = ddeconomy::Economy::load(&p).map_err(err)?;
+        if let Some(economy) = loaded_economy {
+            self.economy = economy;
         }
         if let Some(p) = parts(save::TAG_PROG) {
             self.progression = ddprogress::Progression::load(&p, &seat_now).map_err(err)?;

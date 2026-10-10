@@ -13,6 +13,7 @@ ddnpcrt = { path = "../ddnpcrt" }
 ddprogress = { path = "../ddprogress" }
 ddrift = { path = "../ddrift" }
 dditem = { path = "../dditem" }
+ddsave = { path = "../ddsave" }
 ddskill = { path = "../ddskill" }
 ddexe = { path = "../ddexe" }
 ddpawn = { path = "../ddpawn" }
@@ -36,6 +37,5 @@ mtcamera = { path = "../mtcamera" }
 dddoor = { path = "../dddoor" }
 
 [dev-dependencies]
-ddsave = { path = "../ddsave" }
 ddcombat = { path = "../ddcombat" }
 
