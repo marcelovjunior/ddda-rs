@@ -40,6 +40,14 @@ pub enum Victim {
         hp: f32,
         hp_max: f32,
     },
+    /// An ordinary NPC inherits player mitigation, with its own main
+    /// collision pool and canonical script flags (0x00BB21E0). The host
+    /// supplies the pool built by uPlayerBase::vf196 (0x00B5F0A0).
+    Npc {
+        defender: PlayerDefender,
+        region: RegionPool,
+        rates: CollisionRates,
+    },
 }
 
 impl Victim {
@@ -47,6 +55,7 @@ impl Victim {
         match self {
             Victim::Enemy { regions, .. } => regions.first().is_some_and(|r| r.hp <= 0.0),
             Victim::Player { hp, .. } => *hp <= 0.0,
+            Victim::Npc { region, .. } => region.hp <= 0.0,
         }
     }
 
@@ -54,6 +63,7 @@ impl Victim {
         match self {
             Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp),
             Victim::Player { hp, .. } => *hp,
+            Victim::Npc { region, .. } => region.hp,
         }
     }
 }
@@ -358,7 +368,13 @@ fn hit_pass_inner(
         if v.victim.dead() {
             continue;
         }
-        let hits = resolve(&attacks, &v.hurts, &mut v.history, dt, holds);
+        // 0x0076B7E0 rejects valuation under Invincible (+0xCFC bit4),
+        // but still records contact history after this gate.
+        let accepts = match &v.victim {
+            Victim::Npc { rates, .. } => crate::npc_combat::accepts_hit(rates),
+            _ => true,
+        };
+        let hits = resolve(&attacks, &v.hurts, &mut v.history, dt, holds, accepts);
         let Some(&(first, region)) = hits.first() else {
             continue;
         };
@@ -460,6 +476,39 @@ fn hit_pass_inner(
                     killed: was_alive && *hp <= 0.0,
                 }
             }
+            Victim::Npc { defender, region: pool, rates } => {
+                use ddcombat::damage::{apply_break, apply_hp, resolve_reaction, scale_for_region};
+                // Translated from 0x00B7AD90 -> 0x0076DB10 -> 0x00776F50
+                // (DDDA.exe 2017-12-13 Steam). Ordinary NPCs have one
+                // main region; the body uses NPC group kind3 for pairs.
+                let mut h = merged;
+                player_mitigate(&mut h, defender, &tables.game);
+                let (dp, dm) = v.statuses.defence_muls();
+                h.phys = (h.phys * dp).max(0.0);
+                h.mag = (h.mag * dm).max(0.0);
+                // As in the existing enemy pass, attacker+0x14 is not
+                // yet carried by Fighter: its minimum is assumed 1.
+                let total = scale_for_region(&mut h, pool, rates, &tables.game, None, 1.0);
+                let was_alive = pool.hp > 0.0;
+                apply_break(pool, &h, rates);
+                let npc_status = StatusHit { element: h.element, element_buildup: h.element_buildup,
+                    status: h.status, mag: h.mag };
+                build_up(&mut pool.status, &npc_status, &pool.resist.element, 1.0, 1.0, &mut *roll);
+                let (slots, frozen) = fire(&mut pool.status);
+                add_fired(&mut v.statuses, &slots, &tables.status_player);
+                // NoDamage affects HP alone. It does not discard this
+                // hit, its status build-up, or the contact history.
+                apply_hp(pool, total, rates, h.row.is_no_death);
+                HitEvent {
+                    attacker,
+                    victim: v.owner,
+                    region,
+                    hits: hits_n,
+                    total,
+                    reaction: resolve_reaction(pool, frozen),
+                    killed: was_alive && pool.hp <= 0.0,
+                }
+            }
         };
         events.push(event.clone());
         if collision.is_some() {
@@ -494,12 +543,13 @@ fn resolve(
     history: &mut HitHistory,
     dt: f32,
     holds: &dyn Fn(u32) -> bool,
+    accepts: bool,
 ) -> Vec<(usize, u32)> {
     history.begin_frame(dt);
     let mut hits = Vec::new();
     for c in contacts(attacks, hurts) {
         let a = &attacks[c.attack];
-        if !history.already_hit(a.side.owner, a.key, a.relation) {
+        if !history.already_hit(a.side.owner, a.key, a.relation) && accepts {
             hits.push((c.attack, hurts[c.hurt].region_id));
         }
         history.record(a.side.owner, a.key, a.relation, a.flags.multi_hit, a.reset_time);
@@ -566,6 +616,15 @@ pub fn status_pass(fighters: &mut [Fighter], dt: f32) -> Vec<StatusEvent> {
                 let d = poison_player(&mut f.dots, &f.statuses, dt) + burning(&f.statuses, dt);
                 *hp = (*hp + d).max(0.0);
                 decay(&mut f.pools, step);
+                d
+            }
+            Victim::Npc { region, .. } => {
+                // Ordinary NPCs inherit the same player-side timed
+                // status handlers. As for Player above, DoT currently
+                // writes HP directly; script gating of DoT is untraced.
+                let d = poison_player(&mut f.dots, &f.statuses, dt) + burning(&f.statuses, dt);
+                region.hp = (region.hp + d).max(0.0);
+                decay(&mut region.status, step);
                 d
             }
         };
