@@ -191,3 +191,34 @@ resolved the compile errors without source changes. The core lease was
 released after actual exit. Reaction helper work is isolated on another
 branch and was not part of this acceptance run; the playable route remains
 open.
+**Independent reaction phase helper (head5831/5842):**
+`ddnpcrt::demo_reaction` translates extra/blow action phases from
+`0x0080E4E0/0x0080E4B0` and `0x0080E520/0x0080E560`. It preserves native
+motion arguments (115 for extra; 102/10A/10B/103 for blow), flags&5
+termination, ground byte exactly1 and the current body's Down observation.
+The action+0x50 completion byte and blow+0x7C down endpoint remain distinct;
+interface completion polls at `0x0056EBB0`. `0x0056EDA0` copies the
+authored payload, rather than polling completion. Unknown ground/layers
+cannot advance to landing/completion, and missing adjustment/Down inputs
+remain explicit errors. No HP write, death flag or timer completion exists.
+
+The helper is not connected to the host. Common damage entry
+`0x0080E190`, real motion/body updates and horizontal velocity
+`0x00B73490` remain explicit requests for a future body adapter. In
+particular `0x0080D500 -> 0x00B86010` toggles selected collision-record
+byte+0x90 bit0x40, not the landing byte. Actual NPC ground comes through
+`0x00BAFB00 -> 0x00B61A20 -> 0x0084BA60 -> 0x00885E30`; the last function
+writes body+0x1ED0 from real scenery flags+0x1B68 under update gate
++0x2398 bit4, with axis-present/mode and ground-check masks. The capsule
+mode3 height is set by `0x0080B450` from max(HumanEdit+0xF74,+0xF78),
+then `0x0076C540 -> 0x00CCE580 -> 0x0079DAB0/0x0079E200` builds/sweeps it.
+Those actual HumanEdit/body/physics providers remain unintegrated.
+
+On `step/s31-demo-reaction`, complete `cargo test -p ddnpcrt` actually
+exited0: 38passed, 0failed, compile18.87s. Three new scalar-observation
+regressions passed in0.02s, covering missing/terminal layers, strict ground
+byte, missing adjustment/Down observations and distinct down/recovery
+endpoints; all existing installed NPC suites also passed. These fixtures
+do not execute a native body, ground query or normal-input route. The core
+lease was released after actual exit. Next: supply source-owned NPC morph
+capsule/scenery/body requests before enabling the helper in the host.
