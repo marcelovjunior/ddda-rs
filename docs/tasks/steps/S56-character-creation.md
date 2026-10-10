@@ -152,6 +152,22 @@ Next action: obtain the shared release-only viewer window, run the full
 viewer tests and default release build, then capture a bounded stage801
 flow with explicit name fixtures. GUI/native-page parity remains separate.
 
+Source-only capture preparation (not yet compiled or executed): unattended
+pages now dwell for at least three successful GUI draws and 0.75 real seconds
+after their fixture is prepared. With an explicit, existing private
+`DDVIEW_CHARACTER_CAPTURE_DIR` inside `E:/ddda-re`, every page requests an
+actual primary-window screenshot and waits for its image save acknowledgment
+before advancing. Name text is entered before the dwell, rather than on the
+frame that leaves the name page. Optional explicit `DDVIEW_CHARACTER_SEX_<seat>`
+and `DDVIEW_CHARACTER_PRESET_<seat>` fixtures (or the unsuffixed fallback)
+select installed rows; preset indices are zero-based. Capture files identify
+both seat and persistent profile. After all local profiles confirm and the
+story admits the opening, the capture mode writes `S56-confirmed.ddhs` through
+`Host::save`, logging its saved hash. Errors block the capture flow. This is
+project test automation, not native editor timing or an original-game save.
+The new dwell boundary regression also remains unexecuted until the viewer
+window; the tested headless core source is unchanged.
+
 Later milestones still need detailed face/body/color/voice/personality and
 moniker pages, native page/selector animations, scene/background and editor
 motions, GUI font filters/icons/IME composition and input-repeat behavior,

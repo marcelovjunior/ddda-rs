@@ -13,6 +13,17 @@ pub(crate) enum Page {
     Confirm,
 }
 
+impl Page {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gender => "gender",
+            Self::Name => "name",
+            Self::Preset => "preset",
+            Self::Confirm => "confirm",
+        }
+    }
+}
+
 pub(crate) struct Editor {
     pub edit: Edit,
     pub page: Page,
@@ -88,6 +99,15 @@ impl Editor {
             .zip(self.edit.fields)
             .map(|(name, value)| ((*name).to_owned(), u32::from(value)))
             .collect()
+    }
+
+    /// Explicit unattended selection, using the same installed rows as input.
+    pub fn select_preset(&mut self, sex: u8, preset: usize) -> Result<(), String> {
+        self.presets
+            .apply(&mut self.edit, sex, preset)
+            .map_err(|e| e.to_string())?;
+        self.preset = preset;
+        Ok(())
     }
 
     /// Project restore policy: retain saved identity/appearance and point the

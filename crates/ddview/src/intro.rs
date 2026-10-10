@@ -170,12 +170,19 @@ pub fn update(
             };
             if args.unattended && waited > 3.0 {
                 if let Some(r) = result.as_mut() {
-                    let seat = intro.owners[intro.owner_index].0;
+                    let (seat, profile) = intro.owners[intro.owner_index];
                     if let Ok(name) = std::env::var(format!("DDVIEW_CHARACTER_NAME_{seat}"))
                         .or_else(|_| std::env::var("DDVIEW_CHARACTER_NAME"))
                     {
                         if r.0.is_none() {
-                            r.0 = edit.automate(&name);
+                            match edit.automate(&mut commands, &name, now, seat, profile) {
+                                Ok(record) => r.0 = record,
+                                Err(e) => {
+                                    error!("intro: unattended character creation: {e}");
+                                    intro.phase = Phase::Blocked;
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -200,11 +207,14 @@ pub fn update(
                 intro.phase = Phase::Blocked;
                 return;
             }
+            let sex = record.get("mGender").unwrap();
+            let name = record.name_str();
             if let Err(e) = session.host.confirm_character(seat, record) {
                 error!("intro: character confirmation: {e}");
                 intro.phase = Phase::Blocked;
                 return;
             }
+            info!("intro: stage801 confirmed seat {seat} profile {profile} sex {sex} name {name:?}");
             edit.close(&mut commands);
             if intro.owner_index + 1 < intro.owners.len() {
                 intro.owner_index += 1;
@@ -226,6 +236,31 @@ pub fn update(
                 *intro.session.get_mut().unwrap() = Some(session);
                 intro.phase = Phase::Blocked;
                 return;
+            }
+            // Explicit project capture checkpoint, after every local profile
+            // confirmed and the story admitted the opening. Never a native save.
+            if args.unattended {
+                let checkpoint = (|| -> Result<(), String> {
+                    let Some(dir) = crate::charaedit::capture_dir()? else {
+                        return Ok(());
+                    };
+                    let file = session.host.save().map_err(|e| e.to_string())?;
+                    let path = dir.join("S56-confirmed.ddhs");
+                    std::fs::write(&path, file.to_bytes()).map_err(|e| e.to_string())?;
+                    info!(
+                        "intro: stage801 all {} local profiles confirmed; checkpoint {} hash {:016x}",
+                        intro.owners.len(),
+                        path.display(),
+                        session.host.saved_hash()
+                    );
+                    Ok(())
+                })();
+                if let Err(e) = checkpoint {
+                    error!("intro: character checkpoint: {e}");
+                    *intro.session.get_mut().unwrap() = Some(session);
+                    intro.phase = Phase::Blocked;
+                    return;
+                }
             }
             commands.remove_resource::<CharaEdit>();
             commands.remove_resource::<EditResult>();

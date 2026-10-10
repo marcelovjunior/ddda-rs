@@ -7,6 +7,9 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 const MOTION: &str = r"motion\pl\m\m00\m0000_co\m0000_co";
 
@@ -23,6 +26,50 @@ pub struct CharaEdit {
     controls: Entity,
     dirty: bool,
     closed: bool,
+    automation: Option<Automation>,
+}
+
+// Project capture policy, not native editor timing. Successful GUI draws must
+// span several frames and real time; a requested screenshot must finish saving.
+struct Automation {
+    page: Page,
+    since: f64,
+    draws: u32,
+    capture_dir: Option<PathBuf>,
+    saved: Option<Arc<Mutex<Option<Result<(), String>>>>>,
+}
+
+impl Automation {
+    fn dwell_complete(&self, now: f64) -> bool {
+        self.draws >= 3 && now - self.since >= 0.75
+    }
+}
+
+/// The capture runner creates this directory explicitly before launching.
+/// Resolve links before accepting it: screenshots/checkpoints stay private.
+pub(crate) fn capture_dir() -> Result<Option<PathBuf>, String> {
+    let Some(path) = std::env::var_os("DDVIEW_CHARACTER_CAPTURE_DIR") else {
+        return Ok(None);
+    };
+    let path = std::fs::canonicalize(path).map_err(|e| format!("capture directory: {e}"))?;
+    let private = std::fs::canonicalize("E:/ddda-re").map_err(|e| format!("private research root: {e}"))?;
+    if !path.is_dir() || !path.starts_with(private) {
+        return Err("character capture directory must already exist inside E:/ddda-re".into());
+    }
+    Ok(Some(path))
+}
+
+fn fixture<T: std::str::FromStr>(field: &str, seat: ddhost::PlayerId) -> Result<Option<T>, String> {
+    match std::env::var(format!("DDVIEW_CHARACTER_{field}_{seat}"))
+        .or_else(|_| std::env::var(format!("DDVIEW_CHARACTER_{field}")))
+    {
+        Ok(value) => value
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("invalid character {field} fixture for seat {seat}")),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 impl CharaEdit {
@@ -31,11 +78,89 @@ impl CharaEdit {
     }
 
     /// Explicit unattended input; callers provide a name fixture, never invent one.
-    pub fn automate(&mut self, name: &str) -> Option<ddpawn::cmc::Edit> {
-        if self.editor.page == Page::Name {
-            self.editor.typed = name.to_owned();
+    pub fn automate(
+        &mut self,
+        commands: &mut Commands,
+        name: &str,
+        now: f64,
+        seat: ddhost::PlayerId,
+        profile: ddhost::ProfileId,
+    ) -> Result<Option<ddpawn::cmc::Edit>, String> {
+        let page = self.editor.page;
+        if self.automation.as_ref().map(|a| a.page) != Some(page) {
+            match page {
+                Page::Gender => {
+                    if let Some(sex) = fixture::<u8>("SEX", seat)? {
+                        self.editor.select_preset(sex, self.editor.preset)?;
+                        self.dirty = true;
+                    }
+                }
+                Page::Name => {
+                    self.editor.typed.clear();
+                    self.editor.type_text(name);
+                }
+                Page::Preset => {
+                    if let Some(preset) = fixture::<usize>("PRESET", seat)? {
+                        self.editor
+                            .select_preset(self.editor.edit.get("mGender").unwrap(), preset)?;
+                        self.dirty = true;
+                    }
+                }
+                Page::Confirm => {}
+            }
+            self.automation = Some(Automation {
+                page,
+                since: now,
+                draws: 0,
+                capture_dir: capture_dir()?,
+                saved: None,
+            });
+            info!(
+                "intro: stage801 seat {seat} profile {profile} page {} fixture prepared",
+                page.label()
+            );
+            return Ok(None);
         }
-        self.editor.accept().then(|| self.record())
+        let automation = self.automation.as_mut().unwrap();
+        if !automation.dwell_complete(now) {
+            return Ok(None);
+        }
+        if let Some(dir) = &automation.capture_dir {
+            if let Some(saved) = &automation.saved {
+                match &*saved.lock().unwrap() {
+                    None => return Ok(None),
+                    Some(Err(error)) => return Err(error.clone()),
+                    Some(Ok(())) => {}
+                }
+            } else {
+                let path = dir.join(format!("S56-seat{seat}-profile{profile}-{}.png", page.label()));
+                let saved = Arc::new(Mutex::new(None));
+                let acknowledged = saved.clone();
+                commands
+                    .spawn(Screenshot::primary_window())
+                    .observe(move |event: On<ScreenshotCaptured>| {
+                        let result = event
+                            .image
+                            .clone()
+                            .try_into_dynamic()
+                            .map_err(|e| e.to_string())
+                            .and_then(|image| image.to_rgb8().save(&path).map_err(|e| e.to_string()));
+                        if result.is_ok() {
+                            info!("intro: stage801 rendered capture saved {}", path.display());
+                        }
+                        *acknowledged.lock().unwrap() = Some(result);
+                    });
+                automation.saved = Some(saved);
+                return Ok(None);
+            }
+        }
+        let confirmed = self.editor.accept();
+        if page == Page::Name && self.editor.page == Page::Name {
+            return Err(format!(
+                "character name fixture for seat {seat} normalizes to empty"
+            ));
+        }
+        Ok(confirmed.then(|| self.record()))
     }
 
     pub fn close(&mut self, commands: &mut Commands) {
@@ -45,6 +170,29 @@ impl CharaEdit {
         commands.entity(self.controls).despawn();
         self.editor.close(commands);
         self.closed = true;
+    }
+}
+
+#[cfg(test)]
+mod automation_tests {
+    use super::*;
+
+    #[test]
+    fn unattended_character_page_waits_for_multiple_draws_and_real_time() {
+        let mut automation = Automation {
+            page: Page::Name,
+            since: 10.0,
+            draws: 0,
+            capture_dir: None,
+            saved: None,
+        };
+        // A slow first frame must not admit a page that never got drawn.
+        assert!(!automation.dwell_complete(30.0));
+        automation.draws = 2;
+        assert!(!automation.dwell_complete(30.0));
+        automation.draws = 3;
+        assert!(!automation.dwell_complete(10.1));
+        assert!(automation.dwell_complete(10.75));
     }
 }
 
@@ -124,6 +272,7 @@ fn setup_inner(
         controls,
         dirty: true,
         closed: false,
+        automation: None,
     });
     Ok(())
 }
@@ -178,14 +327,21 @@ pub fn update(
         }
     }
     if let Ok(window) = windows.single() {
-        if let Err(error) = e.editor.draw(
+        match e.editor.draw(
             &mut commands,
             &mut images,
             e.loader.vfs,
             window.width(),
             window.height(),
         ) {
-            error!("character editor GUI: {error}");
+            Err(error) => error!("character editor GUI: {error}"),
+            Ok(()) => {
+                if let Some(automation) = &mut e.automation {
+                    if automation.page == e.editor.page {
+                        automation.draws = automation.draws.saturating_add(1);
+                    }
+                }
+            }
         }
     }
     if !e.dirty {
