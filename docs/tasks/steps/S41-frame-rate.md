@@ -455,3 +455,88 @@ time-scale settings; fractional durations use invariant formatting.
 Next: obtain the approved current-scene batch after head releases the GPU
 and compilation is quiet; stream the short field trace with the committed
 analyzer, separating renderer handoff/waits from actual system work.
+
+### Actual saved-host baselines and cached-span profiling limitation
+
+Head #6493/#6592 approved the frozen `84ed50f` batch. Under a normal
+`live/ddview` lease, all compilation was held quiet (#6604/#6579). Each
+viewer used the recorded private checkpoint, 1920x1080, GPU mesh builder,
+and the immutable default or trace pin above. The original PID 23408
+remained running. All three owned PIDs were verified absent after their
+normal numeric exit 0; the GPU lease and compilation hold were released
+immediately (#6638).
+
+| Capture | Host/checkpoint configuration | Actual PID / exit / wall duration |
+| --- | --- | --- |
+| Field baseline | `FieldSettle`, x1, demo driver/fight disabled | 28368 / 0 / 60.9331 s |
+| Room baseline | `WalkOut`, x1, demo driver/fight disabled | 18416 / 0 / 59.9012 s |
+| Field CPU trace | `FieldWalk`, x4, demo fight enabled; 5 s delay / 10 s trace | 23560 / 0 / 30.1599 s |
+
+The first two PNGs were actually viewed by codex-66 and independently by
+root (#6658): the field has intact terrain and dressed bodies. Contrary
+to its checkpoint name, `WalkOut` restores the **interior room**, stage
+200/SceNo1200, with intact geometry and characters; it does **not** supply
+the requested outdoor Cassardis benchmark. Private prefixes are
+`E:/ddda-re/notes/steps/s41/field-checkpoint-before-84ed50f`,
+`town-checkpoint-before-84ed50f` (room despite the filename), and
+`field-checkpoint-trace-84ed50f`; run metadata, hashes, exit files,
+stderr, GPU samples and screenshots stay private.
+
+Warm reports ending at 25/30/35/40 wall seconds (before screenshots at
+45 s) give the following **baseline**, not an optimization comparison:
+
+| Metric | Field | Interior room |
+| --- | --- | --- |
+| Frame medians, ms | 14.1 / 14.2 / 14.1 / 14.3 | 8.6 / 8.8 / 9.1 / 8.7 |
+| Median of those medians | 14.15 ms (~71 fps) | 8.75 ms (~114 fps) |
+| p99, ms | 15.8 / 15.9 / 16.3 / 20.2 | 11.7 / 11.1 / 11.8 / 10.1 |
+| Entities / mesh entities | 4836 / 1802 | 14423 / 4008 |
+| Visible meshes / unique meshes | 1071 / 951 | 418 / 374 |
+| Visible DD materials / allocated | 423 / 1979 | 209 / 1729 |
+| Bin unpacking GPU, median of average reports | 1.901124 ms (5 reports) | 1.064627 ms (5) |
+| Opaque GPU, median of average reports | 1.587558 ms (5 reports) | 1.306304 ms (4) |
+
+These GPU report medians are not per-frame distributions. Original-game
+3D utilization was zero in all 3/4 warm samples, but NVIDIA was **P3**,
+with core clocks 855–900 MHz (field) / 1140–1215 MHz (room), memory
+5001 MHz. They cannot be compared as optimization gains against prior
+P0/static-scene runs; matched after captures must report clocks too.
+
+The streamed 85,203,539-byte trace has actual window markers at
+13.3709468 / 23.3786632 trace seconds (10.0077 s), no terminal open
+scopes, and 633 complete main-thread frames in the trimmed
+13.47–23.27 s interval. It reports main `Update` 3.9949 ms/frame,
+`PostUpdate` 1.1455, and RenderExtractApp 9.3417 including 8.6798
+exclusive. The latter wraps Bevy's pipelined `recv` wait
+(`bevy_render-0.19.1/src/pipelined_rendering.rs:184`), **not proof of
+CPU compute**. Render-thread `Render` is 14.8229 ms/frame including
+8.9693 exclusive; `unpack_bins` encoding is 1.2900 and `queue_submit`
+1.5248. These overlapping thread/parent values must not be summed.
+Accelerated/instrumented x4 frame times are diagnostic only.
+
+**Actual trace limitation:** there are zero ordinary `system` spans.
+Bevy caches `SystemMeta.system_span` during plugin build
+(`bevy_ecs-0.19.1/src/system/function_system.rs:52`), before our global
+window filter enables recording. A cached disabled `Span` stays disabled
+even when dynamic callsite interest changes. The prior regression created
+a fresh span on every call and missed this contract. Thus the apparent
+render-schedule exclusive cost contains unseen system work/worker waits
+and does not identify a dominant bottleneck.
+
+Head #6662 approved replacing the global creation filter with an own
+Chrome layer wrapper: preserve cached span metadata, gate entry callbacks,
+pair exit decisions through window edges, retain ordinary events, and
+test a span created once before the window. Source correction is in
+progress; full tests/build and actual system-span capture remain pending.
+
+Head #6571 also approved camera-setting caching, but source inspection
+disproved it as an **opening** bottleneck: `play::step` calls
+`camera_projection` only under its initial `Local<bool>` guard, then
+returns when OpeningRes/NetRes exists; repeated `config_camera_fov`
+reads belong only to standalone play. No cache edits or opening gain
+claim were made (#6609). It remains a possible standalone/S42 foundation.
+
+Next: validate the cached-span correction headlessly, capture one short
+corrected field system trace under normal leases, and target the actual
+largest source-supported cost. Outdoor town measurement and the 5.5 ms
+acceptance gate remain open; no new renderer default or gain is claimed.

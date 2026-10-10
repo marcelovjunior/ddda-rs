@@ -9,9 +9,10 @@ publish.workspace = true
 [features]
 # Opt-in CPU system/render spans; TRACE_CHROME selects the private output file.
 # Keep disabled for acceptance timing so tracing overhead is not benchmarked.
-profile-trace = ["bevy/trace_chrome"]
+profile-trace = ["bevy/trace", "dep:tracing-chrome"]
 
 [dependencies]
+tracing-chrome = { version = "0.7.2", optional = true }
 mtcamera = { path = "../mtcamera" }
 mtmovie = { path = "../mtmovie" }
 ddpawn = { path = "../ddpawn" }

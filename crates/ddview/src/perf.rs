@@ -16,8 +16,8 @@ pub fn log_plugin() -> bevy::log::LogPlugin {
 #[cfg(feature = "profile-trace")]
 mod field_trace {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-    use bevy::log::{BoxedLayer, LogPlugin, tracing_subscriber::{filter::dynamic_filter_fn, registry::Registry}};
+    use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread::ThreadId};
+    use bevy::log::{BoxedLayer, LogPlugin, tracing::{self, span}, tracing_subscriber::{Layer, layer::Context, registry::Registry}};
 
     #[derive(Resource)]
     pub struct TraceWindow {
@@ -67,33 +67,89 @@ mod field_trace {
         }
     }
 
-    fn span_filter(enabled: Arc<AtomicBool>) -> BoxedLayer {
-        // DynFilterFn uses Interest::sometimes: a callsite first seen before
-        // the field must be checked again once the capture window opens.
-        // A global Layer filter gates Chrome spans too, not just formatting.
-        Box::new(dynamic_filter_fn::<Registry, _>(move |metadata, _| {
-            metadata.is_event() || enabled.load(Ordering::Acquire)
-        }))
+    /// Bevy's SystemMeta caches a Span during plugin build. Filtering its
+    /// creation would permanently disable that span, even after the window
+    /// opens. Keep span metadata, gate the Chrome enter callbacks instead,
+    /// and pair exits using the decision made at enter (including boundaries).
+    struct WindowLayer<L> {
+        inner: L,
+        enabled: Arc<AtomicBool>,
+        entered: Mutex<HashMap<ThreadId, Vec<(span::Id, bool)>>>,
     }
 
+    impl<L> WindowLayer<L> {
+        fn new(inner: L, enabled: Arc<AtomicBool>) -> Self {
+            Self { inner, enabled, entered: Mutex::new(HashMap::new()) }
+        }
+    }
+
+    impl<L: Layer<Registry>> Layer<Registry> for WindowLayer<L> {
+        fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, Registry>) {
+            self.inner.on_new_span(attrs, id, ctx);
+        }
+        fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, Registry>) {
+            self.inner.on_record(id, values, ctx);
+        }
+        fn on_enter(&self, id: &span::Id, ctx: Context<'_, Registry>) {
+            let record = self.enabled.load(Ordering::Acquire);
+            self.entered.lock().unwrap().entry(std::thread::current().id())
+                .or_default().push((id.clone(), record));
+            if record { self.inner.on_enter(id, ctx); }
+        }
+        fn on_exit(&self, id: &span::Id, ctx: Context<'_, Registry>) {
+            let (entered_id, record) = self.entered.lock().unwrap()
+                .get_mut(&std::thread::current().id()).and_then(Vec::pop)
+                .expect("trace span exit must pair with its thread's enter");
+            debug_assert_eq!(&entered_id, id);
+            if record { self.inner.on_exit(id, ctx); }
+        }
+        fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
+            self.inner.on_event(event, ctx);
+        }
+        fn on_close(&self, id: span::Id, ctx: Context<'_, Registry>) {
+            self.inner.on_close(id, ctx);
+        }
+    }
+
+    #[derive(Resource)]
+    struct TraceFlush { _guard: Mutex<tracing_chrome::FlushGuard> }
+
     fn trace_layer(app: &mut App) -> Option<BoxedLayer> {
-        let stage = std::env::var("DDVIEW_TRACE_STAGE").ok()?;
-        let stage = match stage.parse::<u32>() {
-            Ok(stage) => stage,
-            Err(_) => { eprintln!("DDVIEW_TRACE_STAGE must be a stage number; full tracing retained"); return None; }
-        };
+        let stage = std::env::var("DDVIEW_TRACE_STAGE").ok().and_then(|value| {
+            value.parse::<u32>().map_err(|_| {
+                eprintln!("DDVIEW_TRACE_STAGE must be a stage number; full tracing retained");
+            }).ok()
+        });
         let read_seconds = |name: &str, fallback: f64, minimum: f64, maximum: f64| {
             std::env::var(name).ok().and_then(|value| value.parse::<f64>().ok())
                 .filter(|value| value.is_finite() && *value >= minimum && *value <= maximum)
                 .unwrap_or(fallback)
         };
-        let window = TraceWindow::new(stage,
-            read_seconds("DDVIEW_TRACE_DELAY", 5.0, 0.0, 60.0),
-            read_seconds("DDVIEW_TRACE_SECONDS", 10.0, 0.001, 30.0));
-        let layer = span_filter(window.enabled.clone());
-        eprintln!("ddview: trace window stage {stage}, delay {} wall seconds, duration {} wall seconds; normal exit afterwards", window.delay, window.duration);
-        app.insert_resource(window);
-        Some(layer)
+        let enabled = if let Some(stage) = stage {
+            let window = TraceWindow::new(stage,
+                read_seconds("DDVIEW_TRACE_DELAY", 5.0, 0.0, 60.0),
+                read_seconds("DDVIEW_TRACE_SECONDS", 10.0, 0.001, 30.0));
+            eprintln!("ddview: trace window stage {stage}, delay {} wall seconds, duration {} wall seconds; normal exit afterwards", window.delay, window.duration);
+            let enabled = window.enabled.clone();
+            app.insert_resource(window);
+            enabled
+        } else { Arc::new(AtomicBool::new(true)) };
+        let path = std::env::var("TRACE_CHROME").unwrap_or_else(|_| "chrome-trace.json".into());
+        let (chrome, guard) = tracing_chrome::ChromeLayerBuilder::<Registry>::new()
+            .file(path)
+            // Match Bevy's names, including each cached system's recorded name.
+            .name_fn(Box::new(|item| match item {
+                tracing_chrome::EventOrSpan::Event(event) => event.metadata().name().into(),
+                tracing_chrome::EventOrSpan::Span(span) => {
+                    use bevy::log::tracing_subscriber::fmt::{FormattedFields, format::DefaultFields};
+                    if let Some(fields) = span.extensions().get::<FormattedFields<DefaultFields>>() {
+                        format!("{}: {}", span.metadata().name(), fields.fields.as_str())
+                    } else { span.metadata().name().into() }
+                }
+            }))
+            .build();
+        app.insert_resource(TraceFlush { _guard: Mutex::new(guard) });
+        Some(Box::new(WindowLayer::new(chrome, enabled)))
     }
 
     pub fn log_plugin() -> LogPlugin {
@@ -134,34 +190,81 @@ mod field_trace {
         }
 
         #[test]
-        fn cached_callsites_resume_spans_and_always_keep_events() {
+        fn cached_system_span_records_only_window_entries_and_keeps_events() {
             #[derive(Clone)]
-            struct Count(Arc<AtomicUsize>, Arc<AtomicUsize>);
+            struct Count(Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>);
             impl<S: tracing::Subscriber> Layer<S> for Count {
-                fn on_new_span(&self, _: &tracing::span::Attributes<'_>, _: &tracing::span::Id, _: Context<'_, S>) {
+                fn on_enter(&self, _: &span::Id, _: Context<'_, S>) {
                     self.0.fetch_add(1, Ordering::Relaxed);
                 }
-                fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
+                fn on_exit(&self, _: &span::Id, _: Context<'_, S>) {
                     self.1.fetch_add(1, Ordering::Relaxed);
                 }
-            }
-            fn same_callsite() {
-                let span = tracing::info_span!("captured_frame");
-                let _entered = span.enter();
-                tracing::info!("ordinary route event");
+                fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
+                    self.2.fetch_add(1, Ordering::Relaxed);
+                }
             }
             let enabled = Arc::new(AtomicBool::new(false));
-            let count = Count(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-            let subscriber = Registry::default().with(span_filter(enabled.clone())).with(count.clone());
+            let count = Count(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+            let subscriber = Registry::default().with(WindowLayer::new(count.clone(), enabled.clone()));
             tracing::subscriber::with_default(subscriber, || {
-                same_callsite();
+                // This is the actual Bevy contract: construct once BEFORE the
+                // window, then repeatedly enter the same cached Span.
+                let cached = tracing::info_span!("system", name = "cached_bevy_system");
+                assert!(!cached.is_disabled());
+                cached.in_scope(|| tracing::info!("before window"));
                 enabled.store(true, Ordering::Release);
-                same_callsite();
+                let entered = cached.enter();
+                tracing::info!("inside window");
+                // A recorded entry must still get its exit after window close.
                 enabled.store(false, Ordering::Release);
-                same_callsite();
+                drop(entered);
+                cached.in_scope(|| tracing::info!("after window"));
+                // Also test the inverse boundary and reentry of the SAME ID:
+                // the outer entry was suppressed, the inner one is recorded.
+                let outer = cached.enter();
+                enabled.store(true, Ordering::Release);
+                cached.in_scope(|| {});
+                drop(outer);
             });
-            assert_eq!(count.0.load(Ordering::Relaxed), 1);
-            assert_eq!(count.1.load(Ordering::Relaxed), 3);
+            assert_eq!(count.0.load(Ordering::Relaxed), 2);
+            assert_eq!(count.1.load(Ordering::Relaxed), 2);
+            assert_eq!(count.2.load(Ordering::Relaxed), 3);
+        }
+
+        #[test]
+        fn bevy_system_created_before_window_is_captured_when_reused() {
+            #[derive(Clone)]
+            struct SystemEntries(Arc<AtomicUsize>);
+            impl Layer<Registry> for SystemEntries {
+                fn on_enter(&self, id: &span::Id, ctx: Context<'_, Registry>) {
+                    use bevy::log::tracing_subscriber::registry::LookupSpan;
+                    if ctx.span(id).unwrap().metadata().name() == "system" {
+                        self.0.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            let enabled = Arc::new(AtomicBool::new(false));
+            let entries = Arc::new(AtomicUsize::new(0));
+            let runs = Arc::new(AtomicUsize::new(0));
+            let probe_runs = runs.clone();
+            let subscriber = Registry::default().with(WindowLayer::new(SystemEntries(entries.clone()), enabled.clone()));
+            tracing::subscriber::with_default(subscriber, || {
+                let mut app = App::new();
+                // IntoSystem constructs and caches SystemMeta's actual span
+                // while recording is off. No rename/rebuild is done later.
+                app.add_systems(Update, move || { probe_runs.fetch_add(1, Ordering::Relaxed); });
+                app.update();
+                assert_eq!(entries.load(Ordering::Relaxed), 0);
+                enabled.store(true, Ordering::Release);
+                app.update();
+                let recorded = entries.load(Ordering::Relaxed);
+                assert!(recorded > 0, "the reused Bevy system span must enter Chrome");
+                enabled.store(false, Ordering::Release);
+                app.update();
+                assert_eq!(entries.load(Ordering::Relaxed), recorded);
+            });
+            assert_eq!(runs.load(Ordering::Relaxed), 3);
         }
     }
 }
