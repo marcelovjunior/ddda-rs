@@ -96,7 +96,22 @@ The AO source audit is recorded in SHADING.md. The executable has a
 local/global-map ambient-occlusion filter, but neither stage100 nor
 stage200 f00 scheduler creates one; runtime activation is unresolved.
 
-Next: compare live sunlight and authored lighting for the street pose.
+The sunlight investigation found the cause of the large shadow displacement:
+weather update 0x004c1110 elevates the shadow direction with mShadowLimit,
+while the viewer had used the direct sunlight direction. The translated
+formula and runtime scheduler/default reader now drive the shadow-map
+light separately. Two regressions pass; release build passes (40.57 s).
+The repeated recorded street capture now places the sunlit wedge across
+the road in the original's position. Its edge is visibly softer, and the
+actor/HUD/vegetation and complete image comparison remain outstanding.
+This corrects the large footprint discrepancy without changing sunlight
+intensity or tuning the shadow bias by eye.
+
+Next: trace shadow filtering/bias and compare the other two requested poses.
 Detail-normal, skinned bases, normal prepass, AO and shadow differences
 remain separate investigations. Three requested comparison pairs are
 still outstanding; this brief remains in progress.
+
+Merged-main validation: complete viewer release suite passed 47 tests,
+with one pre-existing installed HUD test ignored. The repeated street
+capture completed without shader errors. All captures remain private.

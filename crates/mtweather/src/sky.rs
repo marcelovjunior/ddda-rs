@@ -157,6 +157,40 @@ pub fn sun_direction(sky: &Sky, ms: u32) -> [f32; 3] {
     [east as f32, up as f32, -north as f32]
 }
 
+/// Shadow-map direction, distinct from the direct-light direction.
+/// `limit` is sWeatherManager.mShadowLimit (+0xe0), read from the stage
+/// scheduler or its constructor default. No clamping is done by the source.
+// Translated from 0x004c1110, consumed by 0x00c6c970 (DDDA.exe 2017-12-13 Steam).
+pub fn shadow_direction(sun: [f32; 3], limit: f32) -> [f32; 3] {
+    let y = (1.0 - limit) * sun[1].abs() + limit;
+    let inverse_length = (sun[0] * sun[0] + y * y + sun[2] * sun[2]).sqrt().recip();
+    [sun[0] * inverse_length, y * inverse_length, sun[2] * inverse_length]
+}
+
+#[cfg(test)]
+mod shadow_direction_tests {
+    use super::shadow_direction;
+
+    #[test]
+    fn matches_recorded_weather_and_shadow_unit_direction() {
+        // Cassardis weather +0xd0 at 16:30:31; its shadow unit +0x160
+        // agrees within 0.000013 (one update's sky phase difference).
+        let got = shadow_direction([-0.848_688_4, 0.528_669, -0.015_401_542], 0.5);
+        for (value, expected) in got.into_iter().zip([-0.743_002_3, 0.669_152_86, -0.013_483_61]) {
+            assert!((value - expected).abs() < 0.000_001);
+        }
+    }
+
+    #[test]
+    fn night_reflects_height_and_limit_preserves_horizontal_bearing() {
+        assert_eq!(shadow_direction([0.0, -1.0, 0.0], 0.5), [0.0, 1.0, 0.0]);
+        assert_eq!(shadow_direction([0.6, -0.8, 0.0], 0.0), [0.6, 0.8, 0.0]);
+        let got = shadow_direction([0.6, 0.0, 0.8], 1.0);
+        assert!((got[0] / got[2] - 0.75).abs() < 1e-6);
+        assert!((got[1] - 1.0_f32 / 2.0_f32.sqrt()).abs() < 1e-6);
+    }
+}
+
 /// Density integral from `pos` (2D: across, up from the earth's centre,
 /// m) along `dir` over `length` m in `steps` trapezoid steps, density
 /// `exp(-h / scale)` (1 below the ground after the first sample).

@@ -659,3 +659,35 @@ read directly from the installed archives. Their spawned filter units
 are DOFFilter, ImagePlaneFilter and ColorCorrectFilter; neither contains
 an AO unit. This narrows the activation investigation to another owner
 or scheduler; it does not establish that AO is absent at run time.
+
+### Separate shadow-map direction
+
+The misplaced Cassardis road shadow exposed a separate engine direction.
+Weather update **0x004c1110** reads the sky vector through **0x004baa50**,
+replaces Y with `(1 - limit) * abs(Y) + limit`, and normalizes the result
+into manager +0xd0. Reflection **0x004bca80** names the limit at +0xe0
+`mShadowLimit`; constructor **0x004bb200** initializes it to 0.5. The
+stage reader uses an authored value when present and that sourced default
+otherwise. It does not replace the direct sun vector used for shading.
+
+`uSkyStableShadow::vf08` **0x00c6c970** copies manager +0xd0 into the
+shadow unit +0x160, unless manager +0x9b4 bit5 selects the explicit +0x9e0
+override. The viewer now points its shadow-map light along this separate
+direction. Scripted overrides and the remaining shadow distance/bias
+parameters are not handled by this change.
+
+At a paused Cassardis clock of 16:30:31, direct sunlight was approximately
+(-0.8486884, 0.5286690, -0.0154015), while the weather shadow vector was
+(-0.7430023, 0.6691529, -0.0134836). The translated calculation matches
+within 0.000001 per component. The shadow unit agrees within 0.000013;
+its preceding update accounts for that small difference. These live
+reads changed no game state. Two regression tests cover the recorded
+vector and the night/limit branches; targeted Clippy passes with only the
+pre-existing type-complexity test fixtures allowed. Release build passed
+in 40.57 seconds after merging current main and retaining one preview hook.
+
+The repeated 16:06:11 street capture with the translated shadow direction
+puts the sunlit wedge across the road near the original boundary, fixing
+the large footprint discrepancy. The edge remains visibly softer than
+the original. This is a qualitative same-pose check, not a full image
+match; the actor/HUD and vegetation are excluded from the static preview.
