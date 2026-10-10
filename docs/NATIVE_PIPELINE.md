@@ -156,10 +156,13 @@ r = h.run(addr, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=10000
    loads the vectors with `vectors("<name>")` (returns `None` and the test
    passes trivially when the private file is absent) and asserts the port's
    output equals the original's for every case.
-6. **Gate and commit.** `cargo test -q -p ddnative` must pass, then
-   `python scripts/inventory.py build` and commit (the commit message lists
-   the functions and vector counts). Never chain the commit after a test
-   command that may fail.
+6. **Declare and gate.** Put `// verifies 0x00XXXXXX ...` directly above
+   the test (every address the test proves; for a family, its
+   representative). Then run `scripts/native_gate.sh && git commit ...`.
+   The gate runs the tests with `DDNATIVE_REQUIRE_VECTORS=1` (a missing
+   vector file fails instead of skipping), rebuilds the tracker, and fails
+   if any `Translated from` port lacks a declared test. The tracker credits
+   a port only when both lines exist.
 
 ## Porting conventions
 
@@ -284,6 +287,12 @@ only allocation, freeing and type registration are replaced.
   input is not part of the contract. Exclude it with a comment saying why.
 - **Loose families.** See above: only exact families.
 - **Chained commits.** A `;` after a failing test still commits. Gate.
+- **Silently skipped tests.** A test whose vector file is missing used to
+  pass trivially. That happened once: a generator crashed (its fixture was
+  smaller than the object's highest field), the test was never added, and
+  the port was committed and counted as verified. Since then the gate
+  requires vectors and the tracker requires a declared test. Size fixtures
+  to the highest offset touched, plus slack.
 
 ## Verified ports (as of 2026-10-10)
 
@@ -312,6 +321,7 @@ only allocation, freeing and type registration are replaced.
 | 0x00BB2150 | uNpc::vf118 (death reported once) | `character::npc_death_once` | 27 |
 | 0x004F57E0 + 22 | drop_dead_refs pattern (23 action vf10s) | `unit::drop_dead_refs` | 276 |
 | 0x004E0EB0 + 15 | enemy-family action entry (cEm0600 ... cEm9807, cEmDieBone) | `action::enemy_action_enter` | 160 |
+| 0x008D4840 | cEm0100Action::vf05 (entry of every goblin action: velocity/acceleration reset) | `enemy::goblin_action_enter` | 80 |
 | 0x00AC4F70 | cPlAction::vf05 (entry of every player action: landing bits, push rank 13, capsule from adjust 0xD3/0xD4) | `player_action::enter` | 200 |
 
 `python scripts/inventory.py summary` gives the live count.

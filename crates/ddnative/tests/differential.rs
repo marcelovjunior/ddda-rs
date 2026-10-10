@@ -5,9 +5,16 @@
 use ddnative::{model, player_action};
 use serde_json::Value;
 
+/// The vectors recorded from the original. Missing vectors skip the test,
+/// except under DDNATIVE_REQUIRE_VECTORS=1 (the commit gate), where they
+/// fail it: a port is never "verified" by a test that did not run.
 fn vectors(name: &str) -> Option<Vec<Value>> {
     let path = format!("E:/ddda-re/notes/native/vectors/{name}.json");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return None,
+    };
     serde_json::from_str::<Value>(&text).ok()?.as_array().cloned()
 }
 
@@ -22,6 +29,7 @@ impl player_action::Effects for Release {
     }
 }
 
+// verifies 0x00AC5100
 #[test]
 fn player_action_base_update_matches_the_original() {
     let Some(cases) = vectors("player_action_vf06") else { return };
@@ -53,6 +61,7 @@ fn player_action_base_update_matches_the_original() {
     }
 }
 
+// verifies 0x004C6B50
 #[test]
 fn model_world_origin_matches_the_original() {
     let Some(cases) = vectors("model_vf85") else { return };
@@ -64,6 +73,7 @@ fn model_world_origin_matches_the_original() {
     }
 }
 
+// verifies 0x007F1890
 #[test]
 fn action_base_enter_matches_the_original() {
     use ddnative::action;
@@ -81,6 +91,7 @@ fn action_base_enter_matches_the_original() {
     }
 }
 
+// verifies 0x00572860
 #[test]
 fn demo_interface_state_matches_the_original() {
     use ddnative::action;
@@ -101,6 +112,7 @@ fn demo_interface_state_matches_the_original() {
     }
 }
 
+// verifies 0x010FA570 0x010FA5B0
 #[test]
 fn particle_counters_and_flag_match_the_original() {
     use ddnative::particle;
@@ -117,6 +129,7 @@ fn particle_counters_and_flag_match_the_original() {
     }
 }
 
+// verifies 0x00850100
 #[test]
 fn character_damage_edges_match_the_original() {
     use ddnative::character::{damage_edges, DamageEdges};
@@ -132,6 +145,7 @@ fn character_damage_edges_match_the_original() {
     }
 }
 
+// verifies 0x00BB4730
 #[test]
 fn npc_flag_location_matches_the_original() {
     use ddnative::character::{npc_flags, NpcFlags};
@@ -145,6 +159,7 @@ fn npc_flag_location_matches_the_original() {
     }
 }
 
+// verifies 0x00B88AB0 0x00B53190 0x00B6AE40 0x00B531B0 0x0089EFE0
 #[test]
 fn player_predicates_and_table_match_the_original() {
     use ddnative::{action, character as ch};
@@ -186,6 +201,7 @@ fn u32s(v: &Value) -> Vec<u32> {
     v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect()
 }
 
+// verifies 0x008C7780
 #[test]
 fn every_action_constructor_matches_the_original() {
     use ddnative::action;
@@ -199,6 +215,7 @@ fn every_action_constructor_matches_the_original() {
     }
 }
 
+// verifies 0x00B84300
 #[test]
 fn player_joint3_position_matches_the_original() {
     use ddnative::character::player_joint3_position;
@@ -212,6 +229,7 @@ fn player_joint3_position_matches_the_original() {
     }
 }
 
+// verifies 0x00AAEF50
 #[test]
 fn enemy_blend_matches_the_original() {
     use ddnative::enemy::{blend, BlendSource, BlendTarget};
@@ -236,6 +254,7 @@ fn enemy_blend_matches_the_original() {
     }
 }
 
+// verifies 0x004CBBE0
 #[test]
 fn every_extended_action_constructor_matches_the_original() {
     use ddnative::action;
@@ -248,6 +267,7 @@ fn every_extended_action_constructor_matches_the_original() {
     }
 }
 
+// verifies 0x004DFA00
 #[test]
 fn every_action_constructor_with_8c_matches_the_original() {
     use ddnative::action;
@@ -259,6 +279,7 @@ fn every_action_constructor_with_8c_matches_the_original() {
     }
 }
 
+// verifies 0x004F57E0
 #[test]
 fn every_drop_dead_refs_function_matches_the_original() {
     use ddnative::unit::drop_dead_refs;
@@ -272,6 +293,7 @@ fn every_drop_dead_refs_function_matches_the_original() {
     }
 }
 
+// verifies 0x00ACC4A0
 #[test]
 fn tired_message_matches_the_original() {
     let Some(cases) = vectors("tired_vf09") else { return };
@@ -282,6 +304,7 @@ fn tired_message_matches_the_original() {
     }
 }
 
+// verifies 0x00BB2150
 #[test]
 fn npc_death_once_matches_the_original() {
     let Some(cases) = vectors("npc_vf118") else { return };
@@ -292,6 +315,7 @@ fn npc_death_once_matches_the_original() {
     }
 }
 
+// verifies 0x00B44FB0
 #[test]
 fn wand_base_refs_match_the_original() {
     let Some(cases) = vectors("wand_base_vf10") else { return };
@@ -307,6 +331,7 @@ fn wand_base_refs_match_the_original() {
     }
 }
 
+// verifies 0x004E0EB0
 #[test]
 fn every_enemy_action_entry_matches_the_original() {
     use ddnative::action::{enemy_action_enter, EnemyAction, Owner};
@@ -327,6 +352,7 @@ fn every_enemy_action_entry_matches_the_original() {
     }
 }
 
+// verifies 0x00AC4F70
 #[test]
 fn player_action_enter_matches_the_original() {
     use ddnative::player_action::{enter, EnterPlayer};
@@ -355,5 +381,33 @@ fn player_action_enter_matches_the_original() {
             "f306c", "w3064", "rank", "v0", "v1", "v2", "v3", "h1e68", "r31b4", "r1e6c", "b49c0", "b31b3"]
             .map(|k| u(o, k));
         assert_eq!(got, want, "{c}");
+    }
+}
+
+// verifies 0x008D4840
+#[test]
+fn goblin_action_enter_matches_the_original() {
+    use ddnative::action::{EnemyAction, Owner};
+    use ddnative::enemy::{goblin_action_enter, GoblinMotion};
+    let Some(cases) = vectors("goblin_action_vf05") else { return };
+    let f = |b: u32| f32::from_bits(b);
+    for c in &cases {
+        let i = &c["in"];
+        let mut owner = Owner { category_206c: u(c, "cat"), word_2370: u(i, "w2370"), word_2374: u(i, "w2374"),
+            flags_273c: u(i, "flags"), status_2e34: u(i, "status"), pending_2e38: u(c, "pending") };
+        let mut o2ba0 = u(i, "o2ba0");
+        let mut act = EnemyAction { byte_50: 0xEE, owner_54: 1, word_58: 1, word_60: 1, float_64: 1.0, byte_6c: 0,
+            word_70: 1, owner_74: 1 };
+        let mut g = GoblinMotion { velocity_2530: [9.0; 4], accel_2540: [9.0; 4], word_2574: 7,
+            value_2578: 9.0, value_257c: f(u(i, "v257c")), byte_5c7c: 7 };
+        let gl = u32s(&c["globals"]);
+        goblin_action_enter(&mut act, u(c, "owner"), &mut owner, &mut o2ba0, || true, &mut g, [f(gl[0]), f(gl[1]), f(gl[2])]);
+        let o = &c["out"];
+        assert_eq!((u32::from(act.byte_50), act.owner_54, act.owner_74, o2ba0, owner.status_2e34, owner.flags_273c),
+            (u(o, "b50"), u(o, "o54"), u(o, "o74"), u(o, "o2ba0"), u(o, "status"), u(o, "flags")), "{c}");
+        assert_eq!(g.velocity_2530.map(f32::to_bits).to_vec(), u32s(&o["vel"]), "{c}");
+        assert_eq!(g.accel_2540.map(f32::to_bits).to_vec(), u32s(&o["acc"]), "{c}");
+        assert_eq!((u32::from(g.word_2574), g.value_2578.to_bits(), g.value_257c.to_bits(), u32::from(g.byte_5c7c)),
+            (u(o, "w2574"), u(o, "v2578"), u(o, "v257c"), u(o, "b5c7c")), "{c}");
     }
 }

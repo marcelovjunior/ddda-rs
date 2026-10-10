@@ -78,6 +78,17 @@ def build():
         for line in path.read_text(encoding="utf-8").splitlines():
             if "Translated from" in line:
                 ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    # a port counts only when a differential test declares it
+    # ("// verifies 0x..." above the test in crates/ddnative/tests)
+    tested = set()
+    for path in REPO.glob("crates/ddnative/tests/*.rs"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("// verifies"):
+                tested.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    untested = ported - tested
+    if untested:
+        print("ported without a declared test (not credited):", sorted(hex(a) for a in untested))
+    ported &= tested
     # families: same body modulo one constant, each member replayed by the
     # family's differential test (E:/ddda-re/notes/native/families/*.json)
     import json
