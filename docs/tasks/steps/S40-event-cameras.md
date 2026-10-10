@@ -42,7 +42,7 @@ Walking into the roadside scene in `--opening` plays the authored camera
 12 close-up, then control returns; the story advances on its real end;
 the Result names the resources and functions.
 
-## Results (source checkpoint; capture pending)
+## Results (ready for review; ordinary camera12 capture completed)
 
 **Implemented:** `mtcamera::quest` reads indexed `cCamExParamAnim` entries
 from installed `rCameraParamList scr/stNNN/etc/stNNN`. Stage loader
@@ -138,7 +138,7 @@ in43.74s. The final cinema-policy reader regression passed4 tests
 the privately pinned final binary, a600-second watchdog and exclusive
 viewer lease. It **actually exited1 after86.3s**: Cassardis SceNo1300
 door interaction requested an unsupported simple-event camera before
-camera12. No camera12 capture or ordinary-route q2:5 is claimed.
+camera12. That earlier run supplied no camera12 capture or ordinary-route q2:5.
 
 Head approved retaining the explicitly labelled pre-existing
 `ScriptedHost` stand-in for simple/unsupported prerequisite cameras
@@ -157,22 +157,50 @@ The compatibility viewer passed **71 tests, 2 existing ignored**
 in45.24s. The private binary's SHA256 is recorded on board5277.
 The later Pawn-domain checks passed the same **5 host + 4 reader tests**
 (compile2.91s, suites6.68s/2.59s), with the expanded AI/world/resume fixture
-described above. That follow-up needs its final viewer binary refresh and
-another bounded ordinary-route capture.
+described above. The Pawn checkpoint **a168fa3** default release build
+exited0 in47.56s; its private binary is pinned with its exact source/hash
+on board5356. Root independently passed the same5 host +4 reader tests
+and reviewed the Pawn action gate (board5359).
+
+**Ordinary route capture:** the exact **a168fa3** private binary ran
+hidden with `--perf-route --players 1 --size 1600x900`, ordinary demo-fight
+inputs and a600-second owned-process watchdog. The real Cassardis
+NPC/event flow set GSF381 and activated q2, and the gate handoff played
+installed camera149 with its authored return. Normal RescueApproach
+movement entered the installed event1 Area; camera12 generation2 started
+at **05:50:00.600 UTC**. Its real midpoint screenshot was saved at
+**05:50:02.223**, resource exhaustion advanced **q2:5 at05:50:03.709**,
+and the return to gameplay completed at **05:50:04.606**. No position,
+quest flag, camera request or combat outcome was injected. Private
+evidence: `E:/ddda-re/notes/steps/S40/camera12-midpoint.png` and
+`capture-a168fa3.stderr.log`. The inspected1600x900 image shows Reynard
+and the goblins in the authored close-up; existing actor deformation and
+material artifacts are prominent. It is camera behavior evidence, not
+an original-game appearance match. Root independently inspected this
+same image, log, pin hash and process exit.
+
+Wrapper session64857 actually exited0 after306.9s; its owned PID32104
+completed `WaitForExit` and a read-only process inventory confirmed it
+gone before the viewer lease was released. The wrapper's native
+`Process.ExitCode` field was blank: **numeric OS exit0 is not established**.
+This is distinct from the actual wrapper exit0 and confirmed process exit.
 
 **Compared against the original:** static executable/data tracing only.
 No original-game visual comparison or live camera recording was performed.
 
 **Limits:** only non-simple, world-target2 Anim sequences with supported
-type2/3 positive blends and frame-type0 are admitted. Partial input-domain
+type2/3 positive blends and frame-type0 are admitted. Partial actor-domain
 flags1/2 and CantActPlayer-only blocks are rejected instead of collapsed.
 Actor-relative variants, templates, world slow, camera-request force
 timers, simple-event fade/skip/placement, collision along transitions,
 keep-angle resume options, cinema framing/FOV policy, and overlapping
 camera-owner identity completions remain open. Unsupported modes retain
 only the explicitly labelled legacy stand-in described above; ownership
-contention fails explicitly. The next action is the compatibility
-checkpoint's viewer validation and ordinary-route camera12 capture.
+contention fails explicitly. The native action-arbitration pipeline is
+not fully ported, and the visible actor/material fidelity issues remain.
+The next action is head's review of the final checkpoint and the separate
+S44 LAN camera/NPC replication milestone; this brief's ordinary camera
+close-up, real q2:5 and return-to-control gate is evidenced.
 
 Further FOV tracing: **0x007B77E0** multiplies the key FOV by 16/9 and
 `sCameraExt+0xD04`; **0x00420910** sets that factor to0.5625 normally,
