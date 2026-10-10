@@ -254,6 +254,14 @@ substitute model extents for that radius. Two pure regressions passed
 with bounds translation/scaling assertions (compile7.48s/test4.80s),
 all actual exit0 under a valid exclusive core lease, then released.
 Viewer gauge placement and original NPC304 comparison remain open.
+Bounds review follow-up: the mask key is the MOD `anim_map_index`, not
+the bone array index: **0x00B8D980** passes joint+0x93 to vf100, and
+uModel vf23 copies MOD record byte0 into that field. Matrix/radius arrays
+stay in parallel MOD order. Invalid negative radii or any nonfinite
+matrix input now fail explicitly before bounds calculation. The two
+pure tests and two installed pose tests passed again, actual exit0
+(unit compile6.48s/test0.00s, installed compile3.39s/test4.61s); core
+was actually released after process completion.
 
 Next action: compose actual death-action playback/stages and materialize
 the combat body in the opening adapter; finish the sourced bounds and

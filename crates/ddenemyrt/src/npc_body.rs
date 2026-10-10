@@ -248,6 +248,8 @@ impl NpcBody {
     // and 0x00B531B0 / 0x00B8D980 (DDDA.exe 2017-12-13 Steam).
     pub fn bounds(&self, pose: &Posed, detail: u8) -> Result<NpcBounds, String> {
         let mask = self.detail_masks.get(detail as usize).ok_or("unsupported NPC detail row")?;
+        // 0x00B8D980 passes joint+0x93 (MOD byte0 anim_map_index) to
+        // vf100. Radius and matrix arrays remain in parallel MOD order.
         scaled_bounds(pose.joints.iter().zip(&self.bone_radii)
             .filter(|((id, _), _)| mask[*id as usize] != 0)
             .map(|((_, matrix), radius)| (*matrix, *radius)))
@@ -267,6 +269,9 @@ fn scaled_bounds(spheres: impl IntoIterator<Item = (Mat4, f32)>) -> Result<NpcBo
     let mut high = [f32::NEG_INFINITY; 3];
     let mut count = 0;
     for (matrix, radius) in spheres {
+        if radius < 0.0 || !radius.is_finite() || matrix.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("invalid NPC model bound input".into());
+        }
         // Native length includes all four components of each matrix row.
         let scale = matrix[..3].iter().map(|row| row.iter().map(|v| v * v)
             .sum::<f32>().sqrt()).fold(0.0_f32, f32::max);
@@ -302,6 +307,10 @@ mod bounds_tests {
         assert_eq!(bounds.gauge_top(), [3.5, 30.0, 21.0]);
         assert!(scaled_bounds([]).is_err());
         assert!(scaled_bounds([(IDENTITY, f32::NAN)]).is_err());
+        assert!(scaled_bounds([(IDENTITY, -1.0)]).is_err());
+        let mut invalid_axis = IDENTITY;
+        invalid_axis[0][0] = f32::NAN;
+        assert!(scaled_bounds([(invalid_axis, 1.0)]).is_err());
     }
 
     #[test]
