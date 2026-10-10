@@ -172,6 +172,7 @@ pub struct Session {
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
     pending_input: PlayerInput,
+    pending_local: HashMap<ddsim::PlayerId, Input>,
     failure: Option<String>,
     guest_control_shot: bool,
     guest_npcs: HashMap<u32, [f32; 3]>,
@@ -273,6 +274,7 @@ pub fn prepare(
         guest: None,
         network_ready: false,
         pending_input: PlayerInput::default(),
+        pending_local: HashMap::new(),
         failure: None,
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
@@ -866,15 +868,18 @@ pub fn step(
     }
     if pause.paused || s.cut.is_some() || s.talk.is_some() || s.world_menu().is_some() {
         s.pending_input = PlayerInput::default();
+        s.pending_local.clear();
     }
     s.pending_input.sim = play::latch_input(s.pending_input.sim, input.sim);
     s.pending_input.interact |= input.interact;
     input = s.pending_input;
-    let local_second = if s.host.server.is_none() && !pause.paused && s.cut.is_none()
+    if s.host.server.is_none() && !pause.paused && s.cut.is_none()
         && s.talk.is_none() && s.world_menu().is_none()
     {
-        PlayerInput { sim: play::p2_input(&keys, st.cam_yaw), interact: false }
-    } else { PlayerInput::default() };
+        let queued = s.pending_local.entry(1).or_default();
+        *queued = play::latch_input(*queued, play::p2_input(&keys, st.cam_yaw));
+    }
+    let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
@@ -883,6 +888,7 @@ pub fn step(
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
         s.pending_input = PlayerInput::default();
+        s.pending_local.clear();
         if let Err(error) = s.sync_npc_intels() {
             s.failure = Some(format!("NPC materialization: {error}"));
             break;
@@ -900,7 +906,9 @@ pub fn step(
         let mut inputs = FrameInputs::new();
         let seats: Vec<_> = s.host.roster.ids().collect();
         for id in seats {
-            inputs.insert(id, if id == 0 { input } else if id == 1 { local_second } else { PlayerInput::default() });
+            inputs.insert(id, if id == 0 { input } else {
+                PlayerInput { sim: consume_local_input(&mut local_inputs, id), interact: false }
+            });
         }
         input.interact = false;
         s.host.scenario_field_cells = stage_view.streamer.as_ref().and_then(|streamer| streamer.scenario_field_cells());
@@ -1637,6 +1645,17 @@ fn benchmark_cell(p: Vec3) -> (i32, i32) {
     (50 + (p.z / 10_000.0).floor() as i32, 50 + (p.x / 10_000.0).floor() as i32)
 }
 
+/// A render frame may contain several host ticks: held movement persists,
+/// while each locally latched button edge is delivered only once.
+fn consume_local_input(inputs: &mut HashMap<ddsim::PlayerId, Input>, seat: ddsim::PlayerId) -> Input {
+    let Some(input) = inputs.get_mut(&seat) else { return Input::default() };
+    let current = *input;
+    input.jump = false;
+    input.light = false;
+    input.heavy = false;
+    current
+}
+
 /// Demo-only goal past the far support plane of an authored doorway box.
 /// The approach chooses the exit side; dimensions come from the install.
 fn demo_through_box(zone: &ddstory::scenario::Zone, from: Vec3) -> Option<Vec3> {
@@ -2058,6 +2077,22 @@ mod tests {
             let stop = goal - goal.normalize() * 60.0;
             assert!(!zone.contains(stop.to_array()));
         }
+    }
+    #[test]
+    fn local_input_survives_zero_ticks_and_consumes_edges_once() {
+        let pressed = Input { jump: true, light: true, heavy: true, stick: [0.0, 1.0], ..Default::default() };
+        let mut pending = HashMap::from([(1, pressed), (2, Input::default())]);
+        // No host tick in this render frame; the next render has no edge.
+        *pending.get_mut(&1).unwrap() = play::latch_input(pending[&1], Input::default());
+        let mut frame = pending.clone();
+        let first = consume_local_input(&mut frame, 1);
+        pending.clear();
+        assert!(first.jump && first.light && first.heavy);
+        let second = consume_local_input(&mut frame, 1);
+        assert!(!second.jump && !second.light && !second.heavy);
+        assert_eq!(second.stick, first.stick);
+        assert!(!consume_local_input(&mut frame, 2).jump);
+        assert!(pending.is_empty(), "consumed edges cannot leak into the next render");
     }
     #[test]
     fn demo_door_planning_preserves_real_collision_and_rejects_unknown_locks() {
