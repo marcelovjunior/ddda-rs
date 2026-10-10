@@ -24,6 +24,8 @@ pub trait StoryWorld: ddstory::Host {
     /// Observe combat at the beginning of the story phase, before this
     /// frame's hit pass. Implementations bind actors to placement keys.
     fn observe_fight(&mut self, _fight: Option<&ddenemyrt::fight::Fight>) {}
+    fn observe_npc_combat(&mut self, _stage: u32, _target: ddstory::Target,
+        _facts: crate::npc_combat::Facts) {}
     /// Perform this frame's requests (stage `stage` is loaded).
     fn handle(&mut self, stage: u32, requests: &[Request]);
     /// Completions and facts due this frame, in the order they happened.
@@ -121,6 +123,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
     pub story_npcs: crate::story_npcs::StoryNpcs,
+    pub npc_combat: crate::npc_combat::NpcCombat,
     /// Current stage's observed completed collision cells, supplied by its
     /// loading adapter before the story phase; clear on leaving the field.
     pub scenario_field_cells: Option<ddstory::scenario::LoadedFieldCells>,
@@ -174,6 +177,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             economy: ddeconomy::Economy::default(),
             npcs: ddnpcrt::NpcRuntime::default(),
             story_npcs: Default::default(),
+            npc_combat: Default::default(),
             scenario_field_cells: None,
             npc_errors: vec![],
             npc_parked: Default::default(),
@@ -339,6 +343,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // frame come first. The story sees every Arisen where the last frame
         // left them: line 10 has not moved yet.
         self.world.observe_fight(self.fight.as_ref());
+        self.sync_npc_combat();
+        self.observe_npc_combat();
         let events = self.world.events();
         // Step 20, aGameMain's managers: sNpcManager::vf06 (0x00475AD0)
         // restocks the shops once per new day, before sQuestManager.
@@ -459,6 +465,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut npc_requests = self.step_npcs()?;
         npc_requests.extend(self.step_story_npcs()?);
         self.record_story_npc_requests(&npc_requests);
+        self.sync_npc_combat();
         self.step_doors(&presses);
         for request in &npc_requests {
             if let ddnpcrt::schedule::Request::Gsf { no, value } = request {
