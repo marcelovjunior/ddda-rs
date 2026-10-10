@@ -40,7 +40,7 @@ impl Observer {
     /// the main pawn's entries belong to its progression owner. Remote seats and
     /// support pawns are excluded. Source B5BD20 only notifies the Arisen or a
     /// pawn with +5854 == 0; support pawns do not earn levels (ddprogress).
-    fn observe(&mut self, progression: &Progression, locals: &[u8], pawn_name: &str) {
+    fn observe(&mut self, progression: &Progression, locals: &[u8], pawn_name: &str, arisen_names: &HashMap<u8, String>) {
         let mut changes = Vec::new();
         let mut present = Vec::new();
         for member in progression.party.iter().flatten() {
@@ -67,7 +67,9 @@ impl Observer {
                             owner,
                             pawn,
                             level,
-                            name: if pawn { pawn_name.to_owned() } else { String::new() },
+                            // vf60 0x006772F0 binds the notification's name at
+                            // +0x290; co-op resolves it by this notice's owner.
+                            name: if pawn { pawn_name.to_owned() } else { arisen_names.get(&owner).cloned().unwrap_or_default() },
                         });
                     }
                 }
@@ -639,8 +641,9 @@ fn update(
         .as_ref()
         .map(|pawn| pawn.pawn.edit.name_str())
         .unwrap_or_default();
+    let arisen_names = state.locals.iter().map(|&owner| (owner, session.host.character_name(owner))).collect();
     view.observer
-        .observe(&session.host.progression, &state.locals, &pawn_name);
+        .observe(&session.host.progression, &state.locals, &pawn_name, &arisen_names);
     let event_active = session.event_active();
     drop(session);
     let visible = !pause.paused && !event_active;
@@ -906,12 +909,23 @@ mod tests {
             progression.party[slot] = Some(Member { character, role });
         }
         let mut observer = Observer::default();
-        observer.observe(&progression, &[0], "Synthetic Pawn");
+        let mut characters = ddhost::character_creation::Characters::default();
+        for (profile, name) in [(11, "Alba"), (22, "Beren")] {
+            let mut edit = ddpawn::cmc::Edit { name: [0; 25], nickname: 0, fields: [0; 41] };
+            edit.set_name(name.as_bytes());
+            characters.confirm(ddhost::ProfileId(profile), edit).unwrap();
+        }
+        let mut saved = ddhost::save::SaveFile::default();
+        characters.save(&mut saved);
+        let characters = ddhost::character_creation::Characters::default().loaded(
+            &ddhost::save::SaveFile::from_bytes(&saved.to_bytes()).unwrap()).unwrap();
+        let names = HashMap::from([(0, characters.name(ddhost::ProfileId(11))), (1, characters.name(ddhost::ProfileId(22)))]);
+        observer.observe(&progression, &[0], "Synthetic Pawn", &names);
         assert!(observer.queue.is_empty());
         for c in &mut progression.characters {
             c.progress.level += 2
         }
-        observer.observe(&progression, &[0], "Synthetic Pawn");
+        observer.observe(&progression, &[0], "Synthetic Pawn", &names);
         assert_eq!(
             observer
                 .queue
@@ -920,19 +934,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, false, 2), (0, false, 3), (0, true, 2), (0, true, 3)]
         );
-        observer.observe(&progression, &[0], "Synthetic Pawn");
+        assert_eq!(observer.queue[0].name, "Alba");
+        let texts = Texts::load(&vfs).unwrap();
+        assert_eq!(texts.fields(&observer.queue[0]).unwrap()[3], "Alba");
+        assert_eq!(observer.queue[2].name, "Synthetic Pawn");
+        observer.observe(&progression, &[0], "Synthetic Pawn", &names);
         assert_eq!(observer.queue.len(), 4);
         progression.characters[2].progress.level = 1;
-        observer.observe(&progression, &[0], "");
+        observer.observe(&progression, &[0], "", &names);
         assert_eq!(observer.queue.len(), 4);
-        observer.observe(&progression, &[0, 1], "");
+        observer.observe(&progression, &[0, 1], "", &names);
         assert_eq!(observer.queue.len(), 4, "new local seat establishes baseline");
         progression.characters[1].progress.level += 1;
-        observer.observe(&progression, &[0, 1], "");
+        observer.observe(&progression, &[0, 1], "", &names);
         assert!(observer
             .queue
             .iter()
-            .any(|n| n.owner == 1 && !n.pawn && n.level == 4));
+            .any(|n| n.owner == 1 && !n.pawn && n.level == 4 && n.name == "Beren"));
     }
     #[test]
     fn installed_text_panel_tracks_and_font_match_native_bindings() {

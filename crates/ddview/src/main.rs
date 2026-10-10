@@ -1087,6 +1087,19 @@ pub fn opening_world(
     args: &Args,
     vfs: &ddvfs::Vfs,
 ) {
+    let mut looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
+    // Stage801/checkpoint EDIT belongs to a profile. Resolve current seats at
+    // presentation time, including a guest whose old seat changed on load.
+    for seat in session.host.roster.seats() {
+        if let Some(edit) = session.host.character_edit(seat.id) {
+            let fields: Vec<_> = ddpawn::cmc::EDIT_U8_FIELDS.iter().zip(edit.fields)
+                .map(|(name, value)| ((*name).to_owned(), u32::from(value))).collect();
+            let look = ddlook::save::edit_look_dressed(vfs, &fields)
+                .unwrap_or_else(|e| panic!("opening profile {} character look: {e}", seat.profile.0));
+            looks.resize_with(looks.len().max(usize::from(seat.id) + 1), || None);
+            looks[usize::from(seat.id)] = Some(look);
+        }
+    }
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
     match item_menu::View::load(vfs, &args.native_pc, images) {
         Ok(view) => commands.insert_resource(view),
@@ -1096,7 +1109,6 @@ pub fn opening_world(
         Ok(view) => commands.insert_resource(view),
         Err(error) => panic!("opening vocation menu: {error}"),
     };
-    let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
     if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo, args.host.is_some() || args.join.is_some()) {
         commands.insert_resource(state);
         if let Err(e) = hud::spawn(commands, vfs, images) {
