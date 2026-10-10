@@ -44,6 +44,46 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// The two independently advanced generator counters. Seed selection uses
+/// the installed resource's seed list and the actual effect RNG selector;
+/// it does not choose a project-wide seed or merge birth and path draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratorCounters {
+    initial_seed: u16,
+    pub birth: u32,
+    pub path: u32,
+}
+
+impl GeneratorCounters {
+    /// The caller supplies the resource seed entries, including its first
+    /// entry when the native count is zero. An absent list is unsupported.
+    /// `global_random` must use the effect manager's actual selected stream.
+    // Translated from 0x010FA600..0x010FA66E
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn select(seeds: &[i32], effect_flags: u32,
+        mut global_random: impl FnMut(u32) -> u32) -> Result<Self, String> {
+        if seeds.is_empty() || seeds.len() > usize::from(u8::MAX) {
+            return Err("generator seed list is absent or exceeds its native byte count".into());
+        }
+        let selector = effect_flags & 8;
+        let index = if seeds.len() < 2 { 0 }
+            else { (global_random(selector) % seeds.len() as u32) as usize };
+        let selected = seeds[index];
+        let initial_seed = if selected < 0 { (global_random(selector) & 0xFFF) as u16 }
+            else { selected as u16 };
+        Ok(Self { initial_seed, birth: u32::from(initial_seed), path: u32::from(initial_seed) })
+    }
+
+    /// Reuse resets both draw positions to the original low-16-bit seed.
+    /// Resetting the generator must not consume another global RNG value.
+    // Translated from 0x010FA570 and 0x010FA580
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn reset(&mut self) {
+        self.birth = u32::from(self.initial_seed);
+        self.path = u32::from(self.initial_seed);
+    }
+}
+
 /// Installed per-coordinate resource, separate from every generator payload.
 /// Dynamic curve offsets are retained; this reader does not execute curves,
 /// choose a global seed, compose transforms or create an effect.
@@ -808,6 +848,39 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_seed_selection_preserves_global_draw_order_and_separate_reset_counters() {
+        let mut fixed = GeneratorCounters::select(&[0x1234_ABCD], 8,
+            |_| panic!("single fixed entry must not consume global RNG")).unwrap();
+        assert_eq!((fixed.birth, fixed.path), (0xABCD, 0xABCD),
+            "fixed seed is truncated to16 bits, not masked to12");
+        fixed.birth += 4;
+        fixed.path += 9;
+        assert_ne!(fixed.birth, fixed.path);
+        fixed.reset();
+        assert_eq!((fixed.birth, fixed.path), (0xABCD, 0xABCD));
+
+        let mut calls = Vec::new();
+        let mut values = [1, 0x1234_FABC].into_iter();
+        let selected = GeneratorCounters::select(&[17, -1, 19], 0xFFFF,
+            |selector| { calls.push(selector); values.next().unwrap() }).unwrap();
+        assert_eq!(calls, [8, 8], "entry selection precedes the negative-seed draw");
+        assert_eq!((selected.birth, selected.path), (0xABC, 0xABC));
+        assert_eq!(values.next(), None);
+        let mut calls = Vec::new();
+        let selected = GeneratorCounters::select(&[17, 18, 19], 0x10,
+            |selector| { calls.push(selector); 5 }).unwrap();
+        assert_eq!(calls, [0]);
+        assert_eq!((selected.birth, selected.path), (19, 19), "selection uses modulo count");
+        let random = GeneratorCounters::select(&[-17], 8, |selector| {
+            assert_eq!(selector, 8); 0xFFFF_FFFF
+        }).unwrap();
+        assert_eq!((random.birth, random.path), (0xFFF, 0xFFF));
+        assert!(GeneratorCounters::select(&[], 0, |_| panic!("invalid list must not draw")).is_err());
+        assert!(GeneratorCounters::select(&vec![0; 256], 0,
+            |_| panic!("invalid list must not draw")).is_err());
+    }
 
     #[test]
     fn generator_binding_keeps_coordinate_anchor_and_distinct_scale_modes() {

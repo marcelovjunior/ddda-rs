@@ -721,3 +721,20 @@ relative versus world positions and unsupported modes. Both this test and
 the generator-transform test remain **uncompiled/unrun** at this freeze.
 This is a path input adapter; the production effect lifetime, actual birth,
 world collision query and ordinary damage connection remain open.
+
+Bounded instruction review now resolves generator seed creation at
+`0x010FA600..0x010FA66E`. Multiple installed seed entries consume a global
+draw to select an entry by modulo count; a negative selected entry consumes
+another draw and masks it to12 bits. A nonnegative entry instead retains
+its low16 bits. Both global calls pass the actual owning effect flags&8
+to `0x00FB52A0`, preserving its stream selection. Generator birth+44 and
+path+48 start equal but advance independently. `0x010FA570/0x010FA580`
+restore both from the original low16-bit seed without another global draw.
+
+`GeneratorCounters` translates this contract with explicit installed seed
+entries and a caller-owned RNG callback. Its new regression distinguishes
+single fixed seeds, multi-entry selection, negative seed draws, the two
+mask widths, stream selectors and independent counters/reset. This test
+and the two new basis/path tests are **uncompiled/unrun**. Resource loading,
+actual global RNG ownership and production emitter admission remain open;
+the helper does not choose a new seed policy for gameplay.
