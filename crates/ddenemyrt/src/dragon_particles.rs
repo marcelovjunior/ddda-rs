@@ -44,6 +44,60 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Native world-query descriptor, resolved relative to the life payload.
+/// This is separate from the secondary effect's travel delay at life+0x44.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldCollision {
+    pub flags: u32,
+    pub radius_growth: f32,
+    pub radius: f32,
+    pub radius_limit_extra: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WorldQuery {
+    Sphere { from: [f32; 3], to: [f32; 3], radius: f32 },
+    Line { from: [f32; 3], to: [f32; 3] },
+}
+
+impl WorldCollision {
+    /// Copied from descriptor byte2, rather than a life duration field.
+    // Translated from 0x010CD1C0 (DDDA.exe 2017-12-13 Steam).
+    pub fn initial_delay(&self) -> u8 { (self.flags >> 16) as u8 }
+
+    /// Every initially nonzero delay suppresses this update, including 1->0.
+    // Translated from 0x010F54F0 (DDDA.exe 2017-12-13 Steam).
+    pub fn query_due(delay: &mut u8) -> bool {
+        if *delay != 0 { *delay -= 1; false } else { true }
+    }
+
+    /// Caller supplies actual old/current positions and radius after its
+    /// growth update. Floor-only queries and collision-provider filters need
+    /// their own scene adapters before issuing these world queries.
+    // Translated from 0x010E2A00 (DDDA.exe 2017-12-13 Steam).
+    pub fn query(&self, from: [f32; 3], to: [f32; 3], scaled_radius: f32)
+        -> Result<WorldQuery, String> {
+        if from.iter().chain(to.iter()).chain([scaled_radius].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite particle world query".into());
+        }
+        if self.flags & 0x4000 != 0 { return Err("floor-only particle query needs native adapter".into()); }
+        if self.flags & 0x1000 != 0 && scaled_radius > 0.00001 {
+            return Ok(WorldQuery::Sphere { from, to, radius: scaled_radius });
+        }
+        let mut direction: [f32; 3] = std::array::from_fn(|i| to[i] - from[i]);
+        let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if length >= f32::EPSILON {
+            let inverse = 1.0 / length;
+            for component in &mut direction { *component *= inverse; }
+        }
+        // The original retains tiny unnormalized displacements here.
+        Ok(WorldQuery::Line {
+            from: std::array::from_fn(|i| from[i] - direction[i] * scaled_radius),
+            to: std::array::from_fn(|i| to[i] + direction[i] * scaled_radius),
+        })
+    }
+}
+
 /// Supported point-provider binding: actor-relative offset and unchanged
 /// local orientation. The caller supplies the real parent coordinate matrix.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -409,6 +463,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn world_query_delay_and_geometry_follow_descriptor_not_secondary_delay() {
+        let mut list = synthetic_list();
+        list.payload.resize(0x260, 0);
+        let life = list.units[0].offsets[3] as usize;
+        list.payload[life + 6..life + 8].copy_from_slice(&0x110u16.to_le_bytes());
+        list.payload[life + 0x44..life + 0x48].copy_from_slice(&20u32.to_le_bytes());
+        let at = life + 0x110;
+        list.payload[at..at + 4].copy_from_slice(&0x0005_0200u32.to_le_bytes());
+        list.payload[at + 8..at + 12].copy_from_slice(&3.0f32.to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        let descriptor = unit.world_collision.unwrap();
+        assert_eq!(descriptor.radius, 3.0);
+        let mut delay = descriptor.initial_delay();
+        assert_eq!(delay, 5);
+        for _ in 0..5 { assert!(!WorldCollision::query_due(&mut delay)); }
+        assert_eq!(delay, 0);
+        assert!(WorldCollision::query_due(&mut delay));
+        assert_eq!(descriptor.query([0.0; 3], [0.0, 0.0, 10.0], 3.0).unwrap(),
+            WorldQuery::Line { from: [0.0, 0.0, -3.0], to: [0.0, 0.0, 13.0] });
+        let sphere = WorldCollision { flags: descriptor.flags | 0x1000, ..descriptor };
+        assert_eq!(sphere.query([0.0; 3], [0.0, 0.0, 10.0], 3.0).unwrap(),
+            WorldQuery::Sphere { from: [0.0; 3], to: [0.0, 0.0, 10.0], radius: 3.0 });
+        assert!(matches!(sphere.query([0.0; 3], [0.0, 0.0, 10.0], 0.00001).unwrap(), WorldQuery::Line { .. }));
+        let floor = WorldCollision { flags: descriptor.flags | 0x4000, ..descriptor };
+        assert!(floor.query([0.0; 3], [0.0; 3], 3.0).is_err());
+        list.payload.truncate(at + 15);
+        assert!(CollisionUnit::read("synthetic".into(), &list).is_err());
+    }
+
+    #[test]
     fn path_setup_samples_native_order_and_advances_zero_variation_draws() {
         let mut parameters = PathParameters { flags: 0, iterations: 2,
             selectors: 0x4444, taper_points: 0,
@@ -673,6 +757,7 @@ pub struct CollisionUnit {
     pub initial_distance: [f32; 2],
     pub path_points: u8,
     pub path_parameters: PathParameters,
+    pub world_collision: Option<WorldCollision>,
 }
 
 impl CollisionUnit {
@@ -726,6 +811,15 @@ impl CollisionUnit {
         let point_at = life.checked_add(0x78).ok_or("collision path offset overflow")?;
         let path_points = *bytes.get(point_at).ok_or("truncated collision path count")?;
         if path_points < 2 { return Err("collision path has fewer than two points".into()); }
+        // cParticleGenerator::vf14 0x010D7380 resolves runtime+0x128
+        // from the ushort at life+6, not life+0x44 or the nested path data.
+        let collision_offset = half(life, 6)?;
+        let world_collision = if collision_offset == 0 { None } else {
+            let base = life.checked_add(usize::from(collision_offset))
+                .ok_or("collision descriptor offset overflow")?;
+            Some(WorldCollision { flags: word(base, 0)?, radius_growth: float(base, 4)?,
+                radius: float(base, 8)?, radius_limit_extra: float(base, 0xC)? })
+        };
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
             capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
@@ -742,7 +836,7 @@ impl CollisionUnit {
                     pair(life, 0xA0)?, pair(life, 0xA8)?, pair(life, 0xB0)?],
                 rotation: [pair(life, 0xB8)?, pair(life, 0xC0)?, pair(life, 0xC8)?],
                 curves: [u32::from(half(life, 0x104)?), u32::from(half(life, 0x106)?),
-                    word(life, 0x108)?, word(life, 0x10C)?] } })
+                    word(life, 0x108)?, word(life, 0x10C)?] }, world_collision })
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction

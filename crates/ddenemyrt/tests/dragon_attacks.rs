@@ -31,6 +31,11 @@ fn installed_collision_effect_reads_runtime_fields_and_keeps_spawn_separate_from
     assert_eq!(sampled.length_velocity, 0.0);
     assert_eq!(sampled.angular_velocity, 0.0);
     assert_eq!(sampled.rotation, [0.0; 3]);
+    let world_collision = unit.world_collision.expect("installed life world-query descriptor");
+    assert_eq!(world_collision.initial_delay(), 5,
+        "native descriptor byte2, not secondary-effect delay20");
+    assert_eq!(world_collision.flags & (0x1000 | 0x4000), 0,
+        "installed breath uses an extended line world query");
     assert_eq!(unit.generator.flags & 2, 0, "this installed unit is one-shot");
     let mut counter = 0;
     let durations = unit.sample_raw_durations(&mut counter,

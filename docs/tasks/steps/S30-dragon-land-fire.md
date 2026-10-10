@@ -374,3 +374,42 @@ DDSIM79 passed, enemy164 passed/2 existing ignored, host95 passed. Compile
 This accepts the point binding, path sampling, target identity and shared
 contact checkpoint; production fire and downstream viewer acceptance
 remain open. No new original-game comparison was performed.
+
+### World collision descriptor checkpoint
+
+The collision reader resolves the ushort at life+6 using `0x010D7380`,
+then reads the world-query flags, radius growth, initial radius and limit
+extension from the installed descriptor. Its byte2 initializes the query
+delay (`0x010CD1C0`). The delay update (`0x010F54F0`) suppresses every
+initially nonzero counter, including the update that changes one to zero;
+the life+0x44 secondary-effect travel delay is independent.
+
+The supported query geometry follows `0x010E2A00`: bit0x1000 selects a
+swept sphere only above radius0.00001, otherwise a line is extended at
+both ends by the actual scaled radius. Tiny displacements retain their
+unnormalized native direction. Floor-only queries and effect-owned scene
+filters/traversal/response remain explicit missing adapters. This helper
+does not issue a scene query or enable production fire.
+
+The final full enemy run actually exited zero: 165 passed, two existing
+diagnostics ignored (11.37s compile, 85.32s total tests). All70 library
+tests included the new descriptor/delay/geometry regression; four installed
+attack tests passed. Private log:
+E:/ddda-re/notes/steps/S29/full-world-collision-reader-fresh-deps.log.
+The downstream full host run also actually exited zero: 95 passed,
+27.50s compile. Private log:
+E:/ddda-re/notes/steps/S29/full-world-collision-reader-host.log.
+
+An earlier full run reused a stale66-test library and was rejected.
+Narrowly rebuilding ddenemyrt then exposed a stale DDSIM artifact missing
+the source-present ground_contact API; narrowly rebuilding DDSIM selected
+both current sources. No failed/stale run is counted as acceptance.
+Validation is on this S30 branch's integrated main7a5c414 dependency set;
+later S48/S49 integration and downstream viewer remain pending.
+
+Next: connect the real shared effect coordinate block and generator clocks
+to type4 paths before production particle queries and ordinary HP damage.
+Source `0x00E6DD90/0x00E6E030/0x00E73720` establishes per-coordinate0x130
+blocks; a generator's +0x14 points to that block, not the effect's final
+matrix. This avoids applying parent/effect scaling twice. Full S30
+landing/fire/state6/original-comparison acceptance remains open.
