@@ -696,3 +696,15 @@ The Rust regression remains **uncompiled/unrun** pending its coordinated
 full package gate. The earlier185 passes still belong to `2ca38ae`.
 Next: validate this source batch, then integrate actual generator creation,
 coordinate/effect clocks, birth and the world query into ordinary damage.
+
+Production frame-order tracing also distinguishes the two generator RNG
+counters. `0x010F9B10` refreshes vf15 binding, advances the generator gate,
+initializes or advances the life4 path, then admits a particle and updates
+existing particles. In `0x010E5620`, ordinary life4 path sampling selects
+generator +48; path-state mode0x1000 selects +44 instead. Initializer
+`0x010EC540` and ordinary particle birth `0x010EDC90` use +44. The manager
+constructor `0x010FA1D0` initializes both independently; do not feed path
+sampling through the birth counter simply because both use the same native
+tables. The path helper's caller contract now states that distinction.
+Runtime initialization owners and their later seed writes remain to be
+integrated; these source findings do not establish an active fire emitter.

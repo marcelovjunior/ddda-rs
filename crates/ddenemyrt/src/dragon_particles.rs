@@ -591,7 +591,10 @@ pub struct SampledPath {
 
 impl PathParameters {
     /// Supported uncurved, unconstrained native setup. Each draw advances
-    /// the actual generator counter even when its variation is zero.
+    /// the caller's actual selected counter even when its variation is zero.
+    /// Ordinary life4 setup uses generator +48, separately from the +44
+    /// counter used by initializer and particle birth. Native path-state
+    /// mode0x1000 selects +44 instead; resource flags alone do not select it.
     // Translated from 0x010E5620 (DDDA.exe 2017-12-13 Steam).
     pub fn sample(&self, counter: &mut u32,
         mut random_float: impl FnMut(usize) -> f32) -> Result<SampledPath, String> {
