@@ -141,6 +141,8 @@ impl HostHandle {
 /// Loaded NPC layouts and real actor requests, independent of graph-map membership.
 struct NpcAdapter {
     layouts: HashMap<u32, ddhost::npc_placements::LoadedLayouts>,
+    field_groups: Option<ddhost::ddspawn::gpl::GroupList>,
+    field_cells: Option<Vec<(u16, u16)>>,
     families: ddhost::npc_placements::NameFamilies,
     guards: HashMap<u32, ddnpcrt::schedule::Guard>,
     goto: HashMap<u32, [f32; 3]>,
@@ -157,13 +159,47 @@ impl NpcAdapter {
             .map_err(|error| error.0)?;
         let list = ddhost::npc_placements::group_list(vfs, STAGE)?;
         // Cassardis is loaded as a whole stage by opening::setup. Field
-        // admission must instead use actual streamer layout cells and archive
-        // readiness; this adapter does not pretend those observations exist.
+        // layouts are parsed separately from the streamer's completed cell set.
         let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
-        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), families, guards: HashMap::new(), goto: HashMap::new(),
+        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
+            families, guards: HashMap::new(), goto: HashMap::new(),
             placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+    }
+
+    /// Parse NPC archives only after the streamer's layout set completes.
+    /// LoadedLayouts applies the existing 0x0075faa0 gates; parsing a layout
+    /// does not acknowledge any actor's Guard/Goto or model readiness.
+    fn sync_field_layouts(
+        &mut self, vfs: &ddvfs::Vfs, stage: u32, cells: &[(i32, i32)],
+    ) -> Result<bool, String> {
+        if stage != 100 {
+            let changed = self.field_cells.take().is_some();
+            self.layouts.remove(&100);
+            return Ok(changed);
+        }
+        let mut loaded = cells.iter().map(|&(m, n)| {
+            Ok((u16::try_from(m).map_err(|_| format!("invalid field layout M {m}"))?,
+                u16::try_from(n).map_err(|_| format!("invalid field layout N {n}"))?))
+        }).collect::<Result<Vec<_>, String>>()?;
+        // Stage bootstrap 0x004a21b0, NPC loop 0x004a277d..0x004a27cb,
+        // loads authored (0,0) groups through 0x004a37a0(type=3), outside
+        // the split-grid window. Their intels remain until stage unload;
+        // individual physical actor readiness is still a separate system.
+        loaded.push((0, 0));
+        loaded.sort_unstable();
+        loaded.dedup();
+        if self.field_cells.as_ref() == Some(&loaded) { return Ok(false); }
+        if self.field_groups.is_none() {
+            self.field_groups = Some(ddhost::npc_placements::group_list(vfs, 100)?);
+        }
+        let layouts = ddhost::npc_placements::LoadedLayouts::read(
+            vfs, 100, self.field_groups.as_ref().unwrap(), &loaded,
+        )?;
+        self.layouts.insert(100, layouts);
+        self.field_cells = Some(loaded);
+        Ok(true)
     }
 }
 
@@ -379,6 +415,14 @@ impl Session {
 
     fn sync_npc_intels(&mut self) -> Result<(), String> {
         let stage = self.world().stage_no;
+        // Retire old-stage owners before admitting the new stage, including
+        // any NPC id reused across the handoff. Do not infer death on unload.
+        let mut old_stages: Vec<_> = self.host.story_npc_intels()
+            .filter(|p| p.stage != stage).map(|p| p.stage).collect();
+        old_stages.sort_unstable(); old_stages.dedup();
+        for old in old_stages {
+            self.host.reconcile_story_npc_intels(old, vec![]).map_err(|e| e.to_string())?;
+        }
         let Some(layouts) = self.npc_adapter.layouts.get(&stage) else {
             if self.npc_adapter.reported_stage != stage {
                 warn!("opening: stage {stage} NPC materialization waits for loaded-layout/archive readiness adapter");
@@ -415,6 +459,11 @@ impl Session {
         }
         let owned: HashMap<_, _> = self.host.story_npc_intels()
             .filter_map(|p| self.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
+        if stage == 100 && owned != self.npc_adapter.owners {
+            let admitted: Vec<_> = self.host.story_npc_intels()
+                .map(|p| (p.npc, p.target.group, p.target.index)).collect();
+            info!("opening: field NPC intels admitted {admitted:?}");
+        }
         // Request ownership is independent of successful model creation.
         for (&npc, old) in &self.npc_adapter.owners {
             if owned.get(&npc) != Some(old) {
@@ -867,6 +916,15 @@ pub fn step(
             // the camera's copy too (play::follow_camera)
             st.terrain = terrain.clone();
             s.host.set_ground_with_doors(Box::new(terrain));
+        }
+        let stage = s.world().stage_no;
+        // A target stage's cells cannot admit actors before its streamer
+        // enters that stage. The next completed set is observed next frame.
+        let loaded_stage = if streamer.stage == stage { stage } else { 0 };
+        match s.npc_adapter.sync_field_layouts(streamer.loader.vfs, loaded_stage, streamer.loaded_layout_cells()) {
+            Ok(true) => info!("opening: stage {stage} NPC layout cells {:?}", s.npc_adapter.field_cells),
+            Ok(false) => {}
+            Err(error) => { s.failure = Some(format!("NPC layouts: {error}")); return; }
         }
     }
     if !s.network_ready {
@@ -2129,6 +2187,68 @@ fn plan_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_field_npc_cells_admit_idempotently_and_retire_on_unload() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let list = ddhost::npc_placements::group_list(&vfs, 100).unwrap();
+        let group = list.groups.iter().find(|g| g.slot == 4).unwrap();
+        assert!(group.cells.iter().any(|c| c.m == 0 && c.n == 0));
+        let starts = ddhost::install::start_positions(&vfs, 100).unwrap();
+        let start = starts.entries.get(2).unwrap();
+        let grid = crate::stream::Streamer::field_grid(native).unwrap();
+        let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
+        assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
+        let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
+        // Fixture observations satisfy this installed group's authored gates;
+        // this is not a claim that the full opening route has reached them.
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = 100;
+        story.world.stage_no = 100;
+        story.world.sce_no = group.scene_window.map_or(1500, |(begin, _)| begin as u32);
+        story.world.hour = group.hours.map_or(12, |(begin, _)| u32::from(begin));
+        for flag in [group.layout_flag, group.layout_flag2].into_iter().flatten() {
+            story.world.set_lot(100, usize::from(flag), true);
+        }
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &cells).unwrap());
+        session.sync_npc_intels().unwrap();
+        let owner = session.host.story_npc_lifetime(304).expect("installed group 4 NPC admitted");
+        let admitted: Vec<_> = session.host.story_npc_intels()
+            .map(|p| (p.npc, p.target.group, p.target.index)).collect();
+        println!("field loaded cells {cells:?}: admitted {admitted:?}");
+        assert!(admitted.contains(&(304, 4, 0)));
+        assert!(session.host.story_npc_intels().all(|p| p.stage == 100));
+        assert!(!session.npc_adapter.sync_field_layouts(&vfs, 100, &[cells[0], cells[0]]).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_eq!(session.host.story_npc_lifetime(304), Some(owner));
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &[]).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_eq!(session.host.story_npc_lifetime(304), Some(owner),
+            "global NPC intel survives neighboring split-cell unload");
+        let retired: Vec<_> = admitted.iter().filter_map(|&(npc, _, _)|
+            session.host.story_npc_lifetime(npc as u32).is_none().then_some(npc)).collect();
+        println!("split-cell unload retires {retired:?}; global NPC 304 retained");
+        assert!(!retired.is_empty(), "arrival fixture also contains a split-cell NPC");
+        assert_eq!(session.npc_adapter.field_cells.as_deref(), Some(&[(0, 0)][..]));
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = STAGE;
+        story.world.stage_no = STAGE;
+        session.sync_npc_intels().unwrap();
+        assert!(session.host.story_npc_lifetime(304).is_none());
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = 100;
+        story.world.stage_no = 100;
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &cells).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_ne!(session.host.story_npc_lifetime(304), Some(owner));
+        assert_eq!(session.host.roster.ids().count(), 2);
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
+        assert!(!session.npc_adapter.layouts.contains_key(&100));
+    }
+
     #[test]
     fn installed_intro_waits_on_quest_movie_then_editor_before_q0001() {
         use ddstory::data::Data;
