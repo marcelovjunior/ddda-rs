@@ -74,6 +74,16 @@ First ports: `cPlAction::vf06` (0x00AC5100, the base update of every player
 action: 720 vectors, 120 through the effect release) and `uObjModel::vf85`
 (0x004C6B50, world origin: 25 vectors).
 
+**Families.** Many functions share one body except a constant (the action
+in-place constructors differ only in their vtable). One parameterized port
+verifies a whole family, but membership must be **byte-exact except that
+constant**: a looser shape match admitted 15 constructors writing a float
+at another offset, and only the per-member differential test caught it.
+Each member is replayed individually; a private `families/*.json` lists
+the members and the tracker credits them when the representative is
+ported. Commit only behind a passing gate (`cargo test -p ddnative`
+succeeding), never chained after it unconditionally.
+
 **Phase 3, wiring.** Connect the rebuilt pieces to the host's game state;
 the hand-written glue (ScriptedHost shortcuts, the demo driver, route-only
 adapters) is retired as the rebuilt systems take over.
