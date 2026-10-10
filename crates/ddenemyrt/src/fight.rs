@@ -39,6 +39,9 @@ pub struct FightData {
     pub bow: BowData,
     /// The attacks' values from `param\pl\other\m_pl000_00`.
     pub attack_param: ddsim::AttackParam,
+    /// Installed player adjust values, also consumed by death actions.
+    /// Bulk data stays in the player's resources, not translated constants.
+    pub player_adjust: Vec<f32>,
     pub goblin: GoblinData,
     pub tables: Tables,
     /// The pawns' AI data (`crate::pawn`).
@@ -75,6 +78,7 @@ impl FightData {
         strider.body.banks.resize(10, None);
         strider.body.banks[9] = Some(bow.player_bank.clone());
         let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
+        let player_adjust = adjust(ADJUST_PARAMS)?.0;
         Ok(FightData {
             arisen,
             mage,
@@ -83,8 +87,9 @@ impl FightData {
             shell: ShellParam::load(vfs)?,
             arrow: ArrowData::load(vfs)?,
             bow,
-            attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
+            attack_param: ddsim::AttackParam::from_adjust(&player_adjust)
                 .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
+            player_adjust,
             goblin: GoblinData::load(vfs, exe)?,
             tables: Tables {
                 game: adjust(r"param\game")?,

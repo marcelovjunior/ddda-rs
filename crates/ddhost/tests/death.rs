@@ -523,3 +523,129 @@ fn installed_damage_bank_poses_each_kit_and_zero_hp_cannot_emit_queued_attacks()
         assert!(!fight.bow_errors.contains_key(&seat));
     }
 }
+
+type DeathHost = ddhost::Host<ddhost::data::NoStoryData, ddstory::scripted::ScriptedHost>;
+
+fn installed_death_host() -> Option<DeathHost> {
+    use ddenemyrt::fight::{Fight, FightData};
+    let native = std::path::PathBuf::from(std::env::var_os("DDDA_NATIVE_PC")
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into()));
+    if !native.exists() { return None; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let file = ddexe::ExeFile::next_to(&native).unwrap();
+    let data = std::sync::Arc::new(FightData::load(&vfs, &file.image().unwrap()).unwrap());
+    let mut host = DeathHost::new(ddsim::Sim::new(ddhost::install::root_motions(&vfs).unwrap()),
+        None, ddstory::scripted::ScriptedHost::default(), Box::new(DeathTestGround));
+    host.join(ProfileId(100), Control::Local, [0.0; 3], 0.0).unwrap();
+    host.join(ProfileId(200), Control::Remote, [400.0, 0.0, 0.0], 0.0).unwrap();
+    let mut fight = Fight::new(data);
+    for seat in host.roster.ids() {
+        fight.add_arisen(seat);
+        fight.equip(&mut host.sim, seat);
+    }
+    host.fight = Some(fight);
+    Some(host)
+}
+
+fn kill_arisen(host: &mut DeathHost, seat: ddhost::PlayerId) {
+    let actor = &mut host.fight.as_mut().unwrap().arisen.get_mut(&seat).unwrap().fighter;
+    let ddenemyrt::combat::Victim::Player { hp, .. } = &mut actor.victim else { panic!("Arisen HP"); };
+    *hp = 0.0;
+}
+
+fn complete_installed_death(host: &mut DeathHost, seat: ddhost::PlayerId) -> ddhost::FrameReport {
+    let body = host.sim.player(seat).unwrap();
+    let period = host.sim.motion_for(body.weapon, 0x109).unwrap().period();
+    let delay = Parameters::from_adjust(&host.fight.as_ref().unwrap().data.player_adjust)
+        .unwrap().game_over_delay;
+    // Bound comes from the installed layer plus actual native delay, not a
+    // guessed fatal duration. Extra frames allow discrete entry/exit updates.
+    let mut report = Default::default();
+    for _ in 0..(period.ceil() + delay.ceil()) as usize + 3 {
+        report = host.tick(&ddhost::FrameInputs::new()).unwrap();
+    }
+    assert!(matches!(host.sim.player(seat).unwrap().state, ddsim::State::Death {
+        phase: ddsim::DeathPhase::ArisenDead }));
+    report
+}
+
+#[test]
+fn installed_host_fatality_gates_only_dead_profile_and_waits_for_dead_entry() {
+    use ddhost::{FrameInputs, PlayerInput};
+    let Some(mut host) = installed_death_host() else { return };
+    let delay = Parameters::from_adjust(&host.fight.as_ref().unwrap().data.player_adjust)
+        .unwrap().game_over_delay;
+    assert_eq!(delay, Parameters::load(&ddvfs::Vfs::open(std::path::PathBuf::from(
+        std::env::var_os("DDDA_NATIVE_PC").unwrap_or_else(||
+            "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into()))).unwrap()).unwrap().game_over_delay);
+    kill_arisen(&mut host, 0);
+    let inputs: FrameInputs = [(0, PlayerInput { sim: ddsim::Input {
+        stick: [0.0, 1.0], light: true, jump: true, ..Default::default() }, interact: true }),
+        (1, PlayerInput { sim: ddsim::Input { stick: [0.0, 1.0], ..Default::default() }, interact: true })]
+        .into_iter().collect();
+    let report = host.tick(&inputs).unwrap();
+    assert!(report.death.seats[0].terminal);
+    assert_eq!(report.death.seats[0].spectator, Some(1));
+    assert!(!report.death.seats[1].terminal);
+    assert!(!report.death.game_over);
+    assert!(host.player_actions_blocked(0));
+    assert!(!host.player_actions_blocked(1));
+    assert!(!ddhost::StoryWorld::player_actions_blocked(&host.world, 0),
+        "personal death must not set the shared authored-camera lock");
+    assert!(matches!(host.sim.player(0).unwrap().state, ddsim::State::Death {
+        phase: ddsim::DeathPhase::Collapse { pawn: false } }));
+    assert_eq!(host.sim.player(0).unwrap().position, [0.0; 3]);
+    assert!(host.sim.player(1).unwrap().position[2] > 0.0);
+    assert_eq!(host.tick(&inputs).unwrap().interact, Some(1), "dead seat's prompt must be gated");
+    // Removing the survivor during collapse must not begin the Dead clock.
+    host.leave(1);
+    let report = host.tick(&FrameInputs::new()).unwrap();
+    assert!(!report.death.game_over);
+    let report = complete_installed_death(&mut host, 0);
+    assert!(report.death.game_over, "zero or positive installed delay reached only after Dead entry");
+}
+
+#[test]
+fn installed_host_death_reconnect_and_seat_reuse_preserve_profile_attempt() {
+    let Some(mut host) = installed_death_host() else { return };
+    kill_arisen(&mut host, 0);
+    let report = complete_installed_death(&mut host, 0);
+    assert!(!report.death.game_over, "active living profile vetoes shared game over");
+    let dead_frame = host.sim.player(0).unwrap().frame;
+    host.leave(0);
+    let newcomer = host.join(ProfileId(300), Control::Local, [800.0, 0.0, 0.0], 0.0).unwrap();
+    assert_eq!(newcomer, 0);
+    assert!(!host.player_actions_blocked(newcomer));
+    assert!(!host.sim.player(newcomer).unwrap().incapacitated());
+    assert!(!host.tick(&ddhost::FrameInputs::new()).unwrap().death.game_over);
+    host.leave(newcomer);
+    let reattached = host.join(ProfileId(100), Control::Local, [0.0; 3], 0.0).unwrap();
+    assert_eq!(reattached, 0);
+    assert!(host.player_actions_blocked(reattached));
+    assert!(matches!(host.sim.player(reattached).unwrap().state, ddsim::State::Death {
+        phase: ddsim::DeathPhase::ArisenDead }));
+    assert_eq!(host.sim.player(reattached).unwrap().frame, dead_frame);
+    host.leave(1);
+    assert!(host.tick(&ddhost::FrameInputs::new()).unwrap().death.game_over,
+        "disconnected living profiles do not veto");
+}
+
+#[test]
+fn installed_host_airborne_fatality_is_reported_without_grounded_fallback() {
+    let Some(mut host) = installed_death_host() else { return };
+    host.sim.player_mut(0).unwrap().state = ddsim::State::Fall;
+    host.sim.player_mut(0).unwrap().position[1] = 100.0;
+    kill_arisen(&mut host, 0);
+    let report = host.tick(&ddhost::FrameInputs::new()).unwrap();
+    assert!(report.death.seats[0].terminal);
+    assert!(report.death.seats[0].unsupported.as_deref().unwrap().contains("airborne"));
+    assert!(!host.sim.player(0).unwrap().incapacitated());
+    assert!(!host.player_actions_blocked(1));
+    // Landing in the port cannot silently change the original fatal branch.
+    host.sim.player_mut(0).unwrap().state = ddsim::State::Wait;
+    host.sim.player_mut(0).unwrap().position[1] = 0.0;
+    let report = host.tick(&ddhost::FrameInputs::new()).unwrap();
+    assert!(!host.sim.player(0).unwrap().incapacitated());
+    assert!(report.death.seats[0].unsupported.is_some());
+    assert!(!report.death.game_over);
+}

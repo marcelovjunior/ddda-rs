@@ -5,7 +5,7 @@
 //! must provide those observations. The original has one Arisen; profile keys
 //! and the all-active-Arisen game-over rule are project policy (COOP_DESIGN).
 
-use crate::{PlayerId, ProfileId, Roster};
+use crate::{Host, PlayerId, ProfileId, Roster, StoryWorld};
 use std::collections::BTreeMap;
 
 /// Scalar inputs to the final death selector in the native damage dispatcher.
@@ -353,5 +353,170 @@ impl SessionDeaths {
     /// Only successful shared checkpoint replacement clears the attempt.
     pub fn restored(&mut self) {
         self.terminal.clear();
+    }
+}
+
+/// One view's death policy, kept separate from shared authored-camera locks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Report {
+    pub game_over: bool,
+    pub seats: Vec<SeatReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeatReport {
+    pub seat: PlayerId,
+    pub profile: ProfileId,
+    pub terminal: bool,
+    pub spectator: Option<PlayerId>,
+    /// Unsupported branches are observable, never a grounded fallback.
+    pub unsupported: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ArisenAction {
+    phase: ddsim::DeathPhase,
+    frame: f32,
+}
+
+/// Attempt state survives a disconnect by profile. It is not a durable save
+/// chunk, and ordinary `Host::load` does not claim to reconstruct an attempt.
+#[derive(Debug, Clone, Default)]
+pub struct Runtime {
+    session: SessionDeaths,
+    parameters: Option<Parameters>,
+    actions: BTreeMap<ProfileId, ArisenAction>,
+    unsupported: BTreeMap<ProfileId, String>,
+}
+
+impl Runtime {
+    pub fn is_dead(&self, profile: ProfileId) -> bool {
+        self.session.is_dead(profile)
+    }
+
+    pub fn report(&self, roster: &Roster) -> Report {
+        Report {
+            game_over: self.session.game_over(roster),
+            seats: roster.seats().iter().map(|seat| SeatReport {
+                seat: seat.id,
+                profile: seat.profile,
+                terminal: self.is_dead(seat.profile),
+                spectator: self.session.spectator_target(roster, seat.id),
+                unsupported: self.unsupported.get(&seat.profile).cloned(),
+            }).collect(),
+        }
+    }
+
+    fn restore_body(&mut self, sim: &mut ddsim::Sim, profile: ProfileId, seat: PlayerId) {
+        let Some(action) = self.actions.get(&profile).copied() else { return };
+        // Reattaching the same attempt is co-op policy, not a native revive.
+        if let Err(error) = sim.begin_grounded_death(seat, false, true) {
+            self.unsupported.insert(profile, error);
+            return;
+        }
+        let body = sim.player_mut(seat).expect("death entry validated seat");
+        body.state = ddsim::State::Death { phase: action.phase };
+        body.frame = action.frame;
+    }
+}
+
+/// Conservative projection of the ordinary-grounded selector's actor bit.
+/// The port has control states and scenery results, not native +273C. Only
+/// its grounded domains and an actual floor contact admit the translated
+/// 0x00B747D0 -> 0x00AD56F0 branch. Other control/actor guards remain open.
+fn grounded_admission(sim: &ddsim::Sim, seat: PlayerId, ground: &dyn ddsim::Ground) -> bool {
+    let Some(body) = sim.player(seat) else { return false };
+    let control_grounded = body.state.on_ground_for_attacks()
+        || matches!(body.state, ddsim::State::JumpStart { .. } | ddsim::State::HardLanding)
+        || (matches!(body.state, ddsim::State::Bow { .. })
+            && body.bow.is_some_and(|bow| matches!(bow.movement,
+                ddsim::attack::BowMovement::Standing | ddsim::attack::BowMovement::Moving)));
+    if !control_grounded || body.hold.is_some() { return false; }
+    if ground.triangles_in(body.position, body.position, &mut Vec::new()) {
+        // Same native-derived check drop and capsule as Sim::ground_move.
+        ddsim::sweep::sweep(&sim.sweep_param, &ddsim::sweep::PLAYER_CAPSULE,
+            body.position, [0.0, -ddsim::GROUND_CHECK_DROP * ddsim::TICK, 0.0], true,
+            &|lo, hi, out| { ground.triangles_in(lo, hi, out); }).grounded()
+    } else {
+        // Height-only test worlds have no capsule contact. Require their
+        // exact floor height; no invented snap radius for fatal admission.
+        ground.height(body.position[0], body.position[2], body.position[1])
+            == Some(body.position[1])
+    }
+}
+
+impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
+    /// Personal death policy never changes the global quest-camera wire bit.
+    pub fn player_actions_blocked(&self, seat: PlayerId) -> bool {
+        self.world.player_actions_blocked(seat)
+            || self.roster.seat(seat).is_some_and(|seat| self.death.is_dead(seat.profile))
+    }
+
+    pub(crate) fn restore_arisen_death_on_join(&mut self, profile: ProfileId, seat: PlayerId) {
+        self.death.restore_body(&mut self.sim, profile, seat);
+    }
+
+    /// Run after the actual HP hit pass, before input reaches actor movement.
+    /// Pawns require stable admission identity and native contact binding;
+    /// this adapter deliberately covers roster Arisen only.
+    pub(crate) fn start_arisen_deaths(&mut self) {
+        let Some(fight) = &self.fight else { return };
+        if self.death.parameters.is_none() {
+            match Parameters::from_adjust(&fight.data.player_adjust) {
+                Ok(parameters) => self.death.parameters = Some(parameters),
+                Err(error) => {
+                    for seat in self.roster.seats() {
+                        if fight.arisen.get(&seat.id).is_some_and(|a| a.fighter.victim.dead()) {
+                            self.death.unsupported.insert(seat.profile, error.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for seat in self.roster.seats() {
+            let Some(actor) = fight.arisen.get(&seat.id) else { continue };
+            if !actor.fighter.victim.dead() || self.death.is_dead(seat.profile) { continue; }
+            self.death.session.enter_fatal(seat.profile);
+            let error = if self.sim.player(seat.id).is_some_and(|p| p.hold.is_some()) {
+                Some("held ledge fatal control domain remains untranslated".into())
+            } else if actor.fighter.statuses.has(ddcombat::cstatus::kind::PETRIFY) {
+                Some("petrification-state fatal branch remains untranslated".into())
+            } else if !grounded_admission(&self.sim, seat.id, self.ground.as_ref()) {
+                Some("airborne or unmapped fatal control domain remains untranslated".into())
+            } else {
+                self.sim.begin_grounded_death(seat.id, false, true).err()
+            };
+            if let Some(error) = error {
+                self.death.unsupported.insert(seat.profile, error);
+            }
+            if let Some(body) = self.sim.player_mut(seat.id) { body.cancel_attack_actions(); }
+        }
+    }
+
+    pub(crate) fn dead_actions_at_move_start(&self) -> std::collections::BTreeSet<ProfileId> {
+        self.roster.seats().iter().filter_map(|seat| {
+            matches!(self.sim.player(seat.id).map(|p| p.state), Some(ddsim::State::Death {
+                phase: ddsim::DeathPhase::ArisenDead })).then_some(seat.profile)
+        }).collect()
+    }
+
+    pub(crate) fn step_arisen_death_clocks(&mut self, step: f32,
+        dead_at_start: &std::collections::BTreeSet<ProfileId>) {
+        for seat in self.roster.seats() {
+            let Some(body) = self.sim.player(seat.id) else { continue };
+            let ddsim::State::Death { phase } = body.state else { continue };
+            self.death.actions.insert(seat.profile, ArisenAction { phase, frame: body.frame });
+            if phase != ddsim::DeathPhase::ArisenDead { continue; }
+            self.death.session.enter_dead(seat.profile);
+            // Native Dead starts its own clock on entry. Never charge the
+            // collapse's whole outer frame to a newly entered Dead action.
+            if !dead_at_start.contains(&seat.profile) { continue; }
+            let Some(parameters) = self.death.parameters else { continue };
+            if let Some(Some(clock)) = self.death.session.terminal.get_mut(&seat.profile) {
+                if let Err(error) = clock.step(step * body.unit_rate, parameters.game_over_delay, true) {
+                    self.death.unsupported.insert(seat.profile, error);
+                }
+            }
+        }
     }
 }

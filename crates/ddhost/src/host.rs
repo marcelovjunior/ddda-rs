@@ -108,6 +108,7 @@ pub struct FrameReport {
     /// The NPCs' requests to the actor layer (ddnpcrt schedules).
     pub npc_requests: Vec<ddnpcrt::schedule::Request>,
     pub pawn_order_requests: Vec<crate::pawn_orders::Delivery>,
+    pub death: crate::death::Report,
 }
 
 pub struct Host<D: Data, W: StoryWorld> {
@@ -165,6 +166,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// A fight in progress (ddenemyrt): enemies, hit volumes, damage.
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
+    pub death: crate::death::Runtime,
     pub opening_dragon_data: Option<crate::dragon::OpeningDragonData>,
     pub doors: Option<crate::doors::Doors>,
     /// Ambient enemy ownership; admission and view lifetimes are separate.
@@ -206,6 +208,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             boot: true,
             request_log: StateHasher::default(),
             fight: None,
+            death: Default::default(),
             opening_dragon_data: None,
             doors: None,
             ambient: Default::default(),
@@ -329,6 +332,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.economy.wallet(id);
         self.joined_items(id);
         self.joined_fighter(id);
+        self.restore_arisen_death_on_join(profile, id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
         Some(id)
@@ -383,7 +387,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // The scenario prompt reads sScenario +0x108, which the player's move
         // (line 10, uPlayerBase vf204 0x00B6EAC0) set during the last frame:
         // a press reaches the story one frame after it was made.
-        let interact = self.scenario_press.take();
+        let interact = self.scenario_press.take().filter(|&seat| !self.player_actions_blocked(seat));
         if let Some(story) = self.story.as_mut() {
             let seats: Vec<PlayerId> = self.roster.ids().collect();
             let players = seats
@@ -424,10 +428,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let effective_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
-            (id, if self.world.player_actions_blocked(id) { Default::default() } else { input })
+            (id, if self.player_actions_blocked(id) { Default::default() } else { input })
         }).collect();
         let inputs = &effective_inputs;
-        let presses = self.edges.interact_presses(inputs);
+        let mut presses = self.edges.interact_presses(inputs);
         // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
         // from the volumes the fight switched on last frame, damage applied,
         // before anyone moves (FRAME.md 5.1).
@@ -438,6 +442,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             kills = f.kill_awards();
         }
         self.start_npc_deaths()?;
+        self.start_arisen_deaths();
+        // This frame's hit pass can kill an actor after input sampling.
+        // Gate every downstream consumer, including doors and pawn orders.
+        let living_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
+            (id, if self.player_actions_blocked(id) { Default::default() } else { input })
+        }).collect();
+        let inputs = &living_inputs;
+        presses.retain(|&id| !self.player_actions_blocked(id));
+        let dead_at_start = self.dead_actions_at_move_start();
         // A goblin's death gives the party its experience (0x00443470);
         // without progression data (or party records) there is no one to
         // award.
@@ -463,6 +476,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        self.step_arisen_death_clocks(step, &dead_at_start);
         // uNpcIntel line12 precedes the NPC actor/action on line15.
         self.step_npc_death_intels()?;
         self.step_opening_dragon_a(step)?;
@@ -533,7 +547,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for r in &requests {
             self.request_log.debug(r);
         }
-        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests })
+        Ok(FrameReport { frame: self.frame, requests, interact, npc_requests, pawn_order_requests,
+            death: self.death.report(&self.roster) })
     }
 
     /// A hash of the whole simulated state, for replays.
@@ -548,7 +563,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Equal hashes after the same inputs are the replay property.
     pub fn state_hash(&self) -> u64 {
         let mut h = StateHasher::default();
-        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press);
+        h.u64(self.saved_hash()).debug(&self.locks).debug(&self.scenario_press).debug(&self.death);
         for p in &self.sim.players {
             h.debug(p);
         }

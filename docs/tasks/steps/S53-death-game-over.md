@@ -122,9 +122,36 @@ compiled or tested**; the new state also needs the approved network body
 tag. Pawn return completion arbitration, external actor completion, fatal
 root correction and airborne/stone variants remain open.
 
-Native tracing further identified `0x0064FB10`: checkpoint option two sets
-save flag bit zero before entering the option-save GUI in mode 15; other
-load choices clear flag bit two. Its load-side consumer and the complete
-attempt restoration still need tracing. Pawn near-death requests CMC
+Native tracing further identified the option mapping by `0x0064F8D8`
+and the installed message resources: zero is latest save, one Normal Mode,
+two Easy Mode, three checkpoint and four title. The initial label of
+`0x0064FB10` as a checkpoint selector was incorrect: it saves a difficulty
+change (Easy sets save flag bit zero; Normal clears bit two). GUI exit
+`0x0064F95A` reports `0x10` for latest/Normal/Easy, `0x11` for checkpoint
+and `0x12` for title. The controller requests GameSys code `0x25` at
+`0x0050ED76` for latest and code `0x26` at `0x0050ED98` for checkpoint.
+Their load-side consumers and complete attempt restoration still need
+tracing. Pawn near-death requests CMC
 situation six, list one, at both `0x00AFCFBF` and `0x00AFD17F`; that is an
 urgent request-list index, not a speech priority or ordinary cooldown list.
+
+Grounded host continuation is also source-only: it observes roster Arisen
+HP after the hit pass, cancels personal input before movement/orders/doors,
+reports spectators by active persistent profile and starts the installed
+delay after actual Dead entry. Profile reconnect preserves the collapse or
+Dead phase/frame; a new profile reusing that seat is living. The port's
+ordinary-grounded admission conservatively uses its mapped control domain
+and scenery floor contact rather than claiming complete native actor-flag
+coverage. Unmapped air, held and petrification paths remain visible errors
+and never silently become grounded after landing. It does not change the
+shared authored-camera lock or `Host::load` semantics.
+
+Three installed host regressions and two network whole/delta/application/
+malformed-payload regressions are drafted, bringing the additional source
+tests to nine beyond the ten tested at the helper checkpoint. Network body
+tag 19 carries all six grounded death phases. The protocol-11 transition
+is pending reviewed chatter protocol 10 in main. None of this continuation
+has been compiled or tested; full touched/downstream suites and the default
+release build remain required. Ordinary save replacement still does not
+reset a live attempt; dedicated reconstruction and viewer restoration are
+open.

@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ddcombat = { path = "../ddcombat" }
 ddid = { path = "../ddid" }
 ddeconomy = { path = "../ddeconomy" }
 ddnpcrt = { path = "../ddnpcrt" }
@@ -33,9 +34,5 @@ mtsbc = { path = "../mtsbc" }
 ddmap = { path = "../ddmap" }
 ddnpc = { path = "../ddnpc" }
 mtcamera = { path = "../mtcamera" }
-
 dddoor = { path = "../dddoor" }
-
-[dev-dependencies]
-ddcombat = { path = "../ddcombat" }
 
