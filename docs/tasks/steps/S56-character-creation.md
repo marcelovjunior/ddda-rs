@@ -168,6 +168,21 @@ project test automation, not native editor timing or an original-game save.
 The new dwell boundary regression also remains unexecuted until the viewer
 window; the tested headless core source is unchanged.
 
+Bounded source-only keyboard follow-up: `0x00D89EE0` jumps to
+`0x00D89800`, an internal UTF-16-to-UTF-8 converter (not an OS conversion).
+Its two range checks `0x00D898C2..0x00D898DB` recognize high and low surrogate
+words and branch to `0x00D89951..0x00D89959`, which emits ASCII space for
+each word rather than composing a surrogate pair. The single-word callback
+at `0x0075D76C` therefore cannot admit a supplementary scalar as four-byte
+UTF-8 through that route. The pushed seven is output-buffer capacity,
+not a conversion mode. The inverse `0x00D89EF0` jumps to `0x00D89990`;
+`0x00D89A98..0x00D89AB6` rejects four/five/six-byte leading sequences through
+the error return at `0x00D89BF1..0x00D89C10`. Thus the UTF-8 character counter's
+four-byte support does not establish keyboard admission. Native IME/Steam
+callback routing and its interaction with this conversion remain unported;
+the source does not claim Bevy's supplementary-scalar behavior matches it.
+No new emulator or viewer run accompanied this instruction audit.
+
 Later milestones still need detailed face/body/color/voice/personality and
 moniker pages, native page/selector animations, scene/background and editor
 motions, GUI font filters/icons/IME composition and input-repeat behavior,

@@ -140,8 +140,11 @@ impl Editor {
 
     /// Committed keyboard text, separate from IME composition and key repeat.
     /// The native limit counts UTF-8 leading sequences via 0x00D88F30,
-    /// including four-byte sequences as one. Native admission of non-BMP
-    /// keyboard/IME input upstream of this buffer is still unresolved.
+    /// including four-byte sequences as one. This does not prove input admission:
+    /// the single-UTF16-word callback's converter 0x00D898C2..0x00D89959
+    /// substitutes spaces for surrogates, and inverse 0x00D89A98..0x00D89BF1
+    /// rejects four-byte UTF8. Full native IME/Steam callback routing is unported;
+    /// Bevy committed supplementary scalars are not keyboard-parity evidence.
     // Translated from 0x0075D71E..0x0075D7B2 (DDDA.exe 2017-12-13 Steam).
     pub fn type_text(&mut self, text: &str) {
         for c in text.chars().filter(|&c| u32::from(c) >= 0x20) {
