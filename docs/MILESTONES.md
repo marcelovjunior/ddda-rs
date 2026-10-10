@@ -505,6 +505,22 @@ opening (codex-31), route perf (codex-29).
   the exe's charset/blacklist rules, 16 installed presets, confirmation;
   per-profile EDIT in the save; names on the S35/S43 GUIs. Two-profile
   capture checked.
-- **Open:** dragon fire (S30) and beach scene (S31, codex-80), death/game
-  over + retry + vitals (S53, protocol 11), frame rate toward 180 fps (S41:
-  ~10.6 ms field frame vs 5.5 ms), Ghidra MCP down since the low-memory stop.
+- **Death and retry (S53, protocol 11):** grounded death phases, game over
+  from an authoritative DeathReport, atomic retry (candidate host, then an
+  infallible swap; live roster and connections kept), the six native vital
+  fields saved per profile (VITL), epoch-tagged reliable messages.
+- **Pawn voice and names (S52):** voices read from `rom/sound/pwn.pck` with
+  the exe's own CRC32 path lookup; story pawn names localized like the
+  original (English "Rook"); checked in an actual capture.
+- **Beach scene groundwork (S31):** native Demo reactions, NPC capsules from
+  the installed adjust table, damage edges, and the native editor exit to
+  stage 200/start 3 with the prologue-end flag that gates it.
+- **Dragon fire (S30):** coordinate basis/parent binding, generator inputs
+  and initialization, each step checked against the original's instructions.
+- **New steps:** S57 base vocation starting skills (codex-81), S58 equipment
+  menu, S59 navigation (codex-82; the beach movement needs it), S60 the
+  tutorial's numbers against the running original.
+- **Open:** dragon fire emission/damage (S30), beach scene wiring (S31,
+  codex-80), navigation (S59), starting skills (S57), frame rate toward
+  180 fps (S41: ~10.6 ms field frame vs 5.5 ms), Ghidra MCP down since the
+  low-memory stop.
