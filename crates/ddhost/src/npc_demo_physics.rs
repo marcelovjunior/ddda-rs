@@ -83,6 +83,36 @@ pub(super) fn damage_entry_flags(current: u32, saved: u32) -> u32 {
     (restored | 0x10) & !0x0c
 }
 
+/// Native body bytes+0x2EA0..0x2EA3. Demo Damage(flag) reads the rising
+/// edge at+0x2EA1, rather than the persistent active byte or an HP change.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct DamageEdges {
+    pub active: bool,
+    pub started: bool,
+    pub ended: bool,
+    pub other: bool,
+}
+
+impl DamageEdges {
+    /// Actual body fields and linked NPC vf180 flags must be supplied.
+    /// Unknown NPC flags reject the update without inventing an edge.
+    // Translated from uCharacterBase::vf111 0x00850100..0x00850181 and
+    // Demo getter0x007AB800 (DDDA.exe 2017-12-13 Steam).
+    pub fn observe(&mut self, body_flags: u32, body_category: u8,
+        npc_flags: Option<u32>, collision_flags: u32) -> Result<(), &'static str>
+    {
+        let npc_damage = if body_category & 8 != 0 {
+            npc_flags.ok_or("Demo damage edge needs actual linked NPC flags")? & 0x80 != 0
+        } else { false };
+        let active = body_flags & 0x10 != 0 || npc_damage || collision_flags & 0x4000 != 0;
+        self.started = active && !self.active;
+        self.ended = !active && self.active;
+        self.other = false;
+        self.active = active;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +166,29 @@ mod tests {
             ((0xa5a5_500f & !0x0e3f) | 0x0e23 | 0x10) & !0x0c);
         assert_eq!(damage_entry_flags(u32::MAX, 0) & 0x0e3f, 0x10);
         assert_eq!(damage_entry_flags(0, u32::MAX) & 0x0e3f, 0x0e33);
+    }
+
+    #[test]
+    fn demo_damage_flag_is_a_native_rising_edge_with_distinct_body_npc_and_collision_sources() {
+        let mut edges = DamageEdges::default();
+        edges.observe(0x10, 8, Some(0), 0).unwrap();
+        assert!(edges.active && edges.started && !edges.ended && !edges.other);
+        edges.observe(0x10, 8, Some(0), 0).unwrap();
+        assert!(edges.active && !edges.started && !edges.ended);
+        edges.observe(0, 8, Some(0), 0).unwrap();
+        assert!(!edges.active && !edges.started && edges.ended);
+        edges.observe(0, 8, Some(0x80), 0).unwrap();
+        assert!(edges.active && edges.started && !edges.ended);
+        let before = edges;
+        assert!(edges.observe(0, 8, None, 0).is_err());
+        assert_eq!(edges, before, "unknown linked NPC observation cannot mutate the edge");
+        edges.observe(0, 0, Some(0x80), 0).unwrap();
+        assert!(!edges.active && edges.ended, "NPC mask does not apply to a non-NPC body");
+        edges.observe(0, 0, None, 0x4000).unwrap();
+        assert!(edges.active && edges.started);
+        edges.observe(0, 0, None, 0x4000).unwrap();
+        assert!(edges.active && !edges.started && !edges.ended);
+        edges.observe(0, 0, None, 0).unwrap();
+        assert!(!edges.active && !edges.started && edges.ended);
     }
 }
