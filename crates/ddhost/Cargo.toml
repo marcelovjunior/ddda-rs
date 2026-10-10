@@ -32,6 +32,9 @@ mtsbc = { path = "../mtsbc" }
 ddmap = { path = "../ddmap" }
 ddnpc = { path = "../ddnpc" }
 
+dddoor = { path = "../dddoor" }
+
 [dev-dependencies]
 ddsave = { path = "../ddsave" }
 ddcombat = { path = "../ddcombat" }
+

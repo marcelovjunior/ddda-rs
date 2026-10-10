@@ -6,6 +6,14 @@ use ddnpcrt::schedule::{Clock, Npc, Request};
 use ddstory::{data::Data, Target};
 use std::collections::{BTreeMap, HashMap};
 
+/// Host identity for one materialized intel lifetime. This deterministic
+/// co-op token replaces pointer identity; it is not an original game value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NpcLifetime {
+    pub npc: u32,
+    pub generation: u64,
+}
+
 struct Applied {
     stage: u32,
     target: Target,
@@ -21,6 +29,9 @@ pub struct StoryNpcs {
     intels: HashMap<(u32, Target), crate::npc_placements::Placement>,
     bindings: HashMap<(u32, Target), u32>,
     positions: HashMap<u32, [f32; 3]>,
+    intel_flags: HashMap<u32, u32>,
+    lifetimes: HashMap<u32, u64>,
+    pub(crate) lifetime_counter: u64,
     pending: HashMap<(u32, Target), String>,
     normal_controllers: HashMap<(u32, Target), bool>,
     applied: BTreeMap<u32, Applied>,
@@ -105,6 +116,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if self.story_npcs.intels.get(&key) == Some(&placement) {
             return Ok(None);
         }
+        let generation = self.story_npcs.lifetime_counter.checked_add(1)
+            .ok_or_else(|| HostError::Npc("NPC lifetime token space exhausted".into()))?;
         if self.story_npcs.bindings.contains_key(&key) {
             self.unbind_story_npc(key.0, key.1);
         } else if self.npcs.npcs.contains_key(&npc) {
@@ -132,6 +145,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.story_npcs.pending.entry(key).or_insert_with(|| placement.authored_action.clone());
         }
         self.story_npcs.positions.insert(npc, placement.transform.position);
+        // uNpcIntel constructor0x00bbbfa0 initializes +0x5c0 to zero.
+        self.story_npcs.intel_flags.insert(npc, 0);
+        self.story_npcs.lifetime_counter = generation;
+        self.story_npcs.lifetimes.insert(npc, generation);
         self.story_npcs.intels.insert(key, placement);
         self.observe_story_npc_normal_controller(key.0, key.1, Some(true));
         self.world.observe_npc_intel(key.0, key.1, true);
@@ -154,6 +171,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(intel) = self.story_npcs.intels.remove(&(stage, target)) {
             self.npcs.npcs.remove(&(intel.npc as u32));
             self.story_npcs.positions.remove(&(intel.npc as u32));
+            self.story_npcs.intel_flags.remove(&(intel.npc as u32));
+            self.story_npcs.lifetimes.remove(&(intel.npc as u32));
             self.world.observe_npc_intel(stage, target, false);
         }
         if let Some(npc) = self.story_npcs.bindings.remove(&(stage, target)) {
@@ -178,6 +197,29 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
+    pub fn story_npc_lifetime(&self, npc: u32) -> Option<NpcLifetime> {
+        self.story_npcs.lifetimes.get(&npc).map(|&generation| NpcLifetime { npc, generation })
+    }
+
+    /// Reject a delayed observation from a retired actor, even if its NPC id
+    /// and placement target have been reused. Dialogue/action eligibility is
+    /// still the caller's responsibility, as in the synchronous fixture API.
+    pub fn observe_story_npc_talk_end_for(&mut self, owner: NpcLifetime) -> bool {
+        if self.story_npc_lifetime(owner.npc) != Some(owner)
+            || !self.story_npcs.applied.get(&owner.npc).is_some_and(|a| !a.action.applied_finished()) { return false; }
+        self.observe_story_npc_talk_end(owner.npc);
+        true
+    }
+
+    /// Actor-lifetime checked arrival. A future asynchronous mover must ALSO
+    /// validate the current interface/command when an action changes within
+    /// the same actor lifetime; this token alone does not identify a Goto.
+    pub fn story_npc_arrived_for(&mut self, owner: NpcLifetime, position: [f32; 3]) -> bool {
+        if self.story_npc_lifetime(owner.npc) != Some(owner) { return false; }
+        self.story_npc_arrived(owner.npc, position);
+        true
+    }
+
     /// Position of the materialized actor, independent of graph suspension
     /// and presentation interpolation. Only real placement/actor requests
     /// or an explicit host mover arrival update it.
@@ -185,10 +227,30 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.positions.get(&npc).copied()
     }
 
+    /// Canonical intel flags, including Set Disable Flag writes. This does
+    /// not claim every flag consumer is implemented. uNpc::vf180 at
+    /// 0x00bb4730 returns this same intel+0x5c0 storage for a linked body.
+    pub fn story_npc_intel_flags(&self, npc: u32) -> Option<u32> {
+        self.story_npcs.intel_flags.get(&npc).copied()
+    }
+
     pub(crate) fn record_story_npc_requests(&mut self, requests: &[Request]) {
         for request in requests {
-            if let Request::Place { npc, pos, .. } = request {
-                if let Some(position) = self.story_npcs.positions.get_mut(npc) { *position = *pos; }
+            match request {
+                Request::Place { npc, pos, .. } => {
+                    if let Some(position) = self.story_npcs.positions.get_mut(npc) { *position = *pos; }
+                }
+                Request::ActorFlag { npc, flag, value } => {
+                    // Intel storage also backs linked-body vf180 (0x00bb4730).
+                    // Flag consumers and FixedPosition body ground mode remain separate.
+                    if let Some(flags) = self.story_npcs.intel_flags.get_mut(npc) {
+                        if *value { *flags |= flag.mask(); } else { *flags &= !flag.mask(); }
+                    }
+                }
+                Request::DisableFlags { npc, mask } => {
+                    if let Some(flags) = self.story_npcs.intel_flags.get_mut(npc) { *flags |= mask; }
+                }
+                _ => {}
             }
         }
     }
@@ -329,7 +391,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         let mut out = vec![];
         for (&npc, applied) in &mut self.story_npcs.applied {
-            match applied.action.step(&*data, clock) {
+            applied.action.observe_scene(Some(story.world.sce_no));
+            match applied.action.step_observed(&*data, clock, Some(&story.world)) {
                 Ok(requests) => out.extend(requests),
                 Err(error) => {
                     if let Some(position) = applied.action.position() {

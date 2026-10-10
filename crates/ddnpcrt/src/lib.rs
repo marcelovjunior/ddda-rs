@@ -170,7 +170,8 @@ impl NpcRuntime {
         let clock = schedule::Clock { hour: world.hour, minute: world.minute, dt };
         let mut out = vec![];
         for npc in self.npcs.values_mut() {
-            out.extend(npc.step(data, clock)?);
+            npc.observe_scene(Some(world.sce_no));
+            out.extend(npc.step_observed(data, clock, Some(world))?);
         }
         Ok(out)
     }

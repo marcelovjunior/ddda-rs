@@ -118,6 +118,16 @@ impl DialogueSlot {
         true
     }
 
+    /// Matching-owner candidate removal from 0x0043de30. Guard dispatch
+    /// 0x00bb0470 uses this when the actor loses eligibility. Clearing a
+    /// candidate does not clear an active dialogue or report TalkEnd.
+    /// Ancillary GUI/global side effects remain outside this slot model.
+    pub fn clear_reserved(&mut self, owner: DialogueOwner) -> bool {
+        if self.reserved != Some(owner) { return false; }
+        self.reserved = None;
+        true
+    }
+
     /// Translated from 0x0043ded0 (DDDA.exe 2017-12-13 Steam).
     /// The seat comparison prevents another co-op seat taking a reservation
     /// for the same actor. No reservation is required when both slots are free.
@@ -172,4 +182,40 @@ impl TalkEndObservation {
         if pending { self.pending_exit = 0; }
         pending || (self.current_action == Some(0x0300_0041) && self.active_dialogue_empty == Some(true))
     }
+}
+
+/// Motion-state observations shared by Guard launch and real talk exit.
+/// Unknown state never authorizes an actor transition.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TalkMotionObservation {
+    /// Actor+0x57e4.
+    pub mode: Option<u32>,
+    /// Actor+0x57e0, nonzero means active.
+    pub active: Option<bool>,
+    /// Actor+0x56d0.
+    pub flags: Option<u32>,
+}
+
+impl TalkMotionObservation {
+    /// Translated from 0x00bb4f90; the same predicate gates cleanup in
+    /// 0x00bb41c0 (DDDA.exe 2017-12-13 Steam). Mode zero needs no motion
+    /// observation; nonzero mode requires an active motion and bit2.
+    /// Guard0x00bb0db0 uses true for automatic launch, false for manual
+    /// candidate reservation when its authored guard flag permits it. False
+    /// therefore does not reject all Guard interactions. Talk exit0x00bb41c0
+    /// does require true. This is not full actor eligibility.
+    pub fn ready(&self) -> bool {
+        match self.mode {
+            Some(0) => true,
+            Some(_) => self.active == Some(true) && self.flags.is_some_and(|flags| flags & 4 != 0),
+            None => false,
+        }
+    }
+}
+
+/// Translated from 0x0049ace0 (DDDA.exe 2017-12-13 Steam), consumed as
+/// a byte by Guard0x00bb0db0. This reads cUnit+4, not NPC intel+0x5c0.
+/// A known allocated unit (status1) alone is insufficient for this check.
+pub fn guard_unit_ready(status: Option<u32>) -> bool {
+    status.is_some_and(|status| status & 7 == 2 && status & 0x4800 == 0x4800)
 }

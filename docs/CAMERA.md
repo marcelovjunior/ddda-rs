@@ -176,7 +176,15 @@ Read-only exe trace, 2026-10-09, camera-near:
   (+0x34), at **0x007dce13**. Its projection consumer **0x007dc810** uses
   that field directly. No wall-dependent near-plane change was found in
   the normal update **0x007dcf30**; this is not a claim that every camera
-  implementation uses the same near plane.
+  implementation uses the same near plane. **Correction from camera-feel:**
+  this is the child camera, not the active rendering/collision camera.
+  `uCameraCtrl` inherits **16 cm** from `uCamera::ctor` **0x01128740**
+  through **0x007d3a80 / 0x007d6cd0**. Its update **0x007d7210** copies
+  the child eye/target/FOV, but not its near field. **0x007de570** reads
+  `sCamera+0xce0` (the controller). A paused and 40-frame unpaused
+  Cassardis sample both show controller near 16, child near 96, with
+  identical eye and target. Follow-camera collision and projection now
+  use 16 cm, giving a 20.8 cm aligned sphere rather than 124.8 cm.
 - **0x0088bdc0**, called by `uCharacterBase::vf97` **0x0084c800**, computes
   near-camera opacity. It selects semantic joint **1** through
   `uModel::vf22` **0x00ff9a20**; missing IDs use the model matrix.
@@ -215,6 +223,15 @@ restoring authored alpha mode/depth state afterward. Alpha-tested parts,
 sorting and shadows still require an original-frame comparison.
 
 ### Collision followups found during this trace
+
+Camera-feel correction (2026-10-09): **0x007e1400**, the caller of
+**0x007de570**, translates the look target by the complete eye correction
+at **0x007e1b11..0x007e1b68**. This includes off-axis initial-penetration
+recovery. Moving only the eye and then looking back at the old target
+incorrectly rotates the view. `follow_camera` now applies the caller's
+translation to both endpoints; a wall and low-ceiling overlap regression
+checks the preserved eye-target vector. Six camera-filtered release tests
+and the release viewer build pass. Live wall/roof comparison is pending.
 
 **0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
 or sweep result. It does not continue to the next surface. **0x007c6f90**
