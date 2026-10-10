@@ -18,6 +18,7 @@
 pub mod face;
 pub mod face_constraint;
 pub mod body;
+pub mod creation;
 pub mod eyebrow;
 #[rustfmt::skip]
 mod face_controllers;

@@ -266,6 +266,9 @@ pub fn setup(
     let side = match mode {
         Mode::Host { port } => {
             let mut host = Host::new(sim, None, ScriptedHost::default(), Box::new(ground));
+            let chatter_vfs = ddvfs::Vfs::open(native_pc)?;
+            host.pawn_chatter = ddhost::pawn_chatter::Runtime::with_data(Arc::new(
+                ddhost::pawn_chatter::Data::load(&chatter_vfs)?));
             host.join(ProfileId(profile.unwrap_or(1)), Control::Local, spawn.to_array(), yaw)
                 .ok_or("cannot seat the host")?;
             // The play state's fight moves into the host: seat 0's kit, the
@@ -535,8 +538,9 @@ pub fn step(
                     *demo_press = press;
                 }
                 local.insert(0, i);
-                if let Err(e) = server.step(&local, now) {
-                    error!("net: host frame: {e}");
+                match server.step(&local, now) {
+                    Ok(report) => crate::pawn_chatter::queue(&mut d.commands, &report.pawn_messages),
+                    Err(e) => error!("net: host frame: {e}"),
                 }
             }
             for line in &server.log[s.log_seen..] {
@@ -549,6 +553,13 @@ pub fn step(
         Side::Joining(_) => vec![],
         Side::Guest { client, newest, told } => {
             client.pump(now);
+            let mut retained = Vec::new();
+            for event in std::mem::take(&mut client.events) {
+                if let ddnet::proto::ToClient::PawnMessage(message) = event {
+                    crate::pawn_chatter::queue(&mut d.commands, &[message]);
+                } else { retained.push(event); }
+            }
+            client.events = retained;
             while s.acc >= frame {
                 s.acc -= frame;
                 client.frame(input, now);

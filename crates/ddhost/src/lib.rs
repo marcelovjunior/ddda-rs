@@ -13,6 +13,7 @@
 //! Nothing here renders, plays sound or reads devices.
 
 pub mod ambient;
+pub mod character_creation;
 pub mod clock;
 pub mod doors;
 pub mod dragon;
@@ -33,6 +34,7 @@ pub mod quest_camera;
 pub mod player;
 pub mod profiles;
 pub mod pawn_orders;
+pub mod pawn_chatter;
 pub mod prologue;
 pub mod save;
 pub mod spawns;

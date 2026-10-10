@@ -55,6 +55,8 @@ pub struct Client<T: Transport> {
     pub lead_changes: i64,
     hold: bool,
     pub events: Vec<ToClient>,
+    profile: ddid::ProfileId,
+    last_pawn_message: u64,
     /// The host's spot, from Welcome.
     pub spot: Option<Spot>,
     /// Looks by seat, from Look events.
@@ -63,6 +65,34 @@ pub struct Client<T: Transport> {
     ground_pending: bool,
     ground_stage: Option<u32>,
     stage_start_frame: u64,
+}
+
+#[cfg(test)]
+mod pawn_message_tests {
+    use super::*;
+    use crate::transport::Udp;
+    use ddhost::{pawn_chatter::{Identity, Message}, ProfileId};
+    struct Flat;
+    impl Ground for Flat { fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) } }
+
+    #[test]
+    fn client_filters_profile_and_deduplicates_host_message_ids() {
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(),
+            Udp::bind("127.0.0.1:0").unwrap().local_addr(), 42, 1, 2, None,
+            Sim::new(Default::default()), Box::new(Flat), 0);
+        let mut message = Message { id: 1, frame: 110, pawn_slot: 1, pawn_seat: 6,
+            pawn_identity: Identity::Main { profile: ProfileId(41) }, message: 901,
+            name: String::new(), gender: 0, voice: 0, audience: vec![ProfileId(41)] };
+        client.pawn_message(message.clone());
+        assert!(client.events.is_empty());
+        message.audience.push(ProfileId(42));
+        client.pawn_message(message.clone());
+        client.pawn_message(message.clone());
+        assert_eq!(client.events.len(), 1);
+        message.id = 2;
+        client.pawn_message(message);
+        assert_eq!(client.events.len(), 2);
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +270,8 @@ impl<T: Transport> Client<T> {
             lead_changes: 0,
             hold: false,
             events: vec![],
+            profile: ddid::ProfileId(profile),
+            last_pawn_message: 0,
             spot: None,
             looks: BTreeMap::new(),
             quest_camera: None,
@@ -271,6 +303,15 @@ impl<T: Transport> Client<T> {
         self.link.rtt_ms
     }
 
+    // Link delivers reliable messages in order. Host speech IDs also remain
+    // monotonic across successful loads; no client advances speech selection.
+    fn pawn_message(&mut self, message: ddhost::pawn_chatter::Message) {
+        if message.heard_by(self.profile) && message.id > self.last_pawn_message {
+            self.last_pawn_message = message.id;
+            self.events.push(ToClient::PawnMessage(message));
+        }
+    }
+
     /// Reads every waiting packet from the host.
     pub fn pump(&mut self, now: u64) {
         while let Some((from, bytes)) = self.transport.recv(now) {
@@ -294,6 +335,7 @@ impl<T: Transport> Client<T> {
                         self.looks.remove(&seat);
                         self.events.push(ToClient::Left { seat });
                     }
+                    Ok(ToClient::PawnMessage(message)) => self.pawn_message(message),
                     Ok(e) => self.events.push(e),
                     Err(_) => {}
                 }

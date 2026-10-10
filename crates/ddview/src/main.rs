@@ -27,11 +27,13 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod pawn_chatter;
 mod probe;
 mod perf;
 mod clock;
 mod intro;
 mod charaedit;
+mod character_creation;
 mod movie;
 mod stream;
 mod event;
@@ -52,6 +54,7 @@ mod level_up_notice;
 mod pause;
 mod settings;
 mod shadows;
+mod shadow_extent;
 mod sky;
 mod stage;
 
@@ -635,6 +638,7 @@ fn main() {
         .add_plugins(stage::ShadingPlugin)
         .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)
+        .add_plugins(shadow_extent::FiniteShadowPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
         .init_resource::<play::CameraConfig>()
@@ -647,6 +651,7 @@ fn main() {
         })
         .init_resource::<play::Hud>()
         .add_plugins(level_up_notice::LevelUpPlugin)
+        .add_plugins(pawn_chatter::PawnChatterPlugin)
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .init_resource::<item_menu::Menus>()
@@ -1086,6 +1091,19 @@ pub fn opening_world(
     args: &Args,
     vfs: &ddvfs::Vfs,
 ) {
+    let mut looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
+    // Stage801/checkpoint EDIT belongs to a profile. Resolve current seats at
+    // presentation time, including a guest whose old seat changed on load.
+    for seat in session.host.roster.seats() {
+        if let Some(edit) = session.host.character_edit(seat.id) {
+            let fields: Vec<_> = ddpawn::cmc::EDIT_U8_FIELDS.iter().zip(edit.fields)
+                .map(|(name, value)| ((*name).to_owned(), u32::from(value))).collect();
+            let look = ddlook::save::edit_look_dressed(vfs, &fields)
+                .unwrap_or_else(|e| panic!("opening profile {} character look: {e}", seat.profile.0));
+            looks.resize_with(looks.len().max(usize::from(seat.id) + 1), || None);
+            looks[usize::from(seat.id)] = Some(look);
+        }
+    }
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
     match item_menu::View::load(vfs, &args.native_pc, images) {
         Ok(view) => commands.insert_resource(view),
@@ -1095,7 +1113,6 @@ pub fn opening_world(
         Ok(view) => commands.insert_resource(view),
         Err(error) => panic!("opening vocation menu: {error}"),
     };
-    let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
     if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo, args.host.is_some() || args.join.is_some()) {
         commands.insert_resource(state);
         if let Err(e) = hud::spawn(commands, vfs, images) {
