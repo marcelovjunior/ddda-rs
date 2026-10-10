@@ -42,6 +42,9 @@ pub struct Inputs<'a> {
     /// Native validated character+0x2EA1 (0x007AB800), not HP loss inferred
     /// by this controller. The host's actual reaction supplies this value.
     pub damage_flag: bool,
+    /// Actual packed motion word of the current character layer. None when
+    /// that actor observation is unavailable, distinct from an absent body.
+    pub motion_number: Option<u16>,
     /// Owner's native pause byte +0xe, used by 0x00533A90.
     pub interface_paused: bool,
 }
@@ -98,6 +101,7 @@ fn flag_mask(name: &str) -> Option<u32> {
         "Set No Talk" => 0x0080_0000, // 0x007AA670
         "Set Lift Disable" => 0x800, // 0x007AA430
         "Set No Lift Reaction" => 0x1000, // 0x007AA4C0
+        "Set No Escape" => 0x2000, // 0x007AA5E0
         _ => return None,
     })
 }
@@ -142,6 +146,11 @@ impl Owner for FieldsState {
         match variable.property {
             "NpcUnit" => Ok(Value::Bool(env.inputs.npc_ready)),
             "Damage (flag)" => Ok(Value::Bool(env.inputs.damage_flag)),
+            // Translated from0x007AB940 (DDDA.exe2017-12-13 Steam): the
+            // after-change counter masks the read; no owner also reads0.
+            // A valid body lacking a supplied layer observation is unknown.
+            "Motion No" => Ok(Value::Int(if self.common.after_change != 0 || env.inputs.think.actor.is_none() { 0 }
+                else { i64::from(env.inputs.motion_number.ok_or_else(|| Error::Data("Demo Motion No observation unavailable".into()))?) })),
             "GSF" => Ok(Value::Bool(variable.index.is_some_and(|n| env.inputs.world.gsf.get(n as usize)))),
             "FreeFlag" => Ok(Value::Bool(variable.index.is_some_and(|n|
                 n < 128 && self.free_flags[n as usize / 32] & (1 << (n & 31)) != 0))),
@@ -240,5 +249,29 @@ impl Demo {
         for n in 0..4 { if common.timer_run & (1 << n) != 0 { common.timers[n] += seconds; } }
         if common.random_timer > 0.0 { common.random_timer -= seconds; } else { common.random_timer = 0.0; }
         Ok(requests)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn motion_number_observes_after_change_and_rejects_unknown_live_layer() {
+        let mut fields = FieldsState { npc: 704, common: ThinkFields::default(),
+            free_flags: [0; 4], command: 0, active: None, complete: false };
+        let mut think = ActorInputs::default();
+        let world = ddstory::World::default();
+        let variable = Var { owner: "cAIActionFSMDemo", property: "Motion No", index: None };
+        let read = |fields: &FieldsState, think: &ActorInputs, motion_number| {
+            let inputs = Inputs { think, world: &world, npc_ready: think.actor.is_some(),
+                damage_flag: false, motion_number, interface_paused: false };
+            fields.var(&Env { inputs: &inputs, requests: &mut Vec::new() }, &variable)
+        };
+        assert_eq!(read(&fields, &think, None).unwrap(), Value::Int(0));
+        think.actor = Some(Actor::default());
+        assert!(matches!(read(&fields, &think, None), Err(Error::Data(_))));
+        assert_eq!(read(&fields, &think, Some(0x109)).unwrap(), Value::Int(0x109));
+        fields.common.after_change = 2;
+        assert_eq!(read(&fields, &think, Some(0x109)).unwrap(), Value::Int(0));
     }
 }

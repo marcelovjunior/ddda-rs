@@ -68,7 +68,7 @@ impl Action {
         }
     }
     pub fn step(&mut self, graphs: &dyn Graphs, clock: Clock, inputs: &ActorInputs,
-        world: &ddstory::World, ready: bool, paused: bool) -> Result<Frame, Error> {
+        world: &ddstory::World, ready: bool, motion_number: Option<u16>, paused: bool) -> Result<Frame, Error> {
         match self {
             Self::Npc(npc) => {
                 npc.observe_scene(Some(world.sce_no));
@@ -78,7 +78,8 @@ impl Action {
                 if *halted || owner.finished() { return Ok(Frame::default()); }
                 let mut frame = Frame::default();
                 for request in owner.step(&demo::Inputs { think: inputs, world,
-                    npc_ready: ready, damage_flag: false, interface_paused: paused })? {
+                    npc_ready: ready, damage_flag: false,
+                    motion_number, interface_paused: paused })? {
                     // No Demo reaction action currently sets character+0x2EA1.
                     // This remains false until that actual actor path is ported.
                     match request {

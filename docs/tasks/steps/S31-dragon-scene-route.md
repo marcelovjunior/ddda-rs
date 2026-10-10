@@ -116,12 +116,44 @@ retirement and rejection of stale body bindings. No full-route or
 original comparison was performed. The core lease was released after
 the command's actual exit.
 
+**Base motion-bank checkpoint:** native `uNpc::vf192` at `0x00BAE100`
+calls inherited `0x00B5B260`; disassembly at `0x00B5B272/0x00B5B288`
+passes actor+0x4C24 to `0x008282E0`. The constructor `0x00B574D0`
+sets this pointer to `0x014F1D30`. Its sentinel-terminated packed-bank/
+path pairs register `rMotionList` through `0x01057670`: base banks0/1/2
+are co/dm/gp, before the existing NPC banks11/12/13. The unrelated
+`0x014EAC20` collision survey tuple must not supply animation bank keys.
+The host loader now reads the actual table at runtime; codex-61 is
+coordinating the same correction in its owned `NpcBody` reader. Existing
+CC6/CC7/C9A motions use NPC bank12 and remain separate.
+
+The Demo Motion No getter uses the actual current packed layer word,
+with the sourced after-change mask (`0x007AB940`). A live body without a
+layer observation raises an explicit error. NoEscape uses the inherited
+`0x007AA5E0` mask. Installed bank1 slots109/115 match the dm resource.
+An explicit installed NPC704 state9 checkpoint runs the unchanged
+authored motion109 through the real host clock to terminal, without
+setting NpcAppDie. This fixture bypasses navigation/reactions and is not
+an ordinary route replay. NPC709 separately runs its real authored loop;
+explicit q0:1/GSF465 fixtures exercise flag changes without HP/death.
+
+Complete `ddnpcrt` suite35passed (compile8.07s; suite durations0.06,
+6.66,4.18,2.87,3.59,2.84s). Focused host12passed (compile9.32s;
+combat2/11.09s, Demo4/8.45s, motion6/8.80s). Actual command exit0.
+An initial missing-new-field compile error proved stale shared ddnpcrt
+metadata; a narrow `cargo clean -p ddnpcrt` removed205.8MiB and resolved
+it. No behavior was changed for that error; no new target/full clean.
+The core lease was released for the parent's observer review.
+
 **Open:** production scene entry and event player continuation to q1;
-native Demo Wait/Motion/GotoEx/SetDamage controller/body integration;
+native Demo root movement/GotoEx/SetDamage actor integration;
 actual S30 damage/FSM integration; persistent dragon-death lifecycle;
 normal-input route capture and original comparison. Existing simple/
 unsupported camera adapters remain explicitly labelled stand-ins.
 
-**Next:** source/port the beach Demo callbacks using native actor
-observations and real motion clocks, then enter ev00 after editor
-confirmation instead of fast-forwarding through the fight.
+**Next:** port native reaction/ground and root-motion/Trace actors, then
+enter ev00 after editor confirmation instead of fast-forwarding through
+the fight. Damage3 is `0x0080E4E0/0x0080E4B0`; Damage4 is
+`0x0080E520/0x0080E560` and requires actual ground contact between
+motions102/10A/10B/103. DemoGotoEx uses `0x0056DCC0 -> 0x0057B9A0`.
+A timed replacement for these action results would not match the source.
