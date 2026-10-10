@@ -3,6 +3,28 @@
 
 use bevy::prelude::*;
 
+/// Opt-in renderer experiment; preserve Bevy's default until identical-scene
+/// captures demonstrate a benefit. This changes instance-buffer preparation,
+/// not simulation, geometry, materials or the original's LOD selection.
+/// Bevy 0.19.1: PbrPlugin forwards this flag to MeshRenderPlugin and
+/// GpuMeshPreprocessPlugin; render/mesh.rs selects its CPU extraction/batching
+/// path, and render/gpu_preprocess.rs skips GPU preprocessing systems.
+pub fn pbr_plugin() -> bevy::pbr::PbrPlugin {
+    let mode = std::env::var("DDVIEW_MESH_BUILDER").ok();
+    let use_gpu = match mode.as_deref() {
+        None | Some("gpu") => true,
+        Some("cpu") => false,
+        Some(value) => {
+            eprintln!("DDVIEW_MESH_BUILDER={value:?}: expected cpu or gpu; using GPU default");
+            true
+        }
+    };
+    if mode.is_some() {
+        eprintln!("ddview: mesh instance builder {} (renderer experiment)", if use_gpu { "gpu" } else { "cpu" });
+    }
+    bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: use_gpu, ..default() }
+}
+
 #[derive(Resource, Default)]
 pub struct Perf {
     frames: Vec<f32>,

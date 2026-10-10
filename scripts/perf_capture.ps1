@@ -12,11 +12,16 @@ param(
     [Parameter(Mandatory)][string]$OutputBase,
     [Parameter(Mandatory)][string[]]$ViewerArgs,
     [ValidateRange(1, 1800)][int]$Seconds = 60,
+    [ValidateRange(10, 1800)][int]$WatchdogSeconds = 120,
     [ValidateSet('auto', 'vulkan', 'dx12')][string]$Backend = 'auto',
+    [ValidateSet('gpu', 'cpu')][string]$MeshBuilder = 'gpu',
     [switch]$Trace,
     [switch]$NoShadows
 )
 $ErrorActionPreference = 'Stop'
+if ($WatchdogSeconds -le $Seconds) {
+    throw 'WatchdogSeconds must exceed the measured duration and allow startup.'
+}
 $viewerPath = (Resolve-Path -LiteralPath $Viewer).Path
 $outputPath = [IO.Path]::GetFullPath($OutputBase)
 $privateRoot = [IO.Path]::GetFullPath('E:/ddda-re') + [IO.Path]::DirectorySeparatorChar
@@ -41,6 +46,7 @@ $oldSeconds = $env:DDVIEW_PERF_SECONDS
 $oldTrace = $env:TRACE_CHROME
 $oldShadows = $env:DDVIEW_NO_SHADOWS
 $oldBackend = $env:WGPU_BACKEND
+$oldMeshBuilder = $env:DDVIEW_MESH_BUILDER
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
@@ -51,10 +57,13 @@ try {
     $env:TRACE_CHROME = "$outputPath.trace.json"
     $env:DDVIEW_NO_SHADOWS = if ($NoShadows) { '1' } else { $null }
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
+    $env:DDVIEW_MESH_BUILDER = $MeshBuilder
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
+        watchdog_seconds = $WatchdogSeconds
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
+        mesh_builder = $MeshBuilder
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
     $captureProcess = Start-Process -FilePath $viewerPath -ArgumentList ($quotedArguments -join ' ') `
@@ -81,7 +90,7 @@ try {
                 } else { $null }
             })
         }
-        if ($watch.Elapsed.TotalSeconds -gt $Seconds + 180) {
+        if ($watch.Elapsed.TotalSeconds -gt $WatchdogSeconds) {
             $owned = Get-CimInstance Win32_Process -Filter "ProcessId=$($captureProcess.Id)"
             if ($owned -and $owned.ExecutablePath -eq $viewerPath) {
                 'Timed exit failed; stopping only the verified owned viewer.' |
@@ -99,6 +108,7 @@ try {
     $env:TRACE_CHROME = $oldTrace
     $env:DDVIEW_NO_SHADOWS = $oldShadows
     $env:WGPU_BACKEND = $oldBackend
+    $env:DDVIEW_MESH_BUILDER = $oldMeshBuilder
     if ($captureProcess -and -not $captureProcess.HasExited) {
         Write-Warning "Viewer PID $($captureProcess.Id) still running: retain live/ddview lease until actual exit."
     }
