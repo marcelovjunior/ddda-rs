@@ -431,6 +431,7 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
             let hp_max = match &a.fighter.victim {
                 Victim::Player { hp_max, .. } => *hp_max,
                 Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp_max),
+                Victim::Npc { region, .. } => region.hp_max,
             };
             Vital {
                 id,
@@ -445,6 +446,7 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
         .map(|g| {
             let hp_max = match &g.fighter.victim {
                 Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp_max),
+                Victim::Npc { region, .. } => region.hp_max,
                 Victim::Player { hp_max, .. } => *hp_max,
             };
             Enemy {
@@ -488,6 +490,7 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
                 .expect("loaded dragon body has a bound rModel");
             let hp_max = match &d.actor.fighter.victim {
                 Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp_max),
+                Victim::Npc { region, .. } => region.hp_max,
                 Victim::Player { hp_max, .. } => *hp_max,
             };
             enemies.push(Enemy {
