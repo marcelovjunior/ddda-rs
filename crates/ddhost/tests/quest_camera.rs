@@ -231,7 +231,7 @@ impl ddsim::Ground for Flat {
 }
 
 #[test]
-fn host_camera_blocks_each_occupied_seat_without_stopping_world_frames() {
+fn host_camera_blocks_each_arisen_and_pawn_without_stopping_ai_or_world_frames() {
     let Some(vfs) = install() else { return };
     let mut world = OpeningWorld::new();
     let mut cameras = Cameras::default();
@@ -253,6 +253,20 @@ fn host_camera_blocks_each_occupied_seat_without_stopping_world_frames() {
         )
         .unwrap();
     }
+    let exe = ddexe::ExeFile::next_to(&vfs.root).unwrap();
+    let data = ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap();
+    let mut fight = ddenemyrt::fight::Fight::new(std::sync::Arc::new(data));
+    for seat in 0..2 {
+        fight.add_arisen(seat);
+        fight.equip(&mut host.sim, seat);
+        // Fixture beyond the installed battle-follow threshold. Each pawn
+        // serves a distinct occupied seat; camera12 must block both domains.
+        fight.add_pawn(&mut host.sim, 4 + seat, seat,
+            [if seat == 0 { -2500.0 } else { 2500.0 }, 0.0, 0.0],
+            0.0, [500.0; 9], 7 + u32::from(seat));
+    }
+    fight.add_goblin([0.0, 0.0, 2500.0], std::f32::consts::PI);
+    host.fight = Some(fight);
     let initial = host.sim.players.iter().map(|p| p.position).collect::<Vec<_>>();
     let inputs: FrameInputs = (0..2)
         .map(|id| {
@@ -274,6 +288,11 @@ fn host_camera_blocks_each_occupied_seat_without_stopping_world_frames() {
         host.tick(&inputs).unwrap();
     }
     assert_eq!(host.frame, 30);
+    let fight = host.fight.as_ref().unwrap();
+    for pawn in fight.pawns.values() {
+        assert!(!pawn.brain.history.is_empty(), "Pawn AI must continue ticking");
+    }
+    assert!(fight.goblins[0].frame > 0.0, "Enemy world phases must continue");
     for (p, initial) in host.sim.players.iter().zip(initial) {
         assert_eq!(p.position[0], initial[0]);
         assert_eq!(p.position[2], initial[2]);
@@ -293,8 +312,12 @@ fn host_camera_blocks_each_occupied_seat_without_stopping_world_frames() {
         host.tick(&inputs).unwrap();
     }
     let before = host.sim.player(0).unwrap().position;
+    let pawn_before = [host.sim.player(4).unwrap().position, host.sim.player(5).unwrap().position];
     for _ in 0..30 {
         host.tick(&inputs).unwrap();
     }
     assert_ne!(host.sim.player(0).unwrap().position, before);
+    for (id, before) in [4, 5].into_iter().zip(pawn_before) {
+        assert_ne!(host.sim.player(id).unwrap().position, before, "Pawn{id} did not resume");
+    }
 }
