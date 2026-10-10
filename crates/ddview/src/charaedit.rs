@@ -86,6 +86,7 @@ impl CharaEdit {
         seat: ddhost::PlayerId,
         profile: ddhost::ProfileId,
     ) -> Result<Option<ddpawn::cmc::Edit>, String> {
+        let profile = profile.0;
         let page = self.editor.page;
         if self.automation.as_ref().map(|a| a.page) != Some(page) {
             match page {

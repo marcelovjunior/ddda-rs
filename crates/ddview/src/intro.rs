@@ -214,7 +214,10 @@ pub fn update(
                 intro.phase = Phase::Blocked;
                 return;
             }
-            info!("intro: stage801 confirmed seat {seat} profile {profile} sex {sex} name {name:?}");
+            info!(
+                "intro: stage801 confirmed seat {seat} profile {} sex {sex} name {name:?}",
+                profile.0
+            );
             edit.close(&mut commands);
             if intro.owner_index + 1 < intro.owners.len() {
                 intro.owner_index += 1;
