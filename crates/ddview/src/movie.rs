@@ -7,6 +7,8 @@
 //! [`update`] shows the frame due at the elapsed time. When the movie ends
 //! or is skipped, [`MovieFinished`] is set for the caller (the opening's
 //! q0000 waits on its event).
+//! External subtitle tracks use the same clock and localized GMD reader
+//! as event cutscenes; dialogue is read from the installation at runtime.
 //!
 //! Escape or any connected pad's Start press skips (0x004367c0).
 //! Viewer choice: preserve the picture aspect, letterboxed on black.
@@ -81,6 +83,8 @@ pub struct MoviePlayer {
     next: Option<mtmovie::Frame>,
     voice: Option<Entity>,
     ended: bool,
+    subtitles: Option<ddstory::event::EventPlayer>,
+    subtitle_label: Option<String>,
 }
 
 #[derive(Component)]
@@ -88,6 +92,7 @@ struct MovieRoot;
 
 /// Starts `path` full screen. Fails if the file does not open as a movie.
 pub fn start(commands: &mut Commands, images: &mut Assets<Image>, path: &Path) -> Result<(), String> {
+    let subtitles = movie_subtitles(path, 1)?; // same English configuration as cutscenes
     let video = mtmovie::VideoReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let info = video.info;
     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -148,6 +153,9 @@ pub fn start(commands: &mut Commands, images: &mut Assets<Image>, path: &Path) -
             ));
         })
         .id();
+    if subtitles.is_some() {
+        crate::event::spawn_subtitle_ui(commands, Some(root));
+    }
     commands.insert_resource(MovieFinished(false));
     commands.insert_resource(MovieSkip(false));
     commands.insert_resource(MoviePlayer {
@@ -160,8 +168,25 @@ pub fn start(commands: &mut Commands, images: &mut Assets<Image>, path: &Path) -
         next: None,
         voice: None,
         ended: false,
+        subtitles,
+        subtitle_label: None,
     });
     Ok(())
+}
+
+/// The event table and scheduler select the movie and its subtitle units.
+/// Title movies have no event subtitle scheduler. Message files remain in
+/// the install and use EventPlayer's original localized-path/fallback rule.
+fn movie_subtitles(path: &Path, language: usize) -> Result<Option<ddstory::event::EventPlayer>, String> {
+    if path.parent().and_then(Path::file_name).is_none_or(|p| p != "event") { return Ok(None); }
+    let native_pc = path.parent().and_then(Path::parent).and_then(Path::parent)
+        .ok_or("event movie is not beneath nativePC/movie/event")?;
+    let exe = ddexe::locate(native_pc).map_err(|e| e.to_string())?;
+    let data = ddstory::data::InstallData::open(native_pc, Some(&exe)).map_err(|e| e.to_string())?;
+    let row = event_paths(&data)?.into_iter().find_map(|(row, movie)| (movie == path).then_some(row));
+    row.map(|row| ddstory::event::EventPlayer::open(&data, row, ddstory::event::EventConfig {
+        language, sex: 0, hour: 8, stage: 800,
+    }).map_err(|e| e.to_string())).transpose()
 }
 
 /// Folds the soundtrack to stereo. Media Foundation's 5.1 order is FL, FR,
@@ -188,6 +213,7 @@ pub fn update(
     mut skip_request: ResMut<MovieSkip>,
     mut images: ResMut<Assets<Image>>,
     mut sounds: ResMut<Assets<DecodedAudio>>,
+    mut subs: Query<&mut Text, With<crate::event::SubtitleText>>,
 ) {
     let Some(mut m) = player else { return };
     let now = time.elapsed_secs_f64();
@@ -218,6 +244,20 @@ pub fn update(
     let requested = std::mem::take(&mut skip_request.0);
     let skip = skip_input(&keys, pads.iter()) || requested;
     let elapsed = now - m.start.unwrap_or(now);
+    if let Some(timeline) = m.subtitles.as_mut() {
+        match timeline.subtitle_at((elapsed * 30.0) as f32) {
+            Ok(line) => {
+                let text = line.as_ref().and_then(|s| s.text.as_deref()).unwrap_or("").replace('\r', "");
+                for mut subtitle in &mut subs { subtitle.0.clone_from(&text); }
+                let label = line.map(|s| s.label);
+                if label != m.subtitle_label {
+                    info!("movie {} subtitle {:?} at {elapsed:.2} s", m.name, label);
+                    m.subtitle_label = label;
+                }
+            }
+            Err(e) => warn!("movie {} subtitle: {e}", m.name),
+        }
+    }
     // the newest frame due now (late frames are dropped)
     let mut due = None;
     loop {
@@ -264,6 +304,19 @@ fn skip_input<'a>(keys: &ButtonInput<KeyCode>, pads: impl Iterator<Item = &'a Ga
 mod tests {
     use super::*;
 
+    #[test]
+    fn installed_movie_resource_resolves_its_subtitle_scheduler() {
+        let native_pc = std::env::var_os("DDDA_NATIVE_PC").map(PathBuf::from)
+            .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+        if !native_pc.exists() { eprintln!("SKIP: DDDA install absent"); return; }
+        let mut subtitles = movie_subtitles(&path(&native_pc, "st100ev00"), 1).unwrap().unwrap();
+        assert_eq!(subtitles.path, r"st100\ev00\st100ev00");
+        let line = subtitles.subtitle_at(180.0).unwrap().unwrap();
+        assert_eq!(line.label, "1");
+        assert!(line.text.as_ref().is_some_and(|t| !t.is_empty()));
+        assert!(movie_subtitles(&path(&native_pc, "title_A"), 1).unwrap().is_none());
+    }
+
     /// Exercise the real playback system without a decoder/window: input
     /// completion must remove playback and acknowledge its caller.
     #[test]
@@ -278,11 +331,16 @@ mod tests {
                 .init_resource::<MovieFinished>()
                 .add_systems(Update, update);
             let root = app.world_mut().spawn_empty().id();
+            let subtitle_root = {
+                let mut commands = app.world_mut().commands();
+                crate::event::spawn_subtitle_ui(&mut commands, Some(root))
+            };
+            app.world_mut().flush();
             let (_tx, frames) = sync_channel(AHEAD);
             app.insert_resource(MoviePlayer {
                 name: "test".into(), frames: Mutex::new(frames), sound: None,
                 image: Handle::default(), root, start: Some(0.0), next: None,
-                voice: None, ended: false,
+                voice: None, ended: false, subtitles: None, subtitle_label: None,
             });
             app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
             app.update();
@@ -300,6 +358,9 @@ mod tests {
             assert!(app.world().resource::<MovieFinished>().0);
             assert!(!app.world().contains_resource::<MoviePlayer>());
             assert!(app.world().get_entity(root).is_err());
+            assert!(app.world().get_entity(subtitle_root).is_err());
+            assert_eq!(app.world_mut().query_filtered::<Entity, With<crate::event::SubtitleText>>()
+                .iter(app.world()).count(), 0);
         }
     }
 

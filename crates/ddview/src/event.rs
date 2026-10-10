@@ -510,7 +510,18 @@ pub fn spawn_event_ui(commands: &mut Commands) {
         BackgroundColor(Color::NONE),
         FadePlane,
     ));
+    spawn_subtitle_ui(commands, None);
     commands.spawn((
+        Node { position_type: PositionType::Absolute, top: Val::Px(8.0), left: Val::Px(8.0), ..default() },
+        children![(Text::new(""), TextFont::from_font_size(16.0), TextColor(Color::srgb(0.8, 0.8, 0.8)), InfoText)],
+    ));
+}
+
+/// Common subtitle presentation for cutscenes and movies. Position and
+/// font remain the existing viewer choices, not a traced GUI layout.
+/// A movie parents the line to its full-screen root so skip/end removes it.
+pub fn spawn_subtitle_ui(commands: &mut Commands, parent: Option<Entity>) -> Entity {
+    let mut line = commands.spawn((
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Percent(8.0),
@@ -520,10 +531,8 @@ pub fn spawn_event_ui(commands: &mut Commands) {
         },
         children![(Text::new(""), TextFont::from_font_size(30.0), TextColor(Color::WHITE), TextLayout::justify(Justify::Center), SubtitleText)],
     ));
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, top: Val::Px(8.0), left: Val::Px(8.0), ..default() },
-        children![(Text::new(""), TextFont::from_font_size(16.0), TextColor(Color::srgb(0.8, 0.8, 0.8)), InfoText)],
-    ));
+    if let Some(parent) = parent { line.insert(ChildOf(parent)); }
+    line.id()
 }
 
 /// The save's Arisen and party pawns (slot `mPlayerDataManual`).
