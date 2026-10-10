@@ -36,7 +36,7 @@ Arisen's sex, name and basic look from the installed editor data, saved
 with the profile, shown in the existing GUIs; the Result lists what of
 uGUIEdit remains for later milestones.
 
-## Results (source checkpoint; validation pending)
+## Results (CPU validation complete; bounded capture pending)
 
 The native class is `uGUICharacterEdit`; `uGUIEdit` above is shorthand.
 Its loader `0x0060C100` loads the installed character-edit messages,
@@ -46,7 +46,7 @@ Its loader `0x0060C100` loads the installed character-edit messages,
 detailed, body, and menu GUI resources. No game text or preset rows are
 copied into source.
 
-Prepared implementation:
+Implemented first milestone:
 
 - The bounded stage-801 editor chooses sex, accepts committed keyboard
   text, selects one of the installed 16 full presets for that sex, and
@@ -102,11 +102,11 @@ Prepared implementation:
   notices while leaving other profiles' notices intact. A recycled-seat
   regression covers the old name not reaching the new occupant.
 
-Prepared regressions cover profile save/load and seat remapping, an offline
+Regressions cover profile save/load and seat remapping, an offline
 record surviving departure/reentry, recycled-seat isolation, malformed
 offline EDIT rejection preserving the entire host state, installed preset
 look application, native name normalization, and installed GUI name hierarchy.
-Core validation now passed; viewer regressions remain uncompiled/unexecuted.
+Core and full release viewer validation passed.
 No original-game GUI comparison or bounded editor capture has run.
 This checkpoint is not Ready until the viewer gate completes.
 
@@ -148,11 +148,31 @@ are retained privately: `full-core-1859799.log` and
 `6cef422b51f6052ea69fb21727e5a58e34b3785eed6ada2a64033b59aa652d45`;
 `full-core-1859799.summary.private.json` records counts and all eight names.
 
-Next action: obtain the shared release-only viewer window, run the full
-viewer tests and default release build, then capture a bounded stage801
-flow with explicit name fixtures. GUI/native-page parity remains separate.
+Full release viewer gate on frozen `2cbcc65` (automatic integration of
+reviewed main `6afbc3c`, including S52 protocol10 and the S30 helper):
+`cargo test --release -p ddview --target-dir
+E:/ddda-rs-wt/m5-cassardis/target --jobs 2 -- --test-threads=1` completed
+**123 PASS, zero failed, two existing ignored, actual exit0** in session86377.
+All three new S56 names and both expanded S35/S43 names occur exactly once
+and pass. The complete125-test suite compiled in1m49s and ran in87.22s.
+The first attempt succeeded; no source fix or artifact clean was needed.
+The log `viewer-full-2cbcc65-first.log` SHA-256 is
+`d48e0d2a09b22bc13fe950bfee16c22f23ee4b570d976adf88add63a8fdfe0fc`.
 
-Source-only capture preparation (not yet compiled or executed): unattended
+Sequential default `cargo build --release -p ddview` on that same existing
+target/source completed in1m54s, session31341, actual exit0. The private
+pin `ddview-s56-2cbcc65.exe` matches the built executable:95,655,424 bytes,
+SHA-256 `f39d51d35bea301b33647def65bd1e0eefaba98ab4149d3fd85b4ff1df6a6f82`.
+`viewer-full-2cbcc65-first.summary.private.json` and
+`viewer-build-gate-2cbcc65.private.json` retain exact names/counts/log hashes.
+The worktree was clean throughout both jobs. The CPU lease is released;
+no viewer/GPU capture was launched under that lease. Head's later opening
+chatter hooks are outside this compiled committed baseline.
+
+Next action: obtain the explicit GPU window and capture a bounded stage801
+flow with two local profile fixtures. GUI/native-page parity remains separate.
+
+Compiled capture preparation (actual GPU capture still pending): unattended
 pages now dwell for at least three successful GUI draws and 0.75 real seconds
 after their fixture is prepared. With an explicit, existing private
 `DDVIEW_CHARACTER_CAPTURE_DIR` inside `E:/ddda-re`, every page requests an
@@ -165,8 +185,8 @@ both seat and persistent profile. After all local profiles confirm and the
 story admits the opening, the capture mode writes `S56-confirmed.ddhs` through
 `Host::save`, logging its saved hash. Errors block the capture flow. This is
 project test automation, not native editor timing or an original-game save.
-The new dwell boundary regression also remains unexecuted until the viewer
-window; the tested headless core source is unchanged.
+The new dwell boundary regression passes in the full release viewer gate;
+the previously tested headless character-creation source is unchanged.
 
 Bounded source-only keyboard follow-up: `0x00D89EE0` jumps to
 `0x00D89800`, an internal UTF-16-to-UTF-8 converter (not an OS conversion).
