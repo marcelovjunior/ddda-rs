@@ -34,51 +34,63 @@ the same path, so do it once, generically.
 A two-seat LAN test shows the guest mirroring the host's dragon (identity,
 pose, HP) alongside goblins, with the protocol bumped and documented.
 
-## Results (in progress)
+## Results (ready for review)
 
-Prepared the protocol-7 enemy schema: host-loaded model and indexed motion-bank
-paths, family dispatch tag, yaw or full quaternion, nonuniform scale, animation,
-and main-pool HP/death. Six field groups avoid resending resource names when
-only pose changes; an unchanged enemy still occupies five bytes. These are
-co-op protocol decisions, not rules copied from the original game's networking.
-`GoblinData.model` preserves the existing installed loader's model path; it is
-not selected by a guessed viewer table.
+Protocol 7 carries the host-loaded model and indexed motion-bank paths, family
+dispatch tag, yaw or full quaternion, nonuniform scale, action/motion/frame and
+main-pool HP/death. Six delta groups avoid resending resource names when only
+pose changes; an unchanged enemy still occupies five bytes. Protocol tags and
+interpolation are co-op presentation decisions, not original-game network rules.
+No model, motion, texture or bulk stats are copied into the wire or repository.
 
-A reusable guest view owns bodies by authoritative owner id, loads models and
-motion banks from the guest's install, removes missing/replaced identities, and
-logs unsupported family tags once. Both ordinary LAN play and the opening guest
-call that path; opening previously never read enemy snapshots. The root scale
-uses the existing character renderer's centimetres-to-metres conversion.
+After reviewed S29 merge `bb68257`, `from_fight` projects goblins and the canonical
+opening dragon. Goblin identity preserves the existing installed loader's path.
+Dragon identity comes from its bound `rModel` descriptor and loaded body banks;
+rotation, per-axis scale, frame and health come from the host actor.
+`Dragon::current_action` exposes its existing typed entrance actions 10/52/53/54,
+without inferring actions from motion slots. Future host families still need a
+projection and supported dispatch tag; cyclops is not implemented by this brief.
 
-Preliminary `cargo test --release -p ddview --no-run` compiled successfully in
-41.07 seconds using the shared M5 target. This is a compile check, not a viewer
-run or a passing test-suite claim. The mixed-kind whole/delta and interpolation
-regressions passed (4 tests, compile 13.63 seconds). The full DDNET suite then
-passed all 15 tests: 5 unit, 4 wire, 3 loopback, 2 replication, and 1 story test;
-this includes the installed goblin fight under UDP loss (3.33 seconds) and the
-NPC/cutscene story path (5.67 seconds). The guest view shares parsed motion banks
-by their resource paths. The full viewer suite passed 63 tests with 2 existing
-ignored tests (compile 32.31 seconds, tests 13.90 seconds), including the new
-owner-keyed full-rotation/nonuniform-scale pose and identity-replacement/body/
-child-removal regressions. Only the existing `main.rs` Args visibility warning
-remains. The dragon projection, installed
-mixed dragon/goblin host/guest check and visual check await the reviewed S29
-merge. No original-game or dragon LAN acceptance claim is made by this
-preparation checkpoint.
+The guest owns bodies by authoritative owner id, loads resources from its own
+install, shares parsed banks by resource paths and removes missing/replaced
+identities with their child entities. Unknown families are logged once and not
+substituted with goblins. Ordinary LAN play and the opening guest use this path;
+opening previously did not read enemy snapshots. Poses retain full rotation and
+nonuniform scale with the existing centimetres-to-metres conversion. Quaternion
+interpolation and immediate motion switches are presentation choices; native
+animation blend state is not replicated.
 
-After reviewed S29 merge `bb68257`, `from_fight` now also projects the canonical
-opening dragon. Model identity comes from its bound `rModel` resource descriptor;
-bank paths come from its loaded body. Quaternion, per-axis scale, frame, HP and
-death come directly from the actor. `Dragon::current_action` exposes the existing
-typed native variants (10/52/53/54), rather than reverse-mapping a motion slot.
+Final validation on integrated source `3a0023a` (including reviewed S26):
 
-The installed mixed-enemy test runs two seats over actual loopback UDP with
-30 ms +/- 10 ms latency and 5% packet loss. It observed all four native entrance
-actions and an actual non-yaw flight rotation, checked the guest's snapshot hash
-and exact identity/pose/motion/HP against that host frame, then closed the host's
-authored LOT admission gate and verified that only the dragon retired. This is
-an isolated entrance fixture, not the ordinary story route or an original-game
-comparison. Focused five tests passed (13.21 seconds compile, 2.89 seconds tests).
-The final full DDNET suite passed 16 tests (5.73 seconds compile); the installed
-mixed test took 3.13 seconds, existing goblin replication 4.53 seconds and story
-replication 5.18 seconds. Final integrated viewer validation/capture is pending.
+- `cargo test --release -p ddnet`: **16 passed**, compile 14.26 seconds. The
+  installed mixed test took 2.57 seconds, goblin replication 5.39 seconds and
+  NPC/cutscene story replication 4.49 seconds. The earlier unleased S34 run had
+  exited before this command started; there was no build overlap.
+- The mixed test uses two seats over actual loopback UDP, 30 ms +/- 10 ms
+  latency and 5% loss. It observed all four entrance actions and actual non-yaw
+  flight rotation, then checked the received snapshot hash and exact enemy
+  identity/pose/motion/HP against that host frame. Closing the authored LOT gate
+  retired the dragon while retaining the goblin. This is retirement, not death.
+- `cargo test --release -p ddview`: **64 passed, 2 existing ignored**, compile
+  27.70 seconds, tests 12.41 seconds. New ECS regressions cover owner-keyed pose
+  despite snapshot reordering, full quaternion/nonuniform scale, identity
+  replacement, and root/child removal. Normal release build passed in 46.08
+  seconds. Only inherited Args-visibility/audio-dead-code warnings remained.
+
+Two real ddview processes used the player's install and joined over UDP. Final
+host PID 21572 and guest PID 33176 both exited 0 after 54.7958705 seconds total;
+neither process's 60-second watchdog triggered. Both final PNGs were inspected:
+the guest visibly renders the host's dragon flying over Cassardis. Guest logs
+show owner 100 Goblin (`model\\em\\e01\\e0100\\e0100`) and owner 101 Dragon
+(`model\\em\\e58\\e5800\\e5800`) before its screenshot. An earlier guest capture
+visibly showed the goblin near the two Arisen while the dragon was outside the
+ordinary follow camera. All raw screenshots, logs and launcher remain private
+under `E:/ddda-re/notes/steps/S33/`.
+
+Visual acceptance uses the explicit entrance diagnostic: the host alone adds a
+synthetic goblin under `DDVIEW_LAN_ENEMY_CAPTURE`, and the existing
+`DDVIEW_DRAGON_ENTRANCE_CAPTURE` camera frames the mirrored dragon using the host
+fixture's offset. This does not assert a natural mixed encounter, matching host
+and guest screenshot frames, full story-route acceptance or comparison against
+an original-game recording. No game installation or original game process was
+modified. Source/test/LAN acceptance is complete; head review and merge are next.
