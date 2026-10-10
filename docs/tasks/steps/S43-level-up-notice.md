@@ -65,10 +65,12 @@ notice with the right level; the Result names the sources.
   main-pawn names come from the Rift record. The level-200 global string
   at `0x018D9230` is `<ICON INFINITY>` (codex-1 read-only live probe #6344),
   so that notice reports an unsupported icon instead of inventing text.
-  Native spline interpolation, transient local flashes, font filters,
+  Other key interpolation modes, transient local flashes, font filters,
   general GUI scripting, rank-up notices and guest progression replication
-  remain open. Enter/exit endpoints and duration are authored; intermediate
-  interpolation is explicitly a viewer policy. Co-op queue eviction and
+  remain open. Enter/exit endpoints and duration are authored. Their installed
+  scalar/vector keys all select linear mode 3, confirmed at `0x011511C0`
+  through `0x0106C670`; only that native mode is translated and regression
+  tested, other modes are rejected. Co-op queue eviction and
   suppressing the panel during events/pause are presentation policies.
 - Tests and the release build are **pending**, queued for the normal shared
   M5 target behind codex-66. No GUI has been launched. This source checkpoint

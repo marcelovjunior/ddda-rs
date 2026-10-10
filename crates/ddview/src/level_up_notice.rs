@@ -1,7 +1,7 @@
 //! Installed character-level notice. The host remains the progression authority.
 //! Native queue/identity/text/hold sources are marked below. This small presenter
 //! handles the enter/exit tracks and settled panel; local flashes, font filters,
-//! general GUI sequencing and native spline interpolation remain unported.
+//! general GUI sequencing and other key interpolation modes remain unported.
 use bevy::prelude::*;
 use ddhost::ddprogress::{Progression, Role};
 use std::collections::{HashMap, VecDeque};
@@ -125,6 +125,7 @@ impl Texts {
 #[derive(Clone)]
 struct Track {
     name: String,
+    vector: bool,
     keys: Vec<(f32, [f32; 4])>,
 }
 impl Track {
@@ -137,10 +138,19 @@ impl Track {
         }
         for pair in self.keys.windows(2) {
             if frame <= pair[1].0 {
-                // Viewer interpolation policy, explicitly not a translation of
-                // the native key's curve mode. Exact native spline is unported.
-                let t = ((frame - pair[0].0) / (pair[1].0 - pair[0].0)).clamp(0.0, 1.0);
-                return std::array::from_fn(|i| pair[0].1[i] + (pair[1].1[i] - pair[0].1[i]) * t);
+                // Translated from 0x011511C0, float/vector key mode 3
+                // (DDDA.exe 2017-12-13 Steam). Scalar uses x87 weighted
+                // interpolation; vector stores t to f32 before component math.
+                let t =
+                    (f64::from(frame) - f64::from(pair[0].0)) / (f64::from(pair[1].0) - f64::from(pair[0].0));
+                return if self.vector {
+                    let t = t as f32;
+                    std::array::from_fn(|i| (1.0 - t) * pair[0].1[i] + pair[1].1[i] * t)
+                } else {
+                    std::array::from_fn(|i| {
+                        ((1.0 - t) * f64::from(pair[0].1[i]) + f64::from(pair[1].1[i]) * t) as f32
+                    })
+                };
             }
         }
         self.keys.last().unwrap().1
@@ -210,9 +220,22 @@ fn sequence(gui: &mtgui::Gui<'_>, id: u32, node: u32) -> Result<Sequence, String
             .to_owned();
         let first_key = word(row, 12)? as usize;
         let first_value = word(row, 16)? as usize;
-        let mut track = Track { name, keys: vec![] };
+        let mut track = Track {
+            name,
+            vector: kind == 4,
+            keys: vec![],
+        };
         for index in 0..((flags >> 8) & 65535) as usize {
-            let frame = (word(keys, (first_key + index) * 8)? & 0xffffff) as f32;
+            let packed_key = word(keys, (first_key + index) * 8)?;
+            // All the selected installed panel tracks use mode 3. Refuse
+            // other modes instead of silently substituting linear motion.
+            if packed_key >> 24 != 3 {
+                return Err("unsupported level panel interpolation mode".into());
+            }
+            let frame = (packed_key & 0xffffff) as f32;
+            if track.keys.last().is_some_and(|&(last, _)| last >= frame) {
+                return Err("unordered level panel keys".into());
+            }
             let mut value = [0.0; 4];
             for (component, v) in value.iter_mut().enumerate().take(if kind == 4 { 4 } else { 1 }) {
                 *v = f32::from_bits(word(
@@ -633,6 +656,23 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_linear_scalar_and_vector_tracks_use_weighted_values() {
+        let scalar = Track {
+            name: "synthetic".into(),
+            vector: false,
+            keys: vec![(0.0, [10.0, 0.0, 0.0, 0.0]), (8.0, [26.0, 0.0, 0.0, 0.0])],
+        };
+        assert_eq!(scalar.sample(4.0)[0], 18.0);
+        assert_eq!(scalar.sample(8.0)[0], 26.0);
+        assert_eq!(scalar.sample(99.0)[0], 26.0);
+        let vector = Track {
+            name: "synthetic".into(),
+            vector: true,
+            keys: vec![(0.0, [1.0, 1.0, 1.0, 0.0]), (8.0, [1.0, 1.0, 1.0, 1.0])],
+        };
+        assert_eq!(vector.sample(4.0), [1.0, 1.0, 1.0, 0.5]);
+    }
     #[test]
     fn native_identity_and_queue_preserve_levels_per_local_owner() {
         use ddhost::ddprogress::{Character, Member};
