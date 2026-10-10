@@ -72,8 +72,9 @@ impl ViewMotions {
             v.common.insert(bank as u8, view_bank(vfs, path)?);
         }
         // the weapon categories' lists bound at 0x600 / 0x700 (table
-        // 0x0163DF8C): sword m0001, staff m0007 (as ddenemyrt::arisen)
-        for (w, n) in [(Weapon::Sword, "0001"), (Weapon::Staff, "0007")] {
+        // 0x0163DF8C): sword m0001, dagger m0005, staff m0007 (as
+        // ddenemyrt::arisen)
+        for (w, n) in [(Weapon::Sword, "0001"), (Weapon::Dagger, "0005"), (Weapon::Staff, "0007")] {
             let mut m = HashMap::new();
             for (bank, kind) in [(6u8, "co"), (7u8, "at")] {
                 m.insert(bank, view_bank(vfs, &format!(r"motion\pl\m\m00\m{n}_{kind}\m{n}_{kind}"))?);
@@ -134,10 +135,10 @@ pub struct Party {
 /// transition lists are not in ddsim).
 pub fn kit_of(look: Option<&ddlook::Look>) -> Kit {
     let cat = look.and_then(|l| l.weapons.first()).map(|w| (w.id as u32 >> 24) & 0xff);
-    if cat == Some(5) {
-        Kit::Mage
-    } else {
-        Kit::Fighter
+    match cat {
+        Some(5) => Kit::Mage,
+        Some(4) => Kit::Strider,
+        _ => Kit::Fighter,
     }
 }
 
@@ -196,6 +197,14 @@ pub struct PlayState {
 
 #[derive(Component)]
 pub struct FollowCam;
+
+impl PlayState {
+    /// Forgets the motion shown for `id`, so the next frame poses a freshly
+    /// spawned body.
+    pub fn forget_shown(&mut self, id: PlayerId) {
+        self.shown.remove(&id);
+    }
+}
 
 /// The fight data from the install and the exe next to it.
 pub fn fight_data(vfs: &ddvfs::Vfs, native_pc: &std::path::Path) -> Result<std::sync::Arc<FightData>, String> {
@@ -699,14 +708,12 @@ fn state_weapon(s: ddsim::State, known: Weapon) -> Weapon {
     match s {
         ddsim::State::Shot { .. } => Weapon::Staff,
         ddsim::State::Attack { attack } => {
-            let id = attack.motion();
-            // sword rows 0x700-0x713, staff rows 0x723 on (ddsim::attack)
-            if id >= 0x723 {
-                Weapon::Staff
-            } else if known == Weapon::None {
-                Weapon::Sword
-            } else {
-                known
+            use ddsim::Attack::*;
+            match attack {
+                StaffStrike1 | StaffStrike2 | StaffAirStrike => Weapon::Staff,
+                DaggerLight1 | DaggerLight2 | DaggerLight3 | DaggerHeavy | DaggerAirLight1 | DaggerAirLight2
+                | DaggerAirHeavy | DaggerAirHeavyLand => Weapon::Dagger,
+                _ => Weapon::Sword,
             }
         }
         _ => known,

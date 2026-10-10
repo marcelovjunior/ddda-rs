@@ -37,6 +37,9 @@ pub use ddenemyrt;
 /// The NPC runtime the host composes (`Host::npcs`), for views.
 pub use ddnpcrt;
 pub use ddspawn;
+/// Vocations and their first-choice equipment, for views.
+pub use ddprogress;
+pub use ddskill;
 
 pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};

@@ -101,8 +101,10 @@ pub fn update(
     mut menus: Query<&mut Node, With<PauseMenu>>,
     mut buttons: Query<(&Interaction, &Action, &mut BackgroundColor), With<Button>>,
     mut exit: MessageWriter<AppExit>,
+    movie: Option<Res<crate::movie::MoviePlayer>>,
+    intro: Option<Res<crate::intro::Intro>>,
 ) {
-    if !pause.enabled {
+    if !pause.enabled || movie.is_some() || intro.is_some() {
         return;
     }
     let Ok((window, mut cursor)) = window.single_mut() else {

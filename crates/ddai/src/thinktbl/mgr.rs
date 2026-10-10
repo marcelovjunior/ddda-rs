@@ -77,6 +77,10 @@ pub struct Slot {
     pub x60: u32,
     /// +0x64: the target object (0 for a point).
     pub obj: u32,
+    /// +0x68 and +0x70 bit1: category mask and whether commands0x40..42
+    /// may select this slot by category (0x008bc3b0).
+    pub category: u32,
+    pub categorized: bool,
     /// +0x74 / +0x78: kind and id stamped when a command selects the slot
     /// (+0xe60 / +0xe64 counters).
     pub kind: u32,
@@ -104,6 +108,8 @@ impl Default for Slot {
             mask50: 0,
             x60: 0,
             obj: 0,
+            category: 0,
+            categorized: false,
             kind: 0,
             id: 0,
             x7c: 1,
@@ -226,6 +232,9 @@ pub struct ThinkMgr {
     /// +0x64: records stepped in the current table.
     pub index: u32,
     pub slots: [Slot; SLOTS],
+    /// +0xd8b: the first eight slots ordered by 3D distance, valid first.
+    /// Rebuilt before each think by 0x008b71a0.
+    pub distance_order: [u8; 8],
     /// +0xde4 / +0xe44: selected-slot history and its length.
     pub history: [u32; SLOTS],
     pub history_len: u32,
@@ -437,6 +446,7 @@ impl ThinkMgr {
             bytes: [0; 4],
             index: 0,
             slots: [Slot::default(); SLOTS],
+            distance_order: [0, 1, 2, 3, 4, 5, 6, 7],
             history: [0; SLOTS],
             history_len: 0,
             cur: 0,
@@ -1017,6 +1027,21 @@ impl ThinkMgr {
                 }
                 self.select(b)
             }
+            // Translated from 0x008ba2a0 case0x42 / 0x008bc3b0
+            // (DDDA.exe 2017-12-13 Steam). Unlike 0x41, uses the distance
+            // order at +0xd8b, not the priority order at +0xd74.
+            0x42 => {
+                if !*bd {
+                    *bd = true;
+                    self.history = [SLOTS as u32; SLOTS];
+                    self.history_len = 0;
+                }
+                let slot = self.distance_order.iter().copied().find(|&index| {
+                    let slot = &self.slots[usize::from(index)];
+                    slot.valid && slot.categorized && slot.category & b != 0
+                });
+                slot.is_some_and(|index| self.select(u32::from(index)))
+            }
             7 => {
                 self.explicit = false;
                 true
@@ -1529,7 +1554,19 @@ impl ThinkMgr {
         for t in &mut self.timers {
             t.flags |= 1;
         }
-        // 0x008b71a0 orders slots 0..7 for commands 0x40..0x42 (not ported).
+        // Translated from 0x008b71a0's second ordering pass
+        // (DDDA.exe 2017-12-13 Steam). Strict comparisons keep distance ties
+        // in slot order, and put valid slots before invalid ones.
+        self.distance_order = [0, 1, 2, 3, 4, 5, 6, 7];
+        for first in 0..7 {
+            for right in (first + 1..8).rev() {
+                let left_slot = self.slots[usize::from(self.distance_order[right - 1])];
+                let right_slot = self.slots[usize::from(self.distance_order[right])];
+                if right_slot.valid && (!left_slot.valid || right_slot.dist3 < left_slot.dist3) {
+                    self.distance_order.swap(right - 1, right);
+                }
+            }
+        }
         for s in &mut self.slots {
             s.x80 = 1;
         }
@@ -1894,6 +1931,37 @@ mod tests {
     }
 
     const T: u32 = 0x1000;
+
+    #[test]
+    fn category_selection_uses_valid_distance_order_and_matching_mask() {
+        let tables = Tables::from_records(vec![T], [end(T)]);
+        let mut manager = mgr(T, Slot::default());
+        for (index, distance, category, categorized) in [
+            (0, 0.0, 4, true),
+            (1, 200.0, 2, true),
+            (2, 100.0, 2, true),
+            (3, 50.0, 2, false),
+            (4, 100.0, 2, true),
+        ] {
+            manager.slots[index] = Slot {
+                valid: true, dist3: distance, category, categorized,
+                ..Slot::default()
+            };
+        }
+        manager.slots[5] = Slot { category: 2, categorized: true, ..Slot::default() };
+        manager.think(&tables, &mut Fixed { roll: 0 }).unwrap();
+        let mut reset_history = false;
+        manager.command(&mut Fixed { roll: 0 }, &end(T), 0x42, 0, 0, 2, &mut reset_history, false).unwrap();
+        // Ignores nearer uncategorized and wrong-category slots, as well as
+        // invalid slot5. Equal-distance slot4 keeps its original order.
+        assert_eq!(manager.cur, 2);
+        assert_eq!(manager.history_len, 1);
+        assert_eq!(manager.history[0], 2);
+        manager.command(&mut Fixed { roll: 0 }, &end(T), 0x42, 0, 0, 0, &mut reset_history, false).unwrap();
+        assert_eq!((manager.cur, manager.history_len), (2, 1));
+        manager.command(&mut Fixed { roll: 0 }, &end(T), 0x42, 0, 0, 4, &mut reset_history, false).unwrap();
+        assert_eq!((manager.cur, manager.history_len), (0, 2));
+    }
 
     #[test]
     fn distance_min_inclusive_max_exclusive() {

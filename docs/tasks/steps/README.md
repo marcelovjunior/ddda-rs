@@ -57,6 +57,15 @@ without an "after" can run in parallel, one agent each.
 | S14 | cyclops: think driver and target selection | S06 |
 | S15 | shadows: the dark patches on Cassardis walls | - |
 | S16 | opening movie: skip input and the hookup after the prologue | S08 |
+| S17 | cyclops: navigation provider (world sets 1002/1003) | S14 |
+| S18 | cyclops: WalkTrace approach, runnable actor, test fight | S17 |
+| S19 | opening movie and event subtitles | S16 |
+| S20 | the naked NPC in the class-selection room | - |
+| S21 | enemy HP bars above their heads | - |
+
+Priority now (the tutorial is the goal): S21, S20, S12/S10/S11 (cutscene
+faces), S17-S18 (cyclops), S19. Head is doing the Strider (daggers done,
+bow next) and the vocation kit hookup.
 
 The cutscene command used by S01-S04:
 
