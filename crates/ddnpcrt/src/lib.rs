@@ -8,6 +8,7 @@
 
 pub mod guard;
 pub mod demo;
+pub mod demo_reaction;
 pub mod quest_talk;
 pub mod schedule;
 pub mod talk;
