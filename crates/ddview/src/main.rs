@@ -618,7 +618,7 @@ fn main() {
     let no_vsync = args.no_vsync || args.perf || args.perf_route;
     let unattended = args.unattended;
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+    app.add_plugins(DefaultPlugins.set(perf::pbr_plugin()).set(perf::log_plugin()).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ddview".into(),
                 resolution: WindowResolution::new(size.0, size.1),
@@ -631,6 +631,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(perf::MeshBuilderPlugin)
         .add_plugins(stage::ShadingPlugin)
         .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)

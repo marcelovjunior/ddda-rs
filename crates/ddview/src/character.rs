@@ -726,6 +726,49 @@ fn skinned_part(
     )
 }
 
+/// Renderer-only palette compaction. Bevy 0.19.1 render/skin.rs allocates
+/// `SkinnedMesh::joints.len()` matrices separately for each mesh, even when
+/// parts share joints and inverse-bind assets. Its skinning.wgsl loads all
+/// four indices, including zero-weight lanes; retain every referenced index.
+/// No vertex, influence, bind transform, material or visibility is changed.
+/// Invalid inputs keep the original palette without partially changing it.
+fn compact_skin_palette(
+    mesh: &mut Mesh,
+    inverse: &[Mat4],
+    joints: &[Entity],
+) -> Option<(Vec<Mat4>, Vec<Entity>)> {
+    if inverse.len() != joints.len() { return None; }
+    let Some(VertexAttributeValues::Uint16x4(indices)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX) else { return None; };
+    let mut used = vec![false; joints.len()];
+    for &index in indices.iter().flatten() {
+        *used.get_mut(usize::from(index))? = true;
+    }
+    let count = used.iter().filter(|&&used| used).count();
+    if count == 0 || count == joints.len() { return None; }
+    let mut remap = vec![0u16; joints.len()];
+    let mut compact_inverse = Vec::with_capacity(count);
+    let mut compact_joints = Vec::with_capacity(count);
+    for (index, &used) in used.iter().enumerate() {
+        if used {
+            remap[index] = u16::try_from(compact_joints.len()).ok()?;
+            compact_inverse.push(inverse[index]);
+            compact_joints.push(joints[index]);
+        }
+    }
+    let remapped: Vec<[u16; 4]> = indices.iter()
+        .map(|vertex| vertex.map(|index| remap[usize::from(index)]))
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(remapped));
+    Some((compact_inverse, compact_joints))
+}
+
+/// Exact compact palettes are the normal renderer path after S41's matched
+/// upload/fidelity checks. Only an explicit zero selects the diagnostic
+/// full-palette path; an empty inherited variable keeps the normal default.
+fn compact_skins_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value != Some(std::ffi::OsStr::new("0"))
+}
+
 /// Spawns the skinned meshes of one model on `joints` (one per bone).
 /// Returns the drawn groups only when the diagnostic is enabled.
 #[allow(clippy::too_many_arguments)]
@@ -746,6 +789,9 @@ fn spawn_meshes(
     eyebrow: Option<ddlook::eyebrow::Eyebrow>,
 ) -> Vec<u16> {
     let group_colours = std::env::var_os("DDVIEW_GROUP_COLOURS").is_some();
+    let compact_setting = std::env::var_os("DDVIEW_COMPACT_SKINS");
+    let compact_skins = compact_skins_enabled(compact_setting.as_deref());
+    let skin_diagnostics = std::env::var("DDVIEW_SKIN_DIAGNOSTICS").is_ok_and(|value| value == "1");
     let mut drawn_groups = Vec::new();
     let mut group_materials = HashMap::new();
     // Inverse binds from the rest pose (world = parent world x local in
@@ -766,6 +812,7 @@ fn spawn_meshes(
         });
     }
     let inverse: Vec<Mat4> = world.iter().map(Mat4::inverse).collect();
+    let compact_inverse = compact_skins.then(|| inverse.clone());
     let bindposes_handle = bindposes.add(SkinnedMeshInverseBindposes::from(inverse));
 
     let mrl_bytes = loader.vfs.read(material_path.unwrap_or(model_path), RMATERIAL).ok();
@@ -956,7 +1003,16 @@ fn spawn_meshes(
             };
             log_part("spawned", &alpha);
         }
-        let mut e = commands.spawn(skinned_part(mesh, meshes, bindposes_handle.clone(), joints));
+        let compact = compact_inverse.as_ref()
+            .and_then(|inverse| compact_skin_palette(&mut mesh, inverse, joints));
+        let (part_bindposes, part_joints) = if let Some((inverse, joints)) = &compact {
+            (bindposes.add(SkinnedMeshInverseBindposes::from(inverse.clone())), joints.as_slice())
+        } else { (bindposes_handle.clone(), joints) };
+        if compact_skins && skin_diagnostics {
+            info!("SKIN_PALETTE actor={root:?} model={model_path} mesh={mesh_index} original={} retained={} compacted={}",
+                joints.len(), part_joints.len(), compact.is_some());
+        }
+        let mut e = commands.spawn(skinned_part(mesh, meshes, part_bindposes, part_joints));
         // 0x00ffc350 uses the first weight bound's bone-space sphere center
         // when primitive flag bit2 selects per-primitive transparent sorting.
         let bound = first_bound.and_then(|bytes| {
@@ -1214,6 +1270,139 @@ fn undummy(loader: &Loader, path: &str) -> String {
         full
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod compact_skin_tests {
+    use super::*;
+
+    #[test]
+    fn default_palette_and_explicit_opt_out_select_matching_joint_indices() {
+        use std::ffi::OsStr;
+
+        let mut world = World::new();
+        let joints: Vec<_> = (0..8).map(|_| world.spawn_empty().id()).collect();
+        let inverse = vec![Mat4::IDENTITY; 8];
+        // Empty inherited switches keep the normal path. Only zero is the
+        // diagnostic opt-out; no process-global environment mutation is used.
+        for (setting, compact) in [(None, true), (Some(OsStr::new("")), true),
+            (Some(OsStr::new("1")), true), (Some(OsStr::new("0")), false)] {
+            let mut mesh = mesh();
+            let selected = compact_skins_enabled(setting)
+                .then(|| compact_skin_palette(&mut mesh, &inverse, &joints)).flatten();
+            if compact {
+                let (bind, palette) = selected.unwrap();
+                assert_eq!(palette, [joints[2], joints[6], joints[7]]);
+                assert_eq!(bind.len(), palette.len());
+                assert_eq!(indices(&mesh), &[[0, 1, 0, 2]; 3]);
+            } else {
+                assert!(selected.is_none());
+                assert_eq!(indices(&mesh), &[[2, 6, 2, 7]; 3]);
+            }
+        }
+    }
+
+    fn mesh() -> Mesh {
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION,
+            vec![[1.0, -2.0, 3.0], [-4.0, 5.0, 1.0], [2.0, 1.0, -3.0]]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(vec![[2, 6, 2, 7]; 3]));
+        // Joint 7 has no contribution but the GPU still indexes its matrix.
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[0.2, 0.5, 0.3, 0.0]; 3]);
+        mesh.insert_indices(Indices::U32(vec![0, 1, 2]));
+        mesh
+    }
+
+    fn indices(mesh: &Mesh) -> &[[u16; 4]] {
+        let Some(VertexAttributeValues::Uint16x4(indices)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX) else { panic!("indices") };
+        indices
+    }
+
+    #[test]
+    fn compact_palette_preserves_animated_skinning_and_bevy_bounds() {
+        use bevy::ecs::system::SystemState;
+        use bevy::mesh::skinning::entity_aabb_from_skinned_mesh_bounds;
+
+        let mut world = World::new();
+        let joints: Vec<_> = (0..8).map(|_| world.spawn(GlobalTransform::IDENTITY).id()).collect();
+        let inverse: Vec<_> = (0..8).map(|i| Transform {
+            translation: Vec3::new(i as f32 * 0.2, -1.0, 0.5),
+            rotation: Quat::from_rotation_z(i as f32 * -0.07),
+            scale: Vec3::new(1.1, 0.9, 1.2),
+        }.to_matrix().inverse()).collect();
+        let mut original = mesh();
+        let mut compact = original.clone();
+        let (compact_inverse, compact_joints) = compact_skin_palette(&mut compact, &inverse, &joints).unwrap();
+        assert_eq!(compact_joints, vec![joints[2], joints[6], joints[7]]);
+        assert_eq!(compact_inverse.len(), 3);
+        assert_eq!(indices(&compact), &[[0, 1, 0, 2]; 3]);
+        for attribute in [Mesh::ATTRIBUTE_POSITION, Mesh::ATTRIBUTE_NORMAL] {
+            let Some(VertexAttributeValues::Float32x3(before)) = original.attribute(attribute) else { panic!("original geometry") };
+            let Some(VertexAttributeValues::Float32x3(after)) = compact.attribute(attribute) else { panic!("compact geometry") };
+            assert_eq!(before, after);
+        }
+        let Some(VertexAttributeValues::Float32x4(before_weights)) = original.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT) else { panic!("original weights") };
+        let Some(VertexAttributeValues::Float32x4(after_weights)) = compact.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT) else { panic!("compact weights") };
+        assert_eq!(before_weights, after_weights);
+        assert_eq!(original.indices().unwrap().iter().collect::<Vec<_>>(), compact.indices().unwrap().iter().collect::<Vec<_>>());
+        let original_skin = SkinnedMesh { inverse_bindposes: default(), joints: joints.clone() };
+        let compact_skin = SkinnedMesh { inverse_bindposes: default(), joints: compact_joints.clone() };
+        let original_bind = SkinnedMeshInverseBindposes::from(inverse.clone());
+        let compact_bind = SkinnedMeshInverseBindposes::from(compact_inverse.clone());
+        original.generate_skinned_mesh_bounds().unwrap();
+        compact.generate_skinned_mesh_bounds().unwrap();
+        let mut query: SystemState<Query<&GlobalTransform>> = SystemState::new(&mut world);
+        for frame in [0.0, 0.7, 2.3] {
+            let transforms: Vec<_> = (0..8).map(|i| Transform {
+                translation: Vec3::new(i as f32, frame * i as f32, -2.0),
+                rotation: Quat::from_rotation_y(frame * 0.3 + i as f32 * 0.11),
+                scale: Vec3::new(1.0 + frame * 0.1, 0.8, 1.2),
+            }.to_matrix()).collect();
+            for (&joint, &transform) in joints.iter().zip(&transforms) {
+                *world.get_mut::<GlobalTransform>(joint).unwrap() = GlobalTransform::from(transform);
+            }
+            for vertex in 0..3 {
+                let Some(VertexAttributeValues::Float32x4(weights)) = original.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT) else { panic!("weights") };
+                let skin_matrix = |indices: [u16; 4], matrices: &[Mat4]| {
+                    let mut result = Mat4::ZERO;
+                    for (index, weight) in indices.into_iter().zip(weights[vertex]) {
+                        result += matrices[usize::from(index)] * weight;
+                    }
+                    result
+                };
+                let full: Vec<_> = transforms.iter().zip(&inverse).map(|(joint, bind)| *joint * *bind).collect();
+                let reduced: Vec<_> = [2, 6, 7].into_iter().zip(&compact_inverse)
+                    .map(|(i, bind)| transforms[i] * *bind).collect();
+                // Exact matrices preserve position, normal inverse-transpose
+                // and previous-frame skinning, not only a rest-pose vertex.
+                assert_eq!(skin_matrix(indices(&original)[vertex], &full), skin_matrix(indices(&compact)[vertex], &reduced));
+            }
+            let joints_query = query.get(&world).unwrap();
+            assert_eq!(entity_aabb_from_skinned_mesh_bounds(&joints_query, &original, &original_skin, &original_bind, None).unwrap(),
+                entity_aabb_from_skinned_mesh_bounds(&joints_query, &compact, &compact_skin, &compact_bind, None).unwrap());
+        }
+    }
+
+    #[test]
+    fn invalid_or_complete_palette_keeps_vertex_indices_unchanged() {
+        let mut world = World::new();
+        let joints: Vec<_> = (0..8).map(|_| world.spawn_empty().id()).collect();
+        let inverse = vec![Mat4::IDENTITY; 8];
+        let mut mesh = mesh();
+        let original = indices(&mesh).to_vec();
+        assert!(compact_skin_palette(&mut mesh, &inverse[..7], &joints).is_none());
+        assert_eq!(indices(&mesh), original);
+        let invalid = vec![[2, 6, 2, 8]; 3];
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(invalid.clone()));
+        assert!(compact_skin_palette(&mut mesh, &inverse, &joints).is_none());
+        assert_eq!(indices(&mesh), invalid);
+        let complete = vec![[0, 1, 2, 3], [4, 5, 6, 7], [7, 0, 3, 4]];
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(complete.clone()));
+        assert!(compact_skin_palette(&mut mesh, &inverse, &joints).is_none());
+        assert_eq!(indices(&mesh), complete);
     }
 }
 

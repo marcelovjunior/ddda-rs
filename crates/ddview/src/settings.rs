@@ -150,10 +150,10 @@ impl SettingKey {
             ),
             Self::Fov => g
                 .camera_fov
-                .map(|v| format!("{v}°"))
+                .map(|v| format!("{v} deg"))
                 .unwrap_or_else(|| "Unspecified".into()),
             Self::Unsupported(section, key) => format!(
-                "{} — Unavailable",
+                "{} - Unavailable",
                 state
                     .store
                     .as_ref()
@@ -234,7 +234,7 @@ fn menu_setup(
         ))
         .with_children(|panel| {
             panel.spawn((
-                Text::new("Graphics settings — viewer menu"),
+                Text::new("Graphics settings - viewer menu"),
                 TextFont {
                     font_size: bevy::text::FontSize::Px(26.0),
                     ..default()
