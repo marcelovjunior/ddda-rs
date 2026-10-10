@@ -104,6 +104,9 @@ impl CoordinateDefinition {
     /// caller supplies table access and the owning effect's sampled delay.
     /// Float multiplication and addition have separate f32 rounding, matching
     /// MULSS/ADDSS at0x010FBFE4..0x010FC046 (not a fused multiply-add).
+    /// This advances the initialization sampling counter only: 0x00E6E030
+    /// resets the runtime counter to the original low-16-bit seed after the
+    /// coordinate's initial transform. Do not start runtime draws at seed+4.
     // Translated from 0x010FBB20, delay0x010FC162
     // (DDDA.exe 2017-12-13 Steam).
     pub fn sample_static(&self, counter: &mut u32, effect_delay: i16,

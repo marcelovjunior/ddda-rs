@@ -500,3 +500,15 @@ This remains an unused headless helper: no production effect, queries,
 damage or original-game control is enabled. Next: run the complete enemy
 suite on the reviewed integrated dependency set, require both new named
 tests to execute, then bind the actual parent/effect transform and clocks.
+
+Further source review distinguishes the initialization sampling counter
+from runtime draws: after FA080/FBB20 and the first vf43 transform,
+`0x00E6E030` resets coordinate+0x114 from its original seed at+0x112.
+The initializer's post-draw counter must not become the runtime starting
+counter. `0x010FA330` also identifies the first unit word's low byte as the
+original coordinate-table index; `0x00E6DD90` deduplicates used coordinates
+before assigning compact blocks. The reader's index is the resource
+index, never that compact ordinal. The existing mteffect field name
+`generator_kind` for this raw byte is misleading; its public rename/alias
+is a separate reader change to coordinate with head. No caller uses this
+new helper yet, so neither unresolved integration rule changes production.
