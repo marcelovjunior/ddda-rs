@@ -16,6 +16,7 @@ ddpawnai = { path = "../ddpawnai" }
 ddpawn = { path = "../ddpawn" }
 dditem = { path = "../dditem" }
 ddlook = { path = "../ddlook" }
+ddnpc = { path = "../ddnpc" }
 ddsim = { path = "../ddsim" }
 ddskill = { path = "../ddskill" }
 ddvfs = { path = "../ddvfs" }

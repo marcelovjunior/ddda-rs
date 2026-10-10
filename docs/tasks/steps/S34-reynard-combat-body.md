@@ -567,3 +567,51 @@ it skips that placement scaling call. The uMultiNpc vf05 **0x00BA96A0**
 call to00889040 does not establish the ordinary linked NPC304 behavior.
 Stored enable/rate1/2.5 therefore remains distinct from a proven ordinary
 consumer; no2500 HP change or invented reset behavior was applied.
+
+The subsequent intel trace resolves the stored2.5 HP rate. **uNpcIntel
+vf05 0x00BBC4E0**, atBBC70A..BBC755, tests type byte+3D0!=1 and
+HP-rate enable+450!=0, then sets max+3DC to1000*rate(+430). Current+3D8
+is set identically only when preserved-current flag+44F is clear.
+The intel branch of **cSetInfoNpc vf08 0x007A32F0** stores these fields
+from the placement. NPC304 bypasses the later pawn-ID<120 overrides;
+its linked actor then copies the initialized intel values as described
+above. This supersedes the earlier unresolved-consumer statement.
+
+Implemented: `IntelHp::initialize` translates that scalar branch and its
+preserved-current/type1 guards. New ordinary combat-lifetime binding reads
+the actual placement enable/rate and initializes HP/max once; an existing
+same-lifetime binding returns before initialization. The installed n04
+rate therefore gives Reynard2500 initial HP without embedding2.5 as a
+production constant. Damaged same-lifetime rebinding retains both current
+HP and the original maximum. Disabled rates and type1 skip the scalar
+branch; repeated initialization recomputes maximum from1000 rather than
+compounding. Persisted cross-session NPC intel/save loading and special
+party/body families are outside this opening combat adapter.
+
+Implemented: the pure civilian death response helper uses explicit
+`Region::Japan`/`Region::Other`, defaultOther, and every native ledger,
+intel-type, hostile-class, damage-owner and current-action guard. The host
+owns one session-wide region setting, shared by all players/NPCs. Other
+retains real friendly damage; no unconditional HP floor is installed.
+The helper reports sourced HP1 and optional escape action03000044,
+without applying an unsupported navigation/escape actor. Full actor
+escape and proxy-owner wiring remain unimplemented. This follows head's
+board5898 decision; COOP_DESIGN consolidation is delegated to head.
+
+The NPC body now reads its civilian byte from installed rNpcLedgerList
+and inherits the actual native base motion registrations. NPC vf192
+**0x00BAE100** calls **0x00B5B260**, which uses constructor table014F1D30;
+**0x008282E0** registers packed-key bank IDs until the -1 sentinel.
+These are co0/dm1/gp2. The previous014EAC20 collision survey was not the
+registration source. Authored NPC banks11/12/13 remain independently
+resolved. Bulk paths/ledger fields stay in the player's installation.
+
+Tested: installed body3 passed, combat11 passed with1 explicit diagnostic
+ignored (Cargo13674 actual exit0, compile5.39s/body3.22s/combat2.43s).
+Host NPC combat2 passed (Cargo27695 actual exit0, compile5.85s/test8.84s),
+including real runtime rate-derived initial HP and damaged same-lifetime
+rebinding. The exclusive core lease was released after the actual exit.
+No game process, new GPU run, or original NPC304 comparison was used for
+this batch. The previous contact trace used its documented1000 HP fixture;
+it is preserved as earlier diagnostic evidence rather than relabeled as
+a trace of this newly corrected production initialization.
