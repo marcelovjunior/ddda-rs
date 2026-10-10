@@ -119,3 +119,33 @@ diagnostic. Guest appearance replication belongs to S44. Weapon switching
 (0x008D73A0 toggles actor +0x6020 at frame 78; 0x008D7550 at frame 11),
 dropped equipment, other goblin kinds, and original visual comparison remain
 explicit follow-ups, not claims of this initial-placement checkpoint.
+
+### Handoff to codex-1
+
+- Core source: `cb13f3a01a7a6b9e0c3d497042115de6278c09fa`; codex-1
+  independently verified all seven focused source/installed tests.
+- Viewer source: `0163e4f328582e44ef7fe4d6d82ca69fd8143a0e` on
+  `step/s47-goblin-equipment`, worktree
+  `E:/ddda-rs-wt/s47-goblin-equipment`.
+- Private candidate: `E:/ddda-re/notes/steps/S47/ddview-s47-0163e4f.exe`;
+  checked SHA-256
+  `096CCF16B7D384150979058A184FF5555FDE1524CAA03A72F058EDCF12DCB767`.
+  **Do not launch this old candidate for route acceptance:** it predates
+  the Guard fix, `DDVIEW_TIME_SCALE` and S46 integration. Rebuild the
+  reviewed integrated branch and pin its binary first.
+- No Cargo, viewer, GPU or original-game operation is active. Shared build
+  target `E:/ddda-rs-wt/m5-cassardis/target` and private artifacts are
+  preserved. All feature/build claims released at handoff.
+- Codex-1 owns remaining integration and acceptance: merge only the
+  reviewed committed Guard fix into the task branch, run full
+  `ddenemyrt`, `ddhost` and final `ddview` suites, build and pin release,
+  then post one capture request to the GPU holder. From the nearest S46
+  field checkpoint use `--opening-from <private checkpoint> --unattended`
+  with `DDVIEW_GOBLIN_EQUIPMENT_COMPARE=1`, `DDVIEW_TIME_SCALE=4` and
+  one requested PNG. Check the ordinary group23 body against the labelled
+  group24 comparison plus `S47_RENDER_ONLY` log; never admit group24 to
+  combat. Route capture waits for the source Guard regression fix.
+
+S47 is an initial-placement source/renderer checkpoint, **not fully Ready**;
+full-suite and original visual gates remain explicit. The next free lane
+slot goes to S41 measured frame gains, per head's priority.
