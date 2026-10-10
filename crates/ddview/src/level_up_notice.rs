@@ -3,6 +3,7 @@
 //! handles the enter/exit tracks and settled panel; local flashes, font filters,
 //! general GUI sequencing and other key interpolation modes remain unported.
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use ddhost::ddprogress::{Progression, Role};
 use std::collections::{HashMap, VecDeque};
 
@@ -309,6 +310,7 @@ struct View {
     virtual_size: Vec2,
     observer: Observer,
     active: Option<Active>,
+    captured: bool,
 }
 
 fn setup(mut commands: Commands, args: Res<crate::Args>, mut images: ResMut<Assets<Image>>) {
@@ -357,6 +359,7 @@ impl View {
             virtual_size,
             observer: Observer::default(),
             active: None,
+            captured: false,
         })
     }
     fn texture(&mut self, path: &str, images: &mut Assets<Image>) -> Result<Handle<Image>, String> {
@@ -536,6 +539,7 @@ fn update(
     state: Option<Res<crate::play::PlayState>>,
     view: Option<ResMut<View>>,
     time: Res<Time>,
+    args: Res<crate::Args>,
     pause: Res<crate::pause::PauseState>,
     windows: Query<&Window>,
     mut images: ResMut<Assets<Image>>,
@@ -650,6 +654,23 @@ fn update(
         node.width = Val::Px(q.size.x * scale.x);
         node.height = Val::Px(q.size.y * scale.y);
         image.color = q.color.with_alpha(q.color.alpha() * alpha);
+    }
+    // A bounded route capture can observe the first real level-up at its
+    // settled panel, instead of guessing a wall-clock screenshot delay.
+    // This captures presentation only and never generates a level-up.
+    if !view.captured
+        && !pause.paused
+        && !event_active
+        && active.notice.owner == state.follow
+        && active.elapsed >= panel.enter.frames
+        && active.elapsed < panel.enter.frames + HOLD_FRAMES
+    {
+        if let Some(dir) = &args.shots {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(dir.join("S43-level-up.png")));
+            view.captured = true;
+        }
     }
 }
 

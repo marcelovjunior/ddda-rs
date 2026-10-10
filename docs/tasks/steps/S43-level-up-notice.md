@@ -69,8 +69,8 @@ notice with the right level; the Result names the sources.
   general GUI scripting, rank-up notices and guest progression replication
   remain open. Enter/exit endpoints and duration are authored. Their installed
   scalar/vector keys all select linear mode 3, confirmed at `0x011511C0`
-  through `0x0106C670`; only that native mode is translated and regression
-  tested, other modes are rejected. Co-op queue eviction and
+  through `0x0106C670`; only that native mode is translated and has a pending
+  regression test, other modes are rejected. Co-op queue eviction and
   suppressing the panel during events/pause are presentation policies.
 - Tests and the release build are **pending**, queued for the normal shared
   M5 target behind codex-66. No GUI has been launched. This source checkpoint
@@ -78,3 +78,6 @@ notice with the right level; the Result names the sources.
 - Next action: integrate reviewed committed main, run the full ddview suite
   and default release build, then provide a pinned-binary capture request for
   a real opening kill/level-up (no synthetic production award).
+  With `--shots <private-dir>`, the first real notice automatically requests
+  `S43-level-up.png` once its enter track has finished. This supports a bounded
+  route capture without guessing its elapsed wall time or creating experience.
