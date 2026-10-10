@@ -34,6 +34,9 @@ use std::sync::Mutex;
 
 #[path = "npc_motion.rs"]
 mod npc_motion;
+#[path = "guest_npc.rs"]
+mod guest_npc;
+pub(crate) use guest_npc::GaugeActor;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -245,8 +248,6 @@ pub struct Session {
     /// Authored event movie currently awaited by the story (if intro enabled).
     pub intro_movie: Option<PathBuf>,
     pub host: HostHandle,
-    /// Save-free bags; actual story rewards and menu choices deliver items.
-    quick_items: crate::items::QuickItems,
     vocation_menu: crate::vocation_menu::Selection,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
@@ -254,7 +255,8 @@ pub struct Session {
     pending_local: HashMap<ddsim::PlayerId, Input>,
     failure: Option<String>,
     guest_control_shot: bool,
-    guest_npcs: HashMap<u32, [f32; 3]>,
+    guest_npcs: HashMap<u32, ddnet::npc::NpcBody>,
+    guest_npc_bodies: guest_npc::Bodies,
     guest_enemy_views: crate::net::enemy_views::Views,
     acc: f32,
     /// The party before the last host frame, to draw between frames.
@@ -298,6 +300,8 @@ pub struct Session {
     /// world the gates last saw.
     enemy_spawned: std::collections::HashSet<(u32, i32)>,
     enemy_world: Option<(u32, u32, Option<ddquest::story::MsbBits>)>,
+    /// Explicit render-only S47 comparison; never an admitted combat owner.
+    equipment_compare: Option<Entity>,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -306,6 +310,37 @@ pub struct Session {
 pub struct OpeningRes(pub Mutex<Session>);
 
 impl OpeningRes {
+    pub(crate) fn item_menu_snapshot(&self, player: ddsim::PlayerId) -> Option<crate::item_menu::Snapshot> {
+        let session = self.0.lock().unwrap();
+        // Guest inventory requests are not in the LAN protocol. Events and
+        // story-owned menus retain priority over local inventory UI.
+        if session.guest.is_some() || session.cut.is_some() || session.talk.is_some() || session.world_menu().is_some()
+            || ddhost::StoryWorld::player_actions_blocked(&session.host.world, player) { return None; }
+        session.host.roster.seat(player)?;
+        // Co-op policy: this Arisen and the session's active pawn bags, never
+        // another Arisen. Native 0x00669990 requires a member's active actor;
+        // its additional record+0x354 admission flag remains unported.
+        let bags = session.host.item_recipients().into_iter().filter(|r| match r.owner {
+            ddeconomy::inventory::Owner::Arisen(p) => p == player,
+            ddeconomy::inventory::Owner::Pawn(_) => session.host.sim.player(r.seat).is_some()
+                && session.host.fight.as_ref().is_some_and(|f| f.arisen.contains_key(&r.seat)),
+            _ => false,
+        }).filter_map(|r| Some(crate::item_menu::BagView {
+            owner:r.owner, bag:session.host.economy.inventory.bag(r.owner)?.clone(),
+        })).collect::<Vec<_>>();
+        (!bags.is_empty()).then_some(crate::item_menu::Snapshot { bags })
+    }
+
+    pub(crate) fn item_menu_use(&self, player: ddsim::PlayerId, bag: ddeconomy::inventory::Owner, row: &crate::item_menu::Entry) -> Result<(), String> {
+        let mut session = self.0.lock().unwrap();
+        if session.guest.is_some() || session.cut.is_some() || session.talk.is_some() || session.world_menu().is_some() { return Err("item menu is unavailable".into()); }
+        let item = session.host.item_request(player, ddhost::items::ItemRequest::Use {
+            owner:bag,index:row.index,expected:row.slot,
+        })?;
+        info!("opening item menu: seat {player}, bag {bag:?}, used item {item}");
+        Ok(())
+    }
+
     pub(crate) fn vocation_snapshot(&self) -> Option<(usize, usize, bool, bool)> {
         let session = self.0.lock().unwrap();
         let (_, owner) = session.world_menu().filter(|(menu, _)| *menu == Menu::Vocation)?;
@@ -402,15 +437,13 @@ pub fn prepare(
     let bag_phase = if sce >= 1050 { ddeconomy::new_game::Phase::NewlyArisen }
         else if matches!(w.stage_no, 800 | 801) { ddeconomy::new_game::Phase::BeforeCreation }
         else { ddeconomy::new_game::Phase::DragonChallenge };
-    let seats: Vec<_> = host.roster.ids().collect();
-    let quick_items = crate::items::QuickItems::new_game(&vfs, &seats, bag_phase)?;
+    host.new_game_items(std::sync::Arc::new(ddhost::items::ItemData::load(&vfs)?), bag_phase);
     let mut s = Session {
         intro_movie,
         host: HostHandle {
             local: Some(Box::new(host)),
             server: None,
         },
-        quick_items,
         vocation_menu: crate::vocation_menu::Selection::default(),
         guest: None,
         network_ready: false,
@@ -419,6 +452,7 @@ pub fn prepare(
         failure: None,
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
+        guest_npc_bodies: guest_npc::Bodies::default(),
         guest_enemy_views: crate::net::enemy_views::Views::default(),
         acc: 0.0,
         between: play::Between::default(),
@@ -464,6 +498,7 @@ pub fn prepare(
         enemy_cells: Default::default(),
         enemy_spawned: Default::default(),
         enemy_world: None,
+        equipment_compare: None,
         gone: vec![],
         dragon_view: None,
         dragon_capture: std::env::var_os("DDVIEW_DRAGON_ENTRANCE_CAPTURE").is_some(),
@@ -548,14 +583,14 @@ impl Session {
     /// Editor confirmation resumes the remaining stand-in dragon route.
     pub fn intro_edit_done(&mut self) -> Result<(), String> {
         if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
-        self.quick_items.character_created();
+        self.host.character_created_items();
         let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
         let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
             h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
         }).map_err(|e| e.to_string())?;
         // The existing preparation route can bypass ev01 headless. Apply
         // only its completed boundary; a live challenge leaves this pending.
-        if self.world().sce_no >= 1050 { self.quick_items.heart_taken(); }
+        if self.world().sce_no >= 1050 { self.host.heart_taken_items(); }
         self.host.world.live(CASSARDIS_ROWS);
         self.host.world.manual_stages = true;
         self.last_sce = self.world().sce_no;
@@ -685,8 +720,21 @@ impl Session {
         // explicit --shots are kept: a route with screenshots is a labelled
         // visual capture (main.rs), not a timing benchmark
     }
-    /// The rendered body entity of NPC `npc`, if it has one (read-only, for
-    /// diagnostics such as the NPC gauge anchor telemetry).
+    /// Both endpoints supply the same installed gauge pose renderer.
+    pub(crate) fn npc_gauge_actors(&self) -> Vec<GaugeActor> {
+        if self.guest.is_some() { return self.guest_npc_bodies.gauges(&self.guest_npcs); }
+        let Some(fight) = self.host.fight.as_ref() else { return vec![] };
+        fight.npcs.values().filter_map(|npc| {
+            if fight.npc_errors.contains_key(&npc.fighter.owner)
+                || self.host.story_npc_gauge_visible(npc.npc) != Some(true) { return None; }
+            let ddhost::ddenemyrt::combat::Victim::Npc { region, .. } = &npc.fighter.victim else { return None };
+            if region.hp <= 0.0 { return None; }
+            Some(GaugeActor { owner: npc.fighter.owner, npc: npc.npc, body: npc.body.clone(),
+                motion: npc.motion, frame: npc.frame, position: npc.position, yaw: npc.yaw,
+                scale: npc.scale, hp: region.hp, hp_max: region.hp_max })
+        }).collect()
+    }
+    /// The rendered body entity, for gauge anchor telemetry.
     pub(crate) fn npc_body_entity(&self, npc: u32) -> Option<Entity> {
         self.npcs.get(&npc).map(|n| n.0)
     }
@@ -831,8 +879,7 @@ impl Session {
                 }
                 TalkEvent::QuestEffects { player, npc, effects } => {
                     for effect in effects {
-                        if let ddnpcrt::quest_talk::Effect::Item { item, count, level } = *effect {
-                            self.quick_items.npc_grant(*player, item, count, level);
+                        if let ddnpcrt::quest_talk::Effect::Item { item, count, .. } = *effect {
                             info!("opening: NPC {npc} quest reward: seat {player} item {item} count {count}");
                         }
                     }
@@ -1211,11 +1258,12 @@ pub struct OpeningStage<'w, 's> {
 /// Goblins run and get a body and their encounter binding; other enemies
 /// have no runtime here.
 /// *Not yet*: despawning on cell unload or a closing gate, kill records (a
-/// new game has none), the record's think/equipment/stat options
-/// (`Fight::add_goblin` uses the goblin defaults), other enemy families.
+/// new game has none), the record's think options, other enemy families.
+/// Equipment and placement stat rates use the installed record.
 fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, stage: u32) {
     let Some(streamer) = view.streamer.as_mut() else { return };
     if s.enemy_stage != stage {
+        if let Some(entity) = s.equipment_compare.take() { view.commands.entity(entity).despawn(); }
         s.enemy_stage = stage;
         s.enemy_cells.clear();
         s.enemy_spawned.clear();
@@ -1287,18 +1335,18 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
-        match crate::character::spawn(
+        let appearance = fight.goblins.last().and_then(|g| g.appearance.as_ref())
+            .expect("equipped host spawn resolves appearance");
+        match play::goblin_view::spawn(
             &mut view.commands,
             &mut streamer.loader,
             &mut view.meshes,
             &mut view.materials,
             &mut view.images,
             &mut view.bindposes,
-            play::GOBLIN_MODEL,
-            ddhost::ddenemyrt::goblin::BANKS[0].1,
-            0,
+            &fight.data.goblin,
+            appearance,
             at,
-            Some(0.0),
         ) {
             Ok(e) => st.goblins.push(play::GoblinView::new(e, hp)),
             Err(e) => {
@@ -1306,6 +1354,30 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
                 warn!("opening: goblin body: {e}");
                 st.goblins.push(play::GoblinView::new(Entity::PLACEHOLDER, hp));
             }
+        }
+    }
+    if stage == 100 && s.equipment_compare.is_none()
+        && goblins.iter().any(|spawn| spawn.group == 23)
+        && std::env::var_os("DDVIEW_GOBLIN_EQUIPMENT_COMPARE").is_some() {
+        let comparison = (|| -> Result<Entity, String> {
+            let record = play::goblin_view::comparison_record(streamer.loader.vfs)?;
+            let placement = record.placement().ok_or("comparison record has no coordinates")?;
+            let appearance = fight.data.goblin.equipment.choose(ddhost::spawns::placement_equipment(&record),
+                &mut ddhost::ddenemyrt::goblin::equipment::NativeRng::default());
+            let at = (Vec3::from(placement.position) - st.origin) * UNIT;
+            let entity = play::goblin_view::spawn(&mut view.commands, &mut streamer.loader,
+                &mut view.meshes, &mut view.materials, &mut view.images, &mut view.bindposes,
+                &fight.data.goblin, &appearance, at)?;
+            view.commands.entity(entity).insert(Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(placement.angle[1]))
+                .with_scale(Vec3::from(placement.scale) * UNIT));
+            info!("S47_RENDER_ONLY comparison group=24 record={} equip={} at={:?}; no Fight/quest admission; isolated native appearance stream",
+                record.id, appearance.effective_type, placement.position);
+            Ok(entity)
+        })();
+        match comparison {
+            Ok(entity) => s.equipment_compare = Some(entity),
+            Err(error) => warn!("S47_RENDER_ONLY comparison failed: {error}"),
         }
     }
     // Each goblin's layout identity binds it to the story's encounter
@@ -1438,6 +1510,7 @@ pub fn step(
     mut vis: Query<&mut Visibility, Without<Actor>>,
     mut hud: ResMut<play::Hud>,
     vocation_view: Option<Res<crate::vocation_menu::View>>,
+    item_menus: Res<crate::item_menu::Menus>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
     let keys = &order_devices.keys;
@@ -1461,6 +1534,7 @@ pub fn step(
             return;
         }
     }
+    if s.guest.is_none() {
     kit_weapons(&mut stage_view, st, s);
     hired_pawn_bodies(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
@@ -1483,6 +1557,7 @@ pub fn step(
         if loaded_stage != 0 {
             field_enemies(&mut stage_view, st, s, loaded_stage);
         }
+    }
     }
     if !s.network_ready {
         s.network_ready = true;
@@ -1527,26 +1602,25 @@ pub fn step(
     // Like --play, quick use is local host input. Opening menus/events
     // suppress it; LAN clients cannot consume an unsynchronised local bag.
     if !pause.paused && s.cut.is_none() && s.talk.is_none() && s.world_menu().is_none() {
-        let (items, host) = (&mut s.quick_items, &mut s.host);
-        let host = &mut **host;
-        if let Some(fight) = host.fight.as_mut() {
-            for (seat, result) in items.pressed(&keys, &st.locals, &mut host.sim, fight) {
-                match result {
+        for &seat in &st.locals {
+            let key = match seat { 0 => KeyCode::KeyU, 1 => KeyCode::Numpad0, _ => continue };
+            if !item_menus.blocks(seat) && keys.just_pressed(key) {
+                match s.host.item_request(seat, ddhost::items::ItemRequest::QuickUse) {
                     Ok(item) => info!("opening quick-use: seat {seat} used item {item}"),
                     Err(error) => info!("opening quick-use: seat {seat}: {error}"),
                 }
             }
         }
     }
-    if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
+    if !pause.paused && !item_menus.blocks(0) && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
         play::orbit(st, &buttons, &mouse);
     }
     // Local input: talk and menu keys first, the rest to the host.
     // Local keyboard mapping is viewer policy: E for seat0, numpad Enter
     // for seat1. Host dialogue ownership is the same for either seat.
-    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
+    let e_press = !pause.paused && !item_menus.blocks(0) && keys.just_pressed(KeyCode::KeyE);
     let talk_press = if e_press { Some(0) }
-        else if !pause.paused && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
+        else if !pause.paused && !item_menus.blocks(1) && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
         else { None };
     let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
@@ -1616,7 +1690,7 @@ pub fn step(
         s.demo = None;
     }
     // The demo stands in for the keys.
-    if !pause.paused && s.demo.is_some() && s.cut.is_none() {
+    if !pause.paused && !item_menus.blocks(0) && s.demo.is_some() && s.cut.is_none() {
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
@@ -1625,6 +1699,10 @@ pub fn step(
     }
     if pause.paused {
         input = PlayerInput::default();
+    }
+    if item_menus.blocks(0) {
+        input = PlayerInput::default();
+        s.pending_input = PlayerInput::default();
     }
     if pause.paused || s.cut.is_some() || s.talk.is_some() || s.world_menu().is_some() {
         s.pending_input = PlayerInput::default();
@@ -1637,8 +1715,9 @@ pub fn step(
         && s.talk.is_none() && s.world_menu().is_none()
     {
         let queued = s.pending_local.entry(1).or_default();
-        *queued = play::latch_input(*queued,
-            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1));
+        *queued = if item_menus.blocks(1) { Input::default() } else { play::latch_input(*queued,
+            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1))
+        };
     }
     let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
@@ -1701,7 +1780,6 @@ pub fn step(
             break;
         }
         s.npc_requests(&report.npc_requests);
-        s.quick_items.rewards(&report.requests);
         for r in &report.requests {
             match r {
                 Request::PlaceParty {
@@ -1885,13 +1963,8 @@ fn ddskill_fighter() -> u32 {
 fn close_menu(s: &mut Session, job: u32) {
     info!("opening: vocation menu closed with job {job}");
     s.vocation_menu.close();
-    let selecting = s.world_menu().is_some();
     s.host.world.close_menu(Some(job));
-    if selecting {
-        if let Some(vocation) = ddhost::ddskill::vocation::Vocation::from_id(job) {
-            s.quick_items.first_choice(vocation);
-        }
-    }
+    // Host::apply_job_kit delivers the first-choice items once on its next tick.
 }
 
 fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize, sex: u8) -> EventConfig {
@@ -1901,9 +1974,9 @@ fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize,
 fn start_cut(s: &mut Session, row: usize) {
     // Translated from 0x0050c290 case 0x15: the real ev01 request
     // replaces the challenge gear before the movie, once per session.
-    if row == 21 && s.guest.is_none() { s.quick_items.heart_taken(); }
+    if row == 21 && s.guest.is_none() { s.host.heart_taken_items(); }
     let w = s.world();
-    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
+    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.stage().or_else(|| c.spot.map(|spot| spot.stage))), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
         Ok(p) => {
             info!("opening: cutscene row {row} ({}), {} frames", p.path, p.end_frame);
@@ -2219,13 +2292,9 @@ fn demo_heal(s: &mut Session, now: f32) {
         return;
     }
     d.last_heal = now;
-    let (items, host) = (&mut s.quick_items, &mut s.host);
-    let host = &mut **host;
-    if let Some(fight) = host.fight.as_mut() {
-        match items.use_next(0, &mut host.sim, fight) {
-            Ok(item) => info!("opening demo: used item {item}"),
-            Err(e) => info!("opening demo: no curative: {e}"),
-        }
+    match s.host.item_request(0, ddhost::items::ItemRequest::QuickUse) {
+        Ok(item) => info!("opening demo: used item {item}"),
+        Err(e) => info!("opening demo: no curative: {e}"),
     }
 }
 
@@ -2641,16 +2710,16 @@ fn benchmark_place_from_scenarios(sc: &ddstory::scenario::Scenarios, task: u32, 
 impl Session {
     fn network(&mut self, args: &crate::Args) -> Result<(), String> {
         if args.join.is_some() {
-            let mut guest = crate::net::take_prejoined().ok_or("opening guest did not complete prejoin")?;
-            let vfs = ddvfs::Vfs::open(&args.native_pc)?;
-            guest.set_ground(Box::new(ddhost::install::stage_collision(&vfs, STAGE)?));
+            let guest = crate::net::take_prejoined().ok_or("opening guest did not complete prejoin")?;
+            // Collision is confirmed/loaded from the received stage in guest_step,
+            // before any prediction. Prejoined field snapshots never get Cassardis ground.
             self.guest = Some(guest);
             self.demo = None;
         } else if let Some(port) = args.host {
             let udp = ddnet::Udp::bind(&format!("0.0.0.0:{port}")).map_err(|e| e.to_string())?;
             let p = self.host.sim.player(0).ok_or("missing host seat")?;
             let spot = ddnet::Spot {
-                stage: STAGE,
+                stage: self.world().stage_no,
                 cell: (50, 50),
                 pos: p.position,
                 yaw: p.yaw,
@@ -2701,6 +2770,42 @@ fn guest_step(
     };
     let c = s.guest.as_mut().unwrap();
     c.pump(now);
+    // The host's loaded stage and positions select presentation/collision.
+    // Reuse Streamer::enter as the host handoff does, without StageLoaded,
+    // place_party, local quest advancement or NPC ownership admission.
+    if let Some(streamer) = view.streamer.as_mut() {
+        let received_stage = c.stage().or_else(|| c.spot.map(|spot| spot.stage));
+        if received_stage == Some(streamer.stage) && !c.ground_ready() {
+            c.set_ground(Box::new(st.terrain.clone()));
+        }
+        if let Some(stage) = received_stage.filter(|&stage| stage != streamer.stage) {
+            let focus = c.latest().and_then(|snap| c.seat.and_then(|seat|
+                snap.bodies.iter().find(|body| body.id == seat))).map(|body| body.position);
+            if let Some(focus) = focus {
+                match streamer.enter(&mut view.commands, view.entities.iter(), &mut view.meshes,
+                    &mut view.materials, &mut view.images, stage, focus) {
+                    Ok(terrain) => {
+                        st.origin = Vec3::ZERO; // Streamer::enter uses stage origin cell(50,50).
+                        st.terrain = terrain.clone();
+                        st.door_collision = Default::default();
+                        c.set_ground(Box::new(terrain));
+                        for (id, (entity, _, _)) in s.npcs.drain() {
+                            view.commands.entity(entity).despawn();
+                            s.npc_authored_motion.forget_remote(id);
+                        }
+                        s.guest_npcs.clear(); s.npc_moving.clear();
+                        info!("opening guest: presented authoritative stage {stage} at {focus:?}");
+                    }
+                    Err(error) => { s.failure = Some(format!("guest stage {stage}: {error}")); }
+                }
+            }
+        }
+        streamer.focus = c.own().map(|body| body.position);
+        streamer.actors = c.latest().map_or_else(Vec::new, |snap| snap.bodies.iter().map(|body| body.position).collect());
+        if let Some(terrain) = streamer.take_terrain() {
+            st.terrain = terrain.clone(); c.set_ground(Box::new(terrain));
+        }
+    }
     if paused || s.cut.is_some() {
         s.pending_input = PlayerInput::default();
     }
@@ -2729,7 +2834,34 @@ fn guest_step(
     let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
     bodies.extend(c.own().as_ref().map(shown));
     let enemies = c.enemies(0.0);
-    s.guest_npcs = c.npcs().into_iter().map(|n| (n.id, n.pos)).collect();
+    let npc_snapshots = c.npcs();
+    let camera_snapshot = c.quest_camera();
+    let retired: Vec<_> = s.npcs.keys().copied().filter(|id|
+        npc_snapshots.iter().find(|n| n.id == *id).is_none_or(|next|
+            next.combat.is_some_and(|combat| combat.retired)
+                || s.guest_npcs.get(id).is_some_and(|old| old.generation != next.generation))).collect();
+    for id in retired {
+        s.npc_authored_motion.forget_remote(id);
+        if let Some((entity, _, _)) = s.npcs.remove(&id) { view.commands.entity(entity).despawn(); }
+    }
+    s.guest_npcs = npc_snapshots.iter().map(|n| (n.id, *n)).collect();
+    if let Some(streamer) = view.streamer.as_mut() {
+        if let Err(error) = crate::quest_camera::receive(s.host.world.cameras.get_or_insert_with(Default::default),
+            camera_snapshot, streamer.loader.vfs) { s.failure = Some(format!("guest quest camera: {error}")); }
+        if let Err(error) = s.guest_npc_bodies.load(&npc_snapshots, streamer.loader.vfs,
+            &s.npc_adapter.exe.image().expect("supported installed exe")) { s.failure = Some(format!("guest NPC body: {error}")); }
+        // Admission follows the authoritative list; own install supplies look.
+        for npc in &npc_snapshots {
+            if s.npcs.contains_key(&npc.id) || npc.combat.is_some_and(|c| c.retired) { continue; }
+            let Some(look) = npc_look(streamer.loader.vfs, npc.id, 0) else { continue };
+            match crate::character::spawn_look(&mut view.commands, &mut streamer.loader,
+                &mut view.meshes, &mut view.materials, &mut view.images, &mut view.bindposes,
+                &look, play::MOTIONS, 0, (Vec3::from(npc.pos)-st.origin)*UNIT, Some(npc.yaw)) {
+                Ok(entity) => { s.npcs.insert(npc.id, (entity, Vec3::from(npc.pos), npc.yaw)); }
+                Err(error) => { s.failure = Some(format!("guest NPC {} model: {error}", npc.id)); }
+            }
+        }
+    }
     for event in events {
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
             start_cut(s, row as usize);
@@ -2785,11 +2917,14 @@ fn guest_step(
     }
     for (&id, &(entity, _, _)) in &s.npcs {
         let at = s.guest_npcs.get(&id);
-        if let (Some(at), Ok((mut t, _))) = (at, roots.get_mut(entity)) {
-            t.translation = Vec3::from(*at) * UNIT;
+        if let (Some(at), Ok((mut t, mut playback))) = (at, roots.get_mut(entity)) {
+            *t = npc_motion::remote_transform(at, st.origin);
+            if let Err(error) = s.npc_authored_motion.show_remote(at, &mut playback) {
+                s.failure = Some(format!("guest NPC {id} motion: {error}"));
+            }
         }
         if let Ok(mut v) = vis.get_mut(entity) {
-            *v = if at.is_some() && s.cut.is_none() {
+            *v = if at.is_some_and(|n| n.combat.is_none_or(|c| !c.retired)) && s.cut.is_none() {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -3017,6 +3152,50 @@ fn plan_path(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn installed_item_menu_uses_selected_slot_through_host_and_rejects_other_bags() {
+        use super::*;
+        let native=std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !native.is_dir() {return;}
+        let exe=ddexe::locate(native).unwrap();
+        let mut session=prepare(native,&exe,2,false,None,false).unwrap();
+        // Explicit gameplay fixture: no cutscene/talk/story-owned menu. Bag
+        // contents still come from the installed authored q1 reward.
+        session.cut=None; session.talk=None; session.host.world.menu=None;
+        let reward=ddstory::orders::reward(&session.host.story.as_ref().unwrap().data,1).unwrap();
+        for request in reward {
+            if let ddstory::Request::Reward {quest,items,..}=request {
+                let host=&mut *session.host;
+                let data=host.item_data.clone().unwrap();
+                for seat in host.roster.ids() {
+                    host.economy.opening_grants.reward(&mut host.economy.inventory,&data.items,seat,quest,&items);
+                }
+            }
+        }
+        let original_other=session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(1)).unwrap().clone();
+        let fight=session.host.fight.as_mut().unwrap();
+        // Preparation stops before the vocation creates fight actors. This
+        // recovery fixture explicitly creates them from installed FightData;
+        // it is not a claim that the route selected a vocation or gave a reward.
+        for seat in [0,1] { fight.add_arisen(seat); }
+        if let ddhost::ddenemyrt::combat::Victim::Player {hp,hp_max,..}=&mut fight.arisen.get_mut(&0).unwrap().fighter.victim { *hp=20.0; *hp_max=1000.0; }
+        let res=OpeningRes(Mutex::new(session));
+        let data=res.item_menu_snapshot(0).unwrap();
+        let index=data.bags[0].bag.slots.iter().position(|s|s.item==43).unwrap();
+        let row=crate::item_menu::Entry {index,slot:data.bags[0].bag.slots[index]};
+        assert!(res.item_menu_use(1,ddeconomy::inventory::Owner::Arisen(0),&row).is_err());
+        res.item_menu_use(0,ddeconomy::inventory::Owner::Arisen(0),&row).unwrap();
+        // The stale stack count no longer matches: never consume a different
+        // live slot using an old presentation row.
+        assert!(res.item_menu_use(0,ddeconomy::inventory::Owner::Arisen(0),&row).is_err());
+        let mut session=res.0.lock().unwrap();
+        assert!(session.host.fight.as_ref().unwrap().arisen[&0].fighter.victim.hp()>20.0);
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().count(43),4);
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(1)).unwrap(),&original_other);
+        let frame=session.host.frame;
+        session.host.tick(&Default::default()).unwrap();
+        assert_eq!(session.host.frame,frame+1);
+    }
+    #[test]
     fn installed_second_arisen_has_an_outfit_and_keeps_the_first_seats_look() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
         if !native.is_dir() { return; }
@@ -3066,7 +3245,7 @@ mod tests {
         let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
         assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
         let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
-        assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap(),
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap(),
             &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
         // Fixture observations satisfy this installed group's authored gates;
         // this is not a claim that the full opening route has reached them.
@@ -3185,7 +3364,7 @@ mod tests {
         if !native.exists() { return; }
         let exe = native.parent().unwrap().join("DDDA.exe");
         let mut session = prepare(native, &exe, 2, false, None, true).unwrap();
-        assert!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().slots.is_empty());
+        assert!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().slots.is_empty());
         let row = session.host.world.inner.awaiting.unwrap();
         let event = &session.host.story.as_ref().unwrap().data.event_table().unwrap().rows[row];
         assert_eq!((event.stage, event.event), (100, 0));
@@ -3204,7 +3383,7 @@ mod tests {
         assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
         session.intro_edit_done().unwrap();
         for seat in [0, 1] {
-            assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(seat)).unwrap(),
+            assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(seat)).unwrap(),
                 &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
         }
         assert_eq!(session.world().stage_no, STAGE);

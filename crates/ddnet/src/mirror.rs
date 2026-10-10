@@ -30,57 +30,8 @@ pub struct Spot {
     pub yaw: f32,
 }
 
-/// An NPC where the host's schedule put it (`Host::npcs`).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NpcBody {
-    pub id: u32,
-    pub pos: [f32; 3],
-}
-
-/// The NPCs of a host's runtime and those parked off it (`Host::npc_parked`),
-/// in id order.
-pub fn npcs_of(
-    n: &ddhost::ddnpcrt::NpcRuntime,
-    parked: &std::collections::BTreeMap<u32, [f32; 3]>,
-) -> Vec<NpcBody> {
-    let mut v: Vec<NpcBody> = n
-        .npcs
-        .keys()
-        .filter_map(|&id| {
-            Some(NpcBody {
-                id,
-                pos: n.position(id)?,
-            })
-        })
-        .collect();
-    v.extend(
-        parked
-            .iter()
-            .filter(|(id, _)| !n.npcs.contains_key(id))
-            .map(|(&id, &pos)| NpcBody { id, pos }),
-    );
-    v.sort_by_key(|b| b.id);
-    v
-}
-
-pub fn write_npcs(w: &mut Writer, v: &[NpcBody]) {
-    w.len(v.len());
-    for x in v {
-        w.u32(x.id).f32(x.pos[0]).f32(x.pos[1]).f32(x.pos[2]);
-    }
-}
-
-pub fn read_npcs(r: &mut Reader) -> Result<Vec<NpcBody>> {
-    let n = r.len(16)?;
-    (0..n)
-        .map(|_| {
-            Ok(NpcBody {
-                id: r.u32()?,
-                pos: [r.f32()?, r.f32()?, r.f32()?],
-            })
-        })
-        .collect()
-}
+pub use crate::npc::NpcBody;
+pub use crate::npc::{of as npcs_of, read as read_npcs, write as write_npcs};
 
 /// A seat's hit points (the Arisen and pawns of the fight).
 #[derive(Debug, Clone, Copy, PartialEq)]

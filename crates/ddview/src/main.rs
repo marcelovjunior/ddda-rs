@@ -41,6 +41,7 @@ mod ambient;
 mod net;
 mod opening;
 mod vocation_menu;
+mod item_menu;
 mod quest_camera;
 mod play;
 mod bow_view;
@@ -49,6 +50,7 @@ mod skills;
 mod hud;
 mod level_up_notice;
 mod pause;
+mod settings;
 mod shadows;
 mod sky;
 mod stage;
@@ -303,6 +305,12 @@ fn args() -> Args {
             _ => panic!("unknown option {k}"),
         }
     }
+    // screenshots fail silently into a missing directory: create it
+    if let Some(dir) = &a.shots {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ddview: --shots {}: {e}", dir.display());
+        }
+    }
     if a.perf_route {
         // Screenshots stall frames, so a route with shots is a visual
         // capture, not a timing benchmark (its perf numbers are invalid).
@@ -547,33 +555,18 @@ fn resolve_lighting(args: &mut Args) {
 /// `CameraFov` from the player's own game settings
 /// (`%LOCALAPPDATA%\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`), if present.
 fn config_camera_fov() -> Option<f32> {
-    let dir = std::env::var_os("LOCALAPPDATA")?;
-    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
-    let text = std::fs::read_to_string(path).ok()?;
-    text.lines()
-        .find_map(|l| l.trim().strip_prefix("CameraFov="))
-        .and_then(|v| v.trim().parse().ok())
+    settings::initial_graphics().camera_fov
 }
 
 /// `ViewRange` from the player's game settings as the config object stores
 /// it (written by 0x00eddb20: NORMAL 1, FAR 2, FARTHEST 3); NORMAL if absent.
 fn config_view_range() -> u32 {
-    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return 1 };
-    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    match text.lines().find_map(|l| l.trim().strip_prefix("ViewRange=")).map(str::trim) {
-        Some("FAR") => 2,
-        Some("FARTHEST") => 3,
-        _ => 1,
-    }
+    settings::initial_graphics().view_range.map_or(1, settings::ViewRange::native)
 }
 
 /// `DofFilter` from the player's game settings (ON unless it says OFF).
 fn config_dof_filter() -> bool {
-    let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return true };
-    let path = PathBuf::from(dir).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    text.lines().find_map(|l| l.trim().strip_prefix("DofFilter=")).map(str::trim) != Some("OFF")
+    settings::initial_graphics().dof.unwrap_or(true)
 }
 
 /// Stage and cell (A, B) of the `origin_cell` path in a reference JSON.
@@ -643,6 +636,8 @@ fn main() {
         .add_plugins(sky::SkyPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
+        .init_resource::<play::CameraConfig>()
+        .add_plugins(settings::SettingsPlugin)
         .insert_resource(ClearColor(clear))
         .insert_resource(GlobalAmbientLight {
             color: Color::WHITE,
@@ -653,11 +648,12 @@ fn main() {
         .add_plugins(level_up_notice::LevelUpPlugin)
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
+        .init_resource::<item_menu::Menus>()
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, (hud::update, vocation_menu::update).chain()).chain());
+        .add_systems(Update, ((pause::update, item_menu::controls).chain(), fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, (hud::update, vocation_menu::update, item_menu::draw).chain()).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
     // Diagnostics are opt-in: render queries themselves have a cost, so
@@ -732,6 +728,7 @@ fn setup(
     let t = std::time::Instant::now();
     // Kept for the whole run: the field streamer loads cells from them later.
     let vfs: &'static ddvfs::Vfs = Box::leak(Box::new(ddvfs::Vfs::open(&args.native_pc).expect("open nativePC")));
+    commands.insert_resource(settings::RenderSource { vfs, textures: Default::default() });
     let mfx_path = args.native_pc.join("usershader").join("BbsShaderPackage.mfx");
     let mfx: &'static mtshader::ShaderPackage = Box::leak(Box::new(
         mtshader::ShaderPackage::parse(&std::fs::read(mfx_path).expect("read mfx")).expect("parse mfx"),
@@ -792,6 +789,7 @@ fn setup(
             Err(e) => error!("character: {e}"),
         }
         spawn_camera_and_light(&mut commands, &args, None);
+        commands.insert_resource(settings::RenderSource { vfs, textures: loader.textures.clone() });
         return;
     }
     if let Some(session) = slot.0.lock().unwrap().take() {
@@ -811,6 +809,7 @@ fn setup(
         }
         // The world handoff for the opening's JumpArea (stream.rs): its host
         // drives the focus; the stage models it spawned are StageEntity.
+        commands.insert_resource(settings::RenderSource { vfs, textures: loader.textures.clone() });
         match stream::Streamer::field_grid(&args.native_pc) {
             Ok(grid) => commands.insert_resource(stream::Streamer::new(
                 loader,
@@ -1041,6 +1040,7 @@ fn setup(
         }
     }
     spawn_camera_and_light(&mut commands, &args, post);
+    commands.insert_resource(settings::RenderSource { vfs, textures: loader.textures.clone() });
     // The clock advances in play when the lighting comes from the data.
     if args.play && args.light_from_data {
         if let Some(ms) = args.clock_ms {
@@ -1086,6 +1086,10 @@ pub fn opening_world(
     vfs: &ddvfs::Vfs,
 ) {
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
+    match item_menu::View::load(vfs, &args.native_pc, images) {
+        Ok(view) => commands.insert_resource(view),
+        Err(error) => panic!("opening item menu: {error}"),
+    };
     match vocation_menu::View::load(vfs, &args.native_pc, images) {
         Ok(view) => commands.insert_resource(view),
         Err(error) => panic!("opening vocation menu: {error}"),

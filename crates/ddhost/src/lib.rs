@@ -20,6 +20,7 @@ pub mod data;
 pub mod hash;
 pub mod host;
 pub mod input;
+pub mod items;
 pub mod install;
 pub mod lock;
 pub mod npcs;

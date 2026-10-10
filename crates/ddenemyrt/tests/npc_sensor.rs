@@ -37,6 +37,51 @@ impl ddsim::Ground for Flat {
 }
 
 #[test]
+fn installed_party_sword_contacts_respect_reynard_gauge_for_each_owner() {
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.is_dir() { eprintln!("SKIP: no installed game data"); return; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let exe = ddexe::ExeFile::next_to(&native).unwrap();
+    let image = exe.image().unwrap();
+    let body = std::sync::Arc::new(ddenemyrt::npc_body::NpcBody::load(&vfs, &image, 304, 304, 0, 0, 0).unwrap());
+    let data = std::sync::Arc::new(ddenemyrt::fight::FightData::load(&vfs, &image).unwrap());
+    let region = ddenemyrt::npc_combat::ordinary_region(&vfs, &data.tables.game, 2500.0).unwrap();
+    let motion = body.resolve(3073).unwrap();
+    for seat in [0, 6] {
+        for gauge in [true, false] {
+            let mut sim = ddsim::Sim::new(Default::default());
+            sim.add_player(0, if seat == 0 { [0.0; 3] } else { [10000.0, 0.0, 0.0] }, 0.0);
+            let mut fight = ddenemyrt::fight::Fight::new(data.clone());
+            fight.add_arisen(0);
+            fight.equip(&mut sim, 0);
+            if seat == 6 { fight.add_pawn(&mut sim, 6, 0, [0.0; 3], 0.0, [500.0; 9], 7); }
+            let owner = fight.bind_npc(304, 1, body.clone(), region.clone(), motion);
+            let npc = fight.npcs.get_mut(&owner).unwrap();
+            npc.position = [0.0, 0.0, 100.0];
+            npc.hit_guard.gauge_enabled = gauge;
+            fight.volumes(&sim);
+            let mut history_seen = false;
+            let mut hits = 0;
+            // Explicit pad presses isolate actual installed sword/hurt volumes
+            // and owner class; this fixture does not test pawn decision-making.
+            for frame in 0..90 {
+                hits += fight.hits(1.0).iter().filter(|e| e.victim == owner).count();
+                history_seen |= fight.npcs[&owner].fighter.history.entries.iter().any(|h| h.attacker == u32::from(seat));
+                let input = ddsim::Input { light: frame == 0, ..Default::default() };
+                sim.step(1.0 / 30.0, &std::collections::HashMap::from([(seat, input)]), &Flat);
+                fight.players_moved(&mut sim, &Flat, 1.0);
+                fight.volumes(&sim);
+            }
+            assert!(history_seen, "installed swing must contact Reynard: seat={seat} gauge={gauge}");
+            let hp = fight.npcs[&owner].fighter.victim.hp();
+            if gauge { assert_eq!(hp, 2500.0); assert_eq!(hits, 0); }
+            else { assert!(hp < 2500.0); assert!(hits > 0); }
+        }
+    }
+}
+
+#[test]
 fn installed_goblin_selects_and_damages_reynard_and_no_damage_holds() {
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
@@ -56,6 +101,8 @@ fn installed_goblin_selects_and_damages_reynard_and_no_damage_holds() {
         let goblin = fight.add_goblin([0.0, 0.0, 100.0], std::f32::consts::PI);
         assert_ne!(npc, goblin);
         fight.npcs.get_mut(&npc).unwrap().set_flags(flags);
+        // Authored quest gauge protects against party hits, not goblins.
+        fight.npcs.get_mut(&npc).unwrap().hit_guard.gauge_enabled = true;
         let mut contacts = 0;
         let mut history_seen = false;
         for _ in 0..360 {

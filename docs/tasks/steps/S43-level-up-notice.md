@@ -119,3 +119,42 @@ notice with the right level; the Result names the sources.
   font (`sGUI+0x58`) before inserting a type-5 glyph. The table/font resource
   initializer still needs tracing; this is not the ordinary text font's
   Unicode infinity glyph. No inferred icon number, resource or pixel is copied.
+
+### Parent combined review and attempted genuine capture
+
+Codex-1 independently reviewed native hierarchy/clock and co-op consumer
+changes, including the two-owner follow-switch regression. Integration
+435a027 on the S47 branch passed all92 viewer tests/two existing ignored,
+including all six notice tests; default release48.12s, actual94503 exit0.
+The genuine RescueApproach checkpoint run exited zero after151.5195s
+(owned30364). It stayed at level2/experience420 below485, so no new notice
+was expected or captured. No level or experience was manufactured.
+The route also suppresses step shots in enable_perf_route, reported to
+head separately. This is not S43 visual acceptance. The source tests are
+accepted; genuine notice capture and original comparison remain open.
+Private logs/pin: E:/ddda-re/notes/steps/S47/combined-rescue-435a027.err.txt
+and ddview-s47-combined-435a027.exe (provenance hash in the S47 Results).
+
+The updated source42576fd passed all92 default viewer tests (six notice
+regressions included), two existing ignored; actual53534 exit0, fresh
+compile40.03s/tests12.11s and release56.98s. With the screenshot path and
+demo guard fixes, the next bounded RescueApproach run genuinely succeeded,
+delivered Reynard's item1058 and logged S43_LEVEL_UP owner0/level3 at
+09:12:49 UTC. The Arisen name remains explicitly unresolved/empty.
+However the screenshot directory had not been created, so the real notice
+PNG failed with OS error3. Harness56794 later exited1 on a watchdog/process
+exit race; numeric viewer exit is unknown, its executable was confirmed
+absent before lease release. No notice visual/original acceptance is claimed.
+Private combined-rescue-42576fd.err.txt and pin provenance in S47 preserve
+the evidence. Next: repeat once with the directory prepared and inspect
+the genuine notice PNG; no manufactured progression or event replay.
+
+The approved retry at source d5567f8 includes directory creation; its full
+viewer92 tests/two existing ignored and release40.03s actually passed.
+Screenshot saving now works, but this route failed the rescue and stayed
+at level2/experience420. The single step PNG contains pre-pipeline sky/HUD;
+there is no notice PNG. Owned viewer15908 exited-1 via the retained-handle
+watchdog after180.7952s; its executable was absent before lease release.
+The earlier42576fd genuine level3 event remains log evidence, not visual
+acceptance. Next: a stable real progression route with render-ready capture,
+coordinated with head; no further speculative GUI retry is planned.

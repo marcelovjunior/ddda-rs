@@ -87,6 +87,41 @@ pub fn ordinary_defender() -> PlayerDefender {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageOwnerClass { Player, Pawn, Npc, Enemy, Class4, Unknown }
 
+/// Gauge-related subset of the ordinary NPC's vf66 permission callback.
+/// These are actor/intel facts, independent of collision NoDamage/Invincible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GaugeHitGuard {
+    pub linked_intel: bool,
+    /// Linked intel byte +0x3D1; nonzero bypasses this ordinary-NPC guard.
+    pub intel_hostile: bool,
+    /// Actor +0x206E bit0x10 (human enemy).
+    pub human_enemy: bool,
+    /// Linked intel +0x547, written by SetGaugeDisp.
+    pub gauge_enabled: bool,
+}
+
+impl Default for GaugeHitGuard {
+    fn default() -> Self {
+        Self { linked_intel: true, intel_hostile: false, human_enemy: false, gauge_enabled: false }
+    }
+}
+
+impl GaugeHitGuard {
+    /// Other global/event/action guards in 0x00BB7680 are outside this subset.
+    /// Shell callers supply the resolved actor class, not the shell's owner ID.
+    // Translated from uNpc::vf66 0x00BB6EC0 -> 0x00BB7680,
+    // branch 0x00BB778B..0x00BB77D4 (DDDA.exe 2017-12-13 Steam).
+    pub fn allows(self, owner: DamageOwnerClass, owner_is_gauged_npc: bool) -> bool {
+        if !self.linked_intel || self.intel_hostile || self.human_enemy || !self.gauge_enabled {
+            return true;
+        }
+        !matches!(owner, DamageOwnerClass::Player | DamageOwnerClass::Pawn)
+            // This source test uses actor class bit8, independently of the
+            // owner classifier's later hostile-NPC -> Enemy distinction.
+            && !owner_is_gauged_npc
+    }
+}
+
 /// Host-selected policy shared by every NPC and every player seat.
 /// 0x0041E230 maps Steam country JP to0; only that native region enables
 /// the safeguard. The source's other regional modes all disable it.
