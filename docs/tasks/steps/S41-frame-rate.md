@@ -998,3 +998,194 @@ simple cascade far-range change is insufficient. Native per-stage
 back-forward properties must be loaded from stage SDL, not copied as bulk
 constants. That follow-up needs normal source/GPU leases and queue timing;
 root S30/core and the queued children received this actual build handoff.
+
+### Root handoff: completed compact-default named trace
+
+Under head #7449/#7538, root ran the frozen `4f8f726` trace executable
+above with the compact flag absent, installed field checkpoint in ECON-v2
+format, x1 time, GPU mesh builder, unchanged default backend and 1920x1080.
+The checkpoint SHA-256 was
+`3690FEEFF71565855422B65BC87CF0D10B50609B4E89565C4ABC7E36B27E4208`.
+There was no demo, screenshot exit or diagnostic colour override. The
+normal GPU claim preceded launch; no Cargo/rustc/CPU diagnostic overlapped.
+
+Viewer PID34172 and harness session80963 actually exited **0**, after
+28.1841818 wall seconds. The stage100 trace window ran from
+11:47:47.949319 to 11:47:50.961720 UTC, **3.012401 wall seconds**, and its
+own completed-window condition requested normal application exit. The
+owned viewer was absent and original DDDA PID23408 remained at its verified
+install path before normal lease release #7561. No watchdog truncation
+or original-game control occurred.
+
+Actual Chrome instant markers, rather than the separate perf elapsed
+origin, bound the analysis: start **18.2024448 s**, end **21.214852 s**.
+Streaming analysis trims 100 ms from each boundary and selects the actual
+main thread `(pid1, tid0)`. It contains **209 complete main update spans**.
+Strict parsing passes with no unmatched, truncated or terminal open scopes;
+`--allow-open-scopes` was not used. The named systems migrate among compute
+workers, so the following groups combine matching system names across
+threads, with **210 complete runs each**:
+
+| Named CPU system | Total inclusive/exclusive CPU ms | CPU ms per complete main update |
+| --- | ---: | ---: |
+| Shadow `write_binned_instance_buffers` | 439.9097 | 2.104831 |
+| `prepare_preprocess_bind_groups` | 320.4129 | 1.533076 |
+| `prepare_skins` | 86.8364 | 0.415485 |
+
+Inclusive and exclusive agree for these three system scopes. Across
+threads and enclosing spans, CPU times overlap; the rows are a ranking,
+not additive frame time, critical-path savings, GPU timing or an FPS gain.
+The traced main-update median12.898 ms/p95 15.9137 ms is diagnostic only.
+Compact palettes remain the accepted default; this capture adds no code.
+
+The 320,134,513-byte raw trace, launch/exit/provenance logs, marker events,
+strict streaming summary and grouped ranking remain private under
+`E:/ddda-re/notes/steps/s41/field-compact-default-trace-4f8f726.*`.
+No game records, screenshots or trace data enter the repository.
+
+Next proposed target is finite native shadow caster extent, because shadow
+bin-buffer writing is the largest of these named CPU costs. Any adapter
+must handle both CPU directional visibility and GPU extracted shadow
+frusta, and obtain native stage properties at runtime. Head must assign
+that source scope before implementation; no culling or quality change is
+claimed here.
+
+### Prepared opt-in finite caster adapter (not yet compiled)
+
+Head #7581 approved the next source scope. Source **a60a6c9**, on the owned
+branch after reviewed-main integration **faceaee**, adds a small viewer
+adapter without modifying Bevy, its registry sources or shadow-map quality.
+It is enabled only by `DDVIEW_FINITE_SHADOW_EXTENT=1`; absence/empty/zero
+retain the accepted renderer. No default promotion or performance gain is
+claimed before the agreed full suites, release and matched x1 A/B.
+
+`SkyShadow` now reads the installed scheduler's
+`mBackforwardViewDistance` as an optional finite nonnegative value, with
+no constructor/bulk-value fallback. The native depth boundary from
+`0x00EE5CE0` uses the camera-view slice's AABB centre and enclosing radius,
+then extends toward the light by that radius plus the authored distance.
+The viewer adapts this near boundary to the existing Bevy cascades; native
+XY projection fitting/texel snapping and depth projection remain separate.
+Using a world-space AABB instead would wrongly change the sphere radius
+as the camera turns.
+
+CPU cascade entity lists are filtered after Bevy's light visibility pass,
+with the finite near plane enabled in OBB intersection. Explicit
+`NoFrustumCulling` and missing bounds remain conservative. The same planes,
+keyed by light, camera and cascade, are extracted into the render world.
+Directional shadow frusta are repaired after `prepare_lights`' deferred
+view insertion and before view-uniform preparation, restoring the finite
+GPU near halfspace for `NoCpuCulling` meshes too. Point/spot lights and
+unmapped views are unchanged. Missing stage data clears the extracted
+plane map rather than retaining stale data.
+
+Four meaningful regressions are prepared, **unexecuted**: camera/light
+rotation and native sphere boundary; remote versus crossing caster OBB;
+render-world repair for two cameras, unmapped cascades and point lights;
+and actual CPU entity-list filtering preserving opt-outs/missing bounds,
+plus clearing planes when the authored setting disappears. The existing
+installed sky regression also checks valid authored caster distances for
+both opening stages. No Cargo/GPU work overlapped head's combined-main
+checks; the root source is frozen pending its queue window after the
+children's first headless checks. Next: compile and run the full viewer
+suite with all four names present, then build/pin one executable for the
+opt-in OFF/ON identical-picture x1 comparison.
+
+Source review then caught a stage ownership issue before compilation:
+the existing initial `SkyShadowSetting` reads opening stage200 once. A
+field checkpoint or stage100 handoff must not inherit that stage's caster
+distance. Follow-up **b9c8233** reads the current `Streamer.stage` after
+opening/stream updates and caches `(stage, weather)`, without altering
+the accepted sky projection. Missing/invalid new-stage data clears the
+caster setting. A fifth prepared regression verifies stage/weather
+handoff, one installed load per key and no stale prior-stage fallback.
+This follow-up also remains **uncompiled/unexecuted**; candidate pin/plan
+metadata must use the final actually tested source, not the earlier a60
+checkpoint. The prepared private OFF/ON helper has an explicit `UNBUILT`
+guard until full acceptance and checksum/pin gates are complete.
+
+Head's uninterrupted-route regeneration found a separate RoadWalk freeze
+after ReynardRepeat, despite S50's passing resumed checkpoint. Root's
+viewer build/capture window now follows head's diagnostic build and short
+resume run, not merely the children's actual core exits. The accepted
+named trace above remains valid; no candidate capture overlapped that
+diagnosis and no full uninterrupted-route claim follows from S50.
+
+### Opt-in finite extent: full CPU gates passed, image gate pending
+
+Reviewed committed main `18a4ca5` (including head's swept push-out fix and
+accepted atomic-load helpers) was integrated into this branch as `e054c56`.
+The first full viewer attempt, session89730, actually failed compilation
+with exit101: two retained-entity conversions and the public Cascade
+module path were wrong. Its private log is preserved. Source `e338193`
+corrects those Bevy API references without changing the culling rule.
+
+The corrected complete release viewer suite, session41614, actually
+exited0: **119 passed, zero failed, two existing ignored diagnostics**.
+Compilation24.83 s; test execution16.24 s. All five finite-shadow
+regressions, the installed stage-sky test, all three compact-palette
+regressions and all five road regressions are explicitly present and pass.
+The private log is `full-shadow-extent-e338193.log` under the S41 evidence
+directory. No narrower filtered run is substituted for this suite.
+
+Release build session29754 actually exited0 in41.42 s. Frozen executable
+`E:/ddda-re/notes/steps/s41/ddview-shadow-extent-e338193.exe` has SHA-256
+`B80591EB1D620B52B3C25C733AFB1349431C90401081496181D3CA046533152E`.
+Only the existing Args/private-interface and unused audio-method warnings
+remain. Normal build lease releases followed actual exits; no new target
+or original-game operation occurred.
+
+Head #7858 completed the uninterrupted route with the push-out fix and
+regenerated canonical route-v2. The prepared matched OFF/ON plan therefore
+uses its new `route-v2/FieldSettle.ddhs`, SHA-256
+`D458FCBC8278DBD6F89A94FB5BD5AFF1D1C51E4C94A5E991382FA0063F53BB9B`.
+The old compact trace remains evidence for its own frozen checkpoint;
+it is not recast as a trace of this new scene. The new finite extent
+remains opt-in; **no image, performance or default-promotion gate is
+claimed yet**. Next: both bounded x1 captures with this one pin/checkpoint,
+no concurrent Cargo/CPU diagnostic, then inspect both actual images and
+telemetry before any promotion decision.
+
+### Matched finite extent OFF/ON completed; keep opt-in
+
+Both x1 GPU-builder/Vulkan/1920x1080 captures used the executable and new
+canonical checkpoint hashes above, default compact palettes and identical
+geometry/material/quality/camera arguments. Only finite extent changed:
+OFF absent, ON `1`, recorded in each private case manifest. No Cargo or
+native diagnostic overlapped either capture. OFF session92269/PID33108
+actually exited0 after63.3138837 s; ON session19067/PID7360 actually
+exited0 after63.0371166 s. Both normal GPU leases were released only after
+the owned viewer was absent and original DDDA PID23408 was verified alive.
+
+Root personally inspected both actual PNGs. The same dressed Arisen,
+second body, terrain, trees, flag/cart, HUD and visible shadow boundaries
+are retained. This is one field pose, not a claim of every caster/view
+configuration or original-game rendering parity. The ON log confirms
+current stage100 and an installed caster extension of30000 cm; no fallback
+constant supplies it. The plan uses the new route-v2 checkpoint rather
+than an old capture mislabeled as current.
+
+| Warm report at elapsed seconds | OFF median/p95 ms | ON median/p95 ms |
+| --- | ---: | ---: |
+| 25 | 10.6 / 12.2 | 10.6 / 12.6 |
+| 30 | 10.8 / 11.7 | 10.5 / 11.2 |
+| 35 | 10.8 / 12.4 | 10.7 / 12.4 |
+| 40 | 10.9 / 12.5 | 10.6 / 12.5 |
+
+Mesh allocations1423, DD material allocations1975 and UI entities141
+match. Cross-view visible meshes fluctuate689..692 with actor animation;
+bin-unpacking compute invocations remain approximately48,500 in both.
+The four GPU telemetry samples covering the corresponding20..40 s windows
+show original-game 3D utilization0%. OFF graphics clocks2400..2460 MHz,
+ON2475..2550 MHz; both memory8501 MHz/P0. These clocks covary with the
+small wall-time difference, and p95 is not consistently better. **No
+frequency-independent speedup or default promotion is justified.**
+
+Private evidence prefix is
+`E:/ddda-re/notes/steps/s41/field-shadow-extent-{off,on}-e338193-r1`, with
+actual PNG/run/case/exit/PID/GPU/diagnostic files. No images or game records
+are committed. This is a fully tested/captured **opt-in experiment ready
+for head review**, not S41 completion or a demonstrated performance win.
+Next proposed performance target is the named preprocessing bind-group
+preparation cost; reducing this authored caster distance by eye would
+violate the research method. Source/runtime scope remains head's decision.

@@ -53,6 +53,7 @@ mod level_up_notice;
 mod pause;
 mod settings;
 mod shadows;
+mod shadow_extent;
 mod sky;
 mod stage;
 
@@ -636,6 +637,7 @@ fn main() {
         .add_plugins(stage::ShadingPlugin)
         .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)
+        .add_plugins(shadow_extent::FiniteShadowPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
         .init_resource::<play::CameraConfig>()
