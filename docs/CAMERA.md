@@ -418,3 +418,39 @@ accumulator/smoother/pose shift before the stage sweep. The existing
 `Body::push_volumes` can guide placement but loses source kind and callback
 state; it cannot be used directly as the complete provider. No dragon
 runtime or viewer files were changed for this handoff.
+
+### Separate collision anchor and view axis
+
+A direct entry snapshot of **0x007de570** confirms ESI is the candidate
+eye, EDI the collision anchor, and argument 1 the normalized outward view
+direction. The anchor can differ from the look target. **0x007e1400**
+selects the anchor from camera settings +0x224/+0x228/+0x22c; for normal
+camera conditions it switches to actor model position plus settings +0x70
+when pitch is below **-0.8** (or the actor-avoidance overlap succeeds).
+A live Cassardis steep-pitch sample had anchor at feet +155 cm, while its
+look target lay roughly a metre to the side. That 155 cm is an authored
+setting, not a universal constant: base settings constructor **0x007b64e0**
+initializes +0x70 to120 cm, and `rCameraParamList` **0x007d01b0** loads the
+reflected settings. Runtime camera-parameter loading/selection remains
+unimplemented; the follow adapter still chooses its approximate target
+as anchor.
+
+The collision helper now accepts these inputs independently. Source
+**0x007de5dd..0x007de657** computes radius as `near*1.3 +
+(1 - abs(dot(view_outward, normalize(eye-anchor))))*10`. The near-plane
+offset uses the original view direction even after ray correction.
+A synthetic perpendicular-anchor test covers both distinctions. The
+private diagnostic accepts optional anchor/direction columns for exact
+helper-input replay. No sampled poses are embedded.
+
+With those inputs, a genuine Cassardis lintel-edge contact matches eye and
+target to **0.000702 cm**; two clear neighboring poses match exactly.
+The earlier steep-pitch sample's 13.479 cm mismatch used the wrong anchor
+and does not establish a convex-query defect. The wall sample rerun after
+this refactor matches to **0.001041 cm** (small floating-point differences
+from the previously collinear shortcut). Eight camera-filtered tests pass
+(including one existing HUD test), one private diagnostic is ignored by
+default, and release build passes. These are installed-geometry collision
+comparisons, not full rendered follow-camera acceptance: authored target
+height, runtime anchor selection, camera lag and actor avoidance remain
+incomplete.

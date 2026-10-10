@@ -115,3 +115,21 @@ of an unresolved difference, not roof acceptance. The outer caller can
 choose an actor-relative collision anchor separately from the look target
 (and switches anchor behavior below pitch -0.8); recording the actual
 helper inputs is the next action before assessing convex geometry error.
+
+Fifth checkpoint: direct **0x007de570** entry snapshots resolve the anchor
+mismatch. The helper now accepts collision anchor and outward viewing
+axis separately and translates the source angular radius allowance.
+Original low-lintel collision replay matches eye/target to **0.000702 cm**,
+with two clear samples exact; the wall rerun matches to **0.001041 cm**.
+Eight filtered tests pass (seven camera plus existing HUD), and release
+build passes (35.09s, three existing warnings). The diagnostic accepts
+optional actual helper inputs. All hooks were restored and verified;
+original restored pause/bgOff; live claim released for ambient research.
+
+Remaining: the viewer's full follow adapter still uses its approximate
+look target as collision anchor. Source chooses an actor-relative anchor
+below pitch -0.8 (or actor avoidance), using authored camera parameters.
+155 cm observed live differs from120 cm constructor default; do not
+hardcode the capture. Next action is load `rCameraParamList` settings and
+translate anchor selection, then compare the fully rendered follow pose.
+The two collision contacts match; this does not close full-pose acceptance.

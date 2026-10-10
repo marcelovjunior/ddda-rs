@@ -802,15 +802,26 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
 /// so original candidate poses can be compared without assuming its lag,
 /// authored target height or actor avoidance offset.
 fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, near: f32) -> (Vec3, Vec3) {
+    let view_outward = (desired_eye - target).normalize_or_zero();
+    collide_camera_query(ground, desired_eye, target, target, view_outward, near)
+}
+
+/// 0x007de570 takes the collision anchor (EDI) independently from the
+/// outward view direction (argument 1). The outer caller can choose an
+/// actor-relative anchor, so recomputing the view direction from it is wrong.
+fn collide_camera_query(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3,
+    anchor: Vec3, view_outward: Vec3, near: f32) -> (Vec3, Vec3) {
     let mut eye = desired_eye;
-    if let Some((hit, flags)) = camera_ray(ground, target, eye) {
+    let ray_direction = (eye - anchor).normalize_or_zero();
+    // Translated from 0x007de5dd..0x007de657 (DDDA.exe 2017-12-13 Steam).
+    let radius = near * 1.3 + (1.0 - view_outward.dot(ray_direction).abs()) * 10.0;
+    if let Some((hit, flags)) = camera_ray(ground, anchor, eye) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
-    let toward = (target - eye).normalize_or_zero();
-    let radius = near * 1.3;
+    let toward = -view_outward.normalize_or_zero();
     let centre = eye + toward * near;
     if sphere_hits(ground, centre, radius) {
-        if let Some((stop, flags)) = camera_sphere_cast(ground, target, centre, radius) {
+        if let Some((stop, flags)) = camera_sphere_cast(ground, anchor, centre, radius) {
             if flags & 0x10 == 0 { eye = stop - toward * near; }
         }
     }
@@ -1239,6 +1250,23 @@ mod tests {
     }
 
     #[test]
+    fn camera_query_keeps_view_direction_separate_from_anchor() {
+        // Synthetic perpendicular query: the 0x007de570 angular allowance
+        // adds 10 cm, while the near-plane offset remains on the view axis.
+        let mut terrain = ddworld::Terrain::empty();
+        terrain.add([[-1000.0, -1000.0, 90.0], [1000.0, -1000.0, 90.0], [0.0, 1000.0, 90.0]]);
+        let desired_eye = Vec3::new(0.0, 0.0, 100.0);
+        let target = desired_eye - Vec3::X * 100.0;
+        let (eye, corrected_target) = collide_camera_query(&terrain, desired_eye, target,
+            Vec3::ZERO, Vec3::X, 16.0);
+        assert!((eye.z - 59.1).abs() < 0.002, "{eye:?}");
+        // The sphere sweeps toward (ray-hit - view*near), then the eye
+        // recovers the same near offset. It must not substitute ray direction.
+        assert!(eye.x > 0.0 && eye.x < 16.0, "{eye:?}");
+        assert!((corrected_target - eye + Vec3::X * 100.0).length() < 0.001);
+    }
+
+    #[test]
     fn camera_sphere_initial_overlap_uses_penetration_normal() {
         let mut terrain = ddworld::Terrain::empty();
         terrain.add([[-1000.0, -1000.0, -10.0], [1000.0, -1000.0, -10.0], [0.0, 1000.0, -10.0]]);
@@ -1283,16 +1311,21 @@ mod tests {
     #[ignore = "requires private original camera pose samples and game installation"]
     fn camera_compare_private_original_poses() {
         // Each private row: candidate eye, candidate target, actual eye,
-        // actual target, active near. No recordings are embedded in repo.
+        // actual target, active near; optionally anchor and outward direction.
+        // No recordings are embedded in repo.
         let path = std::env::var("DDDA_CAMERA_POSES").expect("private pose file");
         let native = std::env::var("DDDA_NATIVE_PC").expect("nativePC path");
         let vfs = ddvfs::Vfs::open(native).unwrap();
         let terrain = ddhost::install::stage_collision(&vfs, 200).unwrap();
         for (index, line) in std::fs::read_to_string(path).unwrap().lines().enumerate() {
             let v: Vec<f32> = line.split(',').map(|s| s.parse().unwrap()).collect();
-            assert_eq!(v.len(), 13);
+            assert!(v.len() == 13 || v.len() == 19);
             let point = |start| Vec3::new(v[start], v[start + 1], v[start + 2]);
-            let (eye, target) = collide_camera(&terrain, point(0), point(3), v[12]);
+            let (eye, target) = if v.len() == 19 {
+                collide_camera_query(&terrain, point(0), point(3), point(13), point(16), v[12])
+            } else {
+                collide_camera(&terrain, point(0), point(3), v[12])
+            };
             eprintln!("camera sample {index}: eye={eye:?} target={target:?}; errors eye={} target={}", eye.distance(point(6)), target.distance(point(9)));
         }
     }
