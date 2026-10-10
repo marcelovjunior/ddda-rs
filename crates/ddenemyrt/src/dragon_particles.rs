@@ -54,7 +54,7 @@ pub struct CoordinateDefinition {
     pub scale: [[f32; 2]; 3],
     pub local_offset: [f32; 3],
     /// Copied by0x010FBB20, not consumed as a float by0x010FC1D0.
-    /// Its meaning is unresolved; installed resources contain NaN bit patterns.
+    /// Encoded signed parent joint; negative values select the effect parent.
     pub offset_tail: u32,
     pub local_quaternion: [f32; 4],
     pub seed: i32,
@@ -62,7 +62,66 @@ pub struct CoordinateDefinition {
     pub curve_offsets: [u16; 4],
 }
 
+/// Static local coordinate output before vf43 applies its parent binding.
+/// Scale remains separate: multiplying it into this rotation would apply
+/// the effect/parent scale twice when the actual coordinate is assembled.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoordinateBasis {
+    pub rotation: mtlmt::pose::Mat4,
+    pub offset: [f32; 3],
+    pub scale: [f32; 3],
+    pub largest_scale: f32,
+}
+
 impl CoordinateDefinition {
+    /// The apparent fourth offset float is a signed parent joint identifier.
+    /// A negative identifier selects the effect's unscaled parent matrix.
+    // Translated from 0x010FBB20 -> 0x00E73720 -> 0x00E705C0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn parent_joint(&self) -> i32 { self.offset_tail as i32 }
+
+    /// Nonmirrored static basis only. Mirrored quaternion conversion and
+    /// vf43 parent/secondary binding remain separate native adapters.
+    // Translated from 0x010FC1D0 (DDDA.exe 2017-12-13 Steam).
+    pub fn static_basis(&self, sampled_scale: [f32; 3], effect_scale: [f32; 3],
+        mirrored: bool) -> Result<CoordinateBasis, String> {
+        if mirrored { return Err("mirrored coordinate needs native quaternion conversion".into()); }
+        if self.curve_offsets.iter().any(|&offset| offset != 0) {
+            return Err("dynamic coordinate basis needs native context".into());
+        }
+        if self.local_quaternion.iter().chain(self.local_offset.iter())
+            .chain(sampled_scale.iter()).chain(effect_scale.iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite static coordinate input".into());
+        }
+        let scale = std::array::from_fn(|axis| effect_scale[axis] * sampled_scale[axis]);
+        if scale.iter().any(|v: &f32| !v.is_finite()) { return Err("static coordinate scale overflow".into()); }
+        let mut largest_scale = scale[0];
+        if largest_scale <= scale[1] { largest_scale = scale[1]; }
+        if scale[2] > largest_scale { largest_scale = scale[2]; }
+        // Preserve the raw quaternion and native scalar operation order
+        // without normalizing the quaternion.
+        let [x, y, z, w] = self.local_quaternion;
+        let double_z = z * 2.0;
+        let double_y = y * 2.0;
+        let double_x = x * 2.0;
+        let double_wx = w * double_x;
+        let double_xx = x * double_x;
+        let double_zz = z * double_z;
+        let rotation = [
+            [1.0 - (double_zz + y * double_y), x * double_y + w * double_z,
+                x * double_z - w * double_y, 0.0],
+            [x * double_y - w * double_z, 1.0 - (double_zz + double_xx),
+                y * double_z + double_wx, 0.0],
+            [x * double_z + w * double_y, y * double_z - double_wx,
+                1.0 - (y * double_y + double_xx), 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        if rotation.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("static coordinate rotation overflow".into());
+        }
+        Ok(CoordinateBasis { rotation, offset: self.local_offset, scale, largest_scale })
+    }
+
     // Translated from 0x01147790, 0x010F9DB0, 0x010FA080 and
     // 0x010FBB20 (DDDA.exe 2017-12-13 Steam).
     pub fn read(list: &mteffect::EffectList, index: u16) -> Result<Self, String> {
@@ -589,6 +648,29 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_coordinate_basis_preserves_raw_rotation_and_separate_scale() {
+        let mut definition = CoordinateDefinition {
+            flags: 0, binding_bits: 0, scale: [[1.0, 0.0]; 3],
+            local_offset: [11.0, 22.0, 33.0], offset_tail: u32::MAX,
+            // Deliberately nonunit: normalizing would change this rotation.
+            local_quaternion: [0.5, 0.0, 0.0, 0.5], seed: 0,
+            delay: DurationRange { base: 0, variation: 0 }, curve_offsets: [0; 4],
+        };
+        assert_eq!(definition.parent_joint(), -1);
+        let basis = definition.static_basis([0.5, 2.0, -0.25], [2.0, -3.0, 4.0], false).unwrap();
+        assert_eq!(basis.rotation, [[1.0, 0.0, 0.0, 0.0], [0.0, 0.5, 0.5, 0.0],
+            [0.0, -0.5, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+        assert_eq!(basis.offset, [11.0, 22.0, 33.0]);
+        assert_eq!(basis.scale, [1.0, -6.0, -1.0]);
+        assert_eq!(basis.largest_scale, 1.0, "native maximum is not an absolute radius");
+        assert!(definition.static_basis([1.0; 3], [1.0; 3], true).is_err());
+        definition.curve_offsets[0] = 1;
+        assert!(definition.static_basis([1.0; 3], [1.0; 3], false).is_err());
+        definition.curve_offsets[0] = 0;
+        assert!(definition.static_basis([f32::MAX; 3], [2.0; 3], false).is_err());
+    }
 
     #[test]
     fn coordinate_resource_resolves_relative_table_and_preserves_native_fields() {
