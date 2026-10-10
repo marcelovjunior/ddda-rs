@@ -42,6 +42,7 @@ names exactly what still blocks it with measurements.
 
 - Branch `step/s41-frame-rate`, worktree
   `E:/ddda-rs-wt/s41-frame-rate`; reviewed source base `10da58b`.
+  Current source checkpoint `9f6ab4d` includes reviewed main `0eb3a1b`.
   No renderer optimization has been measured or claimed yet.
 - `--perf` and `--perf-route` already select `AutoNoVsync`; unattended
   runs already use continuous Winit updates. The host keeps its existing
@@ -63,31 +64,132 @@ names exactly what still blocks it with measurements.
   and private paths are in the script. It does not control the original.
 - `scripts/perf_trace.py` summarizes bounded warm CPU trace windows by
   thread and span; inclusive and exclusive spans are kept separate and
-  overlapping threads must not be summed as frame time. Four regression
-  tests pass (nested/parallel work, boundary clipping, distinct threads,
-  broken capture rejection); launcher PowerShell syntax check passes.
+  overlapping threads must not be summed as frame time. It streams the
+  tracing-chrome event array instead of retaining multi-gigabyte captures,
+  requires explicit frame-thread selection when several threads emit the
+  marker, and normalizes Bevy's empty formatted-field suffix. Nine
+  regression tests pass, including clipped child accounting and explicit
+  reporting of terminal open scopes. Open scopes are never counted as
+  completed frames; the opt-in allowance requires independently verified
+  normal process exit. Launcher PowerShell syntax check passes.
 - Initial source trace build **failed with exit 1**: merged S34's new
   `Victim::Npc` was missing from three `ddnet/src/mirror.rs` matches
   (431/446/489). Reported on board #5007/#5012 to the S34 owner; no
   renderer performance conclusion follows from this build failure.
   Head fixed the matches in `e268c65`, integrated on this task branch as
-  `c5e0760`; the profiling changes still await their own source build.
+  `c5e0760`. Subsequent trace release build from `aab579d` exited 0 in
+  6m24s; default release tests from `9f6ab4d` passed 71, with two existing
+  ignored tests (21.76s compile, 12.05s test). Default release build exited
+  0 in 49.56s. Existing private-interface/audio warnings remain.
 - Launcher additionally supports explicit `-Backend vulkan|dx12` (default
   `auto`) and records optional NVIDIA utilization/clock/power-state CSV.
   This enables an unchanged-scene experiment: Bevy 0.19.1 release
   `WgpuSettings` retains indirect-call validation when its requested
   backends include DX12, even if the selected adapter is Vulkan; an
   explicit Vulkan request removes that flag. **Hypothesis only**, not a
-  measured improvement or a new default.
+  measured improvement or a new default; the identical-scene experiment
+  below did **not** improve the median.
 - Head #4984 requires the original game to remain running for maintainer
   probes. Read-only original PID 23408 3D samples before our captures were
   25–31%. Relative before/after samples must record its concurrent share;
   isolated absolute 180 fps acceptance needs a later maintainer run with
-  the original closed. Head currently owns the separate route capture;
-  no S41 GUI capture has started and no GPU lease is held. Head released
-  the completed ordinary route on #5091 and queued S40's camera capture
-  first, then S41. Its observed rescue/thank/repeat route is separate from
-  S41 performance acceptance.
-- Next: build the opt-in profiler after the S34 compatibility fix, obtain
-  the free GPU lease, measure identical Cassardis/field scenes and the
-  ordinary route, then optimize the largest measured cost.
+  the original closed. Original-game GPU share during the actual warm
+  captures below was 9–17%, at a different GPU clock from that idle probe.
+  The original was neither controlled nor closed.
+
+### Private executable provenance
+
+Private binaries, traces and recordings remain outside the repository.
+
+| Build | Source | Private pin | SHA-256 |
+| --- | --- | --- | --- |
+| Default | `9f6ab4d2f390a9980b2cf700aa242f4152658824` | `E:/ddda-re/notes/steps/s41/ddview-default-9f6ab4d.exe` | `45A458C289C8B1EF48B4DB7B930D3F6EECEB6B54AEC8A9B6932CBBAD576BF57C` |
+| Trace (`profile-trace`) | `aab579dde2c030da69e3b8ed31ebb059d0138004` | `E:/ddda-re/notes/steps/s41/ddview-trace-aab579d.exe` | `917799DE6833F07C153F08DF8B4B490CE0685A50C5A5D38B8443C31B6AFEFFE9` |
+
+Trace pin predates the NPC body materialization merge in the default pin.
+These standalone `--play` captures create no `OpeningSession`; their
+rendering/geometry source is identical. Neither older pin should be used
+to validate the subsequent S40 camera route fixes.
+
+### Standalone field measurements (not the ordinary route)
+
+Identical arguments for all three captures:
+
+```text
+E:/SteamLibrary/steamapps/common/DDDA/nativePC
+--play --stage 100 --cell 64,54
+--spawn 138.387,31224.596,3931.14
+--pos 138.387,31400,4431.14 --look 138.387,31400,3431.14
+--players 2 --clock 12:00 --perf --unattended --size 1920x1080
+```
+
+Spawn is the recorded S32 field point `(40138.387,31224.596,143931.14)`
+relative to cell `64m54n` origin `(40000,0,140000)`. This normal standalone
+benchmark setup does not move actors or acknowledge quests in the route.
+The scene has 1907 entities, 982 meshes, 365 visible meshes (263 unique),
+208 visible DD materials / 745 allocated. The ordinary route previously
+had about 4744–5314 entities, 1712–1971 meshes, 1068 visible meshes and 479
+visible materials / 2021 allocated. These are different scenes: the static
+result is not evidence of an improvement to the ordinary route.
+
+| Capture prefix under `E:/ddda-re/notes/steps/s41/` | Owned PID | Duration including startup | OS exit | Warm 5-second window medians, elapsed 20–55s | Median of those medians |
+| --- | --- | --- | --- | --- | --- |
+| `field-default-9f6ab4d` | 20220 | 67.220285s | 0 | 8.8, 8.8, 9.0, 8.9, 8.8, 8.9, 8.8ms | 8.8ms |
+| `field-vulkan-9f6ab4d` | 30364 | 67.3577866s | 0 | 18.9, 10.2, 9.5, 8.8, 8.8, 8.7, 8.8ms | 8.8ms |
+| `field-trace-aab579d` | 26276 | 52.3729081s | 0 | Instrumented; excluded from acceptance | See CPU trace below |
+
+The first two ran for 60 seconds after the first perf update; the trace
+ran for 45 seconds. Default warm p99 windows were 12.1–14.6ms. Explicit
+Vulkan warm p99 windows were 11.4–37.1ms, retaining the transient early
+slowdown rather than discarding it. There is no measured reason to change
+the default backend. NVIDIA warm graphics/memory clocks were stable at
+2745/8501MHz (P0). The Vulkan slowdown coincided with lower total GPU load
+(one 37% sample); its cause is unresolved, not attributed to clock changes.
+Original process PID 23408 warm 3D utilization was 13–16% in the default
+capture and 9–17% in the Vulkan capture. Viewer share was 57–67% and
+29–69%, respectively. Harness metadata, GPU samples and logs preserve the
+coactivity evidence. Root's short core review overlapped startup/warm-up
+of the default capture; the reported steady windows were after it ended.
+
+Default GPU diagnostics (median of eight logged warm averages) measured
+opaque 4.393ms, bin unpack 0.693ms, clustering 0.068ms, early mesh 0.024ms,
+transparent 0.024ms, upscale 0.100ms and UI 0.005ms. Opaque is the largest
+measured GPU pass. CPU encoding diagnostics for that pass are not GPU time.
+
+### CPU trace breakdown
+
+The 6,119,163,198-byte private trace was streamed successfully (analyzer
+OS exit 0). Window 30–45s, explicitly selected Chrome `(pid=1, tid=0)`;
+metadata names that thread `main`, and it is the only thread emitting
+`update`. It contains 1546 complete frames, median 9.219ms, p95 12.933ms.
+Tracing overhead means these frame times are not acceptance measurements.
+
+| Span / thread | Inclusive wall ms per main frame | Exclusive wall ms per main frame |
+| --- | --- | --- |
+| Main-thread update | 9.588 | 0.005 |
+| Main-thread RenderExtractApp | 6.766 | 5.900 |
+| Main app | 2.817 | 0.003 |
+| Render-thread Render schedule | 9.124 | 4.542 |
+| Render-thread render_system | 4.199 | 0.003 |
+| Render-thread queue_submit | 0.997 | 0.997 |
+| Render-thread bin unpack encoding | 0.777 | 0.777 |
+| Render-thread shadow encoding | 0.445 | 0.445 |
+
+These spans overlap across threads and parents; summing them would be
+incorrect. Bevy 0.19.1 `bevy_render/src/pipelined_rendering.rs:184–198`
+confirms `renderer_extract` waits for `render_channels.recv()` inside
+`scope_with_executor`, then extracts and returns the render world. This
+scope may also run pending executor tasks while waiting. Therefore the
+5.900ms exclusive wall time mixes handoff/waiting and any untraced work;
+it is not a proven 5.900ms CPU-computation cost. Seven terminal open scopes were explicitly omitted
+after verifying normal process exit; the two long-lived app/thread scopes
+and late shutdown scopes are listed in the private summary. All measured
+complete frames end before shutdown.
+
+All owned captures exited and GPU was actually released on board #5375;
+head #5358 gives S40's camera12 route priority while this analysis proceeds.
+No S41 GUI process or Cargo build remains. Cassardis, the current ordinary
+route and same-picture optimization comparison remain **OPEN**. Next:
+finish identifying actual render-thread work versus waits from the pinned
+Bevy source, measure Cassardis/updated route after S40 releases the GPU,
+then test the largest measured cost without changing presentation quality.
