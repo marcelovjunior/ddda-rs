@@ -252,6 +252,34 @@ remain open. Parent authorized a subsequent source-only private actual-line
 capture hook, with a new full viewer/build gate after S56's queued window.
 The pin above predates that future hook; it is not a captured speech result.
 
+### Actual-line capture source preparation (uncompiled/unexecuted)
+
+Parent authorized a separate source-only capture hook after the verified
+5557883 gate. `DDVIEW_S52_CAPTURE_DIR` names an **already existing** directory
+under canonical `E:/ddda-re`; it is independent of opening `--shots`.
+One fixed `S52-pawn-chatter.png` is requested only after a genuinely resolved
+installed line has spawned its glyph entities and all those nodes have been
+positioned by a subsequent presenter update, unpaused and outside an event.
+If an older row is replaced before its first projection, the pending target
+tracks the newest genuine line. No speech, input, timer or message is injected.
+
+The `ScreenshotCaptured` observer converts the actual image to RGB, matching
+Bevy's HDR-alpha handling, then logs **`S52_CAPTURE_SAVED`** only after the
+PNG save returns success; failures become `S52_CAPTURE_FAILED`. It revalidates
+the canonical directory and refuses an existing output (including symlinks)
+at callback time. A new headless regression delivers a synthetic CPU image
+to that real observer and checks PNG dimensions, actual success/failure state,
+outside-root rejection and preserved existing output. That synthetic test is
+not a captured game scene. The new hook and regression are **uncompiled and
+unexecuted** until the next full viewer/default-release window after S56 and
+head's opening-hook gate. No new pin or capture result is claimed yet.
+
+Head reported reviewed protocol10 merged to main **6afbc3c** (board8123),
+and has prepared the opening hooks below. Those head edits remain uncommitted
+until their own full gate; this branch does not copy or edit that work in
+progress. Network and declaration/story claims were normally handed back;
+protocol11 is now S53's coordinated scope.
+
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
 markup, portraits, filters, slide/fade sequences, GUI acceptance/history,
