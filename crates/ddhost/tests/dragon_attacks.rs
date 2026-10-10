@@ -23,6 +23,10 @@ fn installed_entrance_continues_to_press_using_prior_host_terrain_and_gsf() {
     let exe = ddexe::ExeFile::next_to(&native).unwrap();
     let image = exe.image().unwrap();
     let dragon_data = ddhost::dragon::OpeningDragonData::load(&vfs, &image).unwrap();
+    assert_eq!(dragon_data.target.kind, 2);
+    assert_eq!(dragon_data.target.group, dragon_data.group.slot);
+    // The authored dragon has layout ID1, rather than its Vec ordinal0.
+    assert_eq!(dragon_data.target.index, 1);
     let mut story = ddstory::Story::new_game(ddhost::data::NoStoryData);
     story.stage.stage_no = 200;
     story.world.stage_no = 200;

@@ -16,7 +16,7 @@ use ddid::{Parts, PlayerId, Reader, Result, Writer};
 use dditem::rules::StockSlot;
 use std::collections::BTreeSet;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 fn bag(w: &mut Writer, b: &Bag) {
     w.len(b.slots.len());
@@ -25,11 +25,61 @@ fn bag(w: &mut Writer, b: &Bag) {
     }
 }
 
-fn read_bag(r: &mut Reader) -> Result<Bag> {
+#[cfg(test)]
+mod opening_tests {
+    use super::*;
+    #[test]
+    fn opening_delivery_ids_follow_saved_player_parts_when_seats_swap() {
+        let mut e=Economy::default();
+        e.opening_phase=Some(crate::new_game::Phase::NewlyArisen);
+        e.inventory.bag_mut(Owner::Arisen(0)).slots.push(Slot{item:43,num:5,flags:1});
+        e.inventory.bag_mut(Owner::Arisen(1)).slots.push(Slot{item:1058,num:1,flags:1});
+        e.opening_grants.first_choices.insert(0);
+        e.opening_grants.rewards.insert((0,1));
+        let mut parts=e.save();
+        let first=parts.players.remove(&0).unwrap();
+        let second=parts.players.remove(&1).unwrap();
+        parts.players.insert(0,second);parts.players.insert(1,first);
+        let restored=Economy::load(&parts).unwrap();
+        assert_eq!(restored.inventory.bag(Owner::Arisen(1)).unwrap().count(43),5);
+        assert!(restored.opening_grants.first_choices.contains(&1));
+        assert!(restored.opening_grants.rewards.contains(&(1,1)));
+        assert!(!restored.opening_grants.rewards.contains(&(0,1)));
+        assert_eq!(restored.opening_phase,e.opening_phase);
+        let mut mixed=parts.clone();
+        let old_player=mixed.players.get_mut(&0).unwrap();
+        old_player[0]=1;
+        old_player.truncate(old_player.len()-5);
+        assert!(Economy::load(&mixed).is_err(), "mixed versions must not lose delivery protection");
+        let mut invalid=parts;*invalid.shared.last_mut().unwrap()=99;
+        assert!(Economy::load(&invalid).is_err());
+    }
+
+    #[test]
+    fn legacy_econ_v1_loads_bags_without_invented_opening_grants() {
+        let mut shared=Writer::new();
+        shared.u8(1).u64(0).len(RECORDS);
+        for _ in 0..RECORDS {shared.bool(false);}
+        shared.len(0).len(0).len(0).i32(0).bool(false).len(0);
+        let mut player=Writer::new();
+        player.u8(1).bool(false).bool(true).len(1).i16(43).i16(3).u32(1).bool(false);
+        let parts=Parts{shared:shared.finish(),players:[(7,player.finish())].into()};
+        let restored=Economy::load(&parts).unwrap();
+        assert_eq!(restored.inventory.bag(Owner::Arisen(7)).unwrap().count(43),3);
+        assert!(restored.opening_phase.is_none());
+        assert!(restored.opening_grants.rewards.is_empty());
+        assert!(restored.opening_grants.first_choices.is_empty());
+    }
+}
+
+fn read_bag(r: &mut Reader, maximum: usize) -> Result<Bag> {
     let n = r.len(8)?;
+    if n > maximum { return Err("ECON bag slot limit".into()); }
     let mut slots = Vec::with_capacity(n);
     for _ in 0..n {
-        slots.push(Slot { item: r.i16()?, num: r.i16()?, flags: r.u32()? });
+        let slot = Slot { item: r.i16()?, num: r.i16()?, flags: r.u32()? };
+        if slot.item < 0 || slot.num <= 0 { return Err("ECON occupied slot item/count".into()); }
+        slots.push(slot);
     }
     Ok(Bag { slots })
 }
@@ -41,8 +91,14 @@ fn opt_bag(w: &mut Writer, b: Option<&Bag>) {
     }
 }
 
-fn read_opt_bag(r: &mut Reader) -> Result<Option<Bag>> {
-    Ok(if r.bool()? { Some(read_bag(r)?) } else { None })
+fn read_opt_bag(r: &mut Reader, maximum: usize) -> Result<Option<Bag>> {
+    Ok(if r.bool()? { Some(read_bag(r, maximum)?) } else { None })
+}
+
+fn version(r: &mut Reader) -> Result<u8> {
+    let v=r.u8()?;
+    if !matches!(v,1|VERSION) { return Err(format!("ECON version {v}")); }
+    Ok(v)
 }
 
 fn set(w: &mut Writer, s: &BTreeSet<u32>) {
@@ -98,6 +154,13 @@ impl Economy {
             w.u8(n);
             bag(&mut w, b);
         }
+        // Project format v2 persists delivery state beside the native-derived
+        // bags. Per-profile delivery sets remap with the corresponding bag.
+        w.u8(match self.opening_phase {
+            None=>0,Some(crate::new_game::Phase::BeforeCreation)=>1,
+            Some(crate::new_game::Phase::DragonChallenge)=>2,
+            Some(crate::new_game::Phase::NewlyArisen)=>3,
+        });
         let mut seats: BTreeSet<PlayerId> = self.wallets.keys().copied().collect();
         for o in self.inventory.bags.keys() {
             if let Owner::Arisen(p) | Owner::Storage(p) = o {
@@ -115,6 +178,11 @@ impl Economy {
                 };
                 opt_bag(&mut w, self.inventory.bags.get(&Owner::Arisen(p)));
                 opt_bag(&mut w, self.inventory.bags.get(&Owner::Storage(p)));
+                w.bool(self.opening_grants.first_choices.contains(&p));
+                let rewards: Vec<_> = self.opening_grants.rewards.iter()
+                    .filter_map(|&(seat,quest)|(seat==p).then_some(quest)).collect();
+                w.len(rewards.len());
+                for quest in rewards {w.u32(quest);}
                 (p, w.finish())
             })
             .collect();
@@ -126,7 +194,7 @@ impl Economy {
     pub fn load(parts: &Parts) -> Result<Economy> {
         let mut e = Economy::default();
         let mut r = Reader::new(&parts.shared);
-        r.version("ECON", VERSION)?;
+        let shared_version=version(&mut r)?;
         e.last_day = r.u64()?;
         let n = r.len(1)?;
         if n != RECORDS {
@@ -161,20 +229,32 @@ impl Economy {
         e.inventory.main_pawn_present = r.bool()?;
         for _ in 0..r.len(5)? {
             let n = r.u8()?;
-            e.inventory.bags.insert(Owner::Pawn(n), read_bag(&mut r)?);
+            if n > 2 || e.inventory.bags.contains_key(&Owner::Pawn(n)) { return Err("ECON pawn bag identity".into()); }
+            e.inventory.bags.insert(Owner::Pawn(n), read_bag(&mut r, crate::inventory::BAG_SLOTS)?);
+        }
+        if shared_version>=2 {
+            e.opening_phase=match r.u8()? {0=>None,1=>Some(crate::new_game::Phase::BeforeCreation),2=>Some(crate::new_game::Phase::DragonChallenge),3=>Some(crate::new_game::Phase::NewlyArisen),_=>return Err("ECON opening phase".into())};
         }
         r.end()?;
         for (&p, b) in &parts.players {
             let mut r = Reader::new(b);
-            r.version("ECON player", VERSION)?;
+            let player_version=version(&mut r)?;
+            if player_version != shared_version { return Err("ECON mixed part versions".into()); }
             if r.bool()? {
                 e.wallets.insert(p, Wallet { gold: r.i32()?, rift_crystals: r.i32()? });
             }
-            if let Some(b) = read_opt_bag(&mut r)? {
+            if let Some(b) = read_opt_bag(&mut r, crate::inventory::BAG_SLOTS)? {
                 e.inventory.bags.insert(Owner::Arisen(p), b);
             }
-            if let Some(b) = read_opt_bag(&mut r)? {
+            if let Some(b) = read_opt_bag(&mut r, crate::inventory::STORAGE_SLOTS)? {
                 e.inventory.bags.insert(Owner::Storage(p), b);
+            }
+            if player_version>=2 {
+                if r.bool()? {e.opening_grants.first_choices.insert(p);}
+                for _ in 0..r.len(4)? {
+                    let quest=r.u32()?;
+                    if !e.opening_grants.rewards.insert((p,quest)) {return Err("ECON repeated reward identity".into());}
+                }
             }
             r.end()?;
         }

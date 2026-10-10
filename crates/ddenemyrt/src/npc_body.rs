@@ -29,13 +29,14 @@ pub struct NpcFighter {
     pub yaw: f32,
     pub scale: [f32; 3],
     pub flags: u32,
+    pub hit_guard: crate::npc_combat::GaugeHitGuard,
 }
 
 impl NpcFighter {
     pub fn new(npc: u32, generation: u64, owner: u32, body: Arc<NpcBody>,
         region: ddcombat::damage::RegionPool, motion: MotionId) -> Self {
         Self { npc, generation, body, motion, frame: 0.0, position: [0.0; 3],
-            yaw: 0.0, scale: [1.0; 3], flags: 0,
+            yaw: 0.0, scale: [1.0; 3], flags: 0, hit_guard: Default::default(),
             fighter: Fighter { owner,
                 // No NPC attack volumes are registered by this ordinary
                 // passive body. Weapon/equipment attacks remain unsupported.

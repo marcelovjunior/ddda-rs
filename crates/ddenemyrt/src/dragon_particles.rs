@@ -44,6 +44,148 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Native world-query descriptor, resolved relative to the life payload.
+/// This is separate from the secondary effect's travel delay at life+0x44.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldCollision {
+    pub flags: u32,
+    pub radius_growth: f32,
+    pub radius: f32,
+    pub radius_limit_extra: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WorldQuery {
+    Sphere { from: [f32; 3], to: [f32; 3], radius: f32 },
+    Line { from: [f32; 3], to: [f32; 3] },
+}
+
+impl WorldCollision {
+    /// Copied from descriptor byte2, rather than a life duration field.
+    // Translated from 0x010CD1C0 (DDDA.exe 2017-12-13 Steam).
+    pub fn initial_delay(&self) -> u8 { (self.flags >> 16) as u8 }
+
+    /// Every initially nonzero delay suppresses this update, including 1->0.
+    // Translated from 0x010F54F0 (DDDA.exe 2017-12-13 Steam).
+    pub fn query_due(delay: &mut u8) -> bool {
+        if *delay != 0 { *delay -= 1; false } else { true }
+    }
+
+    /// Caller supplies actual old/current positions and radius after its
+    /// growth update. Floor-only queries and collision-provider filters need
+    /// their own scene adapters before issuing these world queries.
+    // Translated from 0x010E2A00 (DDDA.exe 2017-12-13 Steam).
+    pub fn query(&self, from: [f32; 3], to: [f32; 3], scaled_radius: f32)
+        -> Result<WorldQuery, String> {
+        if from.iter().chain(to.iter()).chain([scaled_radius].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite particle world query".into());
+        }
+        if self.flags & 0x4000 != 0 { return Err("floor-only particle query needs native adapter".into()); }
+        if self.flags & 0x1000 != 0 && scaled_radius > 0.00001 {
+            return Ok(WorldQuery::Sphere { from, to, radius: scaled_radius });
+        }
+        let mut direction: [f32; 3] = std::array::from_fn(|i| to[i] - from[i]);
+        let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if length >= f32::EPSILON {
+            let inverse = 1.0 / length;
+            for component in &mut direction { *component *= inverse; }
+        }
+        // The original retains tiny unnormalized displacements here.
+        Ok(WorldQuery::Line {
+            from: std::array::from_fn(|i| from[i] - direction[i] * scaled_radius),
+            to: std::array::from_fn(|i| to[i] + direction[i] * scaled_radius),
+        })
+    }
+}
+
+/// Supported point-provider binding: actor-relative offset and unchanged
+/// local orientation. The caller supplies the real parent coordinate matrix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProviderBinding {
+    pub local_offset: [f32; 3],
+    pub effect_scale: f32,
+}
+
+impl ProviderBinding {
+    /// Normal create-context fields from 0x00A55BC0/0x004241F0. Other
+    /// placement modes, floor alignment and randomized scaling need their
+    /// own native adapters before using this binding.
+    // Translated from 0x00CB6CF0, 0x004298B0 and 0x0042D8F0's EAX
+    // offset argument (DDDA.exe 2017-12-13 Steam).
+    pub fn read(element: &mteffect::Element, actor_scale: [f32; 3],
+        create_flags: u32) -> Result<Self, String> {
+        let p = &element.parameters;
+        if p[1] != 0 || p[2] != 0 || p[18] != 6 || p[43] & 2 != 0
+            || p[31..38].iter().any(|v| *v != 0)
+            || p[9..12].iter().any(|v| f32::from_bits(*v) != 0.0)
+            || f32::from_bits(p[29]) != 0.0 {
+            return Err("unsupported point-provider binding".into());
+        }
+        let mut local_offset = std::array::from_fn(|axis| f32::from_bits(p[6 + axis]));
+        let effect_scale = f32::from_bits(p[28]);
+        if actor_scale.iter().chain(local_offset.iter()).chain([effect_scale].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite point-provider binding".into());
+        }
+        if p[43] & 4 == 0 && create_flags & 0x20 == 0 {
+            for axis in 0..3 { local_offset[axis] *= actor_scale[axis]; }
+        }
+        Ok(Self { local_offset, effect_scale })
+    }
+
+    /// The helper stores the relative offset in effect+0x160; FE0350
+    /// projects it through the parent, rather than translating twice.
+    // Translated from 0x00FE0350's parent/joint-1 branch and final scale
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn matrix(&self, parent: &mtlmt::pose::Mat4) -> Result<mtlmt::pose::Mat4, String> {
+        if parent.iter().flatten().chain(self.local_offset.iter())
+            .chain([self.effect_scale].iter()).any(|v| !v.is_finite()) {
+            return Err("invalid point-provider parent coordinate".into());
+        }
+        let local = mtlmt::pose::compose([1.0; 3], [0.0, 0.0, 0.0, 1.0], self.local_offset);
+        let mut matrix = mtlmt::pose::mul(&local, parent);
+        for row in matrix.iter_mut().take(3) {
+            for value in row { *value *= self.effect_scale; }
+        }
+        Ok(matrix)
+    }
+}
+
+/// Effect-owned integer updates and the fractional collision-sample clock.
+/// Generator clocks advance only once per returned integer update.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EffectClock {
+    pub fraction: f32,
+    first_update: bool,
+    initial_steps: u16,
+}
+
+impl EffectClock {
+    // Translated from 0x00FDF5B0 (DDDA.exe 2017-12-13 Steam).
+    pub fn new(initial_steps: u16) -> Self {
+        Self { fraction: 1.0, first_update: true, initial_steps }
+    }
+
+    /// `rate` is the actual effect+0xFC value for this native update.
+    /// Birth uses +0x112 instead; it does not consume the rate yet.
+    // Translated from 0x00E6BCA0, reached by uEffect::vf09 0x00E70710
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, rate: f32) -> Result<u16, String> {
+        if !rate.is_finite() || rate < 0.0 || !self.fraction.is_finite() {
+            return Err("invalid native effect clock".into());
+        }
+        let value = if self.first_update { self.fraction } else { self.fraction + rate };
+        if !(0.0..32768.0).contains(&value) {
+            return Err("unsupported native effect update count".into());
+        }
+        let whole = value.trunc() as u16;
+        let steps = if self.first_update { whole.wrapping_add(self.initial_steps).wrapping_sub(1) }
+            else { whole };
+        self.first_update = false;
+        self.fraction = value - value.trunc();
+        Ok(steps)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectQuality {
     pub tier: u8,
@@ -115,6 +257,63 @@ pub struct PathDynamics {
     pub spring: f32,
     pub taper_points: u8,
     pub force: [f32; 3],
+}
+
+/// Authored type4 path parameters, before native random sampling and the
+/// owning generator's scale/direction transform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathParameters {
+    pub flags: u16,
+    pub iterations: u16,
+    pub selectors: u16,
+    pub taper_points: u8,
+    /// Length, length velocity, angular velocity, force, damping, spring.
+    pub ranges: [[f32; 2]; 6],
+    pub rotation: [[f32; 2]; 3],
+    pub curves: [u32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampledPath {
+    pub length: f32,
+    pub length_velocity: f32,
+    pub angular_velocity: f32,
+    pub force: f32,
+    pub damping: f32,
+    pub spring: f32,
+    pub rotation: [f32; 3],
+}
+
+impl PathParameters {
+    /// Supported uncurved, unconstrained native setup. Each draw advances
+    /// the actual generator counter even when its variation is zero.
+    // Translated from 0x010E5620 (DDDA.exe 2017-12-13 Steam).
+    pub fn sample(&self, counter: &mut u32,
+        mut random_float: impl FnMut(usize) -> f32) -> Result<SampledPath, String> {
+        if self.flags != 0 || self.curves != [0; 4] {
+            return Err("unsupported curved or constrained collision path setup".into());
+        }
+        if self.ranges.iter().chain(self.rotation.iter()).flatten().any(|v| !v.is_finite()) {
+            return Err("nonfinite collision path parameters".into());
+        }
+        let mut sample = |range: [f32; 2]| -> Result<f32, String> {
+            *counter = counter.wrapping_add(1);
+            let random = random_float((*counter & 0xFFF) as usize);
+            let value = random * range[1] + range[0];
+            if !random.is_finite() || !value.is_finite() { return Err("invalid native path random sample".into()); }
+            Ok(value)
+        };
+        let length = sample(self.ranges[0])?.max(0.0);
+        let length_velocity = sample(self.ranges[1])?;
+        // Native order is force/damping/spring before angular velocity,
+        // despite the authored angular pair preceding them in the resource.
+        let force = sample(self.ranges[3])?;
+        let damping = sample(self.ranges[4])?;
+        let spring = sample(self.ranges[5])?;
+        let angular_velocity = sample(self.ranges[2])?;
+        let rotation = [sample(self.rotation[0])?, sample(self.rotation[1])?, sample(self.rotation[2])?];
+        Ok(SampledPath { length, length_velocity, angular_velocity, force, damping, spring, rotation })
+    }
 }
 
 /// Unconstrained type4 path state. Collision-constrained and angular paths
@@ -264,6 +463,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn world_query_delay_and_geometry_follow_descriptor_not_secondary_delay() {
+        let mut list = synthetic_list();
+        list.payload.resize(0x260, 0);
+        let life = list.units[0].offsets[3] as usize;
+        list.payload[life + 6..life + 8].copy_from_slice(&0x110u16.to_le_bytes());
+        list.payload[life + 0x44..life + 0x48].copy_from_slice(&20u32.to_le_bytes());
+        let at = life + 0x110;
+        list.payload[at..at + 4].copy_from_slice(&0x0005_0200u32.to_le_bytes());
+        list.payload[at + 8..at + 12].copy_from_slice(&3.0f32.to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        let descriptor = unit.world_collision.unwrap();
+        assert_eq!(descriptor.radius, 3.0);
+        let mut delay = descriptor.initial_delay();
+        assert_eq!(delay, 5);
+        for _ in 0..5 { assert!(!WorldCollision::query_due(&mut delay)); }
+        assert_eq!(delay, 0);
+        assert!(WorldCollision::query_due(&mut delay));
+        assert_eq!(descriptor.query([0.0; 3], [0.0, 0.0, 10.0], 3.0).unwrap(),
+            WorldQuery::Line { from: [0.0, 0.0, -3.0], to: [0.0, 0.0, 13.0] });
+        let sphere = WorldCollision { flags: descriptor.flags | 0x1000, ..descriptor };
+        assert_eq!(sphere.query([0.0; 3], [0.0, 0.0, 10.0], 3.0).unwrap(),
+            WorldQuery::Sphere { from: [0.0; 3], to: [0.0, 0.0, 10.0], radius: 3.0 });
+        assert!(matches!(sphere.query([0.0; 3], [0.0, 0.0, 10.0], 0.00001).unwrap(), WorldQuery::Line { .. }));
+        let floor = WorldCollision { flags: descriptor.flags | 0x4000, ..descriptor };
+        assert!(floor.query([0.0; 3], [0.0; 3], 3.0).is_err());
+        list.payload.truncate(at + 15);
+        assert!(CollisionUnit::read("synthetic".into(), &list).is_err());
+    }
+
+    #[test]
+    fn path_setup_samples_native_order_and_advances_zero_variation_draws() {
+        let mut parameters = PathParameters { flags: 0, iterations: 2,
+            selectors: 0x4444, taper_points: 0,
+            ranges: [[-2.0, 0.0], [10.0, 1.0], [20.0, 1.0],
+                [30.0, 1.0], [40.0, 1.0], [50.0, 1.0]],
+            rotation: [[60.0, 1.0], [70.0, 1.0], [80.0, 1.0]], curves: [0; 4] };
+        let mut counter = 0xFFFF_FFFE;
+        let mut indices = Vec::new();
+        let sampled = parameters.sample(&mut counter, |index| {
+            indices.push(index); indices.len() as f32
+        }).unwrap();
+        assert_eq!(indices, [0xFFF, 0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(counter, 7);
+        assert_eq!(sampled, SampledPath { length: 0.0, length_velocity: 12.0,
+            angular_velocity: 26.0, force: 33.0, damping: 44.0, spring: 55.0,
+            rotation: [67.0, 78.0, 89.0] });
+        parameters.curves[3] = 1;
+        assert!(parameters.sample(&mut counter, |_| panic!("unsupported curves cannot draw")).is_err());
+        assert_eq!(counter, 7);
+        parameters.curves[3] = 0;
+        parameters.flags = 0x10;
+        assert!(parameters.sample(&mut counter, |_| panic!("constrained setup cannot draw")).is_err());
+    }
+
+    #[test]
+    fn provider_binding_keeps_relative_offset_and_parent_scale_without_double_translation() {
+        let mut element = mteffect::Element { lists: std::array::from_fn(|_| String::new()),
+            effect_2d: String::new(), parameters: [0; 69] };
+        element.parameters[18] = 6;
+        element.parameters[6] = 3.0_f32.to_bits();
+        element.parameters[7] = (-2.0_f32).to_bits();
+        element.parameters[28] = 0.5_f32.to_bits();
+        let binding = ProviderBinding::read(&element, [2.0, 3.0, 4.0], 0).unwrap();
+        assert_eq!(binding.local_offset, [6.0, -6.0, 0.0]);
+        // Explicit native parent coordinate, with nonuniform rows. Do not
+        // normalize its axes or apply actor position before its translation.
+        let parent = [[0.0, 2.0, 0.0, 0.0], [-3.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0], [100.0, 200.0, 300.0, 1.0]];
+        let matrix = binding.matrix(&parent).unwrap();
+        assert_eq!(matrix[3], [118.0, 212.0, 300.0, 1.0]);
+        assert_eq!(matrix[0], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(matrix[1], [-1.5, 0.0, 0.0, 0.0]);
+        assert_eq!(matrix[2], [0.0, 0.0, 2.0, 0.0]);
+        assert_eq!(ProviderBinding::read(&element, [2.0; 3], 0x20).unwrap().local_offset, [3.0, -2.0, 0.0]);
+        element.parameters[43] = 4;
+        assert_eq!(ProviderBinding::read(&element, [2.0; 3], 0).unwrap().local_offset, [3.0, -2.0, 0.0]);
+        element.parameters[43] = 2;
+        assert!(ProviderBinding::read(&element, [1.0; 3], 0).is_err());
+        element.parameters[43] = 0;
+        element.parameters[29] = 1.0_f32.to_bits();
+        assert!(ProviderBinding::read(&element, [1.0; 3], 0).is_err());
+    }
+
+    #[test]
+    fn effect_birth_skips_rate_then_preserves_fractional_native_updates() {
+        let mut clock = EffectClock::new(0);
+        assert_eq!(clock.advance(7.0).unwrap(), 0);
+        assert_eq!(clock.fraction, 0.0);
+        assert_eq!(clock.advance(0.25).unwrap(), 0);
+        assert_eq!(clock.fraction, 0.25);
+        assert_eq!(clock.advance(0.75).unwrap(), 1);
+        assert_eq!(clock.fraction, 0.0);
+        assert_eq!(clock.advance(2.5).unwrap(), 2);
+        assert_eq!(clock.fraction, 0.5);
+        assert_eq!(clock.advance(0.5).unwrap(), 1);
+        let mut preadvanced = EffectClock::new(4);
+        assert_eq!(preadvanced.advance(0.5).unwrap(), 4);
+        assert_eq!(preadvanced.fraction, 0.0);
+        assert_eq!(preadvanced.advance(0.5).unwrap(), 0);
+        let before = preadvanced;
+        assert!(preadvanced.advance(f32::NAN).is_err());
+        assert_eq!(preadvanced, before);
+    }
+
+    #[test]
     fn provider_quality_uses_global_owner_mode_and_strict_distance_boundary() {
         let mut element = mteffect::Element { lists: std::array::from_fn(|_| String::new()),
             effect_2d: String::new(), parameters: [0; 69] };
@@ -375,7 +679,7 @@ mod tests {
     }
 
     fn synthetic_list() -> mteffect::EffectList {
-        let mut payload = vec![0; 0x1B0];
+        let mut payload = vec![0; 0x240];
         let put = |bytes: &mut [u8], at, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
         put(&mut payload, 0x10 + 8, 2);
         put(&mut payload, 0x10 + 0xC, 5);
@@ -452,6 +756,8 @@ pub struct CollisionUnit {
     pub acceleration: [f32; 2],
     pub initial_distance: [f32; 2],
     pub path_points: u8,
+    pub path_parameters: PathParameters,
+    pub world_collision: Option<WorldCollision>,
 }
 
 impl CollisionUnit {
@@ -505,6 +811,15 @@ impl CollisionUnit {
         let point_at = life.checked_add(0x78).ok_or("collision path offset overflow")?;
         let path_points = *bytes.get(point_at).ok_or("truncated collision path count")?;
         if path_points < 2 { return Err("collision path has fewer than two points".into()); }
+        // cParticleGenerator::vf14 0x010D7380 resolves runtime+0x128
+        // from the ushort at life+6, not life+0x44 or the nested path data.
+        let collision_offset = half(life, 6)?;
+        let world_collision = if collision_offset == 0 { None } else {
+            let base = life.checked_add(usize::from(collision_offset))
+                .ok_or("collision descriptor offset overflow")?;
+            Some(WorldCollision { flags: word(base, 0)?, radius_growth: float(base, 4)?,
+                radius: float(base, 8)?, radius_limit_extra: float(base, 0xC)? })
+        };
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
             capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
@@ -512,7 +827,16 @@ impl CollisionUnit {
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
             fade: [a?, b?, c?], hold_curve: (curve_word >> 1) & 0x7FFF,
             hold_limit: half(movement, 0xE)?, speed: pair(life, 0x28)?,
-            acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points })
+            acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points,
+            // Type4's constructor0x010F1230 passes life+0x80 to0x010E5620.
+            path_parameters: PathParameters { flags: half(life, 0x80)?,
+                iterations: half(life, 0x82)?, selectors: half(life, 0x84)?,
+                taper_points: half(life, 0x86)? as u8,
+                ranges: [pair(life, 0x88)?, pair(life, 0x90)?, pair(life, 0x98)?,
+                    pair(life, 0xA0)?, pair(life, 0xA8)?, pair(life, 0xB0)?],
+                rotation: [pair(life, 0xB8)?, pair(life, 0xC0)?, pair(life, 0xC8)?],
+                curves: [u32::from(half(life, 0x104)?), u32::from(half(life, 0x106)?),
+                    word(life, 0x108)?, word(life, 0x10C)?] }, world_collision })
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction

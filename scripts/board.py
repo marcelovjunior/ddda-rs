@@ -231,7 +231,11 @@ def cmd_leave(a):
 def cmd_status(a):
     need_known(load(), a.agent)
     append({'type': 'status', 'agent': a.agent, 'text': a.text, 'state': a.state, 'task': a.task})
-    unread = [m for m in state(load())[2] if to_me(m, a.agent) and m['id'] > state(load())[3].get(a.agent, 0)]
+    # one snapshot: replaying the whole log per message made status hang
+    # for minutes on a large board (codex-1 #7211)
+    snapshot = state(load())
+    last = snapshot[3].get(a.agent, 0)
+    unread = [m for m in snapshot[2] if to_me(m, a.agent) and m['id'] > last]
     print('status recorded' + (f'; {len(unread)} unread message(s): run inbox {a.agent}' if unread else ''))
 
 

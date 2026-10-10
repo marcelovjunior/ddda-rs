@@ -759,7 +759,8 @@ impl Loader<'_> {
             return h.clone();
         }
         let h = match self.vfs.read(path, RTEXTURE).and_then(|b| tex_to_image(&b)) {
-            Ok(img) => {
+            Ok(mut img) => {
+                crate::settings::filter_loaded_image(&mut img);
                 self.stats.textures += 1;
                 Some(images.add(img))
             }

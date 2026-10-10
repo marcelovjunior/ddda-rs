@@ -307,3 +307,134 @@ It passed (3.98s compile, 0.00s run), actual exit0. The initial compile used
 a shared cached DDSIM without this branch's capsule API; a narrow DDSIM
 rebuild restored it. Runtime ownership, birth transform and full fire damage
 remain open.
+
+The owning effect's integer/fractional clock is translated from
+`0x00FDF5B0/0x00E6BCA0`, reached by `uEffect::vf09` (`0x00E70710`).
+It initializes interpolation to1 and uses the actual +0x112 initial-step
+field on its first update, rather than consuming +0xFC's rate immediately.
+The default zero initial steps therefore run no generator updates at birth.
+Later updates preserve the fractional remainder and return the native
+integer count; generator clocks must run only that many times. The caller
+supplies the actual effect rate, independent of render FPS.
+
+One regression covering birth, explicit pre-advance, fractional boundaries,
+multiple updates and invalid context passed (4.01s compile, 0.00s run),
+actual exit0. A narrow DDSIM rebuild selected this branch's source after
+other shared-target work. This clock is not yet connected to production
+effect allocation or BreathParticles; full fire damage remains open.
+
+The supported point-provider binding follows `0x004298B0/0x0042D8F0`
+and `0x00FE0350`. Assembly establishes that the hidden EAX argument to
+42D8F0 is the actor-relative offset, rather than the already transformed
+world birth point. The binding preserves the actual parent matrix and its
+nonuniform scale, applies the authored effect scale to its basis, and
+rejects unsupported orientation/scatter modes. It does not translate an
+already transformed point a second time.
+
+Type4 path setup now reads its authored flags, iteration count, selectors,
+range pairs and curve references at life+0x80. Sampling follows
+`0x010E5620`: length, length velocity, force, damping, spring, angular
+velocity, then three rotation values. Every draw advances the supplied
+native generator counter, including zero variation. Curved/constrained
+setups remain explicit errors. These fields are runtime game data.
+
+The opening dragon's data now exposes its real authored EnemyCheck target:
+kind2, the loaded group's slot and the layout record ID. The installed
+dragon is record1, not the record vector's ordinal0.
+
+Focused validation completed with exit0: all36 dragon library tests
+(2.80s compile, 0.00s tests), all4 installed attack tests (5.98s compile,
+3.90s tests), and the installed host entrance/Press regression (11.35s
+compile, 10.12s tests). This checks provider/path boundaries and actual
+target identity, not complete production fire. Full touched-crate suites
+after current-main integration are still pending.
+
+Further source audit distinguishes the life+0x44 secondary-effect delay
+from world collision delay. `0x010D7380` resolves the collision descriptor
+using the ushort at life+6; `0x010CD1C0` copies its byte2 into the particle's
+collision delay. `0x010F7190` advances travel with the old speed before
+adding acceleration. Production effect ownership, this actual scene query,
+and normal fire HP damage remain the next integration work.
+
+
+### Shared contact projection and full core acceptance
+
+Head approved this shared adapter on board6073. `ddsim::sweep::ground_contact`
+now projects the real axis-present flag and ground mode using the native
+`0x00885E30` masks: an enabled axis with `0x400` rejects contact; the
+ground-mode mask is `0x100003`, otherwise `3`. `Swept::grounded` retains
+its existing enabled-axis/non-ground-mode behaviour. Dragon delegates to
+the shared helper. The preceding scenery flags and actor update gate
+remain caller-owned; this does not invent terrain contact for NPCs.
+
+After integrating reviewed main7a5c414 (task HEAD e6f88ae), the complete
+`cargo test -p ddsim -p ddenemyrt -p ddhost` run finished with actual exit0:
+DDSIM79 passed, enemy164 passed/2 existing ignored, host95 passed. Compile
+35.19s. Private log: E:/ddda-re/notes/steps/S29/full-core-e6f88ae-contact.log.
+This accepts the point binding, path sampling, target identity and shared
+contact checkpoint; production fire and downstream viewer acceptance
+remain open. No new original-game comparison was performed.
+
+### World collision descriptor checkpoint
+
+The collision reader resolves the ushort at life+6 using `0x010D7380`,
+then reads the world-query flags, radius growth, initial radius and limit
+extension from the installed descriptor. Its byte2 initializes the query
+delay (`0x010CD1C0`). The delay update (`0x010F54F0`) suppresses every
+initially nonzero counter, including the update that changes one to zero;
+the life+0x44 secondary-effect travel delay is independent.
+
+The supported query geometry follows `0x010E2A00`: bit0x1000 selects a
+swept sphere only above radius0.00001, otherwise a line is extended at
+both ends by the actual scaled radius. Tiny displacements retain their
+unnormalized native direction. Floor-only queries and effect-owned scene
+filters/traversal/response remain explicit missing adapters. This helper
+does not issue a scene query or enable production fire.
+
+The final full enemy run actually exited zero: 165 passed, two existing
+diagnostics ignored (11.37s compile, 85.32s total tests). All70 library
+tests included the new descriptor/delay/geometry regression; four installed
+attack tests passed. Private log:
+E:/ddda-re/notes/steps/S29/full-world-collision-reader-fresh-deps.log.
+The downstream full host run also actually exited zero: 95 passed,
+27.50s compile. Private log:
+E:/ddda-re/notes/steps/S29/full-world-collision-reader-host.log.
+
+An earlier full run reused a stale66-test library and was rejected.
+Narrowly rebuilding ddenemyrt then exposed a stale DDSIM artifact missing
+the source-present ground_contact API; narrowly rebuilding DDSIM selected
+both current sources. No failed/stale run is counted as acceptance.
+Validation is on this S30 branch's integrated main7a5c414 dependency set;
+later S48/S49 integration and downstream viewer remain pending.
+
+Next: connect the real shared effect coordinate block and generator clocks
+to type4 paths before production particle queries and ordinary HP damage.
+Source `0x00E6DD90/0x00E6E030/0x00E73720` establishes per-coordinate0x130
+blocks; a generator's +0x14 points to that block, not the effect's final
+matrix. This avoids applying parent/effect scaling twice. Full S30
+landing/fire/state6/original-comparison acceptance remains open.
+
+The subsequent current-main integration is f5017cb (reviewed maina24c1ed,
+including S48 save and S49 perception). Complete DDSIM/enemy/host suites
+actually exited zero in process46000: DDSIM79, enemy169/two existing
+ignored, host98 passed; compile32.38s, tests0.01/97.18/200.82s. Both the
+new world-query regression and S49 sensor tests executed. Private log:
+E:/ddda-re/notes/steps/S29/full-current-core-collision.log. Core lease was
+released after actual exit. Downstream viewer for this S30 dependency set
+and production fire acceptance remain pending.
+
+### Downstream viewer acceptance of the collision checkpoint
+
+With reviewed main3ecd13e integrated (source47a1518), the complete default
+viewer release suite and build actually exited zero in parent process38841.
+All89 tests passed, with two existing diagnostics ignored; compile30.51s,
+tests11.81s, release build38.57s. Private logs:
+E:/ddda-re/notes/steps/S29/full-current-viewer-47a1518.log and
+E:/ddda-re/notes/steps/S29/build-current-viewer-47a1518.log.
+Together with the preceding346-test core run, this accepts the sourced
+world-collision reader/shared contact checkpoint for review. It does not
+enable production fire or establish an original-game comparison.
+
+Next: connect the actual effect coordinate blocks and generator clocks,
+then issue native-shaped scene queries and ordinary fire damage. Effect
+ownership, full landing/fire/state6 and visual acceptance remain open.

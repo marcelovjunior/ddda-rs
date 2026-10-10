@@ -46,10 +46,10 @@ pub fn heart_taken(inventory: &mut Inventory, items: &ItemList, seat: PlayerId) 
 /// Delivery bookkeeping for one opening session. The story disables fired
 /// QCT rows; keeping delivery ids also protects against a repeated adapter
 /// notification. This is host state, shared by all local Arisen seats.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Grants {
-    first_choices: BTreeSet<PlayerId>,
-    rewards: BTreeSet<(PlayerId, u32)>,
+    pub(crate) first_choices: BTreeSet<PlayerId>,
+    pub(crate) rewards: BTreeSet<(PlayerId, u32)>,
 }
 
 impl Grants {
