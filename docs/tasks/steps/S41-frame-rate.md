@@ -787,3 +787,41 @@ effective distance is the scripted distance multiplied by the clamped
 day/night factor `(blend - 0.7) * -5.0000005`, with a 10 cm minimum.
 The active blend/override and current-scene object ownership were not read;
 no second game probe or shadow implementation follows from this source.
+
+### Compact palettes accepted headlessly; matched FPS capture queued
+
+Source `39acf70` (documentation `3adc1fe`) is frozen. After codex-73's
+actual M5 release #7154, a normal lease and empty global Cargo/rustc
+preflight preceded the one-heavy build window. All suites/builds actually
+exited before M5 release #7189, with no owned Cargo/rustc remaining.
+
+- Full default session 11105 **actual exit 0: 88 passed / 2 existing
+  ignored**, fresh compile 25.29 s, tests 11.20 s. Both new palette tests
+  explicitly ran and passed: animated matrix/actual Bevy AABB equality
+  plus transactional invalid/full-palette fallback.
+- Full profile/default-release sequence 8968 **actual exit 0**: profile
+  **93 passed / 2 existing ignored**, fresh compile 24.55 s, tests 11.60 s;
+  all five real cached-span/name/window regressions and both new palette
+  tests passed. Default release **40.14 s / exit 0**.
+- Trace release session 27994 **actual exit 0 / 52.80 s**, approved by
+  parent during the same lease for eventual named CPU diagnostics. No
+  trace GUI was launched. Only existing private-interface/audio warnings
+  remain; no clean/new target was needed.
+- Default pin `E:/ddda-re/notes/steps/s41/ddview-palettes-39acf70.exe`, SHA-256
+  `D0D0E0C2B8FC6C24F954F06C2C012C385BBA469C7B70D93DFBCED8D13E938D8C`.
+  Trace pin `ddview-trace-palettes-39acf70.exe`, SHA-256
+  `0BB1174054F273D5A822577A93718C4299A50F604A8CC41914EA4EA392FBE32E`.
+  Both copied/checksummed privately before actual release. E: free space
+  34.35 GB; old accepted trace pin is removed only after this replacement's
+  actual exit/checksum and committed results, retaining prior summaries.
+- Harness SHA-256 (metadata flags plus retained-handle watchdog):
+  `6866DCF7037EB6A8F635DE9FED68F97FB20BEF2516A4783D61780F281DD0975E`.
+  Parse check and all seven actual-AST race tests pass.
+
+**Actual game palette/upload reduction, PNG fidelity and FPS gain remain
+unverified.** Head #7157 queues its current-main/rescue validation, then
+root's S42 settings visual captures, then our matched palette A/B. That
+pair uses the same default pin, frozen v1 FieldSettle, x1, GPU builder,
+unchanged camera/content and `DDVIEW_SKIN_DIAGNOSTICS=1` on both sides;
+only `DDVIEW_COMPACT_SKINS` changes. Native simulation remains 30 Hz.
+No new default or 180 fps claim follows from headless tests alone.
