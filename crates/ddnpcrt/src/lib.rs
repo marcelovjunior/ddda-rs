@@ -31,10 +31,15 @@ pub struct TalkSet {
 /// Game data the runtime reads.
 pub trait NpcData: schedule::Graphs {
     fn talk_set(&self, npc: u32) -> Result<Arc<TalkSet>, Error>;
+    /// Only an actually preloaded authored Guard resource may be selected.
+    fn guard_talk_set(&self, _npc: u32, _guard: &schedule::Guard) -> Result<Option<Arc<TalkSet>>, Error> {
+        Err(Error::Unimplemented("NPC Guard text resource loading".into()))
+    }
 }
 
 /// Game data from the player's install, cached.
 pub struct InstallData {
+    native_pc: std::path::PathBuf,
     vfs: ddvfs::Vfs,
     /// GMD language suffix, e.g. "eng".
     pub language: String,
@@ -45,6 +50,7 @@ pub struct InstallData {
 impl InstallData {
     pub fn open(native_pc: impl AsRef<std::path::Path>, language: &str) -> Result<Self, Error> {
         Ok(InstallData {
+            native_pc: native_pc.as_ref().to_path_buf(),
             vfs: ddvfs::Vfs::open(native_pc).map_err(Error::Data)?,
             language: language.to_string(),
             graphs: Mutex::default(),
@@ -67,6 +73,24 @@ impl schedule::Graphs for InstallData {
 }
 
 impl NpcData for InstallData {
+    fn guard_talk_set(&self, npc: u32, config: &schedule::Guard) -> Result<Option<Arc<TalkSet>>, Error> {
+        let mut resources = guard::Resources::default();
+        match config.message_kind {
+            2 => {
+                let file = ddexe::ExeFile::next_to(&self.native_pc).map_err(|e| Error::Data(e.0))?;
+                let exe = file.image().map_err(|e| Error::Data(e.0))?;
+                if !guard::quest_preloads(&exe, npc).map_err(|e| Error::Data(e.0))?
+                    .iter().any(|&quest| u32::from(quest) == config.quest) { return Ok(None); }
+                resources.insert(guard::ResourceKey::Quest(config.quest),
+                    self.authored_talk_set(&guard::quest_path(npc, config.quest as u16))?);
+            }
+            5 => resources.insert(guard::ResourceKey::Base, self.talk_set(npc)?),
+            // The override registry is independent of the base talk set.
+            4 => return Err(Error::Unimplemented("NPC Guard override resource registry".into())),
+            _ => return Ok(None),
+        }
+        Ok(resources.select(config))
+    }
     fn talk_set(&self, npc: u32) -> Result<Arc<TalkSet>, Error> {
         if let Some(s) = self.sets.lock().unwrap().get(&npc) {
             return Ok(s.clone());

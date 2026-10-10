@@ -21,6 +21,19 @@ pub struct TalkOutcome {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    pub(crate) fn talk_authored(&mut self, player: PlayerId, npc: u32,
+        set: std::sync::Arc<ddnpcrt::TalkSet>, conversation: i32) -> Result<TalkOutcome, HostError> {
+        self.locks.acquire(npc, player).map_err(HostError::Lock)?;
+        let world = &self.story.as_ref().ok_or(HostError::NoData("story"))?.world;
+        let story = ddnpcrt::Story { world, equip_menus: false };
+        match self.npcs.talk_authored(&story, player, npc, set, conversation) {
+            Ok(events) => self.after_talk(player, events),
+            Err(error) => {
+                let _ = self.locks.release(npc, player);
+                Err(HostError::Talk(error))
+            }
+        }
+    }
     fn npc_data(&self) -> Result<std::sync::Arc<dyn ddnpcrt::NpcData + Send + Sync>, HostError> {
         self.data.npc.clone().ok_or(HostError::NoData("npc"))
     }
@@ -133,6 +146,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     fn after_talk(&mut self, player: PlayerId, events: Vec<TalkEvent>) -> Result<TalkOutcome, HostError> {
         let mut session = None;
         let mut end_npc = None;
+        let mut guard_exit = false;
         for e in &events {
             match *e {
                 TalkEvent::Action { npc, action: Action::Shop { mode }, .. } => {
@@ -148,11 +162,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                         _ => continue,
                     });
                 }
-                TalkEvent::End { npc, .. } => end_npc = Some(npc),
+                TalkEvent::End { npc, .. } => {
+                    guard_exit = self.story_guard_text_ended(player, npc);
+                    end_npc = Some(npc);
+                }
                 _ => {}
             }
         }
-        if let (Some(npc), None) = (end_npc, session) {
+        if let (Some(npc), None, false) = (end_npc, session, guard_exit) {
             let _ = self.locks.release(npc, player);
         }
         Ok(TalkOutcome { events, session })

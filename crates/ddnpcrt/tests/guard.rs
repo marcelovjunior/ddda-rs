@@ -167,3 +167,61 @@ fn guard_unit_readiness_is_stricter_than_allocated_status() {
     assert!(guard_unit_ready(Some(0x4802)));
     assert!(guard_unit_ready(Some(0xffff_fffa)), "unrelated status bits do not reject readiness");
 }
+
+#[test]
+fn guard_sensor_uses_strict_radius_inclusive_height_and_reentry_latch() {
+    use ddnpcrt::guard::Sensor;
+    let mut config = guard(2, 1);
+    config.radius = 300.0;
+    config.height = 100.0;
+    config.center = [20.0, 0.0, 0.0];
+    let mut sensor = Sensor::default();
+    let actor = [100.0, 10.0, 200.0];
+    let yaw = std::f32::consts::FRAC_PI_2;
+    assert!(!sensor.hit(&config, actor, yaw, [100.0, 10.0, -120.0]).unwrap(), "radius equality excluded");
+    assert!(sensor.hit(&config, actor, yaw, [100.0, 110.0, 180.0]).unwrap(), "height equality included");
+    assert!(!sensor.hit(&config, actor, yaw, [100.0, 110.01, 180.0]).unwrap());
+    sensor.launched();
+    assert!(!sensor.hit(&config, actor, yaw, [100.0, 10.0, 180.0]).unwrap());
+    assert!(!sensor.hit(&config, actor, yaw, [100.0, 10.0, 500.0]).unwrap());
+    assert!(sensor.hit(&config, actor, yaw, [100.0, 10.0, 180.0]).unwrap());
+    config.range = 90.0;
+    assert!(sensor.hit(&config, actor, yaw, actor).is_err(), "angular restriction cannot be ignored");
+}
+
+#[test]
+fn normal_talk_releases_after_stock_exit_then_original_fallback_precedes_motion_cleanup() {
+    use ddnpcrt::guard::{ActorTalk, TalkMotionObservation};
+    let mut actor = ActorTalk::new(TalkMotionObservation { mode: Some(3), ..Default::default() }, true);
+    actor.enter();
+    assert!(!actor.controller_enabled);
+    assert!(!actor.take_frame(None, Some(true)));
+    actor.text_finished();
+    assert!(!actor.cleanup(), "text end cannot manufacture motion readiness");
+    assert!(!actor.release_dialogue(None, 0));
+    assert!(!actor.release_dialogue(Some(false), 0));
+    assert!(!actor.release_dialogue(Some(true), 1), "jump counterpart unimplemented");
+    assert!(!actor.take_frame(None, Some(true)));
+    assert!(actor.release_dialogue(Some(true), 0));
+    assert!(!actor.take_frame(None, None), "unknown shared dialogue slot cannot produce TalkEnd");
+    assert!(!actor.take_frame(None, Some(false)), "another active dialogue blocks fallback");
+    assert!(actor.take_frame(None, Some(true)), "bb3290 active-talk/empty-slot branch has no motion/controller gate");
+    assert!(!actor.cleanup());
+    actor.motion.active = Some(true);
+    actor.motion.flags = Some(4);
+    assert!(actor.cleanup());
+    assert!(actor.controller_enabled);
+    assert!(actor.take_frame(Some(0), Some(true)));
+    assert!(!actor.take_frame(Some(0), Some(true)));
+}
+
+#[test]
+fn actor_cleanup_preserves_preexisting_disabled_controller() {
+    use ddnpcrt::guard::{ActorTalk, TalkMotionObservation};
+    let mut actor = ActorTalk::new(TalkMotionObservation { mode: Some(0), ..Default::default() }, false);
+    actor.enter();
+    actor.text_finished();
+    assert!(actor.cleanup());
+    assert!(!actor.controller_enabled);
+    assert!(!actor.take_frame(Some(0), Some(true)));
+}

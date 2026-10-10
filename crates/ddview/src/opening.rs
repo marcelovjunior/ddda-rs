@@ -537,6 +537,23 @@ impl Session {
         })
     }
 
+    fn talk_npc(&mut self, seat: ddsim::PlayerId, npc: u32) -> Result<ddhost::npcs::TalkOutcome, ddhost::HostError> {
+        if self.host.story_npc_guard(npc).is_none() { return self.host.talk(seat, npc); }
+        let owner = self.host.story_npc_lifetime(npc).ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))?;
+        let body = self.npcs.get(&npc).copied();
+        // Viewer adapter assumption: a successfully constructed idle body
+        // with the current canonical lifetime is eligible in this supported
+        // opening state. Full original cUnit status and character flags are
+        // not yet simulated. This is explicit admission, never TalkEnd.
+        let ready = body.is_some() && self.npc_adapter.bindings.get(&npc) == Some(&owner)
+            && self.cut.is_none() && self.world_menu().is_none() && self.talk.is_none();
+        // uNpc ctor0x00bab3a0 initializes mode3. Its readiness remains
+        // unknown here, selecting the original manual Guard candidate path.
+        let motion = ddnpcrt::guard::TalkMotionObservation { mode: Some(3), ..Default::default() };
+        self.host.talk_story_guard(seat, owner, ready, body.map_or(0.0, |(_, _, yaw)| yaw), motion)?
+            .ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))
+    }
+
     pub fn event_active(&self) -> bool {
         self.cut.is_some()
     }
@@ -1143,7 +1160,7 @@ pub fn step(
         };
     } else if e_press && near.is_some() {
         let npc = near.unwrap();
-        match s.host.talk(0, npc) {
+        match s.talk_npc(0, npc) {
             Ok(o) => s.show_talk(&o.events),
             Err(e) => info!("opening: NPC {npc}: {e}"),
         }
@@ -1697,6 +1714,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             let shape = story.stage.scenarios.entry(4, 7)?.shape.as_ref()?;
             demo_through_box(&shape.zone, s.demo.as_ref()?.step_origin)
         }),
+        Step::Q0002Event if s.world().sce_no >= 1400 => s.npcs.get(&1).map(|(_, at, _)| *at),
         Step::Q0002Event => place("cassardis: q0002 event"),
         // Installed st200_door entry 0 is the stage100/start2 gate.
         // Coordinates and angle are read from that scenario at runtime.
@@ -1870,7 +1888,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         Step::FieldSettle if now - d.since >= 30.0 => next = Some(Step::Done),
         _ => {}
     }
-    let talk_due = step == Step::TalkQuina
+    let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400))
         && target.is_some_and(|t| (Vec3::new(t.x - p.x, 0.0, t.z - p.z)).length() <= 150.0)
         && now - d.last_talk > 1.5;
     if talk_due {
@@ -1909,9 +1927,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
                 s.show_talk(&o.events);
             }
         } else if let Some(d) = s.demo.as_mut() {
-            if !d.talked {
+            if !d.talked || step == Step::Q0002Event {
                 d.talked = true;
-                match s.host.talk(0, 2) {
+                let npc = if step == Step::Q0002Event { 1 } else { 2 };
+                match s.talk_npc(0, npc) {
                     Ok(o) => {
                         s.show_talk(&o.events);
                         s.shot("5-talk-quina");
