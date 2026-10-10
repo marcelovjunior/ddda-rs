@@ -1,6 +1,37 @@
 //! Installed motion/character-parameter evidence; no original replay claim.
 use ddenemyrt::dragon::{Dragon, DragonData, DragonEffect, DragonError, DragonStep, attacks::*};
 
+#[test]
+fn installed_collision_effect_reads_runtime_fields_and_keeps_spawn_separate_from_fade() {
+    use ddenemyrt::dragon::particles::CollisionUnit;
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.is_dir() { eprintln!("SKIP collision effect: install absent"); return; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    // Explicit list-slot fixture, not a claim that the native LOD selector
+    // or provider's runtime parameter overrides have been implemented.
+    let unit = CollisionUnit::load(&vfs, 0).unwrap();
+    assert!(unit.capacity > 0 && unit.path_points > 1);
+    assert_eq!(unit.generator.flags & 2, 0, "this installed unit is one-shot");
+    let mut counter = 0;
+    let durations = unit.sample_raw_durations(&mut counter,
+        |_| panic!("installed zero-variation ranges must not read RNG table")).unwrap();
+    assert_eq!(counter, 3);
+    assert_eq!(durations[0], 0);
+    assert_eq!(durations[2], 0);
+    assert!(durations[1] > 0);
+    let mut generator = GeneratorClock::new(counter, 4);
+    assert!(generator.update(unit.generator, 0, |_| panic!("no restart RNG")).spawn);
+    let mut fade = FadeClock::enter(durations, unit.hold_limit, false);
+    for _ in 0..durations[1] {
+        assert!(!generator.update(unit.generator, 0, |_| panic!("one-shot")).spawn);
+        assert!(fade.update(false, false, false));
+    }
+    assert_eq!(fade.phase, FadePhase::Done);
+    assert!(!fade.update(false, false, false));
+    // No particle position or party hit was fabricated by this reader/test.
+}
+
 fn step() -> DragonStep<'static> {
     DragonStep {
         engine_step: 1.0,

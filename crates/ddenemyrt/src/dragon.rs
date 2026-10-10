@@ -15,6 +15,8 @@ use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool}
 pub mod flight;
 #[path = "dragon_attacks.rs"]
 pub mod attacks;
+#[path = "dragon_particles.rs"]
+pub mod particles;
 #[path = "dragon_actor.rs"]
 mod actor;
 pub use actor::OpeningDragon;

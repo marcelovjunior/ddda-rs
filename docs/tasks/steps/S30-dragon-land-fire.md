@@ -171,3 +171,36 @@ The first compile encountered a stale shared-target DDSIM artifact from
 another worktree; a narrow DDSIM rebuild restored the branch's capsule API.
 An initial namespace filter ran zero tests; the explicit generator filter
 then ran all three new tests. No fire/contact acceptance was inferred.
+
+The type1 movement fade state selection/update is translated from
+`0x010FA8D0/0x010FAD70`. It accepts already sampled/adjusted durations;
+the owner-specific adjustment at `0x010F9CB0` remains outside this helper.
+Fade-in uses the native duration+1 denominator. Reaching Done from fade-in
+or hold stays live for that update, while fade-out's terminal retires in
+the same update. Generator-held lifetimes, detachment, hold limits and
+graceful stop are represented. Three new regressions cover these boundaries.
+
+Head approved the existing `mteffect` dependency in board #5065. The new
+`dragon::particles::CollisionUnit` reader follows the installed EPV index4,
+element2 to an explicitly selected list slot, then reads the generator,
+particle11, movement1/tag0x12 and lifetime4 fields. It reads radius,
+capacity, joint, duration ranges, speed/acceleration, initial path distance
+and point count from the installation; none of those records are embedded.
+Unsupported kinds/inherited bodies, truncated fields and nonfinite scalar
+values reject. The native LOD selector, parameter overrides, complete path
+and particle simulation are not implemented by this reader.
+
+Raw duration sampling follows `0x010FA8D0`: three counter increments,
+inclusive integer variation, zero-variation table-read suppression and
+explicit rejection of unsupported hold curves. This sampling precedes the
+unported owner adjustment. Two synthetic regressions cover native counter
+wrapping/range behavior and malformed/unsupported units. A new installed
+regression resolves the actual EPV/EFL, observes one emission request and
+the separate resource hold clock through retirement, without manufacturing
+any particle position, collision or damage.
+
+All 26 dragon library regressions and all three installed action/effect/
+scenery regressions passed (6.35s/5.53s compile; 6.99s installed run), actual
+exit0. This validates the reader and source helpers, not the full fire
+runtime or original-game acceptance. Next action remains binding the
+authentic type4 path/mover before enabling the rest of the encounter.

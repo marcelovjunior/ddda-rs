@@ -106,6 +106,92 @@ impl GeneratorClock {
     }
 }
 
+/// Type1 movement's fade clock, after native sampling/duration adjustment.
+/// Particle trajectory and allocation are separate from this lifetime gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FadePhase { In, Hold, Out, Done }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FadeClock {
+    pub phase: FadePhase,
+    pub opacity: f32,
+    pub timer: u16,
+    pub durations: [u16; 3],
+    pub hold_limit: u16,
+    pub hold_latch: bool,
+}
+
+impl FadeClock {
+    // Translated from the state selection at 0x010FA8D0
+    // (DDDA.exe 2017-12-13 Steam). Durations must already be sampled and
+    // adjusted by 0x010F9CB0; RNG/curve/owner adapters are not translated here.
+    pub fn enter(durations: [u16; 3], hold_limit: u16, hold_latch: bool) -> Self {
+        let [fade_in, hold, fade_out] = durations;
+        let (phase, timer, opacity) = if fade_in != 0 {
+            (FadePhase::In, 0, 1.0 / (f32::from(fade_in) + 1.0))
+        } else if hold != 0 {
+            (FadePhase::Hold, hold, 1.0)
+        } else {
+            (FadePhase::Out, fade_out.max(1), 1.0)
+        };
+        Self { phase, opacity, timer, durations, hold_limit, hold_latch }
+    }
+
+    fn begin_out(&mut self) {
+        if self.durations[2] == 0 { self.phase = FadePhase::Done; }
+        else { self.phase = FadePhase::Out; self.timer = self.durations[2]; }
+    }
+
+    /// Returns native liveness. Reaching Done from In/Hold remains live for
+    /// that update; reaching Done from Out retires during the same update.
+    // Translated from 0x010FAD70 (DDDA.exe 2017-12-13 Steam).
+    // `detached` is particle flags+0x0C bit1; `generator_holds` is manager
+    // flags+0x3C bit28; `stop` is runtime unit+0x0C bit29.
+    pub fn update(&mut self, generator_holds: bool, detached: bool, stop: bool) -> bool {
+        if detached { self.hold_latch = false; }
+        match self.phase {
+            FadePhase::In => {
+                self.timer = self.timer.wrapping_add(1);
+                if self.timer < self.durations[0] {
+                    self.opacity = (f32::from(self.timer) + 1.0)
+                        / (f32::from(self.durations[0]) + 1.0);
+                } else {
+                    self.opacity = 1.0;
+                    if self.durations[1] != 0 {
+                        self.phase = FadePhase::Hold; self.timer = self.durations[1];
+                    } else if generator_holds && self.hold_latch {
+                        self.phase = FadePhase::Hold; self.timer = 1;
+                    } else { self.begin_out(); }
+                }
+                if stop { self.begin_out(); }
+                true
+            }
+            FadePhase::Hold => {
+                if !generator_holds || !self.hold_latch {
+                    self.timer = self.timer.wrapping_sub(1);
+                } else if self.hold_limit != 0 {
+                    self.hold_limit = self.hold_limit.wrapping_sub(1);
+                    if self.hold_limit == 0 { self.timer = 0; }
+                }
+                if self.timer == 0 || stop { self.begin_out(); }
+                true
+            }
+            FadePhase::Out => {
+                self.timer = self.timer.wrapping_sub(1);
+                if self.timer == 0 {
+                    self.opacity = 0.0;
+                    self.phase = FadePhase::Done;
+                    false
+                } else {
+                    self.opacity = f32::from(self.timer) / f32::from(self.durations[2]);
+                    true
+                }
+            }
+            FadePhase::Done => false,
+        }
+    }
+}
+
 /// Default cObjCollision scenery branch, before any runtime type override.
 /// The capsule is posed relative to the actor origin supplied to the sweep.
 /// Type1 length/width overrides and special negative joint IDs are unported.
@@ -408,6 +494,58 @@ impl PressAttack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fade_clock_retirement_distinguishes_hold_and_fade_out_terminals() {
+        // Synthetic durations; no installed movement record is copied.
+        let mut hold = FadeClock::enter([0, 2, 0], 0, false);
+        assert!(hold.update(false, false, false));
+        assert!(hold.update(false, false, false));
+        assert_eq!((hold.phase, hold.opacity), (FadePhase::Done, 1.0));
+        assert!(!hold.update(false, false, false));
+        let mut out = FadeClock::enter([0, 0, 2], 0, false);
+        assert!(out.update(false, false, false));
+        assert_eq!(out.opacity, 0.5);
+        assert!(!out.update(false, false, false));
+        assert_eq!((out.phase, out.opacity), (FadePhase::Done, 0.0));
+        let mut zero = FadeClock::enter([0; 3], 0, false);
+        assert_eq!(zero.timer, 1);
+        assert!(!zero.update(false, false, false));
+    }
+
+    #[test]
+    fn fade_clock_uses_native_fade_in_denominator_and_stop_transition() {
+        let mut clock = FadeClock::enter([2, 3, 2], 0, false);
+        assert_eq!(clock.opacity, 1.0 / 3.0);
+        assert!(clock.update(false, false, false));
+        assert_eq!(clock.opacity, 2.0 / 3.0);
+        assert!(clock.update(false, false, false));
+        assert_eq!((clock.phase, clock.timer, clock.opacity), (FadePhase::Hold, 3, 1.0));
+        assert!(clock.update(false, false, true));
+        assert_eq!((clock.phase, clock.timer, clock.opacity), (FadePhase::Out, 2, 1.0));
+        assert!(clock.update(false, false, false));
+        assert_eq!(clock.opacity, 0.5);
+        assert!(!clock.update(false, false, false));
+    }
+
+    #[test]
+    fn fade_clock_latch_holds_until_detachment_limit_or_stop() {
+        let mut clock = FadeClock::enter([0, 3, 0], 0, true);
+        for _ in 0..20 { assert!(clock.update(true, false, false)); }
+        assert_eq!((clock.phase, clock.timer), (FadePhase::Hold, 3));
+        assert!(clock.update(true, true, false));
+        assert_eq!((clock.hold_latch, clock.timer), (false, 2));
+        let mut limited = FadeClock::enter([0, 3, 0], 2, true);
+        assert!(limited.update(true, false, false));
+        assert_eq!((limited.timer, limited.hold_limit), (3, 1));
+        assert!(limited.update(true, false, false));
+        assert_eq!((limited.phase, limited.timer), (FadePhase::Done, 0));
+        assert!(!limited.update(true, false, false));
+        let mut stopped = FadeClock::enter([2, 0, 0], 0, true);
+        assert!(stopped.update(true, false, true));
+        assert_eq!(stopped.phase, FadePhase::Done);
+        assert!(!stopped.update(true, false, false));
+    }
+
     #[test]
     fn generator_single_spawn_waits_for_activation_and_owner_delay() {
         let params = GeneratorParams { flags: 4, restart_delay: 0, restart_variation: 0 };
