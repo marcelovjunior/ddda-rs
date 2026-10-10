@@ -35,3 +35,64 @@
 
 Killing goblins in `--opening` until a level-up shows the original's
 notice with the right level; the Result names the sources.
+
+## Results (source checkpoint, 2026-10-10, codex-70)
+
+- Creation confirmed: `0x00B5BD20` -> `0x00452CE0` queues a category-0
+  Arisen or category-1 eligible pawn record through `0x00454B90`;
+  `0x00452780` creates `uGUICharacterLevelUp` through `0x00677240`.
+  Byte `+0x298` means Arisen (true) versus pawn (false), not local/remote.
+- Correction to the brief: `0x00676BE0`/`0x00676C00` resolve another GUI
+  class. The actual LevelUpBase overrides are vf09 `0x00676F20` and vf11
+  `0x00677100`. `0x006772A0` selects **sequence** ids 3/4/5 (Arisen) or
+  12/13/14 (pawn), rather than message ids. Init `0x00676D20` sets the
+  hold counter to 120 native frame units; `0x00677030` decrements it after
+  the intro finishes, then starts the exit sequence.
+  The presenter translates that state machine: intro completion does not
+  spend hold time, and the old hold counter is checked before decrementing
+  it (a step crossing zero starts the exit on the following update).
+- The install supplies `id/cockpit/level_info` from `rom/game_main.arc`,
+  cockpit/common messages from `rom/bbsrpg_core.arc`, and the layout's bitmap
+  font and textures. Native vf60 binds object indices 8/9 (level/name),
+  common message 88 to object 5, and cockpit message 4 to object 4. The
+  installed enter/exit global tracks span 8/6 frames respectively; panel
+  pointer-array indices are 1 (Arisen) and 15 (pawn).
+  Parent review #6449 caught the object-link interpretation before acceptance:
+  record `+0xC` is first child (`0x01068C40`) and `+8` next sibling
+  (`0x01068C60`), confirmed by both setters' disassembly. Correct installed
+  number-parent positions are (-80,19) for Arisen and (-90,19) for pawn;
+  title/prefix/name are siblings and inherit neither offset.
+- Added a dedicated `level_up_notice` presenter with per-owner observation
+  and queueing. It reads authoritative `OpeningRes.host.progression` and
+  `PlayState.locals/follow`, initializes a silent baseline, preserves levels
+  crossed between render frames, and excludes remote/support-pawn records.
+  It never awards experience or edits the host. The only shared-file edits
+  are the approved module declaration and plugin installation in main.rs.
+- Explicit limits: Arisen name is unported because the current host/editor
+  has no canonical name (head accepted follow-up in board #6374); actual
+  main-pawn names come from the Rift record. The level-200 global string
+  at `0x018D9230` is `<ICON INFINITY>` (codex-1 read-only live probe #6344),
+  so that notice reports an unsupported icon instead of inventing text.
+  Other key interpolation modes, transient local flashes, font filters,
+  general GUI scripting, rank-up notices and guest progression replication
+  remain open. Enter/exit endpoints and duration are authored. Their installed
+  scalar/vector keys all select linear mode 3, confirmed at `0x011511C0`
+  through `0x0106C670`; only that native mode is translated and has a pending
+  regression test, other modes are rejected. Co-op queue eviction and
+  suppressing the panel during events/pause are presentation policies.
+- Tests and the release build are **pending**, queued for the normal shared
+  M5 target behind codex-66. No GUI has been launched. This source checkpoint
+  is not Ready and has not been compared against the original.
+- Next action: integrate reviewed committed main, run the full ddview suite
+  and default release build, then provide a pinned-binary capture request for
+  a real opening kill/level-up (no synthetic production award).
+  With `--shots <private-dir>`, the first real notice automatically requests
+  `S43-level-up.png` once its enter track has finished. This supports a bounded
+  route capture without guessing its elapsed wall time or creating experience.
+- Infinity follow-up source: message vf21 `0x010FEF20` -> analyzer
+  `0x01002C30` -> tag dispatch `0x01002960` -> ICON binding `0x010024F0`.
+  `sGUI::vf17` at `0x00DE1770` resolves the icon name from the active name/id
+  table (`sGUI+0x5C`), and `0x01001650` temporarily switches to the GUI icon
+  font (`sGUI+0x58`) before inserting a type-5 glyph. The table/font resource
+  initializer still needs tracing; this is not the ordinary text font's
+  Unicode infinity glyph. No inferred icon number, resource or pixel is copied.
