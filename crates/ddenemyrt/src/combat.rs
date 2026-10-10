@@ -240,8 +240,13 @@ pub struct CombatOwnerState {
 
 /// Actor-specific callbacks in collision execution order. The policy owns
 /// actor observations such as accepted-death markers; HP snapshots do not
-/// substitute for those markers. Callbacks run only for configured enemies.
+/// substitute for those markers. Damage-result callbacks run only for
+/// configured enemies; the contact permission callback runs before merging.
 pub trait EnemyHitPolicy {
+    /// Victim vf66 callback after attack valuation, before frame merging.
+    /// Contact history and the attack's critical roll have already run.
+    fn accepts_contact(&mut self, _victim: u32, _attacker: u32) -> bool { true }
+
     fn after_mitigation(
         &mut self,
         _owner: u32,
@@ -366,6 +371,34 @@ pub fn hit_pass_with_npc_trace(
     hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut (), Some(trace))
 }
 
+/// Ordinary pass with explicit NPC actor permissions. Projectile owners keep
+/// independent histories; `owners` resolves their actual originating actors.
+/// Each owner tuple contains its ID, resolved class, and whether actor class
+/// bit8 is set with a linked intel whose gauge byte is nonzero. The third
+/// fact is independent of the hostile-NPC -> Enemy class distinction.
+pub fn hit_pass_with_npc_guards(
+    fighters: &mut [Fighter], tables: &Tables, dt: f32,
+    roll: &mut dyn FnMut() -> f32, holds: &dyn Fn(u32) -> bool,
+    guards: &[(u32, crate::npc_combat::GaugeHitGuard)],
+    owners: &[(u32, crate::npc_combat::DamageOwnerClass, bool)],
+    trace: Option<&mut Vec<NpcHitTrace>>,
+) -> Vec<HitEvent> {
+    struct Guards<'a> {
+        guards: &'a [(u32, crate::npc_combat::GaugeHitGuard)],
+        owners: &'a [(u32, crate::npc_combat::DamageOwnerClass, bool)],
+    }
+    impl EnemyHitPolicy for Guards<'_> {
+        fn accepts_contact(&mut self, victim: u32, attacker: u32) -> bool {
+            let Some((_, guard)) = self.guards.iter().find(|(owner, _)| *owner == victim) else { return true };
+            let (class, gauge) = self.owners.iter().find(|(owner, _, _)| *owner == attacker)
+                .map(|(_, class, gauge)| (*class, *gauge))
+                .unwrap_or((crate::npc_combat::DamageOwnerClass::Unknown, false));
+            guard.allows(class, gauge)
+        }
+    }
+    hit_pass_inner(fighters, tables, dt, roll, holds, &[], &mut Guards { guards, owners }, trace)
+}
+
 fn hit_pass_inner(
     fighters: &mut [Fighter],
     tables: &Tables,
@@ -413,13 +446,14 @@ fn hit_pass_inner(
             _ => true,
         };
         let hits = resolve(&attacks, &v.hurts, &mut v.history, dt, holds, accepts);
-        let Some(&(first, region)) = hits.first() else {
+        if hits.is_empty() {
             continue;
-        };
+        }
+        let mut accepted = Vec::new();
         let mut values: Vec<HitValue> = Vec::new();
         let mut npc_contacts = (npc_trace.is_some() && matches!(v.victim, Victim::Npc { .. }))
             .then(Vec::new);
-        for &(ai, _) in &hits {
+        for &(ai, region) in &hits {
             let a = &attacks[ai];
             let Some((_, att)) = attackers.iter().find(|(o, _)| *o == a.side.owner) else {
                 continue;
@@ -428,6 +462,11 @@ fn hit_pass_inner(
                 Attacker::Enemy(e) => enemy_attack(e, &a.row),
                 Attacker::Player(p) => player_attack(p, &a.row, roll(), &tables.dlc),
             };
+            // 0x0076B7E0 calls valuation 0x0076C4F0 before victim vf66
+            // (+0xC7C). Its rejection retains RNG and recorded history,
+            // but excludes HP, reactions and status from frame merging.
+            if !policy.accepts_contact(v.owner, a.side.owner) { continue; }
+            accepted.push((ai, region));
             if let Some(contacts) = &mut npc_contacts {
                 contacts.push(NpcContactTrace { attacker: a.side.owner, key: a.key,
                     relation: a.relation, multi_hit: a.flags.multi_hit, reset_time: a.reset_time,
@@ -438,6 +477,7 @@ fn hit_pass_inner(
         let Some(mut merged) = merge_frame(&values) else {
             continue;
         };
+        let (first, region) = accepted[0];
         let status_hit = StatusHit {
             element: merged.element,
             element_buildup: merged.element_buildup,
