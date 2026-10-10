@@ -141,6 +141,8 @@ impl HostHandle {
 /// Loaded NPC layouts and real actor requests, independent of graph-map membership.
 struct NpcAdapter {
     layouts: HashMap<u32, ddhost::npc_placements::LoadedLayouts>,
+    field_groups: Option<ddhost::ddspawn::gpl::GroupList>,
+    field_cells: Option<Vec<(u16, u16)>>,
     families: ddhost::npc_placements::NameFamilies,
     guards: HashMap<u32, ddnpcrt::schedule::Guard>,
     goto: HashMap<u32, [f32; 3]>,
@@ -157,13 +159,47 @@ impl NpcAdapter {
             .map_err(|error| error.0)?;
         let list = ddhost::npc_placements::group_list(vfs, STAGE)?;
         // Cassardis is loaded as a whole stage by opening::setup. Field
-        // admission must instead use actual streamer layout cells and archive
-        // readiness; this adapter does not pretend those observations exist.
+        // layouts are parsed separately from the streamer's completed cell set.
         let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
-        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), families, guards: HashMap::new(), goto: HashMap::new(),
+        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
+            families, guards: HashMap::new(), goto: HashMap::new(),
             placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+    }
+
+    /// Parse NPC archives only after the streamer's layout set completes.
+    /// LoadedLayouts applies the existing 0x0075faa0 gates; parsing a layout
+    /// does not acknowledge any actor's Guard/Goto or model readiness.
+    fn sync_field_layouts(
+        &mut self, vfs: &ddvfs::Vfs, stage: u32, cells: &[(i32, i32)],
+    ) -> Result<bool, String> {
+        if stage != 100 {
+            let changed = self.field_cells.take().is_some();
+            self.layouts.remove(&100);
+            return Ok(changed);
+        }
+        let mut loaded = cells.iter().map(|&(m, n)| {
+            Ok((u16::try_from(m).map_err(|_| format!("invalid field layout M {m}"))?,
+                u16::try_from(n).map_err(|_| format!("invalid field layout N {n}"))?))
+        }).collect::<Result<Vec<_>, String>>()?;
+        // Stage bootstrap 0x004a21b0, NPC loop 0x004a277d..0x004a27cb,
+        // loads authored (0,0) groups through 0x004a37a0(type=3), outside
+        // the split-grid window. Their intels remain until stage unload;
+        // individual physical actor readiness is still a separate system.
+        loaded.push((0, 0));
+        loaded.sort_unstable();
+        loaded.dedup();
+        if self.field_cells.as_ref() == Some(&loaded) { return Ok(false); }
+        if self.field_groups.is_none() {
+            self.field_groups = Some(ddhost::npc_placements::group_list(vfs, 100)?);
+        }
+        let layouts = ddhost::npc_placements::LoadedLayouts::read(
+            vfs, 100, self.field_groups.as_ref().unwrap(), &loaded,
+        )?;
+        self.layouts.insert(100, layouts);
+        self.field_cells = Some(loaded);
+        Ok(true)
     }
 }
 
@@ -203,6 +239,11 @@ pub struct Session {
     last_sce: u32,
     /// The Arisen's look (seat 0), for the cutscenes' player actor.
     pub arisen_look: Option<ddlook::Look>,
+    /// Each seat's look, by seat id (setup's party looks; weapons follow the
+    /// vocation kit, [`kit_weapons`]).
+    party_looks: Vec<Option<ddlook::Look>>,
+    /// The vocation whose starting weapons the Arisen show (0: none yet).
+    weapons_job: u32,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -330,6 +371,8 @@ pub fn prepare(
         sex: 0,
         last_sce: sce,
         arisen_look: None,
+        party_looks: vec![],
+        weapons_job: 0,
         gone: vec![],
     };
     let start = f
@@ -372,6 +415,14 @@ impl Session {
 
     fn sync_npc_intels(&mut self) -> Result<(), String> {
         let stage = self.world().stage_no;
+        // Retire old-stage owners before admitting the new stage, including
+        // any NPC id reused across the handoff. Do not infer death on unload.
+        let mut old_stages: Vec<_> = self.host.story_npc_intels()
+            .filter(|p| p.stage != stage).map(|p| p.stage).collect();
+        old_stages.sort_unstable(); old_stages.dedup();
+        for old in old_stages {
+            self.host.reconcile_story_npc_intels(old, vec![]).map_err(|e| e.to_string())?;
+        }
         let Some(layouts) = self.npc_adapter.layouts.get(&stage) else {
             if self.npc_adapter.reported_stage != stage {
                 warn!("opening: stage {stage} NPC materialization waits for loaded-layout/archive readiness adapter");
@@ -408,6 +459,11 @@ impl Session {
         }
         let owned: HashMap<_, _> = self.host.story_npc_intels()
             .filter_map(|p| self.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
+        if stage == 100 && owned != self.npc_adapter.owners {
+            let admitted: Vec<_> = self.host.story_npc_intels()
+                .map(|p| (p.npc, p.target.group, p.target.index)).collect();
+            info!("opening: field NPC intels admitted {admitted:?}");
+        }
         // Request ownership is independent of successful model creation.
         for (&npc, old) in &self.npc_adapter.owners {
             if owned.get(&npc) != Some(old) {
@@ -668,6 +724,7 @@ pub fn setup(
         })
         .collect();
     s.arisen_look = party_looks.first().cloned().flatten();
+    s.party_looks = party_looks.clone();
     s.sex = s.arisen_look.as_ref().map_or(0, |l| l.sex);
     let party = play::Party {
         arisen,
@@ -764,6 +821,67 @@ pub struct OpeningStage<'w, 's> {
     bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 }
 
+/// When the story's vocation changes (the weapon table's menu, then
+/// `Host::apply_job_kit` gives the fight kit), each local Arisen is respawned
+/// with that vocation's starting weapons sheathed: the first-choice items of
+/// `ddprogress::change::starting_items` before the two shared ones (primary,
+/// then secondary; 0x00673740). *Viewer choice*: the original puts the items
+/// in the inventory and equips them; here only the look changes. Seats
+/// without a look (the base body) keep theirs.
+fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
+    let job = s.world().player_job;
+    if job == s.weapons_job {
+        return;
+    }
+    let Some(vocation) = ddhost::ddskill::vocation::Vocation::from_id(job) else { return };
+    let Some(streamer) = view.streamer.as_mut() else { return };
+    s.weapons_job = job;
+    let items = ddhost::ddprogress::change::starting_items(vocation);
+    let own = &items[..items.len().saturating_sub(2)];
+    let primary = own.first().map_or(-1, |&i| i32::from(i));
+    let secondary = own.get(1).map_or(-1, |&i| i32::from(i));
+    let weapons = match ddlook::save::weapons_for_items(streamer.loader.vfs, primary, secondary) {
+        Ok(w) => w,
+        Err(e) => {
+            warn!("opening: starting weapons of {vocation:?}: {e}");
+            return;
+        }
+    };
+    for id in st.locals.clone() {
+        let (Some(&old), Some(Some(look))) = (st.entities.get(&id), s.party_looks.get(usize::from(id))) else { continue };
+        let mut look = look.clone();
+        look.weapons = weapons.clone();
+        match crate::character::spawn_look(
+            &mut view.commands,
+            &mut streamer.loader,
+            &mut view.meshes,
+            &mut view.materials,
+            &mut view.images,
+            &mut view.bindposes,
+            &look,
+            play::MOTIONS,
+            0,
+            Vec3::ZERO,
+            Some(0.0),
+        ) {
+            Ok(e) => {
+                view.commands.entity(old).despawn();
+                st.entities.insert(id, e);
+                if let Some(v) = st.visible.remove(&old) {
+                    st.visible.insert(e, v);
+                }
+                st.forget_shown(id);
+                if id == 0 {
+                    s.arisen_look = Some(look.clone());
+                }
+                s.party_looks[usize::from(id)] = Some(look);
+                info!("opening: seat {id} takes the {vocation:?} starting weapons {primary:#x} / {secondary:#x} (body {old:?} -> {e:?})");
+            }
+            Err(e) => warn!("opening: seat {id} with {vocation:?} weapons: {e}"),
+        }
+    }
+}
+
 pub fn step(
     mut stage_view: OpeningStage,
     time: Res<Time>,
@@ -790,6 +908,7 @@ pub fn step(
         s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
         return;
     }
+    kit_weapons(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         streamer.actors = s.host.sim.players.iter().map(|p| p.position).collect();
@@ -797,6 +916,15 @@ pub fn step(
             // the camera's copy too (play::follow_camera)
             st.terrain = terrain.clone();
             s.host.set_ground_with_doors(Box::new(terrain));
+        }
+        let stage = s.world().stage_no;
+        // A target stage's cells cannot admit actors before its streamer
+        // enters that stage. The next completed set is observed next frame.
+        let loaded_stage = if streamer.stage == stage { stage } else { 0 };
+        match s.npc_adapter.sync_field_layouts(streamer.loader.vfs, loaded_stage, streamer.loaded_layout_cells()) {
+            Ok(true) => info!("opening: stage {stage} NPC layout cells {:?}", s.npc_adapter.field_cells),
+            Ok(false) => {}
+            Err(error) => { s.failure = Some(format!("NPC layouts: {error}")); return; }
         }
     }
     if !s.network_ready {
@@ -1640,7 +1768,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         pl.yaw = yaw;
     }
     if menu_due {
-        close_menu(s, ddskill_fighter());
+        // DDVIEW_DEMO_JOB picks another vocation (2 Strider, 3 Mage) for
+        // unattended checks of the other kits
+        let job = std::env::var("DDVIEW_DEMO_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(ddskill_fighter());
+        close_menu(s, job);
     }
     if talk_due {
         if s.talk.is_some() {
@@ -2056,6 +2187,68 @@ fn plan_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_field_npc_cells_admit_idempotently_and_retire_on_unload() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let list = ddhost::npc_placements::group_list(&vfs, 100).unwrap();
+        let group = list.groups.iter().find(|g| g.slot == 4).unwrap();
+        assert!(group.cells.iter().any(|c| c.m == 0 && c.n == 0));
+        let starts = ddhost::install::start_positions(&vfs, 100).unwrap();
+        let start = starts.entries.get(2).unwrap();
+        let grid = crate::stream::Streamer::field_grid(native).unwrap();
+        let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
+        assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
+        let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
+        // Fixture observations satisfy this installed group's authored gates;
+        // this is not a claim that the full opening route has reached them.
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = 100;
+        story.world.stage_no = 100;
+        story.world.sce_no = group.scene_window.map_or(1500, |(begin, _)| begin as u32);
+        story.world.hour = group.hours.map_or(12, |(begin, _)| u32::from(begin));
+        for flag in [group.layout_flag, group.layout_flag2].into_iter().flatten() {
+            story.world.set_lot(100, usize::from(flag), true);
+        }
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &cells).unwrap());
+        session.sync_npc_intels().unwrap();
+        let owner = session.host.story_npc_lifetime(304).expect("installed group 4 NPC admitted");
+        let admitted: Vec<_> = session.host.story_npc_intels()
+            .map(|p| (p.npc, p.target.group, p.target.index)).collect();
+        println!("field loaded cells {cells:?}: admitted {admitted:?}");
+        assert!(admitted.contains(&(304, 4, 0)));
+        assert!(session.host.story_npc_intels().all(|p| p.stage == 100));
+        assert!(!session.npc_adapter.sync_field_layouts(&vfs, 100, &[cells[0], cells[0]]).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_eq!(session.host.story_npc_lifetime(304), Some(owner));
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &[]).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_eq!(session.host.story_npc_lifetime(304), Some(owner),
+            "global NPC intel survives neighboring split-cell unload");
+        let retired: Vec<_> = admitted.iter().filter_map(|&(npc, _, _)|
+            session.host.story_npc_lifetime(npc as u32).is_none().then_some(npc)).collect();
+        println!("split-cell unload retires {retired:?}; global NPC 304 retained");
+        assert!(!retired.is_empty(), "arrival fixture also contains a split-cell NPC");
+        assert_eq!(session.npc_adapter.field_cells.as_deref(), Some(&[(0, 0)][..]));
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = STAGE;
+        story.world.stage_no = STAGE;
+        session.sync_npc_intels().unwrap();
+        assert!(session.host.story_npc_lifetime(304).is_none());
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = 100;
+        story.world.stage_no = 100;
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, 100, &cells).unwrap());
+        session.sync_npc_intels().unwrap();
+        assert_ne!(session.host.story_npc_lifetime(304), Some(owner));
+        assert_eq!(session.host.roster.ids().count(), 2);
+        assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
+        assert!(!session.npc_adapter.layouts.contains_key(&100));
+    }
+
     #[test]
     fn installed_intro_waits_on_quest_movie_then_editor_before_q0001() {
         use ddstory::data::Data;

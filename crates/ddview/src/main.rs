@@ -269,7 +269,8 @@ fn args() -> Args {
                 a.kit = Some(match v.as_str() {
                     "fighter" => play::Kit::Fighter,
                     "mage" => play::Kit::Mage,
-                    _ => panic!("--kit fighter|mage"),
+                    "strider" => play::Kit::Strider,
+                    _ => panic!("--kit fighter|strider|mage"),
                 })
             }
             "--cam-pitch" => a.cam_pitch = Some(v.parse().unwrap()),

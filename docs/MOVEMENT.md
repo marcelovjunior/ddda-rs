@@ -428,10 +428,19 @@ ground 0x301 / air 0x302, check, slot). The ground rows used:
 | staff (list 0x014F8898) | light | any | WandShot `0x01070021` | |
 | | heavy | Strike1 | WandStrike2 `0x0107001F` | 22 |
 | | heavy | any other | WandStrike1 `0x0107001E` | |
+| dagger (list 0x014F86B8) | heavy | any | LandL `0x01050003` (motion 0x715) | |
+| | light | LandS 0 | LandS 1 `0x01050001` (0x70B) | 22 |
+| | light | LandS 1 | LandS 2 `0x01050002` (0x70C) | 22 |
+| | light | any other | LandS 0 `0x01050000` (0x70A) | |
 
 Left out: S1_1 -> S1_2_1 (check 24, an ability bit not identified), LandL's
 follow-up `0x0101000D` (a learned ability), the staff's charged rows
 (command 0x0C, checks 8, 15, 16), skills.
+
+Dagger: every strike costs `m_pl000_00[0x1BA]` (70), turns at 0xAE. Left
+out: the rows behind check 27 (uPlayer +0x206E bit 0x10, *assumed* clinging:
+LandS 0x01050007, motion 0x301), Engrave (check 24), Double Vault (command 8).
+Checks are `uPlayer::vf188` 0x00B72DB0.
 
 **Air attacks** (rows flagged 0x302; records are 8 words, the last -1).
 The jump, sprint-jump and fall motions (11, 14, 23, 7) keep slots 1 and 4
@@ -441,6 +450,8 @@ executing throughout, so an air press starts at once.
 |---|---|---|
 | light | AirS `0x01010003` (slot 4): motion 0x714, jump row 0x36 | air WandShot `0x01070022`: variant 1 (0x014F7148), motions 0x716 / 0x717 / 0x718, one volley |
 | heavy | AirL `0x01010005`: motion 0x703, row 0x37; landing 0x704 | WandAirStrike `0x01070020`: motion 0x725, row 0x47 |
+| dagger light | AirS1 `0x01050005`: 0x719, row 0x38 (impulse 0x00AC59A0), physics; after AirS1 (check 22) AirS2 `0x01050006`: 0x71A, hangs to bit 31 then row 0x39 (SpeedY 12.5) | |
+| dagger heavy | AirL `0x01050004`, only 25 cm or more above ground (check 10, `m_pl000_00[0x75]`): 0x71C, hangs to bit 31 then row 0x3A (SpeedY 22.5, gravity -6); landing 0x71D | |
 
 - `0x00937CF0(row)` loads a `pljumpparam` row into uPlayer +0x38D8
   (SpeedY), +0x38DC (gravity), +0x38E0 (SpeedZ); `0x00AC59A0` adds it as an
