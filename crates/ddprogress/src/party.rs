@@ -71,6 +71,20 @@ pub struct Progression {
 pub const RC_CAP: i32 = 99_999_999;
 
 impl Progression {
+    /// Detach a profile's Arisen and remove every reference to its old seat.
+    /// Remaining character indices stay coherent; this is host co-op policy.
+    pub fn detach_arisen(&mut self, seat: PlayerId) -> Option<Character> {
+        let index = self.party.iter().flatten()
+            .find(|m| m.role == Role::Arisen(seat))?.character;
+        for member in &mut self.party {
+            if member.is_some_and(|m| m.character == index) { *member = None; }
+            else if let Some(member) = member {
+                if member.character > index { member.character -= 1; }
+            }
+        }
+        Some(self.characters.remove(index))
+    }
+
     pub fn new() -> Self {
         Progression { characters: vec![], party: [None; 4] }
     }

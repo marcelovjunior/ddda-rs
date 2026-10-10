@@ -146,7 +146,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
                         data,
                         profile,
                         look,
-                    }) => self.hello(from, protocol, build, data, profile, look),
+                    }) => self.hello(from, protocol, build, data, profile, look, now),
                     Ok(ToHost::Bye) => self.drop_client(from, "left"),
                     Err(_) => {}
                 }
@@ -191,6 +191,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         data: u64,
         profile: u64,
         look: Option<LookData>,
+        now: u64,
     ) {
         let Some(r) = self.clients.get(&from) else { return };
         if r.seat.is_some() {
@@ -281,7 +282,30 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
                 if let Some(l) = look {
                     self.looks.insert(seat, l);
                 }
+                // Late admission observes the CURRENT authoritative clock,
+                // even while the host is only servicing heartbeats. Never
+                // replay a stored quest-camera start or a cached old snapshot.
+                let snapshot = self.current_snapshot();
+                let payload = snapshot.encode(None);
+                let remote = self.clients.get_mut(&from).unwrap();
+                let packet = remote.link.packet(Some(&payload), now);
+                self.transport.send(from, &packet, now);
             }
+        }
+    }
+
+    fn current_snapshot(&self) -> Snapshot {
+        let (vitals, enemies) = mirror::from_fight(self.host.fight.as_ref());
+        Snapshot {
+            frame: self.host.frame,
+            stage: self.host.story.as_ref().map(|s| s.world.stage_no),
+            base: None,
+            cmd_newest: None,
+            bodies: self.host.sim.players.iter().map(Body::of).collect(),
+            vitals, enemies,
+            npcs: mirror::npcs_of(&self.host),
+            quest_camera: self.host.world.quest_camera_active().map(|active|
+                crate::quest_camera::QuestCamera::of(active, self.host.world.player_actions_blocked(0))),
         }
     }
 
@@ -387,8 +411,11 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
     /// Service reliable acknowledgements while a presentation endpoint holds
     /// simulation time (for example the end of a bounded opening slice).
     pub fn heartbeat(&mut self, now: u64) {
+        // Rebuild from the host rather than replaying history: a client that
+        // joins while simulation is held still receives current camera/end.
+        let payload = self.current_snapshot().encode(None);
         for (addr, remote) in &mut self.clients {
-            let packet = remote.link.packet(None, now);
+            let packet = remote.link.packet(remote.seat.map(|_| payload.as_slice()), now);
             self.transport.send(*addr, &packet, now);
         }
     }

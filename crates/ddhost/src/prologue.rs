@@ -108,7 +108,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.rift.party = setup.pawns.clone();
         let owner = self.roster.ids().next().unwrap();
         for index in 0..2 {
-            self.hired_by[index] = self.rift.party.hired[index].as_ref().map(|_| owner);
+            self.hired_by[index] = self.rift.party.hired[index].as_ref()
+                .and_then(|_| self.roster.seat(owner).map(|s| s.profile));
         }
         self.refresh_party();
         Ok(setup)

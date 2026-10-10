@@ -39,7 +39,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut p = Party::for_roster(&self.roster);
         for k in 0..2 {
             if self.rift.party.hired[k].is_some() && p.slots[2 + k].is_none() {
-                p.slots[2 + k] = Some(Member::Hired { owner: self.hired_by[k].unwrap_or(0), slot: k as u8 + 1 });
+                if let Some(owner) = self.hired_by[k].and_then(|profile|
+                    self.roster.seats().iter().find(|s| s.profile == profile).map(|s| s.id)) {
+                    p.slots[2 + k] = Some(Member::Hired { owner, slot: k as u8 + 1 });
+                }
             }
         }
         self.party = p;
@@ -204,7 +207,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let play_time = self.play_time();
         let slot = self.rift.hire(&mut arisen, room_slot, play_time).map_err(|e| HostError::Rift(format!("{e:?}")))?;
         self.economy.wallet(player).rift_crystals = arisen.rift_crystals;
-        self.hired_by[slot - 1] = Some(player);
+        self.hired_by[slot - 1] = self.roster.seat(player).map(|s| s.profile);
         self.refresh_party();
         Ok(slot)
     }

@@ -206,7 +206,41 @@ pub struct Economy {
     locks: BTreeMap<u32, PlayerId>,
 }
 
+/// Durable state of one Arisen, detached from its temporary session seat.
+/// Profile ownership and reattachment are host co-op policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlayerState {
+    pub wallet: Option<Wallet>,
+    pub bag: Option<inventory::Bag>,
+    pub storage: Option<inventory::Bag>,
+    pub first_choice: bool,
+    pub rewards: BTreeSet<u32>,
+}
+
 impl Economy {
+    pub fn detach_player(&mut self, seat: PlayerId) -> PlayerState {
+        self.close_all(seat);
+        let rewards = self.opening_grants.rewards.iter()
+            .filter_map(|&(p, q)| (p == seat).then_some(q)).collect();
+        self.opening_grants.rewards.retain(|&(p, _)| p != seat);
+        PlayerState {
+            wallet: self.wallets.remove(&seat),
+            bag: self.inventory.bags.remove(&Owner::Arisen(seat)),
+            storage: self.inventory.bags.remove(&Owner::Storage(seat)),
+            first_choice: self.opening_grants.first_choices.remove(&seat),
+            rewards,
+        }
+    }
+
+    pub fn attach_player(&mut self, seat: PlayerId, state: PlayerState) {
+        self.detach_player(seat);
+        if let Some(wallet) = state.wallet { self.wallets.insert(seat, wallet); }
+        if let Some(bag) = state.bag { self.inventory.bags.insert(Owner::Arisen(seat), bag); }
+        if let Some(storage) = state.storage { self.inventory.bags.insert(Owner::Storage(seat), storage); }
+        if state.first_choice { self.opening_grants.first_choices.insert(seat); }
+        self.opening_grants.rewards.extend(state.rewards.into_iter().map(|q| (seat, q)));
+    }
+
     pub fn new(day: u64) -> Self {
         Economy {
             last_day: day,
