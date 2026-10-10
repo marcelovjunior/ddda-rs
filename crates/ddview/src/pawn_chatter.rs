@@ -6,6 +6,7 @@
 use bevy::prelude::*;
 use bevy::ecs::system::SystemParam;
 use bevy::camera::{primitives::Frustum, visibility::VisibleEntities};
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use ddhost::pawn_chatter::{Bank, Message};
 use std::collections::HashMap;
 
@@ -112,7 +113,64 @@ fn game_sphere(transform: &GlobalTransform, sphere: [f32;4], origin: Vec3) -> [f
 
 #[derive(Clone)]
 struct Quad { position: Vec2, size: Vec2, image: Handle<Image>, rect: Rect }
-struct Active { hold: f32, quads: Vec<Quad>, entities: Vec<Entity> }
+struct Active { id: u64, hold: f32, quads: Vec<Quad>, entities: Vec<Entity> }
+
+/// Opt-in presentation evidence, independent of opening milestone shots.
+/// This is a diagnostic policy, not a native game timer or speech producer.
+#[derive(Resource)]
+struct Capture { directory: std::path::PathBuf, state: CaptureState }
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureState { Armed, Waiting(u64), Requested(u64), Saved(u64), Failed(u64, String) }
+impl Capture {
+    fn new(directory: &std::path::Path) -> Result<Self,String> {
+        let directory = directory.canonicalize().map_err(|error| error.to_string())?;
+        capture_path(&directory)?;
+        Ok(Self { directory, state: CaptureState::Armed })
+    }
+}
+fn capture_path(directory: &std::path::Path) -> Result<std::path::PathBuf,String> {
+    let root = std::path::Path::new("E:/ddda-re").canonicalize().map_err(|error| error.to_string())?;
+    let directory = directory.canonicalize().map_err(|error| error.to_string())?;
+    if !directory.is_dir() || !directory.starts_with(root) {
+        return Err("S52 capture directory must already exist under canonical E:/ddda-re".into());
+    }
+    let path = directory.join("S52-pawn-chatter.png");
+    match path.symlink_metadata() {
+        Ok(_) => return Err("S52 capture output already exists".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(path)
+}
+fn save_capture(image: Image, directory: &std::path::Path) -> Result<(std::path::PathBuf,u32,u32),String> {
+    // Revalidate the canonical directory and non-overwrite rule at the actual
+    // ScreenshotCaptured callback, not just when the request was queued.
+    let path = capture_path(directory)?;
+    let image = image.try_into_dynamic().map_err(|error| error.to_string())?.to_rgb8();
+    let (width,height) = image.dimensions();
+    // RGB matches Bevy's save_to_disk observer: HDR alpha stores brightness.
+    image.save(&path).map_err(|error| error.to_string())?;
+    Ok((path,width,height))
+}
+fn request_capture(commands: &mut Commands, capture: &mut Capture, id: u64) {
+    capture.state = CaptureState::Requested(id);
+    let directory = capture.directory.clone();
+    info!("S52_CAPTURE_REQUEST message={id} directory={}", directory.display());
+    commands.spawn(Screenshot::primary_window()).observe(
+        move |event: On<ScreenshotCaptured>, mut capture: ResMut<Capture>| {
+            if capture.state != CaptureState::Requested(id) { return; }
+            match save_capture(event.image.clone(), &directory) {
+                Ok((path,width,height)) => {
+                    capture.state = CaptureState::Saved(id);
+                    info!("S52_CAPTURE_SAVED message={id} width={width} height={height} path={}", path.display());
+                }
+                Err(error) => {
+                    error!("S52_CAPTURE_FAILED message={id} error={error}");
+                    capture.state = CaptureState::Failed(id,error);
+                }
+            }
+        });
+}
 
 #[derive(Resource)]
 struct View {
@@ -133,6 +191,12 @@ fn setup(mut commands: Commands, args: Res<crate::Args>) {
     match View::load(&args.native_pc) {
         Ok(view) => commands.insert_resource(view),
         Err(error) => warn!("S52 chatter presentation unavailable: {error}"),
+    }
+    if let Some(directory) = std::env::var_os("DDVIEW_S52_CAPTURE_DIR") {
+        match Capture::new(std::path::Path::new(&directory)) {
+            Ok(capture) => { commands.insert_resource(capture); }
+            Err(error) => warn!("S52 private capture refused: {error}"),
+        }
     }
 }
 
@@ -259,7 +323,8 @@ fn object_position(gui: &mtgui::Gui<'_>, first: usize, wanted: usize, count: usi
 fn update(mut commands: Commands, mut inbox: ResMut<Inbox>, view: Option<ResMut<View>>,
     opening: Option<Res<crate::opening::OpeningRes>>, state: Option<Res<crate::play::PlayState>>,
     pause: Res<crate::pause::PauseState>, time: Res<Time>, windows: Query<&Window>,
-    mut images: ResMut<Assets<Image>>, mut nodes: Query<&mut Node>) {
+    mut images: ResMut<Assets<Image>>, mut nodes: Query<&mut Node>,
+    mut capture: Option<ResMut<Capture>>) {
     let Some(mut view) = view else { inbox.0.clear(); return; };
     let Ok(window) = windows.single() else { return; };
     let Some(state) = state else { return; };
@@ -279,7 +344,14 @@ fn update(mut commands: Commands, mut inbox: ResMut<Inbox>, view: Option<ResMut<
                             image: quad.image.clone(), rect: Some(quad.rect), ..default() }, GlobalZIndex(54))).id()).collect();
                         info!("S52_PAWN_MESSAGE id={} frame={} slot={} message={} name={:?}",
                             message.id, message.frame, message.pawn_slot, message.message, message.name);
-                        view.active.push(Active { hold: HOLD_SECONDS, quads, entities });
+                        view.active.push(Active { id: message.id, hold: HOLD_SECONDS, quads, entities });
+                        if let Some(capture) = capture.as_mut() {
+                            if matches!(capture.state, CaptureState::Armed | CaptureState::Waiting(_)) {
+                                // Keep a genuine current line if the oldest
+                                // row is replaced before its first projection.
+                                capture.state = CaptureState::Waiting(message.id);
+                            }
+                        }
                         if view.active.len() > 3 {
                             for entity in view.active.remove(0).entities { commands.entity(entity).despawn(); }
                         }
@@ -303,6 +375,7 @@ fn update(mut commands: Commands, mut inbox: ResMut<Inbox>, view: Option<ResMut<
         // Settled layout only; animated sliding/replacement still unported.
         let row = (view.active.len() - 1 - index) as f32;
         let base = view.base - Vec2::Y * (66.0 * row);
+        let mut positioned = 0;
         for (entity, quad) in active.entities.iter().zip(&active.quads) {
             if let Ok(mut node) = nodes.get_mut(*entity) {
                 node.display = if !pause.paused && !event_active { Display::Flex } else { Display::None };
@@ -310,6 +383,15 @@ fn update(mut commands: Commands, mut inbox: ResMut<Inbox>, view: Option<ResMut<
                 node.top = Val::Px((base.y + quad.position.y) * scale.y);
                 node.width = Val::Px(quad.size.x * scale.x);
                 node.height = Val::Px(quad.size.y * scale.y);
+                positioned += 1;
+            }
+        }
+        if let Some(capture) = capture.as_mut() {
+            // New entities are deferred and cannot be queried/positioned on
+            // their spawn update. Require actual subsequent glyph projection.
+            if capture.state == CaptureState::Waiting(active.id) && !pause.paused && !event_active
+                && !active.entities.is_empty() && positioned == active.entities.len() {
+                request_capture(&mut commands, capture, active.id);
             }
         }
     }
@@ -333,6 +415,43 @@ mod tests {
         let game_distance = Vec3::Z.dot(Vec3::from_slice(&sphere[..3])) + plane[3];
         let world_distance = transform.transform_point(Vec3::new(100.0,0.0,0.0)).z - 2.5;
         assert!((game_distance * crate::stage::UNIT - world_distance).abs() < 0.001);
+    }
+
+    #[test]
+    fn private_capture_callback_acknowledges_png_save_and_refuses_overwrite_or_outside_root() {
+        use bevy::ecs::world::CommandQueue;
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        let private = std::path::Path::new("E:/ddda-re");
+        if !private.is_dir() { return; }
+        let directory = private.join("notes/steps/S52").join(format!("capture-test-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&directory).unwrap();
+        let mut capture = Capture::new(&directory).unwrap();
+        assert!(Capture::new(&std::env::temp_dir()).is_err());
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        request_capture(&mut Commands::new(&mut queue, &world), &mut capture, 7);
+        world.insert_resource(capture);
+        queue.apply(&mut world);
+        let entity = world.query_filtered::<Entity, With<Screenshot>>().single(&world).unwrap();
+        let image = Image::new_fill(Extent3d { width: 2, height: 1, depth_or_array_layers: 1 },
+            TextureDimension::D2, &[255,0,0,0], TextureFormat::Rgba8UnormSrgb, default());
+        // Deliver a synthetic CPU image to the real renderer callback. This
+        // tests file/ack behavior without claiming a captured game scene.
+        world.trigger(ScreenshotCaptured { entity, image: image.clone() });
+        assert_eq!(world.resource::<Capture>().state, CaptureState::Saved(7));
+        let path = directory.join("S52-pawn-chatter.png");
+        let png = std::fs::read(&path).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()),2);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()),1);
+        assert!(Capture::new(&directory).is_err());
+        world.resource_mut::<Capture>().state = CaptureState::Requested(7);
+        world.trigger(ScreenshotCaptured { entity, image });
+        assert!(matches!(world.resource::<Capture>().state, CaptureState::Failed(7,_)));
+        assert_eq!(std::fs::read(&path).unwrap(),png);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]

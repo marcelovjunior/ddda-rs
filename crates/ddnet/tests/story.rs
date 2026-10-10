@@ -151,7 +151,7 @@ fn guest_sees_the_npcs_and_gets_the_cutscene() {
         srv.pump(now);
         srv.step(&FrameInputs::new(), now).unwrap();
         for event in late.events.drain(..) {
-            if let ToClient::PlayEvent { frame, row } = event {
+            if let ToClient::PlayEvent { frame, row, .. } = event {
                 late_start = Some((frame, row));
             }
         }

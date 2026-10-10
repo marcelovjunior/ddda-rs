@@ -41,6 +41,7 @@ pub mod spawns;
 pub mod story_pawns;
 pub mod story_npcs;
 pub mod systems;
+pub mod vitals;
 
 /// The fight runtime the host composes (`Host::fight`), for views.
 pub use ddenemyrt;
