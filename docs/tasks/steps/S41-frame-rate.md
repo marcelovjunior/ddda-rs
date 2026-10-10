@@ -37,3 +37,45 @@ goal.
 The Result shows the before/after breakdown and the field route's median
 frame time at or under 5.5 ms (180 fps) on the maintainer-class GPU, or
 names exactly what still blocks it with measurements.
+
+## Results (in progress)
+
+- Branch `step/s41-frame-rate`, worktree
+  `E:/ddda-rs-wt/s41-frame-rate`; reviewed source base `10da58b`.
+  No renderer optimization has been measured or claimed yet.
+- `--perf` and `--perf-route` already select `AutoNoVsync`; unattended
+  runs already use continuous Winit updates. The host keeps its existing
+  fixed-step simulation. There is no remaining assumed refresh-rate cap
+  to remove in these modes.
+- Added optional `profile-trace` feature, using Bevy 0.19.1's
+  `trace_chrome` system/schedule/render spans. Set `TRACE_CHROME` to a
+  private JSON path. This adds tracing overhead and is **not** the build
+  used for acceptance frame times.
+- `DDVIEW_PERF_SECONDS=<positive seconds>` makes a perf capture exit
+  through ordinary `AppExit::Success`, flushing the trace without a
+  screenshot or forced stop. Its clock starts at the first perf update,
+  after startup preparation. Timing windows are labelled with their
+  current stage and reset at stage handoff.
+- Repeatable launcher `scripts/perf_capture.ps1` records a private pinned
+  executable's SHA-256, arguments, elapsed duration, numeric OS exit,
+  and read-only GPU engine samples including the original game's PID.
+  The caller must hold `live/ddview` until actual exit. Example arguments
+  and private paths are in the script. It does not control the original.
+- `scripts/perf_trace.py` summarizes bounded warm CPU trace windows by
+  thread and span; inclusive and exclusive spans are kept separate and
+  overlapping threads must not be summed as frame time. Four regression
+  tests pass (nested/parallel work, boundary clipping, distinct threads,
+  broken capture rejection); launcher PowerShell syntax check passes.
+- Initial source trace build **failed with exit 1**: merged S34's new
+  `Victim::Npc` was missing from three `ddnet/src/mirror.rs` matches
+  (431/446/489). Reported on board #5007/#5012 to the S34 owner; no
+  renderer performance conclusion follows from this build failure.
+- Head #4984 requires the original game to remain running for maintainer
+  probes. Read-only original PID 23408 3D samples before our captures were
+  25–31%. Relative before/after samples must record its concurrent share;
+  isolated absolute 180 fps acceptance needs a later maintainer run with
+  the original closed. Head currently owns the separate route capture;
+  no S41 GUI capture has started and no GPU lease is held.
+- Next: build the opt-in profiler after the S34 compatibility fix, obtain
+  the free GPU lease, measure identical Cassardis/field scenes and the
+  ordinary route, then optimize the largest measured cost.
