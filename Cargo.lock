@@ -2532,6 +2532,7 @@ dependencies = [
 name = "ddpawnai"
 version = "0.1.0"
 dependencies = [
+ "ddexe",
  "ddvfs",
  "mtarc",
  "mtxfs",
