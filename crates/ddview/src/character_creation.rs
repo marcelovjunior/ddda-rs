@@ -90,6 +90,18 @@ impl Editor {
             .collect()
     }
 
+    /// Committed keyboard text, separate from IME composition and key repeat.
+    // Translated from 0x0075D71E..0x0075D7B2 (DDDA.exe 2017-12-13 Steam).
+    pub fn type_text(&mut self, text: &str) {
+        for c in text.chars().filter(|&c| u32::from(c) >= 0x20) {
+            let count = self.typed.chars().count();
+            let limit = if count == self.typed.len() { 12 } else { 8 };
+            if count < limit {
+                self.typed.push(if c == '<' || c == '>' { '*' } else { c });
+            }
+        }
+    }
+
     /// Viewer input bindings; native page order is reduced to this milestone.
     /// Name editing uses committed keyboard text, with native normalization on accept.
     pub fn change(&mut self, forward: bool) -> Result<bool, String> {
@@ -378,7 +390,14 @@ mod tests {
         assert_eq!(editor.page, Page::Name);
         assert!(!editor.accept());
         assert_eq!(editor.page, Page::Name);
-        editor.typed = "Alba".into();
+        editor.type_text("\u{1F}");
+        assert!(editor.typed.is_empty());
+        // Native callback rejects only values below0x20; DEL must reach the
+        // sanitizer and become a replacement, rather than being discarded.
+        editor.type_text("\u{7F}<>");
+        assert_eq!(editor.typed, "\u{7F}**");
+        editor.typed.clear();
+        editor.type_text("Alba");
         assert!(!editor.accept());
         assert_eq!(editor.page, Page::Preset);
         assert!(editor.change(true).unwrap());

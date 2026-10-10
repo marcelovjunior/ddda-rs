@@ -155,15 +155,7 @@ pub fn update(
         for event in events {
             if event.state == ButtonState::Pressed {
                 if let Some(text) = event.text {
-                    // Native callback 0x0075D79E rejects controls, maps <> to *.
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        let count = e.editor.typed.chars().count();
-                        // 0x0075D71E..0x0075D73A: 12 single-byte characters,
-                        // otherwise8; cName applies its final UTF-16 limit on accept.
-                        if count < if count == e.editor.typed.len() { 12 } else { 8 } {
-                            e.editor.typed.push(if c == '<' || c == '>' { '*' } else { c });
-                        }
-                    }
+                    e.editor.type_text(&text);
                 }
             }
         }

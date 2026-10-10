@@ -314,6 +314,7 @@ mod tests {
         assert_eq!(text(rules.normalize("Ｆｕｌｌ１２３")), "Full123");
         assert_eq!(text(rules.normalize("éABCDEFGHIJKL")), "*ABCDEFG");
         assert_eq!(text(rules.normalize("badBADあく")), "********");
+        assert_eq!(text(rules.normalize("A\u{7F}B")), "A*B");
         assert_eq!(text(rules.normalize("Alba’s\n<>")), "Alba's**");
         assert_eq!(text(rules.normalize("   ")), "***");
         assert_eq!(text(rules.normalize("")), "");
