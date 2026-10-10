@@ -3059,6 +3059,10 @@ mod tests {
         }
         let original_other=session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(1)).unwrap().clone();
         let fight=session.host.fight.as_mut().unwrap();
+        // Preparation stops before the vocation creates fight actors. This
+        // recovery fixture explicitly creates them from installed FightData;
+        // it is not a claim that the route selected a vocation or gave a reward.
+        for seat in [0,1] { fight.add_arisen(seat); }
         if let ddhost::ddenemyrt::combat::Victim::Player {hp,hp_max,..}=&mut fight.arisen.get_mut(&0).unwrap().fighter.victim { *hp=20.0; *hp_max=1000.0; }
         let res=OpeningRes(Mutex::new(session));
         let data=res.item_menu_snapshot(0).unwrap();
