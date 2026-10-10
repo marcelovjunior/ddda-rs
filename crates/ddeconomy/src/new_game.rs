@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    BeforeCreation,
     DragonChallenge,
     NewlyArisen,
 }
@@ -17,6 +18,7 @@ pub enum Phase {
 /// bag is erased at 0x00444b02 -> sItemManager::vf10 0x0045da90.
 pub fn bag(phase: Phase) -> Bag {
     let items: &[i16] = match phase {
+        Phase::BeforeCreation => &[],
         Phase::DragonChallenge => &[0x12d, 0x4a0],
         Phase::NewlyArisen => &[0x4a1],
     };

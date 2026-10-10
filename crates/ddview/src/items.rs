@@ -2,7 +2,7 @@
 //! Inventory selection is viewer policy, recovery rules live in headless
 //! crates. LAN item requests are not yet part of the network protocol.
 
-use bevy::prelude::Resource;
+use bevy::prelude::{ButtonInput, KeyCode, Resource};
 use ddeconomy::inventory::{Bag, Inventory, Owner, Slot};
 use ddeconomy::item_use::{Recovery, UseError};
 use ddhost::ddenemyrt::fight::Fight;
@@ -81,6 +81,17 @@ impl QuickItems {
         }
     }
 
+    /// The first editor's actual confirmation calls 0x0077fd80. Until
+    /// then the prologue-reset bag stays empty (0x00444840).
+    pub fn character_created(&mut self) {
+        let Some((phase, _)) = &mut self.opening else { return };
+        if *phase != ddeconomy::new_game::Phase::BeforeCreation { return; }
+        *phase = ddeconomy::new_game::Phase::DragonChallenge;
+        for &seat in self.owners.keys() {
+            self.inventory.bags.insert(Owner::Arisen(seat), ddeconomy::new_game::bag(*phase));
+        }
+    }
+
     /// Called when the real first vocation menu closes. The original has
     /// one Arisen; each local Arisen receives that first-choice equipment.
     pub fn first_choice(&mut self, vocation: ddhost::ddskill::vocation::Vocation) {
@@ -102,6 +113,15 @@ impl QuickItems {
                 }
             }
         }
+    }
+
+    /// Local host quick-use keys, after the opening has checked its pause,
+    /// cutscene and menu gates. Holding a key does not consume repeatedly.
+    pub fn pressed(&mut self, keys: &ButtonInput<KeyCode>, locals: &[PlayerId], sim: &mut Sim, fight: &mut Fight) -> Vec<(PlayerId, Result<i16, String>)> {
+        [KeyCode::KeyU, KeyCode::Numpad0].into_iter().enumerate()
+            .filter(|(_, key)| keys.just_pressed(*key))
+            .filter_map(|(index, _)| locals.get(index).copied())
+            .map(|seat| (seat, self.use_next(seat, sim, fight))).collect()
     }
 
     /// The original save has four bags in cSAVE_DATA_ITEM order. Each
@@ -271,11 +291,22 @@ mod tests {
         let other_hp = fight.arisen[&1].fighter.victim.hp();
         let other_bag = quick.inventory.bag(Owner::Arisen(1)).unwrap().clone();
         assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 5);
-        assert_eq!(quick.use_next(0, &mut sim, &mut fight).unwrap(), 43);
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyU);
+        assert_eq!(quick.pressed(&keys, &[0, 1], &mut sim, &mut fight), [(0, Ok(43))]);
         assert!(fight.arisen[&0].fighter.victim.hp() > 20.0);
         assert_eq!(fight.arisen[&1].fighter.victim.hp(), other_hp);
         assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 4);
         assert_eq!(quick.inventory.bag(Owner::Arisen(1)).unwrap(), &other_bag);
+        keys.clear();
+        assert!(quick.pressed(&keys, &[0, 1], &mut sim, &mut fight).is_empty());
+        if let ddhost::ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut fight.arisen.get_mut(&1).unwrap().fighter.victim {
+            *hp = 20.0; *hp_max = 1000.0;
+        }
+        keys.press(KeyCode::Numpad0);
+        assert_eq!(quick.pressed(&keys, &[0, 1], &mut sim, &mut fight), [(1, Ok(43))]);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(43), 4);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(1)).unwrap().count(43), 4);
     }
 
     #[test]

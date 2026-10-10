@@ -31,7 +31,7 @@ In an `--opening` run the Arisen's bag holds the traced items, U uses a
 restorative when hurt (test), and the Result lists the items with their
 sources.
 
-## Results (codex-59, implementation in progress)
+## Results (codex-59)
 
 The opening does **not** begin q0001 with restoratives. The first quest
 rewards them when it actually clears after ev10. Preloading the prologue's
@@ -63,24 +63,44 @@ potions into Cassardis would contradict the original's bag reset.
   `id\message\item\itemName_eng`; reward pairs are read at runtime,
   never copied into implementation constants.
 
-Implemented `ddeconomy::new_game` for the two post-prologue phases, the
+Implemented `ddeconomy::new_game` for the empty pre-editor bag and the two
+post-editor phases, the
 heart-taking mutation and first-choice/reward delivery. The save-free
 `QuickItems::new_game` reads the install's item records and unaugmented
 recovery factor. Each Arisen seat receives a distinct bag (co-op policy);
 repeated first-choice/reward notifications do not duplicate items.
 
-Tested: focused release viewer inventory tests **4 passed**, including a
-new installed-data regression: the hurt Arisen cannot consume a curative
-before q1 clears; the actual reward then permits one Greenwarish use,
-heals that seat, and leaves the other Arisen's HP and bag untouched.
-Compilation 46.21 s, tests 4.90 s; one existing `Args` visibility warning.
-Core regression tests are prepared and queued for the shared build lease.
+The opening Session constructs those bags at its actual preparation
+boundary, gives the temporary equipment on editor confirmation, applies
+the heart-taking swap on the real event-row-21 request, gives first-choice
+items on menu close, and delivers the runtime `Request::Reward` pairs
+after the real host frame. The existing headless intro bypass also applies
+the completed heart-taking boundary; it does not leave prologue gear in
+q1. U / Numpad0 call the same recovery adapter on the authoritative local
+host after pause, cutscene, talk and menu gates.
 
-Not yet integrated: the Session constructor, real event/vocation/reward
-hooks and U/Numpad0 input in opening.rs (codex-1's current S29 claim).
-No original live q1 bag comparison or viewer run is claimed. Item input
-over LAN remains the existing QuickItems limitation; this brief initially
-provides local host-owned Arisen bags, as --play quick use does.
+Tested: **14 ddeconomy tests passed** (8 unit, 1 existing install, 3
+item-use, 2 new bags), compile 11.02 s; new installed regression 4.36 s.
+Full release viewer tests **62 passed, 2 existing ignored**, compile
+18.52 s, tests 10.86 s. The new item test presses U and Numpad0: a hurt
+Arisen cannot consume a curative before q1 clears; the actual reward then
+permits one Greenwarish use, heals that seat and leaves the other bag and
+HP untouched. A held key spends no additional item. The final intro phase
+change additionally passed its focused installed test (compile 18.25 s,
+test 5.12 s), checking the real Session's empty pre-editor bag and both
+post-dragon Arisen bags. The shared M5 target initially reused another
+worktree's ddeconomy artifact; only that package was cleaned (5.6 MiB),
+then the actual current sources compiled and passed.
+Normal release `ddview` build passed in 31.30 s, with the existing `Args`
+visibility and unused `forget_actor` warnings.
 
-Next action: run the queued core regressions, coordinate the opening.rs
-handoff, and verify the complete opening adapter.
+No original live q1 bag comparison or rendered opening route is claimed.
+Item input over LAN and persistence remain the existing QuickItems
+limitations; this brief provides independent local host Arisen bags, as
+--play quick use does. The heart-taking bag mutation does not model the
+removed equipment's global buy-back side effect (`0x00461be0` ->
+`0x00461f30`). Storage/platform bonus grants are separate systems; they
+are not invented as items held by the new Arisen.
+
+Next action: compare a fresh original q1 bag after ev10, then move item
+commands and inventory ownership into the host/network save protocol.
