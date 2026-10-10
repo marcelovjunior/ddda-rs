@@ -36,62 +36,63 @@ In `--opening` the menu shows the Arisen's real bag with installed names
 and icons, using a curative heals through the host, and the Result names
 the GUI classes, layouts and messages.
 
-## Result checkpoint (codex-71, 2026-10-10; NOT ready)
+## Results (codex-71, 2026-10-10; capture still required)
 
-Source WIP only; **not compiled or tested and no viewer capture yet**. Head
-board #6504 prioritizes S51 host-owned bags first; this branch preserves
-the menu work for adaptation to S51's authoritative inventory API.
+Implemented and tested source checkpoint `f34223b`, after S51 host inventory
+integration and reviewed main `3ecd13e`. No whole-brief Ready claim until the
+required screenshot is inspected. Head alone merges.
 
 - Native screen: `uGUIItemLE::vf58` 0x00668270 loads installed
   `id/DDN/co_item/co_item`; `uGUIPause::vf58` 0x006B7ED0 loads
-  `id/DDN/pause/pause0_001`. This checkpoint keeps the existing viewer
-  pause parent with an Items entry; the native pause-top VM is unported.
+  `id/DDN/pause/pause0_001`. This step keeps the viewer pause parent with an
+  Items entry; the native pause-top VM remains unported.
 - `0x006682B0` binds itemName/itemInfo and
-  `id/message/pause/pause_item/pause_item_eng`; ordinary item names and
-  descriptions come from installed itemName/itemInfo English messages;
-  Use is pause_item index 2. Late-game message aliases remain open.
+  `id/message/pause/pause_item/pause_item_eng`. Ordinary names/descriptions and
+  Use (pause_item index 2) are read from installed English messages. Late-game
+  aliases remain unresolved.
 - `0x0066A190` creates twelve icons in a four-column, three-row grid from
-  native nodes 43/44/45; `0x00605DA0` reads four ushort atlas corners per
-  item from installed exe table 0x0151AF48. No atlas table or pixels copied.
-- Parent-object links verified from 0x01077EC0: object +8 is sibling,
-  +C is child. Static drawing applies parent transforms to book objects;
-  full GUI animation/filter/overlay state and native sort are unported.
-- Owner-specific menu state, active bag snapshots, expected-live-slot
-  validation, and selected-slot use share the existing quick-use recovery
-  path. Head #6460 approved host ticking with only owner input suppressed.
-  Guest inventory requests, Give, native keyboard remapping/repeat, and
-  opening pawn inventory admission remain open.
-- Checkpoint defect reported #6464/#6474: QuickItems lives outside Host.save.
-  No reward is synthesized to make captures work. S51 is the prerequisite.
+  native nodes 43/44/45. `0x00605DA0` reads four ushort atlas corners per item
+  at installed exe table 0x0151AF48. Category order comes from installed
+  0x017F15E8 as used by 0x0066EEC0. No atlas table or pixels copied.
+- Parent object links use 0x01077EC0 -> 0x01068C60/40: +8 is sibling, +C child.
+  Native parent transforms and authored font, texture, size, colour and line
+  endings drive the static projection. Full GUI animation/filter/overlay
+  state, native sort and reserved quest-tab execution remain unported.
+- Per-player menu state snapshots the requesting Arisen's real ECON bag and
+  active session pawn bags. Selection retains `Owner`, index and exact slot;
+  Use calls `Host::item_request`, the same authority as quick use. Native
+  0x00669990's additional record+0x354 pawn admission flag remains unresolved.
+- Co-op policy approved #6460: host ticks while only the menu owner's device
+  input is blocked; demo-side actions and orbit for that owner are also
+  suppressed. One full-screen overlay is presented at a time; other owners'
+  menu state stays independent. Bindings/repeat are explicit viewer policy.
+  Give, guest inventory transport, dynamic member-name headers and the native
+  pause/filter VM remain next work.
 
-Private research only: `E:/ddda-re/notes/steps/S38` (decompilation,
-installed resource probes, geometry checks). GUI and exe probes found
-1901 non-empty installed icon rectangles and connected object trees for
-the six selected animations. These are source observations, not Rust test
-or fidelity acceptance. Next action: S51, then adapt and run full ddview
-tests/release plus a bounded real-bag capture through the shared GPU queue.
+Validation:
 
+- Full `ddview --release` suite, session 49728: **88 passed, 2 existing ignored,
+  0 failures**, actual exit 0. Fresh source compile 20.71 s; tests 12.33 s.
+  All four source-present menu regressions ran: real runtime reward rows and
+  owner/slot identity; native parent geometry and rejected bad links; installed
+  icon/bitmap-font drawing without GPU; selected-slot use through host with
+  foreign/stale rejection, isolated bag consumption and continued host ticks.
+- Default release build, session 47922: actual exit 0, 37.65 s.
+- S51 dependency: full core **137 passed**, full viewer **84 passed/2 existing
+  ignored**, release build and parent independent installed item **3 passed**;
+  detailed evidence remains in S51 Results. S38 changes presentation/hooks only.
+- Test recovery actors and authored q1 grants are explicit installed-data
+  fixtures, not completed-route claims. Native resource probes also found 1901
+  non-empty icon rectangles and connected trees for six selected animations;
+  no original-game visual comparison is claimed.
 
-### S51 adaptation prepared (source only)
+Private logs/source probes/pin: `E:/ddda-re/notes/steps/S38` (never committed).
+Default pin `ddview-s38-item-menu-f34223b.exe`, SHA-256
+`4EB1D2D788697E7EBFB071604CFE601C83923F4E51007EAD468AF34FA3A9DB6E`.
 
-The dedicated menu projection now keeps `Owner` with the selected slot rather
-than translating bag choice back into an actor seat. Controller indices convert
-explicitly to `PlayerId`; projected snapshots remain per-owner. Its list test
-uses a headless ECON/runtime reward fixture, with no QuickItems manufacturing
-path. Opening hooks still need S51 integration and adaptation; no Cargo or
-capture acceptance is claimed for this checkpoint.
-
-
-### Host authority integration checkpoint (still UNTESTED viewer)
-
-Parent reviewed S51 inventory source and its full core run (137 passed). This
-isolated S38 branch integrates that frozen source. Opening snapshots now clone
-the requesting Arisen's ECON bag and active session pawn bags; selection sends
-`Owner`, index and exact expected slot to `Host::item_request`. Keyboard quick
-use calls the same API and respects each menu owner's input lock. Native pawn
-admission additionally tests record+0x354; that flag is not yet represented.
-
-Head #6740 will regenerate ECON v2 route checkpoints after S51 lands, then the
-S38 capture uses a real post-reward checkpoint. Old ECON v1 checkpoints are not
-backfilled with manufactured rewards. Full viewer tests/release and the capture
-are still required; no screenshot or original comparison is claimed.
+Next action, capture request #6927: head #6740 regenerates real ECON v2 route
+checkpoints after S51 lands. Use a real post-q1 reward checkpoint with
+`DDVIEW_ITEM_MENU_CAPTURE=1` and the existing `--shot`/`--shot-delay`, under the
+normal GPU lease, `--unattended` and a retained-handle watchdog <=180 s. Inspect
+that the actual menu contains native names/icons/counts from the restored bag.
+Old checkpoints are not backfilled with manufactured items or rewards.
