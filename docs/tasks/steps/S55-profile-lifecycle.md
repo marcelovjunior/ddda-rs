@@ -33,8 +33,10 @@ state, and LAN late join is coherent, with tests.
 
 ## Results
 
-- Source prepared by codex-75 on `step/s55-profile-lifecycle`, from
-  committed main `5858ed0`. This is project co-op lifecycle policy, not
+- Implemented by codex-75 on `step/s55-profile-lifecycle`, from
+  committed main `5858ed0`, with reviewed main `7ea18c9` integrated in
+  branch-only merge `3c0a548`. Validated Rust source is `3e804bd`.
+  This is project co-op lifecycle policy, not
   a native multiplayer rule. Head approved runtime profile parking and
   retained the existing fight-save limits in board #7130.
 - `Host` parks unseated state by `ProfileId`; active system APIs remain
@@ -79,15 +81,43 @@ state, and LAN late join is coherent, with tests.
   PLCE/PROG-only partial saves cannot replace a fresh/imported bag with
   defaults. Unrecognized profile chunk tags do not create profile state.
   Normal S51 late-join initialization still runs when no bag exists.
-- **Validation pending:** eight focused tests are prepared: seat recycling,
-  parked save roundtrip, malformed parked ECON rollback, HOST v1 migration,
-  partial/unknown profile chunks, installed progression/reward/fight/hirer
-  rejoin and save reconstruction,
-  parked runtime health/status hash, and real UDP heartbeat-only late join
-  at installed camera 12's current clock/exhaustion. No Cargo run yet;
-  coordinator's single-heavy-build queue is being respected. No live GUI
-  or original-game multiplayer comparison is claimed.
-- Next action: run the full touched/downstream `ddeconomy`, `ddprogress`,
-  `ddhost`, `ddnet` suites in the shared core target, then the integrated
-  `ddview` release tests/build in the coordinator's M5 window and parent
-  review. No heavy run starts during the quiet captures.
+- **Tested:** full `cargo test -p ddeconomy -p ddprogress -p ddhost -p ddnet`
+  completed with actual exit 0: **164 passed, 0 ignored**, 294.17 seconds
+  total (33.38 seconds compilation). All eight new source-present test
+  names were confirmed in the log: six host integration tests, one parked
+  health/status hash test, and one real UDP late-camera test. They cover
+  seat recycling, parked save roundtrip, malformed parked ECON/PROG/PLCE
+  rejection before mutation, HOST v1 migration, partial/unknown profile
+  chunks, installed progression/reward/fight/hirer restoration and save
+  reconstruction, and installed camera 12's current clock/exhaustion
+  without advancing the host. The install was present and explicitly
+  selected with `DDDA_NATIVE_PC`; installed fixtures executed.
+- **Downstream tested:** full `cargo test --release -p ddview` completed
+  with actual exit 0: **103 passed, 2 ignored**, 39.04 seconds total
+  (25.26 seconds compilation, 13.13 seconds tests). Then
+  `cargo build --release -p ddview` completed with actual exit 0 in
+  40.34 seconds. Existing viewer warnings about `Args` visibility and
+  `forget_actor` remain. No viewer source changes were made by S55.
+- Validation used the normal coordinated `build/core` and `build/m5`
+  leases and existing shared targets; both were released after actual
+  completion. Private logs are under `E:/ddda-re/notes/steps/S55`, named
+  `full-core-3e804bd575dbbf0e6133b77b1e822075279a999c.log`,
+  `viewer-3e804bd575dbbf0e6133b77b1e822075279a999c.log` and
+  `build-3e804bd575dbbf0e6133b77b1e822075279a999c.log`.
+  The first compile on `b8d923f` failed on the new fixture's borrowed
+  path; `3e804bd` fixed it before the successful full validation.
+- The private release executable was frozen only after actual build
+  success as `ddview-s55-profile-3e804bd575dbbf0e6133b77b1e822075279a999c.exe`
+  in that evidence directory, SHA-256
+  `B8C3D7897EA86F5B10383DD787C11976AFB7DA88CC58AE78E1E14C3D49C66639`.
+- **Comparison limits:** headless tests consume installed game data, but
+  no live GUI or original-game multiplayer comparison is claimed. Runtime
+  HP/status/endurance parking is tested; durable HP/status/endurance
+  remains an explicit save gap required by head #7130. Vocation kits
+  outside the existing Fighter/Strider/Mage implementation remain a
+  separate gap. Shared-camera locking is the project policy described
+  above. No game installation files or original-game process were changed.
+- Next action: codex-1/head review and integrate this branch. Hand off
+  claimed host hooks to S53 after review; S53 must keep terminal-death
+  state profile-owned and observe damage after `Fight::hits`, per head
+  #7481. Head alone updates milestones and merges into main.
