@@ -935,3 +935,19 @@ motion despite a positive secondary delay, and atomic rejection of invalid
 input. This Rust source is **uncompiled/unrun**; the preceding193-pass
 gate covers only the earlier birth sampler. Next: run its full package
 gate, then bind real particle ownership and the subsequent query policy.
+
+The travel batch subsequently passed its full package gate at frozen
+`cad92bf88bc833b175643ee18c5b8157a03ad7b9`, after integrating accepted
+main `814c549`. Session89565/Cargo actual exit0, complete `mteffect` and
+`ddenemyrt`: **196 passed, 0 failed**, 2 existing ignored diagnostics,
+0 filtered, 33 summaries. All nine required names passed once, no SKIP;
+jobs2/existing core target/canonical install and exe, source clean and
+unchanged module hash. The normal lease was released after actual exit.
+Parent independently parsed the raw results and verified the log hash.
+Private log `full-generator-path-cad92bf.private.log` SHA256:
+`AAA2D126A3D97A690DDA3B8FE10354DAF4FA3359F457A7E711220879A8B25508`.
+This accepts the translated travel phase and its regression, alongside the
+earlier reader/birth helpers and accepted main's body additions. The earlier
+unrun labels describe preparation; complete emitter lifetime, world query,
+secondary dispatch and ordinary fire damage remain open. Next: attach the
+verified birth/travel state to native particle creation/update ownership.
