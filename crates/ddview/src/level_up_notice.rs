@@ -295,7 +295,7 @@ struct Quad {
 }
 struct Active {
     notice: Notice,
-    elapsed: f32,
+    clock: Clock,
     quads: Vec<Quad>,
     entities: Vec<Entity>,
 }
@@ -521,16 +521,67 @@ fn object_transform(
     Ok(transform)
 }
 
-fn phase(panel: &Panel, elapsed: f32) -> Option<(&Sequence, f32)> {
-    if elapsed < panel.enter.frames {
-        return Some((&panel.enter, elapsed));
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Enter,
+    Hold,
+    Exit,
+    Done,
+}
+struct Clock {
+    phase: Phase,
+    frame: f32,
+    hold: f32,
+}
+impl Default for Clock {
+    fn default() -> Self {
+        Self {
+            phase: Phase::Enter,
+            frame: 0.0,
+            hold: HOLD_FRAMES,
+        }
     }
-    let after = elapsed - panel.enter.frames;
-    if after < HOLD_FRAMES {
-        return Some((&panel.enter, panel.enter.frames));
+}
+impl Clock {
+    /// Translated from 0x00676F20 / 0x00677030 (DDDA.exe 2017-12-13
+    /// Steam): intro completion starts the hold; test the OLD counter before
+    /// subtracting delta; exit completion ends the notice. The adapter supplies
+    /// completion from supported authored track durations, not wall-clock age.
+    fn transition(&mut self, delta: f32, sequence_done: bool) {
+        match self.phase {
+            Phase::Enter if sequence_done => self.phase = Phase::Hold,
+            Phase::Hold if self.hold <= 0.0 => {
+                self.hold = 0.0;
+                self.phase = Phase::Exit;
+                self.frame = 0.0;
+            }
+            Phase::Hold => self.hold -= delta,
+            Phase::Exit if sequence_done => self.phase = Phase::Done,
+            _ => {}
+        }
     }
-    let exit = after - HOLD_FRAMES;
-    (exit <= panel.exit.frames).then_some((&panel.exit, exit))
+    fn advance(&mut self, panel: &Panel, delta: f32) {
+        let done = match self.phase {
+            Phase::Enter => self.frame >= panel.enter.frames,
+            Phase::Exit => self.frame >= panel.exit.frames,
+            _ => false,
+        };
+        self.transition(delta, done);
+        // uGUI::vf09 runs AFTER the subclass state machine (0x00676F20).
+        match self.phase {
+            Phase::Enter => self.frame = (self.frame + delta).min(panel.enter.frames),
+            Phase::Exit => self.frame = (self.frame + delta).min(panel.exit.frames),
+            _ => {}
+        }
+    }
+    fn sample<'a>(&self, panel: &'a Panel) -> Option<(&'a Sequence, f32)> {
+        match self.phase {
+            Phase::Enter => Some((&panel.enter, self.frame)),
+            Phase::Hold => Some((&panel.enter, panel.enter.frames)),
+            Phase::Exit => Some((&panel.exit, self.frame)),
+            Phase::Done => None,
+        }
+    }
 }
 
 fn update(
@@ -563,14 +614,15 @@ fn update(
     let event_active = session.event_active();
     drop(session);
     if !pause.paused && !event_active {
-        if let Some(active) = view.active.as_mut() {
-            active.elapsed += time.delta_secs() * ddhost::clock::BASE_FPS
+        let View { active, panels, .. } = &mut *view;
+        if let Some(active) = active {
+            active.clock.advance(
+                &panels[usize::from(active.notice.pawn)],
+                time.delta_secs() * ddhost::clock::BASE_FPS,
+            );
         }
     }
-    let finished = view
-        .active
-        .as_ref()
-        .is_some_and(|a| phase(&view.panels[usize::from(a.notice.pawn)], a.elapsed).is_none());
+    let finished = view.active.as_ref().is_some_and(|a| a.clock.phase == Phase::Done);
     if finished {
         if let Some(active) = view.active.take() {
             for entity in active.entities {
@@ -609,7 +661,7 @@ fn update(
                         .collect();
                     view.active = Some(Active {
                         notice,
-                        elapsed: 0.0,
+                        clock: Clock::default(),
                         quads,
                         entities,
                     });
@@ -622,7 +674,7 @@ fn update(
         return;
     };
     let panel = &view.panels[usize::from(active.notice.pawn)];
-    let Some((sequence, frame)) = phase(panel, active.elapsed) else {
+    let Some((sequence, frame)) = active.clock.sample(panel) else {
         return;
     };
     let mut position = panel.position;
@@ -662,8 +714,7 @@ fn update(
         && !pause.paused
         && !event_active
         && active.notice.owner == state.follow
-        && active.elapsed >= panel.enter.frames
-        && active.elapsed < panel.enter.frames + HOLD_FRAMES
+        && active.clock.phase == Phase::Hold
     {
         if let Some(dir) = &args.shots {
             commands
@@ -677,6 +728,29 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_hold_waits_for_intro_and_tests_counter_before_decrement() {
+        let mut clock = Clock::default();
+        clock.transition(2.0, false);
+        assert_eq!(clock.phase, Phase::Enter);
+        assert_eq!(clock.hold, 120.0);
+        clock.transition(2.0, true);
+        assert_eq!(clock.phase, Phase::Hold);
+        assert_eq!(clock.hold, 120.0);
+        clock.transition(119.5, false);
+        assert_eq!(clock.phase, Phase::Hold);
+        assert_eq!(clock.hold, 0.5);
+        clock.transition(1.0, false);
+        assert_eq!(clock.phase, Phase::Hold);
+        assert_eq!(clock.hold, -0.5);
+        clock.transition(1.0, false);
+        assert_eq!(clock.phase, Phase::Exit);
+        assert_eq!(clock.hold, 0.0);
+        clock.transition(1.0, false);
+        assert_eq!(clock.phase, Phase::Exit);
+        clock.transition(1.0, true);
+        assert_eq!(clock.phase, Phase::Done);
+    }
     #[test]
     fn native_linear_scalar_and_vector_tracks_use_weighted_values() {
         let scalar = Track {
@@ -782,8 +856,23 @@ mod tests {
             ),
             (8.0, 6.0, 8.0, 6.0)
         );
-        assert!(phase(&arisen, 127.99).is_some());
-        assert!(phase(&arisen, 134.01).is_none());
+        let mut clock = Clock::default();
+        for _ in 0..8 {
+            clock.advance(&arisen, 1.0)
+        }
+        assert_eq!(clock.phase, Phase::Enter);
+        clock.advance(&arisen, 1.0);
+        assert_eq!(clock.phase, Phase::Hold);
+        for _ in 0..120 {
+            clock.advance(&arisen, 1.0)
+        }
+        assert_eq!(clock.phase, Phase::Hold);
+        clock.advance(&arisen, 1.0);
+        assert_eq!(clock.phase, Phase::Exit);
+        for _ in 0..6 {
+            clock.advance(&arisen, 1.0)
+        }
+        assert_eq!(clock.phase, Phase::Done);
         let x = arisen.enter.tracks.iter().find(|t| t.name == "PosX").unwrap();
         assert_eq!(x.sample(0.0)[0], 1430.0);
         assert_eq!(x.sample(8.0)[0], 1029.0);

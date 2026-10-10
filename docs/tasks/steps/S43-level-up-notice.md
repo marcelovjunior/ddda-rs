@@ -48,6 +48,9 @@ notice with the right level; the Result names the sources.
   12/13/14 (pawn), rather than message ids. Init `0x00676D20` sets the
   hold counter to 120 native frame units; `0x00677030` decrements it after
   the intro finishes, then starts the exit sequence.
+  The presenter translates that state machine: intro completion does not
+  spend hold time, and the old hold counter is checked before decrementing
+  it (a step crossing zero starts the exit on the following update).
 - The install supplies `id/cockpit/level_info` from `rom/game_main.arc`,
   cockpit/common messages from `rom/bbsrpg_core.arc`, and the layout's bitmap
   font and textures. Native vf60 binds object indices 8/9 (level/name),
