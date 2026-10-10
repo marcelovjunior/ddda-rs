@@ -190,7 +190,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     /// Canonical intel flags, including Set Disable Flag writes. This does
-    /// not claim every flag consumer/body-copy lifecycle is implemented.
+    /// not claim every flag consumer is implemented. uNpc::vf180 at
+    /// 0x00bb4730 returns this same intel+0x5c0 storage for a linked body.
     pub fn story_npc_intel_flags(&self, npc: u32) -> Option<u32> {
         self.story_npcs.intel_flags.get(&npc).copied()
     }
@@ -200,6 +201,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             match request {
                 Request::Place { npc, pos, .. } => {
                     if let Some(position) = self.story_npcs.positions.get_mut(npc) { *position = *pos; }
+                }
+                Request::ActorFlag { npc, flag, value } => {
+                    // Intel storage also backs linked-body vf180 (0x00bb4730).
+                    // Flag consumers and FixedPosition body ground mode remain separate.
+                    if let Some(flags) = self.story_npcs.intel_flags.get_mut(npc) {
+                        if *value { *flags |= flag.mask(); } else { *flags &= !flag.mask(); }
+                    }
                 }
                 Request::DisableFlags { npc, mask } => {
                     if let Some(flags) = self.story_npcs.intel_flags.get_mut(npc) { *flags |= mask; }

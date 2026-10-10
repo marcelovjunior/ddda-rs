@@ -76,6 +76,14 @@ fn installed_newly_arisen_actions_set_flags_and_wait_without_false_finish() {
                 Request::DisableFlags { npc, mask } if *npc == id && *mask != 0));
         }
         assert!(flags_seen, "installed actor-disable request must reach the host");
+        npc.observe_scene(Some(1200));
+        let mut clears = false;
+        for _ in 0..90 {
+            let requests = npc.step(&data, clock).unwrap();
+            clears |= requests.iter().any(|r| matches!(r, Request::ActorFlag { value: false, .. }));
+            assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. })));
+        }
+        assert!(clears, "scene transition executes authored flag clear callbacks");
         assert!(!npc.applied_finished());
     }
 }
