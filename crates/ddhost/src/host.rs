@@ -20,6 +20,8 @@ use std::collections::BTreeSet;
 pub trait StoryWorld: ddstory::Host {
     /// Advance host-owned authored cameras before story completion checks.
     fn camera_step(&mut self, _seconds: f32) {}
+    /// Read-only projection of the authoritative camera clock for guests.
+    fn quest_camera_active(&self) -> Option<&crate::quest_camera::Active> { None }
     /// Stage event camera input policy, applied independently to every seat.
     fn player_actions_blocked(&self, _seat: PlayerId) -> bool { false }
     /// Actual creation/destruction of a host-owned NPC intel and its
