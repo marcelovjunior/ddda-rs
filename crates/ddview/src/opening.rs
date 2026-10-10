@@ -1278,7 +1278,7 @@ fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
 pub fn step(
     mut stage_view: OpeningStage,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    order_devices: play::PawnOrderDevices,
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
@@ -1291,6 +1291,8 @@ pub fn step(
     mut hud: ResMut<play::Hud>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
+    let keys = &order_devices.keys;
+    let gamepads = &order_devices.gamepads;
     let (Some(mut st), Some(res)) = (state, res) else {
         return;
     };
@@ -1354,6 +1356,7 @@ pub fn step(
             st,
             &mut stage_view,
             &keys,
+            &gamepads,
             &buttons,
             &mouse,
             time.delta_secs(),
@@ -1392,7 +1395,7 @@ pub fn step(
         else { None };
     let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
-        sim: play::p1_input(&keys, &buttons, st.cam_yaw),
+        sim: play::gamepad_order_input(play::p1_input(&keys, &buttons, st.cam_yaw), &gamepads, 0),
         interact: false,
     };
     if s.world_menu().is_some() {
@@ -1480,7 +1483,8 @@ pub fn step(
         && s.talk.is_none() && s.world_menu().is_none()
     {
         let queued = s.pending_local.entry(1).or_default();
-        *queued = play::latch_input(*queued, play::p2_input(&keys, st.cam_yaw));
+        *queued = play::latch_input(*queued,
+            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1));
     }
     let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
@@ -2532,6 +2536,7 @@ fn guest_step(
     st: &mut PlayState,
     view: &mut OpeningStage,
     keys: &ButtonInput<KeyCode>,
+    gamepads: &Query<(Entity, &Gamepad)>,
     buttons: &ButtonInput<MouseButton>,
     mouse: &AccumulatedMouseMotion,
     dt: f32,
@@ -2549,7 +2554,7 @@ fn guest_step(
         sim: if paused || s.cut.is_some() {
             Input::default()
         } else {
-            play::p1_input(keys, buttons, st.cam_yaw)
+            play::gamepad_order_input(play::p1_input(keys, buttons, st.cam_yaw), gamepads, 0)
         },
         interact: !paused && keys.just_pressed(KeyCode::KeyE),
     };

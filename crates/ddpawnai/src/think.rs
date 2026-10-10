@@ -138,7 +138,7 @@ pub const FOLLOW: [FollowRange; 7] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FollowState {
     /// The party command (`situation +0x52C`; 8 none, 9 / 10 / 11 the
-    /// commands; *guessed* 9 Wait, 10 Go, 11 Help).
+    /// commands; 9 Go, 10 Come, 11 Help, from sender 0x00B768E0).
     pub command: i64,
     /// 0x005985A0: the battle target is one of the large enemies (unit
     /// byte +0x2D in 'P', 'R', 'Z', '[', 0xAE, 0xB8, 0xB9) or sGameSys
