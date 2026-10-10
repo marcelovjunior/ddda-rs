@@ -6,6 +6,145 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 const COCKPIT: &str = "id/DDN/cockpit/cockpit0_1"; // 0x006781c0
+const NPC_GAUGE: &str = "id/cockpit/npc_gauge"; // 0x0069F540
+
+struct NpcTemplate {
+    image: Handle<Image>,
+    position: Vec2,
+    size: Vec2,
+    rect: Rect,
+    scale: Vec2,
+    anchor: u32,
+    priority: i32,
+    crop: bool,
+    color: Color,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct NpcGauges {
+    templates: Vec<NpcTemplate>,
+    owners: HashMap<(u32, Entity), Vec<Entity>>,
+    poses: HashMap<u32, NpcCachedBounds>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct NpcPoseKey {
+    body: usize,
+    motion: ddhost::ddenemyrt::body::MotionId,
+    frame: f32,
+    position: [f32; 3],
+    yaw: f32,
+    scale: [f32; 3],
+}
+
+struct NpcCachedBounds {
+    key: NpcPoseKey,
+    model: [[f32; 4]; 4],
+    bounds: ddhost::ddenemyrt::npc_body::NpcBounds,
+}
+
+#[derive(Component)]
+pub(crate) struct NpcGaugeQuad {
+    owner: u32,
+    camera: Entity,
+    template: usize,
+}
+
+/// The normal bar and full background of the installed layout. Its status
+/// icons, name text and animated delayed-HP trail are not a GUI VM port.
+fn npc_templates(vfs: &ddvfs::Vfs, images: &mut Assets<Image>) -> Result<Vec<NpcTemplate>, String> {
+    let bytes = vfs.read(NPC_GAUGE, mtarc::type_hash("rGUI"))?;
+    let gui = mtgui::Gui::parse(&bytes)?;
+    let regions = gui.texture_regions()?;
+    let mut textures = HashMap::new();
+    let mut templates = Vec::new();
+    for (name, crop) in [("CMC_gaugeback0", false), ("Npc_gauge", true)] {
+        let index = gui
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(i, _)| gui.local_animation(*i).is_some_and(|a| a.name == name))
+            .map(|(i, _)| i)
+            .ok_or("NPC gauge node absent")?;
+        let scalar = |key: &str, default| {
+            gui.node_property(index, key)
+                .and_then(|p| p.word)
+                .map(f32::from_bits)
+                .unwrap_or(default)
+        };
+        let scale = Vec2::new(scalar("SclX", 1.0), scalar("SclY", 1.0));
+        let node_pos = node_position(&gui, index)?;
+        // 0x0069F760 selects control 5 for an ordinary living NPC.
+        let frame = if crop {
+            gui.control_range(index, 5)?.map_or(0, |r| r[0] as u32)
+        } else {
+            0
+        };
+        for object in gui.animation_objects(name)? {
+            let Some(texture) = object.integer("Texture").filter(|&id| id != u32::MAX) else {
+                continue;
+            };
+            let region = regions
+                .iter()
+                .find(|r| r.id == texture)
+                .ok_or("NPC gauge atlas absent")?;
+            let image = if let Some(image) = textures.get(region.path) {
+                Handle::<Image>::clone(image)
+            } else {
+                let image = images.add(stage::tex_to_image(
+                    &vfs.read(region.path, mtarc::type_hash("rTexture"))?,
+                )?);
+                textures.insert(region.path, image.clone());
+                image
+            };
+            let size = object
+                .property("Size")
+                .and_then(|p| gui.vector(p))
+                .ok_or("NPC gauge size absent")?;
+            let color = object
+                .vector_keys
+                .iter()
+                .filter(|(name, key, _)| *name == "VertexColor" && *key <= frame)
+                .last()
+                .map(|(_, _, value)| *value)
+                .or_else(|| {
+                    object
+                        .property("VertexColor")
+                        .or_else(|| object.property("VertexColorLT"))
+                        .and_then(|p| gui.vector(p))
+                })
+                .unwrap_or([255.0; 4]);
+            templates.push(NpcTemplate {
+                image,
+                position: node_pos
+                    + scale
+                        * Vec2::new(
+                            object.scalar("PosX").unwrap_or(0.0),
+                            object.scalar("PosY").unwrap_or(0.0),
+                        ),
+                size: Vec2::new(size[0], size[1]),
+                scale,
+                rect: Rect::new(region.rect[0], region.rect[1], region.rect[2], region.rect[3]),
+                anchor: object.integer("ControlPoint").unwrap_or(0),
+                priority: gui
+                    .node_property(index, "Priority")
+                    .and_then(|p| p.word)
+                    .unwrap_or(0) as i32,
+                crop,
+                color: Color::srgba(
+                    color[0] / 255.0,
+                    color[1] / 255.0,
+                    color[2] / 255.0,
+                    color[3] / 255.0,
+                ),
+            });
+        }
+    }
+    if !templates.iter().any(|t| t.crop) {
+        return Err("NPC gauge fill absent".into());
+    }
+    Ok(templates)
+}
 
 #[derive(Clone, Copy)]
 enum Binding {
@@ -212,6 +351,221 @@ fn number(value: f32) -> String {
     format!("{}", hp % 10000)
 }
 
+fn update_npc_gauges(
+    commands: &mut Commands,
+    gauges: &mut NpcGauges,
+    opening: Option<&crate::opening::OpeningRes>,
+    cameras: &Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    quads: &mut Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
+    origin: Option<Vec3>,
+    event_active: bool,
+) {
+    use ddhost::ddenemyrt::{combat::Victim, npc_body::ORDINARY_NPC_SCENERY_RADIUS, npc_combat::gauge_fill};
+    let snapshots: Vec<_> = opening
+        .filter(|_| origin.is_some() && !event_active)
+        .into_iter()
+        .flat_map(|opening| {
+            let session = opening.0.lock().unwrap();
+            let Some(fight) = session.host.fight.as_ref() else {
+                return Vec::new();
+            };
+            fight
+                .npcs
+                .values()
+                .filter_map(|npc| {
+                    if fight.npc_errors.contains_key(&npc.fighter.owner) {
+                        return None;
+                    }
+                    if session.host.story_npc_gauge_visible(npc.npc) != Some(true) {
+                        return None;
+                    }
+                    let Victim::Npc { region, .. } = &npc.fighter.victim else {
+                        return None;
+                    };
+                    if region.hp <= 0.0 {
+                        return None;
+                    }
+                    let key = NpcPoseKey {
+                        body: std::sync::Arc::as_ptr(&npc.body) as usize,
+                        motion: npc.motion,
+                        frame: npc.frame,
+                        position: npc.position,
+                        yaw: npc.yaw,
+                        scale: npc.scale,
+                    };
+                    if !gauges
+                        .poses
+                        .get(&npc.fighter.owner)
+                        .is_some_and(|pose| pose.key == key)
+                    {
+                        // Cache a host pose between render frames; each view still
+                        // applies its own live camera pull and projection below.
+                        let pose = npc
+                            .body
+                            .pose(npc.motion, npc.frame, npc.position, npc.yaw, npc.scale)
+                            .ok()?;
+                        // Explicit opening detail3 adapter: native dynamic LOD choice and
+                        // constraint-mask overrides are not yet represented by the host.
+                        let bounds = npc.body.bounds(&pose, 3).ok()?;
+                        gauges.poses.insert(
+                            npc.fighter.owner,
+                            NpcCachedBounds {
+                                key,
+                                model: pose.model,
+                                bounds,
+                            },
+                        );
+                    }
+                    let pose = &gauges.poses[&npc.fighter.owner];
+                    Some((
+                        npc.fighter.owner,
+                        npc.position,
+                        pose.model,
+                        pose.bounds,
+                        region.hp,
+                        region.hp_max,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    gauges
+        .poses
+        .retain(|owner, _| snapshots.iter().any(|(candidate, ..)| candidate == owner));
+    let bar_width = gauges.templates.iter().find(|t| t.crop).map_or(0.0, |t| t.size.x);
+    let mut desired = HashMap::new();
+    if let Some(origin) = origin.filter(|_| !event_active) {
+        for (owner, position, model, bounds, hp, max) in snapshots {
+            let Some(width) = gauge_fill(hp, max, hp <= 0.0, bar_width) else {
+                continue;
+            };
+            for (entity, camera, transform) in cameras {
+                if !camera.is_active {
+                    continue;
+                }
+                let point = bounds.gauge_anchor(
+                    &model,
+                    [0.0; 3],
+                    position,
+                    Some((transform.translation() / stage::UNIT + origin).to_array()),
+                    ORDINARY_NPC_SCENERY_RADIUS,
+                );
+                let Some((screen, scale)) =
+                    npc_gauge_projection(camera, transform, origin, Vec3::from_array(point))
+                else {
+                    continue;
+                };
+                desired.insert((owner, entity), (screen, scale, width));
+            }
+        }
+    }
+    reconcile_npc_gauges(commands, gauges, quads, &desired);
+}
+
+fn npc_gauge_projection(
+    camera: &Camera,
+    transform: &GlobalTransform,
+    origin: Vec3,
+    game_point: Vec3,
+) -> Option<(Vec2, Vec2)> {
+    let viewport = camera.logical_viewport_rect()?;
+    let scale = viewport.size() / Vec2::new(1280.0, 720.0);
+    if !scale.is_finite() || scale.min_element() <= 0.0 {
+        return None;
+    }
+    let screen = camera
+        .world_to_viewport(transform, (game_point - origin) * stage::UNIT)
+        .ok()?;
+    // vf11 / 0x0069FA10: projection, then 40 authored screen px up.
+    Some(((screen - viewport.min) / scale - Vec2::new(0.0, 40.0), scale))
+}
+
+fn reconcile_npc_gauges(
+    commands: &mut Commands,
+    gauges: &mut NpcGauges,
+    quads: &mut Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
+    desired: &HashMap<(u32, Entity), (Vec2, Vec2, f32)>,
+) {
+    let retired: Vec<_> = gauges
+        .owners
+        .keys()
+        .copied()
+        .filter(|key| !desired.contains_key(key))
+        .collect();
+    for key in retired {
+        if let Some(entities) = gauges.owners.remove(&key) {
+            for entity in entities {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+    for &(owner, camera) in desired.keys() {
+        gauges.owners.entry((owner, camera)).or_insert_with(|| {
+            gauges
+                .templates
+                .iter()
+                .enumerate()
+                .map(|(index, t)| {
+                    commands
+                        .spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                display: Display::None,
+                                ..default()
+                            },
+                            ImageNode {
+                                image: t.image.clone(),
+                                rect: Some(t.rect),
+                                color: t.color,
+                                ..default()
+                            },
+                            GlobalZIndex(t.priority),
+                            UiTargetCamera(camera),
+                            NpcGaugeQuad {
+                                owner,
+                                camera,
+                                template: index,
+                            },
+                        ))
+                        .id()
+                })
+                .collect()
+        });
+    }
+    for (quad, mut node, mut image) in quads {
+        let Some(&(point, screen_scale, width)) = desired.get(&(quad.owner, quad.camera)) else {
+            node.display = Display::None;
+            continue;
+        };
+        let t = &gauges.templates[quad.template];
+        let (position, size, rect) = npc_quad_layout(t, point, screen_scale, width);
+        node.display = Display::Flex;
+        node.left = Val::Px(position.x);
+        node.top = Val::Px(position.y);
+        node.width = Val::Px(size.x);
+        node.height = Val::Px(size.y);
+        image.rect = Some(rect);
+        image.color = t.color;
+    }
+}
+
+fn npc_quad_layout(t: &NpcTemplate, point: Vec2, screen_scale: Vec2, width: f32) -> (Vec2, Vec2, Rect) {
+    let mut size = t.size;
+    let mut rect = t.rect;
+    // 0x0069F5A0 changes the drawable width and texture width; retaining
+    // its authored full-width anchor keeps the fill's left edge fixed.
+    let anchor = Vec2::from_array(mtgui::layout::anchor_offset(t.size.to_array(), t.anchor));
+    if t.crop {
+        size.x = width;
+        rect.max.x = rect.min.x + width;
+    }
+    (
+        (point + t.position + t.scale * anchor) * screen_scale,
+        size * t.scale * screen_scale,
+        rect,
+    )
+}
+
 /// Startup receives the existing VFS and image assets; no separate game index.
 pub fn spawn(commands: &mut Commands, vfs: &ddvfs::Vfs, images: &mut Assets<Image>) -> Result<(), String> {
     let bytes = vfs.read(COCKPIT, mtarc::type_hash("rGUI"))?;
@@ -360,19 +714,26 @@ pub fn spawn(commands: &mut Commands, vfs: &ddvfs::Vfs, images: &mut Assets<Imag
     }
     info!("HUD: installed cockpit geometry/textures loaded");
     spawn_prompts(commands, vfs, images)?;
+    commands.insert_resource(NpcGauges {
+        templates: npc_templates(vfs, images)?,
+        ..default()
+    });
     Ok(())
 }
 
 pub fn update(
+    mut commands: Commands,
     hud: Res<play::Hud>,
     state: Option<Res<play::PlayState>>,
     opening: Option<Res<crate::opening::OpeningRes>>,
     windows: Query<&Window>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
     playback: Query<&Playback>,
     transforms: Query<&GlobalTransform>,
-    mut quads: Query<(&Quad, &mut Node, &mut ImageNode), Without<Prompt>>,
-    mut prompts: Query<(&Prompt, &mut Node), Without<Quad>>,
+    mut quads: Query<(&Quad, &mut Node, &mut ImageNode), (Without<Prompt>, Without<NpcGaugeQuad>)>,
+    mut prompts: Query<(&Prompt, &mut Node), (Without<Quad>, Without<NpcGaugeQuad>)>,
+    mut npc_gauges: Option<ResMut<NpcGauges>>,
+    mut npc_quads: Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
 ) {
     let _timing = crate::perf::Section::start("hud::update");
     let Ok(window) = windows.single() else {
@@ -390,6 +751,17 @@ pub fn update(
             )
         })
         .unwrap_or((false, false));
+    if let Some(gauges) = npc_gauges.as_mut() {
+        update_npc_gauges(
+            &mut commands,
+            gauges,
+            opening.as_deref(),
+            &cameras,
+            &mut npc_quads,
+            state.as_ref().map(|s| s.origin),
+            event_active,
+        );
+    }
     let local_binding = state
         .as_ref()
         .and_then(|s| s.locals.iter().position(|seat| *seat == s.follow));
@@ -417,7 +789,7 @@ pub fn update(
         // 0x007325d0: joint-map entry 4 +25cm Y. 0x00ffddb0 maps
         // actor+368 to rModel+110; 0x00fa8fe0 loads the MOD remap there.
         let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
-        let (camera, transform) = cameras.single().ok()?;
+        let (_, camera, transform) = cameras.single().ok()?;
         let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0)) // original screen-space offset
@@ -429,12 +801,14 @@ pub fn update(
         let (entity, ..) = hud.enemy?;
         let p = playback.get(entity).ok()?;
         let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
-        let (camera, transform) = cameras.single().ok()?;
+        let (_, camera, transform) = cameras.single().ok()?;
         let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0))
     })();
-    let enemy_row = hud.enemy.map(|(_, hp, max)| (String::new(), hp, max, Color::WHITE));
+    let enemy_row = hud
+        .enemy
+        .map(|(_, hp, max)| (String::new(), hp, max, Color::WHITE));
     for (quad, mut node, mut image) in &mut quads {
         if event_active {
             node.display = Display::None;
@@ -507,6 +881,155 @@ fn pawn_anchor(joint: Vec3, camera: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn npc_gauge_projection_uses_viewport_local_coordinates_and_origin() {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
+        let camera = Camera {
+            viewport: Some(Viewport {
+                physical_position: UVec2::new(320, 180),
+                physical_size: UVec2::new(640, 360),
+                ..default()
+            }),
+            computed: ComputedCameraValues {
+                target_info: Some(RenderTargetInfo {
+                    physical_size: UVec2::new(1280, 720),
+                    scale_factor: 1.0,
+                }),
+                clip_from_view: Mat4::perspective_infinite_reverse_rh(1.0, 16.0 / 9.0, 0.1),
+                ..default()
+            },
+            ..default()
+        };
+        let point = Vec3::new(10000.0, 20000.0, 30000.0);
+        let eye = point + Vec3::Z * 300.0;
+        let camera_transform = GlobalTransform::from_translation(eye * stage::UNIT);
+        let (full, scale) = npc_gauge_projection(&camera, &camera_transform, Vec3::ZERO, point).unwrap();
+        assert!((full - Vec2::new(640.0, 320.0)).length() < 0.001);
+        assert_eq!(scale, Vec2::splat(0.5));
+        let origin = point;
+        let relative_transform = GlobalTransform::from_translation((eye - origin) * stage::UNIT);
+        let (relative, relative_scale) =
+            npc_gauge_projection(&camera, &relative_transform, origin, point).unwrap();
+        assert!((relative - full).length() < 0.001);
+        assert_eq!(relative_scale, scale);
+    }
+    #[test]
+    fn npc_gauge_owners_have_independent_camera_quads() {
+        #[derive(Resource, Default)]
+        struct Desired(HashMap<(u32, Entity), (Vec2, Vec2, f32)>);
+        let mut app = App::new();
+        app.init_resource::<Desired>();
+        app.insert_resource(NpcGauges {
+            templates: vec![NpcTemplate {
+                image: Handle::default(),
+                position: Vec2::ZERO,
+                size: Vec2::new(100.0, 10.0),
+                rect: Rect::new(0.0, 0.0, 100.0, 10.0),
+                scale: Vec2::ONE,
+                anchor: 0,
+                priority: 0,
+                crop: true,
+                color: Color::WHITE,
+            }],
+            ..default()
+        });
+        app.add_systems(
+            Update,
+            |mut commands: Commands,
+             desired: Res<Desired>,
+             mut gauges: ResMut<NpcGauges>,
+             mut quads: Query<
+                (&NpcGaugeQuad, &mut Node, &mut ImageNode),
+                (Without<Quad>, Without<Prompt>),
+            >| {
+                reconcile_npc_gauges(&mut commands, &mut gauges, &mut quads, &desired.0);
+            },
+        );
+        let first = app.world_mut().spawn_empty().id();
+        let second = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Desired>().0.extend([
+            ((123, first), (Vec2::new(100.0, 50.0), Vec2::ONE, 40.0)),
+            ((123, second), (Vec2::new(300.0, 80.0), Vec2::ONE, 40.0)),
+        ]);
+        app.update();
+        app.update();
+        let gauges = app.world().resource::<NpcGauges>();
+        assert_eq!(gauges.owners.len(), 2);
+        for (camera, left) in [(first, 100.0), (second, 300.0)] {
+            let entity = gauges.owners[&(123, camera)][0];
+            assert_eq!(app.world().get::<UiTargetCamera>(entity).unwrap().0, camera);
+            assert_eq!(app.world().get::<Node>(entity).unwrap().left, Val::Px(left));
+            assert_eq!(app.world().get::<Node>(entity).unwrap().width, Val::Px(40.0));
+        }
+        let retired = gauges.owners[&(123, first)][0];
+        let retained = gauges.owners[&(123, second)][0];
+        app.world_mut().resource_mut::<Desired>().0.remove(&(123, first));
+        app.update();
+        assert!(app.world().get_entity(retired).is_err());
+        assert!(app.world().get_entity(retained).is_ok());
+        app.world_mut().resource_mut::<Desired>().0.clear();
+        app.update();
+        assert!(app.world().get_entity(retained).is_err());
+    }
+    #[test]
+    fn npc_gauge_retirement_is_disjoint_from_other_hud_queries() {
+        let mut app = App::new();
+        app.init_resource::<play::Hud>().init_resource::<NpcGauges>();
+        app.add_systems(Update, update);
+        let camera = app.world_mut().spawn_empty().id();
+        let quad = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ImageNode::default(),
+                NpcGaugeQuad {
+                    owner: 123,
+                    camera,
+                    template: 0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<NpcGauges>()
+            .owners
+            .insert((123, camera), vec![quad]);
+        app.world_mut().spawn(Window::default());
+        app.update();
+        assert!(app.world().resource::<NpcGauges>().owners.is_empty());
+        assert!(app.world().get_entity(quad).is_err());
+        app.update(); // Idempotent once the actor/view is absent.
+    }
+    #[test]
+    fn installed_npc_gauge_fill_preserves_background_and_left_anchor() {
+        let native = std::env::var_os("DDDA_NATIVE_PC")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+        if !native.is_dir() {
+            return;
+        }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let templates = npc_templates(&vfs, &mut Assets::default()).unwrap();
+        let fill = templates.iter().find(|t| t.crop).unwrap();
+        let background = templates.iter().find(|t| !t.crop).unwrap();
+        assert_eq!(fill.size, Vec2::new(88.0, 8.0));
+        assert_eq!(fill.scale, Vec2::new(0.8, 1.0));
+        assert!(fill.priority > background.priority);
+        let point = Vec2::new(640.0, 360.0);
+        let (left, full, full_rect) = npc_quad_layout(fill, point, Vec2::ONE, fill.size.x);
+        let (half_left, half, half_rect) = npc_quad_layout(fill, point, Vec2::ONE, fill.size.x / 2.0);
+        assert_eq!(left, half_left);
+        assert_eq!(half, Vec2::new(full.x / 2.0, full.y));
+        assert_eq!(half_rect.min, full_rect.min);
+        assert_eq!(half_rect.width(), full_rect.width() / 2.0);
+        assert_eq!(
+            npc_quad_layout(background, point, Vec2::ONE, 3.0),
+            npc_quad_layout(background, point, Vec2::ONE, fill.size.x)
+        );
+        let screen_scale = Vec2::new(0.5, 0.75);
+        let (scaled_left, scaled_size, _) = npc_quad_layout(fill, point, screen_scale, fill.size.x / 2.0);
+        assert_eq!(scaled_left, half_left * screen_scale);
+        assert_eq!(scaled_size, half * screen_scale);
+    }
     #[test]
     fn pawn_anchor_uses_authored_joint_and_camera_offset() {
         let point = pawn_anchor(Vec3::new(1.0, 2.0, 3.0), Vec3::new(1.0, 2.25, 10.0));

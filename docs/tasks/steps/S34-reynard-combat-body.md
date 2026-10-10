@@ -279,6 +279,49 @@ existing release target (compile31.75s/test7.94s), then the lease was
 released. An initial accidental default-debug command was stopped with
 actual exit1 before this release check; no new target was created.
 
-Next action: compose actual death-action playback/stages and finish the
-scenery-radius input before wiring the viewer gauge. Validate the actual
-ordinary rescue route with the materialized combat body after review.
+Scenery radius source: **0x00769C70** (`cObjCollision::ctor`) writes
+height+0xD88 **180** and radius+0xD8C **35**; **0x0080B450** selects
+HumanEdit collision mode3 at owner+0x1E5C. In **0x0076C540**, instruction
+**0x0076C72D** loads radius+0xD8C and **0x0076C753** loads height+0xD88;
+**0x00CCE580** shrinks endpoints [0,180] inward by35, producing the live
+capsule [35,145] with radius35. **0x0079DAB0** copies it into the capsule
+read by **0x005371B0**. The earlier `cScrAdjust` constructor uses50/100
+and is overwritten; it is not the ordinary NPC gauge radius. No
+player-group109 inference is needed. `ORDINARY_NPC_SCENERY_RADIUS` now
+exposes the sourced35 for ordinary HumanEdit mode3; dynamic overrides
+and other modes remain unsupported. Both bounds/camera-anchor tests
+passed actual exit0 (compile10.32s/test0.03s), then core was released.
+
+Viewer gauge implementation now reads `id/cockpit/npc_gauge` and its
+texture atlas from the installation. It selects the normal living colour
+control5 from **0x0069F760**, displays `CMC_gaugeback0` and `Npc_gauge`,
+and takes drawable size, crop rectangle, local scale, position, packed
+anchor and node priority from the installed GUI. **0x0069F5A0** drives
+the main fill, including the positive three-pixel minimum and no clamp
+above full HP. Canonical SetGaugeDisp, actual NPC HP and active event state
+gate visibility. No name/status icons or delayed-damage trail are ported.
+
+Each combat owner has separate UI entities for each active camera, with
+`UiTargetCamera`; camera departure and NPC/gauge retirement despawn only
+that view's quads. The native world bounds/camera pull are evaluated in
+game centimetres, then converted using the viewer origin and the camera's
+viewport before the sourced40-pixel upward offset. Unchanged canonical
+motion/frame/placement bounds are cached across rendering frames; camera
+pull and projection still update for each view. This is a detail3,
+ordinary mode3/zero-local-offset opening adapter. Native dynamic LOD,
+constraint masks, capsule overrides, global GUI override and other unit
+state/offset writers remain unported.
+
+Focused release HUD validation passed **6 tests**, with **1 existing
+ignored** test (compile30.29s/test1.84s, actual process exit0). This includes
+the installed NPC GUI/atlas/crop/background test, distinct per-camera UI
+owners and view retirement, disjoint mutable HUD queries, and viewport-local
+projection invariance under viewer-origin changes. The valid shared M5
+lease was actually released after the process exited. No visible gauge or
+original Reynard rescue comparison is claimed. Existing
+LAN NPC snapshots contain id/position only; guest HP, authored motion and
+SetGaugeDisp replication require a coordinated protocol extension, proposed
+to head on board5225. Local camera cardinality does not close that wire gap.
+
+Next action: compose actual death-action playback/stages. Validate the ordinary
+rescue route and visible gauge with the materialized combat body after review.
