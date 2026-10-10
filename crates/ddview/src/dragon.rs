@@ -84,7 +84,8 @@ pub(super) fn show(
     };
     transform.translation = (Vec3::from(dragon.actor.pos) - st.origin) * UNIT;
     transform.rotation = Quat::from_array(dragon.actor.rotation);
-    transform.scale = Vec3::from(dragon.scale);
+    // The character root owns the cm -> viewer-m conversion (spawn_assembled).
+    transform.scale = Vec3::from(dragon.scale) * UNIT;
     if let Some(motion) = dragon.actor.motion() {
         if view.shown != Some(motion) {
             if let Some(motion_data) = dragon.data.body.motion(motion) {

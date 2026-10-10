@@ -413,8 +413,13 @@ pub fn prepare(
         let story=s.host.story.as_mut().unwrap();
         // Presentation fixture starts at the documented post-ev00 gate;
         // actual story sequencing is S31. Stop its unrelated q1 scripts.
-        story.stage.game_flags.s54=1;
-        story.world.set_sce_no(1025,true);
+        story.quests.clear();
+        story.tasks.clear();
+        story.stage.scenarios=Default::default();
+        story.stage.event=Default::default();
+        s.host.world.enable_live_encounters();
+        let story=s.host.story.as_mut().unwrap();
+        story.world.set_sce_no(1025,false);
         story.world.set_lot(200,0,true);
         info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
     }
