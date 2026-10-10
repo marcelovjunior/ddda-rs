@@ -36,7 +36,7 @@ the Result shows the diff stat.
 
 ## Result
 
-codex-1, 2026-10-09: complete. `NpcAdapter.layouts` is now a
+codex-1, 2026-10-09: complete, implementation commit `e3671d5`. `NpcAdapter.layouts` is now a
 `HashMap<u32, LoadedLayouts>` initially containing only Cassardis (200).
 NPC synchronization and door coverage query the current stage's entry.
 Missing stages retain the existing warning, retirement and false coverage;
