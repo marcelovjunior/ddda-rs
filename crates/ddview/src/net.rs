@@ -630,6 +630,7 @@ pub fn step(
         Side::Host(server) => {
             play::show_goblins(st, server.host.fight.as_ref(), &mut roots, 1.0);
             hud.rows = play::hud_rows(st, &server.host.sim, server.host.fight.as_ref(), None);
+            hud.enemy = play::enemy_gauge(st, server.host.fight.as_ref());
         }
         Side::Guest { client, .. } => {
             let mut hp = HashMap::new();

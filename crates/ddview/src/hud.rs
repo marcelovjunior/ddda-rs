@@ -13,6 +13,8 @@ enum Binding {
     Stamina,
     Pawn,
     Digit(usize),
+    /// The small-enemy gauge (`play::Hud::enemy`).
+    Enemy,
 }
 
 #[derive(Component)]
@@ -227,6 +229,10 @@ pub fn spawn(commands: &mut Commands, vfs: &ddvfs::Vfs, images: &mut Assets<Imag
         ("CMC_gauge_under", Binding::Pawn, false),
         ("CMC_gauge", Binding::Pawn, true),
         ("life_counter", Binding::Digit(0), false),
+        // uGUILifeGauge's small-enemy artwork (0x0067A340 / 0x0067AC40):
+        // enmy_gauge_back (node 34, id 164) and enmy_gauge (node 19, id 142)
+        ("enmy_gauge_back", Binding::Enemy, false),
+        ("enmy_gauge", Binding::Enemy, true),
     ] {
         let objects = gui.animation_objects(name)?;
         let nodes: Vec<_> = gui
@@ -416,6 +422,19 @@ pub fn update(
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0)) // original screen-space offset
     })();
+    // The small enemy's anchor: *viewer choice* until 0x0067C970's mode-0
+    // point (actor +0x1A0, +0x1B4 on Y) is traced: joint-map entry 4 plus
+    // 25 cm, pulled toward the camera, as the pawn gauge's 0x007325D0.
+    let enemy_position = (|| {
+        let (entity, ..) = hud.enemy?;
+        let p = playback.get(entity).ok()?;
+        let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
+        let (camera, transform) = cameras.single().ok()?;
+        let point = pawn_anchor(joint, transform.translation());
+        let projected = camera.world_to_viewport(transform, point).ok()?;
+        Some(projected / scale - Vec2::new(0.0, 40.0))
+    })();
+    let enemy_row = hud.enemy.map(|(_, hp, max)| (String::new(), hp, max, Color::WHITE));
     for (quad, mut node, mut image) in &mut quads {
         if event_active {
             node.display = Display::None;
@@ -425,6 +444,7 @@ pub fn update(
             Binding::Health | Binding::Digit(_) => row("Arisen HP"),
             Binding::Stamina => row("Arisen stamina"),
             Binding::Pawn => row("Pawn HP"),
+            Binding::Enemy => enemy_row.as_ref(),
         };
         let Some(data) = data else {
             node.display = Display::None;
@@ -436,6 +456,13 @@ pub fn update(
         let mut rect = quad.rect;
         if matches!(quad.binding, Binding::Pawn) {
             let Some(point) = pawn_position else {
+                node.display = Display::None;
+                continue;
+            };
+            pos += point;
+        }
+        if matches!(quad.binding, Binding::Enemy) {
+            let Some(point) = enemy_position else {
                 node.display = Display::None;
                 continue;
             };

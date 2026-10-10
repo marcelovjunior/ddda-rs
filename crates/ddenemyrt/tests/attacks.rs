@@ -393,3 +393,21 @@ fn the_dagger_heavy_attack_hits() {
         assert!(in_window(&data, Kit::Strider, state, frame));
     }
 }
+
+#[test]
+fn the_last_hit_goblin_shows_the_small_gauge_for_450_frames() {
+    let Some(data) = data() else { return };
+    let mut b = Bout::new(data, Kit::Fighter, 120.0);
+    assert_eq!(b.fight.small_gauge, None);
+    b.press_light();
+    b.until(80, |f| f.state == State::Wait);
+    let goblin = b.fight.goblins[0].fighter.owner;
+    let (owner, left) = b.fight.small_gauge.expect("a hit shows the gauge");
+    assert_eq!(owner, goblin);
+    assert!(left > 0.0 && left <= ddenemyrt::fight::SMALL_GAUGE_FRAMES);
+    // no more hits: it counts down and drops
+    for _ in 0..500 {
+        b.frame(Input::default());
+    }
+    assert_eq!(b.fight.small_gauge, None);
+}

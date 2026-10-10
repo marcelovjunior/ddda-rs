@@ -1364,6 +1364,7 @@ pub fn step(
         }
     }
     hud.rows = play::hud_rows(st, &s.host.sim, s.host.fight.as_ref(), None);
+    hud.enemy = play::enemy_gauge(st, s.host.fight.as_ref());
     st.follow = follow;
     let hide = s.cut.is_some();
     for (&e, &on) in &st.visible {

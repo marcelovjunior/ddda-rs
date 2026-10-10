@@ -595,6 +595,7 @@ pub fn step(
     let fight = st.fight.take();
     show_goblins(st, fight.as_ref(), &mut roots, alpha);
     hud.rows = hud_rows(st, &st.sim, fight.as_ref(), None);
+    hud.enemy = enemy_gauge(st, fight.as_ref());
     st.fight = fight;
 }
 
@@ -1011,6 +1012,19 @@ pub fn show_goblins(
 #[derive(Resource, Default)]
 pub struct Hud {
     pub rows: Vec<(String, f32, f32, Color)>,
+    /// The small-enemy gauge (`Fight::small_gauge`): the goblin's body, HP
+    /// and maximum HP.
+    pub enemy: Option<(Entity, f32, f32)>,
+}
+
+/// The small-enemy gauge's goblin, if the fight shows one: its body (by the
+/// fight's goblin order, as [`show_goblins`] pairs them), HP and maximum.
+pub fn enemy_gauge(st: &PlayState, fight: Option<&Fight>) -> Option<(Entity, f32, f32)> {
+    let f = fight?;
+    let (owner, _) = f.small_gauge?;
+    let k = f.goblins.iter().position(|g| g.fighter.owner == owner)?;
+    let view = st.goblins.get(k)?;
+    Some((view.entity, f.goblins[k].fighter.victim.hp(), view.hp_max))
 }
 
 /// HUD rows for the followed Arisen, its pawn and the nearest goblin.

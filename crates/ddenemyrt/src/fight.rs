@@ -148,7 +148,16 @@ pub struct Fight {
     pub pawns: BTreeMap<u8, crate::pawn::PawnSeat>,
     /// *Placeholder* critical roll (only critical-capable weapons read it).
     roll_seed: u32,
+    /// The small-enemy life gauge: the last damaged small enemy's owner id
+    /// and the frames it stays shown ([`SMALL_GAUGE_FRAMES`]).
+    pub small_gauge: Option<(u32, f32)>,
 }
+
+/// `uGUILifeGauge` keeps one small-enemy pointer (+0x400) and refreshes its
+/// timer (+0x404) to 450 frames on each damage report (0x0067C110, from
+/// `uEnemy::vf69`'s damage path at 0x00AAAFBF via 0x00452EE0); 0x0067AC40
+/// counts it down and drops the pointer at 0.
+pub const SMALL_GAUGE_FRAMES: f32 = 450.0;
 
 /// Owner ids of shells count from here.
 pub const SHELL_OWNER_BASE: u32 = 1000;
@@ -171,6 +180,7 @@ impl Fight {
             next_shell: SHELL_OWNER_BASE,
             pawns: BTreeMap::new(),
             roll_seed: 0x1234_5678,
+            small_gauge: None,
         }
     }
 
@@ -330,6 +340,20 @@ impl Fight {
         }
         for g in &mut self.goblins {
             g.fighter = it.next().expect("one fighter per goblin");
+        }
+        // the small-enemy gauge (0x0067C110 / 0x0067AC40): counts down by
+        // the frame step, then follows the latest damaged goblin. *Assumed*:
+        // every hit event on a goblin is a damage report (the gate inside
+        // uEnemy::vf69 is not translated).
+        if let Some((_, left)) = &mut self.small_gauge {
+            *left -= dt;
+        }
+        if self.small_gauge.is_some_and(|(_, left)| left <= 0.0) {
+            self.small_gauge = None;
+        }
+        let goblin_owners: Vec<u32> = self.goblins.iter().map(|g| g.fighter.owner).collect();
+        if let Some(e) = self.events.iter().rev().find(|e| goblin_owners.contains(&e.victim)) {
+            self.small_gauge = Some((e.victim, SMALL_GAUGE_FRAMES));
         }
         // a shell that hit is gone (*placeholder*, see `crate::shell`)
         let hit: Vec<u32> = self.events.iter().map(|e| e.attacker).collect();
