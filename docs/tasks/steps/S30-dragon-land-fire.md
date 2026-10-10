@@ -578,3 +578,25 @@ stream selection must not be reduced to locking. No production global
 draw order is claimed. Next S30 action remains the actual vf43 parent/
 secondary binding and effect clock/emission/query integration before
 ordinary party damage and state6 acceptance.
+
+### Prepared next primary-parent binding (not yet tested)
+
+The next source batch reads the separate u16 binding options at resource+4
+and translates the supported primary-parent part of `0x00E73720`.
+`static_parent` accepts the actual vf44-resolved parent matrix, normalizes
+its four-component axis rows while retaining their lengths in separate
+signed scale, optionally scales the local XYZ offset, composes/normalizes
+the coordinate basis, and produces the two equal native matrix blocks when
+secondary binding is absent (`0x00E6BD70/0x00E6BDE0`). The caller must
+supply unscaled effect+0x120 for a negative joint; the earlier provider's
+final scaled effect+0xB0 matrix is not interchangeable.
+
+The adapter rejects nonzero primary binding/parent-scale modes, mirrored
+or dynamic conversion, secondary binding and the separate postprocess
+request. A synthetic regression covers nonuniform signed scale, optional
+offset scaling, a rotated parent, zero-length rows, both matrix blocks and
+unsupported guards. **Rust compile/test and independent native four-case
+proof are pending** the queue; the prepared private native harness calls
+the original vf43, its original vf44 negative-joint lookup and both native
+matrix-copy routines rather than substituting output callbacks. No
+production emitter, contact, damage or source-readiness claim is added.
