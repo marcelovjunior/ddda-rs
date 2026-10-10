@@ -76,6 +76,13 @@ The v2 RoadWalk SHA-256 is
 - `demo_input` also returns while that search is pending before checking
   its existing RoadWalk 300-second deadline or actual quest outcome. Thus
   the intended timeout cannot bound the stalled search.
+- The newer main-7ea18c9 rescue capture adds another cause: direct steering
+  toward the distant centre cuts across the road's embankment **before**
+  planning begins. At 11:01:00.754 UTC the body is at Y31367; by
+  11:01:01.246 it falls to Y30551, and subsequently stalls near
+  `(25928, 30350, 138664)`. Planning only starts at 11:01:04.839 and returns
+  170 waypoints at 11:02:35.167, after the demo deadline. Thus waiting for
+  a collision stall before planning can strand the body below the road.
 
 ### Prepared changes and validation
 
@@ -91,15 +98,22 @@ demo return a safe partial route at the boundary toward an unloaded target,
 retaining the existing 10-m-progress condition. Ordinary movement and native
 streaming admit the next window before a fresh search. No cap, movement speed, collision
 threshold, quest bit, HP or XP is tuned or manufactured.
+RoadWalk starts its search before its first direct heading and replans
+when a partial path ends. A missing/empty safe route waits and retries;
+it does not substitute straight movement over an embankment. Pending
+searches refresh actual completed residency, including the first host tick
+after a checkpoint resume.
 
-Four regressions are prepared but **not executed**: entry into a trigger
+Five regressions are prepared but **not executed**: entry into a trigger
 whose centre has no walkable ground; the recorded RoadWalk position over
 installed collision/scenery, geometrically replaying native residency at
 partial endpoints and checking actual Area entry without repeated wall
 positions; early partial-route return while unexplored loaded cells remain;
 and timeout/native-outcome handling during a pending search (including
 q2:10 without q0003, which must keep waiting) without
-manufacturing quest success. This geometric search regression is not a
+manufacturing quest success; and the first RoadWalk heading with no safe
+ground, which must wait without placing the actor or inventing flags.
+This geometric search regression is not a
 simulated walk or a game-process acceptance run. Full viewer tests, release build and
 the real v2 walked route are pending the coordinated build/GPU queue.
 
