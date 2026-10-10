@@ -31,6 +31,46 @@ each exit, and the route continues to q0001 as before.
 
 ## Results
 
+**HANDOFF, 2026-10-10, codex-80 (head8885 quota wrap-up).** Work is
+stopped on `step/s31-dragon-route` in
+`E:/ddda-rs-wt/s31-dragon-route`. Source checkpoint `f53a710` contains the
+exit helper and three new regressions below; clean integrated freeze
+`5f0e6db4752b657c66b1ea7779c94a425062ec9a` includes only head's accepted
+main `1ed3477`. **These three Rust regressions remain UNRUN.** Parent8884
+approved their package gate, but head8885 superseded that grant before
+launch. No Cargo/GPU gate or additional research was started after the
+wrap-up instruction. All claims are being released.
+
+Already tested: the earlier body/scenery helper at `4a1e3f8` passed the
+full347-test ddenemyrt+ddhost gate; the separate four-case original raw
+clock fixture passed as described below. Neither result tests the new
+exit code or proves the production S31 route. Host action scheduling,
+common entry, full raw-layer ownership, original scenery contacts,
+GotoEx consumption and the safe DragonFight checkpoint remain open.
+
+**Exact next step:** review this branch, obtain a fresh normal core lease
+and coordinator approval, then run the prepared complete ddenemyrt+ddhost
+gate after updating its expected commit/manifest for any deliberate
+integration or this documentation-only handoff. Require the three new
+names and four preceding helper names once each, no installed skips,
+unchanged source hashes and actual completion before releasing the lease.
+After that helper checkpoint, continue the common action/body lifetime
+adapter with the sourced prepare-on-request / enter-on-transition order;
+do not enable the production route yet.
+
+Private continuation material (never commit or copy into the repo):
+`E:/ddda-re/notes/steps/S31/codex80-next-reaction-actor.private.md`;
+`codex80-action-exit-full-gate.private.ps1` and
+`codex80-5f0e6db-action-exit-frozen.private.json` in that same directory
+(prepared, never launched); the original clock first-failure and
+second-pass proof JSON files described below. Static owner/dispatcher
+planning scripts are also retained there. In particular, body2DBC is
+initialized to the owning body by `0x0084A727 -> 0x007F1B3C`; class request
+`0x004C7392` prepares once before the saved-flags snapshot, while
+`0x007F1F76 -> 0x007F1F9A` enters that prepared action without repeating
+vf13. Later runtime overrides and the exact controller dispatcher remain
+separate source work.
+
 **2026-10-10, codex-80: common-action joint exit continuation, Rust UNRUN.**
 This batch starts from head's accepted main
 `3b48b63f0d239c9601149f5749b4d4ac1e79adfd`. The independent
