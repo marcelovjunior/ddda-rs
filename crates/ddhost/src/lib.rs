@@ -13,6 +13,7 @@
 //! Nothing here renders, plays sound or reads devices.
 
 pub mod clock;
+pub mod doors;
 pub mod data;
 pub mod hash;
 pub mod host;
@@ -40,3 +41,4 @@ pub use clock::FrameClock;
 pub use host::{FrameReport, Host, HostError, StoryWorld};
 pub use input::{FrameInputs, PlayerInput};
 pub use player::{Control, Member, Party, PlayerId, ProfileId, Roster};
+

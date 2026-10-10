@@ -60,7 +60,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // owner fails would discard earlier requests and advance those owners
         // a second time in this same host frame.
         for (&id, npc) in &mut self.npcs.npcs {
-            match npc.step(&*data, clock) {
+            npc.observe_scene(Some(story.world.sce_no));
+            match npc.step_observed(&*data, clock, Some(&story.world)) {
                 Ok(requests) => out.extend(requests),
                 Err(error) => {
                     if let Some(pos) = npc.position() {

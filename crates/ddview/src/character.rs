@@ -185,6 +185,8 @@ pub struct Morph {
 /// One uCnsEdit record (0x00860ac0).
 #[derive(Clone, Copy)]
 pub struct Edit {
+    /// Semantic model joint ID, used by type-0xb's joint-2 exception.
+    pub joint_id: u8,
     /// +0xa4: 0 plain, 0xb absolute size (also takes `child`), 9 human
     /// hand absolute size; 0xc remains approximated as plain.
     pub kind: u32,
@@ -199,9 +201,9 @@ pub struct Edit {
 /// first, so children follow their morphed parents): world = parent world
 /// x local, then `world x Translate(offset) x Scale(k)` (column vectors).
 /// k is the scale for type 0; type 9 human hands cancel inherited axis
-/// lengths (0x00867b70, +0xb0 set by 0x0081c330). For type 0xb it is scale x child
-/// divided by the world axis lengths, so those joints end at an absolute
-/// size whatever their parents did (0x0086d180). The model scale is the
+/// lengths (0x00867b70, +0xb0 set by 0x0081c330). Type 0xb uses child scale
+/// and axis-length compensation (0x0086d180), except semantic joint 2
+/// compensates only Y and retains model scale there. The model scale is the
 /// skeleton's root. The result goes back into the local transforms (shear
 /// from non-uniform parent scales is dropped by the TRS decomposition).
 fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
@@ -216,8 +218,11 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
         let mut w = pw * local.to_matrix();
         for e in &m.joint[i] {
             let k = if e.kind == 0xb {
-                let len = Vec3::new(w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length());
-                e.scale * e.child / len.max(Vec3::splat(1.192_092_9e-7))
+                Vec3::from_array(ddlook::morph::human_absolute_axis_factors(
+                    e.joint_id, e.scale.to_array(), e.child.to_array(), m.model_scale.to_array(), [
+                        w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length(),
+                    ],
+                ))
             } else if e.kind == 9 {
                 Vec3::from_array(ddlook::morph::hand_axis_factors(e.scale.to_array(), [
                     w.x_axis.truncate().length(), w.y_axis.truncate().length(), w.z_axis.truncate().length(),
@@ -486,6 +491,7 @@ pub fn spawn_assembled_hands(
                 let mut v = vec![];
                 if let Some((_, m)) = body.and_then(|b| b.joints.iter().find(|(j, _)| *j == id)) {
                     v.push(Edit {
+                        joint_id: id,
                         kind: m.kind,
                         scale: Vec3::from(m.scale),
                         child: Vec3::from(m.child),
@@ -496,6 +502,7 @@ pub fn spawn_assembled_hands(
                 if let Some(f) = face.iter().find(|f| f.id == id && ddlook::face::special_kind(id).is_none()) {
                     let r = f.rotation.map(f32::to_radians);
                     v.push(Edit {
+                        joint_id: id,
                         kind: 0,
                         scale: Vec3::from(f.scale),
                         child: Vec3::ONE,
@@ -631,6 +638,9 @@ fn spawn_meshes(
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v.positions.clone());
         if !v.normals.is_empty() {
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.normals.clone());
+        }
+        if !v.tangents.is_empty() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, v.tangents.clone());
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v.uvs[0].clone());
         // Bevy skins with four influences; layouts with up to eight keep the
@@ -926,7 +936,7 @@ mod eyebrow_install_tests {
                 alpha_mode: AlphaMode::Mask(0.5), ..default() },
             extension: DdExt { depth: Some(15), params: DdParams::default(),
                 map: None, spec: None, sky: SkyEnvParams::default(),
-                sky_rayleigh: default(), sky_mie: default(), env_cube: None, albedo_blend: None },
+                sky_rayleigh: default(), sky_mie: default(), env_cube: None, albedo_blend: None, normal: None },
         };
         let mut private = source.clone();
         let authored = (0.8, source.base.alpha_mode, source.extension.depth, source.extension.params.flags);

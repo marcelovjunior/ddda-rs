@@ -118,3 +118,52 @@ fn talk_end_requires_real_actor_state_and_preserves_blocked_pending_exit() {
     observation.current_action = Some(0);
     assert!(!observation.take_frame());
 }
+
+#[test]
+fn talk_motion_transition_requires_observed_ready_state() {
+    use ddnpcrt::guard::TalkMotionObservation;
+    let mut motion = TalkMotionObservation::default();
+    assert!(!motion.ready());
+    motion.mode = Some(0);
+    assert!(motion.ready(), "zero mode bypasses the motion-specific checks");
+    motion.mode = Some(3);
+    assert!(!motion.ready());
+    motion.active = Some(true);
+    assert!(!motion.ready(), "unknown flags cannot authorize cleanup");
+    motion.flags = Some(0);
+    assert!(!motion.ready());
+    motion.flags = Some(4);
+    assert!(motion.ready());
+    motion.active = Some(false);
+    assert!(!motion.ready(), "the completion bit alone is insufficient");
+    motion.active = Some(true);
+    motion.flags = Some(0xffff_fffb);
+    assert!(!motion.ready(), "only bit2 permits the transition");
+}
+
+#[test]
+fn losing_guard_eligibility_releases_only_that_seats_candidate() {
+    use ddnpcrt::guard::{DialogueOwner, DialogueSlot};
+    let owner = DialogueOwner { actor: 200, player: 0 };
+    let other = DialogueOwner { actor: 200, player: 1 };
+    let mut slot = DialogueSlot::default();
+    assert!(slot.reserve(owner, Some(2)));
+    assert!(!slot.clear_reserved(other));
+    assert_eq!(slot.reserved(), Some(owner));
+    assert!(slot.clear_reserved(owner));
+    assert_eq!(slot.reserved(), None);
+    assert!(slot.reserve(other, Some(2)), "another seat can acquire after real candidate cleanup");
+    assert!(slot.activate(other, Some(2)));
+    assert!(!slot.clear_reserved(other));
+    assert_eq!(slot.active(), Some(other), "candidate cleanup cannot end active talk");
+}
+
+#[test]
+fn guard_unit_readiness_is_stricter_than_allocated_status() {
+    use ddnpcrt::guard::guard_unit_ready;
+    for status in [None, Some(1), Some(2), Some(0x4801), Some(0x0802), Some(0x4002), Some(0x4803)] {
+        assert!(!guard_unit_ready(status));
+    }
+    assert!(guard_unit_ready(Some(0x4802)));
+    assert!(guard_unit_ready(Some(0xffff_fffa)), "unrelated status bits do not reject readiness");
+}

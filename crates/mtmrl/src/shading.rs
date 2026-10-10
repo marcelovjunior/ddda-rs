@@ -103,6 +103,16 @@ impl Shading {
         self.features.get(switch).map(String::as_str)
     }
 
+    /// Ordinary tangent-space normal map on the primary UV set. Other
+    /// bump variants (detail/water/edit blends) need their own shader rules.
+    /// Decode/basis: sc/DX9/Stage200 PS 0x6171f8, VS 0x1381d4.
+    pub fn primary_normal_map(&self) -> Option<&str> {
+        (self.feature("FBump") == Some("FBumpNormalMap")
+            && self.feature("FUVNormalMap") == Some("FUVPrimary")
+            && self.albedo_uv == "UV_Primary")
+            .then(|| self.textures.get("tNormalMap").map(String::as_str)).flatten()
+    }
+
     /// Standard alpha blending (`BSBlendAlpha`: SrcAlpha, InvSrcAlpha).
     pub fn blends_alpha(&self) -> bool {
         self.blend
@@ -338,6 +348,17 @@ mod tests {
         assert_eq!(s.albedo_uv, "UV_Primary");
         let d = s.depth.unwrap();
         assert!(d.depth_test && !d.depth_write);
+        let mut s = s;
+        s.textures.insert("tNormalMap".into(), "scr\\x_NM".into());
+        assert_eq!(s.primary_normal_map(), None, "a bound map alone must not enable bump mapping");
+        s.features.insert("FBump".into(), "FBumpNormalMap".into());
+        s.features.insert("FUVNormalMap".into(), "FUVPrimary".into());
+        assert_eq!(s.primary_normal_map(), Some("scr\\x_NM"));
+        s.features.insert("FUVNormalMap".into(), "FUVSecondary".into());
+        assert_eq!(s.primary_normal_map(), None, "unhandled UV sets cannot silently use albedo UV");
+        s.features.insert("FUVNormalMap".into(), "FUVPrimary".into());
+        s.features.insert("FBump".into(), "FBumpDetailNormalMap".into());
+        assert_eq!(s.primary_normal_map(), None, "detail blend needs its own shader path");
     }
 
     /// A character material as in the `model\pl` lists: FAlbedoMapAdd

@@ -102,3 +102,38 @@ two existing viewer warnings remain. No original hand comparison is
 claimed. General rotated
 type-9 constraints, type-0xc constraints and the independent fresh-model
 body-measurement pipeline remain separate work.
+
+### Type-0xb joint-2 exception
+
+`0x0086d180` compensates only the Y axis of semantic joint 2 and retains
+the model's Y scale there. `0x0081c330` leaves +0xb0 clear for joint 2,
+while setting it for the other human type-0xb joints (3/4/6/10), which
+compensate all axes. The renderer previously applied the latter behavior
+to every type-0xb joint. It now retains the semantic joint ID and uses a
+sourced helper for that distinction, including the strict epsilon case
+that keeps the initial factor instead of dividing by a clamped length.
+Two regressions and strict ddlook clippy pass. The release viewer build
+passed after the uncontended route benchmark (two existing warnings). No original
+same-record appearance comparison is claimed.
+
+### Fresh-model measurement evaluation trace
+
+The independent `0x00cbbf00` measurement path still needs its own fresh
+model evaluation before feeding body weight/height. Further source review
+establishes that `uModel::vf23` (`0x00ffddb0`) initializes joint translation
+from the bone record's location (+0x0c), converts the supplied rest matrix
+basis directly to a quaternion, and initializes joint scale from the
+constant vector at `0x01629510`. It does not perform the generic matrix
+scale decomposition used by `mtlmt::pose::Skeleton::from_bones`.
+`0x01058a70` blends only existing active motion channels; the fresh model
+has none. The joint pass `0x01054700` chooses an evaluator from model flags
+and invokes each joint constraint after composing that joint. Its ordinary
+evaluator `0x01051b60` composes quaternion/scale/translation and multiplies
+by the already-evaluated parent, or the model transform for a root.
+
+This is source evidence, not a new measurement implementation. A fresh
+measurement adapter must verify the constructor's evaluator flags and
+scale constant, reproduce that initialization and ordered constraint
+pass, then compare unedited/edited joint measurements. Neither the current
+animated renderer pose nor blindly retaining raw local matrices is a
+validated substitute. No animation-wide behavior is changed here.

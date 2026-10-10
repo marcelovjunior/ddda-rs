@@ -62,6 +62,14 @@ fn installed_npc_targets_read_layout_identity_and_schedule_mode() {
     assert_eq!(families.select("MultiNpc_fixture"), Some(true));
     assert_eq!(families.select("Enemy_fixture"), None);
     let vfs = ddvfs::Vfs::open(native).unwrap();
+    let list = npc_placements::group_list(&vfs, 200).unwrap();
+    let loaded = npc_placements::LoadedLayouts::read(&vfs, 200, &list, &[(0, 0)]).unwrap();
+    let flags = |flag: u16| flag == 32;
+    let world = ddspawn::World { scene: 1100, hour: 12, flag: &flags };
+    assert!(loaded.candidates(&world).placements.iter().any(|p|
+        p.target.group == 27 && p.target.index == 0 && p.npc == 1));
+    let absent = npc_placements::LoadedLayouts::read(&vfs, 200, &list, &[]).unwrap();
+    assert!(absent.candidates(&world).placements.is_empty(), "flag cannot load an unobserved cell");
     for (stage, group, npc) in [(200, 1, 39), (200, 27, 1), (100, 4, 304)] {
         let list = npc_placements::group_list(&vfs, stage).unwrap();
         let group = list.groups.iter().find(|g| g.slot == group).unwrap();
@@ -152,6 +160,8 @@ mod graph_fixture {
     impl Graphs for GraphsWithFault {
         fn graph(&self, path: &str) -> Result<std::sync::Arc<mtfsm::Graph>, ddnpcrt::Error> {
             let healthy = path == "healthy";
+            let flags = path == "flags";
+            let boolean_flag = matches!(path, "flags_clear" | "flags_set");
             Ok(std::sync::Arc::new(mtfsm::Graph {
                 owner: b"cAIActionFSMNpc".to_vec(), attribute: 0, conditions: vec![],
                 root: Some(mtfsm::Cluster { id: 0, owner_node_unique_id: 0, initial_state: 1,
@@ -159,11 +169,13 @@ mod graph_fixture {
                         name: b"owner fixture".to_vec(), setting: 0, user_attribute: 0,
                         from_all: None, links: vec![], subcluster: None,
                         processes: vec![mtfsm::Process {
-                            container: if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
-                            category: vec![], parameter: healthy.then(|| Record {
+                            container: if boolean_flag { b"Set Lift Disable".to_vec() } else if flags { b"Set Disable Flag".to_vec() } else if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
+                            category: vec![], parameter: if boolean_flag { Some(Record { class_hash: 0, class_name: None,
+                                fields: vec![("Bool".into(), vec![Parameter::Scalar(mtxfs::Value::Bool(path == "flags_set"))])] }) } else if flags { Some(Record { class_hash: 0, class_name: None,
+                                fields: vec![("Flag".into(), vec![Parameter::Scalar(mtxfs::Value::U(352))])] }) } else { healthy.then(|| Record {
                                 class_hash: 0, class_name: None,
                                 fields: vec![("InitPos".into(), vec![Parameter::Scalar(mtxfs::Value::F(vec![4.0, 5.0, 6.0, 0.0]))])],
-                            }),
+                            }) },
                         }] }] }),
             }))
         }
@@ -192,12 +204,14 @@ fn placement_action_suspends_normal_graph_and_later_apply_supersedes_default() {
         assert!(host.npcs.npcs[&1].controller.is_some());
         let frame = host.tick(&Default::default()).unwrap();
         assert_eq!(frame.npc_requests, vec![Request::Place { npc: 1, pos: [4.0, 5.0, 6.0], dir: None }]);
+        assert_eq!(host.story_npc_position(1), Some([4.0, 5.0, 6.0]), "committed Place updates host position");
         assert_eq!(host.story_npc_action(1).unwrap().2, "healthy");
         assert_eq!(host.story_npc_normal_graph_present(1), Some(true));
         assert!(!host.npcs.npcs.contains_key(&1), "normal graph is suspended, not stepped alongside authored action");
         assert!(host.npc_errors.is_empty(), "unsupported normal fixture must not execute while suspended");
         host.unbind_story_npc(200, p.target);
         assert!(host.story_npc_action(1).is_none());
+        assert!(host.story_npc_position(1).is_none());
         assert!(!host.npcs.npcs.contains_key(&1), "unload cannot restore a retired normal owner");
     }
 }
@@ -217,6 +231,10 @@ fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements()
     host.reconcile_story_npc_intels(200, vec![first.clone(), second.clone()]).unwrap();
     assert_eq!(host.npcs.position(1), Some([9.0, 8.0, 7.0]));
     assert_eq!(host.story_npc_intels().count(), 2);
+    let before_arrival = host.state_hash();
+    host.story_npc_arrived(1, [7.0, 8.0, 9.0]);
+    assert_eq!(host.story_npc_position(1), Some([7.0, 8.0, 9.0]));
+    assert_ne!(host.state_hash(), before_arrival, "canonical NPC position participates in replay state");
     assert!(host.reconcile_story_npc_intels(200, vec![first.clone(), first]).is_err());
     assert_eq!(host.story_npc_intels().count(), 2, "invalid snapshot cannot retire owners");
     let external = ddstory::Target { kind: 5, group: 99, index: 0 };
@@ -232,4 +250,91 @@ fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements()
     host.reconcile_story_npc_intels(200, vec![]).unwrap();
     assert_eq!(host.story_npc_intels().count(), 0);
     assert!(host.npcs.npcs.is_empty());
+}
+
+#[test]
+fn unsupported_applied_owner_does_not_abort_frame_or_restore_normal_as_if_finished() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut first = placement(1);
+    first.authored_action = "healthy".into();
+    let mut second = placement(2);
+    second.target.index = 18;
+    second.authored_action = "broken".into();
+    host.reconcile_story_npc_intels(200, vec![first, second]).unwrap();
+    let report = host.tick(&Default::default()).unwrap();
+    assert_eq!(report.npc_requests.len(), 1, "earlier owner's request survives");
+    for _ in 0..3 { assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty()); }
+    assert_eq!(host.npc_errors.len(), 1);
+    assert_eq!(host.npc_errors[0].0, 2);
+    assert!(!host.story_npc_action(2).unwrap().3, "port error cannot signal Finish");
+    assert_eq!(host.story_npc_normal_graph_present(2), Some(true));
+    assert!(!host.npcs.npcs.contains_key(&2), "normal remains suspended after failure");
+    assert_eq!(host.story_npc_intels().count(), 2, "both materialized owners remain");
+}
+
+#[test]
+fn disable_flags_belong_to_the_materialized_intel_lifetime() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut p = placement(1);
+    p.authored_action = "flags".into();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0));
+    let report = host.tick(&Default::default()).unwrap();
+    assert!(report.npc_requests.iter().any(|r| matches!(r,
+        ddnpcrt::schedule::Request::DisableFlags { npc: 1, mask: 0x1a00 })));
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00));
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "same intel retains authored writes");
+    host.apply_story_npc(200, p.target, "flags_clear");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1200), "clear touches only the selected bit");
+    host.apply_story_npc(200, p.target, "flags_set");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "set restores the bit without losing others");
+    host.unbind_story_npc(200, p.target);
+    assert_eq!(host.story_npc_intel_flags(1), None);
+    host.load_story_npc_intel(p).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0), "replacement starts with constructor state");
+}
+
+#[test]
+fn retired_actor_cannot_acknowledge_replacement_with_same_id_and_target() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut p = placement(1);
+    p.authored_action = "flags".into();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    let old = host.story_npc_lifetime(1).unwrap();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_lifetime(1), Some(old), "unchanged allocation preserves identity");
+    assert!(host.story_npc_arrived_for(old, [4.0, 5.0, 6.0]));
+    host.unbind_story_npc(200, p.target);
+    assert!(!host.story_npc_arrived_for(old, [8.0, 8.0, 8.0]));
+    host.load_story_npc_intel(p.clone()).unwrap();
+    host.tick(&Default::default()).unwrap();
+    assert!(host.story_npc_action(1).is_some(), "replacement applied owner is actively waiting");
+    let replacement = host.story_npc_lifetime(1).unwrap();
+    assert_ne!(replacement, old);
+    let before = host.state_hash();
+    assert!(!host.story_npc_arrived_for(old, [9.0, 9.0, 9.0]));
+    assert!(!host.observe_story_npc_talk_end_for(old));
+    assert_eq!(host.story_npc_position(1), Some(p.transform.position));
+    assert_eq!(host.state_hash(), before, "stale observations cannot mutate the replacement");
+    assert!(host.observe_story_npc_talk_end_for(replacement), "current owner accepts its observation");
+    assert!(host.story_npc_arrived_for(replacement, [7.0, 8.0, 9.0]));
+    assert_eq!(host.story_npc_position(1), Some([7.0, 8.0, 9.0]));
 }

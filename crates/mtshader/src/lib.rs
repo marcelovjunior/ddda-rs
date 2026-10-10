@@ -32,6 +32,31 @@ use std::fmt;
 
 pub const MAGIC: [u8; 4] = *b"MFX\0";
 
+/// Reference decode for the ordinary DXT5 normal-map shader. Tangent and
+/// bitangent evaluation is separate; this vector is not normalized here.
+// Translated from sc/DX9/Stage200 PS file offsets 0x6171f8, 0x318e0c,
+// 0x5f3000 (DDDA.exe 2017-12-13 Steam shader package).
+pub fn normal_map_vector(rgba: [f32; 4]) -> [f32; 3] {
+    let x = (rgba[3] - 127.0 / 255.0) * 2.0;
+    let y = (rgba[1] - 127.0 / 255.0) * 2.0;
+    let zz = 1.0 - x * x - y * y;
+    [x, y, if zz > 0.0001 { zz.sqrt() } else { 0.01 }]
+}
+
+/// Reference basis after the world 3x3 transform, before interpolation.
+/// Tangent W was already decoded from the biased vertex byte by mtmod.
+// Translated from sc/DX9/Stage200 VS file offset 0x1381d4
+// (DDDA.exe 2017-12-13 Steam shader package).
+pub fn normal_map_basis(normal: [f32; 3], tangent: [f32; 4]) -> [[f32; 3]; 3] {
+    let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+    let bitangent = [
+        tangent[1] * normal[2] - tangent[2] * normal[1],
+        tangent[2] * normal[0] - tangent[0] * normal[2],
+        tangent[0] * normal[1] - tangent[1] * normal[0],
+    ];
+    [normal.map(|v| v / length), [tangent[0], tangent[1], tangent[2]], bitangent.map(|v| v * tangent[3])]
+}
+
 /// Kind numbers seen in the entry bits (meaning from the kind names and
 /// usage: 0 constant buffer, 1 texture, 2 feature switch, 3 sampler state,
 /// 9 input layout).
@@ -667,6 +692,33 @@ impl ShaderPackage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normal_map_uses_alpha_green_and_127_midpoint() {
+        let neutral = 127.0 / 255.0;
+        assert_eq!(normal_map_vector([1.0, neutral, 0.0, neutral]), [0.0, 0.0, 1.0]);
+        let n = normal_map_vector([0.25, neutral, 0.75, 191.0 / 255.0]);
+        assert!((n[0] - 128.0 / 255.0).abs() < 1e-7);
+        assert_eq!(n[1], 0.0);
+        assert!((n[2] - (1.0 - n[0] * n[0]).sqrt()).abs() < 1e-7);
+        assert_eq!(n, normal_map_vector([0.0, neutral, 1.0, 191.0 / 255.0]));
+    }
+
+    #[test]
+    fn normal_map_outside_unit_disc_has_sourced_z_floor() {
+        let n = normal_map_vector([0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(n[2], 0.01);
+        assert!(n.iter().all(|v| v.is_finite()));
+        assert!(n[0] > 1.0 && n[1] > 1.0, "do not clamp source XY before basis composition");
+    }
+
+    #[test]
+    fn normal_map_basis_keeps_source_cross_order_lengths_and_handedness() {
+        let basis = normal_map_basis([0.0, 0.0, 2.0], [3.0, 0.0, 0.0, 1.0]);
+        assert_eq!(basis, [[0.0, 0.0, 1.0], [3.0, 0.0, 0.0], [0.0, -6.0, 0.0]]);
+        let mirrored = normal_map_basis([0.0, 0.0, 2.0], [3.0, 0.0, 0.0, -1.0]);
+        assert_eq!(mirrored[2], [0.0, 6.0, 0.0]);
+    }
 
     #[test]
     fn object_ids_match_known_vertex_formats() {
