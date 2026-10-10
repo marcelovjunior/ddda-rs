@@ -70,3 +70,18 @@ or GUI acceptance are claimed by this checkpoint. Next: implement the
 last-hit/expiry adapter without losing hits across multiple host ticks
 per rendered frame; finish the anchor producer trace and bind the
 installed small-gauge geometry to canonical enemy ownership and HP.
+
+## Result (head, implementation)
+
+Implemented on main: `Fight::small_gauge` keeps the last damaged goblin's
+owner id and 450 frames (`SMALL_GAUGE_FRAMES`), counted down by the hit
+pass's frame step; `play::enemy_gauge` pairs it with the goblin's body,
+and `hud.rs` draws `enmy_gauge_back` and the HP-cropped `enmy_gauge` from
+`cockpit0_1` over it. Test
+`the_last_hit_goblin_shows_the_small_gauge_for_450_frames`. A `--play
+--demo --goblin` capture shows the thin bar over the damaged goblin.
+
+Still open: the anchor (0x0067C970 mode 0, actor +0x1A0/+0x1B4, from
+`cCharParamEnemy` +0xB4/+0xB8/+0xC0) is a viewer choice (joint 4 + 25 cm
+like the pawn gauge); the damage-report gate inside `uEnemy::vf69`; large
+enemies' gauges (+0x3F0); other enemy families.
