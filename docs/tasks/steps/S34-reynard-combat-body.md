@@ -54,7 +54,7 @@ A headless installed test shows goblins damaging Reynard (and NoDamage
 holding while set), NpcCheck reading his HP, and the viewer showing his
 gauge after SetGaugeDisp. The Result lists each value's source.
 
-## Results (current S34 checkpoints; acceptance incomplete)
+## Results (current S34 checkpoints; gauge placement acceptance remains open)
 
 Implemented in this checkpoint:
 
@@ -394,5 +394,61 @@ and accepts output only under the private research tree without parent
 traversal. The screenshot request is diagnostic, not proof of a saved
 file; that file must be inspected after the bounded route. All six focused
 HUD tests passed again (one existing ignored, actual exit0,
-compile30.47s/test1.67s). Head currently owns the viewer GPU route;
-the S34 capture waits its actual exit/release.
+compile30.47s/test1.67s). After head's actual GPU release, the bounded
+ordinary viewer capture below ran under its own normal lease.
+
+The default release viewer also built with actual exit0 (compile51.30s),
+then was pinned privately from source
+`e875bec67b37520fc3fa1f58ed17da6de4bf7b8f`; SHA-256
+`69FDD24853AE10B041CDA30842D14935AB7546A0D0F475A4549BE8C59A604349`.
+The M5 lease was released after that copy and actual build exit.
+
+Corpse opacity follow-up is source research, not a renderer implementation.
+NPC vf08 **0x00BAF4F0** reads corpse intel+0x484, clamps negatives to0,
+and copies it to body+0x2510 only when body+0x2518 is mode2, before calling
+the player-base/action update. Consequently the body uses the previous
+intel alpha, one host frame behind the post-action `corpse_alpha` getter.
+Generic opacity vf90 **0x00885E30** (0x00886090 is an interior address)
+advances mode1 by actor delta times0.2 to1/mode2, and mode3 downward by
+the same increment to0/mode4. Constructor **0x00884670** initializes
+mode0 and both opacity fields to1; model vf10 **0x00886450** can select
+NPC-class fade-in mode1 and opacity0. Ordinary settled bodies therefore
+reach mode2; other mode writers must be traced before generalizing this.
+
+The later common presentation path **0x0088BDC0** multiplies body+0x2510
+by the near-camera factor into body+0x2514. The viewer currently applies
+the shared character-opacity path to player/pawn roots only. A future
+NPC renderer adapter needs the actual lifetime on each model root,
+separate cloned material ownership, and body-alpha processing independent
+of a singleton camera. No opening marker, alpha mode, material-alpha
+renderer or prior-frame host alpha has been added here. Raw source
+exports remain private. This follow-up must preserve the one-frame lag;
+actor+0x1065's wider meaning is still unresolved.
+
+Visible gauge evidence: the ordinary `--perf-route --players 1 --size
+1600x900` run, with the existing demo inputs and the optional screenshot
+hook, saved `E:/ddda-re/notes/steps/S34/npc-gauge-e875bec.png`. The image
+was inspected directly: the full blue NPC bar is visible near the
+upper-left edge of the roadside viewport. The 1600x900 PNG is 2,155,483
+bytes, SHA-256
+`B123F512EEFC71CE092C357F2CBF88F10C67D35AAF2A6DB831350FDB3E4FE3CC`.
+At 06:16:20.215402Z the production HUD logged owner106, camera12545v0,
+authored point[19.043007,104.84619] and fill width88, after NPC304's real
+motion3226 and materialized body, while entering the native camera149
+route. HP, SetGaugeDisp, motion, placement and camera were not changed
+by the evidence hook. Head's placement review on board5596 rejected this
+as sufficient evidence of correct placement: Reynard is not recognizable
+under the bar, and the same-frame rendered body/anchor/camera comparison
+is still required. The installed HP/damage/NoDamage tests remain passed;
+gauge placement, guest replication and original NPC304 parity remain open.
+
+The run used owned hidden PID9884, launched at06:12:12.8156710Z with a
+600-second watchdog. It reached native camera12 and q2:5 on resource
+exhaustion. NPC304 started real death motion3270 (CC6) at06:17:19.068167Z;
+the ordinary rescue later ended at06:18:29.749857Z with q2:20 false and
+q2:30 true, zero goblins alive and Arisen HP510. That is failure-branch
+evidence, not a successful rescue or proof of every death boundary.
+After preserving the PNG and logs, only the executable-path-verified
+owned PID was stopped. Its retained process handle reported actual
+OS exit-1 after421.4 seconds; the wrapper exited1, WMI confirmed no PID,
+and the GPU lease was then released. No original game process was used.
