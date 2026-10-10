@@ -233,13 +233,14 @@ impl Catalog {
 
 #[derive(Resource)]
 pub(crate) struct View {
+    vfs: ddvfs::Vfs,
     pub catalog: Catalog,
     gui: Vec<u8>,
     dialog: Vec<u8>,
     font: Vec<u8>,
     textures: HashMap<String, Handle<Image>>,
     entities: Vec<Entity>,
-    shown: Option<(usize, usize, bool, bool, [u32; 2])>,
+    shown: Option<(usize, usize, bool, bool, [u32; 2], String)>,
 }
 
 impl View {
@@ -294,6 +295,7 @@ impl View {
             );
         }
         Ok(Self {
+            vfs: ddvfs::Vfs::open(native_pc)?,
             catalog,
             gui,
             dialog,
@@ -390,7 +392,8 @@ impl Painter<'_, '_, '_, '_> {
                 size.to_array(),
                 object.integer("ControlPoint").unwrap_or(0),
             ));
-            let position = transform.transform_point2(position + anchor) + translation;
+            let object_transform = object_transform(gui, animation, ordinal)?;
+            let position = (transform * object_transform).transform_point2(position + anchor) + translation;
             let layer = layer + object.integer("Priority").unwrap_or(0) as i32;
             if let Some((_, text)) = text.iter().find(|(id, _)| *id == object.id) {
                 let font_size = object
@@ -482,31 +485,35 @@ pub(crate) fn update(
     opening: Option<Res<crate::opening::OpeningRes>>,
     view: Option<ResMut<View>>,
     windows: Query<&Window>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let (Some(opening), Some(mut view)) = (opening, view) else {
         return;
     };
     let Ok(window) = windows.single() else { return };
     let snapshot = opening.vocation_snapshot().map(|(owner, cursor, confirm, yes)| {
+        let name = opening.0.lock().unwrap().host.character_name(owner as u8);
         (
             owner,
             cursor,
             confirm,
             yes,
             [window.width().to_bits(), window.height().to_bits()],
+            name,
         )
     });
     if view.shown == snapshot {
         return;
     }
-    view.shown = snapshot;
+    view.shown = snapshot.clone();
     for entity in view.entities.drain(..) {
         commands.entity(entity).despawn();
     }
-    let Some((_, cursor, confirmation, yes, _)) = snapshot else {
+    let Some((_, cursor, confirmation, yes, _, name)) = snapshot else {
         return;
     };
     let View {
+        vfs,
         catalog,
         gui,
         dialog,
@@ -519,6 +526,16 @@ pub(crate) fn update(
         let gui = mtgui::Gui::parse(gui)?;
         let dialog = mtgui::Gui::parse(dialog)?;
         let font = mtgui::font::Font::parse(font)?;
+        // Saved names can select glyph pages absent from the job descriptions.
+        for character in name.chars() {
+            let glyph = font.glyph(character).ok_or_else(|| format!("vocation name glyph missing {character:?}"))?;
+            let path = font.texture_path(glyph.page)?;
+            if !textures.contains_key(&path) {
+                textures.insert(path.clone(), images.add(crate::stage::tex_to_image(
+                    &vfs.read(&path, mtarc::type_hash("rTexture"))?
+                )?));
+            }
+        }
         // Viewer viewport policy, as for the existing HUD: preserve authored
         // aspect and centre its virtual screen. Native animation/filter VM,
         // character preview and button legend are still outside this port.
@@ -539,7 +556,9 @@ pub(crate) fn update(
             .choices
             .get(cursor)
             .ok_or("vocation cursor outside list")?;
-        painter.node(&gui, 1, Vec2::ZERO, &[(6, &selected.description)], 200, None)?;
+        // vf05 0x006720D0..0x006721B4 binds node1/object ordinal9,
+        // installed object ID11, to the Arisen's saved name.
+        painter.node(&gui, 1, Vec2::ZERO, &[(6, &selected.description), (11, &name)], 200, None)?;
         for choice in &catalog.choices {
             painter.node(&gui, choice.node, Vec2::ZERO, &[(2, &choice.name)], 220, None)?;
         }
@@ -579,6 +598,74 @@ pub(crate) fn update(
     if let Err(error) = render() {
         error!("vocation menu: {error}");
     }
+}
+
+fn word(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(offset..offset + 4)
+            .ok_or("level track truncated")?
+            .try_into()
+            .unwrap(),
+    ))
+}
+
+fn object_transform(
+    gui: &mtgui::Gui<'_>,
+    animation: &mtgui::Animation<'_>,
+    wanted: usize,
+) -> Result<bevy::math::Affine2, String> {
+    // 0x01077EC0 calls 0x01068C40 for r+C (FIRST CHILD), which writes
+    // child+74=this. r+8 is NEXT SIBLING via 0x01068C60, which inherits
+    // this+74 as sibling+74. Confirmed against both setters' disassembly.
+    let records = gui.section(0xa4).ok_or("vocation object section absent")?.bytes;
+    let objects = gui.animation_objects(animation.name)?;
+    let first = animation.words[3] as usize;
+    let parent = |child: usize| -> Result<Option<usize>, String> {
+        for index in 0..objects.len() {
+            let mut next = word(records, (first + index) * 32 + 12)?;
+            let mut count = 0;
+            while next != u32::MAX {
+                let absolute = next as usize;
+                if absolute < first || absolute >= first + objects.len() {
+                    return Err("vocation child outside animation".into());
+                }
+                if absolute - first == child {
+                    return Ok(Some(index));
+                }
+                next = word(records, absolute * 32 + 8)?;
+                count += 1;
+                if count > objects.len() {
+                    return Err("cyclic vocation object siblings".into());
+                }
+            }
+        }
+        Ok(None)
+    };
+    let mut transform = bevy::math::Affine2::IDENTITY;
+    let mut index = parent(wanted)?;
+    let mut count = 0;
+    while let Some(i) = index {
+        let object = &objects[i];
+        let local = bevy::math::Affine2::from_scale_angle_translation(
+            Vec2::new(
+                object.scalar("SclX").unwrap_or(1.0),
+                object.scalar("SclY").unwrap_or(1.0),
+            ),
+            object.scalar("Rotation").unwrap_or(0.0).to_radians(),
+            Vec2::new(
+                object.scalar("PosX").unwrap_or(0.0),
+                object.scalar("PosY").unwrap_or(0.0),
+            ),
+        );
+        transform = local * transform;
+        index = parent(i)?;
+        count += 1;
+        if count > objects.len() {
+            return Err("cyclic vocation object parents".into());
+        }
+    }
+    Ok(transform)
 }
 
 fn node_transform(gui: &mtgui::Gui<'_>, wanted: usize) -> Result<Affine2, String> {
@@ -639,6 +726,12 @@ mod tests {
         assert_eq!(hidden, [4, 5, 15, 7]);
         assert!(first_choice_object_visible(1, objects.iter().position(|o| o.id == 6).unwrap()));
         assert!((0..objects.len()).all(|ordinal| first_choice_object_visible(2, ordinal)));
+        // Native name binding uses ordinal9, whose saved-name font object is
+        // a child of the authored name banner. Its control point only anchors
+        // its geometry; it must not shift the child's transform.
+        assert_eq!(objects[9].id, 11);
+        assert_eq!(object_transform(&gui, animation, 9).unwrap().translation, Vec2::new(256.0, 49.0));
+        assert_eq!(object_transform(&gui, animation, 5).unwrap(), Affine2::IDENTITY);
     }
     use super::*;
     #[test]
