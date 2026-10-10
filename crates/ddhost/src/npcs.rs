@@ -21,6 +21,91 @@ pub struct TalkOutcome {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Host-format chunk, not the original file format. Only permanent
+    /// row masks are serialized; tables are reread from the player's install.
+    pub(crate) fn save_npc_quest_controls(&self, file: &mut crate::save::SaveFile) {
+        let saved = self.saved_npc_quest_rows();
+        let mut writer = ddid::Writer::new();
+        writer.u8(1).len(saved.len());
+        for (npc, rows) in saved {
+            writer.u32(npc).len(rows.len());
+            for row in rows { writer.len(row.table).len(row.row); }
+        }
+        file.put(crate::save::TAG_NPC_QUEST, crate::save::Owner::Shared, writer.finish());
+    }
+
+    pub(crate) fn saved_npc_quest_rows(&self) -> Vec<(u32, Vec<ddnpcrt::quest_talk::RowKey>)> {
+        self.npcs.quest_controls.iter().filter_map(|(&npc, control)| {
+            let rows = control.saved_disabled_rows();
+            (!rows.is_empty()).then_some((npc, rows))
+        }).collect()
+    }
+
+    pub(crate) fn load_npc_quest_controls(&mut self, file: &crate::save::SaveFile) -> Result<(), HostError> {
+        let mut controls = std::collections::BTreeMap::new();
+        if let Some(bytes) = file.get(crate::save::TAG_NPC_QUEST, crate::save::Owner::Shared) {
+            let mut reader = ddid::Reader::new(bytes);
+            reader.version("NPCQ", 1).map_err(HostError::Save)?;
+            let count = reader.len(8).map_err(HostError::Save)?;
+            if count != 0 {
+                let data = self.npc_data()?;
+                for _ in 0..count {
+                    let npc = reader.u32().map_err(HostError::Save)?;
+                    if npc >= 900 || controls.contains_key(&npc) {
+                        return Err(HostError::Save("invalid or duplicate saved NPC control".into()));
+                    }
+                    let mut rows = Vec::new();
+                    for _ in 0..reader.len(8).map_err(HostError::Save)? {
+                        rows.push(ddnpcrt::quest_talk::RowKey {
+                            table: reader.u32().map_err(HostError::Save)? as usize,
+                            row: reader.u32().map_err(HostError::Save)? as usize,
+                        });
+                    }
+                    let table = data.quest_control(npc).map_err(|error| HostError::Save(error.to_string()))?
+                        .ok_or_else(|| HostError::Save("saved NPC QCT missing from install".into()))?;
+                    let mut control = ddnpcrt::quest_talk::Control::new(table);
+                    control.restore_disabled_rows(&rows).map_err(|error| HostError::Save(error.to_string()))?;
+                    controls.insert(npc, control);
+                }
+            }
+            reader.end().map_err(HostError::Save)?;
+        }
+        // Absent old-save chunk means empty, including load into an existing
+        // runtime. No transient conversation survives a load.
+        let players: Vec<_> = self.roster.ids().collect();
+        for player in players {
+            if let Some(npc) = self.npcs.talk_abort(player) { let _ = self.locks.release(npc, player); }
+        }
+        self.npcs.quest_controls = controls;
+        Ok(())
+    }
+    /// Ordinary NPC control selection before the base/shop conversation.
+    /// Called only after the materialized lifetime and dialogue slot are
+    /// admitted. Missing/unsupported data never fabricates a reward.
+    pub(crate) fn talk_quest_or_base(&mut self, player: PlayerId, npc: u32) -> Result<TalkOutcome, HostError> {
+        let data = self.npc_data()?;
+        // Preload the item rules before phase1: phase2 cannot lose its grant
+        // due to a late missing data source after consuming the once row.
+        if data.quest_control(npc).map_err(|error| HostError::Npc(error.to_string()))?.is_some() {
+            if let Err(error) = data.quest_items() {
+                return Err(HostError::Npc(error.to_string()));
+            }
+        }
+        let world = &self.story.as_ref().ok_or(HostError::NoData("story"))?.world;
+        let story = ddnpcrt::Story { world, equip_menus: false };
+        self.locks.acquire(npc, player).map_err(HostError::Lock)?;
+        let result = self.npcs.talk_quest(&*data, &story, player, npc, None);
+        match result {
+            Ok(Some(events)) => {
+                self.after_talk(player, events)
+            }
+            Ok(None) => self.talk(player, npc),
+            Err(error) => {
+                let _ = self.locks.release(npc, player);
+                Err(HostError::Npc(error.to_string()))
+            }
+        }
+    }
     pub(crate) fn talk_authored(&mut self, player: PlayerId, npc: u32,
         set: std::sync::Arc<ddnpcrt::TalkSet>, conversation: i32) -> Result<TalkOutcome, HostError> {
         self.locks.acquire(npc, player).map_err(HostError::Lock)?;
@@ -148,6 +233,25 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut end_npc = None;
         let mut guard_exit = false;
         for e in &events {
+            if let TalkEvent::QuestEffects { player: owner, effects, .. } = e {
+                if *owner != player { return Err(HostError::UnknownPlayer(*owner)); }
+                let data = self.npc_data()?;
+                let items = data.quest_items().map_err(|error| HostError::Npc(error.to_string()))?;
+                for effect in effects {
+                    match *effect {
+                        ddnpcrt::quest_talk::Effect::Item { item, count, level } => {
+                            self.economy.inventory.add(&items, ddeconomy::inventory::Owner::Arisen(player),
+                                player, item, count, level, &mut self.economy.buyback);
+                        }
+                        ddnpcrt::quest_talk::Effect::QuestBit { quest, bit, value } => {
+                            self.story.as_mut().ok_or(HostError::NoData("story"))?.world.set_quest_bit(quest, bit, value);
+                        }
+                        ddnpcrt::quest_talk::Effect::Gsf { flag, value } => {
+                            self.story.as_mut().ok_or(HostError::NoData("story"))?.world.gsf.set(flag, value);
+                        }
+                    }
+                }
+            }
             match *e {
                 TalkEvent::Action { npc, action: Action::Shop { mode }, .. } => {
                     session = Some(match mode {

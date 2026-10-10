@@ -57,6 +57,37 @@ pub struct StoryNpcs {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Manual talk to a current materialized body. The actor adapter proves
+    /// body readiness; current lifetime and the stock global dialogue slot
+    /// provide host arbitration for all co-op seats, as the Guard path does.
+    /// NPC QCT precedes the base chooser at 0x00B9DC20.
+    pub fn talk_story_npc(&mut self, player: crate::PlayerId, owner: NpcLifetime,
+        actor_ready: bool, motion: ddnpcrt::guard::TalkMotionObservation)
+        -> Result<Option<crate::npcs::TalkOutcome>, HostError>
+    {
+        self.roster.seat(player).ok_or(HostError::UnknownPlayer(player))?;
+        if !actor_ready || self.story_npc_lifetime(owner.npc) != Some(owner) { return Ok(None); }
+        // SetNoTalk, translated from0x007AA670 (DDDA.exe2017-12-13 Steam).
+        if self.story_npc_intel_flags(owner.npc).is_some_and(|flags| flags & 0x0080_0000 != 0) { return Ok(None); }
+        let dialogue_owner = ddnpcrt::guard::DialogueOwner { actor: owner.generation, player };
+        if !self.story_npcs.dialogue.reserve(dialogue_owner, Some(2))
+            || !self.story_npcs.dialogue.activate(dialogue_owner, Some(2)) { return Ok(None); }
+        let enabled = self.story_npcs.applied.get(&owner.npc)
+            .is_some_and(|applied| !applied.action.applied_finished());
+        let mut actor = ddnpcrt::guard::ActorTalk::new(motion, enabled);
+        actor.enter();
+        self.story_npcs.talks.insert(owner.npc, GuardTalk { owner: dialogue_owner, actor, jump_kind: 0 });
+        if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 1; }
+        match self.talk_quest_or_base(player, owner.npc) {
+            Ok(outcome) => Ok(Some(outcome)),
+            Err(error) => {
+                self.story_npcs.talks.remove(&owner.npc);
+                self.story_npcs.dialogue.clear_active(dialogue_owner);
+                if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+                Err(error)
+            }
+        }
+    }
     /// The actor adapter supplies actual body eligibility and talk-motion
     /// observations. Distance alone cannot authorize dialogue. Arbitration
     /// is host-owned and names the interacting seat, not a global player.
@@ -252,6 +283,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     pub fn unbind_story_npc(&mut self, stage: u32, target: Target) {
         if let Some(intel) = self.story_npcs.intels.remove(&(stage, target)) {
+            self.npcs.retire_quest_talk(intel.npc as u32);
             if let Some(lifetime) = self.story_npcs.lifetimes.get(&(intel.npc as u32)) {
                 if self.story_npcs.dialogue.active().is_some_and(|owner| owner.actor == *lifetime) {
                     if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }

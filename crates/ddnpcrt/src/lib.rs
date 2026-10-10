@@ -7,6 +7,7 @@
 //! modules. The NPC graphs run on the shared AI core (`ddai::core`).
 
 pub mod guard;
+pub mod quest_talk;
 pub mod schedule;
 pub mod talk;
 
@@ -31,6 +32,13 @@ pub struct TalkSet {
 /// Game data the runtime reads.
 pub trait NpcData: schedule::Graphs {
     fn talk_set(&self, npc: u32) -> Result<Arc<TalkSet>, Error>;
+    fn quest_control(&self, _npc: u32) -> Result<Option<Arc<ddquest::qct::QuestCtrl>>, Error> { Ok(None) }
+    fn quest_items(&self) -> Result<Arc<dditem::itl::ItemList>, Error> {
+        Err(Error::Unimplemented("NPC quest item list".into()))
+    }
+    fn quest_talk_set(&self, _npc: u32, _quest: u32) -> Result<Option<Arc<TalkSet>>, Error> {
+        Err(Error::Unimplemented("NPC quest talk resource".into()))
+    }
     /// Only an actually preloaded authored Guard resource may be selected.
     fn guard_talk_set(&self, _npc: u32, _guard: &schedule::Guard) -> Result<Option<Arc<TalkSet>>, Error> {
         Err(Error::Unimplemented("NPC Guard text resource loading".into()))
@@ -45,6 +53,8 @@ pub struct InstallData {
     pub language: String,
     graphs: Mutex<HashMap<String, Arc<mtfsm::Graph>>>,
     sets: Mutex<HashMap<u32, Arc<TalkSet>>>,
+    controls: Mutex<HashMap<u32, Option<Arc<ddquest::qct::QuestCtrl>>>>,
+    quest_items: Mutex<Option<Arc<dditem::itl::ItemList>>>,
 }
 
 impl InstallData {
@@ -55,6 +65,8 @@ impl InstallData {
             language: language.to_string(),
             graphs: Mutex::default(),
             sets: Mutex::default(),
+            controls: Mutex::default(),
+            quest_items: Mutex::default(),
         })
     }
 }
@@ -73,6 +85,32 @@ impl schedule::Graphs for InstallData {
 }
 
 impl NpcData for InstallData {
+    fn quest_items(&self) -> Result<Arc<dditem::itl::ItemList>, Error> {
+        let mut cache = self.quest_items.lock().unwrap();
+        if let Some(items) = cache.as_ref() { return Ok(items.clone()); }
+        let bytes = self.vfs.read(r"etc\item\itemList", mtarc::type_hash("rItemList")).map_err(Error::Data)?;
+        let items = Arc::new(dditem::itl::ItemList::parse(&bytes).map_err(|error| Error::Data(error.0))?);
+        *cache = Some(items.clone());
+        Ok(items)
+    }
+    fn quest_control(&self, npc: u32) -> Result<Option<Arc<ddquest::qct::QuestCtrl>>, Error> {
+        if let Some(cached) = self.controls.lock().unwrap().get(&npc) { return Ok(cached.clone()); }
+        let path = format!(r"etc\questCtrl\n{npc:03}QuestCtrl");
+        let kind = mtarc::type_hash("rQuestCtrlTbl");
+        let control = if self.vfs.find(&path).iter().any(|&(hash, _)| hash == kind) {
+            let bytes = self.vfs.read(&path, kind).map_err(Error::Data)?;
+            Some(Arc::new(ddquest::qct::QuestCtrl::parse(&bytes).map_err(|e| Error::Data(e.0))?))
+        } else { None };
+        self.controls.lock().unwrap().insert(npc, control.clone());
+        Ok(control)
+    }
+    fn quest_talk_set(&self, npc: u32, quest: u32) -> Result<Option<Arc<TalkSet>>, Error> {
+        let file = ddexe::ExeFile::next_to(&self.native_pc).map_err(|e| Error::Data(e.0))?;
+        let exe = file.image().map_err(|e| Error::Data(e.0))?;
+        if !guard::quest_preloads(&exe, npc).map_err(|e| Error::Data(e.0))?
+            .iter().any(|&id| u32::from(id) == quest) { return Ok(None); }
+        Ok(Some(self.authored_talk_set(&guard::quest_path(npc, quest as u16))?))
+    }
     fn guard_talk_set(&self, npc: u32, config: &schedule::Guard) -> Result<Option<Arc<TalkSet>>, Error> {
         let mut resources = guard::Resources::default();
         match config.message_kind {
@@ -113,6 +151,9 @@ impl NpcData for InstallData {
 /// What a talk shows or asks the host to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TalkEvent {
+    /// Actual selected NPC QCT phase2, following the last read line.
+    /// The host applies it once to the interacting seat and world.
+    QuestEffects { player: PlayerId, npc: u32, effects: Vec<quest_talk::Effect> },
     /// Show one line (GMD index in the NPC's talk file, raw text with its
     /// markup). Answer with [`NpcRuntime::talk_next`].
     Line { player: PlayerId, npc: u32, conversation: i32, index: u32, text: String },
@@ -145,6 +186,7 @@ struct Talk {
     lines: Vec<u32>,
     at: usize,
     handler: Option<Handler>,
+    quest_row: Option<quest_talk::RowKey>,
 }
 
 /// The story state a talk reads.
@@ -163,9 +205,54 @@ pub struct NpcRuntime {
     /// Talk memory per NPC (world state, saved with the session).
     pub memory: BTreeMap<u32, TalkMemory>,
     talks: BTreeMap<PlayerId, Talk>,
+    pub quest_controls: BTreeMap<u32, quest_talk::Control>,
 }
 
 impl NpcRuntime {
+    /// Ordinary materialized NPC talk: 0x00B9DC20 checks its installed
+    /// control before 0x00BB4830's base chooser. Missing control/no selected
+    /// row returns None; unsupported control is an explicit error.
+    pub fn talk_quest(&mut self, data: &dyn NpcData, story: &Story,
+        player: PlayerId, npc: u32, talk_counter: Option<u32>)
+        -> Result<Option<Vec<TalkEvent>>, Error>
+    {
+        if self.talking_to(npc).is_some() || self.talks.contains_key(&player) {
+            return Err(Error::Data("NPC quest talk already owned".into()));
+        }
+        if !self.quest_controls.contains_key(&npc) {
+            let Some(table) = data.quest_control(npc)? else { return Ok(None); };
+            self.quest_controls.insert(npc, quest_talk::Control::new(table));
+        }
+        let control = self.quest_controls.get_mut(&npc).unwrap();
+        let context = quest_talk::Context { world: story.world, npc, talk_counter };
+        let Some(selected) = control.begin(&context)? else { return Ok(None); };
+        let set = match data.quest_talk_set(npc, selected.quest) {
+            Ok(Some(set)) if set.set.by_number(selected.conversation).is_some() => set,
+            result => {
+                control.abort();
+                return Err(match result {
+                    Err(error) => error,
+                    _ => Error::Data("selected NPC quest dialogue unavailable".into()),
+                });
+            }
+        };
+        if !set.set.by_number(selected.conversation).unwrap().active_choices().is_empty() {
+            control.abort();
+            return Err(Error::Unimplemented("NPC quest dialogue choice-result routing".into()));
+        }
+        let lines = talk::lines(&set.set, selected.conversation, &|f| talk::TalkState::gsf(story.world, f));
+        self.talks.insert(player, Talk { npc, set, conversation: selected.conversation,
+            lines, at: 0, handler: None, quest_row: Some(selected.row) });
+        Ok(Some(self.show(player)))
+    }
+
+    /// Intel/body lifetime loss cancels selected text without phase2.
+    /// Row mask memory belongs to the NPC, so survives body reconstruction.
+    pub fn retire_quest_talk(&mut self, npc: u32) {
+        let players: Vec<_> = self.talks.iter().filter(|(_, talk)| talk.npc == npc)
+            .map(|(&player, _)| player).collect();
+        for player in players { self.talk_abort(player); }
+    }
     /// Start an NPC's daily schedule (`uNpcIntel::vf05` 0x00bbc4e0 ->
     /// 0x00bbdaa0). `use_24` is the placement's `mUse24Schedule`.
     pub fn spawn(&mut self, data: &dyn NpcData, world: &ddstory::World, npc: u32, use_24: u8) -> Result<bool, Error> {
@@ -274,7 +361,7 @@ impl NpcRuntime {
 
     fn start(&mut self, player: PlayerId, npc: u32, set: Arc<TalkSet>, c: i32, w: &ddstory::World) -> Result<Vec<TalkEvent>, TalkError> {
         let lines = talk::lines(&set.set, c, &|f| talk::TalkState::gsf(w, f));
-        self.talks.insert(player, Talk { npc, set, conversation: c, lines, at: 0, handler: None });
+        self.talks.insert(player, Talk { npc, set, conversation: c, lines, at: 0, handler: None, quest_row: None });
         Ok(self.show(player))
     }
 
@@ -302,6 +389,11 @@ impl NpcRuntime {
     fn finish(&mut self, player: PlayerId, choice: Option<u8>) -> Vec<TalkEvent> {
         let Some(t) = self.talks.remove(&player) else { return vec![] };
         let mut out = vec![];
+        if let Some(row) = t.quest_row {
+            if let Some(effects) = self.quest_controls.get_mut(&t.npc).and_then(|control| control.complete(row)) {
+                out.push(TalkEvent::QuestEffects { player, npc: t.npc, effects });
+            }
+        }
         if let Some(h) = t.handler {
             let a = talk::action(h, choice);
             if a != Action::Nothing {
@@ -339,7 +431,11 @@ impl NpcRuntime {
 
     /// The player walked away or left the session.
     pub fn talk_abort(&mut self, player: PlayerId) -> Option<u32> {
-        self.talks.remove(&player).map(|t| t.npc)
+        let talk = self.talks.remove(&player)?;
+        if talk.quest_row.is_some() {
+            if let Some(control) = self.quest_controls.get_mut(&talk.npc) { control.abort(); }
+        }
+        Some(talk.npc)
     }
 }
 

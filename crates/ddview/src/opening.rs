@@ -71,6 +71,7 @@ struct Cut {
 
 /// A talk shown to the local seat.
 struct TalkView {
+    player: ddsim::PlayerId,
     npc: u32,
     line: String,
     choices: Vec<String>,
@@ -90,6 +91,10 @@ enum Step {
     /// `DDVIEW_DEMO_FIGHT`: after the settle, fight the field's goblins
     /// with ordinary inputs (play::demo_attack) and log the quest state.
     Rescue,
+    /// Ordinary talk only after the retained actor reaches its authored
+    /// talking loop. QCT text completion gives q2:88; no demo flag write.
+    ThankReynard,
+    ReynardRepeat,
     /// After the rescue's outcome (q2:20 or q2:30): walk the road toward
     /// the authored `q0002_event2` volume, which sets q2:10 and boots
     /// q0003 (docs/tasks/q0002-roadside.md, sequence 5).
@@ -615,8 +620,7 @@ impl Session {
     }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
-        // Opening interaction currently routes E only to host seat 0.
-        if seat != 0 || self.cut.is_some() || self.talk.is_some() {
+        if self.cut.is_some() || self.talk.is_some() {
             return false;
         }
         let Some(player) = self.host.sim.player(seat) else { return false; };
@@ -626,7 +630,6 @@ impl Session {
     }
 
     fn talk_npc(&mut self, seat: ddsim::PlayerId, npc: u32) -> Result<ddhost::npcs::TalkOutcome, ddhost::HostError> {
-        if self.host.story_npc_guard(npc).is_none() { return self.host.talk(seat, npc); }
         let owner = self.host.story_npc_lifetime(npc).ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))?;
         let body = self.npcs.get(&npc).copied();
         // Viewer adapter assumption: a successfully constructed idle body
@@ -638,6 +641,10 @@ impl Session {
         // uNpc ctor0x00bab3a0 initializes mode3. Its readiness remains
         // unknown here, selecting the original manual Guard candidate path.
         let motion = ddnpcrt::guard::TalkMotionObservation { mode: Some(3), ..Default::default() };
+        if self.host.story_npc_guard(npc).is_none() {
+            return self.host.talk_story_npc(seat, owner, ready, motion)?
+                .ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent));
+        }
         self.host.talk_story_guard(seat, owner, ready, body.map_or(0.0, |(_, _, yaw)| yaw), motion)?
             .ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))
     }
@@ -685,9 +692,9 @@ impl Session {
         &self.host.story.as_ref().unwrap().world
     }
 
-    /// The nearest NPC to seat 0 within [`TALK_RANGE`].
-    fn npc_near(&self) -> Option<u32> {
-        let p = self.host.sim.player(0)?.position;
+    /// Viewer input policy: the chosen local seat supplies the position.
+    fn npc_near_for(&self, seat: ddsim::PlayerId) -> Option<u32> {
+        let p = self.host.sim.player(seat)?.position;
         self.npcs
             .iter()
             .map(|(&id, &(_, at, _))| (id, (at.x - p[0]).hypot(at.z - p[2])))
@@ -707,6 +714,7 @@ impl Session {
         for e in events {
             match e {
                 TalkEvent::Line {
+                    player,
                     npc,
                     text,
                     conversation,
@@ -716,14 +724,16 @@ impl Session {
                     let line = clean(text);
                     info!("opening: NPC {npc} conversation {conversation} line {index}: {line}");
                     self.talk = Some(TalkView {
+                        player: *player,
                         npc: *npc,
                         line,
                         choices: vec![],
                     });
                 }
-                TalkEvent::Choices { npc, options, .. } => {
+                TalkEvent::Choices { player, npc, options, .. } => {
                     let line = self.talk.as_ref().map(|t| t.line.clone()).unwrap_or_default();
                     self.talk = Some(TalkView {
+                        player: *player,
                         npc: *npc,
                         line,
                         choices: options.iter().map(|o| clean(o)).collect(),
@@ -736,6 +746,14 @@ impl Session {
                 TalkEvent::End { npc, .. } => {
                     info!("opening: talk with NPC {npc} ended");
                     self.talk = None;
+                }
+                TalkEvent::QuestEffects { player, npc, effects } => {
+                    for effect in effects {
+                        if let ddnpcrt::quest_talk::Effect::Item { item, count, level } = *effect {
+                            self.quick_items.npc_grant(*player, item, count, level);
+                            info!("opening: NPC {npc} quest reward: seat {player} item {item} count {count}");
+                        }
+                    }
                 }
             }
         }
@@ -1302,12 +1320,17 @@ pub fn step(
         play::orbit(st, &buttons, &mouse);
     }
     // Local input: talk and menu keys first, the rest to the host.
-    let near = s.npc_near();
+    // Local keyboard mapping is viewer policy: E for seat0, numpad Enter
+    // for seat1. Host dialogue ownership is the same for either seat.
+    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
+    let talk_press = if e_press { Some(0) }
+        else if !pause.paused && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
+        else { None };
+    let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
         sim: play::p1_input(&keys, &buttons, st.cam_yaw),
         interact: false,
     };
-    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
     if s.world_menu().is_some() {
         input.sim = Input {
             camera_yaw: st.cam_yaw,
@@ -1330,19 +1353,23 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-        let digit = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
-            .iter()
-            .position(|&k| keys.just_pressed(k));
+        let talk_player = s.talk.as_ref().unwrap().player;
+        let choices = if talk_player == 0 {
+            [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
+        } else {
+            [KeyCode::Numpad1, KeyCode::Numpad2, KeyCode::Numpad3, KeyCode::Numpad4]
+        };
+        let digit = choices.iter().position(|&k| keys.just_pressed(k));
         let has_choices = s.talk.as_ref().is_some_and(|t| !t.choices.is_empty());
         if has_choices {
             if let Some(i) = digit {
-                match s.host.talk_choose(0, i as u8) {
+                match s.host.talk_choose(talk_player, i as u8) {
                     Ok(o) => s.show_talk(&o.events),
                     Err(e) => warn!("talk: {e}"),
                 }
             }
-        } else if e_press {
-            match s.host.talk_next(0) {
+        } else if talk_press == Some(talk_player) {
+            match s.host.talk_next(talk_player) {
                 Ok(o) => s.show_talk(&o.events),
                 Err(e) => {
                     warn!("talk: {e}");
@@ -1355,9 +1382,9 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-    } else if e_press && near.is_some() {
+    } else if talk_press.is_some() && near.is_some() {
         let npc = near.unwrap();
-        match s.talk_npc(0, npc) {
+        match s.talk_npc(talk_press.unwrap(), npc) {
             Ok(o) => s.show_talk(&o.events),
             Err(e) => info!("opening: NPC {npc}: {e}"),
         }
@@ -1956,10 +1983,12 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let d = s.demo.as_mut().unwrap();
         d.check.0 = now;
         if outcome {
-            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> RoadWalk", w_bit(s, 20), w_bit(s, 30));
+            let next = if w_bit(s, 20) { Step::ThankReynard } else { Step::RoadWalk };
+            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> {next:?}", w_bit(s, 20), w_bit(s, 30));
             let d = s.demo.as_mut().unwrap();
-            d.step = Step::RoadWalk;
+            d.step = next;
             d.since = now;
+            d.talked = false;
             d.path.clear();
             d.planning = None;
         } else if alive == 0 || now - since > 240.0 {
@@ -2031,7 +2060,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
     // With DDVIEW_DEMO_FIGHT the Arisen defends itself in the field: once
     // a live goblin is within 10 m it fights with ordinary inputs (the
     // goblins run in and attack; an idle Arisen would die before Rescue).
-    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RoadWalk)
+    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::ThankReynard | Step::ReynardRepeat | Step::RoadWalk)
         && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
         && demo_goblin_near(s, 1000.0)
     {
@@ -2073,6 +2102,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event2")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
+        Step::ThankReynard | Step::ReynardRepeat => s.host.story_npc_position(304).map(Vec3::from),
         Step::Gate | Step::FieldSettle | Step::Rescue | Step::Done => None,
     };
     if (now % 2.0) < 0.04 {
@@ -2235,6 +2265,12 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         Step::FieldSettle if now - d.since >= 30.0 => {
             next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::Rescue } else { Step::Done })
         }
+        Step::ThankReynard if w.quest_bit(2, 88) && s.talk.is_none() => {
+            next = Some(Step::ReynardRepeat);
+        }
+        Step::ReynardRepeat if d.talked && s.talk.is_none() => {
+            next = Some(Step::RoadWalk);
+        }
         Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
             info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
             next = Some(Step::Done);
@@ -2245,7 +2281,12 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         }
         _ => {}
     }
-    let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400))
+    // Authored q0002_n304's ready loop has both Loop and Talk true;
+    // tremble3226 has Talk false. Wait for the real actor, not a timer.
+    let reynard_ready = s.host.story_npc_motion(304)
+        .is_some_and(|actor| actor.authored.looping && actor.authored.talk);
+    let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400)
+        || (step == Step::ThankReynard && reynard_ready) || step == Step::ReynardRepeat)
         && target.is_some_and(|t| (Vec3::new(t.x - p.x, 0.0, t.z - p.z)).length() <= 150.0)
         && now - d.last_talk > 1.5;
     if talk_due {
@@ -2266,6 +2307,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         d.step_origin = p;
         d.check = (now, p);
         d.last_talk = 0.0;
+        if matches!(n, Step::ThankReynard | Step::ReynardRepeat) { d.talked = false; }
     }
     if let (Some(yaw), Some(pl)) = (face, s.host.sim.player_mut(0)) {
         // the demo turns the Arisen to the table (the scenario's angle
@@ -2285,12 +2327,16 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             }
         } else if let Some(d) = s.demo.as_mut() {
             if !d.talked || step == Step::Q0002Event {
-                d.talked = true;
-                let npc = if step == Step::Q0002Event { 1 } else { 2 };
+                let npc = match step {
+                    Step::Q0002Event => 1,
+                    Step::ThankReynard | Step::ReynardRepeat => 304,
+                    _ => 2,
+                };
                 match s.talk_npc(0, npc) {
                     Ok(o) => {
+                        if let Some(d) = s.demo.as_mut() { d.talked = true; }
                         s.show_talk(&o.events);
-                        s.shot("5-talk-quina");
+                        if npc == 2 { s.shot("5-talk-quina"); }
                     }
                     Err(e) => warn!("demo: talk: {e}"),
                 }
