@@ -1104,6 +1104,50 @@ fn undummy(loader: &Loader, path: &str) -> String {
 #[cfg(test)]
 mod eyebrow_install_tests {
     #[test]
+    fn eyelid_constraint_uses_current_eye_pivot_without_accumulating_morphs() {
+        use super::*;
+        use bevy::ecs::system::SystemState;
+        let mut world = World::new();
+        let parent_pose = Transform::from_translation(Vec3::new(10.0, -5.0, 8.0))
+            .with_rotation(Quat::from_rotation_z(0.37)).with_scale(Vec3::new(1.3, 0.7, 1.1));
+        let eye_pose = Transform::from_translation(Vec3::new(1.0, 2.0, 3.0))
+            .with_rotation(Quat::from_rotation_z(0.4)).with_scale(Vec3::new(1.1, 0.8, 1.3));
+        let lid_pose = Transform::from_translation(Vec3::new(2.0, 3.0, 4.0))
+            .with_rotation(Quat::from_rotation_z(-0.2)).with_scale(Vec3::new(0.9, 1.2, 0.8));
+        let parent = world.spawn(parent_pose).id();
+        let eye = world.spawn(eye_pose).id();
+        let lid = world.spawn(lid_pose).id();
+        let mut morph = Morph {
+            bones: vec![(parent, None), (eye, Some(0)), (lid, Some(0))],
+            joint: vec![vec![], vec![], vec![Edit {
+                joint_id: 82, pivot: Some(1), kind: 0xd,
+                scale: Vec3::new(1.2, 0.85, 1.1), child: Vec3::ONE,
+                offset: Vec3::new(0.2, -0.3, 0.5), rotation: Quat::IDENTITY,
+            }]],
+            model_scale: Vec3::ONE, base: vec![parent_pose, eye_pose, lid_pose], attach: vec![],
+        };
+        let mut state: SystemState<Query<&mut Transform>> = SystemState::new(&mut world);
+        let mut first = None;
+        for _ in 0..3 {
+            let mut joints = state.get_mut(&mut world).unwrap();
+            // Same motion-only restore as animate, before each morph pass.
+            for (i, &(entity, _)) in morph.bones.iter().enumerate() {
+                *joints.get_mut(entity).unwrap() = morph.base[i];
+            }
+            apply_morph(&mut morph, false, &mut joints);
+            let local = *joints.get(lid).unwrap();
+            let pose = parent_pose.to_matrix() * local.to_matrix();
+            // Full vf24 0x00860ac0 synthetic fixture: type d target position
+            // is independent of its rotation. This also checks pivot mapping.
+            assert!(pose.w_axis.truncate().distance(Vec3::new(12.238449, -2.356826, 13.115)) < 0.000_01);
+            if let Some(previous) = first {
+                assert_eq!(local, previous);
+            } else { first = Some(local); }
+            assert_eq!(morph.base[2], lid_pose);
+        }
+    }
+
+    #[test]
     fn near_fade_restores_authored_material_and_does_not_change_its_source() {
         use super::*;
         use crate::stage::{DdExt, DdMaterial, DdParams, SkyEnvParams};
