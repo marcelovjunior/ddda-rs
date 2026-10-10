@@ -2324,8 +2324,8 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
     }
     let step = d.step;
     let elapsed = now - d.since;
-    let road_terminal = step == Step::RoadWalk && (s.world().quest_bit(2, 10)
-        || s.host.story.as_ref().is_some_and(|story| story.quest(3).is_some())
+    let road_terminal = step == Step::RoadWalk && ((s.world().quest_bit(2, 10)
+        && s.host.story.as_ref().is_some_and(|story| story.quest(3).is_some()))
         || elapsed > 300.0);
     if step == Step::Rescue {
         return demo_rescue(s, now);
@@ -2567,12 +2567,13 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         Step::ReynardRepeat if d.talked && s.talk.is_none() => {
             next = Some(Step::RoadWalk);
         }
-        Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
+        Step::RoadWalk if w.quest_bit(2, 10) && quests.contains(&3) => {
             info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
             next = Some(Step::Done);
         }
         Step::RoadWalk if now - d.since > 300.0 => {
             warn!("opening demo: road: q0002_event2 not reached in 300 s");
+            s.failure = Some("RoadWalk did not enter event2 and boot q0003 within 300 seconds".into());
             next = Some(Step::Done);
         }
         _ => {}
@@ -2667,7 +2668,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 w.quest_bits(1).map(|b| b.words()),
                 quests.contains(&2)
             );
-            let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+            let valid = if step == Step::RoadWalk {
+                w.stage_no == 100 && w.quest_bit(2, 10) && quests.contains(&3)
+            } else if s.demo.as_ref().is_some_and(|d| d.perf_route) {
                 w.stage_no == 100 && s.demo.as_ref().is_some_and(|d| d.resumed
                     || d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)))
             } else { w.sce_no == 1400
@@ -2676,7 +2679,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 && quests.contains(&2)
                 && w.quest_bits(1)
                     .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]) };
-            if !valid {
+            if !valid && s.failure.is_none() {
                 s.failure = Some("opening endpoint flag/SceNo check failed".into());
             }
             s.shot("7-q0002");
@@ -3618,14 +3621,24 @@ mod tests {
         assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
         assert!(!session.world().quest_bit(2, 10), "timeout cannot invent success");
         assert!(session.host.story.as_ref().unwrap().quest(3).is_none());
+        assert!(session.failure.is_some(), "a route timeout cannot exit as successful acceptance");
+        session.failure = None;
         let d = session.demo.as_mut().unwrap();
         d.step = Step::RoadWalk; d.since = 1.0;
         d.planning = Some(RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0)));
         // Explicit observation fixture: production event2 writes the bit.
         session.host.story.as_mut().unwrap().world.set_quest_bit(2, 10, true);
         demo_input(&mut session, 2.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::RoadWalk,
+            "the exit bit alone does not prove q0003 booted");
+        // Explicit loaded-quest observation fixture, not a driver mutation.
+        session.host.story.as_mut().unwrap().quests.push(ddstory::story::Quest {
+            id: 3 << 16, flags: 1, script: None, ctrl: None, log: vec![],
+        });
+        demo_input(&mut session, 3.0, &Flat, None);
         assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
         assert!(session.world().quest_bit(2, 10));
+        assert!(session.failure.is_none());
     }
     #[test]
     fn demo_navigation_cassardis_door() {

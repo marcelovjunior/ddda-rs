@@ -84,6 +84,8 @@ and uses the installed event2 `Shape::hit` predicate for completion rather
 than requiring arrival at its centre. Actual quest detection, movement,
 collision and flags remain host-owned. The road deadline/outcome can clear
 a pending search before its budget return, nearby combat or door input.
+Successful RoadWalk completion requires **both** q2:10 and a loaded q0003;
+the timeout reports a failed application exit instead of a successful route.
 With head's #7294 approval, an actual completed-cell snapshot also lets the
 demo return a safe partial route at the boundary toward an unloaded target,
 retaining the existing 10-m-progress condition. Ordinary movement and native
@@ -95,7 +97,8 @@ whose centre has no walkable ground; the recorded RoadWalk position over
 installed collision/scenery, geometrically replaying native residency at
 partial endpoints and checking actual Area entry without repeated wall
 positions; early partial-route return while unexplored loaded cells remain;
-and timeout/native-outcome handling during a pending search without
+and timeout/native-outcome handling during a pending search (including
+q2:10 without q0003, which must keep waiting) without
 manufacturing quest success. This geometric search regression is not a
 simulated walk or a game-process acceptance run. Full viewer tests, release build and
 the real v2 walked route are pending the coordinated build/GPU queue.
