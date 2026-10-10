@@ -173,3 +173,29 @@ impl TalkEndObservation {
         pending || (self.current_action == Some(0x0300_0041) && self.active_dialogue_empty == Some(true))
     }
 }
+
+/// Motion-state observations shared by Guard launch and real talk exit.
+/// Unknown state never authorizes an actor transition.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TalkMotionObservation {
+    /// Actor+0x57e4.
+    pub mode: Option<u32>,
+    /// Actor+0x57e0, nonzero means active.
+    pub active: Option<bool>,
+    /// Actor+0x56d0.
+    pub flags: Option<u32>,
+}
+
+impl TalkMotionObservation {
+    /// Translated from 0x00bb4f90; the same predicate gates cleanup in
+    /// 0x00bb41c0 (DDDA.exe 2017-12-13 Steam). Mode zero needs no motion
+    /// observation; nonzero mode requires an active motion and bit2.
+    /// This is only one prerequisite, not full Guard eligibility.
+    pub fn ready(&self) -> bool {
+        match self.mode {
+            Some(0) => true,
+            Some(_) => self.active == Some(true) && self.flags.is_some_and(|flags| flags & 4 != 0),
+            None => false,
+        }
+    }
+}

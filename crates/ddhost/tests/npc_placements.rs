@@ -160,6 +160,8 @@ mod graph_fixture {
     impl Graphs for GraphsWithFault {
         fn graph(&self, path: &str) -> Result<std::sync::Arc<mtfsm::Graph>, ddnpcrt::Error> {
             let healthy = path == "healthy";
+            let flags = path == "flags";
+            let boolean_flag = matches!(path, "flags_clear" | "flags_set");
             Ok(std::sync::Arc::new(mtfsm::Graph {
                 owner: b"cAIActionFSMNpc".to_vec(), attribute: 0, conditions: vec![],
                 root: Some(mtfsm::Cluster { id: 0, owner_node_unique_id: 0, initial_state: 1,
@@ -167,11 +169,13 @@ mod graph_fixture {
                         name: b"owner fixture".to_vec(), setting: 0, user_attribute: 0,
                         from_all: None, links: vec![], subcluster: None,
                         processes: vec![mtfsm::Process {
-                            container: if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
-                            category: vec![], parameter: healthy.then(|| Record {
+                            container: if boolean_flag { b"Set Lift Disable".to_vec() } else if flags { b"Set Disable Flag".to_vec() } else if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
+                            category: vec![], parameter: if boolean_flag { Some(Record { class_hash: 0, class_name: None,
+                                fields: vec![("Bool".into(), vec![Parameter::Scalar(mtxfs::Value::Bool(path == "flags_set"))])] }) } else if flags { Some(Record { class_hash: 0, class_name: None,
+                                fields: vec![("Flag".into(), vec![Parameter::Scalar(mtxfs::Value::U(352))])] }) } else { healthy.then(|| Record {
                                 class_hash: 0, class_name: None,
                                 fields: vec![("InitPos".into(), vec![Parameter::Scalar(mtxfs::Value::F(vec![4.0, 5.0, 6.0, 0.0]))])],
-                            }),
+                            }) },
                         }] }] }),
             }))
         }
@@ -246,4 +250,59 @@ fn reconciled_materialized_set_preserves_owners_and_retires_removed_placements()
     host.reconcile_story_npc_intels(200, vec![]).unwrap();
     assert_eq!(host.story_npc_intels().count(), 0);
     assert!(host.npcs.npcs.is_empty());
+}
+
+#[test]
+fn unsupported_applied_owner_does_not_abort_frame_or_restore_normal_as_if_finished() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut first = placement(1);
+    first.authored_action = "healthy".into();
+    let mut second = placement(2);
+    second.target.index = 18;
+    second.authored_action = "broken".into();
+    host.reconcile_story_npc_intels(200, vec![first, second]).unwrap();
+    let report = host.tick(&Default::default()).unwrap();
+    assert_eq!(report.npc_requests.len(), 1, "earlier owner's request survives");
+    for _ in 0..3 { assert!(host.tick(&Default::default()).unwrap().npc_requests.is_empty()); }
+    assert_eq!(host.npc_errors.len(), 1);
+    assert_eq!(host.npc_errors[0].0, 2);
+    assert!(!host.story_npc_action(2).unwrap().3, "port error cannot signal Finish");
+    assert_eq!(host.story_npc_normal_graph_present(2), Some(true));
+    assert!(!host.npcs.npcs.contains_key(&2), "normal remains suspended after failure");
+    assert_eq!(host.story_npc_intels().count(), 2, "both materialized owners remain");
+}
+
+#[test]
+fn disable_flags_belong_to_the_materialized_intel_lifetime() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut p = placement(1);
+    p.authored_action = "flags".into();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0));
+    let report = host.tick(&Default::default()).unwrap();
+    assert!(report.npc_requests.iter().any(|r| matches!(r,
+        ddnpcrt::schedule::Request::DisableFlags { npc: 1, mask: 0x1a00 })));
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00));
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "same intel retains authored writes");
+    host.apply_story_npc(200, p.target, "flags_clear");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1200), "clear touches only the selected bit");
+    host.apply_story_npc(200, p.target, "flags_set");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "set restores the bit without losing others");
+    host.unbind_story_npc(200, p.target);
+    assert_eq!(host.story_npc_intel_flags(1), None);
+    host.load_story_npc_intel(p).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0), "replacement starts with constructor state");
 }

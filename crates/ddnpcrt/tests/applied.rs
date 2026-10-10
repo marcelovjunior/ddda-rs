@@ -55,3 +55,35 @@ fn installed_applied_npc_waits_for_talk_then_finishes_once() {
     assert_eq!(finishes, 1);
     assert!(npc.applied_finished());
 }
+
+#[test]
+fn installed_newly_arisen_actions_set_flags_and_wait_without_false_finish() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let data = ddnpcrt::InstallData::open(native, "eng").unwrap();
+    for id in [1, 2] {
+        let path = format!(r"ai\fsm\npc\st200\quest\q0001_n{id:03}_ai");
+        let mut npc = Npc::applied(id, &data, &path).unwrap();
+        npc.observe_scene(Some(1100));
+        let clock = Clock { hour: 8, minute: 0, dt: 1.0 / 30.0 };
+        let mut flags_seen = false;
+        for _ in 0..90 {
+            let requests = npc.step(&data, clock).unwrap();
+            assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. })));
+            flags_seen |= requests.iter().any(|r| matches!(r,
+                Request::DisableFlags { npc, mask } if *npc == id && *mask != 0));
+        }
+        assert!(flags_seen, "installed actor-disable request must reach the host");
+        npc.observe_scene(Some(1200));
+        let mut clears = false;
+        for _ in 0..90 {
+            let requests = npc.step(&data, clock).unwrap();
+            clears |= requests.iter().any(|r| matches!(r, Request::ActorFlag { value: false, .. }));
+            assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. })));
+        }
+        assert!(clears, "scene transition executes authored flag clear callbacks");
+        assert!(!npc.applied_finished());
+    }
+}

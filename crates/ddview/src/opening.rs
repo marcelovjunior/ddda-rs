@@ -313,6 +313,76 @@ pub fn prepare(
 }
 
 impl Session {
+    fn sync_npc_intels(&mut self) -> Result<(), String> {
+        let stage = self.world().stage_no;
+        if stage != self.npc_adapter.layouts.stage {
+            if self.npc_adapter.reported_stage != stage {
+                warn!("opening: stage {stage} NPC materialization waits for loaded-layout/archive readiness adapter");
+                self.npc_adapter.reported_stage = stage;
+            }
+            // Stage unload is real; field materialization waits for its own
+            // loaded-cell/archive adapter rather than keeping Cassardis actors.
+            self.host.reconcile_story_npc_intels(STAGE, vec![]).map_err(|e| e.to_string())?;
+            self.npc_adapter.guards.clear();
+            self.npc_adapter.goto.clear();
+            self.npc_adapter.placed.clear();
+            self.npc_adapter.bindings.clear();
+            return Ok(());
+        }
+        let candidates = {
+            let (scene, hour, flag) = ddhost::spawns::world_inputs(self.world(), stage);
+            let world = ddhost::ddspawn::World { scene, hour, flag: &flag };
+            self.npc_adapter.layouts.candidates(&world)
+        };
+        let mut admitted = Vec::new();
+        for placement in candidates.placements {
+            match self.npc_adapter.families.select(&placement.transform.name) {
+                None => continue,
+                Some(true) => return Err("NPC MultiNpc materialization not implemented".into()),
+                Some(false) => admitted.push(placement),
+            }
+        }
+        // 0x004a76a0 has 200 slots. This stage's port owns only NPC intels;
+        // the bounded fresh-slot path is supported, priority eviction is not.
+        if admitted.len() > 200 { return Err("NPC intel pool priority eviction not implemented".into()); }
+        for (target, diagnostic) in self.host.reconcile_story_npc_intels(stage, admitted).map_err(|e| e.to_string())? {
+            warn!("opening: NPC placement {target:?}: {diagnostic}");
+        }
+        let owned: HashMap<_, _> = self.host.story_npc_intels()
+            .map(|p| (p.npc as u32, (p.stage, p.target))).collect();
+        for (&npc, old) in &self.npc_adapter.bindings {
+            if owned.get(&npc) != Some(old) {
+                self.npc_adapter.guards.remove(&npc);
+                self.npc_adapter.goto.remove(&npc);
+                self.npc_adapter.placed.remove(&npc);
+            }
+        }
+        Ok(())
+    }
+
+    fn npc_requests(&mut self, requests: &[ddnpcrt::schedule::Request]) {
+        use ddnpcrt::schedule::Request as NpcRequest;
+        for request in requests {
+            match request {
+                NpcRequest::Place { npc, pos, dir } => {
+                    self.npc_adapter.placed.insert(*npc, (*pos, *dir));
+                    self.npc_adapter.goto.remove(npc);
+                }
+                NpcRequest::Goto { npc, pos, .. } => {
+                    self.npc_adapter.goto.insert(*npc, *pos);
+                    // Keep the actual request pending. The existing visual-only
+                    // 150cm/s interpolation cannot acknowledge a host arrival.
+                    warn!("opening: NPC {npc} awaits headless movement to {pos:?}");
+                }
+                NpcRequest::Guard { npc, config } => { self.npc_adapter.guards.insert(*npc, config.clone()); }
+                NpcRequest::Wait { npc, dir: Some(dir), .. } => {
+                    if let Some((_, _, yaw)) = self.npcs.get_mut(npc) { *yaw = dir[0].atan2(dir[2]); }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Viewer benchmark driver only: uses normal player inputs and actual
     /// stage callbacks, not scripted placement or quest completion.
     pub fn enable_perf_route(&mut self) {
@@ -875,7 +945,8 @@ pub fn step(
         // view's interpolated transforms or graph-map membership.
         s.host.world.npcs = s.host.story_npc_intels().filter_map(|placement| {
             let id = placement.npc as u32;
-            if !s.npcs.contains_key(&id) { return None; }
+            // Heading is still the authored placement heading: canonical
+            // Wait/Place-direction updates are unresolved, never read from rendering.
             s.host.story_npc_position(id).map(|pos| ddstory::NpcUnit {
                 id, unit: ddstory::Player { pos, yaw: placement.transform.angle[1] },
             })

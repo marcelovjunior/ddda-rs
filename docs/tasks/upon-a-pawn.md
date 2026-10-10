@@ -479,3 +479,129 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   activation, lifetime retirement, blocked pending exit and both completion
   branches. All four Guard release tests pass; ddnpcrt clippy --no-deps
   -Dwarnings passes. Latest viewer release build is running.
+
+### Applied graph error isolation
+
+- Unsupported authored/applied graphs now halt in place and report one
+  diagnostic without aborting the whole host frame or publishing Finish.
+  The normal controller remains suspended; the materialized actor stays
+  owned. This is explicit port error recovery, not original completion.
+- halt_graphs also clears an uncommitted Finish bit from a partially processed
+  frame. Regression covers pending completion suppression and two applied
+  owners where the healthy request survives the later owner's failure.
+- Passed ddnpcrt lib7, placement7 and story_pawns9; targeted clippy passed
+  with the documented pre-existing host lint allowed.
+- Viewer release through951b5f0 passed and was copied privately. Current
+  adapter work follows head2565 with codex29's separate route harness hooks.
+
+### Cached loaded layouts and canonical NPC positions
+
+- LoadedLayouts caches successfully parsed NPC records for supplied loaded
+  cells; group gates remain reevaluated from current story state without
+  repeated archive reads. Tests verify a true group flag cannot admit a cell
+  the adapter did not supply, and LOT32 admits the actual group27 NPC1 record.
+- Materialized NPC position now lives in the host independently of normal or
+  applied graphs. Placement initializes it, committed Place requests update
+  it, and explicit mover arrivals update it without presentation interpolation.
+  It is retired with the owner and participates in stable replay hashing.
+- Position/ownership/cache checks and existing story-pawn regressions pass
+  (placement7/story_pawns9); targeted host clippy passes with the documented
+  pre-existing lint allowed. Viewer adapter WIP is separate and compiled;
+  GUI smoke waits for codex29's uncontended route timing run.
+
+### Guard motion prerequisite (codex-31)
+
+- Translated 0x00bb4f90 into TalkMotionObservation: mode zero permits
+  the motion transition; otherwise actual active motion and actor flags
+  bit2 are required. Unknown observations do not authorize the transition.
+  The same predicate gates real talk exit in 0x00bb41c0. This is one
+  prerequisite, not complete Guard eligibility or automatic UI cleanup.
+- All five Guard release tests and ddnpcrt clippy --no-deps pass.
+  The predicate remains ready for actor-state adapter wiring.
+
+### Cassardis NPC viewer materialization checkpoint (codex-31)
+
+- Opening now caches actually parsed whole-stage Cassardis NPC layouts,
+  evaluates their authored gates each host tick, recognizes installed name
+  families and reconciles materialized intel owners. Model enumeration follows
+  those owners even when their normal graph is suspended. It no longer creates
+  every daily-FSM filename as an NPC with an invented one-HP lifetime.
+- Place requests use canonical host positions; Guard configuration is retained
+  and Goto waits for a real headless mover. Visual interpolation does not report
+  arrival. Stage unload retires Cassardis owners. Field NPC admission still
+  awaits actual layout/archive readiness; MultiNpc and pool priority eviction
+  remain explicit unsupported cases. Current Cassardis admission covers the
+  fresh-slot path within the original 200-slot cap, not a shared eviction pool.
+- Release build and viewer clippy passed (existing warnings only). Bounded
+  1080p unattended demo smoke drew 31 initial NPCs, completed weapon-table
+  interaction and started ev10. Screenshot at 25 seconds shows SceNo1100,
+  cutscene row22 frame597, GSF372=true and GSF381=false. No timing acceptance
+  was taken while another build ran. Private screenshot/logs remain outside
+  the repo; no original comparison or full-route acceptance is claimed.
+- The run exposed q0001 NPC1/NPC2 applied actions requiring missing
+  cAIActionFSMDemo.SceNo; they quarantine without losing their actor. Nine
+  daily Goto requests correctly remain pending. Guard actor eligibility,
+  actual talk cleanup, headless locomotion and field NPC admission are still
+  outstanding. Next: translate the source-backed SceNo variable, then rerun
+  the bounded route to expose the next real prerequisite.
+
+### Shared SceNo in NPC graphs (codex-31)
+
+- cThinkFSM reflection 0x007a82d0 directly binds getter0x005baf00 for SceNo
+  (sGameSys+0x30). Both normal and applied NPC owners now receive the host's
+  current scene each frame. Missing observations remain errors; no default
+  scene or actor completion is manufactured.
+- Eight NPC library tests, two installed applied-action tests and nine host
+  story_pawns tests pass. The q1 NPC1/NPC2 installed graphs now read SceNo
+  and reach their next unsupported actor process, Set Disable Flag, without
+  emitting Finish. This is not full q1 action support.
+- Touched-crate clippy passes with the pre-existing install.rs
+  chunks_exact_to_as_chunks warning allowed; that unowned code was unchanged.
+- Viewer follow-up65b3b73 removes a rendering-membership filter from scenario
+  NPC observations. All admitted canonical intels now contribute positions,
+  even without a rendered body. Heading still uses authored placement yaw;
+  canonical direction updates from Wait/Place remain unresolved.
+
+### Authored disable flags on materialized NPC intels (codex-31)
+
+- Process registration0x007a74f0 binds Set Disable Flag to0x007aa840.
+  The callback maps twelve authored bits and ORs either a valid NPC's vf180
+  word or, without that body, intel+0x5c0. The mapping is a translated
+  instruction switch, not copied bulk data. Constructor0x00bbbfa0 initializes
+  intel+0x5c0 to zero; intel tick0x00bbcb80 clears a separate bit0x400.
+- The NPC runtime emits typed DisableFlags requests. The host records them
+  on its materialized intel lifetime, includes them in replay hash, preserves
+  them across unchanged placement snapshots and clears them on retirement.
+  Actor-body flag copying and gameplay consumers are still unimplemented;
+  this checkpoint does not infer active/searchable status from these flags.
+- Nine NPC library tests, two installed applied-action tests and eight host
+  placement tests pass. Installed q1 NPC1/NPC2 now emit disable requests and
+  wait at scene1100 without false Finish or unsupported-process quarantine.
+  Host regression covers same-owner retention and replacement reset. Clippy
+  passes with the same existing install.rs lint allowance.
+- Next: source the corresponding clear/set boolean flag callbacks used after
+  the q1 scene transition, then actor eligibility and real Guard completion.
+
+### Boolean actor flags and linked-body storage (codex-31)
+
+- Added typed boolean callbacks for SuperArmor0x007aa1f0,
+  NoSurprise0x007aa3a0, LiftDisable0x007aa430,
+  NoLiftReaction0x007aa4c0, NoEscape0x007aa5e0,
+  LiftEnable0x007ab460 and FixPos0x007aa790. They set or clear one
+  sourced bit without losing unrelated flags. These do not complete motion
+  interfaces or infer actor eligibility.
+- Resolved the previous body-copy uncertainty: uNpc::vf1800x00bb4730
+  returns linked intel+0x5c0 when body+0x5854 exists, otherwise body+0x2738.
+  All three NPC-derived vtable entries traced resolve to that getter. Thus
+  linked bodies and intels share canonical flags directly; no copy bridge is
+  required. Gameplay consumers of those bits still need their own translation.
+- FixPos(false) on a real body additionally changes body+0x1df0 from zero
+  to13. The typed request preserves its identity for that future body adapter;
+  the intel-only callback has no such side effect. This body-ground-mode
+  operation remains unimplemented and is not silently inferred from a mesh.
+- Ten NPC library tests, two installed applied-action tests and eight host
+  placement tests pass. Installed q1 NPC1/NPC2 survive SceNo1100 to1200,
+  emit initial disable writes and later flag clears, and do not falsely
+  Finish. The host regression checks selected-bit clear/set, unrelated-bit
+  retention and retirement. Touched-crate clippy passes with the previously
+  documented install.rs lint allowance. No new viewer run yet.
