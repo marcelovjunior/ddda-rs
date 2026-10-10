@@ -48,6 +48,9 @@ use crate::event::{Actor, EventCam, FadePlane, InfoText, SubtitleText};
 use crate::play::{self, FollowCam, PlayState, Shown};
 use crate::stage::{Loader, UNIT};
 
+#[path = "dragon.rs"]
+mod dragon_view;
+
 /// The Cassardis stage.
 pub const STAGE: u32 = 200;
 /// NPCs within this distance (cm, horizontal) of the Arisen answer E.
@@ -212,6 +215,9 @@ impl NpcAdapter {
 
 /// The session (host frame stepping, the cutscene, the talk, the demo).
 pub struct Session {
+    dragon_view: Option<dragon_view::DragonView>,
+    /// Explicit S29 actor capture fixture, never a claimed opening route.
+    dragon_capture: bool,
     /// Authored event movie currently awaited by the story (if intro enabled).
     pub intro_movie: Option<PathBuf>,
     pub host: HostHandle,
@@ -405,12 +411,35 @@ pub fn prepare(
         enemy_spawned: Default::default(),
         enemy_world: None,
         gone: vec![],
+        dragon_view: None,
+        dragon_capture: std::env::var_os("DDVIEW_DRAGON_ENTRANCE_CAPTURE").is_some(),
     };
     let start = f
         .arrival
         .filter(|(stage, _)| *stage == STAGE)
         .map_or(s.world().start_pos, |(_, n)| n);
     if !intro { s.place_party(start); }
+    // S29 owns admission/body independently. S31 will enter the live
+    // authored scene instead of the stand-in fast-forward above.
+    let exe_file=ddexe::ExeFile::next_to(native_pc).map_err(|e|e.to_string())?;
+    s.host.set_opening_dragon_data(ddhost::dragon::OpeningDragonData::load(&vfs,
+        &exe_file.image().map_err(|e|e.to_string())?)?);
+    if s.dragon_capture {
+        s.demo=None;
+        s.place_party(3);
+        let story=s.host.story.as_mut().unwrap();
+        // Presentation fixture starts at the documented post-ev00 gate;
+        // actual story sequencing is S31. Stop its unrelated q1 scripts.
+        story.quests.clear();
+        story.tasks.clear();
+        story.stage.scenarios=Default::default();
+        story.stage.event=Default::default();
+        s.host.world.enable_live_encounters();
+        let story=s.host.story.as_mut().unwrap();
+        story.world.set_sce_no(1025,false);
+        story.world.set_lot(200,0,true);
+        info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
+    }
     Ok(s)
 }
 
@@ -1327,6 +1356,14 @@ pub fn step(
     let frame = FrameClock::default().seconds();
     s.acc = (s.acc + time.delta_secs()).min(0.25);
     while s.acc >= frame {
+        if s.dragon_capture && s.host.fight.as_ref().and_then(|f|f.dragon.as_ref())
+            .is_some_and(|d|d.thinker.current_states()==[1] && d.actor.frame>=15.0)
+        {
+            // Hold a frame reached by real simulation while GPU pipelines
+            // warm up. This never reports completion to the actor/FSM.
+            s.acc=0.0;
+            break;
+        }
         let _timing = crate::perf::Section::start("opening host frame");
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
@@ -1500,6 +1537,18 @@ pub fn step(
     }
     play::show(st, &bodies, &mut roots, &mut cams);
     play::show_goblins(st, s.host.fight.as_ref(), &mut roots, 1.0);
+    dragon_view::sync(&mut stage_view,st,s);
+    dragon_view::show(st,s,&mut roots);
+    if s.dragon_capture {
+        if let Some(dragon)=s.host.fight.as_ref().and_then(|f|f.dragon.as_ref()) {
+            let target=(Vec3::from(dragon.actor.pos)-st.origin)*UNIT;
+            // Capture camera choice, not a claim about the original camera.
+            for mut camera in &mut cams {
+                *camera=Transform::from_translation(target+Vec3::new(40.0,20.0,60.0))
+                    .looking_at(target,Vec3::Y);
+            }
+        }
+    }
     // The party's bars once the fight has its Arisen (the vocation's kit):
     // each seat's maximum from its kit, as play::setup records it.
     if let Some(f) = s.host.fight.as_ref() {

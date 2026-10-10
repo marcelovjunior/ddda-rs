@@ -130,6 +130,8 @@ pub struct Fight {
     /// By seat.
     pub arisen: BTreeMap<u8, ArisenFighter>,
     pub goblins: Vec<Goblin>,
+    pub dragon: Option<crate::dragon::OpeningDragon>,
+    next_enemy: u32,
     /// The hits of the last [`Fight::hits`].
     pub events: Vec<HitEvent>,
     /// The status updates of the last [`Fight::hits`].
@@ -171,6 +173,8 @@ impl Fight {
             data,
             arisen: BTreeMap::new(),
             goblins: Vec::new(),
+            dragon: None,
+            next_enemy: ENEMY_OWNER_BASE,
             events: Vec::new(),
             status_events: Vec::new(),
             positions: BTreeMap::new(),
@@ -273,8 +277,15 @@ impl Fight {
 
     /// Adds a goblin; returns its owner id.
     pub fn add_goblin(&mut self, pos: [f32; 3], yaw: f32) -> u32 {
-        let owner = ENEMY_OWNER_BASE + self.goblins.len() as u32;
+        let owner = self.allocate_enemy_owner();
         self.goblins.push(Goblin::new(&self.data.goblin, owner, pos, yaw));
+        owner
+    }
+
+    /// Session ownership ids are port bookkeeping, shared by enemy kinds.
+    pub fn allocate_enemy_owner(&mut self) -> u32 {
+        let owner = self.next_enemy;
+        self.next_enemy += 1;
         owner
     }
 
@@ -317,6 +328,7 @@ impl Fight {
     pub fn hits(&mut self, dt: f32) -> &[HitEvent] {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
+        fighters.extend(self.dragon.iter().map(|d|d.actor.fighter.clone()));
         let shell_fighters = self.shell_fighters();
         fighters.extend(shell_fighters);
         fighters.extend(self.spell_fighters());
@@ -340,6 +352,9 @@ impl Fight {
         }
         for g in &mut self.goblins {
             g.fighter = it.next().expect("one fighter per goblin");
+        }
+        if let Some(dragon) = &mut self.dragon {
+            dragon.actor.fighter = it.next().expect("one fighter per dragon");
         }
         // the small-enemy gauge (0x0067C110 / 0x0067AC40): counts down by
         // the frame step, then follows the latest damaged goblin. *Assumed*:
@@ -623,6 +638,11 @@ impl Fight {
         }
         for (seat, p) in &self.pawns {
             s += &format!("p{seat}:{:?}:{};", p.brain.goal, p.brain.history.len());
+        }
+        if let Some(d) = &self.dragon {
+            s += &format!("dragon:{}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?};",
+                d.actor.fighter.owner,d.actor.pos,d.actor.rotation,d.actor.motion(),d.actor.frame,
+                d.actor.done(),d.thinker.current_states(),d.actor.fighter.victim);
         }
         s
     }
