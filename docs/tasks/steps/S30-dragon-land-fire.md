@@ -835,3 +835,22 @@ sampled scalar stays retained. Thus the first birth must not simply
 continue at seed+4. The regression now also checks this reset and retained
 sample; no manager-list lifecycle port or native full-creation execution
 has been claimed. This source remains uncompiled/unrun.
+
+The initialization batch now passed its full package gate at frozen
+`b112b92b46083a31d436f3f9bb7f111ae3dbb0a8`. Session55381 and Cargo
+actually exited0 for complete `mteffect` and `ddenemyrt`, jobs2 on the
+existing core target: 192 passed, 0 failed, the same 2 ignored diagnostics,
+0 filtered, 33 summaries. Installed paths were explicitly canonical,
+no check reported SKIP, and all seven required names passed once,
+including the new initialization/range/read/reset regression. Test-summary
+durations totaled 107.94s. Source stayed clean with the same module hash;
+the core lease was released after actual completion.
+
+Private full log `full-generator-path-b112b92.private.log` SHA256:
+`64B13368A3FF81D18D3B5553873674981CAAF123B51E2132F1B45BDAC7141F40`.
+The earlier unrun labels describe this batch's preparation before this
+gate. The result verifies the new Rust sampler and installed range read;
+it does not execute the original full creation chain or establish a
+production emitter, real birth/world query, fire rendering or ordinary
+party damage. Next: connect the actual manager creation stages in native
+order, retaining the post-initialization counter reset before path/birth.
