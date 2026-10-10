@@ -1,23 +1,31 @@
 # Step tasks
 
-Small, pre-digested tasks for the Codex lane (from 2026-10-09 night it runs
-a cheaper model). Each step is **one change or one diagnostic**, with the
-files, facts and done check written out. Head (Claude) does the analysis
-between steps and writes the next ones.
+Scoped tasks for the Codex lane (from 2026-10-09 night it runs a cheaper
+model). Each step is one problem of moderate size, with the files, the
+facts already known and a done check written out. The agent researches and
+decides how; head (Claude) reviews, merges and writes the next steps from
+the Results.
 
 ## Rules for every step
 
 - Work on the branch named in the step, in your own worktree. Claim the
-  listed files on the board first (`scripts/board.py claim`).
-- Change only the files listed. If the step needs anything else, stop and
-  post a `question` to `head`; don't widen the scope yourself.
-- Don't guess. If the code or the exe doesn't show what the step says, stop
-  and report what you found instead.
-- Run the tests the step names (`cargo test -p <crate>`), and for ddview
-  changes `cargo build --release -p ddview`.
-- Finish by appending a short **Result** section to the step file: what you
-  did, the commit hash, the test output line, and anything surprising.
-  Then post `ready <branch> <crates>` to `head` and stop.
+  files you change on the board first (`scripts/board.py claim`).
+- The listed files are where the work should land. Small related edits
+  elsewhere are fine when the step needs them; say why in the Result. If
+  the step turns out to need a bigger change than described, stop and post
+  a `question` to `head` with what you found.
+- Research is welcome: Ghidra (headless on 127.0.0.1:8089), the docs, the
+  installed data, live reads with the oracle (safety rules in
+  docs/CODEX.md). Use your judgement on the approach; the "Do" lists are
+  the suggested path, not a script.
+- Trace in the exe and label any guess as *assumed* or *viewer choice*
+  (AGENTS.md). Never invent behaviour to make a test pass.
+- Run the tests for the crates you touch (`cargo test -p <crate>`), and for
+  ddview changes `cargo build --release -p ddview`.
+- Finish by appending a **Result** section to the step file: what you
+  found and did, the commit hash, the test lines, what is still open, and
+  your suggestion for the next step. Then post `ready <branch> <crates>`
+  to `head` and pick the next step.
 - Never commit game data, screenshots or anything from E:\ddda-re. Put
   captures under `E:\ddda-re\notes\steps\<step>\` and name them in the
   Result.
@@ -37,11 +45,18 @@ without an "after" can run in parallel, one agent each.
 | S02 | cutscene: colour each mesh group (diagnostic capture) | - |
 | S03 | cutscene: force the eyebrows visible (diagnostic capture) | - |
 | S04 | cutscene: dump Quina's face joints at frame 1010 (diagnostic) | - |
+| S10 | cutscene: fix the elder's ear hole and hair | S01, S02 |
+| S11 | cutscene: fix the eyebrows | S01, S03 |
+| S12 | cutscene: fix Quina's distorted expression | S04 |
 | S05 | cyclops: translate base action enter 0x0097FD30 | - |
 | S06 | cyclops: translate the placement initializer 0x00978820 | S05 |
 | S07 | ambient: ground the creatures' root motion on collision | - |
 | S08 | opening movie: find the original's skip input (research) | - |
 | S09 | NPCs: keep a layout set per stage in NpcAdapter | - |
+| S13 | NPCs: admit field NPCs from the loaded layout cells | S09 |
+| S14 | cyclops: think driver and target selection | S06 |
+| S15 | shadows: the dark patches on Cassardis walls | - |
+| S16 | opening movie: skip input and the hookup after the prologue | S08 |
 
 The cutscene command used by S01-S04:
 
