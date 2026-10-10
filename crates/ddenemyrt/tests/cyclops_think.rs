@@ -126,6 +126,28 @@ impl ddai::thinktbl::Host for UnknownWorld {
     }
 }
 
+/// Controlled observations, not a claim about stage100's live services.
+/// 0x0059f8e0 returns0 when FieldWayPoint/NavigationMesh are absent; the
+/// common setters return0 and clear path-result flags (0x008ab3b0/5b0).
+struct DisabledNavigation;
+impl ddai::thinktbl::Host for DisabledNavigation {
+    fn check(&mut self, id: u32, arg: u32) -> Result<bool, ddai::Error> {
+        match id {
+            1016 | 1017 => Ok(false),
+            _ => UnknownWorld.check(id, arg),
+        }
+    }
+    fn set(&mut self, id: u32, arg: u32) -> Result<u32, ddai::Error> {
+        match id {
+            1002 | 1003 => Ok(0),
+            _ => UnknownWorld.set(id, arg),
+        }
+    }
+    fn rand(&mut self) -> u32 {
+        0
+    }
+}
+
 #[test]
 fn installed_cyclops_think_choices_require_world_observations() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
@@ -153,4 +175,38 @@ fn installed_cyclops_think_choices_require_world_observations() {
     println!("world diagnostic: {result:?}");
     assert!(matches!(result, Err(ddai::Error::Unimplemented(message))
         if message == "cyclops world set 1002(0)"));
+    // Controlled combat-mode fixture. This supplies disabled navigation
+    // observations; it does not certify stage100's live navigation state.
+    let attack_input = ThinkInput {
+        mode: 2,
+        sensors: vec![candidate(1, [0.0, 0.0, 600.0], 1.0)],
+        ..ThinkInput::default()
+    };
+    let mut driver = ThinkDriver::new(&initialization, 1.0, 0);
+    let action = driver
+        .think(
+            &initialization.tables,
+            &attack_input,
+            true,
+            false,
+            &mut DisabledNavigation,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(action, 50);
+    assert_eq!(driver.target, Some(1));
+    let catalogue = Catalogue::read(&exe).unwrap();
+    let descriptor = &catalogue.actions[action as usize];
+    assert_eq!(descriptor.class, "cEm5000ActAttack");
+    let request = SimpleAction::Attack.motion_request(descriptor.argument);
+    let body = catalogue
+        .load_body(&ddvfs::Vfs::open(native).unwrap(), 1.0)
+        .unwrap();
+    let motion = body.motion(request.motion).unwrap();
+    assert_eq!(request.motion, ddenemyrt::body::MotionId::new(1, 0));
+    assert!(motion.frame_count > 1);
+    println!(
+        "controlled attack {action}: packed {:#x}, motion {:?}, {} frames",
+        descriptor.argument, request.motion, motion.frame_count
+    );
 }
