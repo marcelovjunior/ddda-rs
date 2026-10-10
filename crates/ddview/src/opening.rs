@@ -2365,6 +2365,14 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         .map(|q| q.number())
         .collect();
     let d = s.demo.as_mut().unwrap();
+    // A pending collision search must not hide a real quest outcome or
+    // the demo's existing road deadline. These checks do not write flags.
+    if step == Step::RoadWalk && (w.quest_bit(2, 10) || quests.contains(&3)
+        || now - d.since > 300.0)
+    {
+        d.planning = None;
+        d.path.clear();
+    }
     // A closed hinged door changes the collision topology. A human would
     // press interact before trying to plan around it. Use the host's
     // explicitly labelled nearest-door adapter through ordinary input;
@@ -2437,7 +2445,12 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
             if now - d.check.0 > 3.0 {
                 if (p - d.check.1).length() < 60.0 {
                     if let Some(goal) = target {
-                        d.planning = Some(RoutePlan::new(p, goal));
+                        let shape = (step == Step::RoadWalk).then(|| {
+                            s.host.story.as_ref()?.stage.scenarios.tasks.get(4)?
+                                .iter().find(|entry| entry.name == "q0002_event2")?
+                                .shape.clone()
+                        }).flatten();
+                        d.planning = Some(RoutePlan::to_shape(p, goal, shape));
                         warn!(
                             "opening demo: blocked walking to {step:?}; planning incrementally (no placement fallback)"
                         );
@@ -2961,7 +2974,11 @@ impl ddsim::Ground for DemoPlanningGround<'_> {
 /// is the existing player radius. The budget bounds demo work; a failed
 /// search leaves the player where collision put it, never warps it.
 struct RoutePlan {
+    origin: Vec3,
     target: Vec3,
+    /// Demo completion uses the installed Area for RoadWalk. Its centre
+    /// can lie in blocked scenery; a player only needs to enter the Area.
+    shape: Option<ddstory::scenario::Shape>,
     open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
     nodes: HashMap<RouteCell, RouteNode>,
     visited: std::collections::HashSet<(i32, i32)>,
@@ -2971,9 +2988,16 @@ struct RoutePlan {
 }
 
 impl RoutePlan {
+    #[cfg(test)]
     fn new(from: Vec3, target: Vec3) -> Self {
+        Self::to_shape(from, target, None)
+    }
+
+    fn to_shape(from: Vec3, target: Vec3, shape: Option<ddstory::scenario::Shape>) -> Self {
         Self {
+            origin: from,
             target,
+            shape,
             open: [(
                 std::cmp::Reverse((from.x - target.x).hypot(from.z - target.z) as i32),
                 (0, 0),
@@ -2996,7 +3020,9 @@ impl RoutePlan {
     ) -> Option<Vec<Vec3>> {
         use std::cmp::Reverse;
         let Self {
+            origin,
             target,
+            shape,
             open,
             nodes,
             visited,
@@ -3018,7 +3044,10 @@ impl RoutePlan {
                 continue;
             }
             let (at, cost, _) = nodes[&key];
-            if distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS {
+            if shape.as_ref().map_or_else(
+                || distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS,
+                |shape| shape.hit(at.to_array(), 0.0),
+            ) {
                 let mut path = vec![];
                 let mut k = key;
                 while k != (0, 0) {
@@ -3041,8 +3070,12 @@ impl RoutePlan {
                     if visited.contains(&next) {
                         continue;
                     }
-                    let mx = dx as f32 * cell;
-                    let mz = dz as f32 * cell;
+                    // Anchor every key to the same grid. Advancing from
+                    // the last slid position accumulates lateral drift:
+                    // different keys then revisit the same physical wall
+                    // and produce a route that loops around it repeatedly.
+                    let mx = origin.x + next.0 as f32 * cell - at.x;
+                    let mz = origin.z + next.1 as f32 * cell - at.z;
                     let hit = ddsim::sweep::sweep(
                         param,
                         &ddsim::sweep::PLAYER_CAPSULE,
@@ -3424,6 +3457,86 @@ mod tests {
         let end = *path.last().expect("a partial path");
         assert!(end.x > 1500.0 && end.x < 2000.0, "{end:?}");
         assert!((end - goal).length() < goal.length() - 1000.0);
+    }
+
+    #[test]
+    fn demo_planner_enters_trigger_without_requiring_its_blocked_center() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below: f32) -> Option<f32> {
+                (x.abs() < 500.0 && z.abs() < 200.0 && below >= 0.0).then_some(0.0)
+            }
+        }
+        let shape = ddstory::scenario::Shape {
+            zone: ddstory::scenario::Zone::Aabb {
+                min: [280.0, 0.0, -100.0], max: [1120.0, 200.0, 100.0],
+            },
+            angle: None, toward: None,
+        };
+        let mut plan = RoutePlan::to_shape(Vec3::ZERO, Vec3::new(700.0, 0.0, 0.0), Some(shape.clone()));
+        let path = plan.advance(&Plate, &ddsim::sweep::SweepParam::default(),
+            std::time::Duration::MAX).unwrap();
+        assert!(shape.hit(path.last().expect("walk into the trigger").to_array(), 0.0));
+        assert!(path.last().unwrap().x < 500.0, "centre has no walkable ground");
+    }
+
+    #[test]
+    fn installed_road_planner_enters_area_without_repeated_wall_loops() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let bytes = vfs.read(r"scr\st100\etc\st100_fsm", mtarc::type_hash("rScenario")).unwrap();
+        let scenarios = ddstory::scenario::Scenarios::load(&[(4, std::sync::Arc::new(mtxfs::parse(&bytes).unwrap()))]).unwrap();
+        let index = scenarios.tasks[4].iter().position(|entry| entry.name == "q0002_event2").unwrap();
+        let shape = scenarios.tasks[4][index].shape.clone().unwrap();
+        assert!(shape.angle.is_none() && shape.toward.is_none());
+        let target = benchmark_place_from_scenarios(&scenarios, 4, index as u32).unwrap().0;
+        // Recorded S46 RoadWalk checkpoint position, replay fixture only.
+        let from = Vec3::new(35764.04, 31966.314, 141997.23);
+        let grid = crate::stream::Streamer::field_grid(native).unwrap();
+        let mut ground = ddworld::Terrain::load_collision_cells(&vfs, 100,
+            grid.wanted(ddworld::stream::Kind::Collision, from.to_array(), 1.0));
+        ground.add_scenery_cells(&vfs, &ddworld::Terrain::scenery_index(&vfs), 100,
+            grid.wanted(ddworld::stream::Kind::Layout, from.to_array(), 1.0));
+        let mut plan = RoutePlan::to_shape(from, target, Some(shape.clone()));
+        let path = plan.advance(&ground, &ddsim::sweep::SweepParam::default(),
+            std::time::Duration::MAX).unwrap();
+        println!("road collision search: {} nodes, {} visited, {} waypoints; end {:?}; target {:?}; shape {:?}",
+            plan.nodes.len(), plan.visited.len(), path.len(), path.last(), target, shape);
+        assert!(shape.hit(path.last().expect("real road route").to_array(), 0.0));
+        for (index, point) in path.iter().enumerate() {
+            assert!(!path[..index].iter().any(|previous| (*point - *previous).length() < 1.0),
+                "route must not revisit the same wall position: {point:?}");
+        }
+    }
+
+    #[test]
+    fn road_deadline_and_authored_outcome_survive_a_pending_search() {
+        struct Flat;
+        impl ddsim::Ground for Flat {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+        }
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let mut session = prepare(native, &exe, 2, true, None, false).unwrap();
+        session.host.story.as_mut().unwrap().world.stage_no = 100;
+        session.host.sim.player_mut(0).unwrap().position = [0.0; 3];
+        let d = session.demo.as_mut().unwrap();
+        d.step = Step::RoadWalk; d.since = 1.0;
+        d.planning = Some(RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0)));
+        demo_input(&mut session, 302.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
+        assert!(!session.world().quest_bit(2, 10), "timeout cannot invent success");
+        assert!(session.host.story.as_ref().unwrap().quest(3).is_none());
+        let d = session.demo.as_mut().unwrap();
+        d.step = Step::RoadWalk; d.since = 1.0;
+        d.planning = Some(RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0)));
+        // Explicit observation fixture: production event2 writes the bit.
+        session.host.story.as_mut().unwrap().world.set_quest_bit(2, 10, true);
+        demo_input(&mut session, 2.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
+        assert!(session.world().quest_bit(2, 10));
     }
     #[test]
     fn demo_navigation_cassardis_door() {
