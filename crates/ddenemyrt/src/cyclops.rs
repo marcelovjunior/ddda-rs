@@ -29,6 +29,8 @@ pub fn initialize_placement(
     if !values.arisen_proof {
         return Ok(());
     }
+    // Validate both installed table reads before changing caller state.
+    let leg_ids = [exe.u32(0x014f_f680 + 5 * 4)?, exe.u32(0x014f_f680 + 6 * 4)?];
     // 0x004c6af0 (owner vf82) reads the first array slot's maximum,
     // not a sum of region HP or a search by pool identity.
     if let Some(main) = regions.first_mut() {
@@ -44,8 +46,7 @@ pub fn initialize_placement(
     // 0x00770f00 resolves hurt-region indices through the installed mapping
     // and searches by pool +4 identity. These are current DP/BP (+14/+20),
     // leaving their maxima (+18/+24) and recovery speeds unchanged.
-    for hit_region in [5, 6] {
-        let pool_id = exe.u32(0x014f_f680 + hit_region * 4)?;
+    for pool_id in leg_ids {
         if let Some(leg) = regions.iter_mut().find(|pool| pool.id == pool_id) {
             leg.dp = values.leg_stagger;
             leg.bp = values.leg_knockdown;
