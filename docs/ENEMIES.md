@@ -277,3 +277,30 @@ admits2/17 and preserves first-table6/5; scene0 does not admit birds.
 
 Three unit tests and two installed tests pass. Host frame-loop execution
 and moving-creature visual comparison remain outstanding.
+
+
+### Flight movement and group removal checkpoint
+
+`cEm8600ActFlyLoop::vf06` (`0x00aa1030`) advances horizontal position
+using the previous yaw and unit delta, corrects height towards unit
++0x6024, then turns toward +0x5c10 through `0x00aa0a80`. The turn is
+1/8 of the wrapped difference times delta, capped at 0.41887903 radians.
+Afterward it adds sin(phase) to y; phase advances by the f64 constant
+0.13962634404500326 each action update, **without delta scaling**. The
+SSE instruction order was checked: translation precedes turning. Status
+bits0x800/0x1000 skip movement and motion completion. The helper ports
+position/heading only; the caller still owes the two body-byte writes and
+sourced target/height/speed observations. The global zero vector at
+0x018cfe80 was corroborated by a separate read-only live read.
+
+`ddspawn::should_despawn` translates `0x0075f860`: removal has independent
+flag/scene/hour enable bits. A false spawn gate alone does not remove an
+existing group. The enabled removal paths read raw authored windows even
+when their spawn gate bits are off. Installed regression covers that
+difference and the invalid-hour-window case.
+
+Installed first-table execution (existing ThinkMgr, no supplied callback
+answers) selects actions0x1000004/0x1000003 for tables5/6, matching the
+read-only original snapshot. Four unit tests and two installed tests pass;
+crate-only clippy passes with the existing combat type_complexity allowance.
+These are source/function-level checks, not a full moving-bird comparison.

@@ -47,6 +47,24 @@ fn cassardis_ambient_variants_preserve_authored_think_selection() {
         );
         assert_eq!(actor.record.get("mStartTableNo"), Some(&mtlot::Value::Int(table)));
     }
+    // Removal enables are independent of the spawn-gate enables. Use an
+    // installed group as the fixture; only the traced control fields vary.
+    let mut group = list.group(1).unwrap().clone();
+    group.despawn = 0;
+    group.scene_window = Some((2000, 3000));
+    assert_eq!(ddspawn::gate(&group, &world), Gate::Scene);
+    assert!(!ddspawn::should_despawn(&group, &world));
+    group.despawn = 2;
+    group.scene_window = None;
+    group.s.0[13] = 2000;
+    group.s.0[14] = 3000;
+    assert!(ddspawn::should_despawn(&group, &world));
+    group.despawn = 4;
+    group.hours = None;
+    group.s.0[19] = 20 | (4 << 16);
+    assert!(ddspawn::should_despawn(&group, &world));
+    group.s.0[19] = 24 | (4 << 16);
+    assert!(!ddspawn::should_despawn(&group, &world));
 }
 
 fn st100() -> GroupList {

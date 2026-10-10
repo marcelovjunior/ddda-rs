@@ -22,6 +22,26 @@ fn installed_ambient_resources_and_action_descriptors() {
         assert_eq!(action.class, "cEmActWait");
         assert_eq!(ddenemyrt::ambient::enter_action(&action).unwrap().id, motion);
     }
+    struct NoCallbacks;
+    impl ddai::thinktbl::Host for NoCallbacks {
+        fn check(&mut self, id: u32, _: u32) -> Result<bool, ddai::Error> {
+            panic!("unexpected ambient idle check {id}")
+        }
+        fn set(&mut self, id: u32, _: u32) -> Result<u32, ddai::Error> {
+            panic!("unexpected ambient idle commit {id}")
+        }
+        fn rand(&mut self) -> u32 {
+            0
+        }
+    }
+    for (index, expected) in [(5, 0x0100_0004), (6, 0x0100_0003)] {
+        let root = Species::Em8300.think_root(&exe, Some(index)).unwrap();
+        let tables = ddai::thinktbl::Tables::read_roots(&exe, vec![root], &[]).unwrap();
+        let mut think = ddai::thinktbl::ThinkMgr::new();
+        think.request_table(root);
+        think.slots[0] = ddai::thinktbl::Slot::measure([0.0; 3], 0.0, [3000.0, 0.0, 0.0], 0.0, 1);
+        assert_eq!(think.think(&tables, &mut NoCallbacks).unwrap(), expected);
+    }
     let vfs = ddvfs::Vfs::open(root).unwrap();
     for (species, resources, actions) in [(Species::Em8300, 17, 18), (Species::Em8602, 15, 15)] {
         let res = species.resources(&exe).unwrap();

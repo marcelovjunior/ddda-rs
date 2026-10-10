@@ -97,6 +97,28 @@ pub fn gate(g: &Group, w: &World) -> Gate {
     Gate::Spawn
 }
 
+/// Removal conditions for an already materialized group. This is not
+/// `gate != Spawn`: each removal condition has its own enable bit, and
+/// scene/hour removal reads the raw window even if its spawn gate is off.
+// Translated from 0x0075f860 (DDDA.exe 2017-12-13 Steam).
+pub fn should_despawn(g: &Group, w: &World) -> bool {
+    if g.despawn & 1 != 0
+        && (!(w.flag)(g.layout_flags as u16) || g.layout_flag2.is_some_and(|f| !(w.flag)(f)))
+    {
+        return true;
+    }
+    if g.despawn & 2 != 0 && (w.scene < g.s.0[13] as i32 || w.scene >= g.s.0[14] as i32) {
+        return true;
+    }
+    if g.despawn & 4 != 0 {
+        let raw = g.s.0[19];
+        if let Some(mask) = hour_mask(raw as u16, (raw >> 16) as u16) {
+            return mask & (1 << (w.hour & 31)) == 0;
+        }
+    }
+    false
+}
+
 /// Each group seen and its gate.
 pub type Gates = Vec<(u32, Gate)>;
 

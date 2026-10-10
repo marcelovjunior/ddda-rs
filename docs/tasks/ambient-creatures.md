@@ -64,3 +64,16 @@ callbacks. Three unit tests, one installed resource/action test and one
 installed spawn regression pass. Strict no-deps clippy passes with the
 pre-existing combat type_complexity allowance. ENEMIES.md has sources
 and live limitations. Host/renderer hookup and movement remain open.
+
+
+### Flight and lifecycle groundwork
+
+Added sourced bird flight position/heading update (0x00aa1030/0x00aa0a80)
+and independent group removal rules (0x0075f860). Immutable species model,
+skeleton and bank loader is available for host instances. Four unit tests,
+installed action/table test and installed spawn/removal test pass; targeted
+clippy passes with the existing allowance. Authored first tables actually
+select the live observed idle actions through the shared interpreter.
+
+Still pending: actor owner pool, host frame-loop and renderer integration,
+bird target/height/speed observations, and moving-original comparison.

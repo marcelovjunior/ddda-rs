@@ -98,6 +98,52 @@ pub struct Resource {
     pub class: String,
 }
 
+/// One species' immutable resources shared by every host-owned instance.
+/// All paths, motion tracks and action descriptors come from the install.
+#[derive(Debug, Clone)]
+pub struct Data {
+    pub species: Species,
+    pub model: String,
+    pub skeleton: mtlmt::pose::Skeleton,
+    pub banks: Vec<crate::body::MotionBank>,
+    pub actions: Vec<Action>,
+}
+
+impl Data {
+    pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>, species: Species) -> Result<Self, String> {
+        let resources = species.resources(exe)?;
+        let model = resources
+            .iter()
+            .find(|r| r.class == "rModel")
+            .ok_or("ambient species has no model")?
+            .path
+            .clone();
+        let skeleton = crate::body::load::skeleton(vfs, &model)?;
+        // 0x008892b0 preserves resource-list order for motion banks.
+        let banks = resources
+            .iter()
+            .filter(|r| r.class == "rMotionList")
+            .map(|r| crate::body::load::bank(vfs, &r.path))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            species,
+            model,
+            skeleton,
+            banks,
+            actions: species.actions(exe)?,
+        })
+    }
+
+    pub fn motion(&self, id: u32) -> Option<&mtlmt::Motion> {
+        self.banks
+            .get((id >> 8) as usize)?
+            .list
+            .motions
+            .get((id & 255) as usize)?
+            .as_ref()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
     pub class: String,
@@ -210,6 +256,73 @@ pub fn step_common_wait(wait_for_motion_end_on_entry: bool, motion_ended: bool) 
     }
 }
 
+/// Mutable position/heading of an ambient bird's FlyLoop action.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Flight {
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub phase: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FlightInputs {
+    /// Unit delta in 30-Hz frame units, not seconds.
+    pub delta: f32,
+    /// Unit +0x6024, established by the think result's height + initial y.
+    pub target_height: f32,
+    /// Unit +0x602c, sampled as rand * 6.5 + 18.5 by 0x00aa05c0.
+    pub speed: f32,
+    /// Unit +0x5c10, updated from the selected target by 0x00aa09b0.
+    pub target_yaw: f32,
+    pub body_status: u32,
+    pub motion_ended: bool,
+}
+
+impl Flight {
+    /// FlyLoop vf06 position update. Target selection is supplied by the
+    /// host; this function never invents a player or a target position.
+    /// The phase increment really is per action update, not delta-scaled.
+    // Translated from 0x00aa1030 and turn helper 0x00aa0a80
+    // (DDDA.exe 2017-12-13 Steam), checked against the disassembly.
+    pub fn step(&mut self, inputs: FlightInputs) -> ActionStep {
+        if inputs.body_status & (0x800 | 0x1000) != 0 {
+            return ActionStep {
+                done: false,
+                body_flags: 0,
+            };
+        }
+        let (sin, cos) = self.yaw.sin_cos();
+        self.position[0] += sin * inputs.speed * inputs.delta;
+        self.position[2] += cos * inputs.speed * inputs.delta;
+        let distance = inputs.target_height - self.position[1];
+        if distance.abs() >= f32::EPSILON {
+            let step = ((-1.0 / distance.abs()) * 16.0 * inputs.delta + 4.0).max(0.0) * inputs.delta;
+            self.position[1] += if distance < 0.0 { -step } else { step };
+        }
+        let difference = inputs.target_yaw - self.yaw;
+        let mut wrapped = difference - (difference * 0.159_154_94) as i32 as f32 * std::f32::consts::TAU;
+        if difference < 0.0 {
+            wrapped += std::f32::consts::TAU;
+        }
+        if wrapped >= std::f32::consts::PI {
+            wrapped -= std::f32::consts::TAU;
+        }
+        let turn = (wrapped * 0.125 * inputs.delta).clamp(-0.418_879_03, 0.418_879_03);
+        self.yaw = if wrapped.abs() - turn.abs() <= 0.0 {
+            inputs.target_yaw
+        } else {
+            self.yaw + turn
+        };
+        // f64 add and f32 round before sin, at 0x00aa1249..0x00aa125d.
+        self.phase = (f64::from(self.phase) + 0.139_626_344_045_003_26) as f32;
+        self.position[1] += self.phase.sin();
+        ActionStep {
+            done: inputs.motion_ended,
+            body_flags: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +373,31 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn flight_uses_old_heading_before_turn_and_holds_when_disabled() {
+        let mut flight = Flight {
+            position: [0.0; 3],
+            yaw: 0.0,
+            phase: 0.0,
+        };
+        let mut input = FlightInputs {
+            delta: 1.0,
+            target_height: 100.0,
+            speed: 20.0,
+            target_yaw: std::f32::consts::FRAC_PI_2,
+            body_status: 0x800,
+            motion_ended: true,
+        };
+        let original = flight;
+        assert!(!flight.step(input).done);
+        assert_eq!(flight, original);
+        input.body_status = 0;
+        assert!(flight.step(input).done);
+        assert_eq!(flight.position[0], 0.0);
+        assert_eq!(flight.position[2], 20.0);
+        assert!((flight.yaw - std::f32::consts::FRAC_PI_2 * 0.125).abs() < 1e-6);
+        assert!((flight.position[1] - (3.84 + flight.phase.sin())).abs() < 1e-6);
     }
 }
