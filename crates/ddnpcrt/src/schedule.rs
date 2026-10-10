@@ -207,7 +207,7 @@ struct Think {
 
 struct Env<'a> {
     clock: Clock,
-    _graphs: std::marker::PhantomData<&'a ()>,
+    world: Option<&'a ddstory::World>,
 }
 
 fn rec(p: &Process) -> Result<&mtfsm::Record, Error> {
@@ -221,6 +221,30 @@ fn name(p: &Process) -> String {
 }
 
 impl Think {
+    // Translated from 0x007aadd0/0x007aae20 (DDDA.exe 2017-12-13 Steam).
+    // Enter clears the destination FreeFlag; polling refreshes it, never latches it.
+    fn check_quest_flag(&mut self, quest: u64, bit: u64, flag: u64,
+        action: Option<u64>, world: Option<&ddstory::World>) -> Result<(), Error> {
+        if quest >= 128 || bit >= 96 || flag >= 128 { return Ok(()); }
+        let value = match action {
+            None => false,
+            Some(mode @ 0..=1) => {
+                let world = world.ok_or_else(|| Error::Unimplemented("NPC Check QuestFlag without world observation".into()))?;
+                world.quest_bit(quest as usize, bit as usize) == (mode == 0)
+            }
+            Some(_) => return Ok(()),
+        };
+        let word = &mut self.flags[flag as usize / 32];
+        let mask = 1 << (flag & 31);
+        if value { *word |= mask; } else { *word &= !mask; }
+        Ok(())
+    }
+    fn quest_flag_process(&mut self, p: &Process, polling: bool, world: Option<&ddstory::World>) -> Result<(), Error> {
+        let r = rec(p)?;
+        let field = |name| r.u(name).ok_or_else(|| Error::Data(format!("Check QuestFlag missing {name}")));
+        self.check_quest_flag(field("QuestNo")?, field("BitNo")?, field("FlagNo")?,
+            if polling { Some(field("ActType")?) } else { None }, world)
+    }
     fn finish(&mut self) {
         self.sys |= 4;
     }
@@ -395,6 +419,7 @@ impl Owner for Think {
                 let authored = rec(p)?.u("Flag").ok_or_else(|| Error::Data("Disable Flag missing Flag".into()))?;
                 self.out.push(Request::DisableFlags { npc: self.npc, mask: disable_flag_mask(authored as u32) });
             }
+            "Check QuestFlag" => self.quest_flag_process(p, false, None)?,
             "Finish" => {}
             "Set FreeCondition" => {
                 let r = rec(p)?;
@@ -415,6 +440,9 @@ impl Owner for Think {
     }
 
     fn state(&mut self, env: &mut Env<'_>, p: &Process, _m: &mut ProcMem, _at: ProcAt) -> Result<(), Error> {
+        if name(p) == "Check QuestFlag" {
+            return self.quest_flag_process(p, true, env.world);
+        }
         // Translated from 0x007497e0: the state callback sets Finish.
         if name(p) == "Finish" {
             self.sys |= 1;
@@ -603,10 +631,14 @@ impl Npc {
 
     /// One frame: the controller, then the action graph it selected.
     pub fn step(&mut self, graphs: &dyn Graphs, clock: Clock) -> Result<Vec<Request>, Error> {
-        let mut env = Env {
-            clock,
-            _graphs: std::marker::PhantomData,
-        };
+        self.step_observed(graphs, clock, None)
+    }
+
+    /// Run against the host's current story state. Missing observations remain
+    /// unsupported if a graph actually reads them; they never imply false flags.
+    pub fn step_observed(&mut self, graphs: &dyn Graphs, clock: Clock,
+        world: Option<&ddstory::World>) -> Result<Vec<Request>, Error> {
+        let mut env = Env { clock, world };
         if let Some(c) = self.controller.as_mut() {
             c.step(&mut self.ctrl, &mut env)?;
         }
@@ -650,7 +682,31 @@ mod variable_tests {
     }
     fn value(fields: &Think, owner: &str, property: &str, index: Option<u32>) -> Value {
         fields.var(&Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 },
-            _graphs: std::marker::PhantomData }, &Var { owner, property, index }).unwrap()
+            world: None }, &Var { owner, property, index }).unwrap()
+    }
+    #[test]
+    fn quest_flag_polling_clears_sets_inverts_and_preserves_other_private_bits() {
+        let mut npc = Npc::intel(3);
+        let mut world = ddstory::World::default();
+        npc.set_free_flag(false, 127, true);
+        npc.set_free_flag(false, 31, true);
+        npc.think.check_quest_flag(2, 95, 31, None, None).unwrap();
+        assert_eq!(npc.think.flags, [0, 0, 0, 0x8000_0000]);
+        assert!(npc.think.check_quest_flag(2, 95, 31, Some(0), None).is_err());
+        for (authored, mode, expected) in [(true, 0, true), (false, 0, false),
+            (false, 1, true), (true, 1, false)] {
+            world.set_quest_bit(2, 95, authored);
+            npc.think.check_quest_flag(2, 95, 31, Some(mode), Some(&world)).unwrap();
+            assert_eq!(npc.think.flags[0] != 0, expected);
+            assert_eq!(npc.think.flags[3], 0x8000_0000);
+        }
+        let before = npc.think.flags;
+        for (quest, bit, flag, mode) in [(128, 95, 31, 0), (2, 96, 31, 0),
+            (2, 95, 128, 0), (2, 95, 31, 2)] {
+            npc.think.check_quest_flag(quest, bit, flag, Some(mode), None).unwrap();
+        }
+        assert_eq!(npc.think.flags, before);
+        assert_eq!(npc.ctrl.flags, [0; 4], "controller private flags remain separate");
     }
     #[test]
     fn boolean_actor_flag_callbacks_have_distinct_sourced_masks() {
@@ -674,7 +730,7 @@ mod variable_tests {
     #[test]
     fn scene_observation_is_shared_and_refreshes_after_story_progress() {
         let mut npc = Npc::intel(1);
-        let env = Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 }, _graphs: std::marker::PhantomData };
+        let env = Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 }, world: None };
         let var = Var { owner: "cAIActionFSMDemo", property: "SceNo", index: None };
         assert!(npc.think.var(&env, &var).is_err());
         for scene in [1100, 1200, 1400] {

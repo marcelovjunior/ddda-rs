@@ -171,7 +171,7 @@ impl NpcRuntime {
         let mut out = vec![];
         for npc in self.npcs.values_mut() {
             npc.observe_scene(Some(world.sce_no));
-            out.extend(npc.step(data, clock)?);
+            out.extend(npc.step_observed(data, clock, Some(world))?);
         }
         Ok(out)
     }
