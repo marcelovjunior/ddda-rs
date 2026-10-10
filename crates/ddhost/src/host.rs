@@ -151,6 +151,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
     pub doors: Option<crate::doors::Doors>,
+    /// Ambient enemy ownership; admission and view lifetimes are separate.
+    pub ambient: crate::ambient::Population,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -182,6 +184,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             request_log: StateHasher::default(),
             fight: None,
             doors: None,
+            ambient: Default::default(),
         }
     }
 
@@ -381,6 +384,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             h.debug(&f.digest());
         }
         if let Some(doors) = &self.doors { h.debug(&doors.digest()); }
+        h.u64(self.ambient.digest());
         h.u64(self.request_log.finish());
         h.finish()
     }

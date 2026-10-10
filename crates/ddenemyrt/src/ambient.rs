@@ -88,7 +88,10 @@ impl Species {
             Self::Em8300 => (0x0186_16a0, 18),
             Self::Em8602 => (0x0186_2270, 15),
         };
-        (0..count).map(|i| Action::read(exe, base + i * 0x44)).collect()
+        let names = exe.class_names();
+        (0..count)
+            .map(|i| Action::read(exe, &names, base + i * 0x44))
+            .collect()
     }
 }
 
@@ -107,6 +110,7 @@ pub struct Data {
     pub skeleton: mtlmt::pose::Skeleton,
     pub banks: Vec<crate::body::MotionBank>,
     pub actions: Vec<Action>,
+    pub common_actions: Vec<Action>,
 }
 
 impl Data {
@@ -131,7 +135,23 @@ impl Data {
             skeleton,
             banks,
             actions: species.actions(exe)?,
+            common_actions: {
+                let names = exe.class_names();
+                (0..79)
+                    .map(|i| Action::read(exe, &names, 0x0186_35d0 + i * 0x44))
+                    .collect::<Result<_, _>>()?
+            },
         })
+    }
+
+    pub fn action(&self, id: i32) -> Option<&Action> {
+        let bank = (id as u32 >> 24) & 255;
+        let index = (id as u32 & 65535) as usize;
+        match bank {
+            0 => self.actions.get(index),
+            1 => self.common_actions.get(index),
+            _ => None,
+        }
     }
 
     pub fn motion(&self, id: u32) -> Option<&mtlmt::Motion> {
@@ -153,8 +173,11 @@ pub struct Action {
 }
 
 impl Action {
-    fn read(exe: &ddexe::Exe<'_>, row: u32) -> Result<Self, String> {
-        let names = exe.class_names();
+    fn read(
+        exe: &ddexe::Exe<'_>,
+        names: &std::collections::HashMap<u32, String>,
+        row: u32,
+    ) -> Result<Self, String> {
         let dti = exe.u32(row)?;
         Ok(Self {
             class: names
@@ -177,7 +200,141 @@ impl Action {
         if index >= 79 {
             return Err(format!("common enemy action {index} outside bank"));
         }
-        Self::read(exe, 0x0186_35d0 + index * 0x44)
+        Self::read(exe, &exe.class_names(), 0x0186_35d0 + index * 0x44)
+    }
+}
+
+/// Mutable action/think/motion state owned by one canonical ambient actor.
+/// Target slots and condition flags are supplied by the host, not by rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Runtime {
+    pub think: ddai::thinktbl::ThinkMgr,
+    pub action: i32,
+    pub motion: u32,
+    pub frame: f32,
+    pub motion_ended: bool,
+    pub done: bool,
+    pub body_flags: u32,
+    pub retained_wait: bool,
+    pub clear_body_motion_bytes: bool,
+}
+
+impl Runtime {
+    // Translated from vf33 0x00a9be40 / 0x00aa1b80
+    // (DDDA.exe 2017-12-13 Steam): initial action request and selected root.
+    pub fn new(data: &Data, root: u32) -> Result<Self, String> {
+        let mut state = Self {
+            think: ddai::thinktbl::ThinkMgr::new(),
+            action: -1,
+            motion: 0,
+            frame: 0.0,
+            motion_ended: false,
+            done: false,
+            body_flags: 0,
+            retained_wait: false,
+            clear_body_motion_bytes: false,
+        };
+        let initial = match data.species {
+            Species::Em8300 => 0x0100_0001,
+            Species::Em8602 => 0x0100_0003,
+        };
+        // Initial common Wait enters before vf33 installs the table.
+        state.start(data, initial)?;
+        state.think.request_table(root);
+        Ok(state)
+    }
+
+    pub fn start(&mut self, data: &Data, action: i32) -> Result<(), String> {
+        let definition = data
+            .action(action)
+            .ok_or_else(|| format!("ambient action descriptor {action:#x} unavailable"))?;
+        let request = enter_action(definition)
+            .ok_or_else(|| format!("ambient action {action:#x} {} unimplemented", definition.class))?;
+        if data.motion(request.id).is_none() {
+            return Err(format!("ambient motion {:#x} unavailable", request.id));
+        }
+        self.action = action;
+        self.motion = request.id;
+        self.frame = request.start_frame;
+        self.motion_ended = false;
+        self.done = false;
+        self.retained_wait = self.think.f120f;
+        self.clear_body_motion_bytes = request.clear_body_motion_bytes;
+        Ok(())
+    }
+
+    /// Ordinary no-damage/no-forced-action path. The caller must defer to
+    /// those higher-priority controllers when they are active.
+    // Translated from 0x00a9c7d0 / 0x00aa05c0 (DDDA.exe 2017-12-13 Steam).
+    pub fn select(
+        &mut self,
+        data: &Data,
+        tables: &ddai::thinktbl::Tables,
+        callbacks: &mut dyn ddai::thinktbl::Host,
+    ) -> Result<(), String> {
+        if !self.done && !self.think.f1210 {
+            return Ok(());
+        }
+        self.think.f1211 = self.done;
+        self.think.reload_default();
+        let next = self.think.think(tables, callbacks).map_err(|e| e.to_string())?;
+        if next != -1 && (next != self.action || self.think.ea5) {
+            self.start(data, next)?;
+        }
+        Ok(())
+    }
+
+    /// Phase 91 action update. Completion is latched until a new action,
+    /// matching the source callbacks which only ever set their done byte.
+    pub fn step_action(&mut self, data: &Data) -> Result<(), String> {
+        let definition = data.action(self.action).ok_or("ambient action missing")?;
+        let result = if definition.class == "cEmActWait" {
+            step_common_wait(self.retained_wait, self.motion_ended)
+        } else {
+            step_action(&definition.class, self.motion_ended)
+                .ok_or_else(|| format!("ambient action step {} unimplemented", definition.class))?
+        };
+        self.done |= result.done;
+        self.body_flags |= result.body_flags;
+        Ok(())
+    }
+
+    /// Phase 92; canonical clock and installed root travel, before collision.
+    // Translated from 0x010629f0 / 0x0105b740 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(
+        &mut self,
+        data: &Data,
+        position: &mut [f32; 3],
+        yaw: f32,
+        delta: f32,
+    ) -> Result<(), String> {
+        let motion = data.motion(self.motion).ok_or("ambient motion missing")?;
+        let root = ddsim::RootMotion::from_motion(motion);
+        let looping = motion.loop_frame >= 0;
+        let travel = if looping {
+            root.delta(self.frame, delta)
+        } else {
+            root.delta_once(self.frame, delta)
+        };
+        let (sin, cos) = yaw.sin_cos();
+        position[0] += travel[0] * cos + travel[2] * sin;
+        position[1] += travel[1];
+        position[2] += -travel[0] * sin + travel[2] * cos;
+        let last = motion.frame_count.saturating_sub(1) as f32;
+        let next = self.frame + delta;
+        if looping {
+            let start = motion.loop_frame as f32;
+            self.frame = if next > last {
+                start + (next - last).rem_euclid((last - start).max(1.0))
+            } else {
+                next
+            };
+            self.motion_ended = next > last;
+        } else {
+            self.frame = next.min(last);
+            self.motion_ended = next >= last;
+        }
+        Ok(())
     }
 }
 

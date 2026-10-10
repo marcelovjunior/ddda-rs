@@ -304,3 +304,31 @@ answers) selects actions0x1000004/0x1000003 for tables5/6, matching the
 read-only original snapshot. Four unit tests and two installed tests pass;
 crate-only clippy passes with the existing combat type_complexity allowance.
 These are source/function-level checks, not a full moving-bird comparison.
+
+
+### Ambient canonical ownership and Wait clocks
+
+`ddhost::ambient::Population` owns actors by stage/group/cell/record plus
+allocation generation. Duplicate cell admission preserves state; explicit
+cell retirement invalidates stale updates. Admission reads ordinary GPL
+conditions and kill records, refuses unresolved gates/missing layouts, and
+returns unsupported families. Host state hashes include the population.
+The owner currently requires its caller to track group retirement before
+re-admission; it is not a complete layout-controller lifecycle.
+
+`ddenemyrt::ambient::Runtime` now retains action, interpreter, canonical
+motion/frame, completion latch and root travel. Initial actions come from
+vf33 0x00a9be40 / 0x00aa1b80; ordinary selection gates from 0x00a9c7d0 /
+0x00aa05c0; action callbacks retain their earlier source addresses. Motion
+advance follows 0x010629f0 / 0x0105b740, before collision. Unsupported
+actions return errors without replacing the previous state with an idle.
+Installed first-table5/6 regression selects the observed bank1 actions4/3,
+motions11/10; clock advance and latched completion are tested. Resource
+names are now scanned once per action bank rather than once per row.
+
+Validation: two installed runtime/resource tests and one installed host
+ownership test pass; ddhost/ddenemyrt crate-only clippy passes with existing
+combat type_complexity and install chunks_exact_to_as_chunks allowances.
+Not yet connected to the host frame loop or renderer; bird flight and
+physical collision remain pending. No new original-game comparison in
+this checkpoint, and this does not yet replace door occupancy stand-ins.

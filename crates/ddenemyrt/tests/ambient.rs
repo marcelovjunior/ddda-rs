@@ -90,3 +90,60 @@ fn installed_ambient_resources_and_action_descriptors() {
         "8602 deliberately shares common bank in slots 0 and 1"
     );
 }
+
+#[test]
+fn installed_ambient_actions_advance_canonical_clocks() {
+    use ddenemyrt::ambient::{Data, Runtime};
+    let root = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\nativePC".into());
+    if !root.is_dir() {
+        return;
+    }
+    let file = ddexe::ExeFile::next_to(&root).unwrap();
+    let exe = file.image().unwrap();
+    let vfs = ddvfs::Vfs::open(root).unwrap();
+    struct NoCallbacks;
+    impl ddai::thinktbl::Host for NoCallbacks {
+        fn check(&mut self, id: u32, _: u32) -> Result<bool, ddai::Error> {
+            Err(ddai::Error::Unimplemented(format!("check {id}")))
+        }
+        fn set(&mut self, id: u32, _: u32) -> Result<u32, ddai::Error> {
+            Err(ddai::Error::Unimplemented(format!("set {id}")))
+        }
+        fn rand(&mut self) -> u32 {
+            0
+        }
+    }
+    let data = Data::load(&vfs, &exe, Species::Em8300).unwrap();
+    for (index, expected_action, expected_motion) in [(5, 0x0100_0004, 11), (6, 0x0100_0003, 10)] {
+        let root = data.species.think_root(&exe, Some(index)).unwrap();
+        let tables = ddai::thinktbl::Tables::read_roots(&exe, vec![root], &[]).unwrap();
+        let mut actor = Runtime::new(&data, root).unwrap();
+        assert_eq!(actor.action, 0x0100_0001);
+        actor.think.slots[0] = ddai::thinktbl::Slot::measure([0.; 3], 0., [3000., 0., 0.], 0., 1);
+        actor.step_action(&data).unwrap();
+        actor.select(&data, &tables, &mut NoCallbacks).unwrap();
+        assert_eq!((actor.action, actor.motion), (expected_action, expected_motion));
+        let mut position = [0.; 3];
+        actor.advance(&data, &mut position, 0., 1.).unwrap();
+        assert_eq!(actor.frame, 1.);
+        let motion = data.motion(actor.motion).unwrap();
+        let last = motion.frame_count.saturating_sub(1) as f32;
+        actor.frame = last;
+        actor.advance(&data, &mut position, 0., 1.).unwrap();
+        assert!(actor.motion_ended);
+        actor.step_action(&data).unwrap();
+        assert!(actor.done);
+        // A later frame with a clear motion-end bit cannot clear completion.
+        actor.motion_ended = false;
+        actor.step_action(&data).unwrap();
+        assert!(actor.done);
+        let before = actor.clone();
+        assert!(actor.start(&data, 0x7f00_0000).is_err());
+        assert_eq!(actor, before);
+    }
+    let data = Data::load(&vfs, &exe, Species::Em8602).unwrap();
+    let actor = Runtime::new(&data, data.species.default_think_root()).unwrap();
+    assert_eq!((actor.action, actor.motion), (0x0100_0003, 10));
+}
