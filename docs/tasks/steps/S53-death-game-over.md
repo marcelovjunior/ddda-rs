@@ -343,3 +343,13 @@ requires exactly one further advance per retry, without changing runtime
 behavior. The partial log is preserved. Remaining suites and all 47 names
 still require a successful full rerun, followed by full viewer/default
 release gates; none is replaced by a focused run.
+
+Full run `24136e3` / session 88766 exited 101 after 35 summaries:
+239 passed, one failed and the same two existing ignored enemy tests. All
+other death/vitals integration regressions passed. The six-field rejoin
+round trip found a real admission-order bug: profile attachment applied
+VITL, then `Host::join` rebuilt stamina and replaced the saved level gain.
+Attachment now returns its optional restored vitals to `Host::join`, which
+applies all six fields after the final fighter/body construction. The exact
+field assertion is unchanged. Its failure log is preserved and the full
+four-package gate is repeated on the corrected frozen source.

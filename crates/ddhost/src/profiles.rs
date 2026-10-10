@@ -354,10 +354,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         );
     }
 
-    pub(crate) fn attach_profile(&mut self, profile: ProfileId, seat: PlayerId) {
-        let Some(state) = self.profiles.remove(&profile) else {
-            return;
-        };
+    pub(crate) fn attach_profile(&mut self, profile: ProfileId, seat: PlayerId) -> Option<crate::vitals::Vitals> {
+        let state = self.profiles.remove(&profile)?;
         let vitals = Self::parked_vitals(&state);
         if let Some(economy) = state.economy {
             self.economy.attach_player(seat, economy);
@@ -426,10 +424,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 fight.equip(&mut self.sim, body.id);
             }
         }
-        if let Some(value) = vitals {
-            self.joined_fighter(seat);
-            self.apply_profile_vitals(profile, seat, value);
-        }
+        // Host::join applies these after its final fighter/body construction;
+        // otherwise that constructor can overwrite the saved stamina gain.
+        vitals
     }
 
     pub(crate) fn save_parked_profiles(&self, file: &mut SaveFile) {

@@ -399,10 +399,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
         self.refresh_party();
-        self.attach_profile(profile, id);
+        let restored_vitals = self.attach_profile(profile, id);
         self.economy.wallet(id);
         self.joined_items(id);
         self.joined_fighter(id);
+        if let Some(value) = restored_vitals {
+            self.apply_profile_vitals(profile, id, value);
+        }
         self.restore_arisen_death_on_join(profile, id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
