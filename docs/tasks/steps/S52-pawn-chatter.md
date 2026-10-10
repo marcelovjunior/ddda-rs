@@ -368,10 +368,98 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
-Next action: parent reviews the fresh ce212d7 gate/pin, then root performs
-one bounded genuine-line capture from the regenerated route-v2
+At the ce212d7 gate, the next action was parent review followed by one
+bounded genuine-line capture from the regenerated route-v2
 `RescueApproach.ddhs` (SHA-256
 `CD6931B58EBA6B7A6674F4F80DAF39AB06C5EEFCA02A8A45F4F23CD94FA176AE`).
 Only the real `S52_CAPTURE_SAVED` callback and inspected PNG establish that
 presentation result. Earlier failures are preserved; no GPU work, original
-process control or capture has occurred in this agent's lane.
+process control or capture had occurred in this agent's lane at that gate.
+
+### Actual text capture and fidelity failures
+
+Root ran the reviewed ce212d7 private pin under its normal GPU lease,
+session 50673 / PID33272, and reported actual exit0 after 70.2268 seconds.
+The genuine host event was id1/frame13832/pawn-slot1/message1000. Its
+real positioned glyphs triggered `S52_CAPTURE_REQUEST` and the actual
+`S52_CAPTURE_SAVED` callback at 1280x720. Root, parent and this agent
+inspected the private PNG: the installed English line `Goblin!` is visible
+during the stage100/Sce1410 rescue fight. The PNG SHA-256 is
+`704C203CCBE3E4D3918EFF16DE8A20BA0A766AEE8E73C5DCD2D45A039C213732`.
+Capture logs, PNG and process proof remain private under
+`E:/ddda-re/notes/steps/S52/capture-ce212d7-20261010-112300`.
+
+This establishes functional text capture, with two fidelity failures:
+the name is Japanese despite English speech text, and voice playback failed
+because the selected stream was absent as a loose file. Neither localized
+name fidelity nor audible voice is PASS from this capture.
+
+### Packed voice backend (source preparation, untested)
+
+The failing installed STRQ event0/selector0 resolves the exact path
+`sound\\stream\\pwn\\m1\\wave09\\pwn_9780_m1.sngw`. Native resource routing
+`0x00D0EC00` sends `.sngw` paths to a bank chosen by the six embedded short
+names at `0x01408C08..0x01408C44`, with the Japanese names considered first.
+The packed reader at `0x00D0EA80` checks magic `0x58284039`, reads a count
+and 12-byte `(key, offset, length)` rows, searches the key and bounds reads
+to that payload. Its hash `0x00D01B60`, seeded with -1 at `0x00D0EB33`,
+uses exact relative path bytes including backslashes and extension, without
+case folding or a final complement. The reflected polynomial is confirmed
+by native table word `0x014077C0 = 0xEDB88320`.
+
+A bounded private index probe found the exact key `0xEB961C30` in installed
+`rom/sound/pwn.pck`: row23962, offset729047513, length11799. A bounded
+64-byte header read identifies Ogg/Vorbis mono48000; no decoding or playing
+was performed by that probe. Thus the captured STRQ mapping is correct and
+the missing packed backend caused the voice failure.
+
+Head8326/8335 approved a new `mtsound::packed` module and one stream read
+site in `ddview/audio.rs`. It preserves the existing loose-file preference
+as explicit project compatibility policy, then uses native bank/hash routing
+when that file is absent. Native itself checks packed banks before its loose
+fallback. Reader allocation and malformed-index checks are safety policy;
+all index rows and compressed payloads remain installed. Three source-present
+regressions cover exact hash/routing/bounded selection, malformed indices and
+the installed captured cue decoded to finite nonzero PCM. At this checkpoint
+all three are **uncompiled and unexecuted**; full mtsound and downstream
+viewer/default-release gates and one actual voice follow-up remain required.
+
+### Localized name lookup (source preparation, untested)
+
+Chatter setup `0x00413DC9` calls `0x00B837B0` to derive the native party
+display index, then `0x00413DDE` calls `0x005DDE50` with force1. The returned
+display string is stored at request+14 (`0x00413DEF`) and supplied to the
+GUI at `0x0063335E`. Hired indices2/3 dispatch to `0x005DDF00`, whose
+`0x00767450` check searches five embedded shorts at `0x0155DAB8`:880..884.
+For these overrides Japanese uses the stored name, while other languages
+use the installed nickname GMD and the full `mNickname` index
+(`0x005DDF1D..0x005DDF2A`). Installed `nickname_eng` entry884 supplies the
+localized Rook name. No stock record, game resource or hardcoded display
+name is changed by this research. Normal-name metadata/platform branches
+and main-pawn stage-dependent name logic remain open.
+
+Head8373 approved the host producer and one existing `mtgmd` dependency.
+`DisplayNames` reads the five shorts from the installed exe and loads the
+available installed nickname tables by the traced language suffix. Host
+speech uses the same `self.data.rift` configured language index as its
+story-pawn builder, with that builder's existing English default when no
+RiftData is configured. Standalone `Runtime::step` preserves its English
+compatibility; the host calls the internal explicit-language entry point.
+The existing Message.name wire field carries the localized display string.
+No network format, stock builder or stored Edit is changed. Missing required
+localized indices suppress the unsupported emission and record a diagnostic;
+the native fallback string is untraced and no replacement is invented.
+
+Two additional source-present regressions exercise the hired/main/Japanese/
+English distinction, the native short-check versus full-index lookup,
+unavailable languages and the installed stock14/ledger504 record's emitted
+order reply under both Japanese and English without changing its saved Edit.
+These two and the three new packed reader regressions are **UNRUN** pending
+the exclusive CPU window; the earlier 233-core/124-viewer gates do not
+validate this new source. No audible-voice or localized-name capture PASS
+has been claimed.
+
+Next action: prepare the approved packed reader and a narrowly reviewed
+localized-name producer, then run full touched/downstream tests and fresh
+viewer release/build under the next explicit CPU window. Root performs the
+subsequent bounded genuine-speech capture only from the verified new pin.

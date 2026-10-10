@@ -375,7 +375,7 @@ fn play_pending(mut commands: Commands, mut audio: ResMut<AudioState>, mut asset
                 let requests = mtsound::StreamRequests::parse(&bytes)?;
                 let source = requests.event_source(u16::try_from(*stream_id).map_err(|_| "invalid stream ID")?, u16::try_from(*prepare_id).map_err(|_| "invalid prepare ID")?)?;
                 let source_path = mtsound::stream_path(source.path)?;
-                let bytes = std::fs::read(v.root.join(&source_path)).map_err(|e| format!("{source_path}: {e}"))?;
+                let bytes = mtsound::packed::read_stream(&v.root, source.path, 40_000_000)?;
                 let pcm = mtsound::decode::vorbis(&bytes, 40_000_000)?;
                 info!("audio resolved {key} -> {source_path} ({} samples)", pcm.samples.len());
                 pcm
