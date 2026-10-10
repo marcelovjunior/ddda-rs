@@ -1362,12 +1362,36 @@ mod tests {
         list.payload.truncate(0x130 + 0x78);
         assert!(CollisionUnit::read("synthetic".into(), &list).is_err());
     }
+
+    #[test]
+    fn collision_generator_seeds_are_bounded_payload_reads_including_native_zero_count() {
+        let mut list = synthetic_list();
+        let base = list.units[0].offsets[0] as usize;
+        list.payload[base + 0x10..base + 0x14].copy_from_slice(&0x1234_ABCDu32.to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        assert_eq!(unit.generator_seeds, [0x1234_ABCD]);
+        assert_eq!(unit.generator_counters(0, |_| panic!("zero count still uses its first fixed entry"))
+            .unwrap().birth, 0xABCD);
+        list.payload[base + 0xF] = 2;
+        list.payload[base + 0x14..base + 0x18].copy_from_slice(&(-1i32).to_le_bytes());
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        assert_eq!(unit.generator_seeds, [0x1234_ABCD, -1]);
+        let mut draws = [1, 0xABC].into_iter();
+        assert_eq!(unit.generator_counters(8, |_| draws.next().unwrap()).unwrap().path, 0xABC);
+        assert_eq!(draws.next(), None);
+        list.payload[base + 0xF] = 255;
+        assert!(CollisionUnit::read("synthetic".into(), &list).is_err(),
+            "corrupt count cannot read beyond the installed payload");
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollisionUnit {
     pub path: String,
     pub generator: GeneratorParams,
+    /// Generator payload+0xF count and +0x10 signed entries. Native count
+    /// zero still reads the first entry; no game seed table is embedded.
+    pub generator_seeds: Vec<i32>,
     pub capacity: u16,
     /// Generator+0x30's two axis-selector nibbles; not an actor joint ID.
     /// 0x010EC540 copies them into runtime+0x108 bits8..15.
@@ -1448,8 +1472,17 @@ impl CollisionUnit {
             Some(WorldCollision { flags: word(base, 0)?, radius_growth: float(base, 4)?,
                 radius: float(base, 8)?, radius_limit_extra: float(base, 0xC)? })
         };
+        // 0x010FA330 binds runtime+2C to this generator payload;
+        // 0x010FA600 selects its count+F and entries+10. Count0/1 both
+        // read entry0, rather than treating count0 as an absent seed.
+        let seed_count_at = generator.checked_add(0xF).ok_or("generator seed offset overflow")?;
+        let seed_count = usize::from(*bytes.get(seed_count_at).ok_or("truncated generator seed count")?).max(1);
+        let generator_seeds = (0..seed_count).map(|index|
+            word(generator, 0x10 + index * 4).map(|value| value as i32))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
+            generator_seeds,
             capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
             emission_shape: word(generator, 0x78)? as u8,
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
@@ -1465,6 +1498,11 @@ impl CollisionUnit {
                 rotation: [pair(life, 0xB8)?, pair(life, 0xC0)?, pair(life, 0xC8)?],
                 curves: [u32::from(half(life, 0x104)?), u32::from(half(life, 0x106)?),
                     word(life, 0x108)?, word(life, 0x10C)?] }, world_collision })
+    }
+
+    pub fn generator_counters(&self, effect_flags: u32,
+        global_random: impl FnMut(u32) -> u32) -> Result<GeneratorCounters, String> {
+        GeneratorCounters::select(&self.generator_seeds, effect_flags, global_random)
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction

@@ -738,3 +738,12 @@ mask widths, stream selectors and independent counters/reset. This test
 and the two new basis/path tests are **uncompiled/unrun**. Resource loading,
 actual global RNG ownership and production emitter admission remain open;
 the helper does not choose a new seed policy for gameplay.
+
+The installed seed read is now connected to `CollisionUnit::read`.
+`0x010FA330` binds runtime+2C to the selected unit's actual generator
+payload, so the count+F and signed entries+10 belong to that payload.
+Count0 still supplies the first entry, as does count1; larger counts are
+read with payload bounds checks. No EFL header field or coordinate seed
+is substituted. A fourth new regression verifies zero-count behavior,
+multiple entries, the bound against a corrupt255-entry count and use of
+the runtime selection helper. All four new tests remain **uncompiled/unrun**.
