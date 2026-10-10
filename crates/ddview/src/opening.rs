@@ -203,6 +203,11 @@ pub struct Session {
     last_sce: u32,
     /// The Arisen's look (seat 0), for the cutscenes' player actor.
     pub arisen_look: Option<ddlook::Look>,
+    /// Each seat's look, by seat id (setup's party looks; weapons follow the
+    /// vocation kit, [`kit_weapons`]).
+    party_looks: Vec<Option<ddlook::Look>>,
+    /// The vocation whose starting weapons the Arisen show (0: none yet).
+    weapons_job: u32,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -330,6 +335,8 @@ pub fn prepare(
         sex: 0,
         last_sce: sce,
         arisen_look: None,
+        party_looks: vec![],
+        weapons_job: 0,
         gone: vec![],
     };
     let start = f
@@ -668,6 +675,7 @@ pub fn setup(
         })
         .collect();
     s.arisen_look = party_looks.first().cloned().flatten();
+    s.party_looks = party_looks.clone();
     s.sex = s.arisen_look.as_ref().map_or(0, |l| l.sex);
     let party = play::Party {
         arisen,
@@ -764,6 +772,67 @@ pub struct OpeningStage<'w, 's> {
     bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 }
 
+/// When the story's vocation changes (the weapon table's menu, then
+/// `Host::apply_job_kit` gives the fight kit), each local Arisen is respawned
+/// with that vocation's starting weapons sheathed: the first-choice items of
+/// `ddprogress::change::starting_items` before the two shared ones (primary,
+/// then secondary; 0x00673740). *Viewer choice*: the original puts the items
+/// in the inventory and equips them; here only the look changes. Seats
+/// without a look (the base body) keep theirs.
+fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
+    let job = s.world().player_job;
+    if job == s.weapons_job {
+        return;
+    }
+    let Some(vocation) = ddhost::ddskill::vocation::Vocation::from_id(job) else { return };
+    let Some(streamer) = view.streamer.as_mut() else { return };
+    s.weapons_job = job;
+    let items = ddhost::ddprogress::change::starting_items(vocation);
+    let own = &items[..items.len().saturating_sub(2)];
+    let primary = own.first().map_or(-1, |&i| i32::from(i));
+    let secondary = own.get(1).map_or(-1, |&i| i32::from(i));
+    let weapons = match ddlook::save::weapons_for_items(streamer.loader.vfs, primary, secondary) {
+        Ok(w) => w,
+        Err(e) => {
+            warn!("opening: starting weapons of {vocation:?}: {e}");
+            return;
+        }
+    };
+    for id in st.locals.clone() {
+        let (Some(&old), Some(Some(look))) = (st.entities.get(&id), s.party_looks.get(usize::from(id))) else { continue };
+        let mut look = look.clone();
+        look.weapons = weapons.clone();
+        match crate::character::spawn_look(
+            &mut view.commands,
+            &mut streamer.loader,
+            &mut view.meshes,
+            &mut view.materials,
+            &mut view.images,
+            &mut view.bindposes,
+            &look,
+            play::MOTIONS,
+            0,
+            Vec3::ZERO,
+            Some(0.0),
+        ) {
+            Ok(e) => {
+                view.commands.entity(old).despawn();
+                st.entities.insert(id, e);
+                if let Some(v) = st.visible.remove(&old) {
+                    st.visible.insert(e, v);
+                }
+                st.forget_shown(id);
+                if id == 0 {
+                    s.arisen_look = Some(look.clone());
+                }
+                s.party_looks[usize::from(id)] = Some(look);
+                info!("opening: seat {id} takes the {vocation:?} starting weapons {primary:#x} / {secondary:#x} (body {old:?} -> {e:?})");
+            }
+            Err(e) => warn!("opening: seat {id} with {vocation:?} weapons: {e}"),
+        }
+    }
+}
+
 pub fn step(
     mut stage_view: OpeningStage,
     time: Res<Time>,
@@ -790,6 +859,7 @@ pub fn step(
         s.failure = Some("performance route exceeded 600 seconds without completing the walk".into());
         return;
     }
+    kit_weapons(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         streamer.actors = s.host.sim.players.iter().map(|p| p.position).collect();
@@ -1640,7 +1710,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         pl.yaw = yaw;
     }
     if menu_due {
-        close_menu(s, ddskill_fighter());
+        // DDVIEW_DEMO_JOB picks another vocation (2 Strider, 3 Mage) for
+        // unattended checks of the other kits
+        let job = std::env::var("DDVIEW_DEMO_JOB").ok().and_then(|v| v.parse().ok()).unwrap_or(ddskill_fighter());
+        close_menu(s, job);
     }
     if talk_due {
         if s.talk.is_some() {

@@ -197,6 +197,14 @@ pub struct PlayState {
 #[derive(Component)]
 pub struct FollowCam;
 
+impl PlayState {
+    /// Forgets the motion shown for `id`, so the next frame poses a freshly
+    /// spawned body.
+    pub fn forget_shown(&mut self, id: PlayerId) {
+        self.shown.remove(&id);
+    }
+}
+
 /// The fight data from the install and the exe next to it.
 pub fn fight_data(vfs: &ddvfs::Vfs, native_pc: &std::path::Path) -> Result<std::sync::Arc<FightData>, String> {
     let exe = ddexe::ExeFile::next_to(native_pc).map_err(|e| e.0)?;

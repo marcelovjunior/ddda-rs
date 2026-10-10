@@ -164,6 +164,17 @@ fn character<S: Source + ?Sized>(
     Some(SavedLook { who, look, items: eq, edit: f })
 }
 
+/// The sheathed weapons for two equipped item numbers (primary, secondary;
+/// -1 none): each item's weapon id is its itemList record +0x40, as the
+/// save's equipment conversion reads it (0x00780fa0).
+pub fn weapons_for_items<S: Source + ?Sized>(src: &S, primary: i32, secondary: i32) -> Result<Vec<crate::weapon::WeaponPart>, Error> {
+    let items = item_records(src)?;
+    let id = |item: i32| {
+        usize::try_from(item).ok().and_then(|i| items.get(i)).map_or(-1, |r| i32::from_le_bytes(r[0x40..0x44].try_into().unwrap()))
+    };
+    Ok(crate::weapon::weapons(id(primary), id(secondary)))
+}
+
 fn item_records<S: Source + ?Sized>(src: &S) -> Result<Vec<[u8; 0x80]>, Error> {
     let itl = src
         .resource(r"etc\item\itemList", "rItemList")?
