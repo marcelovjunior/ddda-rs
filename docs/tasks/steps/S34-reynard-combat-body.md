@@ -325,3 +325,24 @@ to head on board5225. Local camera cardinality does not close that wire gap.
 
 Next action: compose actual death-action playback/stages. Validate the ordinary
 rescue route and visible gauge with the materialized combat body after review.
+
+Independent death helper follow-up: `npc_death` translates the scalar
+phase switch in **0x00B98AE0**, initialization/prior-apparent shortcut in
+**0x00B988B0**, and the separate corpse intel clock in **0x00BBCB80** /
+constructor **0x00BBBFA0**. Intel wait starts at60 times the source base
+FPS and uses sMain+0x70 only after apparent death, before permanent death,
+with corpse-hold bit0x00400000 clear. Actor phase1 requires an actual
+layer-end observation; phase2 waits or holds; phase3 subtracts actor+0x14
+times1/30 from shared intel alpha. The hold bit is not re-checked in
+phase3. The terminal removal branch does not store the final alpha;
+without an intel, phase3 re-reads alpha1 every frame. No HP-to-death-bank
+shortcut is introduced. Actor+0x1065's wider meaning, root/bone locks,
+collision flags and the automatic motion/removal hooks remain unported.
+
+Four boundary regressions passed actual exit0 (compile6.66s/test0.03s)
+under a normal exclusive core lease, released after completion. These
+helpers remain independent of the host's automatic action selection;
+their tests are not an installed death-motion/original comparison.
+The common damage death entry is now verified **uPlayerBase::vf72
+0x00B7C470**, called by NPC **0x00BB7410** at instruction **0x00BB750E**;
+0x00B7C520 is an interior address, not the function entry.
