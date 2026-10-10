@@ -49,7 +49,7 @@ fn tables() -> Tables {
     game[0x25] = 1.0;
     game[0x26] = 1.0;
     game[0x27] = 1.0;
-    Tables { game: Adjust(game), dlc: Adjust(vec![]), status_enemy: Default::default(), status_player: Default::default() }
+    Tables { game: Adjust(game), dlc: Adjust(vec![1.0; 16]), status_enemy: Default::default(), status_player: Default::default() }
 }
 
 #[test]
@@ -112,6 +112,60 @@ fn native_damage_owner_classes_use_executable_priority() {
     assert_eq!(damage_owner_class(0x80, 0x10, 0), Enemy);
     assert_eq!(damage_owner_class(0, 0x10, 0), Class4);
     assert_eq!(damage_owner_class(0, 0, 0), Unknown);
+}
+
+#[test]
+fn native_gauge_permission_keeps_intel_hostility_and_attacker_guards() {
+    use ddenemyrt::npc_combat::{GaugeHitGuard, DamageOwnerClass::*};
+    let shown = GaugeHitGuard { gauge_enabled: true, ..Default::default() };
+    assert!(!shown.allows(Player, false));
+    assert!(!shown.allows(Pawn, false));
+    assert!(!shown.allows(Npc, true));
+    assert!(!shown.allows(Enemy, true), "gauged hostile NPC retains actor class bit8");
+    for owner in [Enemy, Class4, Unknown, Npc] { assert!(shown.allows(owner, false)); }
+    for bypass in [GaugeHitGuard::default(), GaugeHitGuard { linked_intel: false, ..shown },
+        GaugeHitGuard { intel_hostile: true, ..shown }, GaugeHitGuard { human_enemy: true, ..shown }] {
+        for owner in [Player, Pawn, Npc] { assert!(bypass.allows(owner, true)); }
+    }
+}
+
+#[test]
+fn gauge_veto_preserves_critical_roll_history_and_merges_only_accepted_contacts() {
+    use ddenemyrt::npc_combat::{GaugeHitGuard, DamageOwnerClass::*};
+    use ddenemyrt::combat::hit_pass_with_npc_guards;
+    let mut player = enemy();
+    player.owner = 0;
+    player.attacker = Attacker::Player(PlayerAttacker::new(100.0, 0.0, 0.0, 0.0));
+    player.attacks[0].side = Side { owner: 0, kind: 0 };
+    let mut pawn_proxy = player.clone();
+    pawn_proxy.owner = 1003;
+    pawn_proxy.attacks[0].side.owner = 1003;
+    let shown = GaugeHitGuard { gauge_enabled: true, ..Default::default() };
+    let guards = [(500, shown), (501, Default::default())];
+    let owners = [(0, Player, false), (1003, Pawn, false), (100, Enemy, false)];
+    let mut veto_only = vec![player.clone(), pawn_proxy.clone(), npc(500, 0, 1000.0)];
+    let original_pool = main_pool(&veto_only[2]).clone();
+    let mut rolls = 0;
+    assert!(hit_pass_with_npc_guards(&mut veto_only, &tables(), 1.0,
+        &mut || { rolls += 1; 0.0 }, &|_| true, &guards, &owners, None).is_empty());
+    assert_eq!(rolls, 2, "victim vf66 runs after valuation of both vetoed party contacts");
+    assert_eq!(main_pool(&veto_only[2]), &original_pool, "veto must suppress HP, reactions and status");
+    for owner in [0, 1003] { assert!(veto_only[2].history.already_hit(owner, 1 << 16, 0)); }
+    let mut fighters = vec![player, pawn_proxy, enemy(), npc(500, 0, 1000.0), npc(501, 0, 1000.0)];
+    let mut trace = Vec::new();
+    let events = hit_pass_with_npc_guards(&mut fighters, &tables(), 1.0,
+        &mut || 0.0, &|_| true, &guards, &owners, Some(&mut trace));
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].attacker, events[0].hits), (100, 1));
+    assert_eq!(events[1].hits, 3);
+    assert_eq!(trace[0].contacts.iter().map(|c| c.attacker).collect::<Vec<_>>(), vec![100]);
+    assert!(main_pool(&fighters[3]).hp > main_pool(&fighters[4]).hp);
+    for owner in [0, 1003, 100] { assert!(fighters[3].history.already_hit(owner, 1 << 16, 0)); }
+    let hp = main_pool(&fighters[3]).hp;
+    let hidden = [(500, GaugeHitGuard::default())];
+    assert!(hit_pass_with_npc_guards(&mut fighters, &tables(), 1.0,
+        &mut || 0.0, &|_| true, &hidden, &owners, None).is_empty(), "gauge toggle must not free held contacts");
+    assert_eq!(main_pool(&fighters[3]).hp, hp);
 }
 
 fn set_flags(f: &mut Fighter, flags: u32) {

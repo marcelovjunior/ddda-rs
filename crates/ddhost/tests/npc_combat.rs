@@ -17,7 +17,9 @@ struct Fixture {
     region: ddcombat::damage::RegionPool,
 }
 
-fn fixture() -> Option<Fixture> {
+fn fixture() -> Option<Fixture> { fixture_after_gauge(false) }
+
+fn fixture_after_gauge(wait_for_gauge: bool) -> Option<Fixture> {
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
     if !native.is_dir() { eprintln!("SKIP: no installed game data"); return None; }
@@ -42,10 +44,38 @@ fn fixture() -> Option<Fixture> {
     let placement = layouts.candidates(&gates).placements.into_iter().find(|p| p.npc == 304).unwrap();
     host.load_story_npc_intel(placement.clone()).unwrap();
     let lifetime = host.story_npc_lifetime(304).unwrap();
+    if wait_for_gauge {
+        for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
+        assert_eq!(host.story_npc_gauge_visible(304), Some(true));
+    }
     host.bind_story_npc_motion_body(lifetime, banks).unwrap();
     let combat = host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap())
         .unwrap().unwrap();
     Some(Fixture { host, placement, lifetime, owner: combat, body, region })
+}
+
+#[test]
+fn installed_late_materialized_reynard_inherits_existing_gauge_permission() {
+    let Some(Fixture { host, owner, .. }) = fixture_after_gauge(true) else { return };
+    assert!(host.fight.as_ref().unwrap().npcs[&owner].hit_guard.gauge_enabled,
+        "linked gauge permission must be present before the body's first hit pass");
+}
+
+#[test]
+fn installed_host_rescue_gauge_controls_combat_guard_after_invincibility_clears() {
+    let Some(Fixture { mut host, owner, .. }) = fixture() else { return };
+    assert!(!host.fight.as_ref().unwrap().npcs[&owner].hit_guard.gauge_enabled);
+    for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
+    assert!(host.fight.as_ref().unwrap().npcs[&owner].hit_guard.gauge_enabled);
+    // Isolated authored-graph observation, not a fabricated rescue outcome.
+    host.story.as_mut().unwrap().world.set_quest_bit(2, 25, true);
+    for _ in 0..20 { host.tick(&Default::default()).unwrap(); }
+    let npc = &host.fight.as_ref().unwrap().npcs[&owner];
+    assert_eq!(npc.flags & 0x1800_0000, 0);
+    assert!(npc.hit_guard.gauge_enabled, "SetGaugeDisp persists after NoDamage/Invincible clear");
+    host.story.as_mut().unwrap().world.set_quest_bit(2, 20, true);
+    for _ in 0..20 { host.tick(&Default::default()).unwrap(); }
+    assert!(!host.fight.as_ref().unwrap().npcs[&owner].hit_guard.gauge_enabled);
 }
 
 #[test]

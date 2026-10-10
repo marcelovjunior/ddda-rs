@@ -88,6 +88,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         hp.initialize(0, false, rate);
         region.hp = hp.current;
         region.hp_max = hp.maximum;
+        let gauge_enabled = self.story_npc_gauge_visible(lifetime.npc).unwrap_or(false);
         let fight = self.fight.as_mut().ok_or(HostError::NoData("fight"))?;
         if let Some(old) = self.npc_combat.bindings.remove(&lifetime.npc) {
             fight.unbind_npc(old.owner);
@@ -98,6 +99,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             npc.position = placement.transform.position;
             npc.yaw = placement.transform.angle[1];
             npc.scale = placement.transform.scale;
+            // A body admitted after SetGaugeDisp inherits linked intel+0x547
+            // immediately (0x00BABEE0), before its first collision pass.
+            npc.hit_guard.gauge_enabled = gauge_enabled;
         }
         self.npc_combat.bindings.insert(lifetime.npc, Binding { lifetime, owner,
             stage: placement.stage, target: placement.target });
@@ -278,6 +282,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             let position = self.story_npc_position(binding.lifetime.npc);
             let flags = self.story_npc_intel_flags(binding.lifetime.npc);
+            let gauge_enabled = self.story_npc_gauge_visible(binding.lifetime.npc).unwrap_or(false);
             let actor = self.story_npc_motion(binding.lifetime.npc)
                 .filter(|a| a.token.owner == binding.lifetime)
                 .map(|a| (a.motion, a.frame));
@@ -285,6 +290,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             let Some(npc) = fight.npcs.get_mut(&binding.owner) else { continue };
             if let Some(position) = position { npc.position = position; }
             if let Some(flags) = flags { npc.set_flags(flags); }
+            // SetGaugeDisp 0x00534BC0 -> 0x00BB8C10/0x00BB8CA0 also
+            // writes intel+0x547, consumed by the damage veto 0x00BB7680.
+            // This binding supports ordinary linked NPCs only.
+            npc.hit_guard.gauge_enabled = gauge_enabled;
             if let Some((motion, frame)) = actor {
                 npc.motion = ddenemyrt::body::MotionId::new((motion >> 8) as u8, motion & 255);
                 npc.frame = frame;
