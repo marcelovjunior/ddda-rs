@@ -747,3 +747,13 @@ read with payload bounds checks. No EFL header field or coordinate seed
 is substituted. A fourth new regression verifies zero-count behavior,
 multiple entries, the bound against a corrupt255-entry count and use of
 the runtime selection helper. All four new tests remain **uncompiled/unrun**.
+
+Bounded original-instruction validation now covers four single fixed seed
+cases (0, 1, low16 bits set, and distinct high/low16 bits). Each executes
+the real `0x010FA600` selection and both `0x010FA570/0x010FA580` reset
+functions, twelve calls total, returning normally with restored stack and
+preserved ESI. Both counters exactly retain the expected low16 bits after
+their independent mutation and reset. No instruction/output was patched
+and no callback was substituted. This proof does **not** execute the
+multi-entry or negative-seed global RNG branches, and it does not establish
+the Rust gate or production emitter. Evidence remains private.
