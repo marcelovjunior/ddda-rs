@@ -120,6 +120,22 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         if candidate.frame.checked_add(1 + crate::client::LEAD_MAX as u64).is_none() {
             return Err(HostError::Save("retry frame exceeds input lead range".into()));
         }
+        if candidate.story.as_ref().is_some_and(|story|
+            presentation.spot.is_none_or(|spot| spot.stage != story.world.stage_no)) {
+            return Err(HostError::Save("retry notice does not match restored stage".into()));
+        }
+        for seat in candidate.roster.seats() {
+            let Some(edit) = candidate.character_edit(seat.id) else { continue };
+            let Some(look) = presentation.looks.get(&seat.id) else {
+                return Err(HostError::Save("retry notice omitted restored Arisen look".into()));
+            };
+            let names: std::collections::BTreeSet<_> = look.edit.iter().map(|(name, _)| name).collect();
+            if names.len() != edit.fields.len() || look.edit.len() != edit.fields.len()
+                || look.edit.iter().any(|(name, value)| *value > u8::MAX as u32
+                    || edit.get(name) != Some(*value as u8)) {
+                return Err(HostError::Save("retry notice look differs from restored EDIT".into()));
+            }
+        }
         let mut staged_remotes = self.clients.clone();
         for remote in staged_remotes.values_mut() {
             let Some(seat) = remote.seat else { continue };

@@ -676,6 +676,11 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
         candidate.npc_combat = Default::default();
         candidate.npc_errors.clear();
         candidate.npc_parked.clear();
+        // Legacy/partial checkpoints keep existing EDIT records just as
+        // ordinary load does. Checkpoint chunks replace matching profiles;
+        // absent profiles retain their live durable identity independently
+        // of the factory's transient initial characters.
+        candidate.characters = self.characters.clone();
         candidate.load(&seed.save, data)?;
         let restored_vitals = crate::vitals::read(&seed.save)?;
         let mut notices = Vec::new();
@@ -952,6 +957,7 @@ mod retry_tests {
         live.death.session.enter_fatal(ProfileId(1));
         live.economy.wallet(0).gold = 99;
         let before_hash = live.state_hash();
+        let chatter_lifecycle = live.pawn_chatter.recognition_lifecycle();
         let before_save = live.export_durable_state().unwrap().to_bytes();
         let template = live.sim.fresh_attempt();
         let mut invalid = checkpoint.clone();
@@ -989,10 +995,12 @@ mod retry_tests {
                 })
                 .unwrap();
             assert!(!prepared.candidate().player_actions_blocked(0));
+            assert_eq!(prepared.candidate().pawn_chatter.recognition_lifecycle(), chatter_lifecycle + 1);
             // A failure while preparing presentation can drop the candidate.
             drop(prepared);
         }
         assert_eq!(live.state_hash(), before_hash);
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), chatter_lifecycle);
         assert_eq!(checkpoint.to_bytes(), checkpoint_bytes);
     }
 
@@ -1040,6 +1048,7 @@ mod retry_tests {
         assert!(body.skills.released.is_empty());
         assert!(!body.bow_latched);
         assert!(live.profiles.contains_key(&ProfileId(1)));
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), 1);
         let second = live
             .prepare_retry(&checkpoint, NoStoryData, |seed| {
                 factory(seed, &template, &BTreeMap::new())
@@ -1047,6 +1056,84 @@ mod retry_tests {
             .unwrap()
             .commit_retry();
         assert_eq!(second.epoch, 2);
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), 2);
+    }
+
+    fn fixture_edit(name: &str, gender: u8, marker: u8) -> ddpawn::cmc::Edit {
+        // Synthetic record identity exercises project durability policy;
+        // these bytes are not proposed installed appearance selections.
+        let mut edit = ddpawn::cmc::Edit { name: [0; 25], nickname: 71, fields: [marker; 41] };
+        edit.set("mGender", gender);
+        edit.set_name(name.as_bytes());
+        edit
+    }
+    #[test]
+    fn retry_edit_restores_checkpoint_retains_absent_parked_and_legacy_profiles() {
+        use crate::character_creation::TAG_EDIT;
+        for legacy in [false, true] {
+            let mut live = host();
+            let saved = fixture_edit("Saved", 0, 3);
+            let changed = fixture_edit("Changed", 1, 5);
+            let newcomer = fixture_edit("Newcomer", 1, 7);
+            let parked = fixture_edit("Parked", 0, 9);
+            live.confirm_character(0, saved.clone()).unwrap();
+            let mut checkpoint = live.save().unwrap();
+            if legacy { checkpoint.chunks.retain(|c| c.tag != TAG_EDIT); }
+            let place = crate::save::place_from(checkpoint.get(crate::save::TAG_PLACE,
+                Owner::Profile(ProfileId(1))).unwrap()).unwrap();
+            live.confirm_character(0, changed.clone()).unwrap();
+            let parked_seat = live.join(ProfileId(3), Control::Remote, [700.0, 0.0, 900.0], 0.0).unwrap();
+            live.confirm_character(parked_seat, parked.clone()).unwrap();
+            live.leave(parked_seat);
+            let remote = live.join(ProfileId(2), Control::Remote, [900.0, 0.0, 900.0], 0.0).unwrap();
+            live.confirm_character(remote, newcomer.clone()).unwrap();
+            let template = live.sim.fresh_attempt();
+            let places = [(ProfileId(2), place)].into_iter().collect();
+            live.prepare_retry(&checkpoint, NoStoryData, |seed| {
+                let mut candidate = factory(seed, &template, &places)?;
+                candidate.characters.confirm(ProfileId(2), fixture_edit("Poison", 0, 11)).unwrap();
+                Ok(candidate)
+            }).unwrap().commit_retry();
+            assert_eq!(live.character_edit(0), Some(if legacy { &changed } else { &saved }));
+            assert_eq!(live.character_edit(remote), Some(&newcomer));
+            assert_eq!(live.characters.get(ProfileId(3)), Some(&parked));
+            assert!(live.profiles.contains_key(&ProfileId(3)));
+            let saved_file = live.save().unwrap();
+            assert!(saved_file.get(TAG_EDIT, Owner::Profile(ProfileId(3))).is_some());
+            live.leave(remote);
+            let reused = live.join(ProfileId(4), Control::Remote, [0.0; 3], 0.0).unwrap();
+            assert_eq!(reused, remote);
+            assert_eq!(live.character_edit(reused), None, "seat reuse cannot inherit newcomer EDIT");
+            assert_eq!(live.characters.get(ProfileId(2)), Some(&newcomer));
+        }
+    }
+    #[test]
+    fn retry_edit_malformed_or_dropped_candidate_preserves_live_records_and_lifecycle() {
+        let mut live = host();
+        let saved = fixture_edit("Saved", 0, 3);
+        let changed = fixture_edit("Changed", 1, 5);
+        live.confirm_character(0, saved).unwrap();
+        let checkpoint = live.save().unwrap();
+        live.confirm_character(0, changed.clone()).unwrap();
+        let hash = live.state_hash();
+        let lifecycle = live.pawn_chatter.recognition_lifecycle();
+        let template = live.sim.fresh_attempt();
+        let mut malformed = checkpoint.clone();
+        malformed.chunks.iter_mut().find(|c| c.tag == crate::character_creation::TAG_EDIT)
+            .unwrap().bytes[33] = 2;
+        assert!(live.prepare_retry(&malformed, NoStoryData,
+            |seed| factory(seed, &template, &BTreeMap::new())).is_err());
+        assert_eq!(live.state_hash(), hash);
+        assert_eq!(live.character_edit(0), Some(&changed));
+        {
+            let prepared = live.prepare_retry(&checkpoint, NoStoryData,
+                |seed| factory(seed, &template, &BTreeMap::new())).unwrap();
+            assert_eq!(prepared.candidate().character_name(0), "Saved");
+            drop(prepared);
+        }
+        assert_eq!(live.state_hash(), hash);
+        assert_eq!(live.character_edit(0), Some(&changed));
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), lifecycle);
     }
 
     #[test]

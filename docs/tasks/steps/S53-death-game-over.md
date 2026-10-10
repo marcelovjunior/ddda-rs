@@ -294,3 +294,23 @@ applied here): in `consume_client_events`, change
 retry resource preparation, fresh-world factory and presentation retirement
 remain open, so this is not runtime/UI readiness. No additional Cargo,
 release or original-game comparison result is claimed.
+
+Reviewed S56 main `5192882` is integrated at `7bc411c`. Two further
+source-only EDIT regressions exercise checkpoint restoration, absent active
+and actually parked profile retention, legacy missing EDIT, factory poison,
+seat reuse and malformed/dropped candidate atomicity. The live character
+catalogue seeds candidate loading to preserve the reviewed partial-save
+contract; saved records then override matching profiles. Existing retry
+tests additionally assert S52 chatter lifecycle preservation on failure/drop
+and one advance per successful retry. Server preflight requires its notice
+stage to match a restored story stage and its Arisen appearance fields to
+match the restored 41-field EDIT record, before any live host/link mutation.
+The total is now 47 named S53 regressions, ten helper names actually passed
+and 37 continuation names **uncompiled and unrun**.
+
+Head explicitly delegated the two mechanical `opening.rs` patterns in board
+8262, and they are now applied on this branch: both PlayEvent and PawnMessage
+accept their new epoch fields. This delegates no retry/viewer control logic.
+The coherent core/net checkpoint is freezing for the coordinator's next
+full touched/downstream window; production retry, revival and game-over
+presentation remain open and no runtime readiness is claimed.
