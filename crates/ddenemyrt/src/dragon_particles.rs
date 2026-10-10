@@ -62,6 +62,16 @@ pub struct GeneratorInitialization {
     pub auxiliary_triplet: [f32; 3],
 }
 
+/// Uncurved life4 birth values, before sampling the actual path position.
+/// The secondary-effect delay does not suspend the particle's movement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Life4Birth {
+    pub speed: f32,
+    pub acceleration: f32,
+    pub distance: f32,
+    pub secondary_effect_delay: i16,
+}
+
 impl GeneratorCounters {
     /// The caller supplies the resource seed entries, including its first
     /// entry when the native count is zero. An absent list is unsupported.
@@ -1402,6 +1412,48 @@ mod tests {
     }
 
     #[test]
+    fn life4_birth_consumes_six_float_samples_then_one_word_without_touching_path() {
+        let mut unit = CollisionUnit::read("synthetic".into(), &synthetic_list()).unwrap();
+        unit.speed = [-2.0, 6.0];
+        unit.acceleration = [1.0, -4.0];
+        unit.initial_distance = [10.0, 100.0];
+        unit.birth_delay = DurationRange { base: -2, variation: 5 };
+        let mut counters = unit.generator_counters(0, |_| panic!("fixed seed")).unwrap();
+        counters.birth = 0xFFE;
+        counters.path = 99;
+        let mut floats = Vec::new();
+        let mut words = Vec::new();
+        let mut values = [0.25, 0.5, 0.75, 0.2, 0.3, 0.4].into_iter();
+        let birth = unit.sample_life4_birth(&mut counters, |index| {
+            floats.push(index);
+            values.next().unwrap()
+        }, |index| { words.push(index); 9 }).unwrap();
+        assert_eq!(floats, [0xFFF, 0, 1, 2, 3, 4]);
+        assert_eq!(words, [5]);
+        assert_eq!(values.next(), None);
+        assert_eq!(birth, Life4Birth { speed: -0.5, acceleration: -1.0,
+            distance: 85.0, secondary_effect_delay: 1 });
+        assert_eq!((counters.birth, counters.path), (0x1005, 99));
+        unit.birth_delay.variation = 0;
+        words.clear();
+        let birth = unit.sample_life4_birth(&mut counters, |_| 0.0,
+            |index| { words.push(index); u32::MAX }).unwrap();
+        assert_eq!(words, [12], "native loads the delay word even with no variation");
+        assert_eq!(birth.secondary_effect_delay, -2);
+        assert_eq!((counters.birth, counters.path), (0x100C, 99));
+        let before = counters.clone();
+        unit.birth_curves[0] = 1;
+        assert!(unit.sample_life4_birth(&mut counters,
+            |_| panic!("unsupported curve cannot draw"), |_| panic!("unsupported curve")).is_err());
+        assert_eq!(counters, before);
+        unit.birth_curves[0] = 0;
+        unit.birth_angles[0][0] = 1.0;
+        assert!(unit.sample_life4_birth(&mut counters,
+            |_| panic!("unsupported angular birth cannot draw"), |_| panic!("unsupported angular birth")).is_err());
+        assert_eq!(counters, before);
+    }
+
+    #[test]
     fn collision_reader_rejects_missing_variant_inheritance_and_bad_fields() {
         let mut list = synthetic_list();
         list.units[0].third_kind = 2;
@@ -1464,6 +1516,12 @@ pub struct CollisionUnit {
     pub speed: [f32; 2],
     pub acceleration: [f32; 2],
     pub initial_distance: [f32; 2],
+    /// Life4+10/+18/+20 angular ranges and +38/+3A/+42 curves.
+    /// Nonzero angular/curve birth remains unsupported by the sampler.
+    pub birth_angles: [[f32; 2]; 3],
+    pub birth_curves: [u16; 3],
+    /// Life4+44/+46; used by secondary effect dispatch, not motion admission.
+    pub birth_delay: DurationRange,
     pub path_points: u8,
     pub path_parameters: PathParameters,
     pub world_collision: Option<WorldCollision>,
@@ -1548,6 +1606,10 @@ impl CollisionUnit {
             fade: [a?, b?, c?], hold_curve: (curve_word >> 1) & 0x7FFF,
             hold_limit: half(movement, 0xE)?, speed: pair(life, 0x28)?,
             acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points,
+            birth_angles: [pair(life, 0x10)?, pair(life, 0x18)?, pair(life, 0x20)?],
+            birth_curves: [half(life, 0x38)?, half(life, 0x3A)?, half(life, 0x42)?],
+            birth_delay: DurationRange { base: half(life, 0x44)? as i16,
+                variation: half(life, 0x46)? },
             // Type4's constructor0x010F1230 passes life+0x80 to0x010E5620.
             path_parameters: PathParameters { flags: half(life, 0x80)?,
                 iterations: half(life, 0x82)?, selectors: half(life, 0x84)?,
@@ -1585,6 +1647,39 @@ impl CollisionUnit {
         }
         Ok(GeneratorInitialization { particle_scale: samples[0],
             auxiliary_triplet: [samples[1], samples[2], samples[3]] })
+    }
+
+    /// Ordinary generator-owned birth; the alternate particle-owned u16
+    /// counter branch is not represented. Zero angular ranges still read
+    /// their three float-table entries before the delay word.
+    // Translated from 0x010EDC90 and 0x010EE1EC..0x010EE28E
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn sample_life4_birth(&self, counters: &mut GeneratorCounters,
+        mut random_float: impl FnMut(usize) -> f32,
+        mut random_word: impl FnMut(usize) -> u32) -> Result<Life4Birth, String> {
+        if self.birth_curves != [0; 3]
+            || self.birth_angles.iter().flatten().any(|v| *v != 0.0) {
+            return Err("unsupported curved or angular life4 birth".into());
+        }
+        let ranges = [self.speed, self.acceleration, self.initial_distance,
+            self.birth_angles[0], self.birth_angles[1], self.birth_angles[2]];
+        if ranges.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("nonfinite life4 birth range".into());
+        }
+        let samples = ranges.map(|[base, variation]| {
+            counters.birth = counters.birth.wrapping_add(1);
+            random_float((counters.birth & 0xFFF) as usize) * variation + base
+        });
+        counters.birth = counters.birth.wrapping_add(1);
+        let delay_word = random_word((counters.birth & 0xFFF) as usize);
+        let extra = if self.birth_delay.variation == 0 { 0 } else {
+            delay_word % (u32::from(self.birth_delay.variation) + 1)
+        };
+        if samples.iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite life4 birth sample".into());
+        }
+        Ok(Life4Birth { speed: samples[0], acceleration: samples[1], distance: samples[2],
+            secondary_effect_delay: self.birth_delay.base.wrapping_add(extra as i16) })
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction
