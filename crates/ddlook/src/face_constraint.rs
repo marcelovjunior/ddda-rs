@@ -33,6 +33,12 @@ fn vector(v: [f32; 3], matrix: Matrix) -> [f32; 3] {
     std::array::from_fn(|i| (0..3).map(|k| v[k] * matrix[k * 4 + i]).sum())
 }
 
+fn singular_affine(m: Matrix) -> bool {
+    m[0] * (m[5] * m[10] - m[6] * m[9])
+        - m[1] * (m[4] * m[10] - m[6] * m[8])
+        + m[2] * (m[4] * m[9] - m[5] * m[8]) == 0.0
+}
+
 fn rotation(angles: [f32; 3]) -> Matrix {
     let [(sx, cx), (sy, cy), (sz, cz)] = angles.map(f32::sin_cos);
     [cy * cz, cy * sz, -sy, 0.0,
@@ -69,6 +75,11 @@ pub fn apply(
                     let turned = vector(delta, rotate);
                     std::array::from_fn(|i| pivot[12 + i] + turned[i] + parent_offset[i])
                 };
+                let target = if singular_affine(world) {
+                    // Both helpers use identity if inverse(world) fails.
+                    let transformed = vector(target, world);
+                    std::array::from_fn(|i| transformed[i] + world[12 + i])
+                } else { target };
                 result[12..15].copy_from_slice(&target);
             }
             // These two helpers bypass vf24's common offset/scale tail.
@@ -103,6 +114,10 @@ pub fn apply(
                 for row in 0..3 {
                     for column in 0..4 { result[row * 4 + column] *= scale[row]; }
                 }
+            }
+            if singular_affine(parent) {
+                // 0x0086b2e0 substitutes identity for inverse(parent).
+                result = multiply(result, parent);
             }
             for i in 0..3 { result[12 + i] += parent_offset[i]; }
         }
@@ -162,5 +177,27 @@ mod tests {
         assert_eq!(binding(0x52), Some((0xd, Some(0x51))));
         assert_eq!(binding(0xe9), Some((0xe, Some(0xe1))));
         assert_eq!(binding(0xed), None);
+    }
+
+    #[test]
+    fn original_singular_inverse_falls_back_to_identity() {
+        // Full 0x00860ac0 executed with synthetic zero-X-scale parent.
+        let parent = matrix([5.0, -3.0, 4.0], 0.0, [0.0, 1.0, 1.0]);
+        let world = multiply(matrix([2.0, 3.0, 4.0], 0.0, [1.0; 3]), parent);
+        let pivot = multiply(matrix([1.0, 2.0, 3.0], 0.0, [1.0; 3]), parent);
+        let cases = [
+            (0xd, [0.0, 1.0, 1.0], [5.0, -0.405, 16.65]),
+            (0xe, [0.0, 1.0, 1.0], [5.0, -0.3, 16.5]),
+            (0xf, [0.0, 0.85, 1.1], [5.0, -0.3, 8.5]),
+            (0x10, [0.0, 0.85, 1.1], [5.0, -3.3, 12.5]),
+        ];
+        for (kind, scale, position) in cases {
+            let actual = apply(kind, world, parent, Some(pivot), [0.2, -0.3, 0.5],
+                [1.2, 0.85, 1.1], [0.0; 3]).unwrap();
+            let expected = matrix(position, 0.0, scale);
+            for (a, b) in actual.iter().zip(expected) {
+                assert!((a - b).abs() < 0.000_01, "kind={kind:x}: {actual:?}");
+            }
+        }
     }
 }
