@@ -94,6 +94,7 @@ fn applied_npc_host_requires_binding_and_real_talk_observation() {
         assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
         assert!(!host.npcs.npcs.contains_key(&2), "normal controller must remain paused");
     }
+    assert!(host.npc_errors.is_empty(), "Guard graph errors: {:?}", host.npc_errors);
     assert!(guard_seen);
     assert_eq!(host.story_npc_normal_graph_present(2), Some(true));
     host.observe_story_npc_talk_end(2);
