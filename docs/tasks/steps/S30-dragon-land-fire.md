@@ -45,7 +45,7 @@ Head approved the dependency/lockfile scope in board #4502.
 Ground contact remains an explicit host observation. Its phase-90
 projection is translated from `uObjModel::vf90`, `0x00885E30`: previous
 terrain flags +0x1B68 bits zero/one, with bit20 additionally admitted in
-ground mode +0x1B6D; a present ground body with bit0x400 suppresses contact.
+ground mode +0x1B6D; an enabled axis check with bit0x400 suppresses contact.
 Missing contact input rejects Press stepping. No estimated height or
 landing timer stands in for the terrain solver. Landing binds 299,
 notifies GSF463 when actor +0x679A permits it, and clears that flag at
@@ -79,10 +79,28 @@ not been compared with a recording of the original.
 
 The breath source resolves EPV index4 element1 for visual fire and
 element2 for collision (`0x00A55BC0` disassembly); `0x00E6CA90` supplies
-up to15 active type11 particle positions. The collision effect resource
+up to15 active type11 particle positions and interpolated radii. The collision effect resource
 contains a single such unit, so its generator/movement/lifetime source
 is being traced before translating any volume. Bulk EPV/EFL records,
 private decompilation and dumps remain outside the repository.
+
+The type11 radius substep is translated from `0x012AC1E0/0x012AC260`:
+growth advances once per effect update, crossing the upper limit clamps
+and stops growth, and crossing below zero retires the particle. Radius
+double buffering and the four-component sample interpolation from
+`0x00E6CA90` are represented without an emitter or synthetic contact.
+Three additional regressions verify exact-limit versus overshoot behavior,
+zero versus negative retirement, buffer retention and unclamped sample
+fraction. All eight source tests and the installed actor test passed
+(2.59s/4.96s compile, 3.66s installed test) after the narrow debug rebuild.
+
+The installed scenery group is a horizontal capsule attached to joint254.
+`uEmDragonBase::vf33`, `0x00A3F820`, disables the axis check (+0x1B60=0)
+and sets the character's collision filter. The player's vertical capsule
+must not substitute for that shape. Scenery point lookup at `0x0076C540`
+passes normalize=1 through `0x00CCDE30/0x00CCE190` (verified disassembly),
+preserving joint scale. A generic capsule/optional-axis extension to the
+existing headless sweep is requested in board #4644 before shared edits.
 
 Next action: connect the native terrain-result flags to Press's prior
 contact input, then translate the installed collision particle unit

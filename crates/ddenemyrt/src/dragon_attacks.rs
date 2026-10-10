@@ -72,12 +72,13 @@ pub struct PressUpdate {
 }
 
 /// Phase-90 projection of the previous terrain result into actor +0x1ed0.
-/// `has_ground_body` is +0x1b60; `flags` is its resolved +0x1b68 state,
+/// `axis_check` is +0x1b60 != 0 (cScrAdjust +0x1a0); `flags` is its
+/// resolved +0x1b68 state,
 /// and `ground_mode` is +0x1b6d. The caller supplies actual contact flags;
 /// a position below an arbitrary height is not equivalent to this result.
 /// Translated from uObjModel::vf90 0x00885e30 (DDDA.exe 2017-12-13 Steam).
-pub fn ground_contact(has_ground_body: bool, flags: u32, ground_mode: bool) -> bool {
-    if has_ground_body && flags & 0x400 != 0 {
+pub fn ground_contact(axis_check: bool, flags: u32, ground_mode: bool) -> bool {
+    if axis_check && flags & 0x400 != 0 {
         return false;
     }
     flags & if ground_mode { 0x10_0003 } else { 3 } != 0
@@ -107,6 +108,64 @@ pub struct BreathUpdate {
     /// This boolean is not a guessed cone or synthetic target volume.
     pub collect_particles: bool,
     pub stop_effects: bool,
+}
+
+/// Radius fields of an actual type-11 collision particle, not a substitute
+/// for its emitter, movement or lifetime. Parameters come from EFL data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollisionRadius {
+    pub base: f32,
+    pub increment: f32,
+    pub upper_limit: f32,
+    pub growing: bool,
+    pub samples: [f32; 2],
+    pub live: bool,
+}
+
+impl CollisionRadius {
+    /// Translated from 0x012ac1e0 (DDDA.exe 2017-12-13 Steam).
+    /// Without an override: particle resource +40/+44/+48; the resolved
+    /// lifetime override supplies +8/+0c/+4 instead. Selection is external.
+    pub fn enter(base: f32, limit_delta: f32, increment: f32, scale: f32) -> Self {
+        Self {
+            base,
+            increment,
+            upper_limit: base + limit_delta,
+            growing: increment != 0.0,
+            samples: [base * scale; 2],
+            live: true,
+        }
+    }
+
+    /// Translated from 0x012ac260 (DDDA.exe 2017-12-13 Steam).
+    /// This is one effect update, with no invented dt multiplier. Native
+    /// particle +0x0f bit0 selects the destination of the radius double buffer.
+    pub fn update(&mut self, scale: f32, destination: bool) {
+        if !self.live {
+            return;
+        }
+        if self.growing {
+            let mut next = self.base + self.increment;
+            if next < 0.0 {
+                self.live = false;
+                return;
+            }
+            if self.upper_limit < next {
+                self.growing = false;
+                next = self.upper_limit;
+            }
+            self.base = next;
+        }
+        self.samples[usize::from(destination)] = self.base * scale;
+    }
+}
+
+/// Type-11 output from 0x00e6ca90 (DDDA.exe 2017-12-13 Steam), for one
+/// already-selected active particle. +0x20/+0x30 positions and +0x60/+0x64
+/// radii are interpolated with effect +0x104. The effect producer supplies
+/// the previous/current buffer selection; this function does not emit one.
+pub fn sample_collision_particle(previous: [f32; 4], current: [f32; 4], fraction: f32) -> [f32; 4] {
+    std::array::from_fn(|axis| (current[axis] - previous[axis]) * fraction + previous[axis])
 }
 
 impl BreathWide {
@@ -240,6 +299,36 @@ mod tests {
         assert!(ground_contact(true, 0x10_0000, true));
         assert!(!ground_contact(true, 0x400 | 3, true));
         assert!(ground_contact(false, 0x400 | 3, false));
+    }
+    #[test]
+    fn particle_radius_clamps_only_after_crossing_and_preserves_previous_buffer() {
+        let mut radius = CollisionRadius::enter(2.0, 2.0, 1.0, 3.0);
+        radius.update(3.0, true);
+        assert_eq!(radius.samples, [6.0, 9.0]);
+        radius.update(3.0, false);
+        assert_eq!((radius.base, radius.growing), (4.0, true));
+        radius.update(2.0, true);
+        assert_eq!((radius.base, radius.growing), (4.0, false));
+        assert_eq!(radius.samples, [12.0, 8.0]);
+        radius.update(5.0, false);
+        assert_eq!(radius.samples, [20.0, 8.0]);
+    }
+    #[test]
+    fn particle_radius_negative_growth_retires_only_below_zero() {
+        let mut radius = CollisionRadius::enter(1.0, 0.0, -1.0, 1.0);
+        radius.update(1.0, true);
+        assert!(radius.live);
+        assert_eq!(radius.samples, [1.0, 0.0]);
+        radius.update(1.0, false);
+        assert!(!radius.live);
+        assert_eq!(radius.samples, [1.0, 0.0]);
+    }
+    #[test]
+    fn particle_sampling_interpolates_radius_with_position_without_clamping_time() {
+        let a = [0.0, 2.0, 4.0, 8.0];
+        let b = [4.0, 6.0, 8.0, 12.0];
+        assert_eq!(sample_collision_particle(a, b, 0.25), [1.0, 3.0, 5.0, 9.0]);
+        assert_eq!(sample_collision_particle(a, b, 1.5), [6.0, 8.0, 10.0, 14.0]);
     }
     #[test]
     fn delay_and_motion_event_gate_fall_before_velocity_is_incremented() {
