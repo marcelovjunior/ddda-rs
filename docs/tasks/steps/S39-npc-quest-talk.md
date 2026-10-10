@@ -127,3 +127,18 @@ in addition to live intel; that is S34's separate source dependency. Head and
 the S40 owner were given the findings before another GPU replay. No S39 GUI
 route was launched, and S32's three previous ordinary attempts did not reach
 its complete motion chain. No original-game comparison is claimed.
+
+After S40's explicit opening-file handoff (#4917), the necessary ordinary
+driver correction is implemented: FieldWalk still crosses its first cell and
+settles for the performance sample, then `RescueApproach` walks to the installed
+event1 Area target using the existing collision planner and ordinary movement.
+It keeps the fight/heal inputs and advances only on observed q2:25 or an actual
+outcome. Rescue no longer treats zero live enemies as an outcome; it waits for
+the authored q2:20/q2:30 checks (or the existing bounded timeout). An installed
+driver regression actually passed (31.78 s compile, 11.29 s test), proving
+movement toward the installed target without body placement or quest-bit
+writes, a pending empty fight and progression only after explicit observation
+fixtures. The initial test compile caught and corrected a Vec index typo.
+This correction is source-tested; its ordinary GPU route remains open and
+the prior private `93873b9` binary predates it. S40/S34 can integrate this driver
+with actual camera/HP observations before the next meaningful replay.
