@@ -35,7 +35,8 @@ and the authored story `Request::PawnMessage`. This checkpoint does **not**
 complete S52: host composition, installed GUI/audio consumption, opening
 combat-list/low-HP producers and the bounded capture remain outstanding.
 The separate `ddhost/pawn_chatter.rs` adapter is source preparation and has
-not been compiled or tested at this checkpoint.
+not been compiled or tested at this first checkpoint. The subsequent full
+core result is recorded below; viewer validation is still pending.
 
 Native sources (DDDA.exe 2017-12-13 Steam):
 
@@ -102,7 +103,8 @@ hirer, network identity and hire time; rebinding retires old requests. The
 host's successful-load tail clears transient speech after fallible parsing;
 failed load must preserve the queue. A new installed regression checks the
 pass-C order mailbox only produces speech on the following move frame and
-checks failed-load atomicity. All follow-up tests remain **unexecuted**.
+checks failed-load atomicity. These follow-up core tests subsequently passed
+the full gate below; the viewer tests remain **unexecuted**.
 
 New native evidence: `0x00AFCFBF` and `0x00AFD17F` request situation 6 on
 actor list **1**, not configuration priority 1. `0x00AFCE65` initializes
@@ -123,8 +125,8 @@ frustum (`0x007D3F50`) and a collision ray. Existing placeholder pawn
 `BATTLE_RANGE` and current attack targets are not substituted for this list.
 The native sensor/recognition adapter and original comparison are outstanding.
 Isolated native `RecognitionClock`, `Recognition` hysteresis and
-`RecognitionSight` geometry helpers now have three source-present but
-unexecuted regressions. Manager cadence is **one main-frame unit**, not
+`RecognitionSight` geometry helpers have three regressions, passed in the
+full core gate below. Manager cadence is **one main-frame unit**, not
 one second; refresh discards remainder and entry clocks add the current
 frame's `mainDelta/FPS`, including fractional frames. Seen must exceed
 2 seconds and lost must exceed 10; actual combat membership overrides
@@ -192,6 +194,28 @@ batch. The next full run must cover the final source, with both earlier
 failure logs preserved. Second log:
 `E:/ddda-re/notes/steps/S52/full-core-1298761-second.private.log`.
 
+Actual final full core validation on 2026-10-10: frozen source **28d11ef**,
+`cargo test -p ddpawnai -p ddstory -p ddhost -p ddnet`, session **69259**,
+exited **0**. **233 tests passed, zero failed**, across 53 nonempty suites
+and four successful empty doc-test suites (57 successful summaries).
+All **17** new follow-up core names (pawn AI5, host10, network2) were
+individually verified source-present and present exactly once as PASS in
+the complete log. The earlier failures above were preserved. Private final
+log: `E:/ddda-re/notes/steps/S52/full-core-28d11ef-third.private.log`;
+matching name/hash proof: `full-core-28d11ef-third.private.proof.json`.
+Source SHA-256 values at that gate:
+
+- `ddpawnai/chatter.rs`: `006FBCC612E12E8879DAE2D83D5913044C064992A18A10ABE698A0E26823518F`.
+- `ddhost/pawn_chatter.rs`: `AD276709ECED98274AF6F1267C54D6AEA41DB4BE62A0BA92C06F369750551366`.
+- `ddnet/proto.rs`: `98A314734A3B3E14AA684848AF202870E7951A0E973AB6E95BAB81548E103B2C`.
+- `ddnet/client.rs`: `11969AC1DACE224CF784872F958A0609B8A7FF19BA358FA62E72A13481F256B9`.
+
+The shared core lease and lock/regression claims were normally released
+after the actual exit and proof. **S52 remains in progress**, with both
+viewer tests unexecuted, no release viewer build, no opening hook applied
+by this branch, and no original comparison/capture. These passing core
+results do not imply those presentation or original-game gates passed.
+
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
 markup, portraits, filters, slide/fade sequences, GUI acceptance/history,
@@ -229,5 +253,5 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
 Next actual gate: obtain the normal full touched/downstream Cargo window
-and viewer release window. The follow-up Cargo failures above are preserved;
+for the viewer tests and release build. The follow-up Cargo failures above are preserved;
 no GPU work, original process control or capture has occurred.
