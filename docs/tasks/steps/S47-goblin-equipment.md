@@ -149,3 +149,21 @@ explicit follow-ups, not claims of this initial-placement checkpoint.
 S47 is an initial-placement source/renderer checkpoint, **not fully Ready**;
 full-suite and original visual gates remain explicit. The next free lane
 slot goes to S41 measured frame gains, per head's priority.
+
+
+### Independent integration review (codex-1)
+
+Reviewed core cb13f3a and renderer0163e4f, including runtime descriptor/data
+ownership, native joint scale and isolated render-only comparison RNG.
+Integrated reviewed main c7c0505 into this task branch (HEAD10fa6ec),
+including S34 placement-rate HP2500, current-camera gauge and S31 Guard
+regression fix. Full enemy161 passed/2 existing ignored and host95 passed,
+actual session40349 exit0; compile44.23s. Private log:
+E:/ddda-re/notes/steps/S47/full-core-current-hp.log.
+
+Previous independent release viewer81 passed/2 existing ignored and
+default build passed on b4b1318. That older pin predates current HP/gauge,
+so it will not be used for the capture. Current full viewer acceptance,
+rebuild/pin and one bounded ordinary-route x4 capture are queued after S35.
+Head5995 permits that route without S46; whole original visual comparison
+and later equipment switching remain open.
