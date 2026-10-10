@@ -1090,3 +1090,23 @@ checks; the root source is frozen pending its queue window after the
 children's first headless checks. Next: compile and run the full viewer
 suite with all four names present, then build/pin one executable for the
 opt-in OFF/ON identical-picture x1 comparison.
+
+Source review then caught a stage ownership issue before compilation:
+the existing initial `SkyShadowSetting` reads opening stage200 once. A
+field checkpoint or stage100 handoff must not inherit that stage's caster
+distance. Follow-up **b9c8233** reads the current `Streamer.stage` after
+opening/stream updates and caches `(stage, weather)`, without altering
+the accepted sky projection. Missing/invalid new-stage data clears the
+caster setting. A fifth prepared regression verifies stage/weather
+handoff, one installed load per key and no stale prior-stage fallback.
+This follow-up also remains **uncompiled/unexecuted**; candidate pin/plan
+metadata must use the final actually tested source, not the earlier a60
+checkpoint. The prepared private OFF/ON helper has an explicit `UNBUILT`
+guard until full acceptance and checksum/pin gates are complete.
+
+Head's uninterrupted-route regeneration found a separate RoadWalk freeze
+after ReynardRepeat, despite S50's passing resumed checkpoint. Root's
+viewer build/capture window now follows head's diagnostic build and short
+resume run, not merely the children's actual core exits. The accepted
+named trace above remains valid; no candidate capture overlapped that
+diagnosis and no full uninterrupted-route claim follows from S50.
