@@ -656,7 +656,11 @@ fn main() {
             },
         ));
     }
-    app.run();
+    // an AppExit::Error (e.g. "opening failed") must fail the process, so
+    // unattended runs and harnesses see it
+    if let AppExit::Error(code) = app.run() {
+        std::process::exit(i32::from(code.get()));
+    }
 }
 
 /// The opening session until setup moves it into its resource.
