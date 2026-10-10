@@ -96,3 +96,36 @@ checkpoints after S51 lands. Use a real post-q1 reward checkpoint with
 normal GPU lease, `--unattended` and a retained-handle watchdog <=180 s. Inspect
 that the actual menu contains native names/icons/counts from the restored bag.
 Old checkpoints are not backfilled with manufactured items or rewards.
+
+Parent capture (2026-10-10): actual session20203 exit0, owned viewer30744
+numeric exit0 after58.443933s. Normal GPU lease released only after the
+owned viewer was absent; original DDDA23408 remained running. Frozen pin
+above resumed head's real ECONv2 `RoadWalk.ddhs` (SHA-256
+`F19945A9F9A075282A3B4A375696C7259A6453AE4007394E4C3A647C8705A5A9`).
+Actual logs identify seat0, Arisen(0), category0 and two real slots; the
+capture driver did not grant items or rewards. The screenshot was saved and
+inspected at `E:/ddda-re/notes/steps/S38/real-v2-roadwalk-f34223b/items.png`.
+Installed bitmap text shows the selected Scrag of Beast name/description,
+two icons/counts and the selection highlight. Screenshot existence and real
+bag projection are verified; original visual fidelity is not accepted:
+the Use control overlaps the description, native category/member headers
+remain absent, and the static animation projection exposes coloured states
+whose native control/overlay transitions remain unported. The rendered icon
+association still needs an original-game comparison. Performance numbers
+from this screenshot run are not timing evidence.
+
+Two earlier runs are rejected: a nonexistent `--quit-at` flag exited101
+before bootstrap; then the older pin rejected the newer `ReynardRepeat`
+resume name and exited1. Source preflight selected its supported `RoadWalk`
+step/checkpoint; `--shot` naturally exits one virtual second after its shot,
+with an independent retained-handle90s watchdog. Neither failure is counted
+as acceptance.
+
+Parent follow-up under head7028: failed Use stores `Selection.error`, but
+the painter currently discards that text. Existing native Use handler
+0x0066C750 falls through0x006EADA0 on refusal; no installed failure-message
+mapping/layout was established. A guessed native message was not added.
+Next action: resolve native control/overlay state for the description and
+Use submenu, then recapture the same real bag; map refusal feedback from
+source. Source/host-use regression acceptance remains separate from this
+open visual gate.
