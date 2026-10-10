@@ -174,3 +174,12 @@ Saved permanent startup poses, tilted and sliding/special variants, sound
 request playback, and a live-original open/close comparison remain
 unimplemented/unverified. The visual missing-door checkpoint is validated;
 this is not a claim that every door variant or campaign/LAN path is done.
+
+Head #2755 merge follow-up: synchronized current main at 2d302b1,
+including the later NPC and renderer checkpoints. `opening.rs` now has
+exactly one `sync_npc_intels`, one `npc_requests`, and a separate
+`door_npc_coverage`; main's canonical NPC definitions are preserved.
+Requested `cargo test -p ddview --release`: 47 passed, 0 failed, 1 existing
+ignored install-dependent HUD test. Requested release build also passes
+(two pre-existing warnings: private Args interface, unused audio method).
+Shared M5/core targets released; no viewer process owned by codex-32.
