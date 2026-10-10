@@ -3,6 +3,169 @@
 
 use bevy::prelude::*;
 
+/// Normal logging is unchanged. A profile-trace build can opt into a short
+/// stage-specific span window while keeping ordinary events throughout the
+/// route; this avoids writing a many-gigabyte trace before reaching the field.
+pub fn log_plugin() -> bevy::log::LogPlugin {
+    #[cfg(feature = "profile-trace")]
+    { field_trace::log_plugin() }
+    #[cfg(not(feature = "profile-trace"))]
+    { default() }
+}
+
+#[cfg(feature = "profile-trace")]
+mod field_trace {
+    use super::*;
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use bevy::log::{BoxedLayer, LogPlugin, tracing_subscriber::{filter::dynamic_filter_fn, registry::Registry}};
+
+    #[derive(Resource)]
+    pub struct TraceWindow {
+        pub stage: u32,
+        delay: f64,
+        duration: f64,
+        target_since: Option<f64>,
+        active_since: Option<f64>,
+        done: bool,
+        enabled: Arc<AtomicBool>,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum Transition { None, Started, Finished, LeftStage }
+
+    impl TraceWindow {
+        fn new(stage: u32, delay: f64, duration: f64) -> Self {
+            Self { stage, delay, duration, target_since: None, active_since: None,
+                done: false, enabled: Arc::new(AtomicBool::new(false)) }
+        }
+
+        pub fn advance(&mut self, stage: u32, now: f64) -> Transition {
+            if self.done { return Transition::None; }
+            if stage != self.stage {
+                self.target_since = None;
+                if self.active_since.is_some() {
+                    self.enabled.store(false, Ordering::Release);
+                    self.done = true;
+                    return Transition::LeftStage;
+                }
+                return Transition::None;
+            }
+            if let Some(start) = self.active_since {
+                if now - start >= self.duration {
+                    self.enabled.store(false, Ordering::Release);
+                    self.done = true;
+                    return Transition::Finished;
+                }
+            } else if now - *self.target_since.get_or_insert(now) >= self.delay {
+                // Start at the actual update, so a loading hitch cannot skip
+                // the entire window or reduce its requested sample duration.
+                self.active_since = Some(now);
+                self.enabled.store(true, Ordering::Release);
+                return Transition::Started;
+            }
+            Transition::None
+        }
+    }
+
+    fn span_filter(enabled: Arc<AtomicBool>) -> BoxedLayer {
+        // DynFilterFn uses Interest::sometimes: a callsite first seen before
+        // the field must be checked again once the capture window opens.
+        // A global Layer filter gates Chrome spans too, not just formatting.
+        Box::new(dynamic_filter_fn::<Registry, _>(move |metadata, _| {
+            metadata.is_event() || enabled.load(Ordering::Acquire)
+        }))
+    }
+
+    fn trace_layer(app: &mut App) -> Option<BoxedLayer> {
+        let stage = std::env::var("DDVIEW_TRACE_STAGE").ok()?;
+        let stage = match stage.parse::<u32>() {
+            Ok(stage) => stage,
+            Err(_) => { eprintln!("DDVIEW_TRACE_STAGE must be a stage number; full tracing retained"); return None; }
+        };
+        let read_seconds = |name: &str, fallback: f64, minimum: f64, maximum: f64| {
+            std::env::var(name).ok().and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= minimum && *value <= maximum)
+                .unwrap_or(fallback)
+        };
+        let window = TraceWindow::new(stage,
+            read_seconds("DDVIEW_TRACE_DELAY", 5.0, 0.0, 60.0),
+            read_seconds("DDVIEW_TRACE_SECONDS", 10.0, 0.001, 30.0));
+        let layer = span_filter(window.enabled.clone());
+        eprintln!("ddview: trace window stage {stage}, delay {} wall seconds, duration {} wall seconds; normal exit afterwards", window.delay, window.duration);
+        app.insert_resource(window);
+        Some(layer)
+    }
+
+    pub fn log_plugin() -> LogPlugin {
+        LogPlugin { custom_layer: trace_layer, ..default() }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use bevy::log::{tracing, tracing_subscriber::{Layer, layer::Context, prelude::*}};
+        use std::sync::atomic::AtomicUsize;
+
+        #[test]
+        fn field_window_uses_actual_stage_and_wall_duration_even_after_loading_hitch() {
+            let mut window = TraceWindow::new(100, 5.0, 10.0);
+            assert_eq!(window.advance(200, 0.0), Transition::None);
+            assert_eq!(window.advance(100, 30.0), Transition::None);
+            assert_eq!(window.advance(100, 34.9), Transition::None);
+            assert_eq!(window.advance(100, 50.0), Transition::Started);
+            assert!(window.enabled.load(Ordering::Acquire));
+            assert_eq!(window.advance(100, 59.9), Transition::None);
+            assert_eq!(window.advance(100, 60.0), Transition::Finished);
+            assert!(!window.enabled.load(Ordering::Acquire));
+            assert_eq!(window.advance(100, 100.0), Transition::None);
+        }
+
+        #[test]
+        fn leaving_the_target_resets_waiting_and_ends_an_active_capture() {
+            let mut window = TraceWindow::new(100, 5.0, 10.0);
+            window.advance(100, 0.0);
+            window.advance(200, 4.0);
+            window.advance(100, 10.0);
+            assert_eq!(window.advance(100, 14.0), Transition::None);
+            assert_eq!(window.advance(100, 15.0), Transition::Started);
+            assert_eq!(window.advance(200, 16.0), Transition::LeftStage);
+            assert!(!window.enabled.load(Ordering::Acquire));
+            assert_eq!(window.advance(100, 30.0), Transition::None);
+        }
+
+        #[test]
+        fn cached_callsites_resume_spans_and_always_keep_events() {
+            #[derive(Clone)]
+            struct Count(Arc<AtomicUsize>, Arc<AtomicUsize>);
+            impl<S: tracing::Subscriber> Layer<S> for Count {
+                fn on_new_span(&self, _: &tracing::span::Attributes<'_>, _: &tracing::span::Id, _: Context<'_, S>) {
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                }
+                fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
+                    self.1.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            fn same_callsite() {
+                let span = tracing::info_span!("captured_frame");
+                let _entered = span.enter();
+                tracing::info!("ordinary route event");
+            }
+            let enabled = Arc::new(AtomicBool::new(false));
+            let count = Count(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+            let subscriber = Registry::default().with(span_filter(enabled.clone())).with(count.clone());
+            tracing::subscriber::with_default(subscriber, || {
+                same_callsite();
+                enabled.store(true, Ordering::Release);
+                same_callsite();
+                enabled.store(false, Ordering::Release);
+                same_callsite();
+            });
+            assert_eq!(count.0.load(Ordering::Relaxed), 1);
+            assert_eq!(count.1.load(Ordering::Relaxed), 3);
+        }
+    }
+}
+
 /// Opt-in renderer experiment; preserve Bevy's default until identical-scene
 /// captures demonstrate a benefit. This changes instance-buffer preparation,
 /// not simulation, geometry, materials or the original's LOD selection.
@@ -159,6 +322,7 @@ pub fn update(
     args: Res<crate::Args>,
     stream: Option<Res<crate::stream::Streamer>>,
     mut exit: MessageWriter<AppExit>,
+    #[cfg(feature = "profile-trace")] mut trace_window: Option<ResMut<field_trace::TraceWindow>>,
 ) {
     let Some(mut p) = perf else { return };
     ON.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -179,6 +343,19 @@ pub fn update(
         p.stop_after = None;
     }
     let stage = stream.as_ref().map_or(args.stage, |stream| stream.stage);
+    #[cfg(feature = "profile-trace")]
+    if let Some(window) = trace_window.as_mut() {
+        match window.advance(stage, elapsed) {
+            field_trace::Transition::Started => {
+                info!(name: "s41_trace_window_start", stage, elapsed, "stage-specific CPU trace window started");
+            }
+            field_trace::Transition::Finished | field_trace::Transition::LeftStage => {
+                info!(name: "s41_trace_window_end", stage, elapsed, "stage-specific CPU trace window ended; normal app exit");
+                exit.write(AppExit::Success);
+            }
+            field_trace::Transition::None => {}
+        }
+    }
     if p.stage != Some(stage) {
         // A window crossing a stage load cannot describe either steady scene.
         p.frames.clear();

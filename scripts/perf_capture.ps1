@@ -15,10 +15,16 @@ param(
     [ValidateRange(10, 1800)][int]$WatchdogSeconds = 120,
     [ValidateSet('auto', 'vulkan', 'dx12')][string]$Backend = 'auto',
     [ValidateSet('gpu', 'cpu')][string]$MeshBuilder = 'gpu',
+    [Nullable[uint32]]$TraceStage = $null,
+    [ValidateRange(0, 60)][double]$TraceDelay = 5,
+    [ValidateRange(0.001, 30)][double]$TraceSeconds = 10,
     [switch]$Trace,
     [switch]$NoShadows
 )
 $ErrorActionPreference = 'Stop'
+if ($null -ne $TraceStage -and -not $Trace) {
+    throw 'TraceStage requires -Trace and a profile-trace executable.'
+}
 # DDVIEW_PERF_SECONDS uses Instant (wall time after the first perf update).
 # Screenshot/route delays may instead follow scaled virtual time. Keep the
 # launch-relative hard watchdog independent; it may intentionally be shorter.
@@ -47,6 +53,9 @@ $oldTrace = $env:TRACE_CHROME
 $oldShadows = $env:DDVIEW_NO_SHADOWS
 $oldBackend = $env:WGPU_BACKEND
 $oldMeshBuilder = $env:DDVIEW_MESH_BUILDER
+$oldTraceStage = $env:DDVIEW_TRACE_STAGE
+$oldTraceDelay = $env:DDVIEW_TRACE_DELAY
+$oldTraceSeconds = $env:DDVIEW_TRACE_SECONDS
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
@@ -58,6 +67,9 @@ try {
     $env:DDVIEW_NO_SHADOWS = if ($NoShadows) { '1' } else { $null }
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
     $env:DDVIEW_MESH_BUILDER = $MeshBuilder
+    $env:DDVIEW_TRACE_STAGE = if ($null -ne $TraceStage) { [string]$TraceStage } else { $null }
+    $env:DDVIEW_TRACE_DELAY = if ($null -ne $TraceStage) { [string]$TraceDelay } else { $null }
+    $env:DDVIEW_TRACE_SECONDS = if ($null -ne $TraceStage) { [string]$TraceSeconds } else { $null }
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
@@ -65,6 +77,7 @@ try {
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
         time_scale_env = $env:DDVIEW_TIME_SCALE
         mesh_builder = $MeshBuilder
+        trace_stage = $TraceStage; trace_delay_seconds = $TraceDelay; trace_window_seconds = $TraceSeconds
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
     $captureProcess = Start-Process -FilePath $viewerPath -ArgumentList ($quotedArguments -join ' ') `
@@ -110,6 +123,9 @@ try {
     $env:DDVIEW_NO_SHADOWS = $oldShadows
     $env:WGPU_BACKEND = $oldBackend
     $env:DDVIEW_MESH_BUILDER = $oldMeshBuilder
+    $env:DDVIEW_TRACE_STAGE = $oldTraceStage
+    $env:DDVIEW_TRACE_DELAY = $oldTraceDelay
+    $env:DDVIEW_TRACE_SECONDS = $oldTraceSeconds
     if ($captureProcess -and -not $captureProcess.HasExited) {
         Write-Warning "Viewer PID $($captureProcess.Id) still running: retain live/ddview lease until actual exit."
     }
