@@ -788,9 +788,10 @@ impl Fight {
             id: owner, pos: npc.position, alive: !npc.fighter.victim.dead(),
         }).collect();
         let mut started = vec![];
+        let pawn_owners: Vec<_> = self.pawns.keys().map(|seat| u32::from(*seat)).collect();
         for g in &mut self.goblins {
             let before = g.log.len();
-            g.step_with_npcs(&self.data.goblin, &targets, &npcs, ground, step);
+            g.step_with_subtypes(&self.data.goblin, &targets, &npcs, &pawn_owners, ground, step);
             if g.log.len() > before && g.attacking() {
                 started.push(g.fighter.owner);
             }

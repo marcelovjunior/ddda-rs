@@ -126,8 +126,11 @@ fn the_goblin_approaches_and_its_hits_land_in_the_windows() {
     let Some(data) = data() else { return };
     let r = fight(600, false);
     let a: Vec<i32> = r.actions.iter().map(|x| x.1).collect();
-    // taunt, dash in, then an attack of the close-range table
-    assert_eq!(&a[..2], [71, action::DASH_TRACE], "{a:?}");
+    // Sensor-driven alert/search entry precedes the combat table. Preserve
+    // the combat behavior and actual hit windows without assuming immediate
+    // combat from mere presence of a primary-Arisen fallback slot.
+    let taunt = a.iter().position(|&x| x == 71).unwrap_or_else(|| panic!("{a:?}"));
+    assert_eq!(a[taunt + 1], action::DASH_TRACE, "{a:?}");
     assert!(
         a.iter()
             .any(|&x| [action::N_ATTACK1, action::N_ATTACK2, action::N_ATTACK12].contains(&x)),
@@ -254,30 +257,25 @@ fn an_fsm_goblin_hands_over_to_its_think_tables() {
     let g = &h.fight.as_ref().unwrap().goblins[0];
     assert!(g.fsm_error.is_none(), "{:?}", g.fsm_error);
     let a: Vec<i32> = g.log.iter().map(|x| x.1).collect();
-    assert_eq!(&a[..3], [action::WAIT_ATCK, 71, action::DASH_TRACE], "{a:?}");
+    assert_eq!(a[0], action::WAIT_ATCK, "the authored FSM action still comes first: {a:?}");
+    let taunt = a.iter().position(|&x| x == 71).unwrap_or_else(|| panic!("{a:?}"));
+    assert_eq!(a[taunt + 1], action::DASH_TRACE, "{a:?}");
     assert!(a.contains(&action::N_ATTACK1), "{a:?}");
 }
 
-/// A goblin 30 m away runs (9 RunTrace, beyond the 2000 cm dash range of
-/// table 0x017cb9f8) instead of standing: it closes in, switches to the
-/// dash and attacks.
+/// The old30m fixture incorrectly treated the primary-Arisen fallback as
+/// an alert. The installed initial sensor sphere is20m, so an unnoticed
+/// enemy must not run across the field merely because a player exists.
 #[test]
-fn a_far_goblin_runs_in_then_dashes_and_attacks() {
+fn a_far_unnoticed_goblin_does_not_run_in_and_attack() {
     if data().is_none() {
         return;
     }
     let r = fight_from(3000.0, 900, false);
     let a: Vec<i32> = r.actions.iter().map(|x| x.1).collect();
-    let run = a.iter().position(|&x| x == action::RUN_TRACE).unwrap_or_else(|| panic!("{a:?}"));
-    let dash = a.iter().position(|&x| x == action::DASH_TRACE).unwrap_or_else(|| panic!("{a:?}"));
-    assert!(run < dash, "{a:?}");
-    assert!(
-        a[dash..]
-            .iter()
-            .any(|&x| [action::N_ATTACK1, action::N_ATTACK2, action::N_ATTACK12].contains(&x)),
-        "{a:?}"
-    );
-    assert!(r.hits.iter().any(|(_, e)| e.victim == 0), "{a:?}");
+    assert!(!a.iter().any(|x| [action::RUN_TRACE, action::DASH_TRACE,
+        action::N_ATTACK1, action::N_ATTACK2, action::N_ATTACK12].contains(x)), "{a:?}");
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
 }
 
 /// Killing the goblin gives the party its experience: 100 for an ordinary
