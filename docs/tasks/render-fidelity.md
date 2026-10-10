@@ -115,3 +115,13 @@ still outstanding; this brief remains in progress.
 Merged-main validation: complete viewer release suite passed 47 tests,
 with one pre-existing installed HUD test ignored. The repeated street
 capture completed without shader errors. All captures remain private.
+
+Shadow follow-up: corrected the single-map claim after tracing constructor
+0x00eefc60 and draw 0x00efdc70. The original enables three cascades;
+0x00ee5ce0 blends logarithmic and linear splits with the authored
+distribution as the linear weight. Added a tested CPU split helper
+(two regressions, targeted Clippy pass), not yet connected to rendering.
+Quality-dependent atlas allocation, filter dispatch and bias semantics are
+documented in SHADING.md; paused unit fields are explicitly distinguished
+from active draw state. Next: resolve the active atlas/filter configuration
+before replacing the viewer's one-cascade approximation.

@@ -183,8 +183,8 @@ pub struct StageSky {
     pub shadow: Option<SkyShadow>,
 }
 
-/// `uSkyStableShadow` (a `uStableShadow`: one shadow map over the view,
-/// not cascades): its view distance (cm) and distribution, as the sky
+/// `uSkyStableShadow` (a `uStableShadow`: cascaded shadow maps over the view,
+/// using a vertically stacked atlas): its view distance (cm) and distribution, as the sky
 /// scheduler sets them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkyShadow {
