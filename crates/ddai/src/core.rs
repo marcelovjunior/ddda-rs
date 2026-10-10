@@ -21,8 +21,9 @@
 //! (+0x18/+0x1c) that 0x00e06710 honours is never armed by the processes
 //! implemented here and is not modelled. Graphs whose `mFSMAttribute` has
 //! bit 2 get per-cluster work memory (0x00e09750 -> 0x00e06e00 /
-//! 0x00e087e0); that only matters for sub-machines, so such graphs with a
-//! sub-machine are refused as unimplemented.
+//! 0x00e087e0): persistent lists of once-only from-all transitions. Owners
+//! opt into that storage through `new_with_cluster_work`; `new` preserves
+//! the previous rejection for hierarchical graphs requiring that storage.
 
 use crate::cond::{self, Value, Var, Vars};
 use crate::Error;
@@ -98,6 +99,9 @@ pub struct Core {
     levels: Vec<Level>,
     first: bool,
     mem: HashMap<(u32, usize), ProcMem>,
+    /// Native ClusterWork +0xc/+0x10 taken node IDs, keyed by the cluster's
+    /// mOwnerNodeUniqueId (+8), not mId (+4). Persists across level reentry.
+    cluster_once: Option<HashMap<u32, Vec<u32>>>,
     /// Runtime core attribute (+0xa8).
     attribute: u32,
 }
@@ -127,11 +131,23 @@ fn has_sub(c: &Cluster) -> bool {
 
 impl Core {
     pub fn new(path: &str, graph: Arc<Graph>) -> Result<Core, Error> {
+        Self::create(path, graph, false)
+    }
+
+    /// Enable native persistent per-cluster once-transition storage. This
+    /// does not invent additional owner variables or complete any callback.
+    // Translated from 0x00e09750, 0x00e087e0 -> 0x010c9310(8),
+    // 0x00e059b0, 0x00e05a00 and 0x00e092a0 (DDDA.exe 2017-12-13 Steam).
+    pub fn new_with_cluster_work(path: &str, graph: Arc<Graph>) -> Result<Core, Error> {
+        Self::create(path, graph, true)
+    }
+
+    fn create(path: &str, graph: Arc<Graph>, cluster_work: bool) -> Result<Core, Error> {
         let root = graph
             .root
             .as_ref()
             .ok_or_else(|| Error::Data(format!("{path}: no root machine")))?;
-        if graph.attribute & 2 != 0 && has_sub(root) {
+        if !cluster_work && graph.attribute & 2 != 0 && has_sub(root) {
             return Err(Error::Unimplemented(format!(
                 "{path}: per-cluster work (mFSMAttribute bit 2) with sub-machines"
             )));
@@ -142,6 +158,7 @@ impl Core {
             levels: vec![],
             first: true,
             mem: HashMap::new(),
+            cluster_once: (cluster_work && graph.attribute & 2 != 0).then(HashMap::new),
             attribute: 3,
         };
         s.start_level(0, root.initial_state, root)?;
@@ -211,7 +228,11 @@ impl Core {
                 if s.id == self.levels[k].current {
                     continue;
                 }
-                if s.setting & 8 != 0 && self.levels[k].once.contains(&s.unique_id) {
+                let taken = match &self.cluster_once {
+                    Some(work) => work.get(&c.owner_node_unique_id).is_some_and(|ids| ids.contains(&s.unique_id)),
+                    None => self.levels[k].once.contains(&s.unique_id),
+                };
+                if s.setting & 8 != 0 && taken {
                     continue;
                 }
                 if self.condition(owner, env, cid)? {
@@ -323,7 +344,12 @@ impl Core {
                         if let Some(s) = c.state(self.levels[k].current) {
                             if s.setting & 8 != 0 {
                                 let uid = s.unique_id;
-                                self.levels[k].once.push(uid);
+                                if let Some(work) = &mut self.cluster_once {
+                                    let ids = work.entry(c.owner_node_unique_id).or_default();
+                                    if !ids.contains(&uid) { ids.push(uid); }
+                                } else {
+                                    self.levels[k].once.push(uid);
+                                }
                             }
                         }
                     }
@@ -431,6 +457,40 @@ mod tests {
                 root: Some(empty),
             }],
         })
+    }
+
+    #[test]
+    fn opted_in_cluster_once_work_survives_reentry_and_uses_owner_node_identity() {
+        let sub = |owner| Box::new(Cluster { id: 0, owner_node_unique_id: owner,
+            initial_state: 0, states: vec![state(0, 0, &[], None), state(1, 8, &[], Some(0))] });
+        let mut first = state(0, 0, &[], None);
+        first.subcluster = Some(sub(first.unique_id));
+        let mut second = state(1, 0, &[], None);
+        second.subcluster = Some(sub(second.unique_id));
+        let mut g = (*graph(vec![first, second])).clone();
+        g.attribute = 3;
+        let g = Arc::new(g);
+        assert!(Core::new("hierarchical", g.clone()).is_err(), "default owners retain their explicit gate");
+        let mut core = Core::new_with_cluster_work("hierarchical", g.clone()).unwrap();
+        let mut owner = Log::default();
+        for _ in 0..2 { core.step(&mut owner, &mut ()).unwrap(); }
+        assert_eq!(core.current_states(), [0, 1]);
+        assert_eq!(core.cluster_once.as_ref().unwrap().get(&100), Some(&vec![101]));
+        let first_sub = g.root.as_ref().unwrap().state(0).unwrap().subcluster.as_ref().unwrap();
+        // Re-admit the same child cluster as after leaving/reentering its
+        // parent. Native storage belongs to Core, not this active level.
+        core.start_level(1, 0, first_sub).unwrap();
+        for _ in 0..3 { core.step(&mut owner, &mut ()).unwrap(); }
+        assert_eq!(core.current_states(), [0, 0], "once-from-all is not taken again");
+        core.levels[0].current = 1;
+        let second_sub = g.root.as_ref().unwrap().state(1).unwrap().subcluster.as_ref().unwrap();
+        core.start_level(1, 0, second_sub).unwrap();
+        for _ in 0..2 { core.step(&mut owner, &mut ()).unwrap(); }
+        assert_eq!(core.current_states(), [1, 1], "equal mId does not alias another parent node");
+        assert_eq!(core.cluster_once.as_ref().unwrap().get(&101), Some(&vec![101]));
+        let mut fresh = Core::new_with_cluster_work("hierarchical", g).unwrap();
+        for _ in 0..2 { fresh.step(&mut owner, &mut ()).unwrap(); }
+        assert_eq!(fresh.current_states(), [0, 1], "new Core owns a fresh native work lifetime");
     }
 
     #[test]

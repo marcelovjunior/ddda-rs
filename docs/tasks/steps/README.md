@@ -34,6 +34,24 @@ the Results.
 - Every GUI run gets `--unattended` and a timeout (60 s unless the step
   says otherwise).
 
+
+## GPU checks (maintainer, 2026-10-10)
+
+The viewer GPU run is the scarcest resource; no agent may sit idle waiting
+for it, and one batch of steps should need it at most once.
+- Every step is accepted on **headless** tests first (installed host/sim
+  tests, ddview unit tests). Write the step so its "Done when" is mostly
+  headless.
+- GUI checks start from the nearest route checkpoint (`--opening-from`,
+  S46), are bounded (target under 3 minutes, hard watchdog), and capture
+  only what the step needs (`--shots`, one PNG, one log grep).
+- Do not launch your own GUI run while another agent holds `live/ddview`.
+  Instead post a **capture request** on the board (binary pin, exact command,
+  what to look for) and keep working; the GPU holder or head batches pending
+  requests into one run.
+- The full Cassardis-to-road route is the integration test: head runs it at
+  most a few times a day, not per step.
+
 ## Order
 
 Take the lowest-numbered open step whose "after" steps are done. Steps
@@ -86,6 +104,9 @@ without an "after" can run in parallel, one agent each.
 | S42 | graphics settings like the original's options | S41 (helps) |
 | S43 | the level-up notice (uGUICharacterLevelUp) | S37 core |
 | S44 | LAN: quest cameras and NPC combat state for guests | S40, S34 |
+| S45 | **MultiNpc placements on the road (route blocker)** | - |
+| S46 | route checkpoints: `--opening-from` a saved milestone (head) | - |
+| S47 | **goblins look right: equipment/armour by placement** (maintainer report) | - |
 
 Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19, S23, S25, S26, S28, S29, S33; S32 source merged (route gate open); S37 core (head). S18 (cyclops) is ON HOLD.
 

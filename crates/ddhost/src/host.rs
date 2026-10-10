@@ -414,6 +414,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             f.hits(step);
             kills = f.kill_awards();
         }
+        self.start_npc_deaths()?;
         // A goblin's death gives the party its experience (0x00443470);
         // without progression data (or party records) there is no one to
         // award.
@@ -439,6 +440,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
+        // uNpcIntel line12 precedes the NPC actor/action on line15.
+        self.step_npc_death_intels()?;
         self.step_opening_dragon_a(step)?;
         // Line 10 continued (fight): scripted attacks advance and move their
         // Arisen; line 15: the enemies think, act and move; step 38: the
