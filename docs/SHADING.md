@@ -613,3 +613,49 @@ Decoder/basis and material-selection regressions pass. A release build
 and bounded field capture (480 meshes, 397 instances) passed without WGSL
 pipeline errors. This does not establish visual agreement with the
 original; see the render-fidelity brief for the comparison status.
+
+### Ambient-occlusion filter source audit
+
+The executable contains a separate `uAmbientOcclusionFilter`; this is
+not accounted for by the already supported mesh Occlusion byte.
+Constructor **0x010460f0** and reflection **0x01046250** identify:
+
+| Offset | Property | Constructor default |
+| --- | --- | --- |
+| +0x280 | mLocalSpaceOccRadius | 10 |
+| +0x284 | mLocalSpaceFallOff | 1 |
+| +0x288 | mGlobalSpaceOccRadius | 20 |
+| +0x28c | mGlobalSpaceFallOff | 1 |
+| +0x290 | mDistanceDispersion | 2 |
+| +0x294 | mIntensityDispersion | 5 |
+| +0x298 | mIntensity | 1 |
+| +0x2a0 | mBounceIntensity | 1 |
+| +0x2ac | mOccDecayRatio | 2 |
+| +0x2b0 | mBlurTapNum | 5 |
+| +0x2b8 | mMaxRadius | 0.1 |
+| +0x2bc | mAmbientMaskGroup | 0 |
+
+These are constructor observations, not values to hard-code for a stage.
+The authored/live settings and enable conditions still need to be read.
+Draw callback **0x0104a870** binds +0x40/+0x44 as `tSSAONarrowMap` and
+`tSSAOWideMap` (MFX indices 0x387/0x388). It uploads intensity and bounce
+intensity to `CBSSAOFFilterIntensity` (0x29b), selects
+`FSSAOApplyAmbientOcclusion` (0x7c8), and chooses one of four
+`BSAmbientMaskGroup0..3` states (0x265..0x268) using +0x2bc. Optional
+bounce follows through **0x0104a320**; its formula is not translated yet.
+The underlying map generation/blur callbacks, active Cassardis settings
+and final material mask consumption need comparison before implementing
+this pass. The existence of this filter alone does not prove it was
+active in a particular screenshot.
+
+An additional ordinary material shader, `sc/DX9/Stage200` PS file offset
+**0x242be4**, confirms that the decoded perturbed normal feeds the SH
+lighting evaluation and that the same alpha/green midpoint and Z floor
+apply in a material pass, not just the normal buffer. Vertex occlusion
+then multiplies the resulting light.
+
+The stage-100 and stage-200 `scr/st*/sdl/st*_f00` schedulers were also
+read directly from the installed archives. Their spawned filter units
+are DOFFilter, ImagePlaneFilter and ColorCorrectFilter; neither contains
+an AO unit. This narrows the activation investigation to another owner
+or scheduler; it does not establish that AO is absent at run time.

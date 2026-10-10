@@ -81,7 +81,22 @@ recorded Cassardis street capture initially omitted the buildings because
 the existing static preview does not load nonfield stage models; codex-32
 has fixed that hook in the doors branch. No same-pose match is claimed yet.
 
-Next: apply that preview fix and compare the recorded Cassardis pose.
+Follow-up: head approved the static nonfield model hook (board 2760),
+shared with the doors branch. Release build passed (38.72 s); the bounded
+Cassardis capture loaded 31 stage models and 315 placed objects with no
+shader errors. Recorded eye/target/up/near and 70-degree effective FOV
+(base 55 plus the live configuration's 15) align the scenery. At recorded
+16:06:11 fine weather, the largest visible difference is the sun-shadow
+footprint: the original has a sunlit wedge across the road, while the
+viewer leaves that road shaded. The static comparison excludes the actor
+and HUD. No image-match pass is claimed; live sunlight inputs must be
+checked before attributing the shadow discrepancy to filtering or bias.
+
+The AO source audit is recorded in SHADING.md. The executable has a
+local/global-map ambient-occlusion filter, but neither stage100 nor
+stage200 f00 scheduler creates one; runtime activation is unresolved.
+
+Next: compare live sunlight and authored lighting for the street pose.
 Detail-normal, skinned bases, normal prepass, AO and shadow differences
 remain separate investigations. Three requested comparison pairs are
 still outstanding; this brief remains in progress.

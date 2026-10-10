@@ -831,6 +831,11 @@ fn setup(
             info!("low models {n}");
         }
     }
+    // Static nonfield reference captures need the stage's authored model
+    // bundle, just as the opening does (shared with the doors checkpoint).
+    if !args.play && args.stage != 100 {
+        event::spawn_stage_models(&mut commands, &mut loader, &mut meshes, &mut materials, &mut images, args.stage);
+    }
     loader.spawn_water(
         &mut commands,
         &mut meshes,
