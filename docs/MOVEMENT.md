@@ -642,7 +642,7 @@ stage flags, actor +0x26A4, +0x4CF0, +0x31EA).
 - The run velocity's factors +0x3340 (layer rate) and +0x29A8 are 1.0 in
   every trace (|velocity| = 10.165 exactly); the 1.15 is the unit time.
 - Town or field is a per-player flag set by the host. `--play` starts in
-  town mode (as recorded); F2 toggles it.
+  town mode (as recorded); F4 toggles it (F2 is the native Come! pawn order, S36).
 - Integration order: position += velocity, then velocity += gravity.
 - Turning (recorded 2026-10-09, keyboard): the heading (+0x2654) and the
   velocity take the stick's direction at once. The facing (+0x257C) steps

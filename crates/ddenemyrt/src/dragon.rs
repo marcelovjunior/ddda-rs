@@ -13,6 +13,10 @@ use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool}
 
 #[path = "dragon_flight.rs"]
 pub mod flight;
+#[path = "dragon_attacks.rs"]
+pub mod attacks;
+#[path = "dragon_particles.rs"]
+pub mod particles;
 #[path = "dragon_actor.rs"]
 mod actor;
 pub use actor::OpeningDragon;
@@ -215,6 +219,19 @@ pub enum DragonEffect {
     ExitHover,
     /// Primary-layer binding from 0x00a6ba90; blending remains host work.
     BindMotion { id: u16, blend: f32, speed: f32 },
+    /// PressAttack landing/exit, 0x00a6af70/0x00a6b290.
+    Gsf { no: u16, value: bool },
+    /// The native 150-frame fall recovery dispatches action 60.
+    EscapeFly { position: [f32; 3] },
+    /// BreathWide's effect engine requests, 0x00a56a30/0x00a56d10.
+    BreathPrewarm,
+    BreathStart,
+    BreathParticles,
+    BreathStop,
+    /// Press phase-specific native air/ground bookkeeping at 0x00a6af70.
+    PressControl { landed: bool },
+    /// Breath phase-specific native actor bookkeeping at 0x00a56d10.
+    BreathControl { emitting: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +239,7 @@ pub enum DragonError {
     Unsupported(u32),
     MissingMotion(u16),
     NoAction,
+    MissingTerrainContact,
 }
 
 /// Resolved inputs for phases 91..93. External displacement includes the
@@ -260,6 +278,8 @@ enum DragonAction {
     KakkuHover,
     HoverKakku { speed: f32, acceleration: f32 },
     TargetFly,
+    PressAttack,
+    BreathWide,
 }
 
 impl DragonAction {
@@ -269,6 +289,8 @@ impl DragonAction {
             Self::KakkuHover => 121,
             Self::HoverKakku { .. } => 103,
             Self::TargetFly => 126,
+            Self::PressAttack => 298,
+            Self::BreathWide => 263,
         }
     }
 }
@@ -369,6 +391,12 @@ pub struct Dragon {
     done: bool,
     turn: Option<DragonYaw>,
     pub flight: Option<flight::TargetFly>,
+    pub press: Option<attacks::PressAttack>,
+    pub breath: Option<attacks::BreathWide>,
+    /// Prior terrain contact and actor +0x679a == 0, resolved by the host.
+    /// Missing input rejects Press stepping rather than fabricating contact.
+    pub press_contact: Option<(bool, bool)>,
+    primary_events: u32,
 }
 
 impl Dragon {
@@ -385,6 +413,10 @@ impl Dragon {
             done: false,
             turn: None,
             flight: None,
+            press: None,
+            breath: None,
+            press_contact: None,
+            primary_events: 0,
         }
     }
 
@@ -401,11 +433,41 @@ impl Dragon {
             DragonAction::KakkuHover => 53,
             DragonAction::HoverKakku { .. } => 54,
             DragonAction::TargetFly => 10,
+            DragonAction::PressAttack => 33,
+            DragonAction::BreathWide => 21,
         })
     }
 
     pub fn motion(&self) -> Option<crate::body::MotionId> {
-        self.action.map(|a| crate::body::MotionId::new(0, a.motion()))
+        self.action.map(|a| {
+            let encoded = match a {
+                DragonAction::PressAttack if self.press.as_ref().is_some_and(|p| p.phase == attacks::PressPhase::Landed) => 299,
+                DragonAction::BreathWide if self.breath.as_ref().is_some_and(|b| b.phase == attacks::BreathPhase::Emitting) => 264,
+                _ => a.motion(),
+            };
+            crate::body::MotionId::new((encoded >> 8) as u8, encoded & 0xff)
+        })
+    }
+
+    /// Native action-33 entry 0x00a6aed0. Serialized phase and delay are
+    /// resolved by the controller, not inferred from the animation frame.
+    pub fn start_press(&mut self, data: &DragonData, phase: attacks::PressPhase, delay: f32)
+        -> Result<Vec<DragonEffect>, DragonError>
+    {
+        let effects = self.enter(data, DragonAction::PressAttack, 0.0, None)?;
+        self.press = Some(attacks::PressAttack::enter(data.press_params, phase, delay));
+        Ok(effects)
+    }
+
+    /// Only the opening sequence-4, controller+0x0c == 0 branch of
+    /// 0x00a56a30. Alternate dragon variants require a separate entry.
+    pub fn start_opening_breath(&mut self, data: &DragonData)
+        -> Result<Vec<DragonEffect>, DragonError>
+    {
+        let mut effects = self.enter(data, DragonAction::BreathWide, 0.0, None)?;
+        self.breath = Some(attacks::BreathWide::enter());
+        effects.push(DragonEffect::BreathPrewarm);
+        Ok(effects)
     }
 
     /// TargetFly modes 0/2, 0x00a60b70. Mode 1 needs the actor's
@@ -514,7 +576,7 @@ impl Dragon {
         turn: Option<DragonYaw>,
     ) -> Result<Vec<DragonEffect>, DragonError> {
         let motion = action.motion();
-        let id = crate::body::MotionId::new(0, motion);
+        let id = crate::body::MotionId::new((motion >> 8) as u8, motion & 0xff);
         if data.body.frames(id) == 0 {
             return Err(DragonError::MissingMotion(motion));
         }
@@ -530,9 +592,19 @@ impl Dragon {
                 self.turn = None;
                 effects.push(DragonEffect::ClearAcceleration);
             }
+            if matches!(previous, DragonAction::PressAttack) {
+                self.velocity = [0.0; 3];
+                effects.push(DragonEffect::Gsf { no: 463, value: false });
+            }
+            if matches!(previous, DragonAction::BreathWide) {
+                effects.push(DragonEffect::BreathStop);
+            }
         }
         self.action = Some(action);
         self.flight = None;
+        self.press = None;
+        self.breath = None;
+        self.primary_events = 0;
         // TargetFly entry disables the ordinary yaw rotator (+0x2576,
         // 0x00a60b70); its quaternion steering owns rotation instead.
         self.turn = None;
@@ -571,13 +643,16 @@ impl Dragon {
         input: DragonStep<'_>,
     ) -> Result<Vec<DragonEffect>, DragonError> {
         let action = self.action.ok_or(DragonError::NoAction)?;
-        let id = crate::body::MotionId::new(0, action.motion());
-        let motion = data
-            .body
-            .motion(id)
-            .filter(|m| m.frame_count > 0)
-            .ok_or(DragonError::MissingMotion(action.motion()))?;
-        let mut effects = vec![DragonEffect::HoverAirControl];
+        let mut effects = Vec::new();
+        match action {
+            DragonAction::PressAttack => effects.push(DragonEffect::PressControl {
+                landed: self.press.as_ref().unwrap().phase == attacks::PressPhase::Landed,
+            }),
+            DragonAction::BreathWide => effects.push(DragonEffect::BreathControl {
+                emitting: self.breath.as_ref().unwrap().phase == attacks::BreathPhase::Emitting,
+            }),
+            _ => effects.push(DragonEffect::HoverAirControl),
+        }
         if matches!(action, DragonAction::HoverUp(_)) && input.notify_attached {
             effects.extend(
                 input
@@ -598,6 +673,27 @@ impl Dragon {
                 self.done = hover.done;
             }
             DragonAction::TargetFly => {},
+            DragonAction::PressAttack => {
+                let (ground_contact, notify_landing) = self.press_contact.ok_or(DragonError::MissingTerrainContact)?;
+                let out = self.press.as_mut().unwrap().update(data.press_params, attacks::PressInput {
+                    engine_step: input.engine_step, primary_events: self.primary_events,
+                    ground_contact, motion_frame: self.frame, motion_ended: self.motion_ended,
+                    notify_landing, cached_position: self.pos,
+                });
+                if let Some(velocity) = out.actor_velocity { self.velocity = velocity; }
+                if let Some((no, value)) = out.gsf { effects.push(DragonEffect::Gsf { no, value }); }
+                if let Some(position) = out.escape_position { effects.push(DragonEffect::EscapeFly { position }); }
+                if let Some((id, blend)) = out.motion { self.rebind(id, blend, &mut effects); }
+                self.done = self.press.as_ref().unwrap().done;
+            },
+            DragonAction::BreathWide => {
+                let out = self.breath.as_mut().unwrap().update(self.frame, self.motion_ended);
+                if let Some((id, blend)) = out.motion { self.rebind(id, blend, &mut effects); }
+                if out.start_effects { effects.push(DragonEffect::BreathStart); }
+                if out.collect_particles { effects.push(DragonEffect::BreathParticles); }
+                if out.stop_effects { effects.push(DragonEffect::BreathStop); }
+                self.done = self.breath.as_ref().unwrap().done;
+            },
             _ => self.done |= hover_transition_complete(self.motion_ended, input.motion_flags),
         }
         if let Some(turn) = &mut self.turn {
@@ -625,6 +721,9 @@ impl Dragon {
                 self.velocity[axis] = input.velocity_min[axis];
             }
         }
+        let id = self.motion().ok_or(DragonError::NoAction)?;
+        let motion = data.body.motion(id).filter(|m| m.frame_count > 0)
+            .ok_or(DragonError::MissingMotion((u16::from(id.bank) << 8) | id.slot))?;
         let root = ddsim::RootMotion::from_motion(motion);
         let delta = if motion.loop_frame >= 0 {
             root.delta(self.frame, input.motion_step)
@@ -643,10 +742,25 @@ impl Dragon {
             next >= last
         };
         self.frame = data.body.wrap_frame(id, next);
+        // Primary layer event word consumed by the following phase 91.
+        // Translated from 0x01060730/0x01057060 (Steam 2017-12-13).
+        if let Some(bank) = data.body.banks.get(usize::from(id.bank)).and_then(Option::as_ref) {
+            if let Some(groups) = bank.list.events.get(usize::from(id.slot)) {
+                self.primary_events = groups.first().map_or(0, |runs|
+                    mtlmt::event_bits(runs, (next - input.motion_step) as i32, next as i32));
+            }
+        }
         if let Victim::Enemy { rates, .. } = &mut self.fighter.victim {
             sync_collision_flags(rates, input.controller_flag_c, input.actor_flags);
         }
         Ok(effects)
+    }
+
+    fn rebind(&mut self, id: u16, blend: f32, effects: &mut Vec<DragonEffect>) {
+        self.frame = 0.0;
+        self.motion_ended = false;
+        self.primary_events = 0;
+        effects.push(DragonEffect::BindMotion { id, blend, speed: 1.0 });
     }
 
     /// Final pass-C activation boundary, after authoritative terrain correction
@@ -659,10 +773,9 @@ impl Dragon {
         data: &DragonData,
         resolved_pose: &crate::body::Posed,
     ) -> Result<(), DragonError> {
-        let action = self.action.ok_or(DragonError::NoAction)?;
-        let id = crate::body::MotionId::new(0, action.motion());
+        let id = self.motion().ok_or(DragonError::NoAction)?;
         if data.body.frames(id) == 0 {
-            return Err(DragonError::MissingMotion(action.motion()));
+            return Err(DragonError::MissingMotion((u16::from(id.bank) << 8) | id.slot));
         }
         let acts = data.body.activations(id, self.frame);
         (self.fighter.attacks, self.fighter.hurts) =
@@ -689,6 +802,7 @@ pub struct DragonData {
     pub defender: EnemyDefender,
     pub regions: Vec<RegionPool>,
     pub obj_size: u32,
+    pub press_params: attacks::PressParams,
 }
 
 impl DragonData {
@@ -706,6 +820,7 @@ impl DragonData {
             defender: stats.defender,
             regions: stats.regions,
             obj_size: stats.obj_size,
+            press_params: attacks::PressParams::load(vfs)?,
         })
     }
 
