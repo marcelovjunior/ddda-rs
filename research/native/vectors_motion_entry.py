@@ -8,7 +8,10 @@ import harness as h
 N = "E:/ddda-re/notes/native"; S = h.SCRATCH; rnd = random.Random(47)
 specs = json.load(open(f"{N}/patterns/motion_entry.json"))
 fam = json.load(open("E:/ddda-re/notes/inventory/exact_families.json"))
-base_global = {0x008D4840: 0x01996BC4}
+base_global = {0x008D4840: 0x01996BC4,  # goblin; then the species bases (ddnative::species)
+               0x00A4DB70: 0x0199F320, 0x008FBDD0: 0x01997F64, 0x00919DB0: 0x0199886C, 0x0095A810: 0x0199A36C,
+               0x00A2AE80: 0x0199EE38, 0x00A202E0: 0x0199E9D8, 0x009C5890: 0x0199CEA4, 0x009B4920: 0x0199C82C,
+               0x009BD970: 0x0199CD44}
 for f in fam:
     if f["rep"] == 0x004E0EB0:
         for m in f["members"]:
@@ -22,7 +25,7 @@ for sp in specs:
     if g is None:
         continue
     for _ in range(3):
-        img = bytearray(rnd.getrandbits(8) for _ in range(0x7000))
+        img = bytearray(rnd.getrandbits(8) for _ in range(0x9000))
         struct.pack_into("<I", img, 0x44, S + OWN); struct.pack_into("<I", img, OWN, S + VT)
         struct.pack_into("<I", img, VT + 0x10, S + DTIF); struct.pack_into("<I", img, VT + 0x90, S + CAPF)
         img[DTIF:DTIF + 6] = bytes([0xB8]) + struct.pack("<I", S + DTI) + bytes([0xC3])
@@ -30,6 +33,8 @@ for sp in specs:
         cid = rnd.getrandbits(32) | 1
         struct.pack_into("<I", img, DTI + 4, cid); struct.pack_into("<I", img, DTI + 0x10, 0)
         struct.pack_into("<I", img, OWN + 0x206C, rnd.choice([0, 0x80, 0x82]))
+        # species tails follow these: keep them valid (no parts, no sub-object)
+        struct.pack_into("<I", img, OWN + 0x60E8, 0); struct.pack_into("<I", img, OWN + 0x7324, 0)
         fields = {str(x): struct.unpack_from("<I", img, x)[0] for kind, x in sp["args"] if kind == "field"}
         r = h.run(sp["addr"], ecx=S, scratch=bytes(img), allow={sp["base"], 0x007F1890},
                   poke={g: cid, 0x018CFE80: 0, 0x018CFE84: 0, 0x018CFE88: 0})

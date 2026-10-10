@@ -192,7 +192,7 @@ def scan_motion_entries():
     verified = {a for (a,) in db.execute("SELECT address FROM functions WHERE status='verified'")}
     found = []
     for a, ns, nm, sz in db.execute("SELECT address, namespace, name, size FROM functions "
-                                    "WHERE NOT thunk AND status NOT IN ('verified','platform') "
+                                    "WHERE NOT thunk AND status != 'platform' "
                                     "AND size BETWEEN 30 AND 200 AND address < 0x012E0000"):
         spec = motion_entry_spec(a, sz, verified)
         if spec:

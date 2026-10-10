@@ -17,10 +17,36 @@ pub const MOTION_ENTRIES: &[MotionEntry] = &[
     MotionEntry { addr: 0x008E2E40, base: 0x008D4840, args: [Const(0x0000026C), Const(0x00000001), Const(0x00000000), Const(0x00000000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x008E2FB0 (DDDA.exe 2017-12-13 Steam), cEm0100ActDmgCFall::vf05.
     MotionEntry { addr: 0x008E2FB0, base: 0x008D4840, args: [Const(0x000002AC), Const(0x00000001), Const(0x00000000), Const(0x00000000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x008FC720 (DDDA.exe 2017-12-13 Steam), cEm0200Run::vf05.
+    MotionEntry { addr: 0x008FC720, base: 0x008FBDD0, args: [Const(0x0000001A), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x008FC880 (DDDA.exe 2017-12-13 Steam), cEm0200RunStop::vf05.
+    MotionEntry { addr: 0x008FC880, base: 0x008FBDD0, args: [Const(0x0000001B), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x008FCA50 (DDDA.exe 2017-12-13 Steam), cEm0200Dash::vf05.
+    MotionEntry { addr: 0x008FCA50, base: 0x008FBDD0, args: [Const(0x00000024), Const(0x00000000), Const(0x00000000), Const(0x41700000), Const(0x3F800000), Const(0x3F800000)] },
+    // Translated from 0x008FDA90 (DDDA.exe 2017-12-13 Steam), cEm0200Turn::vf05.
+    MotionEntry { addr: 0x008FDA90, base: 0x008FBDD0, args: [Field(0x48), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x008FE110 (DDDA.exe 2017-12-13 Steam), cEm0200AttackRun::vf05.
+    MotionEntry { addr: 0x008FE110, base: 0x008FBDD0, args: [Const(0x00000024), Const(0x00000000), Const(0x00000000), Const(0x41700000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00902510 (DDDA.exe 2017-12-13 Steam), cEm0200ThreatWalk::vf05.
+    MotionEntry { addr: 0x00902510, base: 0x008FBDD0, args: [Const(0x00000015), Const(0x00000000), Const(0x00000000), Const(0x41700000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00903930 (DDDA.exe 2017-12-13 Steam), cEm0200Smell::vf05.
+    MotionEntry { addr: 0x00903930, base: 0x008FBDD0, args: [Const(0x0000006A), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00905A40 (DDDA.exe 2017-12-13 Steam), cEm0200LeaderAssult::vf05.
+    MotionEntry { addr: 0x00905A40, base: 0x008FBDD0, args: [Const(0x00000064), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x009075D0 (DDDA.exe 2017-12-13 Steam), cEm0200UpBody::vf05.
+    MotionEntry { addr: 0x009075D0, base: 0x008FBDD0, args: [Const(0x000000FF), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x009090D0 (DDDA.exe 2017-12-13 Steam), cEm0200StatusSleep::vf05.
+    MotionEntry { addr: 0x009090D0, base: 0x008FBDD0, args: [Const(0x00000220), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00927720 (DDDA.exe 2017-12-13 Steam), cEm0400ActFireBreath::vf05.
+    MotionEntry { addr: 0x00927720, base: 0x00919DB0, args: [Const(0x00000121), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00927840 (DDDA.exe 2017-12-13 Steam), cEm0400ActFireBreath_4::vf05.
+    MotionEntry { addr: 0x00927840, base: 0x00919DB0, args: [Const(0x00000122), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x009663E0 (DDDA.exe 2017-12-13 Steam), cEm1200ActWait::vf05.
     MotionEntry { addr: 0x009663E0, base: 0x009661E0, args: [Field(0x48), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x0099DEF0 (DDDA.exe 2017-12-13 Steam), cEm5101_00ActWait::vf05.
     MotionEntry { addr: 0x0099DEF0, base: 0x0099DDD0, args: [Field(0x48), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x009C65F0 (DDDA.exe 2017-12-13 Steam), cEm5300ActBack::vf05.
+    MotionEntry { addr: 0x009C65F0, base: 0x009C5890, args: [Const(0x00000055), Const(0x00000000), Const(0x00000004), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x009D2AF0 (DDDA.exe 2017-12-13 Steam), cEm5300_00ActEatAttackReturn::vf05.
     MotionEntry { addr: 0x009D2AF0, base: 0x009D1590, args: [Const(0x0000010A), Const(0x00000001), Const(0x00000004), Const(0x00000000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x009D2C40 (DDDA.exe 2017-12-13 Steam), cEm5300_00ActEatHitGuardShed::vf05.
@@ -29,6 +55,18 @@ pub const MOTION_ENTRIES: &[MotionEntry] = &[
     MotionEntry { addr: 0x009D4DC0, base: 0x009D1590, args: [Field(0x48), Const(0x00000000), Const(0x00000004), Const(0x00000000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x009D6900 (DDDA.exe 2017-12-13 Steam), cEm5300_00ActDmgHate::vf05.
     MotionEntry { addr: 0x009D6900, base: 0x009D1590, args: [Const(0x00000205), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A4DF80 (DDDA.exe 2017-12-13 Steam), cEm5800WaitNoButtle::vf05.
+    MotionEntry { addr: 0x00A4DF80, base: 0x00A4DB70, args: [Const(0x000000BE), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A4E0E0 (DDDA.exe 2017-12-13 Steam), cEm5800Doubt::vf05.
+    MotionEntry { addr: 0x00A4E0E0, base: 0x00A4DB70, args: [Const(0x000000BF), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A55A80 (DDDA.exe 2017-12-13 Steam), cEm5800BackWalk::vf05.
+    MotionEntry { addr: 0x00A55A80, base: 0x00A4DB70, args: [Const(0x00000019), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A599B0 (DDDA.exe 2017-12-13 Steam), cEm5800Bite::vf05.
+    MotionEntry { addr: 0x00A599B0, base: 0x00A4DB70, args: [Const(0x0000010B), Const(0x00000001), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A5FDA0 (DDDA.exe 2017-12-13 Steam), cEm5800FlyUpSky::vf05.
+    MotionEntry { addr: 0x00A5FDA0, base: 0x00A4DB70, args: [Const(0x00000064), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
+    // Translated from 0x00A795B0 (DDDA.exe 2017-12-13 Steam), cEm5800ShitaiGabuGabu::vf05.
+    MotionEntry { addr: 0x00A795B0, base: 0x00A4DB70, args: [Const(0x0000009B), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x00A97B90 (DDDA.exe 2017-12-13 Steam), cEm8000ActWait::vf05.
     MotionEntry { addr: 0x00A97B90, base: 0x00A979E0, args: [Field(0x48), Const(0x00000000), Const(0x00000000), Const(0x40A00000), Const(0x00000000), Const(0x3F800000)] },
     // Translated from 0x00A98EB0 (DDDA.exe 2017-12-13 Steam), cEm8100ActWait::vf05.
