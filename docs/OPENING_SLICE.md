@@ -41,14 +41,19 @@ extended past q0002.
 | Step | Original | Status | Brief |
 |---|---|---|---|
 | 1 | New game: stage 380, SceNo 100 | traced | opening-prologue |
-| 2 | Prologue, stage 380: the playable hero, fights (harpies among them), SceNo 200 → 900, event st380 ev00 | party setup and encounter facts merged; the chimera blocks (chimera-runtime) | opening-prologue |
+| 2 | Prologue, stage 380: the playable hero, fights (harpies among them), SceNo 200 → 900, event st380 ev00 | **for later** (maintainer, 2026-10-10): important, not urgent; it branches into more systems. The opening runs it as a scripted stand-in until then. Party setup, encounter facts and the chimera's think init are merged | opening-prologue |
 | 3 | Prologue end → stage 800, q0000 boot, the movie `movie\event\st100ev00.wmv` (the beach and the dragon) | **plays** at q0000's awaited PlayEvent (S16), skip = Escape / pad Start (S08, 0x004367C0); subtitles open (S19) | opening-movie |
 | 4 | Stage 801: character creation | data readers (chara-edit), no UI | chara-creation-ui |
-| 5 | Stage 200: st200 ev00 "It's the dragon!", the scripted fight "Challenge the Dragon", ev01 (heart taken), ev05 | dragon AI requests and the completion check merged; fight and host open | dragon-attack |
+| 5 | Stage 200: st200 ev00 "It's the dragon!", the scripted fight "Challenge the Dragon", ev01 (heart taken), ev05 | **required for the current goal**; dragon AI requests and the completion check merged; fight and host open | dragon-attack |
 | 6 | q0001 "Newly Arisen": weapon table, vocation, ev10, Quina | **playable**; the menu stub offers Fighter / Strider / Mage and the Arisen gets that vocation's fight kit and starting weapons (Host::apply_job_kit, 573e421, 50deb30); cutscene faces in progress (S10-S12) | done |
 | 7 | ev15, q0002 "Upon a Pawn": the first pawn, the goblins harassing a woman | NPC placement/lifetime/Guard merged; field NPC admission (S13); field enemy groups spawn into the opening's fight from loaded cells (head); the roadside encounter itself open (q0002-roadside) | upon-a-pawn, q0002-roadside |
 | 8 | q0003: the road out of Cassardis to the Encampment (st210 ev00 at SceNo 2000) | route test exits Cassardis's buildings; field detection rule merged; q3 entry; needs the cyclops (S17, S18) and the first Rift contact | road-to-encampment, cyclops-runtime, first-rift |
-| 9 | Arrival at the Encampment, where the hydra's head is later brought | not started | road-to-encampment |
+| 9 | Arrival at the Encampment, where the hydra's head is later brought | **waits** for the maintainer's playtest of steps 1-8 (road and dragon fight first); includes the cyclops (cyclops-runtime, S18) and the first Rift contact | road-to-encampment |
+
+**Current goal (maintainer, 2026-10-10):** the tutorial through the
+road to the Encampment: steps 3-8 playable, the dragon attack (5)
+included. The prologue (2) is for later; the Encampment (9) waits for the
+maintainer's playtest of everything before it.
 
 Steps 7–9 have not been traced yet: who the first pawn is, where the
 goblin scene happens, and which stage is the Encampment. Each brief

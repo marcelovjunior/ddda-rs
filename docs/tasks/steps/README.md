@@ -64,10 +64,10 @@ without an "after" can run in parallel, one agent each.
 | S21 | enemy HP bars above their heads | - |
 | S22 | identify the roadside goblin encounter (q0002) in the data | - |
 | S23 | **the opening stalls at SceNo 1400 after ev15** (tutorial blocker) | - |
+| S24 | map the beach dragon fight (research; S25+ follow from it) | - |
+| S18 | (ON HOLD: cyclops belongs to the Encampment, after the playtest) | |
 
-Priority now (the tutorial is the goal): S23 first, then S21, S22, S20, S12/S10/S11 (cutscene
-faces), S17-S18 (cyclops), S19. Head is doing the Strider (daggers done,
-bow next) and the vocation kit hookup.
+Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S24 (dragon attack map, then the steps it produces), S21, S22, S12, S19. S18 (cyclops) is ON HOLD.
 
 The cutscene command used by S01-S04:
 
