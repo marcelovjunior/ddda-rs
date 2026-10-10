@@ -52,6 +52,68 @@ fn tables() -> Tables {
     Tables { game: Adjust(game), dlc: Adjust(vec![]), status_enemy: Default::default(), status_player: Default::default() }
 }
 
+#[test]
+fn ordinary_intel_hp_rate_initialization_preserves_saved_current_and_never_compounds() {
+    use ddenemyrt::npc_combat::IntelHp;
+    // Synthetic rate isolates initialization and saved-current semantics.
+    let mut hp = IntelHp::default();
+    hp.initialize(0, false, Some(3.0));
+    assert_eq!(hp, IntelHp { current: 3000.0, maximum: 3000.0 });
+    hp.current = 725.0;
+    hp.initialize(0, true, Some(3.0));
+    assert_eq!(hp, IntelHp { current: 725.0, maximum: 3000.0 });
+    hp.initialize(0, true, Some(2.0));
+    assert_eq!(hp, IntelHp { current: 725.0, maximum: 2000.0 });
+    let preserved = hp;
+    hp.initialize(1, false, Some(4.0));
+    assert_eq!(hp, preserved);
+    hp.initialize(0, false, None);
+    assert_eq!(hp, preserved);
+    hp.initialize(0, false, Some(2.0));
+    assert_eq!(hp, IntelHp { current: 2000.0, maximum: 2000.0 });
+}
+
+#[test]
+fn native_civilian_lethal_dispatch_preserves_region_owner_and_action_guards() {
+    use ddenemyrt::npc_combat::{civilian_lethal_response, CivilianDeathContext, DamageOwnerClass, Region};
+    let base = CivilianDeathContext { region: Region::Japan, intel_type: Some(0), human_enemy: false,
+        ledger_civilian: Some(1), damage_owner: DamageOwnerClass::Player, current_action: 0 };
+    let response = civilian_lethal_response(base).unwrap();
+    assert_eq!(response.hp, 1.0);
+    assert_eq!(response.action, Some(0x0300_0044));
+    for owner in [DamageOwnerClass::Pawn, DamageOwnerClass::Class4] {
+        assert_eq!(civilian_lethal_response(CivilianDeathContext { damage_owner: owner, ..base }), Some(response));
+    }
+    for owner in [DamageOwnerClass::Npc, DamageOwnerClass::Enemy, DamageOwnerClass::Unknown] {
+        assert!(civilian_lethal_response(CivilianDeathContext { damage_owner: owner, ..base }).is_none());
+    }
+    assert_eq!(Region::default(), Region::Other);
+    assert!(civilian_lethal_response(CivilianDeathContext { region: Region::Other, ..base }).is_none());
+    for civilian in [None, Some(0), Some(2), Some(-1)] {
+        assert!(civilian_lethal_response(CivilianDeathContext { ledger_civilian: civilian, ..base }).is_none());
+    }
+    assert!(civilian_lethal_response(CivilianDeathContext { intel_type: Some(1), ..base }).is_none());
+    assert!(civilian_lethal_response(CivilianDeathContext { human_enemy: true, ..base }).is_none());
+    assert_eq!(civilian_lethal_response(CivilianDeathContext { intel_type: None, ..base }), Some(response));
+    for action in [0x0300_0044, 0xa6] {
+        let guarded = civilian_lethal_response(CivilianDeathContext { current_action: action, ..base }).unwrap();
+        assert_eq!(guarded.hp, 1.0);
+        assert_eq!(guarded.action, None);
+    }
+}
+
+#[test]
+fn native_damage_owner_classes_use_executable_priority() {
+    use ddenemyrt::npc_combat::{damage_owner_class, DamageOwnerClass::*};
+    assert_eq!(damage_owner_class(0x80, 2 | 4 | 8 | 0x10, 0x10), Player);
+    assert_eq!(damage_owner_class(0x80, 4 | 8 | 0x10, 0x10), Pawn);
+    assert_eq!(damage_owner_class(0x80, 8 | 0x10, 0), Npc);
+    assert_eq!(damage_owner_class(0, 8, 0x10), Enemy);
+    assert_eq!(damage_owner_class(0x80, 0x10, 0), Enemy);
+    assert_eq!(damage_owner_class(0, 0x10, 0), Class4);
+    assert_eq!(damage_owner_class(0, 0, 0), Unknown);
+}
+
 fn set_flags(f: &mut Fighter, flags: u32) {
     let Victim::Npc { rates, .. } = &mut f.victim else { unreachable!() };
     *rates = ordinary_collision_rates(flags);

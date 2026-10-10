@@ -31,3 +31,14 @@ for per-feature GUI checks. The full route stays as the integration test.
 `--opening-from <field checkpoint>` reaches the rescue outcome in a few
 minutes with the same result as the full route, and a test round-trips a
 route checkpoint through save/load.
+
+## Status (head, 2026-10-10)
+
+- Blocker found: `Story::from_world` restores flags/SceNo but not running
+  quest scripts ("the original saves non-fix scripts, 0x00495150"), so a
+  checkpoint inside q0002 would lose the rescue's FSM. Porting the original's
+  script save/restore (0x00495150 and its loader) is the prerequisite; it is
+  a source step of its own.
+- Interim (main bb3c661): `DDVIEW_TIME_SCALE=N` runs the deterministic host N
+  times faster per rendered frame; the full route at x4 reached SceNo 1400 in
+  under 5 real minutes. Use it for unattended GUI checks until checkpoints exist.

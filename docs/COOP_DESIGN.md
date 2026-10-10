@@ -73,3 +73,13 @@ it follows.
 - Saves: host-only, or each player keeps their own character? *Proposed in ADR 0002: the host saves all; each player keeps their own character's chunks.*
 - Pause and menus in a shared world. *Proposed in ADR 0002: personal menus freeze nothing; events freeze the shared world for both, as the original's group bit 57 does (FRAME.md).*
 - Pawn rental between the two players' Riftstones.
+
+## Region-dependent rules (head, 2026-10-10)
+
+The original reads the Steam IP country (0x0041E230 -> GetIPCountry: JP 0,
+US/default 1, EU 2, AS 3) and gates some rules on Japan. Example: the civilian
+safeguard of `uNpc::vf72` (0x00BB7410), which leaves a civilian at 1 HP and
+makes it flee when the player or a pawn hits it, applies only for JP; elsewhere
+player/pawn damage on civilians (Reynard on the road) is real. The host owns
+one session-wide `Region` setting, **default Other** (non-JP behaviour); it is
+never enabled implicitly, and every region-gated rule names its source.

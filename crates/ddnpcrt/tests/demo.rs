@@ -24,7 +24,7 @@ fn installed_beach_demo_readiness_waits_for_a_real_npc_body() {
         let mut demo = Demo::new(npc, &path(npc), graph).unwrap();
         for _ in 0..8 {
             let requests = demo.step(&Inputs { think: &think, world: &world,
-                npc_ready: false, damage_flag: false, interface_paused: false }).unwrap();
+                npc_ready: false, damage_flag: false, motion_number: None, interface_paused: false }).unwrap();
             for request in requests {
                 match request {
                     Request::Interface { command, interface: Interface::Wait, .. } => {
@@ -38,7 +38,7 @@ fn installed_beach_demo_readiness_waits_for_a_real_npc_body() {
         let mut readiness = false;
         for _ in 0..8 {
             for request in demo.step(&Inputs { think: &think, world: &world,
-                npc_ready: true, damage_flag: false, interface_paused: false }).unwrap() {
+                npc_ready: true, damage_flag: false, motion_number: None, interface_paused: false }).unwrap() {
                 if let Request::World(ddai::think::Request::QuestFlag { quest, bit, value }) = request {
                     assert_eq!(quest, 0);
                     assert!((10..=14).contains(&bit));
@@ -91,7 +91,7 @@ fn native_interface_completions_reject_stale_commands_and_waits() {
     let mut wait_command = None;
     for _ in 0..8 {
         for request in demo.step(&Inputs { think: &think, world: &world, npc_ready: true,
-            damage_flag: false, interface_paused: false }).unwrap() {
+            damage_flag: false, motion_number: None, interface_paused: false }).unwrap() {
             if let Request::Interface { command, interface: Interface::Wait, .. } = request { wait_command = Some(command); }
         }
     }
@@ -101,7 +101,7 @@ fn native_interface_completions_reject_stale_commands_and_waits() {
     let mut motion_command = None;
     for _ in 0..8 {
         for request in demo.step(&Inputs { think: &think, world: &world, npc_ready: true,
-            damage_flag: false, interface_paused: false }).unwrap() {
+            damage_flag: false, motion_number: None, interface_paused: false }).unwrap() {
             if let Request::Interface { command, interface: Interface::Motion(_), .. } = request { motion_command = Some(command); }
         }
     }

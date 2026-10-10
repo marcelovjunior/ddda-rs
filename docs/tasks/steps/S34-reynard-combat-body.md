@@ -514,3 +514,104 @@ NoDamage and FixPos. State0 checks q2:25 and q2:20; either condition enters
 state5, which clears Invincible/NoDamage. No other protection setter occurs
 in this installed graph. These are runtime-data conditions, not added
 quest-specific delays or tuning.
+
+The final camera12 midpoint capture used diagnostic checkpoint125c265,
+without changing the actor, HP, authored anchor or camera. The recognizable
+cowering Reynard appears beneath a full blue gauge in the actual1600x900
+PNG `E:/ddda-re/notes/steps/S34/npc-gauge-125c265.png` (private),
+2,563,907 bytes, SHA-256
+`ACE74E4A8CB20EE40C44703F677E0D29A8D11512F615EC4236D6460A9D74B3A3`.
+Head accepted the position on board5803. Model and rendered roots both
+match actor[35761.57,31982.791,142039.44]. The production authored point
+was[770.40393,128.77536]; the same-frame current anchor projected to
+[767.27795,168.68207] before the sourced40-pixel upward GUI offset.
+The old/current projection residual is about3.91 physical pixels.
+This proves visibility and positioning in this captured opening close-up;
+it is not an original NPC304 comparison or a successful rescue route.
+
+Owned hidden PID20304 began at06:41:38.1343432Z with a360-second watchdog.
+The engine captured at06:46:15.265242Z; the launcher stopped only its
+executable-path-verified owned PID three seconds after the PNG appeared.
+The retained handle reported OS exit-1 after280.7 seconds, the launcher
+exited0, WMI confirmed no remaining PID, and the GPU lease was released.
+The purposeful capture stop is not a natural viewer exit0. Its older
+command predates S46/time-scale checkpoints and was explicitly authorized
+on board5741; future batches use head's nearest-checkpoint policy.
+
+The resulting production NPC HUD uses `TransformHelper` and a cloned
+current Projection refreshed for the viewport aspect. Camera movement
+and lens edits occur earlier in Update, while Bevy's cached projection
+and GlobalTransform refresh later; using the current values removes the
+observed residual without moving the sourced anchor. Other HUD branches
+are unchanged. Seven focused release HUD tests passed, one existing test
+ignored, actual Cargo exit0, compile29.77s/test1.76s. No new GPU run was
+requested for this correction.
+
+Further source tracing corrects the earlier human-attacker hypothesis:
+**0x00BB7410** only floors civilian HP to1 and requests action03000044
+when DAT018750F0 is0. Lazy getter **0x0041E230** reads the Steam IP country:
+JP returns0, US/default1, EU2 and AS3. This is a regional branch, not a
+normal gameplay-mode branch. Ordinary regions take the regular death
+path even for player damage. A pure explicit-context helper translates
+all guards and the two action suppression values03000044/A6; production
+integration awaits the host's explicit region policy. Attacker classifier
+**0x00BB6EC0** priority is player, pawn, NPC/hostile-NPC, enemy, class4,
+unknown, after resolving proxy ownership. Navigation, actor escape and
+nearby-affinity cleanup are not claimed as implemented by this helper.
+
+The HP-rate consumer also has an important linked-intel split. Ordinary
+uNpc vf05 **0x00BABEE0** invokes **0x00889040** placement scaling only
+when its intel pointer is absent. Its linked ordinary branch copies
+intel HP/max at+3D8/+3DC, calls **0x00BBE910**, and sets the live pool;
+it skips that placement scaling call. The uMultiNpc vf05 **0x00BA96A0**
+call to00889040 does not establish the ordinary linked NPC304 behavior.
+Stored enable/rate1/2.5 therefore remains distinct from a proven ordinary
+consumer; no2500 HP change or invented reset behavior was applied.
+
+The subsequent intel trace resolves the stored2.5 HP rate. **uNpcIntel
+vf05 0x00BBC4E0**, atBBC70A..BBC755, tests type byte+3D0!=1 and
+HP-rate enable+450!=0, then sets max+3DC to1000*rate(+430). Current+3D8
+is set identically only when preserved-current flag+44F is clear.
+The intel branch of **cSetInfoNpc vf08 0x007A32F0** stores these fields
+from the placement. NPC304 bypasses the later pawn-ID<120 overrides;
+its linked actor then copies the initialized intel values as described
+above. This supersedes the earlier unresolved-consumer statement.
+
+Implemented: `IntelHp::initialize` translates that scalar branch and its
+preserved-current/type1 guards. New ordinary combat-lifetime binding reads
+the actual placement enable/rate and initializes HP/max once; an existing
+same-lifetime binding returns before initialization. The installed n04
+rate therefore gives Reynard2500 initial HP without embedding2.5 as a
+production constant. Damaged same-lifetime rebinding retains both current
+HP and the original maximum. Disabled rates and type1 skip the scalar
+branch; repeated initialization recomputes maximum from1000 rather than
+compounding. Persisted cross-session NPC intel/save loading and special
+party/body families are outside this opening combat adapter.
+
+Implemented: the pure civilian death response helper uses explicit
+`Region::Japan`/`Region::Other`, defaultOther, and every native ledger,
+intel-type, hostile-class, damage-owner and current-action guard. The host
+owns one session-wide region setting, shared by all players/NPCs. Other
+retains real friendly damage; no unconditional HP floor is installed.
+The helper reports sourced HP1 and optional escape action03000044,
+without applying an unsupported navigation/escape actor. Full actor
+escape and proxy-owner wiring remain unimplemented. This follows head's
+board5898 decision; COOP_DESIGN consolidation is delegated to head.
+
+The NPC body now reads its civilian byte from installed rNpcLedgerList
+and inherits the actual native base motion registrations. NPC vf192
+**0x00BAE100** calls **0x00B5B260**, which uses constructor table014F1D30;
+**0x008282E0** registers packed-key bank IDs until the -1 sentinel.
+These are co0/dm1/gp2. The previous014EAC20 collision survey was not the
+registration source. Authored NPC banks11/12/13 remain independently
+resolved. Bulk paths/ledger fields stay in the player's installation.
+
+Tested: installed body3 passed, combat11 passed with1 explicit diagnostic
+ignored (Cargo13674 actual exit0, compile5.39s/body3.22s/combat2.43s).
+Host NPC combat2 passed (Cargo27695 actual exit0, compile5.85s/test8.84s),
+including real runtime rate-derived initial HP and damaged same-lifetime
+rebinding. The exclusive core lease was released after the actual exit.
+No game process, new GPU run, or original NPC304 comparison was used for
+this batch. The previous contact trace used its documented1000 HP fixture;
+it is preserved as earlier diagnostic evidence rather than relabeled as
+a trace of this newly corrected production initialization.

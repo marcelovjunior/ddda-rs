@@ -9,7 +9,8 @@ use std::collections::HashMap;
 pub struct Banks { lists: HashMap<u16, mtlmt::MotionList> }
 
 impl Banks {
-    /// Translated from 0x00bb6060. `npc_type` is cNpcInfo.mNpcType
+    /// Translated from 0x00B5B260 -> 0x008282E0 and 0x00bb6060.
+    /// `npc_type` is cNpcInfo.mNpcType
     /// (body+0x6ed8); zero is its constructor value (0x00784880), not
     /// a ledger NPC id. The caller must supply actual specialized types.
     /// `common_variant` names the game's regular 00 or alternate 99 set.
@@ -23,7 +24,24 @@ impl Banks {
             mtlmt::parse(&vfs.read(path, mtarc::type_hash("rMotionList"))?)
                 .map_err(|e| format!("{path}: {e}"))
         };
-        let mut lists = HashMap::from([(11, read(&common)?)]);
+        let mut lists = HashMap::new();
+        // uPlayerBase ctor0x00B574D0 sets actor+0x4C24 to this table;
+        // uNpc vf1920x00BAE100 calls inherited0x00B5B260 before NPC banks.
+        // Native0x008282E0 reads bank/path pairs until packed==-1, loads
+        // rMotionList and registers bank(packed>>8)&15 with0x01057670.
+        // This is not the NPC collision survey table0x014EAC20.
+        // Translated from 0x008282E0 (DDDA.exe 2017-12-13 Steam).
+        let mut address = 0x014f_1d30;
+        loop {
+            let packed = exe.u32(address).map_err(|e| e.0)?;
+            if packed == u32::MAX { break; }
+            let bank = ((packed >> 8) & 15) as u16;
+            let pointer = exe.u32(address + 4).map_err(|e| e.0)?;
+            if pointer == 0 { lists.remove(&bank); }
+            else { lists.insert(bank, read(&exe.cstr(pointer).map_err(|e| e.0)?)?); }
+            address += 8;
+        }
+        lists.insert(11, read(&common)?);
         let table = exe.u32(0x0163_c980 + 4 * npc_type).map_err(|e| e.0)?;
         for (index, suffix) in ['c', 'j'].into_iter().enumerate() {
             let bank = ((exe.u32(table + index as u32 * 8).map_err(|e| e.0)? >> 8) & 15) as u16;

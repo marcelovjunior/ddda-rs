@@ -736,7 +736,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 motion_ended: motion.is_some_and(|m| m.observation().action_terminal),
                 ..Default::default()
             };
-            match applied.action.step(&*data, clock, &inputs, &story.world, ready, self.story_npcs.talks.contains_key(&npc)) {
+            match applied.action.step(&*data, clock, &inputs, &story.world, ready, motion.map(|m| m.motion), self.story_npcs.talks.contains_key(&npc)) {
                 Ok(frame) => {
                     // 0x0056C940 destroys the old interface before replacement.
                     // An unported GotoEx/Damage cannot retain an old motion or
