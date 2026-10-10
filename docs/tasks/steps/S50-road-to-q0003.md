@@ -33,10 +33,12 @@ latest runs still time out (300 s) with the Arisen replanning in place near
 From the RoadWalk checkpoint the demo reaches q0002_event2 and q0003 boots,
 with the cause documented.
 
-## Results (codex-76, work in progress)
+## Results (codex-76, ready for review)
 
-Current source changes are **untested**, and the authored q2:10/q0003
-walked gate remains **open**. Head's source/current save container requires
+**Implemented, tested and walked:** the v2 RoadWalk checkpoint reaches the
+authored event2 Area; q2:10 becomes true and q0003 boots. The ordinary viewer
+exits 0. Original-game appearance/path comparison and the rest of q0003's
+Encampment/cyclops route are not claimed. Head's source/current save container requires
 the regenerated ECON-v2 checkpoint; the earlier `route/` file is incompatible.
 The v2 RoadWalk SHA-256 is
 `F19945A9F9A075282A3B4A375696C7259A6453AE4007394E4C3A647C8705A5A9`.
@@ -84,7 +86,7 @@ The v2 RoadWalk SHA-256 is
   170 waypoints at 11:02:35.167, after the demo deadline. Thus waiting for
   a collision stall before planning can strand the body below the road.
 
-### Prepared changes and validation
+### Changes and validation
 
 The demo search anchors candidate X/Z positions to its initial grid origin
 and uses the installed event2 `Shape::hit` predicate for completion rather
@@ -104,7 +106,7 @@ it does not substitute straight movement over an embankment. Pending
 searches refresh actual completed residency, including the first host tick
 after a checkpoint resume.
 
-Five regressions are prepared but **not executed**: entry into a trigger
+Five regressions **pass**: entry into a trigger
 whose centre has no walkable ground; the recorded RoadWalk position over
 installed collision/scenery, geometrically replaying native residency at
 partial endpoints and checking actual Area entry without repeated wall
@@ -114,8 +116,64 @@ q2:10 without q0003, which must keep waiting) without
 manufacturing quest success; and the first RoadWalk heading with no safe
 ground, which must wait without placing the actor or inventing flags.
 This geometric search regression is not a
-simulated walk or a game-process acceptance run. Full viewer tests, release build and
-the real v2 walked route are pending the coordinated build/GPU queue.
+simulated walk or a game-process acceptance run. The separately observed
+ordinary-input route below supplies that gate.
+
+- Source commits: `824c1f0`, `6c90b6e`, `1e43ba9`, `ad098e1`, `c53d4d9`.
+  Reviewed main dependencies are merged on the owned branch at `ee24b63`
+  (main7ea18c9) and `b644636` (main5a76f19). Relative to reviewed main,
+  feature edits are only this brief and `crates/ddview/src/opening.rs`.
+- After narrow release cleaning of the viewer and shared S55-affected
+  economy/progression/host/network packages, `cargo test --release -p ddview
+  -- --test-threads=1 --nocapture` actually exited 0 (session79570):
+  **114 passed, 2 existing ignored**, fresh compile35.58 s/tests81.79 s.
+  All five new road regressions are explicitly present and passed. The
+  installed geometric replay visits3,796 keys/4,096 nodes and returns135
+  waypoints ending inside the Area at `(21591.287, 31996.15, 138431.81)`.
+- `cargo build --release -p ddview` actually exited0 (session52693),
+  40.11 s. The frozen private `ddview-s50-b644636.exe` is95,030,784 bytes,
+  SHA-256 `7BBC77DB1802513806C88369B29B9B97196ACACC3B4A54E5A103A5C0DC878763`.
+  The shared M5 lease was released after that actual exit and pin copy.
+
+### Actual checkpoint walk
+
+One normal `live/ddview` lease launched that private default-renderer pin,
+with the unchanged real v2 checkpoint above, `DDVIEW_OPENING_STEP=RoadWalk`,
+x4 virtual time, ordinary demo combat/input, one Arisen, 1600x900 and
+`--perf-route --shots <private directory>`. Negative diagnostic flags were
+removed rather than set to empty strings. No original game control,
+teleports, placement fallback, quest bits, HP, curatives or XP were injected.
+Curative use, if needed, retains the existing host-owned inventory action.
+
+- The first safe search begins at11:37:31.707 UTC and finishes with135
+  waypoints at11:37:34.298. Actual walking changes native collision/layout
+  residency; ordinary blocked-path replans finish with93 and56 waypoints.
+  The body follows the safe detour instead of taking the direct embankment
+  drop seen in the old capture.
+- At **11:38:07.971 UTC**, the actual driver logs
+  **`q2:10 true, q0003 booted true`**, then RoadWalk -> Done with quests
+  `[28, 31, 1, 2, 3]`, stage100/SceNo1410. The endpoint is
+  `(21555.422, 31997.69, 138440.47)` and the host writes a real `Done.ddhs`
+  checkpoint, SHA-256
+  `CD9CDD775A66F73B112637D59DD87E971CF8266E1573BB40E3941F58508EB900`.
+- Viewer PID240 and the enclosing harness session9009 **actually exit0**
+  after55.606 s, naturally before the120-s wall exit/180-s retained-handle
+  watchdog. The owned viewer is absent before lease release; the original
+  DDDA PID23408 remains running. No FPS improvement is claimed: screenshots
+  and x4 make this a route check, not a timing sample.
+- Both actual PNGs were viewed. The endpoint `7-q0002.png` shows the
+  dressed Arisen standing on the road with terrain, rocks, the palisade and
+  the HUD listing q0003; HP480 is visible. The initial `1-newly-arisen.png`
+  is a sky/HUD-only startup frame and is **not** a geometry/appearance gate.
+  Neither is a comparison against a matched original-game reference.
+
+Private evidence is under
+`E:/ddda-re/notes/steps/S50/real-v2-roadwalk-b644636-r1/` (logs, recorded
+arguments/exit/provenance, PNGs and checkpoint), with full test/build logs
+beside it. The private launch plan performs checkpoint/pin/harness SHA
+checks and refuses a failed normal lease before starting a viewer. It uses
+the accepted S41 safe retained-process-handle harness, not the old PID-stop
+helper. No private evidence or game files enter the repository.
 
 ### Authored navigation evidence
 
@@ -134,9 +192,9 @@ approximately 6 m away. A route within that graph has 36 authored nodes,
 but includes links with substantial vertical changes. These are guidance,
 not proof that every NPC graph edge is walkable by an Arisen. No raw graph,
 game data, native resource or speculative cross-cell connection is copied
-into the repository. The grid/Area correction is tested first; a wider
-navigation-provider port is unnecessary if the genuine route succeeds.
+into the repository. The smaller collision/grid/Area correction succeeds
+in the genuine route; a wider navigation-provider port was unnecessary.
 
-Next action: execute the installed collision/Area regression after the
-current S41 captures, then build and walk the v2 checkpoint to authored
-q0002_event2 and q0003 with a retained-process-handle watchdog.
+Next action: head reviews/merges this branch, then the next q0003 route brief
+uses the real Done checkpoint to advance toward the Encampment/cyclops.
+S52 supplies the pawn-message queue that event2 subsequently waits on.
