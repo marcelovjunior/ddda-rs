@@ -4,6 +4,88 @@
 use crate::commands::Command;
 use ddexe::Exe;
 
+/// Native situation records and their four-candidate message groups. These
+/// are bulk executable data, read at runtime rather than reproduced here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SituationTables(Vec<Situation>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Situation {
+    pub flags: u32,
+    pub parameter: i32,
+    pub candidates: Vec<i32>,
+    direct: bool,
+}
+impl SituationTables {
+    // Translated from 0x00599BB0, 0x0059D0E0 / 0x0059D180
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn from_exe(exe: &Exe<'_>) -> Result<Self, String> {
+        let mut rows = Vec::new();
+        for index in 0..0x98 {
+            let at = 0x0152_D0F0 + index * 16;
+            let message = exe.i32(at + 8)?;
+            let group = exe.u32(at + 12)?;
+            let direct = message >= 0;
+            let mut candidates = Vec::new();
+            if direct { candidates.push(message); }
+            else if let Some(address) = situation_group_address(exe, group)? {
+                // Unlike enemy/order lists, -1 holes do not end this group.
+                for slot in 0..4 {
+                    let value = exe.i32(address + slot * 4)?;
+                    if value != -1 { candidates.push(value); }
+                }
+            }
+            rows.push(Situation { flags: exe.u32(at)?, parameter: exe.i32(at + 4)?,
+                candidates, direct });
+        }
+        Ok(Self(rows))
+    }
+    pub fn get(&self, situation: u32) -> &Situation {
+        // Native out-of-range situations fall back to row zero.
+        &self.0[if situation < 0x98 { situation as usize } else { 0 }]
+    }
+    // Translated from 0x00599BB0 / 0x0059D180 (DDDA.exe 2017-12-13 Steam).
+    pub fn select(&self, situation: u32, mut random: impl FnMut() -> u32) -> Option<i32> {
+        let row = self.get(situation);
+        if row.candidates.is_empty() { None }
+        else if row.direct { row.candidates.first().copied() }
+        else { Some(row.candidates[random() as usize % row.candidates.len()]) }
+    }
+}
+
+// Translated from 0x0059D0E0 (DDDA.exe 2017-12-13 Steam).
+fn situation_group_address(exe: &Exe<'_>, group: u32) -> Result<Option<u32>, String> {
+    Ok(match group {
+        0..24 => Some(0x0182_9B50 + group * 16),
+        100_000 => Some(0x0182_9CD0),
+        200_000..200_072 => Some(0x0182_9CE0 + (group - 200_000) * 16),
+        210_000..300_000 => {
+            let bank = (group - 210_000) / 1000;
+            let row = (group - 210_000) % 1000;
+            if bank < 24 && row < exe.u32(0x0152_D034 + bank * 8)? {
+                Some(exe.u32(0x0152_D030 + bank * 8)? + row * 16)
+            } else { None }
+        }
+        _ => None,
+    })
+}
+
+/// Actor list1 bypasses TALK cooldown and random selection. Its accepted
+/// requests are forwarded in insertion order, after the ordinary list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UrgentQueue(pub Vec<ActorRequest>);
+impl UrgentQueue {
+    // Translated from 0x005AB130 (DDDA.exe 2017-12-13 Steam).
+    pub fn offer(&mut self, request: ActorRequest) {
+        if self.0.len() < 32 { self.0.push(request); }
+    }
+    // Translated from 0x005AAF7F..0x005AB09E (DDDA.exe 2017-12-13 Steam).
+    pub fn step(&mut self, eligible: bool, previously_shown: impl Fn(i32) -> bool) -> Vec<ActorRequest> {
+        if !eligible { return Vec::new(); }
+        std::mem::take(&mut self.0).into_iter()
+            .filter(|request| !previously_shown(request.message)).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     pub message: i32,
@@ -409,6 +491,33 @@ impl Bank {
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_situation_selection_keeps_direct_no_draw_and_group_draw() {
+        let tables = SituationTables(vec![
+            Situation { flags: 1, parameter: -1, candidates: vec![907], direct: true },
+            Situation { flags: 0, parameter: -1, candidates: vec![908, 909, 910], direct: false },
+            Situation { flags: 0, parameter: -1, candidates: vec![], direct: false },
+        ]);
+        assert_eq!(tables.select(0, || panic!("direct message draws no RNG")), Some(907));
+        assert_eq!(tables.select(152, || panic!("fallback row is direct")), Some(907));
+        let mut draws = 0;
+        assert_eq!(tables.select(1, || { draws += 1; 5 }), Some(910));
+        assert_eq!(draws, 1);
+        assert_eq!(tables.select(2, || panic!("empty group draws no RNG")), None);
+    }
+
+    #[test]
+    fn urgent_list_keeps_insertion_order_bypasses_cooldown_and_drops_new_overflow() {
+        let mut queue = UrgentQueue::default();
+        for message in 0..33 { queue.offer(ActorRequest { message, grouped: false }); }
+        assert!(queue.step(false, |_| false).is_empty());
+        assert_eq!(queue.0.len(), 32);
+        let forwarded = queue.step(true, |message| message == 1);
+        assert_eq!(forwarded.iter().map(|request| request.message).collect::<Vec<_>>(),
+            (0..32).filter(|message| *message != 1).collect::<Vec<_>>());
+        assert!(queue.0.is_empty());
+    }
+
     fn request(speaker: u8, message: i32, priority: i32, remaining: f32) -> Pending {
         Pending { speaker, message, priority, remaining, grouped: false }
     }
@@ -500,6 +609,14 @@ mod tests {
         let file = ddexe::ExeFile::next_to(&path).unwrap();
         let exe = file.image().unwrap();
         let tables = OrderTables::from_exe(&exe).unwrap();
+        let situations = SituationTables::from_exe(&exe).unwrap();
+        // Near-death actor entries AFCFBF / AFD17F select situation6,
+        // whose group0 candidates stay in the installed executable.
+        let expected: Vec<_> = (0..4).map(|slot| exe.i32(0x0182_9B50 + slot * 4).unwrap())
+            .filter(|message| *message != -1).collect();
+        assert!(!expected.is_empty());
+        assert_eq!(situations.get(6).candidates, expected);
+        assert_eq!(situations.get(6).flags & 1, 1);
         let vfs = ddvfs::Vfs::open(&path).unwrap();
         for (command, goal) in [(Command::Go, None), (Command::Come, None), (Command::Help, Some(52))] {
             for style in 0..7 {

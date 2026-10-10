@@ -372,6 +372,13 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
             self.history.pop_front();
         }
         for (addr, r) in self.clients.iter_mut() {
+            if r.seat.is_some() {
+                for message in &report.pawn_messages {
+                    if message.heard_by(ProfileId(r.profile)) {
+                        r.link.send_reliable(ToClient::PawnMessage(message.clone()).encode());
+                    }
+                }
+            }
             for q in &report.requests {
                 r.link.send_reliable(
                     ToClient::Story {

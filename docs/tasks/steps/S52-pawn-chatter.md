@@ -92,3 +92,63 @@ private assets were committed. Next action: compose the admitted-pawn host
 adapter with the typed authored request, then installed native GUI/voice
 consumption; run full downstream tests and a release viewer build before
 requesting the single nearest-checkpoint capture from the GPU holder.
+
+### Follow-up source preparation (not compiled or tested)
+
+The next source batch adds host admission bindings, `FrameReport.pawn_messages`,
+reliable `ToClient::PawnMessage` with persistent-profile hearing and monotonic
+message IDs, and a thin installed-font/STRQ consumer. It preserves actual
+hirer, network identity and hire time; rebinding retires old requests. The
+host's successful-load tail clears transient speech after fallible parsing;
+failed load must preserve the queue. A new installed regression checks the
+pass-C order mailbox only produces speech on the following move frame and
+checks failed-load atomicity. All follow-up tests remain **unexecuted**.
+
+New native evidence: `0x00AFCFBF` and `0x00AFD17F` request situation 6 on
+actor list **1**, not configuration priority 1. `0x00AFCE65` initializes
+the former caller's EDI to 1. `0x00599BB0` resolves situation records from
+`0x0152D0F0`; `0x0059D0E0`/`0x0059D180` select four-candidate message groups,
+skipping individual `-1` holes. These are runtime executable readers.
+`0x005AAF7F..0x005AB09E` forwards every eligible list1 request in insertion
+order, without ordinary TALK cooldown or random selection. The host exposes
+`SituationEvent { pawn_slot, situation, list_index }`; S53 supplies the
+actual guarded near-death entry event. No guessed low-HP threshold is used.
+
+Combat timing remains open. Global `0x018FA4F4` is `sRecognition`, proved by
+DTI registration `0x0132C820` and constructor `0x00487890`. Combat-list writer
+`0x004403A0` reads its recognized-byte records at `0x00440554`, then pawn
+sensor2 candidates at `0x00440628`. Recognition `0x00487B00`/`0x00488260`
+uses seen/lost clocks; visibility `0x00488440` tests the player camera's
+frustum (`0x007D3F50`) and a collision ray. Existing placeholder pawn
+`BATTLE_RANGE` and current attack targets are not substituted for this list.
+The native sensor/recognition adapter and original comparison are outstanding.
+
+Presentation currently covers plain single-line glyphs with native ordinary
+message/name font objects 5/9 and settled row positions. Native multiline,
+markup, portraits, filters, slide/fade sequences, GUI acceptance/history,
+voice pitch/spatial/lip synchronization and immediate NPC messages remain
+explicitly unsupported. The installed GUI/text/voice regression is also
+unexecuted. Source preparation alone is not a Ready result.
+Viewer reconnection/session replacement also remains open: the current
+viewer creates one session at startup. A future replacement must reset
+presentation deduplication to that new session, while same-host load/retry
+must preserve monotonic IDs. `Client::new` starts a fresh client counter.
+
+Opening hooks for head to apply, because `opening.rs` remains head-owned:
+
+```rust
+// prepare(), after Host::new and before host/session construction completes:
+host.pawn_chatter = ddhost::pawn_chatter::Runtime::with_data(std::sync::Arc::new(
+    ddhost::pawn_chatter::Data::load(&vfs)?));
+// step(), after the successful host.tick_network result:
+crate::pawn_chatter::queue(&mut stage_view.commands, &report.pawn_messages);
+// guest_step(), in the existing drain of client.events, before PlayEvent:
+if let ddnet::proto::ToClient::PawnMessage(message) = &event {
+    crate::pawn_chatter::queue(&mut view.commands, std::slice::from_ref(message));
+}
+```
+
+Next actual gate: integrate reviewed committed main with the S53 transactional
+loader and head's capsule-swept push-out fix, then obtain the normal full
+touched/downstream Cargo window and viewer release window. No follow-up
+Cargo run, GPU work, original process control or capture has occurred.
