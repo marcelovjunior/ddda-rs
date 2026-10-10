@@ -12,7 +12,7 @@
 //! applied here). A keyed channel replaces the joint's rest value; unkeyed
 //! channels keep it (*assumed*, see Riftstone's UNKNOWNs).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
@@ -140,6 +140,8 @@ pub struct Playback {
     pub joints: HashMap<u8, Entity>,
     /// Fixed frame to hold (screenshots); `None` plays in a loop.
     pub hold_frame: Option<f32>,
+    /// Diagnostic context only: the event timeline differs from motion time.
+    pub event_frame: Option<f32>,
     /// Set with `motion` when the motion changes: interpolation frames of
     /// the change. `animate` freezes the shown pose and fades it out over
     /// the new motion (`mtlmt::blend`, docs/ANIMATION.md).
@@ -153,6 +155,65 @@ pub struct Playback {
     /// Weapons drawn: each weapon with a hand joint hangs there instead of
     /// on its sheathed row (0x0080be30's switch).
     pub drawn: bool,
+}
+
+/// Original local transform, before motion and character-edit constraints.
+/// Added only when the joint diagnostic is enabled; shared part joints keep
+/// the rest transform and parent of the skeleton that first created them.
+#[derive(Component)]
+pub struct JointRest {
+    id: u8,
+    parent_id: Option<u8>,
+    local: Transform,
+}
+
+#[derive(Default)]
+pub struct JointDump {
+    settings: Option<(Option<f32>, Option<f32>)>,
+    done: HashSet<Entity>,
+}
+
+fn diagnostic_frame(name: &str) -> Option<f32> {
+    std::env::var(name).ok()?.parse::<f32>().ok().filter(|f| f.is_finite())
+}
+
+fn joint_delta(rest: &Transform, animated: &Transform) -> (f32, f32) {
+    // abs(dot) treats q and -q as the same rotation. Distances are already
+    // in model cm (the UNIT conversion sits on the actor root).
+    let cosine = rest.rotation.normalize().dot(animated.rotation.normalize()).abs().clamp(0.0, 1.0);
+    (2.0 * cosine.acos().to_degrees(), rest.translation.distance(animated.translation))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dump_joints(
+    actor: Entity, model: Option<&Name>, cutscene: Option<&crate::event::Actor>,
+    playback: &Playback, frame: f32, state: &mut JointDump,
+    rest: &Query<&JointRest>, joints: &Query<&mut Transform>,
+) {
+    let Some(cutscene) = cutscene else { return };
+    let (motion_frame, event_frame) = *state.settings.get_or_insert_with(|| (
+        diagnostic_frame("DDVIEW_JOINT_DUMP"), diagnostic_frame("DDVIEW_JOINT_DUMP_EVENT_FRAME"),
+    ));
+    let matches = motion_frame.is_some_and(|wanted| (wanted - frame).abs() < 0.5)
+        || event_frame.zip(playback.event_frame).is_some_and(|(wanted, actual)| (wanted - actual).abs() < 0.5);
+    if !matches || !state.done.insert(actor) { return; }
+    let mut ids: Vec<_> = playback.joints.iter().collect();
+    ids.sort_unstable_by_key(|(id, _)| **id);
+    for (_, &entity) in ids {
+        let (Ok(original), Ok(animated)) = (rest.get(entity), joints.get(entity)) else { continue };
+        let (angle, moved) = joint_delta(&original.local, animated);
+        let xyz_degrees = |q: Quat| {
+            let (x, y, z) = q.normalize().to_euler(EulerRot::XYZ);
+            [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+        };
+        info!(
+            "JOINT{} actor={} model={} event_frame={:?} motion_frame={frame:.3} id={} parent={:?} rest_t_cm={:?} rest_r_xyz_deg={:?} rest_s={:?} animated_t_cm={:?} animated_r_xyz_deg={:?} animated_s={:?} angle_deg={angle:.3} move_cm={moved:.3}",
+            if angle > 45.0 || moved > 3.0 { "!!" } else { "" },
+            cutscene.name, model.map_or("<unnamed>", Name::as_str), playback.event_frame, original.id,
+            original.parent_id, original.local.translation.to_array(), xyz_degrees(original.local.rotation), original.local.scale.to_array(),
+            animated.translation.to_array(), xyz_degrees(animated.rotation), animated.scale.to_array(),
+        );
+    }
 }
 
 /// A rigid attachment (a weapon): its anchor under the root, the sheathed
@@ -521,6 +582,7 @@ pub fn spawn_assembled_hands(
         motion,
         joints: joints_by_id,
         hold_frame,
+        event_frame: None,
         blend_request: None,
         blend: None,
         morph,
@@ -553,6 +615,13 @@ fn bind_skeleton(
             ))
             .id();
         let parent = usize::from(b.parent);
+        if diagnostic_frame("DDVIEW_JOINT_DUMP").is_some() || diagnostic_frame("DDVIEW_JOINT_DUMP_EVENT_FRAME").is_some() {
+            commands.entity(e).insert(JointRest {
+                id: b.anim_map_index,
+                parent_id: (b.parent != 255 && parent < i).then(|| model.bones[parent].anim_map_index),
+                local: Transform::from_matrix(local),
+            });
+        }
         if b.parent != 255 && parent < i {
             commands.entity(out[parent]).add_child(e);
         } else {
@@ -792,11 +861,14 @@ fn spawn_meshes(
 /// Samples each playing motion and writes its joints' local transforms,
 /// then mixes in the pose frozen at the last motion change while its fade
 /// lasts (`mtlmt::blend`).
-pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Query<&mut Transform>) {
+pub fn animate(
+    time: Res<Time>, mut players: Query<(Entity, Option<&Name>, Option<&crate::event::Actor>, &mut Playback)>,
+    mut joints: Query<&mut Transform>, rest: Query<&JointRest>, mut dump: Local<JointDump>,
+) {
     let _timing = crate::perf::Section::start("character::animate");
     // the model's frame step in motion frames (the same clamp as play::step)
     let step = time.delta_secs().min(0.1) * MOTION_FPS;
-    for mut p in &mut players {
+    for (entity, name, actor, mut p) in &mut players {
         if let Some(frames) = p.blend_request.take() {
             // freeze the pose shown now (itself possibly mid-blend), before
             // the morph: the morph pass goes on top of the blend each frame,
@@ -864,6 +936,7 @@ pub fn animate(time: Res<Time>, mut players: Query<&mut Playback>, mut joints: Q
         if let Some(m) = &mut p.morph {
             apply_morph(m, drawn, &mut joints);
         }
+        dump_joints(entity, name, actor, &p, frame, &mut dump, &rest, &joints);
     }
 }
 
