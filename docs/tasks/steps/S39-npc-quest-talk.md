@@ -36,7 +36,7 @@ An installed host test and the opening route show Reynard's thanks with
 the reward after the rescue and his repeatable line afterwards, all from
 the installed table; the Result lists the sources.
 
-## Result (source checkpoint; viewer and persistence acceptance pending)
+## Result (source and viewer tested; ordinary route gate open)
 
 The installed `n304QuestCtrl` and quest message resources are read at runtime
 by `ddnpcrt::InstallData`. The selector keeps the NPC's permanent row masks
@@ -109,8 +109,21 @@ reads actual conversation12 lines; only host phase2 supplies q2:88 and item1058.
 After actual text end it talks again for conversation13. No timed flag or
 generic completion bypass is added. Head approved these demo steps in #4828.
 
-The remaining work is release build and an ordinary route. Full route
-acceptance still depends on head's normal
-combat driver and NPC combat body work; S32's three actual ordinary attempts
-did not reach its complete motion chain. No original-game comparison is
-claimed by this source checkpoint.
+The release build actually exited zero in **44.40 s**, and the committed
+`93873b9` executable was copied privately to `notes/steps/s39/` before the
+M5 lease was released. Its only build warnings were the existing public
+opening/Args visibility and unused audio helper warnings. Codex-1 independently
+passed all seven final core talk/save/phase regressions (board #4912).
+
+The ordinary route gate remains open. Before launching another unchanged
+long replay, source inspection identified a driver gap (board #4872/#4910):
+performance FieldWalk ends at the first cell boundary, then Rescue can choose
+Done with zero live enemies and no outcome before entering the authored
+event1 Area. Event1 entry requests camera12 and sets q2:25; its actual script
+is `scr/st100/fsm/q0002_event1`. A normal approach to that volume and waiting
+for the actual outcome is the next driver step, without manufacturing quest
+flags. Main q2 also uses NpcCheck flag0, which requires observed positive HP
+in addition to live intel; that is S34's separate source dependency. Head and
+the S40 owner were given the findings before another GPU replay. No S39 GUI
+route was launched, and S32's three previous ordinary attempts did not reach
+its complete motion chain. No original-game comparison is claimed.
