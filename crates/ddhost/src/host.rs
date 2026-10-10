@@ -147,9 +147,11 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub rift: ddrift::Rift,
     /// The systems' game data, when the host has it.
     pub data: SystemData,
-    /// The seat that hired the pawn in each hired slot (Rift party slots
+    /// The persistent profile that hired the pawn in each hired slot (Rift party slots
     /// 1 and 2).
-    pub(crate) hired_by: [Option<PlayerId>; 2],
+    pub(crate) hired_by: [Option<ProfileId>; 2],
+    /// Unseated Arisen state, owned by persistent identity (co-op policy).
+    pub(crate) profiles: std::collections::BTreeMap<ProfileId, crate::profiles::Parked>,
     /// Seats standing at a Riftstone; the room is open while any do.
     pub(crate) rift_visitors: BTreeSet<PlayerId>,
     edges: Edges,
@@ -196,6 +198,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             rift: ddrift::Rift::new(1, ddrift::PawnLog::default()),
             data: SystemData::default(),
             hired_by: [None; 2],
+            profiles: Default::default(),
             rift_visitors: BTreeSet::new(),
             edges: Edges::default(),
             pawn_orders: Default::default(),
@@ -258,15 +261,16 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Gives each hired pawn (`rift.party.hired`, e.g. Rook from q0002's
     /// story request) a body in the simulation and a seat in the fight, with
     /// its record's vocation kit and its inclinations, beside its owner.
-    /// *Assumed*: 2 m behind the first Arisen seat; released pawns keep
+    /// *Assumed*: 2 m behind its currently seated hirer; released pawns keep
     /// their body (release is not wired here yet).
     fn sync_hired_pawn_bodies(&mut self) {
         use ddenemyrt::fight::Kit;
         let Some(fight) = self.fight.as_mut() else { return };
-        let Some(owner) = self.roster.ids().next() else { return };
-        let Some(at) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { return };
         for (index, hired) in self.rift.party.hired.iter().enumerate() {
             let Some(hired) = hired else { continue };
+            let Some(owner) = self.hired_by[index].and_then(|profile|
+                self.roster.seats().iter().find(|s| s.profile == profile).map(|s| s.id)) else { continue };
+            let Some(at) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { continue };
             let seat = Self::hired_pawn_seat(index);
             if fight.pawns.contains_key(&seat) {
                 continue;
@@ -291,19 +295,20 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     /// Where hired pawn `index` stands beside an owner at `pos` facing `yaw`.
     /// *Assumed*: 2 m behind, 80 cm to either side.
-    fn hired_pawn_place(index: usize, pos: [f32; 3], yaw: f32) -> [f32; 3] {
+    pub(crate) fn hired_pawn_place(index: usize, pos: [f32; 3], yaw: f32) -> [f32; 3] {
         let (s, c) = yaw.sin_cos();
         let side = if index == 0 { 80.0 } else { -80.0 };
         [pos[0] - s * 200.0 + c * side, pos[1], pos[2] - c * 200.0 - s * side]
     }
 
-    /// Moves the hired pawns' bodies to their owner (the first Arisen seat),
+    /// Moves the hired pawns' bodies to their currently seated hirer,
     /// as the party travels together when an area jump places it. Call after
     /// placing the Arisen.
     pub fn place_hired_pawns(&mut self) {
-        let Some(owner) = self.roster.ids().next() else { return };
-        let Some((pos, yaw)) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { return };
         for index in 0..2 {
+            let Some(owner) = self.hired_by[index].and_then(|profile|
+                self.roster.seats().iter().find(|s| s.profile == profile).map(|s| s.id)) else { continue };
+            let Some((pos, yaw)) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { continue };
             let seat = Self::hired_pawn_seat(index);
             if let Some(p) = self.sim.player_mut(seat) {
                 p.position = Self::hired_pawn_place(index, pos, yaw);
@@ -319,8 +324,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     pub fn join(&mut self, profile: ProfileId, control: Control, pos: [f32; 3], yaw: f32) -> Option<PlayerId> {
         let id = self.roster.join(profile, control)?;
         self.sim.add_player(id, pos, yaw);
+        self.refresh_party();
+        self.attach_profile(profile, id);
         self.economy.wallet(id);
         self.joined_items(id);
+        self.joined_fighter(id);
         self.rift.party.reserved = [false, self.roster.len() >= 2];
         self.refresh_party();
         Some(id)
@@ -328,8 +336,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     /// Unseats an Arisen: its body leaves the world and its locks go.
     pub fn leave(&mut self, id: PlayerId) {
-        if self.roster.leave(id).is_some() {
+        if let Some(seat) = self.roster.leave(id) {
+            self.detach_profile(seat.profile, id);
             self.sim.players.retain(|p| p.id != id);
+            self.edges.forget(id);
+            self.pawn_orders.forget(id);
+            if self.scenario_press == Some(id) { self.scenario_press = None; }
             self.locks.release_all(id);
             self.npcs.talk_abort(id);
             self.economy.close_all(id);
@@ -461,7 +473,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(f) = self.fight.as_mut() {
             f.players_moved(&mut self.sim, self.ground.as_ref(), step);
             f.enemies(&self.sim, self.ground.as_ref(), step);
-            f.push_out(&mut self.sim);
+            f.push_out(&mut self.sim, self.ground.as_ref());
             f.volumes(&self.sim);
         }
         self.step_opening_dragon_c(step)?;
@@ -555,6 +567,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
         h.debug(&self.pawn_orders);
+        self.hash_parked_fighters(&mut h);
         if let Some(f) = &self.fight {
             h.debug(&f.digest());
             for (&seat, pawn) in &f.pawns {
@@ -587,6 +600,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             h.bytes(&s.world.save());
         }
         h.debug(&self.economy).debug(&self.progression);
+        for (profile, state) in &self.profiles {
+            h.debug(profile).debug(&state.economy).debug(&state.character).debug(&state.place);
+        }
         h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
         h.debug(&self.saved_npc_quest_rows());
         h.finish()
@@ -617,12 +633,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         let mut f = SaveFile::default();
         let mut w = ddid::Writer::new();
-        w.u8(1).u64(self.frame).len(self.roster.len());
+        w.u8(2).u64(self.frame).len(self.roster.len());
         for seat in self.roster.seats() {
             w.u8(seat.id).u64(seat.profile.0);
         }
         for h in self.hired_by {
-            w.bool(h.is_some()).u8(h.unwrap_or(0));
+            w.bool(h.is_some()).u64(h.unwrap_or(ProfileId(0)).0);
         }
         f.put(save::TAG_HOST, Owner::Shared, w.finish());
         if let Some(s) = &self.story {
@@ -644,6 +660,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 }
             }
         }
+        self.save_parked_profiles(&mut f);
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
         self.save_npc_quest_controls(&mut f);
         Ok(f)
@@ -653,7 +670,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     ///
     /// The roster must already be seated with the save's profiles, though
     /// seats may differ. Profiles of the save that are not seated now are
-    /// left out. Seated profiles without chunks keep what they have. The
+    /// parked for later admission. Seated profiles without chunks keep what they have. The
     /// Rift's stock starts empty until [`Host::refill_rift`], as on the
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
@@ -664,7 +681,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let loaded_economy = if let Some(shared) = f.get(save::TAG_ECON, Owner::Shared) {
             let players = self.roster.seats().iter().filter_map(|s|
                 Some((s.id, f.get(save::TAG_ECON, Owner::Profile(s.profile))?.to_vec()))).collect();
-            let candidate = ddeconomy::Economy::load(&ddid::Parts { shared: shared.to_vec(), players }).map_err(err)?;
+            let mut candidate = ddeconomy::Economy::load(&ddid::Parts { shared: shared.to_vec(), players }).map_err(err)?;
+            for seat in self.roster.seats() {
+                if f.get(save::TAG_ECON, Owner::Profile(seat.profile)).is_none() {
+                    let state = self.economy.clone().detach_player(seat.id);
+                    candidate.attach_player(seat.id, state);
+                }
+            }
             if let Some(items) = &self.item_data {
                 if candidate.inventory.bags.values().flat_map(|b| &b.slots)
                     .any(|s| items.items.get(s.item as u32).is_none()) {
@@ -673,6 +696,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             Some(candidate)
         } else { None };
+        let loaded_profiles = self.read_parked_profiles(f)?;
         // Build/validate the complete script candidate before touching this
         // host, including its frame or player places. Old WRLD-only saves
         // still use from_world. A script chunk cannot stand without its world.
@@ -690,16 +714,27 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // Old seat -> profile, from HOST; then -> the seat it has now.
         let mut old: Vec<(PlayerId, ProfileId)> = vec![];
         let mut hired_old = [None; 2];
+        let mut saved_frame = self.frame;
         if let Some(b) = f.get(save::TAG_HOST, Owner::Shared) {
             let mut r = ddid::Reader::new(b);
-            r.version("HOST", 1).map_err(err)?;
-            self.frame = r.u64().map_err(err)?;
+            let version = r.u8().map_err(err)?;
+            if !matches!(version, 1 | 2) { return Err(err(format!("HOST version {version}"))); }
+            saved_frame = r.u64().map_err(err)?;
             for _ in 0..r.len(9).map_err(err)? {
-                old.push((r.u8().map_err(err)?, ProfileId(r.u64().map_err(err)?)));
+                let id = r.u8().map_err(err)?;
+                let profile = ProfileId(r.u64().map_err(err)?);
+                if old.iter().any(|&(seat, owner)| seat == id || owner == profile) {
+                    return Err(err("HOST duplicate seat/profile".into()));
+                }
+                old.push((id, profile));
             }
             for h in &mut hired_old {
-                let (some, seat) = (r.bool().map_err(err)?, r.u8().map_err(err)?);
-                *h = some.then_some(seat);
+                let some = r.bool().map_err(err)?;
+                let profile = if version == 1 {
+                    let seat = r.u8().map_err(err)?;
+                    old.iter().find(|(id, _)| *id == seat).map(|(_, profile)| *profile)
+                } else { Some(ProfileId(r.u64().map_err(err)?)) };
+                *h = if some { Some(profile.ok_or_else(|| err("HOST hirer absent from saved roster".into()))?) } else { None };
             }
             r.end().map_err(err)?;
         }
@@ -708,44 +743,71 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             let p = old.iter().find(|(o, _)| *o == s)?.1;
             roster.seats().iter().find(|x| x.profile == p).map(|x| x.id)
         };
+        let loaded_progression = if let Some(shared) = f.get(save::TAG_PROG, Owner::Shared) {
+            let players = roster.seats().iter().filter_map(|seat|
+                Some((seat.id, f.get(save::TAG_PROG, Owner::Profile(seat.profile))?.to_vec()))).collect();
+            let mut candidate = ddprogress::Progression::load(&ddid::Parts { shared: shared.to_vec(), players }, &seat_now).map_err(err)?;
+            for seat in roster.seats() {
+                if candidate.party.iter().flatten().any(|m| m.role == ddprogress::Role::Arisen(seat.id)) { continue; }
+                // A parked profile is not in the shared character order, but
+                // its independent player chunk is still authoritative.
+                let character = if let Some(bytes) = f.get(save::TAG_PROG, Owner::Profile(seat.profile)) {
+                    Some(ddprogress::save::load_character(bytes).map_err(err)?)
+                } else { self.character_of(ddprogress::Role::Arisen(seat.id)).cloned() };
+                if let Some(character) = character {
+                    let slot = crate::Party::for_roster(&roster).slots.iter()
+                        .position(|m| *m == Some(crate::Member::Arisen(seat.id))).unwrap();
+                    let character = candidate.add(character);
+                    candidate.party[slot] = Some(ddprogress::Member { character, role: ddprogress::Role::Arisen(seat.id) });
+                }
+            }
+            Some(candidate)
+        } else { None };
+        let loaded_places: Vec<_> = self.roster.seats().iter().filter_map(|seat|
+            f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).map(|bytes| (seat.id, bytes)))
+            .map(|(seat, bytes)| {
+                let (pos, yaw) = save::place_from(bytes)
+                    .ok_or_else(|| err("invalid PLCE length".into()))?;
+                if !pos.iter().chain(std::iter::once(&yaw)).all(|v| v.is_finite()) {
+                    return Err(err("nonfinite PLCE coordinates".into()));
+                }
+                Ok((seat, pos, yaw))
+            }).collect::<Result<_, HostError>>()?;
+        let loaded_rift = if let Some(shared) = f.get(save::TAG_RIFT, Owner::Shared) {
+            let players = roster.seats().iter().filter_map(|seat|
+                Some((seat.id, f.get(save::TAG_RIFT, Owner::Profile(seat.profile))?.to_vec()))).collect();
+            let mut candidate = ddrift::Rift::load(&ddid::Parts { shared: shared.to_vec(), players }).map_err(err)?;
+            candidate.party.reserved = [false, self.roster.len() >= 2];
+            Some(candidate)
+        } else { None };
+        let loaded_npc_controls = self.read_npc_quest_controls(f)?;
+        // Every fallible chunk parser has completed. Applying the validated
+        // candidate below cannot leave half of a shared retry installed.
+        self.frame = saved_frame;
         if let Some(story) = loaded_story {
             self.story = Some(story);
             self.boot = true;
         }
-        for seat in self.roster.seats() {
-            if let Some((pos, yaw)) = f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).and_then(save::place_from) {
-                if let Some(p) = self.sim.player_mut(seat.id) {
-                    p.position = pos;
-                    p.yaw = yaw;
-                    p.drop_from = pos[1];
-                }
+        for (seat, pos, yaw) in loaded_places {
+            if let Some(p) = self.sim.player_mut(seat) {
+                p.position = pos;
+                p.yaw = yaw;
+                p.drop_from = pos[1];
             }
         }
-        let parts = |tag: [u8; 4]| -> Option<ddid::Parts> {
-            let shared = f.get(tag, Owner::Shared)?.to_vec();
-            let players = roster
-                .seats()
-                .iter()
-                .filter_map(|s| Some((s.id, f.get(tag, Owner::Profile(s.profile))?.to_vec())))
-                .collect();
-            Some(ddid::Parts { shared, players })
-        };
         if let Some(economy) = loaded_economy {
             self.economy = economy;
         }
-        if let Some(p) = parts(save::TAG_PROG) {
-            self.progression = ddprogress::Progression::load(&p, &seat_now).map_err(err)?;
-        }
-        if let Some(p) = parts(save::TAG_RIFT) {
-            self.rift = ddrift::Rift::load(&p).map_err(err)?;
-            self.rift.party.reserved = [false, self.roster.len() >= 2];
-        }
-        self.hired_by = hired_old.map(|h| h.map(|s| seat_now(s).unwrap_or(0)));
+        if let Some(progression) = loaded_progression { self.progression = progression; }
+        if let Some(rift) = loaded_rift { self.rift = rift; }
+        self.hired_by = hired_old;
+        self.profiles = loaded_profiles;
         for s in self.roster.ids().collect::<Vec<_>>() {
             self.economy.wallet(s);
         }
-        self.load_npc_quest_controls(f)?;
+        self.restore_npc_quest_controls(loaded_npc_controls);
         self.refresh_party();
+        self.rebuild_profile_fighters();
         Ok(())
     }
 }

@@ -31,6 +31,10 @@ pub struct Orders {
 }
 
 impl Orders {
+    pub(crate) fn forget(&mut self, seat: PlayerId) {
+        self.held.remove(&seat);
+        self.cooldown.remove(&seat);
+    }
     /// B52A00 -> B52880: one seat's rising direction bits. Missing input
     /// releases the seat; repeatedly uploaded held states do not repeat.
     // Translated from 0x00B52880 (DDDA.exe 2017-12-13 Steam).
@@ -110,7 +114,8 @@ impl<D: ddstory::data::Data, W: crate::StoryWorld> crate::Host<D, W> {
         };
         let ownership = fight.pawns.iter().filter_map(|(&seat, pawn)| {
             let owner = if let Some(index) = (0..2).find(|&i| Self::hired_pawn_seat(i) == seat) {
-                self.hired_by[index]
+                self.hired_by[index].and_then(|profile|
+                    self.roster.seats().iter().find(|s| s.profile == profile).map(|s| s.id))
             } else { Some(pawn.owner) };
             owner.map(|owner| (seat, owner))
         }).collect();

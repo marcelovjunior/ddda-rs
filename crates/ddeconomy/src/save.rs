@@ -18,6 +18,27 @@ use std::collections::BTreeSet;
 
 const VERSION: u8 = 2;
 
+impl crate::PlayerState {
+    /// Reuse the validated ECON player-part codec, without copying shared state.
+    pub fn save(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.u8(VERSION).bool(self.wallet.is_some());
+        if let Some(wallet) = &self.wallet { w.i32(wallet.gold).i32(wallet.rift_crystals); }
+        opt_bag(&mut w, self.bag.as_ref());
+        opt_bag(&mut w, self.storage.as_ref());
+        w.bool(self.first_choice).len(self.rewards.len());
+        for &quest in &self.rewards { w.u32(quest); }
+        w.finish()
+    }
+
+    pub fn load(shared: &[u8], bytes: &[u8]) -> Result<Self> {
+        let mut economy = Economy::load(&ddid::Parts {
+            shared: shared.to_vec(), players: [(0, bytes.to_vec())].into(),
+        })?;
+        Ok(economy.detach_player(0))
+    }
+}
+
 fn bag(w: &mut Writer, b: &Bag) {
     w.len(b.slots.len());
     for s in &b.slots {

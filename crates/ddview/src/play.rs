@@ -531,7 +531,7 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
         }
         f.players_moved(&mut st.sim, &st.terrain, step);
         f.enemies(&st.sim, &st.terrain, step);
-        f.push_out(&mut st.sim);
+        f.push_out(&mut st.sim, &st.terrain);
         f.volumes(&st.sim);
         let owner_inputs = local.iter().map(|(&seat, &sim)|
             (seat, ddhost::PlayerInput { sim, interact: false })).collect();
