@@ -357,3 +357,130 @@ the actual axis field and use the existing supported sphere query rather
 than choosing a query from the unrelated body+0x1DEC value. The tested
 ground helper accepts actual `axis_present`; the new capsule provider
 contains no axis policy, so neither implementation needs this correction.
+
+**Native editor handoff continuation (head8361/8380; source only):**
+`aStage801::vf07` at `0x0052B2D0` waits for editor result+0x1C8 ==1.
+`0x0052B740` selects the opening context only when GameSys+0xB8844 has
+mask0x20000 and SceNo is1000. `0x0052B3D9..0x0052B3F7` then requests
+stage200/start3 through `0x00401160`, which records the pending stage and
+start, changes stage-request state+0x808 from1 to2, and clears+0x814.
+The stage210/start10 alternate exit remains unsupported. This request
+comes from the native editor stage; it is not an authored q0 JumpArea.
+
+`dragon_route::editor_exit_request` returns the existing typed JumpArea
+only after all local profiles confirmed and the actual opening context
+is present. It does not publish StageLoaded or complete an event. Fade
+is an explicit caller presentation policy: the native editor routine does
+not write the quest JumpArea fade parameter, and byte+0x814 is not assumed
+to be that parameter.
+
+The installed regression
+`installed_editor_confirmation_requests_beach_and_waits_for_loaded_stage_before_ev00`
+is **uncompiled/unrun**. It uses the existing prologue/movie preparation
+driver solely to reach801; after confirmation there is no fast-forward.
+Two distinct profile EDIT records survive the actual StageLoaded200 report.
+Pending synthetic callbacks cannot start ev00; only the completed-load
+report, installed start3 and installed q0 produce its row19 request.
+The test's non-rendered stage/ground and enemy binding are explicit fixtures;
+it does not prove original scenery, NPC reactions, production damage or
+whole-route acceptance.
+
+The context writer is now sourced: the reset routine `0x00444840` tail
+jumps to `0x00444B20` at `0x00444B19`. That post-prologue routine sets
+stage800/SceNo1000 and, with EBX zero, loads ECX=14 at `0x00444B6E`, then
+calls `0x004373C0` at `0x00444B83`. The setter right-shifts the original
+64-bit top-bit mask through `0x012F2AF0`; shift14 yields upper word0x20000,
+which `0x004373F7` ORs into GameSys+0xB8844. Head8405 approved the narrow
+Story::event_end row0x3E hook: it now writes this actual context mask beside
+the existing stage800/SceNo1000 transition, preserving unrelated flags.
+The handoff regression asserts that a fresh story lacks the bit and the
+translated prologue end supplies it, then passes the editor predicate
+without a flag fixture. No similar B8840/B883C flag was substituted. This
+new Story hook and all four continuation Rust regressions remain unrun.
+
+**Exact unapplied opening.rs patch for head:** the following patch retains
+`LIVE_DRAGON_ROUTE=false`; head can apply it at the final S31 merge and
+only enable after the complete route gate. It queues the native editor
+request after S56's last-profile confirmation, enables live observations
+before the first beach tick, and consumes that request with `enter_stage`
+using `keep_places=false` before materialization or ev00 dispatch. The
+stage adapter reports StageLoaded only after its real load. The existing
+stand-in fast-forward remains solely in the disabled branch. Viewer code
+was not edited or built; this patch is not runtime acceptance.
+
+```diff
+--- a/crates/ddview/src/opening.rs
++++ b/crates/ddview/src/opening.rs
+@@ -59,6 +59,8 @@
+
+ /// The Cassardis stage.
+ pub const STAGE: u32 = 200;
++// Head enables only after the complete S31 route gate.
++const LIVE_DRAGON_ROUTE: bool = false;
+ /// NPCs within this distance (cm, horizontal) of the Arisen answer E.
+ pub const TALK_RANGE: f32 = 220.0;
+ /// The view's NPC walking speed (cm/s, *viewer choice*).
+@@ -247,6 +249,8 @@
+     dragon_capture: bool,
+     /// Authored event movie currently awaited by the story (if intro enabled).
+     pub intro_movie: Option<PathBuf>,
++    /// Native editor exit waiting for the stage adapter, never a load callback.
++    editor_stage_request: Option<Request>,
+     pub host: HostHandle,
+     vocation_menu: crate::vocation_menu::Selection,
+     guest: Option<ddnet::Client<ddnet::Udp>>,
+@@ -443,6 +447,7 @@
+     host.new_game_items(std::sync::Arc::new(ddhost::items::ItemData::load(&vfs)?), bag_phase);
+     let mut s = Session {
+         intro_movie,
++        editor_stage_request: None,
+         host: HostHandle {
+             local: Some(Box::new(host)),
+             server: None,
+@@ -586,6 +591,23 @@
+     /// Editor confirmation resumes the remaining stand-in dragon route.
+     pub fn intro_edit_done(&mut self) -> Result<(), String> {
+         if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
++        if LIVE_DRAGON_ROUTE {
++            if self.editor_stage_request.is_some() {
++                return Err("editor stage request already pending".into());
++            }
++            let story = self.host.story.as_ref().ok_or("editor exit needs story")?;
++            let request = ddhost::opening::dragon_route::editor_exit_request(
++                story.world.stage_no, story.world.sce_no, &story.stage.game_flags,
++                true, 0, // S56 calls only after every local profile; fade is project policy.
++            )?.ok_or("editor confirmation incomplete")?;
++            let target = self.host.opening_dragon_data.as_ref()
++                .ok_or("opening dragon installed placement absent")?.target;
++            self.host.character_created_items();
++            self.host.world.manual_stages = true;
++            self.host.world.enable_dragon_scene(STAGE, target);
++            self.editor_stage_request = Some(request);
++            return Ok(());
++        }
+         self.host.character_created_items();
+         let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
+         let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
+@@ -1539,6 +1561,21 @@
+             return;
+         }
+     }
++    if let Some(request) = s.editor_stage_request.take() {
++        match request {
++            Request::JumpArea { stage, pos, .. } => {
++                if let Err(error) = enter_stage(&mut stage_view, st, s, stage, pos, false) {
++                    s.failure = Some(format!("editor stage {stage} handoff failed: {error}"));
++                    return;
++                }
++                s.host.story.as_mut().unwrap().world.start_pos = pos;
++            }
++            _ => {
++                s.failure = Some("invalid editor stage request".into());
++                return;
++            }
++        }
++    }
+     if s.guest.is_none() {
+     kit_weapons(&mut stage_view, st, s);
+     hired_pawn_bodies(&mut stage_view, st, s);
+```

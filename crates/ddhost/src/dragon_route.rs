@@ -2,6 +2,32 @@
 use ddenemyrt::{combat::Victim, fight::Fight};
 use ddstory::dragon::{ChallengeDragon, ChallengePlayer};
 
+/// The opening branch of the native editor's confirmed exit. The caller
+/// supplies the real new-game context and confirms every local profile
+/// before calling this; stages 802-804 and the stage210 alternate exit
+/// are not supported here. A request does not acknowledge a loaded stage.
+///
+/// `fade` is caller-owned presentation policy: 0x00401160 does not write
+/// the quest JumpArea fade field. Do not infer it from stage+0x814.
+// Translated from 0x0052B2D0, 0x0052B740, 0x0052B3D9 and 0x00401160
+// (DDDA.exe 2017-12-13 Steam).
+pub fn editor_exit_request(
+    stage: u32,
+    sce_no: u32,
+    flags: &ddstory::story::GameFlags,
+    all_profiles_confirmed: bool,
+    fade: u32,
+) -> Result<Option<ddstory::Request>, String> {
+    if stage != 801 {
+        return Err("opening editor exit requires stage801".into());
+    }
+    if !all_profiles_confirmed { return Ok(None); }
+    if sce_no != 1000 || flags.b8844 & 0x0002_0000 == 0 {
+        return Err("opening editor exit lacks the native new-game context".into());
+    }
+    Ok(Some(ddstory::Request::JumpArea { stage: 200, pos: 3, fade }))
+}
+
 /// The first native life-vector pointer, not a lookup by region id.
 /// cObjCollision+0xc2c/+0xc38 is actor+0x1d0c/+0x1d18. 0x00770910
 /// appends the selected RST kind's elements in resource order; the opening
