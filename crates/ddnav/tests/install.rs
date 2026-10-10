@@ -78,3 +78,36 @@ fn installed_field_waypoints_use_distinct_format_and_short_cell_references() {
         assert!(node.edges.iter().all(|e| (e.target as usize) < way.nodes.len()));
     }
 }
+
+#[test]
+fn installed_beach_spatial_selection_finds_every_authored_triangle_centroid() {
+    let Some(root) = installed() else {
+        return;
+    };
+    let data = resource(
+        &root,
+        "rom/stage/stage200/stage200_nav.arc",
+        "scr\\st200\\etc\\st200_nav",
+        "rNavigationMesh",
+    );
+    let mesh = Mesh::parse(&data).unwrap();
+    for (index, node) in mesh.nodes.iter().enumerate() {
+        let mut centroid = [0.; 3];
+        for &vertex in &node.vertices {
+            for (coordinate, value) in centroid.iter_mut().zip(mesh.vertices[vertex as usize].position) {
+                *coordinate += value / node.vertices.len() as f32;
+            }
+        }
+        let cell = mesh
+            .spatial
+            .cell_index(centroid, mesh.spatial.levels - 1)
+            .unwrap()
+            .unwrap();
+        assert!(
+            mesh.spatial.cells[cell]
+                .iter()
+                .any(|entry| entry.node as usize == index),
+            "node {index} missing from cell {cell}"
+        );
+    }
+}

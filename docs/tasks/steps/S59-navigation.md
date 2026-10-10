@@ -88,3 +88,51 @@ NAVIGATION.md documents the format and the query with addresses.
   transformed service and host/NPC body integration are **OPEN**.
 - The whole Done gate is **OPEN**. Next: translate the actual mesh
   node selection/search/trace-point construction before wiring GotoEx.
+
+## HANDOFF (codex-82, head wrap-up #8885, 2026-10-10)
+
+- Reader checkpoint above is tested and accepted. New spatial/projection
+  source and three additional regression tests are committed as **UNRUN**:
+  `native_spatial_cells_clamp_edges_and_preserve_morton_hierarchy`,
+  `installed_beach_spatial_selection_finds_every_authored_triangle_centroid`,
+  `native_vertical_selection_uses_strict_distance_and_authored_attribute_filter`.
+  No new Cargo gate ran before wrap-up. Plane dot addition order on slopes
+  remains an explicit source gap. Missing requested exclusion attributes
+  with a nonzero mask error as project validation, with an unrun regression.
+- Actual private native vf07 probe: four PASS cases, exit 0, 0.0296592 s,
+  instruction counts 62/62/95/32. Script
+  `E:/ddda-re/notes/steps/S59/native-vf07.private.py`, artifact
+  `native-vf07-917ce89-first.private.json`, SHA256
+  `7D8145439A26BA735BAD998ACB0ECC7ACF7A7099531DB461BD929000AB02ACDE`.
+  Synthetic initialized points, dynamic flag 166 false and untransformed
+  service only; no search or trace-4 arrival proof.
+- Actual private vertical projection probe: four PASS cases, exit 0,
+  0.0250946 s, instruction counts 309/271/308/315. Script
+  `E:/ddda-re/notes/steps/S59/native-projection.private.py`, SHA256
+  `07E71C19FAB910F91ACAAA4EA77C1497D5BCA67571FC242E36143FD4F1B94219`;
+  artifact `native-projection-first.private.json`, SHA256
+  `A021F7CF48FCFF36F61D0C4FA1964612B2CCB4A6DAF2297FE5F930972696662C`.
+  Original `0x01093500 -> 0x00D665C0`, guarded output, normal return,
+  stack and all four callee-saved registers checked. Four cases cover a
+  horizontal hit, outside point, strict distance equality and reverse winding;
+  they do not distinguish plane-dot addition order on sloped geometry.
+- Source continuation: owner `0x0059DF30` sets Y offset +190=50 (constant
+  `0x0150A088`), down-ray cap +1B0=100 (`0x01531AE8`), search cutoff
+  +78=400 (`0x014F70DC`), and enables width-use/goal-plane flags. Constructor
+  defaults differ. Stage loader `0x00501020 -> 0x010929C0` sets attribute
+  index 0 and exclusion mask `0x04000000`. Dynamic flag +166 depends on
+  the actual `cAISvDynamicPathFinding` service; never force it off to bypass
+  the native query. Nearest fallback `0x01094FA0`, task phases, authored
+  link-cost mapping, avoidance, transformed service, Trace cadence and
+  current-body/command/generation integration remain OPEN.
+- Exact next step: verify native plane-dot operation order, add a sloped
+  regression with source-backed expectations, freeze/review source, then
+  seek a fresh parent grant for ONE full `ddnav` package gate: six tests,
+  no skips/ignores/filtered results, unchanged lock/source hashes, jobs 2,
+  existing core target and canonical install. Only then continue the native
+  query/fallback/search; S59 Done still requires the actual installed beach
+  GotoEx trace result 4. Private notes/probes are under
+  `E:/ddda-re/notes/steps/S59` and original Trace handoff under
+  `E:/ddda-re/notes/steps/S31/S59-incoming-handoff.private.md`.
+- No new research, emulation, Cargo/GPU gate, merge or rebase after #8885.
+  All claims released after committing this handoff; head owns any merge.

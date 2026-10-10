@@ -1,8 +1,11 @@
 //! Installed stage navigation resources, independent of OS and presentation.
 //! Mesh and field waypoints are distinct native services, never interchangeable.
 mod mesh;
+mod projection;
+mod spatial;
 mod waypoint;
 pub use mesh::{Mesh, MeshLink, MeshNode, NodeInfo, Region, RegionShape, Vertex};
+pub use projection::Projection;
 pub use waypoint::{Waypoint, WaypointEdge, WaypointSet, WaypointShape};
 
 use std::fmt;

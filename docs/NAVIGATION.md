@@ -6,6 +6,22 @@ skips, ignores or filtered tests (source `917ce892`, 2026-10-10). Native
 path construction, avoidance, host service and NPC body
 adapter are still open; there is no direct-line or generic A* substitute.
 
+The next spatial/projection helpers are an **UNRUN draft**, retained on
+`step/s59-navigation` at head's wrap-up directive #8885. The reader's earlier
+3-test result does not validate this newer source. `SpatialCells::cell_index`
+translates Morton indexing from `0x0114D7B0 / 0x0114D990`;
+`Mesh::vertical_candidate` ports only the down-ray selection portion of
+`0x010975E0 -> 0x01093500 -> 0x00D665C0`. The plane dot addition order on
+sloped triangles is explicitly unresolved. A nonzero exclusion mask with a
+missing node attribute word returns an error as a project validation policy;
+silently admitting that unsupported layout is not allowed.
+
+Read-only private native probes passed four prepared-point vf07 cases and
+four vertical triangle cases under parent-reviewed bounds. They test the
+original helper code with synthetic objects, not complete installed paths,
+dynamic service behavior, transformed services, or Rust parity. See the
+brief's HANDOFF for exact artifacts and the next verification step.
+
 Addresses refer to DDDA.exe, 2017-12-13 Steam. Native resource vtable slot 10
 loads and slot 11 saves. The mesh reader is `0x01099E00 -> 0x01099100`; the
 waypoint reader is `0x011FD5C0`. Slot 11's `0x01099BA0` / `0x011FC410` are
