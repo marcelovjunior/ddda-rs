@@ -2985,7 +2985,8 @@ mod tests {
         session.bind_npc_combat(&vfs, &[304]).unwrap();
         let combat_owner = session.host.story_npc_combat_owner(owner).expect("real motion/body binds combat");
         session.host.tick(&Default::default()).unwrap();
-        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 1000.0);
+        // 1000 x his n04 placement HP rate 2.5 (uNpcIntel::vf05 0x00BBC4E0)
+        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 2500.0);
         let combat = &session.host.fight.as_ref().unwrap().npcs[&combat_owner];
         assert!(!combat.fighter.hurts.is_empty());
         assert!(session.host.fight.as_ref().unwrap().npc_errors.is_empty());

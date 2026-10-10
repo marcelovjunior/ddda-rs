@@ -23,6 +23,7 @@ struct Binding { lifetime: NpcLifetime, owner: u32, stage: u32, target: Target }
 pub struct NpcCombat {
     bindings: BTreeMap<u32, Binding>,
     deaths: BTreeMap<u32, DeadActor>,
+    region: ddenemyrt::npc_combat::Region,
 }
 
 struct DeadActor {
@@ -49,10 +50,18 @@ pub enum DeathObservation {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// Explicit session-wide region policy, default Other. A client never
+    /// selects a per-player civilian protection policy for shared NPCs.
+    pub fn set_npc_region(&mut self, region: ddenemyrt::npc_combat::Region) {
+        self.npc_combat.region = region;
+    }
+
+    pub fn npc_region(&self) -> ddenemyrt::npc_combat::Region { self.npc_combat.region }
+
     /// Materialization supplies real resources, pool and current motion.
     /// Rebinding the same lifetime preserves its existing HP and owner.
     pub fn bind_story_npc_combat(&mut self, lifetime: NpcLifetime,
-        body: Arc<ddenemyrt::npc_body::NpcBody>, region: ddenemyrt::npc_combat::RegionPool,
+        body: Arc<ddenemyrt::npc_body::NpcBody>, mut region: ddenemyrt::npc_combat::RegionPool,
         motion: ddenemyrt::body::MotionId) -> Result<Option<u32>, HostError> {
         if self.story_npc_lifetime(lifetime.npc) != Some(lifetime) { return Ok(None); }
         let placement = self.story_npc_intels().find(|p| p.npc as u32 == lifetime.npc)
@@ -62,6 +71,23 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 return Ok(self.fight.as_ref().and_then(|f| f.npcs.get(&binding.owner)).map(|_| binding.owner));
             }
         }
+        // New ordinary intel lifetime only. Same-lifetime rebinding above
+        // retains damage and never reapplies the placement multiplier.
+        // cSetInfoNpc vf08 0x007A32F0 stores enable+450/rate+430;
+        // intel vf05 0x00BBC4E0 initializes HP/max before uNpc vf05
+        // 0x00BABEE0 copies the linked values into its collision pool.
+        let rate = match placement.record.get("HP倍率設定の有無") {
+            Some(mtlot::Value::Int(0)) => None,
+            Some(mtlot::Value::Int(_)) => match placement.record.get("HPの倍率") {
+                Some(mtlot::Value::F32(rate)) if rate.is_finite() => Some(*rate),
+                _ => return Err(HostError::Npc("NPC placement HP rate absent or nonfinite".into())),
+            },
+            _ => return Err(HostError::Npc("NPC placement HP rate enable absent".into())),
+        };
+        let mut hp = ddenemyrt::npc_combat::IntelHp { current: region.hp, maximum: region.hp_max };
+        hp.initialize(0, false, rate);
+        region.hp = hp.current;
+        region.hp_max = hp.maximum;
         let fight = self.fight.as_mut().ok_or(HostError::NoData("fight"))?;
         if let Some(old) = self.npc_combat.bindings.remove(&lifetime.npc) {
             fight.unbind_npc(old.owner);

@@ -52,11 +52,22 @@ fn fixture() -> Option<Fixture> {
 fn installed_host_npc_hp_observations_keep_lifetime_and_death_stages_separate() {
     let Some(Fixture { mut host, placement, lifetime, owner: combat, body, region }) = fixture() else { return };
     let target = placement.target;
+    let Some(mtlot::Value::F32(rate)) = placement.record.get("HPの倍率") else { panic!("installed HP rate absent") };
+    let expected_max = ddhost::ddenemyrt::npc_combat::ORDINARY_NPC_HP * rate;
+    assert_eq!(host.npc_region(), ddhost::ddenemyrt::npc_combat::Region::Other);
+    assert_eq!(host.story_npc_combat_facts(lifetime).unwrap().hp, expected_max);
     let same = host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap());
     assert_eq!(same.unwrap(), Some(combat));
     for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
     assert!(host.world.npc_intel(100, &target).unwrap().hp_positive);
-    assert_eq!(host.story_npc_combat_facts(lifetime).unwrap().hp, 1000.0);
+    assert_eq!(host.story_npc_combat_facts(lifetime).unwrap().hp, expected_max);
+    let ddhost::ddenemyrt::combat::Victim::Npc { region: live, .. } =
+        &mut host.fight.as_mut().unwrap().npcs.get_mut(&combat).unwrap().fighter.victim else { unreachable!() };
+    live.hp -= 100.0;
+    assert_eq!(host.bind_story_npc_combat(lifetime, body.clone(), region.clone(), body.resolve(3226).unwrap()).unwrap(), Some(combat));
+    let facts = host.story_npc_combat_facts(lifetime).unwrap();
+    assert_eq!(facts.hp, expected_max - 100.0, "rebinding must retain damaged current HP");
+    assert_eq!(facts.max_hp, expected_max);
     assert!(!host.observe_story_npc_death(lifetime, DeathObservation::FadeFinished));
     assert!(host.fight.as_ref().unwrap().npc_errors.is_empty());
     assert!(!host.fight.as_ref().unwrap().npcs[&combat].fighter.hurts.is_empty());
