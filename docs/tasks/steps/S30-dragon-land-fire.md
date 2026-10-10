@@ -71,7 +71,7 @@ and installed regression passed again (1.66s/3.00s compile, 4.03s installed
 test). Every Cargo process actually exited zero for these final checks.
 
 **Acceptance is not complete.** The host's entrance-only gate remains
-enabled. Production terrain contact, action dispatch through the whole
+enabled. Real-stage landing verification, action dispatch through the whole
 FSM, effect request consumption, authentic particles/party damage,
 state6 story feedback and the landing/fire capture remain open. This is
 implemented/tested against static source and installed resources; it has
@@ -102,8 +102,7 @@ passes normalize=1 through `0x00CCDE30/0x00CCE190` (verified disassembly),
 preserving joint scale. A generic capsule/optional-axis extension to the
 existing headless sweep is requested in board #4644 before shared edits.
 
-Next action: connect the native terrain-result flags to Press's prior
-contact input, then translate the installed collision particle unit
+Next action: translate the installed collision particle unit
 before enabling the remainder of the encounter.
 
 Head approved the shared sweep extension in board #4751. The existing
@@ -126,3 +125,20 @@ verifies the geometry adapter/contact projection, not stage terrain or
 production phase order. All nine action/helper unit tests and both
 installed tests passed (4.99s compile, 3.88s installed run), actual exit0.
 The host remains entrance-only; the full acceptance gate above stays open.
+
+The host now supplies its triangle provider to Press pass C and reads that
+result at the next phase90. A missing provider is an error. Ground mode
+and the constructor's ground-check offsets follow `0x00A6AF70` and
+`0x0079D850/0x0079E200`; other runtime scenery type/filter/offset overrides
+are still unported. `0x00A3E5E0` initializes the landing-notification
+disable byte to zero. GSF463 effects now reach the host story. The FSM's
+actual ActionEx33 mode0/delay lane dispatches the typed Press action.
+
+One new installed host regression continues the real entrance states
+4/5/1/3/0, lands through the posed capsule sweep on a synthetic plane,
+waits for the actual motion299 terminal, and observes GSF463 set/clear.
+It writes no contact/completion flag. It deliberately leaves the authored
+area condition false, so it does not enter the fire states. The existing
+entrance host regression also passed (6.80s compile, 5.27s existing test,
+6.05s new test), actual exit0 after correcting the triangle callback's
+return type. There is no real-stage capture or original landing comparison.

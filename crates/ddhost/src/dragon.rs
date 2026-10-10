@@ -110,6 +110,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 world.area_stay,
             )
             .map_err(HostError::Npc)?;
+        for effect in &dragon.effects {
+            match *effect {
+                ddenemyrt::dragon::DragonEffect::Gsf { no, value } => world.gsf.set(no as usize, value),
+                ddenemyrt::dragon::DragonEffect::EscapeFly { .. } => {
+                    return Err(HostError::Npc("dragon fall recovery action60 remains unimplemented".into()));
+                }
+                _ => {}
+            }
+        }
         for request in &dragon.world_requests {
             match *request {
                 ddenemyrt::dragon::ActorRequest::Gsf { no, value } => world.gsf.set(no as usize, value),
@@ -134,7 +143,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             return Ok(());
         };
         if let Some(dragon) = &mut fight.dragon {
-            dragon.pass_c(step).map_err(HostError::Npc)?;
+            dragon.pass_c_with_terrain(step, &*self.ground).map_err(HostError::Npc)?;
             fight
                 .positions
                 .insert(dragon.actor.fighter.owner, dragon.actor.pos);
