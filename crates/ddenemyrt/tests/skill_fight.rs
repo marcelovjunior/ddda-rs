@@ -73,7 +73,7 @@ fn sword_skills_use_their_own_bank_and_damage_a_goblin() {
                 assert_eq!(sim.player(0).unwrap().push_rank(), if id == 41 { 15 } else { 14 });
             }
             fight.players_moved(&mut sim, &Flat, 1.0);
-            fight.push_out(&mut sim);
+            fight.push_out(&mut sim, &Flat);
             fight.volumes(&sim);
 
             emitted_attack |= !fight.arisen[&0].fighter.attacks.is_empty();

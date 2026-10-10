@@ -473,7 +473,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(f) = self.fight.as_mut() {
             f.players_moved(&mut self.sim, self.ground.as_ref(), step);
             f.enemies(&self.sim, self.ground.as_ref(), step);
-            f.push_out(&mut self.sim);
+            f.push_out(&mut self.sim, self.ground.as_ref());
             f.volumes(&self.sim);
         }
         self.step_opening_dragon_c(step)?;
