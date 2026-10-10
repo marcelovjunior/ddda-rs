@@ -299,6 +299,34 @@ struct Active {
     quads: Vec<Quad>,
     entities: Vec<Entity>,
 }
+#[derive(Default)]
+struct Consumers(HashMap<u8, Active>);
+impl Consumers {
+    // Co-op presentation policy: a follow switch suspends that owner's panel
+    // and clock, while the new followed owner can consume its own queue.
+    // Resuming does not spend hidden time or alter the native clock ordering.
+    fn advance(&mut self, owner: u8, panels: &[Panel; 2], delta: f32, visible: bool) -> Option<Active> {
+        if !visible {
+            return None;
+        }
+        let active = self.0.get_mut(&owner)?;
+        active
+            .clock
+            .advance(&panels[usize::from(active.notice.pawn)], delta);
+        if active.clock.phase == Phase::Done {
+            self.0.remove(&owner)
+        } else {
+            None
+        }
+    }
+    fn next(&self, observer: &mut Observer, owner: u8, visible: bool) -> Option<Notice> {
+        if !visible || self.0.contains_key(&owner) {
+            return None;
+        }
+        let index = observer.queue.iter().position(|notice| notice.owner == owner)?;
+        observer.queue.remove(index)
+    }
+}
 #[derive(Resource)]
 struct View {
     vfs: ddvfs::Vfs,
@@ -309,7 +337,7 @@ struct View {
     panels: [Panel; 2],
     virtual_size: Vec2,
     observer: Observer,
-    active: Option<Active>,
+    consumers: Consumers,
     captured: bool,
 }
 
@@ -358,7 +386,7 @@ impl View {
             panels,
             virtual_size,
             observer: Observer::default(),
-            active: None,
+            consumers: Consumers::default(),
             captured: false,
         })
     }
@@ -615,64 +643,75 @@ fn update(
         .observe(&session.host.progression, &state.locals, &pawn_name);
     let event_active = session.event_active();
     drop(session);
-    if !pause.paused && !event_active {
-        let View { active, panels, .. } = &mut *view;
-        if let Some(active) = active {
-            active.clock.advance(
-                &panels[usize::from(active.notice.pawn)],
-                time.delta_secs() * ddhost::clock::BASE_FPS,
-            );
+    let visible = !pause.paused && !event_active;
+    let View {
+        consumers,
+        panels,
+        observer,
+        ..
+    } = &mut *view;
+    if let Some(finished) = consumers.advance(
+        state.follow,
+        panels,
+        time.delta_secs() * ddhost::clock::BASE_FPS,
+        visible,
+    ) {
+        for entity in finished.entities {
+            commands.entity(entity).despawn();
         }
     }
-    let finished = view.active.as_ref().is_some_and(|a| a.clock.phase == Phase::Done);
-    if finished {
-        if let Some(active) = view.active.take() {
-            for entity in active.entities {
-                commands.entity(entity).despawn();
-            }
-        }
-    }
-    if view.active.is_none() && !pause.paused && !event_active {
-        if let Some(index) = view.observer.queue.iter().position(|n| n.owner == state.follow) {
-            let notice = view.observer.queue.remove(index).unwrap();
-            match view.quads(&notice, &mut images) {
-                Ok(quads) => {
-                    info!(
-                        "S43_LEVEL_UP owner={} pawn={} level={} name={:?}",
-                        notice.owner, notice.pawn, notice.level, notice.name
-                    );
-                    let entities = quads
-                        .iter()
-                        .map(|q| {
-                            commands
-                                .spawn((
-                                    Node {
-                                        position_type: PositionType::Absolute,
-                                        ..default()
-                                    },
-                                    ImageNode {
-                                        image: q.image.clone(),
-                                        rect: Some(q.rect),
-                                        color: q.color,
-                                        ..default()
-                                    },
-                                    GlobalZIndex(50 + q.layer),
-                                ))
-                                .id()
-                        })
-                        .collect();
-                    view.active = Some(Active {
+    if let Some(notice) = consumers.next(observer, state.follow, visible) {
+        match view.quads(&notice, &mut images) {
+            Ok(quads) => {
+                info!(
+                    "S43_LEVEL_UP owner={} pawn={} level={} name={:?}",
+                    notice.owner, notice.pawn, notice.level, notice.name
+                );
+                let entities = quads
+                    .iter()
+                    .map(|q| {
+                        commands
+                            .spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    ..default()
+                                },
+                                ImageNode {
+                                    image: q.image.clone(),
+                                    rect: Some(q.rect),
+                                    color: q.color,
+                                    ..default()
+                                },
+                                GlobalZIndex(50 + q.layer),
+                            ))
+                            .id()
+                    })
+                    .collect();
+                view.consumers.0.insert(
+                    notice.owner,
+                    Active {
                         notice,
                         clock: Clock::default(),
                         quads,
                         entities,
-                    });
-                }
-                Err(e) => warn!("S43 level notice: {e}"),
+                    },
+                );
+            }
+            Err(e) => warn!("S43 level notice: {e}"),
+        }
+    }
+    for active in view.consumers.0.values() {
+        for entity in &active.entities {
+            if let Ok((mut node, _)) = quads.get_mut(*entity) {
+                node.display = if visible && active.notice.owner == state.follow {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
             }
         }
     }
-    let Some(active) = view.active.as_ref() else {
+    let Some(active) = view.consumers.0.get(&state.follow) else {
         return;
     };
     let panel = &view.panels[usize::from(active.notice.pawn)];
@@ -730,6 +769,71 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn followed_owner_switch_suspends_clock_without_blocking_other_owner() {
+        // Synthetic panels isolate co-op consumption from the installed GUI.
+        let panels = [false, true].map(|_| Panel {
+            node: 0,
+            position: Vec2::ZERO,
+            enter: Sequence {
+                tracks: vec![],
+                frames: 8.0,
+            },
+            exit: Sequence {
+                tracks: vec![],
+                frames: 6.0,
+            },
+        });
+        let notice = |owner, level| Notice {
+            owner,
+            pawn: false,
+            level,
+            name: String::new(),
+        };
+        let activate = |notice| Active {
+            notice,
+            clock: Clock::default(),
+            quads: vec![],
+            entities: vec![],
+        };
+        let mut observer = Observer::default();
+        observer.queue = VecDeque::from([notice(0, 2), notice(0, 3), notice(1, 2)]);
+        let mut consumers = Consumers::default();
+        let first = consumers.next(&mut observer, 0, true).unwrap();
+        consumers.0.insert(0, activate(first));
+        consumers.advance(0, &panels, 3.0, true);
+        assert_eq!(consumers.0[&0].clock.frame, 3.0);
+
+        // Owner 0's in-progress notice and earlier pending record cannot block
+        // owner 1 after following that seat. Hidden owner 0 never spends time.
+        let second = consumers.next(&mut observer, 1, true).unwrap();
+        assert_eq!(second.owner, 1);
+        consumers.0.insert(1, activate(second));
+        let mut finished = None;
+        for _ in 0..150 {
+            if let Some(active) = consumers.advance(1, &panels, 1.0, true) {
+                finished = Some(active);
+                break;
+            }
+        }
+        assert_eq!(finished.unwrap().notice.owner, 1);
+        assert!(!consumers.0.contains_key(&1));
+        assert_eq!(consumers.0[&0].clock.phase, Phase::Enter);
+        assert_eq!(consumers.0[&0].clock.frame, 3.0);
+        assert_eq!(consumers.0[&0].clock.hold, HOLD_FRAMES);
+
+        // Follow back resumes precisely; it does not consume the next owner-0
+        // notice early or catch up any of the time spent following owner 1.
+        assert!(consumers.next(&mut observer, 0, true).is_none());
+        consumers.advance(0, &panels, 5.0, true);
+        assert_eq!(consumers.0[&0].clock.phase, Phase::Enter);
+        consumers.advance(0, &panels, 1.0, true);
+        assert_eq!(consumers.0[&0].clock.phase, Phase::Hold);
+        assert_eq!(consumers.0[&0].clock.hold, HOLD_FRAMES);
+        consumers.advance(0, &panels, 500.0, false);
+        assert_eq!(consumers.0[&0].clock.hold, HOLD_FRAMES);
+        assert_eq!(observer.queue, VecDeque::from([notice(0, 3)]));
+    }
     #[test]
     fn native_hold_waits_for_intro_and_tests_counter_before_decrement() {
         let mut clock = Clock::default();
