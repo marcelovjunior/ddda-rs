@@ -656,3 +656,27 @@ or regression execution follows from that source audit. Bulk effect fields
 and native random tables continue to be read from the installation.
 Next: bind the tested coordinate accessor/parent result to the actual
 shape0 birth and generator-owned path setup, then emission/query/damage.
+
+### Prepared generator-owned basis for production integration
+
+After head merged the parent/accessor checkpoint as `710aa28`, bounded
+instruction review resolved the next scale owner at `0x010D79F0`.
+Generator +134's sampled scalar multiplies effect +1B0, then effect
++1A0/+1A4/+1A8 scale the three basis rows. Coordinate scales and signed
+maximum are additionally inherited only when coordinate +10C bits20..23
+are zero. `0x010FBEC0..0x010FBED5` pack those bits from resource flags
+bits16..19; the raw resource's bits20..23 are a different selector and
+must not be tested directly. Generator +10C bit12 chooses world identity
+axes instead of coordinate primary orientation; both branches keep the
+coordinate primary anchor. Identity rows at `0x016294A0` were checked
+against the original constant table. The coordinate's secondary matrix
+does not supply this generator basis.
+
+`CoordinateTransform::generator_transform` and its meaningful synthetic
+regression are now **source-prepared, uncompiled/unexecuted**. The test
+covers inherited signed scales, nonzero scale mode, coordinate versus
+world axes, retained anchor and invalid inputs. This is the next actual
+path/birth input adapter; it does not yet create an emitter or damage.
+Effect fields, sampled scalar and runtime flags remain explicit caller
+inputs until their actual creation/update owners are integrated. The
+previous185-pass result belongs to `2ca38ae`, not this new source.

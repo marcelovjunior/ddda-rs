@@ -84,6 +84,52 @@ pub struct CoordinateTransform {
     pub largest_scale: f32,
 }
 
+/// Generator-owned scaled basis used by native life4 path setup. This is
+/// distinct from the coordinate's normalized primary/secondary matrices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeneratorTransform {
+    pub matrix: mtlmt::pose::Mat4,
+    pub axis_scale: [f32; 3],
+    pub particle_scale: f32,
+}
+
+impl CoordinateTransform {
+    /// Caller supplies the actual uEffect +1A0/+1B0 values and generator
+    /// +134 sample. `coordinate_scale_mode` is resource flags bits16..19:
+    /// 10FBEC0..10FBED5 pack it into coordinate +10C bits20..23.
+    /// `world_axes` is the generator's actual +10C bit12; it is not inferred
+    /// from a particle's shape or the effect's quality.
+    // Translated from 0x010D79F0 (DDDA.exe 2017-12-13 Steam).
+    pub fn generator_transform(&self, effect_axis_scale: [f32; 3],
+        effect_particle_scale: f32, sampled_generator_scale: f32,
+        coordinate_scale_mode: u8, world_axes: bool) -> Result<GeneratorTransform, String> {
+        if coordinate_scale_mode > 15
+            || effect_axis_scale.iter().chain([effect_particle_scale,
+                sampled_generator_scale, self.largest_scale].iter())
+                .chain(self.scale.iter()).chain(self.primary.iter().flatten())
+                .any(|v| !v.is_finite()) {
+            return Err("invalid generator transform input".into());
+        }
+        let mut particle_scale = effect_particle_scale * sampled_generator_scale;
+        let mut axis_scale = effect_axis_scale.map(|axis| axis * particle_scale);
+        if coordinate_scale_mode == 0 {
+            particle_scale *= self.largest_scale;
+            for axis in 0..3 { axis_scale[axis] *= self.scale[axis]; }
+        }
+        // The native world-axis constants are the identity rows at016294A0.
+        let mut matrix = if world_axes { mtlmt::pose::IDENTITY } else { self.primary };
+        for axis in 0..3 {
+            for value in &mut matrix[axis] { *value *= axis_scale[axis]; }
+        }
+        // The world-axis branch also retains the actual coordinate anchor.
+        matrix[3] = self.primary[3];
+        if !particle_scale.is_finite() || matrix.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("generator transform overflow".into());
+        }
+        Ok(GeneratorTransform { matrix, axis_scale, particle_scale })
+    }
+}
+
 impl CoordinateDefinition {
     /// The apparent fourth offset float is a signed parent joint identifier.
     /// A negative identifier selects the effect's unscaled parent matrix.
@@ -720,6 +766,32 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generator_binding_keeps_coordinate_anchor_and_distinct_scale_modes() {
+        let primary = [[0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]];
+        let coordinate = CoordinateTransform { primary,
+            secondary: mtlmt::pose::IDENTITY, scale: [-2.0, 5.0, -4.0], largest_scale: 5.0 };
+        let inherited = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 0, false).unwrap();
+        assert_eq!(inherited.particle_scale, 3.125);
+        assert_eq!(inherited.axis_scale, [-2.5, 9.375, -10.0]);
+        assert_eq!(inherited.matrix, [[0.0, 0.0, 2.5, 0.0], [0.0, 9.375, 0.0, 0.0],
+            [-10.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]]);
+        // A nonzero native coordinate scale mode bypasses coordinate scales,
+        // but does not itself discard coordinate orientation or translation.
+        let separate = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 2, false).unwrap();
+        assert_eq!(separate.particle_scale, 0.625);
+        assert_eq!(separate.axis_scale, [1.25, 1.875, 2.5]);
+        assert_eq!(separate.matrix[0], [0.0, 0.0, -1.25, 0.0]);
+        assert_eq!(separate.matrix[3], primary[3]);
+        let world = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5, 1.25, 2, true).unwrap();
+        assert_eq!(world.matrix, [[1.25, 0.0, 0.0, 0.0], [0.0, 1.875, 0.0, 0.0],
+            [0.0, 0.0, 2.5, 0.0], [11.0, 22.0, 33.0, 1.0]]);
+        assert!(coordinate.generator_transform([1.0; 3], 1.0, 1.0, 16, false).is_err());
+        assert!(coordinate.generator_transform([1.0; 3], f32::NAN, 1.0, 0, false).is_err());
+        assert!(coordinate.generator_transform([f32::MAX; 3], 2.0, 2.0, 0, false).is_err());
+    }
 
     #[test]
     fn static_parent_binding_separates_axis_scale_offset_and_both_matrix_blocks() {
