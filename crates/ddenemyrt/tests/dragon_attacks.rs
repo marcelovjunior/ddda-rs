@@ -55,6 +55,39 @@ fn step() -> DragonStep<'static> {
 }
 
 #[test]
+fn installed_breath_particle_entries_use_native_sequence_metadata_and_normal_contacts() {
+    use ddcombat::volumes::{contacts, AttackFlags, HurtVolume, Side, Volume};
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.is_dir() { eprintln!("SKIP: install absent"); return; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let exe = ddexe::ExeFile::next_to(&native).unwrap();
+    let data = DragonData::opening(&vfs, &exe.image().unwrap(), 1.0).unwrap();
+    // Explicit native primary-resource fixture, selected by binding ordinal1.
+    let primary = &data.body.collision[1].body;
+    let reference = &primary.seq_index[1];
+    let group = &primary.groups[reference.group_no as usize];
+    let row = primary.attacks[reference.attack_no as usize].as_ref().unwrap();
+    // Synthetic positions isolate the source collision-entry adapter. They
+    // are not claimed to be the installed effect's runtime trajectory.
+    let samples = [[100.0, 200.0, 300.0, 40.0]; 16];
+    let attacks = ddenemyrt::dragon::particles::collision_attacks(primary, None, 42, &samples).unwrap();
+    assert_eq!(attacks.len(), 15);
+    let attack = &attacks[0];
+    assert_eq!(attack.volume, Volume::Sphere { c: [100.0, 200.0, 300.0], r: 40.0 });
+    assert_eq!(attack.side, Side { owner: 42, kind: group.kind });
+    assert_eq!(attack.flags, AttackFlags::from_attack(row));
+    assert_eq!(attack.row, ddcombat::damage::AttackRow::from_attack(row));
+    assert_eq!(attack.key, ((primary.seq_index[0].no << 8) | group.no) << 16);
+    assert_eq!(attack.relation, primary.seq_index[0].relation);
+    let target = |center| HurtVolume { side: Side { owner: 0, kind: 0 },
+        volume: Volume::Sphere { c: center, r: 10.0 }, region_id: 0, hit_prio: 0 };
+    assert!(!contacts(&attacks, &[target([100.0, 200.0, 300.0])]).is_empty());
+    assert!(contacts(&attacks, &[target([1000.0, 200.0, 300.0])]).is_empty());
+    assert!(ddenemyrt::dragon::particles::collision_attacks(primary, None, 42, &[[0.0, 0.0, 0.0, -1.0]]).is_err());
+}
+
+#[test]
 fn installed_scenery_node_sweeps_its_real_posed_horizontal_capsule() {
     use ddcombat::volumes::{Pose, transform_point};
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)

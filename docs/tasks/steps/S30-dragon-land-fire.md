@@ -273,3 +273,21 @@ After integrating reviewed main `104fa88` into this task branch, all 32
 dragon library tests passed (3.43s compile, 0.00s run), and the existing
 installed entrance host test passed (2.90s compile, 5.60s run), actual
 exit0. Main was not modified.
+
+The breath collision-entry adapter is translated from
+`0x00A56D10/0x0076F9C0/0x0076FAB0`. It accepts actual type11 samples,
+caps them at15, and produces ordinary world-sphere attack volumes with
+the installed attack row, flags, reset time and sequence relation/key.
+The collector reads group/attack numbers from primary SeqIndex slot1
+but passes slot0 for sequence metadata. Slot1 must not be mistaken for a
+literal attack-table index or used as the metadata slot. Radius is already
+scaled by the effect; the adapter does not apply character scale again.
+The caller supplies the actual primary resource and optional slot1 fallback.
+
+One installed regression uses the bound Breath resource with explicitly
+synthetic sample positions to verify the15-entry cap, metadata, row/flags,
+ordinary contact versus miss, and invalid live-radius rejection. It passed
+(3.70s compile, 3.52s run), actual exit0. This validates the collision-entry
+boundary, not a native effect trajectory, normal HP loss or a production
+fire capture. The host still needs the complete sampled emitter/lifetime
+ownership chain before enabling its BreathParticles query.

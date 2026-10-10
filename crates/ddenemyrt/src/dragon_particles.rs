@@ -3,6 +3,41 @@
 
 use super::attacks::GeneratorParams;
 
+/// Convert actual type11 samples into ordinary collision entries. The caller
+/// supplies the native primary collision resource and its slot1 fallback;
+/// this adapter never invents an emitter position or replaces it with a cone.
+// Translated from 0x00A56D10's collector and 0x0076F9C0/0x0076FAB0
+// (DDDA.exe 2017-12-13 Steam).
+pub fn collision_attacks(primary: &ddcombat::ocl::ObjCollision,
+    fallback: Option<&ddcombat::ocl::ObjCollision>, owner: u32, samples: &[[f32; 4]])
+    -> Result<Vec<ddcombat::volumes::AttackVolume>, String> {
+    use ddcombat::volumes::{AttackFlags, AttackVolume, Side, Volume};
+    // The collector reads group/attack numbers from SeqIndex slot1, but
+    // passes slot0 as the entry's sequence metadata to 0x0076F9C0.
+    let (group_no, attack_no) = primary.seq_index.get(1)
+        .map_or((0, 0), |s| (s.group_no, s.attack_no));
+    let sequence = primary.seq_index.first().ok_or("breath sequence metadata absent")?;
+    let group = primary.groups.get(group_no as usize).ok_or("breath collision group absent")?;
+    let attack = primary.attacks.get(attack_no as usize).and_then(|a| a.as_ref())
+        .or_else(|| fallback.and_then(|f| f.attacks.get(attack_no as usize)).and_then(|a| a.as_ref()))
+        .ok_or("breath attack parameter absent")?;
+    if !group.is_attack { return Err("unsupported non-attack breath group".into()); }
+    samples.iter().take(15).map(|sample| {
+        if sample.iter().any(|v| !v.is_finite()) || sample[3] < 0.0 {
+            return Err("invalid live collision particle sample".into());
+        }
+        Ok(AttackVolume { side: Side { owner, kind: group.kind },
+            // A56D10 explicitly writes world center+radius and entry type2.
+            // The particle radius already contains its native effect scale.
+            volume: Volume::Sphere { c: [sample[0], sample[1], sample[2]], r: sample[3] },
+            row: ddcombat::damage::AttackRow::from_attack(attack),
+            flags: AttackFlags::from_attack(attack),
+            reset_time: attack.value("mResetTime").map_or(0.0, |v| v.as_f32()),
+            key: ((sequence.no << 8) | group.no) << 16,
+            relation: sequence.relation })
+    }).collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DurationRange {
     pub base: i16,
