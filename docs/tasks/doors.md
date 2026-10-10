@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/doors`
 - **Board area:** `world/doors`
-- **Status:** working (codex-32)
+- **Status:** review (codex-32, opening hinged-door checkpoint)
 
 ## Goal
 
@@ -139,3 +139,38 @@ updating to the already-merged NPC fix precedes the next smoke. Static
 capture confirmed the real door mesh, but its stage inspection path needed
 the same nonfield stage-model hook used by opening (now added, pending
 capture). Private captures/logs remain under E:/ddda-re/notes/doors-codex32.
+
+### Final checkpoint validation (2026-10-10)
+
+- Final merged release build passes. A merge-created duplicate NPC helper
+  block was removed, preserving main's canonical definitions.
+- Hidden `--unattended` full-stage capture at eye (3330,100,-2239), looking
+  at (2853,50,-2455), shows the closed om7121 correctly filling the reported
+  house entrance. The capture includes 31 stage models, 315 placed objects
+  and 23 doors. Private evidence: `door-scene.png` and `scene.stderr.log`
+  under `E:/ddda-re/notes/doors-codex32`.
+- A second hidden opening smoke with current NPC fixes ran to its requested
+  12-second capture and exited normally. It logged 23 doors and occupancy
+  covered=true (ambient spawn-position stand-in), with no ERROR/panic.
+  `opening-final.png` / `opening-final.stderr.log` are private. Existing NPC
+  unsupported-action/movement warnings remain separate limitations.
+- Final targeted verification: 7 dddoor unit tests, 7 ddhost unit tests,
+  installed host door regression and installed placement/resource/cache
+  regression pass (16 total). dddoor all-target strict clippy passes;
+  ddhost lib/door-test clippy passes with only the pre-existing
+  `chunks_exact_to_as_chunks` install.rs lint allowed.
+
+Review/merge `task/doors`; code checkpoints are da4f519, f11c642, e162103,
+b076233 plus main synchronization and final validation cleanup. No game
+install/save changes, original-process control, pushes or main edits.
+
+**Explicit remaining scope:** the core/data API is stage-general for the
+supported hinged variants; the active viewer adapter currently serves the
+opening host and static stage inspection. Ordinary standalone `--play`
+and LAN guest door snapshots are not connected. Original focus arbitration
+is a labeled nearest-door interaction stand-in; ambient occupancy uses
+head-authorized authored spawn positions pending `ambient-creatures`.
+Saved permanent startup poses, tilted and sliding/special variants, sound
+request playback, and a live-original open/close comparison remain
+unimplemented/unverified. The visual missing-door checkpoint is validated;
+this is not a claim that every door variant or campaign/LAN path is done.

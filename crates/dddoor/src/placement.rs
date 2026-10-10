@@ -126,20 +126,6 @@ pub fn candidates(vfs: &ddvfs::Vfs, families: &Families, stage: u32, groups: &Gr
     Ok(out)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn name_resolution_longest_prefix_first_tie() {
-        let f = Families(vec![Family { name: "".into(), class_dti: 0 },
-            Family { name: "om7".into(), class_dti: 1 },
-            Family { name: "om7121".into(), class_dti: 2 },
-            Family { name: "OM7121".into(), class_dti: 3 }]);
-        assert_eq!(f.select("OM7121_left").unwrap().class_dti, 2);
-        assert!(f.select("other").is_none());
-    }
-}
-
 /// Parsed layouts for cells the stage adapter has actually loaded. Gates
 /// remain live; archive reads happen only when the loaded cell set changes.
 pub struct LoadedLayouts {
@@ -172,5 +158,19 @@ impl LoadedLayouts {
             out.gates.push((group.slot,gate));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn name_resolution_longest_prefix_first_tie() {
+        let f = Families(vec![Family { name: "".into(), class_dti: 0 },
+            Family { name: "om7".into(), class_dti: 1 },
+            Family { name: "om7121".into(), class_dti: 2 },
+            Family { name: "OM7121".into(), class_dti: 3 }]);
+        assert_eq!(f.select("OM7121_left").unwrap().class_dti, 2);
+        assert!(f.select("other").is_none());
     }
 }
