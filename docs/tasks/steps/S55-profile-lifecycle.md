@@ -69,6 +69,12 @@ state, and LAN late join is coherent, with tests.
 - LAN admission and heartbeat send a freshly built current snapshot,
   with S44's current camera generation/elapsed clock or explicit `None`.
   They do not replay a remembered quest-camera start. No protocol change.
+- The shared camera lock matches S40/S44's production `OpeningWorld`:
+  `player_actions_blocked(_seat)` ignores the seat and reads the one
+  authored camera's option flags. Applying it to every occupied seat is
+  explicit co-op policy, not original multiplayer evidence. A different
+  `StoryWorld` with individual seat restrictions would need a separate
+  protocol policy; this field does not claim to represent those rules.
 - Missing ECON is tracked separately from an authoritative empty bag;
   PLCE/PROG-only partial saves cannot replace a fresh/imported bag with
   defaults. Unrecognized profile chunk tags do not create profile state.
@@ -82,4 +88,6 @@ state, and LAN late join is coherent, with tests.
   coordinator's single-heavy-build queue is being respected. No live GUI
   or original-game multiplayer comparison is claimed.
 - Next action: run the full touched/downstream `ddeconomy`, `ddprogress`,
-  `ddhost`, `ddnet` suites in the shared core target, then parent review.
+  `ddhost`, `ddnet` suites in the shared core target, then the integrated
+  `ddview` release tests/build in the coordinator's M5 window and parent
+  review. No heavy run starts during the quiet captures.
