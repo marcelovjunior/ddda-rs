@@ -15,6 +15,7 @@
 
 pub mod inventory;
 pub mod item_use;
+pub mod new_game;
 pub mod save;
 pub mod stock;
 pub mod wallet;

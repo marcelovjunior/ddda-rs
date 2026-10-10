@@ -11,6 +11,13 @@ use crate::combat::{Attacker, Fighter, Victim};
 use ddai::{Error, thinktbl::Tables};
 use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool};
 
+#[path = "dragon_flight.rs"]
+pub mod flight;
+#[path = "dragon_actor.rs"]
+mod actor;
+pub use actor::OpeningDragon;
+pub use ddai::think::Request as ActorRequest;
+
 /// Phase-93 projection of character condition flags into collision flags.
 /// `controller_flag_c` is the observed cAICtrl +0x0C byte; `actor_flags`
 /// is the word returned by vf180 (actor +0x2738, 0x004c7480).
@@ -252,6 +259,7 @@ enum DragonAction {
     HoverUp(HoverHeight),
     KakkuHover,
     HoverKakku { speed: f32, acceleration: f32 },
+    TargetFly,
 }
 
 impl DragonAction {
@@ -260,6 +268,7 @@ impl DragonAction {
             Self::HoverUp(_) => 100,
             Self::KakkuHover => 121,
             Self::HoverKakku { .. } => 103,
+            Self::TargetFly => 126,
         }
     }
 }
@@ -351,6 +360,7 @@ impl TargetFlyTravel {
 pub struct Dragon {
     pub pos: [f32; 3],
     pub yaw: f32,
+    pub rotation: [f32; 4],
     pub fighter: Fighter,
     pub frame: f32,
     pub motion_ended: bool,
@@ -358,6 +368,7 @@ pub struct Dragon {
     velocity: [f32; 3],
     done: bool,
     turn: Option<DragonYaw>,
+    pub flight: Option<flight::TargetFly>,
 }
 
 impl Dragon {
@@ -365,6 +376,7 @@ impl Dragon {
         Self {
             pos,
             yaw,
+            rotation: [0.0, (yaw * 0.5).sin(), 0.0, (yaw * 0.5).cos()],
             fighter: data.fighter(owner),
             frame: 0.0,
             motion_ended: false,
@@ -372,11 +384,56 @@ impl Dragon {
             velocity: [0.0; 3],
             done: false,
             turn: None,
+            flight: None,
         }
     }
 
     pub fn done(&self) -> bool {
         self.done
+    }
+
+    pub fn motion(&self) -> Option<crate::body::MotionId> {
+        self.action.map(|a| crate::body::MotionId::new(0, a.motion()))
+    }
+
+    /// TargetFly modes 0/2, 0x00a60b70. Mode 1 needs the actor's
+    /// configured flight point and is deliberately resolved by the caller.
+    pub fn start_target_fly(&mut self, data: &DragonData, target: [f32;3],
+        speed: f32, angular_degrees: f32, arrival_radius: f32)
+        -> Result<Vec<DragonEffect>, DragonError>
+    {
+        let flight = flight::TargetFly::enter(self.pos,self.rotation,target,speed,
+            angular_degrees,arrival_radius,0.0);
+        let effects = self.enter(data,DragonAction::TargetFly,0.0,None)?;
+        self.flight = Some(flight);
+        Ok(effects)
+    }
+
+    /// Cached uCoord matrix, rebuilt outside TargetFly's phase 97.
+    pub fn model_matrix(&self) -> ddcombat::volumes::Mat4 {
+        mtlmt::pose::compose([1.0;3],self.rotation,self.pos)
+    }
+
+    /// Pose in the authoritative actor orientation (including flight pitch).
+    pub fn pose(&self, data: &DragonData) -> Result<crate::body::Posed,DragonError> {
+        let motion = self.motion().ok_or(DragonError::NoAction)?;
+        let model = self.model_matrix();
+        let local = data.body.skeleton.pose(data.body.motion(motion),self.frame);
+        let joints = data.body.skeleton.joints.iter().zip(local)
+            .map(|(joint, matrix)| (joint.id,mtlmt::pose::mul(&matrix,&model))).collect();
+        Ok(crate::body::Posed {model,joints})
+    }
+
+    /// uCharacterBase::vf97 -> action vf07, 0x0084c800 -> 0x00a61590.
+    /// Invoke after terrain/correction and before finish_pass_c.
+    pub fn pass_c_action(&mut self, cached_matrix: &ddcombat::volumes::Mat4, step: f32) {
+        if let Some(flight) = &mut self.flight {
+            flight.step(&mut self.pos,[cached_matrix[2][0],cached_matrix[2][1],cached_matrix[2][2]],step);
+            self.rotation = flight.rotation;
+            let heading = flight::forward(self.rotation);
+            self.yaw = heading[0].atan2(heading[2]);
+            self.done = flight.travel.done;
+        }
     }
 
     pub fn velocity(&self) -> Option<[f32; 3]> {
@@ -463,12 +520,17 @@ impl Dragon {
             }
         }
         self.action = Some(action);
+        self.flight = None;
+        // TargetFly entry disables the ordinary yaw rotator (+0x2576,
+        // 0x00a60b70); its quaternion steering owns rotation instead.
+        self.turn = None;
         self.done = false;
         if let DragonAction::HoverUp(height) = action {
             self.velocity = HoverUp::enter(scale_y, height).velocity;
         }
         if let Some(turn) = turn {
             self.yaw = turn.current;
+            self.rotation = [0.0,(self.yaw*0.5).sin(),0.0,(self.yaw*0.5).cos()];
             self.turn = Some(turn);
         }
         self.frame = 0.0;
@@ -523,6 +585,7 @@ impl Dragon {
                 self.velocity = hover.velocity;
                 self.done = hover.done;
             }
+            DragonAction::TargetFly => {},
             _ => self.done |= hover_transition_complete(self.motion_ended, input.motion_flags),
         }
         if let Some(turn) = &mut self.turn {
@@ -533,6 +596,7 @@ impl Dragon {
                 input.engine_step,
             );
             self.yaw = turn.current;
+            self.rotation = [0.0,(self.yaw*0.5).sin(),0.0,(self.yaw*0.5).cos()];
         }
         for multiplier in input.horizontal_status_multipliers.into_iter().flatten() {
             self.velocity[0] *= multiplier;
