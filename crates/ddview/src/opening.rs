@@ -2690,7 +2690,7 @@ impl RoutePlan {
                 return None;
             }
             let Some((_, key)) = open.pop() else {
-                return Some(vec![]);
+                return Some(partial_path(nodes, visited, *target));
             };
             expanded = true;
             if !visited.insert(key) {
@@ -2709,7 +2709,7 @@ impl RoutePlan {
                 return Some(path);
             }
             if visited.len() > 60000 {
-                return Some(vec![]);
+                return Some(partial_path(nodes, visited, *target));
             }
             for dx in -1..=1i32 {
                 for dz in -1..=1i32 {
@@ -2756,6 +2756,36 @@ impl RoutePlan {
             }
         }
     }
+}
+
+/// When the planner is exhausted (the goal lies beyond the loaded
+/// collision, or the node cap): the path to the explored point nearest the
+/// goal, if it is at least 10 m closer than the start, else none. Walking
+/// there streams in the next cells and the demo plans again.
+fn partial_path(
+    nodes: &HashMap<RouteCell, RouteNode>,
+    visited: &std::collections::HashSet<(i32, i32)>,
+    target: Vec3,
+) -> Vec<Vec3> {
+    let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
+    let from = distance(nodes[&(0, 0)].0);
+    let Some((best, _)) = visited
+        .iter()
+        .map(|&k| (k, distance(nodes[&k].0)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|&(_, d)| d < from - 1000.0)
+    else {
+        return vec![];
+    };
+    let mut path = vec![];
+    let mut k = best;
+    while k != (0, 0) {
+        let (p, _, parent) = nodes[&k];
+        path.push(p);
+        k = parent;
+    }
+    path.reverse();
+    path
 }
 
 #[cfg(test)]
