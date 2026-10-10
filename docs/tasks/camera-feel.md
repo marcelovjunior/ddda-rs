@@ -56,4 +56,26 @@ report to `head`.
 
 ## Results
 
-(filled in by the agent)
+First checkpoint: the missing caller response was found in **0x007e1400**.
+At **0x007e1b11..0x007e1b68**, after **0x007de570** corrects the eye, the
+original adds the full eye delta to the look target. Disassembly confirms
+ESI is the eye pointer and EDI the collision anchor at the helper call.
+The viewer now translates both endpoints, preserving orientation through
+off-axis wall/ceiling penetration recovery. Six camera-filtered release
+tests pass, including the new wall/roof regression; release build passes
+with three existing warnings. This is source-verified and tested, not yet
+matched at the two requested original-game spots. Filter/active-camera
+near-plane investigation and live comparison continue.
+
+Second checkpoint: the original was found already in Cassardis stage200
+(PID23408). Active `uCameraCtrl` near is **16 cm**, while its child
+`uCameraGame` near is 96. The sphere query reads the active controller.
+Constructor **0x01128740** sets 16, inherited by controller through
+**0x007d3a80 / 0x007d6cd0**; **0x007d7210** copies child pose/FOV but
+not near. Paused and 40-frame unpaused readings agree; original feet
+(3376.76,-163.44,-2168.54), target height about134.52 cm, distance230 cm.
+Private captures/readings: `E:/ddda-re/notes/camera-feel-codex33`. Save
+backup made before unpausing; no movement/save writes; pause and bgOff
+restored. Follow collision and projection now use16. Seven camera-filtered
+release tests pass, including clear sidewall/roof that the old radius
+wrongly hit. Updated release build and exact live wall/roof tests pending.

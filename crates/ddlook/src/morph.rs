@@ -38,6 +38,22 @@ pub fn hand_axis_factors(scale: [f32; 3], world_axis_lengths: [f32; 3]) -> [f32;
     })
 }
 
+/// Human-edit type-0xb factors for the unrotated constraints installed by
+/// 0x0081c330. Joint 2 retains model scale and compensates only its Y axis;
+/// joints 3/4/6/10 ignore model scale and compensate all three axes.
+// Translated from 0x0086d180 and 0x00860ac0 (DDDA.exe 2017-12-13 Steam).
+pub fn human_absolute_axis_factors(
+    joint: u8, scale: [f32; 3], child: [f32; 3], model_scale: [f32; 3], world_axis_lengths: [f32; 3],
+) -> [f32; 3] {
+    std::array::from_fn(|i| {
+        if joint == 2 && i != 1 { return scale[i]; }
+        let base = if joint == 2 { model_scale[i] } else { 1.0 };
+        let length = world_axis_lengths[i];
+        let compensation = if length > f32::EPSILON { (child[i] / length) * base } else { base };
+        compensation * scale[i]
+    })
+}
+
 /// One rHumanEdit (version 0x13).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HumanEdit {
@@ -580,6 +596,26 @@ fn joints(c: &Ctrl, present: &dyn Fn(u8) -> bool) -> BodyMorph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_body_constraints_keep_joint2_horizontal_inheritance() {
+        let scale = [2.0, 3.0, 4.0];
+        let child = [5.0, 6.0, 7.0];
+        let model = [8.0, 9.0, 10.0];
+        let lengths = [2.0, 3.0, 4.0];
+        assert_eq!(human_absolute_axis_factors(2, scale, child, model, lengths), [2.0, 54.0, 4.0]);
+        for joint in [3, 4, 6, 10] {
+            assert_eq!(human_absolute_axis_factors(joint, scale, child, model, lengths), [5.0, 6.0, 7.0]);
+        }
+    }
+
+    #[test]
+    fn absolute_body_constraints_do_not_divide_degenerate_axes_or_apply_child_scale() {
+        let scale = [2.0, 3.0, 4.0];
+        let lengths = [0.0, f32::EPSILON, f32::EPSILON / 2.0];
+        assert_eq!(human_absolute_axis_factors(2, scale, [7.0; 3], [5.0; 3], lengths), [2.0, 15.0, 4.0]);
+        assert_eq!(human_absolute_axis_factors(3, scale, [7.0; 3], [5.0; 3], lengths), scale);
+    }
 
     #[test]
     fn hand_size_cancels_nonuniform_inherited_scale() {
