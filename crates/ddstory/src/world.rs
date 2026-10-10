@@ -183,6 +183,10 @@ impl World {
     }
 
     /// Layout flag test 0x00437610; unknown stages read false.
+    /// The stage's whole layout flag set (for change detection).
+    pub fn lot_bits(&self, stage: u32) -> Option<&ddquest::story::MsbBits> {
+        stage_index(stage).map(|i| &self.lot[i])
+    }
     pub fn lot(&self, stage: u32, flag: usize) -> bool {
         stage_index(stage).is_some_and(|i| self.lot[i].get(flag))
     }
