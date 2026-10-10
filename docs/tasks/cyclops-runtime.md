@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/cyclops-runtime`
 - **Board area:** `fight/cyclops`
-- **Status:** in progress (catalogue/think initialization checkpoint)
+- **Status:** review (source checkpoints; full encounter remains open)
 
 ## Goal
 
@@ -42,47 +42,80 @@ Results and report to `head`.
 ### Source checkpoint (codex-36, 2026-10-09)
 
 Implemented `ddenemyrt::cyclops` for ordinary `uEm5000` (constructor
-0x009780d0 writes kind0x3f). Initializer0x00978820 registers115 action
-descriptors at0x01847d38 (stride0x44, null terminator) and44 resource slots
-at0x01849cf0, one null. The reader loads the43 resource requests from the
+0x009780d0 writes kind 0x3f). Initializer 0x00978820 registers 115 action
+descriptors at 0x01847d38 (stride 0x44, null terminator) and 44 resource slots
+at 0x01849cf0, one null. The reader loads the 43 resource requests from the
 installed executable and applies the source CRT flag fixups at
 0x01357a00..0x01357cfa. Only the common/attack/damage motion lists bind as
 body banks; player/enemy interaction lists and child models are preparation
 requests. Thirteen hit-region-to-pool identities are read from0x014ff680.
 
-Think initialization at0x00978fxx uses default0x01734b48 and, when the
-placement enables its first table, the selected pointer at0x01736ee8.
+Think initialization at 0x00978fxx uses default 0x01734b48 and, when the
+placement enables its first table, the selected pointer at 0x01736ee8.
 All six populated controller slots parse. The selected current/base remain
 equal; default is overwritten with the fallback even in the enabled
 branch. This distinction matters when resetting the manager. Invalid/null
 roots return an error. No targets or action-completion observations are
 invented.
 
-The q0003 actor is in `scr\st100\etc\st100_63m52n_e20`, record0,
-`cSetInfoEnemy5000`, rather than a stage210 placement. Group20 requires
-layout flag30, has no scene window, and despawns on flag loss (mask1).
-The authored Proof-of-Arisen flag is enabled, weapon type2, remaining HP
-ratio0.2, XP500 and leg stagger/knockdown thresholds1500; first-think
-selection is disabled. Initializer0x009790xx applies these special
+The q0003 actor is in `scr\st100\etc\st100_63m52n_e20`, record 0,
+`cSetInfoEnemy5000`, rather than a stage 210 placement. Group 20 requires
+layout flag 30, has no scene window, and despawns on flag loss (mask 1).
+The authored Proof-of-Arisen flag is enabled, weapon type 2, remaining HP
+ratio 0.2, XP 500 and leg stagger/knockdown thresholds 1500; first-think
+selection is disabled. Initializer 0x009790xx applies these special
 encounter settings. They must be loaded from the placement, not made
 family defaults or inferred from arrival at the Encampment.
 
 Validation: one resource-fixup regression and one installed catalogue,
 resource-resolution, controller-root and placement regression pass.
-All43 resource requests resolve in the install. Targeted clippy passes
+All 43 resource requests resolve in the install. Targeted clippy passes
 with only the existing `combat.rs` type-complexity lint allowed; strict
 clippy reports that existing lint. No original-game fight comparison yet.
 
-Still unsupported: action execution, armor/weapon children, clinging and
+Still unsupported: connected action execution, armor/weapon children, clinging and
 weak-point reactions, party/guard combat, rendering and host death feed.
 The full brief remains open. Next: connect body/bank loading and the
 source Wait/Common/Attack callbacks, then the placement-specific health
 initializer and host lifetime identity before exposing an encounter.
 
-Action source leads: Wait update0x0097ff30 requests bank0, sets body
-flags2360/2370 bit0 and completes the action immediately; Common
-enter0x00980fb0 requests bank1. Attack update0x00981000 tests both motion
-completion queries and motion flags80000000 before setting action done,
-and sets body flags101. Its query arguments still need disassembly before
-translation. Base enter0x0097fd30 also applies per-action data tables;
-these side effects cannot be skipped when building a faithful driver.
+### Body and callback checkpoint; stand-down handoff
+
+The catalogue now loads the body skeleton, three bound motion banks and
+one body collision resource. Wait/Common/Attack callback primitives are
+translated and tested. Wait update (0x0097ff30) sets body flags at
++0x2360/+0x2370 bit 0 and completes the action immediately; Common enter
+(0x00980fb0, also inherited by Attack) requests its descriptor's motion.
+**Correction to the initial source lead:** the request's second argument
+is force-restart, not bank. Shared body vf36 (0x00886e70) preserves the
+current motion when the ID matches and force is false. Wait uses false;
+Common/Attack use true. uModel::vf30 (0x0105b480) decodes a packed ID as
+bank `(id >> 8) & 15`, slot `id & 255`; the installed attack `0x164`
+therefore resolves to bank 1, slot 0x64. A failing installed regression
+exposed and corrected the earlier interpretation before this checkpoint.
+
+Attack update (0x00981000) and Common update (0x00996f20) complete on
+active motion +6 bit 2 or motion flags 0x80000000. Disassembly confirms
+the two calls to 0x010570f0 query the same active motion object. Attack
+ORs body flags 0x101; Common ORs 1. These primitives do not implement
+base-enter state or a live unit driver. The loader plus two callback/fixup
+unit tests and the installed integration test pass; targeted clippy
+passes with only the pre-existing `combat.rs` type-complexity allowance.
+Full `cargo test -p ddenemyrt -- --test-threads=1`: 67 passed, one
+pre-existing pawn debug-trace test ignored. No viewer build was needed.
+
+**Resume in `crates/ddenemyrt/src/cyclops.rs`:** implement base action
+enter 0x0097fd30 before connecting the simple callbacks. It clears several
+body action fields and reads per-action tables at 0x014fee64/0x014fee68.
+Then implement the placement-specific health/leg initializer in
+0x00978820 and the actual think/target driver. Generic callback wrappers
+0x00987e20/0x00987e60 delegate IDs >=1000 to common enemy handlers;
+local checks 0..4 are in 0x00987e90, with helpers 0x00987f10/0x00987fb0.
+
+Death must preserve a family-specific ordering: 0x0097ca10 invokes common
+uEnemy death **before** priority-2 action arbitration. A blocked death
+animation request must not suppress death reporting. Motion/frame helper
+0x0097e6a0 reads 14 interval rows at 0x015bfc88 and falls back to actor
++0x623c. These are source leads only, not translated death runtime.
+No host/viewer hookup, live fight comparison, or q0003 completion is
+claimed. Claims and build target are released at stand-down.

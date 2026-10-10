@@ -5,6 +5,58 @@
 /// Enemy kind written by constructor 0x009780d0 (2017-12-13 Steam).
 pub const ENEMY_KIND: u8 = 0x3f;
 
+/// The small callback subset whose motion request and completion conditions
+/// are traced. Base-enter effects and the action manager remain separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimpleAction {
+    Wait,
+    Common,
+    Attack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionRequest {
+    pub motion: crate::body::MotionId,
+    pub force_restart: bool,
+    pub blend_frames: f32,
+    pub speed: f32,
+}
+
+impl SimpleAction {
+    /// Wait emits this on update (0x0097ff30); Common/Attack emit it on
+    /// enter (0x00980fb0). Body vf36 (0x00886e70) interprets the second
+    /// argument as force-restart, not a bank. Packed motion IDs are decoded
+    /// by uModel::vf30 (0x0105b480). The other arguments request zero flags,
+    /// five blend frames, starting frame zero and playback speed one.
+    pub fn motion_request(self, argument: u32) -> MotionRequest {
+        MotionRequest {
+            motion: crate::body::MotionId::new(((argument >> 8) & 0xf) as u8, (argument & 0xff) as u16),
+            force_restart: self != Self::Wait,
+            blend_frames: 5.0,
+            speed: 1.0,
+        }
+    }
+
+    /// Caller supplies the actual active motion's completion bit and flags.
+    /// No duration or timer stands in for a missing motion observation.
+    // Translated from 0x0097ff30, 0x00996f20 and 0x00981000
+    // (DDDA.exe 2017-12-13 Steam). 0x010570f0 reads active motion +6 bit2;
+    // both apparent queries in the latter callbacks read the same object.
+    pub fn update(self, motion_end: bool, motion_flags: u32) -> SimpleUpdate {
+        SimpleUpdate {
+            done: self == Self::Wait || motion_end || motion_flags & 0x8000_0000 != 0,
+            body_flags_or: if self == Self::Attack { 0x101 } else { 1 },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SimpleUpdate {
+    pub done: bool,
+    /// OR into both actor +0x2360 and +0x2370, preserving other bits.
+    pub body_flags_or: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Catalogue {
     pub actions: Vec<crate::chimera::ActionRecord>,
@@ -14,6 +66,32 @@ pub struct Catalogue {
 }
 
 impl Catalogue {
+    /// Bind only the actor's resources (flag bit zero). Prepared child models
+    /// and the interaction motion lists do not become additional body banks.
+    // Translated from 0x008892b0 / 0x00889510, called by 0x00978820
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
+        use crate::body::{Body, load};
+        let bound = || self.resources.iter().filter(|resource| resource.flags & 1 != 0);
+        let mut models = bound().filter(|resource| resource.class == "rModel");
+        let model = models.next().ok_or("cyclops: missing body model")?;
+        if models.next().is_some() {
+            return Err("cyclops: ambiguous body model".into());
+        }
+        Ok(Body {
+            skeleton: load::skeleton(vfs, &model.path)?,
+            banks: bound()
+                .filter(|resource| resource.class == "rMotionList")
+                .map(|resource| load::bank(vfs, &resource.path).map(Some))
+                .collect::<Result<_, _>>()?,
+            collision: bound()
+                .filter(|resource| resource.class == "rObjCollision")
+                .map(|resource| load::collision(vfs, &resource.path, None))
+                .collect::<Result<_, _>>()?,
+            scale,
+        })
+    }
+
     /// Read the installed executable's bulk descriptors. Initializer
     /// 0x00978820 registers actions at 0x01847d38 and 44 resource slots at
     /// 0x01849cf0; the null resource slot is skipped by 0x00889de0.
@@ -125,6 +203,25 @@ impl ThinkInitialization {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_rethinks_immediately_while_common_and_attack_wait_for_motion() {
+        assert!(SimpleAction::Wait.update(false, 0).done);
+        assert!(!SimpleAction::Wait.motion_request(2).force_restart);
+        for action in [SimpleAction::Common, SimpleAction::Attack] {
+            assert!(!action.update(false, 0).done);
+            assert!(action.update(true, 0).done);
+            assert!(action.update(false, 0x8000_0000).done);
+            assert!(!action.update(false, 0x7fff_ffff).done);
+            assert_eq!(
+                action.motion_request(0x164).motion,
+                crate::body::MotionId::new(1, 0x64)
+            );
+            assert!(action.motion_request(0x164).force_restart);
+        }
+        assert_eq!(SimpleAction::Attack.update(false, 0).body_flags_or, 0x101);
+        assert_eq!(SimpleAction::Common.update(false, 0).body_flags_or, 1);
+    }
 
     #[test]
     fn resource_fixups_preserve_high_bits_and_separate_child_requests() {

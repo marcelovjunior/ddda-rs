@@ -29,6 +29,14 @@ fn installed_cyclops_catalogue_and_controller_roots() {
         ]
     );
     let vfs = ddvfs::Vfs::open(native).unwrap();
+    let body = catalogue.load_body(&vfs, 1.0).unwrap();
+    assert_eq!(body.banks.len(), 3);
+    assert_eq!(body.collision.len(), 1);
+    assert!(body.motion(ddenemyrt::body::MotionId::new(0, 2)).is_some());
+    assert!(
+        body.motion(SimpleAction::Attack.motion_request(0x164).motion)
+            .is_some()
+    );
     let groups = ddspawn::gpl::GroupList::parse(
         &vfs.read(
             r"scr\st100\etc\st100_e",
