@@ -431,6 +431,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // pipeline). Their seats are sim players outside the roster.
         if let Some(f) = self.fight.as_mut() {
             for (id, i) in f.pawn_inputs(&self.sim, step) {
+                // 0x00B61A20, checks 0x00B62303..0x00B6239B: camera
+                // action locks include the Pawn actor domain (flag7).
+                // AI/world phases still run; only its generated pad is gated.
+                let i = if self.world.player_actions_blocked(id) { Default::default() } else { i };
                 sim_inputs.entry(id).or_insert(i);
             }
         }

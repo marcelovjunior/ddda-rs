@@ -76,13 +76,27 @@ identity and releases its controls, reporting one completion.
 
 Camera12's order has `mSimpleEv=false`, `mForceTimer=-1`, `StopSelf=false`;
 its camera has `mIsCantActPlayer=true`, `mCantActFlag=3`, no world slow.
-**0x007E0D50** applies the authored input range through the two native
-input domains (**0x00437480 / 0x004374D0**, bit indices6/7). The adapter
+**0x007E0D50** applies the authored action range through two native actor
+domains (**0x00437480 / 0x004374D0**, bit indices6/7). Further consumer
+tracing found **uPlayerBase::vf90 0x00B61A20**, checks **0x00B62303–9B**:
+actor+0x206D bit1 tests mask0x02F80000 (including flag6), while bit2 (Pawn)
+tests0x01F40000 (including flag7). These skip new action arbitration at
+**0x00B623C4–0x00B62400**; the base character/world phases keep running.
+The adapter
 blocks movement/attack/interact input for every occupied roster seat;
 the host's world/actor phases keep advancing. This is the explicit co-op
 extension of the original stage-global camera and input flags: every
 local seat shares the shot; the host blocks remote seats too. **Remote
 camera pose replication is still open** in the LAN protocol.
+
+The **f96f9de** checkpoint only gated external seat inputs. The subsequent
+Pawn-domain fix (head approval5294) also gates generated Pawn pads using
+the same authored policy, after ticking their AI. Its installed regression
+has two Arisen and two separately owned Pawns: all four bodies remain
+still for camera12's first30 motion frames, Pawn AI history and enemy
+frames advance, and both
+Pawns resume movement after the real camera end. The action adapter still
+does not port every skipped native arbitration call.
 
 The event is a camera move, with no LCM show-motion or new actor animation.
 The existing NPC/enemy adapters continue their authored actions. A
@@ -138,8 +152,13 @@ Whole simple-event fade/placement/skip fidelity remains open. A regression
 covers the early legacy completion followed by camera12's actual end.
 Compatibility checks exited0: **5 host + 4 reader tests passed**
 (compile6.89s, suites6.09s/3.33s), including rejection of concurrent owners.
-The compatibility checkpoint needs its final viewer build and another
-bounded ordinary-route capture.
+The compatibility viewer passed **71 tests, 2 existing ignored**
+(compile38.88s, tests11.59s), and its default release build exited0
+in45.24s. The private binary's SHA256 is recorded on board5277.
+The later Pawn-domain checks passed the same **5 host + 4 reader tests**
+(compile2.91s, suites6.68s/2.59s), with the expanded AI/world/resume fixture
+described above. That follow-up needs its final viewer binary refresh and
+another bounded ordinary-route capture.
 
 **Compared against the original:** static executable/data tracing only.
 No original-game visual comparison or live camera recording was performed.
