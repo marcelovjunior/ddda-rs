@@ -279,6 +279,19 @@ existing release target (compile31.75s/test7.94s), then the lease was
 released. An initial accidental default-debug command was stopped with
 actual exit1 before this release check; no new target was created.
 
-Next action: compose actual death-action playback/stages and finish the
-scenery-radius input before wiring the viewer gauge. Validate the actual
+Scenery radius source: **0x00769C70** (`cObjCollision::ctor`) writes
+height+0xD88 **180** and radius+0xD8C **35**; **0x0080B450** selects
+HumanEdit collision mode3 at owner+0x1E5C. In **0x0076C540**, instruction
+**0x0076C72D** loads radius+0xD8C and **0x0076C753** loads height+0xD88;
+**0x00CCE580** shrinks endpoints [0,180] inward by35, producing the live
+capsule [35,145] with radius35. **0x0079DAB0** copies it into the capsule
+read by **0x005371B0**. The earlier `cScrAdjust` constructor uses50/100
+and is overwritten; it is not the ordinary NPC gauge radius. No
+player-group109 inference is needed. `ORDINARY_NPC_SCENERY_RADIUS` now
+exposes the sourced35 for ordinary HumanEdit mode3; dynamic overrides
+and other modes remain unsupported. Both bounds/camera-anchor tests
+passed actual exit0 (compile10.32s/test0.03s), then core was released.
+
+Next action: compose actual death-action playback/stages and wire the
+viewer gauge using the sourced bounds and scenery radius. Validate the actual
 ordinary rescue route with the materialized combat body after review.

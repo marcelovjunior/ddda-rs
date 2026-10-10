@@ -7,6 +7,14 @@ use mtlmt::pose::{compose, mul, IDENTITY};
 use crate::combat::{Attacker, Fighter, Victim};
 use std::sync::Arc;
 
+/// Ordinary assembled human NPC scenery capsule radius in centimetres.
+/// cObjCollision::ctor 0x00769C70 initializes +0xD8C to 35. HumanEdit
+/// 0x0080B450 selects mode3; 0x0076C540 passes that radius unchanged to
+/// 0x00CCE580, then 0x0079DAB0 writes the capsule read by 0x005371B0.
+/// Dynamic capsule overrides and other collision modes are unsupported.
+// Translated from 0x00769C70 / 0x0076C540 (DDDA.exe 2017-12-13 Steam).
+pub const ORDINARY_NPC_SCENERY_RADIUS: f32 = 35.0;
+
 /// One ordinary, non-attacking NPC lifetime, distinct from every player seat.
 /// Motion/frame/transform are supplied by the host's authored NPC actor.
 #[derive(Debug, Clone)]
@@ -320,7 +328,7 @@ mod bounds_tests {
         model[0][0] = 2.0;
         model[3] = [100.0, 0.0, 0.0, 1.0];
         let anchor = |camera| bounds.gauge_anchor(&model, [5.0, 0.0, 0.0],
-            [100.0, 0.0, 0.0], camera, 35.0);
+            [100.0, 0.0, 0.0], camera, ORDINARY_NPC_SCENERY_RADIUS);
         assert_eq!(anchor(None), [110.0, 50.0, 0.0]);
         assert_eq!(anchor(Some([210.0, 50.0, 0.0])), [145.0, 50.0, 0.0]);
         assert_eq!(anchor(Some([10.0, 50.0, 0.0])), [75.0, 50.0, 0.0]);
