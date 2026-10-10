@@ -31,7 +31,10 @@ skills and the shield's are not all in the runtime.
 3. Seat each Arisen's equipped skills from the traced state (per profile,
    co-op), and the skill inputs as the original binds them.
 4. Tests: per vocation, each equipped starting skill starts, plays its
-   installed motion to its end, costs its stamina and can hit a goblin.
+   installed motion to its end, costs its stamina and has its **native
+   effect**: damage skills hit a goblin; Anodyne (220) heals with the white
+   cap and no attack damage; Shield Summons (272) provokes as the source
+   says. No skill gets an effect it does not have (codex-81 #8501).
 
 ## Done when
 
@@ -118,7 +121,13 @@ motion, guessed timing, or attack effect has been installed.
 Anodyne is a healing action and Shield Summons a provoke action. Their
 acceptance needs their native effects, not invented goblin damage to
 satisfy the broad original wording of the test instruction. Board #8501
-requests that clarification and exact DDSIM/Fight/host hookup scope;
-unclaimed shared files remain untouched. **Next action:** port the
+received the correction and exact DDSIM/Fight/host hookup scope in head
+#8524; unclaimed shared files remain untouched. **Next action:** port the
 individually traced action and effect paths and run the
 coordinated full package gates before the final batched GPU checks.
+## Head scope note (2026-10-10, #8501/#8504)
+
+Starters traced by codex-81 (0x006749A0/0x00674A60): Fighter 40 + 272,
+Strider 152 + 350, Mage 210 + 220. Authorized narrow edits: ddsim skill
+modes (dagger/shield/bow), ddenemyrt fight.rs hookup, and the host's
+progression-to-equipped sync; viewer changes come to head as a patch.
