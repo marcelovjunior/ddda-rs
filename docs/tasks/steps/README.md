@@ -76,6 +76,7 @@ without an "after" can run in parallel, one agent each.
 | S32 | NPC authored motions (Reynard's rescue script) | S23 |
 | S33 | LAN: replicate every enemy kind (the dragon for guests) | S29 |
 | S34 | Reynard as a combat body (HP, goblins target him, his gauge) | S32 (viewer part) |
+| S35 | the real vocation menu at the weapon table (uGUIJobChange) | - |
 
 Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19. S18 (cyclops) is ON HOLD.
 
