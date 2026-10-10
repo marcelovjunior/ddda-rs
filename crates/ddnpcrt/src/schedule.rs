@@ -50,6 +50,8 @@ pub struct Guard {
 /// What an NPC asks of the actor layer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    /// OR mapped authored disable bits into this materialized NPC owner.
+    DisableFlags { npc: u32, mask: u32 },
     /// Configure a sensor; the actor/talk system decides eligibility.
     Guard {
         npc: u32,
@@ -94,6 +96,16 @@ pub enum Request {
         npc: u32,
         path: String,
     },
+}
+
+/// Translated from 0x007aa840 (DDDA.exe 2017-12-13 Steam).
+/// Twelve authored bits map to vf180 flags, or intel+0x5c0 without a body.
+/// Higher authored bits are ignored by the original bounded switch.
+pub fn disable_flag_mask(authored: u32) -> u32 {
+    const BITS: [u32; 12] = [0x1000_0000, 0x0800_0000, 0x0400_0000,
+        0x0200_0000, 0x0001_0000, 0x800, 0x1000, 0x2000, 0x200, 0x100, 0x40, 0x10];
+    BITS.iter().enumerate().filter(|(bit, _)| authored & (1 << bit) != 0)
+        .fold(0, |mask, (_, value)| mask | value)
 }
 
 /// The actor layer finished the NPC's current interface.
@@ -331,6 +343,12 @@ impl Owner for Think {
                         value: r.b("Bool").unwrap_or(false),
                     });
                 }
+            }
+            "Set Disable Flag" => {
+                // 0x007aa840 selects the valid NPC body, otherwise its intel.
+                // The host applies this request only to a materialized owner.
+                let authored = rec(p)?.u("Flag").ok_or_else(|| Error::Data("Disable Flag missing Flag".into()))?;
+                self.out.push(Request::DisableFlags { npc: self.npc, mask: disable_flag_mask(authored as u32) });
             }
             "Finish" => {}
             "Set FreeCondition" => {
@@ -588,6 +606,15 @@ mod variable_tests {
     fn value(fields: &Think, owner: &str, property: &str, index: Option<u32>) -> Value {
         fields.var(&Env { clock: Clock { hour: 12, minute: 0, dt: 0.0 },
             _graphs: std::marker::PhantomData }, &Var { owner, property, index }).unwrap()
+    }
+    #[test]
+    fn authored_disable_bits_map_without_touching_unselected_flags() {
+        for (bit, expected) in [0x1000_0000, 0x0800_0000, 0x0400_0000, 0x0200_0000,
+            0x10000, 0x800, 0x1000, 0x2000, 0x200, 0x100, 0x40, 0x10].into_iter().enumerate() {
+            assert_eq!(disable_flag_mask(1 << bit), expected);
+        }
+        assert_eq!(disable_flag_mask(0xffff_f000), 0);
+        assert_eq!(disable_flag_mask(352), 0x1a00);
     }
     #[test]
     fn scene_observation_is_shared_and_refreshes_after_story_progress() {

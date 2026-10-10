@@ -57,7 +57,7 @@ fn installed_applied_npc_waits_for_talk_then_finishes_once() {
 }
 
 #[test]
-fn installed_newly_arisen_actions_reach_the_next_real_actor_prerequisite() {
+fn installed_newly_arisen_actions_set_flags_and_wait_without_false_finish() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
@@ -68,18 +68,14 @@ fn installed_newly_arisen_actions_reach_the_next_real_actor_prerequisite() {
         let mut npc = Npc::applied(id, &data, &path).unwrap();
         npc.observe_scene(Some(1100));
         let clock = Clock { hour: 8, minute: 0, dt: 1.0 / 30.0 };
-        let mut blocked = false;
+        let mut flags_seen = false;
         for _ in 0..90 {
-            match npc.step(&data, clock) {
-                Ok(requests) => assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. }))),
-                Err(error) => {
-                    assert_eq!(error.to_string(), "unimplemented: NPC process Set Disable Flag");
-                    blocked = true;
-                    break;
-                }
-            }
+            let requests = npc.step(&data, clock).unwrap();
+            assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. })));
+            flags_seen |= requests.iter().any(|r| matches!(r,
+                Request::DisableFlags { npc, mask } if *npc == id && *mask != 0));
         }
-        assert!(blocked, "SceNo resolves; the actual actor-disable process still needs translation");
+        assert!(flags_seen, "installed actor-disable request must reach the host");
         assert!(!npc.applied_finished());
     }
 }

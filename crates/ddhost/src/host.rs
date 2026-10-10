@@ -368,7 +368,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         for placement in self.story_npc_intels() {
             h.debug(&(placement.stage, placement.target, placement.npc,
-                self.story_npc_position(placement.npc as u32)));
+                self.story_npc_position(placement.npc as u32),
+                self.story_npc_intel_flags(placement.npc as u32)));
         }
         h.debug(&self.rift.room).debug(&self.rift_visitors);
         if let Some(f) = &self.fight {
