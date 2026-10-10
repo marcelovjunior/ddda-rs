@@ -21,6 +21,10 @@ position, and nothing about the active quest camera.
    clock and the input-lock state; the guest plays the same installed
    camera from its own install and never decides completion itself (the
    host's real end is authoritative).
+   Carry the explicit end edge (active = none) too, so the guest starts the
+   installed return blend when the host's camera ends; the generation
+   identifies replacements; the guest's input prediction honours the
+   replicated lock before its sim step (codex-62, #5331).
 2. NPC combat: replicate per NPC its HP / max HP, gauge visibility
    (SetGaugeDisp), death stage and the motion/pose fields the guest needs
    to draw Reynard as the host does (the S32 motion token: bank/slot/
