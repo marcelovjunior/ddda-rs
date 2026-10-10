@@ -317,3 +317,30 @@ that D4 controls the radius and missing/invalid observations do not obtain
 a fallback. A bounded original-instruction `0x00CCE580` proof script is
 prepared privately but has not been run. The previous178-pass acceptance
 belongs only to source `d3afc703`; it does not validate this continuation.
+
+**Native capsule instruction check:** source `5af3ab0` was unchanged and
+clean during a parent-approved bounded check of original `0x00CCE580`.
+All four synthetic height cases0/20/70/200, with radius35, matched both
+endpoint rows and the radius, reached the normal native RET (ESP+4), and
+preserved the output canary. No instructions, outputs or callbacks were
+substituted. The four cases were bounded to1000 original instructions
+each and less than5s total; the command actually exited0. The private
+JSON SHA256 is `0C276B617BA26C2723A9F2532372348642C806D55BF3DD729A0617A3C478BF09`.
+Two earlier attempts lacked the original file-backed negative-one constant
+page and were rejected; adding that original page resolved the long branch.
+This is a narrow native-function comparison with synthetic input, not
+whole-body ground or route validation. The new Rust tests remain unrun.
+
+**Damage flag writer found (source only):** `uCharacterBase::vf111` at
+`0x00850100..0x00850181` clears bytes2EA1/2EA2/2EA3 each update. Its active
+predicate is body flags273C mask0x10, or NPC category206D mask8 with linked
+vf180 flags mask0x80, or body collision flags2360 mask0x4000. A transition
+from previous active byte2EA0=0 writes rising-edge byte2EA1=1 at
+`0x00850171`; falling from1 writes byte2EA2=1. Demo's getter `0x007AB800`
+reads the one-update rising edge. `0x0084BA60` invokes vf111 before the
+ObjModel ground update. A new scalar `DamageEdges` helper preserves this
+distinction; unknown linked NPC flags reject its update without mutation.
+The regression
+`demo_damage_flag_is_a_native_rising_edge_with_distinct_body_npc_and_collision_sources`
+is **uncompiled/unrun**. No graph input or production actor was changed;
+real body/collision flags still must be supplied by the actor adapter.
