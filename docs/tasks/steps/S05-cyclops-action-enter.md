@@ -62,3 +62,4 @@ Validation: `cargo test -p ddenemyrt -- --test-threads=1` passed (74 passed, 1 e
 then connect the action driver with actual owner identity and runtime
 reset-vector inputs; no original-game execution comparison claimed.
 
+Implementation commit: f0ed539 (step/s05-cyclops-enter).
