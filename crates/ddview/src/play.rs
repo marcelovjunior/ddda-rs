@@ -454,7 +454,7 @@ pub fn demo_attack(sim: &Sim, fight: Option<&Fight>, seat: PlayerId, cam_yaw: f3
             let (dx, dz) = (n.position[0] - p.position[0], n.position[2] - p.position[2]);
             let mut a = dx.atan2(dz) - heading;
             a = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-            !n.fighter.victim.dead() && (dx.hypot(dz) < 250.0 || (dx.hypot(dz) < 400.0 && a.abs() < 70f32.to_radians()))
+            !n.fighter.victim.dead() && dx.hypot(dz) < 300.0 && a.abs() < 60f32.to_radians()
         })
     });
     if bystander && d <= 400.0 {
