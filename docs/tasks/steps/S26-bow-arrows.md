@@ -85,13 +85,21 @@ research only; no shot, fight test or original-game comparison is claimed.
   selected from `accurateWait/Walk/Run/Jump/Fall` by `0x00B17DA0` and
   updated at `0x00B1E480` through `0x007BC800`. Initial smoothed value is
   1.0 (`0x00B16FE0`); stationary target is 0.25. The smoothing and cone
-  rotation need their own regression before using them in a shot test.
+  smoothing still needs integration; cone rotation is now covered by the
+  original-helper synthetic regressions described below.
 - Damage enters the existing `ddcombat::damage::player_attack`
   (`0x0088AA20`) with the **secondary bow equipment slot**, the installed
   collision row and goblin region/defence. `uShlBase::vf111`
   (`0x00BD92E0`) and `uShlArrow::vf111` (`0x00BCF1E0`) project shell
-  additions and special-arrow overrides; the basic shot's additions are
-  zero. The existing Strider kit only supplies dagger equipment and must
+  additions and special-arrow overrides. The basic shot's **stamina**
+  additive is zero, but the normal-arrow selector uses the embedded
+  override-table entry 120 at `0x015F76B8`. `0x00BCF1E0` adds installed
+  rows 120/121/122 to the current phase's attack, preserves shrink when
+  the extra type is zero and blow when the extra type is three, and
+  replaces six status fields. At `repelledDist`, it clears raw attack,
+  stagger and knockdown values. This occurs before player valuation;
+  simply using collision row 1 alone would omit the normal-arrow bonus.
+  The existing Strider kit only supplies dagger equipment and must
   gain the installed starting shortbow slot (item 0x1F8, sourced existing
   `0x00673740` starting equipment selection).
 
@@ -102,3 +110,28 @@ previous-frame hit-pass ordering and validate the 10 m hit, a deliberate
 miss and two independent shooters. Fast-flight collision interpretation,
 accuracy smoothing/rotation, terrain contacts and augment defaults are
 still source checks, not silently assumed completed systems.
+
+### Independent arrow checkpoint
+
+With codex-1's narrow approval (board #3985), `ddenemyrt::arrow` now
+provides an installed basic-arrow reader, per-owner ballistic state,
+distance collision selection, accepted actor/world contact death bits,
+normal-arrow damage projection and explicit bow-origin/aim-target/RNG
+inputs. It does not select a nearest enemy or invent a bow offset.
+Exact vertical aim without the steady augment returns unsupported;
+the original parallel-up basis fallback is not yet translated.
+
+Validation: full `cargo test -p ddenemyrt` passed **91 tests, 1 ignored**
+before the supplemental projection, then the final focused **5 unit +
+1 installed** tests passed. Three oblique-aim cone fixtures execute
+original `0x00B1DCB0` with original basis construction and RNG word
+mapping in a private Unicorn harness (only sin/cos calls supplied by the
+harness); the Rust results agree within 2e-7 per component. The installed
+test verifies the arrow's resource 6 collision, phase falloff,
+supplemental attack rows, trajectory order and death on accepted contact.
+No original live-game comparison or Sim/Fight acceptance is claimed.
+
+S25's reviewed shot-phase handoff and S29's `fight.rs` ownership still
+gate integration. The current-sphere adapter explicitly leaves the
+original fast-flight narrow-phase unresolved; terrain contacts, actual
+bow-joint posing and accuracy-state smoothing remain caller boundaries.

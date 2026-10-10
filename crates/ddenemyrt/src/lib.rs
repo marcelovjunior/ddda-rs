@@ -17,6 +17,7 @@
 
 pub mod ambient;
 pub mod arisen;
+pub mod arrow;
 pub mod body;
 pub mod chimera;
 pub mod combat;
