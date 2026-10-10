@@ -1,8 +1,9 @@
 # Stage navigation
 
-Status: readers implemented, Rust tests **uncompiled/unrun**. Read-only Python
-format probes consumed the installed beach and one field resource through the
-exact file end. Native path construction, avoidance, host service and NPC body
+Status: readers implemented and tested: the complete `ddnav` package passed
+3 tests, including the installed beach and one field resource, with no
+skips, ignores or filtered tests (source `917ce892`, 2026-10-10). Native
+path construction, avoidance, host service and NPC body
 adapter are still open; there is no direct-line or generic A* substitute.
 
 Addresses refer to DDDA.exe, 2017-12-13 Steam. Native resource vtable slot 10
@@ -89,12 +90,22 @@ Do not set A3 to select the direct branch `0x0057CC00`. Beach GotoEx
 records enable path use/update/avoidance and disable width variation.
 
 Mesh vf06 resolves start/end through `0x01090670 -> cAISvNavPathFinding::vf11`
-(`0x010975E0`). Result vf07 calls native search `0x011BA610` when pending,
+(`0x010975E0`). Result vf07 invokes task scheduler `0x011BA610` when pending,
 then consumes generated trace points. Its simple point-consumption branch
 returns 3 while distance squared is greater than or equal to the reach
 distance squared; it advances points only at strict less-than, returning
 4 after the last point. Dynamic-path and curve branches require further
 source tracing. A reader alone does not satisfy the installed GotoEx gate.
+
+`0x010C8B80` installs the mesh controller's four native task callbacks:
+pre-straight examination `0x010B9570`, region search `0x010B5700` (calls
+`0x0114D100`), node search `0x010B5810` (calls `0x0114B650`), and path
+construction `0x010C55C0` (`0x010BA990` or width-adjusted `0x010BCE20`,
+then optional curve `0x010B8210`). These phases are not interchangeable
+with a generic A* over the reader's links. Constructor `0x010B9180` clears
+the dword at `+0x1C4`, including pre-straight enable byte `+0x1C6`;
+later owner settings must be traced rather than selecting that branch
+to avoid the native search.
 
 `0x0056DCC0` maps only trace result 4 to interface done; result 3 drives
 movement and remains running. Results 0/1/2 remain running. A host adapter

@@ -64,19 +64,27 @@ NAVIGATION.md documents the format and the query with addresses.
   636 nodes, 3,202 edges, 85 cells) through their exact file ends. These
   are source/format checks, **not Rust test results or original-game route
   comparisons**. Raw files and probes remain private under `E:/ddda-re`.
-- Three Rust regressions are **UNCOMPILED/UNRUN** while the parent controls
-  the shared Cargo queue: `installed_beach_mesh_reads_complete_topology_and_spatial_cells`,
+- The complete `ddnav` package at clean source `917ce892f685f6c473b6120bf47f9e2843dc75f7`
+  passed **3 tests / 4 suite summaries**, actual Cargo and outer exit 0,
+  zero failures/ignores/filtered tests/skips. Exact names appeared once:
+  `installed_beach_mesh_reads_complete_topology_and_spatial_cells`,
   `installed_field_waypoints_use_distinct_format_and_short_cell_references`,
   and `navigation_rejects_partial_records_counts_versions_and_nonfinite_values`.
-  No shared host/DDNPC declarations, Cargo.lock, main branch, game files or
-  original process have been edited. Standalone rustfmt and git diff checks
-  passed; they are not compilation evidence.
+  Source hashes stayed unchanged through the gate. Parent grant #8767,
+  normal build/core lease released after the actual process completed;
+  jobs 2, existing shared core target, canonical DDDA install and exe.
+  Head #8758 approved the sole Cargo.lock addition for `ddnav` and existing
+  `mtarc`; the gate checked that no other lock entry changed. No shared
+  host/DDNPC declarations, main branch, game files or original process edited.
+  Private log `E:/ddda-re/notes/steps/S59/full-reader-917ce89-first.private.log`,
+  SHA256 `E5F31CE29082BF67B1E979BBA6B501D625364DB0515B1CDE6292C5CB78FA1270`,
+  and its proof JSON retain actual exit, timing (1.895 s), all eight source
+  hashes and exact test occurrences.
 - Request dispatch `0x0059F840 / 0x0059F7F0` selects active mesh controller
   `cAINavPathTrace`, vf06 `0x010BA660`, vf07 `0x010C5620`. Field controller
   `cAIFieldPathTrace` is a different waypoint service. The simple trace-point
   consumer uses strict distance `<` before advancing and returns 4 only
   after the final point. Native search, dynamic path, curve, avoidance,
   transformed service and host/NPC body integration are **OPEN**.
-- The whole Done gate is **OPEN**. Next: run the complete new reader package
-  under the parent's normal build lease, then translate the actual mesh
+- The whole Done gate is **OPEN**. Next: translate the actual mesh
   node selection/search/trace-point construction before wiring GotoEx.
