@@ -80,3 +80,18 @@ explicitly to `PlayerId`; projected snapshots remain per-owner. Its list test
 uses a headless ECON/runtime reward fixture, with no QuickItems manufacturing
 path. Opening hooks still need S51 integration and adaptation; no Cargo or
 capture acceptance is claimed for this checkpoint.
+
+
+### Host authority integration checkpoint (still UNTESTED viewer)
+
+Parent reviewed S51 inventory source and its full core run (137 passed). This
+isolated S38 branch integrates that frozen source. Opening snapshots now clone
+the requesting Arisen's ECON bag and active session pawn bags; selection sends
+`Owner`, index and exact expected slot to `Host::item_request`. Keyboard quick
+use calls the same API and respects each menu owner's input lock. Native pawn
+admission additionally tests record+0x354; that flag is not yet represented.
+
+Head #6740 will regenerate ECON v2 route checkpoints after S51 lands, then the
+S38 capture uses a real post-reward checkpoint. Old ECON v1 checkpoints are not
+backfilled with manufactured rewards. Full viewer tests/release and the capture
+are still required; no screenshot or original comparison is claimed.

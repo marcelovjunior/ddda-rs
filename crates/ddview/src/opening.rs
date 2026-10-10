@@ -3049,7 +3049,7 @@ mod tests {
         let reward=ddstory::orders::reward(&session.host.story.as_ref().unwrap().data,1).unwrap();
         for request in reward {
             if let ddstory::Request::Reward {quest,items,..}=request {
-                let host=&mut **session.host;
+                let host=&mut *session.host;
                 let data=host.item_data.clone().unwrap();
                 for seat in host.roster.ids() {
                     host.economy.opening_grants.reward(&mut host.economy.inventory,&data.items,seat,quest,&items);
