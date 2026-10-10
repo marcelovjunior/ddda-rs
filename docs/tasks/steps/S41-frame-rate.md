@@ -1110,3 +1110,38 @@ viewer build/capture window now follows head's diagnostic build and short
 resume run, not merely the children's actual core exits. The accepted
 named trace above remains valid; no candidate capture overlapped that
 diagnosis and no full uninterrupted-route claim follows from S50.
+
+### Opt-in finite extent: full CPU gates passed, image gate pending
+
+Reviewed committed main `18a4ca5` (including head's swept push-out fix and
+accepted atomic-load helpers) was integrated into this branch as `e054c56`.
+The first full viewer attempt, session89730, actually failed compilation
+with exit101: two retained-entity conversions and the public Cascade
+module path were wrong. Its private log is preserved. Source `e338193`
+corrects those Bevy API references without changing the culling rule.
+
+The corrected complete release viewer suite, session41614, actually
+exited0: **119 passed, zero failed, two existing ignored diagnostics**.
+Compilation24.83 s; test execution16.24 s. All five finite-shadow
+regressions, the installed stage-sky test, all three compact-palette
+regressions and all five road regressions are explicitly present and pass.
+The private log is `full-shadow-extent-e338193.log` under the S41 evidence
+directory. No narrower filtered run is substituted for this suite.
+
+Release build session29754 actually exited0 in41.42 s. Frozen executable
+`E:/ddda-re/notes/steps/s41/ddview-shadow-extent-e338193.exe` has SHA-256
+`B80591EB1D620B52B3C25C733AFB1349431C90401081496181D3CA046533152E`.
+Only the existing Args/private-interface and unused audio-method warnings
+remain. Normal build lease releases followed actual exits; no new target
+or original-game operation occurred.
+
+Head #7858 completed the uninterrupted route with the push-out fix and
+regenerated canonical route-v2. The prepared matched OFF/ON plan therefore
+uses its new `route-v2/FieldSettle.ddhs`, SHA-256
+`D458FCBC8278DBD6F89A94FB5BD5AFF1D1C51E4C94A5E991382FA0063F53BB9B`.
+The old compact trace remains evidence for its own frozen checkpoint;
+it is not recast as a trace of this new scene. The new finite extent
+remains opt-in; **no image, performance or default-promotion gate is
+claimed yet**. Next: both bounded x1 captures with this one pin/checkpoint,
+no concurrent Cargo/CPU diagnostic, then inspect both actual images and
+telemetry before any promotion decision.
