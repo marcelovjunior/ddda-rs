@@ -156,6 +156,25 @@ pub struct Playback {
     /// Weapons drawn: each weapon with a hand joint hangs there instead of
     /// on its sheathed row (0x0080be30's switch).
     pub drawn: bool,
+    /// Optional model layer 1. Its authored channels overlay layer 0;
+    /// there is no invented upper/lower skeleton partition (S27).
+    pub upper: Option<SecondaryPlayback>,
+}
+
+pub struct SecondaryPlayback {
+    pub id: u16,
+    pub motion: mtlmt::Motion,
+    pub frame: f32,
+    request: Option<f32>,
+    blend: Option<(mtlmt::blend::Interpolation, HashMap<Entity, Transform>)>,
+}
+impl Playback {
+    pub fn upper_motion(&mut self, id: u16, motion: &mtlmt::Motion, frame: f32, blend: f32) {
+        if self.upper.as_ref().is_none_or(|upper| upper.id != id) {
+            self.upper = Some(SecondaryPlayback { id, motion: motion.clone(), frame,
+                request: Some(blend), blend: None });
+        } else if let Some(upper) = &mut self.upper { upper.frame = frame; }
+    }
 }
 
 /// Original local transform, before motion and character-edit constraints.
@@ -622,6 +641,7 @@ pub fn spawn_assembled_hands(
         blend: None,
         morph,
         drawn: false,
+        upper: None,
     });
     Ok(root)
 }
@@ -962,6 +982,20 @@ pub fn animate(
     // the model's frame step in motion frames (the same clamp as play::step)
     let step = time.delta_secs().min(0.1) * MOTION_FPS;
     for (entity, name, actor, mut p) in &mut players {
+        // Freeze the preceding unmorphed result independently for layer1.
+        // 0x01061DD0 freezes only channels needed by the requesting layer;
+        // this cache is read only for channels the new motion authors.
+        let previous_upper: Option<HashMap<Entity, Transform>> = p.upper.as_ref().is_some_and(|u| u.request.is_some()).then(|| p.morph.as_ref()
+            .map(|m| m.bones.iter().zip(&m.base).map(|(&(e,_), &t)| (e,t)).collect())
+            .unwrap_or_else(|| p.joints.values().filter_map(|&e| Some((e, *joints.get(e).ok()?))).collect()));
+        if let Some(upper) = &mut p.upper {
+            if let Some(frames) = upper.request.take() {
+                upper.blend = mtlmt::blend::Interpolation::start(frames).map(|b| (b, previous_upper.unwrap_or_default()));
+            }
+            if let Some((b, _)) = &mut upper.blend {
+                if !b.advance(step) { upper.blend = None; }
+            }
+        }
         if let Some(frames) = p.blend_request.take() {
             // freeze the pose shown now (itself possibly mid-blend), before
             // the morph: the morph pass goes on top of the blend each frame,
@@ -1025,11 +1059,56 @@ pub fn animate(
                 tr.scale = Vec3::from(mix_vector(tr.scale.to_array(), s.to_array(), b.weight));
             }
         }
+        // Native layered-channel arbitration (0x01061DD0): a later layer's
+        // keyed rotation/position/scale takes priority. Unkeyed channels
+        // remain from the lower layer, including the independently posed legs.
+        if let Some(upper) = &p.upper {
+            for track in &upper.motion.tracks {
+                if track.joint == 255 { continue; }
+                let Some(&e) = p.joints.get(&track.joint) else { continue };
+                let Ok(mut transform) = joints.get_mut(e) else { continue };
+                let old = upper.blend.as_ref().and_then(|(_, pose)| pose.get(&e));
+                let weight = upper.blend.as_ref().map_or(0., |(b,_)| b.weight);
+                overlay_channel(&mut transform, track.usage, track.sample(upper.frame), old, weight);
+            }
+        }
         let drawn = p.drawn;
         if let Some(m) = &mut p.morph {
             apply_morph(m, drawn, &mut joints);
         }
         dump_joints(entity, name, actor, &p, frame, &mut dump, &rest, &joints);
+    }
+}
+
+fn overlay_channel(transform: &mut Transform, usage: mtlmt::Usage, value: [f32;4], old: Option<&Transform>, weight: f32) {
+    use mtlmt::blend::{mix_rotation, mix_vector};
+    match usage {
+        mtlmt::Usage::LocalRotation => transform.rotation = Quat::from_array(old.map_or(value,
+            |old| mix_rotation(value, old.rotation.to_array(), weight))),
+        mtlmt::Usage::LocalPosition => transform.translation = Vec3::from(old.map_or([value[0],value[1],value[2]],
+            |old| mix_vector([value[0],value[1],value[2]], old.translation.to_array(), weight))),
+        mtlmt::Usage::LocalScale => transform.scale = Vec3::from(old.map_or([value[0],value[1],value[2]],
+            |old| mix_vector([value[0],value[1],value[2]], old.scale.to_array(), weight))),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod secondary_layer_tests {
+    use super::*;
+    #[test]
+    fn upper_channel_preserves_lower_position_scale_and_freezes_its_own_rotation() {
+        let mut lower = Transform::from_translation(Vec3::new(3.,4.,5.)).with_scale(Vec3::splat(2.));
+        let frozen = Transform::from_rotation(Quat::from_rotation_y(1.));
+        let upper = Quat::from_rotation_x(0.4);
+        overlay_channel(&mut lower, mtlmt::Usage::LocalRotation, upper.to_array(), Some(&frozen), 1.);
+        assert!(lower.rotation.angle_between(frozen.rotation) < 1e-5);
+        assert_eq!(lower.translation, Vec3::new(3.,4.,5.));
+        assert_eq!(lower.scale, Vec3::splat(2.));
+        overlay_channel(&mut lower, mtlmt::Usage::LocalRotation, upper.to_array(), Some(&frozen), 0.);
+        assert!(lower.rotation.angle_between(upper) < 1e-5);
+        overlay_channel(&mut lower, mtlmt::Usage::LocalPosition, [10.,20.,30.,0.], Some(&Transform::IDENTITY), 0.5);
+        assert_eq!(lower.translation, Vec3::new(5.,10.,15.));
     }
 }
 

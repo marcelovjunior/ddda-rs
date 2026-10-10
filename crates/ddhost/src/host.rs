@@ -216,9 +216,19 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             _ => return,
         };
         self.kit_job = job;
-        for id in self.roster.ids() {
+        let ids: Vec<PlayerId> = self.roster.ids().collect();
+        for &id in &ids {
             fight.add_arisen_as(id, kit);
             fight.kit(kit).equip(&mut self.sim, id);
+        }
+        // the first vocation choice starts each seat's level-1 character
+        // record (experience, level-ups), when the host has the data
+        if let Some(v) = Vocation::from_id(job) {
+            for id in ids {
+                if self.data.tables.is_some() && self.character_of(ddprogress::Role::Arisen(id)).is_none() {
+                    let _ = self.create_arisen(id, v);
+                }
+            }
         }
     }
 
@@ -384,8 +394,18 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // from the volumes the fight switched on last frame, damage applied,
         // before anyone moves (FRAME.md 5.1).
         let step = self.clock.seconds() * ddsim::MOTION_FPS;
+        let mut kills = vec![];
         if let Some(f) = self.fight.as_mut() {
             f.hits(step);
+            kills = f.kill_awards();
+        }
+        // A goblin's death gives the party its experience (0x00443470);
+        // without progression data (or party records) there is no one to
+        // award.
+        if self.data.tables.is_some() && self.progression.party.iter().any(Option::is_some) {
+            for exp in kills {
+                self.award_exp(ddprogress::Award::new(exp))?;
+            }
         }
         // Step 36, pass A, line 10 "Player": the Arisen (and later the
         // pawns) move: one Sim::step is one engine frame.
@@ -422,6 +442,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.progression.step(t);
             if let Some(story) = self.story.as_mut() {
                 self.progression.sync_to_world(&mut story.world);
+            }
+            // the fight carries each Arisen's current level stats
+            if let Some(f) = self.fight.as_mut() {
+                for m in self.progression.party.iter().flatten() {
+                    let ddprogress::Role::Arisen(seat) = m.role else { continue };
+                    let c = &self.progression.characters[m.character];
+                    let st = &c.progress.stats;
+                    f.apply_level(seat, c.progress.level, st.hp_max, st.attack, st.defend, st.magic_attack, st.magic_defend);
+                }
             }
         }
         // Pass A line 15, the NPCs: daily schedules and their actions

@@ -235,6 +235,7 @@ pub struct Session {
     failure: Option<String>,
     guest_control_shot: bool,
     guest_npcs: HashMap<u32, [f32; 3]>,
+    guest_enemy_views: crate::net::enemy_views::Views,
     acc: f32,
     /// The party before the last host frame, to draw between frames.
     between: play::Between,
@@ -305,6 +306,12 @@ pub fn prepare(
     // picked at the weapon table (Host::apply_job_kit); enemies join it as
     // the story spawns them.
     host.fight = Some(ddhost::ddenemyrt::fight::Fight::new(play::fight_data(&vfs, native_pc)?));
+    // progression (experience, levels): ddprogress tables from the install
+    // and the exe beside it
+    host.data.tables = Some(std::sync::Arc::new(ddhost::install::tables(
+        &vfs,
+        &ddexe::locate(native_pc).map_err(|e| e.to_string())?,
+    )?));
     host.data.npc = Some(std::sync::Arc::new(
         ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
     ));
@@ -377,6 +384,7 @@ pub fn prepare(
         failure: None,
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
+        guest_enemy_views: crate::net::enemy_views::Views::default(),
         acc: 0.0,
         between: play::Between::default(),
         cut: None,
@@ -447,6 +455,14 @@ pub fn prepare(
         story.world.set_sce_no(1025,false);
         story.world.set_lot(200,0,true);
         info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
+        if std::env::var_os("DDVIEW_LAN_ENEMY_CAPTURE").is_some() {
+            // S33 visual fixture only: synthetic goblin position six metres
+            // in front of this runtime Arisen, not a natural beach encounter.
+            let player=s.host.sim.player(0).unwrap();
+            let pos=[player.position[0]+player.yaw.sin()*600.0,player.position[1],
+                player.position[2]+player.yaw.cos()*600.0];
+            s.host.fight.as_mut().unwrap().add_goblin(pos,0.0);
+        }
     }
     Ok(s)
 }
@@ -1036,7 +1052,8 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
     }
     let mut owners = vec![];
     for spawn in &goblins {
-        let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
+        // the placement's stat rates and experience override
+        let owner = ddhost::spawns::add_placed_goblin(fight, spawn);
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
@@ -1253,6 +1270,7 @@ pub fn step(
         guest_step(
             s,
             st,
+            &mut stage_view,
             &keys,
             &buttons,
             &mouse,
@@ -1917,7 +1935,8 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
-            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            s.host.progression.characters.first().map(|c| (c.progress.level, c.progress.exp)),
             w.sce_no,
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
@@ -2388,6 +2407,7 @@ impl Session {
 fn guest_step(
     s: &mut Session,
     st: &mut PlayState,
+    view: &mut OpeningStage,
     keys: &ButtonInput<KeyCode>,
     buttons: &ButtonInput<MouseButton>,
     mouse: &AccumulatedMouseMotion,
@@ -2439,6 +2459,7 @@ fn guest_step(
     };
     let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
     bodies.extend(c.own().as_ref().map(shown));
+    let enemies = c.enemies(0.0);
     s.guest_npcs = c.npcs().into_iter().map(|n| (n.id, n.pos)).collect();
     for event in events {
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
@@ -2459,6 +2480,22 @@ fn guest_step(
     }
     play::show(st, &bodies, roots, cams);
     st.follow = follow;
+    if let Some(streamer) = view.streamer.as_mut() {
+        s.guest_enemy_views.sync(&enemies, st.origin, &mut view.commands,
+            &mut streamer.loader, &mut view.meshes, &mut view.materials,
+            &mut view.images, &mut view.bindposes);
+    }
+    s.guest_enemy_views.show(&enemies, st.origin, s.cut.is_some(), roots, &mut st.visible);
+    if s.dragon_capture {
+        if let Some(dragon)=enemies.iter().find(|e|e.identity.family==ddnet::mirror::EnemyFamily::Dragon) {
+            let target=(Vec3::from(dragon.pos)-st.origin)*UNIT;
+            // Same explicit diagnostic camera as the host; not an original camera.
+            for mut camera in cams.iter_mut() {
+                *camera=Transform::from_translation(target+Vec3::new(40.0,20.0,60.0))
+                    .looking_at(target,Vec3::Y);
+            }
+        }
+    }
     for (&e, &present) in &st.visible {
         if let Ok(mut v) = vis.get_mut(e) {
             *v = if present && s.cut.is_none() {

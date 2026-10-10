@@ -392,6 +392,18 @@ impl Dragon {
         self.done
     }
 
+    /// The native action id owned by this actor, for transport/inspection.
+    /// Uses the same typed variants accepted by start_action and
+    /// start_target_fly; does not infer actions from their motion slots.
+    pub fn current_action(&self) -> Option<u32> {
+        self.action.map(|a| match a {
+            DragonAction::HoverUp(_) => 52,
+            DragonAction::KakkuHover => 53,
+            DragonAction::HoverKakku { .. } => 54,
+            DragonAction::TargetFly => 10,
+        })
+    }
+
     pub fn motion(&self) -> Option<crate::body::MotionId> {
         self.action.map(|a| crate::body::MotionId::new(0, a.motion()))
     }

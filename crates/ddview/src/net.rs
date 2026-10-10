@@ -34,17 +34,20 @@ use bevy::prelude::*;
 use ddhost::data::NoStoryData;
 use ddhost::{Control, FrameClock, FrameInputs, Host, PlayerInput, ProfileId};
 use ddhost::PlayerId;
-use ddnet::{Enemy, LookData, Spot};
+use ddnet::{LookData, Spot};
 use ddstory::scripted::ScriptedHost;
 
 use crate::character::Playback;
 use crate::play::{self, FollowCam, PlayState, Shown};
-use crate::stage::{Loader, UNIT};
+use crate::stage::Loader;
 
 /// The port `--join` uses when the address names none.
 pub const DEFAULT_PORT: u16 = 47810;
 /// How long [`prejoin`] waits for the host's welcome.
 pub const PREJOIN_WAIT: Duration = Duration::from_secs(5);
+
+#[path = "enemy_views.rs"]
+pub(crate) mod enemy_views;
 
 type Guest = ddnet::Client<ddnet::Udp>;
 
@@ -94,8 +97,7 @@ struct Session {
     dressed: BTreeSet<PlayerId>,
     /// The host has announced its own and its pawn's looks.
     own_looks: bool,
-    /// The motion each goblin view shows (guest side).
-    goblin_shown: HashMap<Entity, (u8, u16)>,
+    enemy_views: enemy_views::Views,
 }
 
 #[derive(Resource)]
@@ -297,6 +299,10 @@ pub fn setup(
             // The host runs the fight: the guest's own goblins and pawn
             // logic go; the views stay for the replicated ones.
             st.fight = None;
+            for old in st.goblins.drain(..) {
+                commands.entity(old.entity).despawn();
+                st.visible.remove(&old.entity);
+            }
             match take_prejoined() {
                 Some(mut client) => {
                     client.set_ground(Box::new(ground));
@@ -328,7 +334,7 @@ pub fn setup(
         looks: None,
         dressed,
         own_looks: false,
-        goblin_shown: HashMap::new(),
+        enemy_views: enemy_views::Views::default(),
     };
     commands.insert_resource(NetRes(Mutex::new(session)));
     Ok(())
@@ -431,44 +437,6 @@ fn dress(
             }
             Err(e) => warn!("net: seat {seat}: {e}"),
         }
-    }
-}
-
-/// The replicated goblins on the guest's goblin views (`--goblin` on the
-/// guest too: the views are made at start).
-fn show_enemies(
-    s: &mut Session,
-    st: &mut PlayState,
-    enemies: &[Enemy],
-    roots: &mut Query<(&mut Transform, &mut Playback), Without<FollowCam>>,
-) {
-    let views: Vec<Entity> = st.goblins.iter().map(|g| g.entity).collect();
-    for (i, &e) in views.iter().enumerate() {
-        st.visible.insert(e, i < enemies.len());
-    }
-    let Some(d) = st.fight_data.clone() else { return };
-    for (g, e) in enemies.iter().zip(views) {
-        let Ok((mut tr, mut pb)) = roots.get_mut(e) else { continue };
-        tr.translation = (Vec3::from(g.pos) - st.origin) * UNIT;
-        tr.rotation = Quat::from_rotation_y(g.yaw);
-        let m = d
-            .goblin
-            .body
-            .banks
-            .get(usize::from(g.bank))
-            .and_then(Option::as_ref)
-            .and_then(|b| b.list.motions.get(usize::from(g.slot)))
-            .and_then(Option::as_ref);
-        let key = (g.bank, g.slot);
-        if s.goblin_shown.get(&e) != Some(&key) {
-            if let Some(m) = m {
-                // *viewer choice*, as play.rs: the goblin's blend frames are
-                // not read
-                pb.change_motion(m.clone(), if s.goblin_shown.contains_key(&e) { 6.0 } else { 0.0 });
-            }
-            s.goblin_shown.insert(e, key);
-        }
-        pb.hold_frame = Some(m.map_or(g.frame, |m| display_frame(m, g.frame)));
     }
 }
 
@@ -618,11 +586,11 @@ pub fn step(
     if (t % 2.0) < time.delta_secs() {
         let mut seen: Vec<String> =
             bodies.iter().map(|b| format!("seat {} at ({:.0}, {:.0}, {:.0})", b.id, b.position[0], b.position[1], b.position[2])).collect();
-        let goblins: Vec<(f32, bool)> = match &s.side {
-            Side::Host(server) => ddnet::mirror::from_fight(server.host.fight.as_ref()).1.iter().map(|e| (e.hp, e.dead)).collect(),
-            _ => enemies.iter().map(|e| (e.hp, e.dead)).collect(),
+        let shown_enemies = match &s.side {
+            Side::Host(server) => ddnet::mirror::from_fight(server.host.fight.as_ref()).1,
+            _ => enemies.clone(),
         };
-        seen.extend(goblins.iter().map(|(hp, dead)| format!("goblin hp {hp:.0}{}", if *dead { " dead" } else { "" })));
+        seen.extend(shown_enemies.iter().map(|e| format!("{:?} owner {} hp {:.0}{}",e.identity.family,e.id,e.hp,if e.dead { " dead" } else { "" })));
         info!("net: t={t:.1}s sees {}; dressed {:?}", seen.join(", "), s.dressed);
     }
     play::show(st, &bodies, &mut roots, &mut cams);
@@ -640,9 +608,16 @@ pub fn step(
             }
             hud.rows = play::hud_rows(st, &client.sim, None, Some(&hp));
             for e in &enemies {
-                hud.rows.push(("Goblin HP".to_string(), e.hp, e.hp_max, Color::srgb(0.75, 0.15, 0.12)));
+                hud.rows.push((format!("{:?} HP",e.identity.family), e.hp, e.hp_max, Color::srgb(0.75, 0.15, 0.12)));
             }
-            show_enemies(s, st, &enemies, &mut roots);
+            let mut loader = Loader {
+                vfs: &s.vfs, mfx: &s.mfx, textures: Default::default(), models: Default::default(),
+                model_names: Default::default(), water: None, stats: Default::default(),
+                lod_eye: None, view_range: 1, tag: None,
+            };
+            s.enemy_views.sync(&enemies,st.origin,&mut d.commands,&mut loader,&mut d.meshes,
+                &mut d.materials,&mut d.images,&mut d.bindposes);
+            s.enemy_views.show(&enemies,st.origin,false,&mut roots,&mut st.visible);
         }
         Side::Joining(_) => {}
     }

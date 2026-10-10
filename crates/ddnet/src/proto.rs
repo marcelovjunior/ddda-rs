@@ -14,7 +14,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 ///   and enemies in snapshots.
 /// - 3: NPC bodies in snapshots; PlayEvent (cutscenes).
 /// - 6: per-seat bow held/toggle input and bow layers/secondary slot in bodies.
-pub const PROTOCOL: u16 = 6;
+/// - 7: enemy resource identity, full rotation/scale and field-group deltas.
+pub const PROTOCOL: u16 = 7;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]

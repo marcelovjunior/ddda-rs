@@ -298,7 +298,7 @@ impl<T: Transport> Client<T> {
                     .iter()
                     .map(|e| match a.enemies.iter().find(|x| x.id == e.id) {
                         Some(p) => Enemy::lerp(p, e, k),
-                        None => *e,
+                        None => e.clone(),
                     })
                     .collect()
             }
