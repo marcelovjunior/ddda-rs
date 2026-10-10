@@ -4,7 +4,7 @@
 
 use ddspawn::gpl::GroupList;
 use ddspawn::respawn::{self, Record};
-use ddspawn::{gate, spawns, Gate, World};
+use ddspawn::{Gate, World, gate, spawns};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -24,6 +24,30 @@ fn vfs() -> Option<&'static ddvfs::Vfs> {
 }
 
 const GPL: &str = "rLayoutGroupParamList";
+
+#[test]
+fn cassardis_ambient_variants_preserve_authored_think_selection() {
+    let Some(vfs) = vfs() else { return };
+    let list = GroupList::parse(&vfs.read(r"scr\st200\etc\st200_e", mtarc::type_hash(GPL)).unwrap()).unwrap();
+    let world = World {
+        scene: 1100,
+        hour: 12,
+        flag: &|_| false,
+    };
+    let read = |path: &str| vfs.read(path, mtarc::type_hash("rLayout")).ok();
+    let (_, actors) = spawns(200, &list, (0, 0), &read, &world, &[]).unwrap();
+    let ground: Vec<_> = actors.iter().filter(|a| a.name == "em8300").collect();
+    let birds: Vec<_> = actors.iter().filter(|a| a.name == "em8602").collect();
+    assert_eq!((ground.len(), birds.len()), (2, 17));
+    assert!(birds.iter().all(|a| a.class == "cSetInfoEnemy8600"));
+    for (actor, table) in ground.iter().zip([6, 5]) {
+        assert_eq!(
+            actor.record.get("mUseFirstSetThinkTbl"),
+            Some(&mtlot::Value::Int(1))
+        );
+        assert_eq!(actor.record.get("mStartTableNo"), Some(&mtlot::Value::Int(table)));
+    }
+}
 
 fn st100() -> GroupList {
     let b = vfs()

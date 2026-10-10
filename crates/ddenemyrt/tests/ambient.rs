@@ -10,15 +10,28 @@ fn installed_ambient_resources_and_action_descriptors() {
     }
     let file = ddexe::ExeFile::next_to(&root).unwrap();
     let exe = file.image().unwrap();
+    assert_eq!(Species::Em8300.think_root(&exe, Some(5)).unwrap(), 0x0165_ce50);
+    assert_eq!(Species::Em8300.think_root(&exe, Some(6)).unwrap(), 0x0165_d0d0);
+    assert!(Species::Em8300.think_root(&exe, Some(-1)).is_err());
+    assert_eq!(
+        Species::Em8602.think_root(&exe, Some(6)).unwrap(),
+        Species::Em8602.default_think_root()
+    );
+    for (index, motion) in [(3, 10), (4, 11)] {
+        let action = ddenemyrt::ambient::Action::common(&exe, index).unwrap();
+        assert_eq!(action.class, "cEmActWait");
+        assert_eq!(ddenemyrt::ambient::enter_action(&action).unwrap().id, motion);
+    }
     let vfs = ddvfs::Vfs::open(root).unwrap();
     for (species, resources, actions) in [(Species::Em8300, 17, 18), (Species::Em8602, 15, 15)] {
         let res = species.resources(&exe).unwrap();
         assert_eq!(res.len(), resources);
         let model = res.iter().find(|r| r.class == "rModel").unwrap();
-        assert!(!vfs
-            .read(&model.path, mtarc::type_hash(&model.class))
-            .unwrap()
-            .is_empty());
+        assert!(
+            !vfs.read(&model.path, mtarc::type_hash(&model.class))
+                .unwrap()
+                .is_empty()
+        );
         let banks: Vec<_> = res.iter().filter(|r| r.class == "rMotionList").collect();
         assert_eq!(banks.len(), 3);
         let banks: Vec<_> = banks
