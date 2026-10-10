@@ -3,6 +3,7 @@
 
 use ddnpcrt::{demo::{self, ActorInputs, Demo, Interface, WorldRequest},
     schedule::{Clock, Graphs, Npc, Request}, Error};
+use ddquest::order::Fields;
 
 pub(super) enum Action {
     Npc(Npc),
@@ -19,14 +20,24 @@ pub(super) struct Frame {
 
 impl Action {
     /// Native graph class chooses the owner type (0x0059E260). The existing
-    /// adapter also supports Demo graphs using only inherited NPC interfaces;
+    /// adapter also supports DemoSetPos and inherited NPC interfaces;
     /// keep that tested subset until this owner ports those callbacks too.
     /// Neither path nor NPC number is used to select the supported adapter.
     pub fn new(npc: u32, graphs: &dyn Graphs, path: &str) -> Result<Self, Error> {
         let graph = graphs.graph(path)?;
         fn demo_interfaces(cluster: &mtfsm::Cluster) -> bool {
             cluster.states.iter().any(|state|
-                state.processes.iter().any(|p| p.container == b"SetInterfaceDemo")
+                state.processes.iter().any(|p| {
+                    // Native 0x00533A90 -> 0x0056C940 dispatches through the
+                    // interface object's type. SetInterfaceDemo alone does not imply
+                    // the new adapter: NPC1 uses it for DemoSetPos, which the
+                    // existing adapter already handles before its NPC Guard.
+                    matches!(p.container.as_slice(), b"SetInterfaceDemo" | b"SetInterfaceNpc" | b"SetInterface")
+                        && p.parameter.as_ref().and_then(|r| r.object("Interface"))
+                            .and_then(|r| r.class_name).is_some_and(|class|
+                                class.starts_with("cAIActionInterfaceDemo")
+                                && class != "cAIActionInterfaceDemoSetPos")
+                })
                 || state.subcluster.as_ref().is_some_and(|sub| demo_interfaces(sub)))
         }
         if graph.owner == b"cAIActionFSMDemo" && graph.root.as_ref().is_some_and(demo_interfaces) {
@@ -68,7 +79,7 @@ impl Action {
         }
     }
     pub fn step(&mut self, graphs: &dyn Graphs, clock: Clock, inputs: &ActorInputs,
-        world: &ddstory::World, ready: bool, paused: bool) -> Result<Frame, Error> {
+        world: &ddstory::World, ready: bool, motion_number: Option<u16>, paused: bool) -> Result<Frame, Error> {
         match self {
             Self::Npc(npc) => {
                 npc.observe_scene(Some(world.sce_no));
@@ -78,7 +89,8 @@ impl Action {
                 if *halted || owner.finished() { return Ok(Frame::default()); }
                 let mut frame = Frame::default();
                 for request in owner.step(&demo::Inputs { think: inputs, world,
-                    npc_ready: ready, damage_flag: false, interface_paused: paused })? {
+                    npc_ready: ready, damage_flag: false,
+                    motion_number, interface_paused: paused })? {
                     // No Demo reaction action currently sets character+0x2EA1.
                     // This remains false until that actual actor path is ported.
                     match request {
