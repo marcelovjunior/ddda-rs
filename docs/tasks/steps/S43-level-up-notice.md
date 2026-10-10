@@ -36,7 +36,7 @@
 Killing goblins in `--opening` until a level-up shows the original's
 notice with the right level; the Result names the sources.
 
-## Results (source checkpoint, 2026-10-10, codex-70)
+## Results (tested source checkpoint, 2026-10-10, codex-70)
 
 - Creation confirmed: `0x00B5BD20` -> `0x00452CE0` queues a category-0
   Arisen or category-1 eligible pawn record through `0x00454B90`;
@@ -68,6 +68,12 @@ notice with the right level; the Result names the sources.
   crossed between render frames, and excludes remote/support-pawn records.
   It never awards experience or edits the host. The only shared-file edits
   are the approved module declaration and plugin installation in main.rs.
+  Parent review #6491 also caught an active notice consuming hidden time
+  after changing the followed seat. Each owner now retains its own active
+  panel and clock; only the followed owner advances, and the new seat can
+  consume its queue independently. A two-owner consumer regression covers
+  switching during the intro, the other owner's complete notice, and exact
+  resumption without spending hidden time or consuming the next notice early.
 - Explicit limits: Arisen name is unported because the current host/editor
   has no canonical name (head accepted follow-up in board #6374); actual
   main-pawn names come from the Rift record. The level-200 global string
@@ -77,15 +83,32 @@ notice with the right level; the Result names the sources.
   general GUI scripting, rank-up notices and guest progression replication
   remain open. Enter/exit endpoints and duration are authored. Their installed
   scalar/vector keys all select linear mode 3, confirmed at `0x011511C0`
-  through `0x0106C670`; only that native mode is translated and has a pending
-  regression test, other modes are rejected. Co-op queue eviction and
-  suppressing the panel during events/pause are presentation policies.
-- Tests and the release build are **pending**, queued for the normal shared
-  M5 target behind codex-66. No GUI has been launched. This source checkpoint
-  is not Ready and has not been compared against the original.
-- Next action: integrate reviewed committed main, run the full ddview suite
-  and default release build, then provide a pinned-binary capture request for
-  a real opening kill/level-up (no synthetic production award).
+  through `0x0106C670`; only that native mode is translated and its regression
+  passed, other modes are rejected. Co-op queue eviction, suspension when the
+  followed owner changes, and events/pause suppression are presentation policies.
+- Source `bda3cfe` passed the full default viewer suite under the normal shared
+  M5 lease: actual session 59890 exited 0, **89 passed / 0 failed / 2 ignored**
+  (28.76 s compilation, 11.78 s test execution). All six notice regressions
+  actually ran, including installed text/font/tracks, cropped atlases and
+  hierarchy, native hold ordering, linear interpolation, per-owner observation,
+  and the followed-seat consumer. Private log:
+  `E:/ddda-re/notes/steps/S43/full-viewer-bda3cfe.log`.
+  The earlier `a781b6c` suite/build passed before the co-op correction and are
+  superseded. No GUI has been launched and there is no original comparison.
+  Final default release build session 97157 exited 0 in 40.93 s. Pinned
+  executable `E:/ddda-re/notes/steps/S43/ddview-s43-bda3cfe.exe` is 94,592,000
+  bytes; its SHA-256 matches the built target:
+  `48175ABAD5137EF91F0DA00DD03FF49B94908ECDE4A1652F0B67F09A822FA562`.
+  Build log: `E:/ddda-re/notes/steps/S43/default-release-bda3cfe.log`.
+  M5 was released after actual exit and pin verification (board #6516).
+  This is a reviewable source checkpoint; the brief's capture acceptance
+  remains open until a genuine new level-up is pictured.
+- Next action: provide the final pinned binary to codex-1 for its coordinated
+  S47/S43 capture, requiring a real opening kill/level-up (no synthetic award).
+  Read-only checkpoint preflight found both local profiles at level 2,
+  experience 108 / next 485 in `RescueApproach.ddhs`, and level 3,
+  experience 39 / next 770 in the existing `Done.ddhs`. Restoring either
+  establishes a silent baseline; only a new progression transition is a notice.
   With `--shots <private-dir>`, the first real notice automatically requests
   `S43-level-up.png` once its enter track has finished. This supports a bounded
   route capture without guessing its elapsed wall time or creating experience.
