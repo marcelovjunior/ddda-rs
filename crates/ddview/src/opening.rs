@@ -305,6 +305,12 @@ pub fn prepare(
     // picked at the weapon table (Host::apply_job_kit); enemies join it as
     // the story spawns them.
     host.fight = Some(ddhost::ddenemyrt::fight::Fight::new(play::fight_data(&vfs, native_pc)?));
+    // progression (experience, levels): ddprogress tables from the install
+    // and the exe beside it
+    host.data.tables = Some(std::sync::Arc::new(ddhost::install::tables(
+        &vfs,
+        &ddexe::locate(native_pc).map_err(|e| e.to_string())?,
+    )?));
     host.data.npc = Some(std::sync::Arc::new(
         ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
     ));
@@ -1037,6 +1043,13 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
     let mut owners = vec![];
     for spawn in &goblins {
         let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
+        // the placement's experience override (cSetInfoEnemy +0xEC ->
+        // unit +0x5C24, 0x007A012C); 0 keeps the goblin's own
+        if let Some(&mtlot::Value::Int(exp)) = spawn.record.get("mExperienceOW") {
+            if exp > 0 {
+                fight.goblins.last_mut().expect("just added").exp = exp as u32;
+            }
+        }
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
@@ -1917,7 +1930,8 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
-            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            s.host.progression.characters.first().map(|c| (c.progress.level, c.progress.exp)),
             w.sce_no,
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
