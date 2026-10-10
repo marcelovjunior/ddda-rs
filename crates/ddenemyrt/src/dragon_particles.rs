@@ -54,6 +54,14 @@ pub struct GeneratorCounters {
     pub path: u32,
 }
 
+/// Values sampled by generator vf07 before the first binding/birth.
+/// The auxiliary triplet is not the effect's axis scale used by vf15.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeneratorInitialization {
+    pub particle_scale: f32,
+    pub auxiliary_triplet: [f32; 3],
+}
+
 impl GeneratorCounters {
     /// The caller supplies the resource seed entries, including its first
     /// entry when the native count is zero. An absent list is unsupported.
@@ -1348,6 +1356,46 @@ mod tests {
     }
 
     #[test]
+    fn generator_initialization_reads_real_ranges_and_consumes_four_birth_draws() {
+        let mut list = synthetic_list();
+        for (offset, pair) in [(0x40, [2.0_f32, 4.0]), (0x88, [3.0, 0.0]),
+            (0x90, [-2.0, 8.0]), (0x98, [7.0, -4.0])] {
+            for (part, value) in pair.into_iter().enumerate() {
+                let at = 0x10 + offset + part * 4;
+                list.payload[at..at + 4].copy_from_slice(&value.to_bits().to_le_bytes());
+            }
+        }
+        let unit = CollisionUnit::read("synthetic".into(), &list).unwrap();
+        let mut counters = unit.generator_counters(0, |_| panic!("fixed seed")).unwrap();
+        counters.birth = u32::MAX - 1;
+        counters.path = 91;
+        let mut indices = Vec::new();
+        let mut values = [0.25, 0.75, 0.5, 1.0].into_iter();
+        let initialized = unit.sample_generator_initialization(&mut counters, |index| {
+            indices.push(index);
+            values.next().unwrap()
+        }).unwrap();
+        assert_eq!(indices, [0xFFF, 0, 1, 2],
+            "zero variation still consumes its draw, with native u32 wrap");
+        assert_eq!((counters.birth, counters.path), (2, 91));
+        assert_eq!(initialized, GeneratorInitialization {
+            particle_scale: 3.0, auxiliary_triplet: [3.0, 2.0, 3.0],
+        });
+        assert_eq!(values.next(), None);
+        // The actual sampled +134 feeds vf15; auxiliary values do not
+        // accidentally replace effect axis scales or coordinate scales.
+        let coordinate = CoordinateTransform { primary: mtlmt::pose::IDENTITY,
+            secondary: mtlmt::pose::IDENTITY, scale: [1.0; 3], largest_scale: 1.0 };
+        let bound = coordinate.generator_transform([2.0, 3.0, 4.0], 0.5,
+            initialized.particle_scale, 1, false).unwrap();
+        assert_eq!(bound.particle_scale, 1.5);
+        assert_eq!(bound.axis_scale, [3.0, 4.5, 6.0]);
+        list.payload[0x10 + 0x90..0x10 + 0x94]
+            .copy_from_slice(&f32::NAN.to_bits().to_le_bytes());
+        assert!(CollisionUnit::read("invalid".into(), &list).is_err());
+    }
+
+    #[test]
     fn collision_reader_rejects_missing_variant_inheritance_and_bad_fields() {
         let mut list = synthetic_list();
         list.units[0].third_kind = 2;
@@ -1392,6 +1440,9 @@ pub struct CollisionUnit {
     /// Generator payload+0xF count and +0x10 signed entries. Native count
     /// zero still reads the first entry; no game seed table is embedded.
     pub generator_seeds: Vec<i32>,
+    /// Generator +40/+44, then +88/+8C, +90/+94, +98/+9C.
+    /// vf07 samples these four ranges through the birth counter.
+    pub generator_initialization_ranges: [[f32; 2]; 4],
     pub capacity: u16,
     /// Generator+0x30's two axis-selector nibbles; not an actor joint ID.
     /// 0x010EC540 copies them into runtime+0x108 bits8..15.
@@ -1483,6 +1534,8 @@ impl CollisionUnit {
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
             generator_seeds,
+            generator_initialization_ranges: [pair(generator, 0x40)?,
+                pair(generator, 0x88)?, pair(generator, 0x90)?, pair(generator, 0x98)?],
             capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
             emission_shape: word(generator, 0x78)? as u8,
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
@@ -1503,6 +1556,27 @@ impl CollisionUnit {
     pub fn generator_counters(&self, effect_flags: u32,
         global_random: impl FnMut(u32) -> u32) -> Result<GeneratorCounters, String> {
         GeneratorCounters::select(&self.generator_seeds, effect_flags, global_random)
+    }
+
+    /// Run after native seed selection and before the first vf15/path/birth.
+    /// The caller reads float table 0x01625420 from the installed exe.
+    // Translated from 0x010EC54C..0x010EC5FA
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn sample_generator_initialization(&self, counters: &mut GeneratorCounters,
+        mut random_float: impl FnMut(usize) -> f32) -> Result<GeneratorInitialization, String> {
+        if self.generator_initialization_ranges.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("nonfinite generator initialization range".into());
+        }
+        let samples = self.generator_initialization_ranges.map(|[base, variation]| {
+            counters.birth = counters.birth.wrapping_add(1);
+            let random = random_float((counters.birth & 0xFFF) as usize);
+            random * variation + base
+        });
+        if samples.iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite generator initialization sample".into());
+        }
+        Ok(GeneratorInitialization { particle_scale: samples[0],
+            auxiliary_triplet: [samples[1], samples[2], samples[3]] })
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction

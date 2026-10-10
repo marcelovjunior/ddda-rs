@@ -803,3 +803,25 @@ path sampling, scenery queries and ordinary party damage remain open.
 Next action: integrate the verified inputs with their actual creation and
 update owners, preserving native RNG draw order and the existing generator
 gate before connecting collision samples to ordinary damage.
+
+### Next initialization batch prepared; not yet compiled or run
+
+After accepting main `21a4549`, instruction review of
+`0x010EC54C..0x010EC5FA` resolved generator vf07's four unconditional
+float-table draws. Its actual birth counter+44 advances before each
+lookup in installed table `0x01625420`, even for zero variation; path+48
+stays independent. Generator payload+40/+44 supplies runtime scalar+134;
++88/+8C, +90/+94 and +98/+9C supply auxiliary+1A0/+1A4/+1A8. Those
+auxiliary values must not replace the owning effect's axis scales in vf15.
+The reader now retains these installed ranges and the sampler consumes
+the existing `GeneratorCounters`, connecting the actual sampled scalar
+to the verified basis adapter without introducing another RNG policy.
+
+`generator_initialization_reads_real_ranges_and_consumes_four_birth_draws`
+is a new meaningful regression source: distinct range results, zero
+variation draw consumption, u32 rollover, unchanged path counter, actual
+scalar-to-basis composition and rejection of a nonfinite installed range.
+It is **uncompiled/unrun**. The prior189-pass gate belongs to `6db86fa`.
+Native initialization lifecycle/callback execution and production emission
+remain open. Next: coordinate the complete package gate after higher
+priority viewer/skill work, then bind the actual owner lifecycle and birth.
