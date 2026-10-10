@@ -1,6 +1,6 @@
 //! Ordinary `uEm5000` cyclops data and think initialization.
-//! This is not yet an action driver: weapon children, armor and clinging
-//! callbacks require their own runtime observations before combat is enabled.
+//! The table driver takes canonical sensor/world observations explicitly.
+//! Weapon children, armor and clinging still need runtime adapters.
 
 /// Enemy kind written by constructor 0x009780d0 (2017-12-13 Steam).
 pub const ENEMY_KIND: u8 = 0x3f;
@@ -121,7 +121,7 @@ impl Catalogue {
     // Translated from 0x008892b0 / 0x00889510, called by 0x00978820
     // (DDDA.exe 2017-12-13 Steam).
     pub fn load_body(&self, vfs: &ddvfs::Vfs, scale: f32) -> Result<crate::body::Body, String> {
-        use crate::body::{load, Body};
+        use crate::body::{Body, load};
         let bound = || self.resources.iter().filter(|resource| resource.flags & 1 != 0);
         let mut models = bound().filter(|resource| resource.class == "rModel");
         let model = models.next().ok_or("cyclops: missing body model")?;
@@ -247,6 +247,272 @@ impl ThinkInitialization {
         manager.scale_on = scale > 0.0 && scale != 1.0;
         manager.scale = if manager.scale_on { scale } else { 1.0 };
         manager
+    }
+}
+
+/// A measured object supplied by the host, in the actor's coordinate space.
+/// IDs identify actors, never a global player or a party index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThinkTarget {
+    /// Nonzero object token (the original stores a pointer); the host maps
+    /// its canonical actor IDs to these tokens, including an actor with ID0.
+    pub id: u32,
+    pub position: [f32; 3],
+    pub radius: f32,
+    pub flags: [u32; 2],
+    /// Actor +0x2370, copied to measured slot +0x50 by 0x00aadcf0.
+    pub action_flags: u32,
+}
+
+/// One sensor slot from actor +0x2f94 (0xa3 dwords per slot). Score
+/// components are present only when their source enable byte is nonzero.
+/// How sensors calculate these scores is outside this table driver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorCandidate {
+    pub target: ThinkTarget,
+    pub enabled: bool,
+    pub scores: [Option<f32>; 32],
+}
+
+/// Highest strictly positive enabled score wins; ties retain the earlier
+/// sensor slot. Only the original's 16 slots are examined. With `false`,
+/// targets with actor +0x2360 bits 16/17 are rejected; +0x2364 bit5 is
+/// always rejected. No nearest-player fallback is present in this function.
+// Translated from 0x00ab52e0 (DDDA.exe 2017-12-13 Steam), called for slot0
+// by 0x0097a6a0 with ignore_protection=false.
+pub fn sensor_target(candidates: &[SensorCandidate], ignore_protection: bool) -> Option<ThinkTarget> {
+    let mut best = None;
+    let mut best_score = 0.0;
+    for candidate in candidates.iter().take(16) {
+        if candidate.target.id == 0
+            || !candidate.enabled
+            || (!ignore_protection && candidate.target.flags[0] & 0x30000 != 0)
+            || candidate.target.flags[1] & 0x20 != 0
+        {
+            continue;
+        }
+        let score: f32 = candidate.scores.iter().flatten().copied().sum();
+        if score > best_score {
+            best_score = score;
+            best = Some(candidate.target);
+        }
+    }
+    best
+}
+
+/// The unit fields read by local checks. Their owning systems supply the
+/// observations; a missing attachment or secondary target is not fabricated.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LocalChecks {
+    /// Actor +0x5c64: includes attachment entries whose owner is absent.
+    pub attachment_count: u32,
+    /// Present owners' vocation at owner +0x3c20 -> +0x64.
+    pub attached_vocations: Vec<u32>,
+    /// Actor +0x6238, accumulated in 0x0097e1a0 and reset by set callback1.
+    pub elapsed_frames: f32,
+    /// Actor +0x62bc; its producing system is not translated here.
+    pub counter: u32,
+    /// Actor +0x614c (not the sensor target at slot0).
+    pub secondary_target: Option<[f32; 3]>,
+    pub position: [f32; 3],
+}
+
+impl LocalChecks {
+    // Translated from 0x00987e90 / 0x00987f10 / 0x00987fb0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn check(&self, id: u32, argument: u32) -> bool {
+        match id {
+            0 => argument <= self.attachment_count,
+            1 => self.attached_vocations.iter().any(|vocation| match vocation {
+                4 => argument == 3,
+                13 => argument == 4,
+                14 => argument == 4 || argument == 1,
+                15..=17 => argument == 1,
+                18 => argument == 4 || argument == 2,
+                19..=21 => argument == 2,
+                _ => argument == 0,
+            }),
+            2 => argument as f32 <= self.elapsed_frames,
+            3 => argument <= self.counter,
+            4 => self.secondary_target.is_some_and(|position| {
+                let dx = position[0] - self.position[0];
+                let dz = position[2] - self.position[2];
+                (dx * dx + dz * dz).sqrt() <= argument as f32
+            }),
+            _ => false,
+        }
+    }
+}
+
+/// Family flags at +0x6a24..37 prepared in 0x0097a6a0. The host supplies
+/// bits3..19 from the canonical cyclops systems. Bits0..2 come from vf108
+/// (actor +0x2d70); bit7 is cleared then derived from the weapon's +0x206d
+/// bit4. Bits20..31 are untouched by this flag-preparation block.
+// Translated from 0x0097a6a0 (DDDA.exe 2017-12-13 Steam).
+pub fn think_flags(mode: u32, existing_flags: u32, weapon_flag: bool) -> u32 {
+    let mode_bits = match mode {
+        1 => 2,
+        2 => 4,
+        _ => 1,
+    };
+    (existing_flags & !(7 | (1 << 7))) | mode_bits | (u32::from(weapon_flag) << 7)
+}
+
+/// World observations for one table run. Seven local slots are authored in
+/// 0x0097a6a0; extra object slots9..22 may be prepared by common callbacks.
+/// Slot0 prefers the supplied rage target, otherwise the sensor selector.
+/// Point targets (escape position etc.) can be installed directly into mgr
+/// slots; this adapter only replaces slots whose inputs are listed here.
+#[derive(Debug, Clone, Default)]
+pub struct ThinkInput {
+    pub position: [f32; 3],
+    pub yaw: f32,
+    pub mode: u32,
+    pub family_flags: u32,
+    pub weapon_flag: bool,
+    pub sensors: Vec<SensorCandidate>,
+    pub rage_target: Option<ThinkTarget>,
+    /// Slots1..6, already measured by the host. Missing inputs clear their
+    /// slot as the original does, including the point targets3 and6.
+    pub local_slots: [Option<ddai::thinktbl::Slot>; 6],
+}
+
+/// One actor's table state. Action execution and world providers are separate
+/// from immutable installed table data; errors never substitute callback
+/// answers. Forced-action arbitration is supplied before this table phase.
+#[derive(Debug, Clone)]
+pub struct ThinkDriver {
+    pub manager: ddai::thinktbl::ThinkMgr,
+    pub local: LocalChecks,
+    pub action: i32,
+    pub target: Option<u32>,
+}
+
+impl ThinkDriver {
+    pub fn new(initialization: &ThinkInitialization, scale: f32, action: i32) -> Self {
+        Self {
+            manager: initialization.manager(scale),
+            local: LocalChecks::default(),
+            action,
+            target: None,
+        }
+    }
+
+    /// Timer phase called by uEm5000 vf08, independent of whether the
+    /// current action allowed a table run. The host keeps the phase order.
+    // Translated from 0x00979420 -> 0x008b7930
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn tick_timers(&mut self, frame_step: f32) {
+        self.manager.tick(frame_step);
+    }
+
+    /// Tail of the unit's think (after 0x0097a6a0), not a real-time seconds
+    /// timer. `reset_elapsed` is actor +0x6148 != 0; `weapon_type` is +0x608c.
+    // Translated from 0x0097e1a0 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance_elapsed(&mut self, frame_step: f32, reset_elapsed: bool, weapon_type: u32) {
+        if reset_elapsed || weapon_type == 2 {
+            self.local.elapsed_frames = 0.0;
+        } else {
+            self.local.elapsed_frames += frame_step;
+        }
+    }
+
+    /// The ordinary table phase of 0x0097a6a0: only runs when the action's
+    /// +0x50 completion byte or actor +0x7c30 permits it. The caller handles
+    /// forced actions, FSM activity, death and disabled-AI before this phase.
+    // Translated from 0x0097a6a0 (DDDA.exe 2017-12-13 Steam).
+    pub fn think(
+        &mut self,
+        tables: &ddai::thinktbl::Tables,
+        input: &ThinkInput,
+        action_complete: bool,
+        allow_think: bool,
+        world: &mut dyn ddai::thinktbl::Host,
+    ) -> Result<Option<i32>, ddai::Error> {
+        if !action_complete && !allow_think {
+            return Ok(None);
+        }
+        self.local.position = input.position;
+        self.manager.flags = think_flags(input.mode, input.family_flags, input.weapon_flag);
+        let target = input.rage_target.or_else(|| sensor_target(&input.sensors, false));
+        self.manager.slots[0] = target.map_or_else(ddai::thinktbl::Slot::default, |target| {
+            let mut slot = ddai::thinktbl::Slot::measure(
+                input.position,
+                input.yaw,
+                target.position,
+                target.radius,
+                target.id,
+            );
+            slot.mask48 = target.flags[0];
+            slot.mask50 = target.action_flags;
+            slot.category = 0x400;
+            slot.categorized = true;
+            slot
+        });
+        for (destination, source) in self.manager.slots[1..7].iter_mut().zip(&input.local_slots) {
+            *destination = source.unwrap_or_default();
+        }
+        // Slot category flags are supplied by this family, not the world.
+        // 0x0097a6a0 cases1..6; slot0 is marked above.
+        for (slot, category) in self.manager.slots[1..7]
+            .iter_mut()
+            .zip([0x800, 0x1000, 0x800, 0x2000, 0x4000, 4])
+        {
+            slot.category = category;
+            slot.categorized = true;
+        }
+        self.manager.reload_default();
+        let mut adapter = ThinkCallbacks {
+            local: &mut self.local,
+            world,
+        };
+        let result = self.manager.think(tables, &mut adapter)?;
+        self.target = self
+            .manager
+            .slots
+            .get(self.manager.cur as usize)
+            .filter(|slot| slot.valid && slot.obj != 0)
+            .map(|slot| slot.obj);
+        if result != -1 && (result != self.action || self.manager.ea5) {
+            self.action = result;
+            Ok(Some(result))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+struct ThinkCallbacks<'a> {
+    local: &'a mut LocalChecks,
+    world: &'a mut dyn ddai::thinktbl::Host,
+}
+
+impl ddai::thinktbl::Host for ThinkCallbacks<'_> {
+    // Translated from 0x00987e60 (DDDA.exe 2017-12-13 Steam).
+    fn check(&mut self, id: u32, argument: u32) -> Result<bool, ddai::Error> {
+        if id < 1000 {
+            Ok(self.local.check(id, argument))
+        } else {
+            self.world.check(id, argument)
+        }
+    }
+
+    // Translated from 0x00987e20 (DDDA.exe 2017-12-13 Steam).
+    fn set(&mut self, id: u32, argument: u32) -> Result<u32, ddai::Error> {
+        if id >= 1000 {
+            return self.world.set(id, argument);
+        }
+        if id == 1 {
+            self.local.elapsed_frames = 0.0;
+        }
+        Ok(0)
+    }
+
+    fn row_target(&mut self, slot: usize) -> bool {
+        self.world.row_target(slot)
+    }
+    fn rand(&mut self) -> u32 {
+        self.world.rand()
     }
 }
 
