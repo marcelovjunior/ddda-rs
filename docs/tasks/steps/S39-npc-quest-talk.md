@@ -77,11 +77,22 @@ claims. The complete source-compiled core suites passed **69 host + 31 NPC**
 tests, none ignored. After adding the unsupported-choice guard, the final
 five focused regressions passed again (2.86 s compile, 6.52 s host tests).
 
-The remaining work is the approved per-seat opening bag adapter and optional
-backwards-compatible NPC control-mask save chunk (head board #4751), followed
-by viewer checks and an ordinary route. Until that save chunk is integrated,
-reconstructing a host does not restore the row masks; no hardcoded q2:88 skip
-is used to hide this gap. Full route acceptance still depends on head's normal
+Head approved the per-seat opening adapter and optional save chunk in board
+#4751. The host now writes optional shared chunk `NPCQ` version1 with only
+permanent NPC/table/row masks. Its original persistence is confirmed by
+`uNpc::vf32` (`0x00BACE50`), which binds control+0xC to
+`sNpcManager+0x878+npc*0x110`. Tables are reloaded from the install; no asset
+data or transient conversations enter the chunk. Absence means empty masks,
+including load into an existing runtime. Invalid versions, truncated records
+and rows outside the installed table are rejected before replacing mask memory.
+The saved-state hash includes those masks. Four installed talk/save regressions
+actually passed (13.76 s, 7.43 s compile), including reconstruction without a
+second reward and old-save absence; the existing seven replay and two profile
+save/session tests also passed. No hardcoded q2:88 skip is used.
+
+The remaining work is viewer validation and an ordinary route. The opening
+adapter is written but not yet source-compiled in this checkpoint. Full route
+acceptance still depends on head's normal
 combat driver and NPC combat body work; S32's three actual ordinary attempts
 did not reach its complete motion chain. No original-game comparison is
 claimed by this source checkpoint.

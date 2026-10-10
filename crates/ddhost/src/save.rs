@@ -28,6 +28,8 @@ pub const TAG_ECON: [u8; 4] = *b"ECON";
 pub const TAG_PROG: [u8; 4] = *b"PROG";
 /// `ddrift::Rift::save` (shared only).
 pub const TAG_RIFT: [u8; 4] = *b"RIFT";
+/// Permanent per-NPC quest-control row masks (shared, optional).
+pub const TAG_NPC_QUEST: [u8; 4] = *b"NPCQ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {

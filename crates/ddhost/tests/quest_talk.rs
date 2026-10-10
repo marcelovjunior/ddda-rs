@@ -169,3 +169,80 @@ fn installed_reynard_unload_cancels_selected_text_without_reward_or_stale_comple
     finish(&mut host, 1);
     assert_eq!((count(&host, 0), count(&host, 1)), (0, 1));
 }
+
+#[test]
+fn installed_reynard_once_mask_save_roundtrip_does_not_reaward_and_absent_chunk_resets() {
+    let Some((mut host, owner, _)) = installed_host() else {
+        return;
+    };
+    let motion = TalkMotionObservation {
+        mode: Some(3),
+        ..Default::default()
+    };
+    host.talk_story_npc(1, owner, true, motion).unwrap().unwrap();
+    assert!(
+        host.save().is_err(),
+        "active text cannot be saved with a pending reward"
+    );
+    finish(&mut host, 1);
+    host.tick(&FrameInputs::new()).unwrap();
+    let before_hash = host.saved_hash();
+    let save = host.save().unwrap();
+    assert!(save
+        .get(ddhost::save::TAG_NPC_QUEST, ddhost::save::Owner::Shared)
+        .is_some());
+    let Some((mut restored, restored_owner, _)) = installed_host() else {
+        return;
+    };
+    restored.load(&save, NoStoryData).unwrap();
+    assert_eq!(restored.saved_hash(), before_hash);
+    assert_eq!((count(&restored, 0), count(&restored, 1)), (0, 1));
+    let out = restored
+        .talk_story_npc(0, restored_owner, true, motion)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        out.events.first(),
+        Some(TalkEvent::Line { conversation: 13, .. })
+    ));
+    finish(&mut restored, 0);
+    assert_eq!((count(&restored, 0), count(&restored, 1)), (0, 1));
+
+    let mut old = save.clone();
+    old.chunks
+        .retain(|chunk| chunk.tag != ddhost::save::TAG_NPC_QUEST);
+    restored.load(&old, NoStoryData).unwrap();
+    assert!(
+        restored.npcs.quest_controls.is_empty(),
+        "old save cannot inherit current-runtime masks"
+    );
+}
+
+#[test]
+fn installed_npc_control_save_rejects_corruption_before_replacing_row_memory() {
+    let Some((mut host, owner, _)) = installed_host() else {
+        return;
+    };
+    let motion = TalkMotionObservation {
+        mode: Some(3),
+        ..Default::default()
+    };
+    host.talk_story_npc(0, owner, true, motion).unwrap().unwrap();
+    finish(&mut host, 0);
+    host.tick(&FrameInputs::new()).unwrap();
+    let original = host.npcs.quest_controls[&304].saved_disabled_rows();
+    for bytes in [
+        vec![2],             // Unsupported NPCQ version.
+        vec![1, 1, 0, 0, 0], // Truncated first control.
+        {
+            let mut writer = ddid::Writer::new();
+            writer.u8(1).len(1).u32(304).len(1).u32(999).u32(0);
+            writer.finish() // Row outside the installed table.
+        },
+    ] {
+        let mut bad = host.save().unwrap();
+        bad.put(ddhost::save::TAG_NPC_QUEST, ddhost::save::Owner::Shared, bytes);
+        assert!(host.load(&bad, NoStoryData).is_err());
+        assert_eq!(host.npcs.quest_controls[&304].saved_disabled_rows(), original);
+    }
+}

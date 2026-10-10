@@ -72,6 +72,41 @@ impl Control {
             .unwrap_or(true)
     }
 
+    /// Only permanent NPC row masks are save state. uNpc::vf32 at
+    /// 0x00BACE50 binds control+0xC to sNpcManager+0x878+npc*0x110;
+    /// transient selected text and fired marks do not belong to that bank.
+    pub fn saved_disabled_rows(&self) -> Vec<RowKey> {
+        self.table
+            .tables
+            .iter()
+            .enumerate()
+            .flat_map(|(table, part)| (0..part.rows.len()).map(move |row| RowKey { table, row }))
+            .filter(|&key| self.disabled(key))
+            .collect()
+    }
+
+    pub fn restore_disabled_rows(&mut self, rows: &[RowKey]) -> Result<(), Error> {
+        let mut restored = vec![false; self.disabled.len()];
+        for &key in rows {
+            if !self
+                .table
+                .tables
+                .get(key.table)
+                .is_some_and(|part| key.row < part.rows.len())
+            {
+                return Err(Error::Data("saved NPC QCT row outside installed table".into()));
+            }
+            let index = self.first_id[key.table] + key.row;
+            if restored[index] {
+                return Err(Error::Data("duplicate saved NPC QCT row".into()));
+            }
+            restored[index] = true;
+        }
+        self.abort();
+        self.disabled = restored;
+        Ok(())
+    }
+
     /// Begin phase1. Active-quest pass precedes the ordinary pass at
     /// 0x00792130. An in-flight row cannot be selected again.
     pub fn begin(&mut self, context: &Context<'_>) -> Result<Option<Selection>, Error> {
