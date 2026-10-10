@@ -291,3 +291,19 @@ ordinary contact versus miss, and invalid live-radius rejection. It passed
 boundary, not a native effect trajectory, normal HP loss or a production
 fire capture. The host still needs the complete sampled emitter/lifetime
 ownership chain before enabling its BreathParticles query.
+
+Provider quality selection is translated from `0x00CB6CF0/0x004298B0`.
+It packs the resource's three criteria, honors its global-criteria selector,
+clamps the requested tier against the supplied effect-manager quality, and
+walks downward with the original strict distance boundary. Effect kind4
+suppresses creation. The selected state and duration mode remain distinct:
+assembly at `0x0042B020/0x0042D750` verifies the duration argument is packed
+into effect+0x11A's low nibble, not the state nibble at +0x119's high half.
+No effect-manager settings or criteria are inferred from the resource.
+
+One synthetic regression covers resource/global precedence, tier clamping,
+distance equality, suppressed creation and the resulting duration reduction.
+It passed (3.98s compile, 0.00s run), actual exit0. The initial compile used
+a shared cached DDSIM without this branch's capsule API; a narrow DDSIM
+rebuild restored it. Runtime ownership, birth transform and full fire damage
+remain open.

@@ -44,6 +44,51 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectQuality {
+    pub tier: u8,
+    pub effect_kind: u8,
+    /// Low nibble at effect+0x11A, consumed by duration reduction.
+    pub duration_mode: u8,
+    /// High nibble at effect+0x119. This is separate from duration mode.
+    pub state: u8,
+}
+
+/// Select the actual provider quality criterion. Global criteria and quality
+/// are supplied by the effect manager, never inferred from this resource.
+/// `requested_quality` is the create context's +0x24 bits8..11.
+// Translated from 0x00CB6CF0's criterion packing, 0x004298B0's LOD walk,
+// and 0x0042D750's +0x118 packing (DDDA.exe 2017-12-13 Steam).
+pub fn select_effect_quality(element: &mteffect::Element, requested_quality: u8,
+    manager_quality: u32, global_criteria: [u32; 3], distance_squared: f32)
+    -> Result<Option<EffectQuality>, String> {
+    if requested_quality > 15 || !distance_squared.is_finite() || distance_squared < 0.0 {
+        return Err("invalid effect quality context".into());
+    }
+    let requested = if requested_quality == 3 { manager_quality }
+        else { u32::from(requested_quality).min(manager_quality) };
+    let tier = if requested < 3 { requested as usize } else { 0 };
+    for index in (0..=tier).rev() {
+        let criterion = if element.parameters[38] != 0 { global_criteria[index] } else {
+            let p = &element.parameters[45 + index * 8..53 + index * 8];
+            (p[0] & 0x3FF) | ((p[1] & 0xFF) << 12) | ((p[2] & 7) << 23)
+                | ((p[3] & 3) << 26) | ((p[4] & 3) << 10)
+                | (u32::from(p[5] != 0) << 20) | (u32::from(p[6] != 0) << 21)
+                | (u32::from(p[7] != 0) << 22)
+        };
+        let threshold = (criterion & 0x3FF) as f32 * 100.0;
+        // Native equality falls through to the next lower tier. Tier0 has
+        // no distance gate, including when its threshold is zero.
+        if index != 0 && threshold * threshold <= distance_squared { continue; }
+        let effect_kind = ((criterion >> 23) & 7) as u8;
+        if effect_kind == 4 { return Ok(None); }
+        return Ok(Some(EffectQuality { tier: index as u8, effect_kind,
+            duration_mode: ((criterion >> 10) & 3) as u8,
+            state: ((criterion >> 26) & 3) as u8 }));
+    }
+    unreachable!("native tier0 criterion always terminates the walk")
+}
+
 /// Duration reduction selected by the actual parent effect +0x11A low nibble.
 /// Caller must supply that state; this reader does not choose a quality mode.
 // Translated from 0x010FA8D0's call into 0x010F9CB0
@@ -217,6 +262,35 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_quality_uses_global_owner_mode_and_strict_distance_boundary() {
+        let mut element = mteffect::Element { lists: std::array::from_fn(|_| String::new()),
+            effect_2d: String::new(), parameters: [0; 69] };
+        // Synthetic criteria deliberately give state and duration distinct
+        // values to catch the native stack-argument/packed-byte confusion.
+        for (index, distance) in [0, 4, 2].into_iter().enumerate() {
+            element.parameters[45 + index * 8..53 + index * 8]
+                .copy_from_slice(&[distance, 0, 1, 3, 0, 0, 0, 0]);
+        }
+        let globals = [2 << 10, (1 << 26) | (1 << 10) | 4,
+            (2 << 26) | (2 << 10) | 2];
+        let select = |e: &mteffect::Element, distance| select_effect_quality(e, 3, 2,
+            globals, distance).unwrap().unwrap();
+        assert_eq!(select(&element, 0.0), EffectQuality { tier: 2, effect_kind: 1,
+            state: 3, duration_mode: 0 });
+        element.parameters[38] = 1;
+        let close = select(&element, 199.0 * 199.0);
+        assert_eq!(close, EffectQuality { tier: 2, effect_kind: 0, state: 2, duration_mode: 2 });
+        assert_eq!(adjust_durations_for_owner([7, 11, 23], close.duration_mode.into()), [7, 11, 23]);
+        let boundary = select(&element, 200.0 * 200.0);
+        assert_eq!((boundary.tier, boundary.duration_mode, boundary.state), (1, 1, 1));
+        assert_eq!(select(&element, 400.0 * 400.0).tier, 0);
+        assert_eq!(select_effect_quality(&element, 2, 1, globals, 0.0).unwrap().unwrap().tier, 1);
+        assert_eq!(select_effect_quality(&element, 3, 9, globals, 0.0).unwrap().unwrap().tier, 0);
+        assert!(select_effect_quality(&element, 3, 2, [4 << 23; 3], 0.0).unwrap().is_none());
+        assert!(select_effect_quality(&element, 3, 2, globals, f32::NAN).is_err());
+    }
 
     #[test]
     fn native_path_spring_projection_preserves_velocity_and_handles_compression() {
