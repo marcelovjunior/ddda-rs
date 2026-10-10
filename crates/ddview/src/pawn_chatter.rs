@@ -167,7 +167,7 @@ impl View {
 
     fn resolve(&mut self, message: &Message) -> Result<(String, ddstory::event::Cue), String> {
         let bank = Bank::resolve(&self.exe.image()?, message.message,
-            u32::from(message.gender), u32::from(message.voice), false)?
+            message.gender, message.voice, false)?
             .ok_or("unsupported CMC text/voice bank")?;
         // Viewer language policy matches the opening's current English import.
         // Language options and pitch variants are not inferred from gender.
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(object_position(&gui, animation.words[3] as usize, 5, count).unwrap(), Vec2::ZERO);
         assert_eq!(object_position(&gui, animation.words[3] as usize, 9, count).unwrap(), Vec2::new(41.0, -32.0));
         let data = ddhost::pawn_chatter::Data::load(&view.vfs).unwrap();
-        let message = data.orders.select(ddenemyrt::pawn::Command::Go, None, 0, || 0).unwrap();
+        let message = data.orders.select(ddhost::ddenemyrt::pawn::Command::Go, None, 0, || 0).unwrap();
         let speech = Message { id: 1, frame: 7, pawn_slot: 1, pawn_seat: 6,
             pawn_identity: ddhost::pawn_chatter::Identity::Hired { hirer: ddhost::ProfileId(3),
                 rom_id: 1, network_id: vec![0;64], hired_at: 0 }, message: message as u32,

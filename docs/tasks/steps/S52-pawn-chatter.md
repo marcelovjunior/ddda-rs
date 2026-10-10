@@ -216,6 +216,15 @@ viewer tests unexecuted, no release viewer build, no opening hook applied
 by this branch, and no original comparison/capture. These passing core
 results do not imply those presentation or original-game gates passed.
 
+First full release viewer attempt, session **87786**, exited **101** during
+compilation: the consumer widened saved gender/voice bytes even though
+`Bank::resolve` takes `u8`, and its installed test referenced `ddenemyrt`
+directly instead of the existing `ddhost::ddenemyrt` re-export. Both were
+corrected only in the owned viewer module, without a new dependency.
+Private failure log: `viewer-full-a0a2b89-first.private.log`. The full viewer
+rerun and subsequent default release build remain pending; no viewer PASS
+is claimed from this compile attempt.
+
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
 markup, portraits, filters, slide/fade sequences, GUI acceptance/history,
