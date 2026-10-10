@@ -1479,6 +1479,7 @@ pub fn step(
             return;
         }
     }
+    if s.guest.is_none() {
     kit_weapons(&mut stage_view, st, s);
     hired_pawn_bodies(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
@@ -1501,6 +1502,7 @@ pub fn step(
         if loaded_stage != 0 {
             field_enemies(&mut stage_view, st, s, loaded_stage);
         }
+    }
     }
     if !s.network_ready {
         s.network_ready = true;
@@ -1921,7 +1923,7 @@ fn start_cut(s: &mut Session, row: usize) {
     // replaces the challenge gear before the movie, once per session.
     if row == 21 && s.guest.is_none() { s.quick_items.heart_taken(); }
     let w = s.world();
-    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
+    let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.stage().or_else(|| c.spot.map(|spot| spot.stage))), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
         Ok(p) => {
             info!("opening: cutscene row {row} ({}), {} frames", p.path, p.end_frame);
@@ -2668,7 +2670,7 @@ impl Session {
             let udp = ddnet::Udp::bind(&format!("0.0.0.0:{port}")).map_err(|e| e.to_string())?;
             let p = self.host.sim.player(0).ok_or("missing host seat")?;
             let spot = ddnet::Spot {
-                stage: STAGE,
+                stage: self.world().stage_no,
                 cell: (50, 50),
                 pos: p.position,
                 yaw: p.yaw,
@@ -2719,6 +2721,38 @@ fn guest_step(
     };
     let c = s.guest.as_mut().unwrap();
     c.pump(now);
+    // The host's loaded stage and positions select presentation/collision.
+    // Reuse Streamer::enter as the host handoff does, without StageLoaded,
+    // place_party, local quest advancement or NPC ownership admission.
+    if let Some(streamer) = view.streamer.as_mut() {
+        if let Some(stage) = c.stage().filter(|&stage| stage != streamer.stage) {
+            let focus = c.latest().and_then(|snap| c.seat.and_then(|seat|
+                snap.bodies.iter().find(|body| body.id == seat))).map(|body| body.position);
+            if let Some(focus) = focus {
+                match streamer.enter(&mut view.commands, view.entities.iter(), &mut view.meshes,
+                    &mut view.materials, &mut view.images, stage, focus) {
+                    Ok(terrain) => {
+                        st.origin = Vec3::ZERO; // Streamer::enter uses stage origin cell(50,50).
+                        st.terrain = terrain.clone();
+                        st.door_collision = Default::default();
+                        c.set_ground(Box::new(terrain));
+                        for (id, (entity, _, _)) in s.npcs.drain() {
+                            view.commands.entity(entity).despawn();
+                            s.npc_authored_motion.forget_remote(id);
+                        }
+                        s.guest_npcs.clear(); s.npc_moving.clear();
+                        info!("opening guest: presented authoritative stage {stage} at {focus:?}");
+                    }
+                    Err(error) => { s.failure = Some(format!("guest stage {stage}: {error}")); }
+                }
+            }
+        }
+        streamer.focus = c.own().map(|body| body.position);
+        streamer.actors = c.latest().map_or_else(Vec::new, |snap| snap.bodies.iter().map(|body| body.position).collect());
+        if let Some(terrain) = streamer.take_terrain() {
+            st.terrain = terrain.clone(); c.set_ground(Box::new(terrain));
+        }
+    }
     if paused || s.cut.is_some() {
         s.pending_input = PlayerInput::default();
     }

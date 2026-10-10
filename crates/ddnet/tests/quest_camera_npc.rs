@@ -8,6 +8,7 @@ use ddnet::{
 fn snapshot(frame: u64, npcs: Vec<NpcBody>, quest_camera: Option<QuestCamera>) -> Snapshot {
     Snapshot {
         frame,
+        stage: Some(100),
         base: None,
         cmd_newest: None,
         bodies: vec![],
@@ -67,6 +68,7 @@ fn whole_delta_replacement_and_explicit_end_keep_host_state() {
     end.frame += 1;
     end.base = Some(next.frame);
     end.quest_camera = None;
+    end.stage = Some(200);
     end.npcs[0].combat.as_mut().unwrap().retired = true;
     end.npcs[0].combat.as_mut().unwrap().death_phase = Some(4);
     end.npcs[0].combat.as_mut().unwrap().alpha = 0.0;
@@ -142,6 +144,12 @@ fn position_only_npcs_and_absent_cameras_remain_position_only() {
     let s = snapshot(1, vec![npc], None);
     let decoded = Snapshot::decode(&s.encode(None), &|_| None).unwrap();
     assert_eq!(decoded, s);
+    let mut no_story = s.clone();
+    no_story.stage = None;
+    assert_eq!(
+        Snapshot::decode(&no_story.encode(None), &|_| None).unwrap(),
+        no_story
+    );
     assert!(decoded.npcs[0].motion.is_none() && decoded.npcs[0].combat.is_none());
     for seconds in [f32::NAN, f32::INFINITY, -1.0] {
         let s = snapshot(
@@ -266,6 +274,7 @@ fn installed_loopback_camera12_and_npc_hp_motion_follow_host() {
         std::thread::sleep(std::time::Duration::from_micros(200));
     }
     assert!(guest.seat.is_some());
+    assert_eq!(guest.stage(), Some(100));
     let received = guest.npcs().into_iter().find(|n| n.id == 304).unwrap();
     assert_eq!(received.generation, lifetime.generation);
     assert!(received.motion.is_some());

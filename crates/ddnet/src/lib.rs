@@ -42,7 +42,7 @@ pub fn bodies_hash(bodies: &[Body]) -> u64 {
 /// and delta fields excluded).
 pub fn snapshot_hash(s: &proto::Snapshot) -> u64 {
     let mut h = ddhost::hash::StateHasher::default();
-    h.u64(bodies_hash(&s.bodies)).debug(&s.vitals).debug(&s.enemies).debug(&s.npcs).debug(&s.quest_camera);
+    h.u64(bodies_hash(&s.bodies)).debug(&s.vitals).debug(&s.enemies).debug(&s.npcs).debug(&s.quest_camera).debug(&s.stage);
     h.finish()
 }
 

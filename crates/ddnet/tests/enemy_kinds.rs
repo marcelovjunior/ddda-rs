@@ -28,6 +28,7 @@ fn enemy(id: u32, family: EnemyFamily) -> Enemy {
 fn snap(frame: u64, base: Option<u64>, enemies: Vec<Enemy>) -> Snapshot {
     Snapshot {
         frame,
+        stage: None,
         base,
         cmd_newest: None,
         bodies: vec![],

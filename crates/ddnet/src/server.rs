@@ -334,6 +334,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         let npcs = mirror::npcs_of(&self.host);
         self.history.push_back(Snapshot {
             frame: report.frame,
+            stage: self.host.story.as_ref().map(|s| s.world.stage_no),
             base: None,
             cmd_newest: None,
             bodies,

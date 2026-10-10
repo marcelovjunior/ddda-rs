@@ -81,7 +81,7 @@ mod camera_prediction_tests {
         let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], jump: true, light: true,
             ..Default::default() }, interact: true };
         client.cmds.push_back((11, moving));
-        client.apply(Snapshot { frame: 10, base: None, cmd_newest: None,
+        client.apply(Snapshot { frame: 10, stage: Some(100), base: None, cmd_newest: None,
             bodies: vec![own.clone()], vitals: vec![], enemies: vec![], npcs: vec![],
             quest_camera: Some(crate::quest_camera::QuestCamera { stage: 100, camera_id: 12,
                 generation: 1, seconds: 0.5, input_locked: true }) });
@@ -90,7 +90,7 @@ mod camera_prediction_tests {
         assert_eq!(replayed.state, ddsim::State::Wait);
         client.predict(1, 12, moving);
         assert_eq!(client.own().unwrap().position, replayed.position);
-        client.apply(Snapshot { frame: 12, base: None, cmd_newest: None,
+        client.apply(Snapshot { frame: 12, stage: Some(100), base: None, cmd_newest: None,
             bodies: vec![own], vitals: vec![], enemies: vec![], npcs: vec![], quest_camera: None });
         assert!(!client.actions_blocked());
         client.predict(1, 13, moving);
@@ -146,6 +146,15 @@ impl<T: Transport> Client<T> {
     /// before loading the host's world).
     pub fn set_ground(&mut self, ground: Box<dyn Ground + Send>) {
         self.ground = ground;
+        // A newly received stage used the previous collision until its local
+        // install was loaded. Replay against the new ground immediately.
+        if let Some((frame, own)) = self.snaps.back().and_then(|s|
+            self.seat.and_then(|id| s.bodies.iter().find(|b| b.id == id)).map(|b| (s.frame, b.clone()))) {
+            if let Some(player) = self.sim.player_mut(own.id) { own.apply(player); }
+            self.predicted.retain(|(f, _)| *f <= frame);
+            let cmds: Vec<_> = self.cmds.iter().copied().filter(|(f, _)| *f > frame).collect();
+            for (f, c) in cmds { self.predict(own.id, f, c); }
+        }
     }
 
     pub fn rtt_ms(&self) -> f32 {
@@ -291,6 +300,8 @@ impl<T: Transport> Client<T> {
     pub fn own(&self) -> Option<Body> {
         self.sim.player(self.seat?).map(Body::of)
     }
+
+    pub fn stage(&self) -> Option<u32> { self.snaps.back().and_then(|s| s.stage) }
 
     pub fn quest_camera(&self) -> Option<crate::quest_camera::QuestCamera> { self.quest_camera }
 

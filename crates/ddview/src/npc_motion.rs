@@ -37,6 +37,38 @@ mod tests {
         assert!((top.y - 3.2).abs() < 1e-6, "100cm local joint becomes 1.2m above root");
         assert_eq!(transform.scale, Vec3::from(npc.scale) * crate::stage::UNIT);
     }
+
+    #[test]
+    fn installed_remote_token_controls_blend_and_holds_exact_host_frame() {
+        let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let exe = ddexe::locate(native).unwrap();
+        let mut view = View::load(&vfs, &exe).unwrap();
+        let (resolved, resource) = view.banks.resolve(3226).unwrap();
+        let mut playback = Playback { motion: resource.clone(), joints: HashMap::new(), hold_frame: None,
+            event_frame: None, blend_request: None, blend: None, morph: None, drawn: false, upper: None };
+        let mut npc = ddnet::npc::NpcBody::position(304, [0.0; 3]);
+        npc.generation = 17;
+        npc.motion = Some(ddnet::npc::Motion { command: 1, launch: 2, bank: (resolved >> 8) as u8,
+            slot: resolved & 255, frame: 8.25, blend_frames: 15.0 });
+        assert!(view.show_remote(&npc, &mut playback).unwrap());
+        assert_eq!(playback.hold_frame, Some(8.25));
+        assert_eq!(playback.blend_request.take(), Some(15.0));
+        npc.motion.as_mut().unwrap().frame = 9.5;
+        view.show_remote(&npc, &mut playback).unwrap();
+        assert_eq!(playback.hold_frame, Some(9.5));
+        assert!(playback.blend_request.is_none(), "a new snapshot frame does not restart its motion");
+        npc.motion.as_mut().unwrap().launch += 1;
+        view.show_remote(&npc, &mut playback).unwrap();
+        assert_eq!(playback.blend_request.take(), Some(15.0), "same-bank command replacement restarts blend");
+        view.forget_remote(npc.id);
+        view.show_remote(&npc, &mut playback).unwrap();
+        assert_eq!(playback.blend_request.take(), Some(15.0), "a recreated body binds its resource again");
+        npc.motion = None;
+        assert!(!view.show_remote(&npc, &mut playback).unwrap());
+        assert!(playback.hold_frame.is_none());
+    }
 }
 
 impl View {
