@@ -13,6 +13,92 @@ use ddcombat::volumes::{AttackVolume, Mat4, Pose, Volume, attack_volumes};
 
 /// Secondary category 10 in uPlayerBase::vf198, 0x00B5BA20.
 pub const PARAM_PATH: &str = r"param\shl_param_06";
+/// Source record selected by 0x00B16DC0; the basic action is row zero.
+pub const BOW_PARAM_PATH: &str = r"param\bow_act_param_06";
+
+/// Runtime ordered basic shoot-controller projection. Charging and authored
+/// angle/spread paths are rejected until their separate source translation.
+pub fn load_shot_param(vfs: &ddvfs::Vfs) -> Result<ddsim::BowShotParam, String> {
+    use mtxfs::Value;
+    let bytes = load::read(vfs, BOW_PARAM_PATH, "rBowActParamList")?;
+    let x = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
+    let object = |o: &mtxfs::Object, name: &str| match x.get(o, name).and_then(|v| v.first()) {
+        Some(Value::Object(Some(o))) => Ok((**o).clone()),
+        _ => Err(format!("bow has no {name}")),
+    };
+    let rows = object(&x.root, "mParamList")?;
+    let basic = object(&rows, "mpArray")?;
+    let f = |o: &mtxfs::Object, name: &str| match x.get(o, name).and_then(|v| v.first()) {
+        Some(Value::F(v)) if v.first().is_some_and(|v| v.is_finite()) => Ok(v[0] as f32),
+        _ => Err(format!("bow has no finite {name}")),
+    };
+    let u = |o: &mtxfs::Object, name: &str| match x.get(o, name).and_then(|v| v.first()) {
+        Some(Value::U(v)) => u32::try_from(*v).map_err(|_| format!("bad bow {name}")),
+        Some(Value::S(v)) => u32::try_from(*v).map_err(|_| format!("negative bow {name}")),
+        _ => Err(format!("bow has no {name}")),
+    };
+    for name in ["maxChargeLv", "usableLv", "shootType", "shootDirType"] {
+        if u(&basic, name)? != 0 {
+            return Err(format!("unsupported basic bow {name}"));
+        }
+    }
+    if !matches!(
+        x.get(&basic, "isShotRetNml").and_then(|v| v.first()),
+        Some(Value::Bool(false))
+    ) {
+        return Err("unsupported basic bow return-normal shot".into());
+    }
+    let shoot_list = object(&basic, "shootCtrlList")?;
+    let mut shoots = Vec::new();
+    for row in x
+        .get(&shoot_list, "mpArray")
+        .ok_or("bow has no shoot-controller array")?
+    {
+        let Value::Object(Some(row)) = row else {
+            return Err("null bow shoot row".into());
+        };
+        let angle = [f(row, "degX")?, f(row, "degY")?];
+        let spread = [f(row, "degRndX")?, f(row, "degRndY")?];
+        if angle != [0.0; 2] || spread != [0.0; 2] {
+            return Err("unsupported authored bow angle/spread".into());
+        }
+        shoots.push(ddsim::attack::BowShotRow {
+            wait_frame: f(row, "waitFrame")?,
+            charge_level: u(row, "chargeLv")?,
+            group: u(row, "shlGroup")?,
+            index: u(row, "shlNo")?,
+            angle,
+            spread,
+            shell_wait: f(row, "shlWait")?,
+        });
+    }
+    let adjust = load::read(vfs, r"param\pl\other\m_pl000_00", "rAdjustParam")?;
+    // Source vf26 0x00B1C2C0 requests adjust row 0x1BC; ajp header +12.
+    if adjust.get(..4) != Some(b"ajp\0".as_slice()) {
+        return Err("bad bow adjust file".into());
+    }
+    let count = adjust.get(8..12).ok_or("short bow adjust header")?;
+    if u32::from_le_bytes(count.try_into().unwrap()) <= 0x1BC {
+        return Err("missing bow stamina adjust".into());
+    }
+    let stamina = adjust
+        .get(12 + 4 * 0x1BC..12 + 4 * 0x1BD)
+        .ok_or("short bow stamina adjust")?;
+    let byte = |name| u8::try_from(u(&basic, name)?).map_err(|_| format!("bad bow byte {name}"));
+    Ok(ddsim::BowShotParam {
+        upper: byte("motWaitShot_Up")?,
+        lower: byte("motWaitShot_Low")?,
+        reload_speed: f(&basic, "reloadSpeed")?,
+        shot_wait: f(&basic, "shotWait")?,
+        charge_begin_frame: f(&basic, "chargeBgnFrameShot")?,
+        stamina: f(&basic, "stamina")?,
+        stamina_attack_rate: f(&basic, "staminaAtckAddRate")?,
+        weapon_stamina: f32::from_le_bytes(stamina.try_into().unwrap()),
+        accuracy_wait: f(&basic, "accurateWait")?,
+        rows: shoots,
+    })
+}
+
 /// Normal arrow's supplemental row base, small override table 0x015F76B8.
 const NORMAL_ARROW_ROW: usize = 120;
 
@@ -260,6 +346,66 @@ impl Arrow {
             range_multiplier,
         )
     }
+    /// Boundary for a normal-input scheduler event. The caller resolves the
+    /// actual posed bow model's joint zero (0x00B1D640 / 0x00421ED0), aim
+    /// target and independent RNG words. Unsupported rows are observable.
+    pub fn from_shot(
+        p: &ArrowParam,
+        owner: u32,
+        shooter: u32,
+        shot: ddsim::BowShot,
+        bow_pose: &dyn Pose,
+        target: [f32; 3],
+        random: [u32; 2],
+        steady: bool,
+        range_multiplier: f32,
+    ) -> Result<Self, String> {
+        if shot.row.group != 0
+            || shot.row.index != 0
+            || shot.row.angle != [0.0; 2]
+            || shot.row.spread != [0.0; 2]
+            || shot.row.shell_wait != 0.0
+            || shot.stamina_attack != 0.0
+        {
+            return Err("unsupported nonbasic arrow shot".into());
+        }
+        let matrix = bow_pose.joint_matrix(0).ok_or("missing actual bow joint zero")?;
+        Self::aimed(
+            p,
+            owner,
+            shooter,
+            ArrowAim {
+                bow_origin: [matrix[3][0], matrix[3][1], matrix[3][2]],
+                target,
+                accuracy: shot.accuracy,
+                cone_random: random[0],
+                polar_random: random[1],
+                steady,
+            },
+            range_multiplier,
+        )
+        .ok_or_else(|| "unsupported arrow aim".into())
+    }
+
+    /// Attack-only adapter for the ordinary hit pass. The caller supplies
+    /// the secondary-bow valued shooter; primary dagger stats must not be
+    /// used. Projectile owner/history remain independent for N shooters.
+    pub fn fighter(
+        &self,
+        data: &ArrowData,
+        secondary_shooter: &crate::combat::Fighter,
+    ) -> crate::combat::Fighter {
+        let mut fighter = secondary_shooter.clone();
+        fighter.owner = self.owner;
+        fighter.attacks = self.volumes(data);
+        fighter.hurts.clear();
+        fighter.history = Default::default();
+        fighter.statuses = Default::default();
+        fighter.dots = Default::default();
+        fighter.pools = Default::default();
+        fighter
+    }
+
     /// The origin and direction already resolved by the shot action.
     /// Initialization translated from 0x00C12240 / 0x00BD6D20.
     pub fn fire(

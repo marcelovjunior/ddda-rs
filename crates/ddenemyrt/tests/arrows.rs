@@ -136,3 +136,124 @@ fn installed_arrow_crosses_the_goblins_ten_metre_hurt_volume_and_can_miss() {
     assert!(hit && !aimed.alive);
     assert_eq!((aimed.shooter, missed.shooter), (0, 1));
 }
+
+#[test]
+fn installed_ordered_shot_projection_uses_basic_runtime_record() {
+    let path = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !path.is_dir() {
+        eprintln!("SKIP: no install");
+        return;
+    }
+    let vfs = ddvfs::Vfs::open(path).unwrap();
+    let shot = ddenemyrt::arrow::load_shot_param(&vfs).unwrap();
+    let bytes = vfs
+        .read(
+            ddenemyrt::arrow::BOW_PARAM_PATH,
+            mtarc::type_hash("rBowActParamList"),
+        )
+        .unwrap();
+    let x = mtxfs::parse(&bytes).unwrap();
+    let object = |o: &mtxfs::Object, name| match x.get(o, name).unwrap().first().unwrap() {
+        mtxfs::Value::Object(Some(o)) => (**o).clone(),
+        _ => panic!("bad {name}"),
+    };
+    let rows = object(&x.root, "mParamList");
+    let basic = object(&rows, "mpArray");
+    let list = object(&basic, "shootCtrlList");
+    assert_eq!(shot.rows.len(), x.get(&list, "mpArray").unwrap().len());
+    assert!(!shot.rows.is_empty());
+    assert!(
+        shot.rows
+            .iter()
+            .all(|r| r.angle == [0.0; 2] && r.spread == [0.0; 2])
+    );
+    // Basic uncharged shell is supported by the independently loaded reader.
+    let arrow = ddenemyrt::arrow::ArrowParam::from_list(
+        &vfs.read(ddenemyrt::arrow::PARAM_PATH, mtarc::type_hash("rShlParamList"))
+            .unwrap(),
+        shot.rows[0].group as usize,
+        shot.rows[0].index as usize,
+    )
+    .unwrap();
+    assert!(arrow.speed > 0.0);
+    let mut scheduler = ddsim::BowShotState::default();
+    scheduler.request(&shot);
+    assert!(scheduler.start_due(0.25));
+    scheduler.begin(0, 0.0, shot.stamina_attack_rate);
+    assert_eq!(scheduler.advance(&shot.rows, 0.25), shot.rows);
+    assert!(scheduler.complete);
+    assert!(shot.reload_speed > 0.0);
+    assert!(shot.accuracy_wait > 0.0);
+    assert!(shot.weapon_stamina.is_finite());
+}
+
+#[test]
+fn shot_boundary_requires_real_bow_joint_and_rejects_unsupported_rows() {
+    let Some(data) = data() else { return };
+    let shot = ddsim::BowShot {
+        row: ddsim::attack::BowShotRow {
+            wait_frame: 0.0,
+            charge_level: 0,
+            group: 0,
+            index: 0,
+            angle: [0.0; 2],
+            spread: [0.0; 2],
+            shell_wait: 0.0,
+        },
+        stamina_attack: 0.0,
+        accuracy: 0.7,
+    };
+    let model = ddenemyrt::body::model_matrix([999.0; 3], 0.0);
+    let mut pose = ddenemyrt::body::Posed {
+        model,
+        joints: Vec::new(),
+    };
+    assert!(
+        Arrow::from_shot(
+            &data.param,
+            1000,
+            3,
+            shot,
+            &pose,
+            [20.0, 90.0, 1030.0],
+            [0x80000000; 2],
+            false,
+            1.0
+        )
+        .is_err()
+    );
+    pose.joints
+        .push((0, ddenemyrt::body::model_matrix([20.0, 90.0, 30.0], 0.0)));
+    let arrow = Arrow::from_shot(
+        &data.param,
+        1000,
+        3,
+        shot,
+        &pose,
+        [20.0, 90.0, 1030.0],
+        [0x80000000; 2],
+        false,
+        1.0,
+    )
+    .unwrap();
+    assert_eq!(arrow.position, [20.0, 90.0, 30.0]); // supplied joint, not model/feet
+    assert_eq!(arrow.direction, [0.0, 0.0, 1.0]);
+    let mut unsupported = shot;
+    unsupported.row.group = 9;
+    assert!(
+        Arrow::from_shot(
+            &data.param,
+            1001,
+            7,
+            unsupported,
+            &pose,
+            [20.0, 90.0, 1030.0],
+            [0x80000000; 2],
+            false,
+            1.0
+        )
+        .is_err()
+    );
+}

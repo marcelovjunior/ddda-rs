@@ -141,3 +141,51 @@ emulation confirmed both endpoints for a synthetic trajectory. The final
 focused **5 unit + 2 installed tests** pass, including a 10 m contact
 and deliberate miss against runtime goblin hurt volumes. This verifies
 projectile geometry, not the remaining normal-input Fight/damage gate.
+
+
+### Normal-input scheduler checkpoint
+
+After S25 was reviewed and merged, the approved DDSIM slice now executes a
+stationary basic shot from `Input.light`'s rising edge while bow mode is
+held and Ready. Releasing bow mode exits without firing. `BowShotParam`
+reads the installed row zero and its ordered `shootCtrlList` through
+`ddenemyrt::arrow::load_shot_param`; bulk records are not embedded.
+
+The per-seat `BowShotState` translates `0x00B19540`, `0x00B1C2C0`,
+`0x00B1BE20` and `0x00B1BF90`: shot-wait countdown, upper reload motion,
+actual stamina spent, selected-charge snapshot, inclusive row timing,
+charge-mismatch consumption, cursor completion and post-emission elapsed
+advancement. Lower selection still precedes the shot trigger/upper phase
+handler. Upper completion returns to Ready; the charge reset boundary is
+strictly greater than `chargeBgnFrameShot`. Mode-one adjust 0x1BC costs
+use `Player.secondary_weapon_level_gap`, independently of primary daggers.
+
+`BowAccuracy` translates `0x00B1E480` -> `0x007BC800` with scalar vtable
+`0x01599174`. Initial value 1 and stiffness 0.15 come from the constructor;
+smoothed stationary accuracy updates after emission. Eight synthetic
+variable-step points from original-function Unicorn execution match the
+Rust filter within 2e-7. Runtime `accurateWait` remains data-driven.
+
+`Player.bow_shots` is an undrained host-only event queue. `BowState` and
+its existing wire representation are unchanged. `Arrow::from_shot`
+requires a supplied bow-model Pose with actual joint zero, resolved target,
+RNG words and range augment result. Missing joint or unsupported shot
+returns an error. `Arrow::fighter` accepts an explicitly secondary-valued
+shooter for the ordinary hit pass. These are integration boundaries,
+not a fabricated camera/feet spawn or nearest-enemy aim selection.
+
+Validation: full `cargo test -p ddsim` **76 passed** (63 unit, 7 existing
+bow, 6 new shot tests); installed `cargo test -p ddenemyrt --test arrows`
+**4 passed** in 7.19 s. Normal-input tests cover ordered/mismatched rows,
+delay, hold without repeat, independent seats, release without firing,
+actual spent stamina, strict charge reset, secondary level tier and
+missing motion. The installed gates verify runtime shot parsing and
+joint-required adaptation as well as the earlier trajectory/contact tests.
+
+Still open: root's S29 `fight.rs` scope handoff, canonical posed bow model
+and upper-layer/body attachment provider, secondary bow attacker hookup,
+normal Sim/Fight 10 m damage + miss acceptance, world/terrain contacts and
+live-original comparison. Draw/Shot early command buffering, charging,
+moving/air shots, special arrows, nonzero authored spread and the exact
+vertical basis fallback remain explicit unsupported paths. This is a
+tested checkpoint, not completion of the brief.
