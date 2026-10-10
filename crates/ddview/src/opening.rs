@@ -2323,6 +2323,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         d.check = (now, p);
     }
     let step = d.step;
+    let elapsed = now - d.since;
+    let road_terminal = step == Step::RoadWalk && ((s.world().quest_bit(2, 10)
+        && s.host.story.as_ref().is_some_and(|story| story.quest(3).is_some()))
+        || elapsed > 300.0);
     if step == Step::Rescue {
         return demo_rescue(s, now);
     }
@@ -2330,6 +2334,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
     // a live goblin is within 10 m it fights with ordinary inputs (the
     // goblins run in and attack; an idle Arisen would die before Rescue).
     if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RescueApproach | Step::ThankReynard | Step::ReynardRepeat | Step::RoadWalk)
+        && !road_terminal
         && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
         && demo_goblin_near(s, 1000.0)
     {
@@ -2344,7 +2349,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         let st = &s.host.story.as_ref()?.stage;
         w.place(&st.scenarios).map(|(p, _)| Vec3::from(p))
     };
-    let target = match step {
+    let mut target = match step {
         Step::WeaponTable => place("cassardis: weapon table"),
         Step::RoomExit => place("cassardis: room exit"),
         Step::TalkQuina => s.npcs.get(&2).map(|n| n.1),
@@ -2393,6 +2398,13 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         .map(|q| q.number())
         .collect();
     let d = s.demo.as_mut().unwrap();
+    // A pending collision search must not hide a real quest outcome or
+    // the demo's existing road deadline. These checks do not write flags.
+    if road_terminal {
+        d.planning = None;
+        d.path.clear();
+        target = None;
+    }
     // A closed hinged door changes the collision topology. A human would
     // press interact before trying to plan around it. Use the host's
     // explicitly labelled nearest-door adapter through ordinary input;
@@ -2416,7 +2428,28 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         info!("opening demo: interacting with closed door at {p:?}, retaining route");
         return PlayerInput { interact: true, ..Default::default() };
     }
+    if step == Step::RoadWalk && !road_terminal {
+        while d.path.front().is_some_and(|waypoint| {
+            Vec3::new(waypoint.x - p.x, 0.0, waypoint.z - p.z).length() < ddsim::BODY_RADIUS * 0.5
+        }) {
+            d.path.pop_front();
+        }
+        // Direct steering toward the distant Area centre cuts across the
+        // road's embankment before it ever stalls. Plan the safe walk first,
+        // and again after each partial route, rather than after a fall.
+        if d.path.is_empty() && d.planning.is_none() {
+            if let Some(goal) = target {
+                d.planning = Some(RoutePlan::road(p, goal, &s.host));
+                info!("opening demo: planning RoadWalk over completed collision before walking");
+            }
+        }
+    }
     if let Some(plan) = &mut d.planning {
+        if step == Step::RoadWalk {
+            // A resumed session obtains its first observation on its first
+            // host tick; keep pending search residency current thereafter.
+            plan.loaded = s.host.scenario_field_cells.clone();
+        }
         let _timing = crate::perf::Section::start("demo route planning");
         let ground = DemoPlanningGround::new(stage_ground, s.host.doors.as_ref());
         match plan.advance(
@@ -2432,6 +2465,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 d.path = path.into();
                 d.planning = None;
                 d.check = (now, p);
+                if step == Step::RoadWalk && d.path.is_empty() {
+                    return PlayerInput::default(); // wait for a real route / Area callback
+                }
             }
             None => return PlayerInput::default(),
         }
@@ -2465,7 +2501,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
             if now - d.check.0 > 3.0 {
                 if (p - d.check.1).length() < 60.0 {
                     if let Some(goal) = target {
-                        d.planning = Some(RoutePlan::new(p, goal));
+                        d.planning = Some(if step == Step::RoadWalk {
+                            RoutePlan::road(p, goal, &s.host)
+                        } else { RoutePlan::to_shape(p, goal, None) });
                         warn!(
                             "opening demo: blocked walking to {step:?}; planning incrementally (no placement fallback)"
                         );
@@ -2546,12 +2584,13 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         Step::ReynardRepeat if d.talked && s.talk.is_none() => {
             next = Some(Step::RoadWalk);
         }
-        Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
+        Step::RoadWalk if w.quest_bit(2, 10) && quests.contains(&3) => {
             info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
             next = Some(Step::Done);
         }
         Step::RoadWalk if now - d.since > 300.0 => {
             warn!("opening demo: road: q0002_event2 not reached in 300 s");
+            s.failure = Some("RoadWalk did not enter event2 and boot q0003 within 300 seconds".into());
             next = Some(Step::Done);
         }
         _ => {}
@@ -2646,7 +2685,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 w.quest_bits(1).map(|b| b.words()),
                 quests.contains(&2)
             );
-            let valid = if s.demo.as_ref().is_some_and(|d| d.perf_route) {
+            let valid = if step == Step::RoadWalk {
+                w.stage_no == 100 && w.quest_bit(2, 10) && quests.contains(&3)
+            } else if s.demo.as_ref().is_some_and(|d| d.perf_route) {
                 w.stage_no == 100 && s.demo.as_ref().is_some_and(|d| d.resumed
                     || d.field_cell.is_some_and(|cell| cell != benchmark_cell(p)))
             } else { w.sce_no == 1400
@@ -2655,7 +2696,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                 && quests.contains(&2)
                 && w.quest_bits(1)
                     .is_some_and(|bits| bits.words() == [0x18000000, 0, 3]) };
-            if !valid {
+            if !valid && s.failure.is_none() {
                 s.failure = Some("opening endpoint flag/SceNo check failed".into());
             }
             s.shot("7-q0002");
@@ -2989,7 +3030,14 @@ impl ddsim::Ground for DemoPlanningGround<'_> {
 /// is the existing player radius. The budget bounds demo work; a failed
 /// search leaves the player where collision put it, never warps it.
 struct RoutePlan {
+    origin: Vec3,
     target: Vec3,
+    /// Demo completion uses the installed Area for RoadWalk. Its centre
+    /// can lie in blocked scenery; a player only needs to enter the Area.
+    shape: Option<ddstory::scenario::Shape>,
+    /// Actual completed collision cells, not the desired streaming window.
+    /// The demo can walk a partial route to their edge to admit more cells.
+    loaded: Option<ddstory::scenario::LoadedFieldCells>,
     open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
     nodes: HashMap<RouteCell, RouteNode>,
     visited: std::collections::HashSet<(i32, i32)>,
@@ -2999,9 +3047,27 @@ struct RoutePlan {
 }
 
 impl RoutePlan {
+    #[cfg(test)]
     fn new(from: Vec3, target: Vec3) -> Self {
+        Self::to_shape(from, target, None)
+    }
+
+    fn road(from: Vec3, target: Vec3, host: &StoryHost) -> Self {
+        let shape = host.story.as_ref().and_then(|story| {
+            story.stage.scenarios.tasks.get(4)?.iter()
+                .find(|entry| entry.name == "q0002_event2")?.shape.clone()
+        });
+        let mut plan = Self::to_shape(from, target, shape);
+        plan.loaded = host.scenario_field_cells.clone();
+        plan
+    }
+
+    fn to_shape(from: Vec3, target: Vec3, shape: Option<ddstory::scenario::Shape>) -> Self {
         Self {
+            origin: from,
             target,
+            shape,
+            loaded: None,
             open: [(
                 std::cmp::Reverse((from.x - target.x).hypot(from.z - target.z) as i32),
                 (0, 0),
@@ -3024,7 +3090,10 @@ impl RoutePlan {
     ) -> Option<Vec<Vec3>> {
         use std::cmp::Reverse;
         let Self {
+            origin,
             target,
+            shape,
+            loaded,
             open,
             nodes,
             visited,
@@ -3046,7 +3115,21 @@ impl RoutePlan {
                 continue;
             }
             let (at, cost, _) = nodes[&key];
-            if distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS {
+            let boundary = loaded.as_ref().is_some_and(|cells| {
+                if cells.contains(target.to_array()) || !cells.contains(at.to_array()) {
+                    return false;
+                }
+                let toward = Vec3::new(target.x - at.x, 0.0, target.z - at.z);
+                let length = toward.length();
+                length > 0.0 && !cells.contains([
+                    at.x + toward.x * cell / length, at.y,
+                    at.z + toward.z * cell / length,
+                ])
+            }) && distance(at) < distance(*origin) - 1000.0;
+            if shape.as_ref().map_or_else(
+                || distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS,
+                |shape| shape.hit(at.to_array(), 0.0),
+            ) || boundary {
                 let mut path = vec![];
                 let mut k = key;
                 while k != (0, 0) {
@@ -3069,8 +3152,12 @@ impl RoutePlan {
                     if visited.contains(&next) {
                         continue;
                     }
-                    let mx = dx as f32 * cell;
-                    let mz = dz as f32 * cell;
+                    // Anchor every key to the same grid. Advancing from
+                    // the last slid position accumulates lateral drift:
+                    // different keys then revisit the same physical wall
+                    // and produce a route that loops around it repeatedly.
+                    let mx = origin.x + next.0 as f32 * cell - at.x;
+                    let mz = origin.z + next.1 as f32 * cell - at.z;
                     let hit = ddsim::sweep::sweep(
                         param,
                         &ddsim::sweep::PLAYER_CAPSULE,
@@ -3452,6 +3539,163 @@ mod tests {
         let end = *path.last().expect("a partial path");
         assert!(end.x > 1500.0 && end.x < 2000.0, "{end:?}");
         assert!((end - goal).length() < goal.length() - 1000.0);
+    }
+
+    #[test]
+    fn demo_planner_enters_trigger_without_requiring_its_blocked_center() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below: f32) -> Option<f32> {
+                (x.abs() < 500.0 && z.abs() < 200.0 && below >= 0.0).then_some(0.0)
+            }
+        }
+        let shape = ddstory::scenario::Shape {
+            zone: ddstory::scenario::Zone::Aabb {
+                min: [280.0, 0.0, -100.0], max: [1120.0, 200.0, 100.0],
+            },
+            angle: None, toward: None,
+        };
+        let mut plan = RoutePlan::to_shape(Vec3::ZERO, Vec3::new(700.0, 0.0, 0.0), Some(shape.clone()));
+        let path = plan.advance(&Plate, &ddsim::sweep::SweepParam::default(),
+            std::time::Duration::MAX).unwrap();
+        assert!(shape.hit(path.last().expect("walk into the trigger").to_array(), 0.0));
+        assert!(path.last().unwrap().x < 500.0, "centre has no walkable ground");
+    }
+
+    #[test]
+    fn road_search_returns_a_loaded_edge_before_exhausting_other_cells() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below: f32) -> Option<f32> {
+                (x.abs() < 2000.0 && z.abs() < 2000.0 && below >= 0.0).then_some(0.0)
+            }
+        }
+        let mut plan = RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0));
+        plan.loaded = Some(ddstory::scenario::LoadedFieldCells {
+            origin: [-2000.0, -2000.0], cell: [1000.0; 2], name_offset: [0; 2],
+            loaded: (0..4).flat_map(|m| (0..4).map(move |n| (m, n))).collect(),
+        });
+        let path = plan.advance(&Plate, &ddsim::sweep::SweepParam::default(),
+            std::time::Duration::MAX).unwrap();
+        let end = path.last().expect("walk to the completed collision edge");
+        assert!(end.x > 1500.0 && end.x < 2000.0);
+        assert!(!plan.open.is_empty(), "do not exhaust the whole loaded plate before walking");
+    }
+
+    #[test]
+    fn installed_road_planner_enters_area_without_repeated_wall_loops() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let bytes = vfs.read(r"scr\st100\etc\st100_fsm", mtarc::type_hash("rScenario")).unwrap();
+        let scenarios = ddstory::scenario::Scenarios::load(&[(4, std::sync::Arc::new(mtxfs::parse(&bytes).unwrap()))]).unwrap();
+        let index = scenarios.tasks[4].iter().position(|entry| entry.name == "q0002_event2").unwrap();
+        let shape = scenarios.tasks[4][index].shape.clone().unwrap();
+        assert!(shape.angle.is_none() && shape.toward.is_none());
+        let target = benchmark_place_from_scenarios(&scenarios, 4, index as u32).unwrap().0;
+        // Recorded S46 RoadWalk checkpoint position, replay fixture only.
+        let mut from = Vec3::new(35764.04, 31966.314, 141997.23);
+        let grid = crate::stream::Streamer::field_grid(native).unwrap();
+        let scenery = ddworld::Terrain::scenery_index(&vfs);
+        let distance = |at: Vec3| (at.x - target.x).hypot(at.z - target.z);
+        // Geometric planner replay: rebuild the unchanged native residency
+        // at each partial endpoint. This is not a simulated walked gate.
+        let parts = (distance(from) / 1000.0).ceil() as usize + 1;
+        let mut route = Vec::new();
+        for part in 0..parts {
+            let mut ground = ddworld::Terrain::load_collision_cells(&vfs, 100,
+                grid.wanted(ddworld::stream::Kind::Collision, from.to_array(), 1.0));
+            ground.add_scenery_cells(&vfs, &scenery, 100,
+                grid.wanted(ddworld::stream::Kind::Layout, from.to_array(), 1.0));
+            let mut plan = RoutePlan::to_shape(from, target, Some(shape.clone()));
+            plan.loaded = Some(ddstory::scenario::LoadedFieldCells {
+                origin: grid.origin, cell: grid.cell, name_offset: grid.name_offset,
+                loaded: ground.parsed_collision_cells().to_vec(),
+            });
+            let path = plan.advance(&ground, &ddsim::sweep::SweepParam::default(),
+                std::time::Duration::MAX).unwrap();
+            let end = *path.last().expect("real road route");
+            println!("road collision part {part}: {} nodes, {} visited, {} waypoints; end {end:?}; target {target:?}",
+                plan.nodes.len(), plan.visited.len(), path.len());
+            assert!(shape.hit(end.to_array(), 0.0) || distance(end) < distance(from) - 1000.0);
+            route.extend(path);
+            from = end;
+            if shape.hit(end.to_array(), 0.0) { break; }
+        }
+        assert!(shape.hit(from.to_array(), 0.0), "route enters the installed Area: {shape:?}");
+        for (index, point) in route.iter().enumerate() {
+            assert!(!route[..index].iter().any(|previous| (*point - *previous).length() < 1.0),
+                "route must not revisit the same wall position: {point:?}");
+        }
+    }
+
+    #[test]
+    fn road_deadline_and_authored_outcome_survive_a_pending_search() {
+        struct Flat;
+        impl ddsim::Ground for Flat {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+        }
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let mut session = prepare(native, &exe, 2, true, None, false).unwrap();
+        session.host.story.as_mut().unwrap().world.stage_no = 100;
+        session.host.sim.player_mut(0).unwrap().position = [0.0; 3];
+        let d = session.demo.as_mut().unwrap();
+        d.step = Step::RoadWalk; d.since = 1.0;
+        d.planning = Some(RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0)));
+        demo_input(&mut session, 302.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
+        assert!(!session.world().quest_bit(2, 10), "timeout cannot invent success");
+        assert!(session.host.story.as_ref().unwrap().quest(3).is_none());
+        assert!(session.failure.is_some(), "a route timeout cannot exit as successful acceptance");
+        session.failure = None;
+        let d = session.demo.as_mut().unwrap();
+        d.step = Step::RoadWalk; d.since = 1.0;
+        d.planning = Some(RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0)));
+        // Explicit observation fixture: production event2 writes the bit.
+        session.host.story.as_mut().unwrap().world.set_quest_bit(2, 10, true);
+        demo_input(&mut session, 2.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::RoadWalk,
+            "the exit bit alone does not prove q0003 booted");
+        // Explicit loaded-quest observation fixture, not a driver mutation.
+        session.host.story.as_mut().unwrap().quests.push(ddstory::story::Quest {
+            id: 3 << 16, flags: 1, script: None, ctrl: None, log: vec![],
+        });
+        demo_input(&mut session, 3.0, &Flat, None);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Done);
+        assert!(session.world().quest_bit(2, 10));
+        assert!(session.failure.is_none());
+    }
+
+    #[test]
+    fn installed_road_driver_waits_for_a_safe_route_before_first_heading() {
+        use ddstory::data::Data;
+        struct NoGround;
+        impl ddsim::Ground for NoGround {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { None }
+        }
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let mut session = prepare(native, &exe, 1, true, None, false).unwrap();
+        let scenarios = ddstory::scenario::Scenarios::load(
+            &session.host.story.as_ref().unwrap().data.scenarios(100).unwrap()).unwrap();
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.scenarios = scenarios;
+        story.stage.stage_no = 100; story.world.stage_no = 100;
+        // Recorded RoadWalk pose; deliberately absent ground in this fixture.
+        let from = Vec3::new(35764.04, 31966.314, 141997.23);
+        session.host.sim.player_mut(0).unwrap().position = from.to_array();
+        let d = session.demo.as_mut().unwrap();
+        d.step = Step::RoadWalk; d.since = 1.0; d.check = (1.0, from);
+        let input = demo_input(&mut session, 2.0, &NoGround, None);
+        assert_eq!(input.sim.stick, [0.0; 2],
+            "do not steer directly over an embankment while no safe route exists");
+        assert_eq!(session.host.sim.player(0).unwrap().position, from.to_array());
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::RoadWalk);
+        assert!(!session.world().quest_bit(2, 10));
+        assert!(session.host.story.as_ref().unwrap().quest(3).is_none());
     }
     #[test]
     fn demo_navigation_cassardis_door() {
