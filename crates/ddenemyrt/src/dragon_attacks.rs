@@ -301,10 +301,7 @@ pub struct PressUpdate {
 /// a position below an arbitrary height is not equivalent to this result.
 /// Translated from uObjModel::vf90 0x00885e30 (DDDA.exe 2017-12-13 Steam).
 pub fn ground_contact(axis_check: bool, flags: u32, ground_mode: bool) -> bool {
-    if axis_check && flags & 0x400 != 0 {
-        return false;
-    }
-    flags & if ground_mode { 0x10_0003 } else { 3 } != 0
+    ddsim::sweep::ground_contact(axis_check, flags, ground_mode)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
