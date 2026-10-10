@@ -23,6 +23,7 @@ pub mod character;
 pub mod learn;
 pub mod party;
 pub mod save;
+pub mod starting;
 pub mod tables;
 
 pub use character::Character;

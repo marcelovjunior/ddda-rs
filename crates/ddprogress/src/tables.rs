@@ -38,6 +38,8 @@ pub struct Tables {
     pub skills: SkillList,
     /// The exe's skill records (vocation and weapon masks, kind).
     pub records: Vec<SkillRecord>,
+    /// Native vocation-change free skill grants and slot placement.
+    pub starting: crate::starting::StartingSkills,
     /// `param\game` (sGameSys+0xb8754, loaded by 0x00444740).
     pub game: Vec<f32>,
     /// `param\dlc` (sGameSys+0xb875c, loaded by 0x004447c0).
@@ -65,7 +67,8 @@ impl Tables {
         let records = ExeTables::from_image(exe).map_err(|e| e.0)?.skills;
         let game = parse_adjust(&read("param\\game", "rAdjustParam")?)?;
         let dlc = parse_adjust(&read("param\\dlc", "rAdjustParam")?)?;
-        Ok(Self { growth, ranks, exp, abilities, skills, records, game, dlc })
+        let starting = crate::starting::StartingSkills::load(exe)?;
+        Ok(Self { growth, ranks, exp, abilities, skills, records, starting, game, dlc })
     }
 
     pub fn growth(&self, v: Vocation) -> &[LevelEntry] {
