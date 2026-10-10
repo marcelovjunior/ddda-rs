@@ -35,3 +35,87 @@
 
 Killing goblins in `--opening` until a level-up shows the original's
 notice with the right level; the Result names the sources.
+
+## Results (tested source checkpoint, 2026-10-10, codex-70)
+
+- Creation confirmed: `0x00B5BD20` -> `0x00452CE0` queues a category-0
+  Arisen or category-1 eligible pawn record through `0x00454B90`;
+  `0x00452780` creates `uGUICharacterLevelUp` through `0x00677240`.
+  Byte `+0x298` means Arisen (true) versus pawn (false), not local/remote.
+- Correction to the brief: `0x00676BE0`/`0x00676C00` resolve another GUI
+  class. The actual LevelUpBase overrides are vf09 `0x00676F20` and vf11
+  `0x00677100`. `0x006772A0` selects **sequence** ids 3/4/5 (Arisen) or
+  12/13/14 (pawn), rather than message ids. Init `0x00676D20` sets the
+  hold counter to 120 native frame units; `0x00677030` decrements it after
+  the intro finishes, then starts the exit sequence.
+  The presenter translates that state machine: intro completion does not
+  spend hold time, and the old hold counter is checked before decrementing
+  it (a step crossing zero starts the exit on the following update).
+- The install supplies `id/cockpit/level_info` from `rom/game_main.arc`,
+  cockpit/common messages from `rom/bbsrpg_core.arc`, and the layout's bitmap
+  font and textures. Native vf60 binds object indices 8/9 (level/name),
+  common message 88 to object 5, and cockpit message 4 to object 4. The
+  installed enter/exit global tracks span 8/6 frames respectively; panel
+  pointer-array indices are 1 (Arisen) and 15 (pawn).
+  Parent review #6449 caught the object-link interpretation before acceptance:
+  record `+0xC` is first child (`0x01068C40`) and `+8` next sibling
+  (`0x01068C60`), confirmed by both setters' disassembly. Correct installed
+  number-parent positions are (-80,19) for Arisen and (-90,19) for pawn;
+  title/prefix/name are siblings and inherit neither offset.
+- Added a dedicated `level_up_notice` presenter with per-owner observation
+  and queueing. It reads authoritative `OpeningRes.host.progression` and
+  `PlayState.locals/follow`, initializes a silent baseline, preserves levels
+  crossed between render frames, and excludes remote/support-pawn records.
+  It never awards experience or edits the host. The only shared-file edits
+  are the approved module declaration and plugin installation in main.rs.
+  Parent review #6491 also caught an active notice consuming hidden time
+  after changing the followed seat. Each owner now retains its own active
+  panel and clock; only the followed owner advances, and the new seat can
+  consume its queue independently. A two-owner consumer regression covers
+  switching during the intro, the other owner's complete notice, and exact
+  resumption without spending hidden time or consuming the next notice early.
+- Explicit limits: Arisen name is unported because the current host/editor
+  has no canonical name (head accepted follow-up in board #6374); actual
+  main-pawn names come from the Rift record. The level-200 global string
+  at `0x018D9230` is `<ICON INFINITY>` (codex-1 read-only live probe #6344),
+  so that notice reports an unsupported icon instead of inventing text.
+  Other key interpolation modes, transient local flashes, font filters,
+  general GUI scripting, rank-up notices and guest progression replication
+  remain open. Enter/exit endpoints and duration are authored. Their installed
+  scalar/vector keys all select linear mode 3, confirmed at `0x011511C0`
+  through `0x0106C670`; only that native mode is translated and its regression
+  passed, other modes are rejected. Co-op queue eviction, suspension when the
+  followed owner changes, and events/pause suppression are presentation policies.
+- Source `bda3cfe` passed the full default viewer suite under the normal shared
+  M5 lease: actual session 59890 exited 0, **89 passed / 0 failed / 2 ignored**
+  (28.76 s compilation, 11.78 s test execution). All six notice regressions
+  actually ran, including installed text/font/tracks, cropped atlases and
+  hierarchy, native hold ordering, linear interpolation, per-owner observation,
+  and the followed-seat consumer. Private log:
+  `E:/ddda-re/notes/steps/S43/full-viewer-bda3cfe.log`.
+  The earlier `a781b6c` suite/build passed before the co-op correction and are
+  superseded. No GUI has been launched and there is no original comparison.
+  Final default release build session 97157 exited 0 in 40.93 s. Pinned
+  executable `E:/ddda-re/notes/steps/S43/ddview-s43-bda3cfe.exe` is 94,592,000
+  bytes; its SHA-256 matches the built target:
+  `48175ABAD5137EF91F0DA00DD03FF49B94908ECDE4A1652F0B67F09A822FA562`.
+  Build log: `E:/ddda-re/notes/steps/S43/default-release-bda3cfe.log`.
+  M5 was released after actual exit and pin verification (board #6516).
+  This is a reviewable source checkpoint; the brief's capture acceptance
+  remains open until a genuine new level-up is pictured.
+- Next action: provide the final pinned binary to codex-1 for its coordinated
+  S47/S43 capture, requiring a real opening kill/level-up (no synthetic award).
+  Read-only checkpoint preflight found both local profiles at level 2,
+  experience 108 / next 485 in `RescueApproach.ddhs`, and level 3,
+  experience 39 / next 770 in the existing `Done.ddhs`. Restoring either
+  establishes a silent baseline; only a new progression transition is a notice.
+  With `--shots <private-dir>`, the first real notice automatically requests
+  `S43-level-up.png` once its enter track has finished. This supports a bounded
+  route capture without guessing its elapsed wall time or creating experience.
+- Infinity follow-up source: message vf21 `0x010FEF20` -> analyzer
+  `0x01002C30` -> tag dispatch `0x01002960` -> ICON binding `0x010024F0`.
+  `sGUI::vf17` at `0x00DE1770` resolves the icon name from the active name/id
+  table (`sGUI+0x5C`), and `0x01001650` temporarily switches to the GUI icon
+  font (`sGUI+0x58`) before inserting a type-5 glyph. The table/font resource
+  initializer still needs tracing; this is not the ordinary text font's
+  Unicode infinity glyph. No inferred icon number, resource or pixel is copied.
