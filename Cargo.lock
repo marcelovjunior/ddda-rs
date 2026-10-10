@@ -2652,6 +2652,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ddcombat",
+ "dddoor",
  "ddeconomy",
  "ddexe",
  "ddhost",

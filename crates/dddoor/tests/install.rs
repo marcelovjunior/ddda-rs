@@ -11,6 +11,8 @@ fn installed_cassardis_door_candidates_and_authored_motions() {
     let groups = placement::groups(&vfs, 200).unwrap();
     let world = ddspawn::World { scene: 1400, hour: 12, flag: &|_| false };
     let candidates = placement::candidates(&vfs, &families, 200, &groups, &[(0,0)], &world).unwrap();
+    let cached=placement::LoadedLayouts::read(&vfs,&families,200,&[(0,0)]).unwrap();
+    assert_eq!(cached.candidates(&world).doors.iter().map(|d|d.id).collect::<Vec<_>>(),candidates.doors.iter().map(|d|d.id).collect::<Vec<_>>());
     let doorway = candidates.doors.iter().find(|d| d.id.group == 18 && d.id.record == 2).unwrap();
     assert_eq!(doorway.object, 7121);
     eprintln!("Doorway controls: {:?}", doorway.record.fields.iter().filter(|(n,_)|

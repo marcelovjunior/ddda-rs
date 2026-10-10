@@ -106,3 +106,36 @@ allowed (unrelated all-target replay lint also predates this change).
 The nearest interaction adapter is explicitly opt-in and provisional:
 original focus/angle arbitration still needs connection. Viewer rendering
 and original-game comparison remain pending; the brief is not complete.
+
+### Presentation checkpoint
+
+The opening adapter instantiates 23 authored hinged models and clips in
+Cassardis; the host collision Arc is also used by the follow camera.
+Loaded `_p` layouts are cached and GPL gates remain live. Static stage
+inspection can show authored closed door poses with explicit preview
+scene/hour and clear layout flags. Stage handoff clears the old runtime;
+retained candidates keep their host motion state on a gate/cell rebuild.
+
+Paired-message review confirmed `0x00c3fb00` queues `0x1a` through
+`0x00887250`, and `0x00c3f130` accepts it without an availability check.
+A regression therefore checks that a known locked leaf follows its
+unlocked partner. Unknown persistence is conservatively excluded.
+
+Host occupancy now includes fight goblins and explicitly marks missing
+manager coverage. The fresh Cassardis `_e` audit finds admitted uEm8300
+and uEm8600-family actors; the former's ctor `0x00a9bd00` writes kind
+0x65, the latter's `0x00aa0050` writes 0x6b (excluded by door queries).
+Head #2725 explicitly authorized authored ambient spawn positions as a
+viewer stand-in until the ambient-creatures brief supplies moving actors.
+The adapter labels this stand-in; unknown admitted families still prevent
+closing. This is not an original-game actor simulation comparison.
+
+Validation: 7 door + 7 host unit tests and installed host regression pass,
+including unknown-coverage hold, second actor occupancy and paired locked
+leaf. Cached placement candidates equal the uncached installed candidates.
+Release build passed. Hidden bounded opening smoke loaded all 23 doors
+with coverage=true, then hit the older NPC Set Disable Flag blocker;
+updating to the already-merged NPC fix precedes the next smoke. Static
+capture confirmed the real door mesh, but its stage inspection path needed
+the same nonfield stage-model hook used by opening (now added, pending
+capture). Private captures/logs remain under E:/ddda-re/notes/doors-codex32.

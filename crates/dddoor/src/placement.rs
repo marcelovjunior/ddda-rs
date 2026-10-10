@@ -139,3 +139,38 @@ mod tests {
         assert!(f.select("other").is_none());
     }
 }
+
+/// Parsed layouts for cells the stage adapter has actually loaded. Gates
+/// remain live; archive reads happen only when the loaded cell set changes.
+pub struct LoadedLayouts {
+    pub stage: u32,
+    groups: Vec<(ddspawn::gpl::Group, Vec<Placement>)>,
+}
+impl LoadedLayouts {
+    pub fn read(vfs:&ddvfs::Vfs,families:&Families,stage:u32,cells:&[(u16,u16)]) -> Result<Self,String> {
+        let list=groups(vfs,stage)?;
+        let mut groups=Vec::new();
+        for group in list.groups {
+            let mut doors=Vec::new();
+            let mut seen=std::collections::BTreeSet::new();
+            for cell in &group.cells {
+                if !cells.contains(&(cell.m,cell.n)) || !seen.insert((cell.m,cell.n)) {continue;}
+                let path=ddspawn::layout_path(stage,cell.m,cell.n,'p',group.slot);
+                for record in mtlot::parse(&vfs.read(&path,mtarc::type_hash("rLayout"))?).map_err(|e|format!("{path}: {e}"))? {
+                    if let Some(door)=Placement::from_record(stage,group.slot,record,families)? {doors.push(door);}
+                }
+            }
+            if !seen.is_empty(){groups.push((group,doors));}
+        }
+        Ok(Self{stage,groups})
+    }
+    pub fn candidates(&self,world:&World<'_>)->Candidates {
+        let mut out=Candidates::default();
+        for (group,doors) in &self.groups {
+            let gate=ddspawn::gate(group,world);
+            if gate==Gate::Spawn {out.doors.extend(doors.iter().cloned());}
+            out.gates.push((group.slot,gate));
+        }
+        out
+    }
+}
