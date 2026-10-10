@@ -3083,6 +3083,22 @@ mod tests {
         assert_eq!(actual.aspect_ratio, original.aspect_ratio);
         assert!(!saved.restore(&mut projection));
     }
+    /// A goal beyond the loaded collision (a 40 m plate here) gives the
+    /// path to the plate's edge nearest it, not an empty plan.
+    #[test]
+    fn a_goal_beyond_the_loaded_ground_gives_a_partial_path_toward_it() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below_y: f32) -> Option<f32> {
+                (x.abs() < 2000.0 && z.abs() < 2000.0 && below_y >= 0.0).then_some(0.0)
+            }
+        }
+        let goal = Vec3::new(10_000.0, 0.0, 0.0);
+        let path = plan_path(&Plate, &ddsim::sweep::SweepParam::default(), Vec3::ZERO, goal);
+        let end = *path.last().expect("a partial path");
+        assert!(end.x > 1500.0 && end.x < 2000.0, "{end:?}");
+        assert!((end - goal).length() < goal.length() - 1000.0);
+    }
     #[test]
     fn demo_navigation_cassardis_door() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");

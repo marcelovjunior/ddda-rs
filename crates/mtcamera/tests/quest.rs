@@ -32,6 +32,7 @@ fn animation(keys: &[(f32, f32, i32)]) -> Animation {
         cant_act_flags: 3,
         cant_act_frames: [2.0, 5.0],
         world_slow: false,
+        cinesco: false,
     }
 }
 
@@ -149,4 +150,6 @@ fn unsupported_native_blend_and_input_domains_are_rejected() {
     assert!(!unblocked.supported_world_camera());
     unblocked.cant_act_player = false;
     assert!(unblocked.supported_world_camera());
+    unblocked.cinesco = true;
+    assert!(!unblocked.supported_world_camera());
 }
