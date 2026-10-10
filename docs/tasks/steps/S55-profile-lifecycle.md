@@ -49,6 +49,10 @@ state, and LAN late join is coherent, with tests.
   New or saved profiles receive their own reconstructed combat actor,
   independent of the shared `apply_job_kit` early return. Parked runtime
   fighters/pawns/endurance participate in `state_hash`.
+- A fresh profile also receives its own level-1 progression record when
+  tables/current vocation are available. Arisen progression members are
+  aligned to the current roster's party slots after leave/join/load; a
+  surviving or swapped-seat Arisen cannot occupy the next profile's slot.
 - Hirers are persistent profiles. An unseated hirer's pawn is detached from
   the active party, rather than silently transferred to seat 0 or a new
   occupant. HOST version 2 stores profile hirers and reads version 1's

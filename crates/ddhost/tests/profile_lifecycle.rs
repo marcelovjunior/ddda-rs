@@ -255,6 +255,9 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
     h.data.tables = Some(tables.clone());
     let a = join(&mut h, 11);
     let character = h.create_arisen(a, Vocation::Mage).unwrap();
+    let mut story = ddstory::Story::new_game(NoStoryData);
+    story.world.player_job = Vocation::Mage as u32;
+    h.story = Some(story);
     h.progression.characters[character].discipline.points = 912;
     h.create_main_pawn(Vocation::Fighter).unwrap();
     h.new_game_items(items.clone(), ddeconomy::new_game::Phase::NewlyArisen);
@@ -353,12 +356,17 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
     assert_eq!(a, b);
     assert_eq!(h.fight.as_ref().unwrap().arisen[&b].fighter.owner, u32::from(b));
     assert_ne!(h.fight.as_ref().unwrap().arisen[&b].fighter.victim.hp(), 37.0);
-    assert!(h
+    let fresh = h
         .progression
         .party
         .iter()
         .flatten()
-        .all(|m| m.role != ddprogress::Role::Arisen(b)));
+        .find(|m| m.role == ddprogress::Role::Arisen(b))
+        .unwrap()
+        .character;
+    assert_eq!(h.progression.characters[fresh].vocation, Vocation::Mage);
+    assert_eq!(h.progression.characters[fresh].progress.level, 1);
+    assert_eq!(h.progression.characters[fresh].discipline.points, 0);
     assert!(h
         .party
         .slots
@@ -396,6 +404,44 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
         h.economy.inventory.bag(Owner::Arisen(a2)).unwrap().count(1058),
         1,
         "delivery protection follows A"
+    );
+    // Swapped-seat load and then another departure must also repair active
+    // progression slots before a new profile is admitted.
+    h.progression.characters[fresh].discipline.points = 135;
+    let both = h.save().unwrap();
+    let mut swapped = host();
+    swapped.data.tables = Some(tables.clone());
+    swapped.item_data = Some(items.clone());
+    swapped.fight = Some(Fight::new(data.clone()));
+    let sa = join(&mut swapped, 11);
+    let sb = join(&mut swapped, 22);
+    swapped.load(&both, NoStoryData).unwrap();
+    assert_eq!(
+        swapped.progression.party[0].unwrap().role,
+        ddprogress::Role::Arisen(sa)
+    );
+    assert_eq!(
+        swapped.progression.party[3].unwrap().role,
+        ddprogress::Role::Arisen(sb)
+    );
+    swapped.leave(sb);
+    let sc = join(&mut swapped, 33);
+    assert_eq!(sc, sb);
+    assert_eq!(
+        swapped.progression.party[0].unwrap().role,
+        ddprogress::Role::Arisen(sa)
+    );
+    assert_eq!(
+        swapped.progression.characters[swapped.progression.party[0].unwrap().character]
+            .discipline
+            .points,
+        912
+    );
+    assert_eq!(
+        swapped.progression.characters[swapped.progression.party[3].unwrap().character]
+            .discipline
+            .points,
+        0
     );
     for a_seated_first in [false, true] {
         let mut restored = host();

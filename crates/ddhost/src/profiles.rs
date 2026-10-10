@@ -151,6 +151,35 @@ mod tests {
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    pub(crate) fn align_arisen_records(&mut self) {
+        let arisen: Vec<_> = self
+            .progression
+            .party
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|member| matches!(member.role, ddprogress::Role::Arisen(_)))
+            .collect();
+        for member in &mut self.progression.party {
+            if member.is_some_and(|member| matches!(member.role, ddprogress::Role::Arisen(_))) {
+                *member = None;
+            }
+        }
+        for member in arisen {
+            let ddprogress::Role::Arisen(seat) = member.role else {
+                unreachable!()
+            };
+            if let Some(slot) = self
+                .party
+                .slots
+                .iter()
+                .position(|m| *m == Some(crate::Member::Arisen(seat)))
+            {
+                self.progression.party[slot] = Some(member);
+            }
+        }
+    }
+
     pub(crate) fn rebuild_profile_fighters(&mut self) {
         let ids: Vec<_> = self.roster.ids().collect();
         if let Some(fight) = &mut self.fight {
@@ -179,12 +208,21 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     pub(crate) fn joined_fighter(&mut self, seat: PlayerId) {
         use ddenemyrt::fight::Kit;
         use ddskill::vocation::Vocation;
-        let character = self.character_of(ddprogress::Role::Arisen(seat)).cloned();
+        let mut character = self.character_of(ddprogress::Role::Arisen(seat)).cloned();
         let vocation = character.as_ref().map(|c| c.vocation).or_else(|| {
             self.story
                 .as_ref()
                 .and_then(|story| Vocation::from_id(story.world.player_job))
         });
+        // A newly joining profile needs its own level-1 record even when
+        // the shared vocation has not changed since apply_job_kit last ran.
+        if character.is_none() && self.data.tables.is_some() {
+            if let Some(vocation) = vocation {
+                if self.create_arisen(seat, vocation).is_ok() {
+                    character = self.character_of(ddprogress::Role::Arisen(seat)).cloned();
+                }
+            }
+        }
         let Some(fight) = &mut self.fight else { return };
         if fight.arisen.contains_key(&seat) {
             return;

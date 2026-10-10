@@ -46,6 +46,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         self.party = p;
+        self.align_arisen_records();
     }
 
     /// Play time in whole seconds of host frames. The unit of the Rift's
