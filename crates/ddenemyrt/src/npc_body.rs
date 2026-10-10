@@ -60,6 +60,40 @@ pub struct NpcBody {
     pub look: ddlook::Look,
     morph: Option<ddlook::morph::BodyMorph>,
     order: Vec<usize>,
+    bone_radii: Vec<f32>,
+    detail_masks: Vec<Vec<u8>>,
+}
+
+/// Native world model bounds in centimetres, used by the ordinary NPC gauge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NpcBounds {
+    pub center: [f32; 3],
+    pub extents: [f32; 3],
+}
+
+impl NpcBounds {
+    /// Ordinary gauge mode0 (0x0067C970), before local offset/camera pull.
+    pub fn gauge_top(self) -> [f32; 3] {
+        [self.center[0], self.center[1] + self.extents[1], self.center[2]]
+    }
+
+    /// World anchor for one view's camera; `scenery_radius` is the real
+    /// inline cObjCollision capsule radius, not the model extent.
+    // Translated from 0x0069FB00 / 0x0067C970 / 0x0067C870
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn gauge_anchor(self, model: &Mat4, local_offset: [f32; 3],
+        actor_position: [f32; 3], camera: Option<[f32; 3]>, scenery_radius: f32) -> [f32; 3] {
+        let top = self.gauge_top();
+        let offset = ddcombat::volumes::transform_point(model, local_offset);
+        let point: [f32; 3] = std::array::from_fn(|i| top[i] + offset[i] - actor_position[i]);
+        let Some(camera) = camera else { return point };
+        let mut direction: [f32; 3] = std::array::from_fn(|i| camera[i] - point[i]);
+        let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if length >= f32::EPSILON {
+            for value in &mut direction { *value *= 1.0 / length; }
+        }
+        std::array::from_fn(|i| point[i] + direction[i] * scenery_radius)
+    }
 }
 
 impl NpcBody {
@@ -74,7 +108,16 @@ impl NpcBody {
             return Err("unsupported NPC motion bank family".into());
         }
         let look = ddlook::npc_look(vfs, npc, unit_no, row).map_err(|e| e.to_string())?.look;
-        let skeleton = load::skeleton(vfs, &look.base)?;
+        let model_bytes = load::read(vfs, &look.base, load::RMODEL)?;
+        let model = mtmod::parse(&model_bytes).map_err(|e| format!("{}: {e:?}", look.base))?;
+        let skeleton = mtlmt::pose::Skeleton::from_bones(
+            model.bones.iter().map(|b| (b.anim_map_index, b.parent, b.local)));
+        let bone_radii = model.bones.iter().map(|b| b.length).collect();
+        // uPlayerBase::vf100 0x00B531B0 reads these masks by actor+0x5720.
+        // 0x00B8D980 writes each joint's active flag. This bulk table stays
+        // in the player's executable; dynamic LOD selection is not ported.
+        let detail_masks = (0..4).map(|detail| exe.u8s(0x014f_2af0 + detail * 256, 256)
+            .map_err(|e| e.0)).collect::<Result<Vec<_>, _>>()?;
         let mut banks = vec![None; 14];
         // NPC constructor's collision/motion table 0x014EAC20.
         for (index, bank) in [(1, 1), (2, 7)] {
@@ -112,7 +155,7 @@ impl NpcBody {
         let order = ddlook::face_constraint::order(&parents, &pivots);
         Ok(Self { body: Body { skeleton, banks,
             collision: vec![load::collision(vfs, r"collision\npc\m0000", None)?], scale: 1.0 },
-            look, morph, order })
+            look, morph, order, bone_radii, detail_masks })
     }
 
     /// The event-action bank12 -> bank11 fallback of 0x0080D750.
@@ -198,12 +241,81 @@ impl NpcBody {
         std::array::from_fn(|i| placement[i] * human[i])
     }
 
+    /// Scaled native bounds (model+0x108 bit0x40), with explicit native
+    /// detail row0..3. Additional dynamic constraint mask overrides and
+    /// the unscaled branch's parent spheres are outside this adapter.
+    // Translated from 0x00FFA620, scaled active-joint branch,
+    // and 0x00B531B0 / 0x00B8D980 (DDDA.exe 2017-12-13 Steam).
+    pub fn bounds(&self, pose: &Posed, detail: u8) -> Result<NpcBounds, String> {
+        let mask = self.detail_masks.get(detail as usize).ok_or("unsupported NPC detail row")?;
+        scaled_bounds(pose.joints.iter().zip(&self.bone_radii)
+            .filter(|((id, _), _)| mask[*id as usize] != 0)
+            .map(|((_, matrix), radius)| (*matrix, *radius)))
+    }
+
     pub fn hurts(&self, id: MotionId, frame: f32, pose: &Posed, owner: u32,
         scale: [f32; 3]) -> Vec<HurtVolume> {
         let activations = self.body.activations(id, frame);
         let scale = self.unit_scale(scale);
         ddcombat::volumes::hurt_volumes(&self.body.collision[0].body, &activations, pose,
             (scale[0] + scale[1] + scale[2]) / 3.0, owner)
+    }
+}
+
+fn scaled_bounds(spheres: impl IntoIterator<Item = (Mat4, f32)>) -> Result<NpcBounds, String> {
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    let mut count = 0;
+    for (matrix, radius) in spheres {
+        // Native length includes all four components of each matrix row.
+        let scale = matrix[..3].iter().map(|row| row.iter().map(|v| v * v)
+            .sum::<f32>().sqrt()).fold(0.0_f32, f32::max);
+        let radius = radius * scale;
+        if !radius.is_finite() || matrix[3][..3].iter().any(|v| !v.is_finite()) {
+            return Err("nonfinite NPC model bounds".into());
+        }
+        for axis in 0..3 {
+            low[axis] = low[axis].min(matrix[3][axis] - radius);
+            high[axis] = high[axis].max(matrix[3][axis] + radius);
+        }
+        count += 1;
+    }
+    if count == 0 { return Err("no active NPC bound joints".into()); }
+    Ok(NpcBounds { center: std::array::from_fn(|i| (high[i] + low[i]) * 0.5),
+        extents: std::array::from_fn(|i| (high[i] - low[i]) * 0.5) })
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn native_scaled_spheres_union_uses_largest_four_component_axis() {
+        let mut first = IDENTITY;
+        first[0] = [3.0, 0.0, 0.0, 4.0];
+        first[3] = [10.0, 20.0, 30.0, 1.0];
+        let mut second = IDENTITY;
+        second[3] = [-10.0, 10.0, 5.0, 1.0];
+        let bounds = scaled_bounds([(first, 2.0), (second, 3.0)]).unwrap();
+        assert_eq!(bounds.center, [3.5, 18.5, 21.0]);
+        assert_eq!(bounds.extents, [16.5, 11.5, 19.0]);
+        assert_eq!(bounds.gauge_top(), [3.5, 30.0, 21.0]);
+        assert!(scaled_bounds([]).is_err());
+        assert!(scaled_bounds([(IDENTITY, f32::NAN)]).is_err());
+    }
+
+    #[test]
+    fn gauge_uses_each_camera_and_transformed_offset_without_double_translation() {
+        let bounds = NpcBounds { center: [100.0, 20.0, 0.0], extents: [10.0, 30.0, 10.0] };
+        let mut model = IDENTITY;
+        model[0][0] = 2.0;
+        model[3] = [100.0, 0.0, 0.0, 1.0];
+        let anchor = |camera| bounds.gauge_anchor(&model, [5.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0], camera, 35.0);
+        assert_eq!(anchor(None), [110.0, 50.0, 0.0]);
+        assert_eq!(anchor(Some([210.0, 50.0, 0.0])), [145.0, 50.0, 0.0]);
+        assert_eq!(anchor(Some([10.0, 50.0, 0.0])), [75.0, 50.0, 0.0]);
+        assert_eq!(anchor(Some([110.0, 50.0, 0.0])), anchor(None));
     }
 }
 
