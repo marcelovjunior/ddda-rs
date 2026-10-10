@@ -69,6 +69,32 @@ pub struct CellSpawns {
 /// Spawns the groups of `cells` into `fight`: goblins run, the rest are
 /// returned as placeholders. `records` are the stage's kill records by
 /// group slot.
+/// The stat rates a placement record sets (`cSetInfoPawn` fields; flag 0
+/// leaves the unit's own default).
+pub fn placement_rates(record: &mtlot::Record) -> ddenemyrt::goblin::PlacementRates {
+    let rate = |flag: &str, value: &str| match (record.get(flag), record.get(value)) {
+        (Some(&mtlot::Value::Int(f)), Some(&mtlot::Value::F32(v))) if f != 0 => Some(v),
+        _ => None,
+    };
+    ddenemyrt::goblin::PlacementRates {
+        hp: rate("HP倍率設定の有無", "HPの倍率"),
+        attack: rate("攻撃力倍率設定の有無", "攻撃力の変化倍率"),
+    }
+}
+
+/// Adds the goblin of placement `s` to `fight` with the record's stat
+/// rates and experience override (`mExperienceOW`, cSetInfoEnemy +0xEC ->
+/// unit +0x5C24, 0x007A012C; 0 keeps the goblin's own). Returns its owner.
+pub fn add_placed_goblin(fight: &mut ddenemyrt::fight::Fight, s: &ddspawn::Spawn) -> u32 {
+    let owner = fight.add_goblin_placed(s.position, s.angle[1], placement_rates(&s.record));
+    if let Some(&mtlot::Value::Int(exp)) = s.record.get("mExperienceOW") {
+        if exp > 0 {
+            fight.goblins.last_mut().expect("just added").exp = exp as u32;
+        }
+    }
+    owner
+}
+
 pub fn spawn_cells(
     fight: &mut Fight,
     vfs: &ddvfs::Vfs,
@@ -86,7 +112,7 @@ pub fn spawn_cells(
             .extend(gates.into_iter().map(|(g, gate)| (cell, g, gate)));
         for s in spawns {
             if s.class == "cSetInfoEnemy0100" {
-                let owner = fight.add_goblin(s.position, s.angle[1]);
+                let owner = add_placed_goblin(fight, &s);
                 out.goblins.push((owner, s));
             } else {
                 out.placeholders.push(s);

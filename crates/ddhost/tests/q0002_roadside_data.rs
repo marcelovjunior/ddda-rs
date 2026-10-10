@@ -89,6 +89,11 @@ fn installed_q0002_roadside_groups_and_rescue_actor() {
             assert_eq!(goblin.record.get("mUseFirstSetThinkTbl"), Some(&Value::Int(1)));
             assert_eq!(goblin.record.get("mStartTableNo"), Some(&Value::Int(1)));
             assert_eq!(goblin.record.get("mFsmFilePath"), Some(&Value::Str(vec![])));
+            // the rescue goblins hit at 0.2 of their attack; HP keeps vf33's default
+            assert_eq!(
+                spawns::placement_rates(&goblin.record),
+                ddhost::ddenemyrt::goblin::PlacementRates { hp: None, attack: Some(0.2) }
+            );
         }
         if hour == 12 {
             let exe_file = ddexe::ExeFile::next_to(&native).unwrap();

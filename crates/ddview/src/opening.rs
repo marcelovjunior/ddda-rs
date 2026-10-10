@@ -1052,14 +1052,8 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
     }
     let mut owners = vec![];
     for spawn in &goblins {
-        let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
-        // the placement's experience override (cSetInfoEnemy +0xEC ->
-        // unit +0x5C24, 0x007A012C); 0 keeps the goblin's own
-        if let Some(&mtlot::Value::Int(exp)) = spawn.record.get("mExperienceOW") {
-            if exp > 0 {
-                fight.goblins.last_mut().expect("just added").exp = exp as u32;
-            }
-        }
+        // the placement's stat rates and experience override
+        let owner = ddhost::spawns::add_placed_goblin(fight, spawn);
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
