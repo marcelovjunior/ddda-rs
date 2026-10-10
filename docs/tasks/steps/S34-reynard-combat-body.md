@@ -89,6 +89,12 @@ Implemented in this checkpoint:
   Typed `DeathObservation` stages update NpcDieCheck's apparent/permanent
   banks only for a dead current lifetime. Actual death-action playback,
   automatic stage observations and viewer gauge remain unfinished.
+- The opening adapter now binds NPC304 combat only after successful model
+  materialization and a real S32 canonical motion for the same lifetime.
+  Its installed ordinary body is cached; the host allocates the fighter
+  and supplies the sourced pool. Admission alone does not create combat,
+  and repeat calls preserve the combat owner/HP. Other NPCs, specialized
+  types and common99 bodies remain outside this narrow opening adapter.
 
 Tested: seven focused regressions passed with actual exit 0 under the
 exclusive core target lease, after a narrow `ddenemyrt` cleanup removed
@@ -263,6 +269,16 @@ pure tests and two installed pose tests passed again, actual exit0
 (unit compile6.48s/test0.00s, installed compile3.39s/test4.61s); core
 was actually released after process completion.
 
-Next action: compose actual death-action playback/stages and materialize
-the combat body in the opening adapter; finish the sourced bounds and
-collision-radius inputs before wiring the viewer gauge.
+Opening materialization validation: the existing installed field-intel
+test now also checks admission without a body, a real q0002 NPC graph and
+canonical motion, actual combat owner/HP/hurts, idempotent binding and
+stage-unload retirement. This is an explicit installed graph/body-ready
+fixture, not a full route or screenshot comparison. The focused viewer
+test passed actual exit0 under the valid exclusive M5 lease, using the
+existing release target (compile31.75s/test7.94s), then the lease was
+released. An initial accidental default-debug command was stopped with
+actual exit1 before this release check; no new target was created.
+
+Next action: compose actual death-action playback/stages and finish the
+scenery-radius input before wiring the viewer gauge. Validate the actual
+ordinary rescue route with the materialized combat body after review.

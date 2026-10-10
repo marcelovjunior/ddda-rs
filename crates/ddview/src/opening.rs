@@ -163,6 +163,8 @@ impl HostHandle {
 
 /// Loaded NPC layouts and real actor requests, independent of graph-map membership.
 struct NpcAdapter {
+    exe: ddexe::ExeFile,
+    combat_body: Option<std::sync::Arc<ddhost::ddenemyrt::npc_body::NpcBody>>,
     layouts: HashMap<u32, ddhost::npc_placements::LoadedLayouts>,
     field_groups: Option<ddhost::ddspawn::gpl::GroupList>,
     field_cells: Option<Vec<(u16, u16)>>,
@@ -186,7 +188,8 @@ impl NpcAdapter {
         let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
-        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
+        Ok(Self { exe: file, combat_body: None,
+            layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
             families, guards: HashMap::new(), goto: HashMap::new(),
             placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
     }
@@ -476,6 +479,32 @@ pub fn prepare(
 }
 
 impl Session {
+    /// S34 ordinary NPC304 adapter. Admission alone cannot create a
+    /// combat actor: this receives only successfully materialized bodies
+    /// and waits for the real canonical motion binding.
+    fn bind_npc_combat(&mut self, vfs: &ddvfs::Vfs, bodies: &[u32]) -> Result<(), String> {
+        use ddhost::ddenemyrt::{body::MotionId, npc_body::NpcBody, npc_combat};
+        if !bodies.contains(&304) { return Ok(()); }
+        let Some(owner) = self.host.story_npc_lifetime(304) else { return Ok(()) };
+        if self.host.story_npc_combat_owner(owner).is_some() { return Ok(()); }
+        let Some(actor) = self.host.story_npc_motion(304).filter(|a| a.token.owner == owner) else { return Ok(()) };
+        let motion = MotionId::new((actor.motion >> 8) as u8, actor.motion & 255);
+        if self.npc_adapter.combat_body.is_none() {
+            // Same installed Look id/unit/row as npc_look above. Specialized
+            // NPC types/common99 and other NPC combat bodies are not bound.
+            self.npc_adapter.combat_body = Some(std::sync::Arc::new(NpcBody::load(vfs,
+                &self.npc_adapter.exe.image().map_err(|e| e.0)?, 304, 304, 0, 0, 0)?));
+        }
+        let body = self.npc_adapter.combat_body.as_ref().unwrap().clone();
+        let fight = self.host.fight.as_ref().ok_or("NPC combat needs the host fight")?;
+        let region = npc_combat::ordinary_region(vfs, &fight.data.tables.game, npc_combat::ORDINARY_NPC_HP)?;
+        let bound = self.host.bind_story_npc_combat(owner, body, region, motion).map_err(|e| e.to_string())?;
+        if let Some(combat_owner) = bound {
+            info!("opening: NPC304 lifetime {} materialized combat owner {combat_owner}", owner.generation);
+        }
+        Ok(())
+    }
+
     /// Finish the actual awaited movie, then wait for the quest's editor jump.
     pub fn intro_movie_done(&mut self) -> Result<(), String> {
         if self.intro_movie.is_none() { return Err("no intro movie awaiting completion".into()); }
@@ -826,6 +855,9 @@ fn sync_npc_models(
     let bodies: Vec<_> = session.npcs.keys().copied().collect();
     if let Err(error) = session.npc_authored_motion.bind(&mut *session.host, &bodies) {
         session.failure = Some(format!("NPC authored motion body: {error}"));
+    }
+    if let Err(error) = session.bind_npc_combat(loader.vfs, &bodies) {
+        session.failure = Some(format!("NPC combat body: {error}"));
     }
 }
 
@@ -2841,6 +2873,25 @@ mod tests {
             .map(|p| (p.npc, p.target.group, p.target.index)).collect();
         println!("field loaded cells {cells:?}: admitted {admitted:?}");
         assert!(admitted.contains(&(304, 4, 0)));
+        session.bind_npc_combat(&vfs, &[]).unwrap();
+        assert!(session.host.story_npc_combat_owner(owner).is_none(),
+            "admission alone is not a physical combat body");
+        // Explicit installed graph/model-readiness fixture; no view completion
+        // or quest outcome is fabricated. The ordinary route calls this only
+        // after successful model creation and canonical motion binding.
+        let target = session.host.story_npc_intels().find(|p| p.npc == 304).unwrap().target;
+        session.host.apply_story_npc(100, target, r"ai\fsm\npc\st100\quest\q0002_n304");
+        session.npc_authored_motion.bind(&mut *session.host, &[304]).unwrap();
+        for _ in 0..20 { session.host.tick(&Default::default()).unwrap(); }
+        session.bind_npc_combat(&vfs, &[304]).unwrap();
+        let combat_owner = session.host.story_npc_combat_owner(owner).expect("real motion/body binds combat");
+        session.host.tick(&Default::default()).unwrap();
+        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 1000.0);
+        let combat = &session.host.fight.as_ref().unwrap().npcs[&combat_owner];
+        assert!(!combat.fighter.hurts.is_empty());
+        assert!(session.host.fight.as_ref().unwrap().npc_errors.is_empty());
+        session.bind_npc_combat(&vfs, &[304]).unwrap();
+        assert_eq!(session.host.story_npc_combat_owner(owner), Some(combat_owner));
         assert!(session.host.story_npc_intels().all(|p| p.stage == 100));
         assert!(!session.npc_adapter.sync_field_layouts(&vfs, 100, &[cells[0], cells[0]]).unwrap());
         session.sync_npc_intels().unwrap();
@@ -2860,6 +2911,8 @@ mod tests {
         story.world.stage_no = STAGE;
         session.sync_npc_intels().unwrap();
         assert!(session.host.story_npc_lifetime(304).is_none());
+        session.host.tick(&Default::default()).unwrap();
+        assert!(!session.host.fight.as_ref().unwrap().npcs.contains_key(&combat_owner));
         let story = session.host.story.as_mut().unwrap();
         story.stage.stage_no = 100;
         story.world.stage_no = 100;
