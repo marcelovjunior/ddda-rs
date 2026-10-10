@@ -103,6 +103,8 @@ pub enum HostError {
     /// Input for a seat that is not in the roster.
     UnknownPlayer(PlayerId),
     Save(String),
+    /// Public checkpoints require all currently seated Arisen alive.
+    DeadCheckpoint(ProfileId),
     /// Another Arisen holds the NPC (the interaction lock).
     Lock(LockError),
     Economy(ddeconomy::Error),
@@ -123,6 +125,7 @@ impl std::fmt::Display for HostError {
             HostError::Story(e) => write!(f, "story: {e}"),
             HostError::UnknownPlayer(p) => write!(f, "input for unseated player {p}"),
             HostError::Save(e) => write!(f, "save: {e}"),
+            HostError::DeadCheckpoint(profile) => write!(f, "cannot checkpoint dead profile {profile:?}"),
             HostError::Lock(e) => write!(f, "interaction lock: {e:?}"),
             HostError::Economy(e) => write!(f, "economy: {e:?}"),
             HostError::Talk(e) => write!(f, "talk: {e:?}"),
@@ -213,6 +216,8 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// `None` runs without combat.
     pub fight: Option<ddenemyrt::fight::Fight>,
     pub death: crate::death::Runtime,
+    /// Stored stamina base mismatches are reported without changing saved values.
+    pub vitals_diagnostics: Vec<crate::vitals::BaseMismatch>,
     pub opening_dragon_data: Option<crate::dragon::OpeningDragonData>,
     pub doors: Option<crate::doors::Doors>,
     /// Ambient enemy ownership; admission and view lifetimes are separate.
@@ -255,6 +260,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             request_log: StateHasher::default(),
             fight: None,
             death: Default::default(),
+            vitals_diagnostics: Vec::new(),
             opening_dragon_data: None,
             doors: None,
             ambient: Default::default(),
@@ -670,12 +676,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for p in &self.sim.players {
             h.debug(&(p.id, p.position, p.yaw));
         }
+        for seat in self.roster.seats() { h.debug(&self.seat_vitals(seat.id)); }
         if let Some(s) = &self.story {
             h.bytes(&s.world.save());
         }
         h.debug(&self.economy).debug(&self.progression);
         for (profile, state) in &self.profiles {
             h.debug(profile).debug(&state.economy).debug(&state.character).debug(&state.place);
+            h.debug(&Self::parked_vitals(state));
         }
         h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
         h.debug(&self.saved_npc_quest_rows());
@@ -696,6 +704,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// - optional `STCX`: versioned project continuation (clocks/scratch),
     ///   beyond the original's state re-entry behavior;
     /// - `PLCE`: each Arisen's place, by profile;
+    /// - optional `VITL`: native-derived Arisen HP/white ceiling/stamina;
     /// - `ECON`, `PROG`: shared parts, and per-seat parts filed by profile;
     /// - `RIFT`: the shared Rift.
     ///
@@ -705,6 +714,26 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if self.interacting() {
             return Err(HostError::Busy);
         }
+        for seat in self.roster.seats() {
+            if self.death.is_dead(seat.profile) || self.seat_vitals(seat.id).is_some_and(|v| v.hp <= 0.0) {
+                return Err(HostError::DeadCheckpoint(seat.profile));
+            }
+        }
+        let mut file = self.export_durable_state()?;
+        // Head8082: a disconnected dead profile cannot make a future
+        // checkpoint unusable. It is admitted with fresh kit vitals after
+        // that checkpoint is restored; other durable profile chunks stay.
+        file.chunks.retain(|chunk| chunk.tag != save::TAG_VITALS
+            || !matches!(chunk.owner, Owner::Profile(profile)
+                if !self.roster.seats().iter().any(|seat| seat.profile == profile)
+                    && crate::vitals::Vitals::from_bytes(&chunk.bytes).is_ok_and(|value| value.hp <= 0.0)));
+        Ok(file)
+    }
+
+    /// Internal retry merge snapshot, never a public checkpoint/autosave.
+    /// Accepts dead/open-interaction live state; all serialization remains
+    /// fallible and the candidate closes those attempt lifetimes.
+    pub(crate) fn export_durable_state(&self) -> Result<SaveFile, HostError> {
         let mut f = SaveFile::default();
         let mut w = ddid::Writer::new();
         w.u8(2).u64(self.frame).len(self.roster.len());
@@ -737,6 +766,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.save_parked_profiles(&mut f);
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
         self.save_npc_quest_controls(&mut f);
+        self.save_vitals(&mut f)?;
         Ok(f)
     }
 
@@ -749,6 +779,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
         let err = HostError::Save;
+        let loaded_vitals = crate::vitals::read(f)?;
+        if self.fight.is_none() && self.roster.seats().iter().any(|seat| loaded_vitals.contains_key(&seat.profile)) {
+            return Err(HostError::NoData("VITL fight"));
+        }
         // Validate economy/inventory before the first host mutation. ECON's
         // player parts are keyed by persistent profile, so delivery metadata
         // remaps together with its bag and never follows an old seat number.
@@ -882,6 +916,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.restore_npc_quest_controls(loaded_npc_controls);
         self.refresh_party();
         self.rebuild_profile_fighters();
+        self.vitals_diagnostics.clear();
+        self.apply_loaded_vitals(&loaded_vitals);
         Ok(())
     }
 }

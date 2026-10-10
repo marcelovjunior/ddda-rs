@@ -593,7 +593,11 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
             .epoch
             .checked_add(1)
             .ok_or_else(|| err("retry epoch exhausted".into()))?;
-        let live_save = self.save()?;
+        let checkpoint_vitals = crate::vitals::read(checkpoint)?;
+        if checkpoint_vitals.values().any(|value| value.hp <= 0.0) {
+            return Err(err("retry checkpoint VITL must be alive".into()));
+        }
+        let live_save = self.export_durable_state()?;
         let checkpoint_profiles: std::collections::BTreeSet<_> = checkpoint
             .chunks
             .iter()
@@ -611,6 +615,7 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
             })
             .collect();
         let mut save = checkpoint.clone();
+        let mut absent_dead = std::collections::BTreeSet::new();
         for chunk in &live_save.chunks {
             let Owner::Profile(profile) = chunk.owner else {
                 continue;
@@ -621,6 +626,15 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
             // An active newcomer enters at the restored party's place.
             // Unseated profiles keep durable PLCE for a later admission.
             if chunk.tag == TAG_PLACE && self.roster.seats().iter().any(|s| s.profile == profile) {
+                continue;
+            }
+            if chunk.tag == crate::save::TAG_VITALS
+                && self.roster.seats().iter().any(|s| s.profile == profile)
+                && (self.death.is_dead(profile) || crate::vitals::Vitals::from_bytes(&chunk.bytes)?.hp <= 0.0)
+            {
+                // Head8055: retain durable newcomer identity/state, but its
+                // dead attempt vitals cannot carry death into the new attempt.
+                absent_dead.insert(profile);
                 continue;
             }
             save.put(chunk.tag, chunk.owner, chunk.bytes.clone());
@@ -662,6 +676,7 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
         candidate.npc_errors.clear();
         candidate.npc_parked.clear();
         candidate.load(&seed.save, data)?;
+        let restored_vitals = crate::vitals::read(&seed.save)?;
         let mut notices = Vec::new();
         for index in 0..2 {
             let Some(profile) = self.hired_by[index] else {
@@ -722,6 +737,19 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
             .map(|fight| ddenemyrt::fight::Fight::new(fight.data));
         candidate.refresh_party();
         candidate.rebuild_profile_fighters();
+        candidate.vitals_diagnostics.clear();
+        candidate.apply_loaded_vitals(&restored_vitals);
+        for seat in seed
+            .roster
+            .seats()
+            .iter()
+            .filter(|seat| absent_dead.contains(&seat.profile))
+        {
+            if let Some(body) = candidate.sim.player_mut(seat.id) {
+                body.stamina = body.stamina_max;
+                body.ran_out = false;
+            }
+        }
         candidate.death = Runtime {
             epoch,
             ..Default::default()
@@ -730,6 +758,9 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
         // reviewed runtime dependency is on main; this API is not Ready yet.
         for seat in seed.roster.seats() {
             let p = candidate.sim.player(seat.id).expect("reconstructed seated body");
+            if candidate.seat_vitals(seat.id).is_some_and(|v| v.hp <= 0.0) {
+                return Err(err("retry candidate did not reconstruct a living Arisen".into()));
+            }
             if !p.yaw.is_finite()
                 || p.position.iter().any(|v| !v.is_finite())
                 || !grounded_admission(&candidate.sim, seat.id, candidate.ground.as_ref())
@@ -919,7 +950,7 @@ mod retry_tests {
         live.death.session.enter_fatal(ProfileId(1));
         live.economy.wallet(0).gold = 99;
         let before_hash = live.state_hash();
-        let before_save = live.save().unwrap().to_bytes();
+        let before_save = live.export_durable_state().unwrap().to_bytes();
         let template = live.sim.fresh_attempt();
         let mut invalid = checkpoint.clone();
         invalid.put(TAG_NPC_QUEST, Owner::Shared, vec![255]);
@@ -932,7 +963,7 @@ mod retry_tests {
             .is_err()
         );
         assert_eq!(live.state_hash(), before_hash);
-        assert_eq!(live.save().unwrap().to_bytes(), before_save);
+        assert_eq!(live.export_durable_state().unwrap().to_bytes(), before_save);
         assert!(
             live.prepare_retry(&checkpoint, NoStoryData, |_| Err(crate::HostError::Save(
                 "fixture resource failure".into()

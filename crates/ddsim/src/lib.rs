@@ -533,6 +533,10 @@ pub struct Player {
     /// cPlayerInfo +0x2A8 and its maximum.
     pub stamina: f32,
     pub stamina_max: f32,
+    /// Native save's mStaminaBase and accumulated mStaminaLv. Their sum
+    /// supplies maximum stamina (docs/PAWNS.md); Lv is not the maximum.
+    pub stamina_base: f32,
+    pub stamina_lv: f32,
     /// Body and load classes picking stamina rows (uPlayer +0x34C8 /
     /// +0x34CC). *Assumed* 1 by default: the weights that select them
     /// (`0x00B81120`, `0x00B81270`) are not modelled; 1 matches the
@@ -1056,6 +1060,8 @@ impl Sim {
             hold: None,
             stamina: STAMINA_MAX_RECORDED,
             stamina_max: STAMINA_MAX_RECORDED,
+            stamina_base: STAMINA_MAX_RECORDED,
+            stamina_lv: 0.0,
             body_class: 1,
             load_class: 1,
             ran_out: false,

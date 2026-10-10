@@ -226,3 +226,38 @@ from installed kit/stats; native saved HP/stamina durability is not proven.
 Pawn revival contact selection, airborne fatal branches and authored
 game-over presentation also remain open. No new Cargo/default-release or
 original comparison result is claimed for this continuation.
+
+Head approved a further source-only VITL extension (8028/8037/8055/8082).
+Native `cSAVE_DATA_PARAM` reflection at `0x00785790` and save XML retain
+Arisen current/max/white HP plus current/base/level stamina. Level stamina
+is a gain added to the body-weight base, **not** maximum stamina; the port
+retains all six fields and uses their sum for the runtime stamina maximum.
+The optional per-profile chunk is parsed with all other fallible work
+before host mutation, then applied after fighter reconstruction. An absent
+chunk preserves legacy reconstruction. Stored bases differing from the
+available installed weight-class table are logged and retained rather than
+silently changed. White HP is now retained in the actor and item recovery
+uses the existing sourced white-ceiling helper. Damage wound-pool reduction
+remains untranslated; this is not a claim that new damage generates the
+original wound pool. Pawn vitals remain a follow-up.
+
+Public checkpoint/autosave refuses a seated dead profile with a typed error.
+The internal durable export remains available for all-dead retry and never
+turns failed public saves into empty hashes. A dead newcomer absent from
+the checkpoint is revived at installed/progression maxima for the fresh
+attempt; a living newcomer keeps its live vitals. Public saves omit VITL
+for disconnected dead profiles, allowing later admission after checkpoint
+restoration to rebuild living vitals. Internal export preserves those dead
+values for live merging. Checkpoint VITL with nonfinite/invalid fields or
+nonpositive HP is rejected atomically by retry.
+
+Six more installed regression names cover exact six-field/per-profile and
+parked round trips, legacy absence, malformed atomicity/zero-HP checkpoint
+rejection, absent dead versus living retry, stored-base diagnostic retention
+and omitted dead parked VITL with refilled readmission. The existing parked
+hash test was updated to require saved-health changes while keeping status
+transient. The all-dead installed retry test now also exercises public-save
+refusal and deterministic dead-host hashing. All of this remains
+**uncompiled and untested**, with 32 S53 regression names in source (ten
+helper names actually passed, 22 continuation names not run), plus the
+updated existing profile regression to execute in the full touched suites.

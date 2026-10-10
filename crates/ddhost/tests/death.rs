@@ -678,6 +678,9 @@ fn installed_retry_replaces_dead_seats_projectiles_enemy_and_pawn_brains() {
     kill_arisen(&mut host, 0);
     kill_arisen(&mut host, 1);
     assert!(complete_installed_death(&mut host, 0).death.game_over);
+    assert!(matches!(host.save(), Err(ddhost::HostError::DeadCheckpoint(_))));
+    let dead_hash = host.state_hash();
+    assert_eq!(host.state_hash(), dead_hash, "public save failure cannot erase dead-host hashing");
     poison_attempt_combat(&mut host);
     assert_eq!(host.fight.as_ref().unwrap().pawns[&4].brain.orders.mailbox,
         ddenemyrt::pawn::Command::Go);
@@ -734,4 +737,184 @@ fn installed_retry_replaces_dead_seats_projectiles_enemy_and_pawn_brains() {
     for (seat, z) in before {
         assert!(host.sim.player(seat).unwrap().position[2] > z);
     }
+}
+
+fn set_test_vitals(host: &mut DeathHost, seat: ddhost::PlayerId, hp_value: f32) {
+    let actor = host.fight.as_mut().unwrap().arisen.get_mut(&seat).unwrap();
+    let ddenemyrt::combat::Victim::Player { hp, hp_max, .. } = &mut actor.fighter.victim else {
+        panic!("Arisen victim");
+    };
+    *hp = hp_value;
+    *hp_max = 40.0;
+    actor.hp_max_white = 30.0;
+    let body = host.sim.player_mut(seat).unwrap();
+    body.stamina = 15.0;
+    body.stamina_base = 24.0;
+    body.stamina_lv = 6.0;
+    body.stamina_max = 30.0;
+}
+
+#[test]
+fn installed_vitals_roundtrip_keeps_native_fields_and_parked_profile_identity() {
+    use ddhost::save::{Owner, TAG_VITALS};
+    let Some(mut host) = installed_death_host() else { return };
+    // Synthetic values exercise field independence; no private save record
+    // is copied here, and these are not gameplay tuning constants.
+    set_test_vitals(&mut host, 0, 17.0);
+    set_test_vitals(&mut host, 1, 19.0);
+    let wanted = host.seat_vitals(0).unwrap();
+    let wanted_remote = host.seat_vitals(1).unwrap();
+    let checkpoint = host.save().unwrap();
+    let bytes = checkpoint.get(TAG_VITALS, Owner::Profile(ProfileId(100))).unwrap();
+    assert_eq!(ddhost::vitals::Vitals::from_bytes(bytes).unwrap(), wanted);
+    host.leave(1);
+    set_test_vitals(&mut host, 0, 25.0);
+    host.load(&checkpoint, ddhost::data::NoStoryData).unwrap();
+    assert_eq!(host.seat_vitals(0).unwrap(), wanted);
+    assert_eq!(host.sim.player(0).unwrap().stamina_max, wanted.stamina_base + wanted.stamina_lv);
+    let seat = host.join(ProfileId(200), Control::Remote, [400.0, 0.0, 0.0], 0.0).unwrap();
+    assert_eq!(host.seat_vitals(seat).unwrap(), wanted_remote);
+}
+
+#[test]
+fn installed_vitals_legacy_absence_keeps_existing_reconstruction_contract() {
+    let Some(mut host) = installed_death_host() else { return };
+    let mut checkpoint = host.save().unwrap();
+    checkpoint.chunks.retain(|chunk| chunk.tag != ddhost::save::TAG_VITALS);
+    kill_arisen(&mut host, 0);
+    host.load(&checkpoint, ddhost::data::NoStoryData).unwrap();
+    assert!(!host.fight.as_ref().unwrap().arisen[&0].fighter.victim.dead());
+    let legacy = host.seat_vitals(0).unwrap();
+    assert_eq!(legacy.hp, legacy.hp_max);
+}
+
+#[test]
+fn installed_vitals_malformed_chunks_and_zero_checkpoint_are_atomic() {
+    use ddhost::save::{Owner, TAG_VITALS};
+    let Some(mut host) = installed_death_host() else { return };
+    set_test_vitals(&mut host, 0, 17.0);
+    let checkpoint = host.save().unwrap();
+    let before_hash = host.state_hash();
+    let before_save = host.save().unwrap().to_bytes();
+    let value = host.seat_vitals(0).unwrap();
+    let mut bad_values = Vec::new();
+    let mut invalid = value; invalid.hp = f32::NAN; bad_values.push(invalid.to_bytes());
+    let mut invalid = value; invalid.hp = value.hp_max + 1.0; bad_values.push(invalid.to_bytes());
+    let mut invalid = value; invalid.stamina_lv = f32::INFINITY; bad_values.push(invalid.to_bytes());
+    let mut invalid = value; invalid.stamina_base = -1.0; bad_values.push(invalid.to_bytes());
+    bad_values.push(vec![255]);
+    bad_values.push(value.to_bytes()[..24].to_vec());
+    for bytes in bad_values {
+        let mut corrupt = checkpoint.clone();
+        corrupt.put(TAG_VITALS, Owner::Profile(ProfileId(100)), bytes);
+        assert!(host.load(&corrupt, ddhost::data::NoStoryData).is_err());
+        assert_eq!(host.state_hash(), before_hash);
+        assert_eq!(host.save().unwrap().to_bytes(), before_save);
+    }
+    let mut zero = checkpoint.clone();
+    let mut invalid = value; invalid.hp = 0.0;
+    zero.put(TAG_VITALS, Owner::Profile(ProfileId(100)), invalid.to_bytes());
+    let template = host.sim.fresh_attempt();
+    let data = host.fight.as_ref().unwrap().data.clone();
+    assert!(host.prepare_retry(&zero, ddhost::data::NoStoryData, |seed| {
+        let mut candidate = DeathHost::new(seed.sim(&template, &Default::default())?, None,
+            Default::default(), Box::new(DeathTestGround));
+        candidate.roster = seed.roster.clone();
+        candidate.fight = Some(ddenemyrt::fight::Fight::new(data));
+        Ok(candidate)
+    }).is_err());
+    assert_eq!(host.state_hash(), before_hash);
+    assert_eq!(host.save().unwrap().to_bytes(), before_save);
+}
+
+#[test]
+fn installed_retry_absent_dead_revives_but_living_keeps_live_vitals() {
+    use ddhost::save::Owner;
+    for dead in [false, true] {
+        let Some(mut host) = installed_death_host() else { return };
+        host.leave(1);
+        let checkpoint = host.save().unwrap();
+        let seat = host.join(ProfileId(300), Control::Remote, [900.0, 0.0, 0.0], 0.0).unwrap();
+        set_test_vitals(&mut host, seat, 17.0);
+        let living_vitals = host.seat_vitals(seat).unwrap();
+        if dead {
+            kill_arisen(&mut host, seat);
+            complete_installed_death(&mut host, seat);
+            assert!(matches!(host.save(), Err(ddhost::HostError::DeadCheckpoint(ProfileId(300)))));
+        }
+        let template = host.sim.fresh_attempt();
+        let data = host.fight.as_ref().unwrap().data.clone();
+        let party_place = ddhost::save::place_from(checkpoint.get(ddhost::save::TAG_PLACE,
+            Owner::Profile(ProfileId(100))).unwrap()).unwrap();
+        let places = [(ProfileId(300), party_place)].into_iter().collect();
+        host.prepare_retry(&checkpoint, ddhost::data::NoStoryData, |seed| {
+            let mut candidate = DeathHost::new(seed.sim(&template, &places)?, None,
+                Default::default(), Box::new(DeathTestGround));
+            candidate.roster = seed.roster.clone();
+            candidate.fight = Some(ddenemyrt::fight::Fight::new(data));
+            Ok(candidate)
+        }).unwrap().commit_retry();
+        let restored = host.seat_vitals(seat).unwrap();
+        if dead {
+            assert!(restored.hp > 0.0);
+            assert_eq!(restored.hp, restored.hp_max);
+            assert_eq!(restored.stamina, restored.stamina_base + restored.stamina_lv);
+            assert!(!host.player_actions_blocked(seat));
+        } else {
+            assert_eq!(restored, living_vitals);
+        }
+        host.tick(&ddhost::FrameInputs::new()).unwrap();
+        assert!(!host.player_actions_blocked(seat), "retry must not immediately re-enter death");
+    }
+}
+
+#[test]
+fn installed_vitals_base_mismatch_is_reported_and_stored_value_applied() {
+    let Some(mut host) = installed_death_host() else { return };
+    let native = std::path::PathBuf::from(std::env::var_os("DDDA_NATIVE_PC")
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into()));
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let exe = ddexe::ExeFile::next_to(&native).unwrap();
+    // Names/language are unused by this base-table diagnostic fixture.
+    let data = ddrift::RiftData::load(&vfs, &exe.bytes, Vec::new(), 0).unwrap();
+    let body_class = host.sim.player(0).unwrap().body_class;
+    let installed = data.stamina.entries[body_class].stamina;
+    host.data.rift = Some(std::sync::Arc::new(data));
+    let body = host.sim.player_mut(0).unwrap();
+    body.stamina_base = installed + 1.0;
+    body.stamina_lv = 0.0;
+    body.stamina_max = body.stamina_base;
+    body.stamina = body.stamina_base;
+    let checkpoint = host.save().unwrap();
+    host.load(&checkpoint, ddhost::data::NoStoryData).unwrap();
+    assert_eq!(host.sim.player(0).unwrap().stamina_base, installed + 1.0);
+    let mismatch = host.vitals_diagnostics.iter().find(|d| d.profile == ProfileId(100)).unwrap();
+    assert_eq!((mismatch.installed, mismatch.stored, mismatch.body_class),
+        (installed, installed + 1.0, body_class));
+}
+
+#[test]
+fn installed_checkpoint_omits_dead_parked_vitals_and_readmission_refills() {
+    use ddhost::save::{Owner, TAG_VITALS};
+    let Some(mut host) = installed_death_host() else { return };
+    kill_arisen(&mut host, 1);
+    complete_installed_death(&mut host, 1);
+    host.leave(1);
+    let checkpoint = host.save().unwrap();
+    assert!(checkpoint.get(TAG_VITALS, Owner::Profile(ProfileId(100))).is_some());
+    assert!(checkpoint.get(TAG_VITALS, Owner::Profile(ProfileId(200))).is_none());
+    let template = host.sim.fresh_attempt();
+    let data = host.fight.as_ref().unwrap().data.clone();
+    host.prepare_retry(&checkpoint, ddhost::data::NoStoryData, |seed| {
+        let mut candidate = DeathHost::new(seed.sim(&template, &Default::default())?, None,
+            Default::default(), Box::new(DeathTestGround));
+        candidate.roster = seed.roster.clone();
+        candidate.fight = Some(ddenemyrt::fight::Fight::new(data));
+        Ok(candidate)
+    }).unwrap().commit_retry();
+    let seat = host.join(ProfileId(200), Control::Remote, [400.0, 0.0, 0.0], 0.0).unwrap();
+    let vital = host.seat_vitals(seat).unwrap();
+    assert!(vital.hp > 0.0);
+    assert_eq!(vital.hp, vital.hp_max);
+    assert!(!host.player_actions_blocked(seat));
 }
