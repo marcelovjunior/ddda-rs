@@ -463,3 +463,40 @@ Next: resolve installed per-coordinate payloads and the native initialization
 draw order, then bind the real parent/effect transform without double scale.
 Ghidra is stopped for memory pressure; continue from existing private source
 notes rather than starting a server.
+
+### Coordinate resource/static initialization source checkpoint
+
+**Prepared source; Rust compilation and regression execution are pending.**
+`CoordinateDefinition` reads the installed relative coordinate table
+(`0x01147790`, `0x010F9DB0`) and the native initialization fields
+(`0x010FA080`, `0x010FBB20`). Coordinates are distinct from generator
+payloads; table units use the native ushort limit. No resource records or
+random tables are copied into the repository.
+
+The static subset takes the caller's selected global RNG stream and actual
+owning-effect delay. Three preincremented float-table reads occur even
+for zero variation; the fourth counter increment always occurs, while the
+word-table read is skipped for zero delay variation. Delays and counters
+retain native wrapping. Separate f32 multiply/add rounding matches the
+native MULSS/ADDSS instructions, without fused arithmetic. Dynamic curves
+are explicitly rejected before advancing the caller's counter.
+
+Private x86 instruction emulation of `0x010FBF74..0x010FC1C5` completed
+with actual exit zero and eight seed/variation cases matching the scale,
+counter and delay results. This is independent native evidence, not the
+pending Rust test result. Private output:
+`E:/ddda-re/notes/steps/S29/coordinate-static-emulation.json`.
+
+An actual installed-resource probe found that the fourth offset word can
+contain a nonfinite sentinel. `0x010FBB20` copies it as an opaque word;
+`0x010FC1D0` consumes only XYZ and resets output W. The reader therefore
+validates offset XYZ and keeps the tail as raw u32, rather than rejecting
+the real coordinate as an invalid four-float position. Its tail meaning
+remains unresolved. Prepared regressions cover field/table ownership,
+zero-variation draw order, wrap, separate rounding, opaque-tail admission,
+malformed geometry and the actual installed breath resource.
+
+This remains an unused headless helper: no production effect, queries,
+damage or original-game control is enabled. Next: run the complete enemy
+suite on the reviewed integrated dependency set, require both new named
+tests to execute, then bind the actual parent/effect transform and clocks.
