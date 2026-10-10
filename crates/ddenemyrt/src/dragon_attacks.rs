@@ -1,6 +1,38 @@
 //! Source action state for the opening dragon's landing and breath.
 //! Motion, terrain contact and effect particles are authoritative inputs.
 
+/// Default cObjCollision scenery branch, before any runtime type override.
+/// The capsule is posed relative to the actor origin supplied to the sweep.
+/// Type1 length/width overrides and special negative joint IDs are unported.
+// Translated from 0x0076C540, default type0 branch and 0x00CCDE30/0x00CCE190
+// (DDDA.exe 2017-12-13 Steam). The constructor 0x00769C70 initializes
+// type0 and preserve-scale byte +0xD9E=1; radius uses model +0x64 (Y scale),
+// not the combat volumes' arithmetic mean scale.
+pub fn scenery_capsule(
+    node: &ddcombat::ocl::Node,
+    pose: &dyn ddcombat::volumes::Pose,
+    origin: [f32; 3],
+    model_y_scale: f32,
+) -> Result<ddsim::sweep::CapsuleSegment, String> {
+    if node.shape != 0 {
+        return Err("dragon scenery shape is not the supported capsule".into());
+    }
+    let point = |joint: i32, offset: [f32; 3]| -> Result<[f32; 3], String> {
+        let matrix = if joint == -1 { pose.model_matrix() }
+            else if joint >= 0 { pose.joint_matrix(joint).ok_or_else(|| format!("dragon scenery joint {joint} missing"))? }
+            else { return Err(format!("dragon scenery special joint {joint} unported")); };
+        // normalize=1 preserves the actual scaled basis, unlike hit-volume
+        // node_point's normalize=0 path. Refuse missing pose evidence above.
+        let world = ddcombat::volumes::transform_point(&matrix, offset);
+        Ok(std::array::from_fn(|i| world[i] - origin[i]))
+    };
+    Ok(ddsim::sweep::CapsuleSegment {
+        start: point(node.joint0, node.offset0)?,
+        end: point(node.joint1, node.offset1)?,
+        radius: node.radius * model_y_scale,
+    })
+}
+
 /// Bulk character parameters stay in the player's installation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PressParams {
@@ -271,6 +303,32 @@ impl PressAttack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scenery_offsets_keep_joint_scale_and_radius_uses_model_y_scale() {
+        use ddcombat::volumes::{Mat4, Pose};
+        struct Posed;
+        impl Pose for Posed {
+            fn model_matrix(&self) -> Mat4 { self.joint_matrix(254).unwrap() }
+            fn joint_matrix(&self, id: i32) -> Option<Mat4> {
+                (id == 254).then_some([[2.0, 0.0, 0.0, 0.0], [0.0, 4.0, 0.0, 0.0],
+                    [0.0, 0.0, 8.0, 0.0], [10.0, 20.0, 30.0, 1.0]])
+            }
+        }
+        // Deliberately synthetic record, unrelated to the installed offsets.
+        let mut node = ddcombat::ocl::Node { no: 0, shape: 0, radius: 3.0,
+            joint0: 254, offset0: [1.0, 2.0, 3.0], joint1: 254, offset1: [-1.0, -2.0, -3.0],
+            region_id: 0, hit_prio: 0, node_attr: 0, node_effect_attr: 0, node_free_work: 0 };
+        let cap = scenery_capsule(&node, &Posed, [10.0, 20.0, 30.0], 4.0).unwrap();
+        assert_eq!(cap.start, [2.0, 8.0, 24.0]);
+        assert_eq!(cap.end, [-2.0, -8.0, -24.0]);
+        assert_eq!(cap.radius, 12.0);
+        node.joint0 = 253;
+        assert!(scenery_capsule(&node, &Posed, [0.0; 3], 4.0).is_err());
+        node.joint0 = -2;
+        assert!(scenery_capsule(&node, &Posed, [0.0; 3], 4.0).is_err());
+        node.shape = 1;
+        assert!(scenery_capsule(&node, &Posed, [0.0; 3], 4.0).is_err());
+    }
     // Synthetic parameters, not an embedded installed character record.
     fn params() -> PressParams {
         PressParams {

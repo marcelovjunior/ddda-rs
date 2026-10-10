@@ -105,3 +105,24 @@ existing headless sweep is requested in board #4644 before shared edits.
 Next action: connect the native terrain-result flags to Press's prior
 contact input, then translate the installed collision particle unit
 before enabling the remainder of the encounter.
+
+Head approved the shared sweep extension in board #4751. The existing
+slide loop now accepts arbitrary capsule endpoints and an optional axis
+query; the player API constructs its existing vertical shape/type2 query.
+Two new regressions cover the horizontal far endpoint's broad-phase box
+and the difference between a disabled axis and a failed enabled query.
+The full DDSIM suite passed: 65 library, seven bow and six shot tests.
+
+The default cObjCollision type0 scenery adapter is translated from
+`0x0076C540`, using preserve-scale node lookup (`0x00CCDE30/0x00CCE190`).
+The constructor `0x00769C70` initializes type0 and +0xD9E=1. Its radius
+uses model +0x64, the Y scale, rather than the combat volume's mean scale.
+The type1 length/width override path and special negative joints remain
+unported; missing pose evidence is reported instead of invented.
+One synthetic regression covers nonuniform scale and unsupported joints.
+An installed regression reads the actual scenery node, samples Press's
+real posed joint and sweeps it onto an explicitly synthetic plane. This
+verifies the geometry adapter/contact projection, not stage terrain or
+production phase order. All nine action/helper unit tests and both
+installed tests passed (4.99s compile, 3.88s installed run), actual exit0.
+The host remains entrance-only; the full acceptance gate above stays open.

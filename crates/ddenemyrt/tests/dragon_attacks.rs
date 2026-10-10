@@ -24,6 +24,49 @@ fn step() -> DragonStep<'static> {
 }
 
 #[test]
+fn installed_scenery_node_sweeps_its_real_posed_horizontal_capsule() {
+    use ddcombat::volumes::{Pose, transform_point};
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.is_dir() { eprintln!("SKIP dragon scenery: install absent"); return; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let exe = ddexe::ExeFile::next_to(&native).unwrap();
+    let data = DragonData::opening(&vfs, &exe.image().unwrap(), 1.0).unwrap();
+    let groups: Vec<_> = data.body.collision.iter().flat_map(|set| &set.body.groups)
+        .filter(|group| group.is_scr_adj).collect();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].nodes.len(), 1);
+    let node = &groups[0].nodes[0];
+    let origin = [200.0, 300.0, -400.0];
+    let mut actor = Dragon::new(&data, 100, origin, 0.0);
+    actor.start_press(&data, PressPhase::Waiting, 0.0).unwrap();
+    let pose = actor.pose(&data).unwrap();
+    let cap = scenery_capsule(node, &pose, origin, 1.0).unwrap();
+    for (joint, offset, actual) in [(node.joint0, node.offset0, cap.start),
+        (node.joint1, node.offset1, cap.end)] {
+        let expected = transform_point(&pose.joint_matrix(joint).unwrap(), offset);
+        for i in 0..3 { assert!((actual[i] - (expected[i] - origin[i])).abs() < 0.001); }
+    }
+    assert_eq!(cap.radius, node.radius);
+    let distance = (0..3).map(|i| (cap.end[i] - cap.start[i]).powi(2)).sum::<f32>().sqrt();
+    assert!((cap.end[1] - cap.start[1]).abs() < distance * 0.1,
+        "installed scenery capsule must be horizontal: {cap:?}");
+    // Synthetic plane located below the actual posed capsule: verifies the
+    // adapter and source contact projection, not stage terrain or a replay.
+    let floor = origin[1] + cap.start[1].min(cap.end[1]) - cap.radius - 40.0;
+    let terrain = |_: [f32; 3], _: [f32; 3], out: &mut Vec<ddsim::sweep::Face>| {
+        out.push(([[-10000.0, floor, -10000.0], [-10000.0, floor, 10000.0],
+            [10000.0, floor, -10000.0]], 0));
+        out.push(([[10000.0, floor, -10000.0], [-10000.0, floor, 10000.0],
+            [10000.0, floor, 10000.0]], 0));
+    };
+    let result = ddsim::sweep::sweep_capsule(&Default::default(), &cap, origin,
+        [0.0, -100.0, 0.0], false, None, &terrain);
+    assert!(ground_contact(false, result.met, false), "{result:?}");
+    assert!((result.position[1] - (origin[1] - 40.0)).abs() < 0.2, "{result:?}");
+}
+
+#[test]
 fn installed_press_parameters_and_primary_motion_events_drive_the_fall() {
     let native = std::env::var_os("DDDA_NATIVE_PC")
         .map(std::path::PathBuf::from)
