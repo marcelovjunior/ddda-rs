@@ -80,7 +80,15 @@ Implemented in this checkpoint:
   remain unported. Unsupported active geometry reports an error and
   selects no target. The source fallback to the primary Arisen is
   generalized to the first live registered seat as an explicit co-op
-  policy. Host quest observations and viewer gauge are not wired yet.
+  policy.
+- Host binding and an `OpeningWorld` HP adapter now connect one validated
+  S32 lifetime to the Fight body, preserving HP across idempotent bind.
+  Canonical motion/frame/flags are synchronized after the actor step;
+  missing motion clears hurts with a diagnostic. The story phase reads
+  last-frame HP through `NpcIntel.hp_positive`, the NpcCheck input.
+  Typed `DeathObservation` stages update NpcDieCheck's apparent/permanent
+  banks only for a dead current lifetime. Actual death-action playback,
+  automatic stage observations and viewer gauge remain unfinished.
 
 Tested: seven focused regressions passed with actual exit 0 under the
 exclusive core target lease, after a narrow `ddenemyrt` cleanup removed
@@ -104,6 +112,17 @@ body tests 3.63 s, attacks 5.01 s, status 5.56 s. Two intermediate test
 failures corrected the archive class name to `rAISensorExt` and changed
 the history assertion to observe contacts throughout the attack cycle
 (release correctly clears history before the next attack).
+
+Later host checkpoint: one installed HP/lifetime/death-observation test
+passed (compile 11.55 s, test 10.66 s), followed by NPC sensor3 (5.39 s),
+host goblin7 (9.83 s), NPC motion6 (7.81 s) and NPC placements9 (2.68 s),
+all actual exit0 under a separately acquired exclusive core lease. This
+checkpoint merges reviewed main322456e and preserves `Goblin::placed`
+and PlacementRates. The ordinary natural-combat test stops after the
+first observed real hit; protected cases keep the 360-frame bound.
+The host death-bank test uses an explicit zero-HP fixture and explicit
+death-stage observations. It verifies the adapter, not actual autonomous
+death animation, timer or original rescue failure.
 
 Compared against the original: source tracing only; no live original-game
 recording or complete original rescue comparison yet.
@@ -166,15 +185,24 @@ recording or complete original rescue comparison yet.
   implemented ordinary distance subset retains influences until owner
   retirement and rejects dead candidates. Other influence types,
   grabbed/cached targets and dynamic sensor groups remain explicit limits.
+- Death bank timing: `cNpcActDead::vf06` **0x00B98AE0** phase1 waits for
+  the actual layer end before **0x00BB8B10 -> 0x00437670** writes the
+  apparent bank. Phase2 respects canonical bit **0x00400000** and waits
+  intel+0x4E0; phase3 fades intel+0x484 using unit step / **30**, then
+  **0x00BB57E0 -> 0x00446460** writes both banks. Constructor
+  **0x00BBBFA0** initializes that wait to **60 x sMain.mFps**;
+  **0x00BBCC00** (uNpcIntel vf08) decrements it after apparent death.
+  Body destruction **0x00BB3DB0** only marks apparent when HP is not
+  positive; ordinary alive unloading does not establish a death.
 
 Remaining limits: the hit minimum inherits the existing pass's untraced
 attacker +0x14 assumption of 1; script gating of damage-over-time is not
 traced. NPC death-bank behavior must be sourced separately from HP zero;
 retiring an unloaded owner must never fabricate a death. No host
-NpcCheck/NpcDieCheck or viewer gauge acceptance is claimed by this
-checkpoint. The headless installed body/Fight combat acceptance passes;
-full rescue/original recording comparison remains open.
+autonomous NPC death-action or viewer gauge acceptance is claimed by
+this checkpoint. The headless installed body/Fight combat and HP adapter
+tests pass; full rescue/original recording comparison remains open.
 
-Next action: bind the reviewed S32 host lifetime/motion to the Fight NPC
-body, trace death-bank writes, and expose real HP to quest observations;
-then wire the sourced viewer gauge.
+Next action: compose actual death-action playback/stages and materialize
+the combat body in the opening adapter; finish the sourced bounds and
+collision-radius inputs before wiring the viewer gauge.

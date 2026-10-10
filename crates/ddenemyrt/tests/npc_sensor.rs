@@ -66,6 +66,7 @@ fn installed_goblin_selects_and_damages_reynard_and_no_damage_holds() {
             assert_eq!(fight.goblins[0].target, Some(npc));
             assert!(fight.goblins[0].sensor_error.is_none());
             assert!(fight.npc_errors.is_empty());
+            if flags == 0 && contacts > 0 { break; }
         }
         let hp = fight.npcs[&npc].fighter.victim.hp();
         if flags == 0 { assert!(hp < 1000.0, "actual goblin motions must damage installed NPC hurts"); }

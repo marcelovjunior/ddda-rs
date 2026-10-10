@@ -1,7 +1,8 @@
 //! Combat inputs of an ordinary NPC body. Authored motions and lifetime
 //! belong to the host's NPC actor; this module does not invent either.
 
-use ddcombat::damage::{Adjust, CollisionRates, PlayerDefender, RegionPool};
+use ddcombat::damage::{Adjust, CollisionRates, PlayerDefender};
+pub use ddcombat::damage::RegionPool;
 
 /// The main collision pool of an ordinary NPC. The shared player manager
 /// loads PlDefendParam at 0x0047E46D; this NPC branch always uses row zero,
