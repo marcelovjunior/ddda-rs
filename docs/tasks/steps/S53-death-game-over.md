@@ -90,12 +90,21 @@ after malformed late chunks; the installed-data regression failed because
 it incorrectly required a positive game-over delay. Targeted resource
 inspection confirmed a valid zero delay in this installation, so that test
 now exercises the actual installed threshold inclusively. The corrected
-full suites are pending. No runtime death, revival, GUI or retry completion
-is claimed yet. An authorized narrow save-loader change parses
+full run on source `178c1a0a5fb5c0114508a8d3c2553f2860c2757b` completed
+with process exit zero: 149 tests passed, none failed or were ignored,
+across 44 result summaries (including two empty doc-test summaries). All
+ten new death and late-chunk regressions passed against the installed
+resources. The command was `cargo test -p ddhost -p ddnet --target-dir
+E:/ddda-rs-wt/item-use-review-target -- --test-threads=1`; its private log is
+`E:/ddda-re/notes/steps/S53/full-host-net-corrected.log`. This verifies the
+helper and atomic-loader checkpoint only. No runtime death, revival, GUI,
+default release build or comparison against the original is claimed yet.
+An authorized narrow save-loader change parses
 Rift, NPC row controls and player places before applying any candidate
 state, so malformed late chunks cannot partially replace a retry. Its
-regression passed in the first run; complete touched/downstream success is
-still required in the coordinated full core window.
+regression passed in both full runs. Runtime retry still needs a host
+checkpoint adapter, complete attempt-state replacement and presentation
+restoration; the loader regression alone does not establish those features.
 
 Next action: integrate the proven grounded action/pose chain and real pawn
 revive interactions, then run all touched/downstream suites and the default
