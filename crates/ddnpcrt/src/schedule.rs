@@ -51,12 +51,14 @@ pub struct Guard {
 /// beside each mask). The body adapter must also implement the
 /// FixedPosition(false) ground-mode side effect described below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActorFlag { SuperArmor, NoSurprise, LiftDisabled, NoLiftReaction, NoEscape, LiftEnabled, FixedPosition }
+pub enum ActorFlag { SuperArmor, NoDamage, NoMotionTalk, NoSurprise, LiftDisabled, NoLiftReaction, NoEscape, LiftEnabled, FixedPosition }
 
 impl ActorFlag {
     pub fn mask(self) -> u32 {
         match self {
             Self::SuperArmor => 0x0200_0000, // 0x007aa1f0
+            Self::NoDamage => 0x0800_0000, // 0x007aa0d0
+            Self::NoMotionTalk => 0x0100_0000, // 0x007aa280
             Self::NoSurprise => 0x1_0000, // 0x007aa3a0
             Self::LiftDisabled => 0x800, // 0x007aa430
             Self::NoLiftReaction => 0x1000, // 0x007aa4c0
@@ -70,6 +72,8 @@ impl ActorFlag {
     fn from_process(name: &str) -> Option<Self> {
         Some(match name {
             "Set Super Armor" => Self::SuperArmor,
+            "Set No Damage" => Self::NoDamage,
+            "Set No Motion Talk" => Self::NoMotionTalk,
             "Set No Surprise" => Self::NoSurprise,
             "Set Lift Disable" => Self::LiftDisabled,
             "Set No Lift Reaction" => Self::NoLiftReaction,
@@ -650,7 +654,8 @@ mod variable_tests {
     }
     #[test]
     fn boolean_actor_flag_callbacks_have_distinct_sourced_masks() {
-        for (name, expected) in [("Set Super Armor", 0x0200_0000), ("Set No Surprise", 0x1_0000),
+        for (name, expected) in [("Set No Damage", 0x0800_0000), ("Set Super Armor", 0x0200_0000), ("Set No Motion Talk", 0x0100_0000),
+            ("Set No Surprise", 0x1_0000),
             ("Set Lift Disable", 0x800), ("Set No Lift Reaction", 0x1000),
             ("Set No Escape", 0x2000), ("Set Lift Enable", 0x4_0000), ("Set Fix Pos", 0x200)] {
             assert_eq!(ActorFlag::from_process(name).unwrap().mask(), expected);
