@@ -45,6 +45,13 @@ fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
 }
 
 impl QuickItems {
+    /// Mirror a host-authorized NPC QCT grant to this local seat's opening
+    /// bag. Selection, once rules and world effects belong to the host.
+    pub fn npc_grant(&mut self, seat: PlayerId, item: i16, count: u32, level: u8) {
+        let Some(&owner) = self.owners.get(&seat) else { return; };
+        self.inventory.add(&self.items, owner, seat, item, count, level,
+            &mut ddeconomy::inventory::BuyBack::default());
+    }
     /// Save-free opening bags. Phase is an explicit story boundary: the
     /// challenge carries the editor's temporary items; NewlyArisen has
     /// the event-row-21 replacement. Neither phase starts with curatives.
@@ -262,6 +269,20 @@ impl QuickItems {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_npc_grant_reaches_only_the_interacting_opening_bag() {
+        use super::*;
+        let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !native.is_dir() { eprintln!("SKIP: install absent"); return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let mut quick = QuickItems::new_game(&vfs, &[0, 1], ddeconomy::new_game::Phase::NewlyArisen).unwrap();
+        quick.npc_grant(1, 1058, 1, 0);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(1)).unwrap().count(1058), 1);
+        assert_eq!(quick.inventory.bag(Owner::Arisen(0)).unwrap().count(1058), 0);
+        quick.npc_grant(7, 1058, 1, 0);
+        assert!(quick.inventory.bag(Owner::Arisen(7)).is_none());
+    }
     use super::*;
 
     #[test]

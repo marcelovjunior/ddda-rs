@@ -12,6 +12,7 @@
 //! | heavy attack | K or middle mouse | Numpad 2 |
 //! | equipped skill slots | 1-6 | Numpad 4-9 |
 //! | quick-use saved restorative | U | Numpad 0 |
+//! | bow toggle / hold | configured STG_TOGGLE_BOW_MODE / STG_SUB_WEP | Numpad - / Numpad / |
 //!
 //! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
@@ -81,6 +82,8 @@ impl ViewMotions {
             }
             v.weapon.insert(w, m);
         }
+        // Bow lower0 / upper1 both resolve bank9, B16FE0.
+        v.weapon.insert(Weapon::Bow, [(9, view_bank(vfs, r"motion\pl\m\m00\m0006_at\m0006_at")?)].into());
         Ok(v)
     }
 
@@ -168,6 +171,7 @@ pub struct PlayState {
     pub cam_yaw: f32,
     pub cam_pitch: f32,
     pub camera_params: mtcamera::params::Normal,
+    pub bow_view: crate::bow_view::Aiming,
     /// Scripted input for unattended tests: without goblins P1 runs and
     /// jumps and P2 sprints; with one, P1 closes in and attacks it.
     pub demo: bool,
@@ -278,6 +282,12 @@ pub fn setup(
             f.equip(&mut sim, *id);
             hp_max.insert(*id, f.kit(kit).hp_max);
         }
+        // S27 owns a separate animated shortbow, so remove only the old
+        // rigid secondary bow part to avoid drawing it twice.
+        let mut look = look.clone();
+        if party.kits.get(id) == Some(&Kit::Strider) {
+            if let Some(look) = &mut look { look.weapons.retain(|w| (w.id as u32 >> 24) != 10); }
+        }
         entities.insert(*id, spawn_one(commands, loader, look.as_ref(), *pos)?);
         locals.push(*id);
     }
@@ -325,6 +335,8 @@ pub fn setup(
     if fight.is_none() {
         warn!("play: no fight data (DDDA.exe next to nativePC?): no attacks, pawn or goblins");
     }
+    let mut bow_view = crate::bow_view::Aiming::load(loader.vfs);
+    if let Some(fight) = &fight { bow_view.spawn_models(commands, loader, meshes, materials, images, bindposes, fight)?; }
     Ok(PlayState {
         door_collision: Default::default(),
         sim,
@@ -337,6 +349,7 @@ pub fn setup(
         // the recordings look down 12-30 degrees
         cam_pitch: 0.35,
         camera_params,
+        bow_view,
         demo: false,
         shown: HashMap::new(),
         visible: HashMap::new(),
@@ -452,7 +465,14 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
         inputs.insert(k, v);
     }
     st.sim.step(1.0 / ddsim::MOTION_FPS, &inputs, &st.terrain);
+    // Camera targets are evaluated per owned seat; P2 currently shares the
+    // local viewport's orbit, but never another seat's muzzle or RNG stream.
+    let views: Vec<_> = st.sim.players.iter().filter(|p| p.bow.is_some()).map(|p| {
+        let (eye, target) = bow_camera_pose(st, Vec3::from(p.position), true);
+        (p.id, eye, target)
+    }).collect();
     if let Some(f) = st.fight.as_mut() {
+        st.bow_view.prepare(&st.sim, f, &st.door_collision.over(&st.terrain), &views);
         // hard landings' damage (ddsim queues it, the fight owns HP)
         for p in &mut st.sim.players {
             if p.fall_damage > 0.0 {
@@ -546,6 +566,12 @@ pub fn step(
     if let Some(&p2) = locals.get(1) {
         local.insert(p2, p2_input(&keys, cam_yaw));
     }
+    for (index, seat) in locals.iter().enumerate() {
+        if let Some(input) = local.get_mut(seat) {
+            let active = st.sim.player(*seat).is_some_and(|p| p.bow.is_some());
+            st.bow_view.controls.apply(index, input, &keys, &buttons, active);
+        }
+    }
     // Explicit local input takes over an unattended --demo session.
     if local.values().any(active_input) { st.demo = false; }
     for (&seat, &input) in &local {
@@ -557,7 +583,7 @@ pub fn step(
     st.acc += dt;
     let frame = 1.0 / ddsim::MOTION_FPS;
     let st = &mut *st;
-    while st.acc >= frame {
+    while st.acc >= frame && !crate::bow_view::capture_frozen(st) {
         st.acc -= frame;
         if st.demo {
             let t = time.elapsed_secs();
@@ -578,9 +604,15 @@ pub fn step(
                 }
             }
         }
+        crate::bow_view::capture_input(st, &mut local);
         st.prev.snapshot(&st.sim);
         st.prev_goblins = st.fight.as_ref().map_or_else(Vec::new, |f| f.goblins.iter().map(|g| (g.pos, g.yaw)).collect());
         fixed_frame(st, &local);
+        if crate::bow_view::freeze_capture(st) {
+            st.prev.snapshot(&st.sim);
+            st.prev_goblins = st.fight.as_ref().map_or_else(Vec::new, |f| f.goblins.iter().map(|g| (g.pos,g.yaw)).collect());
+            st.acc = 0.;
+        }
         if let (Some(sounds), Some(data)) = (sounds.as_deref_mut(), st.fight_data.as_ref()) {
             sounds.sample_sim(&st.sim, data, &st.terrain);
         }
@@ -593,6 +625,14 @@ pub fn step(
     let alpha = (st.acc / frame).clamp(0.0, 1.0);
     let shown = st.prev.shown(&st.sim, alpha);
     show(st, &shown, &mut roots, &mut cams);
+    crate::bow_view::show_models(st, &mut roots);
+    let aiming = st.sim.player(st.follow).is_some_and(|p| p.bow.is_some_and(|b| b.phase != ddsim::BowPhase::Released));
+    for mut projection in &mut projs {
+        if let Projection::Perspective(camera) = &mut *projection {
+            camera.fov = (if aiming { st.bow_view.camera.as_ref().map_or(CAMERA_FOV, |c| c.normal.fov_degrees) }
+                else { CAMERA_FOV } + config_camera_fov()).to_radians();
+        }
+    }
     let fight = st.fight.take();
     show_goblins(st, fight.as_ref(), &mut roots, alpha);
     hud.rows = hud_rows(st, &st.sim, fight.as_ref(), None);
@@ -645,7 +685,7 @@ pub fn between(p0: [f32; 3], y0: f32, p1: [f32; 3], y1: f32, alpha: f32) -> ([f3
 }
 
 pub fn active_input(input: &Input) -> bool {
-    input.stick != [0.0; 2] || input.jump || input.light || input.heavy
+    input.stick != [0.0; 2] || input.jump || input.light || input.heavy || input.bow || input.bow_toggle
 }
 
 /// Retain a short input until a fixed tick consumes it. Held input still
@@ -659,6 +699,8 @@ pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     latest.jump |= previous.jump;
     latest.light |= previous.light;
     latest.heavy |= previous.heavy;
+    latest.bow |= previous.bow;
+    latest.bow_toggle |= previous.bow_toggle;
     latest
 }
 
@@ -753,7 +795,7 @@ pub fn show(
         let active = st.sim.player(p.id).and_then(|p| p.skills.active);
         let id = active.map_or_else(|| p.state.motion_id(), |a| a.motion);
         let key = (active.map(|a| a.id), id);
-        let weapon = state_weapon(p.state, p.weapon);
+        let weapon = if matches!(p.state, ddsim::State::Bow { .. }) { Weapon::Bow } else { state_weapon(p.state, p.weapon) };
         let found = if let Some(active) = active {
             st.motions.skills.get(active.id, id)
         } else {
@@ -770,6 +812,14 @@ pub fn show(
         }
         let shown = found.map_or(p.frame, |(m, _)| display_frame(m, p.frame));
         pb.hold_frame = Some(shown);
+        if let Some(bow) = st.sim.player(p.id).and_then(|p| p.bow) {
+            if let Some((motion, _)) = st.motions.get(Weapon::Bow, bow.upper.motion) {
+                // B16FE0 draw3; B1C7D0 wait10; B1CAC0 shot3;
+                // B17940 release10, all embedded request lengths.
+                let blend = match bow.phase { ddsim::BowPhase::Draw | ddsim::BowPhase::Shot => 3., _ => 10. };
+                pb.upper_motion(bow.upper.motion, motion, display_frame(motion, bow.upper.frame), blend);
+            }
+        } else { pb.upper = None; }
         // Weapons in hand while attacking (*inferred*: the original draws
         // them while uPlayer +0x273C has 0x200 and 0x400 / 0x800,
         // uPlayerBase::vf93 0x00B63F70; the writers of those bits are not
@@ -778,10 +828,22 @@ pub fn show(
     }
     // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
-        let (eye, target) = follow_camera_with_params(&st.door_collision.over(&st.terrain), Vec3::from(p.position), st.cam_yaw, st.cam_pitch, Some(&st.camera_params));
+        let aiming = st.sim.player(st.follow).is_some_and(|p| p.bow.is_some_and(|b| b.phase != ddsim::BowPhase::Released));
+        let (eye, target) = bow_camera_pose(st, Vec3::from(p.position), aiming);
         cam.translation = (eye - st.origin) * UNIT;
         cam.look_at((target - st.origin) * UNIT, Vec3::Y);
     }
+}
+
+fn bow_camera_pose(st: &PlayState, feet: Vec3, aiming: bool) -> (Vec3, Vec3) {
+    if let Some(camera) = st.bow_view.camera.as_ref().filter(|_| aiming) {
+        let (eye, target) = camera.pose(feet, st.cam_yaw, st.cam_pitch);
+        let anchor = camera.normal.collision_anchor(target.to_array(), Some((feet.to_array(), feet.to_array())),
+            -st.cam_pitch, true, false).map(Vec3::from).unwrap_or(target);
+        return collide_camera_query(&st.door_collision.over(&st.terrain), eye, target, anchor,
+            (eye - target).normalize_or_zero(), CAMERA_NEAR);
+    }
+    follow_camera_with_params(&st.door_collision.over(&st.terrain), feet, st.cam_yaw, st.cam_pitch, Some(&st.camera_params))
 }
 
 /// The follow camera's target height above the feet and its distance (cm),

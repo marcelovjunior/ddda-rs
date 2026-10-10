@@ -211,7 +211,8 @@ fn a_sword_light_combo_chains_in_its_windows_and_hits_the_goblin() {
     // the first: COMBAT.md's worked example (attack 1 of m0001_00_lv1)
     assert_eq!(hits[0].1.total, 105.0);
     let gob = b.fight.goblins[0].fighter.victim.hp();
-    assert_eq!(gob, 1000.0 - hits.iter().map(|h| h.1.total).sum::<f32>());
+    // main pool 1000 x the vf33 default HP rate 2 (0x008CDD80 / 0x00889040)
+    assert_eq!(gob, 2000.0 - hits.iter().map(|h| h.1.total).sum::<f32>());
     // a level-1 Fighter's Iron Sword is not above its level: no stamina
     assert!(b.log.iter().all(|f| f.stamina == b.log[0].stamina));
 }

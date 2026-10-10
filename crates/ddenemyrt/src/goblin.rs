@@ -25,6 +25,7 @@ use std::sync::Arc;
 /// The goblin's data from the install.
 #[derive(Debug, Clone)]
 pub struct GoblinData {
+    pub sensor: crate::npc_sensor::Sensor,
     /// The rModel actually loaded for this family; LAN guests load the same path locally.
     pub model: String,
     pub body: Body,
@@ -114,6 +115,7 @@ impl GoblinData {
             })
             .collect();
         Ok(GoblinData {
+            sensor: crate::npc_sensor::Sensor::load(vfs)?,
             model: model.into(),
             // the unit's scale (owner +0x60..+0x68) is *assumed* 1 for a
             // standard goblin
@@ -175,7 +177,7 @@ impl ThinkHost for UnitAnswers {
     }
 }
 
-/// A unit the goblin may target (an Arisen).
+/// A unit the goblin may target; NPCs use combat owners, never player seats.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
     pub id: u32,
@@ -195,6 +197,11 @@ impl std::fmt::Debug for Fsm {
 
 #[derive(Debug)]
 pub struct Goblin {
+    /// vf115 initializes group mask1. Dynamic sensor-mask writes from
+    /// later AI states have not yet been ported.
+    pub sensor_mask: u32,
+    pub sensor_error: Option<String>,
+    pub distance_hate: crate::npc_sensor::DistanceHate,
     pub pos: [f32; 3],
     pub yaw: f32,
     /// The current action id (unit +0x2dd4), -1 before the first.
@@ -234,9 +241,44 @@ pub struct Goblin {
     pub fsm_error: Option<String>,
 }
 
+/// A placement's stat rates (`cSetInfoPawn`: `HP倍率設定の有無` /
+/// `HPの倍率`, `攻撃力倍率設定の有無` / `攻撃力の変化倍率`), copied to the
+/// unit by the set-info apply (vf08, 0x007A4BCD: +0x74/+0x7C -> unit
+/// +0x209E/+0x20A0, +0x75/+0x80 -> +0x20A4/+0x20A8). `None` = not set.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PlacementRates {
+    pub hp: Option<f32>,
+    pub attack: Option<f32>,
+}
+
+/// `uEm0100::vf33` (0x008CDD80) defaults for rates a placement did not
+/// set: HP x2 (0x014F9E04) and attack x1.3 (0x0161C874).
+pub const DEFAULT_HP_RATE: f32 = 2.0;
+pub const DEFAULT_ATTACK_RATE: f32 = 1.3;
+
 impl Goblin {
+    /// A goblin placed without stat rates (the vf33 defaults apply).
     pub fn new(data: &GoblinData, owner: u32, pos: [f32; 3], yaw: f32) -> Self {
+        Self::placed(data, owner, pos, yaw, PlacementRates::default())
+    }
+
+    /// A goblin with its placement's rates: the HP rate multiplies the
+    /// main pool's HP and maximum (0x00889040 on the first region of
+    /// actor+0x1D18), the attack rate becomes the attacker's multiplier
+    /// (actor+0x20A8, read by `enemy_attack` 0x0088B530).
+    pub fn placed(data: &GoblinData, owner: u32, pos: [f32; 3], yaw: f32, rates: PlacementRates) -> Self {
+        let hp_rate = rates.hp.unwrap_or(DEFAULT_HP_RATE);
+        let mut regions = data.regions.clone();
+        if let Some(main) = regions.first_mut() {
+            main.hp *= hp_rate;
+            main.hp_max *= hp_rate;
+        }
+        let mut attacker = data.attacker;
+        attacker.attack_mul = Some(rates.attack.unwrap_or(DEFAULT_ATTACK_RATE));
         Goblin {
+            sensor_mask: 1,
+            sensor_error: None,
+            distance_hate: Default::default(),
             pos,
             yaw,
             action: -1,
@@ -258,10 +300,10 @@ impl Goblin {
             exp: data.exp,
             fighter: Fighter {
                 owner,
-                attacker: Attacker::Enemy(data.attacker),
+                attacker: Attacker::Enemy(attacker),
                 victim: Victim::Enemy {
                     defender: data.defender,
-                    regions: data.regions.clone(),
+                    regions,
                     rates: CollisionRates::default(),
                 },
                 attacks: vec![],
@@ -320,14 +362,15 @@ impl Goblin {
     /// A replay digest of the unit.
     pub fn digest(&self) -> String {
         format!(
-            "g{}:{:?}:{:?}:{}:{:?}:{}:{};",
+            "g{}:{:?}:{:?}:{}:{:?}:{}:{}:sensor{}:{:?}:{:?};",
             self.fighter.owner,
             self.pos.map(f32::to_bits),
             self.yaw.to_bits(),
             self.action,
             self.motion,
             self.frame.to_bits(),
-            self.fighter.victim.hp().to_bits()
+            self.fighter.victim.hp().to_bits(),
+            self.sensor_mask, self.distance_hate, self.sensor_error
         )
     }
 
@@ -588,19 +631,35 @@ impl Goblin {
     /// One frame of the goblin (FRAME.md 5.2, line 15). `step` is the
     /// unit's step in 30 fps frames.
     pub fn step(&mut self, data: &GoblinData, targets: &[Target], ground: &dyn ddsim::Ground, step: f32) {
+        self.step_with_npcs(data, targets, &[], ground, step);
+    }
+
+    /// Keeps NPC sensor candidates out of the FSM's player-position roster.
+    pub fn step_with_npcs(&mut self, data: &GoblinData, players: &[Target], npcs: &[Target],
+        ground: &dyn ddsim::Ground, step: f32) {
         self.frames += 1;
-        // the target: the nearest live Arisen (the sensor pick 0x00ab52e0
-        // is *not ported*)
-        let target = targets
-            .iter()
-            .filter(|t| t.alive)
-            .min_by(|a, b| dist2(a.pos, self.pos).total_cmp(&dist2(b.pos, self.pos)))
-            .copied();
+        let all: Vec<_> = players.iter().chain(npcs).copied().collect();
+        let mut admitted = vec![];
+        self.sensor_error = None;
+        for (target, subtype) in players.iter().map(|t| (t, 1)).chain(npcs.iter().map(|t| (t, 4))) {
+            if !target.alive { continue; }
+            match data.sensor.admits(self.sensor_mask, self.pos, self.yaw, *target, subtype) {
+                Ok(true) => admitted.push(*target),
+                Ok(false) => {},
+                Err(error) => { self.sensor_error = Some(error); break; }
+            }
+        }
+        let target = if self.sensor_error.is_none() {
+            self.distance_hate.select(&admitted, &all, self.pos)
+                // 0x008D2930 falls back to the primary Arisen if hate is
+                // empty. Co-op policy: first live registered Arisen.
+                .or_else(|| players.iter().find(|t| t.alive).copied())
+        } else { None };
         self.target = target.map(|t| t.id);
         // phase 90: the AI controller runs the FSM (0x0059f440, restarting a
         // finished one once the action allows, `controlled_frame`), then
         // the unit's think (0x008D2360)
-        self.run_fsm(data, targets);
+        self.run_fsm(data, players);
         // the think: forced actions first, then the table when the current
         // action allows (its done byte)
         if let Some(a) = self.pending.take() {
@@ -825,10 +884,6 @@ impl Goblin {
             self.motion_ended = f >= last;
         }
     }
-}
-
-fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
-    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
 }
 
 #[cfg(test)]

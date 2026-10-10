@@ -8,6 +8,9 @@ pub struct Perf {
     frames: Vec<f32>,
     since: f32,
     unfocused_frames: usize,
+    start: Option<std::time::Instant>,
+    stop_after: Option<f64>,
+    stage: Option<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20,9 +23,38 @@ pub fn update(
     nodes: Query<(), With<Node>>,
     dd_materials: Res<Assets<crate::stage::DdMaterial>>,
     windows: Query<&Window>,
+    args: Res<crate::Args>,
+    stream: Option<Res<crate::stream::Streamer>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     let Some(mut p) = perf else { return };
     ON.store(true, std::sync::atomic::Ordering::Relaxed);
+    if p.start.is_none() {
+        p.start = Some(std::time::Instant::now());
+        if let Some(value) = std::env::var_os("DDVIEW_PERF_SECONDS") {
+            p.stop_after = value.to_str().and_then(|v| v.parse::<f64>().ok())
+                .filter(|s| s.is_finite() && *s > 0.0);
+            if p.stop_after.is_none() {
+                warn!("perf: DDVIEW_PERF_SECONDS must be finite and positive; timed exit disabled");
+            }
+        }
+    }
+    let elapsed = p.start.unwrap().elapsed().as_secs_f64();
+    if p.stop_after.is_some_and(|seconds| elapsed >= seconds) {
+        info!("perf: timed benchmark completed after {elapsed:.3} seconds; normal app exit");
+        exit.write(AppExit::Success);
+        p.stop_after = None;
+    }
+    let stage = stream.as_ref().map_or(args.stage, |stream| stream.stage);
+    if p.stage != Some(stage) {
+        // A window crossing a stage load cannot describe either steady scene.
+        p.frames.clear();
+        p.since = 0.0;
+        p.unfocused_frames = 0;
+        p.stage = Some(stage);
+        info!("perf: stage {stage} starts at elapsed {elapsed:.3} seconds");
+        report_sections();
+    }
     let dt = time.delta_secs();
     p.frames.push(dt * 1000.0);
     if !windows.iter().any(|window| window.focused) {
@@ -52,6 +84,7 @@ pub fn update(
         audio.iter().count(),
         nodes.iter().count()
     );
+    info!("perf: stage {stage}, elapsed {elapsed:.3} seconds");
     let visible: Vec<_> = meshes.iter().filter(|(_, visibility, _)| visibility.get()).collect();
     let unique_meshes: std::collections::HashSet<_> = visible.iter().map(|(mesh, _, _)| mesh.0.id()).collect();
     let unique_materials: std::collections::HashSet<_> = visible.iter().filter_map(|(_, _, mat)| mat.map(|mat| mat.0.id())).collect();

@@ -40,7 +40,9 @@ mod doors;
 mod ambient;
 mod net;
 mod opening;
+mod quest_camera;
 mod play;
+mod bow_view;
 mod items;
 mod skills;
 mod hud;
@@ -129,6 +131,10 @@ struct Args {
     perf: bool,
     /// Script the opening through the gate and a field cell boundary, without captures.
     perf_route: bool,
+    /// `--no-vsync` (implied by `--perf` / `--perf-route`): present without
+    /// waiting for the display, so frame times are not capped at its
+    /// refresh rate.
+    no_vsync: bool,
     /// Automated runs never grab the cursor or pause on focus loss.
     unattended: bool,
 }
@@ -185,6 +191,7 @@ fn args() -> Args {
         light_from_data: false,
         perf: false,
         perf_route: false,
+        no_vsync: false,
         unattended: false,
         // ref001's recorded player position (origin cell 58m50n)
         spawn: Vec3::new(215.9, 41054.3, 3921.1),
@@ -201,6 +208,7 @@ fn args() -> Args {
         if k == "--charaedit" { a.charaedit = Some(0); continue; }
         if k == "--skip-intro" { a.skip_intro = true; continue; }
         if k == "--perf" { a.perf = true; continue; }
+        if k == "--no-vsync" { a.no_vsync = true; continue; }
         if k == "--perf-route" { a.perf_route = true; continue; }
         if k == "--probe" { stage::KEEP_MESHES.store(true, std::sync::atomic::Ordering::Relaxed); continue; }
         if k == "--charaedit-female" { a.charaedit = Some(1); continue; }
@@ -608,12 +616,18 @@ fn main() {
         None => Color::srgb(0.55, 0.68, 0.85),
     };
     let perf_enabled = args.perf;
+    let no_vsync = args.no_vsync || args.perf || args.perf_route;
     let unattended = args.unattended;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ddview".into(),
                 resolution: WindowResolution::new(size.0, size.1),
+                present_mode: if no_vsync {
+                    bevy::window::PresentMode::AutoNoVsync
+                } else {
+                    bevy::window::PresentMode::AutoVsync
+                },
                 ..default()
             }),
             ..default()
@@ -635,8 +649,8 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, opening::cutscene,
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain());
+        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, hud::update).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
     // Diagnostics are opt-in: render queries themselves have a cost, so

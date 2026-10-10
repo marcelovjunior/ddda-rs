@@ -84,6 +84,8 @@ without an "after" can run in parallel, one agent each.
 | S40 | event cameras: the roadside close-up (camera 12) and the others | - |
 | S41 | frame rate: profile, aim for 180 fps on the field | - |
 | S42 | graphics settings like the original's options | S41 (helps) |
+| S43 | the level-up notice (uGUICharacterLevelUp) | S37 core |
+| S44 | LAN: quest cameras and NPC combat state for guests | S40, S34 |
 
 Priority now (goal: the tutorial through the road to the Encampment, the dragon attack included; the prologue is for later; the Encampment and its cyclops wait for the maintainer's playtest): S23 first, then S29-S31 (the dragon attack, from S24's map), S25-S27 (the Strider's bow), S28 (inventory). Done: S21 (head), S12, S19, S23, S25, S26, S28, S29, S33; S32 source merged (route gate open); S37 core (head). S18 (cyclops) is ON HOLD.
 

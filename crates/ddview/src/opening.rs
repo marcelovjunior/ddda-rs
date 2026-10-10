@@ -71,6 +71,7 @@ struct Cut {
 
 /// A talk shown to the local seat.
 struct TalkView {
+    player: ddsim::PlayerId,
     npc: u32,
     line: String,
     choices: Vec<String>,
@@ -87,9 +88,16 @@ enum Step {
     Gate,
     FieldWalk,
     FieldSettle,
+    /// After the performance settle, actually enter the installed roadside
+    /// scenario. Enemies may have run outside its Area before dying.
+    RescueApproach,
     /// `DDVIEW_DEMO_FIGHT`: after the settle, fight the field's goblins
     /// with ordinary inputs (play::demo_attack) and log the quest state.
     Rescue,
+    /// Ordinary talk only after the retained actor reaches its authored
+    /// talking loop. QCT text completion gives q2:88; no demo flag write.
+    ThankReynard,
+    ReynardRepeat,
     /// After the rescue's outcome (q2:20 or q2:30): walk the road toward
     /// the authored `q0002_event2` volume, which sets q2:10 and boots
     /// q0003 (docs/tasks/q0002-roadside.md, sequence 5).
@@ -155,6 +163,8 @@ impl HostHandle {
 
 /// Loaded NPC layouts and real actor requests, independent of graph-map membership.
 struct NpcAdapter {
+    exe: ddexe::ExeFile,
+    combat_body: Option<std::sync::Arc<ddhost::ddenemyrt::npc_body::NpcBody>>,
     layouts: HashMap<u32, ddhost::npc_placements::LoadedLayouts>,
     field_groups: Option<ddhost::ddspawn::gpl::GroupList>,
     field_cells: Option<Vec<(u16, u16)>>,
@@ -178,7 +188,8 @@ impl NpcAdapter {
         let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
-        Ok(Self { layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
+        Ok(Self { exe: file, combat_body: None,
+            layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
             families, guards: HashMap::new(), goto: HashMap::new(),
             placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
     }
@@ -468,6 +479,32 @@ pub fn prepare(
 }
 
 impl Session {
+    /// S34 ordinary NPC304 adapter. Admission alone cannot create a
+    /// combat actor: this receives only successfully materialized bodies
+    /// and waits for the real canonical motion binding.
+    fn bind_npc_combat(&mut self, vfs: &ddvfs::Vfs, bodies: &[u32]) -> Result<(), String> {
+        use ddhost::ddenemyrt::{body::MotionId, npc_body::NpcBody, npc_combat};
+        if !bodies.contains(&304) { return Ok(()); }
+        let Some(owner) = self.host.story_npc_lifetime(304) else { return Ok(()) };
+        if self.host.story_npc_combat_owner(owner).is_some() { return Ok(()); }
+        let Some(actor) = self.host.story_npc_motion(304).filter(|a| a.token.owner == owner) else { return Ok(()) };
+        let motion = MotionId::new((actor.motion >> 8) as u8, actor.motion & 255);
+        if self.npc_adapter.combat_body.is_none() {
+            // Same installed Look id/unit/row as npc_look above. Specialized
+            // NPC types/common99 and other NPC combat bodies are not bound.
+            self.npc_adapter.combat_body = Some(std::sync::Arc::new(NpcBody::load(vfs,
+                &self.npc_adapter.exe.image().map_err(|e| e.0)?, 304, 304, 0, 0, 0)?));
+        }
+        let body = self.npc_adapter.combat_body.as_ref().unwrap().clone();
+        let fight = self.host.fight.as_ref().ok_or("NPC combat needs the host fight")?;
+        let region = npc_combat::ordinary_region(vfs, &fight.data.tables.game, npc_combat::ORDINARY_NPC_HP)?;
+        let bound = self.host.bind_story_npc_combat(owner, body, region, motion).map_err(|e| e.to_string())?;
+        if let Some(combat_owner) = bound {
+            info!("opening: NPC304 lifetime {} materialized combat owner {combat_owner}", owner.generation);
+        }
+        Ok(())
+    }
+
     /// Finish the actual awaited movie, then wait for the quest's editor jump.
     pub fn intro_movie_done(&mut self) -> Result<(), String> {
         if self.intro_movie.is_none() { return Err("no intro movie awaiting completion".into()); }
@@ -615,8 +652,7 @@ impl Session {
     }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
-        // Opening interaction currently routes E only to host seat 0.
-        if seat != 0 || self.cut.is_some() || self.talk.is_some() {
+        if self.cut.is_some() || self.talk.is_some() {
             return false;
         }
         let Some(player) = self.host.sim.player(seat) else { return false; };
@@ -626,7 +662,6 @@ impl Session {
     }
 
     fn talk_npc(&mut self, seat: ddsim::PlayerId, npc: u32) -> Result<ddhost::npcs::TalkOutcome, ddhost::HostError> {
-        if self.host.story_npc_guard(npc).is_none() { return self.host.talk(seat, npc); }
         let owner = self.host.story_npc_lifetime(npc).ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))?;
         let body = self.npcs.get(&npc).copied();
         // Viewer adapter assumption: a successfully constructed idle body
@@ -638,6 +673,10 @@ impl Session {
         // uNpc ctor0x00bab3a0 initializes mode3. Its readiness remains
         // unknown here, selecting the original manual Guard candidate path.
         let motion = ddnpcrt::guard::TalkMotionObservation { mode: Some(3), ..Default::default() };
+        if self.host.story_npc_guard(npc).is_none() {
+            return self.host.talk_story_npc(seat, owner, ready, motion)?
+                .ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent));
+        }
         self.host.talk_story_guard(seat, owner, ready, body.map_or(0.0, |(_, _, yaw)| yaw), motion)?
             .ok_or(ddhost::HostError::Talk(ddnpcrt::TalkError::Silent))
     }
@@ -685,9 +724,9 @@ impl Session {
         &self.host.story.as_ref().unwrap().world
     }
 
-    /// The nearest NPC to seat 0 within [`TALK_RANGE`].
-    fn npc_near(&self) -> Option<u32> {
-        let p = self.host.sim.player(0)?.position;
+    /// Viewer input policy: the chosen local seat supplies the position.
+    fn npc_near_for(&self, seat: ddsim::PlayerId) -> Option<u32> {
+        let p = self.host.sim.player(seat)?.position;
         self.npcs
             .iter()
             .map(|(&id, &(_, at, _))| (id, (at.x - p[0]).hypot(at.z - p[2])))
@@ -707,6 +746,7 @@ impl Session {
         for e in events {
             match e {
                 TalkEvent::Line {
+                    player,
                     npc,
                     text,
                     conversation,
@@ -716,14 +756,16 @@ impl Session {
                     let line = clean(text);
                     info!("opening: NPC {npc} conversation {conversation} line {index}: {line}");
                     self.talk = Some(TalkView {
+                        player: *player,
                         npc: *npc,
                         line,
                         choices: vec![],
                     });
                 }
-                TalkEvent::Choices { npc, options, .. } => {
+                TalkEvent::Choices { player, npc, options, .. } => {
                     let line = self.talk.as_ref().map(|t| t.line.clone()).unwrap_or_default();
                     self.talk = Some(TalkView {
+                        player: *player,
                         npc: *npc,
                         line,
                         choices: options.iter().map(|o| clean(o)).collect(),
@@ -736,6 +778,14 @@ impl Session {
                 TalkEvent::End { npc, .. } => {
                     info!("opening: talk with NPC {npc} ended");
                     self.talk = None;
+                }
+                TalkEvent::QuestEffects { player, npc, effects } => {
+                    for effect in effects {
+                        if let ddnpcrt::quest_talk::Effect::Item { item, count, level } = *effect {
+                            self.quick_items.npc_grant(*player, item, count, level);
+                            info!("opening: NPC {npc} quest reward: seat {player} item {item} count {count}");
+                        }
+                    }
                 }
             }
         }
@@ -805,6 +855,9 @@ fn sync_npc_models(
     let bodies: Vec<_> = session.npcs.keys().copied().collect();
     if let Err(error) = session.npc_authored_motion.bind(&mut *session.host, &bodies) {
         session.failure = Some(format!("NPC authored motion body: {error}"));
+    }
+    if let Err(error) = session.bind_npc_combat(loader.vfs, &bodies) {
+        session.failure = Some(format!("NPC combat body: {error}"));
     }
 }
 
@@ -913,6 +966,9 @@ pub fn setup(
     // Whole-stage data is now loaded; actor observations replace scripted
     // actor completion from this point onward.
     s.host.world.enable_live_encounters();
+    if let Err(error) = crate::quest_camera::install(&mut s.host.world, vfs, STAGE) {
+        s.failure = Some(format!("stage event camera load: {error}"));
+    }
     if let Err(error) = s.sync_npc_intels() { s.failure = Some(error); }
     // NPCs with their looks, idle until their schedule moves them.
     let list = mtlmt::parse(&vfs.read(play::MOTIONS, crate::character::RMOTIONLIST).ok()?).ok()?;
@@ -1052,14 +1108,8 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
     }
     let mut owners = vec![];
     for spawn in &goblins {
-        let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
-        // the placement's experience override (cSetInfoEnemy +0xEC ->
-        // unit +0x5C24, 0x007A012C); 0 keeps the goblin's own
-        if let Some(&mtlot::Value::Int(exp)) = spawn.record.get("mExperienceOW") {
-            if exp > 0 {
-                fight.goblins.last_mut().expect("just added").exp = exp as u32;
-            }
-        }
+        // the placement's stat rates and experience override
+        let owner = ddhost::spawns::add_placed_goblin(fight, spawn);
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
@@ -1308,12 +1358,17 @@ pub fn step(
         play::orbit(st, &buttons, &mouse);
     }
     // Local input: talk and menu keys first, the rest to the host.
-    let near = s.npc_near();
+    // Local keyboard mapping is viewer policy: E for seat0, numpad Enter
+    // for seat1. Host dialogue ownership is the same for either seat.
+    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
+    let talk_press = if e_press { Some(0) }
+        else if !pause.paused && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
+        else { None };
+    let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
         sim: play::p1_input(&keys, &buttons, st.cam_yaw),
         interact: false,
     };
-    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
     if s.world_menu().is_some() {
         input.sim = Input {
             camera_yaw: st.cam_yaw,
@@ -1336,19 +1391,23 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-        let digit = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
-            .iter()
-            .position(|&k| keys.just_pressed(k));
+        let talk_player = s.talk.as_ref().unwrap().player;
+        let choices = if talk_player == 0 {
+            [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
+        } else {
+            [KeyCode::Numpad1, KeyCode::Numpad2, KeyCode::Numpad3, KeyCode::Numpad4]
+        };
+        let digit = choices.iter().position(|&k| keys.just_pressed(k));
         let has_choices = s.talk.as_ref().is_some_and(|t| !t.choices.is_empty());
         if has_choices {
             if let Some(i) = digit {
-                match s.host.talk_choose(0, i as u8) {
+                match s.host.talk_choose(talk_player, i as u8) {
                     Ok(o) => s.show_talk(&o.events),
                     Err(e) => warn!("talk: {e}"),
                 }
             }
-        } else if e_press {
-            match s.host.talk_next(0) {
+        } else if talk_press == Some(talk_player) {
+            match s.host.talk_next(talk_player) {
                 Ok(o) => s.show_talk(&o.events),
                 Err(e) => {
                     warn!("talk: {e}");
@@ -1361,9 +1420,9 @@ pub fn step(
             camera_yaw: st.cam_yaw,
             ..Default::default()
         };
-    } else if e_press && near.is_some() {
+    } else if talk_press.is_some() && near.is_some() {
         let npc = near.unwrap();
-        match s.talk_npc(0, npc) {
+        match s.talk_npc(talk_press.unwrap(), npc) {
             Ok(o) => s.show_talk(&o.events),
             Err(e) => info!("opening: NPC {npc}: {e}"),
         }
@@ -1445,6 +1504,10 @@ pub fn step(
                 break;
             }
         };
+        if let Some(error) = s.host.world.cameras.as_ref().and_then(|c|c.error.as_ref()) {
+            s.failure = Some(format!("authored camera request: {error}"));
+            break;
+        }
         s.npc_requests(&report.npc_requests);
         s.quick_items.rewards(&report.requests);
         for r in &report.requests {
@@ -1461,6 +1524,7 @@ pub fn step(
                         let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
                             &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
                             *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, *stage)?;
                         s.host.doors = None;
                         st.door_collision = Default::default();
                         st.terrain = terrain.clone();
@@ -1962,13 +2026,15 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let d = s.demo.as_mut().unwrap();
         d.check.0 = now;
         if outcome {
-            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> RoadWalk", w_bit(s, 20), w_bit(s, 30));
+            let next = if w_bit(s, 20) { Step::ThankReynard } else { Step::RoadWalk };
+            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> {next:?}", w_bit(s, 20), w_bit(s, 30));
             let d = s.demo.as_mut().unwrap();
-            d.step = Step::RoadWalk;
+            d.step = next;
             d.since = now;
+            d.talked = false;
             d.path.clear();
             d.planning = None;
-        } else if alive == 0 || now - since > 240.0 {
+        } else if now - since > 240.0 {
             info!("opening demo: Rescue done without an outcome -> Done");
             d.step = Step::Done;
             d.since = now;
@@ -2037,7 +2103,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
     // With DDVIEW_DEMO_FIGHT the Arisen defends itself in the field: once
     // a live goblin is within 10 m it fights with ordinary inputs (the
     // goblins run in and attack; an idle Arisen would die before Rescue).
-    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RoadWalk)
+    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RescueApproach | Step::ThankReynard | Step::ReynardRepeat | Step::RoadWalk)
         && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
         && demo_goblin_near(s, 1000.0)
     {
@@ -2071,7 +2137,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         // Walk toward the authored q2 field event volume; stop once the
         // actual simulated position crosses a cell, before claiming any
         // encounter outcome. No fixture NPC or quest state is changed.
-        Step::FieldWalk => s.host.story.as_ref().and_then(|story| {
+        Step::FieldWalk | Step::RescueApproach => s.host.story.as_ref().and_then(|story| {
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
@@ -2079,6 +2145,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event2")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
+        Step::ThankReynard | Step::ReynardRepeat => s.host.story_npc_position(304).map(Vec3::from),
         Step::Gate | Step::FieldSettle | Step::Rescue | Step::Done => None,
     };
     if (now % 2.0) < 0.04 {
@@ -2239,7 +2306,19 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             next = Some(Step::FieldSettle);
         }
         Step::FieldSettle if now - d.since >= 30.0 => {
-            next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::Rescue } else { Step::Done })
+            next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::RescueApproach } else { Step::Done })
+        }
+        Step::RescueApproach if w.quest_bit(2, 25) || w.quest_bit(2, 20) || w.quest_bit(2, 30) => {
+            // q0002_event1 sets25 after actual Area entry/camera request.
+            // Existing main-script outcomes also permit the next real check.
+            // No flag is written by this input driver.
+            next = Some(Step::Rescue);
+        }
+        Step::ThankReynard if w.quest_bit(2, 88) && s.talk.is_none() => {
+            next = Some(Step::ReynardRepeat);
+        }
+        Step::ReynardRepeat if d.talked && s.talk.is_none() => {
+            next = Some(Step::RoadWalk);
         }
         Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
             info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
@@ -2251,7 +2330,12 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         }
         _ => {}
     }
-    let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400))
+    // Authored q0002_n304's ready loop has both Loop and Talk true;
+    // tremble3226 has Talk false. Wait for the real actor, not a timer.
+    let reynard_ready = s.host.story_npc_motion(304)
+        .is_some_and(|actor| actor.authored.looping && actor.authored.talk);
+    let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400)
+        || (step == Step::ThankReynard && reynard_ready) || step == Step::ReynardRepeat)
         && target.is_some_and(|t| (Vec3::new(t.x - p.x, 0.0, t.z - p.z)).length() <= 150.0)
         && now - d.last_talk > 1.5;
     if talk_due {
@@ -2272,6 +2356,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         d.step_origin = p;
         d.check = (now, p);
         d.last_talk = 0.0;
+        if matches!(n, Step::ThankReynard | Step::ReynardRepeat) { d.talked = false; }
     }
     if let (Some(yaw), Some(pl)) = (face, s.host.sim.player_mut(0)) {
         // the demo turns the Arisen to the table (the scenario's angle
@@ -2291,12 +2376,16 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             }
         } else if let Some(d) = s.demo.as_mut() {
             if !d.talked || step == Step::Q0002Event {
-                d.talked = true;
-                let npc = if step == Step::Q0002Event { 1 } else { 2 };
+                let npc = match step {
+                    Step::Q0002Event => 1,
+                    Step::ThankReynard | Step::ReynardRepeat => 304,
+                    _ => 2,
+                };
                 match s.talk_npc(0, npc) {
                     Ok(o) => {
+                        if let Some(d) = s.demo.as_mut() { d.talked = true; }
                         s.show_talk(&o.events);
-                        s.shot("5-talk-quina");
+                        if npc == 2 { s.shot("5-talk-quina"); }
                     }
                     Err(e) => warn!("demo: talk: {e}"),
                 }
@@ -2641,7 +2730,7 @@ impl RoutePlan {
                 return None;
             }
             let Some((_, key)) = open.pop() else {
-                return Some(vec![]);
+                return Some(partial_path(nodes, visited, *target));
             };
             expanded = true;
             if !visited.insert(key) {
@@ -2660,7 +2749,7 @@ impl RoutePlan {
                 return Some(path);
             }
             if visited.len() > 60000 {
-                return Some(vec![]);
+                return Some(partial_path(nodes, visited, *target));
             }
             for dx in -1..=1i32 {
                 for dz in -1..=1i32 {
@@ -2707,6 +2796,36 @@ impl RoutePlan {
             }
         }
     }
+}
+
+/// When the planner is exhausted (the goal lies beyond the loaded
+/// collision, or the node cap): the path to the explored point nearest the
+/// goal, if it is at least 10 m closer than the start, else none. Walking
+/// there streams in the next cells and the demo plans again.
+fn partial_path(
+    nodes: &HashMap<RouteCell, RouteNode>,
+    visited: &std::collections::HashSet<(i32, i32)>,
+    target: Vec3,
+) -> Vec<Vec3> {
+    let distance = |p: Vec3| (p.x - target.x).hypot(p.z - target.z);
+    let from = distance(nodes[&(0, 0)].0);
+    let Some((best, _)) = visited
+        .iter()
+        .map(|&k| (k, distance(nodes[&k].0)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|&(_, d)| d < from - 1000.0)
+    else {
+        return vec![];
+    };
+    let mut path = vec![];
+    let mut k = best;
+    while k != (0, 0) {
+        let (p, _, parent) = nodes[&k];
+        path.push(p);
+        k = parent;
+    }
+    path.reverse();
+    path
 }
 
 #[cfg(test)]
@@ -2792,6 +2911,25 @@ mod tests {
             .map(|p| (p.npc, p.target.group, p.target.index)).collect();
         println!("field loaded cells {cells:?}: admitted {admitted:?}");
         assert!(admitted.contains(&(304, 4, 0)));
+        session.bind_npc_combat(&vfs, &[]).unwrap();
+        assert!(session.host.story_npc_combat_owner(owner).is_none(),
+            "admission alone is not a physical combat body");
+        // Explicit installed graph/model-readiness fixture; no view completion
+        // or quest outcome is fabricated. The ordinary route calls this only
+        // after successful model creation and canonical motion binding.
+        let target = session.host.story_npc_intels().find(|p| p.npc == 304).unwrap().target;
+        session.host.apply_story_npc(100, target, r"ai\fsm\npc\st100\quest\q0002_n304");
+        session.npc_authored_motion.bind(&mut *session.host, &[304]).unwrap();
+        for _ in 0..20 { session.host.tick(&Default::default()).unwrap(); }
+        session.bind_npc_combat(&vfs, &[304]).unwrap();
+        let combat_owner = session.host.story_npc_combat_owner(owner).expect("real motion/body binds combat");
+        session.host.tick(&Default::default()).unwrap();
+        assert_eq!(session.host.story_npc_combat_facts(owner).unwrap().hp, 1000.0);
+        let combat = &session.host.fight.as_ref().unwrap().npcs[&combat_owner];
+        assert!(!combat.fighter.hurts.is_empty());
+        assert!(session.host.fight.as_ref().unwrap().npc_errors.is_empty());
+        session.bind_npc_combat(&vfs, &[304]).unwrap();
+        assert_eq!(session.host.story_npc_combat_owner(owner), Some(combat_owner));
         assert!(session.host.story_npc_intels().all(|p| p.stage == 100));
         assert!(!session.npc_adapter.sync_field_layouts(&vfs, 100, &[cells[0], cells[0]]).unwrap());
         session.sync_npc_intels().unwrap();
@@ -2811,6 +2949,8 @@ mod tests {
         story.world.stage_no = STAGE;
         session.sync_npc_intels().unwrap();
         assert!(session.host.story_npc_lifetime(304).is_none());
+        session.host.tick(&Default::default()).unwrap();
+        assert!(!session.host.fight.as_ref().unwrap().npcs.contains_key(&combat_owner));
         let story = session.host.story.as_mut().unwrap();
         story.stage.stage_no = 100;
         story.world.stage_no = 100;
@@ -2820,6 +2960,47 @@ mod tests {
         assert_eq!(session.host.roster.ids().count(), 2);
         assert!(session.npc_adapter.sync_field_layouts(&vfs, STAGE, &[]).unwrap());
         assert!(!session.npc_adapter.layouts.contains_key(&100));
+    }
+
+    #[test]
+    fn installed_rescue_driver_walks_to_real_area_and_empty_fight_does_not_fake_outcome() {
+        use ddstory::data::Data;
+        struct DriverGround;
+        impl ddsim::Ground for DriverGround {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { None }
+        }
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let exe = native.parent().unwrap().join("DDDA.exe");
+        let mut session = prepare(native, &exe, 2, true, None, false).unwrap();
+        let data = &session.host.story.as_ref().unwrap().data;
+        let scenarios = ddstory::scenario::Scenarios::load(&data.scenarios(100).unwrap()).unwrap();
+        let index = scenarios.tasks[4].iter().position(|entry| entry.name == "q0002_event1").unwrap();
+        let target = benchmark_place_from_scenarios(&scenarios, 4, index as u32).unwrap().0;
+        let story = session.host.story.as_mut().unwrap();
+        story.stage.stage_no = 100; story.world.stage_no = 100;
+        story.stage.scenarios = scenarios;
+        let position = (target + Vec3::X * 1000.0).to_array(); // Explicit isolated position fixture.
+        session.host.sim.player_mut(0).unwrap().position = position;
+        session.demo.as_mut().unwrap().step = Step::RescueApproach;
+        let input = demo_input(&mut session, 1.0, &DriverGround);
+        assert_eq!(input.sim.stick, [0.0, 1.0], "ordinary movement heads toward installed Area");
+        assert_eq!(session.host.sim.player(0).unwrap().position, position, "driver never places the body");
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::RescueApproach);
+        assert!(!session.world().quest_bit(2, 25));
+        assert!(!session.world().quest_bit(2, 20));
+        // Explicit observation fixture: actual event1 entry supplies this in production.
+        session.host.story.as_mut().unwrap().world.set_quest_bit(2, 25, true);
+        demo_input(&mut session, 2.0, &DriverGround);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Rescue);
+        assert!(session.host.fight.as_ref().unwrap().goblins.is_empty());
+        demo_rescue(&mut session, 3.0);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::Rescue, "zero live enemies is not an outcome");
+        assert!(!session.world().quest_bit(2, 20));
+        // Explicit independently observed success fixture, not manufactured by the driver.
+        session.host.story.as_mut().unwrap().world.set_quest_bit(2, 20, true);
+        demo_rescue(&mut session, 4.0);
+        assert_eq!(session.demo.as_ref().unwrap().step, Step::ThankReynard);
     }
 
     #[test]
@@ -2901,6 +3082,22 @@ mod tests {
         assert_eq!(actual.far, original.far);
         assert_eq!(actual.aspect_ratio, original.aspect_ratio);
         assert!(!saved.restore(&mut projection));
+    }
+    /// A goal beyond the loaded collision (a 40 m plate here) gives the
+    /// path to the plate's edge nearest it, not an empty plan.
+    #[test]
+    fn a_goal_beyond_the_loaded_ground_gives_a_partial_path_toward_it() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below_y: f32) -> Option<f32> {
+                (x.abs() < 2000.0 && z.abs() < 2000.0 && below_y >= 0.0).then_some(0.0)
+            }
+        }
+        let goal = Vec3::new(10_000.0, 0.0, 0.0);
+        let path = plan_path(&Plate, &ddsim::sweep::SweepParam::default(), Vec3::ZERO, goal);
+        let end = *path.last().expect("a partial path");
+        assert!(end.x > 1500.0 && end.x < 2000.0, "{end:?}");
+        assert!((end - goal).length() < goal.length() - 1000.0);
     }
     #[test]
     fn demo_navigation_cassardis_door() {

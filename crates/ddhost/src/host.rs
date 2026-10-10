@@ -18,12 +18,18 @@ use std::collections::BTreeSet;
 /// menus). Until those systems exist in headless crates, a stand-in
 /// answers (`ddstory::scripted::ScriptedHost`).
 pub trait StoryWorld: ddstory::Host {
+    /// Advance host-owned authored cameras before story completion checks.
+    fn camera_step(&mut self, _seconds: f32) {}
+    /// Stage event camera input policy, applied independently to every seat.
+    fn player_actions_blocked(&self, _seat: PlayerId) -> bool { false }
     /// Actual creation/destruction of a host-owned NPC intel and its
     /// normal controller. This says nothing about HP or a rendered body.
     fn observe_npc_intel(&mut self, _stage: u32, _target: ddstory::Target, _present: bool) {}
     /// Observe combat at the beginning of the story phase, before this
     /// frame's hit pass. Implementations bind actors to placement keys.
     fn observe_fight(&mut self, _fight: Option<&ddenemyrt::fight::Fight>) {}
+    fn observe_npc_combat(&mut self, _stage: u32, _target: ddstory::Target,
+        _facts: crate::npc_combat::Facts) {}
     /// Perform this frame's requests (stage `stage` is loaded).
     fn handle(&mut self, stage: u32, requests: &[Request]);
     /// Completions and facts due this frame, in the order they happened.
@@ -121,6 +127,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     /// NPC schedules and talks (ddnpcrt).
     pub npcs: ddnpcrt::NpcRuntime,
     pub story_npcs: crate::story_npcs::StoryNpcs,
+    pub npc_combat: crate::npc_combat::NpcCombat,
     /// Current stage's observed completed collision cells, supplied by its
     /// loading adapter before the story phase; clear on leaving the field.
     pub scenario_field_cells: Option<ddstory::scenario::LoadedFieldCells>,
@@ -174,6 +181,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             economy: ddeconomy::Economy::default(),
             npcs: ddnpcrt::NpcRuntime::default(),
             story_npcs: Default::default(),
+            npc_combat: Default::default(),
             scenario_field_cells: None,
             npc_errors: vec![],
             npc_parked: Default::default(),
@@ -332,6 +340,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.frame += 1;
         // Step 6, sMain::vf06 (0x00DBFA90): the step. Constant here.
         let time = self.clock.story_time();
+        self.world.camera_step(self.clock.seconds());
         // Steps 18-20, sGameSys::vf06 then sAreaExt::vf06: the managers of
         // aGameMain (sQuestManager's QCT), aStage's mode (events) and
         // sScenario, then (step 36, line 0) the story scripts. ddstory runs
@@ -339,6 +348,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // frame come first. The story sees every Arisen where the last frame
         // left them: line 10 has not moved yet.
         self.world.observe_fight(self.fight.as_ref());
+        self.sync_npc_combat();
+        self.observe_npc_combat();
         let events = self.world.events();
         // Step 20, aGameMain's managers: sNpcManager::vf06 (0x00475AD0)
         // restocks the shops once per new day, before sQuestManager.
@@ -389,6 +400,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.sync_hired_pawn_bodies();
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
+        let effective_inputs: FrameInputs = inputs.iter().map(|(&id, &input)| {
+            (id, if self.world.player_actions_blocked(id) { Default::default() } else { input })
+        }).collect();
+        let inputs = &effective_inputs;
         let presses = self.edges.interact_presses(inputs);
         // Step 30 (sAI objects): no headless AI objects yet. Step 33: hits
         // from the volumes the fight switched on last frame, damage applied,
@@ -416,6 +431,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // pipeline). Their seats are sim players outside the roster.
         if let Some(f) = self.fight.as_mut() {
             for (id, i) in f.pawn_inputs(&self.sim, step) {
+                // 0x00B61A20, checks 0x00B62303..0x00B6239B: camera
+                // action locks include the Pawn actor domain (flag7).
+                // AI/world phases still run; only its generated pad is gated.
+                let i = if self.world.player_actions_blocked(id) { Default::default() } else { i };
                 sim_inputs.entry(id).or_insert(i);
             }
         }
@@ -459,6 +478,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut npc_requests = self.step_npcs()?;
         npc_requests.extend(self.step_story_npcs()?);
         self.record_story_npc_requests(&npc_requests);
+        self.sync_npc_combat();
         self.step_doors(&presses);
         for request in &npc_requests {
             if let ddnpcrt::schedule::Request::Gsf { no, value } = request {
@@ -545,6 +565,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         h.debug(&self.economy).debug(&self.progression);
         h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
+        h.debug(&self.saved_npc_quest_rows());
         h.finish()
     }
 
@@ -596,6 +617,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
+        self.save_npc_quest_controls(&mut f);
         Ok(f)
     }
 
@@ -666,6 +688,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for s in self.roster.ids().collect::<Vec<_>>() {
             self.economy.wallet(s);
         }
+        self.load_npc_quest_controls(f)?;
         self.refresh_party();
         Ok(())
     }
