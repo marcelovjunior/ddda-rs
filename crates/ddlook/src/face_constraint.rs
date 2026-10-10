@@ -21,6 +21,43 @@ pub fn binding(id: u8) -> Option<(u32, Option<u8>)> {
     })
 }
 
+/// Joint evaluation order from parent and configured constraint pivots.
+/// MOD order alone does not put eye pivots before their dependent lids.
+// Translated from 0x01054540 / 0x01054610 (dependency ranks) and
+// 0x01054690 (sort), DDDA.exe 2017-12-13 Steam. uCnsEdit exposes its
+// pivot through vf21/vf22, 0x0086d5a0 / 0x0086d5e0.
+pub fn order(parents: &[Option<usize>], pivots: &[Option<usize>]) -> Vec<usize> {
+    fn rank(i: usize, parents: &[Option<usize>], pivots: &[Option<usize>],
+        ranks: &mut [Option<u32>], visiting: &mut [bool]) -> u32 {
+        if let Some(value) = ranks[i] { return value; }
+        visiting[i] = true;
+        let value = if let Some(parent) = parents[i] {
+            let mut depth = rank(parent, parents, pivots, ranks, visiting);
+            if let Some(pivot) = pivots.get(i).copied().flatten() {
+                // 0x01054610 skips a dependency already being visited.
+                if !visiting[pivot] {
+                    depth = depth.max(rank(pivot, parents, pivots, ranks, visiting));
+                }
+            }
+            depth + 1
+        } else { 0 };
+        visiting[i] = false;
+        ranks[i] = Some(value);
+        value
+    }
+    let n = parents.len();
+    let mut ranks = vec![None; n];
+    let mut visiting = vec![false; n];
+    for i in 0..n { rank(i, parents, pivots, &mut ranks, &mut visiting); }
+    let mut order: Vec<usize> = (0..n).collect();
+    for i in 0..n.saturating_sub(1) {
+        for j in i + 1..n {
+            if ranks[order[j]] < ranks[order[i]] { order.swap(i, j); }
+        }
+    }
+    order
+}
+
 fn identity() -> Matrix {
     std::array::from_fn(|i| if i / 4 == i % 4 { 1.0 } else { 0.0 })
 }
@@ -129,6 +166,15 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constraint_pivot_rank_precedes_earlier_mod_lid_and_its_child() {
+        assert_eq!(order(&[None, Some(0), Some(0), Some(1)],
+            &[None, Some(2), None, None]), [0, 2, 1, 3]);
+        // Source visiting flag breaks reciprocal constraint dependencies.
+        assert_eq!(order(&[None, Some(0), Some(0)],
+            &[None, Some(2), Some(1)]), [0, 2, 1]);
+    }
 
     fn matrix(position: [f32; 3], angle: f32, scale: [f32; 3]) -> Matrix {
         let mut m = rotation([0.0, 0.0, angle]);

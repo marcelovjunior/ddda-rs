@@ -233,6 +233,8 @@ pub struct Morph {
     /// Base-model bones in file order (parents first): entity and parent
     /// index.
     pub bones: Vec<(Entity, Option<usize>)>,
+    /// Original dependency ranks: parents and constraint pivots first.
+    pub order: Vec<usize>,
     /// Per bone: its uCnsEdit records in order (body, then face).
     pub joint: Vec<Vec<Edit>>,
     /// uModel +0x60.
@@ -273,8 +275,8 @@ pub struct Edit {
 fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
     let n = m.bones.len();
     let root = Mat4::from_scale(m.model_scale);
-    let mut world: Vec<Mat4> = Vec::with_capacity(n);
-    for i in 0..n {
+    let mut world = vec![Mat4::IDENTITY; n];
+    for &i in &m.order {
         let (e, parent) = m.bones[i];
         let local = joints.get(e).copied().unwrap_or_default();
         m.base[i] = local;
@@ -283,7 +285,7 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
         for e in &m.joint[i] {
             if matches!(e.kind, 0xd..=0x10) {
                 let (z, y, x) = e.rotation.to_euler(EulerRot::ZYX);
-                let pivot = e.pivot.and_then(|p| world.get(p)).map(Mat4::to_cols_array);
+                let pivot = e.pivot.map(|p| world[p].to_cols_array());
                 if let Some(corrected) = ddlook::face_constraint::apply(
                     e.kind, w.to_cols_array(), pw.to_cols_array(), pivot,
                     e.offset.to_array(), e.scale.to_array(), [x, y, z],
@@ -309,7 +311,7 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
             // column form W x T(offset) x R x S(k).
             w = w * Mat4::from_translation(e.offset) * Mat4::from_quat(e.rotation) * Mat4::from_scale(k);
         }
-        world.push(w);
+        world[i] = w;
     }
     // Only bones under an edit are written back: the TRS decomposition
     // would garble the others (mirrored bones, shear) for nothing.
@@ -567,7 +569,7 @@ pub fn spawn_assembled_hands(
             .collect();
         // Body edits (ddlook::morph), then face edits (ddlook::face). Joint
         // 0x90 gets both; their order is *assumed*.
-        let joint = model
+        let joint: Vec<Vec<Edit>> = model
             .bones
             .iter()
             .map(|x| {
@@ -605,7 +607,11 @@ pub fn spawn_assembled_hands(
             .collect();
         let base = model.bones.iter().map(|x| Transform::from_matrix(Mat4::from_cols_array(&x.local))).collect();
         let model_scale = body.map_or(Vec3::ONE, |b| Vec3::from(b.model_scale));
-        Morph { bones, joint, model_scale, base, attach }
+        let order = ddlook::face_constraint::order(
+            &bones.iter().map(|&(_, parent)| parent).collect::<Vec<_>>(),
+            &joint.iter().map(|edits| edits.iter().find_map(|edit| edit.pivot)).collect::<Vec<_>>(),
+        );
+        Morph { bones, order, joint, model_scale, base, attach }
     });
     commands.entity(root).insert(Playback {
         motion,
@@ -1170,7 +1176,7 @@ mod bounds_tests {
 #[cfg(test)]
 mod eyebrow_install_tests {
     #[test]
-    fn eyelid_constraint_uses_current_eye_pivot_without_accumulating_morphs() {
+    fn eyelid_uses_later_mod_eye_pivot_without_accumulating_morphs() {
         use super::*;
         use bevy::ecs::system::SystemState;
         let mut world = World::new();
@@ -1184,13 +1190,14 @@ mod eyebrow_install_tests {
         let eye = world.spawn(eye_pose).id();
         let lid = world.spawn(lid_pose).id();
         let mut morph = Morph {
-            bones: vec![(parent, None), (eye, Some(0)), (lid, Some(0))],
-            joint: vec![vec![], vec![], vec![Edit {
-                joint_id: 82, pivot: Some(1), kind: 0xd,
+            bones: vec![(parent, None), (lid, Some(0)), (eye, Some(0))],
+            order: ddlook::face_constraint::order(&[None, Some(0), Some(0)], &[None, Some(2), None]),
+            joint: vec![vec![], vec![Edit {
+                joint_id: 82, pivot: Some(2), kind: 0xd,
                 scale: Vec3::new(1.2, 0.85, 1.1), child: Vec3::ONE,
                 offset: Vec3::new(0.2, -0.3, 0.5), rotation: Quat::IDENTITY,
-            }]],
-            model_scale: Vec3::ONE, base: vec![parent_pose, eye_pose, lid_pose], attach: vec![],
+            }], vec![]],
+            model_scale: Vec3::ONE, base: vec![parent_pose, lid_pose, eye_pose], attach: vec![],
         };
         let mut state: SystemState<Query<&mut Transform>> = SystemState::new(&mut world);
         let mut first = None;
@@ -1209,7 +1216,7 @@ mod eyebrow_install_tests {
             if let Some(previous) = first {
                 assert_eq!(local, previous);
             } else { first = Some(local); }
-            assert_eq!(morph.base[2], lid_pose);
+            assert_eq!(morph.base[1], lid_pose);
         }
     }
 
