@@ -606,6 +606,7 @@ fn spawn_meshes(
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
     let mut bound_offset = 0;
+    let brow_debug = std::env::var_os("DDVIEW_BROW_DEBUG").is_some();
     for m in &model.meshes {
         let first_bound = (m.weight_bound_count > 0)
             .then(|| model.weight_bounds.get(bound_offset..bound_offset + 144))
@@ -684,6 +685,7 @@ fn spawn_meshes(
                 // stage is. Cloth is mostly two-sided: culling its back
                 // faces opened holes onto the body.
                 let mut is_eyebrow = false;
+                let mut is_brow_overlay = false;
                 let shading = mrl.as_ref().and_then(|l| {
                     let mat = l.by_name(&name)?;
                     let mut s = mtmrl::shading::describe(mat, l, mfx);
@@ -691,6 +693,7 @@ fn spawn_meshes(
                     // to draw material +0x18. 0x00843940 identifies colour
                     // groups 5/6 here; group 6 also has eyebrow texture/UVs.
                     let group = (mat.bits[0] >> 23) & 0xff;
+                    is_brow_overlay = group == 6;
                     if let Some(brow) = eyebrow.filter(|_| group == 5 || group == 6) {
                         is_eyebrow = true;
                         s.albedo_color = brow.color;
@@ -720,6 +723,24 @@ fn spawn_meshes(
                     let b = m.base.base_color.to_linear();
                     m.base.base_color = Color::linear_rgba(b.red * c[0], b.green * c[1], b.blue * c[2], b.alpha);
                     material = PartMaterial::Dd(std::sync::Arc::new(DdSlot { material: m, handle: Default::default() }));
+                }
+                if brow_debug && is_brow_overlay {
+                    // Diagnostic viewer choice: isolate the overlay geometry
+                    // from texture alpha and lighting. Keep authored culling
+                    // and all mesh/group admission rules unchanged.
+                    let cull_mode = match &material {
+                        PartMaterial::Standard(h) => materials.get(h).and_then(|m| m.cull_mode),
+                        PartMaterial::Dd(slot) => slot.material.base.cull_mode,
+                    };
+                    material = PartMaterial::Standard(materials.add(StandardMaterial {
+                        base_color: Color::srgb(1.0, 0.0, 0.0),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Opaque,
+                        depth_bias: 5.0,
+                        cull_mode,
+                        ..default()
+                    }));
+                    info!("BROW_DEBUG actor={root:?} model={model_path} material={name} opaque-red depth_bias=5");
                 }
                 material
             })
