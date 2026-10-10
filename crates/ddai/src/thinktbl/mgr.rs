@@ -27,6 +27,13 @@ pub trait Host {
     /// +0x50, a row commit with id `id` (uEm0100: 0x008ac270 -> 0x008abfa0
     /// for ids from 1000). A nonzero result is stored at +0x1240.
     fn set(&mut self, id: u32, arg: u32) -> Result<u32, Error>;
+    /// A setter may replace target data while this table is executing.
+    /// uEm set1003 (0x008ab5b0) writes slot7 through 0x008b72a0/80d0.
+    /// Existing hosts keep their ordinary setter behavior by default.
+    fn set_with_manager(&mut self, id: u32, arg: u32, manager: &mut ThinkMgr) -> Result<u32, Error> {
+        let _ = manager;
+        self.set(id, arg)
+    }
     /// +0x5c, called before a row is tried while target selection is
     /// explicit (+0xe70) and no measurement is pinned (+0xe88 & 0x17);
     /// uEm0100's 0x00aada50 makes the slot's object the unit's attack
@@ -808,7 +815,7 @@ impl ThinkMgr {
     fn triple_commit(&mut self, host: &mut dyn Host, row: &Act, i: usize) -> Result<(), Error> {
         let (op, a, b) = row.triple(i);
         if op & 0xffff == 2 && op & 0xffff_0000 == 0 {
-            let r = host.set(a, b)?;
+            let r = host.set_with_manager(a, b, self)?;
             if r != 0 {
                 self.set_result = r;
             }
@@ -1210,7 +1217,7 @@ impl ThinkMgr {
             0x79 => {
                 let (op, ta, tb) = (rec.word(0x38), rec.word(0x3c), rec.word(0x40));
                 if op & 0xffff == 2 && op & 0xffff_0000 == 0 {
-                    let r = host.set(ta, tb)?;
+                    let r = host.set_with_manager(ta, tb, self)?;
                     if r != 0 {
                         self.set_result = r;
                     }
@@ -1931,6 +1938,46 @@ mod tests {
     }
 
     const T: u32 = 0x1000;
+
+    #[test]
+    fn world_setters_can_install_a_target_before_the_next_command() {
+        struct SlotSetter;
+        impl Host for SlotSetter {
+            fn check(&mut self, _: u32, _: u32) -> Result<bool, Error> {
+                Ok(true)
+            }
+            fn set(&mut self, _: u32, _: u32) -> Result<u32, Error> {
+                panic!("setter must receive the executing manager")
+            }
+            fn set_with_manager(&mut self, id: u32, arg: u32, mgr: &mut ThinkMgr) -> Result<u32, Error> {
+                assert_eq!((id, arg), (1003, 100));
+                mgr.slots[7] = Slot::measure([0.0; 3], 0.0, [0.0, 0.0, 500.0], 0.0, 0);
+                Ok(9)
+            }
+            fn rand(&mut self) -> u32 {
+                0
+            }
+        }
+        let mut record = row(T, 0, 85);
+        record.w[14..17].copy_from_slice(&[2, 1003, 100]);
+        for command in [false, true] {
+            let mut manager = mgr(T, Slot::default());
+            if command {
+                manager
+                    .command(&mut SlotSetter, &record, 0x79, 0, 0, 0, &mut false, false)
+                    .unwrap();
+            } else {
+                manager.triple_commit(&mut SlotSetter, &record, 0).unwrap();
+            }
+            assert_eq!(manager.set_result, 9);
+            assert!(manager.slots[7].valid);
+            manager
+                .command(&mut Fixed { roll: 0 }, &record, 4, 0, 0, 7, &mut false, false)
+                .unwrap();
+            assert_eq!(manager.cur, 7);
+            assert_eq!(manager.slots[manager.cur as usize].dist, 500.0);
+        }
+    }
 
     #[test]
     fn category_selection_uses_valid_distance_order_and_matching_mask() {
