@@ -469,15 +469,19 @@ fn apply(
                         Err(error) => warn!("settings texture {path}: {error}"),
                     }
                 }
-                for (_, mut material) in materials.iter_mut() {
-                    let _ = &mut *material;
-                }
-                for (_, mut material) in dd_materials.iter_mut() {
-                    let _ = &mut *material;
-                }
+                // Assets::iter_mut emits Modified events for yielded assets
+                // (Bevy 0.19.1), invalidating their previous image bindings.
+                for _ in materials.iter_mut() {}
+                for _ in dd_materials.iter_mut() {}
             }
         }
         *previous_filtering = g.filtering;
+    }
+    // This port reads depth from the native material's alpha output. The
+    // viewer's fallback PBR mode has no such channel, so retain main.rs's
+    // original-lighting guard rather than treating its ordinary alpha as Z.
+    if args.light.is_none() {
+        return;
     }
     if let (Some(enabled), Some(source)) = (g.dof, source) {
         let filter = crate::stage::post::DdPost::dof_filter(source.vfs, stage);
