@@ -57,9 +57,26 @@ fn configure_mesh_builder(app: &mut App, use_gpu: bool) {
 mod mesh_builder_tests {
     use super::*;
     use bevy::app::SubApp;
-    use bevy::core_pipeline::core_3d::Opaque3d;
+    use bevy::core_pipeline::core_3d::{Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey};
     use bevy::render::{RenderApp, batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
-        render_phase::{BinnedRenderPhaseBatchSets, BinnedRenderPhaseType, ViewBinnedRenderPhases}, view::RetainedViewEntity};
+        render_phase::{BinnedRenderPhaseType, DrawFunctionId, InputUniformIndex, ViewBinnedRenderPhases},
+        render_resource::CachedRenderPipelineId, view::RetainedViewEntity};
+
+    fn queue_one_opaque_mesh(support: &GpuPreprocessingSupport) -> (usize, usize) {
+        let entity = Entity::from_raw_u32(1).unwrap();
+        let view = RetainedViewEntity::new(entity.into(), None, 0);
+        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
+        phases.prepare_for_new_frame(view, support.min(GpuPreprocessingMode::Culling));
+        let phase = phases.get_mut(&view).unwrap();
+        phase.add(
+            Opaque3dBatchSetKey { pipeline: CachedRenderPipelineId::INVALID,
+                draw_function: DrawFunctionId(0), material_bind_group_index: None,
+                slabs: default(), lightmap_slab: None },
+            Opaque3dBinKey { asset_id: AssetId::<Mesh>::invalid().untyped() },
+            (entity, entity.into()), InputUniformIndex::default(), BinnedRenderPhaseType::mesh(true, support),
+        );
+        (phase.batchable_meshes.len(), phase.multidrawable_meshes.len())
+    }
 
     #[test]
     fn cpu_builder_queues_cpu_phase_buffers_even_on_a_gpu_capable_device() {
@@ -71,10 +88,8 @@ mod mesh_builder_tests {
         let support = app.sub_app(RenderApp).world().resource::<GpuPreprocessingSupport>();
         assert!(support.max_supported_mode == GpuPreprocessingMode::None);
         assert!(matches!(BinnedRenderPhaseType::mesh(true, support), BinnedRenderPhaseType::BatchableMesh));
-        let view = RetainedViewEntity::new(Entity::from_raw_u32(1).unwrap().into(), None, 0);
-        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
-        phases.prepare_for_new_frame(view, support.min(GpuPreprocessingMode::Culling));
-        assert!(matches!(phases.get(&view).unwrap().batch_sets, BinnedRenderPhaseBatchSets::DynamicUniforms(_)));
+        // CPU batching visits batchable_meshes, never multidrawable_meshes.
+        assert_eq!(queue_one_opaque_mesh(support), (1, 0));
     }
 
     #[test]
@@ -86,10 +101,7 @@ mod mesh_builder_tests {
         configure_mesh_builder(&mut app, true);
         let support = app.sub_app(RenderApp).world().resource::<GpuPreprocessingSupport>();
         assert!(support.max_supported_mode == GpuPreprocessingMode::Culling);
-        let view = RetainedViewEntity::new(Entity::from_raw_u32(1).unwrap().into(), None, 0);
-        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
-        phases.prepare_for_new_frame(view, support.min(GpuPreprocessingMode::Culling));
-        assert!(matches!(phases.get(&view).unwrap().batch_sets, BinnedRenderPhaseBatchSets::MultidrawIndirect(_)));
+        assert_eq!(queue_one_opaque_mesh(support), (0, 1));
     }
 }
 
