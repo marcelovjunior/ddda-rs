@@ -70,12 +70,24 @@ names exactly what still blocks it with measurements.
   `Victim::Npc` was missing from three `ddnet/src/mirror.rs` matches
   (431/446/489). Reported on board #5007/#5012 to the S34 owner; no
   renderer performance conclusion follows from this build failure.
+  Head fixed the matches in `e268c65`, integrated on this task branch as
+  `c5e0760`; the profiling changes still await their own source build.
+- Launcher additionally supports explicit `-Backend vulkan|dx12` (default
+  `auto`) and records optional NVIDIA utilization/clock/power-state CSV.
+  This enables an unchanged-scene experiment: Bevy 0.19.1 release
+  `WgpuSettings` retains indirect-call validation when its requested
+  backends include DX12, even if the selected adapter is Vulkan; an
+  explicit Vulkan request removes that flag. **Hypothesis only**, not a
+  measured improvement or a new default.
 - Head #4984 requires the original game to remain running for maintainer
   probes. Read-only original PID 23408 3D samples before our captures were
   25–31%. Relative before/after samples must record its concurrent share;
   isolated absolute 180 fps acceptance needs a later maintainer run with
   the original closed. Head currently owns the separate route capture;
-  no S41 GUI capture has started and no GPU lease is held.
+  no S41 GUI capture has started and no GPU lease is held. Head released
+  the completed ordinary route on #5091 and queued S40's camera capture
+  first, then S41. Its observed rescue/thank/repeat route is separate from
+  S41 performance acceptance.
 - Next: build the opt-in profiler after the S34 compatibility fix, obtain
   the free GPU lease, measure identical Cassardis/field scenes and the
   ordinary route, then optimize the largest measured cost.
