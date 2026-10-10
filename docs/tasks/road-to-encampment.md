@@ -36,3 +36,21 @@ Two players walk from Cassardis to the Encampment without a load break or telepo
 ## Results
 
 (filled in by the agent)
+
+### First q3 entry checkpoint (2026-10-09)
+
+- Traced installed q3 graph and seven-row QCT: arrival/Rift contact,
+  NPC camera sequence, cyclops target20:0, report, st210ev00, Barn. The
+  event is after the encounter/report, not simply arrival; full route
+  acceptance remains open.
+- AreaHit act5 party targets translated from5c2d70/7643d0 with current
+  player/pawn observations and explicit any-Arisen co-op semantics.
+  Unknown non-party positions fail explicitly.
+- Task11 NPC archive callback79d730 now respects its authored half-open
+  scene interval; active resource ownership remains unsupported. This
+  lets Encampment's later hydra resource scenario remain inactive at1450.
+- Verified:9 scenario unit tests,1 all/any-target regression,1 installed
+  four-combination q3 entry regression, strict ddstory clippy (existing
+  chunks_exact_to_as_chunks allowance). No original comparison yet.
+- Next: bounded real doorway/door-interaction route, then field walk and
+  stage210 handoff; full cyclops/Rift/NPC systems are separate prerequisites.
