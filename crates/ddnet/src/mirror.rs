@@ -439,7 +439,7 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
             }
         })
         .collect();
-    let enemies = f
+    let mut enemies: Vec<Enemy> = f
         .goblins
         .iter()
         .map(|g| {
@@ -475,5 +475,48 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
             }
         })
         .collect();
+    if let Some(d) = &f.dragon {
+        // Admission and the action bind run on the host. An actor that
+        // has not bound a motion yet has no drawable pose to replicate.
+        if let Some(motion) = d.actor.motion() {
+            let model = d
+                .data
+                .ai
+                .resources
+                .iter()
+                .find(|r| r.class == "rModel" && r.flags & 1 != 0)
+                .expect("loaded dragon body has a bound rModel");
+            let hp_max = match &d.actor.fighter.victim {
+                Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp_max),
+                Victim::Player { hp_max, .. } => *hp_max,
+            };
+            enemies.push(Enemy {
+                id: d.actor.fighter.owner,
+                identity: EnemyIdentity {
+                    family: EnemyFamily::Dragon,
+                    model: model.path.clone(),
+                    banks: d
+                        .data
+                        .body
+                        .banks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, b)| b.as_ref().map(|b| (i as u8, b.path.clone())))
+                        .collect(),
+                },
+                pos: d.actor.pos,
+                rotation: EnemyRotation::Quaternion(d.actor.rotation),
+                scale: d.scale,
+                action: d.actor.current_action().map_or(-1, |a| a as i32),
+                bank: motion.bank,
+                slot: motion.slot,
+                frame: d.actor.frame,
+                hp: d.actor.fighter.victim.hp(),
+                hp_max,
+                dead: d.actor.fighter.victim.dead(),
+            });
+        }
+    }
+    enemies.sort_by_key(|e| e.id);
     (vitals, enemies)
 }

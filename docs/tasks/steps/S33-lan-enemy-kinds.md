@@ -65,3 +65,20 @@ remains. The dragon projection, installed
 mixed dragon/goblin host/guest check and visual check await the reviewed S29
 merge. No original-game or dragon LAN acceptance claim is made by this
 preparation checkpoint.
+
+After reviewed S29 merge `bb68257`, `from_fight` now also projects the canonical
+opening dragon. Model identity comes from its bound `rModel` resource descriptor;
+bank paths come from its loaded body. Quaternion, per-axis scale, frame, HP and
+death come directly from the actor. `Dragon::current_action` exposes the existing
+typed native variants (10/52/53/54), rather than reverse-mapping a motion slot.
+
+The installed mixed-enemy test runs two seats over actual loopback UDP with
+30 ms +/- 10 ms latency and 5% packet loss. It observed all four native entrance
+actions and an actual non-yaw flight rotation, checked the guest's snapshot hash
+and exact identity/pose/motion/HP against that host frame, then closed the host's
+authored LOT admission gate and verified that only the dragon retired. This is
+an isolated entrance fixture, not the ordinary story route or an original-game
+comparison. Focused five tests passed (13.21 seconds compile, 2.89 seconds tests).
+The final full DDNET suite passed 16 tests (5.73 seconds compile); the installed
+mixed test took 3.13 seconds, existing goblin replication 4.53 seconds and story
+replication 5.18 seconds. Final integrated viewer validation/capture is pending.
