@@ -155,6 +155,10 @@ pub struct Fight {
     /// By seat.
     pub arisen: BTreeMap<u8, ArisenFighter>,
     pub goblins: Vec<Goblin>,
+    /// Native D00690/D006C0, owned once by the host. Only appearance draws
+    /// are integrated here: this is not stream-exact with native global
+    /// 018D017C, also consumed by unrelated systems not yet ported.
+    appearance_rng: crate::goblin::equipment::NativeRng,
     /// Ordinary NPCs keyed by their distinct combat owner, never by seat.
     pub npcs: BTreeMap<u32, crate::npc_body::NpcFighter>,
     pub npc_errors: BTreeMap<u32, String>,
@@ -205,6 +209,7 @@ impl Fight {
             data,
             arisen: BTreeMap::new(),
             goblins: Vec::new(),
+            appearance_rng: Default::default(),
             npcs: BTreeMap::new(),
             npc_errors: BTreeMap::new(),
             dragon: None,
@@ -412,8 +417,17 @@ impl Fight {
 
     /// Adds a goblin with its placement's stat rates.
     pub fn add_goblin_placed(&mut self, pos: [f32; 3], yaw: f32, rates: crate::goblin::PlacementRates) -> u32 {
+        self.add_goblin_equipped(pos, yaw, rates, Default::default())
+    }
+
+    /// Authored equipment plus placement rates. One resolved appearance per
+    /// enemy lifetime, independent of player count or presentation frames.
+    pub fn add_goblin_equipped(&mut self, pos: [f32; 3], yaw: f32,
+        rates: crate::goblin::PlacementRates, placement: crate::goblin::equipment::Placement) -> u32 {
         let owner = self.allocate_enemy_owner();
-        self.goblins.push(Goblin::placed(&self.data.goblin, owner, pos, yaw, rates));
+        let mut goblin = Goblin::placed(&self.data.goblin, owner, pos, yaw, rates);
+        goblin.appearance = Some(self.data.goblin.equipment.choose(placement, &mut self.appearance_rng));
+        self.goblins.push(goblin);
         owner
     }
 
@@ -462,6 +476,16 @@ impl Fight {
     /// Step 33: hits from the volumes of the last frame, damage, pools, and
     /// the victims' reactions.
     pub fn hits(&mut self, dt: f32) -> &[HitEvent] {
+        self.hits_observed(dt, None)
+    }
+
+    /// Optional headless diagnostics of actual NPC contact valuation.
+    /// The caller owns the trace storage; normal gameplay does not allocate it.
+    pub fn hits_with_npc_trace(&mut self, dt: f32, trace: &mut Vec<crate::combat::NpcHitTrace>) -> &[HitEvent] {
+        self.hits_observed(dt, Some(trace))
+    }
+
+    fn hits_observed(&mut self, dt: f32, trace: Option<&mut Vec<crate::combat::NpcHitTrace>>) -> &[HitEvent] {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         fighters.extend(self.dragon.iter().map(|d|d.actor.fighter.clone()));
@@ -482,7 +506,10 @@ impl Fight {
         self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
-        self.events = hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true);
+        self.events = match trace {
+            Some(trace) => crate::combat::hit_pass_with_npc_trace(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true, trace),
+            None => hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true),
+        };
         self.roll_seed = seed;
         let mut it = fighters.into_iter();
         for a in self.arisen.values_mut() {

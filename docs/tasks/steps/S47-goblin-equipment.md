@@ -48,3 +48,39 @@ passes `|_| true`); e0100 has ~60 mesh groups (equipment variants among them).
 
 Rescue-area goblins look like the original's early goblins (no armour), other
 placements show their authored equipment, and the Result lists the sources.
+
+## Results — core checkpoint (codex-65, 2026-10-10)
+
+Implemented and tested, **whole S47 remains open**:
+
+- `cSetInfoEnemy0100::vf08` (0x008AEBB0) preserves authored equipment,
+  leader, weapon-hand-start and ballista-license state. Kind-5 leaders
+  clamp forbidden equipment types to 1 before the vf33 unit-mask dispatch
+  (0x008CDD80). The host now carries these fields into each goblin lifetime.
+- `uEm0100::vf124` (0x008CF4F0) starts a 512-bit body mask with group 0;
+  the ordinary, helmet and leader selections read the installed lists
+  through 0x017C277C/0x017C27B4 and weighted maps 0x01503208/0x01503230.
+  Lists and model resource names are runtime data, not embedded masks.
+- Source RNG is 0x00D00690, with native seeding 0x00D006C0 and static
+  initializer 0x0137E5C0 (seed 0x1105). Three seeds and five subsequent
+  draws each match private x86 instruction emulation. One host-owned
+  appearance stream chooses each nonleader body once; leaders consume
+  no appearance draw. **Not stream-exact with the original global
+  0x018D017C:** unrelated subsystem draws are not integrated yet. Guests
+  will receive resolved appearance through S44; no wire schema changed.
+- Attached-unit resource paths are read from vf33 descriptors. Initial
+  joint/offset rules come from 0x008EB550 (weapon), 0x004C6D60 (shield),
+  0x008EBEC0 (extra equipment). Later weapon attachment changes and
+  detached/dropped equipment are still open.
+
+Actual headless validation on the installed game: five source unit tests
+passed (13.39 s compile, 0.00 s tests); installed body-group/model/joint
+validation passed (1.05 s compile, 3.16 s test); installed rescue placements
+passed through the host with one, two and four Arisen (7.25 s compile,
+5.91 s test). All completed with exit 0. An initial installed-test compile
+failed for a temporary borrow; corrected the test's backing-buffer lifetime.
+No original-game control or GPU capture was performed.
+
+Next: connect resolved masks and separately attached units to the viewer,
+preserving native joint scale, then run viewer tests/build and queue one
+bounded S46-checkpoint capture. Original visual comparison remains open.

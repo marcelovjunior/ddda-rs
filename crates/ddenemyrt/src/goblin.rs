@@ -22,9 +22,13 @@ use ddcombat::damage::{CollisionRates, EnemyAttacker, EnemyDefender, RegionPool,
 use ddcombat::volumes::HitHistory;
 use std::sync::Arc;
 
+#[path = "goblin_equipment.rs"]
+pub mod equipment;
+
 /// The goblin's data from the install.
 #[derive(Debug, Clone)]
 pub struct GoblinData {
+    pub equipment: equipment::Catalog,
     pub sensor: crate::npc_sensor::Sensor,
     /// The rModel actually loaded for this family; LAN guests load the same path locally.
     pub model: String,
@@ -115,6 +119,7 @@ impl GoblinData {
             })
             .collect();
         Ok(GoblinData {
+            equipment: equipment::Catalog::read(exe)?,
             sensor: crate::npc_sensor::Sensor::load(vfs)?,
             model: model.into(),
             // the unit's scale (owner +0x60..+0x68) is *assumed* 1 for a
@@ -197,6 +202,8 @@ impl std::fmt::Debug for Fsm {
 
 #[derive(Debug)]
 pub struct Goblin {
+    /// Placement equipment and the native vf124 body selection, resolved once.
+    pub appearance: Option<equipment::Appearance>,
     /// vf115 initializes group mask1. Dynamic sensor-mask writes from
     /// later AI states have not yet been ported.
     pub sensor_mask: u32,
@@ -276,6 +283,7 @@ impl Goblin {
         let mut attacker = data.attacker;
         attacker.attack_mul = Some(rates.attack.unwrap_or(DEFAULT_ATTACK_RATE));
         Goblin {
+            appearance: None,
             sensor_mask: 1,
             sensor_error: None,
             distance_hate: Default::default(),

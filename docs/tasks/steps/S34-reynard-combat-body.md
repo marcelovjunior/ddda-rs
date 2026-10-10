@@ -54,7 +54,7 @@ A headless installed test shows goblins damaging Reynard (and NoDamage
 holding while set), NpcCheck reading his HP, and the viewer showing his
 gauge after SetGaugeDisp. The Result lists each value's source.
 
-## Results (current S34 checkpoints; acceptance incomplete)
+## Results (current S34 checkpoints; gauge placement acceptance remains open)
 
 Implemented in this checkpoint:
 
@@ -385,3 +385,132 @@ clean under the valid lease restored the actual branch API. Core was
 released after completion. NPC-focused viewer release tests also passed
 **7/7**, actual exit0 (compile33.67s/test8.29s), including installed body
 admission/unload and gauge/template/camera checks; M5 was then released.
+
+Gauge evidence hook: optional `DDVIEW_NPC_GAUGE_CAPTURE` requests one
+engine screenshot after an actual production gauge quad is displayed
+on-screen. It uses the ordinary HP/SetGaugeDisp/event/pose/projection
+path, never changes HP, flags, camera, placement or graph completion,
+and accepts output only under the private research tree without parent
+traversal. The screenshot request is diagnostic, not proof of a saved
+file; that file must be inspected after the bounded route. All six focused
+HUD tests passed again (one existing ignored, actual exit0,
+compile30.47s/test1.67s). After head's actual GPU release, the bounded
+ordinary viewer capture below ran under its own normal lease.
+
+The default release viewer also built with actual exit0 (compile51.30s),
+then was pinned privately from source
+`e875bec67b37520fc3fa1f58ed17da6de4bf7b8f`; SHA-256
+`69FDD24853AE10B041CDA30842D14935AB7546A0D0F475A4549BE8C59A604349`.
+The M5 lease was released after that copy and actual build exit.
+
+Corpse opacity follow-up is source research, not a renderer implementation.
+NPC vf08 **0x00BAF4F0** reads corpse intel+0x484, clamps negatives to0,
+and copies it to body+0x2510 only when body+0x2518 is mode2, before calling
+the player-base/action update. Consequently the body uses the previous
+intel alpha, one host frame behind the post-action `corpse_alpha` getter.
+Generic opacity vf90 **0x00885E30** (0x00886090 is an interior address)
+advances mode1 by actor delta times0.2 to1/mode2, and mode3 downward by
+the same increment to0/mode4. Constructor **0x00884670** initializes
+mode0 and both opacity fields to1; model vf10 **0x00886450** can select
+NPC-class fade-in mode1 and opacity0. Ordinary settled bodies therefore
+reach mode2; other mode writers must be traced before generalizing this.
+
+The later common presentation path **0x0088BDC0** multiplies body+0x2510
+by the near-camera factor into body+0x2514. The viewer currently applies
+the shared character-opacity path to player/pawn roots only. A future
+NPC renderer adapter needs the actual lifetime on each model root,
+separate cloned material ownership, and body-alpha processing independent
+of a singleton camera. No opening marker, alpha mode, material-alpha
+renderer or prior-frame host alpha has been added here. Raw source
+exports remain private. This follow-up must preserve the one-frame lag;
+actor+0x1065's wider meaning is still unresolved.
+
+Visible gauge evidence: the ordinary `--perf-route --players 1 --size
+1600x900` run, with the existing demo inputs and the optional screenshot
+hook, saved `E:/ddda-re/notes/steps/S34/npc-gauge-e875bec.png`. The image
+was inspected directly: the full blue NPC bar is visible near the
+upper-left edge of the roadside viewport. The 1600x900 PNG is 2,155,483
+bytes, SHA-256
+`B123F512EEFC71CE092C357F2CBF88F10C67D35AAF2A6DB831350FDB3E4FE3CC`.
+At 06:16:20.215402Z the production HUD logged owner106, camera12545v0,
+authored point[19.043007,104.84619] and fill width88, after NPC304's real
+motion3226 and materialized body, while entering the native camera149
+route. HP, SetGaugeDisp, motion, placement and camera were not changed
+by the evidence hook. Head's placement review on board5596 rejected this
+as sufficient evidence of correct placement: Reynard is not recognizable
+under the bar, and the same-frame rendered body/anchor/camera comparison
+is still required. The installed HP/damage/NoDamage tests remain passed;
+gauge placement, guest replication and original NPC304 parity remain open.
+
+The run used owned hidden PID9884, launched at06:12:12.8156710Z with a
+600-second watchdog. It reached native camera12 and q2:5 on resource
+exhaustion. NPC304 started real death motion3270 (CC6) at06:17:19.068167Z;
+the ordinary rescue later ended at06:18:29.749857Z with q2:20 false and
+q2:30 true, zero goblins alive and Arisen HP510. That is failure-branch
+evidence, not a successful rescue or proof of every death boundary.
+After preserving the PNG and logs, only the executable-path-verified
+owned PID was stopped. Its retained process handle reported actual
+OS exit-1 after421.4 seconds; the wrapper exited1, WMI confirmed no PID,
+and the GPU lease was then released. No original game process was used.
+
+Placement-review diagnostic follow-up leaves production projection intact.
+The optional capture now waits for the actual camera12 resource midpoint
+and reports actor placement, posed model root, rendered model root,
+world bounds/top/anchor, old and current root projection, current anchor
+projection, and old/current camera positions. `TransformHelper` resolves
+the current hierarchy before transform propagation, and a cloned current
+Projection refreshes the viewport aspect for diagnostic comparison only.
+The camera and actor state are never written by this observer.
+Focused release HUD tests passed7 with1 existing ignored (actual exit0,
+compile38.71s/test2.13s), including a changed-lens diagnostic regression
+and unchanged render-camera state. The first attempt exited1 because the
+shared cache supplied S36's unmerged `ddsim::Input.pawn_orders` field;
+a narrow ddsim release clean (7 files/1.5MiB) under the valid M5 lease
+removed it before the successful rerun. Same-frame live evidence and
+any production projection fix are still pending.
+
+Rapid-loss investigation adds an optional caller-owned headless NPC hit
+observer to the ordinary pass/Fight entry point. Each accepted contact
+reports attacker identity and type, row values, placement/status attack
+multipliers, key/relation, multi-hit/reset inputs, merged raw and mitigated
+values, region total, and HP before/after. It performs no IO, changes no
+RNG calls and allocates no trace storage on the normal path. A two-NPC
+regression compares ordinary/observed events, pools and history, checks
+duplicate-volume collapse and keeps NoDamage's HP gate intact.
+
+Eight focused combat tests passed (one explicit diagnostic ignored),
+actual exit0, compile5.72s/test2.43s. Running the bounded installed
+diagnostic explicitly also passed1, actual exit0/test5.27s. It reads
+Reynard's real global n04 placement and the three e23 goblin placements,
+uses the actual C9A motion/frame/volumes, and retains each hit privately.
+Flat ground, no player attacks and the current default think-table
+adapter are explicit limits; it is not the ordinary quest route.
+
+The actual NPC record enables HP multiplication with runtime value2.5;
+physical/magick defence multiplier overrides are disabled. The current
+S34 adapter omits that HP override and starts from constructor1000.
+The native cSetInfoNpc vf08 **0x007A32F0** invokes cSetInfoPawn vf08,
+which stores HP-rate enable at actor+0x209E and rate at actor+0x20A0;
+the final consumer/application order is still under investigation before
+changing the adapter. No native placement rate is embedded into code.
+
+In this diagnostic the three goblins' actual attack multiplier0.2 reaches
+NPC valuation: raw physical values35/40 become totals34.653465/39.603962.
+There are27 accepted contacts across27 hit frames, one contact per merged
+event, first at frame49 and HP0 at frame892 (29.73 seconds). The owners
+contribute10/8/9 contacts. This does not reproduce head's ordinary-route
+850 damage in about5 seconds and does not establish that the route's
+history or cadence is correct. Pair masks permit player attacks against
+ordinary NPC group3, while the native civilian human-attacker HP1/escape
+safeguard remains unported. Friendly player damage is a hypothesis to
+check with attacker traces, not an established cause. Other native hate
+influences are also missing; no NPC-specific distance preference was
+found in **0x00AB5A50**'s300*(1-distance/3000) contribution. Selection
+**0x00AB52E0** sums all32 native influence slots, rather than only the
+distance subset represented here.
+
+Installed q0002_n304 protection timing: initial state1 sets Invincible,
+NoDamage and FixPos. State0 checks q2:25 and q2:20; either condition enters
+state5, which clears Invincible/NoDamage. No other protection setter occurs
+in this installed graph. These are runtime-data conditions, not added
+quest-specific delays or tuning.

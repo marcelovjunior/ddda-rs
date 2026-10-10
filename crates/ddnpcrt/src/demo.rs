@@ -8,6 +8,8 @@ use ddai::{cond::{Value, Var}, core::{Core, Owner, ProcAt, ProcMem}, fields::Fie
     think::{self, ThinkFields}, Error};
 use mtfsm::{Graph, Process, Record};
 use std::sync::Arc;
+// Keep actor adapters independent of a new direct ddai dependency.
+pub use ddai::think::{Actor, Inputs as ActorInputs, Request as WorldRequest, Time};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Interface {
@@ -207,6 +209,13 @@ impl Demo {
         } })
     }
     pub fn current_states(&self) -> Vec<u32> { self.core.current_states() }
+    /// Only the current unfinished generic-motion interface can consume an
+    /// actual motion observation. Other actions need their own result checks.
+    pub fn motion_command(&self) -> Option<u64> {
+        (!self.finished() && self.fields.common.arm == 1 && !self.fields.complete
+            && matches!(self.fields.active, Some(Interface::Motion(_))))
+            .then_some(self.fields.command)
+    }
     /// Actor observation for this exact command. Wait cannot finish:
     /// its native update always returns running4, even after motion end.
     pub fn interface_done(&mut self, command: u64) -> bool {

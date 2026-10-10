@@ -1278,7 +1278,7 @@ fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
 pub fn step(
     mut stage_view: OpeningStage,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    order_devices: play::PawnOrderDevices,
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
@@ -1291,6 +1291,8 @@ pub fn step(
     mut hud: ResMut<play::Hud>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
+    let keys = &order_devices.keys;
+    let gamepads = &order_devices.gamepads;
     let (Some(mut st), Some(res)) = (state, res) else {
         return;
     };
@@ -1354,6 +1356,7 @@ pub fn step(
             st,
             &mut stage_view,
             &keys,
+            &gamepads,
             &buttons,
             &mouse,
             time.delta_secs(),
@@ -1392,7 +1395,7 @@ pub fn step(
         else { None };
     let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
-        sim: play::p1_input(&keys, &buttons, st.cam_yaw),
+        sim: play::gamepad_order_input(play::p1_input(&keys, &buttons, st.cam_yaw), &gamepads, 0),
         interact: false,
     };
     if s.world_menu().is_some() {
@@ -1480,12 +1483,14 @@ pub fn step(
         && s.talk.is_none() && s.world_menu().is_none()
     {
         let queued = s.pending_local.entry(1).or_default();
-        *queued = play::latch_input(*queued, play::p2_input(&keys, st.cam_yaw));
+        *queued = play::latch_input(*queued,
+            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1));
     }
     let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
     let frame = FrameClock::default().seconds();
-    s.acc = (s.acc + time.delta_secs()).min(0.25);
+    // the catch-up cap follows the virtual clock's own (DDVIEW_TIME_SCALE)
+    s.acc = (s.acc + time.delta_secs()).min(0.25 * crate::time_scale().max(1.0));
     while s.acc >= frame {
         if s.dragon_capture && s.host.fight.as_ref().and_then(|f|f.dragon.as_ref())
             .is_some_and(|d|d.thinker.current_states()==[1] && d.actor.frame>=15.0)
@@ -1838,7 +1843,7 @@ pub fn cutscene(
     let mut finished = None;
     if let Some(c) = &mut s.cut {
         // mDeltaTime: frames at 30 per second.
-        c.acc += time.delta_secs().min(0.1) * 30.0;
+        c.acc += time.delta_secs().min(0.1 * crate::time_scale().max(1.0)) * 30.0;
         while c.acc >= 1.0 && !c.player.finished() {
             c.acc -= 1.0;
             match c.player.step(1.0) {
@@ -2531,6 +2536,7 @@ fn guest_step(
     st: &mut PlayState,
     view: &mut OpeningStage,
     keys: &ButtonInput<KeyCode>,
+    gamepads: &Query<(Entity, &Gamepad)>,
     buttons: &ButtonInput<MouseButton>,
     mouse: &AccumulatedMouseMotion,
     dt: f32,
@@ -2548,7 +2554,7 @@ fn guest_step(
         sim: if paused || s.cut.is_some() {
             Input::default()
         } else {
-            play::p1_input(keys, buttons, st.cam_yaw)
+            play::gamepad_order_input(play::p1_input(keys, buttons, st.cam_yaw), gamepads, 0)
         },
         interact: !paused && keys.just_pressed(KeyCode::KeyE),
     };

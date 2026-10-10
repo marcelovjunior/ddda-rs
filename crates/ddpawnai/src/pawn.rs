@@ -128,6 +128,10 @@ pub const PRESS_MARGIN: f32 = 50.0;
 #[derive(Debug, Clone)]
 pub struct PawnData {
     pub prio: PriorityThink,
+    /// Arisen order repeat cooldown, rAdjustParam m_pl000_00[0x135].
+    /// Native sender reads it through the active adjust controller;
+    /// equipment/skill overrides of that value are not modeled.
+    pub order_cooldown: f32,
     /// `AIPlActParamSword` records (command - 0xA).
     pub sword: Vec<Record>,
 }
@@ -221,6 +225,8 @@ pub struct Pawn {
     pub active: Vec<Active>,
     /// Party command (8 none).
     pub command: i64,
+    /// uCmc order mailbox and cAICheckSituationCmc clocks.
+    pub orders: crate::commands::Clock,
     /// Main weapon type (uCmc +0x3554 high byte; 1 a sword).
     pub weapon: u8,
     pub list: Vec<Entry>,
@@ -249,6 +255,7 @@ impl Pawn {
             inclinations,
             active,
             command: NO_COMMAND,
+            orders: crate::commands::Clock::default(),
             weapon,
             list,
             goal: None,
@@ -374,6 +381,9 @@ impl Pawn {
 
     /// One frame: run the goal (or think first) and return the pad.
     pub fn step(&mut self, data: &PawnData, s: &Senses) -> Pad {
+        if self.orders.step(s.dt, true) {
+            self.set_command(data, self.orders.active as i64);
+        }
         if self.goal.is_none() {
             if let Some((id, g)) = self.think(data, s) {
                 self.history.push((id, None));

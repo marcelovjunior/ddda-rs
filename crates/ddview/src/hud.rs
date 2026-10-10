@@ -43,6 +43,13 @@ struct NpcCachedBounds {
     bounds: ddhost::ddenemyrt::npc_body::NpcBounds,
 }
 
+#[derive(Default)]
+pub(crate) struct NpcGaugeCapture {
+    checked: bool,
+    path: Option<std::path::PathBuf>,
+    requested: bool,
+}
+
 #[derive(Component)]
 pub(crate) struct NpcGaugeQuad {
     owner: u32,
@@ -355,12 +362,30 @@ fn update_npc_gauges(
     commands: &mut Commands,
     gauges: &mut NpcGauges,
     opening: Option<&crate::opening::OpeningRes>,
-    cameras: &Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: &Query<(Entity, &Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    transform_helper: &bevy::transform::helper::TransformHelper,
     quads: &mut Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
     origin: Option<Vec3>,
     event_active: bool,
+    capture: &mut NpcGaugeCapture,
 ) {
     use ddhost::ddenemyrt::{combat::Victim, npc_body::ORDINARY_NPC_SCENERY_RADIUS, npc_combat::gauge_fill};
+    if !capture.checked {
+        capture.checked = true;
+        capture.path = std::env::var_os("DDVIEW_NPC_GAUGE_CAPTURE")
+            .map(std::path::PathBuf::from)
+            .filter(|path| {
+                path.starts_with("E:/ddda-re")
+                    && !path.components().any(|component| matches!(component, std::path::Component::ParentDir))
+            });
+    }
+    // Diagnostic selection only: observe the ordinary camera12 close-up
+    // halfway through its real resource. Never select or advance a camera.
+    let capture_closeup = capture.path.is_some() && opening.is_some_and(|opening| {
+        let session = opening.0.lock().unwrap();
+        session.host.world.cameras.as_ref().and_then(|c| c.active.as_ref())
+            .is_some_and(|c| c.stage == 100 && c.camera_id == 12 && c.seconds >= c.camera.duration() * 0.5)
+    });
     let snapshots: Vec<_> = opening
         .filter(|_| origin.is_some() && !event_active)
         .into_iter()
@@ -424,6 +449,7 @@ fn update_npc_gauges(
                         pose.bounds,
                         region.hp,
                         region.hp_max,
+                        session.npc_body_entity(npc.npc),
                     ))
                 })
                 .collect::<Vec<_>>()
@@ -434,12 +460,13 @@ fn update_npc_gauges(
         .retain(|owner, _| snapshots.iter().any(|(candidate, ..)| candidate == owner));
     let bar_width = gauges.templates.iter().find(|t| t.crop).map_or(0.0, |t| t.size.x);
     let mut desired = HashMap::new();
+    let mut evidence = HashMap::new();
     if let Some(origin) = origin.filter(|_| !event_active) {
-        for (owner, position, model, bounds, hp, max) in snapshots {
+        for (owner, position, model, bounds, hp, max, body_entity) in snapshots {
             let Some(width) = gauge_fill(hp, max, hp <= 0.0, bar_width) else {
                 continue;
             };
-            for (entity, camera, transform) in cameras {
+            for (entity, camera, transform, projection) in cameras {
                 if !camera.is_active {
                     continue;
                 }
@@ -456,10 +483,63 @@ fn update_npc_gauges(
                     continue;
                 };
                 desired.insert((owner, entity), (screen, scale, width));
+                if capture_closeup && !capture.requested {
+                    let current_camera = current_projection_camera(camera, projection);
+                    let current_transform = transform_helper.compute_global_transform(entity).ok();
+                    let body_transform = body_entity.and_then(|e| transform_helper.compute_global_transform(e).ok());
+                    if let (Some(current_camera), Some(current_transform), Some(body_transform)) =
+                        (current_camera, current_transform, body_transform)
+                    {
+                        let body_root = body_transform.translation() / stage::UNIT + origin;
+                        let projected = |camera: &Camera, transform: &GlobalTransform, point: Vec3| {
+                            npc_gauge_projection(camera, transform, origin, point).map(|(p, _)| p + Vec2::new(0.0, 40.0))
+                        };
+                        let old_root = projected(camera, transform, body_root);
+                        let current_root = projected(&current_camera, &current_transform, body_root);
+                        let current_top = projected(&current_camera, &current_transform, Vec3::from_array(bounds.gauge_top()));
+                        let current_anchor = projected(&current_camera, &current_transform, Vec3::from_array(point));
+                        evidence.insert((owner, entity), format!(
+                            "actor_position={position:?} model_root={:?} body_root={body_root:?} bounds={bounds:?} anchor={point:?} old_root_px={old_root:?} current_root_px={current_root:?} current_top_px={current_top:?} current_anchor_px={current_anchor:?} old_eye={:?} current_eye={:?}",
+                            ddcombat::volumes::transform_point(&model, [0.0; 3]), transform.translation(), current_transform.translation()));
+                    }
+                }
             }
         }
     }
     reconcile_npc_gauges(commands, gauges, quads, &desired);
+    // Optional evidence follows production visibility; it never forces HP,
+    // flags, camera, placement or graph completion. Private output only.
+    if capture_closeup && !capture.requested {
+        if let Some(path) = capture.path.as_ref() {
+            let candidate = desired.iter().find(|(_, (point, _, _))| {
+                point.x >= 0.0 && point.x <= 1280.0 && point.y >= 0.0 && point.y <= 720.0
+            });
+            if let Some((&(owner, camera), &(point, _, width))) = candidate {
+                if quads.iter().any(|(quad, node, _)| {
+                    quad.owner == owner && quad.camera == camera && node.display == Display::Flex
+                }) {
+                    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path.clone()));
+                    info!("NPC gauge capture: owner={owner} camera={camera:?} authored_point={point:?} fill_width={width} path={} same_frame={:?}", path.display(), evidence.get(&(owner, camera)));
+                    capture.requested = true;
+                }
+            }
+        }
+    }
+}
+
+// Diagnostic camera matches this frame's Projection before camera_system
+// refreshes Camera::computed in PostUpdate. Production still uses the
+// existing camera here until same-frame evidence establishes the mismatch.
+fn current_projection_camera(camera: &Camera, projection: &Projection) -> Option<Camera> {
+    let viewport = camera.logical_viewport_size()?;
+    let mut current = camera.clone();
+    let mut projection = projection.clone();
+    projection.update(viewport.x, viewport.y);
+    current.computed.clip_from_view = projection.get_clip_from_view();
+    Some(current)
 }
 
 fn npc_gauge_projection(
@@ -727,13 +807,15 @@ pub fn update(
     state: Option<Res<play::PlayState>>,
     opening: Option<Res<crate::opening::OpeningRes>>,
     windows: Query<&Window>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, &Projection), With<Camera3d>>,
+    transform_helper: bevy::transform::helper::TransformHelper,
     playback: Query<&Playback>,
     transforms: Query<&GlobalTransform>,
     mut quads: Query<(&Quad, &mut Node, &mut ImageNode), (Without<Prompt>, Without<NpcGaugeQuad>)>,
     mut prompts: Query<(&Prompt, &mut Node), (Without<Quad>, Without<NpcGaugeQuad>)>,
     mut npc_gauges: Option<ResMut<NpcGauges>>,
     mut npc_quads: Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
+    mut npc_capture: Local<NpcGaugeCapture>,
 ) {
     let _timing = crate::perf::Section::start("hud::update");
     let Ok(window) = windows.single() else {
@@ -757,9 +839,11 @@ pub fn update(
             gauges,
             opening.as_deref(),
             &cameras,
+            &transform_helper,
             &mut npc_quads,
             state.as_ref().map(|s| s.origin),
             event_active,
+            &mut npc_capture,
         );
     }
     let local_binding = state
@@ -789,7 +873,7 @@ pub fn update(
         // 0x007325d0: joint-map entry 4 +25cm Y. 0x00ffddb0 maps
         // actor+368 to rModel+110; 0x00fa8fe0 loads the MOD remap there.
         let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
-        let (_, camera, transform) = cameras.single().ok()?;
+        let (_, camera, transform, _) = cameras.single().ok()?;
         let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0)) // original screen-space offset
@@ -801,7 +885,7 @@ pub fn update(
         let (entity, ..) = hud.enemy?;
         let p = playback.get(entity).ok()?;
         let joint = transforms.get(*p.joints.get(&4)?).ok()?.translation();
-        let (_, camera, transform) = cameras.single().ok()?;
+        let (_, camera, transform, _) = cameras.single().ok()?;
         let point = pawn_anchor(joint, transform.translation());
         let projected = camera.world_to_viewport(transform, point).ok()?;
         Some(projected / scale - Vec2::new(0.0, 40.0))
@@ -881,6 +965,30 @@ fn pawn_anchor(joint: Vec3, camera: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn npc_capture_observes_current_lens_without_overwriting_render_camera() {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo};
+        let old_clip = Mat4::perspective_infinite_reverse_rh(1.0, 16.0 / 9.0, 0.1);
+        let camera = Camera {
+            computed: ComputedCameraValues {
+                target_info: Some(RenderTargetInfo { physical_size: UVec2::new(1600, 900), scale_factor: 1.0 }),
+                clip_from_view: old_clip,
+                ..default()
+            },
+            ..default()
+        };
+        let projection = Projection::Perspective(PerspectiveProjection { fov: 0.5, aspect_ratio: 1.0, ..default() });
+        let current = current_projection_camera(&camera, &projection).unwrap();
+        let expected = Mat4::perspective_infinite_reverse_rh(0.5, 16.0 / 9.0, 0.1);
+        assert!(current.computed.clip_from_view.abs_diff_eq(expected, 1e-6));
+        assert_eq!(camera.computed.clip_from_view, old_clip);
+        let transform = GlobalTransform::IDENTITY;
+        let point = Vec3::new(50.0, 10.0, -300.0);
+        let old = npc_gauge_projection(&camera, &transform, Vec3::ZERO, point).unwrap().0;
+        let fresh = npc_gauge_projection(&current, &transform, Vec3::ZERO, point).unwrap().0;
+        assert!((old - fresh).length() > 100.0, "changed lens must produce a distinct evidence projection");
+        assert!(current_projection_camera(&Camera::default(), &projection).is_none());
+    }
     #[test]
     fn npc_gauge_projection_uses_viewport_local_coordinates_and_origin() {
         use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
