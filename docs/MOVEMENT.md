@@ -442,6 +442,22 @@ out: the rows behind check 27 (uPlayer +0x206E bit 0x10, *assumed* clinging:
 LandS 0x01050007, motion 0x301), Engrave (check 24), Double Vault (command 8).
 Checks are `uPlayer::vf188` 0x00B72DB0.
 
+**Record words** (0x00ABA750, 0x00ABA810): word 2 is the command, word 3
+the edge (0 pressed uPlayer +0x32E0, 1 held +0x32E4, 2 released +0x32E8),
+word 4 ground 0x301 / air 0x302, word 5 the check (uPlayer::vf188
+0x00B72DB0, -1 none), word 6 the slot. Commands test bits of that word:
+1 -> 0x1 (light), 2 -> 0x2 (heavy), 6 -> 0x4, 7 -> 0x8, 8 -> 0x2000,
+9/10 -> 0x8000, 11 -> 0x2000 with +0x32E4 bit 2; 3-5 add the skill-slot
+masks of 0x00B79AE0 / 0x00B79B70 (bow command 0x0C rows). Bit 0x8 is set
+by 0x00B52A00 from the bow-mode toggle (+0x1085 of 0x018D8BB0, while a
+bow, longbow or magick bow is the secondary weapon).
+
+**The bow (not modelled yet).** The secondary-weapon list at 0x014F8198
+holds `cPlActWpnBow` 0x02060000 on command 7 held, check 34, slot 1, on
+ground and in the air (0x014F81F8: 0x02060002); bow skills share the
+class (0x014F621C..). Needs the bow mode toggle, aiming, arrows (shells)
+and its own vf05/vf06.
+
 **Air attacks** (rows flagged 0x302; records are 8 words, the last -1).
 The jump, sprint-jump and fall motions (11, 14, 23, 7) keep slots 1 and 4
 executing throughout, so an air press starts at once.
