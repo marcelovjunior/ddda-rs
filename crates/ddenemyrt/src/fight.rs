@@ -15,7 +15,7 @@
 use crate::arisen::ArisenData;
 use crate::arrow::{Arrow, ArrowData, BowData};
 use crate::body::MotionId;
-use crate::combat::{Attacker, Fighter, HitEvent, Tables, Victim, hit_pass};
+use crate::combat::{Attacker, Fighter, HitEvent, Tables, Victim};
 use crate::goblin::{Goblin, GoblinData, Target};
 use crate::shell::{Shell, ShellParam};
 use ddcombat::volumes::HitHistory;
@@ -486,6 +486,32 @@ impl Fight {
     }
 
     fn hits_observed(&mut self, dt: f32, trace: Option<&mut Vec<crate::combat::NpcHitTrace>>) -> &[HitEvent] {
+        use crate::npc_combat::DamageOwnerClass;
+        let guards: Vec<_> = self.npcs.iter().map(|(&owner, npc)| (owner, npc.hit_guard)).collect();
+        let mut owners = Vec::new();
+        if guards.iter().any(|(_, guard)| guard.gauge_enabled) {
+        owners.extend(self.arisen.keys().map(|&seat| {
+            (u32::from(seat), if self.pawns.contains_key(&seat) { DamageOwnerClass::Pawn }
+                else { DamageOwnerClass::Player }, false)
+        }));
+        owners.extend(self.goblins.iter().map(|g| (g.fighter.owner, DamageOwnerClass::Enemy, false)));
+        owners.extend(self.dragon.iter().map(|d| (d.actor.fighter.owner, DamageOwnerClass::Enemy, false)));
+        owners.extend(self.npcs.iter().map(|(&owner, npc)| (owner,
+            if npc.hit_guard.human_enemy || npc.hit_guard.intel_hostile { DamageOwnerClass::Enemy }
+            else { DamageOwnerClass::Npc }, npc.hit_guard.gauge_enabled)));
+        // Native 0x00BB7680 resolves uShlBase +0x2544 / uShellBase +0x25B0
+        // before checking actor class bits. Never classify a projectile by
+        // its numeric owner or PlayerAttacker formula alone.
+        let actor_count = owners.len();
+        let proxies = self.shells.iter().map(|s| (s.owner, s.shooter))
+            .chain(self.arrows.iter().map(|s| (s.owner, s.shooter)))
+            .chain(self.spells.shells.iter().map(|s| (s.owner, s.shooter)));
+        for (proxy, shooter) in proxies {
+            if let Some(&(_, class, gauge)) = owners[..actor_count].iter().find(|(owner, _, _)| *owner == shooter) {
+                owners.push((proxy, class, gauge));
+            }
+        }
+        }
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         fighters.extend(self.dragon.iter().map(|d|d.actor.fighter.clone()));
@@ -506,10 +532,8 @@ impl Fight {
         self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
-        self.events = match trace {
-            Some(trace) => crate::combat::hit_pass_with_npc_trace(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true, trace),
-            None => hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true),
-        };
+        self.events = crate::combat::hit_pass_with_npc_guards(
+            &mut fighters, &self.data.tables, dt, &mut roll, &|_| true, &guards, &owners, trace);
         self.roll_seed = seed;
         let mut it = fighters.into_iter();
         for a in self.arisen.values_mut() {
