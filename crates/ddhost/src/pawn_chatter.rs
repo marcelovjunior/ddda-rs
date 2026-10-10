@@ -17,6 +17,7 @@ pub struct Data {
     pub orders: OrderTables,
     pub enemies: EnemyTables,
     pub situations: SituationTables,
+    aliases: [[u32; 3]; 2],
     configs: BTreeMap<i32, Config>,
 }
 impl Data {
@@ -37,7 +38,14 @@ impl Data {
                 if ddvfs::key(&bank.text) == path { configs.entry(config.message).or_insert(config); }
             }
         }
-        Ok(Self { orders: OrderTables::from_exe(&exe)?,
+        let mut aliases = [[0;3];2];
+        // 0x00412F60 searches two native triples; keep them installed data.
+        for (group, row) in aliases.iter_mut().enumerate() {
+            for (slot, value) in row.iter_mut().enumerate() {
+                *value = exe.u32(0x0153_D8B8 + group as u32 * 12 + slot as u32 * 4)?;
+            }
+        }
+        Ok(Self { orders: OrderTables::from_exe(&exe)?, aliases,
             enemies: EnemyTables::from_exe(&exe)?, situations: SituationTables::from_exe(&exe)?, configs })
     }
 
@@ -68,7 +76,27 @@ pub enum Identity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EnemyEvent { pub notice: EnemyNotice, pub kind: u32, pub variant: u32 }
+pub struct EnemyEvent {
+    pub notice: EnemyNotice, pub kind: u32, pub variant: u32,
+    /// Global notices shuffle; dead-foe sensor584F9E retains its own pawn.
+    pub pawn_slot: Option<u8>, pub list_index: u8,
+}
+
+/// Host-local camera admission (head policy7840). This lifecycle token is
+/// port bookkeeping, not a native field. It rejects an observation from a
+/// prior load/stage/admission even if its frame number is reused.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecognitionView {
+    pub profile: ProfileId,
+    pub eye: [f32; 3],
+    pub planes: [[f32; 4]; 6],
+    pub frame: u64,
+    pub lifecycle: u64,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawnEnemy { pub owner: u32, pub sphere: [f32; 4] }
+#[derive(Debug, Clone, PartialEq)]
+struct ViewInput { seat: PlayerId, view: RecognitionView, drawn: Vec<DrawnEnemy> }
 
 /// An actor-authored situation, as 599BB0 receives it. Request-list index
 /// is independent of CMC configuration priority. Near-death entry uses1.
@@ -103,6 +131,12 @@ pub struct Runtime {
     bindings: BTreeMap<u8, Binding>,
     rng: ddpawn::rift::XorShift128,
     next_id: u64,
+    recognition_lifecycle: u64,
+    views: BTreeMap<ProfileId, ViewInput>,
+    recognized: BTreeMap<u32, chatter::Recognition>,
+    recognition_clock: chatter::RecognitionClock,
+    combat: Vec<(u32,u32)>,
+    seen_kinds: std::collections::BTreeSet<u32>,
     /// Explicit unsupported paths; never substitute invented text or timing.
     pub errors: Vec<String>,
 }
@@ -110,7 +144,9 @@ impl Default for Runtime {
     fn default() -> Self {
         Self { data: None, queue: Queue::default(), bindings: BTreeMap::new(),
             // Session policy: isolated chatter stream, native seeded algorithm.
-            rng: ddpawn::rift::XorShift128::seeded(0x1105), next_id: 0, errors: Vec::new() }
+            rng: ddpawn::rift::XorShift128::seeded(0x1105), next_id: 0, errors: Vec::new(),
+            recognition_lifecycle: 0, views: BTreeMap::new(), recognized: BTreeMap::new(),
+            recognition_clock: Default::default(), combat: Vec::new(), seen_kinds: Default::default() }
     }
 }
 impl Runtime {
@@ -119,6 +155,26 @@ impl Runtime {
     pub(crate) fn hash_into(&self, hash: &mut crate::hash::StateHasher) {
         // Installed tables and diagnostics do not belong to simulation state.
         hash.debug(&self.queue).debug(&self.bindings).debug(&self.rng).u64(self.next_id);
+        hash.u64(self.recognition_lifecycle).debug(&self.views).debug(&self.recognized).debug(&self.recognition_clock);
+        hash.debug(&self.combat).debug(&self.seen_kinds);
+    }
+
+    pub fn recognition_lifecycle(&self) -> u64 { self.recognition_lifecycle }
+
+    fn invalidate_views(&mut self) {
+        self.recognition_lifecycle = self.recognition_lifecycle.checked_add(1).expect("recognition lifecycle exhausted");
+        self.views.clear();
+    }
+
+    /// Called immediately after a successful Host::leave. Admission reset is
+    /// independent of frame advance; same-frame rejoin cannot retain a view.
+    pub fn forget_profile(&mut self, profile: ProfileId) {
+        self.invalidate_views();
+        self.bindings.retain(|_, binding| match binding.identity {
+            Identity::Main { profile: owner } => owner != profile,
+            Identity::Hired { hirer, .. } => hirer != profile,
+        });
+        self.queue.pending.retain(|pending| self.bindings.contains_key(&pending.speaker));
     }
 
     /// Successful load or stage replacement discards transient requests.
@@ -126,6 +182,22 @@ impl Runtime {
     pub fn clear_pending(&mut self) {
         self.queue = Queue::default();
         self.bindings.clear();
+        self.invalidate_views();
+        self.recognized.clear();
+        self.recognition_clock = Default::default();
+        self.combat.clear();
+        self.seen_kinds.clear();
+    }
+
+    /// Transactional retry candidate (head policy7940). The live runtime is
+    /// untouched until its host candidate is accepted. Message IDs and RNG
+    /// continue within this session; no old audience or camera is inherited.
+    pub fn fork_for_retry(&self) -> Self {
+        let mut attempt = Self { data: self.data.clone(), rng: self.rng,
+            next_id: self.next_id, recognition_lifecycle: self.recognition_lifecycle,
+            ..Self::default() };
+        attempt.clear_pending();
+        attempt
     }
 
     fn error(&mut self, text: String) {
@@ -184,12 +256,38 @@ impl Runtime {
                     }
                 }
             }
-            for enemy in enemies {
-                if let Some(slot) = chatter::random_speaker(ready, || self.rng.next_u32()) {
+            // Translated from 0x00414130 (DDDA.exe 2017-12-13 Steam).
+            // Handles at most one supported new family per phase.
+            // No speaker leaves it unseen; no phrase still marks the family.
+            let mut observed = Vec::new();
+            if self.combat.is_empty() { self.seen_kinds.clear(); }
+            for (index, &(kind, variant)) in self.combat.iter().enumerate() {
+                if kind < 0xbf && self.seen_kinds.contains(&kind) { continue; }
+                if !data.enemies.supports_kind(kind, variant) {
+                    if kind < 0xbf { self.seen_kinds.insert(kind); }
+                    continue;
+                }
+                observed.push(EnemyEvent { notice: combat_notice(&self.combat, index, &data.aliases),
+                    kind, variant, pawn_slot: None, list_index: 1 });
+                break;
+            }
+            for (event_index, enemy) in observed.iter().chain(enemies).enumerate() {
+                let slot = if let Some(slot) = enemy.pawn_slot {
+                    (slot < 3 && ready[slot as usize]).then_some(slot)
+                } else { chatter::random_speaker(ready, || self.rng.next_u32()) };
+                if let Some(slot) = slot {
                     let pawn = pawns.iter().find(|pawn| pawn.slot == slot).unwrap();
                     if let Some(message) = data.enemies.select(enemy.notice, enemy.kind,
                         enemy.variant, &pawn.record.study_flag, || self.rng.next_u32()) {
-                        self.bindings.get_mut(&slot).unwrap().actor.offer(ActorRequest { message, grouped: false });
+                        let binding = self.bindings.get_mut(&slot).unwrap();
+                        let request = ActorRequest { message, grouped: false };
+                        if enemy.list_index == 0 { binding.actor.offer(request); }
+                        else if enemy.list_index == 1 { binding.urgent.offer(request); }
+                    }
+                    if event_index < observed.len() {
+                        if let Some(group) = data.aliases.iter().find(|group| group.contains(&enemy.kind)) {
+                            self.seen_kinds.extend(group.iter().copied().filter(|kind| *kind != 0 && *kind < 0xbf));
+                        } else if enemy.kind < 0xbf { self.seen_kinds.insert(enemy.kind); }
                     }
                 }
             }
@@ -221,10 +319,88 @@ impl Runtime {
     }
 }
 
+// Translated from 0x004142B7..0x00414307 (DDDA.exe 2017-12-13 Steam).
+// Only later combat-list entries can select Additional; it is not a count
+// of arbitrary world enemies, nearby actors or earlier encounters.
+fn combat_notice(list: &[(u32,u32)], index: usize, aliases: &[[u32;3];2]) -> EnemyNotice {
+    let kind = list[index].0;
+    if kind != 0 && list[index+1..].iter().any(|other| other.0 == kind
+        || aliases.iter().any(|group| group.contains(&kind) && group.contains(&other.0))) {
+        EnemyNotice::Additional
+    } else { EnemyNotice::FirstSeen }
+}
+
 impl<D: ddstory::data::Data, W: crate::StoryWorld> crate::Host<D, W> {
+    /// Submit only the camera and bodies actually admitted by this local
+    /// viewer. Remote camera transport is OPEN and rejected here.
+    pub fn observe_pawn_recognition(&mut self, view: RecognitionView, drawn: &[DrawnEnemy]) -> Result<(), String> {
+        let seat = self.roster.seats().iter().find(|seat| seat.profile == view.profile)
+            .ok_or("recognition profile is not seated")?;
+        if seat.control != crate::Control::Local { return Err("guest camera transport is unported".into()); }
+        if view.frame != self.frame || view.lifecycle != self.pawn_chatter.recognition_lifecycle {
+            return Err("stale recognition frame or lifecycle".into());
+        }
+        if !view.eye.iter().chain(view.planes.iter().flatten()).all(|value| value.is_finite()) {
+            return Err("nonfinite recognition camera".into());
+        }
+        let mut owners = std::collections::BTreeSet::new();
+        for enemy in drawn {
+            if !owners.insert(enemy.owner) || !enemy.sphere.iter().all(|value| value.is_finite())
+                || enemy.sphere[3] < 0.0 { return Err("invalid drawn enemy sphere/duplicate".into()); }
+            if !self.fight.as_ref().is_some_and(|fight|
+                fight.goblins.iter().any(|goblin| goblin.fighter.owner == enemy.owner)) {
+                return Err("drawn enemy is not admitted by host".into());
+            }
+        }
+        self.pawn_chatter.views.insert(view.profile, ViewInput { seat: seat.id, view, drawn: drawn.to_vec() });
+        Ok(())
+    }
+
+    fn step_pawn_recognition(&mut self, frames: f32) -> Vec<u32> {
+        // Consume exactly once, even if the native manager skips this frame.
+        let views = std::mem::take(&mut self.pawn_chatter.views);
+        let Some(fight) = &self.fight else { self.pawn_chatter.recognized.clear(); return Vec::new(); };
+        self.pawn_chatter.recognized.retain(|owner, _| fight.goblins.iter()
+            .any(|goblin| goblin.fighter.owner == *owner && !goblin.dead()));
+        let clock_runs = self.world.quest_camera_active().is_none();
+        if let Some(seconds) = self.pawn_chatter.recognition_clock.advance(frames, ddsim::MOTION_FPS, clock_runs) {
+            for goblin in fight.goblins.iter().filter(|goblin| !goblin.dead()) {
+                let owner = goblin.fighter.owner;
+                let sighted = views.values().any(|input| {
+                    if input.view.frame.checked_add(1) != Some(self.frame)
+                        || input.view.lifecycle != self.pawn_chatter.recognition_lifecycle
+                        || !self.roster.seat(input.seat).is_some_and(|seat|
+                            seat.profile == input.view.profile && seat.control == crate::Control::Local) { return false; }
+                    let Some(drawn) = input.drawn.iter().find(|enemy| enemy.owner == owner) else { return false; };
+                    let Some(arisen) = self.sim.player(input.seat) else { return false; };
+                    let target = [drawn.sphere[0],drawn.sphere[1],drawn.sphere[2]];
+                    let length_squared: f32 = (0..3).map(|i| (input.view.eye[i]-target[i]).powi(2)).sum();
+                    chatter::RecognitionSight { renderable: true, camera_present: true,
+                        actor_sphere: drawn.sphere, camera_planes: input.view.planes,
+                        actor_position: goblin.pos, arisen_position: arisen.position,
+                        // 0x0048867E -> 0x0152CF28 tiny segments bypass ray.
+                        // Ground::ray retains geometry, but native ray layer
+                        // mask0x4081D01C is OPEN in the existing ground API.
+                        ray_clear: length_squared < f32::from_bits(0x3c23_d70a)
+                            || self.ground.ray(input.view.eye, target).is_none(),
+                    }.visible()
+                });
+                self.pawn_chatter.recognized.entry(owner).or_default().step(seconds, sighted, true, false);
+            }
+        }
+        fight.goblins.iter().filter_map(|goblin| self.pawn_chatter.recognized.get(&goblin.fighter.owner)
+            .is_some_and(|record| record.recognized).then_some(goblin.fighter.owner)).collect()
+    }
+
     pub(crate) fn step_pawn_chatter(&mut self, frames: f32, authored: &[ddstory::Request],
         enemies: &[EnemyEvent], situations: &[SituationEvent]) -> Vec<Message> {
         use ddpawnai::pawn::{self, Goal};
+        let recognized_owners = self.step_pawn_recognition(frames);
+        // Recognition branch of440554 only. Pawn sensor2 at440628 remains
+        // OPEN; it is never approximated by a current attack target/range.
+        // uEm0100 ctor8CD605..8CD612 writes kind5 into actor+2D. Variant
+        // is ignored for kind5 by8BC6A0/8BC630; no defeated notice here.
+        self.pawn_chatter.combat = recognized_owners.iter().map(|_| (5,0)).collect();
         let audience: Vec<_> = self.roster.seats().iter().map(|seat| seat.profile).collect();
         let mut pawns = Vec::new();
         if let Some(fight) = &self.fight {
@@ -279,6 +455,127 @@ mod tests {
         fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> {
             (below >= 0.0).then_some(0.0)
         }
+    }
+
+    #[test]
+    fn native_combat_notice_uses_later_alias_members_only() {
+        let aliases = [[7,8,0], [12,13,14]];
+        assert_eq!(combat_notice(&[(7,0),(8,9)], 0, &aliases), EnemyNotice::Additional);
+        assert_eq!(combat_notice(&[(7,0),(8,9)], 1, &aliases), EnemyNotice::FirstSeen);
+        assert_eq!(combat_notice(&[(5,0),(5,1)], 0, &aliases), EnemyNotice::Additional);
+        assert_eq!(combat_notice(&[(0,0),(0,0)], 0, &aliases), EnemyNotice::FirstSeen);
+        assert_eq!(combat_notice(&[(7,0),(9,0)], 0, &aliases), EnemyNotice::FirstSeen);
+    }
+
+    #[test]
+    fn retry_fork_preserves_session_stream_without_mutating_old_attempt() {
+        let mut runtime = Runtime::default();
+        runtime.next_id = 42;
+        runtime.rng.state = [7,8,9,10];
+        runtime.queue.offer(Pending { speaker: 1, message: 901, priority: 1,
+            remaining: 90.0, grouped: false });
+        runtime.views.insert(ProfileId(41), ViewInput { seat: 0, drawn: vec![],
+            view: RecognitionView { profile: ProfileId(41), eye: [0.0;3],
+                planes: [[0.0,0.0,1.0,1.0];6], frame: 12, lifecycle: 0 } });
+        runtime.combat.push((5,0));
+        runtime.seen_kinds.insert(5);
+        let attempt = runtime.fork_for_retry();
+        assert_eq!(attempt.next_id,42);
+        assert_eq!(attempt.rng,runtime.rng);
+        assert_eq!(attempt.recognition_lifecycle,1);
+        assert!(attempt.queue.pending.is_empty() && attempt.views.is_empty()
+            && attempt.combat.is_empty() && attempt.seen_kinds.is_empty());
+        assert_eq!(runtime.queue.pending.len(),1);
+        assert_eq!(runtime.views.len(),1);
+        assert_eq!(runtime.recognition_lifecycle,0);
+    }
+
+    type TestHost = crate::Host<crate::data::NoStoryData, ddstory::scripted::ScriptedHost>;
+    fn recognition_host() -> Option<(TestHost, u32)> {
+        let root = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !root.is_dir() { return None; }
+        let vfs = ddvfs::Vfs::open(&root).unwrap();
+        let file = ddexe::ExeFile::next_to(&root).unwrap();
+        let mut host = TestHost::new(ddsim::Sim::new(Default::default()), None,
+            Default::default(), Box::new(Flat));
+        host.join(ProfileId(41), crate::Control::Local, [0.0;3], 0.0).unwrap();
+        host.join(ProfileId(42), crate::Control::Local, [0.0;3], 0.0).unwrap();
+        host.join(ProfileId(43), crate::Control::Remote, [0.0;3], 0.0).unwrap();
+        let mut fight = ddenemyrt::fight::Fight::new(Arc::new(
+            ddenemyrt::fight::FightData::load(&vfs, &file.image().unwrap()).unwrap()));
+        let owner = fight.add_goblin([0.0,0.0,100.0], 0.0);
+        host.fight = Some(fight);
+        Some((host,owner))
+    }
+    fn camera(host: &TestHost, profile: u64) -> RecognitionView {
+        RecognitionView { profile: ProfileId(profile), eye: [0.0;3],
+            planes: [[0.0,0.0,1.0,1000.0];6], frame: host.frame,
+            lifecycle: host.pawn_chatter.recognition_lifecycle() }
+    }
+
+    #[test]
+    fn installed_recognition_unions_seated_views_requires_drawn_body_and_consumes_once() {
+        let Some((mut host,owner)) = recognition_host() else { return; };
+        let drawn = [DrawnEnemy { owner, sphere: [0.0,0.0,100.0,20.0] }];
+        // A camera alone is insufficient, even for an enemy in its frustum.
+        host.observe_pawn_recognition(camera(&host,41), &[]).unwrap();
+        host.frame += 1;
+        assert!(host.step_pawn_recognition(ddsim::MOTION_FPS * 3.0).is_empty());
+        for _ in 0..3 {
+            let mut hidden = camera(&host,41);
+            hidden.planes[0] = [0.0,0.0,-1.0,-1000.0];
+            host.observe_pawn_recognition(hidden, &drawn).unwrap();
+            host.observe_pawn_recognition(camera(&host,42), &drawn).unwrap();
+            host.frame += 1;
+            host.step_pawn_recognition(ddsim::MOTION_FPS);
+        }
+        assert!(host.pawn_chatter.recognized[&owner].recognized,
+            "a second currently seated camera can recognize a shared enemy");
+        host.frame += 1;
+        host.step_pawn_recognition(ddsim::MOTION_FPS * 10.0);
+        assert!(host.pawn_chatter.recognized[&owner].recognized, "strict native lost >10 boundary");
+        host.frame += 1;
+        assert!(host.step_pawn_recognition(ddsim::MOTION_FPS).is_empty(),
+            "consumed views cannot keep recognizing enemies on later frames");
+    }
+
+    #[test]
+    fn installed_recognition_rejects_guest_stale_and_invalid_owner_without_mutation() {
+        let Some((mut host,owner)) = recognition_host() else { return; };
+        let drawn = [DrawnEnemy { owner, sphere: [0.0,0.0,100.0,20.0] }];
+        let before = host.state_hash();
+        assert!(host.observe_pawn_recognition(camera(&host,43), &drawn).is_err());
+        assert!(host.observe_pawn_recognition(camera(&host,99), &drawn).is_err());
+        let mut stale = camera(&host,41); stale.frame += 1;
+        assert!(host.observe_pawn_recognition(stale, &drawn).is_err());
+        stale = camera(&host,41); stale.lifecycle += 1;
+        assert!(host.observe_pawn_recognition(stale, &drawn).is_err());
+        let invalid = [DrawnEnemy { owner: owner.wrapping_add(1), ..drawn[0] }];
+        assert!(host.observe_pawn_recognition(camera(&host,41), &invalid).is_err());
+        assert!(host.observe_pawn_recognition(camera(&host,41), &[drawn[0];2]).is_err());
+        assert_eq!(host.state_hash(), before);
+        let previous = camera(&host,41);
+        host.observe_pawn_recognition(previous.clone(), &drawn).unwrap();
+        host.pawn_chatter.clear_pending();
+        assert!(host.pawn_chatter.views.is_empty());
+        assert!(host.observe_pawn_recognition(previous, &drawn).is_err(),
+            "same-frame load/stage replacement invalidates an older lifecycle");
+    }
+
+    #[test]
+    fn installed_recognition_same_frame_leave_rejoin_cannot_inherit_camera() {
+        let Some((mut host,owner)) = recognition_host() else { return; };
+        let previous = camera(&host,41);
+        host.observe_pawn_recognition(previous.clone(),
+            &[DrawnEnemy { owner, sphere: [0.0,0.0,100.0,20.0] }]).unwrap();
+        let seat = host.roster.seats().iter().find(|seat| seat.profile == ProfileId(41)).unwrap().id;
+        host.leave(seat);
+        host.join(ProfileId(41), crate::Control::Local, [0.0;3], 0.0).unwrap();
+        assert!(host.pawn_chatter.views.is_empty());
+        assert!(host.observe_pawn_recognition(previous, &[]).is_err());
+        host.frame += 1;
+        assert!(host.step_pawn_recognition(ddsim::MOTION_FPS * 3.0).is_empty());
     }
 
     #[test]
@@ -372,6 +669,9 @@ mod tests {
         let messages = runtime.step(2, 1.0, true, &[pawn(Command::Go, &record)], &[], &[], &[], &audience);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].audience, audience);
+        let attempt = runtime.fork_for_retry();
+        assert!(Arc::ptr_eq(runtime.data.as_ref().unwrap(), attempt.data.as_ref().unwrap()));
+        assert_eq!(attempt.next_id, messages[0].id);
         assert!(runtime.step(3, 1.0, true, &[pawn(Command::Go, &record)], &[], &[], &[], &audience).is_empty());
         runtime.queue.offer(Pending { speaker: 1, message: 901, priority: 1,
             remaining: 90.0, grouped: false });
@@ -386,5 +686,27 @@ mod tests {
             network_id: vec![], hired_at: 0 };
         assert!(runtime.step(5, 1.0, true, &[rebound], &[], &[], &[], &audience).is_empty());
         assert!(runtime.queue.pending.is_empty(), "same ROM template, different hirer retires pending speech");
+    }
+
+    #[test]
+    fn installed_combat_notice_retries_without_speaker_and_marks_only_supported_family() {
+        let root = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !root.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(root).unwrap();
+        let data = Arc::new(Data::load(&vfs).unwrap());
+        assert!(data.enemies.supports_kind(5,0), "actual uEm0100 family has a native first-seen row");
+        let mut runtime = Runtime::with_data(data);
+        runtime.combat = vec![(5,0),(5,0)];
+        assert!(runtime.step(1,1.0,true,&[],&[],&[],&[],&[]).is_empty());
+        assert!(!runtime.seen_kinds.contains(&5), "no eligible speaker retries on the next phase");
+        let record = ddpawn::cmc::Cmc::initial();
+        let pawn = Pawn { slot: 1, seat: 6, record: &record, identity: Identity::Main { profile: ProfileId(41) },
+            living: true, ready: true, command: Command::None, goal: None };
+        runtime.step(2,1.0,true,&[pawn],&[],&[],&[],&[ProfileId(41)]);
+        assert!(runtime.seen_kinds.contains(&5), "selected speaker marks family even without a knowledge phrase");
+        runtime.combat.clear();
+        runtime.step(3,1.0,true,&[],&[],&[],&[],&[]);
+        assert!(runtime.seen_kinds.is_empty(), "empty combat list resets encounter history");
     }
 }

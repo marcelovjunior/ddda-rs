@@ -332,6 +332,12 @@ struct EnemyPhrases {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnemyTables { rows: [Vec<EnemyPhrases>; 3] }
 impl EnemyTables {
+    // Translated from 0x008BC6A0 (DDDA.exe 2017-12-13 Steam).
+    // Combat notice admission ignores knowledge; phrase choice does not.
+    pub fn supports_kind(&self, kind: u32, variant: u32) -> bool {
+        self.rows[EnemyNotice::FirstSeen as usize].iter().any(|row|
+            row.kind == kind && (kind != 0x8e || row.variant == variant))
+    }
     // Translated from 0x00599C50 / 0x008BC5F0 / 0x008BC630
     // (DDDA.exe 2017-12-13 Steam). Bulk records remain installed data.
     pub fn from_exe(exe: &Exe<'_>) -> Result<Self, String> {
@@ -776,6 +782,10 @@ mod tests {
                 record(0x8E, 2, 0, vec![904]), record(0x8E, 3, 0, vec![905])],
             vec![record(7, 0, 0x2840, vec![906]), record(7, 0, 0, vec![])],
         ] };
+        assert!(tables.supports_kind(7, 99), "presence ignores knowledge and ordinary variants");
+        assert!(tables.supports_kind(0x8E, 3));
+        assert!(!tables.supports_kind(0x8E, 4));
+        assert!(!tables.supports_kind(8, 0));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 7, 99, &[0, 2], || 3), Some(902));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 7, 99, &[0, 1], || 0), Some(903));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 0x8E, 3, &[], || 0), Some(905));

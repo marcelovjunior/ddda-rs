@@ -4,6 +4,8 @@
 //! remain explicit unsupported paths; no replacement wording is generated.
 
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
+use bevy::camera::{primitives::Frustum, visibility::VisibleEntities};
 use ddhost::pawn_chatter::{Bank, Message};
 use std::collections::HashMap;
 
@@ -28,6 +30,84 @@ pub(crate) fn queue(commands: &mut Commands, messages: &[Message]) {
     commands.queue(move |world: &mut World| {
         if let Some(mut inbox) = world.get_resource_mut::<Inbox>() { inbox.0.extend(messages); }
     });
+}
+
+/// Thin local-camera observation for the host's native recognition clocks.
+/// VisibleEntities is specific to this FollowCam, unlike ViewVisibility's
+/// union over all views. Guests have no camera transport yet.
+#[derive(SystemParam)]
+pub(crate) struct RecognitionObserver<'w, 's> {
+    view: Option<Res<'w, View>>,
+    spheres: Local<'s, HashMap<String, [f32;4]>>,
+    cameras: Query<'w, 's, (&'static GlobalTransform, &'static Frustum,
+        &'static VisibleEntities), With<crate::play::FollowCam>>,
+    roots: Query<'w, 's, &'static GlobalTransform>,
+    parents: Query<'w, 's, &'static ChildOf>,
+}
+/// Keeps opening::step within Bevy's system-parameter tuple limit.
+#[derive(SystemParam)]
+pub(crate) struct PawnDevices<'w,'s> {
+    pub orders: crate::play::PawnOrderDevices<'w,'s>,
+    pub recognition: RecognitionObserver<'w,'s>,
+}
+impl RecognitionObserver<'_, '_> {
+    /// Call before a fixed host tick. The renderer's last completed visible
+    /// mesh list and transforms are one coherent local observation; the host
+    /// consumes it once. Animated actor-bound updates remain OPEN: this
+    /// adapter transforms the installed MOD model sphere, not a guessed size.
+    pub(crate) fn submit<D: ddstory::data::Data, W: ddhost::StoryWorld>(
+        &mut self, host: &mut ddhost::Host<D,W>, state: &crate::play::PlayState) {
+        let Some(view) = self.view.as_ref() else { return; };
+        let Ok((camera,frustum,visible)) = self.cameras.single() else { return; };
+        let Some(seat) = host.roster.seat(state.follow) else { return; };
+        if seat.control != ddhost::Control::Local { return; }
+        let observation = ddhost::pawn_chatter::RecognitionView {
+            profile: seat.profile, eye: (camera.translation() / crate::stage::UNIT + state.origin).to_array(),
+            planes: std::array::from_fn(|i| {
+                let half_space = &frustum.half_spaces[i];
+                game_plane(half_space.normal().into(), half_space.d(), state.origin)
+            }), frame: host.frame, lifecycle: host.pawn_chatter.recognition_lifecycle(),
+        };
+        let Some(fight) = host.fight.as_ref() else { return; };
+        let path = &fight.data.goblin.model;
+        let sphere = if let Some(sphere) = self.spheres.get(path) { *sphere } else {
+            let result = view.vfs.read(path, mtarc::type_hash("rModel"))
+                .and_then(|bytes| mtmod::parse(&bytes).map(|model| model.sphere).map_err(|error| error.to_string()));
+            let Ok(sphere) = result else { return; };
+            self.spheres.insert(path.clone(), sphere);
+            sphere
+        };
+        let meshes = visible.get(std::any::TypeId::of::<Mesh3d>());
+        let mut drawn = Vec::new();
+        for (goblin, body) in fight.goblins.iter().zip(&state.goblins) {
+            let admitted = meshes.iter().any(|&mesh| {
+                let mut at = mesh;
+                loop {
+                    if at == body.entity { return true; }
+                    let Ok(parent) = self.parents.get(at) else { return false; };
+                    at = parent.parent();
+                }
+            });
+            if !admitted { continue; }
+            let Ok(transform) = self.roots.get(body.entity) else { continue; };
+            drawn.push(ddhost::pawn_chatter::DrawnEnemy { owner: goblin.fighter.owner,
+                sphere: game_sphere(transform, sphere, state.origin) });
+        }
+        if let Err(error) = host.observe_pawn_recognition(observation, &drawn) {
+            warn!("S52 local recognition observation rejected: {error}");
+        }
+    }
+}
+
+fn game_plane(normal: Vec3, d: f32, origin: Vec3) -> [f32;4] {
+    [normal.x,normal.y,normal.z,d / crate::stage::UNIT - normal.dot(origin)]
+}
+fn game_sphere(transform: &GlobalTransform, sphere: [f32;4], origin: Vec3) -> [f32;4] {
+    // character::spawn puts native cm vertices under the UNIT-scaled root.
+    let center = transform.transform_point(Vec3::from_slice(&sphere[..3])) / crate::stage::UNIT + origin;
+    let (scale,_,_) = transform.to_scale_rotation_translation();
+    let radius = sphere[3] * scale.abs().max_element() / crate::stage::UNIT;
+    [center.x,center.y,center.z,radius]
 }
 
 #[derive(Clone)]
@@ -239,6 +319,21 @@ fn update(mut commands: Commands, mut inbox: ResMut<Inbox>, view: Option<ResMut<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognition_camera_planes_and_installed_sphere_share_game_coordinates() {
+        let origin = Vec3::new(1000.0,2000.0,3000.0);
+        let transform = GlobalTransform::from(Transform::from_translation(Vec3::new(1.0,2.0,3.0))
+            .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
+            .with_scale(Vec3::splat(crate::stage::UNIT)));
+        let sphere = game_sphere(&transform, [100.0,0.0,0.0,20.0], origin);
+        assert!((Vec3::from_slice(&sphere[..3]) - Vec3::new(1100.0,2200.0,3200.0)).length() < 0.001);
+        assert_eq!(sphere[3],20.0);
+        let plane = game_plane(Vec3::Z, -2.5, origin);
+        let game_distance = Vec3::Z.dot(Vec3::from_slice(&sphere[..3])) + plane[3];
+        let world_distance = transform.transform_point(Vec3::new(100.0,0.0,0.0)).z - 2.5;
+        assert!((game_distance * crate::stage::UNIT - world_distance).abs() < 0.001);
+    }
 
     #[test]
     fn installed_cmc_gui_binds_original_font_hierarchy_decimal_text_and_voice() {

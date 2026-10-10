@@ -131,7 +131,49 @@ frame's `mainDelta/FPS`, including fractional frames. Seen must exceed
 recognition. Visibility preserves sphere-plane tangency and distance
 equality at 9,000,000 cm². Actual camera planes, transformed actor sphere
 and native collision-ray outcome are required inputs, not fabricated here.
-N-profile camera/frustum admission policy is pending head's decision.
+Head approved N-profile camera/frustum admission in board 7840: union any
+currently seated local profile's submitted view; no submitted view gives no
+visibility. Guest camera transport is explicitly open, with no protocol 10
+camera extension. Board 7881 keeps model-resource decoding in the viewer:
+the host accepts typed drawn owners and transformed installed spheres.
+
+The source adapter now rejects unknown/remote profiles, stale frames or
+lifecycle tokens, unadmitted enemy owners, duplicate owners and invalid
+spheres before changing state. It consumes observations once. Successful
+load, stage replacement or leave invalidate the token, including same-frame
+profile leave/rejoin. The short successful `Host::leave` hook was coordinated
+with S53 and normally claimed/released. `fork_for_retry()` (head 7940)
+retains installed data, the RNG stream and monotonic message IDs while
+discarding pending speech, audiences, camera observations and encounter
+state; it leaves the current attempt untouched.
+
+`0x00414130` processes at most one supported new enemy family per phase.
+`0x008BC6A0` checks installed first-seen row presence without knowledge
+gating; `0x004142B7..0x00414307` chooses Additional only from later equal or
+aliased combat entries. Alias triples (`0x0153D8B8`, caller `0x00412F60`)
+stay installed runtime data. No eligible speaker leaves the family unseen;
+an eligible speaker marks it even without a matching phrase. Global combat
+notices use list1 (`0x00414365`); an own-pawn dead-foe notice uses list0
+(`0x00584F9E`). `uEm0100` constructor `0x008CD605..0x008CD612` writes kind5
+to actor+2D. The adapter currently supplies the recognized goblin branch;
+the separate native pawn sensor2 producer remains open.
+
+The viewer observer uses FollowCam's own `VisibleEntities` mesh list and
+the actual renderer root transform, installed MOD sphere, camera eye and
+six frustum planes. It converts metres/origin back into game centimetres.
+Animated native actor-bound updates, additional `0x005A02F0` controller/model
+guards, recognition-manager phase ordering and collision mask `0x4081D01C`
+remain open. Existing `Ground::ray` supplies actual geometry, with no invented
+layer filter or replacement combat radius. Hire greetings and general low-HP
+text producers also remain open: Rook recruitment `0x00440190` has no direct
+speech call; situation149 at `0x004D55E2` belongs to
+`cEm7000ActRimSummonCaughtPl`, not ordinary recruitment. `0x005ABAD0` is
+damage/health-tier action voice logic, not proof of a general low-HP text
+threshold. Existing q0002 exports did not identify an authored CmcMessage.
+
+There are now 19 follow-up source-present tests (core5, host10, net2,
+viewer2), all still unexecuted. The original core checkpoint's actual
+67-pass result remains the only S52 validation result.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
@@ -152,13 +194,23 @@ host.pawn_chatter = ddhost::pawn_chatter::Runtime::with_data(std::sync::Arc::new
     ddhost::pawn_chatter::Data::load(&vfs)?));
 // step(), after the successful host.tick_network result:
 crate::pawn_chatter::queue(&mut stage_view.commands, &report.pawn_messages);
+// step() parameter: replace order_devices: play::PawnOrderDevices with:
+mut pawn_devices: crate::pawn_chatter::PawnDevices,
+// Existing order device references become:
+let keys = &pawn_devices.orders.keys;
+let gamepads = &pawn_devices.orders.gamepads;
+// Immediately before each host.tick_network, after scenario_field_cells:
+pawn_devices.recognition.submit(&mut *s.host, st);
+// enter_stage(), at the successful tail before StageLoaded is reported:
+s.host.pawn_chatter.clear_pending();
 // guest_step(), in the existing drain of client.events, before PlayEvent:
 if let ddnet::proto::ToClient::PawnMessage(message) = &event {
     crate::pawn_chatter::queue(&mut view.commands, std::slice::from_ref(message));
 }
 ```
 
-Next actual gate: integrate reviewed committed main with the S53 transactional
-loader and head's capsule-swept push-out fix, then obtain the normal full
-touched/downstream Cargo window and viewer release window. No follow-up
+Reviewed main18a4ca5, containing the S53 transactional loader and head's
+capsule-swept push-out fix, was cleanly integrated into this task branch.
+Next actual gate: obtain the normal full touched/downstream Cargo window
+and viewer release window. No follow-up
 Cargo run, GPU work, original process control or capture has occurred.

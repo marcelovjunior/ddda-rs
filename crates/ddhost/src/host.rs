@@ -340,6 +340,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Unseats an Arisen: its body leaves the world and its locks go.
     pub fn leave(&mut self, id: PlayerId) {
         if let Some(seat) = self.roster.leave(id) {
+            self.pawn_chatter.forget_profile(seat.profile);
             self.detach_profile(seat.profile, id);
             self.sim.players.retain(|p| p.id != id);
             self.edges.forget(id);
