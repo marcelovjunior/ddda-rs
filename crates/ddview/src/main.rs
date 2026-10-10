@@ -833,6 +833,7 @@ fn setup(
         }
     }
     if !args.play {
+        // Static nonfield reference captures need the authored stage bundle.
         if args.stage != 100 {
             event::spawn_stage_models(&mut commands,&mut loader,&mut meshes,&mut materials,&mut images,args.stage);
         }
@@ -1103,11 +1104,17 @@ struct SkyShadowSetting(Option<sky::SkyShadow>);
 fn sky_shadow(
     mut commands: Commands,
     setting: Option<Res<SkyShadowSetting>>,
-    lights: Query<Entity, (With<DirectionalLight>, Without<ShadowSet>)>,
+    mut lights: Query<(Entity, &mut Transform), (With<DirectionalLight>, Without<ShadowSet>)>,
 ) {
     let Some(setting) = setting else { return };
     let Some(sh) = setting.0 else { return };
-    for e in &lights {
+    for (e, mut transform) in &mut lights {
+        // The custom stage material retains the direct sun direction.
+        // This Bevy light provides its shadow map: weather0x004c1110 and
+        // uSkyStableShadow0x00c6c970 use the separately elevated direction.
+        let sun = transform.rotation * Vec3::Z;
+        let shadow = Vec3::from(mtweather::sky::shadow_direction(sun.to_array(), sh.direction_limit));
+        transform.rotation = Transform::IDENTITY.looking_to(-shadow, Vec3::Y).rotation;
         let far = sh.view_distance * stage::UNIT;
         let config = bevy::light::CascadeShadowConfigBuilder {
             num_cascades: 1,

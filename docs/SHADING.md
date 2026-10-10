@@ -613,3 +613,81 @@ Decoder/basis and material-selection regressions pass. A release build
 and bounded field capture (480 meshes, 397 instances) passed without WGSL
 pipeline errors. This does not establish visual agreement with the
 original; see the render-fidelity brief for the comparison status.
+
+### Ambient-occlusion filter source audit
+
+The executable contains a separate `uAmbientOcclusionFilter`; this is
+not accounted for by the already supported mesh Occlusion byte.
+Constructor **0x010460f0** and reflection **0x01046250** identify:
+
+| Offset | Property | Constructor default |
+| --- | --- | --- |
+| +0x280 | mLocalSpaceOccRadius | 10 |
+| +0x284 | mLocalSpaceFallOff | 1 |
+| +0x288 | mGlobalSpaceOccRadius | 20 |
+| +0x28c | mGlobalSpaceFallOff | 1 |
+| +0x290 | mDistanceDispersion | 2 |
+| +0x294 | mIntensityDispersion | 5 |
+| +0x298 | mIntensity | 1 |
+| +0x2a0 | mBounceIntensity | 1 |
+| +0x2ac | mOccDecayRatio | 2 |
+| +0x2b0 | mBlurTapNum | 5 |
+| +0x2b8 | mMaxRadius | 0.1 |
+| +0x2bc | mAmbientMaskGroup | 0 |
+
+These are constructor observations, not values to hard-code for a stage.
+The authored/live settings and enable conditions still need to be read.
+Draw callback **0x0104a870** binds +0x40/+0x44 as `tSSAONarrowMap` and
+`tSSAOWideMap` (MFX indices 0x387/0x388). It uploads intensity and bounce
+intensity to `CBSSAOFFilterIntensity` (0x29b), selects
+`FSSAOApplyAmbientOcclusion` (0x7c8), and chooses one of four
+`BSAmbientMaskGroup0..3` states (0x265..0x268) using +0x2bc. Optional
+bounce follows through **0x0104a320**; its formula is not translated yet.
+The underlying map generation/blur callbacks, active Cassardis settings
+and final material mask consumption need comparison before implementing
+this pass. The existence of this filter alone does not prove it was
+active in a particular screenshot.
+
+An additional ordinary material shader, `sc/DX9/Stage200` PS file offset
+**0x242be4**, confirms that the decoded perturbed normal feeds the SH
+lighting evaluation and that the same alpha/green midpoint and Z floor
+apply in a material pass, not just the normal buffer. Vertex occlusion
+then multiplies the resulting light.
+
+The stage-100 and stage-200 `scr/st*/sdl/st*_f00` schedulers were also
+read directly from the installed archives. Their spawned filter units
+are DOFFilter, ImagePlaneFilter and ColorCorrectFilter; neither contains
+an AO unit. This narrows the activation investigation to another owner
+or scheduler; it does not establish that AO is absent at run time.
+
+### Separate shadow-map direction
+
+The misplaced Cassardis road shadow exposed a separate engine direction.
+Weather update **0x004c1110** reads the sky vector through **0x004baa50**,
+replaces Y with `(1 - limit) * abs(Y) + limit`, and normalizes the result
+into manager +0xd0. Reflection **0x004bca80** names the limit at +0xe0
+`mShadowLimit`; constructor **0x004bb200** initializes it to 0.5. The
+stage reader uses an authored value when present and that sourced default
+otherwise. It does not replace the direct sun vector used for shading.
+
+`uSkyStableShadow::vf08` **0x00c6c970** copies manager +0xd0 into the
+shadow unit +0x160, unless manager +0x9b4 bit5 selects the explicit +0x9e0
+override. The viewer now points its shadow-map light along this separate
+direction. Scripted overrides and the remaining shadow distance/bias
+parameters are not handled by this change.
+
+At a paused Cassardis clock of 16:30:31, direct sunlight was approximately
+(-0.8486884, 0.5286690, -0.0154015), while the weather shadow vector was
+(-0.7430023, 0.6691529, -0.0134836). The translated calculation matches
+within 0.000001 per component. The shadow unit agrees within 0.000013;
+its preceding update accounts for that small difference. These live
+reads changed no game state. Two regression tests cover the recorded
+vector and the night/limit branches; targeted Clippy passes with only the
+pre-existing type-complexity test fixtures allowed. Release build passed
+in 40.57 seconds after merging current main and retaining one preview hook.
+
+The repeated 16:06:11 street capture with the translated shadow direction
+puts the sunlit wedge across the road near the original boundary, fixing
+the large footprint discrepancy. The edge remains visibly softer than
+the original. This is a qualitative same-pose check, not a full image
+match; the actor/HUD and vegetation are excluded from the static preview.
