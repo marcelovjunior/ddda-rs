@@ -149,7 +149,7 @@ fn repair_gpu_frusta(planes: Res<FinitePlanes>,
     for (kind, view, mut frustum) in &mut views {
         if !matches!(kind, LightEntity::Directional { .. }) { continue; }
         let retained = view.retained_view_entity;
-        let key = (retained.main_entity.into(), retained.auxiliary_entity.into(), retained.subview_index);
+        let key = (*retained.main_entity, *retained.auxiliary_entity, retained.subview_index);
         if let Some(&plane) = planes.0.get(&key) { *frustum = with_plane(*frustum, plane); }
     }
 }
@@ -254,7 +254,7 @@ mod tests {
         let mut frustum = Frustum::default();
         frustum.half_spaces = [HalfSpace::new(Vec4::new(1.0, 0.0, 0.0, 1000.0)); 6];
         let mut cascades = Cascades::default();
-        cascades.cascades.insert(camera, vec![bevy::light::Cascade {
+        cascades.cascades.insert(camera, vec![bevy::light::cascade::Cascade {
             world_from_cascade: Mat4::IDENTITY, ..Default::default()
         }]);
         let mut frusta = CascadesFrusta::default();
