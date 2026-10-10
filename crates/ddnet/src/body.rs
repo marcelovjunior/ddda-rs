@@ -11,7 +11,7 @@
 
 use ddid::{Reader, Result, Writer};
 use ddsim::ledge::{Hang, Ledge};
-use ddsim::attack::{Attack, ShotPhase};
+use ddsim::attack::{Attack, BowLayer, BowMovement, BowPhase, BowState, BowUnsupported, ShotPhase, Weapon};
 use ddsim::{GrabPhase, Hold, JumpParam, Player, PlayerId, State};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,9 @@ pub struct Body {
     pub stamina_max: f32,
     pub unit_rate: f32,
     pub hold: Option<Hold>,
+    pub secondary_weapon: Weapon,
+    pub bow: Option<BowState>,
+    pub bow_latched: bool,
 }
 
 impl Body {
@@ -59,6 +62,9 @@ impl Body {
             stamina_max: p.stamina_max,
             unit_rate: p.unit_rate,
             hold: p.hold,
+            secondary_weapon: p.secondary_weapon,
+            bow: p.bow,
+            bow_latched: p.bow_latched,
         }
     }
 
@@ -82,6 +88,9 @@ impl Body {
         p.stamina_max = self.stamina_max;
         p.unit_rate = self.unit_rate;
         p.hold = self.hold;
+        p.secondary_weapon = self.secondary_weapon;
+        p.bow = self.bow;
+        p.bow_latched = self.bow_latched;
     }
 
     /// A body between `a` and `b` at `t` in 0..1, for showing other
@@ -111,7 +120,8 @@ const MOTION: u16 = 64;
 const STAMINA: u16 = 128;
 const RATE: u16 = 256;
 const HOLD: u16 = 512;
-const ALL: u16 = 1023;
+const BOW: u16 = 1024;
+const ALL: u16 = 2047;
 
 fn v3(w: &mut Writer, v: [f32; 3]) {
     w.f32(v[0]).f32(v[1]).f32(v[2]);
@@ -183,12 +193,17 @@ fn state(w: &mut Writer, s: State) {
             w.u8(16).u8(p);
             return;
         }
+        State::Bow { phase, motion } => {
+            w.u8(18).u8(phase as u8).u16(motion);
+            return;
+        }
     };
     w.u8(tag).bool(a).bool(b);
 }
 
 fn read_state(r: &mut Reader) -> Result<State> {
     let tag = r.u8()?;
+    if tag == 18 { return Ok(State::Bow { phase: read_bow_phase(r)?, motion: r.u16()? }); }
     if tag == 15 {
         let attack = match r.u8()? {
             0 => Attack::SwordLight1,
@@ -256,6 +271,61 @@ fn read_state(r: &mut Reader) -> Result<State> {
     })
 }
 
+fn read_bow_phase(r: &mut Reader) -> Result<BowPhase> {
+    Ok(match r.u8()? {
+        0 => BowPhase::Draw, 1 => BowPhase::Ready, 2 => BowPhase::Shot,
+        3 => BowPhase::Change, 4 => BowPhase::Released,
+        tag => return Err(format!("bow phase {tag}")),
+    })
+}
+
+fn bow(w: &mut Writer, b: Option<BowState>) {
+    w.bool(b.is_some());
+    let Some(b) = b else { return };
+    w.u8(b.phase as u8).u8(b.movement as u8);
+    for layer in [b.upper, b.lower] {
+        w.u16(layer.motion).f32(layer.frame).f32(layer.rate).bool(layer.looping);
+    }
+    let tag = match b.unsupported {
+        None => 0, Some(BowUnsupported::Movement) => 1, Some(BowUnsupported::Air) => 2,
+        Some(BowUnsupported::Shot) => 3, Some(BowUnsupported::Change) => 4,
+        Some(BowUnsupported::MissingMotion(_)) => 5,
+    };
+    w.u8(tag);
+    if let Some(BowUnsupported::MissingMotion(id)) = b.unsupported { w.u16(id); }
+}
+
+fn read_bow(r: &mut Reader) -> Result<Option<BowState>> {
+    if !r.bool()? { return Ok(None) }
+    let phase = read_bow_phase(r)?;
+    let movement = match r.u8()? {
+        0 => BowMovement::Standing, 1 => BowMovement::Moving,
+        2 => BowMovement::Jumping, 3 => BowMovement::Falling,
+        tag => return Err(format!("bow movement {tag}")),
+    };
+    let mut layer = || -> Result<BowLayer> {
+        Ok(BowLayer { motion: r.u16()?, frame: r.f32()?, rate: r.f32()?, looping: r.bool()? })
+    };
+    let (upper, lower) = (layer()?, layer()?);
+    let unsupported = match r.u8()? {
+        0 => None, 1 => Some(BowUnsupported::Movement), 2 => Some(BowUnsupported::Air),
+        3 => Some(BowUnsupported::Shot), 4 => Some(BowUnsupported::Change),
+        5 => Some(BowUnsupported::MissingMotion(r.u16()?)),
+        tag => return Err(format!("bow unsupported {tag}")),
+    };
+    Ok(Some(BowState { phase, movement, upper, lower, unsupported }))
+}
+
+fn weapon(w: &mut Writer, weapon: Weapon) {
+    w.u8(match weapon { Weapon::None => 0, Weapon::Sword => 1, Weapon::Staff => 2,
+        Weapon::Dagger => 3, Weapon::Bow => 4 });
+}
+
+fn read_weapon(r: &mut Reader) -> Result<Weapon> {
+    Ok(match r.u8()? { 0 => Weapon::None, 1 => Weapon::Sword, 2 => Weapon::Staff,
+        3 => Weapon::Dagger, 4 => Weapon::Bow, tag => return Err(format!("weapon {tag}")) })
+}
+
 fn hold(w: &mut Writer, h: &Option<Hold>) {
     w.bool(h.is_some());
     if let Some(h) = h {
@@ -306,6 +376,7 @@ pub fn write(w: &mut Writer, b: &Body, base: Option<&Body>) {
         set(STAMINA, o.stamina == b.stamina && o.stamina_max == b.stamina_max);
         set(RATE, o.unit_rate == b.unit_rate);
         set(HOLD, o.hold == b.hold);
+        set(BOW, o.secondary_weapon == b.secondary_weapon && o.bow == b.bow && o.bow_latched == b.bow_latched);
     }
     w.u8(b.id).u16(mask);
     if mask & POSITION != 0 {
@@ -340,6 +411,11 @@ pub fn write(w: &mut Writer, b: &Body, base: Option<&Body>) {
     if mask & HOLD != 0 {
         hold(w, &b.hold);
     }
+    if mask & BOW != 0 {
+        weapon(w, b.secondary_weapon);
+        bow(w, b.bow);
+        w.bool(b.bow_latched);
+    }
 }
 
 /// Reads one body; `base` finds the baseline body of an id (a delta
@@ -369,6 +445,9 @@ pub fn read(r: &mut Reader, base: &dyn Fn(PlayerId) -> Option<Body>) -> Result<B
             stamina_max: 0.0,
             unit_rate: 1.0,
             hold: None,
+            secondary_weapon: Weapon::None,
+            bow: None,
+            bow_latched: false,
         },
         None => return Err(format!("delta for body {id} without a baseline")),
     };
@@ -409,6 +488,11 @@ pub fn read(r: &mut Reader, base: &dyn Fn(PlayerId) -> Option<Body>) -> Result<B
     }
     if mask & HOLD != 0 {
         b.hold = read_hold(r)?;
+    }
+    if mask & BOW != 0 {
+        b.secondary_weapon = read_weapon(r)?;
+        b.bow = read_bow(r)?;
+        b.bow_latched = r.bool()?;
     }
     Ok(b)
 }
@@ -451,6 +535,46 @@ mod tests {
         let mut w = Writer::new();
         write(&mut w, &a, Some(&a));
         assert_eq!(w.finish().len(), 3);
+    }
+
+    #[test]
+    fn bow_layers_secondary_and_latch_round_trip_and_apply_in_deltas() {
+        let mut current = body();
+        current.secondary_weapon = Weapon::Bow;
+        current.bow_latched = true;
+        current.bow = Some(BowState {
+            phase: BowPhase::Ready, movement: BowMovement::Standing,
+            upper: BowLayer { motion: 0x906, frame: 3.5, rate: 1.0, looping: true },
+            lower: BowLayer { motion: 0x907, frame: 7.25, rate: 1.0, looping: true },
+            unsupported: Some(BowUnsupported::Shot),
+        });
+        current.state = State::Bow { phase: BowPhase::Ready, motion: 0x907 };
+        for phase in [BowPhase::Draw, BowPhase::Ready, BowPhase::Shot, BowPhase::Change, BowPhase::Released] {
+            let base = current.clone();
+            current.bow.as_mut().unwrap().phase = phase;
+            current.state = State::Bow { phase, motion: 0x907 };
+            current.bow.as_mut().unwrap().upper.frame += 0.25;
+            let mut w = Writer::new();
+            write(&mut w, &current, None);
+            write(&mut w, &current, Some(&base));
+            let bytes = w.finish();
+            let mut r = Reader::new(&bytes);
+            assert_eq!(read(&mut r, &|_| None).unwrap(), current);
+            let restored = read(&mut r, &|_| Some(base.clone())).unwrap();
+            assert_eq!(restored, current);
+            r.end().unwrap();
+            let mut sim = ddsim::Sim::new(HashMap::new());
+            sim.add_player(current.id, [0.0; 3], 0.0);
+            restored.apply(sim.player_mut(current.id).unwrap());
+            assert_eq!(Body::of(sim.player(current.id).unwrap()), current);
+        }
+        let base = current.clone();
+        current.bow = None;
+        current.bow_latched = false;
+        let mut w = Writer::new();
+        write(&mut w, &current, Some(&base));
+        let bytes = w.finish();
+        assert_eq!(read(&mut Reader::new(&bytes), &|_| Some(base.clone())).unwrap(), current);
     }
 
     #[test]

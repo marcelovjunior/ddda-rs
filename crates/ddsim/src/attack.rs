@@ -47,6 +47,133 @@ pub enum Weapon {
     Staff,
     /// Dagger (category 4): `m0005_co` / `m0005_at`.
     Dagger,
+    /// Secondary shortbow (category 10), bank 9 `m0006_at`.
+    Bow,
+}
+
+/// Runtime projection of `nPlayer::nWpnBow::cBowActParam`; the host reads
+/// `rBowActParamList`. No shipped record is embedded in the simulation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowParam {
+    pub draw_upper: u8,
+    pub draw_lower: u8,
+    pub release_upper: u8,
+    pub release_lower: u8,
+    pub wait_upper: u8,
+    pub wait_lower: u8,
+    pub fall: u8,
+    pub end_at_zero_stamina: bool,
+    pub wait_stamina: f32,
+}
+
+/// The independent upper-body phase at action +0xC4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BowPhase {
+    Draw = 0,
+    Ready = 1,
+    /// Documented, deferred to S26 (shell firing and shot timing).
+    Shot = 2,
+    /// Documented, deferred until parameter/skill switching is supported.
+    Change = 3,
+    Released = 4,
+}
+
+/// The independent lower-body mode at action +0xB8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BowMovement {
+    Standing = 0,
+    Moving = 1,
+    Jumping = 2,
+    Falling = 3,
+}
+
+/// One motion layer; independent clocks matter when the draw finishes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowLayer {
+    pub motion: u16,
+    pub frame: f32,
+    pub rate: f32,
+    pub looping: bool,
+}
+
+impl BowLayer {
+    fn new(slot: u8, rate: f32, looping: bool) -> Self {
+        Self { motion: 0x900 | u16::from(slot), frame: 0.0, rate, looping }
+    }
+}
+
+/// Per-seat command 7 input, already mapped from the platform controls.
+/// `toggle` is a held key; its rising edge changes the seat's bow latch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BowInput {
+    pub held: bool,
+    pub toggle: bool,
+    /// The host supplies the result of vf16's global release restrictions.
+    pub release_blocked: bool,
+    /// Check 34 reads unit +0x2DD4 and `0x00535CB0(0)`.
+    pub unit_mode: u32,
+    pub stage_mode: u32,
+}
+
+/// A branch that this slice cannot execute faithfully. It is observable
+/// instead of silently substituting ordinary movement or dagger attacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BowUnsupported { Movement, Air, Shot, Change, MissingMotion(u16) }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowState {
+    pub phase: BowPhase,
+    pub movement: BowMovement,
+    pub upper: BowLayer,
+    pub lower: BowLayer,
+    pub unsupported: Option<BowUnsupported>,
+}
+
+impl BowState {
+    /// Translated from cPlActWpnBow::vf05 0x00B16FE0 (DDDA.exe
+    /// 2017-12-13 Steam), stationary shortbow branch. Upper draw uses
+    /// layer 1, lower draw uses layer 0. Other lower modes stay explicit.
+    pub fn draw(param: BowParam) -> Self {
+        Self {
+            phase: BowPhase::Draw, movement: BowMovement::Standing,
+            upper: BowLayer::new(param.draw_upper, 1.0, false),
+            lower: BowLayer::new(param.draw_lower, 1.0, false), unsupported: None,
+        }
+    }
+
+    /// Translated from vf06 0x00B17940, vf25 0x00B1C220 and state
+    /// dispatch 0x00B1AC90 (DDDA.exe 2017-12-13 Steam).
+    /// Completion is observed from the upper layer, never an invented timer.
+    pub fn update(&mut self, param: BowParam, held: bool, release_allowed: bool, upper_done: bool) -> bool {
+        if !matches!(self.phase, BowPhase::Draw | BowPhase::Released)
+            && release_allowed && !held {
+            self.phase = BowPhase::Released;
+            self.upper = BowLayer::new(param.release_upper, 1.2, false);
+            // 0x00B18CB0 case 4 selects +0xEB, also at rate 1.2.
+            self.lower = BowLayer::new(param.release_lower, 1.2, false);
+            return false;
+        }
+        match self.phase {
+            BowPhase::Draw if upper_done => {
+                self.phase = BowPhase::Ready;
+                // 0x00B1C7D0 (+0xF6); 0x00B18CB0 default (+0xF5).
+                self.upper = BowLayer::new(param.wait_upper, 1.0, true);
+                // Lower selection runs before this phase handler; its wait
+                // begins in the following action update, not inside vf25.
+            }
+            BowPhase::Released if upper_done => return true,
+            BowPhase::Shot => self.unsupported = Some(BowUnsupported::Shot),
+            BowPhase::Change => self.unsupported = Some(BowUnsupported::Change),
+            _ => {}
+        }
+        false
+    }
+}
+
+/// Translated from uPlayer::vf188 0x00B72DB0 case 0x22 (DDDA.exe
+/// 2017-12-13 Steam). Check 34 is not a vocation check.
+pub fn bow_check34(unit_mode: u32, stage_mode: u32) -> bool {
+    unit_mode != 15 || stage_mode == 2
 }
 
 /// A basic attack action.
@@ -355,7 +482,7 @@ pub fn next(
         };
     }
     match weapon {
-        Weapon::None => None,
+        Weapon::None | Weapon::Bow => None,
         Weapon::Sword => {
             if light {
                 Some(Request::Attack(match current {
