@@ -12,13 +12,15 @@
 //!   labelled stub, 1 Fighter or 2 Mage;
 //! - **talks** (`Host::talk`): E next to an NPC, lines as subtitles, E for
 //!   the next line, digits for choices;
-//! - the **NPCs** on their daily schedules (`ddnpcrt`), drawn with their
-//!   looks. The host completes their moves at once; the view walks them
-//!   there (*viewer choice*, 150 cm/s).
+//! - **NPCs** admitted from loaded, gated Cassardis layouts, including
+//!   owners whose daily graph is suspended by an authored action. Place
+//!   requests update host positions; Goto awaits a headless mover and Guard
+//!   awaits actor arbitration/cleanup observations. Neither is auto-completed.
 //!
-//! Walking into the 1300 volume runs the original's scripts: SceNo 1300,
-//! `bootEv_st200ev15`, event st200 ev15 (SceNo 1400), the NPC script that
-//! sets GSF 381, and the boot of q0002 "Upon a Pawn".
+//! The authored route passes SceNo 1300, `bootEv_st200ev15`, event st200
+//! ev15 (SceNo 1400), and the NPC script that sets GSF 381 before q0002.
+//! Real NPC prerequisites may currently stop that route; this adapter does
+//! not synthesize actor completion to satisfy the demo.
 //!
 //! `--demo` plays the slice by itself (weapon table, room exit, ev10, a
 //! talk with Quina, the walk out, ev15, q0002) and logs the flag and SceNo
@@ -133,6 +135,34 @@ impl HostHandle {
     }
 }
 
+/// Loaded NPC layouts and real actor requests, independent of graph-map membership.
+struct NpcAdapter {
+    layouts: ddhost::npc_placements::LoadedLayouts,
+    families: ddhost::npc_placements::NameFamilies,
+    guards: HashMap<u32, ddnpcrt::schedule::Guard>,
+    goto: HashMap<u32, [f32; 3]>,
+    placed: HashMap<u32, ([f32; 3], Option<[f32; 3]>)>,
+    bindings: HashMap<u32, (u32, ddstory::Target)>,
+    reported_stage: u32,
+}
+
+impl NpcAdapter {
+    fn cassardis(vfs: &ddvfs::Vfs, exe: &std::path::Path) -> Result<Self, String> {
+        let file = ddexe::ExeFile::open(exe).map_err(|error| error.0)?;
+        let families = ddhost::npc_placements::NameFamilies::from_exe(&file.image().map_err(|e| e.0)?)
+            .map_err(|error| error.0)?;
+        let list = ddhost::npc_placements::group_list(vfs, STAGE)?;
+        // Cassardis is loaded as a whole stage by opening::setup. Field
+        // admission must instead use actual streamer layout cells and archive
+        // readiness; this adapter does not pretend those observations exist.
+        let mut cells: Vec<_> = list.groups.iter().flat_map(|g| g.cells.iter().map(|c| (c.m, c.n))).collect();
+        cells.sort(); cells.dedup();
+        let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
+        Ok(Self { layouts, families, guards: HashMap::new(), goto: HashMap::new(),
+            placed: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+    }
+}
+
 /// The session (host frame stepping, the cutscene, the talk, the demo).
 pub struct Session {
     pub host: HostHandle,
@@ -153,6 +183,7 @@ pub struct Session {
     npcs: HashMap<u32, (Entity, Vec3, f32)>,
     npc_motions: (Option<mtlmt::Motion>, Option<mtlmt::Motion>),
     npc_moving: HashMap<u32, bool>,
+    npc_adapter: NpcAdapter,
     demo: Option<Demo>,
     /// `--shots <dir>`: a screenshot per step.
     shots: Option<PathBuf>,
@@ -229,17 +260,7 @@ pub fn prepare(
         })
         .collect();
     let sce = w.sce_no;
-    let ids = ddhost::install::stage_npcs(&vfs, STAGE, sce);
-    let mut spawned = 0;
-    for id in &ids {
-        if host.spawn_npc(*id, 1).unwrap_or(false) {
-            spawned += 1;
-        }
-    }
-    info!(
-        "opening: {spawned} NPCs on their stage-{STAGE} schedules ({} controllers)",
-        ids.len()
-    );
+    let npc_adapter = NpcAdapter::cassardis(&vfs, exe)?;
     let mut s = Session {
         host: HostHandle {
             local: Some(Box::new(host)),
@@ -259,6 +280,7 @@ pub fn prepare(
         npcs: HashMap::new(),
         npc_motions: (None, None),
         npc_moving: HashMap::new(),
+        npc_adapter,
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
             since: 0.0,
@@ -291,6 +313,76 @@ pub fn prepare(
 }
 
 impl Session {
+    fn sync_npc_intels(&mut self) -> Result<(), String> {
+        let stage = self.world().stage_no;
+        if stage != self.npc_adapter.layouts.stage {
+            if self.npc_adapter.reported_stage != stage {
+                warn!("opening: stage {stage} NPC materialization waits for loaded-layout/archive readiness adapter");
+                self.npc_adapter.reported_stage = stage;
+            }
+            // Stage unload is real; field materialization waits for its own
+            // loaded-cell/archive adapter rather than keeping Cassardis actors.
+            self.host.reconcile_story_npc_intels(STAGE, vec![]).map_err(|e| e.to_string())?;
+            self.npc_adapter.guards.clear();
+            self.npc_adapter.goto.clear();
+            self.npc_adapter.placed.clear();
+            self.npc_adapter.bindings.clear();
+            return Ok(());
+        }
+        let candidates = {
+            let (scene, hour, flag) = ddhost::spawns::world_inputs(self.world(), stage);
+            let world = ddhost::ddspawn::World { scene, hour, flag: &flag };
+            self.npc_adapter.layouts.candidates(&world)
+        };
+        let mut admitted = Vec::new();
+        for placement in candidates.placements {
+            match self.npc_adapter.families.select(&placement.transform.name) {
+                None => continue,
+                Some(true) => return Err("NPC MultiNpc materialization not implemented".into()),
+                Some(false) => admitted.push(placement),
+            }
+        }
+        // 0x004a76a0 has 200 slots. This stage's port owns only NPC intels;
+        // the bounded fresh-slot path is supported, priority eviction is not.
+        if admitted.len() > 200 { return Err("NPC intel pool priority eviction not implemented".into()); }
+        for (target, diagnostic) in self.host.reconcile_story_npc_intels(stage, admitted).map_err(|e| e.to_string())? {
+            warn!("opening: NPC placement {target:?}: {diagnostic}");
+        }
+        let owned: HashMap<_, _> = self.host.story_npc_intels()
+            .map(|p| (p.npc as u32, (p.stage, p.target))).collect();
+        for (&npc, old) in &self.npc_adapter.bindings {
+            if owned.get(&npc) != Some(old) {
+                self.npc_adapter.guards.remove(&npc);
+                self.npc_adapter.goto.remove(&npc);
+                self.npc_adapter.placed.remove(&npc);
+            }
+        }
+        Ok(())
+    }
+
+    fn npc_requests(&mut self, requests: &[ddnpcrt::schedule::Request]) {
+        use ddnpcrt::schedule::Request as NpcRequest;
+        for request in requests {
+            match request {
+                NpcRequest::Place { npc, pos, dir } => {
+                    self.npc_adapter.placed.insert(*npc, (*pos, *dir));
+                    self.npc_adapter.goto.remove(npc);
+                }
+                NpcRequest::Goto { npc, pos, .. } => {
+                    self.npc_adapter.goto.insert(*npc, *pos);
+                    // Keep the actual request pending. The existing visual-only
+                    // 150cm/s interpolation cannot acknowledge a host arrival.
+                    warn!("opening: NPC {npc} awaits headless movement to {pos:?}");
+                }
+                NpcRequest::Guard { npc, config } => { self.npc_adapter.guards.insert(*npc, config.clone()); }
+                NpcRequest::Wait { npc, dir: Some(dir), .. } => {
+                    if let Some((_, _, yaw)) = self.npcs.get_mut(npc) { *yaw = dir[0].atan2(dir[2]); }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Viewer benchmark driver only: uses normal player inputs and actual
     /// stage callbacks, not scripted placement or quest completion.
     pub fn enable_perf_route(&mut self) {
@@ -431,6 +523,44 @@ fn npc_look(vfs: &ddvfs::Vfs, id: u32, row: u32) -> Option<ddlook::Look> {
         .ok()
 }
 
+/// Keep rendered actor lifetimes aligned with actual materialized intels,
+/// including actors whose normal graph is suspended by an authored action.
+#[allow(clippy::too_many_arguments)]
+fn sync_npc_models(
+    session: &mut Session,
+    commands: &mut Commands,
+    loader: &mut Loader,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
+) {
+    let placements: Vec<_> = session.host.story_npc_intels().cloned().collect();
+    let wanted: HashMap<_, _> = placements.iter().map(|p| (p.npc as u32, (p.stage, p.target))).collect();
+    let retired: Vec<_> = session.npcs.keys().copied().filter(|id|
+        !wanted.contains_key(id) || wanted.get(id) != session.npc_adapter.bindings.get(id)).collect();
+    for id in retired {
+        if let Some((entity, _, _)) = session.npcs.remove(&id) { commands.entity(entity).despawn(); }
+        session.npc_adapter.bindings.remove(&id);
+        session.npc_moving.remove(&id);
+    }
+    for placement in placements {
+        let id = placement.npc as u32;
+        if session.npcs.contains_key(&id) { continue; }
+        let pos = Vec3::from(session.host.story_npc_position(id).unwrap_or(placement.transform.position));
+        let yaw = placement.transform.angle[1]; // Same documented Euler-order limit as other layout adapters.
+        let Some(look) = npc_look(loader.vfs, id, 0) else { continue; };
+        match crate::character::spawn_look(commands, loader, meshes, materials, images,
+            bindposes, &look, play::MOTIONS, 0, pos * UNIT, Some(yaw)) {
+            Ok(entity) => {
+                session.npcs.insert(id, (entity, pos, yaw));
+                session.npc_adapter.bindings.insert(id, (placement.stage, placement.target));
+            }
+            Err(error) => warn!("opening: NPC {id} body unavailable: {error}"),
+        }
+    }
+}
+
 /// Startup part: the stage, the Arisen (via play.rs), the NPCs, the
 /// cutscenes' actors (hidden) and the subtitle UI.
 #[allow(clippy::too_many_arguments)]
@@ -500,38 +630,17 @@ pub fn setup(
         }
     };
     st.demo = demo;
+    // Whole-stage data is now loaded; actor observations replace scripted
+    // actor completion from this point onward.
+    s.host.world.enable_live_encounters();
+    if let Err(error) = s.sync_npc_intels() { s.failure = Some(error); }
     // NPCs with their looks, idle until their schedule moves them.
     let list = mtlmt::parse(&vfs.read(play::MOTIONS, crate::character::RMOTIONLIST).ok()?).ok()?;
     s.npc_motions = (
         list.motions.first().cloned().flatten(),
         list.motions.get(0x54).cloned().flatten(),
     );
-    let ids: Vec<u32> = s.host.npcs.npcs.keys().copied().collect();
-    for id in ids {
-        let pos = Vec3::from(s.host.npcs.position(id).unwrap_or([0.0, -100_000.0, 0.0]));
-        let r = match npc_look(vfs, id, 0) {
-            Some(l) => crate::character::spawn_look(
-                commands,
-                loader,
-                meshes,
-                materials,
-                images,
-                bindposes,
-                &l,
-                play::MOTIONS,
-                0,
-                pos * UNIT,
-                Some(0.0),
-            ),
-            None => continue,
-        };
-        match r {
-            Ok(e) => {
-                s.npcs.insert(id, (e, pos, 0.0));
-            }
-            Err(e) => warn!("NPC {id}: {e}"),
-        }
-    }
+    sync_npc_models(&mut s, commands, loader, meshes, materials, images, bindposes);
     info!("opening: {} NPCs drawn", s.npcs.len());
     // The cutscenes' actors, hidden until their event plays.
     let data = &s.host.story.as_ref().unwrap().data;
@@ -581,6 +690,7 @@ pub struct OpeningStage<'w, 's> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     images: ResMut<'w, Assets<Image>>,
+    bindposes: ResMut<'w, Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 }
 
 pub fn step(
@@ -747,18 +857,20 @@ pub fn step(
         s.acc -= frame;
         s.between.snapshot(&s.host.sim);
         s.pending_input = PlayerInput::default();
-        // the NPCs where the view shows them, for volumes that detect NPCs
-        s.host.world.npcs = s
-            .npcs
-            .iter()
-            .map(|(&id, &(_, p, yaw))| ddstory::NpcUnit {
-                id,
-                unit: ddstory::Player {
-                    pos: p.to_array(),
-                    yaw,
-                },
+        if let Err(error) = s.sync_npc_intels() {
+            s.failure = Some(format!("NPC materialization: {error}"));
+            break;
+        }
+        // Scenario observations use authoritative actor positions, not the
+        // view's interpolated transforms or graph-map membership.
+        s.host.world.npcs = s.host.story_npc_intels().filter_map(|placement| {
+            let id = placement.npc as u32;
+            // Heading is still the authored placement heading: canonical
+            // Wait/Place-direction updates are unresolved, never read from rendering.
+            s.host.story_npc_position(id).map(|pos| ddstory::NpcUnit {
+                id, unit: ddstory::Player { pos, yaw: placement.transform.angle[1] },
             })
-            .collect();
+        }).collect();
         let mut inputs = FrameInputs::new();
         let seats: Vec<_> = s.host.roster.ids().collect();
         for id in seats {
@@ -773,6 +885,7 @@ pub fn step(
                 break;
             }
         };
+        s.npc_requests(&report.npc_requests);
         for r in &report.requests {
             match r {
                 Request::PlaceParty {
@@ -851,14 +964,24 @@ pub fn step(
     if s.world_menu().is_some() && s.shots_taken_for("2-vocation-menu") {
         s.shot("2-vocation-menu");
     }
+    if let Some(streamer) = stage_view.streamer.as_mut() {
+        sync_npc_models(s, &mut stage_view.commands, &mut streamer.loader,
+            &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
+            &mut stage_view.bindposes);
+    }
     // The NPCs walk where the schedule put them.
     let dt = time.delta_secs();
     let ids: Vec<u32> = s.npcs.keys().copied().collect();
     for id in ids {
-        let Some(target) = s.host.npcs.position(id).map(Vec3::from) else {
-            continue;
-        };
+        let explicit = s.npc_adapter.placed.remove(&id);
+        let target = explicit.map(|(pos, _)| Vec3::from(pos))
+            .or_else(|| s.host.story_npc_position(id).map(Vec3::from))
+            .unwrap_or(s.npcs[&id].1);
         let (e, mut at, mut yaw) = s.npcs[&id];
+        if let Some((_, dir)) = explicit {
+            at = target;
+            if let Some(dir) = dir { yaw = dir[0].atan2(dir[2]); }
+        }
         let d = target - at;
         let flat = Vec3::new(d.x, 0.0, d.z);
         let moving = flat.length() > 5.0 && flat.length() < 800.0;
