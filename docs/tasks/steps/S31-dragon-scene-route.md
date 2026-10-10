@@ -205,14 +205,17 @@ remain explicit errors. No HP write, death flag or timer completion exists.
 The helper is not connected to the host. Common damage entry
 `0x0080E190`, real motion/body updates and horizontal velocity
 `0x00B73490` remain explicit requests for a future body adapter. In
-particular `0x0080D500 -> 0x00B86010` toggles selected collision-record
-byte+0x90 bit0x40, not the landing byte. Actual NPC ground comes through
+particular `0x0080D500 -> 0x00B86010` toggles selected model-joint
+`mAttr` byte+0x90 bit0x40, not the landing byte (binding corrected in the
+continuation below). Actual NPC ground comes through
 `0x00BAFB00 -> 0x00B61A20 -> 0x0084BA60 -> 0x00885E30`; the last function
 writes body+0x1ED0 from real scenery flags+0x1B68 under update gate
 +0x2398 bit4, with axis-present/mode and ground-check masks. The capsule
-mode3 height is set by `0x0080B450` from max(HumanEdit+0xF74,+0xF78),
-then `0x0076C540 -> 0x00CCE580 -> 0x0079DAB0/0x0079E200` builds/sweeps it.
-Those actual HumanEdit/body/physics providers remain unintegrated.
+mode3 height comes from installed adjustment D3 through `0x00AC50B2`
+and `0x00B5F0A0`; HumanEdit `0x0080B450` supplies the separate D84 factor,
+not mode3 height. `0x0076C540 -> 0x00CCE580 -> 0x0079DAB0/0x0079E200`
+builds/sweeps the actual capsule. Those body/physics providers remain
+unintegrated at this helper checkpoint.
 
 On `step/s31-demo-reaction`, complete `cargo test -p ddnpcrt` actually
 exited0: 38passed, 0failed, compile18.87s. Three new scalar-observation
@@ -245,7 +248,7 @@ prerequisites of the reaction adapter, without activating that adapter:
   still unverified.
 - `0x0080E190` restores only flags0..5 and9..11 from the saved body flags,
   sets damage mask0x10 and clears masks0x4/0x8. Common damage
-  entry still requires its other body and collision-record effects.
+  entry still requires its other body and model-joint attribute effects.
 
 Three new regressions cover disabled/axis/extended ground observations,
 projection-before-deceleration and a sign crossing, and preservation of
@@ -537,3 +540,93 @@ integrated continuation or the full S31 route.
   the native trace with a timer/straight line. A source-owned Nav/BBS
   provider remains a movement dependency; the other victim graphs were
   not surveyed in this bounded read.
+
+**2026-10-10, codex-80: complete continuation helper gate passed; S31
+remains open.** Frozen source
+`a01ee7cc388c1f9839a015f18612b7e01f83386c`, including only head's reviewed
+S53 main integration, passed the complete command
+`cargo test -p ddnpcrt -p ddenemyrt -p ddhost -p ddstory --jobs 2` on the
+prescribed existing core target. Session30212 and Cargo both actually
+exited0 after 516.535s; compile 2m 38s. The result was 428 passed, 0 failed,
+2 pre-existing ignored diagnostics across 84 summaries (80 nonempty and
+4 doc suites). Package counts were ddenemyrt 179, ddhost 164, ddnpcrt 38 and
+ddstory 47. The ignored tests were `installed_reynard_rescue_contact_trace`
+and `debug_trace`; no installed test reported SKIP. The canonical nativePC
+and DDDA.exe were explicitly supplied.
+
+Each new exact regression name appeared once and passed:
+
+- `ordinary_mode3_capsule_shortens_real_height_and_collapses_short_spans`
+- `installed_beach_mode3_capsule_uses_shared_adjustment_height_not_human_factor`
+- `demo_damage_flag_is_a_native_rising_edge_with_distinct_body_npc_and_collision_sources`
+- `installed_editor_confirmation_requests_beach_and_waits_for_loaded_stage_before_ev00`
+
+All nine source/test/doc hashes remained unchanged before/after the run,
+and the worktree remained clean. Private full log
+`full-capsule-edge-core-a01ee7c-first.private.log` has SHA256
+`35825209CC8C16D9CABB154E96B45042A584B43DB3B83076A065049F18003B6A`;
+strict proof JSON SHA256
+`2B11F31250E1C558FE0447339D67084B0B72D8C0A7C16934E99E4BAEA10D9157`.
+The normal core lease was released after actual completion and global
+Cargo/rustc/ddview quiet checks. Eight unused-helper warnings reflect the
+unconnected actor providers. This verifies the capsule, edge, real story
+context writer and editor-request checkpoint, including the existing
+S53/VITL regressions; it does not activate or validate the full body actor,
+viewer patch, original ground contact, production ev00 route or GPU gate.
+The prior original CCE580 synthetic four-case comparison remains a
+separate narrow comparison, not a whole-route observation.
+
+**Further source corrections and actor prerequisites; no new actor code:**
+
+- `0x00B86010` operates on model joints. `0x00FF9A20` (uModel::vf22)
+  resolves the same body+0x368 bone-ID map and body+0x364 array of
+  0xA0-byte records, returning the joint transform at record+0x10;
+  `0x00FF96D0` returns the indexed record. The uModel::Joint DTI allocation
+  at `0x0104F820` confirms size0xA0. Its reflector `0x0104F880` binds
+  `mAttr` to `0x0083D1B0` / `0x0083D1C0`, which read/write byte+0x90.
+  Therefore common damage entry's selected IDs0x96/97/99/9B receive
+  joint `mAttr` bit0x40 changes, rather than scenery contact or hurt-node
+  flags. Earlier collision-record terminology is corrected above; exact
+  bit0x40 semantics and the full joint-state provider remain open.
+- cScrAdjust reflection `0x0079DB30` identifies +0x1AC as `mIsSleep`,
+  +0x1AD as `mIsGroundCheck` and +0x1AE as `mIsCellingAdjust`.
+  `0x0079E3B0` bypasses the query when asleep; the ready body lifecycle
+  uCharacterBase::vf05 `0x0084B980` clears body+0x1B6C at `0x0084B9A8`.
+  `0x0079E3D7` reads actual ground-check+0x1AD, corresponding to the
+  already sourced dynamic body+0x1B6D. Constructor sleep is not a ready
+  actor's observation, and later action overrides cannot be discarded.
+- uCharacterBase::vf91 `0x0084BF60 -> 0x0084CCC0` adds actual velocity
+  times body delta to position at `0x0084D030..0x0084D062`, then adds
+  acceleration to velocity at `0x0084D09D..0x0084D0F0`, and clamps to the
+  current body limits at `0x0084D0F8..0x0084D1A9`. Constructor `0x0084A100`
+  initially supplies +/-10000 from `0x01520BA8` / `0x0161D138`; runtime
+  overrides, status/root/pull branches still need actual providers.
+  Separately, uObjModel::vf09 `0x00886530` clears contact+0x1B68 and calls
+  `0x0076C540` at `0x008865EC` under the real readiness/update gates.
+- Model layer+0x58 initializes to0 at `0x0105B53A`. A positive LMT loop
+  marker must not be copied there without its actual runtime writer.
+  `0x00886E70` restarts only a changed motion or a forced request; Damage3's
+  force=false can retain the previous body's layer frame/status. Body
+  layer lifetime and new interface-command identity remain distinct.
+- Damage interface `0x0056EBB0` stores authored Down at body+0x2E90, and
+  `0x0056ECEB..0x0056ED1D` computes facing from the X/Z differences between
+  AttackPos and the real body origin, performs f32 subtraction then the
+  double CRT atan2, and writes body+0x2578/+0x257C and mode0x100. Reusing
+  prior yaw or inventing an opposite angle would bypass this behavior.
+
+**S59 navigation handoff:** bounded installed reads now cover all seven
+unchanged beach graphs, each actual exit0 using the existing ddtool;
+exports and metadata remain private. NPC704/708/709 each author two
+GotoEx commands. Every Trace enables path use, path update and avoidance,
+with width disabled. NPC704 authors Damage3, NPC705 Damage4 with Down,
+and NPC706/707/710 Damage4 without Down; production continues to read
+those payloads from the install. `0x0056DCC0` maps only actual trace
+result4 to Done, while result3 moves/runs and0/1/2 remain running.
+WaitEnd=false does not bypass arrival. Head8560 assigned this new
+  navigation system to S59, ahead of S58; a private incoming handoff lists
+the Trace/BBS sources, mode ownership, capsule service and lifetime
+constraints. S31 retains real-body reactions, editor handoff and damage
+edges. Next action: connect the sourced reaction body providers and
+preserve current-lifetime observations, consume accepted S59/S30 work,
+then validate the whole route before enabling head's viewer patch or
+writing a positive live-profile DragonFight checkpoint.
