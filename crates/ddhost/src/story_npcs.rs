@@ -41,6 +41,7 @@ pub struct StoryNpcs {
     bindings: HashMap<(u32, Target), u32>,
     positions: HashMap<u32, [f32; 3]>,
     intel_flags: HashMap<u32, u32>,
+    gauge_visible: HashMap<u32, bool>,
     lifetimes: HashMap<u32, u64>,
     pub(crate) lifetime_counter: u64,
     pending: HashMap<(u32, Target), String>,
@@ -223,6 +224,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.positions.insert(npc, placement.transform.position);
         // uNpcIntel constructor0x00bbbfa0 initializes +0x5c0 to zero.
         self.story_npcs.intel_flags.insert(npc, 0);
+        // uNpcIntel constructor0x00bbbfa0 clears +0x547.
+        self.story_npcs.gauge_visible.insert(npc, false);
         self.story_npcs.lifetime_counter = generation;
         self.story_npcs.lifetimes.insert(npc, generation);
         self.story_npcs.intels.insert(key, placement);
@@ -261,6 +264,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.npcs.npcs.remove(&(intel.npc as u32));
             self.story_npcs.positions.remove(&(intel.npc as u32));
             self.story_npcs.intel_flags.remove(&(intel.npc as u32));
+            self.story_npcs.gauge_visible.remove(&(intel.npc as u32));
             self.story_npcs.lifetimes.remove(&(intel.npc as u32));
             self.world.observe_npc_intel(stage, target, false);
         }
@@ -323,9 +327,17 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.intel_flags.get(&npc).copied()
     }
 
+    /// Authored gauge desire (intel+0x547), not actual GUI allocation or HP.
+    pub fn story_npc_gauge_visible(&self, npc: u32) -> Option<bool> {
+        self.story_npcs.gauge_visible.get(&npc).copied()
+    }
+
     pub(crate) fn record_story_npc_requests(&mut self, requests: &[Request]) {
         for request in requests {
             match request {
+                Request::Gauge { npc, visible } => {
+                    if let Some(gauge) = self.story_npcs.gauge_visible.get_mut(npc) { *gauge = *visible; }
+                }
                 Request::Place { npc, pos, .. } => {
                     if let Some(position) = self.story_npcs.positions.get_mut(npc) { *position = *pos; }
                 }

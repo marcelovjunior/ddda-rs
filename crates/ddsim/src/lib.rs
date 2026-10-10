@@ -39,7 +39,7 @@ pub mod ledge;
 pub mod stamina;
 pub mod sweep;
 
-pub use attack::{Attack, AttackParam, ShotPhase, Weapon, ATTACK_SHIPPED};
+pub use attack::{Attack, AttackParam, BowInput, BowParam, BowPhase, BowState, BowUnsupported, ShotPhase, Weapon, ATTACK_SHIPPED};
 pub use ledge::{LedgeParam, LEDGE_SHIPPED};
 pub use stamina::{StaminaRow, StaminaTables, WeightTables};
 
@@ -282,6 +282,8 @@ pub enum State {
     Shot {
         phase: ShotPhase,
     },
+    /// Secondary bow action, with the runtime-selected lower-layer motion.
+    Bow { phase: BowPhase, motion: u16 },
 }
 
 /// Phases of `cPlCliffHangBegin::vf06` (0x00ADA980).
@@ -310,7 +312,7 @@ impl State {
         match self {
             State::Wait => 13,
             State::Walk { .. } | State::Attack { .. } => 14,
-            State::Shot { .. } => attack::shot::PUSH_RANK,
+            State::Shot { .. } | State::Bow { .. } => attack::shot::PUSH_RANK,
             State::LedgeGrab { .. } | State::LedgeHang { .. } | State::LedgeClimb { .. } => 0,
             _ => 15,
         }
@@ -364,6 +366,7 @@ impl State {
             // bank 7: the weapon's `_at` list (`Sim::weapon_motions`)
             State::Attack { attack } => attack.motion(),
             State::Shot { phase } => phase.motion(),
+            State::Bow { motion, .. } => motion,
         }
     }
 
@@ -408,6 +411,7 @@ impl State {
                 | State::Air { .. }
                 | State::Fall
                 | State::LedgeHang { .. }
+                | State::Bow { phase: BowPhase::Ready, .. }
         )
     }
 }
@@ -428,6 +432,10 @@ pub struct Input {
     pub light: bool,
     /// The heavy attack button is held.
     pub heavy: bool,
+    /// Secondary bow command 7 held (uPlayer +0x32E4 bit 0x8).
+    pub bow: bool,
+    /// Bow-mode toggle key held; its rising edge toggles this seat's mode.
+    pub bow_toggle: bool,
     /// Camera yaw (radians, 0 looks along +Z).
     pub camera_yaw: f32,
 }
@@ -497,6 +505,14 @@ pub struct Player {
     rate_queue: [f32; 2],
     /// The weapon whose basic attacks the player uses (`attack`).
     pub weapon: Weapon,
+    /// Secondary slot: a Strider keeps its daggers in `weapon` and its
+    /// shortbow (item 0x1F8 in the opening) here. Equipment is host-owned.
+    pub secondary_weapon: Weapon,
+    pub bow: Option<BowState>,
+    pub bow_latched: bool,
+    bow_toggle_held: bool,
+    /// Host-owned check/release context; held/toggle come from Input.
+    pub bow_context: BowInput,
     /// How far the equipped weapons' level is above the player's (item
     /// +0x66 minus cPlayerInfo +0x700), for the attack cost tier
     /// (`attack::tier`). Set by the host; 0 by default.
@@ -525,6 +541,8 @@ impl Player {
     /// Action constructors set the push-out rank independently of motion:
     /// Broad Cut 0x00B3E0E0, Tusk Toss 0x00B3E7D0 (Steam 2017-12-13).
     pub fn push_rank(&self) -> u32 {
+        // cPlActWpnBow::vf05 0x00B16FE0 sets 13 independently of layers.
+        if self.bow.is_some() { return 13; }
         match self.skills.active.map(|a| a.id) {
             Some(41) => 15,
             Some(43) => 14,
@@ -847,6 +865,8 @@ pub struct Sim {
     /// lists); a player's weapon motions are looked up here before
     /// [`Sim::motions`].
     pub weapon_motions: HashMap<Weapon, HashMap<u16, RootMotion>>,
+    /// Shortbow record zero, supplied from the install by the host.
+    pub bow_param: Option<BowParam>,
     pub skill_definitions: HashMap<u32, skills::Definition>,
     /// Fraction of a frame not yet simulated.
     pending: f32,
@@ -898,6 +918,7 @@ impl Sim {
             sweep_param: sweep::SweepParam::default(),
             attack_param: ATTACK_SHIPPED,
             weapon_motions: HashMap::new(),
+            bow_param: None,
             skill_definitions: HashMap::new(),
             pending: 0.0,
         }
@@ -934,6 +955,11 @@ impl Sim {
             unit_rate: 1.0,
             rate_queue: [1.0; 2],
             weapon: Weapon::None,
+            secondary_weapon: Weapon::None,
+            bow: None,
+            bow_latched: false,
+            bow_toggle_held: false,
+            bow_context: BowInput::default(),
             weapon_level_gap: 0,
             attack_heading: None,
             turn_to: None,
@@ -999,14 +1025,105 @@ impl Sim {
             self.pending -= TICK;
             for i in 0..self.players.len() {
                 let input = inputs.get(&self.players[i].id).copied().unwrap_or_default();
-                self.frame(i, input, ground, TICK);
+                let bow = BowInput { held: input.bow, toggle: input.bow_toggle,
+                    ..self.players[i].bow_context };
+                if !self.bow_frame(i, input, bow, TICK * self.players[i].unit_rate) {
+                    self.frame(i, input, ground, TICK);
+                }
             }
         }
         for i in 0..self.players.len() {
-            let r = self.time_rate(&self.players[i], self.players[i].state);
+            let r = if self.players[i].bow.is_some() { 1.0 }
+                else { self.time_rate(&self.players[i], self.players[i].state) };
             let p = &mut self.players[i];
             p.rate_queue = [p.rate_queue[1], r];
         }
+    }
+
+    /// Translated stationary shortbow slice of 0x00B52A00 (mode latch),
+    /// 0x00B16FE0 (entry), 0x00B17940 / 0x00B1C220 / 0x00B1AC90
+    /// (phases), DDDA.exe 2017-12-13 Steam. Untranslated paths are exposed.
+    fn bow_frame(&mut self, i: usize, input: Input, control: BowInput, dt: f32) -> bool {
+        let p = &mut self.players[i];
+        if p.secondary_weapon != Weapon::Bow {
+            p.bow = None;
+            if matches!(p.state, State::Bow { .. }) { Self::set_state(p, State::Wait); }
+            p.bow_latched = false;
+            p.bow_toggle_held = control.toggle;
+            return false;
+        }
+        if control.toggle && !p.bow_toggle_held { p.bow_latched = !p.bow_latched; }
+        p.bow_toggle_held = control.toggle;
+        let held = control.held || p.bow_latched;
+        let Some(param) = self.bow_param else { return false };
+        if p.bow.is_none() {
+            if !held || !attack::bow_check34(control.unit_mode, control.stage_mode)
+                || p.skills.active.is_some() || !p.state.on_ground_for_attacks() {
+                return false;
+            }
+            // Slot 1 must execute: 0x00ABAAC0 / 0x00B6DC10. With no
+            // motion event data the existing host fallback executes it.
+            let slot = self.attack_events(i).0;
+            if attack::slot_state(slot, attack::ATTACK_SLOT) != 2
+                || self.players[i].stamina <= 0.0 { return false; }
+            let p = &mut self.players[i];
+            p.bow = Some(BowState::draw(param));
+            p.state = State::Bow { phase: BowPhase::Draw, motion: 0x900 | u16::from(param.draw_lower) };
+            p.frame = 0.0;
+            p.request = None;
+            p.turn_to = None;
+        }
+        let p = &mut self.players[i];
+        if param.end_at_zero_stamina && p.stamina <= 0.0 {
+            p.bow = None;
+            Self::set_state(p, State::Wait);
+            return true;
+        }
+        let mut bow = p.bow.unwrap();
+        // vf06 calls 0x00B17DA0 -> 0x00B18CB0 before 0x00B1AC90's
+        // upper phase handler. A new upper Ready phase does not replace
+        // the lower draw until the following action update.
+        if bow.phase == BowPhase::Ready {
+            let motion = 0x900 | u16::from(param.wait_lower);
+            if bow.lower.motion != motion {
+                bow.lower.motion = motion;
+                bow.lower.frame = 0.0;
+                bow.lower.rate = 1.0;
+                bow.lower.looping = true;
+            }
+        }
+        bow.unsupported = if len2(input.stick) >= MOVE_THRESHOLD || input.jump {
+            Some(BowUnsupported::Movement)
+        } else if input.light || input.heavy {
+            Some(BowUnsupported::Shot)
+        } else { None };
+        let Some(upper) = self.motion_for(Weapon::Bow, bow.upper.motion) else {
+            bow.unsupported = Some(BowUnsupported::MissingMotion(bow.upper.motion));
+            self.players[i].bow = Some(bow);
+            return true;
+        };
+        let done = bow.upper.frame >= upper.period();
+        if bow.update(param, held, !control.release_blocked, done) {
+            self.players[i].bow = None;
+            Self::set_state(&mut self.players[i], State::Wait);
+            return true;
+        }
+        for layer in [&mut bow.upper, &mut bow.lower] {
+            let Some(motion) = self.motion_for(Weapon::Bow, layer.motion) else {
+                bow.unsupported = Some(BowUnsupported::MissingMotion(layer.motion));
+                continue;
+            };
+            let frame = layer.frame + dt * layer.rate;
+            layer.frame = if layer.looping { frame.rem_euclid(motion.period()) } else { frame };
+        }
+        let p = &mut self.players[i];
+        // 0x00B19540 charges the record's statminaWait every unit frame.
+        Self::spend(p, dt * param.wait_stamina);
+        p.bow = Some(bow);
+        p.state = State::Bow { phase: bow.phase, motion: bow.lower.motion };
+        p.frame = bow.lower.frame;
+        p.speed = 0.0;
+        true
     }
 
     fn set_state(p: &mut Player, s: State) {
@@ -1077,6 +1194,11 @@ impl Sim {
             return;
         }
         match state {
+            State::Bow { .. } => {
+                // Authority/body correction can remove the layer state;
+                // do not retain a bow action with no underlying controller.
+                Self::set_state(&mut self.players[i], State::Wait);
+            }
             State::Wait
             | State::Walk { .. }
             | State::Run { .. }
