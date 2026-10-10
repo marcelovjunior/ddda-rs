@@ -466,10 +466,15 @@ fn update_npc_gauges(
             let Some(width) = gauge_fill(hp, max, hp <= 0.0, bar_width) else {
                 continue;
             };
-            for (entity, camera, transform, projection) in cameras {
-                if !camera.is_active {
+            for (entity, stored_camera, stored_transform, projection) in cameras {
+                if !stored_camera.is_active {
                     continue;
                 }
+                // HUD runs before PostUpdate propagation/CameraUpdateSystems.
+                // Resolve the current hierarchy and lens to match this frame's
+                // rendered camera, including an authored quest-camera change.
+                let Some(camera) = current_projection_camera(stored_camera, projection) else { continue };
+                let Ok(transform) = transform_helper.compute_global_transform(entity) else { continue };
                 let point = bounds.gauge_anchor(
                     &model,
                     [0.0; 3],
@@ -478,29 +483,25 @@ fn update_npc_gauges(
                     ORDINARY_NPC_SCENERY_RADIUS,
                 );
                 let Some((screen, scale)) =
-                    npc_gauge_projection(camera, transform, origin, Vec3::from_array(point))
+                    npc_gauge_projection(&camera, &transform, origin, Vec3::from_array(point))
                 else {
                     continue;
                 };
                 desired.insert((owner, entity), (screen, scale, width));
                 if capture_closeup && !capture.requested {
-                    let current_camera = current_projection_camera(camera, projection);
-                    let current_transform = transform_helper.compute_global_transform(entity).ok();
                     let body_transform = body_entity.and_then(|e| transform_helper.compute_global_transform(e).ok());
-                    if let (Some(current_camera), Some(current_transform), Some(body_transform)) =
-                        (current_camera, current_transform, body_transform)
-                    {
+                    if let Some(body_transform) = body_transform {
                         let body_root = body_transform.translation() / stage::UNIT + origin;
                         let projected = |camera: &Camera, transform: &GlobalTransform, point: Vec3| {
                             npc_gauge_projection(camera, transform, origin, point).map(|(p, _)| p + Vec2::new(0.0, 40.0))
                         };
-                        let old_root = projected(camera, transform, body_root);
-                        let current_root = projected(&current_camera, &current_transform, body_root);
-                        let current_top = projected(&current_camera, &current_transform, Vec3::from_array(bounds.gauge_top()));
-                        let current_anchor = projected(&current_camera, &current_transform, Vec3::from_array(point));
+                        let old_root = projected(stored_camera, stored_transform, body_root);
+                        let current_root = projected(&camera, &transform, body_root);
+                        let current_top = projected(&camera, &transform, Vec3::from_array(bounds.gauge_top()));
+                        let current_anchor = projected(&camera, &transform, Vec3::from_array(point));
                         evidence.insert((owner, entity), format!(
                             "actor_position={position:?} model_root={:?} body_root={body_root:?} bounds={bounds:?} anchor={point:?} old_root_px={old_root:?} current_root_px={current_root:?} current_top_px={current_top:?} current_anchor_px={current_anchor:?} old_eye={:?} current_eye={:?}",
-                            ddcombat::volumes::transform_point(&model, [0.0; 3]), transform.translation(), current_transform.translation()));
+                            ddcombat::volumes::transform_point(&model, [0.0; 3]), stored_transform.translation(), transform.translation()));
                     }
                 }
             }
@@ -530,9 +531,8 @@ fn update_npc_gauges(
     }
 }
 
-// Diagnostic camera matches this frame's Projection before camera_system
-// refreshes Camera::computed in PostUpdate. Production still uses the
-// existing camera here until same-frame evidence establishes the mismatch.
+// Match this frame's Projection before camera_system refreshes
+// Camera::computed in PostUpdate. This clone never writes the render camera.
 fn current_projection_camera(camera: &Camera, projection: &Projection) -> Option<Camera> {
     let viewport = camera.logical_viewport_size()?;
     let mut current = camera.clone();
