@@ -226,7 +226,7 @@ then test the largest measured cost without changing presentation quality.
   Shared M5 build lease was released after actual exit. No GUI was launched.
 - Launcher now records/restores the CPU/GPU mode and has an explicit hard
   watchdog (`-WatchdogSeconds`, default 120 s), independently of requested
-  measurement duration. Board capture request #5940/#5945 queues two
+  measurement duration. Board capture request #5940/#5947 queues two
   identical-scene runs from this one pin, default backend, GPU then CPU,
   using the standalone field arguments above plus a screenshot at 45 s.
   The requested 50 s timed exit/90 s watchdog keeps the combined batch
@@ -237,3 +237,47 @@ then test the largest measured cost without changing presentation quality.
   claimed from implementing the switch or passing headless tests. Next:
   inspect the queued batch's actual exits, counts, PNGs and warm medians;
   select a default only if comparable captures demonstrate improvement.
+
+### Actual first CPU/GPU comparison: rejected on visual correctness
+
+- Head ran the requested batch (board #5986). Same executable/hash,
+  default Vulkan adapter RTX 4060, original PID 23408 retained. GPU viewer
+  PID 31764 exited **0** after 62.4 s including startup; CPU PID 31076
+  exited **0** after 52.7 s. Both private `.exit.txt` files contain zero.
+  Screenshots ended the runs normally before the 50 s perf timer.
+- Both modes reported 1908 ECS entities, 982 mesh entities, 365 visible
+  meshes / 263 unique, 208 visible DD materials / 745 allocated through
+  the warm windows. These counters describe ECS visibility, not successful
+  draw submission.
+- Preselected elapsed 20–40 s windows (reports at approximately 25, 30,
+  35 and 40 s): GPU medians **7.0, 7.0, 7.2, 6.9 ms**, median of medians
+  **7.0 ms**; p99 **10.9, 10.4, 11.3, 10.9 ms**. CPU medians **2.1, 2.1,
+  2.2, 2.2 ms**, median of medians **2.15 ms**; p99 **4.7, 4.2, 5.0,
+  4.8 ms**. The CPU frame times are **invalid as optimization evidence**.
+- Actual visual inspection by codex-66 and independently codex-1:
+  `field-builder-gpu-87a2925.png` shows intact terrain and both bodies;
+  `field-builder-cpu-87a2925.png` shows mostly sky, sliced/distorted terrain,
+  and no recognizable bodies. This fails picture equivalence despite
+  matching entity/material counts. CPU opaque pass GPU time falls to
+  roughly **0.003 ms**, consistent with missing opaque geometry, not
+  equivalent rendering made faster. The default remains GPU.
+- Warm GPU samples were aligned by UTC with each run's first perf update,
+  not the launcher clock (startup lengths differed). All four warm samples
+  report original PID 23408's 3D share **0%** in each mode; viewer GPU-mode
+  share **47–56%**, broken CPU-mode share **11–15%**. NVIDIA clocks are
+  stable **2745/8501 MHz, P0**, overall utilization **84–95%** and **83–92%**
+  respectively. Other GPU users account for the difference between the
+  viewer share and total utilization. Older 8.8 ms measurements had a
+  different original-game share/source state and are not a before/after
+  optimization comparison with this batch.
+- Source diagnosis: setting `PbrPlugin::use_gpu_instance_buffer_builder`
+  false selects CPU mesh uniforms, but leaves `GpuPreprocessingSupport`
+  at device capability `Culling`. Bevy `core_3d::extract_core_3d_camera_phases`
+  then chooses indirect phases, while `no_gpu_preprocessing` only prepares
+  ordinary batchable meshes and `DynamicUniforms` batch sets. Multidraw
+  meshes are therefore skipped. The correction must set render-app
+  preprocessing support to `None` before plugin finish as well as choosing
+  CPU uniforms; headless phase-selection regressions are being prepared.
+  No shader ABI change or default performance claim follows from the failed
+  batch. Next: test that paired contract and queue a corrected CPU picture
+  comparison before deciding whether CPU preparation is useful.
