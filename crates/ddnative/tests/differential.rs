@@ -63,3 +63,56 @@ fn model_world_origin_matches_the_original() {
         assert_eq!(got.map(f32::to_bits).to_vec(), want, "{c}");
     }
 }
+
+#[test]
+fn action_base_enter_matches_the_original() {
+    use ddnative::action;
+    let Some(cases) = vectors("action_enter") else { return };
+    for c in &cases {
+        let mut o = action::Owner {
+            category_206c: u(c, "cat"), word_2370: u(c, "w70"), word_2374: u(c, "w74"),
+            flags_273c: u(c, "flags"), status_2e34: u(c, "status"), pending_2e38: u(c, "pending"),
+        };
+        let b50 = action::base_enter(&mut o);
+        let out = &c["out"];
+        assert_eq!(u32::from(b50), u(out, "b50"), "{c}");
+        assert_eq!((o.word_2370, o.word_2374, o.flags_273c, o.status_2e34, o.pending_2e38),
+            (u(out, "w70"), u(out, "w74"), u(out, "flags"), u(out, "status"), u(out, "pending")), "{c}");
+    }
+}
+
+#[test]
+fn demo_interface_state_matches_the_original() {
+    use ddnative::action;
+    let Some(cases) = vectors("demo_state") else { return };
+    let words = |v: &Value| -> Vec<u32> { v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect() };
+    for c in &cases {
+        let input: [u32; 9] = words(&c["in"]).try_into().unwrap();
+        let mut owner = action::DemoOwner {
+            byte_0e: u(c, "b0e") as u8,
+            work_40: (u(c, "work") != 0).then_some(input),
+        };
+        let ret = action::demo_state((u(c, "owner") != 0).then_some(&mut owner));
+        assert_eq!(ret, u(c, "ret"), "{c}");
+        // the block in memory: cleared only through the owner's pointer
+        let block = if u(c, "owner") != 0 { owner.work_40.unwrap_or(input) } else { input };
+        assert_eq!(block.to_vec(), words(&c["outwork"]), "{c}");
+        assert_eq!(words(&c["guards"]), vec![0xA5A5_A5A5, 0x5A5A_5A5A], "{c}");
+    }
+}
+
+#[test]
+fn particle_counters_and_flag_match_the_original() {
+    use ddnative::particle;
+    let Some(cases) = vectors("particle_vf08_vf10") else { return };
+    for c in &cases {
+        let g0 = particle::Generator { flags_3c: u(c, "flags"), counter_44: 0x1111_1111, counter_48: 0x2222_2222, seed_4c: u(c, "seed") };
+        let mut g = g0;
+        particle::reset_counters(&mut g);
+        assert_eq!((g.counter_44, g.counter_48, g.flags_3c), (u(c, "c44"), u(c, "c48"), g0.flags_3c), "{c}");
+        let mut g = g0;
+        particle::clear_flag(&mut g, u(c, "arg") as u8);
+        assert_eq!(g.flags_3c, u(c, "flags10"), "{c}");
+        assert_eq!(u(c, "esp10"), 4, "ret 4: one stack argument");
+    }
+}

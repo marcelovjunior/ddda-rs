@@ -13,8 +13,10 @@
 //! Platform-layer functions (allocators, the CRT, threads, file and device
 //! I/O) are not translated here: Rust's own facilities replace them.
 
-pub mod player_action;
+pub mod action;
 pub mod model;
+pub mod particle;
+pub mod player_action;
 
 /// An `fld dword` / `fstp dword` pair: the value is kept, except that a
 /// signalling NaN becomes quiet (the x87 load raises the masked invalid
