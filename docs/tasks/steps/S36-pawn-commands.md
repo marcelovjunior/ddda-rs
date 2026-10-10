@@ -1,4 +1,4 @@
-# S36: Pawn commands (Go! / Wait! / Help! / Come!)
+# S36: Pawn commands (Go! / Come! / Help!)
 
 - **Branch:** `step/s36-pawn-commands`
 - **Files:** `crates/ddsim` (the four order inputs), `crates/ddenemyrt`
@@ -68,3 +68,9 @@ them yet: hired pawns only follow the Arisen and fight on their own
 Installed tests show each order changing Rook's behaviour as the source
 says, the viewer's keys send them, and PAWNS.md documents the orders with
 addresses.
+
+**Correction (codex-64, #5496/#5511):** the native sender 0x00B768E0 knows three
+orders, not four: UP (key 39) -> message 9 Go!, DOWN (40) -> 10 Come!,
+LEFT/RIGHT (41/42) -> 11 Help! (installed `pawnorder_go/come/help` texts),
+sent to all three pawn slots (sPlayerManager +0x9A0/+0x9A4/+0x9A8) without
+owner filter. The 9 = Wait reading in PAWN_AI.md was wrong; there is no Wait.
