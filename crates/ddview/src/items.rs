@@ -45,6 +45,17 @@ fn read_bag(node: Node<'_, '_>) -> Result<Bag, String> {
 }
 
 impl QuickItems {
+    /// Bags this seat may inspect/use: its Arisen and bound shared pawns.
+    /// Missing pawn admission remains absent rather than inventing a bag.
+    pub(crate) fn menu_bags(&self, seat: PlayerId) -> Vec<(PlayerId, Owner, Bag)> {
+        if !matches!(self.owners.get(&seat), Some(Owner::Arisen(id)) if *id == seat) {
+            return Vec::new();
+        }
+        self.owners.iter().filter(|(id, owner)| **id == seat || matches!(owner, Owner::Pawn(_)))
+            .filter_map(|(&id, &owner)| self.inventory.bag(owner).map(|bag| (id, owner, bag.clone())))
+            .collect()
+    }
+
     /// Mirror a host-authorized NPC QCT grant to this local seat's opening
     /// bag. Selection, once rules and world effects belong to the host.
     pub fn npc_grant(&mut self, seat: PlayerId, item: i16, count: u32, level: u8) {
@@ -223,20 +234,40 @@ impl QuickItems {
         }
         let owner = *self.owners.get(&seat).ok_or("no bag for seat")?;
         let bag = self.inventory.bag(owner).ok_or("no bag")?;
-        let (index, item, effect) = bag
+        let index = bag
             .slots
             .iter()
             .enumerate()
-            .find_map(|(i, slot)| {
+            .find_map(|(i, _)| {
                 let effect = self.inventory.recovery(&self.items, owner, i).ok()?;
                 let useful = if effect.whole_party {
                     self.owners.keys().any(|&id| self.needed(effect, id, sim, fight))
                 } else {
                     self.needed(effect, seat, sim, fight)
                 };
-                useful.then_some((i, slot.item, effect))
+                useful.then_some(i)
             })
             .ok_or("no useful supported restorative in this bag")?;
+        self.use_slot(seat, index, sim, fight)
+    }
+
+    /// Menu use and quick use share this authoritative mutation. The caller
+    /// authorizes the selected party bag before invoking it; LAN clients never
+    /// call it. Revalidate the live slot so list rebuilds cannot spend another
+    /// seat's inventory. Native immediate recovery: 0x0066CCD0 -> 0x00B77130.
+    pub(crate) fn use_slot(&mut self, seat: PlayerId, index: usize, sim: &mut Sim, fight: &mut Fight) -> Result<i16, String> {
+        if !fight.arisen.get(&seat).is_some_and(|a| !a.fighter.victim.dead()) {
+            return Err("item user is missing or dead".into());
+        }
+        let owner = *self.owners.get(&seat).ok_or("no bag for seat")?;
+        let item = self.inventory.bag(owner).and_then(|b| b.slots.get(index))
+            .ok_or("selected item slot disappeared")?.item;
+        let effect = self.inventory.recovery(&self.items, owner, index)
+            .map_err(|e| format!("item use: {e:?}"))?;
+        let useful = if effect.whole_party {
+            self.owners.keys().any(|&id| self.needed(effect, id, sim, fight))
+        } else { self.needed(effect, seat, sim, fight) };
+        if !useful { return Err("selected restorative has no supported recipient needing it".into()); }
         let recipients: Vec<_> = self
             .owners
             .iter()

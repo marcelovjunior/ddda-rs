@@ -41,6 +41,7 @@ mod ambient;
 mod net;
 mod opening;
 mod vocation_menu;
+mod item_menu;
 mod quest_camera;
 mod play;
 mod bow_view;
@@ -651,11 +652,12 @@ fn main() {
         .init_resource::<play::Hud>()
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
+        .init_resource::<item_menu::Menus>()
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, (hud::update, vocation_menu::update).chain()).chain());
+        .add_systems(Update, ((pause::update, item_menu::controls).chain(), fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, (hud::update, vocation_menu::update, item_menu::draw).chain()).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
     // Diagnostics are opt-in: render queries themselves have a cost, so
@@ -1084,6 +1086,10 @@ pub fn opening_world(
     vfs: &ddvfs::Vfs,
 ) {
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
+    match item_menu::View::load(vfs, &args.native_pc, images) {
+        Ok(view) => commands.insert_resource(view),
+        Err(error) => panic!("opening item menu: {error}"),
+    };
     match vocation_menu::View::load(vfs, &args.native_pc, images) {
         Ok(view) => commands.insert_resource(view),
         Err(error) => panic!("opening vocation menu: {error}"),
