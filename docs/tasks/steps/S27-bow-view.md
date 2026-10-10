@@ -19,11 +19,10 @@ bow action changes it (trace `uAimCheck` and the camera mode it requests).
 the goblin; a capture shows the aim pose and an arrow in flight; ddview
 tests pass.
 
-## Results — implementation checkpoint (codex-62)
+## Results — review (codex-62)
 
-Work is in progress; no capture or original-game comparison is claimed.
-The scoped viewer compiles, and four focused bow tests pass (30.26 s
-compile, 2.32 s tests), including installed data -> configured keys ->
+The stationary fresh-kit route is implemented and tested. Four focused
+bow tests pass (30.26 s compile, 2.32 s tests), including installed data -> configured keys ->
 real posed bow model joint zero -> TPS camera ray -> RNG -> arrow ->
 ordinary damage at 10 m. Native source and asset dumps remain private.
 
@@ -50,6 +49,8 @@ ordinary damage at 10 m. Native source and asset dumps remain private.
   actual drawn joint `0x99`, normalized as `0x00859B10/0x00859BB0`.
 - The fresh Strider kit's starting bow is shown separately so its
   string/limb motion runs; duplicate rigid bow parts are removed.
+  Both body layer frames contribute to the authoritative mounted pose.
+  The simulation pose excludes presentation interpolation and body morphs.
   Per-seat host RNG uses the already verified original generator;
   per-seat seeds are a port session choice, unlike the original's
   shared global stream. Fresh kits have no equipped augments.
@@ -66,7 +67,28 @@ Open: full native joint masks/frozen-channel cache semantics, morphed
 actor-height and bow attachments, upper-body aim constraints, camera
 entry/exit easing and recoil, lock-on/actor sensor acquisition, moving
 and air shots, charged/special arrows, terrain projectile death, saved
-secondary valuation/augments and LAN projectile replication. The
-stationary fresh-kit route is the acceptance target. Next action:
-merge reviewed main, run the complete viewer tests and build, then
-inspect a bounded capture of the aim pose and real arrow flight.
+secondary valuation/augments and LAN bow input/projectile replication.
+This does not complete all bow skills or full original visual fidelity.
+
+Validation after merging reviewed main (including S33 and S37):
+
+- Complete release viewer suite: **69 passed, 2 existing ignored**;
+  compile 21.39 s, tests 12.10 s. The new upper-layer regression checks
+  independent frozen rotation and preservation of lower position/scale.
+- Normal release build: **passed in 50.50 s**. Existing warnings concern
+  `opening_world`'s Args visibility and `audio::forget_actor`; no new
+  feature warnings remain. No other target directory was created.
+- Hidden bounded capture used the copied private binary with ordinary
+  `--play --kit strider --goblin --players 1 --unattended --size 1600x900
+  --shot-delay 15` and the explicit `DDVIEW_BOW_CAPTURE` fixture above.
+  Owned PID 27672 exited **0** before its 60 s watchdog. The image at
+  private `E:/ddda-re/notes/steps/S27/bow-flight.png` was inspected: TPS
+  shoulder framing, the bank 9 body pose, animated bow and authoritative
+  first-flight segment/tip marker are visible. It is a selected diagnostic
+  orbit and held real snapshot, not an unattended ordinary play route.
+- **No original-game comparison was performed.** Native particle visuals,
+  aim IK and camera transitions are explicitly outside this checkpoint.
+  All owned build/GPU processes exited and their leases were released.
+
+Next action: lane review of the branch and capture, then source-backed
+aim constraints and native arrow particles in a separate visual brief.

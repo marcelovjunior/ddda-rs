@@ -83,8 +83,8 @@ impl Controls {
     }
 }
 
-/// Installed camera mode selection: 0x007DCF30 picks normal slot 1 when
-/// actor +0x273C bit 2 is set by bow enter 0x00B16FE0 (2017-12-13 Steam).
+/// Installed TPS override requested by B1E3A0 -> 421870 after B16FE0.
+/// 7DCF30's normal combat slot switch is the fallback, not this aim view.
 pub struct AimCamera {
     pub normal: mtcamera::params::Normal,
     pub shoulder: f32,
@@ -245,7 +245,7 @@ pub fn capture_input(st: &mut crate::play::PlayState, inputs: &mut HashMap<Playe
     let Some(fight) = &st.fight else { return };
     let Some(goblin) = fight.goblins.first() else { return };
     let Some(hurt) = goblin.fighter.hurts.first() else { return };
-    let center = match hurt.volume { Volume::Sphere { c, .. } => Vec3::from(c), Volume::Capsule { a,b,.. } => (Vec3::from(a)+Vec3::from(b))*0.5 };
+    let center = match hurt.volume { Volume::Sphere { c, .. } => Vec3::from(c), Volume::Capsule { p0,p1,.. } => (Vec3::from(p0)+Vec3::from(p1))*0.5 };
     let Some(camera) = &st.bow_view.camera else { return };
     let feet = Vec3::from(player.position);
     let delta = center-feet;
