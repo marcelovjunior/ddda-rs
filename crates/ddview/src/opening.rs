@@ -121,6 +121,9 @@ struct Demo {
     planning: Option<RoutePlan>,
     /// When the fight demo last used a curative.
     last_heal: f32,
+    /// Damage dealt to NPC combat bodies, by (victim, attacker) owner:
+    /// (hits, valued total). Diagnostic for the rescue log.
+    npc_damage: std::collections::BTreeMap<(u32, u32), (u32, f32)>,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -423,6 +426,7 @@ pub fn prepare(
             field_cell: None,
             planning: None,
             last_heal: f32::NEG_INFINITY,
+            npc_damage: Default::default(),
         }),
         shots,
         shot_queue: vec![],
@@ -1535,6 +1539,13 @@ pub fn step(
                 break;
             }
         };
+        if let (Some(f), Some(d)) = (s.host.fight.as_ref(), s.demo.as_mut()) {
+            for e in f.events.iter().filter(|e| f.npcs.contains_key(&e.victim)) {
+                let acc = d.npc_damage.entry((e.victim, e.attacker)).or_default();
+                acc.0 += 1;
+                acc.1 += e.total;
+            }
+        }
         if let Some(error) = s.host.world.cameras.as_ref().and_then(|c|c.error.as_ref()) {
             s.failure = Some(format!("authored camera request: {error}"));
             break;
@@ -2043,6 +2054,9 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
         );
+        if let Some(d) = s.demo.as_ref().filter(|d| !d.npc_damage.is_empty()) {
+            info!("opening demo: rescue: damage on NPC bodies by (victim, attacker): (hits, total) {:?}", d.npc_damage);
+        }
         // each live goblin: owner, action, target, distance to the Arisen
         // (m) and its last actions, to see why one never reaches or hurts it
         if let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) {
