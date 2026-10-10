@@ -564,3 +564,48 @@ live kill failure; foreign recycled PID with exited original handle;
 foreign PID with still-live original handle; verified owned-handle kill.
 It launches/stops no process. PowerShell parse and `git diff --check`
 also pass. No new live-capture verification is claimed yet.
+
+### Cached-span correction accepted headlessly
+
+Source `061b251` / `35812f0` replaces the creation filter with the own
+Chrome callback layer, approved by head #6662 and reviewed by root. Under
+the normal M5 lease after root's actual release #6693, combined session
+38072 **actually exited 0**, and all owned Cargo/rustc processes were
+gone before releasing M5 #6748. Only independent existing leased targets
+and root's non-performance visual run overlapped; no FPS acceptance was
+performed during compilation.
+
+- Full default suite **86 passed / 0 failed / 2 existing ignored**,
+  fresh viewer compilation 37.06 s, tests 15.89 s.
+- Full `profile-trace` suite **91 passed / 0 failed / 2 existing ignored**,
+  feature dependency compilation 5m13s, tests 14.85 s. All five feature
+  regressions explicitly pass: stage/hitch/window transitions, cached
+  same-ID entries/boundaries, actual reused Bevy App system, and actual
+  Chrome writer output names under LogPlugin layer ordering. Source
+  freshness is confirmed by these named tests; output is not a reused
+  default viewer artifact.
+- Trace release **exit 0 / 46.88 s**; default release **exit 0 / 40.58 s**.
+  Existing private-interface/audio warnings remain. No clean/new target
+  was used; feature changes legitimately recompiled Bevy trace crates.
+- Immutable trace pin
+  `E:/ddda-re/notes/steps/s41/ddview-trace-35812f0.exe`, SHA-256
+  `9BE13EF31DF7658F67FB5A1ED77F1F3D3374C5AC98E525E620BEDA7B3A418D47`.
+  Default pin `E:/ddda-re/notes/steps/s41/ddview-default-35812f0.exe`,
+  SHA-256 `E3A6A1D1B0F31AA2F43CA70CAEC130A7CFE5109DC9EDF6AE5E790D486B603944`.
+  Cargo resolved the lockfile by removing Bevy Log's now-disabled
+  `tracing-chrome` edge; the same already-locked dependency is now direct
+  and optional in ddview. This resolver delta is committed with this result.
+- Hardened harness source `de8d645`, SHA-256
+  `2D079EB05A717A8786BFAEE7676212C363B59FAF08F8D239947C8395971E65D8`,
+  has the seven offline actual-AST race tests described above, all passed.
+  It does not change the already-frozen renderer source used for the pins.
+
+One bounded corrected trace is requested (#6752), pending the normal GPU
+lease and root's approved capture priority. A private copy of the already
+measured FieldWalk checkpoint, SHA-256
+`D4D5628C8C7E6398768DA98D6C10EEC4F626F661C3B0E1AE41EDD432EDBA968A`,
+is frozen at `E:/ddda-re/notes/steps/s41/FieldWalk-84ed50f.ddhs`; canonical
+checkpoints are untouched. This keeps the pin's host schema reproducible
+when head regenerates canonical checkpoints for S51/ECON v2. Actual named
+system spans, bounded window/scope completeness and the largest bottleneck
+remain unverified until that diagnostic run. No renderer gain is claimed.
