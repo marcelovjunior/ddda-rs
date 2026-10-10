@@ -42,6 +42,52 @@ pub trait StoryWorld: ddstory::Host {
     }
 }
 
+#[cfg(test)]
+mod retry_controls_tests {
+    use super::*;
+    use crate::data::NoStoryData;
+    type TestHost = Host<NoStoryData, ddstory::scripted::ScriptedHost>;
+    struct Flat;
+    impl Ground for Flat {
+        fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+    }
+    #[test]
+    fn retry_poisoned_candidate_hidden_controls_are_reconstructed() {
+        let mut live = TestHost::new(Sim::new(Default::default()), None,
+            Default::default(), Box::new(Flat));
+        live.join(ProfileId(1), Control::Local, [0.0; 3], 0.0).unwrap();
+        let checkpoint = live.save().unwrap();
+        let template = live.sim.fresh_attempt();
+        let inputs = [(0, crate::PlayerInput { interact: true,
+            sim: ddsim::Input { pawn_orders: ddsim::PawnOrderButtons { up: true,
+                ..Default::default() }, ..Default::default() } })].into_iter().collect();
+        live.prepare_retry(&checkpoint, NoStoryData, |seed| {
+            let mut candidate = TestHost::new(seed.sim(&template, &Default::default())?, None,
+                Default::default(), Box::new(Flat));
+            candidate.roster = seed.roster.clone();
+            candidate.edges.interact_presses(&inputs);
+            candidate.pawn_orders.presses(&inputs);
+            candidate.rift_visitors.insert(0);
+            candidate.scenario_press = Some(0);
+            candidate.request_log.u64(123);
+            candidate.kit_job = 3;
+            candidate.boot = false;
+            candidate.locks.acquire(123, 0).unwrap();
+            Ok(candidate)
+        }).unwrap().commit_retry();
+        assert_eq!(live.edges, Edges::default());
+        assert_eq!(live.pawn_orders, crate::pawn_orders::Orders::default());
+        assert!(live.rift_visitors.is_empty());
+        assert_eq!(live.scenario_press, None);
+        assert_eq!(live.request_log, StateHasher::default());
+        assert_eq!(live.kit_job, 0);
+        assert!(live.boot);
+        assert_eq!(live.locks, InteractionLocks::default());
+        assert_eq!(live.edges.interact_presses(&inputs), vec![0]);
+        assert_eq!(live.pawn_orders.presses(&inputs), vec![(0, ddenemyrt::pawn::Command::Go)]);
+    }
+}
+
 impl StoryWorld for ddstory::scripted::ScriptedHost {
     fn handle(&mut self, stage: u32, requests: &[Request]) {
         ddstory::scripted::ScriptedHost::handle(self, stage, requests)
@@ -214,6 +260,19 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             ambient: Default::default(),
             kit_job: 0,
         }
+    }
+
+    /// Project retry reconstruction: clear hidden controls on the independent
+    /// candidate before loading the checkpoint. Ordinary load does not use
+    /// this operation. Installed stage data belongs to the fresh factory.
+    pub(crate) fn reset_attempt_controls(&mut self) {
+        self.rift_visitors.clear();
+        self.edges = Default::default();
+        self.pawn_orders = Default::default();
+        self.scenario_press = None;
+        self.request_log = Default::default();
+        self.boot = true;
+        self.kit_job = 0;
     }
 
     /// Gives the Arisen seats the fight kit of the story's current vocation

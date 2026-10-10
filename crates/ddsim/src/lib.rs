@@ -1009,6 +1009,32 @@ impl Sim {
         }
     }
 
+    /// New attempt using the same installed motion/parameter configuration.
+    /// Bodies and fractional time are deliberately reconstructed, so private
+    /// input latches, velocity, death actions and attack slots cannot survive.
+    /// Project reconstruction policy; native reload retires aGameMain at
+    /// 0x0050B67E (DDDA.exe 2017-12-13 Steam).
+    pub fn fresh_attempt(&self) -> Self {
+        Self {
+            players: Vec::new(),
+            motions: self.motions.clone(),
+            jump_normal: self.jump_normal,
+            jump_sprint: self.jump_sprint,
+            air_rows: self.air_rows.clone(),
+            move_param: self.move_param,
+            ledge_param: self.ledge_param,
+            stamina_tables: self.stamina_tables.clone(),
+            weight_tables: self.weight_tables.clone(),
+            sweep_param: self.sweep_param,
+            attack_param: self.attack_param,
+            weapon_motions: self.weapon_motions.clone(),
+            bow_param: self.bow_param,
+            bow_shot_param: self.bow_shot_param.clone(),
+            skill_definitions: self.skill_definitions.clone(),
+            pending: 0.0,
+        }
+    }
+
     pub fn add_player(&mut self, id: PlayerId, position: [f32; 3], yaw: f32) {
         self.players.push(Player {
             id,

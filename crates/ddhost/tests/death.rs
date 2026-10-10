@@ -649,3 +649,89 @@ fn installed_host_airborne_fatality_is_reported_without_grounded_fallback() {
     assert!(report.death.seats[0].unsupported.is_some());
     assert!(!report.death.game_over);
 }
+
+fn poison_attempt_combat(host: &mut DeathHost) {
+    use ddenemyrt::{arrow::Arrow, shell::Shell, skills::spells::Spell};
+    let fight = host.fight.as_mut().unwrap();
+    let enemy = fight.add_goblin([800.0, 0.0, 0.0], 0.0);
+    fight.add_pawn(&mut host.sim, 4, 0, [600.0, 0.0, 0.0], 0.0, [500.0; 9], 7);
+    assert!(fight.deliver_pawn_order(4, ddenemyrt::pawn::Command::Go));
+    fight.shells.push(Shell::fire(&fight.data.shell, 1000, 0, [0.0; 3], 0.0, Some(enemy)));
+    fight.arrows.push(Arrow::fire(&fight.data.arrow.param, 1001, 1,
+        [0.0; 3], [0.0, 0.0, 1.0], 1.0).unwrap());
+    // Synthetic spell identity/age exercises lifetime removal only, never
+    // spell selection, native timing, damage or projectile movement.
+    fight.spells.shells.push(Spell { owner: 1002, shooter: 1, skill: 0,
+        pos: [0.0; 3], direction: [0.0, 0.0, 1.0], age: 1.0, delay: 0.0,
+        distance: 0.0, speed: 0.0, gravity: 0.0, impact: false });
+    fight.shooters.insert(1000, 0);
+    fight.shooters.insert(1001, 1);
+    fight.shooters.insert(1002, 1);
+    fight.small_gauge = Some((enemy, 1.0));
+}
+
+#[test]
+fn installed_retry_replaces_dead_seats_projectiles_enemy_and_pawn_brains() {
+    let Some(mut host) = installed_death_host() else { return };
+    host.frame = 7;
+    let checkpoint = host.save().unwrap();
+    kill_arisen(&mut host, 0);
+    kill_arisen(&mut host, 1);
+    assert!(complete_installed_death(&mut host, 0).death.game_over);
+    poison_attempt_combat(&mut host);
+    assert_eq!(host.fight.as_ref().unwrap().pawns[&4].brain.orders.mailbox,
+        ddenemyrt::pawn::Command::Go);
+    for seat in host.roster.ids() {
+        let body = host.sim.player_mut(seat).unwrap();
+        body.skills.request = Some(123);
+        body.skills.released.push(123);
+        body.bow_latched = true;
+        body.velocity = [1.0, 2.0, 3.0];
+    }
+    let template = host.sim.fresh_attempt();
+    let fight_data = host.fight.as_ref().unwrap().data.clone();
+    let result = host.prepare_retry(&checkpoint, ddhost::data::NoStoryData, |seed| {
+        let mut candidate = DeathHost::new(seed.sim(&template, &Default::default())?,
+            None, Default::default(), Box::new(DeathTestGround));
+        candidate.roster = seed.roster.clone();
+        candidate.fight = Some(ddenemyrt::fight::Fight::new(fight_data));
+        // Poison the independent factory result too: the dedicated retry
+        // must rebuild combat rather than trust its empty constructor.
+        poison_attempt_combat(&mut candidate);
+        Ok(candidate)
+    }).unwrap().commit_retry();
+    assert_eq!((result.frame, result.epoch), (7, 1));
+    assert!(!host.death.report(&host.roster).game_over);
+    let fight = host.fight.as_ref().unwrap();
+    assert!(fight.goblins.is_empty());
+    assert!(fight.pawns.is_empty());
+    assert!(fight.npcs.is_empty());
+    assert!(fight.shells.is_empty());
+    assert!(fight.arrows.is_empty());
+    assert!(fight.spells.shells.is_empty());
+    assert!(fight.shooters.is_empty());
+    assert!(fight.positions.is_empty());
+    assert!(fight.small_gauge.is_none());
+    assert_eq!(host.sim.players.len(), host.roster.len());
+    for seat in host.roster.ids() {
+        assert!(!host.player_actions_blocked(seat));
+        assert!(!fight.arisen[&seat].fighter.victim.dead());
+        assert!(fight.arisen[&seat].fighter.attacks.is_empty());
+        let body = host.sim.player(seat).unwrap();
+        assert_eq!(body.state, ddsim::State::Wait);
+        assert_eq!(body.frame, 0.0);
+        assert_eq!(body.velocity, [0.0; 3]);
+        assert!(body.skills.request.is_none());
+        assert!(body.skills.released.is_empty());
+        assert!(!body.bow_latched);
+    }
+    let inputs = host.roster.ids().map(|seat| (seat, ddhost::PlayerInput {
+        sim: ddsim::Input { stick: [0.0, 1.0], ..Default::default() },
+        ..Default::default() })).collect();
+    let before: Vec<_> = host.roster.ids().map(|seat|
+        (seat, host.sim.player(seat).unwrap().position[2])).collect();
+    host.tick(&inputs).unwrap();
+    for (seat, z) in before {
+        assert!(host.sim.player(seat).unwrap().position[2] > z);
+    }
+}

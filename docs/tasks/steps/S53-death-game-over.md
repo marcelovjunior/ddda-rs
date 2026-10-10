@@ -155,3 +155,74 @@ has been compiled or tested; full touched/downstream suites and the default
 release build remain required. Ordinary save replacement still does not
 reset a live attempt; dedicated reconstruction and viewer restoration are
 open.
+
+Viewer patch proposal for head's currently owned `opening.rs`, against
+`18a4ca5` lines 1214 onward (not applied): replace the `stage == STAGE`
+shortcut in `resume_checkpoint` with the following after a successful
+dedicated host attempt replacement:
+
+```rust
+let (stage, start) = (s.world().stage_no, s.world().start_pos);
+enter_stage(stage_view, st, s, stage, start, true)?;
+```
+
+This rebinds same-stage collision, camera and NPC lifetimes too. It is only
+the stage-reentry hook: old fight/projectiles/AI, enemy admission/view maps,
+event/talk/menu actors and network interpolation still need fresh attempt
+lifetimes. The current `Host::load` before it does not provide that reset,
+and a fallible stage load after a host swap is not atomic presentation.
+Native reload tracing supports rebuilding the world: `0x0050EF80` waits
+for fade/resources, checks the latest/checkpoint request masks at
+`0x0050F0E4` / `0x0050F0F3`, then changes to controller state `0x24` at
+`0x0050F2B1`. That state dispatches to `0x0050B5E0`, which retires its
+temporary GUI objects and asks the area manager to remove `aGameMain`
+(`0x0198CDF0`) at `0x0050B67E`. The save read/reconstruct consumer after
+that lifecycle boundary remains open.
+
+Dedicated retry continuation is **source-only, uncompiled and untested**.
+Under head's explicit approvals 7929/7952, `Host::prepare_retry` constructs
+an independent host through a fresh-world factory with no `Clone` bounds
+on the story data/world. Every chunk/resource/placement check happens on
+that candidate. `PreparedAttempt` borrows the live host exclusively while
+presentation prepares; dropping it preserves the live attempt, and
+`commit_retry` performs an infallible host swap. The network server lives
+outside this host and must retain its connections. A checked monotonic
+attempt epoch is prepared for the pending protocol-11 reset notice.
+
+This is project reconstruction policy, not a claim that the original had
+multiplayer retry. The live roster retains exact seats, holes, profiles and
+controls. Present checkpoint profiles restore checkpoint durable state;
+absent seated/parked profiles retain their live durable chunks. An absent
+seated profile requires a caller-observed checkpoint party place rather
+than its former stage position or an invented offset. Checkpoint shared
+Rift slots remain authoritative. An absent seated profile's hire survives
+only in a free unreserved slot; collision uses ordinary departure log and
+history bookkeeping and emits a typed profile notice, without invented RC
+or items. Its bookkeeping temporarily detaches/restores the candidate Rift
+room so it cannot decrement counters or selections for another restored
+pawn. Native inventory ownership reclaim remains outside `Rift::release`'s
+existing contract and is not claimed by this retry work.
+
+All bodies and fractional sim time are reconstructed, private host input
+edges/order/interaction/request/vocation latches clear, and combat is
+rebuilt from the installed data after load. Old enemies, projectiles,
+fighter actions and pawn brains cannot be carried by the factory result.
+Seven additional retry regressions are source-present: failed factory/late
+chunk/stage preparation and dropped candidate preservation; exact roster
+holes and all-seat action reset; absent seated durable state/party place;
+absent parked durability/place; free hire versus colliding ordinary
+dismissal; deliberately poisoned factory hidden queues; and installed
+dead-seat/projectile/enemy/pawn-brain replacement plus resumed movement.
+There are now 26 named S53 regressions in source, ten actually passed at
+the helper checkpoint and sixteen continuation regressions **not run**.
+
+Pending dependencies/limits: reviewed S52 chatter `fork_for_retry` must
+preserve installed data/RNG/monotonic message IDs, and reviewed S56 EDIT
+must receive retry durability assertions. Protocol-11 epoch/input/snapshot
+baseline reset, the production installed party-placement/fresh-world
+factory, atomic viewer resource preparation/replacement and native save
+choice consumers remain open. Existing save policy reconstructs combat HP
+from installed kit/stats; native saved HP/stamina durability is not proven.
+Pawn revival contact selection, airborne fatal branches and authored
+game-over presentation also remain open. No new Cargo/default-release or
+original comparison result is claimed for this continuation.
