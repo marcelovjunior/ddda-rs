@@ -147,7 +147,7 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub rift: ddrift::Rift,
     /// The systems' game data, when the host has it.
     pub data: SystemData,
-    /// The seat that hired the pawn in each hired slot (Rift party slots
+    /// The persistent profile that hired the pawn in each hired slot (Rift party slots
     /// 1 and 2).
     pub(crate) hired_by: [Option<ProfileId>; 2],
     /// Unseated Arisen state, owned by persistent identity (co-op policy).
@@ -261,7 +261,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     /// Gives each hired pawn (`rift.party.hired`, e.g. Rook from q0002's
     /// story request) a body in the simulation and a seat in the fight, with
     /// its record's vocation kit and its inclinations, beside its owner.
-    /// *Assumed*: 2 m behind the first Arisen seat; released pawns keep
+    /// *Assumed*: 2 m behind its currently seated hirer; released pawns keep
     /// their body (release is not wired here yet).
     fn sync_hired_pawn_bodies(&mut self) {
         use ddenemyrt::fight::Kit;
@@ -295,13 +295,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     /// Where hired pawn `index` stands beside an owner at `pos` facing `yaw`.
     /// *Assumed*: 2 m behind, 80 cm to either side.
-    fn hired_pawn_place(index: usize, pos: [f32; 3], yaw: f32) -> [f32; 3] {
+    pub(crate) fn hired_pawn_place(index: usize, pos: [f32; 3], yaw: f32) -> [f32; 3] {
         let (s, c) = yaw.sin_cos();
         let side = if index == 0 { 80.0 } else { -80.0 };
         [pos[0] - s * 200.0 + c * side, pos[1], pos[2] - c * 200.0 - s * side]
     }
 
-    /// Moves the hired pawns' bodies to their owner (the first Arisen seat),
+    /// Moves the hired pawns' bodies to their currently seated hirer,
     /// as the party travels together when an area jump places it. Call after
     /// placing the Arisen.
     pub fn place_hired_pawns(&mut self) {
@@ -670,7 +670,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     ///
     /// The roster must already be seated with the save's profiles, though
     /// seats may differ. Profiles of the save that are not seated now are
-    /// left out. Seated profiles without chunks keep what they have. The
+    /// parked for later admission. Seated profiles without chunks keep what they have. The
     /// Rift's stock starts empty until [`Host::refill_rift`], as on the
     /// original's load.
     pub fn load(&mut self, f: &SaveFile, data: D) -> Result<(), HostError> {
@@ -721,7 +721,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             if !matches!(version, 1 | 2) { return Err(err(format!("HOST version {version}"))); }
             saved_frame = r.u64().map_err(err)?;
             for _ in 0..r.len(9).map_err(err)? {
-                old.push((r.u8().map_err(err)?, ProfileId(r.u64().map_err(err)?)));
+                let id = r.u8().map_err(err)?;
+                let profile = ProfileId(r.u64().map_err(err)?);
+                if old.iter().any(|&(seat, owner)| seat == id || owner == profile) {
+                    return Err(err("HOST duplicate seat/profile".into()));
+                }
+                old.push((id, profile));
             }
             for h in &mut hired_old {
                 let some = r.bool().map_err(err)?;
@@ -729,7 +734,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     let seat = r.u8().map_err(err)?;
                     old.iter().find(|(id, _)| *id == seat).map(|(_, profile)| *profile)
                 } else { Some(ProfileId(r.u64().map_err(err)?)) };
-                *h = if some { profile } else { None };
+                *h = if some { Some(profile.ok_or_else(|| err("HOST hirer absent from saved roster".into()))?) } else { None };
             }
             r.end().map_err(err)?;
         }

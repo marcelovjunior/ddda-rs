@@ -130,15 +130,21 @@ fn malformed_unseated_profile_is_rejected_before_state_changes() {
     bag(&mut h, a, 43, 5);
     h.leave(a);
     join(&mut h, 22);
-    let mut file = h.save().unwrap();
-    file.put(
-        ddhost::save::TAG_ECON,
-        ddhost::save::Owner::Profile(ProfileId(11)),
-        vec![2],
-    );
     let before = h.save().unwrap().to_bytes();
-    assert!(h.load(&file, NoStoryData).is_err());
-    assert_eq!(h.save().unwrap().to_bytes(), before);
+    for (tag, bytes) in [
+        (ddhost::save::TAG_ECON, vec![2]),
+        (ddhost::save::TAG_PROG, vec![1]),
+        (ddhost::save::TAG_PLACE, vec![0]),
+        (
+            ddhost::save::TAG_PLACE,
+            ddhost::save::place_bytes([f32::NAN, 0.0, 0.0], 0.0),
+        ),
+    ] {
+        let mut file = h.save().unwrap();
+        file.put(tag, ddhost::save::Owner::Profile(ProfileId(11)), bytes);
+        assert!(h.load(&file, NoStoryData).is_err());
+        assert_eq!(h.save().unwrap().to_bytes(), before);
+    }
 }
 
 #[test]

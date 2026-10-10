@@ -19,13 +19,16 @@ pub(crate) struct Parked {
     pub fighter: Option<ddenemyrt::fight::ArisenFighter>,
     pub place: Option<([f32; 3], f32)>,
     pub endurance: Option<(f32, f32, usize, usize, bool)>,
-    pub hired: Vec<(
-        usize,
-        u32,
-        ddenemyrt::pawn::PawnSeat,
-        ddenemyrt::fight::ArisenFighter,
-        ddsim::Player,
-    )>,
+    pub hired: Vec<ParkedPawn>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParkedPawn {
+    index: usize,
+    rom_id: u32,
+    pawn: ddenemyrt::pawn::PawnSeat,
+    fighter: ddenemyrt::fight::ArisenFighter,
+    body: ddsim::Player,
 }
 
 fn cancel_attacks(fight: &mut ddenemyrt::fight::Fight, seat: PlayerId) {
@@ -218,9 +221,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             // Fighter/PawnSeat contain runtime scalar state, not asset Arcs.
             hash.debug(&state.fighter);
             hash.debug(&state.endurance);
-            for (index, rom_id, pawn, fighter, body) in &state.hired {
-                hash.debug(&(index, rom_id, pawn, fighter, body));
-            }
+            hash.debug(&state.hired);
         }
     }
 
@@ -241,7 +242,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                     fighter.fighter.attacks.clear();
                     fighter.fighter.hurts.clear();
                     fighter.fighter.history = Default::default();
-                    hired.push((index, record.pawn.rom_id, pawn, fighter, body));
+                    hired.push(ParkedPawn {
+                        index,
+                        rom_id: record.pawn.rom_id,
+                        pawn,
+                        fighter,
+                        body,
+                    });
                 }
                 fight.positions.remove(&u32::from(pawn_seat));
             }
@@ -307,7 +314,14 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             fight.arisen.insert(seat, fighter);
             fight.equip(&mut self.sim, seat);
         }
-        for (index, rom_id, mut pawn, mut fighter, body) in state.hired {
+        for parked in state.hired {
+            let ParkedPawn {
+                index,
+                rom_id,
+                mut pawn,
+                mut fighter,
+                body,
+            } = parked;
             if self.hired_by[index] != Some(profile)
                 || !self.rift.party.hired[index]
                     .as_ref()
@@ -320,7 +334,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 // Re-enter beside the Arisen, without restoring an old attack.
                 let (position, yaw) = self.sim.player(seat).map(|p| (p.position, p.yaw)).unwrap();
                 self.sim.players.retain(|p| p.id != body.id);
-                self.sim.add_player(body.id, position, yaw);
+                self.sim
+                    .add_player(body.id, Self::hired_pawn_place(index, position, yaw), yaw);
                 let restored = self.sim.player_mut(body.id).unwrap();
                 restored.stamina = body.stamina;
                 restored.stamina_max = body.stamina_max;
@@ -357,6 +372,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     ) -> Result<BTreeMap<ProfileId, Parked>, crate::HostError> {
         let mut profiles = BTreeSet::new();
         for chunk in &file.chunks {
+            if chunk.tag == save::TAG_PLACE && matches!(chunk.owner, Owner::Profile(_)) {
+                if save::place_from(&chunk.bytes).is_none_or(|(position, yaw)| {
+                    !yaw.is_finite() || position.iter().any(|value| !value.is_finite())
+                }) {
+                    return Err(crate::HostError::Save("invalid profile PLCE".into()));
+                }
+            }
             if ![save::TAG_ECON, save::TAG_PROG, save::TAG_PLACE].contains(&chunk.tag) {
                 continue;
             }
