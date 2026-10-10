@@ -512,3 +512,24 @@ index, never that compact ordinal. The existing mteffect field name
 `generator_kind` for this raw byte is misleading; its public rename/alias
 is a separate reader change to coordinate with head. No caller uses this
 new helper yet, so neither unresolved integration rule changes production.
+
+### Actual integrated coordinate acceptance
+
+On compiled source `3d978da` (native reader/sampler `c571bfd`, reviewed
+main7ea integration `4d39031`, counter/index ownership documentation), the
+complete enemy suite actually exited zero in parent session84494:
+**175 passed, zero failed, two existing diagnostics ignored**. Compilation
+took11.71s and the summed test execution times were84.83s. All73 library
+tests passed; the two new coordinate tests and the earlier coordinate-clock
+test were explicitly confirmed by name in the complete output. Private log:
+`E:/ddda-re/notes/steps/S29/full-coordinate-static-integrated.log`.
+There was no stale/failed attempt in this batch. The existing shared core
+target was used; no new cache, production caller or original-game operation
+was introduced. The normal core lease was released after actual exit.
+
+This accepts the unused coordinate reader/static sampler/clock checkpoint
+for head's review. It does **not** make S30's production landing/fire usable,
+so it does not yet satisfy the S31 production-entry staffing exception.
+Next: implement and independently check the actual static vf43 parent/
+coordinate transform, including native normalization/scale ownership,
+then connect clocks, generator emissions, queries and ordinary HP effects.
