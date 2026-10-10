@@ -1,7 +1,466 @@
 //! Per-viewer graphics settings. The original config is only an import source.
 //! Settings never enter the host simulation or the multiplayer protocol.
+use bevy::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicU16, Ordering},
+    OnceLock,
+};
+
+// A display-wide sampler policy: this process's windows/local seats use the
+// same graphics options. No player or host simulation state is global here.
+static SAMPLER_ANISOTROPY: AtomicU16 = AtomicU16::new(0);
+static INITIAL: OnceLock<Result<Store, String>> = OnceLock::new();
+
+pub fn initial_graphics() -> Graphics {
+    INITIAL
+        .get_or_init(Store::load)
+        .as_ref()
+        .map(|s| s.graphics.clone())
+        .unwrap_or_default()
+}
+
+pub fn filter_image(image: &mut Image, filtering: Filtering) {
+    use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+    let mut sampler = match &image.sampler {
+        ImageSampler::Descriptor(s) => s.clone(),
+        ImageSampler::Default => ImageSamplerDescriptor::linear(),
+    };
+    sampler.mag_filter = ImageFilterMode::Linear;
+    sampler.min_filter = ImageFilterMode::Linear;
+    sampler.mipmap_filter = ImageFilterMode::Linear;
+    sampler.anisotropy_clamp = filtering.anisotropy();
+    image.sampler = ImageSampler::Descriptor(sampler);
+}
+
+/// Called only by the world Loader, not HUD/font/movie texture conversion.
+pub fn filter_loaded_image(image: &mut Image) {
+    let level = SAMPLER_ANISOTROPY.load(Ordering::Relaxed);
+    if let Some(filtering) = Filtering::ALL.into_iter().find(|f| f.anisotropy() == level) {
+        filter_image(image, filtering);
+    }
+}
+
+#[derive(Resource)]
+pub struct RenderSource {
+    pub vfs: &'static ddvfs::Vfs,
+    pub textures: std::collections::HashMap<String, Option<Handle<Image>>>,
+}
+
+#[derive(Resource, Default)]
+pub struct Runtime {
+    pub open: bool,
+    store: Option<Store>,
+    graphics: Graphics,
+    revision: u64,
+    error: Option<String>,
+}
+
+pub struct SettingsPlugin;
+impl Plugin for SettingsPlugin {
+    fn build(&self, app: &mut App) {
+        let mut state = Runtime::default();
+        match INITIAL.get_or_init(Store::load) {
+            Ok(store) => {
+                state.graphics = store.graphics.clone();
+                state.store = Some(store.clone());
+            }
+            Err(error) => {
+                error!("viewer settings: {error}");
+                state.error = Some(error.clone());
+            }
+        }
+        SAMPLER_ANISOTROPY.store(
+            state.graphics.filtering.map_or(0, Filtering::anisotropy),
+            Ordering::Relaxed,
+        );
+        app.insert_resource(state)
+            .add_systems(Startup, menu_setup.after(crate::pause::setup))
+            .add_systems(
+                Update,
+                menu_update.after(crate::pause::update).before(crate::play::step),
+            )
+            .add_systems(PostUpdate, apply);
+    }
+}
+
+#[derive(Component)]
+struct SettingsMenu;
+#[derive(Component)]
+struct SettingText(SettingKey);
+#[derive(Component, Clone, Copy)]
+enum MenuAction {
+    Change(SettingKey),
+    Back,
+}
+#[derive(Component)]
+struct SettingsError;
+
+#[derive(Clone, Copy)]
+enum SettingKey {
+    Unsupported(&'static str, &'static str),
+    Vsync,
+    Dof,
+    Shadow,
+    Filtering,
+    Range,
+    Fov,
+}
+
+impl SettingKey {
+    fn value(self, state: &Runtime) -> String {
+        let g = &state.graphics;
+        let boolean = |value| match value {
+            Some(true) => "On",
+            Some(false) => "Off",
+            None => "Unspecified",
+        };
+        match self {
+            Self::Vsync => boolean(g.vsync).into(),
+            Self::Dof => boolean(g.dof).into(),
+            Self::Shadow => g.shadow.map(Quality::token).unwrap_or("Unspecified").into(),
+            Self::Filtering => g.filtering.map(Filtering::token).unwrap_or("Unspecified").into(),
+            Self::Range => format!(
+                "{} (restart to apply)",
+                g.view_range.map(ViewRange::token).unwrap_or("Unspecified")
+            ),
+            Self::Fov => "Unavailable until camera adapter is accepted".into(),
+            Self::Unsupported(section, key) => format!(
+                "{} — Unavailable",
+                state
+                    .store
+                    .as_ref()
+                    .and_then(|s| s.document.get(section, key))
+                    .unwrap_or("Unspecified")
+            ),
+        }
+    }
+
+    fn change(self, graphics: &mut Graphics) -> bool {
+        fn next<T: PartialEq + Copy>(all: &[T], current: Option<T>) -> T {
+            let index = current.and_then(|value| all.iter().position(|v| *v == value));
+            all[index.map_or(0, |i| (i + 1) % all.len())]
+        }
+        match self {
+            Self::Vsync => graphics.vsync = Some(!graphics.vsync.unwrap_or(false)),
+            Self::Dof => graphics.dof = Some(!graphics.dof.unwrap_or(false)),
+            Self::Shadow => graphics.shadow = Some(next(&Quality::ALL, graphics.shadow)),
+            Self::Filtering => graphics.filtering = Some(next(&Filtering::ALL, graphics.filtering)),
+            Self::Range => graphics.view_range = Some(next(&ViewRange::ALL, graphics.view_range)),
+            Self::Fov | Self::Unsupported(..) => return false,
+        }
+        true
+    }
+}
+
+fn menu_setup(mut commands: Commands, args: Res<crate::Args>, source: Option<Res<RenderSource>>) {
+    if !args.play {
+        return;
+    }
+    let Some(source) = source else { return };
+    let options = match OriginalOptions::load(source.vfs) {
+        Ok(options) => options,
+        Err(error) => {
+            error!("graphics menu resources: {error}");
+            return;
+        }
+    };
+    // The controls below are a plain temporary viewer menu using runtime
+    // native labels. The original layout/atlas widget renderer is unported.
+    commands
+        .spawn((
+            SettingsMenu,
+            GlobalZIndex(101),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                display: Display::None,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(5.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.02, 0.03, 0.95)),
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                Text::new("Graphics settings — viewer menu"),
+                TextFont {
+                    font_size: bevy::text::FontSize::Px(26.0),
+                    ..default()
+                },
+            ));
+            for (id, key) in [
+                (139, SettingKey::Unsupported(DISPLAY, "Resolution")),
+                (140, SettingKey::Unsupported(DISPLAY, "FullScreen")),
+                (141, SettingKey::Unsupported(DISPLAY, "RefreshRate")),
+                (142, SettingKey::Vsync),
+                (143, SettingKey::Unsupported(GRAPHICS, "MaxFPS")),
+                (144, SettingKey::Unsupported(GRAPHICS, "AltAntiAlias")),
+                (145, SettingKey::Unsupported(GRAPHICS, "HDR")),
+                (146, SettingKey::Shadow),
+                (147, SettingKey::Unsupported(GRAPHICS, "TextureDetail")),
+                (148, SettingKey::Filtering),
+                (149, SettingKey::Unsupported(GRAPHICS, "GrassQuality")),
+                (150, SettingKey::Unsupported(GRAPHICS, "EffectVolume")),
+                (151, SettingKey::Fov),
+                (233, SettingKey::Range),
+                (237, SettingKey::Dof),
+                (37, SettingKey::Unsupported(GRAPHICS, "Brightness")),
+            ] {
+                let label = options.text(id).unwrap_or("");
+                panel
+                    .spawn(
+                        (Node {
+                            width: Val::Px(780.0),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::SpaceBetween,
+                            ..default()
+                        }),
+                    )
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new(label),
+                            TextFont {
+                                font_size: bevy::text::FontSize::Px(17.0),
+                                ..default()
+                            },
+                        ));
+                        let enabled = !matches!(key, SettingKey::Unsupported(..) | SettingKey::Fov);
+                        row.spawn((
+                            Button,
+                            MenuAction::Change(key),
+                            Node {
+                                width: Val::Px(440.0),
+                                padding: UiRect::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(if enabled {
+                                Color::srgb(0.15, 0.2, 0.28)
+                            } else {
+                                Color::srgb(0.08, 0.08, 0.09)
+                            }),
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                SettingText(key),
+                                Text::new(""),
+                                TextFont {
+                                    font_size: bevy::text::FontSize::Px(17.0),
+                                    ..default()
+                                },
+                                TextColor(if enabled {
+                                    Color::WHITE
+                                } else {
+                                    Color::srgb(0.5, 0.5, 0.5)
+                                }),
+                            ));
+                        });
+                    });
+            }
+            panel.spawn((
+                SettingsError,
+                Text::new(""),
+                TextFont {
+                    font_size: bevy::text::FontSize::Px(15.0),
+                    ..default()
+                },
+            ));
+            panel
+                .spawn((
+                    Button,
+                    MenuAction::Back,
+                    Node {
+                        padding: UiRect::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.15, 0.2, 0.28)),
+                ))
+                .with_children(|button| {
+                    button.spawn(Text::new("Back (Esc)"));
+                });
+        });
+}
+
+fn menu_update(
+    mut state: ResMut<Runtime>,
+    pause: Res<crate::pause::PauseState>,
+    buttons: Query<(&Interaction, &MenuAction), Changed<Interaction>>,
+    mut menus: Query<&mut Node, With<SettingsMenu>>,
+    mut values: Query<(&SettingText, &mut Text), Without<SettingsError>>,
+    mut errors: Query<&mut Text, With<SettingsError>>,
+) {
+    if state.open && pause.paused {
+        for (interaction, action) in &buttons {
+            if *interaction != Interaction::Pressed {
+                continue;
+            }
+            match action {
+                MenuAction::Back => state.open = false,
+                MenuAction::Change(key) => {
+                    let mut candidate = state.graphics.clone();
+                    if !key.change(&mut candidate) {
+                        continue;
+                    }
+                    let Some(store) = &mut state.store else {
+                        continue;
+                    };
+                    match store.save(&candidate) {
+                        Ok(()) => {
+                            state.graphics = candidate;
+                            state.revision += 1;
+                            state.error = None;
+                        }
+                        Err(error) => state.error = Some(error),
+                    }
+                }
+            }
+        }
+    }
+    for mut menu in &mut menus {
+        let display = if state.open && pause.paused {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if menu.display != display {
+            menu.display = display;
+        }
+    }
+    for (key, mut text) in &mut values {
+        let value = key.0.value(&state);
+        if **text != value {
+            **text = value;
+        }
+    }
+    for mut text in &mut errors {
+        let error = state.error.clone().unwrap_or_default();
+        if **text != error {
+            **text = error;
+        }
+    }
+}
+
+fn apply(
+    mut commands: Commands,
+    state: Res<Runtime>,
+    args: Res<crate::Args>,
+    source: Option<Res<RenderSource>>,
+    streamer: Option<Res<crate::stream::Streamer>>,
+    mut windows: Query<&mut Window>,
+    mut shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut cameras: Query<(Entity, &Projection, Option<&mut crate::stage::post::DdPost>), With<Camera3d>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut dd_materials: ResMut<Assets<crate::stage::DdMaterial>>,
+    mut previous: Local<Option<(u64, u32)>>,
+    mut previous_filtering: Local<Option<Filtering>>,
+) {
+    let stage = streamer.as_ref().map_or(args.stage, |s| s.stage);
+    let changed = previous
+        .as_ref()
+        .is_none_or(|(revision, _)| *revision != state.revision);
+    let stage_changed = previous.as_ref().is_none_or(|(_, old)| *old != stage);
+    if !changed && !stage_changed {
+        return;
+    }
+    let initial = previous.is_none();
+    *previous = Some((state.revision, stage));
+    let g = &state.graphics;
+    if changed {
+        if let Some(vsync) = g.vsync {
+            // Explicit CLI performance/uncapped mode keeps its existing priority.
+            let vsync = vsync && !(args.no_vsync || args.perf || args.perf_route);
+            for mut window in &mut windows {
+                window.present_mode = if vsync {
+                    bevy::window::PresentMode::AutoVsync
+                } else {
+                    bevy::window::PresentMode::AutoNoVsync
+                };
+            }
+        }
+        if let Some(quality) = g.shadow {
+            shadow_map.size = quality.shadow_resolution();
+        }
+        SAMPLER_ANISOTROPY.store(g.filtering.map_or(0, Filtering::anisotropy), Ordering::Relaxed);
+        // World images use RenderAssetUsages::RENDER_WORLD: their CPU payload
+        // may have been discarded after upload. Re-read only on a live edit,
+        // restore the same asset IDs, and regenerate material bind groups.
+        // GUI/fonts/movies never belong to these Loader texture maps.
+        if !initial && *previous_filtering != g.filtering {
+            if let (Some(filtering), Some(source)) = (g.filtering, source.as_ref()) {
+                let mut sources = source.textures.clone();
+                if let Some(streamer) = &streamer {
+                    sources.extend(streamer.loader.textures.clone());
+                }
+                for (path, handle) in sources {
+                    let Some(handle) = handle else {
+                        continue;
+                    };
+                    match source
+                        .vfs
+                        .read(&path, mtarc::type_hash("rTexture"))
+                        .and_then(|bytes| crate::stage::tex_to_image(&bytes))
+                    {
+                        Ok(mut image) => {
+                            filter_image(&mut image, filtering);
+                            if let Err(error) = images.insert(handle.id(), image) {
+                                warn!("settings texture {path}: {error}");
+                            }
+                        }
+                        Err(error) => warn!("settings texture {path}: {error}"),
+                    }
+                }
+                for (_, mut material) in materials.iter_mut() {
+                    let _ = &mut *material;
+                }
+                for (_, mut material) in dd_materials.iter_mut() {
+                    let _ = &mut *material;
+                }
+            }
+        }
+        *previous_filtering = g.filtering;
+    }
+    if let (Some(enabled), Some(source)) = (g.dof, source) {
+        let filter = crate::stage::post::DdPost::dof_filter(source.vfs, stage);
+        for (entity, projection, post) in &mut cameras {
+            let Projection::Perspective(lens) = projection else {
+                continue;
+            };
+            let size = windows
+                .iter()
+                .next()
+                .map(|w| (w.physical_width(), w.physical_height()))
+                .unwrap_or(args.size);
+            if let Some(mut post) = post {
+                if let Some(filter) = filter {
+                    *post = (*post).with_dof(
+                        &filter,
+                        lens.near / crate::stage::UNIT,
+                        lens.far / crate::stage::UNIT,
+                        size,
+                    );
+                }
+                post.flags.z = u8::from(enabled && filter.is_some()) as f32;
+            } else if let Some(mut post) = crate::stage::post::DdPost::load(source.vfs, stage) {
+                if enabled {
+                    if let Some(filter) = filter {
+                        post = post.with_dof(
+                            &filter,
+                            lens.near / crate::stage::UNIT,
+                            lens.far / crate::stage::UNIT,
+                            size,
+                        );
+                    }
+                }
+                commands.entity(entity).insert((post, bevy::camera::Hdr));
+            }
+        }
+    }
+}
 
 /// Project format; unrelated to the original game's save/config formats.
 const CONFIG_VERSION: &str = "1";

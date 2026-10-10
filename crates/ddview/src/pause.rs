@@ -22,6 +22,7 @@ pub struct PauseMenu;
 #[derive(Component, Clone, Copy)]
 pub enum Action {
     Resume,
+    Settings,
     Quit,
 }
 
@@ -70,7 +71,7 @@ pub fn setup(mut commands: Commands, args: Res<crate::Args>, mut pause: ResMut<P
                     ..default()
                 },
             ));
-            for (label, action) in [("Resume (Esc)", Action::Resume), ("Quit", Action::Quit)] {
+            for (label, action) in [("Resume (Esc)", Action::Resume), ("Graphics settings", Action::Settings), ("Quit", Action::Quit)] {
                 c.spawn((
                     Button,
                     action,
@@ -103,7 +104,9 @@ pub fn update(
     mut exit: MessageWriter<AppExit>,
     movie: Option<Res<crate::movie::MoviePlayer>>,
     intro: Option<Res<crate::intro::Intro>>,
+    settings: Option<ResMut<crate::settings::Runtime>>,
 ) {
+    let mut settings = settings;
     if !pause.enabled || movie.is_some() || intro.is_some() {
         return;
     }
@@ -114,7 +117,8 @@ pub fn update(
     if !window.focused && pause.auto_pause {
         pause.paused = true;
     } else if keys.just_pressed(KeyCode::Escape) {
-        pause.paused = !pause.paused;
+        if let Some(settings) = settings.as_mut().filter(|s| s.open) { settings.open = false; }
+        else { pause.paused = !pause.paused; }
     }
     for (interaction, action, mut color) in &mut buttons {
         *color = BackgroundColor(if *interaction == Interaction::Hovered {
@@ -125,6 +129,7 @@ pub fn update(
         if was_paused && *interaction == Interaction::Pressed {
             match action {
                 Action::Resume => pause.paused = false,
+                Action::Settings => { if let Some(settings) = settings.as_mut() { settings.open = true; } }
                 Action::Quit => {
                     exit.write(AppExit::Success);
                 }
@@ -144,7 +149,7 @@ pub fn update(
         CursorGrabMode::Locked
     };
     for mut menu in &mut menus {
-        menu.display = if pause.paused {
+        menu.display = if pause.paused && !settings.as_ref().is_some_and(|s| s.open) {
             Display::Flex
         } else {
             Display::None
