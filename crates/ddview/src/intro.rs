@@ -1,19 +1,9 @@
-//! What `--opening` shows before Cassardis (OPENING_SLICE steps 3-4):
-//! q0000's movie (`movie\event\st100ev00.wmv`), then the character editor
-//! (stage 801's role), then the opening world with the edited Arisen.
-//!
-//! The quest state does not wait on this: the session was already walked
-//! to q0001 before the window opened (`opening::prepare`, the fast-forward
-//! stand-in for the prologue and the dragon attack, still in place until
-//! those are playable). Only the order of what is shown follows the
-//! original: the movie, then the edit, then Cassardis.
-//!
-//! With `--unattended` it advances by itself (the movie skips after 3 s,
-//! the edit confirms after 3 s) so automated runs reach Cassardis.
-//!
-//! Skipped by `--skip-intro`, `--save` (the save has its Arisen), `--demo`
-//! and network sessions.
-
+//! Presentation of the movie and editor requested by the opening story.
+//! Preparation still walks the prologue with scripted stand-ins, but stops
+//! at an authored movie event. Playback completion releases that event;
+//! the quest's stage-801 jump admits the editor. Confirmation then resumes
+//! the remaining dragon stand-in route into Cassardis.
+//! Unattended movie/edit completion after three seconds is automation only.
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 
@@ -25,6 +15,7 @@ use crate::stream::Streamer;
 enum Phase {
     Movie,
     Edit,
+    Blocked,
 }
 
 /// The intro in progress; the opening session waits in it.
@@ -41,21 +32,23 @@ pub struct Intro {
     since: Option<f64>,
 }
 
-/// Starts the intro: the movie first (or the editor if the movie fails).
+/// Starts the movie that the quest requested; decoding failure blocks the event.
 pub fn start(
     commands: &mut Commands,
     images: &mut Assets<Image>,
-    native_pc: &std::path::Path,
+    _native_pc: &std::path::Path,
     session: crate::opening::Session,
     vfs: &'static ddvfs::Vfs,
     mfx: &'static mtshader::ShaderPackage,
 ) {
+    let movie_path = session.intro_movie.clone().expect("intro requires awaited movie event");
     let camera = commands.spawn(Camera2d).id();
     let mut intro = Intro { phase: Phase::Movie, session: std::sync::Mutex::new(Some(session)), vfs, mfx, camera, since: None };
-    if let Err(e) = crate::movie::start(commands, images, &crate::movie::path(native_pc, "st100ev00")) {
+    if let Err(e) = crate::movie::start(commands, images, &movie_path) {
         warn!("intro: no movie ({e})");
-        intro.phase = Phase::Edit;
-        begin_edit(commands, &mut intro);
+        // A decode failure is explicit; do not acknowledge an unplayed event.
+        error!("intro: blocked at movie event: {e}");
+        intro.phase = Phase::Blocked;
     }
     commands.insert_resource(intro);
 }
@@ -101,11 +94,14 @@ pub fn update(
     let now = time.elapsed_secs_f64();
     let waited = now - *intro.since.get_or_insert(now);
     match intro.phase {
+        Phase::Blocked => {}
         Phase::Movie => {
             if args.unattended && waited > 3.0 {
                 skip.0 = true;
             }
             if movie.0 {
+                let advanced = intro.session.get_mut().unwrap().as_mut().unwrap().intro_movie_done();
+                if let Err(e) = advanced { error!("intro: movie completion: {e}"); intro.phase = Phase::Blocked; return; }
                 intro.phase = Phase::Edit;
                 intro.since = Some(now);
                 begin_edit(&mut commands, &mut intro);
@@ -119,13 +115,6 @@ pub fn update(
                 }
             }
             let Some(fields) = result.as_ref().and_then(|r| r.0.clone()) else { return };
-            edit.close(&mut commands);
-            commands.remove_resource::<CharaEdit>();
-            commands.remove_resource::<EditResult>();
-            commands.entity(intro.camera).despawn();
-            for l in &lights {
-                commands.entity(l).despawn();
-            }
             let arisen = match ddlook::save::edit_look_dressed(intro.vfs, &fields) {
                 Ok(look) => Some(look),
                 Err(e) => {
@@ -133,7 +122,20 @@ pub fn update(
                     ddlook::save::template_look(intro.vfs, 0).ok()
                 }
             };
-            let Some(session) = intro.session.get_mut().unwrap().take() else { return };
+            let Some(mut session) = intro.session.get_mut().unwrap().take() else { return };
+            if let Err(e) = session.intro_edit_done() {
+                error!("intro: editor completion: {e}");
+                *intro.session.get_mut().unwrap() = Some(session);
+                intro.phase = Phase::Blocked;
+                return;
+            }
+            edit.close(&mut commands);
+            commands.remove_resource::<CharaEdit>();
+            commands.remove_resource::<EditResult>();
+            commands.entity(intro.camera).despawn();
+            for l in &lights {
+                commands.entity(l).despawn();
+            }
             info!("intro: done; Cassardis with the edited Arisen");
             crate::opening_world(
                 &mut commands,
