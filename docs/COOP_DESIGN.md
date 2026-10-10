@@ -24,6 +24,14 @@ single-player design is the expensive mistake to avoid.
   otherwise interacting with an NPC, that NPC is locked for the other player.
 - **LAN play**, each player on their own PC with their own copy of the game
   data.
+- **Death and retry** (head, 2026-10-10, S53): each Arisen's death is
+  terminal for that attempt. Pawns can be revived; they cannot revive an
+  Arisen. A dead player's camera follows a living Arisen while the other
+  players continue. The shared game-over screen opens when every active
+  Arisen is dead; disconnected profiles do not prevent game over. The host
+  chooses the latest shared save/checkpoint, and retry restores that
+  checkpoint atomically for everyone. These multiplayer rules are project
+  policy; the original has one Arisen.
 
 ## Architecture consequences
 

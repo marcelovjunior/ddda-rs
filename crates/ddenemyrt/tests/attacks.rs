@@ -78,7 +78,7 @@ impl Bout {
         let hits = self.fight.hits(1.0).to_vec();
         self.sim.step(1.0 / 30.0, &HashMap::from([(0, input)]), &Flat);
         self.fight.players_moved(&mut self.sim, &Flat, 1.0);
-        self.fight.push_out(&mut self.sim);
+        self.fight.push_out(&mut self.sim, &Flat);
         self.fight.volumes(&self.sim);
         let p = self.sim.player(0).unwrap();
         self.log.push(Frame {

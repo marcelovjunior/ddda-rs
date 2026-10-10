@@ -829,9 +829,10 @@ impl Fight {
     /// out of each other (`crate::pushout`): per pair of overlapping
     /// push-out volumes the higher rank gives way by the overlap; each
     /// character keeps its deepest push of the frame (0x0076D420) and moves
-    /// by it horizontally (0x0076D6B0, pass C). Pairs are taken Arisen
-    /// first, then goblins in creation order.
-    pub fn push_out(&mut self, sim: &mut ddsim::Sim) {
+    /// by it horizontally (0x0076D6B0, pass C, before the scenery sweep:
+    /// `Sim::push_player` sweeps an Arisen's push against `ground`). Pairs
+    /// are taken Arisen first, then goblins in creation order.
+    pub fn push_out(&mut self, sim: &mut ddsim::Sim, ground: &dyn ddsim::Ground) {
         let gdata = &self.data.goblin;
         let mut bodies: Vec<crate::pushout::PushBody> = Vec::new();
         let mut seats = Vec::new();
@@ -874,10 +875,7 @@ impl Fight {
         for (k, d) in pushes.into_iter().enumerate() {
             let Some(d) = d else { continue };
             if k < seats.len() {
-                if let Some(p) = sim.player_mut(seats[k]) {
-                    p.position[0] += d[0];
-                    p.position[2] += d[1];
-                }
+                sim.push_player(seats[k], d, ground);
             } else {
                 let g = &mut self.goblins[k - seats.len()];
                 g.pos[0] += d[0];
