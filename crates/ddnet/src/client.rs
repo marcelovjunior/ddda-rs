@@ -61,6 +61,7 @@ pub struct Client<T: Transport> {
     pub looks: BTreeMap<PlayerId, LookData>,
     quest_camera: Option<crate::quest_camera::QuestCamera>,
     ground_pending: bool,
+    ground_stage: Option<u32>,
     stage_start_frame: u64,
 }
 
@@ -80,6 +81,8 @@ mod camera_prediction_tests {
         let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(), server,
             2, 1, 2, None, sim, Box::new(Flat), 0);
         client.seat = Some(1);
+        client.spot = Some(Spot { stage: 100, cell: (50,50), pos: [0.0;3], yaw: 0.0 });
+        client.set_ground(Box::new(Flat));
         let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], jump: true, light: true,
             ..Default::default() }, interact: true };
         client.cmds.push_back((11, moving));
@@ -140,6 +143,39 @@ mod camera_prediction_tests {
         client.set_ground(Box::new(CountGround { floor: -100.0, calls: new_calls.clone() }));
         assert_eq!(new_calls.load(Ordering::Relaxed), calls, "ordinary terrain refresh does not replay twice");
         assert_eq!(client.own().unwrap(), predicted);
+    }
+    #[test]
+    fn initial_field_snapshot_waits_for_field_ground_even_with_stale_welcome() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        struct Plane { height: f32, calls: Arc<AtomicUsize> }
+        impl Ground for Plane {
+            fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                (self.height <= below).then_some(self.height)
+            }
+        }
+        let mut sim = Sim::new(Default::default()); sim.add_player(1, [0.0, 500.0, 0.0], 0.0);
+        let own = Body::of(sim.player(1).unwrap());
+        let old = Arc::new(AtomicUsize::new(0));
+        let field = Arc::new(AtomicUsize::new(0));
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(),
+            Udp::bind("127.0.0.1:0").unwrap().local_addr(), 2, 1, 2, None, sim,
+            Box::new(Plane { height: 500.0, calls: old.clone() }), 0);
+        client.seat = Some(1);
+        client.spot = Some(Spot { stage: 200, cell: (50,50), pos: own.position, yaw: 0.0 });
+        let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], ..Default::default() }, ..Default::default() };
+        client.cmds.push_back((21, moving));
+        client.apply(snap(20, 100, vec![own.clone()], vec![]));
+        assert!(!client.ground_ready(), "the first stage snapshot must establish collision identity");
+        assert_eq!(old.load(Ordering::Relaxed), 0);
+        assert_eq!(client.own().unwrap(), own);
+        client.set_ground(Box::new(Plane { height: 100.0, calls: field.clone() }));
+        assert_eq!(client.ground_stage, Some(100), "snapshot stage takes precedence over stale Welcome");
+        assert!(client.ground_ready());
+        assert!(field.load(Ordering::Relaxed) > 0);
+        assert_eq!(old.load(Ordering::Relaxed), 0);
+        assert_eq!(client.own().unwrap().state, ddsim::State::Fall);
+        assert_eq!(client.predicted.iter().filter(|(f, _)| *f == 21).count(), 1);
     }
     #[test]
     fn remote_players_and_enemies_never_interpolate_across_stage_boundary() {
@@ -208,6 +244,7 @@ impl<T: Transport> Client<T> {
             looks: BTreeMap::new(),
             quest_camera: None,
             ground_pending: false,
+            ground_stage: None,
             stage_start_frame: 0,
         }
     }
@@ -216,6 +253,7 @@ impl<T: Transport> Client<T> {
     /// before loading the host's world).
     pub fn set_ground(&mut self, ground: Box<dyn Ground + Send>) {
         self.ground = ground;
+        self.ground_stage = self.stage().or_else(|| self.spot.map(|spot| spot.stage));
         if !std::mem::take(&mut self.ground_pending) { return; }
         // Commands were suspended at the stage boundary. Reapply the latest
         // host body and replay them exactly once on the newly loaded ground.
@@ -278,9 +316,9 @@ impl<T: Transport> Client<T> {
         if stage_changed {
             // Until the view loads the new installed collision, show the host
             // body and keep commands queued rather than run them on old ground.
-            self.ground_pending = true;
             self.stage_start_frame = s.frame;
         }
+        self.ground_pending = s.stage.is_some_and(|stage| self.ground_stage != Some(stage));
         // Apply before replay as well as the next prediction step.
         self.quest_camera = s.quest_camera;
         if let (Some(seat), Some(n)) = (self.seat, s.cmd_newest) {
@@ -380,6 +418,8 @@ impl<T: Transport> Client<T> {
     pub fn own(&self) -> Option<Body> {
         self.sim.player(self.seat?).map(Body::of)
     }
+
+    pub fn ground_ready(&self) -> bool { !self.ground_pending }
 
     pub fn stage(&self) -> Option<u32> { self.snaps.back().and_then(|s| s.stage) }
 

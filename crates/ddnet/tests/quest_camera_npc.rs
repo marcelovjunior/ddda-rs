@@ -270,6 +270,7 @@ fn installed_loopback_camera12_and_npc_hp_motion_follow_host() {
         server.pump(now);
         server.step(&Default::default(), now).unwrap();
         guest.pump(now);
+        if guest.stage() == Some(100) && !guest.ground_ready() { guest.set_ground(Box::new(Flat)); }
         now += 33;
         std::thread::sleep(std::time::Duration::from_micros(200));
     }

@@ -2661,9 +2661,9 @@ fn benchmark_place_from_scenarios(sc: &ddstory::scenario::Scenarios, task: u32, 
 impl Session {
     fn network(&mut self, args: &crate::Args) -> Result<(), String> {
         if args.join.is_some() {
-            let mut guest = crate::net::take_prejoined().ok_or("opening guest did not complete prejoin")?;
-            let vfs = ddvfs::Vfs::open(&args.native_pc)?;
-            guest.set_ground(Box::new(ddhost::install::stage_collision(&vfs, STAGE)?));
+            let guest = crate::net::take_prejoined().ok_or("opening guest did not complete prejoin")?;
+            // Collision is confirmed/loaded from the received stage in guest_step,
+            // before any prediction. Prejoined field snapshots never get Cassardis ground.
             self.guest = Some(guest);
             self.demo = None;
         } else if let Some(port) = args.host {
@@ -2725,7 +2725,11 @@ fn guest_step(
     // Reuse Streamer::enter as the host handoff does, without StageLoaded,
     // place_party, local quest advancement or NPC ownership admission.
     if let Some(streamer) = view.streamer.as_mut() {
-        if let Some(stage) = c.stage().filter(|&stage| stage != streamer.stage) {
+        let received_stage = c.stage().or_else(|| c.spot.map(|spot| spot.stage));
+        if received_stage == Some(streamer.stage) && !c.ground_ready() {
+            c.set_ground(Box::new(st.terrain.clone()));
+        }
+        if let Some(stage) = received_stage.filter(|&stage| stage != streamer.stage) {
             let focus = c.latest().and_then(|snap| c.seat.and_then(|seat|
                 snap.bodies.iter().find(|body| body.id == seat))).map(|body| body.position);
             if let Some(focus) = focus {
