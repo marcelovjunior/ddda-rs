@@ -411,3 +411,52 @@ fn goblin_action_enter_matches_the_original() {
             (u(o, "w2574"), u(o, "v2578"), u(o, "v257c"), u(o, "b5c7c")), "{c}");
     }
 }
+
+// verifies 0x00A4DB70 0x008FBDD0 0x00919DB0 0x0095A810 0x00A2AE80 0x00A202E0 0x009C5890 0x009B4920 0x009BD970
+#[test]
+fn every_species_base_entry_matches_the_original() {
+    use ddnative::action::{enemy_action_enter, EnemyAction, Owner};
+    use ddnative::mem::{Image, Mem};
+    use ddnative::species as sp;
+    let Some(cases) = vectors("species") else { return };
+    const S: u32 = 0x0E00_0000;
+    const OWN: u32 = S + 0x1000;
+    for c in &cases {
+        let mut m = Image { base: S, bytes: hex(c["in"].as_str().unwrap()) };
+        // the verified prefix over typed views of the image
+        let mut owner = Owner { category_206c: m.u32(OWN + 0x206C), word_2370: m.u32(OWN + 0x2370),
+            word_2374: m.u32(OWN + 0x2374), flags_273c: m.u32(OWN + 0x273C),
+            status_2e34: m.u32(OWN + 0x2E34), pending_2e38: m.u32(OWN + 0x2E38) };
+        let mut o2ba0 = m.u32(OWN + 0x2BA0);
+        let mut act = EnemyAction { byte_50: m.u8(S + 0x50), owner_54: m.u32(S + 0x54), word_58: m.u32(S + 0x58),
+            word_60: m.u32(S + 0x60), float_64: f32::from_bits(m.u32(S + 0x64)), byte_6c: m.u8(S + 0x6C),
+            word_70: m.u32(S + 0x70), owner_74: m.u32(S + 0x74) };
+        enemy_action_enter(&mut act, OWN, &mut owner, &mut o2ba0, || c["is_class"].as_bool().unwrap());
+        m.set_u8(S + 0x50, act.byte_50); m.set_u32(S + 0x54, act.owner_54); m.set_u32(S + 0x58, act.word_58);
+        m.set_u32(S + 0x60, act.word_60); m.set_u32(S + 0x64, act.float_64.to_bits()); m.set_u8(S + 0x6C, act.byte_6c);
+        m.set_u32(S + 0x70, act.word_70); m.set_u32(S + 0x74, act.owner_74);
+        m.set_u32(OWN + 0x2370, owner.word_2370); m.set_u32(OWN + 0x2374, owner.word_2374);
+        m.set_u32(OWN + 0x273C, owner.flags_273c); m.set_u32(OWN + 0x2E34, owner.status_2e34);
+        m.set_u32(OWN + 0x2BA0, o2ba0);
+        // the species tail
+        let g: [u32; 3] = u32s(&c["globals"]).try_into().unwrap();
+        let o = act.owner_74;
+        match c["kind"].as_str().unwrap() {
+            "em5800" => sp::em5800_tail(&mut m, S, o),
+            "em0200" => sp::em0200_tail(&mut m, o, g),
+            "em0400" => sp::em0400_tail(&mut m, o, g),
+            "em0900" => sp::em0900_tail(&mut m, o, g),
+            "em5500t" => sp::em5500_tentacle_tail(&mut m, S, o),
+            "em5500_00" => sp::em5500_00_tail(&mut m, S, o),
+            "em5300" => sp::em5300_tail(&mut m, o),
+            "em5200" => sp::em5200_tail(),
+            k => panic!("{k}"),
+        }
+        let want = hex(c["out"].as_str().unwrap());
+        if m.bytes != want {
+            let diff: Vec<String> = (0..want.len()).filter(|&i| m.bytes[i] != want[i]).take(8)
+                .map(|i| format!("+{i:#x}: got {:#04x} want {:#04x}", m.bytes[i], want[i])).collect();
+            panic!("{:#010x} ({}): {diff:?}", u(c, "addr"), c["kind"]);
+        }
+    }
+}

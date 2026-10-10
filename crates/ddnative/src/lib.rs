@@ -17,9 +17,11 @@ pub mod action;
 pub mod character;
 pub mod enemy;
 pub mod generated;
+pub mod mem;
 pub mod model;
 pub mod particle;
 pub mod player_action;
+pub mod species;
 pub mod unit;
 
 /// An `fld dword` / `fstp dword` pair: the value is kept, except that a
