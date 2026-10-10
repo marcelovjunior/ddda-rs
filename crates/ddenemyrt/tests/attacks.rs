@@ -151,10 +151,7 @@ fn attack(a: Attack) -> State {
 /// Whether `state` at motion `frame` switches on an attack group of the
 /// kit's collision (the hit window of its motion events).
 fn in_window(data: &FightData, kit: Kit, state: State, frame: f32) -> bool {
-    let a = match kit {
-        Kit::Fighter => &data.arisen,
-        Kit::Mage => &data.mage,
-    };
+    let a = data.kit(kit);
     let id = state.motion_id();
     let m = MotionId::new((id >> 8) as u8, id & 0xff);
     a.body.activations(m, frame).iter().any(|act| {
@@ -350,4 +347,49 @@ fn attacks_spend_stamina_when_the_weapon_outranks_the_arisen() {
     assert!((drop - p.staff_cost).abs() < 2.0, "{drop}");
     assert!(b.log[k].stamina < s0);
     let _ = StaffStrike1;
+}
+
+#[test]
+fn a_dagger_light_combo_chains_and_hits_the_goblin() {
+    use Attack::*;
+    let Some(data) = data() else { return };
+    let mut b = Bout::new(data.clone(), Kit::Strider, 120.0);
+    assert_eq!(b.press_light(), attack(DaggerLight1));
+    // keep pressing: each press waits in slot 1 until it executes
+    for _ in 0..200 {
+        if b.log.last().unwrap().state == attack(DaggerLight3) {
+            break;
+        }
+        b.press_light();
+        b.frame(Input::default());
+    }
+    b.until(120, |f| f.state == State::Wait);
+    for a in [DaggerLight1, DaggerLight2, DaggerLight3] {
+        assert!(b.log.iter().any(|f| f.state == attack(a)), "no {a:?}");
+    }
+    let hits = b.hits();
+    for (i, h) in &hits {
+        let (state, frame) = b.source(*i);
+        eprintln!("dagger hit at {i}: {state:?} frame {frame} total {}", h.total);
+        assert_eq!((h.attacker, h.victim), (0, 100));
+        assert!(in_window(&data, Kit::Strider, state, frame), "{state:?} {frame}");
+    }
+    for a in [DaggerLight1, DaggerLight2, DaggerLight3] {
+        assert!(hits.iter().any(|(i, _)| b.source(*i).0 == attack(a)), "no hit from {a:?}");
+    }
+}
+
+#[test]
+fn the_dagger_heavy_attack_hits() {
+    let Some(data) = data() else { return };
+    let mut b = Bout::new(data.clone(), Kit::Strider, 120.0);
+    assert_eq!(b.press_heavy(), attack(Attack::DaggerHeavy));
+    b.until(120, |f| f.state == State::Wait);
+    let hits = b.hits();
+    assert!(!hits.is_empty());
+    for (i, _) in &hits {
+        let (state, frame) = b.source(*i);
+        assert_eq!(state, attack(Attack::DaggerHeavy));
+        assert!(in_window(&data, Kit::Strider, state, frame));
+    }
 }

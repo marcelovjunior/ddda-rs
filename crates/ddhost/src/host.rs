@@ -153,6 +153,9 @@ pub struct Host<D: Data, W: StoryWorld> {
     pub doors: Option<crate::doors::Doors>,
     /// Ambient enemy ownership; admission and view lifetimes are separate.
     pub ambient: crate::ambient::Population,
+    /// The vocation (`ddskill::vocation::Vocation` id) whose fight kit the
+    /// Arisen seats were given; 0 before any.
+    kit_job: u32,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -185,6 +188,35 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             fight: None,
             doors: None,
             ambient: Default::default(),
+            kit_job: 0,
+        }
+    }
+
+    /// Gives the Arisen seats the fight kit of the story's current vocation
+    /// (world `player_job`, set by the vocation menu's `PlayerJob` report or
+    /// the progression) when it changes: the base vocations' level-1 data
+    /// and starting weapon (`ddenemyrt::arisen`), equipped in the sim.
+    /// *Assumed* for co-op: every Arisen seat takes seat 0's vocation (the
+    /// story world holds one `player_job`). Vocations without a kit (the
+    /// advanced and hybrid ones) keep the current kit.
+    fn apply_job_kit(&mut self) {
+        use ddenemyrt::fight::Kit;
+        use ddskill::vocation::Vocation;
+        let (Some(story), Some(fight)) = (&self.story, self.fight.as_mut()) else { return };
+        let job = story.world.player_job;
+        if job == self.kit_job {
+            return;
+        }
+        let kit = match Vocation::from_id(job) {
+            Some(Vocation::Fighter) => Kit::Fighter,
+            Some(Vocation::Strider) => Kit::Strider,
+            Some(Vocation::Mage) => Kit::Mage,
+            _ => return,
+        };
+        self.kit_job = job;
+        for id in self.roster.ids() {
+            fight.add_arisen_as(id, kit);
+            fight.kit(kit).equip(&mut self.sim, id);
         }
     }
 
@@ -270,6 +302,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             self.boot = false;
         }
+        self.apply_job_kit();
         for request in &requests {
             if let Request::StoryPawn { stock, slot } = request {
                 self.recruit_story_pawn(*stock, *slot)?;

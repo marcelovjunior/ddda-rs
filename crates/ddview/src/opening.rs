@@ -9,7 +9,8 @@
 //! - the **party placement** after an event (`PlaceParty`: a start position
 //!   of `scr\st200\etc\st200`);
 //! - the **vocation menu** at the weapon table (stage mode 0x19): a
-//!   labelled stub, 1 Fighter or 2 Mage;
+//!   labelled stub, 1 Fighter, 2 Strider or 3 Mage; the host then gives the
+//!   Arisen that vocation's fight kit (`Host::apply_job_kit`);
 //! - **talks** (`Host::talk`): E next to an NPC, lines as subtitles, E for
 //!   the next line, digits for choices;
 //! - **NPCs** admitted from loaded, gated Cassardis layouts, including
@@ -226,6 +227,10 @@ pub fn prepare(
         OpeningWorld::new(),
         Box::new(ground),
     );
+    // The fight (ddenemyrt): the Arisen gets its kit when the vocation is
+    // picked at the weapon table (Host::apply_job_kit); enemies join it as
+    // the story spawns them.
+    host.fight = Some(ddhost::ddenemyrt::fight::Fight::new(play::fight_data(&vfs, native_pc)?));
     host.data.npc = Some(std::sync::Arc::new(
         ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
     ));
@@ -806,6 +811,8 @@ pub fn step(
         let pick = if !pause.paused && keys.just_pressed(KeyCode::Digit1) {
             Some(ddskill_fighter())
         } else if !pause.paused && keys.just_pressed(KeyCode::Digit2) {
+            Some(ddskill_strider())
+        } else if !pause.paused && keys.just_pressed(KeyCode::Digit3) {
             Some(ddskill_mage())
         } else {
             None
@@ -1100,11 +1107,14 @@ impl Session {
 fn ddskill_fighter() -> u32 {
     1
 }
+fn ddskill_strider() -> u32 {
+    2
+}
 fn ddskill_mage() -> u32 {
     3
 }
 
-/// The view closed the vocation menu with `job` (Fighter 1, Mage 3:
+/// The view closed the vocation menu with `job` (Fighter 1, Strider 2, Mage 3:
 /// `ddskill::vocation::Vocation`).
 fn close_menu(s: &mut Session, job: u32) {
     info!("opening: vocation menu (stub) closed with job {job}");
@@ -1273,7 +1283,7 @@ pub fn cutscene(
     if s.cut.is_none() {
         if let Ok(mut t) = subs.single_mut() {
             t.0 = if let Some((menu, _)) = s.world_menu() {
-                format!("{menu:?} menu (viewer stub, not uGUIJobChange): 1 Fighter   2 Mage")
+                format!("{menu:?} menu (viewer stub, not uGUIJobChange): 1 Fighter   2 Strider   3 Mage")
             } else if let Some(talk) = &s.talk {
                 let mut l = format!("[NPC {}] {}", talk.npc, talk.line);
                 for (k, c) in talk.choices.iter().enumerate() {

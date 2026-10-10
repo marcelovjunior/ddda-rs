@@ -38,6 +38,12 @@ pub const MAGE_LEVEL_ROW: usize = 1;
 /// The Mage's starting staff, item 0x1AA (first-choice equipment,
 /// 0x00673740; `ddprogress::change::starting_items`).
 pub const MAGE_STAFF: u32 = 0x1aa;
+/// `param\pl\level\lvstrider` row of a level-1 Strider.
+pub const STRIDER_LEVEL_ROW: usize = 1;
+/// The Strider's starting dagger, item 0x195 (first-choice equipment,
+/// 0x00673740; `ddprogress::change::starting_items`; its shortbow 0x1F8 is
+/// the secondary weapon, not modelled here).
+pub const STRIDER_DAGGER: u32 = 0x195;
 
 /// The Arisen's data for the fight.
 #[derive(Debug, Clone)]
@@ -67,6 +73,20 @@ impl ArisenData {
             // the sword: groups in m0001, attacks in m0001_00_lv1 (the `lv`
             // selector is *unknown*; lv1 as in COMBAT.md 8)
             (r"collision\pl\m0001", r"collision\pl\m0001_00_lv1"),
+        )
+    }
+
+    /// A level-1 Strider with the starting dagger, from the install. The
+    /// attack collision is the dagger's `m0005_00_lv1` (the `lv` selector is
+    /// *unknown*; lv1 as for the sword).
+    pub fn strider(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        Self::load(
+            vfs,
+            r"param\pl\level\lvstrider",
+            STRIDER_LEVEL_ROW,
+            STRIDER_DAGGER,
+            WeaponCategory::Dagger,
+            (r"collision\pl\m0005", r"collision\pl\m0005_00_lv1"),
         )
     }
 
@@ -144,6 +164,7 @@ impl ArisenData {
         match self.category {
             WeaponCategory::Sword | WeaponCategory::Mace => ddsim::Weapon::Sword,
             WeaponCategory::Staff => ddsim::Weapon::Staff,
+            WeaponCategory::Dagger => ddsim::Weapon::Dagger,
             _ => ddsim::Weapon::None,
         }
     }

@@ -28,6 +28,8 @@ pub struct FightData {
     pub arisen: ArisenData,
     /// A level-1 Mage with the starting staff.
     pub mage: ArisenData,
+    /// A level-1 Strider with the starting dagger.
+    pub strider: ArisenData,
     /// Per-skill bank-seven bodies; selected independently for each seat.
     pub skills: crate::skills::SkillSet,
     /// The staff's shell.
@@ -41,6 +43,15 @@ pub struct FightData {
 }
 
 impl FightData {
+    /// The data of a kit.
+    pub fn kit(&self, kit: Kit) -> &ArisenData {
+        match kit {
+            Kit::Fighter => &self.arisen,
+            Kit::Mage => &self.mage,
+            Kit::Strider => &self.strider,
+        }
+    }
+
     /// Everything from the install and its exe.
     pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>) -> Result<Self, String> {
         let adjust = |p: &str| -> Result<ddcombat::damage::Adjust, String> {
@@ -49,10 +60,12 @@ impl FightData {
         };
         let arisen = ArisenData::fighter(vfs)?;
         let mage = ArisenData::mage(vfs)?;
+        let strider = ArisenData::strider(vfs)?;
         let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
         Ok(FightData {
             arisen,
             mage,
+            strider,
             skills,
             shell: ShellParam::load(vfs)?,
             attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
@@ -94,6 +107,7 @@ fn status_table(vfs: &ddvfs::Vfs, path: &str) -> Result<ddcombat::cstatus::Statu
 pub enum Kit {
     Fighter,
     Mage,
+    Strider,
 }
 
 /// The player's tuning table.
@@ -162,10 +176,7 @@ impl Fight {
 
     /// The data of a kit.
     pub fn kit(&self, kit: Kit) -> &ArisenData {
-        match kit {
-            Kit::Fighter => &self.data.arisen,
-            Kit::Mage => &self.data.mage,
-        }
+        self.data.kit(kit)
     }
 
     /// Applies the simulation's queued landing damage directly to one living
@@ -545,10 +556,7 @@ impl Fight {
     pub fn volumes(&mut self, sim: &ddsim::Sim) {
         for (&seat, a) in &mut self.arisen {
             let Some(p) = sim.player(seat) else { continue };
-            let body = match a.kit {
-                Kit::Fighter => &self.data.arisen.body,
-                Kit::Mage => &self.data.mage.body,
-            };
+            let body = &self.data.kit(a.kit).body;
             let body = self.data.skills.body(p, body);
             let (motion, frame) = arisen_motion(body, p);
             self.positions.insert(u32::from(seat), p.position);
