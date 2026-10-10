@@ -220,6 +220,49 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
     }
 
+    /// The fight seat of hired pawn slot `index` (0, 1). *Viewer choice*:
+    /// the seats after the Arisen (0-3) and their main pawns (4, 5).
+    pub fn hired_pawn_seat(index: usize) -> PlayerId {
+        6 + index as PlayerId
+    }
+
+    /// Gives each hired pawn (`rift.party.hired`, e.g. Rook from q0002's
+    /// story request) a body in the simulation and a seat in the fight, with
+    /// its record's vocation kit and its inclinations, beside its owner.
+    /// *Assumed*: 2 m behind the first Arisen seat; released pawns keep
+    /// their body (release is not wired here yet).
+    fn sync_hired_pawn_bodies(&mut self) {
+        use ddenemyrt::fight::Kit;
+        let Some(fight) = self.fight.as_mut() else { return };
+        let Some(owner) = self.roster.ids().next() else { return };
+        let Some(at) = self.sim.player(owner).map(|p| (p.position, p.yaw)) else { return };
+        for (index, hired) in self.rift.party.hired.iter().enumerate() {
+            let Some(hired) = hired else { continue };
+            let seat = Self::hired_pawn_seat(index);
+            if fight.pawns.contains_key(&seat) {
+                continue;
+            }
+            let kit = match ddskill::vocation::Vocation::from_id(u32::from(hired.pawn.param.job)) {
+                Some(ddskill::vocation::Vocation::Strider) => Kit::Strider,
+                Some(ddskill::vocation::Vocation::Mage) => Kit::Mage,
+                _ => Kit::Fighter,
+            };
+            let (pos, yaw) = at;
+            let (s, c) = yaw.sin_cos();
+            let side = if index == 0 { 80.0 } else { -80.0 };
+            let place = [pos[0] - s * 200.0 + c * side, pos[1], pos[2] - c * 200.0 - s * side];
+            // the record's inclination values (mInfo); the fight's pawn AI
+            // takes nine
+            let mut inclinations = hired.pawn.info_value;
+            if inclinations.iter().all(|v| *v == 0.0) {
+                // a fresh record's mInfo is 0.0 (Cmc::new); *assumed* the
+                // balanced 500 the play view's pawn uses
+                inclinations = [500.0; 9];
+            }
+            fight.add_pawn_as(&mut self.sim, seat, owner, place, yaw, inclinations, 7 + seat as u32, kit);
+        }
+    }
+
     /// Seats an Arisen and places it in the world. `None` when the roster
     /// is full or the profile is already seated.
     pub fn join(&mut self, profile: ProfileId, control: Control, pos: [f32; 3], yaw: f32) -> Option<PlayerId> {
@@ -308,6 +351,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.recruit_story_pawn(*stock, *slot)?;
             }
         }
+        self.sync_hired_pawn_bodies();
         // Steps 22-25, input (sQlocInput::vf06 0x00409EE0, sKeyboard,
         // sMouse): this frame's inputs, before anything moves.
         let presses = self.edges.interact_presses(inputs);

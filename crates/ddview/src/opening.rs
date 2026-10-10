@@ -943,6 +943,47 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
 /// then secondary; 0x00673740). *Viewer choice*: the original puts the items
 /// in the inventory and equips them; here only the look changes. Seats
 /// without a look (the base body) keep theirs.
+/// Bodies for the hired pawns the host put into the fight
+/// (`Host::sync_hired_pawn_bodies`): each with its record's look
+/// (`ddlook::save::cmc_look`), drawn and posed like the party.
+fn hired_pawn_bodies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
+    let Some(streamer) = view.streamer.as_mut() else { return };
+    for index in 0..2 {
+        let seat = ddhost::Host::<ddstory::data::InstallData, ddhost::opening::OpeningWorld>::hired_pawn_seat(index);
+        if st.entities.contains_key(&seat) || !s.host.fight.as_ref().is_some_and(|f| f.pawns.contains_key(&seat)) {
+            continue;
+        }
+        let Some(hired) = s.host.rift.party.hired[index].as_ref() else { continue };
+        let look = match ddlook::save::cmc_look(streamer.loader.vfs, &hired.pawn) {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("opening: hired pawn {index} look: {e}");
+                continue;
+            }
+        };
+        match crate::character::spawn_look(
+            &mut view.commands,
+            &mut streamer.loader,
+            &mut view.meshes,
+            &mut view.materials,
+            &mut view.images,
+            &mut view.bindposes,
+            &look,
+            play::MOTIONS,
+            0,
+            Vec3::ZERO,
+            Some(0.0),
+        ) {
+            Ok(e) => {
+                st.entities.insert(seat, e);
+                st.visible.insert(e, true);
+                info!("opening: hired pawn {index} (seat {seat}) joins with its body");
+            }
+            Err(e) => warn!("opening: hired pawn {index} body: {e}"),
+        }
+    }
+}
+
 fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
     let job = s.world().player_job;
     if job == s.weapons_job {
@@ -1025,6 +1066,7 @@ pub fn step(
         return;
     }
     kit_weapons(&mut stage_view, st, s);
+    hired_pawn_bodies(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
         streamer.focus = s.host.sim.player(st.follow).map(|p| p.position);
         streamer.actors = s.host.sim.players.iter().map(|p| p.position).collect();

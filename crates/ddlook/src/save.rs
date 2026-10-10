@@ -212,6 +212,22 @@ pub fn template_look<S: Source + ?Sized>(src: &S, sex: u8) -> Result<Look, Error
     Err(Error::Data(format!("no built-in pawn of sex {sex}")))
 }
 
+/// The look of a pawn record (`cSAVE_DATA_CMC`: a story stock pawn, a hired
+/// or a saved pawn): its edit fields and its equipment, assembled as the
+/// built-in pawns are (0x00780fa0).
+pub fn cmc_look<S: Source + ?Sized>(src: &S, cmc: &ddpawn::cmc::Cmc) -> Result<Look, Error> {
+    let t = Tables::load(src)?;
+    let pat = EditPattern::load(src)?;
+    let items = item_records(src)?;
+    let f: Vec<(String, u32)> = ddpawn::cmc::EDIT_U8_FIELDS
+        .iter()
+        .zip(cmc.edit.fields.iter())
+        .map(|(n, &v)| (n.to_string(), v as u32))
+        .collect();
+    let eq: Vec<i16> = cmc.param.equip.iter().map(|e| e.item_no).collect();
+    edit_look(src, &t, &pat, &items, Unit::Player, &f, &eq).ok_or_else(|| Error::Data("no look for this pawn record".into()))
+}
+
 /// A look for edit fields (`(field, value)`, `EDIT_U8_FIELDS` names)
 /// wearing the equipment of the first built-in pawn of the same sex
 /// (`romPawnInfo`). For a freshly edited Arisen: the original's starting

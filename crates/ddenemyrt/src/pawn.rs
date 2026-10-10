@@ -81,9 +81,27 @@ impl Fight {
         inclinations: [f32; 9],
         seed: u32,
     ) {
+        self.add_pawn_as(sim, seat, owner, pos, yaw, inclinations, seed, Kit::Fighter);
+    }
+
+    /// [`Fight::add_pawn`] with a vocation kit. *Assumed*: the brain keeps
+    /// the sword weapon type for every kit (the pawn AI's per-weapon tables
+    /// are only wired for the sword).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_pawn_as(
+        &mut self,
+        sim: &mut ddsim::Sim,
+        seat: u8,
+        owner: u8,
+        pos: [f32; 3],
+        yaw: f32,
+        inclinations: [f32; 9],
+        seed: u32,
+        kit: Kit,
+    ) {
         sim.add_player(seat, pos, yaw);
-        self.add_arisen_as(seat, Kit::Fighter);
-        self.equip(sim, seat);
+        self.add_arisen_as(seat, kit);
+        self.kit(kit).equip(sim, seat);
         let brain = Pawn::new(&self.data.pawn, inclinations, SWORD_TYPE, seed);
         self.pawns.insert(seat, PawnSeat { owner, brain });
     }
