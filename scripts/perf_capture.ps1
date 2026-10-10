@@ -68,14 +68,19 @@ try {
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
     $env:DDVIEW_MESH_BUILDER = $MeshBuilder
     $env:DDVIEW_TRACE_STAGE = if ($null -ne $TraceStage) { [string]$TraceStage } else { $null }
-    $env:DDVIEW_TRACE_DELAY = if ($null -ne $TraceStage) { [string]$TraceDelay } else { $null }
-    $env:DDVIEW_TRACE_SECONDS = if ($null -ne $TraceStage) { [string]$TraceSeconds } else { $null }
+    $env:DDVIEW_TRACE_DELAY = if ($null -ne $TraceStage) { $TraceDelay.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
+    $env:DDVIEW_TRACE_SECONDS = if ($null -ne $TraceStage) { $TraceSeconds.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
         watchdog_seconds = $WatchdogSeconds
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
         time_scale_env = $env:DDVIEW_TIME_SCALE
+        opening_from_env = $env:DDVIEW_OPENING_FROM; opening_step_env = $env:DDVIEW_OPENING_STEP
+        opening_checkpoint_sha256 = if ($env:DDVIEW_OPENING_FROM) {
+            (Get-FileHash -LiteralPath $env:DDVIEW_OPENING_FROM -Algorithm SHA256).Hash
+        } else { $null }
+        demo_fight_env = $env:DDVIEW_DEMO_FIGHT
         mesh_builder = $MeshBuilder
         trace_stage = $TraceStage; trace_delay_seconds = $TraceDelay; trace_window_seconds = $TraceSeconds
         started_utc = [DateTime]::UtcNow.ToString('o')
