@@ -675,3 +675,24 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
 - Validation: release ddview check passes (three existing warnings).
   Host token rejection already has the active replacement regression in
   0edc13e. No live movement/Guard completion is introduced by this adapter.
+
+
+### Check QuestFlag observation (2026-10-09)
+
+- Translated cThinkFSM registration 0x007a74f0 callbacks 0x007aadd0
+  (enter) and 0x007aae20 (poll), confirmed with read-only disassembly.
+  Enter clears private FreeFlag; poll refreshes from quest bit through
+  0x004356c0, ActType0 matches set and ActType1 matches clear. Invalid
+  quest>=128, bit>=96 or destination>=128 does nothing; other ActType does
+  not change the destination. This writes private FreeFlag, not quest state.
+- NPC step_observed reads the current host World by reference for controller
+  and applied action graphs; all three host/runtime stepping paths feed it.
+  Standalone step remains available and errors if a graph needs absent world
+  data. No false quest state is manufactured.
+- Tests: 11 ddnpcrt unit, 4 installed applied, 9 NPC placement, 9 story-pawn
+  pass. Clippy ddnpcrt/ddhost passes with existing chunks_exact_to_as_chunks
+  and type_complexity allowances. Installed NPC3 q0002_n3 passes the quest
+  process and reaches the explicit Check Player Distance observation gap,
+  remaining unfinished; this is not full actor/route acceptance.
+- Task-only main merge 66c425b preserved one NPC helper pair plus doors.
+  Next: source player-distance actor observation and actual Guard readiness.

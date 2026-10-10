@@ -392,7 +392,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut out = vec![];
         for (&npc, applied) in &mut self.story_npcs.applied {
             applied.action.observe_scene(Some(story.world.sce_no));
-            match applied.action.step(&*data, clock) {
+            match applied.action.step_observed(&*data, clock, Some(&story.world)) {
                 Ok(requests) => out.extend(requests),
                 Err(error) => {
                     if let Some(position) = applied.action.position() {
