@@ -222,3 +222,41 @@ endpoints; all existing installed NPC suites also passed. These fixtures
 do not execute a native body, ground query or normal-input route. The core
 lease was released after actual exit. Next: supply source-owned NPC morph
 capsule/scenery/body requests before enabling the helper in the host.
+
+**2026-10-10, codex-80 continuation (source only; not yet compiled):**
+Head8216 approved integrating the independent reaction helper `f128add`
+with reviewed character-creation main `5192882` on this branch; merge
+`f5842a2` retains both previous acceptance sections. No new test count is
+claimed for the combined source yet.
+
+The nested host module `npc_demo_physics.rs` translates the scalar
+prerequisites of the reaction adapter, without activating that adapter:
+
+- `0x00885E30` preserves the previous ground/wall/ceiling bytes unless
+  body update flags+0x2398 contain bit4. Actual scenery flags+0x1B68 use
+  mask3, or mask0x100003 under the extended check. An existing axis and
+  flag0x400 veto ground; an absent axis does not. Unknown scenery is not
+  a synthetic zero observation.
+- `0x00B73490` projects the original horizontal speed through the body's
+  resolved sine/cosine and runtime base vector, preserving vertical
+  velocity. Only afterwards does it add body delta times acceleration to
+  speed, then clear speed/acceleration when old times new is nonpositive.
+  Input validation is project policy; original CRT trig bit parity is
+  still unverified.
+- `0x0080E190` restores only flags0..5 and9..11 from the saved body flags,
+  sets damage mask0x10 and clears masks0x4/0x8. Common damage
+  entry still requires its other body and collision-record effects.
+
+Three new regressions cover disabled/axis/extended ground observations,
+projection-before-deceleration and a sign crossing, and preservation of
+unrelated flags. They are **unrun** pending the shared CPU lease.
+
+Further source evidence: `0x00B5B950` copies the shared player-manager
+resource pointer at+0x970 to every body+0x3348, including NPCs; the exact
+manager loader is the next check before choosing the installed adjustment
+resource. `0x0076C540` mode3 consumes body height+0xD88 and radius+0xD8C,
+then delegates to `0x00CCE580`; heights shorter than twice the radius
+collapse the segment to a sphere. The native NPC axis kind is3 in
+`0x00B5F0A0`, rather than the player's axis kind2. No default human height,
+fake ground byte, elapsed landing, navigation completion or HP loss was
+added. Production reaction/GotoEx actors and the full S31 route remain open.
