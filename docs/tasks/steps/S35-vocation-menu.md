@@ -128,3 +128,28 @@ host menu/kit policy. This is a source checkpoint, not full S35 acceptance.
 Next action: inspect the requested `2-vocation-menu.png` and confirm that
 the unattended Strider selection reaches the existing kit handoff; record
 the capture's owned PID, actual exit, and image hash before closing S35.
+
+
+### Parent review and description correction
+
+Codex-1 reviewed f60827e and its GUI Boolean reader. Head's bounded
+f60827e capture shows installed parchment/list/cursor and confirms job2;
+the parent independently inspected the private PNG. The header/grey
+placeholder and description overflow remain distinct findings.
+
+The installed description uses three CRLF-delimited lines. The painter
+previously replaced CR without consuming LF, inserting a blank row for
+each line ending. Normalize CRLF before isolated CR; preserve intentional
+blank rows and existing CRCRLF handling. No font-size or box tuning.
+After proving stale shared viewer/mtgui artifacts (the new regression was
+absent and visible_at missing despite source), narrow package cleans
+rebuilt actual source. Complete viewer83 passed/2 existing ignored,
+24.69s compile/10.44s tests; default release39.55s, actual41657 exit0.
+Private log: E:/ddda-re/notes/steps/S35/full-viewer-crlf.log.
+
+Further native audit: first-choice vf05 at 0x006722CC..0x00672363 hides
+panel instance ordinals2/3/6/4 (cost controls), so filling the empty cost
+box with an invented title would be wrong. The character-name instances
+are nested under animation objects; their hierarchy/name binding and
+the remaining grey control still need a sourced projection. Full GUI VM,
+original visual comparison and a corrected-menu capture remain open.

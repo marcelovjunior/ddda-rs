@@ -404,7 +404,7 @@ impl Painter<'_, '_, '_, '_> {
                     color[2] / 255.0,
                     color[3] / 255.0,
                 );
-                let text = text.replace("\r\r\n", "\n").replace('\r', "\n");
+                let text = text_lines(text);
                 for (row, line) in text.split('\n').enumerate() {
                     let glyphs = self.font.line(line, [font_size[0], font_size[1]])?;
                     let width: f32 = line
@@ -605,9 +605,22 @@ fn node_transform(gui: &mtgui::Gui<'_>, wanted: usize) -> Result<Affine2, String
     Err("vocation node absent".into())
 }
 
+/// Installed GMD strings preserve CRLF. Treat each authored line ending as
+/// one break; replacing CR alone first would invent blank lines and overflow
+/// the description's authored 83-unit box.
+fn text_lines(text: &str) -> String {
+    text.replace("\r\r\n", "\n").replace("\r\n", "\n").replace('\r', "\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_line_endings_do_not_insert_extra_description_rows() {
+        assert_eq!(text_lines("one\r\ntwo\r\nthree"), "one\ntwo\nthree");
+        assert_eq!(text_lines("one\r\r\ntwo\rthree\nfour"), "one\ntwo\nthree\nfour");
+        assert_eq!(text_lines("one\r\n\r\nthree"), "one\n\nthree");
+    }
     #[test]
     fn native_bounds_cancel_and_same_choice_confirmation() {
         let mut s = Selection::default();
