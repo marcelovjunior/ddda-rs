@@ -76,6 +76,32 @@ Two players walk from Cassardis to the Encampment without a load break or telepo
   Its later street blockage exposed another closed-door planning issue;
   a second two-seat run found a 196-waypoint exit path, then exposed a
   path-discard loop on door interaction. Interaction now retains that
-  path; a fresh bounded run is checking it. P2 is idle in these
+  path; the third run physically exited that building and continued along
+  the street to approximately (1496,-252,56), SceNo1300. It was stopped
+  for the maintainer's quota stand-down before q2/field/Encampment.
+  P2 is idle in these
   automated runs: this is not two-player route acceptance or an
   original-game comparison.
+
+### Stand-down handoff
+
+- Root review found P2 button edges could be lost on a zero-host-tick
+  render or repeated across multiple host ticks. Additional local seats
+  now have a per-seat pending input map, using `play::latch_input`, and
+  consume jump/light/heavy edges once while retaining held movement.
+  The zero-tick/two-tick regression passed in the release viewer test
+  target; the touched viewer compiled successfully (17.58 seconds).
+- Full route, stage210 presentation, Rift contact, cyclops completion,
+  event playback and comparison to an original save remain open. The
+  automated P2 seat was idle; LAN live Spot handoff remains follow-up.
+- Next code: `opening::NpcAdapter::cassardis`, `sync_npc_intels` and
+  `Streamer::loaded_layout_cells`. NPC admission currently retires all
+  actors outside st200. Generalize the existing installed layout reader
+  and canonical lifetime/pool admission to completed stage/cell loads;
+  never infer model readiness or Guard/Goto completion from elapsed time.
+  An unvalidated draft is parked privately and is not committed.
+- Relevant source: NPC common placement gate0x0075faa0, materialization
+  0x00762000, pool0x004a76a0; AreaHit0x005c2d70/0x007643d0 and field
+  collision residency0x00c5f630/0x00c5f680. Q3's st210ev00 belongs after
+  cyclops/report, not arrival. The installed stage100 enemy20:0 is the
+  cyclops runtime brief's responsibility.
