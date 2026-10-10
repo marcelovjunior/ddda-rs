@@ -191,8 +191,8 @@ recording or complete original rescue comparison yet.
   intel+0x4E0; phase3 fades intel+0x484 using unit step / **30**, then
   **0x00BB57E0 -> 0x00446460** writes both banks. Constructor
   **0x00BBBFA0** initializes that wait to **60 x sMain.mFps**;
-  **0x00BBCC00** (uNpcIntel vf08) decrements it after apparent death.
-  Body destruction **0x00BB3DB0** only marks apparent when HP is not
+  **0x00BBCB80** (uNpcIntel vf08) decrements it after apparent death.
+  Body destruction **0x00BB3D70** only marks apparent when HP is not
   positive; ordinary alive unloading does not establish a death.
 
 Remaining limits: the hit minimum inherits the existing pass's untraced
@@ -202,6 +202,10 @@ retiring an unloaded owner must never fabricate a death. No host
 autonomous NPC death-action or viewer gauge acceptance is claimed by
 this checkpoint. The headless installed body/Fight combat and HP adapter
 tests pass; full rescue/original recording comparison remains open.
+The target adapter's `alive` input currently supplies only HP positivity;
+native actor flags+0x2360/+0x2364/+0x2368, redirect actors, augment hate,
+and further influence types remain unsupported. Root travel, target yaw
+and ground integration are still S32 actor-system limits.
 
 Next action: compose actual death-action playback/stages and materialize
 the combat body in the opening adapter; finish the sourced bounds and
