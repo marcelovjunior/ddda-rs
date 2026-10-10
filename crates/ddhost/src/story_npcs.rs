@@ -5,6 +5,8 @@ use crate::{Host, HostError, StoryWorld};
 use ddnpcrt::schedule::{Clock, Npc, Request};
 use ddstory::{data::Data, Target};
 use std::collections::{BTreeMap, HashMap};
+#[path = "npc_demo.rs"]
+mod npc_demo;
 
 /// Host identity for one materialized intel lifetime. This deterministic
 /// co-op token replaces pointer identity; it is not an original game value.
@@ -18,7 +20,7 @@ struct Applied {
     stage: u32,
     target: Target,
     path: String,
-    action: Npc,
+    action: npc_demo::Action,
     normal: Option<Npc>,
 }
 
@@ -599,6 +601,13 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             .map(|a| (a.stage, a.target, a.path.as_str(), a.action.applied_finished()))
     }
 
+    /// Current typed Demo command on a materialized lifetime. Navigation
+    /// and damage remain pending until their actual actor systems are ported.
+    pub fn story_npc_demo_command(&self, owner: NpcLifetime) -> Option<(u64, &ddnpcrt::demo::Interface)> {
+        if self.story_npc_lifetime(owner.npc) != Some(owner) { return None; }
+        self.story_npcs.applied.get(&owner.npc)?.action.pending()
+    }
+
     pub(crate) fn prepare_story_npcs(&mut self) -> Result<(), HostError> {
         let Some(story) = self.story.as_ref() else {
             return Ok(());
@@ -636,7 +645,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             // whose local command number happens to equal its first command.
             self.story_npcs.motion_requests.remove(&npc);
             self.story_npcs.motions.remove(&npc);
-            let action = Npc::applied(npc, &*data, &path).map_err(|e| HostError::Npc(e.to_string()))?;
+            let action = npc_demo::Action::new(npc, &*data, &path).map_err(|e| HostError::Npc(e.to_string()))?;
             let normal = self
                 .story_npcs
                 .applied
@@ -690,7 +699,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let Some(data) = self.data.npc.clone() else {
             return Ok(vec![]);
         };
-        let Some(story) = self.story.as_ref() else {
+        let Some(story) = self.story.as_mut() else {
             return Ok(vec![]);
         };
         let clock = Clock {
@@ -714,9 +723,46 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         let mut out = vec![];
         for (&npc, applied) in &mut self.story_npcs.applied {
             if self.npc_combat.owns_death(npc) { continue; }
-            applied.action.observe_scene(Some(story.world.sce_no));
-            match applied.action.step_observed(&*data, clock, Some(&story.world)) {
-                Ok(requests) => out.extend(requests),
+            let ready = self.story_npcs.motion_bodies.contains_key(&npc);
+            let position = self.story_npcs.positions.get(&npc).copied();
+            let motion = self.story_npcs.motions.get(&npc);
+            let inputs = ddnpcrt::demo::ActorInputs {
+                time: ddnpcrt::demo::Time { delta: self.clock.delta, fps: crate::clock::BASE_FPS },
+                stage: Some(story.stage.stage_no), sce_no: story.world.sce_no,
+                area_stay: story.world.area_stay,
+                actor: if ready { position.map(|pos| ddnpcrt::demo::Actor { pos, world_pos: pos,
+                    action_done: motion.is_some_and(|m| m.observation().action_terminal) }) } else { None },
+                motion_frame: motion.map_or(0.0, |m| m.frame),
+                motion_ended: motion.is_some_and(|m| m.observation().action_terminal),
+                ..Default::default()
+            };
+            match applied.action.step(&*data, clock, &inputs, &story.world, ready, self.story_npcs.talks.contains_key(&npc)) {
+                Ok(frame) => {
+                    // 0x0056C940 destroys the old interface before replacement.
+                    // An unported GotoEx/Damage cannot retain an old motion or
+                    // masquerade as a newly issued native Wait action.
+                    for id in frame.replaced {
+                        self.story_npcs.motion_requests.remove(&id);
+                        self.story_npcs.motions.remove(&id);
+                    }
+                    out.extend(frame.scheduled);
+                    for (id, mask, value) in frame.flags {
+                        if let Some(flags) = self.story_npcs.intel_flags.get_mut(&id) {
+                            if value { *flags |= mask; } else { *flags &= !mask; }
+                        }
+                    }
+                    // Stable owner order, as above. World writes are applied
+                    // after this owner's callbacks; intra-step read-after-write
+                    // remains unsupported by the snapshot-based Demo adapter.
+                    for request in frame.world {
+                        match request {
+                            ddnpcrt::demo::WorldRequest::QuestFlag { quest, bit, value } => story.world.set_quest_bit(quest as usize, bit as usize, value),
+                            ddnpcrt::demo::WorldRequest::Gsf { no, value } => story.world.gsf.set(no as usize, value),
+                            ddnpcrt::demo::WorldRequest::LayoutFlag { stage, no, value } => story.world.set_lot(stage, no as usize, value),
+                            _ => unreachable!("Demo adapter validated world-only requests"),
+                        }
+                    }
+                },
                 Err(error) => {
                     if let Some(position) = applied.action.position() {
                         self.npc_parked.insert(npc, position);

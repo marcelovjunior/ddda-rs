@@ -476,6 +476,16 @@ impl Fight {
     /// Step 33: hits from the volumes of the last frame, damage, pools, and
     /// the victims' reactions.
     pub fn hits(&mut self, dt: f32) -> &[HitEvent] {
+        self.hits_observed(dt, None)
+    }
+
+    /// Optional headless diagnostics of actual NPC contact valuation.
+    /// The caller owns the trace storage; normal gameplay does not allocate it.
+    pub fn hits_with_npc_trace(&mut self, dt: f32, trace: &mut Vec<crate::combat::NpcHitTrace>) -> &[HitEvent] {
+        self.hits_observed(dt, Some(trace))
+    }
+
+    fn hits_observed(&mut self, dt: f32, trace: Option<&mut Vec<crate::combat::NpcHitTrace>>) -> &[HitEvent] {
         let mut fighters: Vec<Fighter> = self.arisen.values().map(|a| a.fighter.clone()).collect();
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         fighters.extend(self.dragon.iter().map(|d|d.actor.fighter.clone()));
@@ -496,7 +506,10 @@ impl Fight {
         self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
-        self.events = hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true);
+        self.events = match trace {
+            Some(trace) => crate::combat::hit_pass_with_npc_trace(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true, trace),
+            None => hit_pass(&mut fighters, &self.data.tables, dt, &mut roll, &|_| true),
+        };
         self.roll_seed = seed;
         let mut it = fighters.into_iter();
         for a in self.arisen.values_mut() {

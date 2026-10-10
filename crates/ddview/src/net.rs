@@ -445,7 +445,7 @@ fn dress(
 pub fn step(
     pause: Res<crate::pause::PauseState>,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    order_devices: play::PawnOrderDevices,
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     args: Res<crate::Args>,
@@ -458,11 +458,13 @@ pub fn step(
     mut demo_press: Local<bool>,
     mut d: Dress,
 ) {
+    let keys = &order_devices.keys;
+    let gamepads = &order_devices.gamepads;
     let (Some(mut st), Some(net)) = (state, net) else { return };
     let st = &mut *st;
     if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) { play::orbit(st, &buttons, &mouse); }
     let mut input = if pause.paused { PlayerInput::default() } else {
-        PlayerInput { sim: play::p1_input(&keys, &buttons, st.cam_yaw), interact: keys.pressed(KeyCode::KeyE) }
+        PlayerInput { sim: play::gamepad_order_input(play::p1_input(&keys, &buttons, st.cam_yaw), &gamepads, 0), interact: keys.pressed(KeyCode::KeyE) }
     };
     if play::active_input(&input.sim) || input.interact { st.demo = false; }
     if !pause.paused && st.demo && !st.goblins.is_empty() && args.host.is_some() {

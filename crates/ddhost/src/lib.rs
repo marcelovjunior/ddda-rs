@@ -29,6 +29,7 @@ pub mod npc_combat;
 pub mod opening;
 pub mod quest_camera;
 pub mod player;
+pub mod pawn_orders;
 pub mod prologue;
 pub mod save;
 pub mod spawns;

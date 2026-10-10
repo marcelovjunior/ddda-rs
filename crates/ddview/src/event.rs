@@ -752,7 +752,7 @@ fn drive(
 ) {
     // mDeltaTime: frames at 30 per second.
     if !playing.args.hold {
-        *acc += time.delta_secs().min(0.1) * 30.0;
+        *acc += time.delta_secs().min(0.1 * crate::time_scale().max(1.0)) * 30.0;
         while *acc >= 1.0 && !playing.player.finished() {
             *acc -= 1.0;
             let f = playing.player.step(1.0).expect("event step");
