@@ -825,3 +825,62 @@ pair uses the same default pin, frozen v1 FieldSettle, x1, GPU builder,
 unchanged camera/content and `DDVIEW_SKIN_DIAGNOSTICS=1` on both sides;
 only `DDVIEW_COMPACT_SKINS` changes. Native simulation remains 30 Hz.
 No new default or 180 fps claim follows from headless tests alone.
+
+### Matched x1 compact-palette capture: upload reduction verified
+
+Head #7204 moved the pair ahead of root's visual queue; codex-76's bounded
+CPU diagnostic actually exited 0 and released core #7228 before the normal
+live/ddview claim. An initial OFF capture was **rejected**: clearing null
+flags through .NET SetEnvironmentVariable left empty environment variables,
+while character.rs's diagnostic switches test var_os presence. Its PNG
+showed RGB group colours and material counts differed. No ON was launched
+from that setup. A head test/build then appeared; the launch guard refused
+ON until head #7249 confirmed actual completion. These rejected timings
+are not evidence for normal renderer performance.
+
+Fresh `field-palettes-{off,on}-39acf70-r2` captures explicitly removed and
+asserted absence of every null environment flag. Same default pin/hash and
+frozen v1 FieldSettle/hash above, x1, GPU builder, automatic backend,
+1920x1080, unchanged camera, no trace, diagnostics=1 both; only compact
+skins=0/1 differed. Each used app Seconds=50, wall Watchdog=90 and screenshot
+delay=45. No competing Cargo/rustc/CPU diagnostic was observed at either
+preflight; head/root agreed to keep both corrected windows quiet.
+
+- OFF PID **24492 actually exited 0 / 60.9390012 s**; ON PID **31816
+  actually exited 0 / 62.2599285 s**. Both private viewers absent afterward,
+  original PID 23408 running at its verified install path, normal GPU lease
+  actually released #7269. Original game received no input or writes.
+- Actual final SkinUniforms: **671 palettes both**, staging extent
+  **278,276 → 32,078 matrices**, steady upload **17,809,664 → 2,052,992
+  bytes**, an **88.47% reduction**. This is the renderer's actual retained
+  staging extent, including high-water allocation, not the sum of live
+  palette sizes. Current/previous buffer sizes each changed
+  24,213,812 → 2,125,764 bytes. Upload reduction is verified.
+- Every warm report has identical **4,836 entities / 1,802 mesh entities /
+  1,071 visible meshes / 951 unique meshes / 423 visible DD materials /
+  1,979 allocated DD materials**. Fixed 30 Hz simulation is unchanged.
+- Reports ending approximately 25/30/35/40 s: OFF median frames
+  **14.4 / 13.9 / 14.5 / 14.0 ms**; ON **10.9 / 11.1 / 11.0 / 11.1 ms**.
+  Median of those four reports **14.2 → 11.05 ms**, 22.2% lower observed
+  wall time (about 70.4 → 90.5 reciprocal fps). OFF p99
+  16.9/14.9/17.9/17.1 ms; ON 13.9/14.3/12.7/13.3 ms. Frames over 16.67 ms
+  total 22 → 6; over 33/50 ms zero in both warm windows.
+- **Clock confound remains:** read-only warm GPU samples show P3 both,
+  OFF graphics 885–915 MHz versus ON 1170–1200 MHz; memory 5001 MHz both.
+  Original game's sampled 3D share is zero in every warm sample. GPU
+  clocks were not changed. Thus faster paired frame time is observed,
+  but an isolated causal FPS gain is **not proven** by this one pair.
+- Both actual PNGs were viewed: intact terrain, two normally textured
+  dressed characters, matching HUD/scene; no apparent skin/bounds or
+  colour regression. These are bounded field fidelity checks, not
+  exhaustive motion/content coverage. Parent independent review requested
+  with exact private paths. Compact palettes remain **opt-in/default off**.
+
+Private run/exit/GPU/stderr/PNG and bounded analysis summaries remain under
+`E:/ddda-re/notes/steps/s41/field-palettes-{off,on}-39acf70-r2.*`.
+The private launcher records verified absent negative flags rather than
+empty values. Source/render harness freeze is unchanged. Next: review
+the pair independently, then reverse-order matched replication or a
+named CPU diagnostic under new approval/normal leases to separate upload
+cost from the observed GPU clock change. Root's queued visual captures
+take the released GPU first; no additional GUI was launched.
