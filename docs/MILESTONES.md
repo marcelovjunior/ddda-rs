@@ -435,3 +435,33 @@ opening (codex-31), route perf (codex-29).
 - **Plan:** the prologue is for later; the dragon attack is required (S24);
   the Encampment waits for the maintainer's playtest.
 - **Disk:** E: fell to 27 GB; the 43 GB stale debug target was removed.
+
+**Batch 2026-10-10, afternoon (head + Codex children 54/58/60/61/62):**
+- **Route:** NPC 1's Guard TalkEnd -> GSF381 -> q0002 boots (S23); field
+  goblins bind to event1's EnemyCheck and killing group 23 sets q2:20
+  through the authored path; Reynard keeps his body after the admission
+  LOT closes (closed spawn gate != removal, 0x0075F860 vs 0x0075FAA0,
+  S32) and plays his authored motions; his thanks, reward 1058 and q2:88
+  run from n304QuestCtrl (S39); the demo walks into event1's Area
+  (RescueApproach) and on toward q0002_event2 (RoadWalk).
+- **Enemies:** goblin RunTrace/RunEnd/RunStumble (far goblins used to
+  stand still); the vf33 stat defaults (HP x2 -> 2000, attack x1.3) and
+  the placements' cSetInfoPawn rates (rescue goblins attack x0.2);
+  experience 100 per goblin (or mExperienceOW) through the party award,
+  level-ups reaching the fighter (S37 core). Reynard as a combat body
+  with source sensor selection and NoDamage/Invincible gates (S34, in
+  progress).
+- **Weapons and items:** the Strider's bow: mode and phases (S25), arrows
+  that hit from the real bow joint (S26), in the viewer with the TPS
+  camera and layered upper-body motion (S27); the new-game bag, rewards
+  and quick use (S28).
+- **Dragon:** host actor with its entrance (S29); landing/PressAttack and
+  breath in progress (S30); LAN guests see every enemy kind, protocol 7
+  (S33).
+- **Viewer:** failed runs exit non-zero; `--no-vsync` (implied by perf
+  runs). Field perf, uncapped: median ~22 ms, our systems ~3 ms; the rest
+  is render-side (S41).
+- **Next steps queued:** S35 vocation GUI, S36 pawn commands, S38 item
+  menu, S40 event cameras (camera 12 = cCamExParamAnim, 3 s, blocks the
+  player), S41 frame rate (180 fps target), S42 graphics settings, S43
+  level-up notice.
