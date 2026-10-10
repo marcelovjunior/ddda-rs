@@ -375,6 +375,9 @@ pub fn prepare(
     // picked at the weapon table (Host::apply_job_kit); enemies join it as
     // the story spawns them.
     host.fight = Some(ddhost::ddenemyrt::fight::Fight::new(play::fight_data(&vfs, native_pc)?));
+    // pawn chatter (S52): the installed situation/message tables
+    host.pawn_chatter = ddhost::pawn_chatter::Runtime::with_data(std::sync::Arc::new(
+        ddhost::pawn_chatter::Data::load(&vfs)?));
     // progression (experience, levels): ddprogress tables from the install
     // and the exe beside it
     host.data.tables = Some(std::sync::Arc::new(ddhost::install::tables(
@@ -1171,6 +1174,7 @@ fn enter_stage(
     s.host.npcs.npcs.clear();
     s.host.npc_parked.clear();
     s.host.world.npcs.clear();
+    s.host.pawn_chatter.clear_pending();
     s.host.world.report(ddstory::HostEvent::StageLoaded { stage });
     Ok(())
 }
@@ -1499,7 +1503,7 @@ fn kit_weapons(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session) {
 pub fn step(
     mut stage_view: OpeningStage,
     time: Res<Time>,
-    order_devices: play::PawnOrderDevices,
+    mut pawn_devices: crate::pawn_chatter::PawnDevices,
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
@@ -1514,8 +1518,8 @@ pub fn step(
     item_menus: Res<crate::item_menu::Menus>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
-    let keys = &order_devices.keys;
-    let gamepads = &order_devices.gamepads;
+    let keys = &pawn_devices.orders.keys;
+    let gamepads = &pawn_devices.orders.gamepads;
     let (Some(mut st), Some(res)) = (state, res) else {
         return;
     };
@@ -1762,6 +1766,7 @@ pub fn step(
         }
         input.interact = false;
         s.host.scenario_field_cells = stage_view.streamer.as_ref().and_then(|streamer| streamer.scenario_field_cells());
+        pawn_devices.recognition.submit(&mut *s.host, st);
         let report = match s.host.tick_network(&inputs, network_now) {
             Ok(r) => r,
             Err(e) => {
@@ -1769,6 +1774,7 @@ pub fn step(
                 break;
             }
         };
+        crate::pawn_chatter::queue(&mut stage_view.commands, &report.pawn_messages);
         if let (Some(f), Some(d)) = (s.host.fight.as_ref(), s.demo.as_mut()) {
             for e in f.events.iter().filter(|e| f.npcs.contains_key(&e.victim)) {
                 let acc = d.npc_damage.entry((e.victim, e.attacker)).or_default();
@@ -2913,6 +2919,9 @@ fn guest_step(
         }
     }
     for event in events {
+        if let ddnet::proto::ToClient::PawnMessage(message) = &event {
+            crate::pawn_chatter::queue(&mut view.commands, std::slice::from_ref(message));
+        }
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
             start_cut(s, row as usize);
             if let Some(cut) = &mut s.cut {

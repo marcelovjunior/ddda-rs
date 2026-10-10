@@ -164,11 +164,22 @@ pub struct Resource {
 }
 #[derive(Debug, Clone)]
 pub struct Unit {
+    /// Raw first-word low byte, retained under its original public name.
+    /// Native uses it as a coordinate-table index; see `coordinate_index`.
     pub generator_kind: u8,
     pub particle_kind: u8,
     pub third_kind: u8,
     pub life_kind: u8,
     pub offsets: [u32; 4],
+}
+impl Unit {
+    /// Resource coordinate index, independently of the unit's ordinal or
+    /// the deduplicated runtime coordinate ordinal. The first word's high
+    /// 24 bits remain the generator-payload offset.
+    // Translated from 0x010FA330 (DDDA.exe 2017-12-13 Steam).
+    pub fn coordinate_index(&self) -> u16 {
+        u16::from(self.generator_kind)
+    }
 }
 #[derive(Debug, Clone)]
 pub struct EffectList {
@@ -342,5 +353,40 @@ impl EffectList {
             resources,
             payload: d.to_vec(),
         })
+    }
+}
+
+#[cfg(test)]
+mod coordinate_tests {
+    use super::*;
+
+    #[test]
+    fn effect_coordinate_index_uses_low_byte_without_changing_generator_payload() {
+        // Synthetic packed records: repeated coordinate7 on distinct units,
+        // plus the byte boundary255 and zero. Generator data starts at0x40.
+        let mut bytes = vec![0; 48 + 0x100];
+        bytes[..4].copy_from_slice(b"EFL\0");
+        bytes[4..8].copy_from_slice(&0x20110318u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&0x100u32.to_le_bytes());
+        bytes[16..18].copy_from_slice(&4u16.to_le_bytes());
+        let indices = [7u8, 7, 255, 0];
+        for (ordinal, index) in indices.into_iter().enumerate() {
+            let at = 48 + ordinal * 16;
+            let packed = (0x40u32 << 8) | u32::from(index);
+            bytes[at..at + 4].copy_from_slice(&packed.to_le_bytes());
+            bytes[at + 4] = 11;
+            bytes[at + 8] = 0x12;
+            bytes[at + 12] = 4;
+        }
+        let list = EffectList::parse(&bytes).unwrap();
+        for (unit, expected) in list.units.iter().zip(indices) {
+            assert_eq!(unit.coordinate_index(), u16::from(expected));
+            assert_eq!(unit.generator_kind, expected, "raw API stays lossless");
+            assert_eq!(unit.offsets, [0x40, 0, 0, 0]);
+            assert_eq!((unit.particle_kind, unit.third_kind, unit.life_kind), (11, 0x12, 4));
+        }
+        assert_eq!(list.units[0].coordinate_index(), list.units[1].coordinate_index());
+        assert_ne!(list.units[1].coordinate_index(), 1, "resource index is not unit ordinal");
+        assert!(list.resources.is_empty());
     }
 }
