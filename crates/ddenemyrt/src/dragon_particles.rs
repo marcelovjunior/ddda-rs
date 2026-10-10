@@ -44,6 +44,58 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Supported point-provider binding: actor-relative offset and unchanged
+/// local orientation. The caller supplies the real parent coordinate matrix.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProviderBinding {
+    pub local_offset: [f32; 3],
+    pub effect_scale: f32,
+}
+
+impl ProviderBinding {
+    /// Normal create-context fields from 0x00A55BC0/0x004241F0. Other
+    /// placement modes, floor alignment and randomized scaling need their
+    /// own native adapters before using this binding.
+    // Translated from 0x00CB6CF0, 0x004298B0 and 0x0042D8F0's EAX
+    // offset argument (DDDA.exe 2017-12-13 Steam).
+    pub fn read(element: &mteffect::Element, actor_scale: [f32; 3],
+        create_flags: u32) -> Result<Self, String> {
+        let p = &element.parameters;
+        if p[1] != 0 || p[2] != 0 || p[18] != 6 || p[43] & 2 != 0
+            || p[31..38].iter().any(|v| *v != 0)
+            || p[9..12].iter().any(|v| f32::from_bits(*v) != 0.0)
+            || f32::from_bits(p[29]) != 0.0 {
+            return Err("unsupported point-provider binding".into());
+        }
+        let mut local_offset = std::array::from_fn(|axis| f32::from_bits(p[6 + axis]));
+        let effect_scale = f32::from_bits(p[28]);
+        if actor_scale.iter().chain(local_offset.iter()).chain([effect_scale].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite point-provider binding".into());
+        }
+        if p[43] & 4 == 0 && create_flags & 0x20 == 0 {
+            for axis in 0..3 { local_offset[axis] *= actor_scale[axis]; }
+        }
+        Ok(Self { local_offset, effect_scale })
+    }
+
+    /// The helper stores the relative offset in effect+0x160; FE0350
+    /// projects it through the parent, rather than translating twice.
+    // Translated from 0x00FE0350's parent/joint-1 branch and final scale
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn matrix(&self, parent: &mtlmt::pose::Mat4) -> Result<mtlmt::pose::Mat4, String> {
+        if parent.iter().flatten().chain(self.local_offset.iter())
+            .chain([self.effect_scale].iter()).any(|v| !v.is_finite()) {
+            return Err("invalid point-provider parent coordinate".into());
+        }
+        let local = mtlmt::pose::compose([1.0; 3], [0.0, 0.0, 0.0, 1.0], self.local_offset);
+        let mut matrix = mtlmt::pose::mul(&local, parent);
+        for row in matrix.iter_mut().take(3) {
+            for value in row { *value *= self.effect_scale; }
+        }
+        Ok(matrix)
+    }
+}
+
 /// Effect-owned integer updates and the fractional collision-sample clock.
 /// Generator clocks advance only once per returned integer update.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,6 +203,63 @@ pub struct PathDynamics {
     pub spring: f32,
     pub taper_points: u8,
     pub force: [f32; 3],
+}
+
+/// Authored type4 path parameters, before native random sampling and the
+/// owning generator's scale/direction transform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathParameters {
+    pub flags: u16,
+    pub iterations: u16,
+    pub selectors: u16,
+    pub taper_points: u8,
+    /// Length, length velocity, angular velocity, force, damping, spring.
+    pub ranges: [[f32; 2]; 6],
+    pub rotation: [[f32; 2]; 3],
+    pub curves: [u32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampledPath {
+    pub length: f32,
+    pub length_velocity: f32,
+    pub angular_velocity: f32,
+    pub force: f32,
+    pub damping: f32,
+    pub spring: f32,
+    pub rotation: [f32; 3],
+}
+
+impl PathParameters {
+    /// Supported uncurved, unconstrained native setup. Each draw advances
+    /// the actual generator counter even when its variation is zero.
+    // Translated from 0x010E5620 (DDDA.exe 2017-12-13 Steam).
+    pub fn sample(&self, counter: &mut u32,
+        mut random_float: impl FnMut(usize) -> f32) -> Result<SampledPath, String> {
+        if self.flags != 0 || self.curves != [0; 4] {
+            return Err("unsupported curved or constrained collision path setup".into());
+        }
+        if self.ranges.iter().chain(self.rotation.iter()).flatten().any(|v| !v.is_finite()) {
+            return Err("nonfinite collision path parameters".into());
+        }
+        let mut sample = |range: [f32; 2]| -> Result<f32, String> {
+            *counter = counter.wrapping_add(1);
+            let random = random_float((*counter & 0xFFF) as usize);
+            let value = random * range[1] + range[0];
+            if !random.is_finite() || !value.is_finite() { return Err("invalid native path random sample".into()); }
+            Ok(value)
+        };
+        let length = sample(self.ranges[0])?.max(0.0);
+        let length_velocity = sample(self.ranges[1])?;
+        // Native order is force/damping/spring before angular velocity,
+        // despite the authored angular pair preceding them in the resource.
+        let force = sample(self.ranges[3])?;
+        let damping = sample(self.ranges[4])?;
+        let spring = sample(self.ranges[5])?;
+        let angular_velocity = sample(self.ranges[2])?;
+        let rotation = [sample(self.rotation[0])?, sample(self.rotation[1])?, sample(self.rotation[2])?];
+        Ok(SampledPath { length, length_velocity, angular_velocity, force, damping, spring, rotation })
+    }
 }
 
 /// Unconstrained type4 path state. Collision-constrained and angular paths
@@ -300,6 +409,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn path_setup_samples_native_order_and_advances_zero_variation_draws() {
+        let mut parameters = PathParameters { flags: 0, iterations: 2,
+            selectors: 0x4444, taper_points: 0,
+            ranges: [[-2.0, 0.0], [10.0, 1.0], [20.0, 1.0],
+                [30.0, 1.0], [40.0, 1.0], [50.0, 1.0]],
+            rotation: [[60.0, 1.0], [70.0, 1.0], [80.0, 1.0]], curves: [0; 4] };
+        let mut counter = 0xFFFF_FFFE;
+        let mut indices = Vec::new();
+        let sampled = parameters.sample(&mut counter, |index| {
+            indices.push(index); indices.len() as f32
+        }).unwrap();
+        assert_eq!(indices, [0xFFF, 0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(counter, 7);
+        assert_eq!(sampled, SampledPath { length: 0.0, length_velocity: 12.0,
+            angular_velocity: 26.0, force: 33.0, damping: 44.0, spring: 55.0,
+            rotation: [67.0, 78.0, 89.0] });
+        parameters.curves[3] = 1;
+        assert!(parameters.sample(&mut counter, |_| panic!("unsupported curves cannot draw")).is_err());
+        assert_eq!(counter, 7);
+        parameters.curves[3] = 0;
+        parameters.flags = 0x10;
+        assert!(parameters.sample(&mut counter, |_| panic!("constrained setup cannot draw")).is_err());
+    }
+
+    #[test]
+    fn provider_binding_keeps_relative_offset_and_parent_scale_without_double_translation() {
+        let mut element = mteffect::Element { lists: std::array::from_fn(|_| String::new()),
+            effect_2d: String::new(), parameters: [0; 69] };
+        element.parameters[18] = 6;
+        element.parameters[6] = 3.0_f32.to_bits();
+        element.parameters[7] = (-2.0_f32).to_bits();
+        element.parameters[28] = 0.5_f32.to_bits();
+        let binding = ProviderBinding::read(&element, [2.0, 3.0, 4.0], 0).unwrap();
+        assert_eq!(binding.local_offset, [6.0, -6.0, 0.0]);
+        // Explicit native parent coordinate, with nonuniform rows. Do not
+        // normalize its axes or apply actor position before its translation.
+        let parent = [[0.0, 2.0, 0.0, 0.0], [-3.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0], [100.0, 200.0, 300.0, 1.0]];
+        let matrix = binding.matrix(&parent).unwrap();
+        assert_eq!(matrix[3], [118.0, 212.0, 300.0, 1.0]);
+        assert_eq!(matrix[0], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(matrix[1], [-1.5, 0.0, 0.0, 0.0]);
+        assert_eq!(matrix[2], [0.0, 0.0, 2.0, 0.0]);
+        assert_eq!(ProviderBinding::read(&element, [2.0; 3], 0x20).unwrap().local_offset, [3.0, -2.0, 0.0]);
+        element.parameters[43] = 4;
+        assert_eq!(ProviderBinding::read(&element, [2.0; 3], 0).unwrap().local_offset, [3.0, -2.0, 0.0]);
+        element.parameters[43] = 2;
+        assert!(ProviderBinding::read(&element, [1.0; 3], 0).is_err());
+        element.parameters[43] = 0;
+        element.parameters[29] = 1.0_f32.to_bits();
+        assert!(ProviderBinding::read(&element, [1.0; 3], 0).is_err());
+    }
+
+    #[test]
     fn effect_birth_skips_rate_then_preserves_fractional_native_updates() {
         let mut clock = EffectClock::new(0);
         assert_eq!(clock.advance(7.0).unwrap(), 0);
@@ -432,7 +595,7 @@ mod tests {
     }
 
     fn synthetic_list() -> mteffect::EffectList {
-        let mut payload = vec![0; 0x1B0];
+        let mut payload = vec![0; 0x240];
         let put = |bytes: &mut [u8], at, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
         put(&mut payload, 0x10 + 8, 2);
         put(&mut payload, 0x10 + 0xC, 5);
@@ -509,6 +672,7 @@ pub struct CollisionUnit {
     pub acceleration: [f32; 2],
     pub initial_distance: [f32; 2],
     pub path_points: u8,
+    pub path_parameters: PathParameters,
 }
 
 impl CollisionUnit {
@@ -569,7 +733,16 @@ impl CollisionUnit {
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
             fade: [a?, b?, c?], hold_curve: (curve_word >> 1) & 0x7FFF,
             hold_limit: half(movement, 0xE)?, speed: pair(life, 0x28)?,
-            acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points })
+            acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points,
+            // Type4's constructor0x010F1230 passes life+0x80 to0x010E5620.
+            path_parameters: PathParameters { flags: half(life, 0x80)?,
+                iterations: half(life, 0x82)?, selectors: half(life, 0x84)?,
+                taper_points: half(life, 0x86)? as u8,
+                ranges: [pair(life, 0x88)?, pair(life, 0x90)?, pair(life, 0x98)?,
+                    pair(life, 0xA0)?, pair(life, 0xA8)?, pair(life, 0xB0)?],
+                rotation: [pair(life, 0xB8)?, pair(life, 0xC0)?, pair(life, 0xC8)?],
+                curves: [u32::from(half(life, 0x104)?), u32::from(half(life, 0x106)?),
+                    word(life, 0x108)?, word(life, 0x10C)?] } })
     }
 
     /// Native raw duration sampling in 0x010FA8D0, before the owner reduction

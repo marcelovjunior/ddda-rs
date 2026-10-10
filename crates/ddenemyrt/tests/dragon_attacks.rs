@@ -11,7 +11,26 @@ fn installed_collision_effect_reads_runtime_fields_and_keeps_spawn_separate_from
     // Explicit list-slot fixture, not a claim that the native LOD selector
     // or provider's runtime parameter overrides have been implemented.
     let unit = CollisionUnit::load(&vfs, 0).unwrap();
+    let provider = mteffect::Provider::parse(&vfs.read("effect/epv/em/em58/p_em5800",
+        mtarc::type_hash("rEffectProvider")).unwrap()).unwrap();
+    let element = provider.element(4, 2).unwrap();
+    let binding = ddenemyrt::dragon::particles::ProviderBinding::read(element, [1.0; 3], 0).unwrap();
+    assert_eq!(binding.local_offset,
+        std::array::from_fn(|axis| f32::from_bits(element.parameters[6 + axis])));
+    let parent = mtlmt::pose::compose([1.0; 3], [0.0, 0.0, 0.0, 1.0], [100.0, 200.0, 300.0]);
+    let bound = binding.matrix(&parent).unwrap();
+    assert_eq!([bound[3][0], bound[3][1], bound[3][2]],
+        std::array::from_fn(|axis| parent[3][axis] + binding.local_offset[axis]));
     assert!(unit.capacity > 0 && unit.path_points > 1);
+    assert!(unit.path_parameters.iterations > 0);
+    assert_eq!(unit.path_parameters.flags, 0);
+    let mut path_counter = 0;
+    let sampled = unit.path_parameters.sample(&mut path_counter, |_| 0.25).unwrap();
+    assert_eq!(path_counter, 9, "native setup draws even with zero variations");
+    assert!(sampled.length > 0.0);
+    assert_eq!(sampled.length_velocity, 0.0);
+    assert_eq!(sampled.angular_velocity, 0.0);
+    assert_eq!(sampled.rotation, [0.0; 3]);
     assert_eq!(unit.generator.flags & 2, 0, "this installed unit is one-shot");
     let mut counter = 0;
     let durations = unit.sample_raw_durations(&mut counter,

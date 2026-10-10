@@ -322,3 +322,36 @@ multiple updates and invalid context passed (4.01s compile, 0.00s run),
 actual exit0. A narrow DDSIM rebuild selected this branch's source after
 other shared-target work. This clock is not yet connected to production
 effect allocation or BreathParticles; full fire damage remains open.
+
+The supported point-provider binding follows `0x004298B0/0x0042D8F0`
+and `0x00FE0350`. Assembly establishes that the hidden EAX argument to
+42D8F0 is the actor-relative offset, rather than the already transformed
+world birth point. The binding preserves the actual parent matrix and its
+nonuniform scale, applies the authored effect scale to its basis, and
+rejects unsupported orientation/scatter modes. It does not translate an
+already transformed point a second time.
+
+Type4 path setup now reads its authored flags, iteration count, selectors,
+range pairs and curve references at life+0x80. Sampling follows
+`0x010E5620`: length, length velocity, force, damping, spring, angular
+velocity, then three rotation values. Every draw advances the supplied
+native generator counter, including zero variation. Curved/constrained
+setups remain explicit errors. These fields are runtime game data.
+
+The opening dragon's data now exposes its real authored EnemyCheck target:
+kind2, the loaded group's slot and the layout record ID. The installed
+dragon is record1, not the record vector's ordinal0.
+
+Focused validation completed with exit0: all36 dragon library tests
+(2.80s compile, 0.00s tests), all4 installed attack tests (5.98s compile,
+3.90s tests), and the installed host entrance/Press regression (11.35s
+compile, 10.12s tests). This checks provider/path boundaries and actual
+target identity, not complete production fire. Full touched-crate suites
+after current-main integration are still pending.
+
+Further source audit distinguishes the life+0x44 secondary-effect delay
+from world collision delay. `0x010D7380` resolves the collision descriptor
+using the ushort at life+6; `0x010CD1C0` copies its byte2 into the particle's
+collision delay. `0x010F7190` advances travel with the old speed before
+adding acceleration. Production effect ownership, this actual scene query,
+and normal fire HP damage remain the next integration work.

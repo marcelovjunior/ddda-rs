@@ -9,6 +9,8 @@ pub struct OpeningDragonData {
     pub graph: Arc<mtfsm::Graph>,
     pub placement: mtlot::Placement,
     pub group: ddspawn::gpl::Group,
+    /// Installed layout identity used by authored EnemyCheck conditions.
+    pub target: ddstory::Target,
 }
 
 impl OpeningDragonData {
@@ -35,11 +37,14 @@ impl OpeningDragonData {
             mtfsm::Graph::parse(&vfs.read(&path, mtarc::type_hash("rAIFSM"))?).map_err(|e| e.to_string())?,
         );
         let scale = placement.scale.iter().sum::<f32>() / 3.0;
+        let target = ddstory::Target { kind: 2, group: group.slot,
+            index: u32::try_from(record.id).map_err(|_| "negative dragon layout ID")? };
         Ok(Self {
             data: Arc::new(DragonData::opening(vfs, exe, scale)?),
             graph,
             placement,
             group,
+            target,
         })
     }
 }
