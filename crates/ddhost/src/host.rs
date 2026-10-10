@@ -554,6 +554,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         h.debug(&self.economy).debug(&self.progression);
         h.debug(&self.rift.party).debug(&self.rift.log).debug(&self.rift.cost_multiplier);
+        h.debug(&self.saved_npc_quest_rows());
         h.finish()
     }
 
@@ -605,6 +606,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
         }
         f.put(save::TAG_RIFT, Owner::Shared, self.rift.save().shared);
+        self.save_npc_quest_controls(&mut f);
         Ok(f)
     }
 
@@ -675,6 +677,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for s in self.roster.ids().collect::<Vec<_>>() {
             self.economy.wallet(s);
         }
+        self.load_npc_quest_controls(f)?;
         self.refresh_party();
         Ok(())
     }
