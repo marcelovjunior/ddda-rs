@@ -184,11 +184,22 @@ Head approved the existing `mteffect` dependency in board #5065. The new
 `dragon::particles::CollisionUnit` reader follows the installed EPV index4,
 element2 to an explicitly selected list slot, then reads the generator,
 particle11, movement1/tag0x12 and lifetime4 fields. It reads radius,
-capacity, joint, duration ranges, speed/acceleration, initial path distance
+capacity, axis selectors, duration ranges, speed/acceleration, initial path distance
 and point count from the installation; none of those records are embedded.
 Unsupported kinds/inherited bodies, truncated fields and nonfinite scalar
 values reject. The native LOD selector, parameter overrides, complete path
 and particle simulation are not implemented by this reader.
+
+The generator +0x30 field was initially labelled as a binding joint in
+the reader, without being used to produce positions. Tracing
+`0x010EC540` shows it packs two axis-selector nibbles into runtime +0x108
+bits8..15. The field is corrected to `generator_axis_selectors`; +0x78's
+low byte is read separately as the emission shape used by `0x010F37F0`.
+The decoder regression includes nonzero upper bytes to check both packed
+fields. All four particle reader/path/duration tests passed (4.69s
+compile, 0.00s test run), actual exit0. This adds no guessed bone binding
+or damage geometry. The native type4 path constructor/update and provider
+birth transform remain the next integration step.
 
 Raw duration sampling follows `0x010FA8D0`: three counter increments,
 inclusive integer variation, zero-variation table-read suppression and

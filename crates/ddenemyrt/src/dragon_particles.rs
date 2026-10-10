@@ -92,6 +92,8 @@ mod tests {
         let put = |bytes: &mut [u8], at, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
         put(&mut payload, 0x10 + 8, 2);
         put(&mut payload, 0x10 + 0xC, 5);
+        put(&mut payload, 0x10 + 0x30, 0xABCD_0066);
+        put(&mut payload, 0x10 + 0x78, 0x1234_5603);
         put(&mut payload, 0xD0 + 0x40, 2.0_f32.to_bits());
         put(&mut payload, 0xD0 + 0x44, 1.0_f32.to_bits());
         put(&mut payload, 0xD0 + 0x48, 0.5_f32.to_bits());
@@ -109,6 +111,9 @@ mod tests {
         let unit = CollisionUnit::read("synthetic".into(), &synthetic_list()).unwrap();
         assert_eq!(unit.radius, [2.0, 1.0, 0.5]);
         assert_eq!((unit.capacity, unit.path_points), (5, 4));
+        // These packed generator selectors are unrelated to actor bone IDs.
+        assert_eq!(unit.generator_axis_selectors, 0x66);
+        assert_eq!(unit.emission_shape, 3);
         let mut counter = 0xFFE;
         let mut indices = Vec::new();
         let durations = unit.sample_raw_durations(&mut counter, |index| {
@@ -145,7 +150,11 @@ pub struct CollisionUnit {
     pub path: String,
     pub generator: GeneratorParams,
     pub capacity: u16,
-    pub binding_joint: i32,
+    /// Generator+0x30's two axis-selector nibbles; not an actor joint ID.
+    /// 0x010EC540 copies them into runtime+0x108 bits8..15.
+    pub generator_axis_selectors: u8,
+    /// Generator+0x78 low byte, copied to runtime+0x106 for 0x010F37F0.
+    pub emission_shape: u8,
     /// Default particle fields +0x40/44/48, before runtime override +0x128.
     pub radius: [f32; 3],
     pub fade: [DurationRange; 3],
@@ -211,7 +220,8 @@ impl CollisionUnit {
         if path_points < 2 { return Err("collision path has fewer than two points".into()); }
         Ok(Self { path, generator: GeneratorParams { flags: word(generator, 8)?,
                 restart_delay: half(generator, 0xAC)? as i16, restart_variation: half(generator, 0xAE)? },
-            capacity: half(generator, 0xC)?, binding_joint: word(generator, 0x30)? as i32,
+            capacity: half(generator, 0xC)?, generator_axis_selectors: word(generator, 0x30)? as u8,
+            emission_shape: word(generator, 0x78)? as u8,
             radius: [float(particle, 0x40)?, float(particle, 0x44)?, float(particle, 0x48)?],
             fade: [a?, b?, c?], hold_curve: (curve_word >> 1) & 0x7FFF,
             hold_limit: half(movement, 0xE)?, speed: pair(life, 0x28)?,
