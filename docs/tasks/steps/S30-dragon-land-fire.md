@@ -884,3 +884,23 @@ curves/angular modes. This new regression is **uncompiled/unrun**; the
 query, secondary effects and ordinary damage remain open. Next: validate
 this batch's complete package gate, then connect sampled birth values to
 the actual path and particle lifetime rather than a delay-based admission.
+
+The birth-sampling batch now passed its full package gate at frozen
+`e0deee8a42b58e462d588f3b3a5f737d38dd7ee6`. Session38499 and Cargo
+actually exited0 for complete `mteffect` and `ddenemyrt`, jobs2 on the
+existing core target: **193 passed, 0 failed**, the same 2 ignored
+diagnostics, 0 filtered, 33 summaries. All eight required regression
+names appeared once, including the new six-float/one-word birth test;
+canonical install/exe were set, no check reported SKIP, and the source
+stayed clean with the same module hash. The normal core lease was released
+after actual completion. Parent independently parsed the raw log and
+verified its SHA256 against the retained proof JSON.
+
+Private log `full-generator-path-e0deee8.private.log` SHA256:
+`C9B06C84C4B3503E37FABF7121811C25B3D7FBB996BCBF7B2432DEA94CE689CA`.
+The preceding unrun labels record preparation before this gate. This
+checks Rust birth sampling and runtime resource reads; original whole
+birth execution, production particle/path ownership, world queries,
+secondary effects, fire rendering and ordinary party damage remain open.
+Next: connect the sampled values to the actual path and particle update
+while preserving the verified counter reset and draw order.
