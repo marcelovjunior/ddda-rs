@@ -126,6 +126,9 @@ pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 pub struct ArisenFighter {
     pub fighter: Fighter,
     pub kit: Kit,
+    /// The character level whose stats the fighter carries
+    /// ([`Fight::apply_level`]); the kit's data is level 1.
+    pub level: u32,
     /// ddsim's attack and volley counts last seen.
     pub attacks_seen: u32,
     pub volleys_seen: u32,
@@ -294,6 +297,7 @@ impl Fight {
                     pools: Default::default(),
                 },
                 kit,
+                level: 1,
                 attacks_seen: 0,
                 volleys_seen: 0,
             },
@@ -326,6 +330,57 @@ impl Fight {
         let p = sim.player(seat).ok_or("missing bow seat")?;
         let a = self.arisen.get(&seat).ok_or("missing bow fighter")?;
         self.data.bow.pose(&self.kit(a.kit).body, p)
+    }
+
+    /// Gives seat `seat`'s Arisen the stats of character level `level`
+    /// (`cPlayerInfo` +0x2A0 max HP, +0x2B4 / +0x2B8 / +0x2BC / +0x2C0
+    /// strength, defence, magick, magick defence). A rise refills HP to
+    /// the new maximum, as the level-up 0x00B5BD20 does through 0x00888DA0
+    /// with the max HP (vf148); a dead Arisen stays dead (0x00888DA0's
+    /// vf1D4 check).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_level(
+        &mut self,
+        seat: u8,
+        level: u32,
+        hp_max: f32,
+        attack: f32,
+        defend: f32,
+        magic_attack: f32,
+        magic_defend: f32,
+    ) {
+        let Some(a) = self.arisen.get_mut(&seat) else { return };
+        if a.level == level {
+            return;
+        }
+        let rose = level > a.level;
+        a.level = level;
+        if let Attacker::Player(p) = &mut a.fighter.attacker {
+            p.base_attack = attack;
+            p.base_mgc_attack = magic_attack;
+        }
+        if let Victim::Player { defender, hp, hp_max: max } = &mut a.fighter.victim {
+            defender.base_defence = defend;
+            defender.base_mgc_defence = magic_defend;
+            *max = hp_max;
+            if rose && *hp > 0.0 {
+                *hp = hp_max;
+            }
+            *hp = hp.min(hp_max);
+        }
+    }
+
+    /// The experience of the goblins killed by this frame's hits
+    /// (`uEm0100::vf131` 0x008D3430 -> 0x008573E0 -> award 0x00443470).
+    /// *Assumed*: every kill awards; the unit-state gates of 0x008573E0
+    /// (+0x206C bits, +0x2B8E, +0x20DC) are not translated.
+    pub fn kill_awards(&self) -> Vec<u32> {
+        self.events
+            .iter()
+            .filter(|e| e.killed)
+            .filter_map(|e| self.goblins.iter().find(|g| g.fighter.owner == e.victim))
+            .map(|g| g.exp)
+            .collect()
     }
 
     /// Adds a goblin; returns its owner id.

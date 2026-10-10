@@ -275,3 +275,96 @@ fn a_far_goblin_runs_in_then_dashes_and_attacks() {
     );
     assert!(r.hits.iter().any(|(_, e)| e.victim == 0), "{a:?}");
 }
+
+/// Killing the goblin gives the party its experience: 100 for an ordinary
+/// goblin (uEm0100::vf33 0x008CDD80), through the party award 0x00443470.
+/// The Arisen's record afterwards equals the same record given
+/// `Award::new(100)` directly.
+#[test]
+fn killing_a_goblin_awards_its_experience() {
+    let Some(data) = data() else { return };
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    let Ok(exe) = ddexe::locate(&native) else { return };
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let tables = Arc::new(ddhost::install::tables(&vfs, &exe).unwrap());
+    let mut h = Host::new(
+        Sim::new(HashMap::new()),
+        None::<ddstory::Story<NoStoryData>>,
+        ScriptedHost::default(),
+        Box::new(Flat),
+    );
+    h.data.tables = Some(tables.clone());
+    assert_eq!(h.join(ProfileId(1), Control::Local, [0.0; 3], 0.0), Some(0));
+    h.create_arisen(0, ddskill::vocation::Vocation::Fighter).unwrap();
+    let mut expected = h.progression.clone();
+    expected.award(&tables, ddprogress::Award::new(100));
+    let mut f = Fight::new(data);
+    f.add_arisen(0);
+    f.equip(&mut h.sim, 0);
+    f.add_goblin([0.0, 0.0, 600.0], std::f32::consts::PI);
+    assert_eq!(f.goblins[0].exp, 100);
+    h.fight = Some(f);
+    let mut press = false;
+    for _ in 0..900 {
+        let mut inputs = FrameInputs::new();
+        inputs.insert(0, PlayerInput { sim: ddsim::Input { light: press, ..Default::default() }, ..Default::default() });
+        h.tick(&inputs).unwrap();
+        let arisen = h.sim.player(0).unwrap().position;
+        let g = &h.fight.as_ref().unwrap().goblins[0];
+        if g.dead() {
+            break;
+        }
+        let d = ((g.pos[0] - arisen[0]).powi(2) + (g.pos[2] - arisen[2]).powi(2)).sqrt();
+        let waits = h.sim.player(0).unwrap().state == ddsim::State::Wait;
+        press = d < 250.0 && waits && !press;
+    }
+    assert!(h.fight.as_ref().unwrap().goblins[0].dead());
+    let got = &h.progression.characters[0].progress;
+    let want = &expected.characters[0].progress;
+    assert_eq!((got.level, got.exp), (want.level, want.exp));
+    assert!(got.exp > 0 || got.level > 1);
+}
+
+/// A level-up reaches the fight: the hurt Arisen's max HP becomes the new
+/// level's and its HP refills (0x00B5BD20 -> 0x00888DA0), one level per
+/// frame.
+#[test]
+fn a_level_up_raises_and_refills_the_fighters_hp() {
+    let Some(data) = data() else { return };
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    let Ok(exe) = ddexe::locate(&native) else { return };
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let tables = Arc::new(ddhost::install::tables(&vfs, &exe).unwrap());
+    let mut h = Host::new(
+        Sim::new(HashMap::new()),
+        None::<ddstory::Story<NoStoryData>>,
+        ScriptedHost::default(),
+        Box::new(Flat),
+    );
+    h.data.tables = Some(tables);
+    assert_eq!(h.join(ProfileId(1), Control::Local, [0.0; 3], 0.0), Some(0));
+    h.create_arisen(0, ddskill::vocation::Vocation::Fighter).unwrap();
+    let mut f = Fight::new(data);
+    f.add_arisen(0);
+    f.equip(&mut h.sim, 0);
+    let hp0 = f.arisen[&0].fighter.victim.hp();
+    if let ddenemyrt::combat::Victim::Player { hp, .. } = &mut f.arisen.get_mut(&0).unwrap().fighter.victim {
+        *hp = 100.0;
+    }
+    h.fight = Some(f);
+    h.award_exp(ddprogress::Award::new(1000)).unwrap();
+    h.tick(&FrameInputs::new()).unwrap();
+    let c = &h.progression.characters[0].progress;
+    assert_eq!(c.level, 2, "one level per frame");
+    let a = &h.fight.as_ref().unwrap().arisen[&0];
+    assert_eq!(a.level, 2);
+    let ddenemyrt::combat::Victim::Player { hp, hp_max, defender } = &a.fighter.victim else { panic!() };
+    assert_eq!(*hp_max, c.stats.hp_max);
+    assert!(*hp_max > hp0, "{hp_max} {hp0}");
+    assert_eq!(*hp, *hp_max);
+    assert_eq!(defender.base_defence, c.stats.defend);
+}

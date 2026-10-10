@@ -51,7 +51,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         (self.frame as f64 * f64::from(self.clock.seconds())) as u32
     }
 
-    fn character_of(&self, role: Role) -> Option<&Character> {
+    pub(crate) fn character_of(&self, role: Role) -> Option<&Character> {
         let m = self.progression.party.iter().flatten().find(|m| m.role == role)?;
         self.progression.characters.get(m.character)
     }

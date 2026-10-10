@@ -32,6 +32,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+#[path = "npc_motion.rs"]
+mod npc_motion;
+
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -108,6 +111,8 @@ struct Demo {
     perf_route: bool,
     field_cell: Option<(i32, i32)>,
     planning: Option<RoutePlan>,
+    /// When the fight demo last used a curative.
+    last_heal: f32,
 }
 
 type StoryHost = Host<InstallData, OpeningWorld>;
@@ -230,6 +235,7 @@ pub struct Session {
     failure: Option<String>,
     guest_control_shot: bool,
     guest_npcs: HashMap<u32, [f32; 3]>,
+    guest_enemy_views: crate::net::enemy_views::Views,
     acc: f32,
     /// The party before the last host frame, to draw between frames.
     between: play::Between,
@@ -241,6 +247,7 @@ pub struct Session {
     npcs: HashMap<u32, (Entity, Vec3, f32)>,
     npc_motions: (Option<mtlmt::Motion>, Option<mtlmt::Motion>),
     npc_moving: HashMap<u32, bool>,
+    npc_authored_motion: npc_motion::View,
     npc_adapter: NpcAdapter,
     demo: Option<Demo>,
     /// `--shots <dir>`: a screenshot per step.
@@ -299,6 +306,12 @@ pub fn prepare(
     // picked at the weapon table (Host::apply_job_kit); enemies join it as
     // the story spawns them.
     host.fight = Some(ddhost::ddenemyrt::fight::Fight::new(play::fight_data(&vfs, native_pc)?));
+    // progression (experience, levels): ddprogress tables from the install
+    // and the exe beside it
+    host.data.tables = Some(std::sync::Arc::new(ddhost::install::tables(
+        &vfs,
+        &ddexe::locate(native_pc).map_err(|e| e.to_string())?,
+    )?));
     host.data.npc = Some(std::sync::Arc::new(
         ddnpcrt::InstallData::open(native_pc, "eng").map_err(|e| e.to_string())?,
     ));
@@ -371,6 +384,7 @@ pub fn prepare(
         failure: None,
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
+        guest_enemy_views: crate::net::enemy_views::Views::default(),
         acc: 0.0,
         between: play::Between::default(),
         cut: None,
@@ -379,6 +393,7 @@ pub fn prepare(
         npcs: HashMap::new(),
         npc_motions: (None, None),
         npc_moving: HashMap::new(),
+        npc_authored_motion: npc_motion::View::load(&vfs, exe)?,
         npc_adapter,
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
@@ -393,6 +408,7 @@ pub fn prepare(
             perf_route: false,
             field_cell: None,
             planning: None,
+            last_heal: f32::NEG_INFINITY,
         }),
         shots,
         shot_queue: vec![],
@@ -439,6 +455,14 @@ pub fn prepare(
         story.world.set_sce_no(1025,false);
         story.world.set_lot(200,0,true);
         info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
+        if std::env::var_os("DDVIEW_LAN_ENEMY_CAPTURE").is_some() {
+            // S33 visual fixture only: synthetic goblin position six metres
+            // in front of this runtime Arisen, not a natural beach encounter.
+            let player=s.host.sim.player(0).unwrap();
+            let pos=[player.position[0]+player.yaw.sin()*600.0,player.position[1],
+                player.position[2]+player.yaw.cos()*600.0];
+            s.host.fight.as_mut().unwrap().add_goblin(pos,0.0);
+        }
     }
     Ok(s)
 }
@@ -505,7 +529,15 @@ impl Session {
         let candidates = {
             let (scene, hour, flag) = ddhost::spawns::world_inputs(self.world(), stage);
             let world = ddhost::ddspawn::World { scene, hour, flag: &flag };
-            layouts.candidates(&world)
+            let mut candidates = layouts.candidates(&world);
+            for owner in self.host.story_npc_intels() {
+                if layouts.retains_existing(&world, owner)
+                    && !candidates.placements.iter().any(|placement| placement.target == owner.target)
+                {
+                    candidates.placements.push(owner.clone());
+                }
+            }
+            candidates
         };
         let mut admitted = Vec::new();
         for placement in candidates.placements {
@@ -770,6 +802,10 @@ fn sync_npc_models(
             Err(error) => warn!("opening: NPC {id} body unavailable: {error}"),
         }
     }
+    let bodies: Vec<_> = session.npcs.keys().copied().collect();
+    if let Err(error) = session.npc_authored_motion.bind(&mut *session.host, &bodies) {
+        session.failure = Some(format!("NPC authored motion body: {error}"));
+    }
 }
 
 /// Initial Arisen view bodies, with explicit LAN snapshot reservations.
@@ -1017,6 +1053,13 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
     let mut owners = vec![];
     for spawn in &goblins {
         let owner = fight.add_goblin(spawn.position, spawn.angle[1]);
+        // the placement's experience override (cSetInfoEnemy +0xEC ->
+        // unit +0x5C24, 0x007A012C); 0 keeps the goblin's own
+        if let Some(&mtlot::Value::Int(exp)) = spawn.record.get("mExperienceOW") {
+            if exp > 0 {
+                fight.goblins.last_mut().expect("just added").exp = exp as u32;
+            }
+        }
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
@@ -1233,6 +1276,7 @@ pub fn step(
         guest_step(
             s,
             st,
+            &mut stage_view,
             &keys,
             &buttons,
             &mouse,
@@ -1517,18 +1561,24 @@ pub fn step(
         if let Ok((mut tr, mut pb)) = roots.get_mut(e) {
             tr.translation = at * UNIT;
             tr.rotation = Quat::from_rotation_y(yaw);
-            if s.npc_moving.get(&id) != Some(&moving) {
-                let m = if moving {
-                    s.npc_motions.1.clone()
-                } else {
-                    s.npc_motions.0.clone()
-                };
-                if let Some(m) = m {
-                    pb.change_motion(m, 6.0);
+            if s.npc_authored_motion.show(&*s.host, id, &mut pb) {
+                // A later locomotion interface must restart its presentation
+                // even when its moving/idle value matches the earlier one.
+                s.npc_moving.remove(&id);
+            } else {
+                if s.npc_moving.get(&id) != Some(&moving) {
+                    let m = if moving {
+                        s.npc_motions.1.clone()
+                    } else {
+                        s.npc_motions.0.clone()
+                    };
+                    if let Some(m) = m {
+                        pb.change_motion(m, 6.0);
+                    }
+                    s.npc_moving.insert(id, moving);
                 }
-                s.npc_moving.insert(id, moving);
+                pb.hold_frame = None;
             }
-            pb.hold_frame = None;
         }
     }
     // The party; during a cutscene the camera belongs to the event.
@@ -1891,7 +1941,8 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
-            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            s.host.progression.characters.first().map(|c| (c.progress.level, c.progress.exp)),
             w.sce_no,
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
@@ -1923,9 +1974,44 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             d.since = now;
         }
     }
+    demo_heal(s, now);
     let d = s.demo.as_mut().unwrap();
     let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
     PlayerInput { sim, interact: false }
+}
+
+/// The fight demo uses the next curative of the Arisen's bag (S28's quick
+/// use, the same path as the U key) below 40% HP, at most every 5 seconds.
+fn demo_heal(s: &mut Session, now: f32) {
+    let hurt = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).is_some_and(|a| {
+        let max = match &a.fighter.victim {
+            ddhost::ddenemyrt::combat::Victim::Player { hp_max, .. } => *hp_max,
+            _ => return false,
+        };
+        let v = &a.fighter.victim;
+        !v.dead() && v.hp() < 0.4 * max
+    });
+    let d = s.demo.as_mut().unwrap();
+    if !hurt || now - d.last_heal < 5.0 {
+        return;
+    }
+    d.last_heal = now;
+    let (items, host) = (&mut s.quick_items, &mut s.host);
+    let host = &mut **host;
+    if let Some(fight) = host.fight.as_mut() {
+        match items.use_next(0, &mut host.sim, fight) {
+            Ok(item) => info!("opening demo: used item {item}"),
+            Err(e) => info!("opening demo: no curative: {e}"),
+        }
+    }
+}
+
+/// Whether a live goblin is within `range` cm (horizontal) of the Arisen.
+fn demo_goblin_near(s: &Session, range: f32) -> bool {
+    let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) else { return false };
+    f.goblins
+        .iter()
+        .any(|g| !g.dead() && (g.pos[0] - p.position[0]).hypot(g.pos[2] - p.position[2]) < range)
 }
 
 fn w_bit(s: &Session, bit: usize) -> bool {
@@ -1947,6 +2033,18 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
     let step = d.step;
     if step == Step::Rescue {
         return demo_rescue(s, now);
+    }
+    // With DDVIEW_DEMO_FIGHT the Arisen defends itself in the field: once
+    // a live goblin is within 10 m it fights with ordinary inputs (the
+    // goblins run in and attack; an idle Arisen would die before Rescue).
+    if matches!(step, Step::FieldWalk | Step::FieldSettle | Step::RoadWalk)
+        && std::env::var_os("DDVIEW_DEMO_FIGHT").is_some()
+        && demo_goblin_near(s, 1000.0)
+    {
+        demo_heal(s, now);
+        let d = s.demo.as_mut().unwrap();
+        let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
+        return PlayerInput { sim, interact: false };
     }
     let route = ddstory::route::opening();
     let place = |name: &str| -> Option<Vec3> {
@@ -2315,6 +2413,7 @@ impl Session {
 fn guest_step(
     s: &mut Session,
     st: &mut PlayState,
+    view: &mut OpeningStage,
     keys: &ButtonInput<KeyCode>,
     buttons: &ButtonInput<MouseButton>,
     mouse: &AccumulatedMouseMotion,
@@ -2366,6 +2465,7 @@ fn guest_step(
     };
     let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
     bodies.extend(c.own().as_ref().map(shown));
+    let enemies = c.enemies(0.0);
     s.guest_npcs = c.npcs().into_iter().map(|n| (n.id, n.pos)).collect();
     for event in events {
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
@@ -2386,6 +2486,22 @@ fn guest_step(
     }
     play::show(st, &bodies, roots, cams);
     st.follow = follow;
+    if let Some(streamer) = view.streamer.as_mut() {
+        s.guest_enemy_views.sync(&enemies, st.origin, &mut view.commands,
+            &mut streamer.loader, &mut view.meshes, &mut view.materials,
+            &mut view.images, &mut view.bindposes);
+    }
+    s.guest_enemy_views.show(&enemies, st.origin, s.cut.is_some(), roots, &mut st.visible);
+    if s.dragon_capture {
+        if let Some(dragon)=enemies.iter().find(|e|e.identity.family==ddnet::mirror::EnemyFamily::Dragon) {
+            let target=(Vec3::from(dragon.pos)-st.origin)*UNIT;
+            // Same explicit diagnostic camera as the host; not an original camera.
+            for mut camera in cams.iter_mut() {
+                *camera=Transform::from_translation(target+Vec3::new(40.0,20.0,60.0))
+                    .looking_at(target,Vec3::Y);
+            }
+        }
+    }
     for (&e, &present) in &st.visible {
         if let Ok(mut v) = vis.get_mut(e) {
             *v = if present && s.cut.is_none() {
