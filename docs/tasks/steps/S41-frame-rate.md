@@ -540,3 +540,27 @@ Next: validate the cached-span correction headlessly, capture one short
 corrected field system trace under normal leases, and target the actual
 largest source-supported cost. Outdoor town measurement and the 5.5 ms
 acceptance gate remain open; no new renderer default or gain is claimed.
+
+### Capture watchdog handle race correction
+
+Root's actual S47 run (#6716/#6718) exposed a race: a CIM provenance
+query found the owned viewer, which then exited before an ID-only
+`Stop-Process`; Windows subsequently reused that PID for `rustc.exe`.
+No foreign process was stopped, but the harness threw before recording
+the viewer's numeric exit. Head #6740 approved hardening this harness.
+
+`perf_capture.ps1` now checks the retained process handle on both sides
+of the provenance query and calls that object's `Kill()` rather than
+resolving a process by PID. A termination exception is ignored only when
+the same launched handle actually exits during a bounded wait; a still
+live failure or changed live provenance propagates. The `finally` block
+writes its actual numeric exit whenever obtainable. The independent
+application timer and hard OS watchdog remain separate.
+
+`scripts/test_perf_capture.ps1` extracts and runs the actual watchdog and
+exit-recording AST against in-memory fake process/query/output objects.
+**7 passed, exit 0**: already exited; exit during query; exit during kill;
+live kill failure; foreign recycled PID with exited original handle;
+foreign PID with still-live original handle; verified owned-handle kill.
+It launches/stops no process. PowerShell parse and `git diff --check`
+also pass. No new live-capture verification is claimed yet.

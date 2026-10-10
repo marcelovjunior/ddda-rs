@@ -110,18 +110,38 @@ try {
             })
         }
         if ($watch.Elapsed.TotalSeconds -gt $WatchdogSeconds) {
+            # GPU/CIM sampling can outlast the viewer. Check the cached handle
+            # on both sides of the provenance query, not only the loop wait.
+            if ($captureProcess.HasExited) { break }
             $owned = Get-CimInstance Win32_Process -Filter "ProcessId=$($captureProcess.Id)"
+            if ($captureProcess.HasExited) { break }
             if ($owned -and $owned.ExecutablePath -eq $viewerPath) {
                 'Timed exit failed; stopping only the verified owned viewer.' |
                     Set-Content -LiteralPath "$outputPath.watchdog.txt"
-                Stop-Process -Id $captureProcess.Id
-            } else { throw 'Owned viewer provenance changed; no process was stopped.' }
+                try {
+                    # Kill via the retained Process handle, avoiding a new
+                    # PID lookup that could race with exit/PID reuse.
+                    if (-not $captureProcess.HasExited) { $captureProcess.Kill() }
+                } catch {
+                    # An exit between HasExited and Kill is harmless. A stop
+                    # failure with the owned viewer still alive must surface.
+                    if (-not $captureProcess.WaitForExit(1000)) { throw }
+                }
+            } else {
+                if ($captureProcess.WaitForExit(1000)) { break }
+                throw 'Owned viewer provenance changed; no process was stopped.'
+            }
         }
     }
     $captureProcess.WaitForExit()
-    $captureProcess.ExitCode | Set-Content -LiteralPath "$outputPath.exit.txt"
     Write-Output "Viewer PID $($captureProcess.Id) exited $($captureProcess.ExitCode) after $($watch.Elapsed.TotalSeconds) seconds."
 } finally {
+    # Even if a query/stop races with exit and throws, preserve a numeric OS
+    # exit from our retained handle whenever it is actually obtainable.
+    if ($captureProcess -and $captureProcess.HasExited) {
+        $captureProcess.WaitForExit()
+        $captureProcess.ExitCode | Set-Content -LiteralPath "$outputPath.exit.txt"
+    }
     $gpuSamples | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$outputPath.gpu.json"
     $env:DDVIEW_PERF_SECONDS = $oldSeconds
     $env:TRACE_CHROME = $oldTrace
