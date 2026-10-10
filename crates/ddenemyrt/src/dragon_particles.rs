@@ -54,6 +54,34 @@ pub struct GeneratorCounters {
     pub path: u32,
 }
 
+/// Bulk static effect samples read from the player's executable. These tables
+/// are distinct from either advancing global/manager RNG stream, and from
+/// each generator's independent birth/path indices. No values are embedded.
+#[derive(Debug, Clone)]
+pub struct GeneratorRandomTables {
+    floats: Vec<f32>,
+    words: Vec<u32>,
+}
+
+impl GeneratorRandomTables {
+    /// Native float/word lookups mask their incremented index with0xFFF.
+    /// Addresses are the supported executable's file-backed data tables,
+    /// reached by0x010EC54C, 0x010E5620 and0x010EDC90.
+    pub fn read(exe: &ddexe::Exe<'_>) -> Result<Self, String> {
+        let floats = exe.f32s(0x0162_5420, 0x1000)?;
+        let words = exe.u32s(0x0162_1420, 0x1000)?;
+        if floats.iter().any(|value| !value.is_finite()) {
+            return Err("nonfinite installed effect random table".into());
+        }
+        Ok(Self { floats, words })
+    }
+
+    /// The native sampler supplies an already-masked index. Out-of-range
+    /// caller inputs are rejected rather than silently changing its draw order.
+    pub fn float(&self, index: usize) -> Option<f32> { self.floats.get(index).copied() }
+    pub fn word(&self, index: usize) -> Option<u32> { self.words.get(index).copied() }
+}
+
 /// Values sampled by generator vf07 before the first binding/birth.
 /// The auxiliary triplet is not the effect's axis scale used by vf15.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,6 +174,20 @@ impl GeneratorCounters {
     pub fn reset(&mut self) {
         self.birth = u32::from(self.initial_seed);
         self.path = u32::from(self.initial_seed);
+    }
+
+    /// The legacy clock holds a counter snapshot. Synchronize it with the
+    /// actual generator +44 before/after its gate; initializer, birth and
+    /// restart share that counter, while path+48 stays independent.
+    // Translated shared-counter ownership from 0x010FA600, 0x010CD14C,
+    // 0x010EC54C and0x010EDC90 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance_clock(&mut self, clock: &mut super::attacks::GeneratorClock,
+        parameters: GeneratorParams, owner_delay: i16,
+        random_word: impl FnMut(usize) -> u32) -> super::attacks::GeneratorUpdate {
+        clock.random_counter = self.birth;
+        let update = clock.update(parameters, owner_delay, random_word);
+        self.birth = clock.random_counter;
+        update
     }
 }
 
@@ -1538,6 +1580,36 @@ mod tests {
         let invalid = ParticlePath { points: Vec::new(), velocities: Vec::new(), total_length: 0.0 };
         assert!(travel.advance_path(0, &invalid, [0.0; 3]).is_err());
         assert_eq!(travel, before);
+    }
+
+    #[test]
+    fn generator_restart_gate_shares_birth_counter_and_keeps_path_independent() {
+        use super::super::attacks::{GeneratorClock, GeneratorPhase};
+        let unit = CollisionUnit::read("synthetic".into(), &synthetic_list()).unwrap();
+        let parameters = GeneratorParams { flags: 2, restart_delay: -3, restart_variation: 5 };
+        let mut counters = GeneratorCounters::select(&[0xFFF], 0, |_| panic!("fixed seed")).unwrap();
+        counters.path = 71;
+        let mut clock = GeneratorClock::new(123, 4);
+        assert!(counters.advance_clock(&mut clock, parameters, 0,
+            |_| panic!("first emission draws no restart sample")).spawn);
+        assert_eq!((clock.phase, clock.random_counter), (GeneratorPhase::Restart, 0xFFF));
+        unit.sample_life4_birth(&mut counters, |_| 0.25, |_| 9).unwrap();
+        assert_eq!((counters.birth, counters.path), (0x1006, 71));
+        let mut restart_indices = Vec::new();
+        let update = counters.advance_clock(&mut clock, parameters, 0,
+            |index| { restart_indices.push(index); 9 });
+        assert!(!update.spawn && !update.prepare_binding);
+        assert_eq!(restart_indices, [7], "restart follows all seven birth draws, not the stale clock seed");
+        assert_eq!((clock.random_counter, counters.birth, counters.path), (0x1007, 0x1007, 71));
+        assert_eq!((clock.delay, clock.age, clock.phase), (0, 2, GeneratorPhase::Waiting));
+        assert!(counters.advance_clock(&mut clock, parameters, 0, |_| panic!("waiting enters emission")).spawn);
+        unit.sample_life4_birth(&mut counters, |_| 0.25, |_| 9).unwrap();
+        assert_eq!((counters.birth, counters.path), (0x100E, 71));
+        let no_variation = GeneratorParams { restart_variation: 0, ..parameters };
+        counters.advance_clock(&mut clock, no_variation, 0,
+            |_| panic!("010CD15F skips the word lookup for zero variation"));
+        assert_eq!((clock.random_counter, counters.birth, counters.path), (0x100F, 0x100F, 71));
+        assert_eq!(clock.delay, -3);
     }
 
     #[test]

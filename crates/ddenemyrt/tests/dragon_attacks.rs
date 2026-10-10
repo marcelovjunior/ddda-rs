@@ -2,6 +2,67 @@
 use ddenemyrt::dragon::{Dragon, DragonData, DragonEffect, DragonError, DragonStep, attacks::*};
 
 #[test]
+fn installed_effect_random_tables_feed_initialization_reset_path_birth_and_travel() {
+    use ddenemyrt::dragon::particles::{CollisionUnit, GeneratorRandomTables, Life4Travel};
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.is_dir() { eprintln!("SKIP: effect RNG install absent"); return; }
+    let exe_file = ddexe::ExeFile::next_to(&native).unwrap();
+    let exe = exe_file.image().unwrap();
+    let tables = GeneratorRandomTables::read(&exe).unwrap();
+    for index in 0..0x1000 {
+        assert_eq!(tables.word(index).unwrap(), exe.u32(0x0162_1420 + index as u32 * 4).unwrap());
+        assert_eq!(tables.float(index).unwrap().to_bits(),
+            exe.f32(0x0162_5420 + index as u32 * 4).unwrap().to_bits());
+    }
+    assert_eq!((tables.float(0x1000), tables.word(0x1000)), (None, None));
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let unit = CollisionUnit::load(&vfs, 0).unwrap();
+    // This seed is a deliberate fixture. Global stream ownership and native
+    // creation-order selection are not substituted by a fresh default RNG.
+    let mut counters = ddenemyrt::dragon::particles::GeneratorCounters::select(
+        &[0xFFF], 0, |_| panic!("fixed fixture seed consumes no global draw")).unwrap();
+    let mut initialization_indices = Vec::new();
+    let initialization = unit.sample_generator_initialization(&mut counters, |index| {
+        initialization_indices.push(index);
+        tables.float(index).unwrap()
+    }).unwrap();
+    assert_eq!(initialization_indices, [0, 1, 2, 3]);
+    assert!(initialization.particle_scale.is_finite());
+    counters.reset(); // Actual creation's vf08 after vf07, before path/birth.
+    let mut path_indices = Vec::new();
+    let sampled = unit.path_parameters.sample(&mut counters.path, |index| {
+        path_indices.push(index);
+        tables.float(index).unwrap()
+    }).unwrap();
+    assert_eq!(path_indices, (0..9).collect::<Vec<_>>());
+    let mut birth_indices = Vec::new();
+    let mut word_indices = Vec::new();
+    let birth = unit.sample_life4_birth(&mut counters, |index| {
+        birth_indices.push(index);
+        tables.float(index).unwrap()
+    }, |index| { word_indices.push(index); tables.word(index).unwrap() }).unwrap();
+    assert_eq!(birth_indices, [0, 1, 2, 3, 4, 5]);
+    assert_eq!(word_indices, [6]);
+    assert_eq!((counters.birth, counters.path), (0x1006, 0x1008));
+    let transform = ddenemyrt::dragon::particles::GeneratorTransform {
+        matrix: mtlmt::pose::IDENTITY, axis_scale: [1.0; 3],
+        particle_scale: initialization.particle_scale,
+    };
+    let bound = transform.bind_path(unit.path_points, &unit.path_parameters, sampled).unwrap();
+    let mut travel = Life4Travel::from_birth(birth);
+    let before = counters;
+    let position = travel.advance_path(1 << 24, &bound.path, [0.0; 3]).unwrap();
+    assert!(position.position.iter().all(|v| v.is_finite()));
+    assert_eq!(travel.distance, [birth.distance, birth.distance + birth.speed]);
+    assert_eq!(travel.speed, birth.speed + birth.acceleration);
+    assert_eq!(travel.secondary_effect_delay, birth.secondary_effect_delay);
+    assert_eq!(counters, before, "travel itself consumes no random draw");
+    // Explicit identity binding/zero anchor fixture, not a production emitter,
+    // real scene query, secondary dispatch, fire contact or original replay.
+}
+
+#[test]
 fn installed_collision_effect_reads_runtime_fields_and_keeps_spawn_separate_from_fade() {
     use ddenemyrt::dragon::particles::CollisionUnit;
     let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
