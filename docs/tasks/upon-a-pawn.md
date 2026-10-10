@@ -581,3 +581,27 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   passes with the same existing install.rs lint allowance.
 - Next: source the corresponding clear/set boolean flag callbacks used after
   the q1 scene transition, then actor eligibility and real Guard completion.
+
+### Boolean actor flags and linked-body storage (codex-31)
+
+- Added typed boolean callbacks for SuperArmor0x007aa1f0,
+  NoSurprise0x007aa3a0, LiftDisable0x007aa430,
+  NoLiftReaction0x007aa4c0, NoEscape0x007aa5e0,
+  LiftEnable0x007ab460 and FixPos0x007aa790. They set or clear one
+  sourced bit without losing unrelated flags. These do not complete motion
+  interfaces or infer actor eligibility.
+- Resolved the previous body-copy uncertainty: uNpc::vf1800x00bb4730
+  returns linked intel+0x5c0 when body+0x5854 exists, otherwise body+0x2738.
+  All three NPC-derived vtable entries traced resolve to that getter. Thus
+  linked bodies and intels share canonical flags directly; no copy bridge is
+  required. Gameplay consumers of those bits still need their own translation.
+- FixPos(false) on a real body additionally changes body+0x1df0 from zero
+  to13. The typed request preserves its identity for that future body adapter;
+  the intel-only callback has no such side effect. This body-ground-mode
+  operation remains unimplemented and is not silently inferred from a mesh.
+- Ten NPC library tests, two installed applied-action tests and eight host
+  placement tests pass. Installed q1 NPC1/NPC2 survive SceNo1100 to1200,
+  emit initial disable writes and later flag clears, and do not falsely
+  Finish. The host regression checks selected-bit clear/set, unrelated-bit
+  retention and retirement. Touched-crate clippy passes with the previously
+  documented install.rs lint allowance. No new viewer run yet.

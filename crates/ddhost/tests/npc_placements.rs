@@ -161,6 +161,7 @@ mod graph_fixture {
         fn graph(&self, path: &str) -> Result<std::sync::Arc<mtfsm::Graph>, ddnpcrt::Error> {
             let healthy = path == "healthy";
             let flags = path == "flags";
+            let boolean_flag = matches!(path, "flags_clear" | "flags_set");
             Ok(std::sync::Arc::new(mtfsm::Graph {
                 owner: b"cAIActionFSMNpc".to_vec(), attribute: 0, conditions: vec![],
                 root: Some(mtfsm::Cluster { id: 0, owner_node_unique_id: 0, initial_state: 1,
@@ -168,8 +169,9 @@ mod graph_fixture {
                         name: b"owner fixture".to_vec(), setting: 0, user_attribute: 0,
                         from_all: None, links: vec![], subcluster: None,
                         processes: vec![mtfsm::Process {
-                            container: if flags { b"Set Disable Flag".to_vec() } else if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
-                            category: vec![], parameter: if flags { Some(Record { class_hash: 0, class_name: None,
+                            container: if boolean_flag { b"Set Lift Disable".to_vec() } else if flags { b"Set Disable Flag".to_vec() } else if healthy { b"SetInitPosNpc".to_vec() } else { b"SetInterfaceNpc".to_vec() },
+                            category: vec![], parameter: if boolean_flag { Some(Record { class_hash: 0, class_name: None,
+                                fields: vec![("Bool".into(), vec![Parameter::Scalar(mtxfs::Value::Bool(path == "flags_set"))])] }) } else if flags { Some(Record { class_hash: 0, class_name: None,
                                 fields: vec![("Flag".into(), vec![Parameter::Scalar(mtxfs::Value::U(352))])] }) } else { healthy.then(|| Record {
                                 class_hash: 0, class_name: None,
                                 fields: vec![("InitPos".into(), vec![Parameter::Scalar(mtxfs::Value::F(vec![4.0, 5.0, 6.0, 0.0]))])],
@@ -293,6 +295,12 @@ fn disable_flags_belong_to_the_materialized_intel_lifetime() {
     assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00));
     host.load_story_npc_intel(p.clone()).unwrap();
     assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "same intel retains authored writes");
+    host.apply_story_npc(200, p.target, "flags_clear");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1200), "clear touches only the selected bit");
+    host.apply_story_npc(200, p.target, "flags_set");
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story_npc_intel_flags(1), Some(0x1a00), "set restores the bit without losing others");
     host.unbind_story_npc(200, p.target);
     assert_eq!(host.story_npc_intel_flags(1), None);
     host.load_story_npc_intel(p).unwrap();
