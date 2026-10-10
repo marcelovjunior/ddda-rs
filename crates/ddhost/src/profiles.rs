@@ -106,7 +106,7 @@ mod tests {
             return;
         }
         let vfs = ddvfs::Vfs::open(&native).unwrap();
-        let exe = ddexe::ExeFile::next_to(native).unwrap();
+        let exe = ddexe::ExeFile::next_to(&native).unwrap();
         let data =
             std::sync::Arc::new(ddenemyrt::fight::FightData::load(&vfs, &exe.image().unwrap()).unwrap());
         let mut host = Host::new(
