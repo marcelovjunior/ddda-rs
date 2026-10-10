@@ -317,7 +317,15 @@ fn installed_death_parameters_and_action_identity() {
     }
     let vfs = ddvfs::Vfs::open(&native).unwrap();
     let params = Parameters::load(&vfs).unwrap();
-    assert!(params.game_over_delay > 0.0);
+    // A zero installed delay is valid: the preceding fatal motion supplies
+    // the collapse time. Exercise the actual runtime threshold inclusively.
+    let mut clock = DeadClock::default();
+    assert!(
+        clock
+            .step(params.game_over_delay, params.game_over_delay, true)
+            .unwrap()
+    );
+    assert!(!clock.step(1.0, params.game_over_delay, true).unwrap());
     assert!(params.pawn_down_limit > 0.0);
     assert!(params.pawn_recovery_ratio > 0.0);
     let file = ddexe::ExeFile::next_to(&native).unwrap();

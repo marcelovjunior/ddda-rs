@@ -84,11 +84,18 @@ project policy; the original supports one Arisen.
 ## Results (not ready for review)
 
 Source helpers and ten named regressions are prepared in `ddhost::death`.
-They have **not been executed**, and no runtime death, revival, GUI or retry
-completion is claimed yet. An authorized narrow save-loader change parses
+The first full host/network run on `db730fa` compiled in 45.71 seconds and
+exited 101: nine new regressions passed, including whole-save preservation
+after malformed late chunks; the installed-data regression failed because
+it incorrectly required a positive game-over delay. Targeted resource
+inspection confirmed a valid zero delay in this installation, so that test
+now exercises the actual installed threshold inclusively. The corrected
+full suites are pending. No runtime death, revival, GUI or retry completion
+is claimed yet. An authorized narrow save-loader change parses
 Rift, NPC row controls and player places before applying any candidate
 state, so malformed late chunks cannot partially replace a retry. Its
-regression is also pending execution in the coordinated full core window.
+regression passed in the first run; complete touched/downstream success is
+still required in the coordinated full core window.
 
 Next action: integrate the proven grounded action/pose chain and real pawn
 revive interactions, then run all touched/downstream suites and the default

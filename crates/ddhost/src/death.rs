@@ -93,8 +93,11 @@ pub fn fatal_completion(
     })
 }
 
+// Native getter argument at 0x00AD7CEF (DDDA.exe 2017-12-13 Steam).
 pub const ADJUST_GAME_OVER_DELAY: usize = 0x136;
+// Native getter argument at 0x00AFD288 (DDDA.exe 2017-12-13 Steam).
 pub const ADJUST_PAWN_DOWN_LIMIT: usize = 1;
+// Native getter argument in 0x00AFDB19..0x00AFDB62 (DDDA.exe 2017-12-13 Steam).
 pub const ADJUST_PAWN_RECOVERY_RATIO: usize = 0xfb;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
