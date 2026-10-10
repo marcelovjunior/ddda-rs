@@ -122,6 +122,16 @@ uses seen/lost clocks; visibility `0x00488440` tests the player camera's
 frustum (`0x007D3F50`) and a collision ray. Existing placeholder pawn
 `BATTLE_RANGE` and current attack targets are not substituted for this list.
 The native sensor/recognition adapter and original comparison are outstanding.
+Isolated native `RecognitionClock`, `Recognition` hysteresis and
+`RecognitionSight` geometry helpers now have three source-present but
+unexecuted regressions. Manager cadence is **one main-frame unit**, not
+one second; refresh discards remainder and entry clocks add the current
+frame's `mainDelta/FPS`, including fractional frames. Seen must exceed
+2 seconds and lost must exceed 10; actual combat membership overrides
+recognition. Visibility preserves sphere-plane tangency and distance
+equality at 9,000,000 cm². Actual camera planes, transformed actor sphere
+and native collision-ray outcome are required inputs, not fabricated here.
+N-profile camera/frustum admission policy is pending head's decision.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,

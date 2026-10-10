@@ -4,6 +4,79 @@
 use crate::commands::Command;
 use ddexe::Exe;
 
+/// Native sRecognition manager cadence. This stores main-frame units, not
+/// seconds. Its entry clocks use only the current frame's delta/FPS when
+/// the manager actually refreshes, including at fractional frame rates.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecognitionClock { pub elapsed_frames: f32 }
+impl RecognitionClock {
+    // Translated from 0x00487B00 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, frames: f32, fps: f32, eligible: bool) -> Option<f32> {
+        if !eligible { return None; }
+        self.elapsed_frames += frames;
+        // Constructor 0x004878BD -> 0x015319B8 embeds1.
+        if self.elapsed_frames < 1.0 { return None; }
+        self.elapsed_frames = 0.0;
+        Some(frames / fps)
+    }
+}
+
+/// One cRecognitionInfo's visibility hysteresis. Actor admission and its
+/// `5A02F0` eligibility are supplied separately; HP or distance alone
+/// cannot stand in for the native visibility test.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Recognition {
+    pub recognized: bool,
+    pub seen_seconds: f32,
+    pub lost_seconds: f32,
+}
+impl Recognition {
+    // Translated from 0x00488260..0x00488336 (DDDA.exe 2017-12-13 Steam).
+    pub fn step(&mut self, seconds: f32, sighted: bool, eligible: bool, combat_override: bool) {
+        if sighted { self.seen_seconds += seconds; self.lost_seconds = 0.0; }
+        else { self.seen_seconds = 0.0; self.lost_seconds += seconds; }
+        if self.recognized {
+            // Constructor 0x004878D7 -> 0x01520BAC embeds10.
+            if self.lost_seconds > 10.0 { self.recognized = false; }
+        } else if eligible && self.seen_seconds > 2.0 {
+            // Constructor 0x004878CA -> 0x014F9E04 embeds2.
+            self.recognized = true;
+        }
+        if combat_override { self.recognized = true; }
+    }
+}
+
+/// Native visibility's caller supplies actual camera planes and collision
+/// ray result. This helper does not create a camera, radius or ray mask.
+pub struct RecognitionSight {
+    pub renderable: bool,
+    pub camera_present: bool,
+    pub actor_sphere: [f32; 4],
+    pub camera_planes: [[f32; 4]; 6],
+    pub actor_position: [f32; 3],
+    pub arisen_position: [f32; 3],
+    /// Native ray from camera origin (or joint4) to actor sphere center:
+    /// tiny segments bypass the ray, otherwise mask0x4081D01C must be clear.
+    pub ray_clear: bool,
+}
+impl RecognitionSight {
+    // Translated from 0x00488440 and sphere test0x007D3F50
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn visible(&self) -> bool {
+        if !self.renderable || !self.camera_present { return false; }
+        let [x,y,z,radius] = self.actor_sphere;
+        for plane in self.camera_planes {
+            // Preserve the SSE scalar addition order, without fused math.
+            let distance = (plane[1] * y + plane[0] * x) + plane[2] * z + plane[3];
+            if -radius > distance { return false; }
+        }
+        let d: [f32; 3] = std::array::from_fn(|i| self.actor_position[i] - self.arisen_position[i]);
+        // 0x00488549 -> 0x0161C814 embeds9,000,000 cm²; equality passes.
+        if (d[1]*d[1] + d[0]*d[0]) + d[2]*d[2] > 9_000_000.0 { return false; }
+        self.ray_clear
+    }
+}
+
 /// Native situation records and their four-candidate message groups. These
 /// are bulk executable data, read at runtime rather than reproduced here.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,6 +563,58 @@ impl Bank {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognition_uses_strict_seen_lost_boundaries_and_native_override() {
+        let mut record = Recognition::default();
+        for _ in 0..4 { record.step(0.5, true, true, false); }
+        assert!(!record.recognized, "exactly2 seconds does not admit");
+        record.step(0.5, true, true, false);
+        assert!(record.recognized);
+        for _ in 0..20 { record.step(0.5, false, true, false); }
+        assert!(record.recognized, "exactly10 seconds does not retire");
+        record.step(0.5, false, true, false);
+        assert!(!record.recognized);
+        record.step(0.5, false, true, true);
+        assert!(record.recognized, "actual combat-list override restores it");
+        let mut absent = Recognition::default();
+        absent.step(3.0, true, false, false);
+        assert!(!absent.recognized, "visibility cannot bypass actor eligibility");
+    }
+
+    #[test]
+    fn recognition_fractional_manager_refresh_keeps_current_delta_and_freezes() {
+        let mut clock = RecognitionClock::default();
+        assert_eq!(clock.advance(0.5, 30.0, true), None);
+        assert_eq!(clock.advance(10.0, 30.0, false), None);
+        assert_eq!(clock.elapsed_frames, 0.5);
+        assert_eq!(clock.advance(0.5, 30.0, true), Some(0.5/30.0));
+        assert_eq!(clock.elapsed_frames, 0.0);
+        assert_eq!(clock.advance(1.5, 30.0, true), Some(1.5/30.0));
+        assert_eq!(clock.elapsed_frames, 0.0, "native refresh discards remainder");
+    }
+
+    #[test]
+    fn recognition_requires_camera_sphere_range_and_clear_ray_with_inclusive_edges() {
+        let mut sight = RecognitionSight { renderable: true, camera_present: true,
+            actor_sphere: [1.0,0.0,0.0,1.0], camera_planes: [[-1.0,0.0,0.0,0.0];6],
+            actor_position: [3000.0,0.0,0.0], arisen_position: [0.0;3], ray_clear: true };
+        assert!(sight.visible(), "sphere tangent and exact native range pass");
+        sight.actor_sphere[0] = 1.001;
+        assert!(!sight.visible());
+        sight.actor_sphere[0] = 1.0;
+        sight.actor_position[0] = 3000.1;
+        assert!(!sight.visible());
+        sight.actor_position[0] = 3000.0;
+        sight.ray_clear = false;
+        assert!(!sight.visible());
+        sight.ray_clear = true;
+        sight.camera_present = false;
+        assert!(!sight.visible());
+        sight.camera_present = true;
+        sight.renderable = false;
+        assert!(!sight.visible());
+    }
 
     #[test]
     fn native_situation_selection_keeps_direct_no_draw_and_group_draw() {
