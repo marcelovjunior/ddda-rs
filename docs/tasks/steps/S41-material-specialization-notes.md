@@ -65,5 +65,70 @@ same spawn/camera/two players/clock12 as the previous field comparison,
 prefixes `field-material-{off,on}-1a0911b` keep the baseline and candidate
 separate. Require PNG fidelity and identical counts before comparing warm
 20–40 s frames, GPU passes and stutters. CPU mode is not part of this batch.
-Next action: independently review the source, then inspect the queued
-batch's actual images/exits and measurements. No gain claimed.
+### Actual off/on comparison: no measured gain
+
+Head completed the requested batch (board #6266): off PID 33632 exited
+**0**, 52.4 s; on PID 33512 exited **0**, 52.5 s. Both private exit files
+contain zero and run metadata records the same pinned executable/hash,
+GPU builder, scene/camera and explicit off/on specialization mode. Both
+logs have no ERROR entry. No process/build/GPU lease remains owned here.
+
+Codex-66 actually viewed both PNGs before comparing timings. Both have
+intact terrain, two bodies, shadows and HUD. These two captured pictures
+are visually equivalent, not byte-identical: 2,019 of 2,073,600 RGB pixels
+differ, only 23 have a maximum channel difference over 10; mean absolute
+channel differences are 0.000912/0.000751/0.000581 on the 0–255 scale.
+This is a static field snapshot, not full-route/fading/night fidelity.
+
+Preselected warm 20–40 s windows, reports ending at approximately
+25/30/35/40 s:
+
+| Metric | Off | On |
+|---|---|---|
+| Frame medians (ms) | 6.7 / 6.7 / 6.7 / 6.7 | 6.9 / 6.7 / 6.6 / 6.7 |
+| Median of frame medians (ms) | **6.7** | **6.7** |
+| Frame p99 (ms) | 9.8 / 9.6 / 10.3 / 10.0 | 10.6 / 9.6 / 10.3 / 10.9 |
+| Frame worst (ms) | 10.9 / 10.6 / 11.8 / 12.0 | 11.6 / 11.4 / 12.6 / 14.9 |
+| Opaque GPU average-report median (ms) | 3.395866 (5 reports) | 3.420587 (3 reports) |
+| Bin-unpack GPU average-report median (ms) | 0.509773 (4 reports) | 0.520794 (4 reports) |
+
+GPU values are medians of the diagnostic logger's reported averages,
+not a reconstructed per-frame GPU distribution; diagnostic schedules
+produce different report counts. Neither frame nor opaque GPU timing
+shows a useful improvement. **Keep specialization off by default.**
+
+Both sides report 1,908 entities / 982 mesh entities / 365 visible meshes
+(263 unique) / 208 visible DD materials (745 allocated) throughout the
+warm windows. Each has zero warm frames above 16.67/33/50 ms. The first
+10 s after perf startup contain four off / five on frames above 50 ms,
+worst 171.5 / 133.6 ms; the first window's p99 is 11.4 / 31.7 ms. Startup
+order/cache variation prevents attributing these differences to compilation.
+The two screenshot entities raise the final report to 1,910 after the warm
+window; they do not change its counts.
+
+Four UTC-aligned warm GPU samples per side retain original PID 23408 at
+0% Windows 3D share. Viewer share is 48–53% off / 52–78% on. NVIDIA
+clocks are stable 2745/8501 MHz, P0, utilization 86–96% / 91–97%.
+Windows-engine and NVIDIA utilization are different metrics; their
+difference is not evidence for an unidentified GPU process.
+
+The scoped hypothesis that feature specialization usefully reduces this
+static field's opaque/frame cost is disproven by this batch. It does not
+prove that materials are inexpensive or establish full-route 180 fps:
+6.7 ms is about 149 fps, still above the 5.5 ms target. No optimization
+default is accepted. The independent CPU startup correction remains a
+separate diagnostic experiment pending review and actual picture validation.
+
+Harness follow-up `5488338` removes the unnecessary timer/watchdog ordering
+guard and records the time-scale environment. `DDVIEW_PERF_SECONDS` uses
+`Instant` wall time after its first update; `--shot-delay` uses virtual time.
+The launch-relative OS watchdog stays independent. Both owned harness
+branches passed PowerShell parse and diff checks; product pins did not change.
+
+Next action: independent review of these images/source/results and the
+separate CPU startup contract; then select the next evidence-backed
+optimization. Ordinary stage material extraction initializes each `DdSlot`
+once and removes `PendingDd`; animation pose allocations are on requested
+motion changes, while their measured steady-frame sections are tiny. A
+future relight-stutter trace should focus on render preparation around
+clock updates, without altering the source-derived rate/lighting quality.
