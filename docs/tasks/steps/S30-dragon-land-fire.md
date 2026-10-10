@@ -533,3 +533,48 @@ so it does not yet satisfy the S31 production-entry staffing exception.
 Next: implement and independently check the actual static vf43 parent/
 coordinate transform, including native normalization/scale ownership,
 then connect clocks, generator emissions, queries and ordinary HP effects.
+
+### Static local basis accepted; parent binding still open
+
+Source **f1e6845** adds the nonmirrored static coordinate basis translated
+from `0x010FC1D0`, with its own meaningful regression. Raw quaternions
+are not normalized; native scalar multiply/add order is retained. XYZ
+offset, unscaled rotation and sampled effect/coordinate scale remain
+separate, avoiding a second scale application during later binding. The
+native largest scale is a signed maximum, not an absolute radius.
+Mirrored conversion, dynamic curves, nonfinite inputs and overflow reject
+instead of supplying a guessed transform.
+
+The fourth offset word is now resolved as the signed parent joint:
+`0x010FBB20` copies it into coordinate+0x8C, and
+`0x00E73720 -> 0x00E705C0` uses a negative value to select the effect's
+unscaled +0x120 parent matrix. The raw field remains compatible; a typed
+accessor exposes its meaning. Final effect+0xB0 scaling and vf43 secondary
+binding are separate, still unimplemented paths.
+
+Private instruction emulation runs the actual nonmirrored function with
+four synthetic raw quaternions and three signed scale combinations:
+**12/12 exact matches**, including output W reset and signed maximum.
+The first harness attempt failed an unmapped scalar-constant read and was
+rejected. Mapping the original executable constant page, without modifying
+instructions or inserting expected outputs, corrected the harness. All
+emulation inputs/outputs and executable bytes stay private under
+`E:/ddda-re/notes/steps/S29/coordinate-basis-emulation.json`.
+
+The complete enemy suite on frozen f1e6845 **actually exited0** in
+session68839: **176 passed, zero failed, two existing diagnostics ignored**;
+74 library tests, compilation10.89 s, summed test execution85.29 s. The
+new static-basis regression and all three earlier named coordinate gates
+are explicitly present and passed. Private complete output is
+`E:/ddda-re/notes/steps/S29/full-coordinate-basis-integrated.log`.
+Normal core lease release followed actual exit; no new target or game
+operation occurred. This is a tested unused helper checkpoint, not
+production landing/fire, original comparison or S30 completion.
+
+Actual instructions at `0x00FB52A0` also distinguish effect RNG streams:
+nonzero selector uses effect-manager+0x24 (with its conditional lock),
+zero uses the global object at `0x018D017C`. The decompiler obscures ECX;
+stream selection must not be reduced to locking. No production global
+draw order is claimed. Next S30 action remains the actual vf43 parent/
+secondary binding and effect clock/emission/query integration before
+ordinary party damage and state6 acceptance.

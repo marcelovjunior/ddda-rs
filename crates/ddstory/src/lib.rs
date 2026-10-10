@@ -236,6 +236,10 @@ pub enum Request {
     OpenMenu { menu: Menu, player: usize },
     /// Show a quest/stage message.
     Message { kind: u8, quest: u16, mes_id: u16, disp_sec: f32 },
+    /// Authored pawn speech (`CmcMessage`, 0x005C6130). A negative
+    /// `pawn_slot` selects the first living party pawn; 0..=2 selects
+    /// that pawn slot. The host validates admission and speech readiness.
+    PawnMessage { message: u32, pawn_slot: i32 },
     /// Quest banner (sIdCockpit 0x004525d0): kind 1 start, 2 objective,
     /// 3 report, 4 fail, 6 clear.
     QuestBanner { kind: u32, quest: u32, log: u32 },
