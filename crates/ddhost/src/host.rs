@@ -763,43 +763,49 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             Some(candidate)
         } else { None };
+        let loaded_places: Vec<_> = self.roster.seats().iter().filter_map(|seat|
+            f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).map(|bytes| (seat.id, bytes)))
+            .map(|(seat, bytes)| {
+                let (pos, yaw) = save::place_from(bytes)
+                    .ok_or_else(|| err("invalid PLCE length".into()))?;
+                if !pos.iter().chain(std::iter::once(&yaw)).all(|v| v.is_finite()) {
+                    return Err(err("nonfinite PLCE coordinates".into()));
+                }
+                Ok((seat, pos, yaw))
+            }).collect::<Result<_, HostError>>()?;
+        let loaded_rift = if let Some(shared) = f.get(save::TAG_RIFT, Owner::Shared) {
+            let players = roster.seats().iter().filter_map(|seat|
+                Some((seat.id, f.get(save::TAG_RIFT, Owner::Profile(seat.profile))?.to_vec()))).collect();
+            let mut candidate = ddrift::Rift::load(&ddid::Parts { shared: shared.to_vec(), players }).map_err(err)?;
+            candidate.party.reserved = [false, self.roster.len() >= 2];
+            Some(candidate)
+        } else { None };
+        let loaded_npc_controls = self.read_npc_quest_controls(f)?;
+        // Every fallible chunk parser has completed. Applying the validated
+        // candidate below cannot leave half of a shared retry installed.
         self.frame = saved_frame;
         if let Some(story) = loaded_story {
             self.story = Some(story);
             self.boot = true;
         }
-        for seat in self.roster.seats() {
-            if let Some((pos, yaw)) = f.get(save::TAG_PLACE, Owner::Profile(seat.profile)).and_then(save::place_from) {
-                if let Some(p) = self.sim.player_mut(seat.id) {
-                    p.position = pos;
-                    p.yaw = yaw;
-                    p.drop_from = pos[1];
-                }
+        for (seat, pos, yaw) in loaded_places {
+            if let Some(p) = self.sim.player_mut(seat) {
+                p.position = pos;
+                p.yaw = yaw;
+                p.drop_from = pos[1];
             }
         }
-        let parts = |tag: [u8; 4]| -> Option<ddid::Parts> {
-            let shared = f.get(tag, Owner::Shared)?.to_vec();
-            let players = roster
-                .seats()
-                .iter()
-                .filter_map(|s| Some((s.id, f.get(tag, Owner::Profile(s.profile))?.to_vec())))
-                .collect();
-            Some(ddid::Parts { shared, players })
-        };
         if let Some(economy) = loaded_economy {
             self.economy = economy;
         }
         if let Some(progression) = loaded_progression { self.progression = progression; }
-        if let Some(p) = parts(save::TAG_RIFT) {
-            self.rift = ddrift::Rift::load(&p).map_err(err)?;
-            self.rift.party.reserved = [false, self.roster.len() >= 2];
-        }
+        if let Some(rift) = loaded_rift { self.rift = rift; }
         self.hired_by = hired_old;
         self.profiles = loaded_profiles;
         for s in self.roster.ids().collect::<Vec<_>>() {
             self.economy.wallet(s);
         }
-        self.load_npc_quest_controls(f)?;
+        self.restore_npc_quest_controls(loaded_npc_controls);
         self.refresh_party();
         self.rebuild_profile_fighters();
         Ok(())
