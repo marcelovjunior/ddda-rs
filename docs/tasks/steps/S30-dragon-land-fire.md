@@ -600,3 +600,21 @@ proof are pending** the queue; the prepared private native harness calls
 the original vf43, its original vf44 negative-joint lookup and both native
 matrix-copy routines rather than substituting output callbacks. No
 production emitter, contact, damage or source-readiness claim is added.
+
+Head #7840 also approved a backward-compatible `mteffect::Unit::coordinate_index`
+accessor. `0x010FA330` copies the first packed unit word's low byte into
+the manager's coordinate index; the high 24 bits remain the generator
+payload offset. The existing raw `generator_kind` field/API remains
+unchanged. A synthetic packed-record regression covers repeated coordinate
+indices on distinct unit ordinals, byte255/zero and unchanged generator
+payload offsets. This source addition is **uncompiled/unexecuted**.
+The next full gate must include `mteffect` as well as the enemy suite,
+and explicitly contain the new accessor test and all five coordinate tests.
+
+Reviewed committed main `18a4ca5`, including head's swept push-out fix and
+the accepted atomic-load death helpers, was integrated automatically into
+this task branch as `51183b4`. No sibling work-in-progress was copied.
+The prepared native parent proof now checks the complete two output
+matrices, signed scale, optional offset scaling and normal RET4 stack
+restoration on four synthetic cases. Earlier unmapped constant reads were
+rejected; the mapped original constant pages have not yet been rerun.
