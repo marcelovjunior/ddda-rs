@@ -20,6 +20,20 @@ type CascadeKey = (Entity, Entity, u32);
 #[derive(Resource, Clone, Default, ExtractResource)]
 struct FinitePlanes(HashMap<CascadeKey, HalfSpace>);
 
+#[derive(Resource, Default)]
+struct CasterSetting {
+    stage_weather: Option<(u32, usize)>,
+    extension_cm: Option<f32>,
+}
+
+impl CasterSetting {
+    fn refresh(&mut self, stage: u32, weather: usize, load: impl FnOnce() -> Option<f32>) {
+        if self.stage_weather == Some((stage, weather)) { return; }
+        self.stage_weather = Some((stage, weather));
+        self.extension_cm = load().filter(|v| v.is_finite() && *v >= 0.0);
+    }
+}
+
 pub struct FiniteShadowPlugin;
 
 impl Plugin for FiniteShadowPlugin {
@@ -31,7 +45,10 @@ impl Plugin for FiniteShadowPlugin {
         }
         info!("finite shadow extent opt-in: installed stage SDL, CPU + GPU");
         app.init_resource::<FinitePlanes>()
+            .init_resource::<CasterSetting>()
             .add_plugins(ExtractResourcePlugin::<FinitePlanes>::default())
+            .add_systems(Update, sync_stage_setting
+                .after(crate::opening::step).after(crate::stream::update))
             .add_systems(PostUpdate, filter_cpu_cascades
                 .after(SimulationLightSystems::CheckLightVisibility));
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -47,6 +64,22 @@ impl Plugin for FiniteShadowPlugin {
 }
 
 fn enabled(value: Option<&str>) -> bool { value == Some("1") }
+
+fn sync_stage_setting(args: Res<crate::Args>,
+    source: Option<Res<crate::settings::RenderSource>>,
+    streamer: Option<Res<crate::stream::Streamer>>,
+    mut setting: ResMut<CasterSetting>) {
+    let Some(source) = source else { return; };
+    // The initial SkyShadowSetting describes Cassardis in opening mode.
+    // A restored field checkpoint or JumpArea must use its CURRENT stage.
+    let stage = streamer.as_ref().map_or_else(
+        || if args.opening { crate::opening::STAGE } else { args.stage }, |s| s.stage);
+    let weather = args.weather.unwrap_or(0);
+    let changed = setting.stage_weather != Some((stage, weather));
+    setting.refresh(stage, weather, || crate::sky::StageSky::load(source.vfs, stage, weather)
+        .and_then(|sky| sky.shadow).and_then(|shadow| shadow.backforward_view_distance));
+    if changed { info!(stage, weather, extension_cm=?setting.extension_cm, "finite caster extent stage SDL"); }
+}
 
 /// Near boundary of the native enclosing sphere plus the authored caster
 /// extension. Corners are in CAMERA view space; choosing a world-space AABB
@@ -76,7 +109,7 @@ fn with_plane(mut frustum: Frustum, plane: HalfSpace) -> Frustum {
 }
 
 fn filter_cpu_cascades(
-    setting: Option<Res<crate::SkyShadowSetting>>,
+    setting: Res<CasterSetting>,
     mut planes: ResMut<FinitePlanes>,
     cameras: Query<(&Projection, &GlobalTransform)>,
     mut lights: Query<(Entity, &Cascades, &CascadeShadowConfig,
@@ -84,7 +117,7 @@ fn filter_cpu_cascades(
     bounds: Query<(&Aabb, &GlobalTransform, Has<NoFrustumCulling>)>,
 ) {
     planes.0.clear();
-    let Some(extension) = setting.and_then(|s| s.0.and_then(|s| s.backforward_view_distance))
+    let Some(extension) = setting.extension_cm
         .map(|cm| cm * crate::stage::UNIT) else { return; };
     for (light, cascades, config, frusta, mut visible) in &mut lights {
         for (&camera, view_cascades) in &cascades.cascades {
@@ -205,11 +238,7 @@ mod tests {
         use bevy::camera::visibility::VisibleMeshEntities;
         let mut world = World::new();
         world.init_resource::<FinitePlanes>();
-        world.insert_resource(crate::SkyShadowSetting(Some(crate::sky::SkyShadow {
-            view_distance: 500.0, distribution: 0.0,
-            backforward_view_distance: Some(1000.0),
-            direction_limit: 0.5, depth_bias_cm: 10.0,
-        })));
+        world.insert_resource(CasterSetting { stage_weather: Some((200, 0)), extension_cm: Some(1000.0) });
         let projection = Projection::Perspective(PerspectiveProjection {
             near: 1.0, far: 5.0, ..Default::default()
         });
@@ -242,8 +271,22 @@ mod tests {
         assert_eq!(world.resource::<FinitePlanes>().0[&(light, camera, 0)].normal_d(), plane.normal_d());
         // No authored value restores conservative behavior and removes
         // previously extracted planes, without a constructor fallback.
-        world.resource_mut::<crate::SkyShadowSetting>().0.as_mut().unwrap().backforward_view_distance = None;
+        world.resource_mut::<CasterSetting>().extension_cm = None;
         world.run_system_once(filter_cpu_cascades).unwrap();
         assert!(world.resource::<FinitePlanes>().0.is_empty());
+    }
+
+    #[test]
+    fn finite_shadow_stage_handoff_loads_once_and_drops_previous_stage_on_missing_data() {
+        let mut setting = CasterSetting::default();
+        setting.refresh(200, 0, || Some(1000.0)); // synthetic scheduler values
+        assert_eq!(setting.extension_cm, Some(1000.0));
+        setting.refresh(200, 0, || panic!("no repeated installed IO per frame"));
+        setting.refresh(100, 0, || Some(2000.0));
+        assert_eq!(setting.extension_cm, Some(2000.0));
+        setting.refresh(801, 0, || None);
+        assert_eq!(setting.extension_cm, None, "no stale prior-stage caster plane");
+        setting.refresh(100, 1, || Some(f32::NAN));
+        assert_eq!(setting.extension_cm, None);
     }
 }
