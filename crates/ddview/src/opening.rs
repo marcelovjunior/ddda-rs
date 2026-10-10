@@ -660,6 +660,11 @@ impl Session {
         }
         self.shots = None;
     }
+    /// The rendered body entity of NPC `npc`, if it has one (read-only, for
+    /// diagnostics such as the NPC gauge anchor telemetry).
+    pub(crate) fn npc_body_entity(&self, npc: u32) -> Option<Entity> {
+        self.npcs.get(&npc).map(|n| n.0)
+    }
     pub(crate) fn door_npc_coverage(&self) -> bool {
         let stage=self.world().stage_no;
         let Some(layouts)=self.npc_adapter.layouts.get(&stage) else {return false;};
@@ -2026,7 +2031,8 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
-            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, Reynard (NPC 304) HP {:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            s.host.story_npc_lifetime(304).and_then(|l| s.host.story_npc_combat_facts(l)).map(|f| (f.hp, f.max_hp)),
             s.host.progression.characters.first().map(|c| (c.progress.level, c.progress.exp)),
             w.sce_no,
             w.quest_bits(2).map(|b| b.words()),
