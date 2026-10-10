@@ -17,6 +17,7 @@ ddsave = { path = "../ddsave" }
 ddskill = { path = "../ddskill" }
 ddexe = { path = "../ddexe" }
 ddpawn = { path = "../ddpawn" }
+ddpawnai = { path = "../ddpawnai" }
 ddsim = { path = "../ddsim" }
 ddenemyrt = { path = "../ddenemyrt" }
 ddspawn = { path = "../ddspawn" }

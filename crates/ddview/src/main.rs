@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod pawn_chatter;
 mod probe;
 mod perf;
 mod clock;
@@ -650,6 +651,7 @@ fn main() {
         })
         .init_resource::<play::Hud>()
         .add_plugins(level_up_notice::LevelUpPlugin)
+        .add_plugins(pawn_chatter::PawnChatterPlugin)
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .init_resource::<item_menu::Menus>()

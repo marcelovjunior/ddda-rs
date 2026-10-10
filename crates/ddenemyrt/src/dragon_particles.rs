@@ -50,6 +50,7 @@ pub struct DurationRange {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoordinateDefinition {
     pub flags: u32,
+    pub binding_options: u16,
     pub binding_bits: u16,
     pub scale: [[f32; 2]; 3],
     pub local_offset: [f32; 3],
@@ -69,6 +70,16 @@ pub struct CoordinateDefinition {
 pub struct CoordinateBasis {
     pub rotation: mtlmt::pose::Mat4,
     pub offset: [f32; 3],
+    pub scale: [f32; 3],
+    pub largest_scale: f32,
+}
+
+/// Supported primary-parent vf43 result. Native stores the same matrix in
+/// both blocks when its secondary-binding option is absent; scale is separate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoordinateTransform {
+    pub primary: mtlmt::pose::Mat4,
+    pub secondary: mtlmt::pose::Mat4,
     pub scale: [f32; 3],
     pub largest_scale: f32,
 }
@@ -122,6 +133,67 @@ impl CoordinateDefinition {
         Ok(CoordinateBasis { rotation, offset: self.local_offset, scale, largest_scale })
     }
 
+    /// Primary binding0 / parent-scale mode0 only. The caller supplies the
+    /// real vf44-resolved parent: negative parent_joint uses effect+0x120,
+    /// NOT the separately scaled final effect+0xB0 provider matrix.
+    // Translated from 0x00E73720, writes0x00E6BD70/0x00E6BDE0
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn static_parent(&self, basis: CoordinateBasis, parent: &mtlmt::pose::Mat4,
+        mirrored: bool) -> Result<CoordinateTransform, String> {
+        if mirrored || self.curve_offsets != [0; 4]
+            || self.flags >> 12 & 0xF != 0 || self.flags >> 16 & 0xF != 0
+            || self.binding_options & 0x10 != 0 || self.binding_bits & 1 != 0 {
+            return Err("unsupported static parent binding mode or postprocess".into());
+        }
+        if parent.iter().flatten().chain(basis.rotation.iter().flatten())
+            .chain(basis.offset.iter()).chain(basis.scale.iter()).any(|v| !v.is_finite()) {
+            return Err("invalid static parent coordinate".into());
+        }
+        // Native normalization includes all four row components. Preserve
+        // zero/very small rows, and retain original lengths in the scale.
+        let normalize = |row: &mut [f32; 4]| -> f32 {
+            let length = (row[0] * row[0] + row[1] * row[1]
+                + row[2] * row[2] + row[3] * row[3]).sqrt();
+            if length >= f32::EPSILON {
+                let reciprocal = 1.0 / length;
+                for value in row { *value *= reciprocal; }
+            }
+            length
+        };
+        let mut normalized_parent = *parent;
+        let mut scale = basis.scale;
+        for axis in 0..3 { scale[axis] *= normalize(&mut normalized_parent[axis]); }
+        if scale.iter().any(|v| !v.is_finite()) {
+            return Err("static parent scale overflow".into());
+        }
+        let mut offset = basis.offset;
+        if self.binding_options & 0x20 != 0 {
+            for axis in 0..3 { offset[axis] *= scale[axis]; }
+        }
+        let mut primary = [[0.0; 4]; 4];
+        for row in 0..3 {
+            for column in 0..4 {
+                primary[row][column] = basis.rotation[row][0] * normalized_parent[0][column]
+                    + basis.rotation[row][1] * normalized_parent[1][column]
+                    + basis.rotation[row][2] * normalized_parent[2][column]
+                    + basis.rotation[row][3] * normalized_parent[3][column];
+            }
+            normalize(&mut primary[row]);
+        }
+        for column in 0..4 {
+            primary[3][column] = normalized_parent[0][column] * offset[0]
+                + normalized_parent[1][column] * offset[1]
+                + normalized_parent[2][column] * offset[2] + normalized_parent[3][column];
+        }
+        if primary.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("static parent transform overflow".into());
+        }
+        let mut largest_scale = scale[0];
+        if largest_scale <= scale[1] { largest_scale = scale[1]; }
+        if scale[2] > largest_scale { largest_scale = scale[2]; }
+        Ok(CoordinateTransform { primary, secondary: primary, scale, largest_scale })
+    }
+
     // Translated from 0x01147790, 0x010F9DB0, 0x010FA080 and
     // 0x010FBB20 (DDDA.exe 2017-12-13 Steam).
     pub fn read(list: &mteffect::EffectList, index: u16) -> Result<Self, String> {
@@ -145,7 +217,7 @@ impl CoordinateDefinition {
         let vector = |at: usize| -> Result<[f32; 4], String> {
             Ok([float(at)?, float(at + 4)?, float(at + 8)?, float(at + 12)?])
         };
-        Ok(Self { flags: word(0), binding_bits: half(6),
+        Ok(Self { flags: word(0), binding_options: half(4), binding_bits: half(6),
             scale: [[float(8)?, float(12)?], [float(16)?, float(20)?], [float(24)?, float(28)?]],
             local_offset: [float(0x20)?, float(0x24)?, float(0x28)?], offset_tail: word(0x2C),
             local_quaternion: vector(0x30)?, seed: word(0x60) as i32,
@@ -650,9 +722,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn static_parent_binding_separates_axis_scale_offset_and_both_matrix_blocks() {
+        let mut definition = CoordinateDefinition {
+            flags: 0, binding_options: 0, binding_bits: 0, scale: [[1.0, 0.0]; 3],
+            local_offset: [11.0, 22.0, 33.0], offset_tail: u32::MAX,
+            local_quaternion: [0.0, 0.0, 0.0, 1.0], seed: 0,
+            delay: DurationRange { base: 0, variation: 0 }, curve_offsets: [0; 4],
+        };
+        let basis = definition.static_basis([0.5, 2.0, -0.25], [2.0, 3.0, 4.0], false).unwrap();
+        let parent = [[2.0, 0.0, 0.0, 0.0], [0.0, 3.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0], [100.0, 200.0, 300.0, 1.0]];
+        let unscaled = definition.static_parent(basis, &parent, false).unwrap();
+        assert_eq!(unscaled.primary[3], [111.0, 222.0, 333.0, 1.0]);
+        assert_eq!(unscaled.scale, [2.0, 18.0, -4.0]);
+        assert_eq!(unscaled.largest_scale, 18.0);
+        assert_eq!(unscaled.primary, unscaled.secondary);
+        assert_eq!(unscaled.primary[0], [1.0, 0.0, 0.0, 0.0]);
+        definition.binding_options = 0x20;
+        let scaled = definition.static_parent(basis, &parent, false).unwrap();
+        assert_eq!(scaled.primary[3], [122.0, 596.0, 168.0, 1.0]);
+        let rotated = [[0.0, 0.0, -2.0, 0.0], [0.0, 3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0, 0.0], [100.0, 200.0, 300.0, 1.0]];
+        let turned = definition.static_parent(basis, &rotated, false).unwrap();
+        assert_eq!(turned.primary[3], [-32.0, 596.0, 278.0, 1.0]);
+        assert_eq!(turned.primary[0], [0.0, 0.0, -1.0, 0.0]);
+        let mut zero_axis = parent;
+        zero_axis[0] = [0.0; 4];
+        let zero = definition.static_parent(basis, &zero_axis, false).unwrap();
+        assert_eq!(zero.primary[0], [0.0; 4]);
+        assert_eq!(zero.scale[0], 0.0);
+        assert_eq!(zero.primary[3][0], 100.0);
+        assert!(definition.static_parent(basis, &parent, true).is_err());
+        definition.binding_options |= 0x10;
+        assert!(definition.static_parent(basis, &parent, false).is_err());
+        definition.binding_options = 0;
+        definition.binding_bits = 1;
+        assert!(definition.static_parent(basis, &parent, false).is_err());
+        definition.binding_bits = 0;
+        definition.flags = 1 << 12;
+        assert!(definition.static_parent(basis, &parent, false).is_err());
+    }
+
+    #[test]
     fn static_coordinate_basis_preserves_raw_rotation_and_separate_scale() {
         let mut definition = CoordinateDefinition {
-            flags: 0, binding_bits: 0, scale: [[1.0, 0.0]; 3],
+            flags: 0, binding_options: 0, binding_bits: 0, scale: [[1.0, 0.0]; 3],
             local_offset: [11.0, 22.0, 33.0], offset_tail: u32::MAX,
             // Deliberately nonunit: normalizing would change this rotation.
             local_quaternion: [0.5, 0.0, 0.0, 0.5], seed: 0,
@@ -681,6 +795,7 @@ mod tests {
         let put = |bytes: &mut [u8], at: usize, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
         put(&mut list.payload, 16, resource as u32);
         put(&mut list.payload, resource, 0x1234_5600);
+        list.payload[resource + 4..resource + 6].copy_from_slice(&0x28u16.to_le_bytes());
         list.payload[resource + 6..resource + 8].copy_from_slice(&0xCAFEu16.to_le_bytes());
         for (i, value) in [1.0f32, 0.1, 2.0, 0.2, 3.0, 0.3].into_iter().enumerate() {
             put(&mut list.payload, resource + 8 + i * 4, value.to_bits());
@@ -695,6 +810,7 @@ mod tests {
         }
         let definition = CoordinateDefinition::read(&list, 0).unwrap();
         assert_eq!(definition.flags, 0x1234_5600);
+        assert_eq!(definition.binding_options, 0x28);
         assert_eq!(definition.binding_bits, 0xCAFE);
         assert_eq!(definition.scale, [[1.0, 0.1], [2.0, 0.2], [3.0, 0.3]]);
         assert_eq!(definition.local_offset, [11.0, 22.0, 33.0]);
