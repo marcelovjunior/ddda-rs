@@ -175,6 +175,8 @@ struct NpcAdapter {
     owners: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
     bindings: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
     reported_stage: u32,
+    /// MultiNpc placements already reported (once each).
+    multi_reported: std::collections::HashSet<(u32, u32, u32)>,
 }
 
 impl NpcAdapter {
@@ -191,7 +193,8 @@ impl NpcAdapter {
         Ok(Self { exe: file, combat_body: None,
             layouts: HashMap::from([(STAGE, layouts)]), field_groups: None, field_cells: None,
             families, guards: HashMap::new(), goto: HashMap::new(),
-            placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+            placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE,
+            multi_reported: Default::default() })
     }
 
     /// Parse NPC archives only after the streamer's layout set completes.
@@ -580,7 +583,24 @@ impl Session {
         for placement in candidates.placements {
             match self.npc_adapter.families.select(&placement.transform.name) {
                 None => continue,
-                Some(true) => return Err("NPC MultiNpc materialization not implemented".into()),
+                // A MultiNpc is an ordinary NPC intel (cLayoutSetNpc::vf15
+                // 0x00762000 -> 0x007624D0 only sets intel+0x3D0) whose
+                // body also takes record fields (cSetInfoNpc vf08
+                // 0x007A3595..0x007A35F3 -> intel +0x444/+0x448/+0x44A/
+                // +0x44C -> body +0x35A4/+0x6F40/+0x307C/+0x3070 in
+                // 0x00BBE070) and which skips the +0x430 x 1000 HP setup
+                // in uNpcIntel::vf05. Admitted as an NPC; those body
+                // fields are not ported yet (reported once per placement).
+                Some(true) => {
+                    let t = placement.target;
+                    if self.npc_adapter.multi_reported.insert((t.kind, t.group, t.index)) {
+                        warn!(
+                            "opening: MultiNpc placement admitted as an ordinary NPC (kind-specific body fields unported): stage {stage} group {} record {} npc {} mMultiNpcKind {:?}",
+                            t.group, t.index, placement.npc, placement.record.get("mMultiNpcKind")
+                        );
+                    }
+                    admitted.push(placement)
+                }
                 Some(false) => admitted.push(placement),
             }
         }
@@ -639,6 +659,11 @@ impl Session {
             demo.perf_route = true;
         }
         self.shots = None;
+    }
+    /// The rendered body entity of NPC `npc`, if it has one (read-only, for
+    /// diagnostics such as the NPC gauge anchor telemetry).
+    pub(crate) fn npc_body_entity(&self, npc: u32) -> Option<Entity> {
+        self.npcs.get(&npc).map(|n| n.0)
     }
     pub(crate) fn door_npc_coverage(&self) -> bool {
         let stage=self.world().stage_no;
@@ -2006,7 +2031,8 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
-            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, Reynard (NPC 304) HP {:?}, level/exp {:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            s.host.story_npc_lifetime(304).and_then(|l| s.host.story_npc_combat_facts(l)).map(|f| (f.hp, f.max_hp)),
             s.host.progression.characters.first().map(|c| (c.progress.level, c.progress.exp)),
             w.sce_no,
             w.quest_bits(2).map(|b| b.words()),
