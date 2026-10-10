@@ -223,7 +223,7 @@ do not execute a native body, ground query or normal-input route. The core
 lease was released after actual exit. Next: supply source-owned NPC morph
 capsule/scenery/body requests before enabling the helper in the host.
 
-**2026-10-10, codex-80 continuation (source only; not yet compiled):**
+**2026-10-10, codex-80 continuation; helper checkpoint:**
 Head8216 approved integrating the independent reaction helper `f128add`
 with reviewed character-creation main `5192882` on this branch; merge
 `f5842a2` retains both previous acceptance sections. No new test count is
@@ -249,14 +249,42 @@ prerequisites of the reaction adapter, without activating that adapter:
 
 Three new regressions cover disabled/axis/extended ground observations,
 projection-before-deceleration and a sign crossing, and preservation of
-unrelated flags. They are **unrun** pending the shared CPU lease.
+unrelated flags. On frozen `d3afc70383bccde9065b6a103f0cc716cae3edf5`, the
+**complete** `cargo test -p ddnpcrt -p ddhost --jobs 2` run exited0:
+178passed, 0failed, 0ignored across45 summaries (including both doc suites),
+in336.36s wall. All three new host tests and all three merged reaction
+tests occurred exactly once and passed; no installed tests were skipped.
+The log SHA256 is
+`80D52E41678C9B747A44ABC47A70ECFDB54BF68DD5BD4654E7A5F63BD7CB9619`.
+Source hashes and the clean HEAD were unchanged through the full command;
+normal core lease was released after its actual exit. The first Windows
+PowerShell5 runner aborted on Cargo's ordinary stderr under its error
+policy before any tests; that rejected attempt is preserved privately.
+The successful fresh run used PowerShell7. The six new unused-helper
+warnings reflect that production actor composition is not enabled yet.
 
 Further source evidence: `0x00B5B950` copies the shared player-manager
-resource pointer at+0x970 to every body+0x3348, including NPCs; the exact
-manager loader is the next check before choosing the installed adjustment
-resource. `0x0076C540` mode3 consumes body height+0xD88 and radius+0xD8C,
+resource pointer at+0x970 to every body+0x3348, including NPCs. The manager
+loader at `0x0047E6F8..0x0047E71A` walks the installed path table
+`0x0163E660`; its first pointer resolves `param\pl\other\m_pl000_00`.
+The existing installed adjustment reader therefore supplies slots18/19/1A.
+`0x0076C540` mode3 consumes collision height+0xD88 and radius+0xD8C,
 then delegates to `0x00CCE580`; heights shorter than twice the radius
 collapse the segment to a sphere. The native NPC axis kind is3 in
 `0x00B5F0A0`, rather than the player's axis kind2. No default human height,
 fake ground byte, elapsed landing, navigation completion or HP loss was
 added. Production reaction/GotoEx actors and the full S31 route remain open.
+
+**Capsule source correction (head8286):** the earlier handoff and initial
+provider proposal conflated two inline collision fields. The collision
+object starts at body+0x10E0. HumanEdit max(F74,F78) is written at
+body+0x1E64 = collision+0xD84 by `0x0080B450`; it is **not** the mode3
+height. `0x00AC50B2..0x00AC50BA` and `0x00B5F0A0` write installed adjustment
+D3 into body+0x1E68 = collision+0xD88. Disassembly proves the mode3 branch
+reads radiusD8C at `0x0076C72D`, endpoint heightD88 at `0x0076C753`, calls
+`0x00CCE580` at `0x0076C785`, and jumps directly to `0x0076D3A9`.
+The HumanEdit factorD84 reads at `0x0076D1E3/0x0076D270` belong to mode1
+and are bypassed by mode3. `0x01629540` is the native default up vector.
+The optional capsule API remains approved, using actual D3 height and
+the sourced ordinary radius, with no HumanEdit multiplication or default
+height. No capsule API or production actor was activated in this batch.
