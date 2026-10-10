@@ -65,10 +65,10 @@ position and type3 shortest-angle/target/distance interpolation follow
 **0x007E3C70 / 0x007D6150 / 0x007DE430**, with the installed 8-point ease
 curve sampled by **0x00D4EC50**.
 
-The headless `OpeningWorld` owns camera playback and advances its resource
-clock before story completion checks. Camera requests never reach
-`ScriptedHost`'s 60-frame timer; previously queued camera timer callbacks
-are discarded. Resource exhaustion supplies `CameraFinished`, the
+The headless `OpeningWorld` owns supported authored camera playback and
+advances its resource clock before story completion checks. Supported
+camera12/149 requests never reach `ScriptedHost`'s 60-frame timer;
+unowned camera timer callbacks are discarded. Resource exhaustion supplies `CameraFinished`, the
 existing order slot observes EndCamera, and the authored task sets q2:5.
 Native ownership/end sources are **0x005C37C0 / 0x005C41D0 / 0x005C4340 /
 0x005C4600 / 0x007DFD40**. A stage handoff invalidates the old camera's
@@ -102,8 +102,10 @@ authored q2:5 plus the return blend; it injects no camera request, position,
 combat outcome or quest flag. Ordinary opening uses the same playback.
 Reviewed S39 RescueApproach **8dc80e3** is integrated: production demo
 input walks into the installed event1 Area and waits for real q2:25.
-Reviewed S34 source checkpoint main **10da58b** is integrated, preserving
-NPC combat observations beside the new camera hooks.
+Reviewed S34 source checkpoint main **10da58b** and body materialization
+**ff89282** are integrated, preserving NPC combat observations beside the
+new camera hooks. Root independently passed its installed materialization
+fixture in the final integrated **ff32ed95** source tree.
 
 **Tested:** core command `cargo test -p mtcamera --test quest -p ddhost
 --test quest_camera` exited0: **4 host + 4 reader tests pass**, compile
@@ -115,12 +117,29 @@ slot → q2:5. That task test begins at its admitted-task/QCT95 boundary;
 it does not claim to walk the original Area. The separate S39 installed
 driver regression supplies normal movement toward that Area.
 
-Before the S34 merge/audit, the integrated viewer passed **71 tests,
-2 existing ignored** (compile20.74s, tests12.30s) and its release build
-exited0 in51.68s; the private binary is under `E:/ddda-re/notes/steps/S40`.
-**Final integrated viewer rerun/rebuild and actual close-up capture are
-pending** the shared build/GPU queue. Head owns the current ordinary route
-run; no competing viewer was launched.
+Final integrated **ff32ed95** viewer tests exited0: **71 passed,
+2 existing ignored** (compile32.05s, tests12.48s); the release build exited0
+in43.74s. The final cinema-policy reader regression passed4 tests
+(compile11.62s, tests5.87s). A hidden ordinary `--perf-route` capture used
+the privately pinned final binary, a600-second watchdog and exclusive
+viewer lease. It **actually exited1 after86.3s**: Cassardis SceNo1300
+door interaction requested an unsupported simple-event camera before
+camera12. No camera12 capture or ordinary-route q2:5 is claimed.
+
+Head approved retaining the explicitly labelled pre-existing
+`ScriptedHost` stand-in for simple/unsupported prerequisite cameras
+(board5193). Installed `scr/st200/fsm/sontyoHouseHatudeCam` starts simple
+camera24; its native dispatch **0x005C41D0 → 0x00517050 → 0x0050DCD0**
+uses the separate fade/loading mode. The adapter logs once per stage/id,
+tracks a serial legacy owner and accepts its timer only after that
+stand-in's own due frame. Supported Anim12/149 never fall back, including
+ownership contention, and legacy callbacks cannot finish a real camera.
+Whole simple-event fade/placement/skip fidelity remains open. A regression
+covers the early legacy completion followed by camera12's actual end.
+Compatibility checks exited0: **5 host + 4 reader tests passed**
+(compile6.89s, suites6.09s/3.33s), including rejection of concurrent owners.
+The compatibility checkpoint needs its final viewer build and another
+bounded ordinary-route capture.
 
 **Compared against the original:** static executable/data tracing only.
 No original-game visual comparison or live camera recording was performed.
@@ -131,9 +150,10 @@ flags1/2 and CantActPlayer-only blocks are rejected instead of collapsed.
 Actor-relative variants, templates, world slow, camera-request force
 timers, simple-event fade/skip/placement, collision along transitions,
 keep-angle resume options, cinema framing/FOV policy, and overlapping
-camera-owner identity completions remain open. Unsupported requests fail
-explicitly and never receive a fabricated completion. The next action is
-the final integrated viewer validation and ordinary-route camera12 capture.
+camera-owner identity completions remain open. Unsupported modes retain
+only the explicitly labelled legacy stand-in described above; ownership
+contention fails explicitly. The next action is the compatibility
+checkpoint's viewer validation and ordinary-route camera12 capture.
 
 Further FOV tracing: **0x007B77E0** multiplies the key FOV by 16/9 and
 `sCameraExt+0xD04`; **0x00420910** sets that factor to0.5625 normally,

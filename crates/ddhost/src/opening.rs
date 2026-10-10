@@ -36,6 +36,10 @@ pub struct OpeningWorld {
     pub manual_stages: bool,
     /// Installed authored event cameras, with a host-owned completion clock.
     pub cameras: Option<crate::quest_camera::Cameras>,
+    /// Explicit legacy prerequisite adapter. This is not native camera
+    /// playback; simple/unsupported modes retain ScriptedHost's old timer.
+    legacy_camera: Option<(u32, u32, u64)>,
+    legacy_camera_logged: std::collections::BTreeSet<(u32, u32)>,
     /// The menu waiting for the view: menu and the seat index it opened
     /// for.
     pub menu: Option<(Menu, usize)>,
@@ -55,6 +59,8 @@ impl OpeningWorld {
             manual_menus: false,
             manual_stages: false,
             cameras: None,
+            legacy_camera: None,
+            legacy_camera_logged: Default::default(),
             menu: None,
             pending: vec![],
         }
@@ -196,8 +202,23 @@ impl StoryWorld for OpeningWorld {
             match r {
                 Request::Camera { cam_id, simple, .. } if self.cameras.is_some() => {
                     let cameras = self.cameras.as_mut().unwrap();
-                    if let Err(error) = cameras.request(stage, *cam_id, *simple) {
-                        cameras.error = Some(error);
+                    if self.legacy_camera.is_some() || cameras.active.is_some() {
+                        cameras.error =
+                            Some("overlapping camera owners need per-owner identity completion".into());
+                    } else if cameras.supports_authored(stage, *cam_id, *simple) {
+                        if let Err(error) = cameras.request(stage, *cam_id, *simple) {
+                            cameras.error = Some(error);
+                        }
+                    } else {
+                        // Head-approved compatibility scope: preserve the
+                        // opening's existing stand-in for other modes. Never
+                        // use it for supported Anim12/149, or for contention.
+                        if self.legacy_camera_logged.insert((stage, *cam_id)) {
+                            eprintln!("opening camera: legacy ScriptedHost stand-in for stage{stage} camera{cam_id} simple={simple}; native fidelity remains open");
+                        }
+                        self.legacy_camera =
+                            Some((stage, *cam_id, self.inner.frame + self.inner.camera_frames));
+                        rest.push(r.clone());
                     }
                 }
                 Request::OpenMenu { menu, player } if self.manual_menus => self.menu = Some((*menu, *player)),
@@ -220,9 +241,24 @@ impl StoryWorld for OpeningWorld {
     fn events(&mut self) -> Vec<HostEvent> {
         let mut e = self.inner.events();
         if self.cameras.is_some() {
-            // Discard any camera timer queued before real playback activation.
-            // Actual resource exhaustion is delivered through pending below.
-            e.retain(|event| !matches!(event, HostEvent::CameraFinished));
+            // Only the explicitly owned legacy request may consume an inner
+            // timer. Old/unowned callbacks cannot finish a real camera; actual
+            // resource exhaustion is delivered through pending below.
+            let mut legacy_end = self
+                .legacy_camera
+                .is_some_and(|(_, _, due)| self.inner.frame >= due)
+                && self.cameras.as_ref().unwrap().active.is_none();
+            e.retain(|event| {
+                if !matches!(event, HostEvent::CameraFinished) {
+                    return true;
+                }
+                if !legacy_end {
+                    return false;
+                }
+                legacy_end = false;
+                self.legacy_camera = None;
+                true
+            });
         }
         if self.manual_stages {
             e.retain(|event| !matches!(event, HostEvent::StageLoaded { .. }));

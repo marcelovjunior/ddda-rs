@@ -2,8 +2,8 @@ use ddhost::opening::OpeningWorld;
 use ddhost::quest_camera::Cameras;
 use ddhost::{Control, FrameInputs, Host, PlayerInput, ProfileId, StoryWorld};
 use ddstory::{
-    HostEvent, Request, Story,
     data::{Data, InstallData},
+    HostEvent, Request, Story,
 };
 
 fn install() -> Option<ddvfs::Vfs> {
@@ -100,7 +100,7 @@ fn q2_event1_waits_for_installed_camera_exhaustion_before_q5() {
 }
 
 #[test]
-fn timer_cannot_finish_real_camera_and_missing_asset_cannot_acknowledge() {
+fn timer_cannot_finish_real_camera_and_overlapping_request_cannot_fallback() {
     let Some(vfs) = install() else { return };
     let mut world = OpeningWorld::new();
     world.inner.camera_frames = 1;
@@ -115,6 +115,9 @@ fn timer_cannot_finish_real_camera_and_missing_asset_cannot_acknowledge() {
     );
     let mut cameras = Cameras::default();
     cameras.load(&vfs, 100).unwrap();
+    assert!(cameras.supports_authored(100, 12, false));
+    assert!(cameras.supports_authored(100, 149, false));
+    assert!(!cameras.supports_authored(200, 24, true));
     world.cameras = Some(cameras);
     for _ in 0..5 {
         assert!(!world.events().contains(&HostEvent::CameraFinished));
@@ -166,6 +169,57 @@ fn stage_handoff_releases_previous_camera_and_reports_one_real_end() {
         1
     );
     world.camera_step(1.0 / 30.0);
+    assert!(!world.events().contains(&HostEvent::CameraFinished));
+}
+
+#[test]
+fn legacy_simple_prerequisite_cannot_complete_following_authored_camera() {
+    let Some(vfs) = install() else { return };
+    let mut world = OpeningWorld::new();
+    world.enable_live_encounters();
+    let mut cameras = Cameras::default();
+    cameras.load(&vfs, 200).unwrap();
+    cameras.load(&vfs, 100).unwrap();
+    world.cameras = Some(cameras);
+    world.inner.camera_frames = 4;
+    // Installed sontyoHouseHatudeCam starts simple camera24 at the door.
+    world.handle(
+        200,
+        &[Request::Camera {
+            cam_id: 24,
+            simple: true,
+            quest: -1,
+        }],
+    );
+    assert!(world.cameras.as_ref().unwrap().active.is_none());
+    assert!(world.cameras.as_ref().unwrap().error.is_none());
+    // A supported camera requested during the stand-in's ownership fails;
+    // contention must not turn that real camera into another timer.
+    world.handle(100, &[Request::Camera { cam_id: 12, simple: false, quest: 2 }]);
+    assert!(world.cameras.as_ref().unwrap().error.is_some());
+    assert!(world.cameras.as_ref().unwrap().active.is_none());
+    for frame in 1..=5 {
+        assert_eq!(world.events().contains(&HostEvent::CameraFinished), frame == 4);
+    }
+    world.handle(
+        100,
+        &[Request::Camera {
+            cam_id: 12,
+            simple: false,
+            quest: 2,
+        }],
+    );
+    assert!(world.cameras.as_ref().unwrap().active.is_some());
+    assert!(world.cameras.as_ref().unwrap().error.is_none());
+    // Neither the earlier legacy callback nor its four-frame duration may
+    // acknowledge camera12. Its installed final key is just over3seconds.
+    for _ in 0..90 {
+        world.camera_step(1.0 / 30.0);
+        assert!(!world.events().contains(&HostEvent::CameraFinished));
+    }
+    world.camera_step(1.0 / 30.0);
+    assert!(world.events().contains(&HostEvent::CameraFinished));
+    assert!(world.cameras.as_ref().unwrap().active.is_none());
     assert!(!world.events().contains(&HostEvent::CameraFinished));
 }
 

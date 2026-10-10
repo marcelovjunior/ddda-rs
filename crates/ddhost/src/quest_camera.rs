@@ -28,6 +28,17 @@ pub struct Cameras {
 }
 
 impl Cameras {
+    /// Admission is separate from ownership: a supported camera must never
+    /// fall back to a timer merely because another camera owns the session.
+    pub fn supports_authored(&self, stage: u32, camera_id: u32, simple: bool) -> bool {
+        !simple
+            && self
+                .lists
+                .get(&stage)
+                .and_then(|list| list.animations.get(camera_id as usize))
+                .and_then(Option::as_ref)
+                .is_some_and(|camera| camera.supported_world_camera() && camera.option_flags & 1 != 0)
+    }
     pub fn install(&mut self, stage: u32, list: List) {
         self.lists.insert(stage, list);
     }
