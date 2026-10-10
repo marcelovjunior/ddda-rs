@@ -640,3 +640,26 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   An asynchronous mover must additionally validate interface/command identity
   when an action changes within the same actor. Viewer/Guard wiring will use
   these tokens instead of equating an NPC id with a permanent actor.
+
+
+### Wounded NPC callbacks and bounded route follow-up (2026-10-09)
+
+- Added typed NoMotionTalk (0x007aa280, bit 0x01000000) and NoDamage
+  (0x007aa0d0, bit 0x08000000), registered by cThinkFSM at 0x007a74f0.
+  Both set/clear the exact NPC intel flag word; linked bodies return that
+  same word through 0x00bb4730. Damage/motion consumers remain separate work.
+- Installed NPC44 q0052_hurt_03 now executes these callbacks and stays active
+  for 90 ticks without unsupported-process failure or synthetic Finish.
+  Validation: ddnpcrt 10 unit + 3 installed applied tests; strict crate clippy.
+- Combined doors/main47d00ac private binary, --opening --demo --unattended
+  --perf --size 1920x1080, bounded 180-second capture: stage200, SceNo1300,
+  GSF372=1, GSF381=0. WalkOut declares completion while the player remains
+  indoors at (7854.979,1731.179,-6936.855); Q0002Event targets
+  (-879.392,-8.178,250.404) and incremental planning does not advance.
+  Private evidence: notes/opening-route-codex31/npc-route-doors.png and
+  npc-route-doors.stderr.txt. This is a route blocker, not proof of walkout,
+  quest2 completion, field entry, or full opening gameplay. No timing gate.
+- Hand-reviewed doors38cf0b8 duplicate-method removal: retained
+  sync_npc_intels/npc_requests are identical to the existing NPC checkpoint.
+  Next: lifetime-bound presentation cleanup, then real actor/movement/Guard
+  prerequisites; route planner doorway handling needs its owning lane.
