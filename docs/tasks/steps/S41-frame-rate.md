@@ -1189,3 +1189,48 @@ for head review**, not S41 completion or a demonstrated performance win.
 Next proposed performance target is the named preprocessing bind-group
 preparation cost; reducing this authored caster distance by eye would
 violate the research method. Source/runtime scope remains head's decision.
+
+### Next preprocessing target approved; trace preparation only
+
+Head #7955 merged the finite extent experiment as `d3f8239`, off by
+default, and assigned the named `prepare_preprocess_bind_groups` cost next.
+This branch fast-forwarded to that reviewed committed main. Runtime source
+is unchanged from the tested finite extent source; no caching change has
+been implemented. Private preparation requires a complete release viewer
+suite with `profile-trace`, all fourteen existing acceptance names and all
+five actual trace-window/naming tests, followed by a release trace pin.
+Neither of those new gates has executed.
+
+The prepared trace uses the new canonical route-v2 `FieldSettle.ddhs`
+checksum above, x1 time, GPU instance building, Vulkan and 1920x1080.
+Both compact-skin override and finite extent flags remain absent. It will
+record one bounded three-second stage100 window, require normal numeric
+exit and strict closed scopes, and retain actual thread identities. The
+pin checksum remains explicitly `UNBUILT` until the full gate/build exits.
+The earlier named trace belongs to its earlier checkpoint, not this scene.
+
+The measured untraced field frame time of approximately10.6 ms needs a
+reduction of about5.1 ms to reach180 fps (5.56 ms). Prior named CPU costs
+rank shadow instance preparation2.105 ms/update, preprocessing bind-group
+preparation1.533 ms and skin preparation0.415 ms. These overlapping worker
+spans are not an additive current critical path. Current partial GPU pass
+metrics place bin unpacking near0.995 ms and opaque drawing near0.595 ms;
+shadow passes and complete GPU-frame coverage are missing. The fresh trace
+must resolve main/render scheduling and waits before assigning the remaining
+wall time to CPU or GPU. Trace overhead is never accepted as an FPS gain.
+
+Read-only installed Bevy0.19.1 source confirms per-view/per-phase bind groups
+are recreated each frame. Frustum preprocess work-item bindings deliberately
+use logical byte lengths rather than whole buffer capacity, so a future cache
+must track lengths as well as buffer identities, binding ranges, layouts and
+view lifecycle. Blanket resource change ticks would also track data uploads,
+which do not inherently change bindings. No registry/vendor edits or guessed
+cache validity rules are authorized or implemented by this preparation.
+
+Head #8004 authorized removal of four old merged worktree targets and the
+accepted305 MiB raw trace after its strict summary/ranking had been retained.
+Verified literal-path PowerShell cleanup actually exited0 and freed
+4,294,483,968 bytes; current shared build targets and all pins/summaries remain.
+The new profile gate follows the active child core queue and root's prepared
+effect-coordinate gate. Next: actual full profile gate and frozen pin, then
+the new named trace before choosing a single optimization for matched A/B.
