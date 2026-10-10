@@ -33,6 +33,25 @@ pub fn install(
         .load(vfs, stage)
 }
 
+/// A guest samples only the received host clock. Resource exhaustion here
+/// never clears ownership; only a later explicit None starts the return blend.
+pub fn receive(cameras: &mut ddhost::quest_camera::Cameras,
+    snapshot: Option<ddnet::quest_camera::QuestCamera>, vfs: &ddvfs::Vfs,
+) -> Result<(), String> {
+    let Some(snapshot) = snapshot else { cameras.active = None; return Ok(()); };
+    let same = cameras.active.as_ref().is_some_and(|c|
+        (c.stage, c.camera_id, c.generation) == (snapshot.stage, snapshot.camera_id, snapshot.generation));
+    if !same {
+        cameras.active = None;
+        cameras.load(vfs, snapshot.stage)?;
+        cameras.request(snapshot.stage, snapshot.camera_id, false)?;
+    }
+    let active = cameras.active.as_mut().expect("admitted installed camera");
+    active.generation = snapshot.generation;
+    active.seconds = snapshot.seconds;
+    Ok(())
+}
+
 pub fn show(
     mut commands: Commands,
     time: Res<Time>,
@@ -177,5 +196,34 @@ fn apply(pose: Pose, origin: Vec3, t: &mut Transform, projection: &mut Projectio
     t.rotation *= Quat::from_rotation_z(-pose.roll_degrees.to_radians());
     if let Projection::Perspective(p) = projection {
         p.fov = pose.fov_degrees.to_radians();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn guest_resource_exhaustion_never_completes_host_camera() {
+        let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let mut cameras = ddhost::quest_camera::Cameras::default();
+        let mut snapshot = ddnet::quest_camera::QuestCamera { stage: 100, camera_id: 12,
+            generation: 17, seconds: 0.5, input_locked: true };
+        receive(&mut cameras, Some(snapshot), &vfs).unwrap();
+        let duration = cameras.active.as_ref().unwrap().camera.duration();
+        snapshot.seconds = duration + 1.0;
+        receive(&mut cameras, Some(snapshot), &vfs).unwrap();
+        let active = cameras.active.as_ref().unwrap();
+        assert!(!active.camera.sample(active.seconds).1);
+        assert_eq!((active.generation, active.seconds), (17, duration + 1.0));
+        // Repeat a held snapshot: render/elapsed time cannot advance ownership.
+        receive(&mut cameras, Some(snapshot), &vfs).unwrap();
+        assert_eq!(cameras.active.as_ref().unwrap().seconds, snapshot.seconds);
+        snapshot.generation = 18; snapshot.seconds = 0.0;
+        receive(&mut cameras, Some(snapshot), &vfs).unwrap();
+        assert_eq!(cameras.active.as_ref().unwrap().generation, 18);
+        receive(&mut cameras, None, &vfs).unwrap();
+        assert!(cameras.active.is_none());
     }
 }

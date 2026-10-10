@@ -16,7 +16,9 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 6: per-seat bow held/toggle input and bow layers/secondary slot in bodies.
 /// - 7: enemy resource identity, full rotation/scale and field-group deltas.
 /// - 8: four held pawn-order direction bits in each per-seat input.
-pub const PROTOCOL: u16 = 8;
+/// - 9: loaded story stage; authored quest camera clock/explicit end/input lock; NPC lifetime,
+///   pose/motion, gauge and health/death state with masked deltas.
+pub const PROTOCOL: u16 = 9;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +63,8 @@ pub struct Inputs {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub frame: u64,
+    /// Loaded story stage; no story hosts leave this absent.
+    pub stage: Option<u32>,
     /// The snapshot frame the bodies are deltas against.
     pub base: Option<u64>,
     /// Newest command frame the host has received from this client (for
@@ -73,6 +77,8 @@ pub struct Snapshot {
     pub enemies: Vec<Enemy>,
     /// The NPCs on their schedules (`Host::npcs`).
     pub npcs: Vec<NpcBody>,
+    /// None explicitly releases the host-owned camera on the guest.
+    pub quest_camera: Option<crate::quest_camera::QuestCamera>,
 }
 
 fn opt_u64(w: &mut Writer, v: Option<u64>) {
@@ -269,6 +275,7 @@ impl Snapshot {
         let (bodies, enemies) = base.map_or((&[][..], &[][..]), |b| (&b.bodies[..], &b.enemies[..]));
         let mut w = Writer::new();
         w.u64(self.frame);
+        w.bool(self.stage.is_some()).u32(self.stage.unwrap_or(0));
         opt_u64(&mut w, self.base);
         opt_u64(&mut w, self.cmd_newest);
         w.len(self.bodies.len());
@@ -277,7 +284,8 @@ impl Snapshot {
         }
         mirror::write_vitals(&mut w, &self.vitals);
         mirror::write_enemies(&mut w, &self.enemies, enemies);
-        mirror::write_npcs(&mut w, &self.npcs);
+        mirror::write_npcs(&mut w, &self.npcs, base.map_or(&[], |s| &s.npcs));
+        crate::quest_camera::write(&mut w, self.quest_camera);
         w.finish()
     }
 
@@ -285,6 +293,7 @@ impl Snapshot {
     pub fn decode(b: &[u8], baseline: &dyn Fn(u64) -> Option<Snapshot>) -> Result<Snapshot> {
         let mut r = Reader::new(b);
         let frame = r.u64()?;
+        let stage = if r.bool()? { Some(r.u32()?) } else { r.u32()?; None };
         let base = read_opt_u64(&mut r)?;
         let cmd_newest = read_opt_u64(&mut r)?;
         let held = match base {
@@ -298,8 +307,9 @@ impl Snapshot {
             .collect::<Result<_>>()?;
         let vitals = mirror::read_vitals(&mut r)?;
         let enemies = mirror::read_enemies(&mut r, held.as_ref().map_or(&[][..], |s| &s.enemies[..]))?;
-        let npcs = mirror::read_npcs(&mut r)?;
+        let npcs = mirror::read_npcs(&mut r, held.as_ref().map_or(&[], |s| &s.npcs))?;
+        let quest_camera = crate::quest_camera::read(&mut r)?;
         r.end()?;
-        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies, npcs })
+        Ok(Snapshot { frame, stage, base, cmd_newest, bodies, vitals, enemies, npcs, quest_camera })
     }
 }
