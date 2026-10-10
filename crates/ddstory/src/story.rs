@@ -139,6 +139,8 @@ pub struct Story<D: Data> {
     /// Stage scripts (uFSMTask list of cFSMTaskCtrl), creation order.
     pub tasks: Vec<Script>,
     pub frame: u64,
+    /// Saved tasks await the first stage load; later stage changes discard them.
+    pub(crate) restoring_stage: Option<u32>,
 }
 
 impl<D: Data> Story<D> {
@@ -152,13 +154,12 @@ impl<D: Data> Story<D> {
         // Translated from 0x00445be1 (DDDA.exe 2017-12-13 Steam):
         // sGameSys+0xaee78 bit 31, stage-index 12's layout flag zero.
         world.set_lot(380, 0, true);
-        Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0 }
+        Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0, restoring_stage: None }
     }
 
-    /// Continue from a saved world. Running scripts are not saved by this
-    /// runtime yet (the original saves non-`fix` scripts, 0x00495150).
+    /// Legacy world-only load. [`Story::from_save`] also restores scripts.
     pub fn from_world(data: D, world: World) -> Story<D> {
-        Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0 }
+        Story { data, world, stage: StageState::default(), quests: vec![], tasks: vec![], frame: 0, restoring_stage: None }
     }
 
     pub fn quest(&self, number: u32) -> Option<&Quest> {
@@ -175,10 +176,18 @@ impl<D: Data> Story<D> {
 
     /// Stage setup when the host reports the stage loaded.
     fn enter_stage(&mut self, stage: u32, cmds: &mut Vec<Command>) -> Result<(), Error> {
-        self.tasks.clear();
+        // 0x00495150 finds existing automatically booted tasks by path or
+        // recreates missing ones before restoring. Keep the validated saved
+        // tasks on the first matching load; start_script deduplicates fix tasks.
+        let restoring = self.restoring_stage.take() == Some(stage);
+        if !restoring {
+            self.tasks.clear();
+        }
         self.stage.stage_no = stage;
-        self.stage.dragon_challenge = Default::default();
-        self.stage.event = EventMode::default();
+        if !restoring {
+            self.stage.dragon_challenge = Default::default();
+            self.stage.event = EventMode::default();
+        }
         self.world.stage_no = stage;
         // 0x004827e0: stage 800 with SceNo 1000 boots q0000 and q0031. The
         // game also requires sGameSys +0xb8844 bit 0x20000 here; which
@@ -197,7 +206,9 @@ impl<D: Data> Story<D> {
             }
         }
         // 0x005083c0: the stage's scenario files.
-        self.stage.scenarios = Scenarios::load(&self.data.scenarios(stage)?)?;
+        if !restoring {
+            self.stage.scenarios = Scenarios::load(&self.data.scenarios(stage)?)?;
+        }
         Ok(())
     }
 

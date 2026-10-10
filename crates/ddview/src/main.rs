@@ -40,6 +40,7 @@ mod doors;
 mod ambient;
 mod net;
 mod opening;
+mod vocation_menu;
 mod quest_camera;
 mod play;
 mod bow_view;
@@ -303,7 +304,11 @@ fn args() -> Args {
         }
     }
     if a.perf_route {
-        assert!(a.shot.is_none() && a.shots.is_none(), "--perf-route measures without screenshots");
+        // Screenshots stall frames, so a route with shots is a visual
+        // capture, not a timing benchmark (its perf numbers are invalid).
+        if a.shot.is_some() || a.shots.is_some() {
+            eprintln!("ddview: --perf-route with screenshots: visual capture only, perf numbers invalid");
+        }
         a.opening = true;
         a.demo = true;
         a.play = true;
@@ -652,7 +657,7 @@ fn main() {
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
         .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, ambient::update, doors::update, (opening::cutscene, quest_camera::show).chain(),
-            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, hud::update).chain());
+            character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), bow_view::draw_arrows, shadows::update, (hud::update, vocation_menu::update).chain()).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
     // Diagnostics are opt-in: render queries themselves have a cost, so
@@ -1081,6 +1086,10 @@ pub fn opening_world(
     vfs: &ddvfs::Vfs,
 ) {
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
+    match vocation_menu::View::load(vfs, &args.native_pc, images) {
+        Ok(view) => commands.insert_resource(view),
+        Err(error) => panic!("opening vocation menu: {error}"),
+    };
     let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
     if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo, args.host.is_some() || args.join.is_some()) {
         commands.insert_resource(state);
