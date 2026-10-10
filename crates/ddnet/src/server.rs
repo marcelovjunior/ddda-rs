@@ -616,6 +616,10 @@ mod retry_tests {
         assert!(server.history.is_empty() && server.active_event.is_none());
         let snapshot = server.current_snapshot();
         assert_eq!((snapshot.epoch, snapshot.frame, snapshot.base), (1, 7, None));
+        assert!(snapshot.death.seats.iter().all(|s| !s.terminal && s.spectator.is_none()));
+        assert_eq!(Snapshot::decode(&snapshot.encode(None), &|_| None).unwrap(), snapshot);
+        let delta = Snapshot { frame: 8, base: Some(7), ..snapshot.clone() };
+        assert_eq!(Snapshot::decode(&delta.encode(Some(&snapshot)), &|_| Some(snapshot.clone())).unwrap(), delta);
         assert!(!server.host.player_actions_blocked(0));
     }
     #[test]

@@ -409,7 +409,8 @@ impl Runtime {
                     seat: seat.id,
                     profile: seat.profile,
                     terminal: self.is_dead(seat.profile),
-                    spectator: self.session.spectator_target(roster, seat.id),
+                    spectator: self.is_dead(seat.profile)
+                        .then(|| self.session.spectator_target(roster, seat.id)).flatten(),
                     unsupported: self.unsupported.get(&seat.profile).cloned(),
                 })
                 .collect(),

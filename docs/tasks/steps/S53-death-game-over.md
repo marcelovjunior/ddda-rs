@@ -314,3 +314,10 @@ accept their new epoch fields. This delegates no retry/viewer control logic.
 The coherent core/net checkpoint is freezing for the coordinator's next
 full touched/downstream window; production retry, revival and game-over
 presentation remain open and no runtime readiness is claimed.
+
+Pre-gate source audit corrected the report projection: living seats carry
+no spectator selection, rather than the camera helper's own-seat follow
+target. This is required by the wire policy's terminal-only spectator
+invariant. The existing server retry regression now encodes/decodes its
+actual living host report as both whole and unchanged-report delta snapshots.
+The 47-name count is unchanged; these assertions remain unrun.
