@@ -289,6 +289,8 @@ pub struct Session {
     /// world the gates last saw.
     enemy_spawned: std::collections::HashSet<(u32, i32)>,
     enemy_world: Option<(u32, u32, Option<ddquest::story::MsbBits>)>,
+    /// Explicit render-only S47 comparison; never an admitted combat owner.
+    equipment_compare: Option<Entity>,
     /// NPC entities to hide for good.
     gone: Vec<Entity>,
 }
@@ -440,6 +442,7 @@ pub fn prepare(
         enemy_cells: Default::default(),
         enemy_spawned: Default::default(),
         enemy_world: None,
+        equipment_compare: None,
         gone: vec![],
         dragon_view: None,
         dragon_capture: std::env::var_os("DDVIEW_DRAGON_ENTRANCE_CAPTURE").is_some(),
@@ -1063,11 +1066,12 @@ pub struct OpeningStage<'w, 's> {
 /// Goblins run and get a body and their encounter binding; other enemies
 /// have no runtime here.
 /// *Not yet*: despawning on cell unload or a closing gate, kill records (a
-/// new game has none), the record's think/equipment/stat options
-/// (`Fight::add_goblin` uses the goblin defaults), other enemy families.
+/// new game has none), the record's think options, other enemy families.
+/// Equipment and placement stat rates use the installed record.
 fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, stage: u32) {
     let Some(streamer) = view.streamer.as_mut() else { return };
     if s.enemy_stage != stage {
+        if let Some(entity) = s.equipment_compare.take() { view.commands.entity(entity).despawn(); }
         s.enemy_stage = stage;
         s.enemy_cells.clear();
         s.enemy_spawned.clear();
@@ -1139,18 +1143,18 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
         let hp = fight.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
         owners.push(owner);
         let at = (Vec3::from(spawn.position) - st.origin) * UNIT;
-        match crate::character::spawn(
+        let appearance = fight.goblins.last().and_then(|g| g.appearance.as_ref())
+            .expect("equipped host spawn resolves appearance");
+        match play::goblin_view::spawn(
             &mut view.commands,
             &mut streamer.loader,
             &mut view.meshes,
             &mut view.materials,
             &mut view.images,
             &mut view.bindposes,
-            play::GOBLIN_MODEL,
-            ddhost::ddenemyrt::goblin::BANKS[0].1,
-            0,
+            &fight.data.goblin,
+            appearance,
             at,
-            Some(0.0),
         ) {
             Ok(e) => st.goblins.push(play::GoblinView::new(e, hp)),
             Err(e) => {
@@ -1158,6 +1162,30 @@ fn field_enemies(view: &mut OpeningStage, st: &mut PlayState, s: &mut Session, s
                 warn!("opening: goblin body: {e}");
                 st.goblins.push(play::GoblinView::new(Entity::PLACEHOLDER, hp));
             }
+        }
+    }
+    if stage == 100 && s.equipment_compare.is_none()
+        && goblins.iter().any(|spawn| spawn.group == 23)
+        && std::env::var_os("DDVIEW_GOBLIN_EQUIPMENT_COMPARE").is_some() {
+        let comparison = (|| -> Result<Entity, String> {
+            let record = play::goblin_view::comparison_record(streamer.loader.vfs)?;
+            let placement = record.placement().ok_or("comparison record has no coordinates")?;
+            let appearance = fight.data.goblin.equipment.choose(ddhost::spawns::placement_equipment(&record),
+                &mut ddhost::ddenemyrt::goblin::equipment::NativeRng::default());
+            let at = (Vec3::from(placement.position) - st.origin) * UNIT;
+            let entity = play::goblin_view::spawn(&mut view.commands, &mut streamer.loader,
+                &mut view.meshes, &mut view.materials, &mut view.images, &mut view.bindposes,
+                &fight.data.goblin, &appearance, at)?;
+            view.commands.entity(entity).insert(Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(placement.angle[1]))
+                .with_scale(Vec3::from(placement.scale) * UNIT));
+            info!("S47_RENDER_ONLY comparison group=24 record={} equip={} at={:?}; no Fight/quest admission; isolated native appearance stream",
+                record.id, appearance.effective_type, placement.position);
+            Ok(entity)
+        })();
+        match comparison {
+            Ok(entity) => s.equipment_compare = Some(entity),
+            Err(error) => warn!("S47_RENDER_ONLY comparison failed: {error}"),
         }
     }
     // Each goblin's layout identity binds it to the story's encounter

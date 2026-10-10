@@ -35,13 +35,12 @@ use ddsim::{Input, PlayerId, Sim, Weapon};
 use crate::character::{Playback, RMOTIONLIST};
 use crate::stage::{Loader, UNIT};
 
+#[path = "goblin_view.rs"]
+pub(crate) mod goblin_view;
+
 /// Bank 0 motion list of the male Arisen (docs/ANIMATION.md).
 pub const MOTIONS: &str = ddhost::install::MOTIONS;
 pub const BODY: &str = r"model\pl\m\m_base\m000\m000";
-/// The goblin's model (`em0100`); its motion banks are
-/// `ddenemyrt::goblin::BANKS`.
-pub const GOBLIN_MODEL: &str = r"model\em\e01\e0100\e0100";
-
 /// The seat of the pawn serving Arisen seat `s` (sim players outside the
 /// host's roster, which seats 0-3).
 pub fn pawn_seat(owner: PlayerId) -> PlayerId {
@@ -312,18 +311,18 @@ pub fn setup(
                 let y = ground_at(&terrain, x, z, pos.y);
                 let gpos = Vec3::new(x, y, z);
                 f.add_goblin(gpos.to_array(), yaw + std::f32::consts::PI);
-                let e = crate::character::spawn(
+                let appearance = f.goblins.last().and_then(|g| g.appearance.as_ref())
+                    .ok_or("goblin appearance was not resolved by the host")?;
+                let e = goblin_view::spawn(
                     commands,
                     loader,
                     meshes,
                     materials,
                     images,
                     bindposes,
-                    GOBLIN_MODEL,
-                    ddhost::ddenemyrt::goblin::BANKS[0].1,
-                    0,
+                    &f.data.goblin,
+                    appearance,
                     (gpos - origin) * UNIT,
-                    Some(0.0),
                 )?;
                 let hp_max = f.goblins.last().map_or(1.0, |g| g.fighter.victim.hp());
                 goblins.push(GoblinView { entity: e, shown: None, hp_max });

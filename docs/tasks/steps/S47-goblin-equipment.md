@@ -84,3 +84,38 @@ No original-game control or GPU capture was performed.
 Next: connect resolved masks and separately attached units to the viewer,
 preserving native joint scale, then run viewer tests/build and queue one
 bounded S46-checkpoint capture. Original visual comparison remains open.
+
+### Viewer checkpoint
+
+The ordinary opening and `--play` goblin builders now use the host's
+resolved mask, with each equipment unit on its native initial joint and
+offset. Native `uCoord::vf21` (0x00DEBBA0) preserves the parent's joint
+scale; the shared attachment adapter has an opt-in raw-matrix path, with
+existing human `uCnsAttach` callers preserving their default normalization.
+The extra unit's kind-5 material replacement (0x008EB920) reads its resource
+name from descriptor 0x01838664. Other character parts have no override.
+
+`DDVIEW_GOBLIN_EQUIPMENT_COMPARE` enables an explicitly labelled,
+**render-only** comparison: one higher-equipment record from the installed
+disabled group-24 roadside layout appears at its authored coordinates,
+beside ordinary group-23 actors. It never joins `Fight`, opens layout gates,
+or changes quests; it uses an isolated native appearance stream and is
+retired on stage changes. Head approved this diagnostic in board #5841.
+
+Actual viewer validation: 77 tests passed, 2 ignored (35.94 s compile,
+9.86 s tests), followed by a successful release build (35.80 s). Then added
+the installed renderer assembly test: it checks exact admitted mesh counts,
+native attachment entries, replacement-material name coverage, and the
+installed comparison record. The final focused two tests passed (17.94 s
+compile, 2.66 s tests), followed by a successful release build (43.25 s).
+All completed with exit 0. The first assembly-test compile required
+unwrapping Bevy 0.19's `SystemState::get_mut` validation result; corrected.
+No new warnings remain. No viewer window or original-game process touched.
+
+Acceptance still open: after S31's NPC Guard regression is fixed and merged,
+integrate the committed fix and run **full ddenemyrt/ddhost/final ddview
+suites** (head #5837), then queue one bounded checkpoint capture with the
+diagnostic. Guest appearance replication belongs to S44. Weapon switching
+(0x008D73A0 toggles actor +0x6020 at frame 78; 0x008D7550 at frame 11),
+dropped equipment, other goblin kinds, and original visual comparison remain
+explicit follow-ups, not claims of this initial-placement checkpoint.

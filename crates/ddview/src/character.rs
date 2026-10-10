@@ -245,6 +245,9 @@ pub struct Attach {
     pub bone: usize,
     pub local: Mat4,
     pub hand: Option<usize>,
+    /// Goblin uCoord attachments retain the parent's joint scale. Human
+    /// uCnsAttach equipment keeps the existing normalized-axis path.
+    pub preserve_joint_scale: bool,
 }
 
 /// The base skeleton with its body morph.
@@ -360,15 +363,22 @@ fn apply_morph(m: &mut Morph, drawn: bool, joints: &mut Query<&mut Transform>) {
         };
         let a = at.anchor;
         let w = world[i];
-        let unit = |v: Vec4| {
-            let l = v.length();
-            if l > 1.192_092_9e-7 { v / l } else { v }
-        };
-        let n = Mat4::from_cols(unit(w.x_axis), unit(w.y_axis), unit(w.z_axis), w.w_axis);
+        let n = attachment_parent_matrix(w, at.preserve_joint_scale);
         if let Ok(mut tr) = joints.get_mut(a) {
             *tr = Transform::from_matrix(n * local);
         }
     }
+}
+
+/// Native uCoord::vf21 0x00DEBBA0 multiplies the unnormalized parent
+/// joint matrix. uCnsAttach::vf24 0x00859BB0 normalizes its axes instead.
+fn attachment_parent_matrix(world: Mat4, preserve_joint_scale: bool) -> Mat4 {
+    if preserve_joint_scale { return world; }
+    let unit = |v: Vec4| {
+        let length = v.length();
+        if length > 1.192_092_9e-7 { v / length } else { v }
+    };
+    Mat4::from_cols(unit(world.x_axis), unit(world.y_axis), unit(world.z_axis), world.w_axis)
 }
 
 impl Playback {
@@ -385,6 +395,8 @@ impl Playback {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtraPart {
     pub path: String,
+    /// Native units may replace the model's default material resource.
+    pub material_path: Option<String>,
     pub tint: Option<[f32; 3]>,
     /// Rigidly attached (weapons): joint id of the base skeleton, rotation
     /// in degrees (applied X, Y, Z: uCnsAttach 0x00859bb0) and offset in cm. The part
@@ -519,7 +531,7 @@ pub fn spawn_assembled_hands(
     let mut joints_by_id: HashMap<u8, Entity> = HashMap::new();
     let joint_entities = bind_skeleton(commands, &model, root, &mut joints_by_id);
     let mut attach = vec![];
-    let mut diagnostic_groups = spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, &joint_entities, root, visible, base_tint, eyebrow);
+    let mut diagnostic_groups = spawn_meshes(commands, loader, meshes, materials, images, bindposes, &model, model_path, None, &joint_entities, root, visible, base_tint, eyebrow);
     for (k, part) in parts.iter().enumerate() {
         let pb = match loader.vfs.read(&part.path, RMODEL) {
             Ok(b) => b,
@@ -554,7 +566,7 @@ pub fn spawn_assembled_hands(
                     .copied()
                     .flatten()
                     .and_then(|h| model.bones.iter().position(|b| b.anim_map_index == h));
-                attach.push(Attach { anchor, bone, local: local.to_matrix(), hand });
+                attach.push(Attach { anchor, bone, local: local.to_matrix(), hand, preserve_joint_scale: false });
                 // Its own joints: weapon bone ids (0, 1, 2) are not body joints.
                 bind_skeleton(commands, &pm, anchor, &mut HashMap::new())
             }
@@ -562,7 +574,7 @@ pub fn spawn_assembled_hands(
         };
         let all = |_: u16| true;
         let vis: &dyn Fn(u16) -> bool = if part.attach.is_some() { &all } else { visible };
-        diagnostic_groups.extend(spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, &joints, root, vis, part.tint, None));
+        diagnostic_groups.extend(spawn_meshes(commands, loader, meshes, materials, images, bindposes, &pm, &part.path, part.material_path.as_deref(), &joints, root, vis, part.tint, None));
     }
     if std::env::var_os("DDVIEW_GROUP_COLOURS").is_some() {
         diagnostic_groups.sort_unstable();
@@ -726,6 +738,7 @@ fn spawn_meshes(
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     model: &mtmod::Model,
     model_path: &str,
+    material_path: Option<&str>,
     joints: &[Entity],
     root: Entity,
     visible: &dyn Fn(u16) -> bool,
@@ -755,7 +768,7 @@ fn spawn_meshes(
     let inverse: Vec<Mat4> = world.iter().map(Mat4::inverse).collect();
     let bindposes_handle = bindposes.add(SkinnedMeshInverseBindposes::from(inverse));
 
-    let mrl_bytes = loader.vfs.read(model_path, RMATERIAL).ok();
+    let mrl_bytes = loader.vfs.read(material_path.unwrap_or(model_path), RMATERIAL).ok();
     let mrl = mrl_bytes.as_deref().and_then(|b| mtmrl::parse(b).ok());
     let mfx = loader.mfx;
     let mut mats: HashMap<u16, PartMaterial> = HashMap::new();
@@ -1133,6 +1146,7 @@ pub fn spawn_look(
         .iter()
         .map(|p| ExtraPart {
             path: p.path.clone(),
+            material_path: None,
             tint: if p.hair {
                 look.hair_color
             } else if p.beard {
@@ -1145,6 +1159,7 @@ pub fn spawn_look(
         .collect();
     parts.extend(look.weapons.iter().map(|w| ExtraPart {
         path: w.path.clone(),
+        material_path: None,
         tint: None,
         attach: Some((w.joint, w.rotation, w.offset)),
     }));
@@ -1204,6 +1219,20 @@ fn undummy(loader: &Loader, path: &str) -> String {
 
 #[cfg(test)]
 mod bounds_tests {
+    #[test]
+    fn goblin_attachment_retains_parent_scale_and_human_attachment_normalizes_it() {
+        use bevy::prelude::*;
+        let joint = Mat4::from_scale_rotation_translation(Vec3::new(2.0,3.0,4.0),
+            Quat::from_rotation_y(0.3), Vec3::new(10.0,20.0,30.0));
+        let offset = Mat4::from_translation(Vec3::new(1.0,2.0,3.0));
+        assert_eq!(super::attachment_parent_matrix(joint, true) * offset, joint * offset);
+        let human = super::attachment_parent_matrix(joint, false);
+        assert!((human.x_axis.length() - 1.0).abs() < 1e-6);
+        assert!((human.y_axis.length() - 1.0).abs() < 1e-6);
+        assert!((human.z_axis.length() - 1.0).abs() < 1e-6);
+        assert_eq!(human.w_axis, joint.w_axis);
+        assert_ne!(human * offset, joint * offset);
+    }
     use super::*;
 
     #[test]

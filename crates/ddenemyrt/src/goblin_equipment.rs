@@ -105,6 +105,7 @@ pub struct Catalog {
     pub weapon: String,
     pub shield: String,
     pub extra: String,
+    pub extra_material: String,
 }
 
 impl Catalog {
@@ -161,6 +162,8 @@ impl Catalog {
             weapon: exe.cstr(exe.u32(0x0183_8624)?)?,
             shield: exe.cstr(exe.u32(0x0183_8630)?)?,
             extra: exe.cstr(exe.u32(0x0183_8640)?)?,
+            // Kind 5 material replacement in uEm0100_20::vf33 0x008EB920.
+            extra_material: exe.cstr(exe.u32(0x0183_8664)?)?,
         })
     }
 
@@ -188,7 +191,7 @@ mod tests {
     fn catalog() -> Catalog {
         Catalog { ordinary: (0..10).map(|i| vec![32 + i]).collect(),
             helmet: (0..4).map(|i| vec![64 + i]).collect(), leader: vec![96],
-            weapon: String::new(), shield: String::new(), extra: String::new() }
+            weapon: String::new(), shield: String::new(), extra: String::new(), extra_material: String::new() }
     }
     #[test]
     fn leader_clamps_forbidden_equipment_before_dispatch() {
