@@ -266,8 +266,10 @@ then test the largest measured cost without changing presentation quality.
   report original PID 23408's 3D share **0%** in each mode; viewer GPU-mode
   share **47–56%**, broken CPU-mode share **11–15%**. NVIDIA clocks are
   stable **2745/8501 MHz, P0**, overall utilization **84–95%** and **83–92%**
-  respectively. Other GPU users account for the difference between the
-  viewer share and total utilization. Older 8.8 ms measurements had a
+  respectively. Windows 3D-engine counters and NVIDIA total utilization
+  sample different metrics/intervals; the nonzero Windows samples belong
+  only to the viewer, so their difference does not prove another GPU user.
+  Older 8.8 ms measurements had a
   different original-game share/source state and are not a before/after
   optimization comparison with this batch.
 - Source diagnosis: setting `PbrPlugin::use_gpu_instance_buffer_builder`
