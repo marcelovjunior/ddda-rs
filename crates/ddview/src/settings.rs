@@ -839,8 +839,6 @@ impl Store {
 /// Text, option layouts and the renderer's readable tables stay install reads.
 pub struct OriginalOptions {
     messages: Vec<String>,
-    pub top: Vec<u8>,
-    pub panel: Vec<u8>,
 }
 
 impl OriginalOptions {
@@ -852,7 +850,7 @@ impl OriginalOptions {
         mtgui::Gui::parse(&panel)?;
         let bytes = vfs.read(
             r"id\DDN\message\pause\pause_option\pause_option_eng",
-            mtarc::type_hash("rMessage"),
+            mtarc::type_hash("rGUIMessage"),
         )?;
         let messages = mtgmd::MessageFile::parse(&bytes)
             .map_err(|e| e.to_string())?
@@ -860,7 +858,7 @@ impl OriginalOptions {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        Ok(Self { messages, top, panel })
+        Ok(Self { messages })
     }
 
     pub fn text(&self, id: u32) -> Option<&str> {
@@ -1041,7 +1039,10 @@ mod tests {
         let options = OriginalOptions::load(&vfs).unwrap();
         assert_eq!(options.text(139), Some("Screen Resolution"));
         assert_eq!(options.text(237), Some("Depth of Field"));
-        assert_eq!(mtgui::Gui::parse(&options.top).unwrap().nodes.len(), 170);
+        let top = vfs
+            .read(r"id\DDN\menu\option\top_option", mtarc::type_hash("rGUI"))
+            .unwrap();
+        assert_eq!(mtgui::Gui::parse(&top).unwrap().nodes.len(), 170);
         for id in (139..=151).chain([233, 234, 237, 238]) {
             assert!(
                 !options.text(id).unwrap().is_empty(),
