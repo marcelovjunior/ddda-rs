@@ -2454,7 +2454,11 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
                                 .iter().find(|entry| entry.name == "q0002_event2")?
                                 .shape.clone()
                         }).flatten();
-                        d.planning = Some(RoutePlan::to_shape(p, goal, shape));
+                        let mut plan = RoutePlan::to_shape(p, goal, shape);
+                        if step == Step::RoadWalk {
+                            plan.loaded = s.host.scenario_field_cells.clone();
+                        }
+                        d.planning = Some(plan);
                         warn!(
                             "opening demo: blocked walking to {step:?}; planning incrementally (no placement fallback)"
                         );
@@ -2983,6 +2987,9 @@ struct RoutePlan {
     /// Demo completion uses the installed Area for RoadWalk. Its centre
     /// can lie in blocked scenery; a player only needs to enter the Area.
     shape: Option<ddstory::scenario::Shape>,
+    /// Actual completed collision cells, not the desired streaming window.
+    /// The demo can walk a partial route to their edge to admit more cells.
+    loaded: Option<ddstory::scenario::LoadedFieldCells>,
     open: std::collections::BinaryHeap<(std::cmp::Reverse<i32>, (i32, i32))>,
     nodes: HashMap<RouteCell, RouteNode>,
     visited: std::collections::HashSet<(i32, i32)>,
@@ -3002,6 +3009,7 @@ impl RoutePlan {
             origin: from,
             target,
             shape,
+            loaded: None,
             open: [(
                 std::cmp::Reverse((from.x - target.x).hypot(from.z - target.z) as i32),
                 (0, 0),
@@ -3027,6 +3035,7 @@ impl RoutePlan {
             origin,
             target,
             shape,
+            loaded,
             open,
             nodes,
             visited,
@@ -3048,10 +3057,21 @@ impl RoutePlan {
                 continue;
             }
             let (at, cost, _) = nodes[&key];
+            let boundary = loaded.as_ref().is_some_and(|cells| {
+                if cells.contains(target.to_array()) || !cells.contains(at.to_array()) {
+                    return false;
+                }
+                let toward = Vec3::new(target.x - at.x, 0.0, target.z - at.z);
+                let length = toward.length();
+                length > 0.0 && !cells.contains([
+                    at.x + toward.x * cell / length, at.y,
+                    at.z + toward.z * cell / length,
+                ])
+            }) && distance(at) < distance(*origin) - 1000.0;
             if shape.as_ref().map_or_else(
                 || distance(at) < TALK_RANGE - 2.0 * ddsim::BODY_RADIUS,
                 |shape| shape.hit(at.to_array(), 0.0),
-            ) {
+            ) || boundary {
                 let mut path = vec![];
                 let mut k = key;
                 while k != (0, 0) {
@@ -3485,6 +3505,26 @@ mod tests {
     }
 
     #[test]
+    fn road_search_returns_a_loaded_edge_before_exhausting_other_cells() {
+        struct Plate;
+        impl ddsim::Ground for Plate {
+            fn height(&self, x: f32, z: f32, below: f32) -> Option<f32> {
+                (x.abs() < 2000.0 && z.abs() < 2000.0 && below >= 0.0).then_some(0.0)
+            }
+        }
+        let mut plan = RoutePlan::new(Vec3::ZERO, Vec3::new(10_000.0, 0.0, 0.0));
+        plan.loaded = Some(ddstory::scenario::LoadedFieldCells {
+            origin: [-2000.0, -2000.0], cell: [1000.0; 2], name_offset: [0; 2],
+            loaded: (0..4).flat_map(|m| (0..4).map(move |n| (m, n))).collect(),
+        });
+        let path = plan.advance(&Plate, &ddsim::sweep::SweepParam::default(),
+            std::time::Duration::MAX).unwrap();
+        let end = path.last().expect("walk to the completed collision edge");
+        assert!(end.x > 1500.0 && end.x < 2000.0);
+        assert!(!plan.open.is_empty(), "do not exhaust the whole loaded plate before walking");
+    }
+
+    #[test]
     fn installed_road_planner_enters_area_without_repeated_wall_loops() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
         if !native.is_dir() { return; }
@@ -3496,20 +3536,37 @@ mod tests {
         assert!(shape.angle.is_none() && shape.toward.is_none());
         let target = benchmark_place_from_scenarios(&scenarios, 4, index as u32).unwrap().0;
         // Recorded S46 RoadWalk checkpoint position, replay fixture only.
-        let from = Vec3::new(35764.04, 31966.314, 141997.23);
+        let mut from = Vec3::new(35764.04, 31966.314, 141997.23);
         let grid = crate::stream::Streamer::field_grid(native).unwrap();
-        let mut ground = ddworld::Terrain::load_collision_cells(&vfs, 100,
-            grid.wanted(ddworld::stream::Kind::Collision, from.to_array(), 1.0));
-        ground.add_scenery_cells(&vfs, &ddworld::Terrain::scenery_index(&vfs), 100,
-            grid.wanted(ddworld::stream::Kind::Layout, from.to_array(), 1.0));
-        let mut plan = RoutePlan::to_shape(from, target, Some(shape.clone()));
-        let path = plan.advance(&ground, &ddsim::sweep::SweepParam::default(),
-            std::time::Duration::MAX).unwrap();
-        println!("road collision search: {} nodes, {} visited, {} waypoints; end {:?}; target {:?}; shape {:?}",
-            plan.nodes.len(), plan.visited.len(), path.len(), path.last(), target, shape);
-        assert!(shape.hit(path.last().expect("real road route").to_array(), 0.0));
-        for (index, point) in path.iter().enumerate() {
-            assert!(!path[..index].iter().any(|previous| (*point - *previous).length() < 1.0),
+        let scenery = ddworld::Terrain::scenery_index(&vfs);
+        let distance = |at: Vec3| (at.x - target.x).hypot(at.z - target.z);
+        // Geometric planner replay: rebuild the unchanged native residency
+        // at each partial endpoint. This is not a simulated walked gate.
+        let parts = (distance(from) / 1000.0).ceil() as usize + 1;
+        let mut route = Vec::new();
+        for part in 0..parts {
+            let mut ground = ddworld::Terrain::load_collision_cells(&vfs, 100,
+                grid.wanted(ddworld::stream::Kind::Collision, from.to_array(), 1.0));
+            ground.add_scenery_cells(&vfs, &scenery, 100,
+                grid.wanted(ddworld::stream::Kind::Layout, from.to_array(), 1.0));
+            let mut plan = RoutePlan::to_shape(from, target, Some(shape.clone()));
+            plan.loaded = Some(ddstory::scenario::LoadedFieldCells {
+                origin: grid.origin, cell: grid.cell, name_offset: grid.name_offset,
+                loaded: ground.parsed_collision_cells().to_vec(),
+            });
+            let path = plan.advance(&ground, &ddsim::sweep::SweepParam::default(),
+                std::time::Duration::MAX).unwrap();
+            let end = *path.last().expect("real road route");
+            println!("road collision part {part}: {} nodes, {} visited, {} waypoints; end {end:?}; target {target:?}",
+                plan.nodes.len(), plan.visited.len(), path.len());
+            assert!(shape.hit(end.to_array(), 0.0) || distance(end) < distance(from) - 1000.0);
+            route.extend(path);
+            from = end;
+            if shape.hit(end.to_array(), 0.0) { break; }
+        }
+        assert!(shape.hit(from.to_array(), 0.0), "route enters the installed Area: {shape:?}");
+        for (index, point) in route.iter().enumerate() {
+            assert!(!route[..index].iter().any(|previous| (*point - *previous).length() < 1.0),
                 "route must not revisit the same wall position: {point:?}");
         }
     }

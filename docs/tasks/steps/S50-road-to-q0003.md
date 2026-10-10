@@ -67,6 +67,12 @@ The v2 RoadWalk SHA-256 is
   advances from the previous capsule's slid position; accumulated slide
   drift makes the key cease to identify the intended location. This is a
   demo-planner bug, not evidence of missing collision or an original gate.
+- The initial completed collision set does **not** include cell63m51n,
+  which contains the event2 centre. The partial endpoint is just inside
+  cell63m52n's western edge. This is the native distance predicate's normal
+  residency boundary, not proof of a missing resource or blocked scenery.
+  Walking the safe partial route should change residency and admit the
+  centre's cell. Exhaustively searching the first window delays that walk.
 - `demo_input` also returns while that search is pending before checking
   its existing RoadWalk 300-second deadline or actual quest outcome. Thus
   the intended timeout cannot bound the stalled search.
@@ -77,14 +83,21 @@ The demo search anchors candidate X/Z positions to its initial grid origin
 and uses the installed event2 `Shape::hit` predicate for completion rather
 than requiring arrival at its centre. Actual quest detection, movement,
 collision and flags remain host-owned. The road deadline/outcome can clear
-a pending search before its budget return. No cap, movement speed, collision
+a pending search before its budget return, nearby combat or door input.
+With head's #7294 approval, an actual completed-cell snapshot also lets the
+demo return a safe partial route at the boundary toward an unloaded target,
+retaining the existing 10-m-progress condition. Ordinary movement and native
+streaming admit the next window before a fresh search. No cap, movement speed, collision
 threshold, quest bit, HP or XP is tuned or manufactured.
 
-Three regressions are prepared but **not executed**: entry into a trigger
+Four regressions are prepared but **not executed**: entry into a trigger
 whose centre has no walkable ground; the recorded RoadWalk position over
-installed collision/scenery, checking actual Area entry and no repeated
-wall positions; and timeout/native-outcome handling during a pending search
-without manufacturing quest success. Full viewer tests, release build and
+installed collision/scenery, geometrically replaying native residency at
+partial endpoints and checking actual Area entry without repeated wall
+positions; early partial-route return while unexplored loaded cells remain;
+and timeout/native-outcome handling during a pending search without
+manufacturing quest success. This geometric search regression is not a
+simulated walk or a game-process acceptance run. Full viewer tests, release build and
 the real v2 walked route are pending the coordinated build/GPU queue.
 
 ### Authored navigation evidence
