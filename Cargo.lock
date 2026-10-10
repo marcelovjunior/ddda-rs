@@ -2368,11 +2368,13 @@ dependencies = [
  "ddpawnai",
  "ddsim",
  "ddskill",
+ "ddspawn",
  "ddstory",
  "ddvfs",
  "mtarc",
  "mtfsm",
  "mtlmt",
+ "mtlot",
  "mtmod",
  "mtxfs",
 ]

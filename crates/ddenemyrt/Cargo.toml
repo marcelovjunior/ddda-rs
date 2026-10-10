@@ -26,3 +26,5 @@ mtxfs = { path = "../mtxfs" }
 
 [dev-dependencies]
 ddstory = { path = "../ddstory" }
+ddspawn = { path = "../ddspawn" }
+mtlot = { path = "../mtlot" }
