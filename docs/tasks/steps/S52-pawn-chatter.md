@@ -36,7 +36,7 @@ complete S52: host composition, installed GUI/audio consumption, opening
 combat-list/low-HP producers and the bounded capture remain outstanding.
 The separate `ddhost/pawn_chatter.rs` adapter is source preparation and has
 not been compiled or tested at this first checkpoint. The subsequent full
-core result is recorded below; viewer validation is still pending.
+core and viewer results are recorded below; actual capture is still pending.
 
 Native sources (DDDA.exe 2017-12-13 Steam):
 
@@ -103,8 +103,8 @@ hirer, network identity and hire time; rebinding retires old requests. The
 host's successful-load tail clears transient speech after fallible parsing;
 failed load must preserve the queue. A new installed regression checks the
 pass-C order mailbox only produces speech on the following move frame and
-checks failed-load atomicity. These follow-up core tests subsequently passed
-the full gate below; the viewer tests remain **unexecuted**.
+checks failed-load atomicity. The follow-up core and viewer tests subsequently
+passed their respective full gates below.
 
 New native evidence: `0x00AFCFBF` and `0x00AFD17F` request situation 6 on
 actor list **1**, not configuration priority 1. `0x00AFCE65` initializes
@@ -211,10 +211,8 @@ Source SHA-256 values at that gate:
 - `ddnet/client.rs`: `11969AC1DACE224CF784872F958A0609B8A7FF19BA358FA62E72A13481F256B9`.
 
 The shared core lease and lock/regression claims were normally released
-after the actual exit and proof. **S52 remains in progress**, with both
-viewer tests unexecuted, no release viewer build, no opening hook applied
-by this branch, and no original comparison/capture. These passing core
-results do not imply those presentation or original-game gates passed.
+after the actual exit and proof. That core gate did not establish any
+presentation or original-game result; the separate viewer gate follows.
 
 First full release viewer attempt, session **87786**, exited **101** during
 compilation: the consumer widened saved gender/voice bytes even though
@@ -222,15 +220,44 @@ compilation: the consumer widened saved gender/voice bytes even though
 directly instead of the existing `ddhost::ddenemyrt` re-export. Both were
 corrected only in the owned viewer module, without a new dependency.
 Private failure log: `viewer-full-a0a2b89-first.private.log`. The full viewer
-rerun and subsequent default release build remain pending; no viewer PASS
-is claimed from this compile attempt.
+rerun and subsequent default release build are recorded separately below;
+no viewer PASS is claimed from this compile attempt.
+
+Actual viewer validation on frozen **5557883**: full
+`cargo test --release -p ddview`, session **30843**, exited **0** with
+**116 passed, zero failed, two existing ignored tests**. Both new viewer
+names were source-present and present exactly once as PASS:
+`installed_cmc_gui_binds_original_font_hierarchy_decimal_text_and_voice`
+and `recognition_camera_planes_and_installed_sphere_share_game_coordinates`.
+Thus all 19 follow-up names actually passed across the core/viewer gates.
+The installed regression resolves the selected original decimal text label,
+font hierarchy/glyphs and a real STRQ request; it does not establish audible
+playback or an original-game comparison.
+
+Sequential `cargo build --release -p ddview`, session **70153**, exited
+**0**. Private pin `E:/ddda-re/notes/steps/S52/ddview-s52-5557883.exe`,
+95,425,536 bytes, matches the built executable's SHA-256
+`6AC12D62505C420B5094F09082FDF15C60643BC59630C19E037461E7F675B6FA`.
+Viewer source SHA-256:
+`973C6D3D20DA103DD0048B4F1978689794D28B875AE4C53A821AFACE86CB5984`.
+Private test/build logs are `viewer-full-5557883-second.private.log` and
+`viewer-default-release-5557883.private.log`; their hashes, source and
+both name checks are in `viewer-gate-5557883.private.json`. The worktree
+remained clean, and M5 was normally released after actual build exit and
+pin/hash verification. No GPU/viewer process was launched.
+
+**S52 remains in progress**: head-owned opening hooks below are required
+for actual recognition/speech, and the requested capture/original comparison
+remain open. Parent authorized a subsequent source-only private actual-line
+capture hook, with a new full viewer/build gate after S56's queued window.
+The pin above predates that future hook; it is not a captured speech result.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,
 markup, portraits, filters, slide/fade sequences, GUI acceptance/history,
 voice pitch/spatial/lip synchronization and immediate NPC messages remain
-explicitly unsupported. The installed GUI/text/voice regression is also
-unexecuted. Source preparation alone is not a Ready result.
+explicitly unsupported. The installed GUI/text/voice regression passed in
+the full viewer gate above. This is not yet a whole-brief Ready result.
 Viewer reconnection/session replacement also remains open: the current
 viewer creates one session at startup. A future replacement must reset
 presentation deduplication to that new session, while same-host load/retry
@@ -261,6 +288,7 @@ if let ddnet::proto::ToClient::PawnMessage(message) = &event {
 
 Reviewed main18a4ca5, containing the S53 transactional loader and head's
 capsule-swept push-out fix, was cleanly integrated into this task branch.
-Next actual gate: obtain the normal full touched/downstream Cargo window
-for the viewer tests and release build. The follow-up Cargo failures above are preserved;
+Next action: prepare the parent-approved actual-line capture hook and
+coordinate head's opening hooks, then obtain the next full viewer/build gate
+before asking root for one bounded capture. Earlier failures are preserved;
 no GPU work, original process control or capture has occurred.
