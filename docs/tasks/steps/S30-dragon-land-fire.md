@@ -680,3 +680,19 @@ path/birth input adapter; it does not yet create an emitter or damage.
 Effect fields, sampled scalar and runtime flags remain explicit caller
 inputs until their actual creation/update owners are integrated. The
 previous185-pass result belongs to `2ca38ae`, not this new source.
+
+Original-instruction validation of `0x010D79F0` now passes four bounded
+calls: inherited coordinate scale versus nonzero mode, each with local
+versus world axes. Each executes the real `0x010FCFE0` post-binding call
+and returns normally, restoring ESP and ESI. All sixteen matrix words,
+three axis scales plus the zero tail, and the separate particle scalar
+match the independently calculated signed-scale expectations exactly.
+The secondary coordinate matrix was deliberately different to detect an
+incorrect binding. No original instruction, return value or output was
+patched, and no callback was stubbed. Private evidence is retained outside
+the repo; this is native scalar evidence, not a running-game fire capture.
+
+The Rust regression remains **uncompiled/unrun** pending its coordinated
+full package gate. The earlier185 passes still belong to `2ca38ae`.
+Next: validate this source batch, then integrate actual generator creation,
+coordinate/effect clocks, birth and the world query into ordinary damage.
