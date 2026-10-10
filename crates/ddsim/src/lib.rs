@@ -1160,7 +1160,7 @@ impl Sim {
                 if phase_before_handler == BowPhase::Ready && bow.phase == BowPhase::Ready {
                     bow.phase = BowPhase::Shot;
                     self.players[i].bow_shot.request(shot_param);
-                } else if matches!(bow.phase, BowPhase::Draw | BowPhase::Shot) {
+                } else if matches!(phase_before_handler, BowPhase::Draw | BowPhase::Shot) {
                     bow.unsupported = Some(BowUnsupported::Shot);
                 }
             }
@@ -1199,12 +1199,25 @@ impl Sim {
                 if self.players[i].bow_shot.wait.is_none() {
                     // Strictly greater (+0x78), not >=; no charged basic row.
                     if bow.upper.frame > shot_param.charge_begin_frame {
+                        // B1C2C0 tests stamina before resetting charge; zero
+                        // ends the action even when isEndStamina0Wait is false.
+                        if self.players[i].stamina <= 0.0 {
+                            self.players[i].bow = None;
+                            Self::set_state(&mut self.players[i], State::Wait);
+                            return true;
+                        }
                         self.players[i].bow_shot.charge_reset = true;
                     }
                     let shot_done = self
                         .motion_for(Weapon::Bow, bow.upper.motion)
                         .is_some_and(|m| bow.upper.frame >= m.period());
                     if shot_done {
+                        // Same source termination check on early motion end.
+                        if self.players[i].stamina <= 0.0 {
+                            self.players[i].bow = None;
+                            Self::set_state(&mut self.players[i], State::Wait);
+                            return true;
+                        }
                         bow.phase = BowPhase::Ready;
                         bow.upper = attack::BowLayer {
                             motion: 0x900 | u16::from(param.wait_upper),

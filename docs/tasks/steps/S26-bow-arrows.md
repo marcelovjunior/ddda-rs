@@ -189,3 +189,84 @@ live-original comparison. Draw/Shot early command buffering, charging,
 moving/air shots, special arrows, nonzero authored spread and the exact
 vertical basis fallback remain explicit unsupported paths. This is a
 tested checkpoint, not completion of the brief.
+
+
+### Final Fight integration (codex-58)
+
+The brief's stationary basic-shot acceptance is now **implemented and
+tested**. With root's fight scope handoff (#4225) and head's explicit
+attachment source (#4263), normal `Input { bow: true, light: true }` from
+Ready emits the installed shot row, spawns an arrow and reaches the
+ordinary Fight hit pass. A Strider keeps its primary daggers; secondary
+bow equipment, weapon-level penalty and damage are separate.
+
+`BowData` reads the installed starting shortbow item 0x1F8 (first-choice
+selection `0x00673740`), Strider level-one row, category-10 model path
+(`0x00BC1A00`), bow weapon skeleton/motion bank and player bank 9. The bow
+model plays source slot 10 on draw (`0x00B16FE0`), runtime `motWait_Bow`
+and `motShotBow` (`0x00B1C7D0` / `0x00B1CAC0`), and source slot 13 on
+release (`0x00B17940`). Its actual joint zero is composed onto drawn
+secondary-hand joint 0x99: no offset/rotation and normalized axes, from
+`0x008404B0` / `0x00C1B460` / `0x00859B10` / `0x00859BB0`.
+**The provider deliberately poses the upper bow layer for the stationary
+slice approved by head. It is not a complete upper/lower blend, and it
+never substitutes the Arisen root for the bow model's joint zero.**
+
+`Fight.bow_contexts` is authoritative per seat: actual bow Pose, resolved
+world target, host RNG stream, six augment ids and the currently valued
+secondary attacker. Missing context, actual joint, required RNG or a
+nonbasic shot remains observable in `Fight.bow_errors`; no guessed arrow
+is spawned and the queue event is consumed once. `0x00B1BF90` consumes two
+RNG words for authored spreads even at width zero; `0x00B1DCB0` consumes
+two additional accuracy words unless augment 0x48 skips its cone.
+
+The original parallel-up basis fallback is now translated and verified:
+`0x007AEED0` changes its reference from +Y (`0x01629540`) to +X
+(`0x01629530`) when the first cross product's squared length is below
+float epsilon. Five vertical/near-vertical original-helper fixtures pass.
+Arrow range reads runtime ability 0x46's `mFVal0` when equipped and
+`mFVal1` otherwise (`0x00783340`), independently verified by original
+execution with two synthetic nondefault values; no neutral value is
+assumed or embedded.
+
+Fight retains the existing previous-frame hit-pass order: arrows move in
+`players_moved`, supply swept attack volumes at the next `hits`, and die
+on accepted actor contact according to their installed bits. Each arrow
+has a unique owner and shooter map. Damage uses the secondary slot and
+current owner attack-status multipliers (`0x0088A910` / `0x0088AA20`), with
+the installed normal-arrow supplements before valuation. The digest
+includes arrow previous/current endpoints and the authoritative context's
+pose, target, remaining RNG, augments and attacker values.
+
+Validation:
+
+- Full `cargo test -p ddsim`: **76 passed**.
+- Full `cargo test -p ddenemyrt`: **100 passed, 1 existing ignored**,
+  including all 9 melee/staff attack regressions.
+- Final focused arrow/Fight suites after current-owner status and digest
+  corrections: **4 installed arrows + 4 installed bow Fight tests passed**.
+- `cargo check -p ddhost` passed (3.17 s); no host source edits.
+- The normal-input installed fixture hits a goblin at 10 m on hit frame 5
+  for **42.72** damage, matching the runtime secondary-bow calculation
+  with the installed distance/supplement row and goblin defence. It also
+  asserts the primary dagger calculation differs. The two-seat fixture
+  has one hit and a deliberate miss with independent owner/RNG state.
+- A post-launch owner attack buff affects the arrow hit through the
+  current shooter; missing context/RNG does not emit a fabricated arrow.
+
+**Not compared against the original live game.** S27 owns viewer keys,
+actual camera target delivery, full layer blending and rendered arrows.
+Terrain/world contact queries, Draw/Shot early command buffering, charged
+skills, moving/air shots, special arrows and nonzero authored spread are
+still separate unsupported paths. The next action is S27's viewer/aim
+provider hookup using `Fight::bow_pose`, `Fight::bow_contexts` and
+`Fight::arrows`, then a bounded original-game comparison.
+
+
+Final source review also preserves vf26's unconditional zero-stamina
+termination at the strict charge-frame boundary or upper motion end
+(`0x00B1C2C0`), even with `isEndStamina0Wait = false`. The upper draw-to-
+Ready handler cannot accept a light press that was still in Draw at the
+preceding command check. Final focused **7 existing bow + 6 shot + 4
+installed Fight tests** passed after this correction; the full-suite
+counts above precede this narrow correction. All owned builds exited.

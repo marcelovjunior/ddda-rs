@@ -25,6 +25,22 @@ fn installed_basic_arrow_reads_its_own_collision_and_falloff() {
     assert!(p.speed > p.speed_max && p.acceleration < 0.0);
     assert!(p.gravity_acceleration < 0.0 && p.gravity_min < 0.0);
     assert!(p.death_distance > p.collision_distances[1]);
+    // Read both augment values independently; no assumed neutral multiplier.
+    let path = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    let vfs = ddvfs::Vfs::open(path).unwrap();
+    let abilities = ddparam::Ability::from_bytes(
+        &vfs.read(
+            r"param\pl\other\plabilityparam",
+            mtarc::type_hash("rPlAbilityParam"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let row = &abilities.entries[0x46];
+    assert_eq!(data.range.multiplier(&[u32::MAX; 6]), row.float_1);
+    assert_eq!(data.range.multiplier(&[0x46; 6]), row.float_0);
     let aim = ArrowAim {
         bow_origin: [17.0, 91.0, 38.0],
         target: [17.0, 91.0, 1038.0],

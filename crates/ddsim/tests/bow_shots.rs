@@ -177,7 +177,8 @@ fn actual_stamina_spent_scales_additive_and_charge_reset_is_strict() {
     tick(&mut s, [true, false], [true; 2]);
     assert!(!s.player(3).unwrap().bow_shot.charge_reset);
     tick(&mut s, [true, false], [true; 2]);
-    assert!(s.player(3).unwrap().bow_shot.charge_reset);
+    assert!(s.player(3).unwrap().bow.is_none());
+    assert!(!s.player(3).unwrap().bow_shot.charge_reset); // zero ends before charge reset
 }
 
 #[test]

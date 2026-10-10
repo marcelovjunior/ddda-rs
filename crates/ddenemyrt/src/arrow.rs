@@ -16,6 +16,174 @@ pub const PARAM_PATH: &str = r"param\shl_param_06";
 /// Source record selected by 0x00B16DC0; the basic action is row zero.
 pub const BOW_PARAM_PATH: &str = r"param\bow_act_param_06";
 
+/// Runtime stationary bow controller and fresh level-one secondary stats.
+/// Motion bank 9 and starting secondary item follow 0x00B16FE0 / 0x00673740.
+#[derive(Debug, Clone)]
+pub struct BowData {
+    pub param: ddsim::BowParam,
+    pub shot: ddsim::BowShotParam,
+    pub motions: std::collections::HashMap<u16, ddsim::RootMotion>,
+    pub starting_attacker: ddcombat::damage::PlayerAttacker,
+    pub weapon_level: u16,
+    pub player_bank: crate::body::MotionBank,
+    pub weapon_body: crate::body::Body,
+    pub wait_weapon: u8,
+    pub shot_weapon: u8,
+}
+impl BowData {
+    pub fn load(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        use mtxfs::Value;
+        let bytes = load::read(vfs, BOW_PARAM_PATH, "rBowActParamList")?;
+        let x = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
+        let object = |o: &mtxfs::Object, name| match x.get(o, name).and_then(|v| v.first()) {
+            Some(Value::Object(Some(o))) => Ok((**o).clone()),
+            _ => Err(format!("bow has no {name}")),
+        };
+        let list = object(&x.root, "mParamList")?;
+        let basic = object(&list, "mpArray")?;
+        let byte = |name| match x.get(&basic, name).and_then(|v| v.first()) {
+            Some(Value::U(v)) => u8::try_from(*v).map_err(|_| format!("bad {name}")),
+            _ => Err(format!("bow has no {name}")),
+        };
+        let param = ddsim::BowParam {
+            draw_upper: byte("motBgn_Up")?,
+            draw_lower: byte("motBgn_Low")?,
+            release_upper: byte("motEnd_Up")?,
+            release_lower: byte("motEnd_Low")?,
+            wait_upper: byte("motWait_Up")?,
+            wait_lower: byte("motWait_Low")?,
+            fall: byte("motFall")?,
+            end_at_zero_stamina: match x.get(&basic, "isEndStamina0Wait").and_then(|v| v.first()) {
+                Some(Value::Bool(v)) => *v,
+                _ => return Err("missing bow stamina end flag".into()),
+            },
+            wait_stamina: match x.get(&basic, "statminaWait").and_then(|v| v.first()) {
+                Some(Value::F(v)) => v[0] as f32,
+                _ => return Err("missing bow wait stamina".into()),
+            },
+        };
+        let bank = load::bank(vfs, r"motion\pl\m\m00\m0006_at\m0006_at")?;
+        let motions = bank
+            .list
+            .motions
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, motion)| {
+                Some((
+                    0x900 | u16::try_from(slot).ok()?,
+                    ddsim::RootMotion::from_motion(motion.as_ref()?)
+                        .with_curves(bank.list.curves[slot].clone())
+                        .with_events(bank.list.events[slot].clone()),
+                ))
+            })
+            .collect();
+        let levels = ddparam::Level::from_bytes(&load::read(vfs, r"param\pl\level\lvstrider", "rPlLevel")?)
+            .map_err(|e| e.to_string())?;
+        let level = levels
+            .entries
+            .get(crate::arisen::STRIDER_LEVEL_ROW)
+            .ok_or("missing Strider level")?;
+        let items = dditem::itl::ItemList::parse(&load::read(vfs, r"etc\item\itemList", "rItemList")?)
+            .map_err(|e| e.to_string())?;
+        // Small first-choice equipment override, 0x00673740 (Strider).
+        let bow = items.get(0x1F8).ok_or("missing starting secondary shortbow")?;
+        if ddskill::vocation::WeaponCategory::from_item_id(bow.equip_model() as i32)
+            != ddskill::vocation::WeaponCategory::Bow
+        {
+            return Err("starting secondary is not shortbow".into());
+        }
+        let id = bow.equip_model();
+        let n = id & 0xFFFFFF;
+        let number = if n % 100 == 20 { 999 } else { n % 100 };
+        let suffix = if n < 100 {
+            String::new()
+        } else {
+            format!("_{}", char::from(b'a' + ((n - 100) / 100) as u8))
+        };
+        // Category-10 branch of weapon_path 0x00BC1A00.
+        let model = format!(r"model\wp\bow\bow{number:03}{suffix}\bow{number:03}{suffix}");
+        let weapon_body = crate::body::Body {
+            skeleton: load::skeleton(vfs, &model)?,
+            banks: vec![Some(load::bank(vfs, r"motion\wp\bow\bow")?)],
+            collision: Vec::new(),
+            scale: 1.0,
+        };
+        Ok(Self {
+            param,
+            shot: load_shot_param(vfs)?,
+            motions,
+            player_bank: bank,
+            weapon_body,
+            wait_weapon: byte("motWait_Bow")?,
+            shot_weapon: byte("motShotBow")?,
+            starting_attacker: ddcombat::damage::PlayerAttacker::new(
+                f32::from(level.attack),
+                f32::from(level.magic_attack),
+                bow.attack() as f32,
+                bow.magic_attack() as f32,
+            ),
+            weapon_level: u16::from_le_bytes([bow.raw[0x66], bow.raw[0x67]]),
+        })
+    }
+    /// Source mount 0x008404B0 / 0x00C1B460 / 0x00859B10 / 0x00859BB0:
+    /// drawn secondary joint 0x99, normalized axes, no offset or rotation.
+    /// Source bow model motion: B16FE0 slot10, B1C7D0 runtime wait byte,
+    /// B1CAC0 runtime shot byte, B17940 slot13. The stationary provider
+    /// uses the upper body pose; full upper/lower blending remains S27.
+    pub fn pose(
+        &self,
+        body: &crate::body::Body,
+        player: &ddsim::Player,
+    ) -> Result<crate::body::Posed, String> {
+        let bow = player.bow.ok_or("seat has no bow action")?;
+        let upper = crate::body::MotionId::new(9, bow.upper.motion & 0xFF);
+        if body.motion(upper).is_none() {
+            return Err("missing actual upper bow motion".into());
+        }
+        let pose = body.pose(upper, bow.upper.frame, player.position, player.yaw);
+        let mut anchor = pose
+            .joint_matrix(0x99)
+            .ok_or("missing drawn secondary joint 0x99")?;
+        for row in anchor.iter_mut().take(3) {
+            let length = row.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if length > f32::EPSILON {
+                for v in row {
+                    *v /= length;
+                }
+            }
+        }
+        let slot = match bow.phase {
+            ddsim::BowPhase::Draw => 10, // B16FE0 embedded bow model slot
+            ddsim::BowPhase::Ready => self.wait_weapon,
+            ddsim::BowPhase::Shot if player.bow_shot.wait.is_some() => self.wait_weapon,
+            ddsim::BowPhase::Shot => self.shot_weapon,
+            ddsim::BowPhase::Released => 13, // B17940 embedded bow model slot
+            ddsim::BowPhase::Change => return Err("unsupported bow model change".into()),
+        };
+        let id = crate::body::MotionId::new(0, u16::from(slot));
+        if self.weapon_body.motion(id).is_none() {
+            return Err("missing actual bow model motion".into());
+        }
+        let mut weapon = self.weapon_body.pose(id, bow.upper.frame, [0.0; 3], 0.0);
+        weapon.model = anchor;
+        for (_, matrix) in &mut weapon.joints {
+            *matrix = mtlmt::pose::mul(matrix, &anchor);
+        }
+        if weapon.joint_matrix(0).is_none() {
+            return Err("missing actual bow model joint zero".into());
+        }
+        Ok(weapon)
+    }
+
+    pub fn install(&self, sim: &mut ddsim::Sim) {
+        sim.bow_param = Some(self.param);
+        sim.bow_shot_param = Some(self.shot.clone());
+        sim.weapon_motions
+            .entry(ddsim::Weapon::Bow)
+            .or_insert_with(|| self.motions.clone());
+    }
+}
+
 /// Runtime ordered basic shoot-controller projection. Charging and authored
 /// angle/spread paths are rejected until their separate source translation.
 pub fn load_shot_param(vfs: &ddvfs::Vfs) -> Result<ddsim::BowShotParam, String> {
@@ -192,10 +360,29 @@ impl ArrowParam {
     }
 }
 
+/// Runtime ability 0x46 row, selected by the six equipped augment ids.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrowRange {
+    pub equipped: f32,
+    pub unequipped: f32,
+}
+impl ArrowRange {
+    /// Translated from 0x00783340 for ability 0x46 (DDDA.exe 2017-12-13
+    /// Steam): row mFVal0 when equipped, mFVal1 otherwise. Both are data.
+    pub fn multiplier(self, augments: &[u32; 6]) -> f32 {
+        if augments.contains(&0x46) {
+            self.equipped
+        } else {
+            self.unequipped
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArrowData {
     pub param: ArrowParam,
     pub collision: CollisionSet,
+    pub range: ArrowRange,
     /// Basic arrow supplements from the installed paired collision table.
     pub supplemental: [AttackRow; 3],
 }
@@ -225,9 +412,23 @@ impl ArrowData {
                 .ok_or_else(|| format!("missing normal arrow row {}", NORMAL_ARROW_ROW + phase))
         });
         let [a, b, c] = supplemental;
+        let abilities = ddparam::Ability::from_bytes(&load::read(
+            vfs,
+            r"param\pl\other\plabilityparam",
+            "rPlAbilityParam",
+        )?)
+        .map_err(|e| e.to_string())?;
+        let range = abilities
+            .entries
+            .get(0x46)
+            .ok_or("missing arrow range ability 0x46")?;
         Ok(Self {
             param: ArrowParam::from_list(&bytes, 0, 0)?,
             collision,
+            range: ArrowRange {
+                equipped: range.float_0,
+                unequipped: range.float_1,
+            },
             supplemental: [a?, b?, c?],
         })
     }
@@ -277,8 +478,8 @@ pub struct ArrowAim {
 impl ArrowAim {
     /// Basic row's zero authored angle/spread branch, translated from
     /// 0x00B1D640 / 0x00B1DCB0 and basis construction 0x007AF5B0.
-    /// The parallel-up fallback of 0x007AEED0 is not modelled: exact
-    /// vertical aim returns None rather than inventing a basis.
+    /// The parallel-up fallback 0x007AEED0 switches the reference from
+    /// +Y to +X (constants 0x01629540 / 0x01629530).
     pub fn direction(&self) -> Option<[f32; 3]> {
         let d = std::array::from_fn::<_, 3, _>(|k| self.target[k] - self.bow_origin[k]);
         let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
@@ -289,16 +490,23 @@ impl ArrowAim {
         if self.steady {
             return Some(forward);
         }
-        let horizontal = (forward[0] * forward[0] + forward[2] * forward[2]).sqrt();
-        if horizontal * horizontal < f32::EPSILON {
-            return None;
-        }
-        let right = [forward[2] / horizontal, 0.0, -forward[0] / horizontal];
+        let horizontal_squared = forward[0] * forward[0] + forward[2] * forward[2];
+        let right = if horizontal_squared < f32::EPSILON {
+            // 0x007AEED0 uses +X cross forward if +Y cross forward is
+            // degenerate, with the same squared epsilon test.
+            let length = (forward[1] * forward[1] + forward[2] * forward[2]).sqrt();
+            [0.0, -forward[2] / length, forward[1] / length]
+        } else {
+            let horizontal = horizontal_squared.sqrt();
+            [forward[2] / horizontal, 0.0, -forward[0] / horizontal]
+        };
         let up = [
-            forward[1] * right[2],
+            forward[1] * right[2] - forward[2] * right[1],
             forward[2] * right[0] - forward[0] * right[2],
-            -forward[1] * right[0],
+            forward[0] * right[1] - forward[1] * right[0],
         ];
+        let length = up.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let up = up.map(|v| v / length);
         // 0x007AEE90 maps the engine's u32 word with 2^-32; vf18 is zero
         // for cPlActWpnBow (0x00B16AE0), so cone limit is accuracy * 4.
         let limit = self.accuracy * 4.0;
@@ -400,7 +608,8 @@ impl Arrow {
         fighter.attacks = self.volumes(data);
         fighter.hurts.clear();
         fighter.history = Default::default();
-        fighter.statuses = Default::default();
+        // Player status multipliers are read from the owner (88A910 /
+        // 88AA20); the attack-only proxy retains that owner's statuses.
         fighter.dots = Default::default();
         fighter.pools = Default::default();
         fighter
@@ -611,7 +820,7 @@ mod tests {
                 ..aim
             }
             .direction()
-            .is_none()
+            .is_some()
         );
     }
 
@@ -643,5 +852,56 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn vertical_accuracy_cone_uses_original_parallel_up_fallback() {
+        // Original B1DCB0, 7AF5B0 and 7AEED0 executed on synthetic unit
+        // and near-vertical directions; only sin/cos supplied by harness.
+        let cases = [
+            ([0.0, 1.0, 0.0], 0, 0, [-0.069756471, 0.997564077, -0.000000006]),
+            ([0.0, 1.0, 0.0], 0, 0x80000000, [0.069756471, 0.997564077, 0.0]),
+            (
+                [0.0, -1.0, 0.0],
+                0,
+                0x40000000,
+                [-0.000000003, -0.997564077, -0.069756471],
+            ),
+            ([0.0, 1.0, 0.0], 0x80000000, 0, [0.0, 1.0, 0.0]),
+            (
+                [0.0001, 1.0, 0.0],
+                0,
+                0,
+                [-0.069656715, 0.997571051, -0.000000006],
+            ),
+        ];
+        for (target, cone_random, polar_random, expected) in cases {
+            let actual = ArrowAim {
+                bow_origin: [0.0; 3],
+                target,
+                accuracy: 1.0,
+                cone_random,
+                polar_random,
+                steady: false,
+            }
+            .direction()
+            .unwrap();
+            for k in 0..3 {
+                assert!((actual[k] - expected[k]).abs() < 2e-7, "{target:?}: {actual:?}");
+            }
+        }
+    }
+    #[test]
+    fn range_augment_selection_matches_original_with_nondefault_fixture_values() {
+        // Original 783340 on synthetic row mFVal0=2.25/mFVal1=1.5;
+        // six slots all empty versus slot2=0x46, private Unicorn fixture.
+        let range = ArrowRange {
+            equipped: 2.25,
+            unequipped: 1.5,
+        };
+        assert_eq!(range.multiplier(&[u32::MAX; 6]), 1.5);
+        assert_eq!(
+            range.multiplier(&[u32::MAX, u32::MAX, 0x46, u32::MAX, u32::MAX, u32::MAX]),
+            2.25
+        );
     }
 }

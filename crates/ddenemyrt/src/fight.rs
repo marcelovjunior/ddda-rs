@@ -13,8 +13,9 @@
 //! attacks to play.
 
 use crate::arisen::ArisenData;
+use crate::arrow::{Arrow, ArrowData, BowData};
 use crate::body::MotionId;
-use crate::combat::{hit_pass, Attacker, Fighter, HitEvent, Tables, Victim};
+use crate::combat::{Attacker, Fighter, HitEvent, Tables, Victim, hit_pass};
 use crate::goblin::{Goblin, GoblinData, Target};
 use crate::shell::{Shell, ShellParam};
 use ddcombat::volumes::HitHistory;
@@ -34,6 +35,8 @@ pub struct FightData {
     pub skills: crate::skills::SkillSet,
     /// The staff's shell.
     pub shell: ShellParam,
+    pub arrow: ArrowData,
+    pub bow: BowData,
     /// The attacks' values from `param\pl\other\m_pl000_00`.
     pub attack_param: ddsim::AttackParam,
     pub goblin: GoblinData,
@@ -60,7 +63,10 @@ impl FightData {
         };
         let arisen = ArisenData::fighter(vfs)?;
         let mage = ArisenData::mage(vfs)?;
-        let strider = ArisenData::strider(vfs)?;
+        let mut strider = ArisenData::strider(vfs)?;
+        let bow = BowData::load(vfs)?;
+        strider.body.banks.resize(10, None);
+        strider.body.banks[9] = Some(bow.player_bank.clone());
         let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
         Ok(FightData {
             arisen,
@@ -68,6 +74,8 @@ impl FightData {
             strider,
             skills,
             shell: ShellParam::load(vfs)?,
+            arrow: ArrowData::load(vfs)?,
+            bow,
             attack_param: ddsim::AttackParam::from_adjust(&adjust(ADJUST_PARAMS)?.0)
                 .ok_or(format!("{ADJUST_PARAMS}: too short"))?,
             goblin: GoblinData::load(vfs, exe)?,
@@ -123,6 +131,20 @@ pub struct ArisenFighter {
     pub volleys_seen: u32,
 }
 
+/// Per-seat authoritative bow context, supplied at the release update.
+/// `pose` must be the actual bow model (Fight::bow_pose is the stationary
+/// provider), not the Arisen root. No nearest-enemy aim is selected.
+#[derive(Debug, Clone)]
+pub struct BowContext {
+    pub pose: crate::body::Posed,
+    pub target: [f32; 3],
+    /// Host-owned engine RNG words. Two authored-spread draws occur even
+    /// at width zero, then two accuracy draws unless augment0x48 skips.
+    pub random: std::collections::VecDeque<u32>,
+    pub augments: [u32; 6],
+    pub secondary_attacker: ddcombat::damage::PlayerAttacker,
+}
+
 /// The fight's state.
 #[derive(Debug)]
 pub struct Fight {
@@ -139,6 +161,10 @@ pub struct Fight {
     pub positions: BTreeMap<u32, [f32; 3]>,
     /// Shells in flight.
     pub shells: Vec<Shell>,
+    pub arrows: Vec<Arrow>,
+    pub bow_contexts: BTreeMap<u8, BowContext>,
+    /// Unsupported missing/invalid provider paths, by seat; no fake spawn.
+    pub bow_errors: BTreeMap<u8, String>,
     /// Equipped spell projectiles and their impact children.
     pub spells: crate::skills::spells::SpellWorld,
     /// The Arisen each shell owner id was fired by (kept after the shell).
@@ -175,6 +201,9 @@ impl Fight {
             status_events: Vec::new(),
             positions: BTreeMap::new(),
             shells: Vec::new(),
+            arrows: Vec::new(),
+            bow_contexts: BTreeMap::new(),
+            bow_errors: BTreeMap::new(),
             spells: Default::default(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
@@ -194,10 +223,18 @@ impl Fight {
     /// Resilience's fall-damage halving is not yet modelled; callers pass the
     /// base amount derived by ddsim from the installed landing parameters.
     pub fn fall_damage(&mut self, seat: u8, amount: f32) -> f32 {
-        if !amount.is_finite() || amount <= 0.0 { return 0.0; }
-        let Some(arisen) = self.arisen.get_mut(&seat) else { return 0.0; };
-        let Victim::Player { hp, .. } = &mut arisen.fighter.victim else { return 0.0; };
-        if *hp <= 0.0 { return 0.0; }
+        if !amount.is_finite() || amount <= 0.0 {
+            return 0.0;
+        }
+        let Some(arisen) = self.arisen.get_mut(&seat) else {
+            return 0.0;
+        };
+        let Victim::Player { hp, .. } = &mut arisen.fighter.victim else {
+            return 0.0;
+        };
+        if *hp <= 0.0 {
+            return 0.0;
+        }
         let removed = amount.min(*hp);
         *hp -= removed;
         removed
@@ -268,7 +305,23 @@ impl Fight {
             self.kit(a.kit).equip(sim, seat);
             self.data.skills.install(sim);
             sim.attack_param = self.data.attack_param;
+            if a.kit == Kit::Strider {
+                self.data.bow.install(sim);
+                if let Some(p) = sim.player_mut(seat) {
+                    p.secondary_weapon = ddsim::Weapon::Bow;
+                    p.secondary_weapon_level_gap =
+                        i32::from(self.data.bow.weapon_level) - self.data.strider.level as i32;
+                }
+            }
         }
+    }
+
+    /// The actual drawn bow model pose mounted to the stationary upper
+    /// layer. Full upper/lower blend and live camera provider are S27.
+    pub fn bow_pose(&self, sim: &ddsim::Sim, seat: u8) -> Result<crate::body::Posed, String> {
+        let p = sim.player(seat).ok_or("missing bow seat")?;
+        let a = self.arisen.get(&seat).ok_or("missing bow fighter")?;
+        self.data.bow.pose(&self.kit(a.kit).body, p)
     }
 
     /// Adds a goblin; returns its owner id.
@@ -319,6 +372,7 @@ impl Fight {
         fighters.extend(self.goblins.iter().map(|g| g.fighter.clone()));
         let shell_fighters = self.shell_fighters();
         fighters.extend(shell_fighters);
+        fighters.extend(self.arrow_fighters());
         fighters.extend(self.spell_fighters());
         let mut seed = self.roll_seed;
         let mut roll = || {
@@ -352,12 +406,21 @@ impl Fight {
             self.small_gauge = None;
         }
         let goblin_owners: Vec<u32> = self.goblins.iter().map(|g| g.fighter.owner).collect();
-        if let Some(e) = self.events.iter().rev().find(|e| goblin_owners.contains(&e.victim)) {
+        if let Some(e) = self
+            .events
+            .iter()
+            .rev()
+            .find(|e| goblin_owners.contains(&e.victim))
+        {
             self.small_gauge = Some((e.victim, SMALL_GAUGE_FRAMES));
         }
         // a shell that hit is gone (*placeholder*, see `crate::shell`)
         let hit: Vec<u32> = self.events.iter().map(|e| e.attacker).collect();
         self.shells.retain(|s| !hit.contains(&s.owner));
+        for arrow in &mut self.arrows {
+            arrow.contact(&self.data.arrow.param, hit.contains(&arrow.owner), false);
+        }
+        self.arrows.retain(|a| a.alive);
         self.spells.hit(&hit, &self.data.skills, &mut self.next_shell);
         for s in &self.spells.shells {
             self.shooters.insert(s.owner, s.shooter);
@@ -419,12 +482,21 @@ impl Fight {
                 self.shooters.insert(owner, u32::from(seat));
             }
             for id in released {
-                let Some(skill) = self.data.skills.0.get(&id) else { continue };
+                let Some(skill) = self.data.skills.0.get(&id) else {
+                    continue;
+                };
                 let Some(spell) = &skill.spell else { continue };
                 let pose = skill.release_pose(feet, yaw);
                 let aim = target.map(|g| aim_point(&self.goblins[g]));
-                self.spells.fire(spell, id, u32::from(seat), &pose, aim, &mut self.next_shell);
+                self.spells
+                    .fire(spell, id, u32::from(seat), &pose, aim, &mut self.next_shell);
             }
+        }
+        self.fire_arrows(sim);
+        self.arrows
+            .retain_mut(|arrow| arrow.step(&self.data.arrow.param, step));
+        for arrow in &self.arrows {
+            self.positions.insert(arrow.owner, arrow.position);
         }
         let param = self.data.shell;
         let goblins = &self.goblins;
@@ -441,20 +513,101 @@ impl Fight {
         }
     }
 
-    fn spell_fighters(&self) -> Vec<Fighter> {
-        self.spells.shells.iter().filter_map(|s| {
-            let skill = self.data.skills.0.get(&s.skill)?;
-            let spell = skill.spell.as_ref()?;
-            let shooter = self.kit(self.arisen.get(&(s.shooter as u8))?.kit);
-            Some(Fighter {
-                owner: s.owner,
-                attacker: Attacker::Player(shooter.attacker),
-                victim: Victim::Player { defender: shooter.defender, hp: 1.0, hp_max: 1.0 },
-                attacks: s.volumes(spell), hurts: vec![],
-                history: HitHistory::default(), statuses: Default::default(),
-                dots: Default::default(), pools: Default::default(),
+    fn fire_arrows(&mut self, sim: &mut ddsim::Sim) {
+        for (&seat, _) in &self.arisen {
+            let Some(p) = sim.player_mut(seat) else { continue };
+            for shot in std::mem::take(&mut p.bow_shots) {
+                let result = (|| {
+                    let context = self
+                        .bow_contexts
+                        .get_mut(&seat)
+                        .ok_or("missing authoritative bow context")?;
+                    let steady = context.augments.contains(&0x48);
+                    let required = if steady { 2 } else { 4 };
+                    if context.random.len() < required {
+                        return Err("missing host bow RNG samples".to_string());
+                    }
+                    context.random.pop_front(); // B1BF90 authored Y (even width0)
+                    context.random.pop_front(); // B1BF90 authored X (even width0)
+                    let random = if steady {
+                        [0; 2]
+                    } else {
+                        [
+                            context.random.pop_front().unwrap(),
+                            context.random.pop_front().unwrap(),
+                        ]
+                    };
+                    let range = self.data.arrow.range.multiplier(&context.augments);
+                    Arrow::from_shot(
+                        &self.data.arrow.param,
+                        self.next_shell,
+                        u32::from(seat),
+                        shot,
+                        &context.pose,
+                        context.target,
+                        random,
+                        steady,
+                        range,
+                    )
+                })();
+                match result {
+                    Ok(arrow) => {
+                        self.shooters.insert(arrow.owner, arrow.shooter);
+                        self.arrows.push(arrow);
+                        self.next_shell += 1;
+                        self.bow_errors.remove(&seat);
+                    }
+                    Err(error) => {
+                        self.bow_errors.insert(seat, error);
+                        if let Some(bow) = &mut p.bow {
+                            bow.unsupported = Some(ddsim::BowUnsupported::Shot);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn arrow_fighters(&self) -> Vec<Fighter> {
+        self.arrows
+            .iter()
+            .filter_map(|arrow| {
+                let seat = u8::try_from(arrow.shooter).ok()?;
+                let context = self.bow_contexts.get(&seat)?;
+                let mut shooter = self.arisen.get(&seat)?.fighter.clone();
+                // 88A910 -> 88AA20: value against the shooter's SECONDARY slot,
+                // supplied by the authoritative host, never its dagger slot.
+                shooter.attacker = Attacker::Player(context.secondary_attacker);
+                Some(arrow.fighter(&self.data.arrow, &shooter))
             })
-        }).collect()
+            .collect()
+    }
+
+    fn spell_fighters(&self) -> Vec<Fighter> {
+        self.spells
+            .shells
+            .iter()
+            .filter_map(|s| {
+                let skill = self.data.skills.0.get(&s.skill)?;
+                let spell = skill.spell.as_ref()?;
+                let shooter = self.kit(self.arisen.get(&(s.shooter as u8))?.kit);
+                Some(Fighter {
+                    owner: s.owner,
+                    attacker: Attacker::Player(shooter.attacker),
+                    victim: Victim::Player {
+                        defender: shooter.defender,
+                        hp: 1.0,
+                        hp_max: 1.0,
+                    },
+                    attacks: s.volumes(spell),
+                    hurts: vec![],
+                    history: HitHistory::default(),
+                    statuses: Default::default(),
+                    dots: Default::default(),
+                    pools: Default::default(),
+                })
+            })
+            .collect()
     }
 
     /// The fighters standing for the shells in the hit pass: attack
@@ -614,9 +767,35 @@ impl Fight {
         for sh in &self.shells {
             s += &format!("s{}:{:?}:{};", sh.owner, sh.pos, sh.speed);
         }
+        for arrow in &self.arrows {
+            s += &format!(
+                "arrow{}:{}:{:?}:{:?}:{:?}:{}:{}:{}:{}:{};",
+                arrow.owner,
+                arrow.shooter,
+                arrow.position,
+                arrow.previous_position,
+                arrow.direction,
+                arrow.speed,
+                arrow.gravity,
+                arrow.distance,
+                arrow.range_multiplier,
+                arrow.alive
+            );
+        }
+        for (seat, context) in &self.bow_contexts {
+            s += &format!(
+                "bow-context{seat}:{:?}:{:?}:{:?}:{:?}:{:?};",
+                context.pose, context.target, context.random, context.augments, context.secondary_attacker
+            );
+        }
+        for (seat, error) in &self.bow_errors {
+            s += &format!("bow-error{seat}:{error};");
+        }
         for sh in &self.spells.shells {
-            s += &format!("spell{}:{}:{}:{:?}:{}:{};", sh.owner, sh.shooter,
-                sh.skill, sh.pos, sh.age, sh.impact);
+            s += &format!(
+                "spell{}:{}:{}:{:?}:{}:{};",
+                sh.owner, sh.shooter, sh.skill, sh.pos, sh.age, sh.impact
+            );
         }
         for g in &self.goblins {
             s += &g.digest();
