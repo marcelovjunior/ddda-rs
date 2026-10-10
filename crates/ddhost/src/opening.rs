@@ -151,6 +151,16 @@ impl StoryWorld for OpeningWorld {
     fn player_actions_blocked(&self, _seat: crate::PlayerId) -> bool {
         self.cameras.as_ref().is_some_and(|c| c.blocks_actions())
     }
+    fn observe_npc_combat(&mut self, stage: u32, target: Target, report: crate::npc_combat::Facts) {
+        let Some(facts) = &mut self.encounters else { return };
+        let mut unit = facts.unit(stage, &target);
+        // 0x005C0820 reads intel HP positivity independently of body HP's
+        // readiness gate for CheckHp. Binding already validates the lifetime.
+        unit.npc = Some(NpcIntel { id: report.npc, hp_positive: report.hp > 0.0 });
+        unit.hp = Some(report.hp);
+        unit.max_hp = Some(report.max_hp);
+        facts.report_unit(stage, target, unit);
+    }
     fn observe_npc_intel(&mut self, stage: u32, target: Target, present: bool) {
         let Some(facts) = &mut self.encounters else { return };
         let mut unit = facts.unit(stage, &target);
