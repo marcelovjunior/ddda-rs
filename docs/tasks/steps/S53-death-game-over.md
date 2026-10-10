@@ -333,3 +333,13 @@ public Sim APIs; installed host regressions remain responsible for actual
 fatal HP/profile policy. An unreachable client match arm was removed.
 Both private failure logs are preserved. No passing continuation test or
 release result is claimed; the exact full-package command is rerunning.
+
+Full continuation run `4d1f037` / session 27191 compiled and exited 101
+after 29 summaries: 209 passed, one failed and two existing ignored enemy
+tests. The only failure was the new retry fixture expecting chatter
+lifecycle one after it had already advanced once during a real profile
+leave. Its assertion now measures the lifecycle after that leave and
+requires exactly one further advance per retry, without changing runtime
+behavior. The partial log is preserved. Remaining suites and all 47 names
+still require a successful full rerun, followed by full viewer/default
+release gates; none is replaced by a focused run.

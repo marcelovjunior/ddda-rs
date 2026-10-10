@@ -1014,6 +1014,7 @@ mod retry_tests {
         live.frame = 7;
         let checkpoint = live.save().unwrap();
         live.leave(0);
+        let chatter_lifecycle = live.pawn_chatter.recognition_lifecycle();
         let roster = live.roster.clone();
         live.sim.begin_grounded_death(remote, false, true).unwrap();
         live.death.session.enter_dead(ProfileId(2));
@@ -1049,7 +1050,7 @@ mod retry_tests {
         assert!(body.skills.released.is_empty());
         assert!(!body.bow_latched);
         assert!(live.profiles.contains_key(&ProfileId(1)));
-        assert_eq!(live.pawn_chatter.recognition_lifecycle(), 1);
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), chatter_lifecycle + 1);
         let second = live
             .prepare_retry(&checkpoint, NoStoryData, |seed| {
                 factory(seed, &template, &BTreeMap::new())
@@ -1057,7 +1058,7 @@ mod retry_tests {
             .unwrap()
             .commit_retry();
         assert_eq!(second.epoch, 2);
-        assert_eq!(live.pawn_chatter.recognition_lifecycle(), 2);
+        assert_eq!(live.pawn_chatter.recognition_lifecycle(), chatter_lifecycle + 2);
     }
 
     fn fixture_edit(name: &str, gender: u8, marker: u8) -> ddpawn::cmc::Edit {
