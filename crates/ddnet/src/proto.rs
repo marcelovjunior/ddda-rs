@@ -13,7 +13,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 ///   guest's look in Hello; the host's spot in Welcome; Look events; HP
 ///   and enemies in snapshots.
 /// - 3: NPC bodies in snapshots; PlayEvent (cutscenes).
-pub const PROTOCOL: u16 = 5;
+/// - 6: per-seat bow held/toggle input and bow layers/secondary slot in bodies.
+pub const PROTOCOL: u16 = 6;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -181,15 +182,37 @@ impl ToClient {
 fn input(w: &mut Writer, i: &PlayerInput) {
     let s = &i.sim;
     w.f32(s.stick[0]).f32(s.stick[1]).bool(s.walk).bool(s.sprint).bool(s.jump).f32(s.camera_yaw);
-    w.bool(s.light).bool(s.heavy).bool(i.interact);
+    w.bool(s.light).bool(s.heavy).bool(s.bow).bool(s.bow_toggle).bool(i.interact);
 }
 
 fn read_input(r: &mut Reader) -> Result<PlayerInput> {
     let stick = [r.f32()?, r.f32()?];
     let (walk, sprint, jump, camera_yaw) = (r.bool()?, r.bool()?, r.bool()?, r.f32()?);
     let (light, heavy) = (r.bool()?, r.bool()?);
-    let sim = ddsim::Input { stick, walk, sprint, jump, camera_yaw, light, heavy };
+    let (bow, bow_toggle) = (r.bool()?, r.bool()?);
+    let sim = ddsim::Input { stick, walk, sprint, jump, camera_yaw, light, heavy, bow, bow_toggle };
     Ok(PlayerInput { sim, interact: r.bool()? })
+}
+
+#[cfg(test)]
+mod bow_input_tests {
+    use super::*;
+
+    #[test]
+    fn bow_commands_round_trip_per_seat_without_changing_primary_buttons() {
+        let first = PlayerInput { sim: ddsim::Input { bow: true, light: true,
+            ..Default::default() }, interact: false };
+        let second = PlayerInput { sim: ddsim::Input { bow_toggle: true, heavy: true,
+            ..Default::default() }, interact: true };
+        let mut w = Writer::new();
+        input(&mut w, &first);
+        input(&mut w, &second);
+        let bytes = w.finish();
+        let mut r = Reader::new(&bytes);
+        assert_eq!(read_input(&mut r).unwrap(), first);
+        assert_eq!(read_input(&mut r).unwrap(), second);
+        r.end().unwrap();
+    }
 }
 
 impl Inputs {

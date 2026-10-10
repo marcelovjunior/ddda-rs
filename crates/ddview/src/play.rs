@@ -404,6 +404,7 @@ pub(crate) fn p2_input(keys: &ButtonInput<KeyCode>, cam_yaw: f32) -> Input {
         light: keys.pressed(KeyCode::Numpad1),
         heavy: keys.pressed(KeyCode::Numpad2),
         camera_yaw: cam_yaw,
+        ..Default::default()
     }
 }
 
@@ -688,6 +689,7 @@ pub fn p1_input(keys: &ButtonInput<KeyCode>, buttons: &ButtonInput<MouseButton>,
         light: keys.pressed(KeyCode::KeyJ) || buttons.pressed(MouseButton::Left),
         heavy: keys.pressed(KeyCode::KeyK) || buttons.pressed(MouseButton::Middle),
         camera_yaw: cam_yaw,
+        ..Default::default()
     }
 }
 
