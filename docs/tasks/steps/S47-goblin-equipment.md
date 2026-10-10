@@ -200,3 +200,33 @@ combined-rescue-435a027.err.txt. GPU released after actual exit.
 Next: repair the explicit screenshot path and diagnose the stricter demo
 attack guard before one coordinated visual retry. Whole S47 remains open;
 original visual comparison and later attachment/drop behavior unverified.
+
+### Updated screenshot/guard checkpoint and capture limitation
+
+Reviewed main3ecd13e and the S35 cost-visibility merge are integrated at
+source42576fd. Parent process53534 actually exited zero: complete default
+viewer92 passed/two existing ignored, fresh compile40.03s/tests12.11s,
+release build56.98s. The source-present equipment/material, joint-scale
+and vocation-visibility regressions executed. A preceding89-test result
+was rejected as a stale S30 viewer artifact; only ddview's release package
+was rebuilt. Private logs are full-viewer-shots-guard-fixed-fresh.log and
+build-viewer-shots-guard-fixed-fresh.log in E:/ddda-re/notes/steps/S47.
+
+Private pin ddview-s47-combined-42576fd.exe is94,574,592 bytes, SHA256
+40A8604D7C76C28326EA3328677C6040A44C4FF7EC672BC1C3E05D28D514561E.
+Its bounded RescueApproach run logged genuine q2:20 true/q2:30 false,
+Reynard dialogue/item1058 and an Arisen level3 notice. The render-only
+group24/equipment4 comparison loaded without a combat/quest owner.
+
+No visual acceptance: the explicit screenshot directory was absent and
+the newly-arisen/level-up PNG writes failed with OS error3. The parent
+created it after discovering the error, after both transient captures.
+Harness56794 exited1 when Stop-Process raced with viewer32444's exit;
+the viewer's numeric exit is unknown. The original23408 remained running.
+PID32444 was subsequently reused by rustc; the viewer was confirmed absent
+by executable provenance and its lease released. This is not an exit0 or
+appearance PASS. Private combined-rescue-42576fd.run.json/err.txt retain
+the evidence. The accelerated screenshot run has no valid FPS result.
+
+Next: one coordinated bounded retry with a precreated screenshot directory
+and the corrected process-handle watchdog, then inspect actual PNGs.

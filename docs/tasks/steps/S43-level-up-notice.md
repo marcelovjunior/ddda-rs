@@ -134,3 +134,17 @@ head separately. This is not S43 visual acceptance. The source tests are
 accepted; genuine notice capture and original comparison remain open.
 Private logs/pin: E:/ddda-re/notes/steps/S47/combined-rescue-435a027.err.txt
 and ddview-s47-combined-435a027.exe (provenance hash in the S47 Results).
+
+The updated source42576fd passed all92 default viewer tests (six notice
+regressions included), two existing ignored; actual53534 exit0, fresh
+compile40.03s/tests12.11s and release56.98s. With the screenshot path and
+demo guard fixes, the next bounded RescueApproach run genuinely succeeded,
+delivered Reynard's item1058 and logged S43_LEVEL_UP owner0/level3 at
+09:12:49 UTC. The Arisen name remains explicitly unresolved/empty.
+However the screenshot directory had not been created, so the real notice
+PNG failed with OS error3. Harness56794 later exited1 on a watchdog/process
+exit race; numeric viewer exit is unknown, its executable was confirmed
+absent before lease release. No notice visual/original acceptance is claimed.
+Private combined-rescue-42576fd.err.txt and pin provenance in S47 preserve
+the evidence. Next: repeat once with the directory prepared and inspect
+the genuine notice PNG; no manufactured progression or event replay.
