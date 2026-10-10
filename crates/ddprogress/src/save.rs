@@ -20,6 +20,22 @@ use std::collections::BTreeMap;
 
 const VERSION: u8 = 1;
 
+/// Independent profile character part, usable while the profile is unseated.
+pub fn save_character(c: &Character) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u8(VERSION);
+    character(&mut w, c);
+    w.finish()
+}
+
+pub fn load_character(bytes: &[u8]) -> Result<Character> {
+    let mut r = Reader::new(bytes);
+    r.version("PROG player", VERSION)?;
+    let character = read_character(&mut r)?;
+    r.end()?;
+    Ok(character)
+}
+
 fn bits(w: &mut Writer, b: &Bits) {
     w.len(b.words().len());
     for &x in b.words() {

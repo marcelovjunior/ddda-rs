@@ -438,3 +438,98 @@ enable production fire or establish an original-game comparison.
 Next: connect the actual effect coordinate blocks and generator clocks,
 then issue native-shaped scene queries and ordinary fire damage. Effect
 ownership, full landing/fire/state6 and visual acceptance remain open.
+
+### Native coordinate clock checkpoint
+
+The effect-owned coordinate block has its own integer clock at+0x118 and
+short delay at+0x11C/+0x11E. `CoordinateClock` translates `0x010FA010`:
+initialization copies the already-sampled delay, every initially nonzero
+delay suppresses this update (including1->0), and the first active update
+increments elapsed to1. Negative short bit patterns and elapsed overflow
+retain native wrapping semantics. The caller supplies the sampled delay;
+resource seed selection, effect offsets and generator clocks are separate.
+
+The complete enemy suite actually exited zero in parent81744:170 passed,
+two existing diagnostics ignored, fresh compile14.43s. All71 library tests
+included the new delay/activation/wrapping regression. Private log:
+E:/ddda-re/notes/steps/S29/full-coordinate-clock-fresh-ddsim.log.
+The first attempt exited101 because a cached older DDSIM artifact lacked
+the source-present ground_contact API; rebuilding only DDSIM selected the
+current source. The failed run is not counted as acceptance.
+
+This is an unused headless ownership helper; it does not create an effect,
+issue queries, change existing caller behaviour or enable production fire.
+Next: resolve installed per-coordinate payloads and the native initialization
+draw order, then bind the real parent/effect transform without double scale.
+Ghidra is stopped for memory pressure; continue from existing private source
+notes rather than starting a server.
+
+### Coordinate resource/static initialization source checkpoint
+
+**Prepared source; Rust compilation and regression execution are pending.**
+`CoordinateDefinition` reads the installed relative coordinate table
+(`0x01147790`, `0x010F9DB0`) and the native initialization fields
+(`0x010FA080`, `0x010FBB20`). Coordinates are distinct from generator
+payloads; table units use the native ushort limit. No resource records or
+random tables are copied into the repository.
+
+The static subset takes the caller's selected global RNG stream and actual
+owning-effect delay. Three preincremented float-table reads occur even
+for zero variation; the fourth counter increment always occurs, while the
+word-table read is skipped for zero delay variation. Delays and counters
+retain native wrapping. Separate f32 multiply/add rounding matches the
+native MULSS/ADDSS instructions, without fused arithmetic. Dynamic curves
+are explicitly rejected before advancing the caller's counter.
+
+Private x86 instruction emulation of `0x010FBF74..0x010FC1C5` completed
+with actual exit zero and eight seed/variation cases matching the scale,
+counter and delay results. This is independent native evidence, not the
+pending Rust test result. Private output:
+`E:/ddda-re/notes/steps/S29/coordinate-static-emulation.json`.
+
+An actual installed-resource probe found that the fourth offset word can
+contain a nonfinite sentinel. `0x010FBB20` copies it as an opaque word;
+`0x010FC1D0` consumes only XYZ and resets output W. The reader therefore
+validates offset XYZ and keeps the tail as raw u32, rather than rejecting
+the real coordinate as an invalid four-float position. Its tail meaning
+remains unresolved. Prepared regressions cover field/table ownership,
+zero-variation draw order, wrap, separate rounding, opaque-tail admission,
+malformed geometry and the actual installed breath resource.
+
+This remains an unused headless helper: no production effect, queries,
+damage or original-game control is enabled. Next: run the complete enemy
+suite on the reviewed integrated dependency set, require both new named
+tests to execute, then bind the actual parent/effect transform and clocks.
+
+Further source review distinguishes the initialization sampling counter
+from runtime draws: after FA080/FBB20 and the first vf43 transform,
+`0x00E6E030` resets coordinate+0x114 from its original seed at+0x112.
+The initializer's post-draw counter must not become the runtime starting
+counter. `0x010FA330` also identifies the first unit word's low byte as the
+original coordinate-table index; `0x00E6DD90` deduplicates used coordinates
+before assigning compact blocks. The reader's index is the resource
+index, never that compact ordinal. The existing mteffect field name
+`generator_kind` for this raw byte is misleading; its public rename/alias
+is a separate reader change to coordinate with head. No caller uses this
+new helper yet, so neither unresolved integration rule changes production.
+
+### Actual integrated coordinate acceptance
+
+On compiled source `3d978da` (native reader/sampler `c571bfd`, reviewed
+main7ea integration `4d39031`, counter/index ownership documentation), the
+complete enemy suite actually exited zero in parent session84494:
+**175 passed, zero failed, two existing diagnostics ignored**. Compilation
+took11.71s and the summed test execution times were84.83s. All73 library
+tests passed; the two new coordinate tests and the earlier coordinate-clock
+test were explicitly confirmed by name in the complete output. Private log:
+`E:/ddda-re/notes/steps/S29/full-coordinate-static-integrated.log`.
+There was no stale/failed attempt in this batch. The existing shared core
+target was used; no new cache, production caller or original-game operation
+was introduced. The normal core lease was released after actual exit.
+
+This accepts the unused coordinate reader/static sampler/clock checkpoint
+for head's review. It does **not** make S30's production landing/fire usable,
+so it does not yet satisfy the S31 production-entry staffing exception.
+Next: implement and independently check the actual static vf43 parent/
+coordinate transform, including native normalization/scale ownership,
+then connect clocks, generator emissions, queries and ordinary HP effects.

@@ -217,3 +217,18 @@ unchanged. This is a small presentation correction, not a native font or
 GUI interpreter implementation. Its rebuilt visual check is pending.
 MEDIUM/HIGH shadow-resolution captures and the whole original comparison
 remain open; the completed LOW capture alone does not close those gates.
+
+The subsequent MEDIUM/HIGH batch completed with actual exit zero for
+owned viewers 30084/30376 (47.12/47.19 seconds). Both actual PNGs were
+independently inspected at the same stage100/noon/1920x1080 overlook pose;
+the three isolated project INIs select LOW/MEDIUM/HIGH. Loaded terrain,
+vegetation and distant buildings remain intact. This supplies a capture
+for each implemented shadow-resolution quality level, but the wide pose
+does not establish close shadow-edge fidelity or an original-quality
+match. No FPS conclusion is drawn. Private evidence:
+`E:/ddda-re/notes/steps/S42/main-7ea18c9-medium-high`.
+Original 23408 remained running and the normal GPU lease was released
+after both actual exits. Source review confirms the first settings apply
+sets DirectionalLightShadowMap from the imported quality; explicit
+PowerShell checks distinguish absent flags from empty environment values.
+The ASCII correction's rebuilt menu image remains the next visual action.

@@ -158,3 +158,33 @@ watchdog after180.7952s; its executable was absent before lease release.
 The earlier42576fd genuine level3 event remains log evidence, not visual
 acceptance. Next: a stable real progression route with render-ready capture,
 coordinated with head; no further speculative GUI retry is planned.
+### Parent genuine integrated capture (2026-10-10)
+
+Head's integrated main `7ea18c9` includes this notice source and the tested
+S54 friendly-contact veto. Its private executable SHA-256 is
+`F4DD8720AF28FE1AFE76E7793B9D468B7A79182F3DF2F3F74EE7DCCC0EF85E64`;
+head reported the complete integrated viewer suite at 103 PASS and the
+actual successful release before providing this pin. The parent used the
+regenerated **v2** RescueApproach checkpoint, SHA-256
+`1FE5BD22AA3B332DC80C858348BBDC3DCFD0CFC4BCC51D3FF904AEC278673334`.
+
+The corrected bounded ordinary demo run produced a genuine owner-0 level-2
+transition at 11:00:51.441 UTC, then saved `S43-level-up.png` at
+11:00:51.602. Independently viewing the PNG confirmed the loaded scene,
+readable Level up!/Lvl. 2 text and the rendered notice panel. No XP, level,
+inventory or quest outcome was manufactured. The empty Arisen-name line is
+still unresolved. This closes the genuine-notice capture gate, **not** the
+original-game visual comparison, missing name/icon work or full native VM.
+
+Owned viewer 16628 actually exited zero after 139.79 seconds. The rescue
+completed with q2:20 true/q2:30 false, but subsequent RoadWalk stalled and
+reached the existing deadline; this is not an Encampment-route PASS.
+The original process 23408 remained running, and the normal GPU lease was
+released after the owned viewer's actual exit. Private evidence:
+`E:/ddda-re/notes/steps/S47/main-7ea18c9-v2-rescue-r2`.
+
+The preceding first attempt omitted `DDVIEW_OPENING_STEP`, so it restored
+the correct checkpoint but left the demo at WeaponTable. It was rejected
+and stopped through its uniquely checked owned process handle: exit -1,
+54.79 seconds. Its PNG is not acceptance. The corrected run explicitly
+set RescueApproach and precreated the screenshot directory.
