@@ -62,8 +62,9 @@ without an "after" can run in parallel, one agent each.
 | S19 | opening movie and event subtitles | S16 |
 | S20 | the naked NPC in the class-selection room | - |
 | S21 | enemy HP bars above their heads | - |
+| S22 | identify the roadside goblin encounter (q0002) in the data | - |
 
-Priority now (the tutorial is the goal): S21, S20, S12/S10/S11 (cutscene
+Priority now (the tutorial is the goal): S21, S22, S20, S12/S10/S11 (cutscene
 faces), S17-S18 (cyclops), S19. Head is doing the Strider (daggers done,
 bow next) and the vocation kit hookup.
 
