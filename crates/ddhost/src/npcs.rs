@@ -41,7 +41,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }).collect()
     }
 
-    pub(crate) fn load_npc_quest_controls(&mut self, file: &crate::save::SaveFile) -> Result<(), HostError> {
+    /// Parse all installed row references before a shared save replaces state.
+    pub(crate) fn read_npc_quest_controls(&self, file: &crate::save::SaveFile)
+        -> Result<std::collections::BTreeMap<u32, ddnpcrt::quest_talk::Control>, HostError>
+    {
         let mut controls = std::collections::BTreeMap::new();
         if let Some(bytes) = file.get(crate::save::TAG_NPC_QUEST, crate::save::Owner::Shared) {
             let mut reader = ddid::Reader::new(bytes);
@@ -70,6 +73,12 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             }
             reader.end().map_err(HostError::Save)?;
         }
+        Ok(controls)
+    }
+
+    pub(crate) fn restore_npc_quest_controls(&mut self,
+        controls: std::collections::BTreeMap<u32, ddnpcrt::quest_talk::Control>)
+    {
         // Absent old-save chunk means empty, including load into an existing
         // runtime. No transient conversation survives a load.
         let players: Vec<_> = self.roster.ids().collect();
@@ -77,7 +86,6 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             if let Some(npc) = self.npcs.talk_abort(player) { let _ = self.locks.release(npc, player); }
         }
         self.npcs.quest_controls = controls;
-        Ok(())
     }
     /// Ordinary NPC control selection before the base/shop conversation.
     /// Called only after the materialized lifetime and dialogue slot are
