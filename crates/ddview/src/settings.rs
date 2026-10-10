@@ -51,6 +51,7 @@ pub struct RenderSource {
 #[derive(Resource, Default)]
 pub struct Runtime {
     pub open: bool,
+    pub(crate) available: bool,
     store: Option<Store>,
     graphics: Graphics,
     revision: u64,
@@ -125,7 +126,10 @@ impl SettingKey {
                 "{} (restart to apply)",
                 g.view_range.map(ViewRange::token).unwrap_or("Unspecified")
             ),
-            Self::Fov => "Unavailable until camera adapter is accepted".into(),
+            Self::Fov => g
+                .camera_fov
+                .map(|v| format!("{v}°"))
+                .unwrap_or_else(|| "Unspecified".into()),
             Self::Unsupported(section, key) => format!(
                 "{} — Unavailable",
                 state
@@ -148,13 +152,28 @@ impl SettingKey {
             Self::Shadow => graphics.shadow = Some(next(&Quality::ALL, graphics.shadow)),
             Self::Filtering => graphics.filtering = Some(next(&Filtering::ALL, graphics.filtering)),
             Self::Range => graphics.view_range = Some(next(&ViewRange::ALL, graphics.view_range)),
-            Self::Fov | Self::Unsupported(..) => return false,
+            // Temporary viewer button granularity; the native 0..15 range
+            // is sourced, its original slider/controller widget is unported.
+            Self::Fov => {
+                graphics.camera_fov =
+                    Some(
+                        graphics
+                            .camera_fov
+                            .map_or(0.0, |v| if v >= 15.0 { 0.0 } else { (v + 1.0).min(15.0) }),
+                    )
+            }
+            Self::Unsupported(..) => return false,
         }
         true
     }
 }
 
-fn menu_setup(mut commands: Commands, args: Res<crate::Args>, source: Option<Res<RenderSource>>) {
+fn menu_setup(
+    mut commands: Commands,
+    args: Res<crate::Args>,
+    source: Option<Res<RenderSource>>,
+    mut state: ResMut<Runtime>,
+) {
     if !args.play {
         return;
     }
@@ -163,9 +182,11 @@ fn menu_setup(mut commands: Commands, args: Res<crate::Args>, source: Option<Res
         Ok(options) => options,
         Err(error) => {
             error!("graphics menu resources: {error}");
+            state.error = Some(error);
             return;
         }
     };
+    state.available = true;
     // The controls below are a plain temporary viewer menu using runtime
     // native labels. The original layout/atlas widget renderer is unported.
     commands
@@ -229,7 +250,7 @@ fn menu_setup(mut commands: Commands, args: Res<crate::Args>, source: Option<Res
                                 ..default()
                             },
                         ));
-                        let enabled = !matches!(key, SettingKey::Unsupported(..) | SettingKey::Fov);
+                        let enabled = !matches!(key, SettingKey::Unsupported(..));
                         row.spawn((
                             Button,
                             MenuAction::Change(key),
@@ -330,6 +351,9 @@ fn menu_update(
             menu.display = display;
         }
     }
+    if !state.open {
+        return;
+    }
     for (key, mut text) in &mut values {
         let value = key.0.value(&state);
         if **text != value {
@@ -358,6 +382,8 @@ fn apply(
     mut dd_materials: ResMut<Assets<crate::stage::DdMaterial>>,
     mut previous: Local<Option<(u64, u32)>>,
     mut previous_filtering: Local<Option<Filtering>>,
+    mut camera_config: ResMut<crate::play::CameraConfig>,
+    mut previous_fov: Local<Option<f32>>,
 ) {
     let stage = streamer.as_ref().map_or(args.stage, |s| s.stage);
     let changed = previous
@@ -371,6 +397,14 @@ fn apply(
     *previous = Some((state.revision, stage));
     let g = &state.graphics;
     if changed {
+        // Args already applies explicit --camera-fov at startup. Preserve
+        // that override until this control itself is deliberately changed.
+        if !initial && *previous_fov != g.camera_fov {
+            if let Some(offset) = g.camera_fov {
+                camera_config.fov_offset_degrees = offset;
+            }
+        }
+        *previous_fov = g.camera_fov;
         if let Some(vsync) = g.vsync {
             // Explicit CLI performance/uncapped mode keeps its existing priority.
             let vsync = vsync && !(args.no_vsync || args.perf || args.perf_route);
@@ -869,6 +903,46 @@ mod tests {
         // A reflection/cube shadow uses half resolution in 0x00DA97D0;
         // this mapping is specifically the stable sun's arg-zero allocation.
         assert_eq!(Quality::High.shadow_resolution(), 2048);
+    }
+
+    #[test]
+    fn filtering_preserves_compressed_payload_mips_dimensions_and_addressing() {
+        use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Bc1RgbaUnormSrgb,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        );
+        image.texture_descriptor.mip_level_count = 3;
+        image.data = Some(vec![0x47; 48]);
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::MirrorRepeat,
+            lod_min_clamp: 1.0,
+            lod_max_clamp: 3.0,
+            ..ImageSamplerDescriptor::linear()
+        });
+        let before = image.clone();
+        for filtering in Filtering::ALL {
+            filter_image(&mut image, filtering);
+            let ImageSampler::Descriptor(sampler) = &image.sampler else {
+                panic!()
+            };
+            assert_eq!(sampler.anisotropy_clamp, filtering.anisotropy());
+            assert_eq!(sampler.address_mode_u, ImageAddressMode::Repeat);
+            assert_eq!(sampler.address_mode_v, ImageAddressMode::MirrorRepeat);
+            assert_eq!((sampler.lod_min_clamp, sampler.lod_max_clamp), (1.0, 3.0));
+            assert_eq!(image.data, before.data);
+            assert_eq!(image.texture_descriptor.format, before.texture_descriptor.format);
+            assert_eq!(image.texture_descriptor.size, before.texture_descriptor.size);
+            assert_eq!(image.texture_descriptor.mip_level_count, 3);
+        }
     }
 
     #[test]

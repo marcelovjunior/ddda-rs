@@ -105,8 +105,46 @@ Regression sources cover roundtrip/preservation/import isolation, duplicate
 and malformed values, native allocation/anisotropy enums, and real filesystem
 save/load with a rejected candidate preserving prior state. **Unexecuted.**
 
-Next: get exact shared main/pause/event/stage hooks agreed and claimed,
-integrate the independently accepted CameraConfig checkpoint, implement the
-first sourced live controls with native menu admission/layout, then run the
-full viewer suite/release under the normal M5 lease and capture each quality
-level. Head folds accepted evidence into MILESTONES; no shared docs edited.
+### Follow-up implementation (still untested)
+
+Head #6923 approved the first feature checkpoint; exact normal claims cover
+main/pause/stage hooks. `35e8738` adds a temporary plain viewer menu reached
+from pause, using runtime original labels; native GUI widget drawing remains
+unported. Unsupported controls are visibly unavailable and do not change
+settings. Esc returns to the still-paused menu. Hidden menu text does no
+per-frame work; a failed resource load cannot open a missing menu.
+
+V-Sync changes window present mode (explicit uncapped/perf CLI retains
+priority). Shadow Quality sets Bevy directional shadow-map resolution;
+caster culling, cascades and distance remain unchanged. Filtering applies
+native anisotropy levels to world Loader images, preserving address modes,
+compressed payload, mip chains, dimensions and formats. Live filter edits
+re-read world textures into the same asset IDs and refresh material bindings
+because render-only CPU payloads may have expired; HUD/fonts/movies are
+excluded. DOF uses the installed stage filter and current lens planes,
+retaining the original tone/vignette state.
+
+Distance Scaling persists and applies at startup, **labelled as requiring
+restart**. Static Loader::spawn_parts discards other LOD meshes; a visibility
+toggle cannot recover them or change already streamed cells. Live range
+reload remains open.
+
+Independently reviewed CameraConfig `44b3f0a`/`203ad96` passed codex-66's
+actual full suite (91 PASS, two existing ignored) and release (40.71 s,
+exit 0), reported #6976/#6978. It is integrated here as `0088c67`/`bb132bc`.
+S42 compares the last applied FOV offset instead of a transient Bevy Changed
+tick, retaining edits made while paused until resume. Its new regression
+runs the actual shared refresh helper across paused updates and resume.
+Startup CLI FOV overrides survive other setting edits. Temporary viewer FOV
+buttons step in whole degrees; only the native 0..15 range is sourced, its
+authored slider/controller widget remains unported.
+
+New regression sources also cover compressed-image sampler preservation
+and pause entry/Esc return. **S42 remains uncompiled/untested**; the accepted
+camera cache result is not a PASS for the settings feature.
+
+Next: full viewer suite/release under the normal M5 lease after urgent S54
+core acceptance, then coordinated private quality captures. The whole S42
+Done gate remains open for native menu drawing, unsupported options, live
+range reload and original comparisons. Head updates MILESTONES; no shared
+docs edited.

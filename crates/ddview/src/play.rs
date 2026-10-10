@@ -572,7 +572,7 @@ pub fn step(
     mut cams: Query<&mut Transform, With<FollowCam>>,
     mut hud: ResMut<Hud>,
     camera: CameraProjection,
-    mut projected: Local<bool>,
+    mut projected: Local<Option<f32>>,
     mut pending: Local<HashMap<PlayerId, Input>>,
     mut sounds: Option<ResMut<crate::audio::PlayerMotionSounds>>,
 ) {
@@ -581,10 +581,7 @@ pub fn step(
     let gamepads = &order_devices.gamepads;
     let Some(mut st) = state else { return };
     if pause.paused { pending.clear(); return; }
-    if !*projected || camera_config.is_changed() {
-        camera_projection(&mut projs, &camera_config);
-        *projected = true;
-    }
+    refresh_camera_projection(&mut projs, &camera_config, &mut projected);
     // A network session (--host / --join) and the opening (opening.rs)
     // step and show the players themselves.
     if net.is_some() || opening.is_some() {
@@ -1121,6 +1118,16 @@ fn camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>, config:
     }
 }
 
+/// A settings edit can happen while paused. Bevy's Changed tick can expire
+/// before play resumes, so compare the last applied offset instead of relying
+/// on one frame's resource change flag (S42).
+fn refresh_camera_projection(cams: &mut Query<&mut Projection, With<FollowCam>>, config: &CameraConfig, applied: &mut Option<f32>) {
+    if *applied != Some(config.fov_offset_degrees) {
+        camera_projection(cams, config);
+        *applied = Some(config.fov_offset_degrees);
+    }
+}
+
 /// Places the goblins and plays their motions (`Goblin::motion` / `frame`,
 /// banks `ddenemyrt::goblin::BANKS`).
 pub fn show_goblins(
@@ -1322,6 +1329,29 @@ mod tests {
             assert!((app.world().resource::<CameraConfig>().fov(50.0)
                 - (50.0 + offset).to_radians()).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn paused_camera_setting_edit_is_applied_when_the_follow_view_resumes() {
+        fn refresh(config: Res<CameraConfig>, mut cameras: Query<&mut Projection, With<FollowCam>>, mut applied: Local<Option<f32>>) {
+            refresh_camera_projection(&mut cameras, &config, &mut applied);
+        }
+        let mut app = App::new();
+        app.insert_resource(CameraConfig { fov_offset_degrees: 15.0 })
+            .init_resource::<crate::pause::PauseState>()
+            .add_systems(Update, refresh.run_if(crate::pause::playing));
+        let view = app.world_mut().spawn((FollowCam, Projection::Perspective(PerspectiveProjection::default()))).id();
+        app.update();
+        app.world_mut().resource_mut::<crate::pause::PauseState>().paused = true;
+        app.world_mut().resource_mut::<CameraConfig>().fov_offset_degrees = 0.0;
+        app.update();
+        app.update();
+        let Projection::Perspective(lens) = app.world().get::<Projection>(view).unwrap() else { panic!() };
+        assert_eq!(lens.fov, (CAMERA_FOV + 15.0).to_radians());
+        app.world_mut().resource_mut::<crate::pause::PauseState>().paused = false;
+        app.update();
+        let Projection::Perspective(lens) = app.world().get::<Projection>(view).unwrap() else { panic!() };
+        assert_eq!(lens.fov, CAMERA_FOV.to_radians());
     }
 
     #[test]
