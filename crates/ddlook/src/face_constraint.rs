@@ -124,40 +124,32 @@ mod tests {
         m
     }
 
-    /// Expected matrices from execution of the four original helpers in
-    /// an x86 emulator with synthetic, rotated nonuniform input matrices.
-    /// For d/e/f the helper output was composed by the vf24 contract;
-    /// type10 directly writes the world matrix. No game data is embedded.
+    /// Expected matrices from execution of uCnsEdit::vf24 (0x00860ac0)
+    /// and its four helpers in an x86 emulator with synthetic, rotated
+    /// nonuniform inputs, weight1 and parent-relative flag clear.
+    /// No game data is embedded.
     #[test]
     fn matches_original_eye_helpers() {
         let parent = matrix([10.0, -5.0, 8.0], 0.37, [1.3, 0.7, 1.1]);
         let world = multiply(matrix([2.0, 3.0, 4.0], -0.2, [0.9, 1.2, 0.8]), parent);
         let pivot = multiply(matrix([1.0, 2.0, 3.0], 0.4, [1.1, 0.8, 1.3]), parent);
-        let helper_outputs = [
-            (0xd, [0.975636, 0.207949, 0.069943, 0.0, -0.215569, 0.967888, 0.129317, 0.0,
-                -0.040806, -0.141243, 0.989134, 0.0, 0.511279, -0.462993, 0.812500, 1.0]),
-            (0xe, [0.975636, 0.207949, 0.069943, 0.0, -0.215569, 0.967888, 0.129317, 0.0,
-                -0.040806, -0.141243, 0.989134, 0.0, 0.006387, -0.108788, 0.852615, 1.0]),
-            (0xf, [1.171072, 0.0, 0.0, 0.0, 0.0, 0.745507, 0.0, 0.0,
-                0.0, 0.0, 1.625000, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        let outputs = [
+            (0xd, [1.085370, 0.473621, 0.061550, 0.0, -0.248687, 0.787139, 0.113799, 0.0,
+                -0.044235, -0.136399, 0.870438, 0.0, 12.238449, -2.356826, 13.115000, 1.0]),
+            (0xe, [1.085370, 0.473621, 0.061550, 0.0, -0.248687, 0.787139, 0.113799, 0.0,
+                -0.044235, -0.136399, 0.870438, 0.0, 11.672728, -2.195701, 13.150301, 1.0]),
+            (0xf, [1.565966, 0.418726, 0.0, 0.0, -0.005546, 0.557397, 0.0, 0.0,
+                0.0, 0.0, 1.573000, 0.0, 11.890152, -2.306205, 12.840000, 1.0]),
+            (0x10, [1.337208, 0.357558, 0.0, 0.0, -0.007439, 0.747675, 0.0, 0.0,
+                0.0, 0.0, 0.968000, 0.0, 11.983002, -2.203681, 12.950000, 1.0]),
         ];
-        for (kind, mut helper) in helper_outputs {
-            if kind == 0xf {
-                helper[12..15].copy_from_slice(&[0.2, -0.3, 0.5]);
-                for r in 0..3 { helper[r * 5] *= [1.2, 0.85, 1.1][r]; }
-            }
-            let expected = multiply(helper, world);
+        for (kind, expected) in outputs {
             let actual = apply(kind, world, parent, Some(pivot), [0.2, -0.3, 0.5],
                 [1.2, 0.85, 1.1], [0.13, -0.07, 0.21]).unwrap();
             for (a, b) in actual.iter().zip(expected) {
                 assert!((a - b).abs() < 0.000_01, "kind={kind:x}: {actual:?} vs {expected:?}");
             }
         }
-        let actual = apply(0x10, world, parent, None, [0.2, -0.3, 0.5],
-            [1.2, 0.85, 1.1], [0.13, -0.07, 0.21]).unwrap();
-        let expected = [1.337208, 0.357558, 0.0, 0.0, -0.007439, 0.747675, 0.0, 0.0,
-            0.0, 0.0, 0.968000, 0.0, 11.983002, -2.203681, 12.950000, 1.0];
-        for (a, b) in actual.iter().zip(expected) { assert!((a - b).abs() < 0.000_01); }
     }
 
     #[test]
