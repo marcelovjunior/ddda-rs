@@ -81,6 +81,9 @@ enum Step {
     Gate,
     FieldWalk,
     FieldSettle,
+    /// `DDVIEW_DEMO_FIGHT`: after the settle, fight the field's goblins
+    /// with ordinary inputs (play::demo_attack) and log the quest state.
+    Rescue,
     Done,
 }
 
@@ -1778,6 +1781,38 @@ pub fn cutscene(
 
 /// The demo's input for this frame: walk to the step's target, press E,
 /// answer the menu and the talk.
+/// The demo's fight on the field: the Arisen attacks the nearest live
+/// goblin with ordinary inputs; every 5 seconds it logs the goblins left,
+/// the party's HP and q0002's state. Ends when no goblin is left alive or
+/// after 240 seconds. No enemy death, flag or quest state is forced.
+fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
+    let alive = s.host.fight.as_ref().map_or(0, |f| f.goblins.iter().filter(|g| !g.dead()).count());
+    let (since, last_log) = {
+        let d = s.demo.as_ref().unwrap();
+        (d.since, d.check.0)
+    };
+    if now - last_log >= 5.0 || alive == 0 || now - since > 240.0 {
+        let w = s.world();
+        let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
+        info!(
+            "opening demo: rescue: {alive} goblins alive, Arisen HP {hp:?}, SceNo {}, q0002 bits {:08x?}, quests {:?}",
+            w.sce_no,
+            w.quest_bits(2).map(|b| b.words()),
+            s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
+        );
+        let d = s.demo.as_mut().unwrap();
+        d.check.0 = now;
+        if alive == 0 || now - since > 240.0 {
+            info!("opening demo: Rescue done -> Done");
+            d.step = Step::Done;
+            d.since = now;
+        }
+    }
+    let d = s.demo.as_mut().unwrap();
+    let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
+    PlayerInput { sim, interact: false }
+}
+
 fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
     let Some(p) = s.host.sim.player(0).map(|p| Vec3::from(p.position)) else {
         return PlayerInput::default();
@@ -1791,6 +1826,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         d.check = (now, p);
     }
     let step = d.step;
+    if step == Step::Rescue {
+        return demo_rescue(s, now);
+    }
     let route = ddstory::route::opening();
     let place = |name: &str| -> Option<Vec3> {
         let w = route.iter().find(|w| w.name == name)?;
@@ -1820,7 +1858,7 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
-        Step::Gate | Step::FieldSettle | Step::Done => None,
+        Step::Gate | Step::FieldSettle | Step::Rescue | Step::Done => None,
     };
     if (now % 2.0) < 0.04 {
         info!(
@@ -1979,7 +2017,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
             info!("perf route: walked cell boundary {:?} -> {:?} at {p:?}; settling 30 seconds without screenshots", d.field_cell, benchmark_cell(p));
             next = Some(Step::FieldSettle);
         }
-        Step::FieldSettle if now - d.since >= 30.0 => next = Some(Step::Done),
+        Step::FieldSettle if now - d.since >= 30.0 => {
+            next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::Rescue } else { Step::Done })
+        }
         _ => {}
     }
     let talk_due = (step == Step::TalkQuina || (step == Step::Q0002Event && w.sce_no >= 1400))
