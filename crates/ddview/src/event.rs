@@ -566,6 +566,7 @@ fn spawn_look(
         .iter()
         .map(|p| character::ExtraPart {
             path: p.path.clone(),
+            material_path: None,
             tint: if p.hair {
                 look.hair_color
             } else if p.beard {
@@ -578,6 +579,7 @@ fn spawn_look(
         .collect();
     parts.extend(look.weapons.iter().map(|w| character::ExtraPart {
         path: w.path.clone(),
+        material_path: None,
         tint: None,
         attach: Some((w.joint, w.rotation, w.offset)),
     }));

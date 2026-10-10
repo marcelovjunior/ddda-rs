@@ -84,3 +84,170 @@ No original-game control or GPU capture was performed.
 Next: connect resolved masks and separately attached units to the viewer,
 preserving native joint scale, then run viewer tests/build and queue one
 bounded S46-checkpoint capture. Original visual comparison remains open.
+
+### Viewer checkpoint
+
+The ordinary opening and `--play` goblin builders now use the host's
+resolved mask, with each equipment unit on its native initial joint and
+offset. Native `uCoord::vf21` (0x00DEBBA0) preserves the parent's joint
+scale; the shared attachment adapter has an opt-in raw-matrix path, with
+existing human `uCnsAttach` callers preserving their default normalization.
+The extra unit's kind-5 material replacement (0x008EB920) reads its resource
+name from descriptor 0x01838664. Other character parts have no override.
+
+`DDVIEW_GOBLIN_EQUIPMENT_COMPARE` enables an explicitly labelled,
+**render-only** comparison: one higher-equipment record from the installed
+disabled group-24 roadside layout appears at its authored coordinates,
+beside ordinary group-23 actors. It never joins `Fight`, opens layout gates,
+or changes quests; it uses an isolated native appearance stream and is
+retired on stage changes. Head approved this diagnostic in board #5841.
+
+Actual viewer validation: 77 tests passed, 2 ignored (35.94 s compile,
+9.86 s tests), followed by a successful release build (35.80 s). Then added
+the installed renderer assembly test: it checks exact admitted mesh counts,
+native attachment entries, replacement-material name coverage, and the
+installed comparison record. The final focused two tests passed (17.94 s
+compile, 2.66 s tests), followed by a successful release build (43.25 s).
+All completed with exit 0. The first assembly-test compile required
+unwrapping Bevy 0.19's `SystemState::get_mut` validation result; corrected.
+No new warnings remain. No viewer window or original-game process touched.
+
+Acceptance still open: after S31's NPC Guard regression is fixed and merged,
+integrate the committed fix and run **full ddenemyrt/ddhost/final ddview
+suites** (head #5837), then queue one bounded checkpoint capture with the
+diagnostic. Guest appearance replication belongs to S44. Weapon switching
+(0x008D73A0 toggles actor +0x6020 at frame 78; 0x008D7550 at frame 11),
+dropped equipment, other goblin kinds, and original visual comparison remain
+explicit follow-ups, not claims of this initial-placement checkpoint.
+
+### Handoff to codex-1
+
+- Core source: `cb13f3a01a7a6b9e0c3d497042115de6278c09fa`; codex-1
+  independently verified all seven focused source/installed tests.
+- Viewer source: `0163e4f328582e44ef7fe4d6d82ca69fd8143a0e` on
+  `step/s47-goblin-equipment`, worktree
+  `E:/ddda-rs-wt/s47-goblin-equipment`.
+- Private candidate: `E:/ddda-re/notes/steps/S47/ddview-s47-0163e4f.exe`;
+  checked SHA-256
+  `096CCF16B7D384150979058A184FF5555FDE1524CAA03A72F058EDCF12DCB767`.
+  **Do not launch this old candidate for route acceptance:** it predates
+  the Guard fix, `DDVIEW_TIME_SCALE` and S46 integration. Rebuild the
+  reviewed integrated branch and pin its binary first.
+- No Cargo, viewer, GPU or original-game operation is active. Shared build
+  target `E:/ddda-rs-wt/m5-cassardis/target` and private artifacts are
+  preserved. All feature/build claims released at handoff.
+- Codex-1 owns remaining integration and acceptance: merge only the
+  reviewed committed Guard fix into the task branch, run full
+  `ddenemyrt`, `ddhost` and final `ddview` suites, build and pin release,
+  then post one capture request to the GPU holder. From the nearest S46
+  field checkpoint use `--opening-from <private checkpoint> --unattended`
+  with `DDVIEW_GOBLIN_EQUIPMENT_COMPARE=1`, `DDVIEW_TIME_SCALE=4` and
+  one requested PNG. Check the ordinary group23 body against the labelled
+  group24 comparison plus `S47_RENDER_ONLY` log; never admit group24 to
+  combat. Route capture waits for the source Guard regression fix.
+
+S47 is an initial-placement source/renderer checkpoint, **not fully Ready**;
+full-suite and original visual gates remain explicit. The next free lane
+slot goes to S41 measured frame gains, per head's priority.
+
+
+### Independent integration review (codex-1)
+
+Reviewed core cb13f3a and renderer0163e4f, including runtime descriptor/data
+ownership, native joint scale and isolated render-only comparison RNG.
+Integrated reviewed main c7c0505 into this task branch (HEAD10fa6ec),
+including S34 placement-rate HP2500, current-camera gauge and S31 Guard
+regression fix. Full enemy161 passed/2 existing ignored and host95 passed,
+actual session40349 exit0; compile44.23s. Private log:
+E:/ddda-re/notes/steps/S47/full-core-current-hp.log.
+
+Previous independent release viewer81 passed/2 existing ignored and
+default build passed on b4b1318. That older pin predates current HP/gauge,
+so it will not be used for the capture. Current full viewer acceptance,
+rebuild/pin and one bounded ordinary-route x4 capture are queued after S35.
+Head5995 permits that route without S46; whole original visual comparison
+and later equipment switching remain open.
+
+### Parent combined acceptance and checkpoint capture
+
+Parent integration435a027 includes reviewed maina24c1ed, S49 perception,
+S43 sourcebda3cfe and S35 native cost visibility. Complete viewer tests:
+92 passed, two existing ignored (28.63s compile, 11.35s tests); default
+release48.12s. Process94503 actually exited zero. The equipment/material/
+joint-scale and six level-notice regressions executed. A source-present
+extra_material field initially exposed stale M5 release dependencies;
+narrow --release package rebuilds corrected them. Failed compiles are not
+counted as acceptance.
+
+Private pin: E:/ddda-re/notes/steps/S47/ddview-s47-combined-435a027.exe,
+SHA256 1102C9544C3EBC12E8DE5ED3C26EBD0281A899F61AE02356A97D3D044FEC7E86.
+The head-approved RescueApproach checkpoint run used normal demo inputs,
+x4 time, GPU/default backend, screenshots and a180s wall watchdog. Owned
+viewer30364 actually exited zero after151.5195s. The log confirms the
+render-only authored group24 record0/equipment4 fixture loaded, without
+Fight/quest admission; it does not prove its visual appearance.
+
+**Visual acceptance failed:** zero PNGs, because enable_perf_route clears
+the session's shots path despite --shots being accepted by argument
+parsing. No real level-up occurred: level2/experience420 stayed below485.
+There is no S43 notice capture. This run also reached the failed rescue
+branch (q2:20 false, q2:30 true) after the stricter main191af5c demo
+bystander guard; Reynard died before the first three goblin kills. No
+performance result is valid for the accelerated screenshot run. Private
+provenance/logs: combined-rescue-435a027.run.json and
+combined-rescue-435a027.err.txt. GPU released after actual exit.
+
+Next: repair the explicit screenshot path and diagnose the stricter demo
+attack guard before one coordinated visual retry. Whole S47 remains open;
+original visual comparison and later attachment/drop behavior unverified.
+
+### Updated screenshot/guard checkpoint and capture limitation
+
+Reviewed main3ecd13e and the S35 cost-visibility merge are integrated at
+source42576fd. Parent process53534 actually exited zero: complete default
+viewer92 passed/two existing ignored, fresh compile40.03s/tests12.11s,
+release build56.98s. The source-present equipment/material, joint-scale
+and vocation-visibility regressions executed. A preceding89-test result
+was rejected as a stale S30 viewer artifact; only ddview's release package
+was rebuilt. Private logs are full-viewer-shots-guard-fixed-fresh.log and
+build-viewer-shots-guard-fixed-fresh.log in E:/ddda-re/notes/steps/S47.
+
+Private pin ddview-s47-combined-42576fd.exe is94,574,592 bytes, SHA256
+40A8604D7C76C28326EA3328677C6040A44C4FF7EC672BC1C3E05D28D514561E.
+Its bounded RescueApproach run logged genuine q2:20 true/q2:30 false,
+Reynard dialogue/item1058 and an Arisen level3 notice. The render-only
+group24/equipment4 comparison loaded without a combat/quest owner.
+
+No visual acceptance: the explicit screenshot directory was absent and
+the newly-arisen/level-up PNG writes failed with OS error3. The parent
+created it after discovering the error, after both transient captures.
+Harness56794 exited1 when Stop-Process raced with viewer32444's exit;
+the viewer's numeric exit is unknown. The original23408 remained running.
+PID32444 was subsequently reused by rustc; the viewer was confirmed absent
+by executable provenance and its lease released. This is not an exit0 or
+appearance PASS. Private combined-rescue-42576fd.run.json/err.txt retain
+the evidence. The accelerated screenshot run has no valid FPS result.
+
+Next: one coordinated bounded retry with a precreated screenshot directory
+and the corrected process-handle watchdog, then inspect actual PNGs.
+
+The one head-approved retry includes main959f6a9's directory creation at
+source d5567f8. Full default viewer92 passed/two existing ignored, fresh
+compile20.37s/tests10.99s and release40.03s, actual79457 exit0. Private pin
+ddview-s47-combined-d5567f8.exe SHA256
+83CCCD16CCA88D814F6688C5E422C428C8F9B5AAB19D19C465714440EEFFECBD.
+
+The corrected handle watchdog obtained numeric exit-1 for owned viewer15908
+after180.7952s (harness1596 exit1). Its executable was confirmed absent and
+original23408 still running before lease release. Only1-newly-arisen.png
+was saved; independent viewing found pre-pipeline sky/HUD without terrain
+or the equipment body. This run failed the rescue (q2:20 false/q2:30 true),
+stayed at level2/experience420 and produced no S43 notice PNG. The final
+NPC304/owner106 ledger records Arisen0 five hits/990.099 and hired pawn6
+five hits/633.6634, plus goblin/projectile damage. Friendly fire is present;
+arrival timing and the exact successful-run difference need comparison.
+Head received the timestamps, complete ledger and goblin lines on the board.
+No new capture retry is planned and no visual/original/FPS PASS is claimed.
+Private combined-rescue-d5567f8.run.json/err.txt and the saved PNG retain
+the evidence. Next: establish a stable real route and render-ready capture
+before equipment appearance acceptance; keep the source checkpoint separate.

@@ -22,6 +22,8 @@ pub struct PauseMenu;
 #[derive(Component, Clone, Copy)]
 pub enum Action {
     Resume,
+    Items,
+    Settings,
     Quit,
 }
 
@@ -70,7 +72,11 @@ pub fn setup(mut commands: Commands, args: Res<crate::Args>, mut pause: ResMut<P
                     ..default()
                 },
             ));
-            for (label, action) in [("Resume (Esc)", Action::Resume), ("Quit", Action::Quit)] {
+            let mut actions = vec![("Resume (Esc)", Action::Resume), ("Graphics settings", Action::Settings), ("Quit", Action::Quit)];
+            // This parent screen is viewer policy; the Items child projects
+            // the installed uGUIItemLE resources. Native pause-top VM is open.
+            if args.opening { actions.insert(1, ("Items", Action::Items)); }
+            for (label, action) in actions {
                 c.spawn((
                     Button,
                     action,
@@ -103,7 +109,10 @@ pub fn update(
     mut exit: MessageWriter<AppExit>,
     movie: Option<Res<crate::movie::MoviePlayer>>,
     intro: Option<Res<crate::intro::Intro>>,
+    mut item_menus: ResMut<crate::item_menu::Menus>,
+    settings: Option<ResMut<crate::settings::Runtime>>,
 ) {
+    let mut settings = settings;
     if !pause.enabled || movie.is_some() || intro.is_some() {
         return;
     }
@@ -111,10 +120,13 @@ pub fn update(
         return;
     };
     let was_paused = pause.paused;
+    let settings_was_open = settings.as_ref().is_some_and(|s| s.open);
     if !window.focused && pause.auto_pause {
         pause.paused = true;
     } else if keys.just_pressed(KeyCode::Escape) {
-        pause.paused = !pause.paused;
+        if item_menus.blocks(0) { item_menus.close(0); pause.paused = false; }
+        else if let Some(settings) = settings.as_mut().filter(|s| s.open) { settings.open = false; keys.reset(KeyCode::Escape); }
+        else { pause.paused = !pause.paused; }
     }
     for (interaction, action, mut color) in &mut buttons {
         *color = BackgroundColor(if *interaction == Interaction::Hovered {
@@ -122,9 +134,11 @@ pub fn update(
         } else {
             Color::srgb(0.15, 0.2, 0.28)
         });
-        if was_paused && *interaction == Interaction::Pressed {
+        if was_paused && !settings_was_open && *interaction == Interaction::Pressed {
             match action {
                 Action::Resume => pause.paused = false,
+                Action::Items => { item_menus.open(0); pause.paused = false; }
+                Action::Settings => { if let Some(settings) = settings.as_mut().filter(|s| s.available) { settings.open = true; } }
                 Action::Quit => {
                     exit.write(AppExit::Success);
                 }
@@ -144,7 +158,7 @@ pub fn update(
         CursorGrabMode::Locked
     };
     for mut menu in &mut menus {
-        menu.display = if pause.paused {
+        menu.display = if pause.paused && !settings.as_ref().is_some_and(|s| s.open) {
             Display::Flex
         } else {
             Display::None
@@ -166,6 +180,8 @@ mod tests {
         })
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<crate::item_menu::Menus>()
+        .init_resource::<crate::settings::Runtime>()
         .add_message::<AppExit>()
         .add_systems(Update, update);
         let window = app
@@ -259,6 +275,17 @@ mod tests {
         );
 
         app.world_mut().resource_mut::<PauseState>().paused = true;
+        app.world_mut().resource_mut::<crate::settings::Runtime>().available = true;
+        let settings = app.world_mut().spawn((Button, Action::Settings, Interaction::Pressed, BackgroundColor::default())).id();
+        app.update();
+        assert!(app.world().resource::<crate::settings::Runtime>().open);
+        assert_eq!(app.world().get::<Node>(menu).unwrap().display, Display::None);
+        *app.world_mut().get_mut::<Interaction>(settings).unwrap() = Interaction::None;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().resource::<crate::settings::Runtime>().open);
+        assert!(app.world().resource::<PauseState>().paused, "leaving settings returns to the pause menu");
+        assert_eq!(app.world().get::<Node>(menu).unwrap().display, Display::Flex);
         *app.world_mut().get_mut::<Interaction>(quit).unwrap() = Interaction::Pressed;
         app.update();
         assert!(!app.world().resource::<Messages<AppExit>>().is_empty());
