@@ -71,7 +71,7 @@ pub struct BowParam {
 pub enum BowPhase {
     Draw = 0,
     Ready = 1,
-    /// Documented, deferred to S26 (shell firing and shot timing).
+    /// Stationary basic shot; ordered shoot-controller rows are host-owned.
     Shot = 2,
     /// Documented, deferred until parameter/skill switching is supported.
     Change = 3,
@@ -174,6 +174,175 @@ impl BowState {
 /// 2017-12-13 Steam). Check 34 is not a vocation check.
 pub fn bow_check34(unit_mode: u32, stage_mode: u32) -> bool {
     unit_mode != 15 || stage_mode == 2
+}
+
+/// One ordered shootCtrlList row, read from the installation. The action
+/// consumes it once even when its charge level does not match.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowShotRow {
+    pub wait_frame: f32,
+    pub charge_level: u32,
+    pub group: u32,
+    pub index: u32,
+    pub angle: [f32; 2],
+    pub spread: [f32; 2],
+    pub shell_wait: f32,
+}
+
+/// Stationary basic shot projection. Skill charging, moving/air shots and
+/// special arrow selection need their own sourced branches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BowShotParam {
+    pub upper: u8,
+    pub lower: u8,
+    pub reload_speed: f32,
+    pub shot_wait: f32,
+    pub charge_begin_frame: f32,
+    pub stamina: f32,
+    pub stamina_attack_rate: f32,
+    /// m_pl000_00 row 0x1BC, charged in mode 1 (weapon level tier).
+    pub weapon_stamina: f32,
+    pub accuracy_wait: f32,
+    pub rows: Vec<BowShotRow>,
+}
+
+/// Host-owned per-seat action +0x168/+0x16C/+0x170/+0x174/+0x178.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowShotState {
+    pub wait: Option<f32>,
+    pub elapsed: f32,
+    pub cursor: usize,
+    pub charge_level: u32,
+    pub complete: bool,
+    pub stamina_attack: f32,
+    pub charge_reset: bool,
+}
+
+impl Default for BowShotState {
+    fn default() -> Self {
+        Self {
+            wait: None,
+            elapsed: 0.0,
+            cursor: 0,
+            charge_level: 0,
+            complete: true,
+            stamina_attack: 0.0,
+            charge_reset: false,
+        }
+    }
+}
+
+impl BowShotState {
+    /// Translated from 0x00B19540 / 0x00B1C2C0 (DDDA.exe 2017-12-13 Steam).
+    pub fn request(&mut self, param: &BowShotParam) {
+        self.wait = Some(param.shot_wait);
+        self.charge_reset = false;
+    }
+
+    /// Countdown precedes motion initialization and the shoot scheduler.
+    /// Returns true only on the update that starts the shot motion.
+    pub fn start_due(&mut self, frames: f32) -> bool {
+        let Some(wait) = self.wait else { return false };
+        let remaining = wait - frames;
+        if remaining > 0.0 {
+            self.wait = Some(remaining);
+            false
+        } else {
+            self.wait = None;
+            true
+        }
+    }
+
+    /// Translated from 0x00B1BE20: snapshot charge and actual stamina debit,
+    /// not the requested cost. Called once when the upper shot starts.
+    pub fn begin(&mut self, charge_level: u32, spent: f32, attack_rate: f32) {
+        self.elapsed = 0.0;
+        self.cursor = 0;
+        self.complete = false;
+        self.charge_level = charge_level;
+        self.stamina_attack = spent * attack_rate;
+    }
+
+    /// Translated from 0x00B1BF90 (DDDA.exe 2017-12-13 Steam). The authored
+    /// order is preserved; a later row never jumps an earlier future row.
+    /// Emission precedes elapsed-time advancement, including waitFrame 0.
+    pub fn advance(&mut self, rows: &[BowShotRow], frames: f32) -> Vec<BowShotRow> {
+        let mut emitted = Vec::new();
+        if self.complete {
+            return emitted;
+        }
+        if self.cursor >= rows.len() {
+            self.complete = true;
+            return emitted;
+        }
+        while let Some(row) = rows.get(self.cursor) {
+            if row.wait_frame > self.elapsed {
+                break;
+            }
+            self.cursor += 1;
+            if row.charge_level == self.charge_level {
+                emitted.push(*row);
+            }
+        }
+        if self.cursor == rows.len() {
+            self.complete = true;
+        }
+        // At entry with an already exhausted list, the original returns;
+        // after consuming the last row inside the loop it still adds dt.
+        if !rows.is_empty() {
+            self.elapsed += frames;
+        }
+        emitted
+    }
+}
+
+/// A host consumes these once and supplies the actual bow joint, aim and
+/// RNG samples at this update. No projectile is spawned from feet offsets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowShot {
+    pub row: BowShotRow,
+    pub stamina_attack: f32,
+    pub accuracy: f32,
+}
+
+/// Smoothed bow accuracy, action +0x154/+0x158/+0x15C. Updated after
+/// shooting, so this frame's shot uses the preceding filter value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BowAccuracy {
+    pub value: f32,
+    pub velocity: f32,
+}
+impl Default for BowAccuracy {
+    /// cPlActWpnBow constructor/vf05 0x00B169C0 / 0x00B16FE0.
+    fn default() -> Self {
+        Self {
+            value: 1.0,
+            velocity: 0.0,
+        }
+    }
+}
+impl BowAccuracy {
+    /// Translated from 0x00B1E480 -> 0x007BC800 and scalar vtable
+    /// 0x007BC910..0x007BC960 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, target: f32, mut frames: f32) {
+        if frames < 0.0 {
+            self.value = target;
+            return;
+        }
+        // Constructor's embedded stiffness; damping is clamped to one.
+        let stiffness = 0.15_f32;
+        let damping = (2.0 * stiffness.sqrt()).min(1.0);
+        while frames > 0.0 {
+            let step = frames.min(1.1); // embedded cap at 0x014091AC
+            let error = self.value - target;
+            // vf06 uses x87 intermediates, rounded on storing acceleration.
+            let acceleration = (-(f64::from(stiffness) * f64::from(error))
+                - f64::from(damping) * f64::from(self.velocity)) as f32;
+            self.velocity = self.velocity * step + (f64::from(acceleration) * f64::from(step)) as f32;
+            self.value += self.velocity;
+            frames -= 1.1;
+        }
+    }
 }
 
 /// A basic attack action.
