@@ -142,7 +142,8 @@ struct NpcAdapter {
     guards: HashMap<u32, ddnpcrt::schedule::Guard>,
     goto: HashMap<u32, [f32; 3]>,
     placed: HashMap<u32, ([f32; 3], Option<[f32; 3]>)>,
-    bindings: HashMap<u32, (u32, ddstory::Target)>,
+    owners: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
+    bindings: HashMap<u32, ddhost::story_npcs::NpcLifetime>,
     reported_stage: u32,
 }
 
@@ -159,7 +160,7 @@ impl NpcAdapter {
         cells.sort(); cells.dedup();
         let layouts = ddhost::npc_placements::LoadedLayouts::read(vfs, STAGE, &list, &cells)?;
         Ok(Self { layouts, families, guards: HashMap::new(), goto: HashMap::new(),
-            placed: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
+            placed: HashMap::new(), owners: HashMap::new(), bindings: HashMap::new(), reported_stage: STAGE })
     }
 }
 
@@ -326,6 +327,7 @@ impl Session {
             self.npc_adapter.guards.clear();
             self.npc_adapter.goto.clear();
             self.npc_adapter.placed.clear();
+            self.npc_adapter.owners.clear();
             self.npc_adapter.bindings.clear();
             return Ok(());
         }
@@ -349,14 +351,16 @@ impl Session {
             warn!("opening: NPC placement {target:?}: {diagnostic}");
         }
         let owned: HashMap<_, _> = self.host.story_npc_intels()
-            .map(|p| (p.npc as u32, (p.stage, p.target))).collect();
-        for (&npc, old) in &self.npc_adapter.bindings {
+            .filter_map(|p| self.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
+        // Request ownership is independent of successful model creation.
+        for (&npc, old) in &self.npc_adapter.owners {
             if owned.get(&npc) != Some(old) {
                 self.npc_adapter.guards.remove(&npc);
                 self.npc_adapter.goto.remove(&npc);
                 self.npc_adapter.placed.remove(&npc);
             }
         }
+        self.npc_adapter.owners = owned;
         Ok(())
     }
 
@@ -390,6 +394,16 @@ impl Session {
             demo.perf_route = true;
         }
         self.shots = None;
+    }
+    pub(crate) fn door_npc_coverage(&self) -> bool {
+        let stage=self.world().stage_no;
+        if stage!=self.npc_adapter.layouts.stage{return false;}
+        let (scene,hour,flag)=ddhost::spawns::world_inputs(self.world(),stage);
+        let candidates=self.npc_adapter.layouts.candidates(&ddhost::ddspawn::World{scene,hour,flag:&flag});
+        !candidates.gates.iter().any(|(_,gate)|matches!(gate,ddhost::ddspawn::Gate::Unported(_)))
+            && candidates.placements.iter().all(|p|
+                self.npc_adapter.families.select(&p.transform.name)==Some(false)
+                    && self.host.story_npc_position(p.npc as u32).is_some())
     }
     /// Presentation query using the same rendered positions and range as E.
     pub fn can_talk(&self, seat: ddsim::PlayerId) -> bool {
@@ -536,7 +550,8 @@ fn sync_npc_models(
     bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
 ) {
     let placements: Vec<_> = session.host.story_npc_intels().cloned().collect();
-    let wanted: HashMap<_, _> = placements.iter().map(|p| (p.npc as u32, (p.stage, p.target))).collect();
+    let wanted: HashMap<_, _> = placements.iter().filter_map(|p|
+        session.host.story_npc_lifetime(p.npc as u32).map(|owner| (owner.npc, owner))).collect();
     let retired: Vec<_> = session.npcs.keys().copied().filter(|id|
         !wanted.contains_key(id) || wanted.get(id) != session.npc_adapter.bindings.get(id)).collect();
     for id in retired {
@@ -554,7 +569,7 @@ fn sync_npc_models(
             bindposes, &look, play::MOTIONS, 0, pos * UNIT, Some(yaw)) {
             Ok(entity) => {
                 session.npcs.insert(id, (entity, pos, yaw));
-                session.npc_adapter.bindings.insert(id, (placement.stage, placement.target));
+                if let Some(&owner) = wanted.get(&id) { session.npc_adapter.bindings.insert(id, owner); }
             }
             Err(error) => warn!("opening: NPC {id} body unavailable: {error}"),
         }
@@ -724,7 +739,7 @@ pub fn step(
         if let Some(terrain) = streamer.take_terrain() {
             // the camera's copy too (play::follow_camera)
             st.terrain = terrain.clone();
-            s.host.ground = Box::new(terrain);
+            s.host.set_ground_with_doors(Box::new(terrain));
         }
     }
     if !s.network_ready {
@@ -900,8 +915,10 @@ pub fn step(
                         let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
                             &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
                             *stage, [start.position[0], start.position[1], start.position[2]])?;
+                        s.host.doors = None;
+                        st.door_collision = Default::default();
                         st.terrain = terrain.clone();
-                        s.host.ground = Box::new(terrain);
+                        s.host.set_ground_with_doors(Box::new(terrain));
                         s.starts = starts.entries.iter().map(|e| (
                             [e.position[0], e.position[1], e.position[2]], e.angle,
                             e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),

@@ -36,6 +36,7 @@ mod movie;
 mod stream;
 mod event;
 mod character;
+mod doors;
 mod net;
 mod opening;
 mod play;
@@ -632,7 +633,7 @@ fn main() {
         .init_resource::<movie::MovieFinished>()
         .init_resource::<movie::MovieSkip>()
         .add_systems(Startup, (setup, pause::setup).chain())
-        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, opening::cutscene,
+        .add_systems(Update, (pause::update, fly_camera, shot, (perf::update, probe::update, event::lod_update, sky_shadow), clock::update, movie::update, charaedit::update, intro::update, play::step, stream::play_hookup, stream::update, net::step, opening::step, doors::update, opening::cutscene,
             character::animate.run_if(pause::animate_world.or_else(|args: Res<Args>| args.opening && (args.host.is_some() || args.join.is_some()))), shadows::update, hud::update).chain());
 
     app.add_systems(PostUpdate, character::camera_fade.after(bevy::transform::TransformSystems::Propagate));
@@ -830,6 +831,19 @@ fn setup(
             let n = loader.spawn_low_models(&mut commands, &mut meshes, &mut materials, &mut images, (a0, b0), loader.view_range);
             info!("low models {n}");
         }
+    }
+    if !args.play {
+        // Static nonfield reference captures need the authored stage bundle.
+        if args.stage != 100 {
+            event::spawn_stage_models(&mut commands,&mut loader,&mut meshes,&mut materials,&mut images,args.stage);
+        }
+        let cells:Vec<_>=(-args.radius..=args.radius).flat_map(|dm|
+            (-args.radius..=args.radius).filter_map(move |dn|
+                Some((u16::try_from(a0+dm).ok()?,u16::try_from(b0+dn).ok()?)))).collect();
+        let world=ddhost::ddspawn::World{scene:args.progress,hour:args.clock_ms.unwrap_or(43_200_000)/3_600_000,flag:&|_|false};
+        let origin=if args.stage==100 {Vec3::new((b0-50) as f32*10000.0,0.0,(a0-50) as f32*10000.0)}else{Vec3::ZERO};
+        if let Err(e)=doors::preview(&mut commands,&mut loader,&mut meshes,&mut materials,&mut images,
+            &mut bindposes,args.stage,&cells,&world,origin){warn!("door preview: {e}");}
     }
     loader.spawn_water(
         &mut commands,
@@ -1090,11 +1104,17 @@ struct SkyShadowSetting(Option<sky::SkyShadow>);
 fn sky_shadow(
     mut commands: Commands,
     setting: Option<Res<SkyShadowSetting>>,
-    lights: Query<Entity, (With<DirectionalLight>, Without<ShadowSet>)>,
+    mut lights: Query<(Entity, &mut Transform), (With<DirectionalLight>, Without<ShadowSet>)>,
 ) {
     let Some(setting) = setting else { return };
     let Some(sh) = setting.0 else { return };
-    for e in &lights {
+    for (e, mut transform) in &mut lights {
+        // The custom stage material retains the direct sun direction.
+        // This Bevy light provides its shadow map: weather0x004c1110 and
+        // uSkyStableShadow0x00c6c970 use the separately elevated direction.
+        let sun = transform.rotation * Vec3::Z;
+        let shadow = Vec3::from(mtweather::sky::shadow_direction(sun.to_array(), sh.direction_limit));
+        transform.rotation = Transform::IDENTITY.looking_to(-shadow, Vec3::Y).rotation;
         let far = sh.view_distance * stage::UNIT;
         let config = bevy::light::CascadeShadowConfigBuilder {
             num_cascades: 1,

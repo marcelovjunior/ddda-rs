@@ -87,3 +87,47 @@ fn installed_newly_arisen_actions_set_flags_and_wait_without_false_finish() {
         assert!(!npc.applied_finished());
     }
 }
+
+#[test]
+fn installed_hurt_npc_sets_no_motion_talk_without_finishing() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let data = ddnpcrt::InstallData::open(native, "eng").unwrap();
+    let mut npc = Npc::applied(44, &data, r"ai\fsm\npc\st200\quest\q0052_hurt_03").unwrap();
+    npc.observe_scene(Some(1100));
+    let clock = Clock { hour: 8, minute: 0, dt: 1.0 / 30.0 };
+    let mut observed = false;
+    for _ in 0..90 {
+        let requests = npc.step(&data, clock).unwrap();
+        observed |= requests.iter().any(|r| matches!(r, Request::ActorFlag {
+            npc: 44, flag: ddnpcrt::schedule::ActorFlag::NoMotionTalk, value: true }));
+        assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. })));
+    }
+    assert!(observed, "installed wounded actor requests the exact translated flag");
+    assert!(!npc.applied_finished());
+}
+
+#[test]
+fn installed_quest_npc_reaches_explicit_actor_observation_boundary() {
+    let native = std::env::var_os("DDDA_NATIVE_PC")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let data = ddnpcrt::InstallData::open(native, "eng").unwrap();
+    let mut npc = Npc::applied(3, &data, r"ai\fsm\npc\st200\quest\q0002_n3").unwrap();
+    let mut world = ddstory::World::default();
+    world.sce_no = 1100;
+    npc.observe_scene(Some(world.sce_no));
+    let clock = Clock { hour: 8, minute: 0, dt: 1.0 / 30.0 };
+    let mut boundary = None;
+    for _ in 0..90 {
+        match npc.step_observed(&data, clock, Some(&world)) {
+            Ok(requests) => assert!(!requests.iter().any(|r| matches!(r, Request::Finished { .. }))),
+            Err(error) => { boundary = Some(error.to_string()); break; }
+        }
+    }
+    assert_eq!(boundary.as_deref(), Some("unimplemented: NPC variable cAIActionFSMDemo.Check Player Distance"));
+    assert!(!npc.applied_finished(), "missing actor observation cannot complete the graph");
+}

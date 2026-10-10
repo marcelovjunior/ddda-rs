@@ -81,7 +81,37 @@ recorded Cassardis street capture initially omitted the buildings because
 the existing static preview does not load nonfield stage models; codex-32
 has fixed that hook in the doors branch. No same-pose match is claimed yet.
 
-Next: apply that preview fix and compare the recorded Cassardis pose.
+Follow-up: head approved the static nonfield model hook (board 2760),
+shared with the doors branch. Release build passed (38.72 s); the bounded
+Cassardis capture loaded 31 stage models and 315 placed objects with no
+shader errors. Recorded eye/target/up/near and 70-degree effective FOV
+(base 55 plus the live configuration's 15) align the scenery. At recorded
+16:06:11 fine weather, the largest visible difference is the sun-shadow
+footprint: the original has a sunlit wedge across the road, while the
+viewer leaves that road shaded. The static comparison excludes the actor
+and HUD. No image-match pass is claimed; live sunlight inputs must be
+checked before attributing the shadow discrepancy to filtering or bias.
+
+The AO source audit is recorded in SHADING.md. The executable has a
+local/global-map ambient-occlusion filter, but neither stage100 nor
+stage200 f00 scheduler creates one; runtime activation is unresolved.
+
+The sunlight investigation found the cause of the large shadow displacement:
+weather update 0x004c1110 elevates the shadow direction with mShadowLimit,
+while the viewer had used the direct sunlight direction. The translated
+formula and runtime scheduler/default reader now drive the shadow-map
+light separately. Two regressions pass; release build passes (40.57 s).
+The repeated recorded street capture now places the sunlit wedge across
+the road in the original's position. Its edge is visibly softer, and the
+actor/HUD/vegetation and complete image comparison remain outstanding.
+This corrects the large footprint discrepancy without changing sunlight
+intensity or tuning the shadow bias by eye.
+
+Next: trace shadow filtering/bias and compare the other two requested poses.
 Detail-normal, skinned bases, normal prepass, AO and shadow differences
 remain separate investigations. Three requested comparison pairs are
 still outstanding; this brief remains in progress.
+
+Merged-main validation: complete viewer release suite passed 47 tests,
+with one pre-existing installed HUD test ignored. The repeated street
+capture completed without shader errors. All captures remain private.

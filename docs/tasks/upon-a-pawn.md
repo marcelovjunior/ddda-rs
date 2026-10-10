@@ -640,3 +640,116 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   An asynchronous mover must additionally validate interface/command identity
   when an action changes within the same actor. Viewer/Guard wiring will use
   these tokens instead of equating an NPC id with a permanent actor.
+
+
+### Wounded NPC callbacks and bounded route follow-up (2026-10-09)
+
+- Added typed NoMotionTalk (0x007aa280, bit 0x01000000) and NoDamage
+  (0x007aa0d0, bit 0x08000000), registered by cThinkFSM at 0x007a74f0.
+  Both set/clear the exact NPC intel flag word; linked bodies return that
+  same word through 0x00bb4730. Damage/motion consumers remain separate work.
+- Installed NPC44 q0052_hurt_03 now executes these callbacks and stays active
+  for 90 ticks without unsupported-process failure or synthetic Finish.
+  Validation: ddnpcrt 10 unit + 3 installed applied tests; strict crate clippy.
+- Combined doors/main47d00ac private binary, --opening --demo --unattended
+  --perf --size 1920x1080, bounded 180-second capture: stage200, SceNo1300,
+  GSF372=1, GSF381=0. WalkOut declares completion while the player remains
+  indoors at (7854.979,1731.179,-6936.855); Q0002Event targets
+  (-879.392,-8.178,250.404) and incremental planning does not advance.
+  Private evidence: notes/opening-route-codex31/npc-route-doors.png and
+  npc-route-doors.stderr.txt. This is a route blocker, not proof of walkout,
+  quest2 completion, field entry, or full opening gameplay. No timing gate.
+- Hand-reviewed doors38cf0b8 duplicate-method removal: retained
+  sync_npc_intels/npc_requests are identical to the existing NPC checkpoint.
+  Next: lifetime-bound presentation cleanup, then real actor/movement/Guard
+  prerequisites; route planner doorway handling needs its owning lane.
+
+
+### Viewer lifetime ownership follow-up (2026-10-09)
+
+- Viewer request caches now follow all canonical NpcLifetime owners,
+  independently of successful model creation. Retiring or replacing an
+  unrendered actor clears its Guard/Goto/Place caches as well.
+- Render bindings use the same allocation token, so replacing the same NPC
+  id at the same authored target retires the old body instead of reusing it.
+- Validation: release ddview check passes (three existing warnings).
+  Host token rejection already has the active replacement regression in
+  0edc13e. No live movement/Guard completion is introduced by this adapter.
+
+
+### Check QuestFlag observation (2026-10-09)
+
+- Translated cThinkFSM registration 0x007a74f0 callbacks 0x007aadd0
+  (enter) and 0x007aae20 (poll), confirmed with read-only disassembly.
+  Enter clears private FreeFlag; poll refreshes from quest bit through
+  0x004356c0, ActType0 matches set and ActType1 matches clear. Invalid
+  quest>=128, bit>=96 or destination>=128 does nothing; other ActType does
+  not change the destination. This writes private FreeFlag, not quest state.
+- NPC step_observed reads the current host World by reference for controller
+  and applied action graphs; all three host/runtime stepping paths feed it.
+  Standalone step remains available and errors if a graph needs absent world
+  data. No false quest state is manufactured.
+- Tests: 11 ddnpcrt unit, 4 installed applied, 9 NPC placement, 9 story-pawn
+  pass. Clippy ddnpcrt/ddhost passes with existing chunks_exact_to_as_chunks
+  and type_complexity allowances. Installed NPC3 q0002_n3 passes the quest
+  process and reaches the explicit Check Player Distance observation gap,
+  remaining unfinished; this is not full actor/route acceptance.
+- Task-only main merge 66c425b preserved one NPC helper pair plus doors.
+  Next: source player-distance actor observation and actual Guard readiness.
+
+
+### Actor-distance and movement source prerequisites (2026-10-09)
+
+- Combined release binary at checkpoint30dd8ea builds in 37.70s, two existing
+  warnings; private copy notes/opening-route-codex31/npc-30dd8ea.exe.
+- Check Player Distance registration (reflection around 0x007a94c8) binds
+  getter0x007abe20. It requires valid owner +0x2a8 and body pointer plus
+  player-manager +0x99c, then returns full 3D distance between positions
+  +0xe0/+0xe4/+0xe8. A missing owner/body/player returns zero in the original.
+  The port must distinguish an observed absent body from an unimplemented
+  body observation. Co-op target selection is not defined by this single-player
+  getter; no nearest-player or seat0 policy is silently inferred here.
+- cAIActionInterfaceNpcSetGoto ctor0x00573400/vtable0x01577358:
+  start0x00573630 initializes trace and returns pending4; update0x005736e0
+  uses trace0x0057b9a0 and explicit actor states. Trace result4 can complete,
+  but running with stop-motion enabled waits for actor motion completion;
+  result3 continues movement. No fixed travel timer or 150cm/s interpolation
+  is justified by these routines.
+- Direct trace helper0x0057c760 compares full3D distance squared with authored
+  trace arrival radius squared (+0x14), then performs collision/height/state
+  checks for other cases. Stage offsets and route branches are explicit in
+  0x0057b9a0; this is not a generic distance-only arrival implementation.
+- Route harness inspection: opening.rs WalkOut transitions after SceNo1300
+  plus six seconds, regardless of whether the actor left the interior. This
+  explains the captured premature stage of the driver, without establishing
+  the remaining doorway collision/planning cause. Reported to coordinator;
+  benchmark driver remains outside this NPC edit scope.
+
+
+### Batch handoff / still not accepted (2026-10-09)
+
+Codex31 closes this batch at coordinator request; the brief remains open.
+Checkpoint chain: 81cdd19 lifetime presentation, 30dd8ea quest observation,
+bff6e07 source prerequisites (e5293d9 wounded flags precedes them).
+All owned viewer processes have exited; core and M5 targets released.
+
+Queued requirements:
+
+- Guard: actual body eligibility/readiness and motion observations; distinct
+  candidate reservation vs active owner; per-seat arbitration, authored
+  resource selection, real actor cleanup feeding TalkEnd. UI end alone must
+  never complete an NPC action.
+- Goto: preserve authored trace/arrival/stop behavior, host-owned movement,
+  route/collision/height checks and animation completion. Asynchronous arrivals
+  need allocation lifetime plus current command identity; lifetime alone is
+  insufficient when the same live actor receives a replacement command.
+- Distance: distinguish unavailable actor observation from observed missing
+  body; define co-op target policy explicitly before wiring getter7abe20.
+- Materialization: stage100 needs loaded-cell/archive readiness and pool
+  admission; actor position remains canonical, orientation is still authored.
+- Route: fix WalkOut's six-second advance using actual exit evidence and
+  investigate doorway interaction/navigation; current capture proves only
+  scene1300 indoors, GSF381false. No quest2 clear or field acceptance claimed.
+
+Coordinator queued road-to-encampment/actual-exit harness as the next route
+priority. No further NPC edits or builds are active in this worktree.

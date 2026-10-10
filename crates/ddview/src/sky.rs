@@ -190,6 +190,8 @@ pub struct StageSky {
 pub struct SkyShadow {
     pub view_distance: f32,
     pub distribution: f32,
+    /// WeatherManager.mShadowLimit, independent of direct sunlight.
+    pub direction_limit: f32,
 }
 
 /// A `uSkyCloudModel` of the sky scheduler.
@@ -270,6 +272,9 @@ impl StageSky {
             Some(SkyShadow {
                 view_distance: float(&s, i, "mShadowViewDistanceEx")?,
                 distribution: float(&s, i, "mShadowDistribution").unwrap_or(0.0),
+                // sWeatherManager ctor0x004bb200 initializes +0xe0 to0.5;
+                // reflection0x004bca80 names it mShadowLimit.
+                direction_limit: float(&s, wm, "mShadowLimit").unwrap_or(0.5),
             })
         });
         // The arrays' tracks repeat the name; the type hash field holds the

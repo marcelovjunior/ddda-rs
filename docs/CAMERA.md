@@ -233,9 +233,30 @@ translation to both endpoints; a wall and low-ceiling overlap regression
 checks the preserved eye-target vector. Six camera-filtered release tests
 and the release viewer build pass. Live wall/roof comparison is pending.
 
-**0x007de570** rejects an attribute with bit 0x10 *after* the nearest ray
-or sweep result. It does not continue to the next surface. **0x007c6f90**
-resolves the collision result's material flag word for stage/static hits.
+The subsequent Cassardis wall comparison records the candidate eye/target
+on entry to **0x007e1400**, then its final pose after that frame. This
+avoids confusing authored target height, camera lag or actor avoidance
+with the collision correction. A real rock-wall contact moved eye and
+target by the same approximately `(-58.379, -16.552, 0.013)` cm. Replaying
+that candidate through the viewer collision helper and the installed
+stage200 SBC gave **0.000788 cm** eye/target error; two neighboring clear
+angles gave zero error. The private opt-in diagnostic
+`camera_compare_private_original_poses` reads externally supplied samples
+and prints errors; it does not claim an automatic tolerance gate.
+No capture data is embedded in the repository. The low-roof contact and
+full viewer pose comparison remain pending. The normal target height
+still uses the earlier measured 140 cm approximation.
+
+**0x007de570** retains a post-query bit-0x10 rejection, but this is not
+its entire filter. The camera sets `sCollision::Param +0xc` to
+**0x4081d01c** through **0x007e178d / 0x00de4710**. Static SBC triangle
+filter **0x01165660** calls `sCollisionExt::vf10` **0x00422f40**: bit
+0x40000000 selects exclusion, rejecting any material with bits in
+**0x0081d01c** before nearest-contact selection. Thus an excluded nearer
+surface must not hide an eligible farther one. The ray wrapper
+**0x00dea870**, sweep traversal **0x01166b10**, and overlap traversal
+**0x01166c00** share this filtering. **0x007c6f90** resolves the resulting
+material flag word for the final post-query check.
 The sphere wrapper **0x010fe5e0** calls **0x010fdea0**, which supplies the
 target as the start and `near-plane-centre - target` as displacement.
 Thus this is a sweep outward from target toward the candidate centre,
@@ -246,8 +267,14 @@ nearest-contact cast and applies that response. Contact geometry reuses
 `ddsim::sweep` conservative advancement, already used for character
 collision. It is a geometric replacement for the original GJK callbacks;
 degenerate contacts, tied contacts and collision-category prefilters have
-not been compared. Ray and sweep both reject bit0x10 only after selecting
-the nearest result, preserving the source's no-search-past behavior.
+not been comprehensively compared. Camera-local ray, sweep and overlap
+now apply the sourced material exclusion before selecting their result.
+The ray retains its existing fast path when the nearest hit is eligible;
+otherwise it recollects triangles and uses Terrain's existing two-sided
+Moller-Trumbore geometry policy. This duplicates a query on excluded hits;
+a shared filtered Ground API is a future optimization, not part of this
+checkpoint. Ground providers without triangle data cannot search beyond
+an excluded hit. Backface/degenerate behavior remains unverified.
 
 Field stage 100 already includes layout-object collision through
 `Terrain::add_scenery_cells`. Nonfield loading uses only the stage merged
@@ -391,3 +418,39 @@ accumulator/smoother/pose shift before the stage sweep. The existing
 `Body::push_volumes` can guide placement but loses source kind and callback
 state; it cannot be used directly as the complete provider. No dragon
 runtime or viewer files were changed for this handoff.
+
+### Separate collision anchor and view axis
+
+A direct entry snapshot of **0x007de570** confirms ESI is the candidate
+eye, EDI the collision anchor, and argument 1 the normalized outward view
+direction. The anchor can differ from the look target. **0x007e1400**
+selects the anchor from camera settings +0x224/+0x228/+0x22c; for normal
+camera conditions it switches to actor model position plus settings +0x70
+when pitch is below **-0.8** (or the actor-avoidance overlap succeeds).
+A live Cassardis steep-pitch sample had anchor at feet +155 cm, while its
+look target lay roughly a metre to the side. That 155 cm is an authored
+setting, not a universal constant: base settings constructor **0x007b64e0**
+initializes +0x70 to120 cm, and `rCameraParamList` **0x007d01b0** loads the
+reflected settings. Runtime camera-parameter loading/selection remains
+unimplemented; the follow adapter still chooses its approximate target
+as anchor.
+
+The collision helper now accepts these inputs independently. Source
+**0x007de5dd..0x007de657** computes radius as `near*1.3 +
+(1 - abs(dot(view_outward, normalize(eye-anchor))))*10`. The near-plane
+offset uses the original view direction even after ray correction.
+A synthetic perpendicular-anchor test covers both distinctions. The
+private diagnostic accepts optional anchor/direction columns for exact
+helper-input replay. No sampled poses are embedded.
+
+With those inputs, a genuine Cassardis lintel-edge contact matches eye and
+target to **0.000702 cm**; two clear neighboring poses match exactly.
+The earlier steep-pitch sample's 13.479 cm mismatch used the wrong anchor
+and does not establish a convex-query defect. The wall sample rerun after
+this refactor matches to **0.001041 cm** (small floating-point differences
+from the previously collinear shortcut). Eight camera-filtered tests pass
+(including one existing HUD test), one private diagnostic is ignored by
+default, and release build passes. These are installed-geometry collision
+comparisons, not full rendered follow-camera acceptance: authored target
+height, runtime anchor selection, camera lag and actor avoidance remain
+incomplete.

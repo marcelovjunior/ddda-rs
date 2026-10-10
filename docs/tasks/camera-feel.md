@@ -79,3 +79,57 @@ backup made before unpausing; no movement/save writes; pause and bgOff
 restored. Follow collision and projection now use16. Seven camera-filtered
 release tests pass, including clear sidewall/roof that the old radius
 wrongly hit. Updated release build and exact live wall/roof tests pending.
+
+Third checkpoint: clean release build passed (27.11s, three existing
+warnings). A genuine Cassardis rock-wall collision was captured with a
+bounded, main-thread-installed entry snapshot at **0x007e1400**. Original
+instruction bytes were restored and read back after each capture. Player
+position and camera angles were restored; the game is paused/bgOff.
+Replaying the exact candidate pose against installed stage200 collision
+matches final eye and target within **0.000788 cm**; two clear angles
+match exactly. The collision-only helper accepts explicit candidate
+eye/target/near to avoid the viewer's assumed target height contaminating
+the comparison. An opt-in ignored diagnostic reads private CSV samples
+(`DDDA_CAMERA_POSES`, `DDDA_NATIVE_PC`) and reports errors, with no raw
+game capture embedded. One diagnostic run completed; this is a measured
+wall match, not a low-roof or full rendered-pose acceptance claim.
+Low-roof contact selection and full viewer comparison remain next.
+
+Fourth checkpoint: source material filtering is now translated from camera
+Param setup **0x007e178d / 0x00de4710**, SBC traversal **0x01165660**,
+and `sCollisionExt::vf10` **0x00422f40**. Mask 0x4081D01C selects exclusion:
+triangles with any 0x0081D01C bit are removed before nearest selection.
+Ray, sphere-overlap and sphere-sweep now agree. Seven camera regression
+tests pass, including an excluded nearer triangle and eligible farther
+triangle; a clean release build passes (28.76s, three existing warnings).
+The camera-local filtered ray fallback repeats triangle collection only
+when the generic nearest ray hit is excluded; this avoids widening the
+shared Ground interface in this checkpoint.
+
+A genuine low lintel contact was captured at original feet approximately
+(2895.79,-78.45,-2368.56), restoring the bounded same-cell movement,
+camera angles and original hook bytes afterwards (paused/bgOff). Its
+current collision replay has **13.47934 cm** error; two neighboring clear
+poses match exactly. Wall error remains **0.000788 cm**. This is evidence
+of an unresolved difference, not roof acceptance. The outer caller can
+choose an actor-relative collision anchor separately from the look target
+(and switches anchor behavior below pitch -0.8); recording the actual
+helper inputs is the next action before assessing convex geometry error.
+
+Fifth checkpoint: direct **0x007de570** entry snapshots resolve the anchor
+mismatch. The helper now accepts collision anchor and outward viewing
+axis separately and translates the source angular radius allowance.
+Original low-lintel collision replay matches eye/target to **0.000702 cm**,
+with two clear samples exact; the wall rerun matches to **0.001041 cm**.
+Eight filtered tests pass (seven camera plus existing HUD), and release
+build passes (35.09s, three existing warnings). The diagnostic accepts
+optional actual helper inputs. All hooks were restored and verified;
+original restored pause/bgOff; live claim released for ambient research.
+
+Remaining: the viewer's full follow adapter still uses its approximate
+look target as collision anchor. Source chooses an actor-relative anchor
+below pitch -0.8 (or actor avoidance), using authored camera parameters.
+155 cm observed live differs from120 cm constructor default; do not
+hardcode the capture. Next action is load `rCameraParamList` settings and
+translate anchor selection, then compare the fully rendered follow pose.
+The two collision contacts match; this does not close full-pose acceptance.

@@ -152,6 +152,7 @@ pub struct GoblinView {
 pub struct PlayState {
     pub sim: Sim,
     pub terrain: ddworld::Terrain,
+    pub door_collision: dddoor::collision::Set,
     /// Stage-frame position (cm) of the viewer's origin.
     pub origin: Vec3,
     pub motions: ViewMotions,
@@ -304,6 +305,7 @@ pub fn setup(
         warn!("play: no fight data (DDDA.exe next to nativePC?): no attacks, pawn or goblins");
     }
     Ok(PlayState {
+        door_collision: Default::default(),
         sim,
         terrain,
         origin,
@@ -753,7 +755,7 @@ pub fn show(
     }
     // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
-        let (eye, target) = follow_camera(&st.terrain, Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
+        let (eye, target) = follow_camera(&st.door_collision.over(&st.terrain), Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
         cam.translation = (eye - st.origin) * UNIT;
         cam.look_at((target - st.origin) * UNIT, Vec3::Y);
     }
@@ -787,23 +789,42 @@ pub const CAMERA_FOV: f32 = 55.0;
 ///    the same here, so the radius is `1.3 x near`. If it overlaps
 ///    collision, it is swept from the target toward that centre (`0x010fe5e0`) and the eye
 ///    goes one near-plane distance behind the sweep's stop.
-/// Nearest ray/sweep hits whose material has bit 0x10 are discarded after
-/// querying (0x007c6f90). Convex contact uses the same geometric replacement
+/// Static surfaces matching the exclusion mask 0x0081d01c are skipped
+/// before querying (0x00422f40); the caller retains its final bit-0x10
+/// check (0x007c6f90). Convex contact uses the same geometric replacement
 /// as character collision, not the original GJK callback implementation.
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
     let desired_eye = target - dir * CAMERA_DISTANCE;
+    collide_camera(ground, desired_eye, target, CAMERA_NEAR)
+}
+
+/// Collision-only pose update, separated from the measured follow offset
+/// so original candidate poses can be compared without assuming its lag,
+/// authored target height or actor avoidance offset.
+fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, near: f32) -> (Vec3, Vec3) {
+    let view_outward = (desired_eye - target).normalize_or_zero();
+    collide_camera_query(ground, desired_eye, target, target, view_outward, near)
+}
+
+/// 0x007de570 takes the collision anchor (EDI) independently from the
+/// outward view direction (argument 1). The outer caller can choose an
+/// actor-relative anchor, so recomputing the view direction from it is wrong.
+fn collide_camera_query(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3,
+    anchor: Vec3, view_outward: Vec3, near: f32) -> (Vec3, Vec3) {
     let mut eye = desired_eye;
-    if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
+    let ray_direction = (eye - anchor).normalize_or_zero();
+    // Translated from 0x007de5dd..0x007de657 (DDDA.exe 2017-12-13 Steam).
+    let radius = near * 1.3 + (1.0 - view_outward.dot(ray_direction).abs()) * 10.0;
+    if let Some((hit, flags)) = camera_ray(ground, anchor, eye) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
-    let toward = (target - eye).normalize_or_zero();
-    let radius = CAMERA_NEAR * 1.3;
-    let centre = eye + toward * CAMERA_NEAR;
+    let toward = -view_outward.normalize_or_zero();
+    let centre = eye + toward * near;
     if sphere_hits(ground, centre, radius) {
-        if let Some((stop, flags)) = camera_sphere_cast(ground, target, centre, radius) {
-            if flags & 0x10 == 0 { eye = stop - toward * CAMERA_NEAR; }
+        if let Some((stop, flags)) = camera_sphere_cast(ground, anchor, centre, radius) {
+            if flags & 0x10 == 0 { eye = stop - toward * near; }
         }
     }
     // Translated from 0x007e1b11..0x007e1b68 (DDDA.exe 2017-12-13 Steam):
@@ -814,9 +835,53 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
     (eye, target + (eye - desired_eye))
 }
 
+/// Translated from camera Param setup 0x007e178d / 0x00de4710 and
+/// sCollisionExt::vf10 0x00422f40 (DDDA.exe 2017-12-13 Steam).
+/// Bit 0x40000000 selects exclusion; the remaining low 30 bits test the
+/// triangle material before nearest-contact selection (0x01165660).
+fn camera_surface(flags: u32) -> bool {
+    flags & 0x0081_d01c == 0
+}
+
+fn camera_ray(ground: &dyn ddsim::Ground, from: Vec3, to: Vec3) -> Option<(ddsim::RayHit, u32)> {
+    let nearest = ground.ray_with_flags(from.to_array(), to.to_array())?;
+    if camera_surface(nearest.1) { return Some(nearest); }
+    let mut faces = Vec::new();
+    ground.triangles_in(from.min(to).to_array(), from.max(to).to_array(), &mut faces);
+    let motion = to - from;
+    let mut best = None;
+    // Same two-sided Moller-Trumbore geometry policy as Terrain's ray.
+    // The original per-triangle geometric callback remains a replacement;
+    // the source-backed change here is filtering before nearest selection.
+    for (triangle, flags) in faces {
+        if !camera_surface(flags) { continue; }
+        let a = Vec3::from(triangle[0]);
+        let edge1 = Vec3::from(triangle[1]) - a;
+        let edge2 = Vec3::from(triangle[2]) - a;
+        let cross = motion.cross(edge2);
+        let determinant = edge1.dot(cross);
+        if determinant.abs() < 1e-9 { continue; }
+        let inverse = determinant.recip();
+        let offset = from - a;
+        let u = offset.dot(cross) * inverse;
+        if !(0.0..=1.0).contains(&u) { continue; }
+        let q = offset.cross(edge1);
+        let v = motion.dot(q) * inverse;
+        if v < 0.0 || u + v > 1.0 { continue; }
+        let fraction = edge2.dot(q) * inverse;
+        if !(1e-4..=1.0).contains(&fraction) || best.is_some_and(|(previous, _, _)| previous <= fraction) { continue; }
+        let normal = edge1.cross(edge2).normalize_or_zero();
+        let normal = if normal.dot(motion) > 0.0 { -normal } else { normal };
+        best = Some((fraction, normal, flags));
+    }
+    best.map(|(fraction, normal, flags)| (ddsim::RayHit {
+        point: (from + motion * fraction).to_array(), normal: normal.to_array(),
+    }, flags))
+}
+
 /// Translated query direction/response from 0x010fdea0 / 0x010fd710
 /// (DDDA.exe 2017-12-13 Steam). The queried start is the target. Only the
-/// nearest contact's flags are returned, even if the camera will ignore it.
+/// nearest eligible contact's flags are returned after material exclusion.
 fn camera_sphere_cast(ground: &dyn ddsim::Ground, start: Vec3, end: Vec3, radius: f32) -> Option<(Vec3, u32)> {
     let mut faces = Vec::new();
     let pad = Vec3::splat(radius);
@@ -824,6 +889,7 @@ fn camera_sphere_cast(ground: &dyn ddsim::Ground, start: Vec3, end: Vec3, radius
     let motion = end - start;
     let mut nearest: Option<(f32, Vec3, f32, u32)> = None;
     for (face, flags) in &faces {
+        if !camera_surface(*flags) { continue; }
         let Some((fraction, normal, gap)) = ddsim::sweep::sphere_contact(start.to_array(), radius, motion.to_array(), face) else { continue };
         if nearest.is_none_or(|hit| fraction < hit.0) {
             nearest = Some((fraction, Vec3::from(normal), gap, *flags));
@@ -843,7 +909,7 @@ fn sphere_hits(ground: &dyn ddsim::Ground, c: Vec3, r: f32) -> bool {
     if !ground.triangles_in(lo, hi, &mut tris) {
         return false;
     }
-    tris.iter().any(|(t, _)| Vec3::from(ddsim::sweep::closest_on_triangle(c.to_array(), t)).distance_squared(c) < r * r)
+    tris.iter().any(|(t, flags)| camera_surface(*flags) && Vec3::from(ddsim::sweep::closest_on_triangle(c.to_array(), t)).distance_squared(c) < r * r)
 }
 
 /// The follow camera's projection: `CAMERA_FOV` plus the player's
@@ -1170,15 +1236,36 @@ mod tests {
     }
 
     #[test]
-    fn camera_discards_nearest_flagged_hit_without_searching_past_it() {
+    fn camera_prefilters_excluded_material_before_nearest_contact() {
         let mut terrain = ddworld::Terrain::empty();
         for (z, flags) in [(-150.0, 0x10), (-190.0, 0)] {
             terrain.add_flagged([[-1000.0, -1000.0, z], [1000.0, -1000.0, z], [0.0, 1000.0, z]], flags);
         }
         let (eye, _) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+        assert!((eye.z + 185.1).abs() < 0.002, "{eye:?}");
+        let (_, flags) = camera_sphere_cast(&terrain, Vec3::new(0.0, 140.0, 0.0), Vec3::new(0.0, 140.0, -214.0), 20.8).unwrap();
+        assert_eq!(flags, 0);
+        let mut excluded = ddworld::Terrain::empty();
+        excluded.add_flagged([[-1000.0, -1000.0, -190.0], [1000.0, -1000.0, -190.0], [0.0, 1000.0, -190.0]], 0x0080_0000);
+        let (eye, _) = follow_camera(&excluded, Vec3::ZERO, 0.0, 0.0);
         assert!((eye.z + CAMERA_DISTANCE).abs() < 0.001, "{eye:?}");
-        let (_, flags) = camera_sphere_cast(&terrain, Vec3::new(0.0, 140.0, 0.0), Vec3::new(0.0, 140.0, -134.0), 124.8).unwrap();
-        assert_eq!(flags, 0x10);
+    }
+
+    #[test]
+    fn camera_query_keeps_view_direction_separate_from_anchor() {
+        // Synthetic perpendicular query: the 0x007de570 angular allowance
+        // adds 10 cm, while the near-plane offset remains on the view axis.
+        let mut terrain = ddworld::Terrain::empty();
+        terrain.add([[-1000.0, -1000.0, 90.0], [1000.0, -1000.0, 90.0], [0.0, 1000.0, 90.0]]);
+        let desired_eye = Vec3::new(0.0, 0.0, 100.0);
+        let target = desired_eye - Vec3::X * 100.0;
+        let (eye, corrected_target) = collide_camera_query(&terrain, desired_eye, target,
+            Vec3::ZERO, Vec3::X, 16.0);
+        assert!((eye.z - 59.1).abs() < 0.002, "{eye:?}");
+        // The sphere sweeps toward (ray-hit - view*near), then the eye
+        // recovers the same near offset. It must not substitute ray direction.
+        assert!(eye.x > 0.0 && eye.x < 16.0, "{eye:?}");
+        assert!((corrected_target - eye + Vec3::X * 100.0).length() < 0.001);
     }
 
     #[test]
@@ -1220,6 +1307,29 @@ mod tests {
         let (eye, target) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
         assert_eq!(eye, Vec3::new(0.0, CAMERA_TARGET_HEIGHT, -CAMERA_DISTANCE));
         assert_eq!(target, Vec3::Y * CAMERA_TARGET_HEIGHT);
+    }
+
+    #[test]
+    #[ignore = "requires private original camera pose samples and game installation"]
+    fn camera_compare_private_original_poses() {
+        // Each private row: candidate eye, candidate target, actual eye,
+        // actual target, active near; optionally anchor and outward direction.
+        // No recordings are embedded in repo.
+        let path = std::env::var("DDDA_CAMERA_POSES").expect("private pose file");
+        let native = std::env::var("DDDA_NATIVE_PC").expect("nativePC path");
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let terrain = ddhost::install::stage_collision(&vfs, 200).unwrap();
+        for (index, line) in std::fs::read_to_string(path).unwrap().lines().enumerate() {
+            let v: Vec<f32> = line.split(',').map(|s| s.parse().unwrap()).collect();
+            assert!(v.len() == 13 || v.len() == 19);
+            let point = |start| Vec3::new(v[start], v[start + 1], v[start + 2]);
+            let (eye, target) = if v.len() == 19 {
+                collide_camera_query(&terrain, point(0), point(3), point(13), point(16), v[12])
+            } else {
+                collide_camera(&terrain, point(0), point(3), v[12])
+            };
+            eprintln!("camera sample {index}: eye={eye:?} target={target:?}; errors eye={} target={}", eye.distance(point(6)), target.distance(point(9)));
+        }
     }
 
     #[test]
