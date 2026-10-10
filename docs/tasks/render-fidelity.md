@@ -135,3 +135,25 @@ sharper and closer to the reference; newly visible dark right-wall patches
 remain unresolved and are explicitly **not** an accepted image match.
 No normal-bias or filter constant was tuned to hide those patches. Next:
 trace caster inclusion and slope/filter behavior, then the other poses.
+
+### Stand-down handoff (head board 3001)
+
+Current implementation ends at **2f0d04a** (preceded by split helper
+048ea95). No viewer process or original-game claim remains. The latest
+private comparison is `notes/render-fidelity-codex1/wall-shadow-bias.png`
+against `notes/camera-feel-codex33/wall-street-reference.png` under
+`E:/ddda-re`; do not copy those artifacts into the repo. The build and
+capture validations above passed; no additional changes are pending.
+
+Resume at `crates/ddview/src/main.rs::sky_shadow` and
+`crates/ddview/src/stage.rs::convert_model`. The immediate unresolved
+visual issue is the right-wall shadow patches. Source starting points:
+**0x00efd240** uploads caster bias/rasterizer state, **0x00edf810** supplies
+the light direction, **0x00edf9b0** selects PCF/cascade receiver variants,
+and **0x00ee5ce0** fits each cascade's projection. Trace their remaining
+slope-bias, caster-mask and filtering behavior before changing values.
+Keep Bevy normal bias, projection fitting and quality resolution explicitly
+approximate until their counterparts are implemented. Do not count the
+street comparison as the three-pose acceptance gate: the class-selection
+room and field-gate captures are still outstanding, as are skinned/detail
+normal paths and the unproven SSAO hypothesis.
