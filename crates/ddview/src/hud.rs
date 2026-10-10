@@ -43,6 +43,13 @@ struct NpcCachedBounds {
     bounds: ddhost::ddenemyrt::npc_body::NpcBounds,
 }
 
+#[derive(Default)]
+pub(crate) struct NpcGaugeCapture {
+    checked: bool,
+    path: Option<std::path::PathBuf>,
+    requested: bool,
+}
+
 #[derive(Component)]
 pub(crate) struct NpcGaugeQuad {
     owner: u32,
@@ -359,6 +366,7 @@ fn update_npc_gauges(
     quads: &mut Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
     origin: Option<Vec3>,
     event_active: bool,
+    capture: &mut NpcGaugeCapture,
 ) {
     use ddhost::ddenemyrt::{combat::Victim, npc_body::ORDINARY_NPC_SCENERY_RADIUS, npc_combat::gauge_fill};
     let snapshots: Vec<_> = opening
@@ -460,6 +468,38 @@ fn update_npc_gauges(
         }
     }
     reconcile_npc_gauges(commands, gauges, quads, &desired);
+    // Optional evidence follows production visibility; it never forces HP,
+    // flags, camera, placement or graph completion. Private output only.
+    if !capture.checked {
+        capture.checked = true;
+        capture.path = std::env::var_os("DDVIEW_NPC_GAUGE_CAPTURE")
+            .map(std::path::PathBuf::from)
+            .filter(|path| {
+                path.starts_with("E:/ddda-re")
+                    && !path
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+            });
+    }
+    if !capture.requested {
+        if let Some(path) = capture.path.as_ref() {
+            let candidate = desired.iter().find(|(_, (point, _, _))| {
+                point.x >= 0.0 && point.x <= 1280.0 && point.y >= 0.0 && point.y <= 720.0
+            });
+            if let Some((&(owner, camera), &(point, _, width))) = candidate {
+                if quads.iter().any(|(quad, node, _)| {
+                    quad.owner == owner && quad.camera == camera && node.display == Display::Flex
+                }) {
+                    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path.clone()));
+                    info!("NPC gauge capture: owner={owner} camera={camera:?} authored_point={point:?} fill_width={width} path={}", path.display());
+                    capture.requested = true;
+                }
+            }
+        }
+    }
 }
 
 fn npc_gauge_projection(
@@ -734,6 +774,7 @@ pub fn update(
     mut prompts: Query<(&Prompt, &mut Node), (Without<Quad>, Without<NpcGaugeQuad>)>,
     mut npc_gauges: Option<ResMut<NpcGauges>>,
     mut npc_quads: Query<(&NpcGaugeQuad, &mut Node, &mut ImageNode), (Without<Quad>, Without<Prompt>)>,
+    mut npc_capture: Local<NpcGaugeCapture>,
 ) {
     let _timing = crate::perf::Section::start("hud::update");
     let Ok(window) = windows.single() else {
@@ -760,6 +801,7 @@ pub fn update(
             &mut npc_quads,
             state.as_ref().map(|s| s.origin),
             event_active,
+            &mut npc_capture,
         );
     }
     let local_binding = state

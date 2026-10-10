@@ -385,3 +385,14 @@ clean under the valid lease restored the actual branch API. Core was
 released after completion. NPC-focused viewer release tests also passed
 **7/7**, actual exit0 (compile33.67s/test8.29s), including installed body
 admission/unload and gauge/template/camera checks; M5 was then released.
+
+Gauge evidence hook: optional `DDVIEW_NPC_GAUGE_CAPTURE` requests one
+engine screenshot after an actual production gauge quad is displayed
+on-screen. It uses the ordinary HP/SetGaugeDisp/event/pose/projection
+path, never changes HP, flags, camera, placement or graph completion,
+and accepts output only under the private research tree without parent
+traversal. The screenshot request is diagnostic, not proof of a saved
+file; that file must be inspected after the bounded route. All six focused
+HUD tests passed again (one existing ignored, actual exit0,
+compile30.47s/test1.67s). Head currently owns the viewer GPU route;
+the S34 capture waits its actual exit/release.
