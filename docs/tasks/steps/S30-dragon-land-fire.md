@@ -825,3 +825,13 @@ It is **uncompiled/unrun**. The prior189-pass gate belongs to `6db86fa`.
 Native initialization lifecycle/callback execution and production emission
 remain open. Next: coordinate the complete package gate after higher
 priority viewer/skill work, then bind the actual owner lifecycle and birth.
+
+The subsequent bounded creation audit resolves an essential intervening
+reset. `0x00E6E130` walks the effect's actual manager list+1F0, calling
+seed selection `0x010FA600`, then vf07, vf08 and vf14 in that order.
+Generator vf08 `0x010D7210 -> 0x010FA570` resets both counters after
+the four initialization draws and before allocation/path/birth. The
+sampled scalar stays retained. Thus the first birth must not simply
+continue at seed+4. The regression now also checks this reset and retained
+sample; no manager-list lifecycle port or native full-creation execution
+has been claimed. This source remains uncompiled/unrun.

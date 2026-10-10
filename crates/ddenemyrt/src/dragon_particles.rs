@@ -1382,6 +1382,12 @@ mod tests {
             particle_scale: 3.0, auxiliary_triplet: [3.0, 2.0, 3.0],
         });
         assert_eq!(values.next(), None);
+        // Creation E6E130 runs vf07 then vf08: D7210 -> FA570 restores
+        // both counters after sampling, before allocation/path/birth.
+        counters.reset();
+        assert_eq!((counters.birth, counters.path), (0, 0));
+        assert_eq!(initialized.particle_scale, 3.0,
+            "counter reset does not discard the sampled runtime scalar");
         // The actual sampled +134 feeds vf15; auxiliary values do not
         // accidentally replace effect axis scales or coordinate scales.
         let coordinate = CoordinateTransform { primary: mtlmt::pose::IDENTITY,
@@ -1559,6 +1565,8 @@ impl CollisionUnit {
     }
 
     /// Run after native seed selection and before the first vf15/path/birth.
+    /// Creation 0x00E6E130 then calls vf08 (0x010D7210 -> 0x010FA570),
+    /// resetting both counters before vf14. Do not omit that separate stage.
     /// The caller reads float table 0x01625420 from the installed exe.
     // Translated from 0x010EC54C..0x010EC5FA
     // (DDDA.exe 2017-12-13 Steam).
