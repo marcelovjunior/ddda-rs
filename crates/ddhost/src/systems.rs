@@ -87,6 +87,32 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         Ok(c)
     }
 
+    /// Refresh one live Arisen's active slots from its actual equipped
+    /// weapon categories. Native slot projection is 0x00780350 (DDDA.exe
+    /// 2017-12-13 Steam); stable-profile/seat ownership is the co-op adapter.
+    /// Equipment consumers must call this after a weapon or vocation change
+    /// and after restoring a parked profile's equipped weapons. This does
+    /// not grant skills, choose a preview kit, or replace weapon equipment.
+    pub fn refresh_equipped_skills(
+        &mut self,
+        player: PlayerId,
+        primary: ddskill::vocation::WeaponCategory,
+        secondary: Option<ddskill::vocation::WeaponCategory>,
+    ) -> Result<[Option<u16>; 6], HostError> {
+        self.roster.seat(player).ok_or(HostError::UnknownPlayer(player))?;
+        if self.sim.player(player).is_none() { return Err(HostError::UnknownPlayer(player)); }
+        let character = self.progression.party.iter().flatten()
+            .find(|member| member.role == Role::Arisen(player))
+            .map(|member| member.character).ok_or(HostError::NoData("Arisen progression record"))?;
+        let record = self.progression.characters.get_mut(character)
+            .ok_or(HostError::NoData("Arisen progression record"))?;
+        let active = ddprogress::learn::active_skills(record, primary, secondary);
+        record.active = active;
+        self.sim.player_mut(player).expect("live simulation seat checked")
+            .skills.equipped = active.map(|skill| skill.map(u32::from));
+        Ok(active)
+    }
+
     /// Gives an experience award to the party (0x00443470, via
     /// `Progression::award`). Levels rise one per frame in `Host::tick`,
     /// as `uPlayer` does (0x00B5BD20).

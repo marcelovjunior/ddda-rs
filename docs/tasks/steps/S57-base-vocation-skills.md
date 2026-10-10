@@ -94,9 +94,17 @@ Fighter as its unresolved-job representation. The native reset at
 `0x00780350` resolves active slots from equipped weapon ids: all six
 primary slots are copied first, followed by only nonempty secondary slots
 overwriting positions 3..5. This replaces the previous guessed copy helper.
-The character record does not own equipped item ids: the host must supply
-the actual weapon categories and synchronize its simulation slots. That
-connection and the presentation adapter remain open.
+The character record does not own equipped item ids. The new
+`Host::refresh_equipped_skills` takes actual supplied weapon categories and
+synchronizes only that live Arisen's progression and simulation slots.
+Its installed regression covers independent Fighter/Mage records,
+customized empty slots, a Strider taking a departed Fighter's seat, and
+the Fighter returning on another seat after the other Arisen leaves.
+This fourth new Rust regression is also **uncompiled/unrun**:
+`installed_equipped_skill_refresh_is_owned_by_profiles_across_seat_reuse`.
+Automatic first-choice/load/retry/weapon-change callers and the
+presentation adapter remain open; this helper alone does not equip a
+complete playable opening kit.
 
 New installed regression sources cover all three first choices, the exact
 learned set without cross-vocation unlocks, aliases, custom empty slots,
@@ -117,6 +125,19 @@ finishes on that installed motion's actual completion
 operation, called with installed shield adjustment values. The layer-9
 bank must remain distinct from the primary layer-7 bank. No stand-in
 motion, guessed timing, or attack effect has been installed.
+
+Threefold Arrow's base-level native selector `0x00b16dc0` joins the runtime
+triples at `0x014f1910` to `rBowActParamList`: skill 350, learned level 1
+selects record 1, rather than the basic-arrow record 0. The installed
+record has three ordered shoot rows at nominal frames 0/2/4 targeting
+shell group 1/index 0 and a 100-stamina action debit. These observations
+are research, not a new runtime grant or copied production parameter
+table. Existing ordinary-arrow helpers reject group 1, so connecting the
+skill must load and use that group's actual shell and attack data.
+Anodyne's healing unit emits native queued message 0x10
+(`0x00c04de0..0x00c04f35`); Shield Summons emits 0x22 via
+`0x00b81600` / `0x00887250`. Their receiver rules remain under trace;
+neither is represented as attack damage.
 
 Anodyne is a healing action and Shield Summons a provoke action. Their
 acceptance needs their native effects, not invented goblin damage to
