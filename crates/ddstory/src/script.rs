@@ -124,17 +124,17 @@ pub struct ProcMem {
 }
 
 #[derive(Debug, Clone)]
-struct Level {
-    current: u32,
-    next: Option<u32>,
-    go: bool,
-    came_by_entry: bool,
+pub(crate) struct Level {
+    pub(crate) current: u32,
+    pub(crate) next: Option<u32>,
+    pub(crate) go: bool,
+    pub(crate) came_by_entry: bool,
     /// +0x16: the first transition check after the level starts is skipped.
-    skip_check: bool,
+    pub(crate) skip_check: bool,
     /// +0x17: the enter step is due.
-    pending_enter: bool,
+    pub(crate) pending_enter: bool,
     /// Unique ids of from-all states with `mSetting` bit 8 already taken.
-    once: Vec<u32>,
+    pub(crate) once: Vec<u32>,
 }
 
 /// A read-only snapshot of a script: where it is and its registers. Two
@@ -158,14 +158,14 @@ pub struct ScriptState {
 pub struct Script {
     pub path: String,
     graph: Arc<Graph>,
-    levels: Vec<Level>,
-    first: bool,
+    pub(crate) levels: Vec<Level>,
+    pub(crate) first: bool,
     pub owner: Owner,
     /// +0x70 bit 0.
     pub running: bool,
-    mem: HashMap<(u32, usize), ProcMem>,
+    pub(crate) mem: HashMap<(u32, usize), ProcMem>,
     /// Runtime core attribute (+0xa8); 3 when a core is made (0x00e05797).
-    attribute: u32,
+    pub(crate) attribute: u32,
 }
 
 /// Context handed to orders.
