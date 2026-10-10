@@ -969,3 +969,12 @@ inputs; global creation order and production emission are not claimed.
 This new Rust source is **uncompiled/unrun**; the196-pass gate above
 accepts the preceding travel batch. Next: coordinate its full package
 gate, then supply real effect/generator/particle owners and world queries.
+
+The clock adapter now also synchronizes the existing `GeneratorClock`
+snapshot with the actual shared birth counter+44 before/after its gate;
+path+48 stays independent. Source `0x010CD14C..0x010CD188` advances+44
+for every restart but skips the word lookup when variation is zero,
+unlike the unconditional word read in life4 birth. The meaningful new
+`generator_restart_gate_shares_birth_counter_and_keeps_path_independent`
+regression interleaves birth and restart and rejects a stale clock seed.
+It remains **uncompiled/unrun**, along with the new installed-table test.
