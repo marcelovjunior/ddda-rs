@@ -635,6 +635,7 @@ fn main() {
         .add_plugins(sky::SkyPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
+        .init_resource::<play::CameraConfig>()
         .add_plugins(settings::SettingsPlugin)
         .insert_resource(ClearColor(clear))
         .insert_resource(GlobalAmbientLight {
