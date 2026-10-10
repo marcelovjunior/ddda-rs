@@ -1223,6 +1223,7 @@ fn resume_checkpoint(
             "RescueApproach" => Step::RescueApproach,
             "Rescue" => Step::Rescue,
             "ThankReynard" => Step::ThankReynard,
+            "ReynardRepeat" => Step::ReynardRepeat,
             "RoadWalk" => Step::RoadWalk,
             other => return Err(format!("DDVIEW_OPENING_STEP {other} not resumable")),
         };
@@ -2381,8 +2382,16 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
     };
     if (now % 2.0) < 0.04 {
         info!(
-            "opening demo: {step:?} at {p:?}, target {target:?}, SceNo {}",
-            s.world().sce_no
+            "opening demo: {step:?} at {p:?}, target {target:?}, SceNo {}; gates: talk {} cut {} menu {:?}              camera {} actions blocked {} state {:?}; Reynard {:?} cm, next waypoint {:?}",
+            s.world().sce_no,
+            s.talk.is_some(),
+            s.cut.is_some(),
+            s.world_menu(),
+            ddhost::StoryWorld::quest_camera_active(&s.host.world).is_some(),
+            ddhost::StoryWorld::player_actions_blocked(&s.host.world, 0),
+            s.host.sim.player(0).map(|pl| pl.state),
+            s.host.story_npc_position(304).map(|r| Vec3::new(r[0] - p.x, 0.0, r[2] - p.z).length()),
+            s.demo.as_ref().and_then(|d| d.path.front().copied())
         );
     }
     let w = s.world().clone();

@@ -57,6 +57,16 @@ fn pass(ctx: &mut OrderCtx, p: &Process) {
     ctx.env.out.push(Request::Order { script: ctx.script.to_string(), container: name(p), parameter: p.parameter.clone() });
 }
 
+// Translated from 0x005C6130 / reflected parameters 0x005C62A0
+// (DDDA.exe 2017-12-13 Steam). Preserve the signed selector: the host
+// resolves party pawn slots, independently of human player seats.
+fn pawn_message(r: &Record) -> Result<Request, Error> {
+    Ok(Request::PawnMessage {
+        message: u(r, "mMesId")? as u32,
+        pawn_slot: s(r, "mCmcId")? as i32,
+    })
+}
+
 fn unimplemented(ctx: &OrderCtx, p: &Process, what: &str) -> Error {
     Error::Unimplemented(format!(
         "order {} ({what}) in state {:?}",
@@ -258,7 +268,7 @@ impl Dispatch for Orders {
                 }
             }
             // Translated from 0x005c6130: a pawn line; host performs it.
-            "CmcMessage" => pass(ctx, p),
+            "CmcMessage" => ctx.env.out.push(pawn_message(rec(p)?)?),
             // Translated from 0x005c3750 (Camera update): mActType 1 ends
             // the camera, 2 restores the normal camera.
             "Camera" => {
@@ -992,6 +1002,28 @@ mod area_target_tests {
         }
         assert!(!super::area_hit_targets(0, &[true, false]));
         assert!(super::area_hit_targets(1, &[true, false]));
+    }
+}
+
+#[cfg(test)]
+mod pawn_message_tests {
+    use mtfsm::{Parameter, Record};
+    use mtxfs::Value;
+
+    #[test]
+    fn authored_cmc_message_preserves_full_id_and_signed_pawn_selector() {
+        for pawn_slot in [-7, -1, 0, 2, 3] {
+            let record = Record {
+                class_hash: 0,
+                class_name: Some("cFSMOrder::cFSMOrderParamCmcMessage"),
+                fields: vec![
+                    ("mMesId".into(), vec![Parameter::Scalar(Value::U(300_123))]),
+                    ("mCmcId".into(), vec![Parameter::Scalar(Value::S(pawn_slot))]),
+                ],
+            };
+            assert_eq!(super::pawn_message(&record).unwrap(),
+                crate::Request::PawnMessage { message: 300_123, pawn_slot: pawn_slot as i32 });
+        }
     }
 }
 

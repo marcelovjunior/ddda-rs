@@ -81,7 +81,7 @@ impl Bout {
         self.sim.step(1.0 / 30.0, &inputs, &Flat);
         self.fight.players_moved(&mut self.sim, &Flat, 1.0);
         self.fight.enemies(&self.sim, &Flat, 1.0);
-        self.fight.push_out(&mut self.sim);
+        self.fight.push_out(&mut self.sim, &Flat);
         self.fight.volumes(&self.sim);
         self.digests.push(self.fight.digest());
         self.frames += 1;
