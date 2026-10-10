@@ -70,3 +70,13 @@ installed resource probes, geometry checks). GUI and exe probes found
 the six selected animations. These are source observations, not Rust test
 or fidelity acceptance. Next action: S51, then adapt and run full ddview
 tests/release plus a bounded real-bag capture through the shared GPU queue.
+
+
+### S51 adaptation prepared (source only)
+
+The dedicated menu projection now keeps `Owner` with the selected slot rather
+than translating bag choice back into an actor seat. Controller indices convert
+explicitly to `PlayerId`; projected snapshots remain per-owner. Its list test
+uses a headless ECON/runtime reward fixture, with no QuickItems manufacturing
+path. Opening hooks still need S51 integration and adaptation; no Cargo or
+capture acceptance is claimed for this checkpoint.

@@ -90,7 +90,6 @@ impl Catalog {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BagView {
-    pub user: PlayerId,
     pub owner: Owner,
     pub bag: Bag,
 }
@@ -120,7 +119,7 @@ struct Selection {
 }
 
 impl Selection {
-    fn apply(&mut self, input: Input, bags: &[BagView], catalog: &Catalog) -> Option<(PlayerId, Entry)> {
+    fn apply(&mut self, input: Input, bags: &[BagView], catalog: &Catalog) -> Option<(Owner, Entry)> {
         if bags.is_empty() {
             return None;
         }
@@ -147,7 +146,7 @@ impl Selection {
         self.cursor = next.clamp(0, rows.len() as isize - 1) as usize;
         input
             .use_item
-            .then(|| (bags[self.bag].user, rows[self.cursor].clone()))
+            .then(|| (bags[self.bag].owner, rows[self.cursor].clone()))
     }
 }
 
@@ -277,13 +276,16 @@ pub(crate) fn controls(
     ordered.sort_by_key(|(e, _)| e.to_bits());
     // Viewer keyboard bindings. The original PC binding remap/repeat table
     // remains unported; gamepads use the existing deterministic seat order.
-    for seat in 0..ordered.len().max(2) {
+    for pad_index in 0..ordered.len().max(2) {
+        let Ok(seat) = PlayerId::try_from(pad_index) else {
+            continue;
+        };
         let open = if seat == 0 {
             keys.just_pressed(KeyCode::KeyI)
         } else {
             keys.just_pressed(KeyCode::NumpadDivide) && seat == 1
         } || ordered
-            .get(seat)
+            .get(pad_index)
             .is_some_and(|(_, p)| p.just_pressed(GamepadButton::Start));
         if open && opening.item_menu_snapshot(seat).is_some() {
             if menus.blocks(seat) {
@@ -329,7 +331,7 @@ pub(crate) fn controls(
         } else {
             Input::default()
         };
-        if let Some((_, pad)) = ordered.get(owner) {
+        if let Some((_, pad)) = ordered.get(usize::from(owner)) {
             let axis = |a| {
                 let v = pad.get(a).unwrap_or(0.0);
                 if v > 0.5 {
@@ -362,8 +364,8 @@ pub(crate) fn controls(
             menus.close(owner);
             continue;
         }
-        if let Some((user, row)) = selection.apply(input, &data.bags, &view.catalog) {
-            let result = opening.item_menu_use(owner, user, &row);
+        if let Some((bag_owner, row)) = selection.apply(input, &data.bags, &view.catalog) {
+            let result = opening.item_menu_use(owner, bag_owner, &row);
             selection.error = result.err().unwrap_or_default();
         }
     }
@@ -838,28 +840,40 @@ mod tests {
         };
         let vfs = ddvfs::Vfs::open(&native).unwrap();
         let catalog = Catalog::load(&vfs, &native).unwrap();
-        let mut quick =
-            crate::items::QuickItems::new_game(&vfs, &[0, 1, 7], ddeconomy::new_game::Phase::NewlyArisen)
-                .unwrap();
+        // Pure projection fixture: runtime reward data enters headless ECON,
+        // and the viewer receives only a cloned bag with its owner identity.
+        let mut economy = ddeconomy::Economy::default();
+        economy.inventory.bags.insert(
+            Owner::Arisen(7),
+            ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen),
+        );
+        let items = ddhost::items::ItemData::load(&vfs).unwrap();
         let story = ddstory::data::InstallData::open(&native, None).unwrap();
-        quick.rewards(&ddstory::orders::reward(&story, 1).unwrap());
-        let bags = quick.menu_bags(7);
+        for request in ddstory::orders::reward(&story, 1).unwrap() {
+            if let ddstory::Request::Reward {
+                quest, items: grants, ..
+            } = request
+            {
+                economy
+                    .opening_grants
+                    .reward(&mut economy.inventory, &items.items, 7, quest, &grants);
+            }
+        }
+        let bags = vec![BagView {
+            owner: Owner::Arisen(7),
+            bag: economy.inventory.bag(Owner::Arisen(7)).unwrap().clone(),
+        }];
         assert_eq!(bags.len(), 1);
-        assert_eq!(bags[0].1, Owner::Arisen(7));
-        let rows = catalog.entries(&bags[0].2, 0);
+        assert_eq!(bags[0].owner, Owner::Arisen(7));
+        let rows = catalog.entries(&bags[0].bag, 0);
         assert!(rows.iter().any(|row| row.slot.item == 43 && row.slot.num == 5));
         for row in &rows {
-            assert_eq!(bags[0].2.slots[row.index], row.slot);
+            assert_eq!(bags[0].bag.slots[row.index], row.slot);
         }
         assert_eq!(catalog.items[43].name, "Greenwarish");
         assert_eq!(catalog.items[43].icon, Rect::new(704.0, 64.0, 768.0, 128.0));
         assert!(!catalog.items[43].description.is_empty());
-        let data = Snapshot {
-            bags: bags
-                .into_iter()
-                .map(|(user, owner, bag)| BagView { user, owner, bag })
-                .collect(),
-        };
+        let data = Snapshot { bags };
         let mut menus = Menus::default();
         menus.open(7);
         menus.open(1);
@@ -877,7 +891,7 @@ mod tests {
                 &catalog,
             )
             .unwrap();
-        assert_eq!(selected.0, 7);
+        assert_eq!(selected.0, Owner::Arisen(7));
         assert_eq!(selected.1.slot, data.bags[0].bag.slots[selected.1.index]);
         menus.close(1);
         assert!(menus.blocks(7) && !menus.blocks(1));
