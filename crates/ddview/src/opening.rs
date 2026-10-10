@@ -1563,7 +1563,7 @@ pub fn step(
             }
         }
     }
-    if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
+    if !pause.paused && !item_menus.blocks(0) && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
         play::orbit(st, &buttons, &mouse);
     }
     // Local input: talk and menu keys first, the rest to the host.
@@ -1641,7 +1641,7 @@ pub fn step(
         s.demo = None;
     }
     // The demo stands in for the keys.
-    if !pause.paused && s.demo.is_some() && s.cut.is_none() {
+    if !pause.paused && !item_menus.blocks(0) && s.demo.is_some() && s.cut.is_none() {
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
