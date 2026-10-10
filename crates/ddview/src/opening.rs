@@ -245,8 +245,6 @@ pub struct Session {
     /// Authored event movie currently awaited by the story (if intro enabled).
     pub intro_movie: Option<PathBuf>,
     pub host: HostHandle,
-    /// Save-free bags; actual story rewards and menu choices deliver items.
-    quick_items: crate::items::QuickItems,
     vocation_menu: crate::vocation_menu::Selection,
     guest: Option<ddnet::Client<ddnet::Udp>>,
     network_ready: bool,
@@ -402,15 +400,13 @@ pub fn prepare(
     let bag_phase = if sce >= 1050 { ddeconomy::new_game::Phase::NewlyArisen }
         else if matches!(w.stage_no, 800 | 801) { ddeconomy::new_game::Phase::BeforeCreation }
         else { ddeconomy::new_game::Phase::DragonChallenge };
-    let seats: Vec<_> = host.roster.ids().collect();
-    let quick_items = crate::items::QuickItems::new_game(&vfs, &seats, bag_phase)?;
+    host.new_game_items(std::sync::Arc::new(ddhost::items::ItemData::load(&vfs)?), bag_phase);
     let mut s = Session {
         intro_movie,
         host: HostHandle {
             local: Some(Box::new(host)),
             server: None,
         },
-        quick_items,
         vocation_menu: crate::vocation_menu::Selection::default(),
         guest: None,
         network_ready: false,
@@ -548,14 +544,14 @@ impl Session {
     /// Editor confirmation resumes the remaining stand-in dragon route.
     pub fn intro_edit_done(&mut self) -> Result<(), String> {
         if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
-        self.quick_items.character_created();
+        self.host.character_created_items();
         let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
         let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
             h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
         }).map_err(|e| e.to_string())?;
         // The existing preparation route can bypass ev01 headless. Apply
         // only its completed boundary; a live challenge leaves this pending.
-        if self.world().sce_no >= 1050 { self.quick_items.heart_taken(); }
+        if self.world().sce_no >= 1050 { self.host.heart_taken_items(); }
         self.host.world.live(CASSARDIS_ROWS);
         self.host.world.manual_stages = true;
         self.last_sce = self.world().sce_no;
@@ -830,8 +826,7 @@ impl Session {
                 }
                 TalkEvent::QuestEffects { player, npc, effects } => {
                     for effect in effects {
-                        if let ddnpcrt::quest_talk::Effect::Item { item, count, level } = *effect {
-                            self.quick_items.npc_grant(*player, item, count, level);
+                        if let ddnpcrt::quest_talk::Effect::Item { item, count, .. } = *effect {
                             info!("opening: NPC {npc} quest reward: seat {player} item {item} count {count}");
                         }
                     }
@@ -1526,11 +1521,10 @@ pub fn step(
     // Like --play, quick use is local host input. Opening menus/events
     // suppress it; LAN clients cannot consume an unsynchronised local bag.
     if !pause.paused && s.cut.is_none() && s.talk.is_none() && s.world_menu().is_none() {
-        let (items, host) = (&mut s.quick_items, &mut s.host);
-        let host = &mut **host;
-        if let Some(fight) = host.fight.as_mut() {
-            for (seat, result) in items.pressed(&keys, &st.locals, &mut host.sim, fight) {
-                match result {
+        for &seat in &st.locals {
+            let key = match seat { 0 => KeyCode::KeyU, 1 => KeyCode::Numpad0, _ => continue };
+            if keys.just_pressed(key) {
+                match s.host.item_request(seat, ddhost::items::ItemRequest::QuickUse) {
                     Ok(item) => info!("opening quick-use: seat {seat} used item {item}"),
                     Err(error) => info!("opening quick-use: seat {seat}: {error}"),
                 }
@@ -1700,7 +1694,6 @@ pub fn step(
             break;
         }
         s.npc_requests(&report.npc_requests);
-        s.quick_items.rewards(&report.requests);
         for r in &report.requests {
             match r {
                 Request::PlaceParty {
@@ -1884,13 +1877,8 @@ fn ddskill_fighter() -> u32 {
 fn close_menu(s: &mut Session, job: u32) {
     info!("opening: vocation menu closed with job {job}");
     s.vocation_menu.close();
-    let selecting = s.world_menu().is_some();
     s.host.world.close_menu(Some(job));
-    if selecting {
-        if let Some(vocation) = ddhost::ddskill::vocation::Vocation::from_id(job) {
-            s.quick_items.first_choice(vocation);
-        }
-    }
+    // Host::apply_job_kit delivers the first-choice items once on its next tick.
 }
 
 fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize, sex: u8) -> EventConfig {
@@ -1900,7 +1888,7 @@ fn cut_config(world: &ddstory::World, guest_stage: Option<u32>, language: usize,
 fn start_cut(s: &mut Session, row: usize) {
     // Translated from 0x0050c290 case 0x15: the real ev01 request
     // replaces the challenge gear before the movie, once per session.
-    if row == 21 && s.guest.is_none() { s.quick_items.heart_taken(); }
+    if row == 21 && s.guest.is_none() { s.host.heart_taken_items(); }
     let w = s.world();
     let cfg = cut_config(w, s.guest.as_ref().and_then(|c| c.spot.as_ref()).map(|spot| spot.stage), s.language, s.sex);
     match EventPlayer::open(&s.host.story.as_ref().unwrap().data, row, cfg) {
@@ -2218,13 +2206,9 @@ fn demo_heal(s: &mut Session, now: f32) {
         return;
     }
     d.last_heal = now;
-    let (items, host) = (&mut s.quick_items, &mut s.host);
-    let host = &mut **host;
-    if let Some(fight) = host.fight.as_mut() {
-        match items.use_next(0, &mut host.sim, fight) {
-            Ok(item) => info!("opening demo: used item {item}"),
-            Err(e) => info!("opening demo: no curative: {e}"),
-        }
+    match s.host.item_request(0, ddhost::items::ItemRequest::QuickUse) {
+        Ok(item) => info!("opening demo: used item {item}"),
+        Err(e) => info!("opening demo: no curative: {e}"),
     }
 }
 
@@ -3065,7 +3049,7 @@ mod tests {
         let cells = [grid.name(grid.index([start.position[0], start.position[1], start.position[2]]))];
         assert_ne!(cells[0], (0, 0), "field arrival uses split-grid coordinates");
         let mut session = prepare(native, &exe, 2, false, None, false).unwrap();
-        assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap(),
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap(),
             &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
         // Fixture observations satisfy this installed group's authored gates;
         // this is not a claim that the full opening route has reached them.
@@ -3184,7 +3168,7 @@ mod tests {
         if !native.exists() { return; }
         let exe = native.parent().unwrap().join("DDDA.exe");
         let mut session = prepare(native, &exe, 2, false, None, true).unwrap();
-        assert!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().slots.is_empty());
+        assert!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().slots.is_empty());
         let row = session.host.world.inner.awaiting.unwrap();
         let event = &session.host.story.as_ref().unwrap().data.event_table().unwrap().rows[row];
         assert_eq!((event.stage, event.event), (100, 0));
@@ -3203,7 +3187,7 @@ mod tests {
         assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
         session.intro_edit_done().unwrap();
         for seat in [0, 1] {
-            assert_eq!(session.quick_items.inventory.bag(ddeconomy::inventory::Owner::Arisen(seat)).unwrap(),
+            assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(seat)).unwrap(),
                 &ddeconomy::new_game::bag(ddeconomy::new_game::Phase::NewlyArisen));
         }
         assert_eq!(session.world().stage_no, STAGE);
