@@ -470,13 +470,15 @@ fn object_transform(
     animation: &mtgui::Animation<'_>,
     wanted: usize,
 ) -> Result<bevy::math::Affine2, String> {
-    // Object r+8 is first child and r+C next sibling, linked by 0x01077EC0.
+    // 0x01077EC0 calls 0x01068C40 for r+C (FIRST CHILD), which writes
+    // child+74=this. r+8 is NEXT SIBLING via 0x01068C60, which inherits
+    // this+74 as sibling+74. Confirmed against both setters' disassembly.
     let records = gui.section(0xa4).ok_or("level object section absent")?.bytes;
     let objects = gui.animation_objects(animation.name)?;
     let first = animation.words[3] as usize;
     let parent = |child: usize| -> Result<Option<usize>, String> {
         for index in 0..objects.len() {
-            let mut next = word(records, (first + index) * 32 + 8)?;
+            let mut next = word(records, (first + index) * 32 + 12)?;
             let mut count = 0;
             while next != u32::MAX {
                 let absolute = next as usize;
@@ -486,7 +488,7 @@ fn object_transform(
                 if absolute - first == child {
                     return Ok(Some(index));
                 }
-                next = word(records, absolute * 32 + 12)?;
+                next = word(records, absolute * 32 + 8)?;
                 count += 1;
                 if count > objects.len() {
                     return Err("cyclic level object siblings".into());
@@ -895,6 +897,26 @@ mod tests {
                 .transform_point2(Vec2::ZERO),
             Vec2::new(-80.0, 19.0)
         );
+        let animation = gui.local_animation(pawn.node).unwrap();
+        assert_eq!(
+            object_transform(&gui, animation, 8)
+                .unwrap()
+                .transform_point2(Vec2::ZERO),
+            Vec2::new(-90.0, 19.0)
+        );
+        // Title/prefix/name are siblings of the number transform, not
+        // descendants: they must not inherit its position.
+        for panel in [&arisen, &pawn] {
+            let animation = gui.local_animation(panel.node).unwrap();
+            for slot in [4, 5, 9] {
+                assert_eq!(
+                    object_transform(&gui, animation, slot)
+                        .unwrap()
+                        .transform_point2(Vec2::ZERO),
+                    Vec2::ZERO
+                );
+            }
+        }
         let cap = Notice { level: 200, ..notice };
         assert!(texts.fields(&cap).unwrap_err().contains("INFINITY"));
     }

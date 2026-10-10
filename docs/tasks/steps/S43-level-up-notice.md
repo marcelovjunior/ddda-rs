@@ -57,6 +57,11 @@ notice with the right level; the Result names the sources.
   common message 88 to object 5, and cockpit message 4 to object 4. The
   installed enter/exit global tracks span 8/6 frames respectively; panel
   pointer-array indices are 1 (Arisen) and 15 (pawn).
+  Parent review #6449 caught the object-link interpretation before acceptance:
+  record `+0xC` is first child (`0x01068C40`) and `+8` next sibling
+  (`0x01068C60`), confirmed by both setters' disassembly. Correct installed
+  number-parent positions are (-80,19) for Arisen and (-90,19) for pawn;
+  title/prefix/name are siblings and inherit neither offset.
 - Added a dedicated `level_up_notice` presenter with per-owner observation
   and queueing. It reads authoritative `OpeningRes.host.progression` and
   `PlayState.locals/follow`, initializes a silent baseline, preserves levels
