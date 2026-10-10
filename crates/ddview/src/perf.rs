@@ -253,10 +253,16 @@ mod field_trace {
             let probe_runs = runs.clone();
             let subscriber = Registry::default().with(WindowLayer::new(SystemEntries(entries.clone()), enabled.clone()));
             tracing::subscriber::with_default(subscriber, || {
+                fn cached_named_probe() {}
+                use bevy::ecs::system::{IntoSystem, System};
+                let named_system = IntoSystem::into_system(cached_named_probe);
+                assert!(named_system.name().as_string().contains("cached_named_probe"),
+                    "release profiling must retain function-derived names; enable Bevy debug");
                 let mut app = App::new();
                 // IntoSystem constructs and caches SystemMeta's actual span
                 // while recording is off. No rename/rebuild is done later.
                 app.add_systems(Update, move || { probe_runs.fetch_add(1, Ordering::Relaxed); });
+                app.add_systems(Update, named_system);
                 app.update();
                 assert_eq!(entries.load(Ordering::Relaxed), 0);
                 enabled.store(true, Ordering::Release);
@@ -293,17 +299,21 @@ mod field_trace {
                 .with(bevy::log::tracing_subscriber::fmt::Layer::default()
                     .with_writer(std::io::sink).with_ansi(false));
             tracing::subscriber::with_default(subscriber, || {
-                let cached = tracing::info_span!("system", name = "cached_probe");
-                cached.in_scope(|| {});
+                fn chrome_cached_system_probe() {}
+                let mut app = App::new();
+                // A real function-derived cached system name, rather than a
+                // manually named span that bypasses release DebugName erasure.
+                app.add_systems(Update, chrome_cached_system_probe);
+                app.update();
                 enabled.store(true, Ordering::Release);
-                let entered = cached.enter();
+                app.update();
                 enabled.store(false, Ordering::Release);
-                drop(entered);
-                cached.in_scope(|| {});
+                app.update();
             });
             drop(guard); // Actual writer thread exit/flush before inspection.
             let trace = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
-            let entries: Vec<_> = trace.lines().filter(|line| line.contains("cached_probe")).collect();
+            let entries: Vec<_> = trace.lines().filter(|line|
+                line.contains("system: name=") && line.contains("chrome_cached_system_probe")).collect();
             assert_eq!(entries.len(), 2, "one cached entry/exit, none outside window: {trace}");
             assert!(entries[0].contains("system: name="), "system name must include recorded fields");
             assert!(entries[0].contains("\"ph\":\"B\""));
