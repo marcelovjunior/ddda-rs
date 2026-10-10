@@ -527,11 +527,12 @@ opening (codex-31), route perf (codex-29).
   Run: `DDVIEW_DEMO_FIGHT=1 DDVIEW_TIME_SCALE=4 ddview <nativePC>
   --perf-route --unattended`; resume any step with `DDVIEW_OPENING_FROM=
   E:/ddda-re/notes/checkpoints/route-v2/<Step>.ddhs DDVIEW_OPENING_STEP=<Step>`.
-  Paused for quota with handoff notes on their branches (not merged):
-  S31 beach scene (`step/s31-dragon-route`, exit helper; GotoEx needs S59),
-  S59 path query (`step/s59-navigation`), S30 fire RNG tables/birth adapters
-  (`step/s30-dragon-land-fire`), S57 starting skills
-  (`step/s57-base-skills`; Blink, Summons, Anodyne, contacts; tests unrun).
+  After the wrap-up, head ran the paused gates itself: S30 (198 pass) and
+  S59 (6 pass) merged; main re-checked (204 pass, viewer builds). Still on
+  branches: S31 beach scene (`step/s31-dragon-route`, exit helper; GotoEx
+  needs the S59 query wired to bodies), S57 starting skills
+  (`step/s57-base-skills`; blocked by the arrow supplement-row load error,
+  see its brief; Shield wire tag and protocol 12 added there).
   Not started: S58 equipment menu, S60 oracle numbers, S41 frame rate.
 - **Open:** dragon fire emission/damage (S30), beach scene wiring (S31,
   codex-80), navigation (S59), starting skills (S57), frame rate toward
