@@ -767,8 +767,11 @@ pub fn show(
 /// identified (*measured*, not traced).
 pub const CAMERA_DISTANCE: f32 = 230.0;
 pub const CAMERA_TARGET_HEIGHT: f32 = 140.0;
-/// The near plane of the same recordings (cm).
-pub const CAMERA_NEAR: f32 = 96.0;
+/// The active uCameraCtrl near plane (cm): uCamera ctor 0x01128740,
+/// inherited through 0x007d3a80/0x007d6cd0. Collision 0x007de570 reads
+/// sCamera+0xce0, not the child uCameraGame's separate 96 cm field.
+/// Verified live in Cassardis: active controller 16, child game camera 96.
+pub const CAMERA_NEAR: f32 = 16.0;
 /// The field camera's `mFov` in those recordings; the render adds the
 /// player's CameraFov setting (docs/SHADING.md).
 pub const CAMERA_FOV: f32 = 55.0;
@@ -790,7 +793,8 @@ pub const CAMERA_FOV: f32 = 55.0;
 pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
-    let mut eye = target - dir * CAMERA_DISTANCE;
+    let desired_eye = target - dir * CAMERA_DISTANCE;
+    let mut eye = desired_eye;
     if let Some((hit, flags)) = ground.ray_with_flags(target.to_array(), eye.to_array()) {
         if flags & 0x10 == 0 { eye = Vec3::from(hit.point); }
     }
@@ -802,7 +806,12 @@ pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f3
             if flags & 0x10 == 0 { eye = stop - toward * CAMERA_NEAR; }
         }
     }
-    (eye, target)
+    // Translated from 0x007e1b11..0x007e1b68 (DDDA.exe 2017-12-13 Steam):
+    // the caller of 0x007de570 translates the look target by the complete
+    // eye correction, including off-axis penetration recovery. Keeping the
+    // target fixed here would turn every sideways/ceiling contact into a
+    // camera rotation when the presentation layer calls look_at.
+    (eye, target + (eye - desired_eye))
 }
 
 /// Translated query direction/response from 0x010fdea0 / 0x010fd710
@@ -1126,25 +1135,25 @@ mod tests {
         // a wall 100 cm behind found by the ray: the eye stops on it
         let (eye, _) = follow_camera(&Wall, Vec3::ZERO, 0.0, 0.0);
         assert!((eye.z + 100.0).abs() < 1e-3, "{eye:?}");
-        // a wall 150 cm behind that only the sphere meets (0x007de570): the
-        // sphere (1.3 x near = 124.8) one near plane (96) in front of the eye
-        // clears it at z = -150 + 124.8, so the eye stops at -25.2 - 96
+        // a wall 230 cm behind that only the sphere meets (0x007de570): the
+        // sphere (1.3 x near = 20.8) one near plane (16) in front of the eye
+        // clears it at z = -230 + 20.8, so the eye stops at -209.2 - 16
         struct Plane;
         impl ddsim::Ground for Plane {
             fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> {
                 Some(0.0)
             }
             fn triangles_in(&self, lo: [f32; 3], _: [f32; 3], out: &mut Vec<ddsim::sweep::Face>) -> bool {
-                if lo[2] > -150.0 {
+                if lo[2] > -230.0 {
                     return false;
                 }
-                let z = -150.0;
+                let z = -230.0;
                 out.push(([[-1e4, -1e4, z], [1e4, -1e4, z], [0.0, 1e4, z]], 0));
                 true
             }
         }
         let (eye, _) = follow_camera(&Plane, Vec3::ZERO, 0.0, 0.0);
-        assert!((eye.z - (-150.0 + 1.3 * CAMERA_NEAR - CAMERA_NEAR)).abs() < 1.0, "{eye:?}");
+        assert!((eye.z - (-230.0 + 1.3 * CAMERA_NEAR - CAMERA_NEAR)).abs() < 1.0, "{eye:?}");
     }
 
     #[test]
@@ -1178,6 +1187,39 @@ mod tests {
         terrain.add([[-1000.0, -1000.0, -10.0], [1000.0, -1000.0, -10.0], [0.0, 1000.0, -10.0]]);
         let (stop, _) = camera_sphere_cast(&terrain, Vec3::ZERO, Vec3::new(0.0, 0.0, -50.0), 20.0).unwrap();
         assert!((stop.z - 10.1).abs() < 0.002, "{stop:?}");
+    }
+
+    #[test]
+    fn camera_wall_and_roof_recovery_translate_the_view_without_rotating() {
+        // 0x007e1400 translates both endpoints after the collision helper.
+        // These contacts push perpendicular to the viewing direction,
+        // exposing the missing caller response even with a zero-pitch view.
+        for triangle in [
+            [[-10.0, -1000.0, -1000.0], [-10.0, 1000.0, -1000.0], [-10.0, 0.0, 1000.0]],
+            [[-1000.0, 150.0, -1000.0], [1000.0, 150.0, -1000.0], [0.0, 150.0, 1000.0]],
+        ] {
+            let mut terrain = ddworld::Terrain::empty();
+            terrain.add(triangle);
+            let desired_target = Vec3::Y * CAMERA_TARGET_HEIGHT;
+            let desired_eye = desired_target - Vec3::Z * CAMERA_DISTANCE;
+            let (eye, target) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+            assert!(eye.distance(desired_eye) > 1.0);
+            assert!((target - desired_target - (eye - desired_eye)).length() < 0.001);
+            assert!((target - eye - Vec3::Z * CAMERA_DISTANCE).length() < 0.001);
+        }
+    }
+
+    #[test]
+    fn camera_active_controller_near_does_not_hit_clear_side_wall_or_roof() {
+        // The child uCameraGame's 96 cm near plane incorrectly gave this
+        // query a 124.8 cm radius. Active uCameraCtrl uses 16 cm (20.8 cm
+        // radius), so a wall 60 cm away or roof 70 cm above is clear.
+        let mut terrain = ddworld::Terrain::empty();
+        terrain.add([[-60.0, -1000.0, -1000.0], [-60.0, 1000.0, -1000.0], [-60.0, 0.0, 1000.0]]);
+        terrain.add([[-1000.0, 210.0, -1000.0], [1000.0, 210.0, -1000.0], [0.0, 210.0, 1000.0]]);
+        let (eye, target) = follow_camera(&terrain, Vec3::ZERO, 0.0, 0.0);
+        assert_eq!(eye, Vec3::new(0.0, CAMERA_TARGET_HEIGHT, -CAMERA_DISTANCE));
+        assert_eq!(target, Vec3::Y * CAMERA_TARGET_HEIGHT);
     }
 
     #[test]
