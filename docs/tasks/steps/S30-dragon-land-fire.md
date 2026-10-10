@@ -204,3 +204,10 @@ scenery regressions passed (6.35s/5.53s compile; 6.99s installed run), actual
 exit0. This validates the reader and source helpers, not the full fire
 runtime or original-game acceptance. Next action remains binding the
 authentic type4 path/mover before enabling the rest of the encounter.
+
+The owner duration adjustment is now separately translated from
+`0x010FA8D0/0x010F9CB0`: parent effect+0x11A low nibble2 preserves
+durations; mode0 shifts by2 and other modes by1, retaining zero and
+clamping positive results to at least1. The caller must provide the actual
+parent state; no quality mode is guessed. One focused regression passed
+(1.97s compile, actual exit0). Runtime parent-state selection remains open.

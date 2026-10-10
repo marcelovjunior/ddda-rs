@@ -9,9 +9,29 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Duration reduction selected by the actual parent effect +0x11A low nibble.
+/// Caller must supply that state; this reader does not choose a quality mode.
+// Translated from 0x010FA8D0's call into 0x010F9CB0
+// (DDDA.exe 2017-12-13 Steam).
+pub fn adjust_durations_for_owner(durations: [u16; 3], owner_flags: u16) -> [u16; 3] {
+    let mode = owner_flags & 0xF;
+    if mode == 2 { return durations; }
+    let shift = if mode == 0 { 2 } else { 1 };
+    durations.map(|duration| if duration == 0 { 0 } else { (duration >> shift).max(1) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_duration_reduction_preserves_zero_and_positive_minimum() {
+        assert_eq!(adjust_durations_for_owner([0, 1, 23], 0), [0, 1, 5]);
+        assert_eq!(adjust_durations_for_owner([0, 1, 23], 1), [0, 1, 11]);
+        assert_eq!(adjust_durations_for_owner([0, 1, 23], 2), [0, 1, 23]);
+        assert_eq!(adjust_durations_for_owner([u16::MAX, 7, 2], 0xFFF2), [u16::MAX, 7, 2]);
+        assert_eq!(adjust_durations_for_owner([u16::MAX, 7, 2], 0xFFF0), [16383, 1, 1]);
+    }
 
     fn synthetic_list() -> mteffect::EffectList {
         let mut payload = vec![0; 0x1B0];
@@ -144,9 +164,8 @@ impl CollisionUnit {
             acceleration: pair(life, 0x48)?, initial_distance: pair(life, 0x70)?, path_points })
     }
 
-    /// Native raw duration sampling in 0x010FA8D0, before 0x010F9CB0's
-    /// owner-specific duration adjustment. Do not substitute this for that
-    /// adapter. Curved hold durations require their native context first.
+    /// Native raw duration sampling in 0x010FA8D0, before the owner reduction
+    /// exposed above. Curved hold durations require their native context first.
     pub fn sample_raw_durations(&self, counter: &mut u32,
         mut random_word: impl FnMut(usize) -> u32) -> Result<[u16; 3], String> {
         if self.hold_curve != 0 { return Err("curved hold duration needs native context".into()); }
