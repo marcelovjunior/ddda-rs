@@ -96,8 +96,7 @@ fn setup_inner(
     let pattern = ddlook::pattern::EditPattern::load(vfs).map_err(|e| e.to_string())?;
     let mut editor = Editor::load(vfs, sex)?;
     if let Some(record) = record {
-        editor.typed = record.name_str();
-        editor.edit = record;
+        editor.restore(record)?;
     }
     // Presentation bindings, not native keyboard scan/repeat or legend geometry.
     let controls = commands

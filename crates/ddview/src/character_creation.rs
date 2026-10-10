@@ -90,6 +90,34 @@ impl Editor {
             .collect()
     }
 
+    /// Project restore policy: retain saved identity/appearance and point the
+    /// picker at its matching installed full preset. An external custom edit
+    /// retains its appearance with the picker at zero until a new choice.
+    pub fn restore(&mut self, record: Edit) -> Result<(), String> {
+        let sex = record.get("mGender").ok_or("saved edit has no gender")?;
+        let rows = self
+            .presets
+            .all
+            .get(usize::from(sex))
+            .ok_or("saved edit gender outside male/female")?;
+        let mut preset = 0;
+        for index in 0..rows.len() {
+            let mut candidate = record.clone();
+            self.presets
+                .apply(&mut candidate, sex, index)
+                .map_err(|e| e.to_string())?;
+            if candidate.fields == record.fields {
+                preset = index;
+                break;
+            }
+        }
+        self.typed = record.name_str();
+        self.edit = record;
+        self.preset = preset;
+        self.shown = None;
+        Ok(())
+    }
+
     /// Committed keyboard text, separate from IME composition and key repeat.
     /// The native limit counts UTF-8 leading sequences via 0x00D88F30,
     /// including four-byte sequences as one. Native admission of non-BMP
@@ -413,6 +441,12 @@ mod tests {
         assert!(editor.accept());
         assert_eq!(editor.edit.fields, appearance);
         assert_eq!(editor.edit.name_str(), "Alba");
+        let record = editor.edit.clone();
+        let mut restored = Editor::load(&vfs, 0).unwrap();
+        restored.restore(record.clone()).unwrap();
+        assert_eq!(restored.preset, 1);
+        assert_eq!(restored.edit, record);
+        assert_eq!(restored.typed, "Alba");
         let look = ddlook::save::edit_look_dressed(&vfs, &editor.fields()).unwrap();
         assert_eq!(look.sex, 1);
         let gui = mtgui::Gui::parse(&editor.gui).unwrap();
