@@ -270,8 +270,8 @@ loader at `0x0047E6F8..0x0047E71A` walks the installed path table
 The existing installed adjustment reader therefore supplies slots18/19/1A.
 `0x0076C540` mode3 consumes collision height+0xD88 and radius+0xD8C,
 then delegates to `0x00CCE580`; heights shorter than twice the radius
-collapse the segment to a sphere. The native NPC axis kind is3 in
-`0x00B5F0A0`, rather than the player's axis kind2. No default human height,
+collapse the segment to a sphere. The NPC collision mode and axis binding
+still require their actual source fields (see the correction below). No default human height,
 fake ground byte, elapsed landing, navigation completion or HP loss was
 added. Production reaction/GotoEx actors and the full S31 route remain open.
 
@@ -344,3 +344,16 @@ The regression
 `demo_damage_flag_is_a_native_rising_edge_with_distinct_body_npc_and_collision_sources`
 is **uncompiled/unrun**. No graph input or production actor was changed;
 real body/collision flags still must be supplied by the actor adapter.
+
+**Axis field correction before actor integration:** the earlier phrase
+"NPC axis kind3" conflated body+0x1DEC (`0x00B5F0A0` word index77B) with
+the reflected `cScrAdjust::mAxisCheckType`. The latter is adjust+0x1A0 =
+body+0x1B60 for inline adjust+0x19C0. Native constructor `0x0079D8E9`
+writes axis type2; the player branch in `0x00B5F0A0` also writes2 at word
+index6D8, while the ordinary NPC branch's3 is a different field.
+`0x00770A90` allocates a collision record and does not overwrite this axis
+word. No type3 axis query was implemented. The actor adapter must preserve
+the actual axis field and use the existing supported sphere query rather
+than choosing a query from the unrelated body+0x1DEC value. The tested
+ground helper accepts actual `axis_present`; the new capsule provider
+contains no axis policy, so neither implementation needs this correction.
