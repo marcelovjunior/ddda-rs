@@ -65,6 +65,9 @@ pub struct Client<T: Transport> {
     ground_pending: bool,
     ground_stage: Option<u32>,
     stage_start_frame: u64,
+    epoch: u64,
+    personal_dead: bool,
+    roster: BTreeMap<PlayerId, ddid::ProfileId>,
 }
 
 #[cfg(test)]
@@ -96,6 +99,157 @@ mod pawn_message_tests {
 }
 
 #[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::proto::RetryNotice;
+    use crate::transport::Udp;
+    struct Flat;
+    impl Ground for Flat { fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) } }
+    fn client() -> Client<Udp> {
+        let mut sim = Sim::new(Default::default()); sim.add_player(1, [0.0; 3], 0.0);
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(),
+            Udp::bind("127.0.0.1:0").unwrap().local_addr(), 42, 1, 2, None, sim, Box::new(Flat), 0);
+        client.seat = Some(1);
+        client
+    }
+    fn snapshot(client: &Client<Udp>, epoch: u64, frame: u64) -> Snapshot {
+        Snapshot { epoch, frame, stage: Some(100), base: None, cmd_newest: None,
+            bodies: client.sim.players.iter().map(Body::of).collect(), vitals: vec![],
+            enemies: vec![], npcs: vec![], quest_camera: None, death: Default::default() }
+    }
+    fn notice(epoch: u64) -> RetryNotice {
+        RetryNotice { epoch, frame: 7, spot: Some(Spot { stage: 100, cell: (0, 0),
+            pos: [0.0; 3], yaw: 0.0 }), looks: Default::default(), dismissals: vec![] }
+    }
+    #[test]
+    fn client_retry_clears_prediction_baselines_events_and_requires_same_stage_ground() {
+        let mut client = client();
+        client.ground_stage = Some(100);
+        client.apply(snapshot(&client, 0, 900));
+        client.cmds.push_back((901, PlayerInput::default()));
+        client.predicted.push_back((901, [5.0, 0.0, 0.0]));
+        client.events.push(ToClient::PlayEvent { epoch: 0, frame: 900, row: 7 });
+        client.last_pawn_message = 10;
+        client.sim.player_mut(1).unwrap().skills.request = Some(123);
+        client.retry_notice(notice(1));
+        assert_eq!(client.epoch, 1);
+        assert!(client.cmds.is_empty() && client.predicted.is_empty() && client.snaps.is_empty());
+        assert!(client.sim.players.is_empty());
+        assert!(client.quest_camera.is_none());
+        assert!(client.ground_pending);
+        assert_eq!(client.ground_stage, None);
+        assert_eq!(client.next_cmd, 7 + 1 + LEAD_MAX as u64);
+        assert_eq!(client.last_pawn_message, 10, "session speech IDs must remain monotonic");
+        assert!(matches!(client.events.as_slice(), [ToClient::Retry(_)]));
+    }
+    #[test]
+    fn client_rejects_stale_epoch_and_accepts_checkpoint_frame_after_notice() {
+        let mut client = client();
+        let old = snapshot(&client, 0, 900);
+        let mut restored = old.clone(); restored.epoch = 1; restored.frame = 7;
+        client.apply(old.clone());
+        client.apply(restored.clone());
+        assert_eq!(client.latest().unwrap().frame, 900, "new epoch waits for reliable notice");
+        client.retry_notice(notice(1));
+        client.apply(restored.clone());
+        assert_eq!((client.latest().unwrap().epoch, client.latest().unwrap().frame), (1, 7));
+        client.apply(old);
+        assert_eq!(client.latest().unwrap(), &restored);
+        client.retry_notice(notice(1));
+        assert_eq!(client.latest().unwrap(), &restored, "duplicate notice cannot reset twice");
+        client.retry_notice(notice(0));
+        assert_eq!(client.latest().unwrap(), &restored);
+    }
+    #[test]
+    fn client_death_projection_uses_active_profiles_not_hp_or_pawn_state() {
+        use ddhost::death::{Report, SeatReport};
+        let mut client = client();
+        let mut first = snapshot(&client, 0, 1);
+        first.vitals = vec![Vital { id: 1, hp: 0.0, hp_max: 100.0 },
+            Vital { id: 4, hp: 100.0, hp_max: 100.0 }];
+        first.bodies[0].state = ddsim::State::Death { phase: ddsim::DeathPhase::ArisenDead };
+        client.apply(first.clone());
+        assert!(!client.actions_blocked());
+        assert_eq!(client.spectator_seat(), None);
+        assert!(!client.death_report().unwrap().game_over, "motion/HP are not native Dead clock evidence");
+        first.frame = 2;
+        first.death = Report { game_over: false, seats: vec![SeatReport { seat: 1,
+            profile: ddhost::ProfileId(42), terminal: true, spectator: Some(0),
+            unsupported: Some("untranslated airborne branch".into()) }, SeatReport { seat: 0,
+            profile: ddhost::ProfileId(41), terminal: false, spectator: None, unsupported: None }] };
+        client.apply(first.clone());
+        assert!(client.actions_blocked());
+        assert_eq!(client.spectator_seat(), Some(0));
+        assert!(!client.death_report().unwrap().game_over);
+        first.frame = 3;
+        first.death.seats[0].profile = ddhost::ProfileId(99);
+        client.apply(first);
+        assert!(!client.actions_blocked(), "a reused seat cannot inherit another profile's policy");
+        assert_eq!(client.spectator_seat(), None);
+    }
+
+    struct Packets(VecDeque<(SocketAddr, Vec<u8>)>);
+    impl Transport for Packets {
+        fn send(&mut self, _: SocketAddr, _: &[u8], _: u64) {}
+        fn recv(&mut self, _: u64) -> Option<(SocketAddr, Vec<u8>)> { self.0.pop_front() }
+        fn local_addr(&self) -> SocketAddr { "127.0.0.1:30001".parse().unwrap() }
+    }
+    fn packet_client() -> (Client<Packets>, Link) {
+        let mut client = Client::new(Packets(Default::default()), "127.0.0.1:30002".parse().unwrap(),
+            42, 1, 2, None, Sim::new(Default::default()), Box::new(Flat), 0);
+        client.seat = Some(1);
+        client.last_pawn_message = 10;
+        let link = Link::new(client.link.conn, 0);
+        (client, link)
+    }
+    #[test]
+    fn client_pump_rejects_retired_reliable_gameplay_after_retry_notice() {
+        use ddhost::pawn_chatter::{Identity, Message};
+        let (mut client, mut peer) = packet_client();
+        let message = Message { id: 1000, frame: 900, pawn_slot: 0, pawn_seat: 2,
+            pawn_identity: Identity::Main { profile: ddid::ProfileId(41) }, message: 123,
+            name: "fixture".into(), gender: 0, voice: 0, audience: vec![ddid::ProfileId(42)] };
+        // Deliberately enqueue retired events after the boundary to test the
+        // epoch guard independently of Link's usual reliable ID ordering.
+        for event in [ToClient::Retry(notice(1)),
+            ToClient::Story { epoch: 0, frame: 900, text: "old".into() },
+            ToClient::PlayEvent { epoch: 0, frame: 900, row: 7 },
+            ToClient::PawnMessage { epoch: 0, message: message.clone() },
+            ToClient::PlayEvent { epoch: 1, frame: 7, row: 8 },
+            ToClient::PawnMessage { epoch: 1, message: Message { id: 11, frame: 7, ..message } }] {
+            peer.send_reliable(event.encode());
+        }
+        let late = peer.packet(None, 0);
+        client.transport.0.push_back((client.server, late.clone()));
+        client.pump(1);
+        assert_eq!(client.epoch, 1);
+        assert_eq!(client.last_pawn_message, 11, "old speech must not poison monotonic deduplication");
+        assert!(matches!(client.events.as_slice(), [ToClient::Retry(_),
+            ToClient::PlayEvent { epoch: 1, row: 8, .. }, ToClient::PawnMessage { epoch: 1, .. }]));
+        client.transport.0.push_back((client.server, late));
+        client.pump(2);
+        assert_eq!(client.events.len(), 3, "late duplicate datagram has no fresh reliable IDs");
+    }
+    #[test]
+    fn client_pump_preserves_latest_retry_epoch_against_welcome_and_notice_reordering() {
+        let (mut client, mut peer) = packet_client();
+        for event in [ToClient::Retry(notice(1)), ToClient::Retry(notice(2)),
+            ToClient::Welcome { seat: 0, epoch: 0, frame: 900, delta: 1.0 / 30.0, spot: None },
+            ToClient::Retry(notice(1)),
+            ToClient::Welcome { seat: 0, epoch: 2, frame: u64::MAX, delta: 1.0 / 30.0, spot: None },
+            ToClient::PlayEvent { epoch: 1, frame: 8, row: 7 },
+            ToClient::PlayEvent { epoch: 2, frame: 7, row: 9 }] {
+            peer.send_reliable(event.encode());
+        }
+        client.transport.0.push_back((client.server, peer.packet(None, 0)));
+        client.pump(1);
+        assert_eq!((client.epoch, client.seat, client.next_cmd), (2, Some(1), 12));
+        assert!(matches!(client.events.as_slice(), [ToClient::Retry(RetryNotice { epoch: 2, .. }),
+            ToClient::PlayEvent { epoch: 2, row: 9, .. }]));
+    }
+}
+
+#[cfg(test)]
 mod camera_prediction_tests {
     use super::*;
     use crate::transport::{Transport, Udp};
@@ -116,7 +270,8 @@ mod camera_prediction_tests {
         let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], jump: true, light: true,
             ..Default::default() }, interact: true };
         client.cmds.push_back((11, moving));
-        client.apply(Snapshot { frame: 10, stage: Some(100), base: None, cmd_newest: None,
+        client.apply(Snapshot { epoch: 0, frame: 10, stage: Some(100), base: None, cmd_newest: None,
+            death: Default::default(),
             bodies: vec![own.clone()], vitals: vec![], enemies: vec![], npcs: vec![],
             quest_camera: Some(crate::quest_camera::QuestCamera { stage: 100, camera_id: 12,
                 generation: 1, seconds: 0.5, input_locked: true }) });
@@ -125,7 +280,8 @@ mod camera_prediction_tests {
         assert_eq!(replayed.state, ddsim::State::Wait);
         client.predict(1, 12, moving);
         assert_eq!(client.own().unwrap().position, replayed.position);
-        client.apply(Snapshot { frame: 12, stage: Some(100), base: None, cmd_newest: None,
+        client.apply(Snapshot { epoch: 0, frame: 12, stage: Some(100), base: None, cmd_newest: None,
+            death: Default::default(),
             bodies: vec![own], vitals: vec![], enemies: vec![], npcs: vec![], quest_camera: None });
         assert!(!client.actions_blocked());
         client.predict(1, 13, moving);
@@ -133,7 +289,8 @@ mod camera_prediction_tests {
     }
 
     fn snap(frame: u64, stage: u32, bodies: Vec<Body>, enemies: Vec<Enemy>) -> Snapshot {
-        Snapshot { frame, stage: Some(stage), base: None, cmd_newest: None,
+        Snapshot { epoch: 0, frame, stage: Some(stage), base: None, cmd_newest: None,
+            death: Default::default(),
             bodies, enemies, vitals: vec![], npcs: vec![], quest_camera: None }
     }
     #[test]
@@ -278,6 +435,9 @@ impl<T: Transport> Client<T> {
             ground_pending: false,
             ground_stage: None,
             stage_start_frame: 0,
+            epoch: 0,
+            personal_dead: false,
+            roster: BTreeMap::new(),
         }
     }
 
@@ -308,8 +468,50 @@ impl<T: Transport> Client<T> {
     fn pawn_message(&mut self, message: ddhost::pawn_chatter::Message) {
         if message.heard_by(self.profile) && message.id > self.last_pawn_message {
             self.last_pawn_message = message.id;
-            self.events.push(ToClient::PawnMessage(message));
+            self.events.push(ToClient::PawnMessage { epoch: self.epoch, message });
         }
+    }
+
+    /// Retain reliable transport ordering/IDs while rejecting retired gameplay
+    /// lifetimes explicitly. A retry also clears events admitted before it.
+    fn attempt_event(&mut self, event: ToClient) {
+        let epoch = match &event {
+            ToClient::Story { epoch, .. } | ToClient::PlayEvent { epoch, .. }
+            | ToClient::PawnMessage { epoch, .. } => *epoch,
+            _ => return,
+        };
+        if epoch != self.epoch { return; }
+        match event {
+            ToClient::PawnMessage { message, .. } => self.pawn_message(message),
+            other => self.events.push(other),
+        }
+    }
+
+    /// Reads every waiting packet from the host.
+    fn retry_notice(&mut self, notice: crate::proto::RetryNotice) {
+        if notice.epoch <= self.epoch { return; }
+        let Some(next_cmd) = notice.frame.checked_add(1 + LEAD_MAX as u64) else { return };
+        // Reliable channel ordering ensures pre-retry events precede this
+        // boundary. Retire their pending presentation, retain speech ID
+        // deduplication, and require new collision even for the same stage.
+        self.epoch = notice.epoch;
+        self.next_cmd = next_cmd;
+        self.cmds.clear();
+        self.predicted.clear();
+        self.snaps.clear();
+        self.sim = self.sim.fresh_attempt();
+        self.quest_camera = None;
+        self.personal_dead = false;
+        self.ground_pending = true;
+        self.ground_stage = None;
+        self.stage_start_frame = notice.frame;
+        self.last_error = 0.0;
+        self.max_error = 0.0;
+        self.hold = false;
+        self.spot = notice.spot;
+        self.looks = notice.looks.clone();
+        self.events.clear();
+        self.events.push(ToClient::Retry(notice));
     }
 
     /// Reads every waiting packet from the host.
@@ -321,21 +523,34 @@ impl<T: Transport> Client<T> {
             let Ok(d) = self.link.receive(&bytes, now) else { continue };
             for m in d.reliable {
                 match ToClient::decode(&m) {
-                    Ok(ToClient::Welcome { seat, frame, delta, spot }) => {
+                    Ok(ToClient::Welcome { seat, epoch, frame, delta, spot }) => {
+                        // Admission is once per connection. A preserved reliable
+                        // Welcome from an older attempt cannot undo Retry.
+                        if self.seat.is_some() || epoch < self.epoch { continue; }
+                        let Some(next_cmd) = frame.checked_add(1 + LEAD_MAX as u64) else { continue };
+                        self.epoch = epoch;
                         self.spot = spot;
                         self.seat = Some(seat);
+                        self.roster.insert(seat, self.profile);
                         self.clock = FrameClock::new(delta).unwrap_or_default();
-                        self.next_cmd = frame + 1 + LEAD_MAX as u64;
+                        self.next_cmd = next_cmd;
                     }
                     Ok(ToClient::Refuse { reason }) => self.refused = Some(reason),
                     Ok(ToClient::Look { seat, look }) => {
                         self.looks.insert(seat, look);
                     }
                     Ok(ToClient::Left { seat }) => {
+                        self.roster.remove(&seat);
                         self.looks.remove(&seat);
                         self.events.push(ToClient::Left { seat });
                     }
-                    Ok(ToClient::PawnMessage(message)) => self.pawn_message(message),
+                    Ok(event @ (ToClient::PawnMessage { .. } | ToClient::Story { .. }
+                        | ToClient::PlayEvent { .. })) => self.attempt_event(event),
+                    Ok(ToClient::Joined { seat, profile }) => {
+                        self.roster.insert(seat, ddid::ProfileId(profile));
+                        self.events.push(ToClient::Joined { seat, profile });
+                    }
+                    Ok(ToClient::Retry(notice)) => self.retry_notice(notice),
                     Ok(e) => self.events.push(e),
                     Err(_) => {}
                 }
@@ -353,6 +568,7 @@ impl<T: Transport> Client<T> {
     }
 
     fn apply(&mut self, s: Snapshot) {
+        if s.epoch != self.epoch { return; }
         self.snapshots += 1;
         let stage_changed = self.snaps.back().is_some_and(|last| last.stage != s.stage);
         if stage_changed {
@@ -363,6 +579,8 @@ impl<T: Transport> Client<T> {
         self.ground_pending = s.stage.is_some_and(|stage| self.ground_stage != Some(stage));
         // Apply before replay as well as the next prediction step.
         self.quest_camera = s.quest_camera;
+        self.personal_dead = s.death.seats.iter().any(|seat|
+            Some(seat.seat) == self.seat && seat.profile == self.profile && seat.terminal);
         if let (Some(seat), Some(n)) = (self.seat, s.cmd_newest) {
             let lead = n as i64 - s.frame as i64;
             // At most one step per snapshot.
@@ -446,7 +664,7 @@ impl<T: Transport> Client<T> {
         let n = self.cmds.len().min(REDUNDANCY);
         let tail: Vec<PlayerInput> = self.cmds.iter().skip(self.cmds.len() - n).map(|(_, c)| *c).collect();
         let newest = self.cmds.back().map_or(0, |(f, _)| *f);
-        Inputs { newest, cmds: tail, snapshot_ack: self.snaps.back().map(|s| s.frame) }.encode()
+        Inputs { epoch: self.epoch, newest, cmds: tail, snapshot_ack: self.snaps.back().map(|s| s.frame) }.encode()
     }
 
     /// Says goodbye (best effort).
@@ -467,7 +685,19 @@ impl<T: Transport> Client<T> {
 
     pub fn quest_camera(&self) -> Option<crate::quest_camera::QuestCamera> { self.quest_camera }
 
-    pub fn actions_blocked(&self) -> bool { self.quest_camera.is_some_and(|c| c.input_locked) }
+    pub fn actions_blocked(&self) -> bool { self.personal_dead || self.quest_camera.is_some_and(|c| c.input_locked) }
+
+    pub fn epoch(&self) -> u64 { self.epoch }
+
+    /// Only current admitted Arisen can be followed; parked profiles and
+    /// living pawns cannot replace a survivor's persistent identity.
+    pub fn spectator_seat(&self) -> Option<PlayerId> {
+        if !self.personal_dead { return None; }
+        self.snaps.back()?.death.seats.iter().find(|seat|
+            Some(seat.seat) == self.seat && seat.profile == self.profile)?.spectator
+    }
+
+    pub fn death_report(&self) -> Option<&ddhost::death::Report> { self.snaps.back().map(|s| &s.death) }
 
     /// The newest snapshot.
     pub fn latest(&self) -> Option<&Snapshot> {

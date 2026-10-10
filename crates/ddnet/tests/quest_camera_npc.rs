@@ -7,6 +7,8 @@ use ddnet::{
 
 fn snapshot(frame: u64, npcs: Vec<NpcBody>, quest_camera: Option<QuestCamera>) -> Snapshot {
     Snapshot {
+        death: Default::default(),
+        epoch: 0,
         frame,
         stage: Some(100),
         base: None,
@@ -165,7 +167,7 @@ fn position_only_npcs_and_absent_cameras_remain_position_only() {
         );
         assert!(Snapshot::decode(&s.encode(None), &|_| None).is_err());
     }
-    assert_eq!(ddnet::proto::PROTOCOL, 10);
+    assert_eq!(ddnet::proto::PROTOCOL, 11);
 }
 
 struct Flat;

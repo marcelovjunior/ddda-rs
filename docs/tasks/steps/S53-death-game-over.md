@@ -261,3 +261,36 @@ refusal and deterministic dead-host hashing. All of this remains
 **uncompiled and untested**, with 32 S53 regression names in source (ten
 helper names actually passed, 22 continuation names not run), plus the
 updated existing profile regression to execute in the full touched suites.
+
+Protocol-11 continuation is source-only. Inputs, snapshots and reliable
+story/cutscene/pawn messages carry an attempt epoch. The client waits for
+the reliable compact RetryNotice before admitting a replacement epoch,
+retires prediction and delta baselines, requires fresh same-stage collision,
+and projects terminal/spectator/game-over policy solely from the host's
+authoritative per-profile DeathReport. Body HP and motion never infer that
+policy. Invalid reports and baseline epochs are rejected. Server preparation
+clones the exact existing Link state under an exclusive mutable borrow,
+preserving connection IDs, reliable IDs, sequence/ack state and transport;
+all notice validation/allocation happens before the host swap. Commit clears
+old commands, acknowledgements, history and active event state without
+rebuilding Server/socket. Preserved old reliable gameplay is explicitly
+epoch-filtered, and a duplicate/old Welcome cannot undo an admitted retry.
+
+Thirteen additional network regression names cover notice owner dismissals
+and looks, whole/delta epoch rollback, malformed command ranges, DeathReport
+round trips/invalid policy, same-stage client reset, stale snapshots,
+profile-based policy, preserved connections, failed/dropped retry and stale
+input/ack rejection, plus encoded-packet old gameplay and Welcome/notice
+reordering. The source total is 45 S53 regression names: ten helper names
+actually passed and 35 continuation names **uncompiled and unrun**. Reviewed
+S52 main `6afbc3c` is integrated and its actual `fork_for_retry` preserves
+installed chatter data/RNG/monotonic IDs while retiring attempt queues.
+S56 reviewed-main integration and EDIT retry assertions follow next.
+
+The mechanical viewer `net.rs` pawn-message pattern is updated under the
+parent's normal scoped claim. Required head-owned `opening.rs` patch (not
+applied here): in `consume_client_events`, change
+`PlayEvent { row, frame }` to `PlayEvent { row, frame, .. }`. Production
+retry resource preparation, fresh-world factory and presentation retirement
+remain open, so this is not runtime/UI readiness. No additional Cargo,
+release or original-game comparison result is claimed.

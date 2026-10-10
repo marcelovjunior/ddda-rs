@@ -7,6 +7,7 @@
 
 use crate::{Host, PlayerId, ProfileId, Roster, StoryWorld};
 use std::collections::BTreeMap;
+pub use ddrift::PawnRef;
 
 /// Scalar inputs to the final death selector in the native damage dispatcher.
 /// These are actor flags, not animation durations inferred from zero HP.
@@ -754,8 +755,9 @@ impl<D: ddstory::data::Data, W: StoryWorld> Host<D, W> {
             epoch,
             ..Default::default()
         };
-        // S52 fork_for_retry preserving message IDs is added only after its
-        // reviewed runtime dependency is on main; this API is not Ready yet.
+        // Reviewed S52 runtime: preserve installed data/RNG/monotonic IDs,
+        // while retiring the old speech/recognition lifetime exactly once.
+        candidate.pawn_chatter = self.pawn_chatter.fork_for_retry();
         for seat in seed.roster.seats() {
             let p = candidate.sim.player(seat.id).expect("reconstructed seated body");
             if candidate.seat_vitals(seat.id).is_some_and(|v| v.hp <= 0.0) {
