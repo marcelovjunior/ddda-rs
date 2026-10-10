@@ -403,12 +403,22 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub fn story_npc_motion(&self, npc: u32) -> Option<&crate::npc_motion::Actor> {
+        if let Some(dead) = self.npc_death_motion(npc) { return Some(dead); }
         self.story_npcs.motions.get(&npc)
     }
 
     pub fn story_npc_motion_resource(&self, npc: u32) -> Option<&mtlmt::Motion> {
+        if let Some(resource) = self.npc_death_resource(npc) { return Some(resource); }
         let actor = self.story_npcs.motions.get(&npc)?;
         self.story_npcs.motion_bodies.get(&npc)?.resolve(actor.authored.number).ok().map(|(_, r)| r)
+    }
+
+    pub(crate) fn npc_death_token(&mut self, owner: NpcLifetime) -> Result<crate::npc_motion::Token, HostError> {
+        self.story_npcs.motion_counter = self.story_npcs.motion_counter.checked_add(1)
+            .ok_or_else(|| HostError::Npc("NPC motion launch space exhausted".into()))?;
+        // Host identity policy: command0 is outside authored interfaces;
+        // a unique launch and lifetime prevent a corpse layer reporting Done.
+        Ok(crate::npc_motion::Token { owner, command: 0, launch: self.story_npcs.motion_counter })
     }
 
     fn start_story_npc_motion(&mut self, npc: u32) -> Result<(), HostError> {
@@ -449,6 +459,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             Some(crate::Member::Arisen(id)) => self.sim.player(id).map(|p| p.position), _ => None,
         };
         for (&npc, actor) in &mut self.story_npcs.motions {
+            if self.npc_combat.owns_death(npc) { continue; }
             if self.story_npcs.talks.contains_key(&npc) { continue; }
             if let Some(placement) = self.story_npcs.intels.values().find(|p| p.npc as u32 == npc) {
                 if let Some(position) = self.story_npcs.positions.get(&npc) {
@@ -648,6 +659,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn step_story_npcs(&mut self) -> Result<Vec<Request>, HostError> {
+        self.step_npc_death_actors()?;
         self.step_story_npc_motions()?;
         // A departed co-op seat cannot leave a shared dialogue stop behind.
         // Retirement is cancellation, never the original actor's TalkEnd.
@@ -690,6 +702,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         // frame and returns. This runs after normal NPC stepping, so the
         // retained normal controller next runs on the subsequent frame.
         for (&npc, applied) in &mut self.story_npcs.applied {
+            if self.npc_combat.owns_death(npc) { continue; }
             if applied.action.applied_finished() {
                 if let Some(normal) = applied.normal.take() {
                     self.story_npcs.motion_requests.remove(&npc);
@@ -700,6 +713,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         }
         let mut out = vec![];
         for (&npc, applied) in &mut self.story_npcs.applied {
+            if self.npc_combat.owns_death(npc) { continue; }
             applied.action.observe_scene(Some(story.world.sce_no));
             match applied.action.step_observed(&*data, clock, Some(&story.world)) {
                 Ok(requests) => out.extend(requests),

@@ -54,7 +54,7 @@ A headless installed test shows goblins damaging Reynard (and NoDamage
 holding while set), NpcCheck reading his HP, and the viewer showing his
 gauge after SetGaugeDisp. The Result lists each value's source.
 
-## Results (body/Fight checkpoint; acceptance incomplete)
+## Results (current S34 checkpoints; acceptance incomplete)
 
 Implemented in this checkpoint:
 
@@ -87,8 +87,9 @@ Implemented in this checkpoint:
   missing motion clears hurts with a diagnostic. The story phase reads
   last-frame HP through `NpcIntel.hp_positive`, the NpcCheck input.
   Typed `DeathObservation` stages update NpcDieCheck's apparent/permanent
-  banks only for a dead current lifetime. Actual death-action playback,
-  automatic stage observations and viewer gauge remain unfinished.
+  banks only for a dead current lifetime. Later checkpoints below add
+  automatic death stages and the viewer gauge; visible acceptance and
+  original NPC304 comparison remain open.
 - The opening adapter now binds NPC304 combat only after successful model
   materialization and a real S32 canonical motion for the same lifetime.
   Its installed ordinary body is cached; the host allocates the fighter
@@ -323,8 +324,8 @@ LAN NPC snapshots contain id/position only; guest HP, authored motion and
 SetGaugeDisp replication require a coordinated protocol extension, proposed
 to head on board5225. Local camera cardinality does not close that wire gap.
 
-Next action: compose actual death-action playback/stages. Validate the ordinary
-rescue route and visible gauge with the materialized combat body after review.
+Next action: validate the ordinary rescue route and visible gauge with the
+materialized combat body, and present the native corpse alpha after review.
 
 Independent death helper follow-up: `npc_death` translates the scalar
 phase switch in **0x00B98AE0**, initialization/prior-apparent shortcut in
@@ -346,3 +347,41 @@ their tests are not an installed death-motion/original comparison.
 The common damage death entry is now verified **uPlayerBase::vf72
 0x00B7C470**, called by NPC **0x00BB7410** at instruction **0x00BB750E**;
 0x00B7C520 is an interior address, not the function entry.
+
+Automatic host follow-up now launches a distinct death action after actual
+NPC HP loss, using ordinary **0x00B988B0** sex motionCC6/CC7, blend15,
+frame0 and speed1, resolved to the actual loaded LMT (including the native
+bank12-to11 fallback). The canonical motion/resource getters expose that
+layer to the existing NPC view; it never publishes authored graph Done.
+Previous normal/applied graph motion stepping is suspended while death
+owns the actor. A monotonic host launch token distinguishes it from the
+previous interface; command0 is host identity policy, not game data.
+
+The intel clock runs before the actor (native line12 before line15,
+`docs/FRAME.md`), so apparent death first affects the next intel update.
+Each current lifetime has its own phase, wait and alpha. Actual LMT end
+sets the apparent bank, the clock/hold gate begins fade, and its final
+boundary sets permanent death and retires the Fight body. The intel
+lifetime and HP0 observation survive body removal; same-lifetime bind
+cannot recreate a fresh HP1000 body. The viewer model adapter excludes
+that retired body. Stale lifetimes cannot write a replacement's banks.
+Native disabled-layer end bit1, civilian human-attacker escape/HP1,
+special type/model overrides, root/bone locks, collision-rate scaling,
+corpse material-alpha presentation and loaded-save corpse restoration
+remain outside this narrow ordinary opening adapter.
+
+The two installed host tests passed on the final guarded source, actual
+exit0 (compile3.29s/test11.43s). The new test explicitly supplies HP loss
+and later accelerates the host clock; it checks real resource-derived
+layer end, untouched wait until apparent death, separated wait/fade
+boundaries, permanent body removal, preserved intel and rejected
+same-lifetime rematerialization. Natural goblin damage/NoDamage remains
+covered by the separate installed sensor test above; this is not a full
+natural death route or original timing comparison. Existing NPC motion6
+and quest-camera5 regressions also passed (compile3.06s/test8.38s and
+6.80s), preserving the reviewed Pawn-domain gate. An initial stale shared
+camera RLib caused a compile failure; a scoped mtcamera/ddhost/ddenemyrt
+clean under the valid lease restored the actual branch API. Core was
+released after completion. NPC-focused viewer release tests also passed
+**7/7**, actual exit0 (compile33.67s/test8.29s), including installed body
+admission/unload and gauge/template/camera checks; M5 was then released.
