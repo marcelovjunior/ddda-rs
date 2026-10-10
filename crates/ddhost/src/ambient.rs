@@ -182,7 +182,7 @@ impl Population {
     /// Supported ordinary actor pass, after player movement. The first-table
     /// 5/6 subgraphs contain no world-flag tests, callbacks or random draws.
     /// Other roots remain diagnosed rather than receiving fabricated inputs.
-    pub fn step(&mut self, delta: f32, players: &[ddsim::Player]) {
+    pub fn step(&mut self, delta: f32, players: &[ddsim::Player], ground: &dyn ddsim::Ground) {
         self.diagnostics.clear();
         for actor in self.instances.values_mut() {
             let result = (|| -> Result<(), String> {
@@ -220,16 +220,21 @@ impl Population {
                     return Err("unexpected random request in authored ambient idle".into());
                 }
                 runtime.step_action(&actor.data)?;
-                let mut position = actor.proposed_position.unwrap_or(actor.position);
+                // Start each attempt from the accepted position: failed ground
+                // queries must not accumulate travel across unloaded scenery.
+                let mut position = actor.position;
                 runtime.advance(&actor.data, &mut position, actor.angle[1], delta)?;
                 actor.runtime = runtime;
-                if position != actor.position {
-                    actor.proposed_position = Some(position);
-                    return Err(format!(
-                        "ambient root travel awaits collision controller: motion {:#x} frame {} {:?}->{position:?}",
-                        actor.runtime.motion, actor.runtime.frame, actor.position
-                    ));
-                }
+                actor.proposed_position = Some(position);
+                // Provisional simple ground snap (assumed 50 cm query margin).
+                // The original creatures' scenery collision is not traced;
+                // this does not provide wall collision or slope traversal.
+                let height = ground
+                    .height(position[0], position[2], position[1] + 50.0)
+                    .ok_or("ambient root travel unresolved: no ground below proposal")?;
+                position[1] = height;
+                actor.position = position;
+                actor.proposed_position = None;
                 Ok(())
             })();
             if let Err(error) = result {
