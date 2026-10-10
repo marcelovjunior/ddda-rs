@@ -492,3 +492,44 @@ runtime parameter loading, stage200 rendering and collision, exit0. This
 is a setup/render smoke, not full original-pose acceptance. A prior direct
 `--play --stage200` smoke used the field origin and fell outside collision;
 it is not counted as Cassardis validation.
+
+### Follow-motion handoff (separate from the reviewed collision batch)
+
+The remaining source pipeline is **cCamImpNml::vf11, 0x007c8880**.
+Its inputs/operations are not equivalent to a fixed look-target height:
+
+- **0x007e1f90** resolves the actor through **0x007e1e50** and settings
+  `mTargetJoint` (+0x68). Joint -1 uses actor world position +0xe0;
+  otherwise it asks the actor's joint matrix for its translation.
+- The initial height is authored +0x70. For `mCameraTarget==0`, add
+  `humanEditScale*180 -180`, reading controller `actor+0x2e54`, +0xf70;
+  absent controller uses1. Actor +0x30 nonzero suppresses the height.
+  This is the target-height adjustment, not the steep-pitch collision
+  anchor height, which uses model position plus authored +0x70 directly.
+- Normal update has authored lateral/forward offsets (+0x74/+0x78),
+  a32 cm horizontal target shift along the view axis, and per-view state.
+  Two material-filtered side rays feed the smoothed translation at
+  processor +0x100 (smoothing consumer **0x007bc400**). Both eye and target
+  receive this translation. The speed/movement lag translation at +0x250
+  is also applied to both endpoints near the function's end.
+- A predictive sphere query adjusts scalar distance state at +0x134,
+  consumed as authored distance minus that state. Its scalar smoother is
+  **0x007bc800**. These query/state updates precede the outer collision
+  response in **0x007e1400** and must not be folded into sphere radius.
+- Actor collision offset also has a separate provider boundary already
+  documented by `mtcamera::actor_offset` (producer **0x00888750**). The
+  source requires selected active collision entries, not every hurtbox.
+
+Exact adapter gaps: it currently supplies simulation position for both
+actor model/world positions, treats normal presentation as advancing,
+sets the actor-overlap input false, uses the followed actor rather than
+special camera target selectors, retains the140 cm approximate look target,
+and omits the normal update's target offsets, lag and predictive distance
+state. It uses the runtime authored distance and collision-anchor rules,
+then the source-separated collision helper. `ddlook::BodyMorph` currently
+retains model/joint transforms but does not expose HumanEdit.floats[0] to
+the follow view; exposing the correct evaluated edit scale requires a
+coordinated appearance/character adapter change. Do not replace the140 cm
+estimate with authored155 cm and call it matched. A new follow-motion
+milestone should supply these per-actor/per-view inputs and compare full
+candidate and final poses over a recorded stationary/orbit/walking sequence.

@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/camera-feel`
 - **Board area:** `play/camera-feel`
-- **Status:** open (high: the maintainer's worst complaint after playtesting)
+- **Status:** review (collision batch; full follow-motion milestone remains open)
 
 ## Goal
 
@@ -154,3 +154,15 @@ installed geometry, writes private screenshot and exits0. Direct play
 stage200 instead used field origin and is excluded from visual validation.
 Next: trace target-height/actor-avoidance pipeline before claiming full
 follow-pose equivalence. The original wall/roof collision responses match.
+
+Final handoff: collision batch reviewed by codex-1; commits eeac7ca,
+b819cd3,8190394,d6128ec,b1cc69e,2f0ebfa and7334b51 (plus current-main merge).
+No push or main mutation. Wall and low-lintel collision helper responses
+are measured against the original and pass the private tolerance gate;
+full follow-pose equivalence is explicitly not claimed. Source handoff in
+CAMERA.md identifies **0x007c8880**, target resolution **0x007e1f90**,
+body-height adjustment, horizontal32 cm target shift, dual-ray translation,
+movement lag, predictive distance state and existing actor-provider gap.
+Codex-1 requested closing this reviewed batch and a separate follow-motion /
+actor-provider milestone, freeing the slot for the Encampment objective.
+All build/live claims are released; no viewer or capture process remains.
