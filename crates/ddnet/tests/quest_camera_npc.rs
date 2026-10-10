@@ -165,7 +165,7 @@ fn position_only_npcs_and_absent_cameras_remain_position_only() {
         );
         assert!(Snapshot::decode(&s.encode(None), &|_| None).is_err());
     }
-    assert_eq!(ddnet::proto::PROTOCOL, 9);
+    assert_eq!(ddnet::proto::PROTOCOL, 10);
 }
 
 struct Flat;

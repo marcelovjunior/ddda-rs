@@ -198,3 +198,18 @@ in the genuine route; a wider navigation-provider port was unnecessary.
 Next action: head reviews/merges this branch, then the next q0003 route brief
 uses the real Done checkpoint to advance toward the Encampment/cyclops.
 S52 supplies the pawn-message queue that event2 subsequently waits on.
+
+### Head follow-up: the continuous run (2026-10-10)
+
+The first full x4 run after the merge froze at RoadWalk: the body never
+moved for 300 s while the planner kept returning 134 waypoints. Resuming
+from the RoadWalk checkpoint reproduced it, so it was not leftover talk
+or camera state; every input gate was clear and the sim alternated
+Walk/Wait. A headless probe at that position found the installed ground
+at Y 31958.9 against a body at Y 31941.9: the Arisen was 17 cm under a
+rising slope, and the capsule sweep moved it 0.0 cm in all eight
+directions. `Fight::push_out` had added a goblin's push to x/z after the
+sim's sweep; the original applies it before the scenery sweep
+(0x0076D6B0). Fixed in cbc5b85 (`Sim::push_player`, regression
+`crates/ddsim/tests/push.rs`). The next uninterrupted run reached q2:10 and
+q0003 (exit 0, 2 min 24 s wall); route-v2 was regenerated from it.

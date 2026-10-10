@@ -4,6 +4,161 @@
 use crate::commands::Command;
 use ddexe::Exe;
 
+/// Native sRecognition manager cadence. This stores main-frame units, not
+/// seconds. Its entry clocks use only the current frame's delta/FPS when
+/// the manager actually refreshes, including at fractional frame rates.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecognitionClock { pub elapsed_frames: f32 }
+impl RecognitionClock {
+    // Translated from 0x00487B00 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, frames: f32, fps: f32, eligible: bool) -> Option<f32> {
+        if !eligible { return None; }
+        self.elapsed_frames += frames;
+        // Constructor 0x004878BD -> 0x015319B8 embeds1.
+        if self.elapsed_frames < 1.0 { return None; }
+        self.elapsed_frames = 0.0;
+        Some(frames / fps)
+    }
+}
+
+/// One cRecognitionInfo's visibility hysteresis. Actor admission and its
+/// `5A02F0` eligibility are supplied separately; HP or distance alone
+/// cannot stand in for the native visibility test.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Recognition {
+    pub recognized: bool,
+    pub seen_seconds: f32,
+    pub lost_seconds: f32,
+}
+impl Recognition {
+    // Translated from 0x00488260..0x00488336 (DDDA.exe 2017-12-13 Steam).
+    pub fn step(&mut self, seconds: f32, sighted: bool, eligible: bool, combat_override: bool) {
+        if sighted { self.seen_seconds += seconds; self.lost_seconds = 0.0; }
+        else { self.seen_seconds = 0.0; self.lost_seconds += seconds; }
+        if self.recognized {
+            // Constructor 0x004878D7 -> 0x01520BAC embeds10.
+            if self.lost_seconds > 10.0 { self.recognized = false; }
+        } else if eligible && self.seen_seconds > 2.0 {
+            // Constructor 0x004878CA -> 0x014F9E04 embeds2.
+            self.recognized = true;
+        }
+        if combat_override { self.recognized = true; }
+    }
+}
+
+/// Native visibility's caller supplies actual camera planes and collision
+/// ray result. This helper does not create a camera, radius or ray mask.
+pub struct RecognitionSight {
+    pub renderable: bool,
+    pub camera_present: bool,
+    pub actor_sphere: [f32; 4],
+    pub camera_planes: [[f32; 4]; 6],
+    pub actor_position: [f32; 3],
+    pub arisen_position: [f32; 3],
+    /// Native ray from camera origin (or joint4) to actor sphere center:
+    /// tiny segments bypass the ray, otherwise mask0x4081D01C must be clear.
+    pub ray_clear: bool,
+}
+impl RecognitionSight {
+    // Translated from 0x00488440 and sphere test0x007D3F50
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn visible(&self) -> bool {
+        if !self.renderable || !self.camera_present { return false; }
+        let [x,y,z,radius] = self.actor_sphere;
+        for plane in self.camera_planes {
+            // Preserve the SSE scalar addition order, without fused math.
+            let distance = (plane[1] * y + plane[0] * x) + plane[2] * z + plane[3];
+            if -radius > distance { return false; }
+        }
+        let d: [f32; 3] = std::array::from_fn(|i| self.actor_position[i] - self.arisen_position[i]);
+        // 0x00488549 -> 0x0161C814 embeds9,000,000 cm²; equality passes.
+        if (d[1]*d[1] + d[0]*d[0]) + d[2]*d[2] > 9_000_000.0 { return false; }
+        self.ray_clear
+    }
+}
+
+/// Native situation records and their four-candidate message groups. These
+/// are bulk executable data, read at runtime rather than reproduced here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SituationTables(Vec<Situation>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Situation {
+    pub flags: u32,
+    pub parameter: i32,
+    pub candidates: Vec<i32>,
+    direct: bool,
+}
+impl SituationTables {
+    // Translated from 0x00599BB0, 0x0059D0E0 / 0x0059D180
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn from_exe(exe: &Exe<'_>) -> Result<Self, String> {
+        let mut rows = Vec::new();
+        for index in 0..0x98 {
+            let at = 0x0152_D0F0 + index * 16;
+            let message = exe.i32(at + 8)?;
+            let group = exe.u32(at + 12)?;
+            let direct = message >= 0;
+            let mut candidates = Vec::new();
+            if direct { candidates.push(message); }
+            else if let Some(address) = situation_group_address(exe, group)? {
+                // Unlike enemy/order lists, -1 holes do not end this group.
+                for slot in 0..4 {
+                    let value = exe.i32(address + slot * 4)?;
+                    if value != -1 { candidates.push(value); }
+                }
+            }
+            rows.push(Situation { flags: exe.u32(at)?, parameter: exe.i32(at + 4)?,
+                candidates, direct });
+        }
+        Ok(Self(rows))
+    }
+    pub fn get(&self, situation: u32) -> &Situation {
+        // Native out-of-range situations fall back to row zero.
+        &self.0[if situation < 0x98 { situation as usize } else { 0 }]
+    }
+    // Translated from 0x00599BB0 / 0x0059D180 (DDDA.exe 2017-12-13 Steam).
+    pub fn select(&self, situation: u32, mut random: impl FnMut() -> u32) -> Option<i32> {
+        let row = self.get(situation);
+        if row.candidates.is_empty() { None }
+        else if row.direct { row.candidates.first().copied() }
+        else { Some(row.candidates[random() as usize % row.candidates.len()]) }
+    }
+}
+
+// Translated from 0x0059D0E0 (DDDA.exe 2017-12-13 Steam).
+fn situation_group_address(exe: &Exe<'_>, group: u32) -> Result<Option<u32>, String> {
+    Ok(match group {
+        0..24 => Some(0x0182_9B50 + group * 16),
+        100_000 => Some(0x0182_9CD0),
+        200_000..200_072 => Some(0x0182_9CE0 + (group - 200_000) * 16),
+        210_000..300_000 => {
+            let bank = (group - 210_000) / 1000;
+            let row = (group - 210_000) % 1000;
+            if bank < 24 && row < exe.u32(0x0152_D034 + bank * 8)? {
+                Some(exe.u32(0x0152_D030 + bank * 8)? + row * 16)
+            } else { None }
+        }
+        _ => None,
+    })
+}
+
+/// Actor list1 bypasses TALK cooldown and random selection. Its accepted
+/// requests are forwarded in insertion order, after the ordinary list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UrgentQueue(pub Vec<ActorRequest>);
+impl UrgentQueue {
+    // Translated from 0x005AB130 (DDDA.exe 2017-12-13 Steam).
+    pub fn offer(&mut self, request: ActorRequest) {
+        if self.0.len() < 32 { self.0.push(request); }
+    }
+    // Translated from 0x005AAF7F..0x005AB09E (DDDA.exe 2017-12-13 Steam).
+    pub fn step(&mut self, eligible: bool, previously_shown: impl Fn(i32) -> bool) -> Vec<ActorRequest> {
+        if !eligible { return Vec::new(); }
+        std::mem::take(&mut self.0).into_iter()
+            .filter(|request| !previously_shown(request.message)).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     pub message: i32,
@@ -177,6 +332,12 @@ struct EnemyPhrases {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnemyTables { rows: [Vec<EnemyPhrases>; 3] }
 impl EnemyTables {
+    // Translated from 0x008BC6A0 (DDDA.exe 2017-12-13 Steam).
+    // Combat notice admission ignores knowledge; phrase choice does not.
+    pub fn supports_kind(&self, kind: u32, variant: u32) -> bool {
+        self.rows[EnemyNotice::FirstSeen as usize].iter().any(|row|
+            row.kind == kind && (kind != 0x8e || row.variant == variant))
+    }
     // Translated from 0x00599C50 / 0x008BC5F0 / 0x008BC630
     // (DDDA.exe 2017-12-13 Steam). Bulk records remain installed data.
     pub fn from_exe(exe: &Exe<'_>) -> Result<Self, String> {
@@ -409,6 +570,85 @@ impl Bank {
 mod tests {
     use super::*;
 
+    #[test]
+    fn recognition_uses_strict_seen_lost_boundaries_and_native_override() {
+        let mut record = Recognition::default();
+        for _ in 0..4 { record.step(0.5, true, true, false); }
+        assert!(!record.recognized, "exactly2 seconds does not admit");
+        record.step(0.5, true, true, false);
+        assert!(record.recognized);
+        for _ in 0..20 { record.step(0.5, false, true, false); }
+        assert!(record.recognized, "exactly10 seconds does not retire");
+        record.step(0.5, false, true, false);
+        assert!(!record.recognized);
+        record.step(0.5, false, true, true);
+        assert!(record.recognized, "actual combat-list override restores it");
+        let mut absent = Recognition::default();
+        absent.step(3.0, true, false, false);
+        assert!(!absent.recognized, "visibility cannot bypass actor eligibility");
+    }
+
+    #[test]
+    fn recognition_fractional_manager_refresh_keeps_current_delta_and_freezes() {
+        let mut clock = RecognitionClock::default();
+        assert_eq!(clock.advance(0.5, 30.0, true), None);
+        assert_eq!(clock.advance(10.0, 30.0, false), None);
+        assert_eq!(clock.elapsed_frames, 0.5);
+        assert_eq!(clock.advance(0.5, 30.0, true), Some(0.5/30.0));
+        assert_eq!(clock.elapsed_frames, 0.0);
+        assert_eq!(clock.advance(1.5, 30.0, true), Some(1.5/30.0));
+        assert_eq!(clock.elapsed_frames, 0.0, "native refresh discards remainder");
+    }
+
+    #[test]
+    fn recognition_requires_camera_sphere_range_and_clear_ray_with_inclusive_edges() {
+        let mut sight = RecognitionSight { renderable: true, camera_present: true,
+            actor_sphere: [1.0,0.0,0.0,1.0], camera_planes: [[-1.0,0.0,0.0,0.0];6],
+            actor_position: [3000.0,0.0,0.0], arisen_position: [0.0;3], ray_clear: true };
+        assert!(sight.visible(), "sphere tangent and exact native range pass");
+        sight.actor_sphere[0] = 1.001;
+        assert!(!sight.visible());
+        sight.actor_sphere[0] = 1.0;
+        sight.actor_position[0] = 3000.1;
+        assert!(!sight.visible());
+        sight.actor_position[0] = 3000.0;
+        sight.ray_clear = false;
+        assert!(!sight.visible());
+        sight.ray_clear = true;
+        sight.camera_present = false;
+        assert!(!sight.visible());
+        sight.camera_present = true;
+        sight.renderable = false;
+        assert!(!sight.visible());
+    }
+
+    #[test]
+    fn native_situation_selection_keeps_direct_no_draw_and_group_draw() {
+        let tables = SituationTables(vec![
+            Situation { flags: 1, parameter: -1, candidates: vec![907], direct: true },
+            Situation { flags: 0, parameter: -1, candidates: vec![908, 909, 910], direct: false },
+            Situation { flags: 0, parameter: -1, candidates: vec![], direct: false },
+        ]);
+        assert_eq!(tables.select(0, || panic!("direct message draws no RNG")), Some(907));
+        assert_eq!(tables.select(152, || panic!("fallback row is direct")), Some(907));
+        let mut draws = 0;
+        assert_eq!(tables.select(1, || { draws += 1; 5 }), Some(910));
+        assert_eq!(draws, 1);
+        assert_eq!(tables.select(2, || panic!("empty group draws no RNG")), None);
+    }
+
+    #[test]
+    fn urgent_list_keeps_insertion_order_bypasses_cooldown_and_drops_new_overflow() {
+        let mut queue = UrgentQueue::default();
+        for message in 0..33 { queue.offer(ActorRequest { message, grouped: false }); }
+        assert!(queue.step(false, |_| false).is_empty());
+        assert_eq!(queue.0.len(), 32);
+        let forwarded = queue.step(true, |message| message == 1);
+        assert_eq!(forwarded.iter().map(|request| request.message).collect::<Vec<_>>(),
+            (0..32).filter(|message| *message != 1).collect::<Vec<_>>());
+        assert!(queue.0.is_empty());
+    }
+
     fn request(speaker: u8, message: i32, priority: i32, remaining: f32) -> Pending {
         Pending { speaker, message, priority, remaining, grouped: false }
     }
@@ -500,6 +740,14 @@ mod tests {
         let file = ddexe::ExeFile::next_to(&path).unwrap();
         let exe = file.image().unwrap();
         let tables = OrderTables::from_exe(&exe).unwrap();
+        let situations = SituationTables::from_exe(&exe).unwrap();
+        // Near-death actor entries AFCFBF / AFD17F select situation6,
+        // whose group0 candidates stay in the installed executable.
+        let expected: Vec<_> = (0..4).map(|slot| exe.i32(0x0182_9B50 + slot * 4).unwrap())
+            .filter(|message| *message != -1).collect();
+        assert!(!expected.is_empty());
+        assert_eq!(situations.get(6).candidates, expected);
+        assert_eq!(situations.get(6).flags & 1, 1);
         let vfs = ddvfs::Vfs::open(&path).unwrap();
         for (command, goal) in [(Command::Go, None), (Command::Come, None), (Command::Help, Some(52))] {
             for style in 0..7 {
@@ -534,6 +782,10 @@ mod tests {
                 record(0x8E, 2, 0, vec![904]), record(0x8E, 3, 0, vec![905])],
             vec![record(7, 0, 0x2840, vec![906]), record(7, 0, 0, vec![])],
         ] };
+        assert!(tables.supports_kind(7, 99), "presence ignores knowledge and ordinary variants");
+        assert!(tables.supports_kind(0x8E, 3));
+        assert!(!tables.supports_kind(0x8E, 4));
+        assert!(!tables.supports_kind(8, 0));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 7, 99, &[0, 2], || 3), Some(902));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 7, 99, &[0, 1], || 0), Some(903));
         assert_eq!(tables.select(EnemyNotice::FirstSeen, 0x8E, 3, &[], || 0), Some(905));

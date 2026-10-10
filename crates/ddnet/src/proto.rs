@@ -18,7 +18,8 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 8: four held pawn-order direction bits in each per-seat input.
 /// - 9: loaded story stage; authored quest camera clock/explicit end/input lock; NPC lifetime,
 ///   pose/motion, gauge and health/death state with masked deltas.
-pub const PROTOCOL: u16 = 9;
+/// - 10: reliable host-selected pawn speech with persistent-profile audiences.
+pub const PROTOCOL: u16 = 10;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +48,7 @@ pub enum ToClient {
     /// host frame `frame`: every view plays it from the data; the host's
     /// own playback reports it over.
     PlayEvent { frame: u64, row: u32 },
+    PawnMessage(ddhost::pawn_chatter::Message),
 }
 
 /// The unreliable input upload: the newest commands, oldest first; the
@@ -163,6 +165,21 @@ impl ToClient {
                 &mut w
             }
             ToClient::PlayEvent { frame, row } => w.u8(6).u64(*frame).u32(*row),
+            ToClient::PawnMessage(message) => {
+                use ddhost::pawn_chatter::Identity;
+                w.u8(7).u64(message.id).u64(message.frame).u8(message.pawn_slot).u8(message.pawn_seat);
+                match &message.pawn_identity {
+                    Identity::Main { profile } => { w.u8(0).u64(profile.0); }
+                    Identity::Hired { hirer, rom_id, network_id, hired_at } => {
+                        w.u8(1).u64(hirer.0).u32(*rom_id).bytes(network_id).u32(*hired_at);
+                    }
+                }
+                w.u32(message.message);
+                string(&mut w, &message.name);
+                w.u8(message.gender).u8(message.voice).len(message.audience.len());
+                for profile in &message.audience { w.u64(profile.0); }
+                &mut w
+            }
         };
         w.finish()
     }
@@ -180,6 +197,24 @@ impl ToClient {
             5 => ToClient::Look { seat: r.u8()?, look: mirror::read_look(&mut r)? },
             4 => ToClient::Story { frame: r.u64()?, text: read_string(&mut r)? },
             6 => ToClient::PlayEvent { frame: r.u64()?, row: r.u32()? },
+            7 => {
+                use ddhost::{pawn_chatter::{Identity, Message}, ProfileId};
+                let (id, frame, pawn_slot, pawn_seat) = (r.u64()?, r.u64()?, r.u8()?, r.u8()?);
+                if id == 0 || pawn_slot >= 3 { return Err("invalid pawn message identity/slot".into()); }
+                let pawn_identity = match r.u8()? {
+                    0 => Identity::Main { profile: ProfileId(r.u64()?) },
+                    1 => Identity::Hired { hirer: ProfileId(r.u64()?), rom_id: r.u32()?,
+                        network_id: r.bytes()?, hired_at: r.u32()? },
+                    _ => return Err("invalid pawn admission identity".into()),
+                };
+                let message = r.u32()?;
+                let name = read_string(&mut r)?;
+                let (gender, voice) = (r.u8()?, r.u8()?);
+                let count = r.len(8)?;
+                let audience = (0..count).map(|_| r.u64().map(ProfileId)).collect::<Result<_>>()?;
+                ToClient::PawnMessage(Message { id, frame, pawn_slot, pawn_seat, pawn_identity,
+                    message, name, gender, voice, audience })
+            }
             k => return Err(format!("client message kind {k}")),
         };
         r.end()?;
@@ -311,5 +346,29 @@ impl Snapshot {
         let quest_camera = crate::quest_camera::read(&mut r)?;
         r.end()?;
         Ok(Snapshot { frame, stage, base, cmd_newest, bodies, vitals, enemies, npcs, quest_camera })
+    }
+}
+
+#[cfg(test)]
+mod pawn_message_tests {
+    use super::*;
+    use ddhost::{pawn_chatter::{Identity, Message}, ProfileId};
+
+    #[test]
+    fn reliable_pawn_message_preserves_admission_and_n_profile_audiences() {
+        for pawn_identity in [Identity::Main { profile: ProfileId(41) },
+            Identity::Hired { hirer: ProfileId(42), rom_id: u32::MAX,
+                network_id: vec![7; 64], hired_at: 99 }] {
+            let event = ToClient::PawnMessage(Message { id: u64::MAX, frame: 110,
+                pawn_slot: 1, pawn_seat: 6, pawn_identity, message: 300_123,
+                name: "Synthetic pawn".into(), gender: 1, voice: 11,
+                audience: vec![ProfileId(41), ProfileId(42), ProfileId(43)] });
+            let bytes = event.encode();
+            assert_eq!(ToClient::decode(&bytes).unwrap(), event);
+            for cut in [0, 1, bytes.len() - 1] { assert!(ToClient::decode(&bytes[..cut]).is_err()); }
+            let mut invalid = bytes.clone();
+            invalid[17] = 3; // opcode + id + frame = pawn slot offset.
+            assert!(ToClient::decode(&invalid).is_err());
+        }
     }
 }

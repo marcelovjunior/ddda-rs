@@ -486,6 +486,16 @@ opening (codex-31), route perf (codex-29).
 - **Performance (S41):** named Bevy traces; compact per-submesh skin palettes
   by default: skin upload 17.8 -> 2.05 MB/frame (-88%), field median
   14.2 -> ~11 ms (GPU clocks covary; no isolated fps claim).
-- **Open:** dragon fire/route (S30/S31), road to q0003 (S50), death/game over
-  (S53), pawn chatter (S52), Arisen name (character creation), Ghidra MCP
-  down since the low-memory stop.
+- **Whole route, one run (2026-10-10):** the unattended x4 route plays from the
+  intro room through Quina, the gate, the field, the rescue (q2:20, Reynard
+  1594/2500 HP, Arisen level 2), Reynard's talks and the road to q0002_event2:
+  q2:10 and q0003 boot, exit 0 in 2 min 24 s wall. It needed one fix: the
+  push-out moved the Arisen without the ground sweep (0x0076D6B0 runs before
+  the scenery sweep), so a goblin push uphill buried the body 17 cm under
+  the slope and froze RoadWalk (`Sim::push_player`, cbc5b85). Route-v2
+  checkpoints regenerated from this run, Done included.
+- **Merged on the way:** S30 static coordinate basis, S52 chatter tables
+  (core/story), S53 death helper with atomic `Host::load` prevalidation.
+- **Open:** dragon fire/route (S30/S31), death/game over runtime (S53), pawn
+  chatter runtime (S52), character creation (S56), shadow extent (S41),
+  Ghidra MCP down since the low-memory stop.

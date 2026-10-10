@@ -190,6 +190,9 @@ pub struct StageSky {
 pub struct SkyShadow {
     pub view_distance: f32,
     pub distribution: f32,
+    /// Authored caster depth extension, separate from receiver view distance.
+    /// Missing/invalid SDL values leave the optional finite cull disabled.
+    pub backforward_view_distance: Option<f32>,
     /// WeatherManager.mShadowLimit, independent of direct sunlight.
     pub direction_limit: f32,
     /// Constructor0x00c6c7a0 initializes +0x194 to10cm. Weather update
@@ -275,6 +278,10 @@ impl StageSky {
             Some(SkyShadow {
                 view_distance: float(&s, i, "mShadowViewDistanceEx")?,
                 distribution: float(&s, i, "mShadowDistribution").unwrap_or(0.0),
+                // uShadow reflection0x00ef9880 names +0x60; sky SDL overrides
+                // the constructor. Bulk stage values remain installed.
+                backforward_view_distance: float(&s, i, "mBackforwardViewDistance")
+                    .filter(|v| v.is_finite() && *v >= 0.0),
                 // sWeatherManager ctor0x004bb200 initializes +0xe0 to0.5;
                 // reflection0x004bca80 names it mShadowLimit.
                 direction_limit: float(&s, wm, "mShadowLimit").unwrap_or(0.5),
@@ -543,6 +550,7 @@ mod shadow_tests {
             let s = super::StageSky::load(&vfs, stage, 0).unwrap().shadow.expect("uSkyStableShadow");
             eprintln!("stage {stage}: {s:?}");
             assert!(s.view_distance > 0.0);
+            assert!(s.backforward_view_distance.is_some_and(|v| v.is_finite() && v > 0.0));
         }
     }
 }

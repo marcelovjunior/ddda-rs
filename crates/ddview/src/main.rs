@@ -27,6 +27,7 @@
 //! `--goblin` (repeatable) adds a goblin 6 m ahead. `--demo` scripts it.
 
 mod audio;
+mod pawn_chatter;
 mod probe;
 mod perf;
 mod clock;
@@ -52,6 +53,7 @@ mod level_up_notice;
 mod pause;
 mod settings;
 mod shadows;
+mod shadow_extent;
 mod sky;
 mod stage;
 
@@ -635,6 +637,7 @@ fn main() {
         .add_plugins(stage::ShadingPlugin)
         .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)
+        .add_plugins(shadow_extent::FiniteShadowPlugin)
         .insert_resource(args.light.clone().unwrap_or_default())
         .insert_resource(args)
         .init_resource::<play::CameraConfig>()
@@ -647,6 +650,7 @@ fn main() {
         })
         .init_resource::<play::Hud>()
         .add_plugins(level_up_notice::LevelUpPlugin)
+        .add_plugins(pawn_chatter::PawnChatterPlugin)
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .init_resource::<item_menu::Menus>()
