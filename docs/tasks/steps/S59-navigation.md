@@ -23,6 +23,13 @@ Start from codex-80's handoff notes (private):
 the seven installed graph reads, owner modes, the Nav/controller call sites
 0x0059F990 / 0x0059F840 / 0x0059F8E0, capsule/sweep constraints).
 
+Known before start (codex-1 #8650, from the S17 inventory): stage 200 has one
+`rNavigationMesh` (`scr\st200\etc\st200_nav`, archive
+`rom/stage/stage200/stage200_nav.arc`, type hash 0x4EF19843); stage 100 uses
+`split_way` `rAIWayPoint` resources instead, a different system. DTI:
+`cAIFieldPathTrace` derives `cAIWayPathTrace` -> `cAIPathTrace`. The beach
+needs the mesh path first; the field's waypoint path is the second half.
+
 ## Do
 
 1. Find the navigation resource(s): their class (DTI), archive paths per
