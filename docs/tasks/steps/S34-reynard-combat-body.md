@@ -468,3 +468,49 @@ shared cache supplied S36's unmerged `ddsim::Input.pawn_orders` field;
 a narrow ddsim release clean (7 files/1.5MiB) under the valid M5 lease
 removed it before the successful rerun. Same-frame live evidence and
 any production projection fix are still pending.
+
+Rapid-loss investigation adds an optional caller-owned headless NPC hit
+observer to the ordinary pass/Fight entry point. Each accepted contact
+reports attacker identity and type, row values, placement/status attack
+multipliers, key/relation, multi-hit/reset inputs, merged raw and mitigated
+values, region total, and HP before/after. It performs no IO, changes no
+RNG calls and allocates no trace storage on the normal path. A two-NPC
+regression compares ordinary/observed events, pools and history, checks
+duplicate-volume collapse and keeps NoDamage's HP gate intact.
+
+Eight focused combat tests passed (one explicit diagnostic ignored),
+actual exit0, compile5.72s/test2.43s. Running the bounded installed
+diagnostic explicitly also passed1, actual exit0/test5.27s. It reads
+Reynard's real global n04 placement and the three e23 goblin placements,
+uses the actual C9A motion/frame/volumes, and retains each hit privately.
+Flat ground, no player attacks and the current default think-table
+adapter are explicit limits; it is not the ordinary quest route.
+
+The actual NPC record enables HP multiplication with runtime value2.5;
+physical/magick defence multiplier overrides are disabled. The current
+S34 adapter omits that HP override and starts from constructor1000.
+The native cSetInfoNpc vf08 **0x007A32F0** invokes cSetInfoPawn vf08,
+which stores HP-rate enable at actor+0x209E and rate at actor+0x20A0;
+the final consumer/application order is still under investigation before
+changing the adapter. No native placement rate is embedded into code.
+
+In this diagnostic the three goblins' actual attack multiplier0.2 reaches
+NPC valuation: raw physical values35/40 become totals34.653465/39.603962.
+There are27 accepted contacts across27 hit frames, one contact per merged
+event, first at frame49 and HP0 at frame892 (29.73 seconds). The owners
+contribute10/8/9 contacts. This does not reproduce head's ordinary-route
+850 damage in about5 seconds and does not establish that the route's
+history or cadence is correct. Pair masks permit player attacks against
+ordinary NPC group3, while the native civilian human-attacker HP1/escape
+safeguard remains unported. Friendly player damage is a hypothesis to
+check with attacker traces, not an established cause. Other native hate
+influences are also missing; no NPC-specific distance preference was
+found in **0x00AB5A50**'s300*(1-distance/3000) contribution. Selection
+**0x00AB52E0** sums all32 native influence slots, rather than only the
+distance subset represented here.
+
+Installed q0002_n304 protection timing: initial state1 sets Invincible,
+NoDamage and FixPos. State0 checks q2:25 and q2:20; either condition enters
+state5, which clears Invincible/NoDamage. No other protection setter occurs
+in this installed graph. These are runtime-data conditions, not added
+quest-specific delays or tuning.
