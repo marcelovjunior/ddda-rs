@@ -57,6 +57,16 @@ def build():
             if a in starts:
                 cites.append((a, rel, kind))
     db.executemany("INSERT INTO cites VALUES (?,?,?)", cites)
+    # platform layer (Rust replaces it, no 1:1 port): deleting destructors,
+    # DTI allocation, construct wrappers, the MT allocators; classified by
+    # shape family in E:/ddda-re/notes/native/platform.json
+    pf = EXPORT.parent / "native" / "platform.json"
+    if pf.exists():
+        import json
+        db.executemany("UPDATE functions SET status='platform' WHERE address=?",
+                       [(a,) for a in json.loads(pf.read_text())])
+    # the C runtime / library block at the top of .text
+    db.execute("UPDATE functions SET status='platform' WHERE address >= 0x012E0000")
     db.execute("UPDATE functions SET status='documented' WHERE address IN (SELECT address FROM cites WHERE kind='doc')")
     db.execute("UPDATE functions SET status='translated' WHERE address IN (SELECT address FROM cites WHERE kind='code')")
     # crates/ddnative holds whole 1:1 ports, each with a differential test

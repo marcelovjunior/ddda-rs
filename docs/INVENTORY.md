@@ -78,3 +78,39 @@ families are regexes in the script). Bytes exclude the C runtime.
   translated code calls most (the frontier).
 - The unattributed 4.5 MB should shrink as classes are labelled; each Phase
   2 batch should label what it touches.
+
+## Shape families and the platform layer (2026-10-10, later)
+
+Functions that differ only in in-image constants (vtables, globals, data
+addresses) and relative call targets are one **shape family**: one
+parameterized port, replayed against every member, verifies all of them.
+Masking those constants (the unpacked exe has no relocation table, so they
+are found by disassembly) gives **1,200 families covering 10,839 functions**;
+95 families of 10+ members cover 7,567. They are mostly small (0.86 MB), so
+this is the boilerplate layer.
+
+The largest families are C++ boilerplate Rust replaces structurally, now
+the tracker's **platform** status (no 1:1 port):
+
+| kind | functions |
+|---|---:|
+| deleting destructors | 3,961 |
+| DTI new-instance allocators (call the allocator selector 0x00CF5E20 first) | 2,474 |
+| construct-if-memory wrappers (`if (mem) ctor(mem) else 0`) | 352 |
+| MT allocator / memory manager entry points | 5 |
+| C runtime / library block (0x012E0000+) | 5,588 |
+
+Gameplay families are worth one port each: the action in-place
+constructor (957 classes, `ddnative::action::construct`) was the first.
+
+With the platform layer split off:
+
+| status | functions | share |
+|---|---:|---:|
+| platform (Rust replaces) | 12,364 | 24.5% |
+| verified (1:1 port + differential test) | 972 | 1.9% |
+| translated (cited, not verified) | 1,696 | 3.4% |
+| documented only | 762 | 1.5% |
+| untouched | 34,684 | 68.7% |
+
+The game to rebuild is about **38,100 functions**; 972 (2.6%) verified.
