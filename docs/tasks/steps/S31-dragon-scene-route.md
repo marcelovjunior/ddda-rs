@@ -484,3 +484,56 @@ was not edited or built; this patch is not runtime acceptance.
      kit_weapons(&mut stage_view, st, s);
      hired_pawn_bodies(&mut stage_view, st, s);
 ```
+
+**Reviewed-main integration before the next gate:** merge `479e1ae`
+consumes only head's accepted/reviewed S53 main
+`6b621e66f0b21a4916c5c1740a7750bc668f76c1` (protocol11, durable VITL,
+atomic retry). All six owned source/test file hashes from `a522cb8` are
+unchanged; all four new regression names remain **uncompiled/unrun**.
+The unapplied viewer patch also passes `git apply --check` against this
+integrated baseline, actual exit0, without editing the viewer. Next gate
+is the complete ddnpcrt/ddenemyrt/ddhost/ddstory packages on the existing
+core target, only after the parent CPU handoff. Previous178-pass helper
+acceptance and the narrow original CCE580 comparison do not validate this
+integrated continuation or the full S31 route.
+
+**Bounded source planning for the next actor; not activated:**
+
+- Native reaction motion banks below10 follow `0x00BB827B -> 0x00B800C0
+  -> 0x00886E70 -> 0x00828350 -> 0x0105B480`. The keep-attribute mask at
+  cMotionControl+0x58 initializes to0 at `0x00828173`; runtime overrides
+  still need their actual observations. A negative installed LMT loop
+  marker adds attribute bit4 at `0x0105B5D9`. A bounded installed read
+  confirms all five reaction motion slots are present in the resource
+  resolved by native bank table `0x014F1D38`. Frame counts remain runtime
+  data; no duration table is embedded.
+- `0x01060730` sets model layer+6 bit1 from its next-step lookahead at
+  `0x01060935..0x0106096C` / `0x01060992..0x010609A0`; bit4 requires the
+  actual current frame to reach the end at `0x01060970..0x01060989` /
+  `0x010609AC..0x010609CB`. Damage's `0x01057100` checks flags&5, so a
+  generic cEventActMotion actor's warm update and bit4-only terminal are
+  unsuitable as its body-layer observation. The positive resource loop
+  marker is not assumed to set model layer+0x58's restart value.
+- The type2 axis query has a separate cScrAdjust+0x1A4
+  `mAxisCheckSphereRadius`, read at `0x0079E628`. Constructor `0x0079D936`
+  initializes it from `0x014EA574` (15.0), independently of capsule D4.
+  Runtime override provenance remains open. Cast length
+  `0x0079E58A..0x0079E5B8` multiplies the actual capsule radius by the
+  native double at `0x0161C9F0` (1.41421356), then narrows to float;
+  airborne motion adds oldY-targetY. The query starts at the lower actual
+  endpoint plus the old body position. Existing `sweep_capsule` accepts
+  a separate AxisQuery, so no new collision engine is needed. Its
+  `triangles_in` availability result must not be replaced by a fabricated
+  ground byte.
+- `0x00B63F70` sets NPC body+0x1E80/+0x1B6D only when body+0x273C bit1
+  is set and the linked NPC flags lack mask0x20000000; otherwise both
+  bytes clear. The extended ground mask is dynamic, not always enabled
+  merely because the body is an NPC.
+- NPC704's installed GotoEx Trace records enable path use and path update.
+  Reflection `0x0057B560` maps the authored values to trace+0x10/11/14/
+  18/1C/20. Mode bytesA1/A2/A3 come separately from the actual interface
+  owner in `0x0057B770`; `0x0057B880` copies authored values without
+  supplying those modes. Do not force A3 to bypass navigation or replace
+  the native trace with a timer/straight line. A source-owned Nav/BBS
+  provider remains a movement dependency; the other victim graphs were
+  not surveyed in this bounded read.
