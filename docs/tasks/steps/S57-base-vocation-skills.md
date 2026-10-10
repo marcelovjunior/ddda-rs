@@ -167,8 +167,9 @@ the equipped category passed to the host refresh. Fighter vocation alone
 does not grant a shield. Fight captures the strict full-3D sphere before
 enemy movement and delivers messages in pass C, leaving current target,
 alert and damage untouched. Actor lifetime tokens prevent pending source
-messages or old hate from carrying across a reused seat. Production item
-equipment and viewer bank-9 binding callers remain OPEN. Additional UNRUN sources:
+messages or old hate from carrying across a reused seat. Head-delegated
+mechanical viewer bank selection follows `SkillData.bank` (7/9); its GPU
+gate remains UNRUN. Production item equipment callers remain OPEN. Additional UNRUN sources:
 
 - `provoke_is_additive_capped_and_decays_separately_from_distance`
 - `provoke_preserves_first_native_target_slot_and_does_not_require_sight`

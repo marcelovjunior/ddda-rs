@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use ddsim::{PlayerId, Sim, Weapon};
 
-/// Each equipped action binds its own bank 7 (0x00AC65A0). The view must
+/// Each equipped action binds its own primary/secondary bank (0x00AC65A0). The view must
 /// select by skill ID as well as motion ID: several spells share 0x77f.
 #[derive(Default)]
 pub struct Motions(std::collections::HashMap<u32, (mtlmt::MotionList, Vec<f32>)>);
@@ -15,7 +15,7 @@ impl Motions {
                 .0
                 .iter()
                 .filter_map(|(&id, skill)| {
-                    let bank = skill.body.banks.get(7)?.as_ref()?;
+                    let bank = skill.body.banks.get(usize::from(skill.bank))?.as_ref()?;
                     let blend = ddhost::install::adjust_table(vfs, &bank.path).unwrap_or_default();
                     Some((id, (bank.list.clone(), blend)))
                 })
