@@ -168,6 +168,9 @@ impl Default for OpeningWorld {
 }
 
 impl StoryWorld for OpeningWorld {
+    fn quest_camera_active(&self) -> Option<&crate::quest_camera::Active> {
+        self.cameras.as_ref()?.active.as_ref()
+    }
     fn camera_step(&mut self, seconds: f32) {
         if self.cameras.as_mut().is_some_and(|c| c.step(seconds)) {
             self.pending.push(HostEvent::CameraFinished);

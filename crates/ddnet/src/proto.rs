@@ -16,7 +16,9 @@ use ddid::{PlayerId, Reader, Result, Writer};
 /// - 6: per-seat bow held/toggle input and bow layers/secondary slot in bodies.
 /// - 7: enemy resource identity, full rotation/scale and field-group deltas.
 /// - 8: four held pawn-order direction bits in each per-seat input.
-pub const PROTOCOL: u16 = 8;
+/// - 9: authored quest camera clock/explicit end/input lock; NPC lifetime,
+///   pose/motion, gauge and health/death state with masked deltas.
+pub const PROTOCOL: u16 = 9;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +75,8 @@ pub struct Snapshot {
     pub enemies: Vec<Enemy>,
     /// The NPCs on their schedules (`Host::npcs`).
     pub npcs: Vec<NpcBody>,
+    /// None explicitly releases the host-owned camera on the guest.
+    pub quest_camera: Option<crate::quest_camera::QuestCamera>,
 }
 
 fn opt_u64(w: &mut Writer, v: Option<u64>) {
@@ -277,7 +281,8 @@ impl Snapshot {
         }
         mirror::write_vitals(&mut w, &self.vitals);
         mirror::write_enemies(&mut w, &self.enemies, enemies);
-        mirror::write_npcs(&mut w, &self.npcs);
+        mirror::write_npcs(&mut w, &self.npcs, base.map_or(&[], |s| &s.npcs));
+        crate::quest_camera::write(&mut w, self.quest_camera);
         w.finish()
     }
 
@@ -298,8 +303,9 @@ impl Snapshot {
             .collect::<Result<_>>()?;
         let vitals = mirror::read_vitals(&mut r)?;
         let enemies = mirror::read_enemies(&mut r, held.as_ref().map_or(&[][..], |s| &s.enemies[..]))?;
-        let npcs = mirror::read_npcs(&mut r)?;
+        let npcs = mirror::read_npcs(&mut r, held.as_ref().map_or(&[], |s| &s.npcs))?;
+        let quest_camera = crate::quest_camera::read(&mut r)?;
         r.end()?;
-        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies, npcs })
+        Ok(Snapshot { frame, base, cmd_newest, bodies, vitals, enemies, npcs, quest_camera })
     }
 }

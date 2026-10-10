@@ -369,7 +369,7 @@ fn update_npc_gauges(
     event_active: bool,
     capture: &mut NpcGaugeCapture,
 ) {
-    use ddhost::ddenemyrt::{combat::Victim, npc_body::ORDINARY_NPC_SCENERY_RADIUS, npc_combat::gauge_fill};
+    use ddhost::ddenemyrt::{npc_body::ORDINARY_NPC_SCENERY_RADIUS, npc_combat::gauge_fill};
     if !capture.checked {
         capture.checked = true;
         capture.path = std::env::var_os("DDVIEW_NPC_GAUGE_CAPTURE")
@@ -391,25 +391,7 @@ fn update_npc_gauges(
         .into_iter()
         .flat_map(|opening| {
             let session = opening.0.lock().unwrap();
-            let Some(fight) = session.host.fight.as_ref() else {
-                return Vec::new();
-            };
-            fight
-                .npcs
-                .values()
-                .filter_map(|npc| {
-                    if fight.npc_errors.contains_key(&npc.fighter.owner) {
-                        return None;
-                    }
-                    if session.host.story_npc_gauge_visible(npc.npc) != Some(true) {
-                        return None;
-                    }
-                    let Victim::Npc { region, .. } = &npc.fighter.victim else {
-                        return None;
-                    };
-                    if region.hp <= 0.0 {
-                        return None;
-                    }
+            session.npc_gauge_actors().into_iter().filter_map(|npc| {
                     let key = NpcPoseKey {
                         body: std::sync::Arc::as_ptr(&npc.body) as usize,
                         motion: npc.motion,
@@ -420,7 +402,7 @@ fn update_npc_gauges(
                     };
                     if !gauges
                         .poses
-                        .get(&npc.fighter.owner)
+                        .get(&npc.owner)
                         .is_some_and(|pose| pose.key == key)
                     {
                         // Cache a host pose between render frames; each view still
@@ -433,7 +415,7 @@ fn update_npc_gauges(
                         // constraint-mask overrides are not yet represented by the host.
                         let bounds = npc.body.bounds(&pose, 3).ok()?;
                         gauges.poses.insert(
-                            npc.fighter.owner,
+                            npc.owner,
                             NpcCachedBounds {
                                 key,
                                 model: pose.model,
@@ -441,14 +423,14 @@ fn update_npc_gauges(
                             },
                         );
                     }
-                    let pose = &gauges.poses[&npc.fighter.owner];
+                    let pose = &gauges.poses[&npc.owner];
                     Some((
-                        npc.fighter.owner,
+                        npc.owner,
                         npc.position,
                         pose.model,
                         pose.bounds,
-                        region.hp,
-                        region.hp_max,
+                        npc.hp,
+                        npc.hp_max,
                         session.npc_body_entity(npc.npc),
                     ))
                 })

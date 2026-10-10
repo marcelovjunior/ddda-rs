@@ -331,7 +331,7 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
         }
         let bodies: Vec<Body> = self.host.sim.players.iter().map(Body::of).collect();
         let (vitals, enemies) = mirror::from_fight(self.host.fight.as_ref());
-        let npcs = mirror::npcs_of(&self.host.npcs, &self.host.npc_parked);
+        let npcs = mirror::npcs_of(&self.host);
         self.history.push_back(Snapshot {
             frame: report.frame,
             base: None,
@@ -340,6 +340,8 @@ impl<D: Data, W: StoryWorld, T: Transport> Server<D, W, T> {
             vitals,
             enemies,
             npcs,
+            quest_camera: self.host.world.quest_camera_active().map(|active|
+                crate::quest_camera::QuestCamera::of(active, self.host.world.player_actions_blocked(0))),
         });
         if self.history.len() > HISTORY {
             self.history.pop_front();

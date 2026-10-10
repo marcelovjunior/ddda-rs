@@ -34,6 +34,9 @@ use std::sync::Mutex;
 
 #[path = "npc_motion.rs"]
 mod npc_motion;
+#[path = "guest_npc.rs"]
+mod guest_npc;
+pub(crate) use guest_npc::GaugeActor;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -254,7 +257,8 @@ pub struct Session {
     pending_local: HashMap<ddsim::PlayerId, Input>,
     failure: Option<String>,
     guest_control_shot: bool,
-    guest_npcs: HashMap<u32, [f32; 3]>,
+    guest_npcs: HashMap<u32, ddnet::npc::NpcBody>,
+    guest_npc_bodies: guest_npc::Bodies,
     guest_enemy_views: crate::net::enemy_views::Views,
     acc: f32,
     /// The party before the last host frame, to draw between frames.
@@ -419,6 +423,7 @@ pub fn prepare(
         failure: None,
         guest_control_shot: false,
         guest_npcs: HashMap::new(),
+        guest_npc_bodies: guest_npc::Bodies::default(),
         guest_enemy_views: crate::net::enemy_views::Views::default(),
         acc: 0.0,
         between: play::Between::default(),
@@ -682,10 +687,22 @@ impl Session {
         if let Some(demo) = &mut self.demo {
             demo.perf_route = true;
         }
-        self.shots = None;
     }
-    /// The rendered body entity of NPC `npc`, if it has one (read-only, for
-    /// diagnostics such as the NPC gauge anchor telemetry).
+    /// Both endpoints supply the same installed gauge pose renderer.
+    pub(crate) fn npc_gauge_actors(&self) -> Vec<GaugeActor> {
+        if self.guest.is_some() { return self.guest_npc_bodies.gauges(&self.guest_npcs); }
+        let Some(fight) = self.host.fight.as_ref() else { return vec![] };
+        fight.npcs.values().filter_map(|npc| {
+            if fight.npc_errors.contains_key(&npc.fighter.owner)
+                || self.host.story_npc_gauge_visible(npc.npc) != Some(true) { return None; }
+            let ddhost::ddenemyrt::combat::Victim::Npc { region, .. } = &npc.fighter.victim else { return None };
+            if region.hp <= 0.0 { return None; }
+            Some(GaugeActor { owner: npc.fighter.owner, npc: npc.npc, body: npc.body.clone(),
+                motion: npc.motion, frame: npc.frame, position: npc.position, yaw: npc.yaw,
+                scale: npc.scale, hp: region.hp, hp_max: region.hp_max })
+        }).collect()
+    }
+    /// The rendered body entity, for gauge anchor telemetry.
     pub(crate) fn npc_body_entity(&self, npc: u32) -> Option<Entity> {
         self.npcs.get(&npc).map(|n| n.0)
     }
@@ -2728,7 +2745,33 @@ fn guest_step(
     let mut bodies: Vec<_> = c.others(0.0).iter().map(shown).collect();
     bodies.extend(c.own().as_ref().map(shown));
     let enemies = c.enemies(0.0);
-    s.guest_npcs = c.npcs().into_iter().map(|n| (n.id, n.pos)).collect();
+    let npc_snapshots = c.npcs();
+    let camera_snapshot = c.quest_camera();
+    let retired: Vec<_> = s.npcs.keys().copied().filter(|id|
+        npc_snapshots.iter().find(|n| n.id == *id).is_none_or(|next|
+            s.guest_npcs.get(id).is_some_and(|old| old.generation != next.generation))).collect();
+    for id in retired {
+        s.npc_authored_motion.forget_remote(id);
+        if let Some((entity, _, _)) = s.npcs.remove(&id) { view.commands.entity(entity).despawn(); }
+    }
+    s.guest_npcs = npc_snapshots.iter().map(|n| (n.id, *n)).collect();
+    if let Some(streamer) = view.streamer.as_mut() {
+        if let Err(error) = crate::quest_camera::receive(s.host.world.cameras.get_or_insert_with(Default::default),
+            camera_snapshot, streamer.loader.vfs) { s.failure = Some(format!("guest quest camera: {error}")); }
+        if let Err(error) = s.guest_npc_bodies.load(&npc_snapshots, streamer.loader.vfs,
+            &s.npc_adapter.exe.image().expect("supported installed exe")) { s.failure = Some(format!("guest NPC body: {error}")); }
+        // Admission follows the authoritative list; own install supplies look.
+        for npc in &npc_snapshots {
+            if s.npcs.contains_key(&npc.id) || npc.combat.is_some_and(|c| c.retired) { continue; }
+            let Some(look) = npc_look(streamer.loader.vfs, npc.id, 0) else { continue };
+            match crate::character::spawn_look(&mut view.commands, &mut streamer.loader,
+                &mut view.meshes, &mut view.materials, &mut view.images, &mut view.bindposes,
+                &look, play::MOTIONS, 0, (Vec3::from(npc.pos)-st.origin)*UNIT, Some(npc.yaw)) {
+                Ok(entity) => { s.npcs.insert(npc.id, (entity, Vec3::from(npc.pos), npc.yaw)); }
+                Err(error) => { s.failure = Some(format!("guest NPC {} model: {error}", npc.id)); }
+            }
+        }
+    }
     for event in events {
         if let ddnet::proto::ToClient::PlayEvent { row, frame } = event {
             start_cut(s, row as usize);
@@ -2784,11 +2827,16 @@ fn guest_step(
     }
     for (&id, &(entity, _, _)) in &s.npcs {
         let at = s.guest_npcs.get(&id);
-        if let (Some(at), Ok((mut t, _))) = (at, roots.get_mut(entity)) {
-            t.translation = Vec3::from(*at) * UNIT;
+        if let (Some(at), Ok((mut t, mut playback))) = (at, roots.get_mut(entity)) {
+            t.translation = (Vec3::from(at.pos) - st.origin) * UNIT;
+            t.rotation = Quat::from_rotation_y(at.yaw);
+            t.scale = Vec3::from(at.scale);
+            if let Err(error) = s.npc_authored_motion.show_remote(at, &mut playback) {
+                s.failure = Some(format!("guest NPC {id} motion: {error}"));
+            }
         }
         if let Ok(mut v) = vis.get_mut(entity) {
-            *v = if at.is_some() && s.cut.is_none() {
+            *v = if at.is_some_and(|n| n.combat.is_none_or(|c| !c.retired)) && s.cut.is_none() {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden

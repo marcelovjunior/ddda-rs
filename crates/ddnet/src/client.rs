@@ -59,6 +59,43 @@ pub struct Client<T: Transport> {
     pub spot: Option<Spot>,
     /// Looks by seat, from Look events.
     pub looks: BTreeMap<PlayerId, LookData>,
+    quest_camera: Option<crate::quest_camera::QuestCamera>,
+}
+
+#[cfg(test)]
+mod camera_prediction_tests {
+    use super::*;
+    use crate::transport::{Transport, Udp};
+    struct Flat;
+    impl Ground for Flat {
+        fn height(&self, _: f32, _: f32, below: f32) -> Option<f32> { Some(below.min(0.0)) }
+    }
+    #[test]
+    fn replicated_lock_applies_before_replay_and_next_prediction() {
+        let mut sim = Sim::new(Default::default()); sim.add_player(1, [0.0; 3], 0.0);
+        let own = Body::of(sim.player(1).unwrap());
+        let server = Udp::bind("127.0.0.1:0").unwrap().local_addr();
+        let mut client = Client::new(Udp::bind("127.0.0.1:0").unwrap(), server,
+            2, 1, 2, None, sim, Box::new(Flat), 0);
+        client.seat = Some(1);
+        let moving = PlayerInput { sim: ddsim::Input { stick: [1.0, 0.0], jump: true, light: true,
+            ..Default::default() }, interact: true };
+        client.cmds.push_back((11, moving));
+        client.apply(Snapshot { frame: 10, base: None, cmd_newest: None,
+            bodies: vec![own.clone()], vitals: vec![], enemies: vec![], npcs: vec![],
+            quest_camera: Some(crate::quest_camera::QuestCamera { stage: 100, camera_id: 12,
+                generation: 1, seconds: 0.5, input_locked: true }) });
+        let replayed = client.own().unwrap();
+        assert_eq!((replayed.position[0], replayed.position[2]), (0.0, 0.0));
+        assert_eq!(replayed.state, ddsim::State::Wait);
+        client.predict(1, 12, moving);
+        assert_eq!(client.own().unwrap().position, replayed.position);
+        client.apply(Snapshot { frame: 12, base: None, cmd_newest: None,
+            bodies: vec![own], vitals: vec![], enemies: vec![], npcs: vec![], quest_camera: None });
+        assert!(!client.actions_blocked());
+        client.predict(1, 13, moving);
+        assert_ne!(client.own().unwrap().position, replayed.position, "explicit host end unlocks prediction");
+    }
 }
 
 impl<T: Transport> Client<T> {
@@ -101,6 +138,7 @@ impl<T: Transport> Client<T> {
             events: vec![],
             spot: None,
             looks: BTreeMap::new(),
+            quest_camera: None,
         }
     }
 
@@ -155,6 +193,8 @@ impl<T: Transport> Client<T> {
 
     fn apply(&mut self, s: Snapshot) {
         self.snapshots += 1;
+        // Apply before replay as well as the next prediction step.
+        self.quest_camera = s.quest_camera;
         if let (Some(seat), Some(n)) = (self.seat, s.cmd_newest) {
             let lead = n as i64 - s.frame as i64;
             // At most one step per snapshot.
@@ -194,7 +234,8 @@ impl<T: Transport> Client<T> {
     }
 
     fn predict(&mut self, id: PlayerId, frame: u64, c: PlayerInput) {
-        let inputs = HashMap::from([(id, c.sim)]);
+        let input = if self.actions_blocked() { ddsim::Input::default() } else { c.sim };
+        let inputs = HashMap::from([(id, input)]);
         self.sim.step(self.clock.seconds(), &inputs, self.ground.as_ref());
         if let Some(p) = self.sim.player(id) {
             self.predicted.push_back((frame, p.position));
@@ -250,6 +291,10 @@ impl<T: Transport> Client<T> {
     pub fn own(&self) -> Option<Body> {
         self.sim.player(self.seat?).map(Body::of)
     }
+
+    pub fn quest_camera(&self) -> Option<crate::quest_camera::QuestCamera> { self.quest_camera }
+
+    pub fn actions_blocked(&self) -> bool { self.quest_camera.is_some_and(|c| c.input_locked) }
 
     /// The newest snapshot.
     pub fn latest(&self) -> Option<&Snapshot> {

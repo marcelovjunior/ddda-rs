@@ -33,6 +33,7 @@ fn snap(frame: u64, base: Option<u64>, enemies: Vec<Enemy>) -> Snapshot {
         bodies: vec![],
         vitals: vec![],
         npcs: vec![],
+        quest_camera: None,
         enemies,
     }
 }

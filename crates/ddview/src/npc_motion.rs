@@ -10,6 +10,7 @@ pub struct View {
     banks: Arc<Banks>,
     bound: HashMap<u32, NpcLifetime>,
     shown: HashMap<u32, Token>,
+    remote_shown: HashMap<u32, (u64, u64, u64, u8, u16)>,
 }
 
 impl View {
@@ -19,7 +20,7 @@ impl View {
         // constructor type0 (0x00784880). Specialized body type overrides
         // and the zone-dependent 99 common bank remain unimplemented here.
         let banks = Banks::load(vfs, &file.image().map_err(|e| e.0)?, 0, 0)?;
-        Ok(Self { banks: Arc::new(banks), bound: HashMap::new(), shown: HashMap::new() })
+        Ok(Self { banks: Arc::new(banks), bound: HashMap::new(), shown: HashMap::new(), remote_shown: HashMap::new() })
     }
 
     /// Bind only actual spawned bodies, not admitted intels with missing models.
@@ -63,4 +64,23 @@ impl View {
         playback.hold_frame = Some(actor.frame);
         true
     }
+
+    /// Sampling the received token never binds to or advances a guest host.
+    pub fn show_remote(&mut self, npc: &ddnet::npc::NpcBody, playback: &mut Playback) -> Result<bool, String> {
+        let Some(motion) = npc.motion else {
+            self.remote_shown.remove(&npc.id); playback.hold_frame = None; return Ok(false);
+        };
+        let key = (npc.generation, motion.command, motion.launch, motion.bank, motion.slot);
+        if self.remote_shown.get(&npc.id) != Some(&key) {
+            let requested = (u16::from(motion.bank) << 8) | motion.slot;
+            let (resolved, resource) = self.banks.resolve(i32::from(requested))?;
+            if resolved != requested { return Err("host supplied an unresolved NPC motion".into()); }
+            playback.change_motion(resource.clone(), motion.blend_frames);
+            self.remote_shown.insert(npc.id, key);
+        }
+        playback.hold_frame = Some(motion.frame);
+        Ok(true)
+    }
+
+    pub fn forget_remote(&mut self, npc: u32) { self.remote_shown.remove(&npc); }
 }
