@@ -235,3 +235,15 @@ fn enemy_blend_matches_the_original() {
         }
     }
 }
+
+#[test]
+fn every_extended_action_constructor_matches_the_original() {
+    use ddnative::action;
+    let Some(cases) = vectors("action_ctor_ext_family") else { return };
+    assert!(cases.len() > 200);
+    for c in &cases {
+        let mut obj = hex(c["in"].as_str().unwrap());
+        action::construct_extended(&mut obj, u(c, "vtable"));
+        assert_eq!(obj, hex(c["out"].as_str().unwrap()), "constructor {:#010x}", u(c, "addr"));
+    }
+}

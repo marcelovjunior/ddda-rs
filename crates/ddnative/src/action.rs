@@ -106,3 +106,17 @@ pub fn construct(memory: Option<&mut [u8]>, vtable: u32) -> bool {
     NewAction { vtable }.write(obj);
     true
 }
+
+/// The extended action constructor (object in EAX, no null check): the
+/// base fields of [`NewAction`], then `+0x54 = -1`, zero words at +0x5C,
+/// +0x64, +0x6C, +0x70 and +0.0 at +0x60, +0x68. Bytes +0x4C..+0x50,
+/// +0x51..+0x54 and +0x58..+0x5C are left as they were.
+// Translated from 0x004CBBE0 (DDDA.exe 2017-12-13 Steam), and every
+// same-body constructor in the private family file (272 classes).
+pub fn construct_extended(obj: &mut [u8], vtable: u32) {
+    NewAction { vtable }.write(obj);
+    obj[0x54..0x58].copy_from_slice(&u32::MAX.to_le_bytes());
+    for off in [0x5C, 0x60, 0x64, 0x68, 0x6C, 0x70] {
+        obj[off..off + 4].fill(0);
+    }
+}
