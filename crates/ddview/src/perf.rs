@@ -45,12 +45,22 @@ impl Plugin for MeshBuilderPlugin {
 }
 
 fn configure_mesh_builder(app: &mut App, use_gpu: bool) {
-    use bevy::render::{RenderApp, batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport}};
+    use bevy::render::{RenderApp, RenderStartup, init_gpu_resource, batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport}};
     if !use_gpu {
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.insert_resource(GpuPreprocessingSupport { max_supported_mode: GpuPreprocessingMode::None });
+            // Bevy 0.19.1 GpuPreprocessingPlugin::finish registers an
+            // unconditional init_gpu_resource in RenderStartup (also run on
+            // device recovery). A build-time override alone gets overwritten.
+            render.add_systems(RenderStartup, force_cpu_mesh_phases
+                .after(init_gpu_resource::<GpuPreprocessingSupport>));
         }
     }
+}
+
+fn force_cpu_mesh_phases(mut support: ResMut<bevy::render::batching::gpu_preprocessing::GpuPreprocessingSupport>) {
+    support.max_supported_mode = bevy::render::batching::gpu_preprocessing::GpuPreprocessingMode::None;
+    info!("CPU mesh phases: preprocessing None after RenderStartup device initialization");
 }
 
 #[cfg(test)]
@@ -102,6 +112,27 @@ mod mesh_builder_tests {
         let support = app.sub_app(RenderApp).world().resource::<GpuPreprocessingSupport>();
         assert!(support.max_supported_mode == GpuPreprocessingMode::Culling);
         assert_eq!(queue_one_opaque_mesh(support), (0, 1));
+    }
+
+    #[test]
+    fn cpu_phase_contract_survives_device_startup_and_recovery() {
+        use bevy::render::RenderStartup;
+        // Reproduce init_gpu_resource's unconditional resource replacement
+        // without requiring a real GPU/RenderDevice in this headless test.
+        fn reset_device_capability(world: &mut World) {
+            world.insert_resource(GpuPreprocessingSupport { max_supported_mode: GpuPreprocessingMode::Culling });
+        }
+        let mut app = App::new();
+        app.insert_sub_app(RenderApp, SubApp::new());
+        configure_mesh_builder(&mut app, false);
+        let render = app.sub_app_mut(RenderApp);
+        render.add_systems(RenderStartup, reset_device_capability.before(force_cpu_mesh_phases));
+        for _ in 0..2 {
+            render.world_mut().run_schedule(RenderStartup);
+            let support = render.world().resource::<GpuPreprocessingSupport>();
+            assert!(support.max_supported_mode == GpuPreprocessingMode::None);
+            assert_eq!(queue_one_opaque_mesh(support), (1, 0));
+        }
     }
 }
 
