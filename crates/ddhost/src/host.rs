@@ -308,6 +308,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             f.push_out(&mut self.sim);
             f.volumes(&self.sim);
         }
+        self.ambient.step(step, &self.sim.players);
         // Same line, phase 90 of each character: at most one level-up
         // (0x00B5BD20) and one rank-up (0x00B5C230) per frame. The original
         // keeps the vocation in sGameSys, so it is mirrored into the story

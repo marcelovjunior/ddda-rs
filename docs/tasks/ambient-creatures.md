@@ -105,3 +105,50 @@ combat type_complexity and install chunks_exact_to_as_chunks allowances.
 Not yet connected to the host frame loop or renderer; bird flight and
 physical collision remain pending. No new original-game comparison in
 this checkpoint, and this does not yet replace door occupancy stand-ins.
+
+
+### Stand-down checkpoint (2026-10-09)
+
+Implemented since2e6e1b8: host frame pass drives authored em8300 first-table
+5/6 idles; the host retains each interpreter and canonical motion clock.
+Corrected same-motion action re-entry using uObjModel::vf36 0x00886e70:
+force=0 preserves the frame. The initial action1/motion0 has real root
+travel (~0.457cm in frame1), so zero-travel assumptions were rejected.
+Root proposals accumulate separately until a scenery controller resolves
+them; canonical positions remain unchanged, with explicit diagnostics.
+Group removal latches prevent immediate re-admission; stage retirement
+clears the group-controller latch.
+
+The new ddview ambient adapter admits from loaded cells/current GPL gates
+and draws actual installed models/banks at canonical transforms and clocks.
+Its main edits are only module declaration and system hookup, coordinated
+with codex-1 and codex-35 (board2909/2988). Fresh-opening host only: no
+saved-game kill-record adapter or guest actor replication. Unsupported
+bird controllers retain their initial poses. Door stand-ins remain.
+
+The 300-frame installed regression expects **19 diagnostics**, not17:
+2 unresolved scenery/root-motion resolutions and17 unresolved bird AI
+controllers. It separately checks the two authored idle actions, advancing
+clocks, nonzero root proposals, generation rejection and removal latches.
+Viewer release `cargo check` passed; no runtime render or new live original
+comparison was performed for this adapter. Previous live snapshot remains
+the only comparison (2 larger actors and8 currently loaded birds).
+
+Next exact work: ddhost/src/ambient.rs Population::step must resolve root
+proposals through sourced scenery collision before publishing positions.
+Then connect bird world inputs and selected-target flight to
+Runtime::select/Flight::step (0x00aa05c0, 0x00aa09b0, 0x00aa1030).
+Shared battle-flag writer found at0x00441650, called by sGameSys::vf06
+0x0043ceb0, with latch clearing0x00441800; full hostile list/sensing input
+is not ported. After physics/AI are covered, replace doors.rs authored
+stand-ins with this canonical feed and compare a bounded original trace.
+This is an incremental checkpoint, **not completion of the brief**.
+
+
+Final validation at stand-down: installed ddenemyrt ambient tests **2/2**,
+installed ddhost ambient test **1/1** (300 frames and lifecycle checks),
+and strict no-deps clippy for both crates passed. Clippy allows only the
+pre-existing combat type_complexity and install chunks_exact_to_as_chunks
+warnings. Viewer release-check passed with its existing opening_world
+private-interface and unused audio forget_actor warnings. Claims and build
+slots are released after this checkpoint; no game/live claim remains.

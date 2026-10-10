@@ -1,9 +1,10 @@
 //! Canonical ambient enemy ownership, independent of renderer/door lifetime.
 //! Admission uses the ordinary enemy GPL/kill-record path. Behavioural
-//! stepping is not yet connected; these actors currently retain spawn poses.
+//! stepping currently supports authored em8300 idle tables; other controllers
+//! expose diagnostics until their world inputs and physical movement are connected.
 
-use ddenemyrt::ambient::{Data, Species};
-use std::collections::BTreeMap;
+use ddenemyrt::ambient::{Data, Species, ddai};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -34,8 +35,12 @@ pub struct Instance {
     pub position: [f32; 3],
     pub angle: [f32; 3],
     pub scale: [f32; 3],
+    /// Phase92 root-motion proposal awaiting scenery collision resolution.
+    pub proposed_position: Option<[f32; 3]>,
     pub think_root: u32,
     pub runtime: ddenemyrt::ambient::Runtime,
+    tables: Arc<ddai::thinktbl::Tables>,
+    authored_idle: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +48,8 @@ pub struct Population {
     instances: BTreeMap<PlacementId, Instance>,
     resources: BTreeMap<String, Arc<Data>>,
     lifetime_counter: u64,
+    retired_groups: BTreeSet<(u32, u32)>,
+    pub diagnostics: BTreeMap<PlacementId, String>,
 }
 
 impl Population {
@@ -116,7 +123,7 @@ impl Population {
             return Ok(false);
         };
         let id = PlacementId::from(spawn);
-        if self.instances.contains_key(&id) {
+        if self.retired_groups.contains(&(id.stage, id.group)) || self.instances.contains_key(&id) {
             return Ok(true);
         }
         let first = match spawn.record.get("mUseFirstSetThinkTbl") {
@@ -142,6 +149,10 @@ impl Population {
                 data
             }
         };
+        let tables = Arc::new(
+            ddai::thinktbl::Tables::read_roots(exe, vec![think_root], &[]).map_err(|e| e.to_string())?,
+        );
+        let authored_idle = species == Species::Em8300 && matches!(first, Some(5 | 6));
         let mut runtime = ddenemyrt::ambient::Runtime::new(&data, think_root)?;
         // uEm8300::vf33 0x00a9be40 locks explicitly authored first tables.
         runtime.think.lock = species == Species::Em8300 && first.is_some();
@@ -158,11 +169,80 @@ impl Population {
                 position: spawn.position,
                 angle: spawn.angle,
                 scale: placement.scale,
+                proposed_position: None,
                 think_root,
                 runtime,
+                tables,
+                authored_idle,
             },
         );
         Ok(true)
+    }
+
+    /// Supported ordinary actor pass, after player movement. The first-table
+    /// 5/6 subgraphs contain no world-flag tests, callbacks or random draws.
+    /// Other roots remain diagnosed rather than receiving fabricated inputs.
+    pub fn step(&mut self, delta: f32, players: &[ddsim::Player]) {
+        self.diagnostics.clear();
+        for actor in self.instances.values_mut() {
+            let result = (|| -> Result<(), String> {
+                if !actor.authored_idle {
+                    return Err("ambient world signals/flight controller not connected".into());
+                }
+                let mut runtime = actor.runtime.clone();
+                runtime.think.tick(delta);
+                // Co-op extension: consider every player and use the closest
+                // as slot0, with stable player id breaking distance ties. The
+                // original fills party slots0..3 (0x00a9c7d0). These authored
+                // idle rows have no range/angle preference among valid slots.
+                let distance = |p: &ddsim::Player| {
+                    p.position
+                        .iter()
+                        .zip(actor.position)
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f32>()
+                };
+                runtime.think.slots[0] = players
+                    .iter()
+                    .min_by(|a, b| distance(a).total_cmp(&distance(b)).then_with(|| a.id.cmp(&b.id)))
+                    .map_or_else(ddai::thinktbl::Slot::default, |p| {
+                        ddai::thinktbl::Slot::measure(
+                            actor.position,
+                            actor.angle[1],
+                            p.position,
+                            0.0,
+                            p.id.into(),
+                        )
+                    });
+                let mut callbacks = ClosedIdle::default();
+                runtime.select(&actor.data, &actor.tables, &mut callbacks)?;
+                if callbacks.random_requested {
+                    return Err("unexpected random request in authored ambient idle".into());
+                }
+                runtime.step_action(&actor.data)?;
+                let mut position = actor.proposed_position.unwrap_or(actor.position);
+                runtime.advance(&actor.data, &mut position, actor.angle[1], delta)?;
+                actor.runtime = runtime;
+                if position != actor.position {
+                    actor.proposed_position = Some(position);
+                    return Err(format!(
+                        "ambient root travel awaits collision controller: motion {:#x} frame {} {:?}->{position:?}",
+                        actor.runtime.motion, actor.runtime.frame, actor.position
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                self.diagnostics.insert(actor.id, error);
+            }
+        }
+    }
+
+    /// Stage controller destruction also discards its group-removal latches.
+    pub fn retire_stage(&mut self, stage: u32) {
+        self.instances.retain(|id, _| id.stage != stage);
+        self.retired_groups.retain(|(s, _)| *s != stage);
+        self.diagnostics.retain(|id, _| id.stage != stage);
     }
 
     /// Explicit streaming retirement; request sets alone are not evidence
@@ -183,6 +263,7 @@ impl Population {
             return false;
         }
         actor.position = position;
+        actor.proposed_position = None;
         true
     }
 
@@ -206,6 +287,9 @@ impl Population {
             })
             .collect();
         for id in &removed {
+            // cLayoutSetCharaBase::vf11 0x0075f860 latches its +0x43
+            // state after retiring a group; admission must not recreate it.
+            self.retired_groups.insert((id.stage, id.group));
             self.instances.remove(id);
         }
         removed
@@ -214,6 +298,7 @@ impl Population {
     pub fn digest(&self) -> u64 {
         let mut hash = crate::hash::StateHasher::default();
         hash.u64(self.lifetime_counter);
+        hash.debug(&self.retired_groups);
         for actor in self.iter() {
             hash.debug(&(
                 actor.id,
@@ -222,10 +307,28 @@ impl Population {
                 actor.position,
                 actor.angle,
                 actor.scale,
+                actor.proposed_position,
                 actor.think_root,
                 &actor.runtime,
             ));
         }
         hash.finish()
+    }
+}
+
+#[derive(Default)]
+struct ClosedIdle {
+    random_requested: bool,
+}
+impl ddai::thinktbl::Host for ClosedIdle {
+    fn check(&mut self, id: u32, _: u32) -> Result<bool, ddai::Error> {
+        Err(ddai::Error::Unimplemented(format!("ambient check {id}")))
+    }
+    fn set(&mut self, id: u32, _: u32) -> Result<u32, ddai::Error> {
+        Err(ddai::Error::Unimplemented(format!("ambient commit {id}")))
+    }
+    fn rand(&mut self) -> u32 {
+        self.random_requested = true;
+        0
     }
 }

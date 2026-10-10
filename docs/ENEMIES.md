@@ -332,3 +332,25 @@ combat type_complexity and install chunks_exact_to_as_chunks allowances.
 Not yet connected to the host frame loop or renderer; bird flight and
 physical collision remain pending. No new original-game comparison in
 this checkpoint, and this does not yet replace door occupancy stand-ins.
+
+
+### Ambient host/view checkpoint at stand-down
+
+The host frame pass now drives authored8300 idle tables5/6 and ddview draws
+installed ambient models from canonical owners. Same-motion force=0
+requests preserve clocks (0x00886e70). Initial8300 action1 plays motion0
+with nonzero root travel; proposals remain separate from canonical
+positions until scenery collision is connected. The 300-frame regression
+therefore reports19 unresolved actors:2 physics and17 bird AI, while
+checking authored idle actions and progressed frames. Group-removal
+latches and stage retirement are explicit. Viewer release-check only;
+no new screenshot/live comparison, no completed occupancy-feed replacement.
+
+A source lead for the existing unresolved shared battle flag: sGameSys
++BE2CC is written by0x00441650, called from vf06 0x0043ceb0. It consumes
++BE2CD explicit trigger or checks the hostile list(+BE25C/+BE268), live
+health, vf108==2, predicate0x007d3f50 and squared range<6250000, then
+accumulates+BE2D4 to threshold+BE2D0. The vf06 clearing pass uses
++BE2DC/+BE2D8 and0x00441800. This is a trace lead, not an implemented
+host battle-state claim. Full results and exact next functions are in the
+ambient-creatures brief.

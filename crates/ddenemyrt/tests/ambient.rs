@@ -128,6 +128,8 @@ fn installed_ambient_actions_advance_canonical_clocks() {
         let mut position = [0.; 3];
         actor.advance(&data, &mut position, 0., 1.).unwrap();
         assert_eq!(actor.frame, 1.);
+        actor.start(&data, expected_action).unwrap();
+        assert_eq!(actor.frame, 1., "same motion is not force restarted");
         let motion = data.motion(actor.motion).unwrap();
         let last = motion.frame_count.saturating_sub(1) as f32;
         actor.frame = last;

@@ -1,5 +1,8 @@
 //! Ambient enemy identities and their installed resources. These are actors,
-//! not door-owned occupancy proxies. Motion/AI execution is still pending.
+//! not door-owned occupancy proxies. Supported action clocks run headless;
+//! full world sensing, flight integration and collision remain incomplete.
+
+pub use ddai;
 
 /// Concrete unit identity; a layout class alone does not identify a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,10 +256,14 @@ impl Runtime {
         if data.motion(request.id).is_none() {
             return Err(format!("ambient motion {:#x} unavailable", request.id));
         }
+        // uObjModel::vf36 0x00886e70: all supported entries pass force=0,
+        // so re-entering an action with the same motion preserves its clock.
+        if self.action == -1 || self.motion != request.id {
+            self.motion = request.id;
+            self.frame = request.start_frame;
+            self.motion_ended = false;
+        }
         self.action = action;
-        self.motion = request.id;
-        self.frame = request.start_frame;
-        self.motion_ended = false;
         self.done = false;
         self.retained_wait = self.think.f120f;
         self.clear_body_motion_bytes = request.clear_body_motion_bytes;
