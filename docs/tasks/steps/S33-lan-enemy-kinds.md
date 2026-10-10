@@ -53,6 +53,12 @@ uses the existing character renderer's centimetres-to-metres conversion.
 Preliminary `cargo test --release -p ddview --no-run` compiled successfully in
 41.07 seconds using the shared M5 target. This is a compile check, not a viewer
 run or a passing test-suite claim. The mixed-kind whole/delta and interpolation
-regressions are written but await the shared core lease. The dragon projection,
-installed host/guest check and visual check await the reviewed S29 merge. No
-original-game or LAN acceptance claim is made by this preparation checkpoint.
+regressions passed (4 tests, compile 13.63 seconds). The full DDNET suite then
+passed all 15 tests: 5 unit, 4 wire, 3 loopback, 2 replication, and 1 story test;
+this includes the installed goblin fight under UDP loss (3.33 seconds) and the
+NPC/cutscene story path (5.67 seconds). The guest view shares parsed motion banks
+by their resource paths; additional owner-keyed pose and body/child removal
+regressions are written and await the M5 lease. The dragon projection, installed
+mixed dragon/goblin host/guest check and visual check await the reviewed S29
+merge. No original-game or dragon LAN acceptance claim is made by this
+preparation checkpoint.
