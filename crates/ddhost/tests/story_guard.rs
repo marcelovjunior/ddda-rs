@@ -55,9 +55,15 @@ fn installed_first_pawn_guard_boots_quest_after_owned_dialogue_exit() {
         player, npc: 1, conversation: 1, .. }) if *player == first));
     assert!(host.talk_story_guard(other, owner, true, 0.0, motion).unwrap().is_none());
     assert!(!host.story.as_ref().unwrap().world.gsf.get(381));
+    host.leave(first);
+    host.tick(&Default::default()).unwrap();
+    assert_eq!(host.story.as_ref().unwrap().stage.game_flags.s54, 0);
+    assert!(!host.story.as_ref().unwrap().world.gsf.get(381), "seat departure cancels; it cannot finish the authored talk");
+    assert!(host.talk_story_guard(other, owner, true, 0.0, motion).unwrap().is_some(),
+        "manual Guard can be retried after its interacting seat departs");
     let mut end = false;
     for _ in 0..40 {
-        let outcome = host.talk_next(first).unwrap();
+        let outcome = host.talk_next(other).unwrap();
         if outcome.events.iter().any(|event| matches!(event, ddnpcrt::TalkEvent::End { .. })) {
             end = true;
             break;

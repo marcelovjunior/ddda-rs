@@ -87,7 +87,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 1; }
         match self.talk_authored(player, owner.npc, set, config.message) {
             Ok(outcome) => {
-                self.story_npcs.guards.get_mut(&owner.npc).unwrap().sensor.launched();
+                // 0x00bb0db0 leaves +0x4d4 clear in the manual branch;
+                // only its motion-ready automatic launch consumes the latch.
+                if motion.ready() { self.story_npcs.guards.get_mut(&owner.npc).unwrap().sensor.launched(); }
                 Ok(Some(outcome))
             }
             Err(error) => {
@@ -250,7 +252,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 self.story_npcs.dialogue.retire(*lifetime);
             }
             if let Some(talk) = self.story_npcs.talks.remove(&(intel.npc as u32)) {
-                self.npcs.talk_abort(talk.owner.player);
+                if self.npcs.talking_to(intel.npc as u32) == Some(talk.owner.player) {
+                    self.npcs.talk_abort(talk.owner.player);
+                }
                 let _ = self.locks.release(intel.npc as u32, talk.owner.player);
             }
             self.story_npcs.guards.remove(&(intel.npc as u32));
@@ -462,6 +466,18 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn step_story_npcs(&mut self) -> Result<Vec<Request>, HostError> {
+        // A departed co-op seat cannot leave a shared dialogue stop behind.
+        // Retirement is cancellation, never the original actor's TalkEnd.
+        let departed: Vec<_> = self.story_npcs.talks.iter()
+            .filter(|(_, talk)| self.roster.seat(talk.owner.player).is_none())
+            .map(|(&npc, _)| npc).collect();
+        for npc in departed {
+            let talk = self.story_npcs.talks.remove(&npc).unwrap();
+            self.story_npcs.dialogue.retire(talk.owner.actor);
+            if self.story_npcs.dialogue.active().is_none() {
+                if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+            }
+        }
         // Normal Guard talks hold no appearance stock resource transactions:
         // loading their text is synchronous, and no exit stock was requested.
         // Empty stock release lists return true at0x00788bb0. Jump/replacement
