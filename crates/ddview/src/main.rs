@@ -32,6 +32,7 @@ mod perf;
 mod clock;
 mod intro;
 mod charaedit;
+mod character_creation;
 mod movie;
 mod stream;
 mod event;
