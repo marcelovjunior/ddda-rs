@@ -441,6 +441,14 @@ pub fn prepare(
         story.world.set_sce_no(1025,false);
         story.world.set_lot(200,0,true);
         info!("S29 isolated dragon capture: installed placement/FSM, real host phases; story route bypassed explicitly");
+        if std::env::var_os("DDVIEW_LAN_ENEMY_CAPTURE").is_some() {
+            // S33 visual fixture only: synthetic goblin position six metres
+            // in front of this runtime Arisen, not a natural beach encounter.
+            let player=s.host.sim.player(0).unwrap();
+            let pos=[player.position[0]+player.yaw.sin()*600.0,player.position[1],
+                player.position[2]+player.yaw.cos()*600.0];
+            s.host.fight.as_mut().unwrap().add_goblin(pos,0.0);
+        }
     }
     Ok(s)
 }
