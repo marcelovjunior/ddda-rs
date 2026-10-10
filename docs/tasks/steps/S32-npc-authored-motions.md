@@ -105,15 +105,49 @@ failed to retain a numeric OS exit code. This is an application failure,
 not a route pass. Private evidence is `route-f7ab591.err.txt` (motion start
 and owner removal at lines 3221/3222).
 
-The next blocker is the layout owner release path. Installed event1 state
+The first replay's blocker was the layout owner release path. Installed event1 state
 22 clears LOT100:3/7 after success/death, while the viewer currently removes
 any owner absent from freshly gated candidates. The original per-frame
 `cLayoutSetCharaBase::vf06` (`0x0075F860`) also checks layout gates when its
 byte +0x43 is clear, and calls NPC vf10 (`0x007625F0`) to queue intel release,
 notify the linked body's manager and set unit bit0x2000/intel+0x4e9. The
-meaning of +0x43 and the linked-body notification must be resolved before
-choosing a retention rule; an unconditional retention fix is not justified
-by this trace. This acceptance gap is reported to head for coordination.
+independent group+0x54 removal flags must be distinguished from admission
+at group+0x20/+0x34. Installed NPC group4 has all three removal flags clear;
+closing LOT3 therefore does not request its existing owner's removal.
+The byte +0x43 prevents repeated removal queuing. An unconditional retention
+rule is not justified: loaded layouts and enabled removal flags still matter.
+
+Head approved this sourced correction in board #4445. Code `e4b1060`
+adds `LoadedLayouts::retains_existing`: stage, NPC and placement target
+must still match a loaded layout, and `ddspawn::should_despawn` must be
+false. The opening adds only those already materialized owners to its
+reconciliation set; closed spawn gates still prohibit new admission.
+Cell/stage unloading and enabled source removal bits still retire owners.
+The new installed regression proves Reynard's zero removal flags, no fresh
+admission with LOT3 clear, retention of the existing owner, wrong identity
+rejection, actual layout unload and an explicitly enabled removal-bit
+fixture. After main integration `45bf7be` (S26/S28/S29), the complete core
+suites passed **67 host + 28 NPC** tests, including six motion/retention
+regressions. The source-compiled viewer passed **62 tests, 2 existing
+ignored**, in 10.28 s. The release build actually exited zero in 42.65 s;
+the pinned private executable is `ddview-e4b1060.exe`.
+
+The retention replay used that executable and ordinary demo inputs. It
+reached the field and played NPC304's 3226, but the Arisen's HP was already
+zero by the end of the 30-second FieldSettle step, before Rescue's first
+combat input. Main's newly translated goblin RunTrace/RunEnd/RunStumble
+(`bf06f3b`) lets the enemies approach and attack during the passive settle;
+the earlier replay preceded that behavior. Consequently q2:20 was not
+reached in this second run, and it did not test 3089's retained owner.
+With codex-1's agreement the owned viewer was intentionally terminated
+after the dead-seat condition was confirmed: actual numeric OS exit **-1**
+after **343.09 s**, not a watchdog or successful route completion. Private
+evidence is `route-e4b1060.err.txt`, `.exit.txt` and `.terminated.txt`.
+GPU ownership was released after actual process exit. Head was asked to
+make the ordinary demo use combat/defense/healing inputs during its passive
+field step; no HP, enemy death, quest bit or motion completion was forced.
+The motion-chain route acceptance gate remains unmet pending that driver
+correction and another ordinary replay.
 
 A final audit also retires the cached motion when a real Goto/Wait or
 unsupported ActionEx interface replaces it, and before a new motion launch
@@ -124,5 +158,14 @@ no longer overrides the following Goto and its old completion is rejected.
 All five motion regressions actually passed (6.78 s compile, 5.87 s tests).
 
 This checkpoint is implemented/tested against installed data and static
-exe logic. Its real route reached rescue success and 3089, but did not
-satisfy the motion-chain acceptance gate or compare with the original game.
+exe logic. The first replay reached rescue success and 3089; the retention
+replay encountered a dead Arisen earlier. Neither satisfies the complete
+motion-chain route gate or compares with the original game.
+
+The installed next departure gate is also identified: NPC control resource
+`etc\\questCtrl\\n304QuestCtrl`, table `q0002`, first row, requires q2:20
+and requests quest conversation 12, reward item1058 (default count one),
+then q2:88. Dispatch is `0x0078FBB0`; this is authored data read from the
+install, not a translated embedded table. NPC304's 3074 waits for that bit
+before six Goto commands and fade. NPC quest-talk control/effect execution
+is a separate unported dependency, not an elapsed-time acknowledgement.
