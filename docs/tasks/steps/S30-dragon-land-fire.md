@@ -627,3 +627,32 @@ proof. Instructions and outputs were not patched or substituted. Evidence
 remains private in `coordinate-parent-native.json` under the S29 directory.
 The new Rust parent/accessor full-package gates remain unexecuted; this
 native proof does not establish production particle emission or damage.
+
+### Primary-parent and coordinate-index checkpoint verified
+
+The complete `mteffect` and `ddenemyrt` gate on clean frozen `2ca38ae`
+actually exited0 in session25965: **185 passed, zero failed, two existing
+ignored diagnostics across33 successful suite summaries**. Compilation
+10.20 s; summed test execution113.25 s. All five coordinate regressions
+and `effect_coordinate_index_uses_low_byte_without_changing_generator_payload`
+occur exactly once and pass. The full private log SHA-256 is
+`B0FEFC8C8B95A0106B88D93DE37CD96C163D41E17BE3C44653146C7C2B097A17`.
+The normal core lease was released after the actual exit; no viewer,
+original-game operation or second Cargo job overlapped this gate.
+
+Together with the original-instruction four-case parent proof above, this
+is a tested primary-parent/coordinate-index **helper checkpoint ready for
+head review**. Production emitter birth, movement/path transforms, queries
+and ordinary party damage are still missing. Therefore it is neither S30
+completion nor the production dragon-fire trigger for S31 acceptance.
+
+Bounded read-only instruction review of `0x010F13E3..0x010F1420` confirms
+life4 path initialization uses the owning generator as ECX, coordinate
+primary translation as its anchor and the executable's +Z direction
+constant at `0x01629550`. `0x010E5620` distinguishes generator context,
+coordinate scales, direction selectors and RNG ownership; its decompiled
+argument list must not erase the implicit ECX owner. No new path/birth port
+or regression execution follows from that source audit. Bulk effect fields
+and native random tables continue to be read from the installation.
+Next: bind the tested coordinate accessor/parent result to the actual
+shape0 birth and generator-owned path setup, then emission/query/damage.
