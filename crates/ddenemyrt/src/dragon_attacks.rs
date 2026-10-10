@@ -1,6 +1,111 @@
 //! Source action state for the opening dragon's landing and breath.
 //! Motion, terrain contact and effect particles are authoritative inputs.
 
+/// cParticleGenerator emission clock. Allocation, binding and life/movement
+/// remain separate; a spawn request does not manufacture a collision volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratorPhase {
+    Initial,
+    Waiting,
+    Emitting,
+    Finished,
+    Restart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratorParams {
+    /// Installed generator +0x08, copied to manager +0x8C.
+    pub flags: u32,
+    /// Installed generator +0xAC/+0xAE, not seconds.
+    pub restart_delay: i16,
+    pub restart_variation: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorClock {
+    pub phase: GeneratorPhase,
+    pub age: u32,
+    pub delay: i16,
+    pub random_counter: u32,
+    /// Runtime unit +0x0C; distinct from installed generator flags.
+    pub unit_flags: u32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GeneratorUpdate {
+    pub prepare_binding: bool,
+    pub spawn: bool,
+}
+
+impl GeneratorClock {
+    /// Seed/counter selection is caller evidence, not a guessed RNG sequence.
+    pub fn new(random_counter: u32, unit_flags: u32) -> Self {
+        Self { phase: GeneratorPhase::Initial, age: 0, delay: 0,
+            random_counter, unit_flags }
+    }
+
+    // Translated from 0x010D6930, cParticleGenerator::vf10
+    // (DDDA.exe 2017-12-13 Steam). The parent 0x010FA5B0 clears a binding
+    // latch on forced stop; that binding is not represented by this clock.
+    pub fn stop(&mut self, params: GeneratorParams, forced: bool) {
+        if params.flags & 1 != 0 { self.unit_flags |= 0x2000_0000; }
+        if params.flags & 2 != 0 && !forced {
+            self.phase = GeneratorPhase::Restart;
+        } else {
+            self.unit_flags |= 0x8000_0004;
+            self.phase = GeneratorPhase::Finished;
+        }
+    }
+
+    // Translated from 0x010CD0C0 and vf10 0x010D6930
+    // (DDDA.exe 2017-12-13 Steam). One call is one effect update; no dt.
+    // The caller reads the player's exe table at 0x01621420 for an index
+    // requested here. The 4096-word table is never embedded in this crate.
+    pub fn update(&mut self, params: GeneratorParams, owner_delay: i16,
+        mut random_word: impl FnMut(usize) -> u32) -> GeneratorUpdate {
+        let mut out = GeneratorUpdate::default();
+        if self.phase == GeneratorPhase::Initial {
+            self.age = 0;
+            self.delay = owner_delay;
+            self.phase = GeneratorPhase::Waiting;
+        }
+        match self.phase {
+            GeneratorPhase::Waiting => {
+                if self.unit_flags & 4 == 0 { return out; }
+                if self.delay != 0 {
+                    self.delay = self.delay.wrapping_sub(1);
+                    return out;
+                }
+                out.prepare_binding = true; // 0x010FA670, before emission.
+                self.phase = GeneratorPhase::Emitting;
+            }
+            GeneratorPhase::Restart => {
+                // Even zero variation advances the native counter.
+                self.random_counter = self.random_counter.wrapping_add(1);
+                let extra = if params.restart_variation == 0 { 0 } else {
+                    random_word((self.random_counter & 0xFFF) as usize)
+                        % (u32::from(params.restart_variation) + 1)
+                };
+                self.delay = params.restart_delay.wrapping_add(extra as i16);
+                self.age = self.age.wrapping_add(1);
+                self.phase = GeneratorPhase::Waiting;
+                return out;
+            }
+            GeneratorPhase::Finished => {
+                self.age = self.age.wrapping_add(1);
+                return out;
+            }
+            GeneratorPhase::Initial => unreachable!(),
+            GeneratorPhase::Emitting => {}
+        }
+        // vf10 changes phase before the allocator receives this request.
+        self.stop(params, false);
+        self.age = self.age.wrapping_add(1);
+        out.spawn = true;
+        out
+    }
+}
+
 /// Default cObjCollision scenery branch, before any runtime type override.
 /// The capsule is posed relative to the actor origin supplied to the sweep.
 /// Type1 length/width overrides and special negative joint IDs are unported.
@@ -303,6 +408,61 @@ impl PressAttack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generator_single_spawn_waits_for_activation_and_owner_delay() {
+        let params = GeneratorParams { flags: 4, restart_delay: 0, restart_variation: 0 };
+        let mut clock = GeneratorClock::new(17, 0);
+        let no_random = |_| panic!("single emission must not sample random table");
+        assert_eq!(clock.update(params, 2, no_random), GeneratorUpdate::default());
+        assert_eq!((clock.phase, clock.delay, clock.age), (GeneratorPhase::Waiting, 2, 0));
+        clock.unit_flags |= 4;
+        assert_eq!(clock.update(params, 99, no_random), GeneratorUpdate::default());
+        assert_eq!(clock.update(params, 99, no_random), GeneratorUpdate::default());
+        assert_eq!(clock.update(params, 99, no_random),
+            GeneratorUpdate { prepare_binding: true, spawn: true });
+        assert_eq!((clock.phase, clock.age), (GeneratorPhase::Finished, 1));
+        assert_eq!(clock.unit_flags, 0x8000_0004);
+        for _ in 0..35 { assert!(!clock.update(params, 0, no_random).spawn); }
+        assert_eq!((clock.age, clock.random_counter), (36, 17));
+    }
+
+    #[test]
+    fn generator_restart_consumes_counter_and_separate_delay_updates() {
+        let params = GeneratorParams { flags: 3, restart_delay: 1, restart_variation: 2 };
+        let mut clock = GeneratorClock::new(0xFFF, 4);
+        assert!(clock.update(params, 0, |_| panic!("not sampled at spawn")).spawn);
+        assert_eq!((clock.phase, clock.unit_flags), (GeneratorPhase::Restart, 0x2000_0004));
+        let mut indices = Vec::new();
+        assert!(!clock.update(params, 0, |index| { indices.push(index); 5 }).spawn);
+        assert_eq!(indices, [0]);
+        assert_eq!((clock.random_counter, clock.delay, clock.age), (0x1000, 3, 2));
+        for delay in [2, 1, 0] {
+            assert!(!clock.update(params, 0, |_| panic!("only restart samples")).spawn);
+            assert_eq!(clock.delay, delay);
+        }
+        assert!(clock.update(params, 0, |_| panic!("only restart samples")).spawn);
+        assert_eq!(clock.age, 3);
+        clock.stop(params, true);
+        assert_eq!(clock.phase, GeneratorPhase::Finished);
+        assert_eq!(clock.unit_flags, 0xA000_0004);
+        assert!(!clock.update(params, 0, |_| panic!("forced stop never restarts")).spawn);
+    }
+
+    #[test]
+    fn generator_zero_variation_still_advances_counter_and_delay_wraps() {
+        let params = GeneratorParams { flags: 2, restart_delay: 0, restart_variation: 0 };
+        let mut clock = GeneratorClock::new(u32::MAX, 4);
+        assert!(clock.update(params, 0, |_| panic!("no RNG read")).spawn);
+        assert!(!clock.update(params, 0, |_| panic!("zero variation has no table read")).spawn);
+        assert_eq!((clock.random_counter, clock.delay), (0, 0));
+        assert!(clock.update(params, 0, |_| panic!("no RNG read")).spawn);
+        let wrapping = GeneratorParams { restart_delay: i16::MAX, restart_variation: 1, ..params };
+        clock.update(wrapping, 0, |_| 1);
+        assert_eq!(clock.delay, i16::MIN);
+        clock.update(wrapping, 0, |_| panic!("waiting does not sample"));
+        assert_eq!(clock.delay, i16::MAX);
+    }
+
     #[test]
     fn scenery_offsets_keep_joint_scale_and_radius_uses_model_y_scale() {
         use ddcombat::volumes::{Mat4, Pose};

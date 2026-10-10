@@ -142,3 +142,32 @@ area condition false, so it does not enter the fire states. The existing
 entrance host regression also passed (6.80s compile, 5.27s existing test,
 6.05s new test), actual exit0 after correcting the triangle callback's
 return type. There is no real-stage capture or original landing comparison.
+
+The collision generator emission clock is now translated from
+`0x010CD0C0` and `cParticleGenerator::vf10`, `0x010D6930`. Activation,
+owner delay, single emission versus restart, forced stop, per-update age,
+signed delay wrapping and RNG counter consumption are explicit. A restart
+advances the counter even when its variation is zero; a nonzero variation
+requests the native random-table word by index from its caller. No RNG
+table or seed is embedded. Binding preparation is a typed request; this
+clock does not allocate particles or implement the whole generator.
+
+The installed collision generator has no restart flag. The allocation
+caller `0x010F9B10` allocates one particle for an emission request and
+updates its lifetime afterward; capacity is not a per-frame spawn count.
+External binding/restart behavior still needs integration evidence before
+claiming the complete breath's particle count. Type4 lifetime initialization
+dispatches to `0x010EDC90`, not the separate type10/11 initialization paths.
+Its path is constructed by `0x010F1230`/`0x010E5620` and updated through
+`0x010F1430`/`0x010E6720`; the type4 mover consumes distance along that
+path (`0x010E2EB0`). These paths are still being traced. Fire motion,
+visuals and party damage remain unimplemented, and the full gate stays open.
+
+Three new clock regressions passed, covering activation/initial delay,
+one-shot retirement, randomized restart gaps, forced stop, zero-variation
+counter advance and signed wrap. Both installed dragon action/scenery
+regressions also passed (6.12s compile, 4.63s installed run), actual exit0.
+The first compile encountered a stale shared-target DDSIM artifact from
+another worktree; a narrow DDSIM rebuild restored the branch's capsule API.
+An initial namespace filter ran zero tests; the explicit generator filter
+then ran all three new tests. No fire/contact acceptance was inferred.
