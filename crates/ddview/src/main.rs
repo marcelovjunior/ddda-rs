@@ -1041,7 +1041,7 @@ pub fn opening_world(
 ) {
     let res = opening::OpeningRes(std::sync::Mutex::new(session));
     let looks = if args.join.is_some() { vec![None, arisen] } else { vec![arisen] };
-    if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo) {
+    if let Some(state) = opening::setup(commands, loader, meshes, materials, images, bindposes, &res, looks, args.demo, args.host.is_some() || args.join.is_some()) {
         commands.insert_resource(state);
         if let Err(e) = hud::spawn(commands, vfs, images) {
             error!("HUD: {e}");

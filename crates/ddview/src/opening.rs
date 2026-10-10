@@ -696,6 +696,40 @@ fn sync_npc_models(
     }
 }
 
+/// Initial Arisen view bodies, with explicit LAN snapshot reservations.
+fn initial_player_placements(
+    roster: &ddhost::player::Roster,
+    sim: &ddsim::Sim,
+    network: bool,
+) -> Vec<(u8, [f32; 3], f32)> {
+    // Viewer policy: LAN reserves bodies for later snapshots. Local play
+    // draws only occupied Arisen seats; capacity is not session membership.
+    let ids: Vec<_> = if network {
+        (0..ddhost::player::MAX_ARISEN as u8).collect()
+    } else {
+        roster.ids().collect()
+    };
+    ids.into_iter().filter_map(|id| {
+        let p = sim.player(id).or_else(|| network.then(|| sim.player(0)).flatten())?;
+        Some((id, p.position, p.yaw))
+    }).collect()
+}
+
+fn complete_player_looks(
+    vfs: &ddvfs::Vfs,
+    seats: &[(u8, [f32; 3], f32)],
+    party_looks: &mut Vec<Option<ddlook::Look>>,
+) {
+    for &(id, _, _) in seats {
+        party_looks.resize_with(party_looks.len().max(usize::from(id) + 1), || None);
+        if party_looks[usize::from(id)].is_none() {
+            // The existing built-in pawn stand-in is a viewer choice, not
+            // an NPC outfit. It also dresses a second local Arisen.
+            party_looks[usize::from(id)] = ddlook::save::template_look(vfs, 0).ok();
+        }
+    }
+}
+
 /// Startup part: the stage, the Arisen (via play.rs), the NPCs, the
 /// cutscenes' actors (hidden) and the subtitle UI.
 #[allow(clippy::too_many_arguments)]
@@ -707,19 +741,17 @@ pub fn setup(
     images: &mut Assets<Image>,
     bindposes: &mut Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>,
     res: &OpeningRes,
-    party_looks: Vec<Option<ddlook::Look>>,
+    mut party_looks: Vec<Option<ddlook::Look>>,
     demo: bool,
+    network: bool,
 ) -> Option<PlayState> {
     let mut s = res.0.lock().unwrap();
     crate::event::spawn_stage_models(commands, loader, meshes, materials, images, STAGE);
     let vfs = loader.vfs;
     // The Arisen: play.rs's characters at the seats.
-    let seats: Vec<(u8, [f32; 3], f32)> = (0..ddhost::player::MAX_ARISEN as u8)
-        .map(|id| {
-            let p = s.host.sim.player(id).or_else(|| s.host.sim.player(0)).unwrap();
-            (id, p.position, p.yaw)
-        })
-        .collect();
+    let seats = initial_player_placements(&s.host.roster, &s.host.sim, network);
+    complete_player_looks(vfs, &seats, &mut party_looks);
+    info!("opening: Arisen bodies for seats {:?}", seats.iter().map(|s| s.0).collect::<Vec<_>>());
     let arisen = seats
         .iter()
         .map(|&(id, pos, yaw)| {
@@ -2285,6 +2317,41 @@ fn plan_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_second_arisen_has_an_outfit_and_keeps_the_first_seats_look() {
+        let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
+        if !native.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(native).unwrap();
+        let first = ddlook::save::template_look(&vfs, 1).unwrap();
+        let mut looks = vec![Some(first.clone())];
+        complete_player_looks(&vfs, &[(0, [0.0; 3], 0.0), (1, [100.0; 3], 1.0)], &mut looks);
+        assert_eq!(looks[0], Some(first), "keep the supplied editor/save appearance");
+        let second = looks[1].as_ref().expect("installed second-seat appearance");
+        assert!(second.parts.iter().any(|p| p.hair));
+        assert!(second.parts.iter().any(|p| !p.hair && !p.beard), "second seat has installed outfit parts");
+    }
+
+    #[test]
+    fn opening_player_bodies_follow_occupied_seats_and_keep_lan_reservations() {
+        use ddhost::player::{Control, ProfileId, Roster};
+        let mut roster = Roster::default();
+        let mut sim = ddsim::Sim::new(HashMap::new());
+        assert_eq!(roster.join(ProfileId(1), Control::Local), Some(0));
+        sim.add_player(0, [10.0, 20.0, 30.0], 0.25);
+        sim.add_player(4, [90.0; 3], 0.0); // A pawn is not another Arisen.
+        assert_eq!(initial_player_placements(&roster, &sim, false),
+            vec![(0, [10.0, 20.0, 30.0], 0.25)]);
+        assert_eq!(initial_player_placements(&roster, &sim, true),
+            vec![(0, [10.0, 20.0, 30.0], 0.25), (1, [10.0, 20.0, 30.0], 0.25)]);
+        assert_eq!(roster.join(ProfileId(2), Control::Local), Some(1));
+        sim.add_player(1, [40.0, 50.0, 60.0], 0.75);
+        assert_eq!(initial_player_placements(&roster, &sim, false),
+            vec![(0, [10.0, 20.0, 30.0], 0.25), (1, [40.0, 50.0, 60.0], 0.75)]);
+        roster.leave(0).unwrap();
+        assert_eq!(initial_player_placements(&roster, &sim, false),
+            vec![(1, [40.0, 50.0, 60.0], 0.75)], "seat zero is not assumed occupied");
+    }
+
     #[test]
     fn installed_field_npc_cells_admit_idempotently_and_retire_on_unload() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
