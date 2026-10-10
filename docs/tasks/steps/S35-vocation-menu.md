@@ -153,3 +153,14 @@ box with an invented title would be wrong. The character-name instances
 are nested under animation objects; their hierarchy/name binding and
 the remaining grey control still need a sourced projection. Full GUI VM,
 original visual comparison and a corrected-menu capture remain open.
+
+### First-choice visibility source checkpoint (tests pending)
+
+The opening presenter now applies the four native vf05 cost-control
+visibility overrides by instance ordinal before drawing authored keys.
+The installed regression distinguishes instance ordinals2/3/4/6 from
+object IDs4/5/15/7 and retains description object6. No title, font or
+layout value is invented. This source checkpoint is **untested** until
+the parent's queued full viewer suite/release acceptance after S43.
+The remaining grey shadow/header/name/hierarchy and capture gates stay
+open; hiding the native cost controls does not imply they are resolved.
