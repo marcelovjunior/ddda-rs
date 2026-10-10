@@ -15,6 +15,7 @@
 //! Nothing here assumes one player: every fighter has an owner id, and
 //! targets are picked from the host's list of Arisen.
 
+pub mod ambient;
 pub mod arisen;
 pub mod body;
 pub mod chimera;

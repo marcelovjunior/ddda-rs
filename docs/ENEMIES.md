@@ -218,3 +218,139 @@ Next action: trace one common enemy's resource-list selection and damage
 consumer, joining the PRP resistances to selected RST region/element IDs.
 That will establish units, effect thresholds and the base-HP selector
 needed by M4 without prematurely baking guesses into simulation.
+
+
+## Cassardis ambient units (2026-10-09, source checkpoint)
+
+`uEm8300::vf33` at `0x00a9be40` loads 17 resource descriptors at
+`0x01861b68`, 18 family action descriptors at `0x018616a0`, and installs
+ordinary think root `0x0164e5d0`. Explicit first-table selections instead
+index `0x0165d670`; this checkpoint does not substitute the ordinary root
+for those quest variants. The constructor `0x00a9bd00` writes unit kind
+`0x65` to the byte at `+0x2d`.
+
+`uEm8602::vf33` at `0x00aa1b80` loads 15 resources at `0x018627e0`,
+15 actions at `0x01862270`, and think root `0x01645228`. The two first
+motion-bank requests intentionally share the e8600 common list. Its
+constructor `0x00aa0000` overwrites the parent uEm8600 kind (`0x6b`) with
+**`0x6d`**. The Cassardis e03 layouts have class `cSetInfoEnemy8600` but
+name `em8602`: class alone cannot select the concrete unit's search kind.
+This matters to the door occupancy exclusion of kind `0x6b`.
+
+`ddenemyrt::ambient` reads resource paths/classes and action descriptors
+from the player's executable; no bulk lists are embedded. Descriptor
+word +4 is an action-specific argument, not universally a motion. Wait
+entries use it as the motion ID (`0x00a9dcf0`, `0x00aa0d40`, `0x00aa0e20`),
+with start frame 0, blend 5, rate 1. Other action classes interpret it
+differently. A test loads both models, all three banks for each unit,
+checks the Wait motions and resolves both think graphs.
+
+**Implemented/tested:** identity and installed resource/action readers.
+**Not yet implemented or compared:** generic host population, action/AI
+execution, motion movement, despawn and visual species identification.
+The authored placement feed remains a stand-in until those execute.
+
+
+### Ambient live identity and wait callbacks
+
+Read-only snapshot of PID23408 (private
+`ambient-creatures-codex34/population-paused.json`) found two active
+uEm8300 and eight loaded uEm8602, corroborating kinds0x65/0x6d. This does
+not mean all seventeen authored birds were loaded. The ground actors
+selected first tables6/5: roots0x0165d0d0/0x0165ce50, read through
+0x0165d670. Current actions were bank1 indices3/4 and motions0x0a/0x0b;
+birds used bank1 index3, motion0x0a. Paused/bgOff remained unchanged.
+
+Shared action bank1 is installed by uEnemy::vf05 (0x00aa8830):79
+descriptors at0x018635d0. 0x007f1ea0 selects bank from bits24..31 and
+index from bits0..15. 0x004c9e50 copies descriptor+0x14..0x20 to action
++4..0x10. Shared cEmActWait reads motion from copied+4 (0x0089c2f0),
+not descriptor argument+4. Completion0x0089c3b0 waits motion-end only
+when think+0x120f was set on action entry; it ORs body2360/2370 bit0.
+
+Family em8300 Wait vf06 at0x00907620 waits motion-end and ORs those
+bits; em8600 Wait/WaitAir vf06 at0x009c5b10 completes immediately.
+FlyStart inherits WaitAir entry0x00aa0e20 but waits motion-end through
+0x0095bb80. Supported callbacks preserve these distinctions; unsupported
+actions return None. Installed ddspawn regression confirms scene1100
+admits2/17 and preserves first-table6/5; scene0 does not admit birds.
+
+Three unit tests and two installed tests pass. Host frame-loop execution
+and moving-creature visual comparison remain outstanding.
+
+
+### Flight movement and group removal checkpoint
+
+`cEm8600ActFlyLoop::vf06` (`0x00aa1030`) advances horizontal position
+using the previous yaw and unit delta, corrects height towards unit
++0x6024, then turns toward +0x5c10 through `0x00aa0a80`. The turn is
+1/8 of the wrapped difference times delta, capped at 0.41887903 radians.
+Afterward it adds sin(phase) to y; phase advances by the f64 constant
+0.13962634404500326 each action update, **without delta scaling**. The
+SSE instruction order was checked: translation precedes turning. Status
+bits0x800/0x1000 skip movement and motion completion. The helper ports
+position/heading only; the caller still owes the two body-byte writes and
+sourced target/height/speed observations. The global zero vector at
+0x018cfe80 was corroborated by a separate read-only live read.
+
+`ddspawn::should_despawn` translates `0x0075f860`: removal has independent
+flag/scene/hour enable bits. A false spawn gate alone does not remove an
+existing group. The enabled removal paths read raw authored windows even
+when their spawn gate bits are off. Installed regression covers that
+difference and the invalid-hour-window case.
+
+Installed first-table execution (existing ThinkMgr, no supplied callback
+answers) selects actions0x1000004/0x1000003 for tables5/6, matching the
+read-only original snapshot. Four unit tests and two installed tests pass;
+crate-only clippy passes with the existing combat type_complexity allowance.
+These are source/function-level checks, not a full moving-bird comparison.
+
+
+### Ambient canonical ownership and Wait clocks
+
+`ddhost::ambient::Population` owns actors by stage/group/cell/record plus
+allocation generation. Duplicate cell admission preserves state; explicit
+cell retirement invalidates stale updates. Admission reads ordinary GPL
+conditions and kill records, refuses unresolved gates/missing layouts, and
+returns unsupported families. Host state hashes include the population.
+The owner currently requires its caller to track group retirement before
+re-admission; it is not a complete layout-controller lifecycle.
+
+`ddenemyrt::ambient::Runtime` now retains action, interpreter, canonical
+motion/frame, completion latch and root travel. Initial actions come from
+vf33 0x00a9be40 / 0x00aa1b80; ordinary selection gates from 0x00a9c7d0 /
+0x00aa05c0; action callbacks retain their earlier source addresses. Motion
+advance follows 0x010629f0 / 0x0105b740, before collision. Unsupported
+actions return errors without replacing the previous state with an idle.
+Installed first-table5/6 regression selects the observed bank1 actions4/3,
+motions11/10; clock advance and latched completion are tested. Resource
+names are now scanned once per action bank rather than once per row.
+
+Validation: two installed runtime/resource tests and one installed host
+ownership test pass; ddhost/ddenemyrt crate-only clippy passes with existing
+combat type_complexity and install chunks_exact_to_as_chunks allowances.
+Not yet connected to the host frame loop or renderer; bird flight and
+physical collision remain pending. No new original-game comparison in
+this checkpoint, and this does not yet replace door occupancy stand-ins.
+
+
+### Ambient host/view checkpoint at stand-down
+
+The host frame pass now drives authored8300 idle tables5/6 and ddview draws
+installed ambient models from canonical owners. Same-motion force=0
+requests preserve clocks (0x00886e70). Initial8300 action1 plays motion0
+with nonzero root travel; proposals remain separate from canonical
+positions until scenery collision is connected. The 300-frame regression
+therefore reports19 unresolved actors:2 physics and17 bird AI, while
+checking authored idle actions and progressed frames. Group-removal
+latches and stage retirement are explicit. Viewer release-check only;
+no new screenshot/live comparison, no completed occupancy-feed replacement.
+
+A source lead for the existing unresolved shared battle flag: sGameSys
++BE2CC is written by0x00441650, called from vf06 0x0043ceb0. It consumes
++BE2CD explicit trigger or checks the hostile list(+BE25C/+BE268), live
+health, vf108==2, predicate0x007d3f50 and squared range<6250000, then
+accumulates+BE2D4 to threshold+BE2D0. The vf06 clearing pass uses
++BE2DC/+BE2D8 and0x00441800. This is a trace lead, not an implemented
+host battle-state claim. Full results and exact next functions are in the
+ambient-creatures brief.

@@ -12,6 +12,7 @@
 //!
 //! Nothing here renders, plays sound or reads devices.
 
+pub mod ambient;
 pub mod clock;
 pub mod doors;
 pub mod data;
