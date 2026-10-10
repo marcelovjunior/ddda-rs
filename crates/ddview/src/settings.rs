@@ -42,6 +42,28 @@ pub fn filter_loaded_image(image: &mut Image) {
     }
 }
 
+fn present_mode(vsync: bool, uncapped: bool) -> bevy::window::PresentMode {
+    if vsync && !uncapped {
+        bevy::window::PresentMode::AutoVsync
+    } else {
+        bevy::window::PresentMode::AutoNoVsync
+    }
+}
+
+fn post_dof(
+    post: &mut crate::stage::post::DdPost,
+    filter: Option<crate::stage::post::DofFilter>,
+    enabled: bool,
+    near: f32,
+    far: f32,
+    size: (u32, u32),
+) {
+    if let Some(filter) = filter {
+        *post = (*post).with_dof(&filter, near, far, size);
+    }
+    post.flags.z = u8::from(enabled && filter.is_some()) as f32;
+}
+
 #[derive(Resource)]
 pub struct RenderSource {
     pub vfs: &'static ddvfs::Vfs,
@@ -411,13 +433,8 @@ fn apply(
         *previous_fov = g.camera_fov;
         if let Some(vsync) = g.vsync {
             // Explicit CLI performance/uncapped mode keeps its existing priority.
-            let vsync = vsync && !(args.no_vsync || args.perf || args.perf_route);
             for mut window in &mut windows {
-                window.present_mode = if vsync {
-                    bevy::window::PresentMode::AutoVsync
-                } else {
-                    bevy::window::PresentMode::AutoNoVsync
-                };
+                window.present_mode = present_mode(vsync, args.no_vsync || args.perf || args.perf_route);
             }
         }
         if let Some(quality) = g.shadow {
@@ -474,15 +491,14 @@ fn apply(
                 .map(|w| (w.physical_width(), w.physical_height()))
                 .unwrap_or(args.size);
             if let Some(mut post) = post {
-                if let Some(filter) = filter {
-                    *post = (*post).with_dof(
-                        &filter,
-                        lens.near / crate::stage::UNIT,
-                        lens.far / crate::stage::UNIT,
-                        size,
-                    );
-                }
-                post.flags.z = u8::from(enabled && filter.is_some()) as f32;
+                post_dof(
+                    &mut post,
+                    filter,
+                    enabled,
+                    lens.near / crate::stage::UNIT,
+                    lens.far / crate::stage::UNIT,
+                    size,
+                );
             } else if let Some(mut post) = crate::stage::post::DdPost::load(source.vfs, stage) {
                 if enabled {
                     if let Some(filter) = filter {
@@ -947,6 +963,37 @@ mod tests {
             assert_eq!(image.texture_descriptor.size, before.texture_descriptor.size);
             assert_eq!(image.texture_descriptor.mip_level_count, 3);
         }
+    }
+
+    #[test]
+    fn dof_toggle_preserves_native_tone_and_vignette_and_uncapped_mode_wins() {
+        use crate::stage::post::{DdPost, DofFilter};
+        let mut post = DdPost::default();
+        post.lut[0] = Vec4::new(0.1, 0.2, 0.3, 0.4);
+        post.vignette[0] = Vec4::splat(0.25);
+        post.flags = Vec4::new(1.0, 1.0, 0.0, 0.0);
+        let filter = DofFilter {
+            blur_size: 1.0,
+            near_limit: 0.7,
+            far_limit: 0.8,
+            focal: 1000.0,
+            near: 200.0,
+            far: 200000.0,
+            gradate: [1.0; 3],
+        };
+        for enabled in [true, false, true] {
+            post_dof(&mut post, Some(filter), enabled, 96.0, 4000000.0, (1920, 1080));
+            assert_eq!(post.flags.z, u8::from(enabled) as f32);
+            assert_eq!((post.flags.x, post.flags.y), (1.0, 1.0));
+            assert_eq!(post.lut[0], Vec4::new(0.1, 0.2, 0.3, 0.4));
+            assert_eq!(post.vignette[0], Vec4::splat(0.25));
+            assert_eq!(post.dof, filter.constants(96.0, 4000000.0, (1920, 1080)));
+        }
+        post_dof(&mut post, None, true, 96.0, 4000000.0, (1920, 1080));
+        assert_eq!(post.flags.z, 0.0, "no invented filter for a stage without one");
+        assert_eq!(present_mode(true, false), bevy::window::PresentMode::AutoVsync);
+        assert_eq!(present_mode(false, false), bevy::window::PresentMode::AutoNoVsync);
+        assert_eq!(present_mode(true, true), bevy::window::PresentMode::AutoNoVsync);
     }
 
     #[test]
