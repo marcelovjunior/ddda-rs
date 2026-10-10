@@ -66,6 +66,9 @@ impl NpcFighter {
 pub struct NpcBody {
     pub body: Body,
     pub look: ddlook::Look,
+    /// Native ledger byte at entry+0x19, serialized at offset0x15.
+    /// The civilian death safeguard tests equality to one, not nonzero.
+    pub civilian: i8,
     morph: Option<ddlook::morph::BodyMorph>,
     order: Vec<usize>,
     bone_radii: Vec<f32>,
@@ -115,6 +118,12 @@ impl NpcBody {
         if npc_type > 32 || ![0, 99].contains(&common_variant) {
             return Err("unsupported NPC motion bank family".into());
         }
+        let ledger_bytes = load::read(vfs, r"etc\item\npclist", "rNpcLedgerList")?;
+        let ledger = ddnpc::Ledger::parse(&ledger_bytes).map_err(|e| e.to_string())?;
+        // 0x00BABB00 obtains this entry with 0x004769C0; 0x00BB7410
+        // consumes its civilian byte. Bulk ledger data remains installed.
+        let civilian = ledger.entries.iter().find(|entry| i32::from(entry.id) == npc as i32)
+            .ok_or_else(|| format!("NPC {npc} absent from ledger"))?.civilian;
         let look = ddlook::npc_look(vfs, npc, unit_no, row).map_err(|e| e.to_string())?.look;
         let model_bytes = load::read(vfs, &look.base, load::RMODEL)?;
         let model = mtmod::parse(&model_bytes).map_err(|e| format!("{}: {e:?}", look.base))?;
@@ -127,11 +136,20 @@ impl NpcBody {
         let detail_masks = (0..4).map(|detail| exe.u8s(0x014f_2af0 + detail * 256, 256)
             .map_err(|e| e.0)).collect::<Result<Vec<_>, _>>()?;
         let mut banks = vec![None; 14];
-        // NPC constructor's collision/motion table 0x014EAC20.
-        for (index, bank) in [(1, 1), (2, 7)] {
-            let path = exe.cstr(exe.u32(0x014e_ac20 + index * 8).map_err(|e| e.0)?)
-                .map_err(|e| e.0)?;
-            banks[bank] = Some(load::bank(vfs, &path)?);
+        // Native NPC vf192 0x00BAE100 calls inherited 0x00B5B260,
+        // using actor+0x4C24 set by 0x00B574D0. 0x008282E0 reads
+        // packed key/path pairs until -1, registering (key >> 8) & 15.
+        // 0x014EAC20 is a separate collision survey, not bank numbering.
+        // (DDDA.exe 2017-12-13 Steam).
+        let mut entry = 0x014f_1d30;
+        loop {
+            let packed = exe.u32(entry).map_err(|e| e.0)?;
+            if packed == u32::MAX { break; }
+            let bank = ((packed >> 8) & 15) as usize;
+            let path = exe.cstr(exe.u32(entry + 4).map_err(|e| e.0)?).map_err(|e| e.0)?;
+            let slot = banks.get_mut(bank).ok_or("base NPC motion bank outside supported array")?;
+            *slot = Some(load::bank(vfs, &path)?);
+            entry = entry.checked_add(8).ok_or("base NPC motion table address overflow")?;
         }
         let common = format!(r"motion\npc\{common_variant:02}m000_c\{common_variant:02}m000_c");
         banks[11] = Some(load::bank(vfs, &common)?);
@@ -163,7 +181,7 @@ impl NpcBody {
         let order = ddlook::face_constraint::order(&parents, &pivots);
         Ok(Self { body: Body { skeleton, banks,
             collision: vec![load::collision(vfs, r"collision\npc\m0000", None)?], scale: 1.0 },
-            look, morph, order, bone_radii, detail_masks })
+            look, civilian, morph, order, bone_radii, detail_masks })
     }
 
     /// The event-action bank12 -> bank11 fallback of 0x0080D750.
