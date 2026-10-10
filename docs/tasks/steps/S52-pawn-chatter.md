@@ -172,8 +172,13 @@ damage/health-tier action voice logic, not proof of a general low-HP text
 threshold. Existing q0002 exports did not identify an authored CmcMessage.
 
 There are now 19 follow-up source-present tests (core5, host10, net2,
-viewer2), all still unexecuted. The original core checkpoint's actual
-67-pass result remains the only S52 validation result.
+viewer2). The first full follow-up core run compiled and exited 101: the
+recognition fixture incorrectly attempted three simultaneous Arisen, above
+the current two-seat admission policy. Twenty host unit tests passed and
+three fixture tests failed before downstream suites ran. The fixture now
+uses two local cameras, with a separate second-seat replacement for guest
+rejection. The full rerun is pending; no passing follow-up gate is claimed.
+Private failure log: `E:/ddda-re/notes/steps/S52/full-core-8db0d07-first.private.log`.
 
 Presentation currently covers plain single-line glyphs with native ordinary
 message/name font objects 5/9 and settled row positions. Native multiline,

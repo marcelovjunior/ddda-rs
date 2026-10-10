@@ -501,7 +501,6 @@ mod tests {
             Default::default(), Box::new(Flat));
         host.join(ProfileId(41), crate::Control::Local, [0.0;3], 0.0).unwrap();
         host.join(ProfileId(42), crate::Control::Local, [0.0;3], 0.0).unwrap();
-        host.join(ProfileId(43), crate::Control::Remote, [0.0;3], 0.0).unwrap();
         let mut fight = ddenemyrt::fight::Fight::new(Arc::new(
             ddenemyrt::fight::FightData::load(&vfs, &file.image().unwrap()).unwrap()));
         let owner = fight.add_goblin([0.0,0.0,100.0], 0.0);
@@ -543,6 +542,8 @@ mod tests {
     #[test]
     fn installed_recognition_rejects_guest_stale_and_invalid_owner_without_mutation() {
         let Some((mut host,owner)) = recognition_host() else { return; };
+        host.leave(1);
+        host.join(ProfileId(43), crate::Control::Remote, [0.0;3], 0.0).unwrap();
         let drawn = [DrawnEnemy { owner, sphere: [0.0,0.0,100.0,20.0] }];
         let before = host.state_hash();
         assert!(host.observe_pawn_recognition(camera(&host,43), &drawn).is_err());
