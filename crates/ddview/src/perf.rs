@@ -361,6 +361,29 @@ pub struct MeshBuilderPlugin;
 impl Plugin for MeshBuilderPlugin {
     fn build(&self, app: &mut App) {
         configure_mesh_builder(app, uses_gpu_mesh_builder());
+        // Both sides of the S41 opt-in A/B use this diagnostic. Report the
+        // actual staging upload extent, not an estimate from visible meshes:
+        // Bevy retains high-water staging storage after freeing a skin.
+        if std::env::var("DDVIEW_SKIN_DIAGNOSTICS").is_ok_and(|value| value == "1") {
+            if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+                render.add_systems(bevy::render::Render, report_skin_upload
+                    .in_set(bevy::render::RenderSystems::PrepareResources)
+                    .after(bevy::pbr::prepare_skins));
+            }
+        }
+    }
+}
+
+fn report_skin_upload(
+    skins: Res<bevy::pbr::SkinUniforms>,
+    mut previous: Local<Option<(usize, usize)>>,
+) {
+    let state = (skins.all_skins().count(), skins.current_staging_buffer.len());
+    if *previous != Some(state) {
+        info!("SKIN_UPLOAD palettes={} staging_matrices={} upload_bytes={} current_buffer_bytes={} previous_buffer_bytes={}",
+            state.0, state.1, state.1 * std::mem::size_of::<Mat4>(),
+            skins.current_buffer.size(), skins.prev_buffer.size());
+        *previous = Some(state);
     }
 }
 

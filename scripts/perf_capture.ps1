@@ -81,6 +81,8 @@ try {
             (Get-FileHash -LiteralPath $env:DDVIEW_OPENING_FROM -Algorithm SHA256).Hash
         } else { $null }
         demo_fight_env = $env:DDVIEW_DEMO_FIGHT
+        compact_skins_env = $env:DDVIEW_COMPACT_SKINS
+        skin_diagnostics_env = $env:DDVIEW_SKIN_DIAGNOSTICS
         mesh_builder = $MeshBuilder
         trace_stage = $TraceStage; trace_delay_seconds = $TraceDelay; trace_window_seconds = $TraceSeconds
         started_utc = [DateTime]::UtcNow.ToString('o')

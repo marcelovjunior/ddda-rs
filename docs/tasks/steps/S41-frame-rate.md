@@ -712,3 +712,58 @@ Compatible real v1 FieldSettle is frozen privately as
 `D2EA9F3946E6460216B8C04F11BEEA11CC74FD6C195152A28C85744136B34543`.
 Canonical checkpoints are untouched and may now become ECON v2 after S51;
 older S41 pins must use only their matching frozen v1 saves.
+
+### Exact compact-palette experiment (head #6959; acceptance pending)
+
+Opt-in `DDVIEW_COMPACT_SKINS=1` compacts each submesh palette to all joint
+indices referenced by its four retained influences. Source-order remapping
+preserves the joint entity and inverse-bind matrix together; zero-weight
+lanes are included because Bevy's current/previous skinning shaders load
+their matrices. Invalid inputs or a completely referenced palette retain
+the original indices transactionally. Geometry, weights, materials,
+transparent sorting's original bone references and visibility remain
+unchanged; GPU mesh preprocessing and the default renderer remain enabled.
+
+Two prepared regressions compare exact weighted matrices across animated
+translation/rotation/nonuniform scale, actual Bevy posed AABB calculation,
+geometry/weights/triangle indices, and invalid/complete palette fallback.
+`DDVIEW_SKIN_DIAGNOSTICS=1` reports actual Render SkinUniforms staging
+extent/bytes after prepare_skins, including high-water retained storage;
+it is not labelled live palette bytes. Capture metadata records both
+experiment flags. PowerShell parse and seven actual-AST watchdog tests
+pass after this metadata-only addition. Parent reviewed the source #7020
+without objections. **Rust compilation, full default/profile suites,
+release pin and matching x1 off/on capture remain pending** the agreed
+one-heavy-Cargo queue S54 core → S42 viewer → S41 viewer. No gain claimed.
+
+### Native caster-depth investigation: constructor cap disproved live
+
+Existing private decompilation and read-only analysis-exe strings establish
+`uShadow::reflection` 0x00ef9880 maps +0x60 to
+`mBackforwardViewDistance` (string 0x014340f0). Constructor 0x00ee9ec0
+sets 4000 cm, inherited by stable/sky shadow constructors. Projection
+0x00ee5ce0 backs its light-space origin by the slice's enclosing sphere
+radius plus this field, using a finite depth extent. This is separate from
+view distance +0x48, scripted view distance +0x190, and map quality.
+Bevy 0.19.1 directional visibility ignores its light near plane
+(`bevy_light/src/lib.rs`); Render extraction explicitly pushes that plane
+to infinity (`bevy_pbr/render/light.rs`). A finite native caster extent
+therefore merits investigation, but its constructor is not an active value.
+
+Head #7035 approved **one read-only original probe** under normal live/game
+claim, with a fresh save backup first. Existing private `live/mem.py`
+opens only PROCESS_VM_READ | PROCESS_QUERY_INFORMATION. Actual probe
+exited 0; PID 23408 image provenance and known object 0x1099fd40 vtable
+0x0160df98 were checked before/after. Game lease released immediately;
+original stayed running. No input, process writes/injection, heap scan,
+install changes or Ghidra restart occurred.
+
+Observed object +0x60 is **21000 cm**, **not constructor 4000 cm**;
++0x48 is 10 cm, +0x190 is 6000 cm, draw enabled, nonzero depth/color maps,
+512 map size, three cascades, distribution 0.25. Current SceNo reads 3400.
+The object is valid and draw-enabled, but current-scene selection and the
+10 cm effective-distance value remain unresolved. Thus a 40 m cap is
+**disproven for the observed object** and is not implemented. Raw probe,
+source script and save backup stay private; head #7050 was informed.
+Next caster work requires active-scene ownership/override evidence before
+any opt-in geometry cull. Palette compaction stays the first optimization.
