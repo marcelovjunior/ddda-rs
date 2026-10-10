@@ -2403,6 +2403,16 @@ fn guest_step(
             &mut view.images, &mut view.bindposes);
     }
     s.guest_enemy_views.show(&enemies, st.origin, s.cut.is_some(), roots, &mut st.visible);
+    if s.dragon_capture {
+        if let Some(dragon)=enemies.iter().find(|e|e.identity.family==ddnet::mirror::EnemyFamily::Dragon) {
+            let target=(Vec3::from(dragon.pos)-st.origin)*UNIT;
+            // Same explicit diagnostic camera as the host; not an original camera.
+            for mut camera in cams.iter_mut() {
+                *camera=Transform::from_translation(target+Vec3::new(40.0,20.0,60.0))
+                    .looking_at(target,Vec3::Y);
+            }
+        }
+    }
     for (&e, &present) in &st.visible {
         if let Ok(mut v) = vis.get_mut(e) {
             *v = if present && s.cut.is_none() {
