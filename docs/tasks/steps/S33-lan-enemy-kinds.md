@@ -33,3 +33,26 @@ the same path, so do it once, generically.
 
 A two-seat LAN test shows the guest mirroring the host's dragon (identity,
 pose, HP) alongside goblins, with the protocol bumped and documented.
+
+## Results (in progress)
+
+Prepared the protocol-7 enemy schema: host-loaded model and indexed motion-bank
+paths, family dispatch tag, yaw or full quaternion, nonuniform scale, animation,
+and main-pool HP/death. Six field groups avoid resending resource names when
+only pose changes; an unchanged enemy still occupies five bytes. These are
+co-op protocol decisions, not rules copied from the original game's networking.
+`GoblinData.model` preserves the existing installed loader's model path; it is
+not selected by a guessed viewer table.
+
+A reusable guest view owns bodies by authoritative owner id, loads models and
+motion banks from the guest's install, removes missing/replaced identities, and
+logs unsupported family tags once. Both ordinary LAN play and the opening guest
+call that path; opening previously never read enemy snapshots. The root scale
+uses the existing character renderer's centimetres-to-metres conversion.
+
+Preliminary `cargo test --release -p ddview --no-run` compiled successfully in
+41.07 seconds using the shared M5 target. This is a compile check, not a viewer
+run or a passing test-suite claim. The mixed-kind whole/delta and interpolation
+regressions are written but await the shared core lease. The dragon projection,
+installed host/guest check and visual check await the reviewed S29 merge. No
+original-game or LAN acceptance claim is made by this preparation checkpoint.

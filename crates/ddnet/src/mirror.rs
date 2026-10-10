@@ -39,9 +39,26 @@ pub struct NpcBody {
 
 /// The NPCs of a host's runtime and those parked off it (`Host::npc_parked`),
 /// in id order.
-pub fn npcs_of(n: &ddhost::ddnpcrt::NpcRuntime, parked: &std::collections::BTreeMap<u32, [f32; 3]>) -> Vec<NpcBody> {
-    let mut v: Vec<NpcBody> = n.npcs.keys().filter_map(|&id| Some(NpcBody { id, pos: n.position(id)? })).collect();
-    v.extend(parked.iter().filter(|(id, _)| !n.npcs.contains_key(id)).map(|(&id, &pos)| NpcBody { id, pos }));
+pub fn npcs_of(
+    n: &ddhost::ddnpcrt::NpcRuntime,
+    parked: &std::collections::BTreeMap<u32, [f32; 3]>,
+) -> Vec<NpcBody> {
+    let mut v: Vec<NpcBody> = n
+        .npcs
+        .keys()
+        .filter_map(|&id| {
+            Some(NpcBody {
+                id,
+                pos: n.position(id)?,
+            })
+        })
+        .collect();
+    v.extend(
+        parked
+            .iter()
+            .filter(|(id, _)| !n.npcs.contains_key(id))
+            .map(|(&id, &pos)| NpcBody { id, pos }),
+    );
     v.sort_by_key(|b| b.id);
     v
 }
@@ -55,7 +72,14 @@ pub fn write_npcs(w: &mut Writer, v: &[NpcBody]) {
 
 pub fn read_npcs(r: &mut Reader) -> Result<Vec<NpcBody>> {
     let n = r.len(16)?;
-    (0..n).map(|_| Ok(NpcBody { id: r.u32()?, pos: [r.f32()?, r.f32()?, r.f32()?] })).collect()
+    (0..n)
+        .map(|_| {
+            Ok(NpcBody {
+                id: r.u32()?,
+                pos: [r.f32()?, r.f32()?, r.f32()?],
+            })
+        })
+        .collect()
 }
 
 /// A seat's hit points (the Arisen and pawns of the fight).
@@ -66,13 +90,88 @@ pub struct Vital {
     pub hp_max: f32,
 }
 
-/// One enemy of the fight: its owner id, place, action (state), motion
-/// (bank, slot, frame), main HP pool and death.
+/// Family dispatch tags are co-op protocol decisions, not DDDA enemy ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnemyFamily {
+    Goblin,
+    Dragon,
+    Unknown(u16),
+}
+
+impl EnemyFamily {
+    fn tag(self) -> u16 {
+        match self {
+            Self::Goblin => 0,
+            Self::Dragon => 1,
+            Self::Unknown(n) => n,
+        }
+    }
+    fn from_tag(n: u16) -> Self {
+        match n {
+            0 => Self::Goblin,
+            1 => Self::Dragon,
+            n => Self::Unknown(n),
+        }
+    }
+}
+
+/// Only resource names cross the network. The guest loads its own model
+/// and indexed motion banks; animation/model bytes stay in its install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnemyIdentity {
+    pub family: EnemyFamily,
+    pub model: String,
+    pub banks: Vec<(u8, String)>,
+}
+
+/// Grounded actors keep the four-byte yaw. Flying actors preserve every
+/// rotation component (quaternion x,y,z,w). This is a wire design choice.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EnemyRotation {
+    Yaw(f32),
+    Quaternion([f32; 4]),
+}
+
+impl EnemyRotation {
+    pub fn quaternion(self) -> [f32; 4] {
+        match self {
+            Self::Quaternion(q) => q,
+            Self::Yaw(y) => [0.0, (y * 0.5).sin(), 0.0, (y * 0.5).cos()],
+        }
+    }
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        if let (Self::Yaw(a), Self::Yaw(b)) = (a, b) {
+            let mut d = (b - a) % std::f32::consts::TAU;
+            if d > std::f32::consts::PI {
+                d -= std::f32::consts::TAU;
+            } else if d < -std::f32::consts::PI {
+                d += std::f32::consts::TAU;
+            }
+            return Self::Yaw(a + d * t);
+        }
+        // Shortest-arc normalized linear interpolation, a presentation
+        // decision. q and -q describe the same rotation.
+        let (a, mut b) = (a.quaternion(), b.quaternion());
+        if a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() < 0.0 {
+            b = b.map(|x| -x);
+        }
+        let mut q = std::array::from_fn::<_, 4, _>(|i| a[i] + (b[i] - a[i]) * t);
+        let norm = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > f32::EPSILON {
+            q = q.map(|x| x / norm);
+        }
+        Self::Quaternion(q)
+    }
+}
+
+/// One host enemy's identity, pose, action, motion and main HP pool.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Enemy {
     pub id: u32,
+    pub identity: EnemyIdentity,
     pub pos: [f32; 3],
-    pub yaw: f32,
+    pub rotation: EnemyRotation,
+    pub scale: [f32; 3],
     pub action: i32,
     pub bank: u8,
     pub slot: u16,
@@ -83,18 +182,16 @@ pub struct Enemy {
 }
 
 impl Enemy {
-    /// Between `a` and `b` at `t` in 0..1: place and yaw blend; the rest
-    /// is `a`'s until `t` passes one half.
+    /// Pose blends between matching lifetimes; discrete state switches
+    /// halfway. A replacement identity never blends with the old body.
     pub fn lerp(a: &Enemy, b: &Enemy, t: f32) -> Enemy {
-        let mut out = if t < 0.5 { *a } else { *b };
-        out.pos = std::array::from_fn(|i| a.pos[i] + (b.pos[i] - a.pos[i]) * t);
-        let mut d = (b.yaw - a.yaw) % std::f32::consts::TAU;
-        if d > std::f32::consts::PI {
-            d -= std::f32::consts::TAU;
-        } else if d < -std::f32::consts::PI {
-            d += std::f32::consts::TAU;
+        let mut out = if t < 0.5 { a.clone() } else { b.clone() };
+        if a.id != b.id || a.identity != b.identity {
+            return out;
         }
-        out.yaw = a.yaw + d * t;
+        out.pos = std::array::from_fn(|i| a.pos[i] + (b.pos[i] - a.pos[i]) * t);
+        out.rotation = EnemyRotation::lerp(a.rotation, b.rotation, t);
+        out.scale = std::array::from_fn(|i| a.scale[i] + (b.scale[i] - a.scale[i]) * t);
         out
     }
 }
@@ -123,11 +220,22 @@ pub fn read_look(r: &mut Reader) -> Result<LookData> {
 }
 
 pub fn write_spot(w: &mut Writer, s: &Spot) {
-    w.u32(s.stage).i32(s.cell.0).i32(s.cell.1).f32(s.pos[0]).f32(s.pos[1]).f32(s.pos[2]).f32(s.yaw);
+    w.u32(s.stage)
+        .i32(s.cell.0)
+        .i32(s.cell.1)
+        .f32(s.pos[0])
+        .f32(s.pos[1])
+        .f32(s.pos[2])
+        .f32(s.yaw);
 }
 
 pub fn read_spot(r: &mut Reader) -> Result<Spot> {
-    Ok(Spot { stage: r.u32()?, cell: (r.i32()?, r.i32()?), pos: [r.f32()?, r.f32()?, r.f32()?], yaw: r.f32()? })
+    Ok(Spot {
+        stage: r.u32()?,
+        cell: (r.i32()?, r.i32()?),
+        pos: [r.f32()?, r.f32()?, r.f32()?],
+        yaw: r.f32()?,
+    })
 }
 
 pub fn write_vitals(w: &mut Writer, v: &[Vital]) {
@@ -139,22 +247,116 @@ pub fn write_vitals(w: &mut Writer, v: &[Vital]) {
 
 pub fn read_vitals(r: &mut Reader) -> Result<Vec<Vital>> {
     let n = r.len(9)?;
-    (0..n).map(|_| Ok(Vital { id: r.u8()?, hp: r.f32()?, hp_max: r.f32()? })).collect()
+    (0..n)
+        .map(|_| {
+            Ok(Vital {
+                id: r.u8()?,
+                hp: r.f32()?,
+                hp_max: r.f32()?,
+            })
+        })
+        .collect()
 }
 
-/// Enemies, each whole or (when equal to the baseline's) as a one-byte
-/// "unchanged".
+// Delta groups: resource identity, position, rotation, scale, animation,
+// HP/death. An unchanged enemy remains five bytes; a moving goblin sends
+// only the changed groups, never its model or bank paths again.
+const IDENTITY: u8 = 1;
+const POSITION: u8 = 2;
+const ROTATION: u8 = 4;
+const SCALE: u8 = 8;
+const ANIMATION: u8 = 16;
+const HEALTH: u8 = 32;
+const ALL: u8 = 63;
+
+fn write_identity(w: &mut Writer, x: &EnemyIdentity) {
+    w.u16(x.family.tag()).bytes(x.model.as_bytes()).len(x.banks.len());
+    for (bank, path) in &x.banks {
+        w.u8(*bank).bytes(path.as_bytes());
+    }
+}
+fn read_identity(r: &mut Reader) -> Result<EnemyIdentity> {
+    let family = EnemyFamily::from_tag(r.u16()?);
+    let model = String::from_utf8(r.bytes()?).map_err(|e| e.to_string())?;
+    let n = r.len(5)?;
+    let banks = (0..n)
+        .map(|_| Ok((r.u8()?, String::from_utf8(r.bytes()?).map_err(|e| e.to_string())?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(EnemyIdentity { family, model, banks })
+}
+fn write_rotation(w: &mut Writer, x: EnemyRotation) {
+    match x {
+        EnemyRotation::Yaw(y) => {
+            w.u8(0).f32(y);
+        }
+        EnemyRotation::Quaternion(q) => {
+            w.u8(1);
+            for x in q {
+                w.f32(x);
+            }
+        }
+    }
+}
+fn read_rotation(r: &mut Reader) -> Result<EnemyRotation> {
+    match r.u8()? {
+        0 => Ok(EnemyRotation::Yaw(r.f32()?)),
+        1 => Ok(EnemyRotation::Quaternion([
+            r.f32()?,
+            r.f32()?,
+            r.f32()?,
+            r.f32()?,
+        ])),
+        n => Err(format!("enemy rotation kind {n}")),
+    }
+}
+fn vec3(w: &mut Writer, x: [f32; 3]) {
+    for v in x {
+        w.f32(v);
+    }
+}
+fn read_vec3(r: &mut Reader) -> Result<[f32; 3]> {
+    Ok([r.f32()?, r.f32()?, r.f32()?])
+}
+
 pub fn write_enemies(w: &mut Writer, e: &[Enemy], base: &[Enemy]) {
     w.len(e.len());
     for x in e {
-        w.u32(x.id);
-        if base.iter().any(|b| b == x) {
-            w.bool(false);
-            continue;
+        let b = base.iter().find(|b| b.id == x.id);
+        let mask = b.map_or(ALL, |b| {
+            (if x.identity != b.identity { IDENTITY } else { 0 })
+                | (if x.pos != b.pos { POSITION } else { 0 })
+                | (if x.rotation != b.rotation { ROTATION } else { 0 })
+                | (if x.scale != b.scale { SCALE } else { 0 })
+                | (if (x.action, x.bank, x.slot, x.frame) != (b.action, b.bank, b.slot, b.frame) {
+                    ANIMATION
+                } else {
+                    0
+                })
+                | (if (x.hp, x.hp_max, x.dead) != (b.hp, b.hp_max, b.dead) {
+                    HEALTH
+                } else {
+                    0
+                })
+        });
+        w.u32(x.id).u8(mask);
+        if mask & IDENTITY != 0 {
+            write_identity(w, &x.identity);
         }
-        w.bool(true);
-        w.f32(x.pos[0]).f32(x.pos[1]).f32(x.pos[2]).f32(x.yaw).i32(x.action);
-        w.u8(x.bank).u16(x.slot).f32(x.frame).f32(x.hp).f32(x.hp_max).bool(x.dead);
+        if mask & POSITION != 0 {
+            vec3(w, x.pos);
+        }
+        if mask & ROTATION != 0 {
+            write_rotation(w, x.rotation);
+        }
+        if mask & SCALE != 0 {
+            vec3(w, x.scale);
+        }
+        if mask & ANIMATION != 0 {
+            w.i32(x.action).u8(x.bank).u16(x.slot).f32(x.frame);
+        }
+        if mask & HEALTH != 0 {
+            w.f32(x.hp).f32(x.hp_max).bool(x.dead);
+        }
     }
 }
 
@@ -163,23 +365,56 @@ pub fn read_enemies(r: &mut Reader, base: &[Enemy]) -> Result<Vec<Enemy>> {
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let id = r.u32()?;
-        if !r.bool()? {
-            let b = base.iter().find(|b| b.id == id).ok_or_else(|| format!("enemy {id}: unchanged without a baseline"))?;
-            out.push(*b);
-            continue;
+        let mask = r.u8()?;
+        if mask & !ALL != 0 {
+            return Err(format!("enemy {id}: invalid delta mask {mask}"));
         }
-        out.push(Enemy {
-            id,
-            pos: [r.f32()?, r.f32()?, r.f32()?],
-            yaw: r.f32()?,
-            action: r.i32()?,
-            bank: r.u8()?,
-            slot: r.u16()?,
-            frame: r.f32()?,
-            hp: r.f32()?,
-            hp_max: r.f32()?,
-            dead: r.bool()?,
-        });
+        let mut x = match base.iter().find(|b| b.id == id) {
+            Some(b) => b.clone(),
+            None if mask == ALL => Enemy {
+                id,
+                identity: EnemyIdentity {
+                    family: EnemyFamily::Unknown(u16::MAX),
+                    model: String::new(),
+                    banks: vec![],
+                },
+                pos: [0.0; 3],
+                rotation: EnemyRotation::Yaw(0.0),
+                scale: [1.0; 3],
+                action: -1,
+                bank: 0,
+                slot: 0,
+                frame: 0.0,
+                hp: 0.0,
+                hp_max: 0.0,
+                dead: false,
+            },
+            None => return Err(format!("enemy {id}: delta without a baseline")),
+        };
+        if mask & IDENTITY != 0 {
+            x.identity = read_identity(r)?;
+        }
+        if mask & POSITION != 0 {
+            x.pos = read_vec3(r)?;
+        }
+        if mask & ROTATION != 0 {
+            x.rotation = read_rotation(r)?;
+        }
+        if mask & SCALE != 0 {
+            x.scale = read_vec3(r)?;
+        }
+        if mask & ANIMATION != 0 {
+            x.action = r.i32()?;
+            x.bank = r.u8()?;
+            x.slot = r.u16()?;
+            x.frame = r.f32()?;
+        }
+        if mask & HEALTH != 0 {
+            x.hp = r.f32()?;
+            x.hp_max = r.f32()?;
+            x.dead = r.bool()?;
+        }
+        out.push(x);
     }
     Ok(out)
 }
@@ -197,7 +432,11 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
                 Victim::Player { hp_max, .. } => *hp_max,
                 Victim::Enemy { regions, .. } => regions.first().map_or(0.0, |r| r.hp_max),
             };
-            Vital { id, hp: a.fighter.victim.hp(), hp_max }
+            Vital {
+                id,
+                hp: a.fighter.victim.hp(),
+                hp_max,
+            }
         })
         .collect();
     let enemies = f
@@ -211,7 +450,21 @@ pub fn from_fight(f: Option<&ddhost::ddenemyrt::fight::Fight>) -> (Vec<Vital>, V
             Enemy {
                 id: g.fighter.owner,
                 pos: g.pos,
-                yaw: g.yaw,
+                identity: EnemyIdentity {
+                    family: EnemyFamily::Goblin,
+                    model: f.data.goblin.model.clone(),
+                    banks: f
+                        .data
+                        .goblin
+                        .body
+                        .banks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, b)| b.as_ref().map(|b| (i as u8, b.path.clone())))
+                        .collect(),
+                },
+                rotation: EnemyRotation::Yaw(g.yaw),
+                scale: [f.data.goblin.body.scale; 3],
                 action: g.action,
                 bank: g.motion.bank,
                 slot: g.motion.slot,

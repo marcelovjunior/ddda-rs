@@ -25,6 +25,8 @@ use std::sync::Arc;
 /// The goblin's data from the install.
 #[derive(Debug, Clone)]
 pub struct GoblinData {
+    /// The rModel actually loaded for this family; LAN guests load the same path locally.
+    pub model: String,
     pub body: Body,
     pub tables: Arc<Tables>,
     /// Action id -> class name (the unit's action table 0x018335d0).
@@ -49,7 +51,8 @@ pub const BANKS: [(u8, &str); 3] = [
 impl GoblinData {
     /// Loads `em0100` from the install and its think tables from the exe.
     pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>) -> Result<Self, String> {
-        let skeleton = load::skeleton(vfs, r"model\em\e01\e0100\e0100")?;
+        let model = r"model\em\e01\e0100\e0100";
+        let skeleton = load::skeleton(vfs, model)?;
         let mut banks = vec![None; 3];
         for (n, path) in BANKS {
             banks[usize::from(n)] = Some(load::bank(vfs, path)?);
@@ -106,6 +109,7 @@ impl GoblinData {
             })
             .collect();
         Ok(GoblinData {
+            model: model.into(),
             // the unit's scale (owner +0x60..+0x68) is *assumed* 1 for a
             // standard goblin
             body: Body {
