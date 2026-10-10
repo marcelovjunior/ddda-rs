@@ -207,6 +207,35 @@ native actor flags+0x2360/+0x2364/+0x2368, redirect actors, augment hate,
 and further influence types remain unsupported. Root travel, target yaw
 and ground integration are still S32 actor-system limits.
 
+Scale/gauge follow-up: **0x0081DB50** writes HumanEdit entry0 to
+uCoord+0x60/64/68. The posed joints already included that scale once,
+but the initial model-matrix and hurt-radius paths used placement scale
+alone. Corrected both to include HumanEdit without applying it twice
+to joints. Two installed pose tests and three sensor/contact tests pass
+after correction (actual exit0; compile6.49 s, pose4.72 s, sensor6.29 s).
+The placement multiplier remains an explicit adapter transform; dynamic
+actor overrides and original LOT/HumanEdit precedence beyond NPC304's
+unit LOT scale remain unverified.
+
+Compared generic gauge geometry against original NPC7 and NPC4 by
+read-only oracle on PID23408, with save backup before the probe; no
+writes, keys, function calls or travel. Native **0x00FFA620** unions
+posed joint spheres using runtime MOD bone record+4 (`Bone.length`) and
+the largest joint axis length when model+0x108 bit0x40 is set. The
+active-joint filter +0x96 bit1 is essential: 42 of 224 joints in these
+NPCs. The translated scaled/active sphere-union reproduced world center
+and extents with maximum errors **0.000038 cm** (NPC7) and
+**0.000320 cm** (NPC4). NPC1 moved between snapshots, so its residual
+does not establish a comparison. Raw matrices/bone data remain private
+in `E:/ddda-re/notes/steps/S34/live-native-bone-bounds.json`.
+Reynard was absent; this is not a NPC304 gauge/rescue comparison.
+The generic gauge anchor is **0x0067C970** mode0 center+extentY;
+**0x0069FB00** adds transformed local offset minus actor position,
+then camera pull **0x0067C870** and 40px upward projection. The pull
+radius from **0x005371B0** is the scenery capsule radius at inline
+cObjCollision+0x9D0, not a model AABB radius. Active-joint-mask source
+and viewer materialization remain the next source inputs.
+
 Next action: compose actual death-action playback/stages and materialize
 the combat body in the opening adapter; finish the sourced bounds and
 collision-radius inputs before wiring the viewer gauge.

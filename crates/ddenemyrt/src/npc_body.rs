@@ -126,8 +126,8 @@ impl NpcBody {
     }
 
     /// Sample motion, then the same source body/face edits as the viewer.
-    /// `scale` is the unit's actual uCoord scale, separate from HumanEdit's
-    /// skeleton model scale. No player seat or nearest target is implied.
+    /// `scale` is the placement scale; HumanEdit entry0 additionally writes
+    /// the native uCoord scale in 0x0081DB50. No player seat is implied.
     // Translated from 0x01051B60 and uCnsEdit::vf24 0x00860AC0,
     // with existing source-marked human/hand/eye helpers
     // (DDDA.exe 2017-12-13 Steam).
@@ -183,14 +183,25 @@ impl NpcBody {
             world[index] = w;
         }
         let half = yaw * 0.5;
-        let model = compose(scale, [0.0, half.sin(), 0.0, half.cos()], position);
-        let joints = skeleton.joints.iter().zip(world).map(|(j, w)| (j.id, mul(&w, &model))).collect();
+        let placement = compose(scale, [0.0, half.sin(), 0.0, half.cos()], position);
+        let model = compose(self.unit_scale(scale), [0.0, half.sin(), 0.0, half.cos()], position);
+        // HumanEdit is already included once in `world` via the root.
+        let joints = skeleton.joints.iter().zip(world).map(|(j, w)| (j.id, mul(&w, &placement))).collect();
         Ok(Posed { model, joints })
+    }
+
+    // Translated from 0x0081DB50's owner+0x60/64/68 writes
+    // (DDDA.exe 2017-12-13 Steam). Placement transform remains an explicit
+    // adapter input; later dynamic actor scale overrides are not ported.
+    pub fn unit_scale(&self, placement: [f32; 3]) -> [f32; 3] {
+        let human = self.morph.as_ref().map_or([1.0; 3], |m| m.model_scale);
+        std::array::from_fn(|i| placement[i] * human[i])
     }
 
     pub fn hurts(&self, id: MotionId, frame: f32, pose: &Posed, owner: u32,
         scale: [f32; 3]) -> Vec<HurtVolume> {
         let activations = self.body.activations(id, frame);
+        let scale = self.unit_scale(scale);
         ddcombat::volumes::hurt_volumes(&self.body.collision[0].body, &activations, pose,
             (scale[0] + scale[1] + scale[2]) / 3.0, owner)
     }

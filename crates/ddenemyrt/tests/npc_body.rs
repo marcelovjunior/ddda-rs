@@ -49,4 +49,17 @@ fn installed_reynard_pose_keeps_unit_transform_and_owner_separate() {
         for i in 0..3 { assert!((delta[i] - offset[i]).abs() < 0.001); }
     }
     assert!(body.resolve(0xfff).is_err());
+    let native_scale = body.unit_scale([1.0; 3]);
+    for axis in 0..3 {
+        let length = original.model[axis][..3].iter().map(|f| f * f).sum::<f32>().sqrt();
+        assert!((length - native_scale[axis]).abs() < 0.00001);
+    }
+    // Native hurt radius uses the actor's mean unit scale (0x00773830),
+    // including HumanEdit's writes to uCoord, not merely LOT scale1.
+    let doubled_pose = body.pose(id, 0.0, [0.0; 3], 0.0, [2.0; 3]).unwrap();
+    let doubled = body.hurts(id, 0.0, &doubled_pose, 503, [2.0; 3]);
+    let radius = |volume: &Volume| match volume { Volume::Sphere { r, .. } | Volume::Capsule { r, .. } => *r };
+    for (one, two) in a.iter().zip(&doubled) {
+        assert!((radius(&two.volume) - 2.0 * radius(&one.volume)).abs() < 0.0001);
+    }
 }
