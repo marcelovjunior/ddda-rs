@@ -7,6 +7,7 @@ use std::fmt;
 pub mod fade;
 pub mod actor_offset;
 pub mod params;
+pub mod quest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);

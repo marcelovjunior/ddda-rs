@@ -27,6 +27,7 @@ pub mod npc_placements;
 pub mod npc_motion;
 pub mod npc_combat;
 pub mod opening;
+pub mod quest_camera;
 pub mod player;
 pub mod prologue;
 pub mod save;
