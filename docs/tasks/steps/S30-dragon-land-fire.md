@@ -307,3 +307,18 @@ It passed (3.98s compile, 0.00s run), actual exit0. The initial compile used
 a shared cached DDSIM without this branch's capsule API; a narrow DDSIM
 rebuild restored it. Runtime ownership, birth transform and full fire damage
 remain open.
+
+The owning effect's integer/fractional clock is translated from
+`0x00FDF5B0/0x00E6BCA0`, reached by `uEffect::vf09` (`0x00E70710`).
+It initializes interpolation to1 and uses the actual +0x112 initial-step
+field on its first update, rather than consuming +0xFC's rate immediately.
+The default zero initial steps therefore run no generator updates at birth.
+Later updates preserve the fractional remainder and return the native
+integer count; generator clocks must run only that many times. The caller
+supplies the actual effect rate, independent of render FPS.
+
+One regression covering birth, explicit pre-advance, fractional boundaries,
+multiple updates and invalid context passed (4.01s compile, 0.00s run),
+actual exit0. A narrow DDSIM rebuild selected this branch's source after
+other shared-target work. This clock is not yet connected to production
+effect allocation or BreathParticles; full fire damage remains open.

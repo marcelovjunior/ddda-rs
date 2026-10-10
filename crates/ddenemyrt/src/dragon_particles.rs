@@ -44,6 +44,42 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Effect-owned integer updates and the fractional collision-sample clock.
+/// Generator clocks advance only once per returned integer update.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EffectClock {
+    pub fraction: f32,
+    first_update: bool,
+    initial_steps: u16,
+}
+
+impl EffectClock {
+    // Translated from 0x00FDF5B0 (DDDA.exe 2017-12-13 Steam).
+    pub fn new(initial_steps: u16) -> Self {
+        Self { fraction: 1.0, first_update: true, initial_steps }
+    }
+
+    /// `rate` is the actual effect+0xFC value for this native update.
+    /// Birth uses +0x112 instead; it does not consume the rate yet.
+    // Translated from 0x00E6BCA0, reached by uEffect::vf09 0x00E70710
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self, rate: f32) -> Result<u16, String> {
+        if !rate.is_finite() || rate < 0.0 || !self.fraction.is_finite() {
+            return Err("invalid native effect clock".into());
+        }
+        let value = if self.first_update { self.fraction } else { self.fraction + rate };
+        if !(0.0..32768.0).contains(&value) {
+            return Err("unsupported native effect update count".into());
+        }
+        let whole = value.trunc() as u16;
+        let steps = if self.first_update { whole.wrapping_add(self.initial_steps).wrapping_sub(1) }
+            else { whole };
+        self.first_update = false;
+        self.fraction = value - value.trunc();
+        Ok(steps)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectQuality {
     pub tier: u8,
@@ -262,6 +298,27 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effect_birth_skips_rate_then_preserves_fractional_native_updates() {
+        let mut clock = EffectClock::new(0);
+        assert_eq!(clock.advance(7.0).unwrap(), 0);
+        assert_eq!(clock.fraction, 0.0);
+        assert_eq!(clock.advance(0.25).unwrap(), 0);
+        assert_eq!(clock.fraction, 0.25);
+        assert_eq!(clock.advance(0.75).unwrap(), 1);
+        assert_eq!(clock.fraction, 0.0);
+        assert_eq!(clock.advance(2.5).unwrap(), 2);
+        assert_eq!(clock.fraction, 0.5);
+        assert_eq!(clock.advance(0.5).unwrap(), 1);
+        let mut preadvanced = EffectClock::new(4);
+        assert_eq!(preadvanced.advance(0.5).unwrap(), 4);
+        assert_eq!(preadvanced.fraction, 0.0);
+        assert_eq!(preadvanced.advance(0.5).unwrap(), 0);
+        let before = preadvanced;
+        assert!(preadvanced.advance(f32::NAN).is_err());
+        assert_eq!(preadvanced, before);
+    }
 
     #[test]
     fn provider_quality_uses_global_owner_mode_and_strict_distance_boundary() {
