@@ -353,3 +353,15 @@ Attachment now returns its optional restored vitals to `Host::join`, which
 applies all six fields after the final fighter/body construction. The exact
 field assertion is unchanged. Its failure log is preserved and the full
 four-package gate is repeated on the corrected frozen source.
+
+Full run `36fff0c` / session 97037 exited 101 after 53 summaries:
+295 passed, one failed and two existing ignored. All 24 death integration
+tests, including the corrected reconnect round trip, passed. An existing
+profile-lifecycle regression still expected a parked saved actor to refill
+HP from progression, which applies to legacy checkpoints but contradicts
+approved VITL retention. Under a normal scoped claim, that regression now
+checks both formats in both seat orders: VITL restores its parsed saved HP;
+removing VITL restores installed/progression HP. Runtime is unchanged.
+The next full run uses Cargo `--no-fail-fast` to collect all remaining
+package failures while still executing every full suite without filtering.
+All failed logs remain private and preserved; no full/release pass yet.

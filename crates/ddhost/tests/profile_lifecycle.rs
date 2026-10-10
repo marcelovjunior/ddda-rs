@@ -443,13 +443,19 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
             .points,
         0
     );
-    for a_seated_first in [false, true] {
+    // VITL keeps saved actor health. Legacy checkpoints without that chunk
+    // retain the original installed/progression reconstruction contract.
+    for (a_seated_first, legacy) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut checkpoint = saved.clone();
+        if legacy {
+            checkpoint.chunks.retain(|chunk| chunk.tag != ddhost::save::TAG_VITALS);
+        }
         let mut restored = host();
         restored.data.tables = Some(tables.clone());
         restored.item_data = Some(items.clone());
         restored.fight = Some(Fight::new(data.clone()));
         let first = join(&mut restored, if a_seated_first { 11 } else { 22 });
-        restored.load(&saved, NoStoryData).unwrap();
+        restored.load(&checkpoint, NoStoryData).unwrap();
         let a3 = if a_seated_first {
             first
         } else {
@@ -472,7 +478,12 @@ fn installed_progress_delivery_fighter_and_hirer_follow_profile_after_leave_and_
         );
         assert_eq!(
             restored.fight.as_ref().unwrap().arisen[&a3].fighter.victim.hp(),
-            restored.progression.characters[c].progress.stats.hp_max
+            if legacy {
+                restored.progression.characters[c].progress.stats.hp_max
+            } else {
+                ddhost::vitals::Vitals::from_bytes(saved.get(ddhost::save::TAG_VITALS,
+                    ddhost::save::Owner::Profile(ProfileId(11))).unwrap()).unwrap().hp
+            }
         );
         assert_eq!(
             restored.party.slots[2],
