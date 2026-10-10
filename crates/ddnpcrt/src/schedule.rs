@@ -51,11 +51,12 @@ pub struct Guard {
 /// beside each mask). The body adapter must also implement the
 /// FixedPosition(false) ground-mode side effect described below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActorFlag { SuperArmor, NoDamage, NoMotionTalk, NoSurprise, LiftDisabled, NoLiftReaction, NoEscape, LiftEnabled, FixedPosition }
+pub enum ActorFlag { Invincible, SuperArmor, NoDamage, NoMotionTalk, NoSurprise, LiftDisabled, NoLiftReaction, NoEscape, LiftEnabled, FixedPosition }
 
 impl ActorFlag {
     pub fn mask(self) -> u32 {
         match self {
+            Self::Invincible => 0x1000_0000, // 0x007aa040
             Self::SuperArmor => 0x0200_0000, // 0x007aa1f0
             Self::NoDamage => 0x0800_0000, // 0x007aa0d0
             Self::NoMotionTalk => 0x0100_0000, // 0x007aa280
@@ -71,6 +72,7 @@ impl ActorFlag {
     }
     fn from_process(name: &str) -> Option<Self> {
         Some(match name {
+            "Set Invincible" => Self::Invincible,
             "Set Super Armor" => Self::SuperArmor,
             "Set No Damage" => Self::NoDamage,
             "Set No Motion Talk" => Self::NoMotionTalk,
@@ -88,6 +90,9 @@ impl ActorFlag {
 /// What an NPC asks of the actor layer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    /// 0x00534bc0 updates intel+0x547; a linked actor also creates/removes
+    /// uGUINpcGauge (0x00bb8c10/0x00bb8ca0). UI allocation is presentation.
+    Gauge { npc: u32, visible: bool },
     /// Typed boolean callback; the host intel path updates this exact bit.
     ActorFlag { npc: u32, flag: ActorFlag, value: bool },
     /// OR mapped authored disable bits into this materialized NPC owner.
@@ -420,6 +425,8 @@ impl Owner for Think {
                 self.out.push(Request::DisableFlags { npc: self.npc, mask: disable_flag_mask(authored as u32) });
             }
             "Check QuestFlag" => self.quest_flag_process(p, false, None)?,
+            // Registered as a state callback, not an entry callback.
+            "SetGaugeDisp" => {},
             "Finish" => {}
             "Set FreeCondition" => {
                 let r = rec(p)?;
@@ -440,6 +447,13 @@ impl Owner for Think {
     }
 
     fn state(&mut self, env: &mut Env<'_>, p: &Process, _m: &mut ProcMem, _at: ProcAt) -> Result<(), Error> {
+        // Translated from0x00534bc0, registered by0x005342c0
+        // (DDDA.exe 2017-12-13 Steam). Repeated writes are intentional.
+        if name(p) == "SetGaugeDisp" {
+            let visible = rec(p)?.b("Bool").ok_or_else(|| Error::Data("SetGaugeDisp missing Bool".into()))?;
+            self.out.push(Request::Gauge { npc: self.npc, visible });
+            return Ok(());
+        }
         if name(p) == "Check QuestFlag" {
             return self.quest_flag_process(p, true, env.world);
         }
@@ -710,7 +724,7 @@ mod variable_tests {
     }
     #[test]
     fn boolean_actor_flag_callbacks_have_distinct_sourced_masks() {
-        for (name, expected) in [("Set No Damage", 0x0800_0000), ("Set Super Armor", 0x0200_0000), ("Set No Motion Talk", 0x0100_0000),
+        for (name, expected) in [("Set Invincible", 0x1000_0000), ("Set No Damage", 0x0800_0000), ("Set Super Armor", 0x0200_0000), ("Set No Motion Talk", 0x0100_0000),
             ("Set No Surprise", 0x1_0000),
             ("Set Lift Disable", 0x800), ("Set No Lift Reaction", 0x1000),
             ("Set No Escape", 0x2000), ("Set Lift Enable", 0x4_0000), ("Set Fix Pos", 0x200)] {

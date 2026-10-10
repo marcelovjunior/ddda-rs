@@ -86,3 +86,48 @@ fn installed_first_pawn_guard_boots_quest_after_owned_dialogue_exit() {
     assert!(host.talk_story_guard(other, owner, true, 0.0, motion).unwrap().is_none(),
         "stale generation cannot own replacement dialogue");
 }
+
+#[test]
+fn installed_reynard_flags_and_gauge_follow_authored_states_without_actor_completion() {
+    let native = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+    if !native.exists() { return; }
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 100;
+    story.world.stage_no = 100;
+    story.world.set_sce_no(1410, true);
+    let mut world = ddhost::opening::OpeningWorld::new();
+    world.enable_live_encounters();
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story), world, Box::new(Void));
+    host.data.npc = Some(Arc::new(ddnpcrt::InstallData::open(&native, "eng").unwrap()));
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let groups = ddhost::npc_placements::group_list(&vfs, 100).unwrap();
+    let layouts = ddhost::npc_placements::LoadedLayouts::read(&vfs, 100, &groups, &[(0, 0)]).unwrap();
+    let gates = ddspawn::World { scene: 1410, hour: 12, flag: &|flag| flag == 3 };
+    let placement = layouts.candidates(&gates).placements.into_iter()
+        .find(|p| p.npc == 304 && p.target.group == 4 && p.target.index == 0).unwrap();
+    let target = placement.target;
+    host.load_story_npc_intel(placement).unwrap();
+    assert_eq!(host.story_npc_gauge_visible(304), Some(false));
+    for _ in 0..90 { host.tick(&Default::default()).unwrap(); }
+    assert!(host.npc_errors.is_empty(), "Reynard must not quarantine at Invincible or SetGaugeDisp: {:?}", host.npc_errors);
+    let initial = host.story_npc_intel_flags(304).unwrap();
+    assert_eq!(initial & 0x1800_0200, 0x1800_0200);
+    assert_eq!(host.story_npc_gauge_visible(304), Some(true));
+    assert!(!host.story_npc_action(304).unwrap().3);
+    // Explicit quest observations in this isolated graph fixture. These
+    // are never manufactured by the actor/callback implementation.
+    host.story.as_mut().unwrap().world.set_quest_bit(2, 25, true);
+    for _ in 0..20 { host.tick(&Default::default()).unwrap(); }
+    assert_eq!(host.story_npc_intel_flags(304), Some(initial & !0x1800_0000),
+        "authored clear preserves unrelated intel bits");
+    assert_eq!(host.story_npc_gauge_visible(304), Some(true));
+    host.story.as_mut().unwrap().world.set_quest_bit(2, 20, true);
+    for _ in 0..20 { host.tick(&Default::default()).unwrap(); }
+    assert_eq!(host.story_npc_gauge_visible(304), Some(false));
+    assert!(!host.story_npc_action(304).unwrap().3, "motion arrival has not been observed");
+    assert!(host.npc_errors.is_empty());
+    host.unbind_story_npc(100, target);
+    assert_eq!(host.story_npc_gauge_visible(304), None);
+    assert_eq!(host.story_npc_intel_flags(304), None);
+}
