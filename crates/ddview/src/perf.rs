@@ -114,6 +114,18 @@ mod field_trace {
     #[derive(Resource)]
     struct TraceFlush { _guard: Mutex<tracing_chrome::FlushGuard> }
 
+    fn chrome_name(item: &tracing_chrome::EventOrSpan<'_, '_, Registry>) -> String {
+        match item {
+            tracing_chrome::EventOrSpan::Event(event) => event.metadata().name().into(),
+            tracing_chrome::EventOrSpan::Span(span) => {
+                use bevy::log::tracing_subscriber::fmt::{FormattedFields, format::DefaultFields};
+                if let Some(fields) = span.extensions().get::<FormattedFields<DefaultFields>>() {
+                    format!("{}: {}", span.metadata().name(), fields.fields.as_str())
+                } else { span.metadata().name().into() }
+            }
+        }
+    }
+
     fn trace_layer(app: &mut App) -> Option<BoxedLayer> {
         let stage = std::env::var("DDVIEW_TRACE_STAGE").ok().and_then(|value| {
             value.parse::<u32>().map_err(|_| {
@@ -138,15 +150,7 @@ mod field_trace {
         let (chrome, guard) = tracing_chrome::ChromeLayerBuilder::<Registry>::new()
             .file(path)
             // Match Bevy's names, including each cached system's recorded name.
-            .name_fn(Box::new(|item| match item {
-                tracing_chrome::EventOrSpan::Event(event) => event.metadata().name().into(),
-                tracing_chrome::EventOrSpan::Span(span) => {
-                    use bevy::log::tracing_subscriber::fmt::{FormattedFields, format::DefaultFields};
-                    if let Some(fields) = span.extensions().get::<FormattedFields<DefaultFields>>() {
-                        format!("{}: {}", span.metadata().name(), fields.fields.as_str())
-                    } else { span.metadata().name().into() }
-                }
-            }))
+            .name_fn(Box::new(chrome_name))
             .build();
         app.insert_resource(TraceFlush { _guard: Mutex::new(guard) });
         Some(Box::new(WindowLayer::new(chrome, enabled)))
@@ -238,7 +242,6 @@ mod field_trace {
             struct SystemEntries(Arc<AtomicUsize>);
             impl Layer<Registry> for SystemEntries {
                 fn on_enter(&self, id: &span::Id, ctx: Context<'_, Registry>) {
-                    use bevy::log::tracing_subscriber::registry::LookupSpan;
                     if ctx.span(id).unwrap().metadata().name() == "system" {
                         self.0.fetch_add(1, Ordering::Relaxed);
                     }
@@ -265,6 +268,47 @@ mod field_trace {
                 assert_eq!(entries.load(Ordering::Relaxed), recorded);
             });
             assert_eq!(runs.load(Ordering::Relaxed), 3);
+        }
+
+        #[test]
+        fn chrome_output_retains_cached_system_name_with_log_plugin_layer_order() {
+            #[derive(Clone)]
+            struct Output(Arc<Mutex<Vec<u8>>>);
+            impl std::io::Write for Output {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.0.lock().unwrap().extend_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            }
+            let output = Output(Arc::new(Mutex::new(Vec::new())));
+            let enabled = Arc::new(AtomicBool::new(false));
+            let (chrome, guard) = tracing_chrome::ChromeLayerBuilder::<Registry>::new()
+                .writer(output.clone()).name_fn(Box::new(chrome_name)).build();
+            // LogPlugin's custom_layer is inside its formatting layer. The
+            // latter adds FormattedFields after on_new_span; on_enter must
+            // still find them when it resolves Chrome's cached-system name.
+            let subscriber = Registry::default()
+                .with(WindowLayer::new(chrome, enabled.clone()))
+                .with(bevy::log::tracing_subscriber::fmt::Layer::default()
+                    .with_writer(std::io::sink).with_ansi(false));
+            tracing::subscriber::with_default(subscriber, || {
+                let cached = tracing::info_span!("system", name = "cached_probe");
+                cached.in_scope(|| {});
+                enabled.store(true, Ordering::Release);
+                let entered = cached.enter();
+                enabled.store(false, Ordering::Release);
+                drop(entered);
+                cached.in_scope(|| {});
+            });
+            drop(guard); // Actual writer thread exit/flush before inspection.
+            let trace = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+            let entries: Vec<_> = trace.lines().filter(|line| line.contains("cached_probe")).collect();
+            assert_eq!(entries.len(), 2, "one cached entry/exit, none outside window: {trace}");
+            assert!(entries[0].contains("system: name="), "system name must include recorded fields");
+            assert!(entries[0].contains("\"ph\":\"B\""));
+            assert!(entries[1].contains("\"ph\":\"E\""));
+            assert!(trace.trim_end().ends_with(']'), "trace must close normally");
         }
     }
 }
