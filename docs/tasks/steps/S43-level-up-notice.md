@@ -81,3 +81,10 @@ notice with the right level; the Result names the sources.
   With `--shots <private-dir>`, the first real notice automatically requests
   `S43-level-up.png` once its enter track has finished. This supports a bounded
   route capture without guessing its elapsed wall time or creating experience.
+- Infinity follow-up source: message vf21 `0x010FEF20` -> analyzer
+  `0x01002C30` -> tag dispatch `0x01002960` -> ICON binding `0x010024F0`.
+  `sGUI::vf17` at `0x00DE1770` resolves the icon name from the active name/id
+  table (`sGUI+0x5C`), and `0x01001650` temporarily switches to the GUI icon
+  font (`sGUI+0x58`) before inserting a type-5 glyph. The table/font resource
+  initializer still needs tracing; this is not the ordinary text font's
+  Unicode infinity glyph. No inferred icon number, resource or pixel is copied.
