@@ -724,3 +724,32 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   explains the captured premature stage of the driver, without establishing
   the remaining doorway collision/planning cause. Reported to coordinator;
   benchmark driver remains outside this NPC edit scope.
+
+
+### Batch handoff / still not accepted (2026-10-09)
+
+Codex31 closes this batch at coordinator request; the brief remains open.
+Checkpoint chain: 81cdd19 lifetime presentation, 30dd8ea quest observation,
+bff6e07 source prerequisites (e5293d9 wounded flags precedes them).
+All owned viewer processes have exited; core and M5 targets released.
+
+Queued requirements:
+
+- Guard: actual body eligibility/readiness and motion observations; distinct
+  candidate reservation vs active owner; per-seat arbitration, authored
+  resource selection, real actor cleanup feeding TalkEnd. UI end alone must
+  never complete an NPC action.
+- Goto: preserve authored trace/arrival/stop behavior, host-owned movement,
+  route/collision/height checks and animation completion. Asynchronous arrivals
+  need allocation lifetime plus current command identity; lifetime alone is
+  insufficient when the same live actor receives a replacement command.
+- Distance: distinguish unavailable actor observation from observed missing
+  body; define co-op target policy explicitly before wiring getter7abe20.
+- Materialization: stage100 needs loaded-cell/archive readiness and pool
+  admission; actor position remains canonical, orientation is still authored.
+- Route: fix WalkOut's six-second advance using actual exit evidence and
+  investigate doorway interaction/navigation; current capture proves only
+  scene1300 indoors, GSF381false. No quest2 clear or field acceptance claimed.
+
+Coordinator queued road-to-encampment/actual-exit harness as the next route
+priority. No further NPC edits or builds are active in this worktree.
