@@ -219,3 +219,103 @@ impl TalkMotionObservation {
 pub fn guard_unit_ready(status: Option<u32>) -> bool {
     status.is_some_and(|status| status & 7 == 2 && status & 0x4800 == 0x4800)
 }
+
+/// The range trigger stored at intel+0x4d4. Changing Guard configuration
+/// resets it (0x00bbf580). An actor crossing the sphere can trigger once;
+/// remaining inside does not retrigger the authored conversation.
+#[derive(Debug, Default)]
+pub struct Sensor {
+    triggered: bool,
+}
+
+impl Sensor {
+    /// Spatial portion of 0x00bb0db0 (DDDA.exe 2017-12-13 Steam).
+    /// Stage-frame positions have already had any world offset resolved.
+    /// Angular guards need the original direction helper; unsupported
+    /// kinds/ranges fail explicitly rather than ignoring that restriction.
+    pub fn hit(&mut self, config: &Guard, actor: [f32; 3], yaw: f32,
+        player: [f32; 3]) -> Result<bool, ddai::Error> {
+        if !matches!(config.kind, 1 | 2) || config.range != 0.0 {
+            return Err(ddai::Error::Unimplemented("NPC Guard angular or nonspatial sensor".into()));
+        }
+        let distance = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]);
+        if distance(actor, player) >= 5000.0 { return Ok(false); }
+        let center = if config.kind == 1 {
+            if (actor[1] - player[1]).abs() > config.height { return Ok(false); }
+            let (sin, cos) = yaw.sin_cos();
+            [actor[0] + cos * config.center[0] + sin * config.center[2],
+             actor[1] + config.center[1],
+             actor[2] - sin * config.center[0] + cos * config.center[2]]
+        } else { config.center };
+        if distance(center, player) >= config.radius {
+            self.triggered = false;
+            return Ok(false);
+        }
+        Ok(!self.triggered)
+    }
+
+    /// Set only after launch succeeds; unavailable text cannot consume it.
+    pub fn launched(&mut self) { self.triggered = true; }
+}
+
+/// The actor side of one real Guard conversation, separate from the text
+/// cursor. Motion readiness and controller state are explicit observations.
+#[derive(Debug, Default)]
+pub struct ActorTalk {
+    pub motion: TalkMotionObservation,
+    pub controller_enabled: bool,
+    restore_controller: bool,
+    active: bool,
+    text_finished: bool,
+    pending_exit: u8,
+    dialogue_released: bool,
+}
+
+impl ActorTalk {
+    pub fn new(motion: TalkMotionObservation, controller_enabled: bool) -> Self {
+        Self { motion, controller_enabled, ..Default::default() }
+    }
+    /// Entering the promoted talk action (0x00bb4060 / 0x00bba820).
+    pub fn enter(&mut self) {
+        self.restore_controller = self.controller_enabled;
+        self.active = true;
+        self.text_finished = false;
+        self.dialogue_released = false;
+        self.controller_enabled = false;
+    }
+    pub fn text_finished(&mut self) { self.text_finished = true; }
+    /// Normal (non-jump) cNpcActTalk::vf06 state0x1b, 0x00b9a430,
+    /// clears the active slot before motion cleanup. The stock resource
+    /// release checks 0x0044a140/0x00449f40 must actually have completed.
+    /// Jump dialogue types8/9 also need counterpart actor observations and
+    /// are outside this narrow path. Text End alone never releases a slot.
+    pub fn release_dialogue(&mut self, resources_released: Option<bool>, jump_kind: u32) -> bool {
+        if !self.active || !self.text_finished || self.dialogue_released
+            || resources_released != Some(true) || jump_kind != 0 { return false; }
+        self.dialogue_released = true;
+        true
+    }
+    /// Actor cleanup from 0x00bb41c0, gated by actual motion readiness.
+    /// A text End alone is insufficient. True permits clearing the slot.
+    pub fn cleanup(&mut self) -> bool {
+        if !self.active || !self.text_finished || !self.motion.ready() { return false; }
+        self.active = false;
+        self.controller_enabled = self.restore_controller;
+        self.pending_exit = 1;
+        true
+    }
+    /// Pending-exit branch of uNpc::vf111 (0x00bb3290).
+    pub fn take_frame(&mut self, game_flags: Option<u32>, active_dialogue_empty: Option<bool>) -> bool {
+        let mut observation = TalkEndObservation {
+            pending_exit: self.pending_exit,
+            controller_enabled: Some(self.controller_enabled),
+            game_flags,
+            current_action: self.active.then_some(0x0300_0041),
+            active_dialogue_empty: if self.dialogue_released { active_dialogue_empty } else { Some(false) },
+            ..Default::default()
+        };
+        let result = observation.take_frame();
+        self.pending_exit = observation.pending_exit;
+        result
+    }
+}

@@ -22,6 +22,17 @@ struct Applied {
     normal: Option<Npc>,
 }
 
+struct GuardAction {
+    config: ddnpcrt::schedule::Guard,
+    sensor: ddnpcrt::guard::Sensor,
+}
+
+struct GuardTalk {
+    owner: ddnpcrt::guard::DialogueOwner,
+    actor: ddnpcrt::guard::ActorTalk,
+    jump_kind: u32,
+}
+
 #[derive(Default)]
 pub struct StoryNpcs {
     /// Intels allocated by the real placement adapter, distinct from
@@ -35,9 +46,74 @@ pub struct StoryNpcs {
     pending: HashMap<(u32, Target), String>,
     normal_controllers: HashMap<(u32, Target), bool>,
     applied: BTreeMap<u32, Applied>,
+    guards: BTreeMap<u32, GuardAction>,
+    dialogue: ddnpcrt::guard::DialogueSlot,
+    talks: BTreeMap<u32, GuardTalk>,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
+    /// The actor adapter supplies actual body eligibility and talk-motion
+    /// observations. Distance alone cannot authorize dialogue. Arbitration
+    /// is host-owned and names the interacting seat, not a global player.
+    pub fn talk_story_guard(&mut self, player: crate::PlayerId, owner: NpcLifetime,
+        actor_ready: bool, yaw: f32, motion: ddnpcrt::guard::TalkMotionObservation)
+        -> Result<Option<crate::npcs::TalkOutcome>, HostError>
+    {
+        self.roster.seat(player).ok_or(HostError::UnknownPlayer(player))?;
+        if !actor_ready || self.story_npc_lifetime(owner.npc) != Some(owner) { return Ok(None); }
+        let Some(position) = self.story_npc_position(owner.npc) else { return Ok(None); };
+        let Some(player_position) = self.sim.player(player).map(|p| p.position) else { return Ok(None); };
+        let Some(guard) = self.story_npcs.guards.get_mut(&owner.npc) else { return Ok(None); };
+        // Motion-not-ready is the manual candidate branch of0x00bb0db0;
+        // authored guard=true rejects that branch. Non-jump path only.
+        if (!motion.ready() && guard.config.guard) || guard.config.jump_kind != 0 { return Ok(None); }
+        if !guard.sensor.hit(&guard.config, position, yaw, player_position)
+            .map_err(|e| HostError::Npc(e.to_string()))? { return Ok(None); }
+        let config = guard.config.clone();
+        let data = self.data.npc.clone().ok_or(HostError::NoData("npc"))?;
+        let Some(set) = data.guard_talk_set(owner.npc, &config)
+            .map_err(|e| HostError::Npc(e.to_string()))? else { return Ok(None); };
+        if set.set.by_number(config.message).is_none() { return Ok(None); }
+        let dialogue_owner = ddnpcrt::guard::DialogueOwner { actor: owner.generation, player };
+        if !self.story_npcs.dialogue.reserve(dialogue_owner, Some(2))
+            || !self.story_npcs.dialogue.activate(dialogue_owner, Some(2)) { return Ok(None); }
+        let controller_enabled = self.story_npcs.applied.get(&owner.npc)
+            .is_some_and(|applied| !applied.action.applied_finished());
+        let mut actor = ddnpcrt::guard::ActorTalk::new(motion, controller_enabled);
+        actor.enter();
+        self.story_npcs.talks.insert(owner.npc, GuardTalk {
+            owner: dialogue_owner, actor, jump_kind: config.jump_kind,
+        });
+        if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 1; }
+        match self.talk_authored(player, owner.npc, set, config.message) {
+            Ok(outcome) => {
+                // 0x00bb0db0 leaves +0x4d4 clear in the manual branch;
+                // only its motion-ready automatic launch consumes the latch.
+                if motion.ready() { self.story_npcs.guards.get_mut(&owner.npc).unwrap().sensor.launched(); }
+                Ok(Some(outcome))
+            }
+            Err(error) => {
+                self.story_npcs.talks.remove(&owner.npc);
+                self.story_npcs.dialogue.clear_active(dialogue_owner);
+                if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+                Err(error)
+            }
+        }
+    }
+
+    pub fn story_npc_guard(&self, npc: u32) -> Option<&ddnpcrt::schedule::Guard> {
+        self.story_npcs.guards.get(&npc).map(|action| &action.config)
+    }
+
+    pub(crate) fn story_guard_text_ended(&mut self, player: crate::PlayerId, npc: u32) -> bool {
+        if let Some(talk) = self.story_npcs.talks.get_mut(&npc)
+            .filter(|talk| talk.owner.player == player
+                && self.story_npcs.dialogue.active() == Some(talk.owner)) {
+            talk.actor.text_finished();
+            return true;
+        }
+        false
+    }
     /// Reconcile the adapter's complete materialized NPC set for a stage.
     /// The caller resolves loaded cells, group gates, name-family selection,
     /// intel-pool admission and archive readiness first. Raw Candidates are
@@ -169,6 +245,19 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
 
     pub fn unbind_story_npc(&mut self, stage: u32, target: Target) {
         if let Some(intel) = self.story_npcs.intels.remove(&(stage, target)) {
+            if let Some(lifetime) = self.story_npcs.lifetimes.get(&(intel.npc as u32)) {
+                if self.story_npcs.dialogue.active().is_some_and(|owner| owner.actor == *lifetime) {
+                    if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+                }
+                self.story_npcs.dialogue.retire(*lifetime);
+            }
+            if let Some(talk) = self.story_npcs.talks.remove(&(intel.npc as u32)) {
+                if self.npcs.talking_to(intel.npc as u32) == Some(talk.owner.player) {
+                    self.npcs.talk_abort(talk.owner.player);
+                }
+                let _ = self.locks.release(intel.npc as u32, talk.owner.player);
+            }
+            self.story_npcs.guards.remove(&(intel.npc as u32));
             self.npcs.npcs.remove(&(intel.npc as u32));
             self.story_npcs.positions.remove(&(intel.npc as u32));
             self.story_npcs.intel_flags.remove(&(intel.npc as u32));
@@ -249,6 +338,15 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 }
                 Request::DisableFlags { npc, mask } => {
                     if let Some(flags) = self.story_npcs.intel_flags.get_mut(npc) { *flags |= mask; }
+                }
+                Request::Guard { npc, config } => {
+                    if config.kind == 0 {
+                        self.story_npcs.guards.remove(npc);
+                    } else if self.story_npcs.lifetimes.contains_key(npc) {
+                        self.story_npcs.guards.insert(*npc, GuardAction {
+                            config: config.clone(), sensor: Default::default(),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -368,6 +466,32 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn step_story_npcs(&mut self) -> Result<Vec<Request>, HostError> {
+        // A departed co-op seat cannot leave a shared dialogue stop behind.
+        // Retirement is cancellation, never the original actor's TalkEnd.
+        let departed: Vec<_> = self.story_npcs.talks.iter()
+            .filter(|(_, talk)| self.roster.seat(talk.owner.player).is_none())
+            .map(|(&npc, _)| npc).collect();
+        for npc in departed {
+            let talk = self.story_npcs.talks.remove(&npc).unwrap();
+            self.story_npcs.dialogue.retire(talk.owner.actor);
+            if self.story_npcs.dialogue.active().is_none() {
+                if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+            }
+        }
+        // Normal Guard talks hold no appearance stock resource transactions:
+        // loading their text is synchronous, and no exit stock was requested.
+        // Empty stock release lists return true at0x00788bb0. Jump/replacement
+        // talks are explicitly rejected by talk_story_guard until implemented.
+        let mut ended = Vec::new();
+        for (&npc, talk) in &mut self.story_npcs.talks {
+            if talk.actor.release_dialogue(Some(true), talk.jump_kind) {
+                self.story_npcs.dialogue.clear_active(talk.owner);
+                if let Some(story) = self.story.as_mut() { story.stage.game_flags.s54 = 0; }
+                let _ = self.locks.release(npc, talk.owner.player);
+            }
+            if talk.actor.take_frame(None, Some(self.story_npcs.dialogue.active().is_none())) { ended.push(npc); }
+        }
+        for npc in ended { self.observe_story_npc_talk_end(npc); }
         let Some(data) = self.data.npc.clone() else {
             return Ok(vec![]);
         };
