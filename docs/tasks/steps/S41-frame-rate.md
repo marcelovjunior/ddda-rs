@@ -193,3 +193,47 @@ route and same-picture optimization comparison remain **OPEN**. Next:
 finish identifying actual render-thread work versus waits from the pinned
 Bevy source, measure Cassardis/updated route after S40 releases the GPU,
 then test the largest measured cost without changing presentation quality.
+
+### CPU instance-builder experiment (codex-66, 2026-10-10)
+
+- Resumed from the clean prior branch and integrated reviewed committed
+  main `861c94e`. Candidate source checkpoint `87a2925` adds only an opt-in
+  `DDVIEW_MESH_BUILDER=cpu|gpu` renderer choice. Unset/`gpu` retains Bevy's
+  existing default. No simulation, original LOD, geometry or material
+  quality changes are part of this experiment.
+- Aggregating the old trace's same-named systems across worker threads
+  identifies shadow binned-buffer preparation at 1.264 ms, preprocess
+  bind-group preparation at 0.938 ms and opaque binned-buffer preparation
+  at 0.474 ms of **thread wall work per main frame**. These totals are not
+  elapsed frame contributions: workers overlap. Their corresponding
+  GPU bin-unpack pass measured 0.693 ms. Animation (0.02–0.03 ms average)
+  and streaming (0.06 ms) are not dominant in this standalone scene.
+- Pinned Bevy 0.19.1 source: `PbrPlugin::use_gpu_instance_buffer_builder`
+  forwards to mesh/preprocess plugins. `render/mesh.rs:245–313` selects
+  CPU extraction and batching when false; `render/gpu_preprocess.rs:403–413`
+  skips compute-preprocessing systems. CPU `MeshPipeline::get_batch_data`
+  and `get_binned_batch_data` retain transforms, skin/morph indices,
+  materials, lightmap and mesh grouping. This is a supported renderer path;
+  visual equivalence and performance still require the capture below.
+- Verified on frozen `87a2925`: `cargo test --release -p ddview`, **79
+  passed, 0 failed, 2 existing ignored**, 55.97 s compilation and 10.81 s
+  test runtime; `cargo build --release -p ddview`, **exit 0**, 37.17 s.
+  Final combined Cargo session 56803 exited 0. Existing private-interface
+  and unused audio-method warnings remain. Python trace accounting still
+  passes all nine regressions; PowerShell launcher syntax/diff checks pass.
+- Private pin `E:/ddda-re/notes/steps/s41/ddview-builder-87a2925.exe`, SHA-256
+  `5A6E202CD81F6E1055D27C75A344EE338206843D8BD70AD69CB334CC81BB8902`.
+  Shared M5 build lease was released after actual exit. No GUI was launched.
+- Launcher now records/restores the CPU/GPU mode and has an explicit hard
+  watchdog (`-WatchdogSeconds`, default 120 s), independently of requested
+  measurement duration. Board capture request #5940/#5945 queues two
+  identical-scene runs from this one pin, default backend, GPU then CPU,
+  using the standalone field arguments above plus a screenshot at 45 s.
+  The requested 50 s timed exit/90 s watchdog keeps the combined batch
+  bounded; compare preselected elapsed 20–40 s windows before screenshot.
+  Original PID 23408 stays running and its concurrent GPU share is recorded.
+- **Pending:** actual same-picture CPU/GPU frame and pass measurements,
+  current full-route measurements, and 180 fps acceptance. No gain is
+  claimed from implementing the switch or passing headless tests. Next:
+  inspect the queued batch's actual exits, counts, PNGs and warm medians;
+  select a default only if comparable captures demonstrate improvement.
