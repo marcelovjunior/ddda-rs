@@ -167,3 +167,36 @@ so it will not be used for the capture. Current full viewer acceptance,
 rebuild/pin and one bounded ordinary-route x4 capture are queued after S35.
 Head5995 permits that route without S46; whole original visual comparison
 and later equipment switching remain open.
+
+### Parent combined acceptance and checkpoint capture
+
+Parent integration435a027 includes reviewed maina24c1ed, S49 perception,
+S43 sourcebda3cfe and S35 native cost visibility. Complete viewer tests:
+92 passed, two existing ignored (28.63s compile, 11.35s tests); default
+release48.12s. Process94503 actually exited zero. The equipment/material/
+joint-scale and six level-notice regressions executed. A source-present
+extra_material field initially exposed stale M5 release dependencies;
+narrow --release package rebuilds corrected them. Failed compiles are not
+counted as acceptance.
+
+Private pin: E:/ddda-re/notes/steps/S47/ddview-s47-combined-435a027.exe,
+SHA256 1102C9544C3EBC12E8DE5ED3C26EBD0281A899F61AE02356A97D3D044FEC7E86.
+The head-approved RescueApproach checkpoint run used normal demo inputs,
+x4 time, GPU/default backend, screenshots and a180s wall watchdog. Owned
+viewer30364 actually exited zero after151.5195s. The log confirms the
+render-only authored group24 record0/equipment4 fixture loaded, without
+Fight/quest admission; it does not prove its visual appearance.
+
+**Visual acceptance failed:** zero PNGs, because enable_perf_route clears
+the session's shots path despite --shots being accepted by argument
+parsing. No real level-up occurred: level2/experience420 stayed below485.
+There is no S43 notice capture. This run also reached the failed rescue
+branch (q2:20 false, q2:30 true) after the stricter main191af5c demo
+bystander guard; Reynard died before the first three goblin kills. No
+performance result is valid for the accelerated screenshot run. Private
+provenance/logs: combined-rescue-435a027.run.json and
+combined-rescue-435a027.err.txt. GPU released after actual exit.
+
+Next: repair the explicit screenshot path and diagnose the stricter demo
+attack guard before one coordinated visual retry. Whole S47 remains open;
+original visual comparison and later attachment/drop behavior unverified.

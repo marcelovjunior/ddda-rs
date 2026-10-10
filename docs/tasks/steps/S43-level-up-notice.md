@@ -119,3 +119,18 @@ notice with the right level; the Result names the sources.
   font (`sGUI+0x58`) before inserting a type-5 glyph. The table/font resource
   initializer still needs tracing; this is not the ordinary text font's
   Unicode infinity glyph. No inferred icon number, resource or pixel is copied.
+
+### Parent combined review and attempted genuine capture
+
+Codex-1 independently reviewed native hierarchy/clock and co-op consumer
+changes, including the two-owner follow-switch regression. Integration
+435a027 on the S47 branch passed all92 viewer tests/two existing ignored,
+including all six notice tests; default release48.12s, actual94503 exit0.
+The genuine RescueApproach checkpoint run exited zero after151.5195s
+(owned30364). It stayed at level2/experience420 below485, so no new notice
+was expected or captured. No level or experience was manufactured.
+The route also suppresses step shots in enable_perf_route, reported to
+head separately. This is not S43 visual acceptance. The source tests are
+accepted; genuine notice capture and original comparison remain open.
+Private logs/pin: E:/ddda-re/notes/steps/S47/combined-rescue-435a027.err.txt
+and ddview-s47-combined-435a027.exe (provenance hash in the S47 Results).
