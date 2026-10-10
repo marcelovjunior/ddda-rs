@@ -251,3 +251,36 @@ No new capture retry is planned and no visual/original/FPS PASS is claimed.
 Private combined-rescue-d5567f8.run.json/err.txt and the saved PNG retain
 the evidence. Next: establish a stable real route and render-ready capture
 before equipment appearance acceptance; keep the source checkpoint separate.
+
+### Parent current-main v2 rescue capture
+
+Head merged the reviewed equipment source into main `7ea18c9`, alongside
+S54's tested NPC friendly-contact veto and the v2 economy adapter. Its
+private executable SHA-256 is
+`F4DD8720AF28FE1AFE76E7793B9D468B7A79182F3DF2F3F74EE7DCCC0EF85E64`.
+Head reported the complete integrated viewer suite at 103 PASS and an
+actual successful release before providing this pin. The regenerated v2
+RescueApproach checkpoint SHA-256 is
+`1FE5BD22AA3B332DC80C858348BBDC3DCFD0CFC4BCC51D3FF904AEC278673334`.
+
+The corrected x4 ordinary route successfully rescued Reynard, with q2:20
+true/q2:30 false, and generated the independently viewed real S43 level-2
+notice PNG. Owned viewer 16628 actually exited zero after 139.79 seconds;
+the original 23408 remained running and the normal GPU lease was released
+after actual exit. The three saved images are private under
+`E:/ddda-re/notes/steps/S47/main-7ea18c9-v2-rescue-r2/shots`.
+
+Equipment **visual acceptance remains open**. The log confirms ordinary
+equipment-0 actors and the render-only group24/equipment4 fixture without
+combat/quest admission. The notice PNG shows an ordinary bare-body goblin,
+but the higher-equipment fixture is outside the shot; neither that log
+nor the unrelated route-end image proves the requested appearance pair.
+Original comparison and later attachment switching/drop behavior remain
+open. The subsequent RoadWalk stalled and hit its existing deadline; this
+is not a q0003/Encampment-route or performance result.
+
+The first attempt omitted the demo resume-step environment setting,
+restored the correct checkpoint at WeaponTable and was rejected. Its
+uniquely checked owned handle was stopped with actual exit -1 after 54.79
+seconds. The corrected run explicitly selected RescueApproach and used a
+precreated screenshot directory; no level, item or quest state was edited.
