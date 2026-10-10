@@ -84,6 +84,10 @@ enum Step {
     /// `DDVIEW_DEMO_FIGHT`: after the settle, fight the field's goblins
     /// with ordinary inputs (play::demo_attack) and log the quest state.
     Rescue,
+    /// After the rescue's outcome (q2:20 or q2:30): walk the road toward
+    /// the authored `q0002_event2` volume, which sets q2:10 and boots
+    /// q0003 (docs/tasks/q0002-roadside.md, sequence 5).
+    RoadWalk,
     Done,
 }
 
@@ -1791,7 +1795,10 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
         let d = s.demo.as_ref().unwrap();
         (d.since, d.check.0)
     };
-    if now - last_log >= 5.0 || alive == 0 || now - since > 240.0 {
+    // q2:20 (rescued) or q2:30 (Reynard died): event1's outcomes. Ordinary
+    // field goblins left alive don't hold the road walk up.
+    let outcome = s.world().quest_bits(2).is_some_and(|b| b.get(20) || b.get(30));
+    if now - last_log >= 5.0 || alive == 0 || outcome || now - since > 240.0 {
         let w = s.world();
         let hp = s.host.fight.as_ref().and_then(|f| f.arisen.get(&0)).map(|a| a.fighter.victim.hp());
         info!(
@@ -1800,10 +1807,29 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
             w.quest_bits(2).map(|b| b.words()),
             s.host.story.as_ref().map(|st| st.quests.iter().map(|q| q.number()).collect::<Vec<_>>())
         );
+        // each live goblin: owner, action, target, distance to the Arisen
+        // (m) and its last actions, to see why one never reaches or hurts it
+        if let (Some(f), Some(p)) = (s.host.fight.as_ref(), s.host.sim.player(0)) {
+            for g in f.goblins.iter().filter(|g| !g.dead()) {
+                let d = ((g.pos[0] - p.position[0]).powi(2) + (g.pos[2] - p.position[2]).powi(2)).sqrt() / 100.0;
+                let recent: Vec<i32> = g.log.iter().rev().take(6).map(|x| x.1).collect();
+                info!(
+                    "opening demo: rescue: goblin {} action {} target {:?} {d:.1} m away, height {:.0} vs {:.0}, recent {recent:?}",
+                    g.fighter.owner, g.action, g.target, g.pos[1], p.position[1]
+                );
+            }
+        }
         let d = s.demo.as_mut().unwrap();
         d.check.0 = now;
-        if alive == 0 || now - since > 240.0 {
-            info!("opening demo: Rescue done -> Done");
+        if outcome {
+            info!("opening demo: Rescue done (q2:20 {}, q2:30 {}) -> RoadWalk", w_bit(s, 20), w_bit(s, 30));
+            let d = s.demo.as_mut().unwrap();
+            d.step = Step::RoadWalk;
+            d.since = now;
+            d.path.clear();
+            d.planning = None;
+        } else if alive == 0 || now - since > 240.0 {
+            info!("opening demo: Rescue done without an outcome -> Done");
             d.step = Step::Done;
             d.since = now;
         }
@@ -1811,6 +1837,10 @@ fn demo_rescue(s: &mut Session, now: f32) -> PlayerInput {
     let d = s.demo.as_mut().unwrap();
     let sim = play::demo_attack(&s.host.sim, s.host.fight.as_ref(), 0, 0.0, &mut d.press);
     PlayerInput { sim, interact: false }
+}
+
+fn w_bit(s: &Session, bit: usize) -> bool {
+    s.world().quest_bits(2).is_some_and(|b| b.get(bit))
 }
 
 fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> PlayerInput {
@@ -1856,6 +1886,10 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         // encounter outcome. No fixture NPC or quest state is changed.
         Step::FieldWalk => s.host.story.as_ref().and_then(|story| {
             let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event1")?;
+            benchmark_place(s, 4, n as u32).map(|v| v.0)
+        }),
+        Step::RoadWalk => s.host.story.as_ref().and_then(|story| {
+            let n = story.stage.scenarios.tasks.get(4)?.iter().position(|e| e.name == "q0002_event2")?;
             benchmark_place(s, 4, n as u32).map(|v| v.0)
         }),
         Step::Gate | Step::FieldSettle | Step::Rescue | Step::Done => None,
@@ -2019,6 +2053,14 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground) -> Pl
         }
         Step::FieldSettle if now - d.since >= 30.0 => {
             next = Some(if std::env::var_os("DDVIEW_DEMO_FIGHT").is_some() { Step::Rescue } else { Step::Done })
+        }
+        Step::RoadWalk if w.quest_bits(2).is_some_and(|b| b.get(10)) || quests.contains(&3) => {
+            info!("opening demo: road: q2:10 {}, q0003 booted {}", w.quest_bits(2).is_some_and(|b| b.get(10)), quests.contains(&3));
+            next = Some(Step::Done);
+        }
+        Step::RoadWalk if now - d.since > 300.0 => {
+            warn!("opening demo: road: q0002_event2 not reached in 300 s");
+            next = Some(Step::Done);
         }
         _ => {}
     }
