@@ -904,3 +904,50 @@ birth execution, production particle/path ownership, world queries,
 secondary effects, fire rendering and ordinary party damage remain open.
 Next: connect the sampled values to the actual path and particle update
 while preserving the verified counter reset and draw order.
+
+### Birth-to-travel buffers prepared; Rust uncompiled/unrun
+
+The next owned adapter retains both distance buffers initialized by
+`0x010EDE1D..0x010EDE22`. The admitted uncurved travel phase selects
+previous/current from particle-context+0C bits25/24 (`0x010F71F2`),
+writes previous distance plus old speed, then adds acceleration to speed
+before sampling the existing path (`0x010F74EE..0x010F7524`). Neither
+speed nor distance is clamped, and secondary delay does not gate travel.
+Admission, speed curves, spawn rotation, query/end/secondary policy and
+production lifetime remain outside this adapter.
+
+One bounded private proof executed whole original `0x010F7190` and its
+real `0x010E2EB0` sampler for four synthetic fixtures: positive/negative
+speed, distance beyond path end and reversed buffer selection. Actual
+exit0, all four passed in 0.08045s, 306/277/237/306 instructions; normal
+RET, stack, all callee-saved registers, canaries and original pages stayed
+valid. Existing movement state2 excludes world queries; delay1 prevents
+secondary dispatch on that update; coordinate is unbound, path already
+generated, spawn offset zero and angular mode absent. Runtime BSS fallback
+vector `0x018CFE80..88` was explicitly poisoned as synthetic input and
+overwritten by positive path segments, never invented as a native constant.
+Private proof `life4-travel-native-first.proof.private.json` SHA256:
+`67A5956949D18B48B266357C59473D47ED5B32340634D18B9EE00A9CE736A898`.
+
+`life4_travel_uses_native_buffers_old_speed_and_path_end_without_delaying_motion`
+checks those fixtures, both birth buffers, successive buffer switches,
+motion despite a positive secondary delay, and atomic rejection of invalid
+input. This Rust source is **uncompiled/unrun**; the preceding193-pass
+gate covers only the earlier birth sampler. Next: run its full package
+gate, then bind real particle ownership and the subsequent query policy.
+
+The travel batch subsequently passed its full package gate at frozen
+`cad92bf88bc833b175643ee18c5b8157a03ad7b9`, after integrating accepted
+main `814c549`. Session89565/Cargo actual exit0, complete `mteffect` and
+`ddenemyrt`: **196 passed, 0 failed**, 2 existing ignored diagnostics,
+0 filtered, 33 summaries. All nine required names passed once, no SKIP;
+jobs2/existing core target/canonical install and exe, source clean and
+unchanged module hash. The normal lease was released after actual exit.
+Parent independently parsed the raw results and verified the log hash.
+Private log `full-generator-path-cad92bf.private.log` SHA256:
+`AAA2D126A3D97A690DDA3B8FE10354DAF4FA3359F457A7E711220879A8B25508`.
+This accepts the translated travel phase and its regression, alongside the
+earlier reader/birth helpers and accepted main's body additions. The earlier
+unrun labels describe preparation; complete emitter lifetime, world query,
+secondary dispatch and ordinary fire damage remain open. Next: attach the
+verified birth/travel state to native particle creation/update ownership.

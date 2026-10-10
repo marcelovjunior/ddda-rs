@@ -72,6 +72,53 @@ pub struct Life4Birth {
     pub secondary_effect_delay: i16,
 }
 
+/// Generator-owned uncurved life4 travel, with the actual two distance buffers.
+/// Admission, curves, scene queries, spawn-offset rotation, retirement and
+/// secondary dispatch remain with their native owner; this is their travel phase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Life4Travel {
+    pub distance: [f32; 2],
+    pub speed: f32,
+    pub acceleration: f32,
+    pub secondary_effect_delay: i16,
+}
+
+impl Life4Travel {
+    // Translated from 0x010EDE08..0x010EDE22
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn from_birth(birth: Life4Birth) -> Self {
+        Self { distance: [birth.distance; 2], speed: birth.speed,
+            acceleration: birth.acceleration,
+            secondary_effect_delay: birth.secondary_effect_delay }
+    }
+
+    /// The caller has already admitted this native update and resolved any
+    /// speed curve. Actual particle-context +0x0C bits25/24 select previous
+    /// and current distance buffers. The coordinate anchor is +0x30, not a
+    /// guessed actor/fire position. This returns the pre-spawn-offset sample.
+    /// No delta multiplier or speed/distance clamp is present in this phase.
+    /// Secondary delay changes only later, after the actual query/end policy.
+    // Translated from 0x010F71F2..0x010F7237, 0x010F74EE..0x010F7524
+    // and 0x010E2EB0 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance_path(&mut self, context_flags: u32, path: &ParticlePath,
+        coordinate_anchor: [f32; 3]) -> Result<PathSample, String> {
+        let previous = ((context_flags >> 25) & 1) as usize;
+        let current = ((context_flags >> 24) & 1) as usize;
+        let distance = self.distance[previous] + self.speed;
+        let speed = self.speed + self.acceleration;
+        if self.distance.iter().chain([self.speed, self.acceleration, distance, speed].iter())
+            .any(|value| !value.is_finite()) {
+            return Err("nonfinite life4 travel state".into());
+        }
+        let sample = sample_path(&path.points, path.total_length, distance, coordinate_anchor)?;
+        // Rejection is a project validation policy; commit the supported phase
+        // only after a valid path sample, rather than leaving a partial state.
+        self.distance[current] = distance;
+        self.speed = speed;
+        Ok(sample)
+    }
+}
+
 impl GeneratorCounters {
     /// The caller supplies the resource seed entries, including its first
     /// entry when the native count is zero. An absent list is unsupported.
@@ -1451,6 +1498,46 @@ mod tests {
         assert!(unit.sample_life4_birth(&mut counters,
             |_| panic!("unsupported angular birth cannot draw"), |_| panic!("unsupported angular birth")).is_err());
         assert_eq!(counters, before);
+    }
+
+    #[test]
+    fn life4_travel_uses_native_buffers_old_speed_and_path_end_without_delaying_motion() {
+        let path = ParticlePath { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0],
+            [0.0, 0.0, 30.0]], velocities: vec![[0.0; 3]; 3], total_length: 30.0 };
+        // These four synthetic fixtures also ran through whole original
+        // 0x010F7190 -> 0x010E2EB0, with no substituted callback or output.
+        for (previous, current, distance, speed, next_distance, next_speed, z, at_end) in [
+            (0, 1, 10.0, 5.0, 15.0, 4.0, 315.0, false),
+            (0, 1, 10.0, -5.0, 5.0, -6.0, 305.0, false),
+            (0, 1, 29.0, 5.0, 34.0, 4.0, 330.0, true),
+            (1, 0, 10.0, 5.0, 15.0, 4.0, 315.0, false),
+        ] {
+            let birth = Life4Birth { speed, acceleration: -1.0, distance,
+                secondary_effect_delay: 1 };
+            let mut travel = Life4Travel::from_birth(birth);
+            assert_eq!(travel.distance, [distance; 2], "native birth initializes both buffers");
+            travel.distance[current] = 999.0;
+            let flags = ((previous as u32) << 25) | ((current as u32) << 24);
+            let sample = travel.advance_path(flags, &path, [100.0, 200.0, 300.0]).unwrap();
+            assert_eq!(travel.distance[previous], distance);
+            assert_eq!(travel.distance[current], next_distance);
+            assert_eq!(travel.speed, next_speed);
+            assert_eq!(sample, PathSample { position: [100.0, 200.0, z], at_end });
+            assert_eq!(travel.secondary_effect_delay, 1,
+                "query/end/secondary policy runs after this travel phase");
+        }
+        let mut travel = Life4Travel::from_birth(Life4Birth { speed: 5.0,
+            acceleration: -1.0, distance: 10.0, secondary_effect_delay: i16::MAX });
+        travel.advance_path(1 << 24, &path, [100.0, 200.0, 300.0]).unwrap();
+        let next = travel.advance_path(1 << 25, &path, [100.0, 200.0, 300.0]).unwrap();
+        assert_eq!((travel.distance, travel.speed), ([19.0, 15.0], 3.0));
+        assert_eq!(next.position, [100.0, 200.0, 319.0], "secondary delay does not postpone movement");
+        let before = travel;
+        assert!(travel.advance_path(0, &path, [f32::NAN, 0.0, 0.0]).is_err());
+        assert_eq!(travel, before, "project input rejection leaves the phase unchanged");
+        let invalid = ParticlePath { points: Vec::new(), velocities: Vec::new(), total_length: 0.0 };
+        assert!(travel.advance_path(0, &invalid, [0.0; 3]).is_err());
+        assert_eq!(travel, before);
     }
 
     #[test]
