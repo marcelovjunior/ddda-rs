@@ -178,3 +178,60 @@ fn player_predicates_and_table_match_the_original() {
         }
     }
 }
+
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+}
+fn u32s(v: &Value) -> Vec<u32> {
+    v.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect()
+}
+
+#[test]
+fn every_action_constructor_matches_the_original() {
+    use ddnative::action;
+    let Some(cases) = vectors("action_ctor_family") else { return };
+    assert_eq!(cases.len(), 957);
+    for c in &cases {
+        let mut obj = hex(c["in"].as_str().unwrap());
+        assert!(action::construct(Some(&mut obj), u(c, "vtable")));
+        assert_eq!(obj, hex(c["out"].as_str().unwrap()), "constructor {:#010x}", u(c, "addr"));
+        assert!(!action::construct(None, u(c, "vtable")));
+    }
+}
+
+#[test]
+fn player_joint3_position_matches_the_original() {
+    use ddnative::character::player_joint3_position;
+    let Some(cases) = vectors("player_vf85") else { return };
+    for c in &cases {
+        let row: [u32; 4] = u32s(&c["row"]).try_into().unwrap();
+        let origin: [u32; 4] = u32s(&c["origin"]).try_into().unwrap();
+        let got = player_joint3_position(u(c, "map3") as u8, u(c, "joints"),
+            |_| row.map(f32::from_bits), origin.map(f32::from_bits));
+        assert_eq!(got.map(f32::to_bits).to_vec(), u32s(&c["out"]), "{c}");
+    }
+}
+
+#[test]
+fn enemy_blend_matches_the_original() {
+    use ddnative::enemy::{blend, BlendSource, BlendTarget};
+    let Some(cases) = vectors("enemy_vf195") else { return };
+    for c in &cases {
+        let srcs: Vec<BlendSource> = c["srcs"].as_array().unwrap().iter().map(|s| BlendSource {
+            values: u32s(&s["values"]).iter().map(|&b| f32::from_bits(b)).collect::<Vec<_>>().try_into().unwrap(),
+            t: f32::from_bits(u(s, "t")),
+        }).collect();
+        let n = u(c, "n") as usize;
+        let mut tgts = vec![BlendTarget { state_08: 0x7777_7777, value_114: 0.0, value_118: 0.0 }; n];
+        let null_src = u(c, "null_src") != 0;
+        let null_tgt = u(c, "null_tgt") != 0;
+        blend((!null_src).then_some(&srcs[..]), (!null_tgt).then_some(&mut tgts[..]));
+        for (i, want) in c["tgts"].as_array().unwrap().iter().enumerate() {
+            let want = u32s(want);
+            assert_eq!(tgts[i].state_08, want[0], "{c}");
+            if want[0] == 4 {
+                assert_eq!((tgts[i].value_114.to_bits(), tgts[i].value_118.to_bits()), (want[1], want[2]), "{c}");
+            }
+        }
+    }
+}

@@ -68,6 +68,13 @@ def build():
         for line in path.read_text(encoding="utf-8").splitlines():
             if "Translated from" in line:
                 ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    # families: same body modulo one constant, each member replayed by the
+    # family's differential test (E:/ddda-re/notes/native/families/*.json)
+    import json
+    for fam in (EXPORT.parent / "native" / "families").glob("*.json"):
+        f = json.loads(fam.read_text())
+        if f["representative"] in ported:
+            ported.update(f["members"])
     db.executemany("UPDATE functions SET status='verified' WHERE address=?", [(a,) for a in ported])
     db.execute("CREATE INDEX calls_caller ON calls(caller)")
     db.execute("CREATE INDEX calls_callee ON calls(callee)")

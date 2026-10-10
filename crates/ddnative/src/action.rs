@@ -76,3 +76,33 @@ pub fn base_exit_status(o: &mut Owner) {
         o.status_2e34 = 0;
     }
 }
+
+/// The initial state an action constructor gives the first 0x54 bytes of a
+/// new action object: the class vtable at +0x00, zero in every word of
+/// +0x04..+0x48 (the floats +0x24..+0x40 are +0.0), and a zero byte at
+/// +0x50. Bytes +0x4C..+0x50 and +0x51.. are left as they were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewAction {
+    pub vtable: u32,
+}
+
+impl NewAction {
+    /// Writes the constructor's fields into an object image.
+    pub fn write(&self, obj: &mut [u8]) {
+        obj[0..4].copy_from_slice(&self.vtable.to_le_bytes());
+        obj[4..0x4C].fill(0);
+        obj[0x50] = 0;
+    }
+}
+
+/// The in-place constructor shared by 957 action classes (`vf16` of
+/// cEm*Act*, cAI*, ...): with memory, initialises it for `vtable` and
+/// returns it; without (a null pointer), returns null. Each class differs
+/// only in its vtable constant (`research/native` finds the family).
+// Translated from 0x008C7780 (DDDA.exe 2017-12-13 Steam), cEm0100Action::vf16,
+// and every same-body constructor listed in the private family file.
+pub fn construct(memory: Option<&mut [u8]>, vtable: u32) -> bool {
+    let Some(obj) = memory else { return false };
+    NewAction { vtable }.write(obj);
+    true
+}

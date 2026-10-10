@@ -90,3 +90,17 @@ pub fn player_vf187(scene_state: u32, value_207c: &mut f32) {
 pub fn player_vf100(row_5720: u32, arg: u32, table: impl Fn(u32) -> u8) -> u8 {
     table((row_5720 << 8).wrapping_add(arg))
 }
+
+/// `uPlayerBase::vf85`: the world position of the joint the model's bone
+/// map names at index 3 (`+0x368` map, `+0x364` joint array, 0xA0 bytes
+/// per joint, its world row at joint+0x40); without that joint (map byte
+/// 0xFF, or a joint address that wraps to zero) the model's own world
+/// origin (`+0xE0`, as `uObjModel::vf85`).
+// Translated from 0x00B84300 (DDDA.exe 2017-12-13 Steam), uPlayerBase::vf85.
+pub fn player_joint3_position(map_byte3: u8, joints_364: u32,
+    joint_row: impl Fn(u32) -> [f32; 4], origin: [f32; 4]) -> [f32; 4] {
+    let idx = u32::from(map_byte3);
+    let joint = joints_364.wrapping_add(idx * 0xA0);
+    let row = if idx == 0xFF || joint == 0 { origin } else { joint_row(joint) };
+    row.map(crate::x87_copy)
+}
