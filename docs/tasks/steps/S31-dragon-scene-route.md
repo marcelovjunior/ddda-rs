@@ -288,3 +288,32 @@ and are bypassed by mode3. `0x01629540` is the native default up vector.
 The optional capsule API remains approved, using actual D3 height and
 the sourced ordinary radius, with no HumanEdit multiplication or default
 height. No capsule API or production actor was activated in this batch.
+
+**Optional mode3 capsule provider continuation (source only, unrun):**
+`NpcBody::mode3_scenery_capsule` now accepts the caller's actual installed
+shared adjustment table. It returns `None` for an unsupported/missing
+HumanEdit controller, preserving other NPC load behavior, and resolves
+the height from D3. Further disassembly resolves the active radius too:
+`0x00AC50D0..0x00AC50DA` writes D4 into body+0x1E6C = collision+0xD8C,
+also written by `0x00B5F0A0`; `0x0076C72D` passes this word to `0x00CCE580`.
+The constructor's35 radius is therefore not the authoritative value after
+common action entry. The new provider uses D3/D4 and does not change the
+existing gauge's constant or unrelated NPC load policy.
+
+`ordinary_mode3_capsule` translates the original positive-height
+normalization, endpoint shortening and short-span collapse, preserving
+the actual radius and the default up direction below the source epsilon.
+Invalid/nonpositive radius, nonfinite values and overflowing squared
+height/radius are rejected as explicit project validation policy.
+No default height/radius, HumanEdit multiplication, actor sweep, damage,
+ground contact or interface completion was introduced.
+
+Two new regression names are **uncompiled/unrun**:
+`ordinary_mode3_capsule_shortens_real_height_and_collapses_short_spans`
+and `installed_beach_mode3_capsule_uses_shared_adjustment_height_not_human_factor`.
+The installed case resolves the manager's first adjustment resource from
+the player's exe, checks NPC704's distinct HumanEdit factor, and verifies
+that D4 controls the radius and missing/invalid observations do not obtain
+a fallback. A bounded original-instruction `0x00CCE580` proof script is
+prepared privately but has not been run. The previous178-pass acceptance
+belongs only to source `d3afc703`; it does not validate this continuation.
