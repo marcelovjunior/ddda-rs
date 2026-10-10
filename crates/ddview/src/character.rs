@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::DynamicSkinnedMeshBounds;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
@@ -666,6 +667,27 @@ fn diagnostic_group_colour(group: u16) -> Color {
     Color::hsl((f32::from(group) * 0.13).fract() * 360.0, 1.0, 0.5)
 }
 
+/// Build bounds from the same joints and influences that deform the mesh.
+/// Rest-pose bounds rejected the elder's ears/hair at ev10 frame 1010.
+/// Bevy 0.19.1's VisibilityPlugin::update_skinned_mesh_bounds reads the mesh
+/// asset each frame, so it must remain in MAIN_WORLD after GPU extraction.
+fn skinned_part(
+    mut mesh: Mesh,
+    meshes: &mut Assets<Mesh>,
+    inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
+    joints: &[Entity],
+) -> (Mesh3d, SkinnedMesh, DynamicSkinnedMeshBounds) {
+    mesh.asset_usage |= RenderAssetUsages::MAIN_WORLD;
+    // The character builder installs matching position/index/weight lengths
+    // and the formats required by the bounds generator and skin shader.
+    mesh.generate_skinned_mesh_bounds().expect("character skin attributes");
+    (
+        Mesh3d(meshes.add(mesh)),
+        SkinnedMesh { inverse_bindposes, joints: joints.to_vec() },
+        DynamicSkinnedMeshBounds,
+    )
+}
+
 /// Spawns the skinned meshes of one model on `joints` (one per bone).
 /// Returns the drawn groups only when the diagnostic is enabled.
 #[allow(clippy::too_many_arguments)]
@@ -895,13 +917,7 @@ fn spawn_meshes(
             };
             log_part("spawned", &alpha);
         }
-        let mut e = commands.spawn((
-            Mesh3d(meshes.add(mesh)),
-            SkinnedMesh {
-                inverse_bindposes: bindposes_handle.clone(),
-                joints: joints.to_vec(),
-            },
-        ));
+        let mut e = commands.spawn(skinned_part(mesh, meshes, bindposes_handle.clone(), joints));
         // 0x00ffc350 uses the first weight bound's bone-space sphere center
         // when primitive flag bit2 selects per-primitive transparent sorting.
         let bound = first_bound.and_then(|bytes| {
@@ -1098,6 +1114,56 @@ fn undummy(loader: &Loader, path: &str) -> String {
         full
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn animated_part_enters_and_leaves_camera_view_with_its_joint() {
+        use bevy::asset::AssetPlugin;
+        use bevy::camera::{CameraProjection, primitives::Aabb, visibility::{VisibilityPlugin, VisibleEntities}};
+        use bevy::mesh::MeshPlugin;
+        use std::any::TypeId;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), MeshPlugin, TransformPlugin, VisibilityPlugin));
+        let projection = PerspectiveProjection { fov: 45f32.to_radians(), aspect_ratio: 1.0, near: 0.16, far: 100.0, ..default() };
+        let camera = app.world_mut().spawn((
+            Camera::default(), VisibleEntities::default(),
+            projection.compute_frustum(&GlobalTransform::IDENTITY),
+        )).id();
+        let joint = app.world_mut().spawn(Transform::IDENTITY).id();
+        let inverse = app.world_mut().resource_mut::<Assets<SkinnedMeshInverseBindposes>>()
+            .add(SkinnedMeshInverseBindposes::from(vec![Mat4::IDENTITY]));
+        // This part is above the view at rest. Event motions likewise move
+        // face parts below their rest bounds while their triangles stay visible.
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[-0.1,2.0,-1.0],[0.1,2.0,-1.0],[0.0,2.1,-1.0]]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(vec![[0;4];3]));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[1.0,0.0,0.0,0.0];3]);
+        mesh.insert_indices(Indices::U32(vec![0,1,2]));
+        let bundle = skinned_part(mesh, &mut app.world_mut().resource_mut::<Assets<Mesh>>(), inverse, &[joint]);
+        let handle = bundle.0.0.clone();
+        let part = app.world_mut().spawn((bundle, Transform::IDENTITY, Visibility::Visible)).id();
+        let visible = |app: &App| app.world().get::<VisibleEntities>(camera).unwrap()
+            .get(TypeId::of::<Mesh3d>()).contains(&part);
+        app.update(); app.update();
+        assert!(!visible(&app));
+        let rest = *app.world().get::<Aabb>(part).unwrap();
+        app.world_mut().get_mut::<Transform>(joint).unwrap().translation.y = -2.0;
+        app.update();
+        assert!(visible(&app), "animated geometry in view must survive frustum culling");
+        let posed = app.world().get::<Aabb>(part).unwrap();
+        assert!((posed.center.y-rest.center.y+2.0).abs() < 1e-5);
+        assert!(app.world().resource::<Assets<Mesh>>().get(&handle).unwrap()
+            .asset_usage.contains(RenderAssetUsages::MAIN_WORLD));
+        // Its asset must still be available when the joint moves again.
+        app.world_mut().get_mut::<Transform>(joint).unwrap().translation.y = 0.0;
+        app.update();
+        assert!(!visible(&app));
     }
 }
 
