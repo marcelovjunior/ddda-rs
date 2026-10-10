@@ -998,3 +998,54 @@ simple cascade far-range change is insufficient. Native per-stage
 back-forward properties must be loaded from stage SDL, not copied as bulk
 constants. That follow-up needs normal source/GPU leases and queue timing;
 root S30/core and the queued children received this actual build handoff.
+
+### Root handoff: completed compact-default named trace
+
+Under head #7449/#7538, root ran the frozen `4f8f726` trace executable
+above with the compact flag absent, installed field checkpoint in ECON-v2
+format, x1 time, GPU mesh builder, unchanged default backend and 1920x1080.
+The checkpoint SHA-256 was
+`3690FEEFF71565855422B65BC87CF0D10B50609B4E89565C4ABC7E36B27E4208`.
+There was no demo, screenshot exit or diagnostic colour override. The
+normal GPU claim preceded launch; no Cargo/rustc/CPU diagnostic overlapped.
+
+Viewer PID34172 and harness session80963 actually exited **0**, after
+28.1841818 wall seconds. The stage100 trace window ran from
+11:47:47.949319 to 11:47:50.961720 UTC, **3.012401 wall seconds**, and its
+own completed-window condition requested normal application exit. The
+owned viewer was absent and original DDDA PID23408 remained at its verified
+install path before normal lease release #7561. No watchdog truncation
+or original-game control occurred.
+
+Actual Chrome instant markers, rather than the separate perf elapsed
+origin, bound the analysis: start **18.2024448 s**, end **21.214852 s**.
+Streaming analysis trims 100 ms from each boundary and selects the actual
+main thread `(pid1, tid0)`. It contains **209 complete main update spans**.
+Strict parsing passes with no unmatched, truncated or terminal open scopes;
+`--allow-open-scopes` was not used. The named systems migrate among compute
+workers, so the following groups combine matching system names across
+threads, with **210 complete runs each**:
+
+| Named CPU system | Total inclusive/exclusive CPU ms | CPU ms per complete main update |
+| --- | ---: | ---: |
+| Shadow `write_binned_instance_buffers` | 439.9097 | 2.104831 |
+| `prepare_preprocess_bind_groups` | 320.4129 | 1.533076 |
+| `prepare_skins` | 86.8364 | 0.415485 |
+
+Inclusive and exclusive agree for these three system scopes. Across
+threads and enclosing spans, CPU times overlap; the rows are a ranking,
+not additive frame time, critical-path savings, GPU timing or an FPS gain.
+The traced main-update median12.898 ms/p95 15.9137 ms is diagnostic only.
+Compact palettes remain the accepted default; this capture adds no code.
+
+The 320,134,513-byte raw trace, launch/exit/provenance logs, marker events,
+strict streaming summary and grouped ranking remain private under
+`E:/ddda-re/notes/steps/s41/field-compact-default-trace-4f8f726.*`.
+No game records, screenshots or trace data enter the repository.
+
+Next proposed target is finite native shadow caster extent, because shadow
+bin-buffer writing is the largest of these named CPU costs. Any adapter
+must handle both CPU directional visibility and GPU extracted shadow
+frusta, and obtain native stage properties at runtime. Head must assign
+that source scope before implementation; no culling or quality change is
+claimed here.
