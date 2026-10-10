@@ -61,8 +61,14 @@ def build():
     db.execute("UPDATE functions SET status='translated' WHERE address IN (SELECT address FROM cites WHERE kind='code')")
     # crates/ddnative holds whole 1:1 ports, each with a differential test
     # against the original (docs/METHODOLOGY.md, "The 1:1 pipeline")
-    db.execute("UPDATE functions SET status='verified' WHERE address IN "
-               "(SELECT address FROM cites WHERE file LIKE 'crates%ddnative%src%')")
+    # only the "Translated from" line of a port counts (callees named in
+    # doc comments are not verified by it)
+    ported = set()
+    for path in REPO.glob("crates/ddnative/src/**/*.rs"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "Translated from" in line:
+                ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    db.executemany("UPDATE functions SET status='verified' WHERE address=?", [(a,) for a in ported])
     db.execute("CREATE INDEX calls_caller ON calls(caller)")
     db.execute("CREATE INDEX calls_callee ON calls(callee)")
     db.commit()
