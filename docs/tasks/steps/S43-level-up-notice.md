@@ -35,3 +35,44 @@
 
 Killing goblins in `--opening` until a level-up shows the original's
 notice with the right level; the Result names the sources.
+
+## Results (source checkpoint, 2026-10-10, codex-70)
+
+- Creation confirmed: `0x00B5BD20` -> `0x00452CE0` queues a category-0
+  Arisen or category-1 eligible pawn record through `0x00454B90`;
+  `0x00452780` creates `uGUICharacterLevelUp` through `0x00677240`.
+  Byte `+0x298` means Arisen (true) versus pawn (false), not local/remote.
+- Correction to the brief: `0x00676BE0`/`0x00676C00` resolve another GUI
+  class. The actual LevelUpBase overrides are vf09 `0x00676F20` and vf11
+  `0x00677100`. `0x006772A0` selects **sequence** ids 3/4/5 (Arisen) or
+  12/13/14 (pawn), rather than message ids. Init `0x00676D20` sets the
+  hold counter to 120 native frame units; `0x00677030` decrements it after
+  the intro finishes, then starts the exit sequence.
+- The install supplies `id/cockpit/level_info` from `rom/game_main.arc`,
+  cockpit/common messages from `rom/bbsrpg_core.arc`, and the layout's bitmap
+  font and textures. Native vf60 binds object indices 8/9 (level/name),
+  common message 88 to object 5, and cockpit message 4 to object 4. The
+  installed enter/exit global tracks span 8/6 frames respectively; panel
+  pointer-array indices are 1 (Arisen) and 15 (pawn).
+- Added a dedicated `level_up_notice` presenter with per-owner observation
+  and queueing. It reads authoritative `OpeningRes.host.progression` and
+  `PlayState.locals/follow`, initializes a silent baseline, preserves levels
+  crossed between render frames, and excludes remote/support-pawn records.
+  It never awards experience or edits the host. The only shared-file edits
+  are the approved module declaration and plugin installation in main.rs.
+- Explicit limits: Arisen name is unported because the current host/editor
+  has no canonical name (head accepted follow-up in board #6374); actual
+  main-pawn names come from the Rift record. The level-200 global string
+  at `0x018D9230` is `<ICON INFINITY>` (codex-1 read-only live probe #6344),
+  so that notice reports an unsupported icon instead of inventing text.
+  Native spline interpolation, transient local flashes, font filters,
+  general GUI scripting, rank-up notices and guest progression replication
+  remain open. Enter/exit endpoints and duration are authored; intermediate
+  interpolation is explicitly a viewer policy. Co-op queue eviction and
+  suppressing the panel during events/pause are presentation policies.
+- Tests and the release build are **pending**, queued for the normal shared
+  M5 target behind codex-66. No GUI has been launched. This source checkpoint
+  is not Ready and has not been compared against the original.
+- Next action: integrate reviewed committed main, run the full ddview suite
+  and default release build, then provide a pinned-binary capture request for
+  a real opening kill/level-up (no synthetic production award).

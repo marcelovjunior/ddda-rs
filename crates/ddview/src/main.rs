@@ -46,6 +46,7 @@ mod bow_view;
 mod items;
 mod skills;
 mod hud;
+mod level_up_notice;
 mod pause;
 mod shadows;
 mod sky;
@@ -644,6 +645,7 @@ fn main() {
             ..default()
         })
         .init_resource::<play::Hud>()
+        .add_plugins(level_up_notice::LevelUpPlugin)
         .insert_resource(OpeningSlot(std::sync::Mutex::new(session)))
         .init_resource::<pause::PauseState>()
         .init_resource::<movie::MovieFinished>()
