@@ -306,3 +306,23 @@ fn wand_base_refs_match_the_original() {
         assert_eq!(vec![r2[0], r2[1], t], u32s(&c["out"]), "{c}");
     }
 }
+
+#[test]
+fn every_enemy_action_entry_matches_the_original() {
+    use ddnative::action::{enemy_action_enter, EnemyAction, Owner};
+    let Some(cases) = vectors("enemy_action_enter") else { return };
+    for c in &cases {
+        let i = &c["in"];
+        let mut owner = Owner { category_206c: u(c, "cat"), word_2370: u(i, "w2370"), word_2374: u(i, "w2374"),
+            flags_273c: u(i, "flags"), status_2e34: u(i, "status"), pending_2e38: u(c, "pending") };
+        let mut o2ba0 = u(i, "o2ba0");
+        let mut act = EnemyAction { byte_50: 0xEE, owner_54: 1, word_58: 1, word_60: 1, float_64: 1.0,
+            byte_6c: 0, word_70: 1, owner_74: 1 };
+        enemy_action_enter(&mut act, u(c, "owner"), &mut owner, &mut o2ba0, || c["is_class"].as_bool().unwrap());
+        let o = &c["out"];
+        assert_eq!((u32::from(act.byte_50), act.owner_54, act.word_58, act.word_60, act.float_64.to_bits(),
+            u32::from(act.byte_6c), act.word_70, act.owner_74, o2ba0, owner.status_2e34, owner.flags_273c),
+            (u(o, "b50"), u(o, "o54"), u(o, "w58"), u(o, "w60"), u(o, "f64"), u(o, "b6c"), u(o, "w70"),
+             u(o, "o74"), u(o, "o2ba0"), u(o, "status"), u(o, "flags")), "entry {:#010x}: {c}", u(c, "addr"));
+    }
+}

@@ -160,3 +160,43 @@ pub fn wand_base_refs(refs_74_78: &mut [u32; 2], ref_1e4: &mut u32,
         }
     }
 }
+
+/// The action fields the enemy-family action entry writes (+0x50..+0x78).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnemyAction {
+    pub byte_50: u8,
+    /// +0x54: the owner, when its category has bit 0x80; else 0.
+    pub owner_54: u32,
+    pub word_58: u32,
+    pub word_60: u32,
+    pub float_64: f32,
+    pub byte_6c: u8,
+    pub word_70: u32,
+    /// +0x74: the owner, when it is-a the family's class; else 0.
+    pub owner_74: u32,
+}
+
+/// The base entry of the enemy-family actions (cEm0600Action ...
+/// cEm9807Action, cEmDieBoneAction: 16 classes, `vf05`): runs
+/// `cActionBase::vf05` ([`base_enter`]), keeps the owner at +0x54 when its
+/// category has bit 0x80 (and then sets the owner's +0x2BA0 to -1), resets
+/// the action's fields, and keeps the owner at +0x74 when it is-a the
+/// family's class. `owner_is_class` is that DTI walk (the owner's
+/// `vf4`/+0x10 DTI, then parents at +0x10, comparing the id at +4 with
+/// the family's class-id global); it is called on every entry.
+// Translated from 0x004E0EB0 (DDDA.exe 2017-12-13 Steam), cEm9100Action::vf05,
+// and the 15 same-body enemy-family action entries.
+pub fn enemy_action_enter(act: &mut EnemyAction, owner_addr: u32, owner: &mut Owner,
+    owner_2ba0: &mut u32, owner_is_class: impl FnOnce() -> bool) {
+    act.byte_50 = base_enter(owner);
+    act.owner_54 = if owner_addr != 0 && owner.category_206c & 0x80 != 0 { owner_addr } else { 0 };
+    act.word_58 = 0;
+    act.word_60 = 0;
+    act.word_70 = 0;
+    act.float_64 = 0.0;
+    act.byte_6c = 1;
+    if act.owner_54 != 0 {
+        *owner_2ba0 = u32::MAX;
+    }
+    act.owner_74 = if owner_is_class() { owner_addr } else { 0 };
+}
