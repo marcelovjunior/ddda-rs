@@ -34,6 +34,25 @@ impl Pose {
         Self { eye: [v[0],v[1],v[2]], target: [v[3],v[4],v[5]],
             roll_degrees: v[6], fov_degrees: v[7] }
     }
+    /// Type 3 camera interpolation: shortest yaw/pitch arcs, linear target
+    /// and distance. Translated from 0x007e3c70, 0x007d6150, 0x007de430.
+    /// Type 2 instead mixes eye and target independently in world space.
+    pub fn interpolate(self, other: Self, weight: f32, kind: u32) -> Option<Self> {
+        if kind == 2 { return Some(self.mix(other,weight)); }
+        if kind != 3 { return None; }
+        let polar = |p: Self| {
+            let d: [f32;3]=std::array::from_fn(|i|p.eye[i]-p.target[i]);
+            let length=d.iter().map(|v|v*v).sum::<f32>().sqrt();
+            (d[0].atan2(d[2]), if length>f32::EPSILON {(d[1]/length).clamp(-1.0,1.0).asin()} else {0.0}, length)
+        };
+        let (ay,ap,ad)=polar(self);let (by,bp,bd)=polar(other);
+        let angle=|a:f32,b:f32| a+((b-a+std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)-std::f32::consts::PI)*weight;
+        let yaw=angle(ay,by);let pitch=angle(ap,bp);let length=ad+(bd-ad)*weight;
+        let mut result=self.mix(other,weight);
+        let offset=[yaw.sin()*pitch.cos()*length,pitch.sin()*length,yaw.cos()*pitch.cos()*length];
+        result.eye=std::array::from_fn(|i|result.target[i]+offset[i]);
+        Some(result)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
