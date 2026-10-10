@@ -2785,7 +2785,8 @@ fn guest_step(
     let camera_snapshot = c.quest_camera();
     let retired: Vec<_> = s.npcs.keys().copied().filter(|id|
         npc_snapshots.iter().find(|n| n.id == *id).is_none_or(|next|
-            s.guest_npcs.get(id).is_some_and(|old| old.generation != next.generation))).collect();
+            next.combat.is_some_and(|combat| combat.retired)
+                || s.guest_npcs.get(id).is_some_and(|old| old.generation != next.generation))).collect();
     for id in retired {
         s.npc_authored_motion.forget_remote(id);
         if let Some((entity, _, _)) = s.npcs.remove(&id) { view.commands.entity(entity).despawn(); }

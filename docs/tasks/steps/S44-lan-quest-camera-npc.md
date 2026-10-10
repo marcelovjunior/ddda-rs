@@ -67,7 +67,8 @@ documented.
   body (0x00534BC0 gauge, 0x00B988B0/0x00B98AE0 death phases).
 - Guest NPC model/motion resources come from its own install. Host tokens
   hold the exact sampled frame; a frame update does not restart blending,
-  while a new launch or recreated body does. The existing HUD bounds,
+  while a new launch or recreated body does. Permanent retirement removes
+  the rendered entity but keeps the received intel lifetime. The existing HUD bounds,
   camera pull/projection, atlas, fill width and per-camera owners are reused.
   Root UNIT conversion remains separate from the skeleton's body morph.
 - Head #6629 approved the related presentation-only stage handoff because
@@ -85,7 +86,7 @@ documented.
 - Open: S47 appearance replication is a separate schema extension;
   the original visual/LAN comparison, broader NPC specialized body banks,
   corpse alpha presentation (also absent on the local host view), and
-  guest dialogue/menu authority are not claimed by this checkpoint.
+  guest dialogue/menu and door state replication are not claimed by this checkpoint.
 - Next action: full ddnet/ddhost and
   downstream ddview tests plus a release build under the existing leased
   targets; request one nearest-checkpoint LAN camera/gauge capture.
