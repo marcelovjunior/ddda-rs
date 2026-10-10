@@ -12,11 +12,22 @@ param(
     [Parameter(Mandatory)][string]$OutputBase,
     [Parameter(Mandatory)][string[]]$ViewerArgs,
     [ValidateRange(1, 1800)][int]$Seconds = 60,
+    [ValidateRange(10, 1800)][int]$WatchdogSeconds = 120,
     [ValidateSet('auto', 'vulkan', 'dx12')][string]$Backend = 'auto',
+    [ValidateSet('gpu', 'cpu')][string]$MeshBuilder = 'gpu',
+    [Nullable[uint32]]$TraceStage = $null,
+    [ValidateRange(0, 60)][double]$TraceDelay = 5,
+    [ValidateRange(0.001, 30)][double]$TraceSeconds = 10,
     [switch]$Trace,
     [switch]$NoShadows
 )
 $ErrorActionPreference = 'Stop'
+if ($null -ne $TraceStage -and -not $Trace) {
+    throw 'TraceStage requires -Trace and a profile-trace executable.'
+}
+# DDVIEW_PERF_SECONDS uses Instant (wall time after the first perf update).
+# Screenshot/route delays may instead follow scaled virtual time. Keep the
+# launch-relative hard watchdog independent; it may intentionally be shorter.
 $viewerPath = (Resolve-Path -LiteralPath $Viewer).Path
 $outputPath = [IO.Path]::GetFullPath($OutputBase)
 $privateRoot = [IO.Path]::GetFullPath('E:/ddda-re') + [IO.Path]::DirectorySeparatorChar
@@ -41,6 +52,10 @@ $oldSeconds = $env:DDVIEW_PERF_SECONDS
 $oldTrace = $env:TRACE_CHROME
 $oldShadows = $env:DDVIEW_NO_SHADOWS
 $oldBackend = $env:WGPU_BACKEND
+$oldMeshBuilder = $env:DDVIEW_MESH_BUILDER
+$oldTraceStage = $env:DDVIEW_TRACE_STAGE
+$oldTraceDelay = $env:DDVIEW_TRACE_DELAY
+$oldTraceSeconds = $env:DDVIEW_TRACE_SECONDS
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
@@ -51,10 +66,25 @@ try {
     $env:TRACE_CHROME = "$outputPath.trace.json"
     $env:DDVIEW_NO_SHADOWS = if ($NoShadows) { '1' } else { $null }
     $env:WGPU_BACKEND = if ($Backend -eq 'auto') { $null } else { $Backend }
+    $env:DDVIEW_MESH_BUILDER = $MeshBuilder
+    $env:DDVIEW_TRACE_STAGE = if ($null -ne $TraceStage) { [string]$TraceStage } else { $null }
+    $env:DDVIEW_TRACE_DELAY = if ($null -ne $TraceStage) { $TraceDelay.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
+    $env:DDVIEW_TRACE_SECONDS = if ($null -ne $TraceStage) { $TraceSeconds.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
+        watchdog_seconds = $WatchdogSeconds
         backend = $Backend; indirect_validation_env = $env:WGPU_VALIDATION_INDIRECT_CALL
+        time_scale_env = $env:DDVIEW_TIME_SCALE
+        opening_from_env = $env:DDVIEW_OPENING_FROM; opening_step_env = $env:DDVIEW_OPENING_STEP
+        opening_checkpoint_sha256 = if ($env:DDVIEW_OPENING_FROM) {
+            (Get-FileHash -LiteralPath $env:DDVIEW_OPENING_FROM -Algorithm SHA256).Hash
+        } else { $null }
+        demo_fight_env = $env:DDVIEW_DEMO_FIGHT
+        compact_skins_env = $env:DDVIEW_COMPACT_SKINS
+        skin_diagnostics_env = $env:DDVIEW_SKIN_DIAGNOSTICS
+        mesh_builder = $MeshBuilder
+        trace_stage = $TraceStage; trace_delay_seconds = $TraceDelay; trace_window_seconds = $TraceSeconds
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
     $captureProcess = Start-Process -FilePath $viewerPath -ArgumentList ($quotedArguments -join ' ') `
@@ -81,24 +111,48 @@ try {
                 } else { $null }
             })
         }
-        if ($watch.Elapsed.TotalSeconds -gt $Seconds + 180) {
+        if ($watch.Elapsed.TotalSeconds -gt $WatchdogSeconds) {
+            # GPU/CIM sampling can outlast the viewer. Check the cached handle
+            # on both sides of the provenance query, not only the loop wait.
+            if ($captureProcess.HasExited) { break }
             $owned = Get-CimInstance Win32_Process -Filter "ProcessId=$($captureProcess.Id)"
+            if ($captureProcess.HasExited) { break }
             if ($owned -and $owned.ExecutablePath -eq $viewerPath) {
                 'Timed exit failed; stopping only the verified owned viewer.' |
                     Set-Content -LiteralPath "$outputPath.watchdog.txt"
-                Stop-Process -Id $captureProcess.Id
-            } else { throw 'Owned viewer provenance changed; no process was stopped.' }
+                try {
+                    # Kill via the retained Process handle, avoiding a new
+                    # PID lookup that could race with exit/PID reuse.
+                    if (-not $captureProcess.HasExited) { $captureProcess.Kill() }
+                } catch {
+                    # An exit between HasExited and Kill is harmless. A stop
+                    # failure with the owned viewer still alive must surface.
+                    if (-not $captureProcess.WaitForExit(1000)) { throw }
+                }
+            } else {
+                if ($captureProcess.WaitForExit(1000)) { break }
+                throw 'Owned viewer provenance changed; no process was stopped.'
+            }
         }
     }
     $captureProcess.WaitForExit()
-    $captureProcess.ExitCode | Set-Content -LiteralPath "$outputPath.exit.txt"
     Write-Output "Viewer PID $($captureProcess.Id) exited $($captureProcess.ExitCode) after $($watch.Elapsed.TotalSeconds) seconds."
 } finally {
+    # Even if a query/stop races with exit and throws, preserve a numeric OS
+    # exit from our retained handle whenever it is actually obtainable.
+    if ($captureProcess -and $captureProcess.HasExited) {
+        $captureProcess.WaitForExit()
+        $captureProcess.ExitCode | Set-Content -LiteralPath "$outputPath.exit.txt"
+    }
     $gpuSamples | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$outputPath.gpu.json"
     $env:DDVIEW_PERF_SECONDS = $oldSeconds
     $env:TRACE_CHROME = $oldTrace
     $env:DDVIEW_NO_SHADOWS = $oldShadows
     $env:WGPU_BACKEND = $oldBackend
+    $env:DDVIEW_MESH_BUILDER = $oldMeshBuilder
+    $env:DDVIEW_TRACE_STAGE = $oldTraceStage
+    $env:DDVIEW_TRACE_DELAY = $oldTraceDelay
+    $env:DDVIEW_TRACE_SECONDS = $oldTraceSeconds
     if ($captureProcess -and -not $captureProcess.HasExited) {
         Write-Warning "Viewer PID $($captureProcess.Id) still running: retain live/ddview lease until actual exit."
     }
