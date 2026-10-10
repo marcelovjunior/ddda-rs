@@ -561,3 +561,23 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   NPC observations. All admitted canonical intels now contribute positions,
   even without a rendered body. Heading still uses authored placement yaw;
   canonical direction updates from Wait/Place remain unresolved.
+
+### Authored disable flags on materialized NPC intels (codex-31)
+
+- Process registration0x007a74f0 binds Set Disable Flag to0x007aa840.
+  The callback maps twelve authored bits and ORs either a valid NPC's vf180
+  word or, without that body, intel+0x5c0. The mapping is a translated
+  instruction switch, not copied bulk data. Constructor0x00bbbfa0 initializes
+  intel+0x5c0 to zero; intel tick0x00bbcb80 clears a separate bit0x400.
+- The NPC runtime emits typed DisableFlags requests. The host records them
+  on its materialized intel lifetime, includes them in replay hash, preserves
+  them across unchanged placement snapshots and clears them on retirement.
+  Actor-body flag copying and gameplay consumers are still unimplemented;
+  this checkpoint does not infer active/searchable status from these flags.
+- Nine NPC library tests, two installed applied-action tests and eight host
+  placement tests pass. Installed q1 NPC1/NPC2 now emit disable requests and
+  wait at scene1100 without false Finish or unsupported-process quarantine.
+  Host regression covers same-owner retention and replacement reset. Clippy
+  passes with the same existing install.rs lint allowance.
+- Next: source the corresponding clear/set boolean flag callbacks used after
+  the q1 scene transition, then actor eligibility and real Guard completion.
