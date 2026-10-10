@@ -750,6 +750,13 @@ fn compact_skin_palette(
     Some((compact_inverse, compact_joints))
 }
 
+/// Exact compact palettes are the normal renderer path after S41's matched
+/// upload/fidelity checks. Only an explicit zero selects the diagnostic
+/// full-palette path; an empty inherited variable keeps the normal default.
+fn compact_skins_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value != Some(std::ffi::OsStr::new("0"))
+}
+
 /// Spawns the skinned meshes of one model on `joints` (one per bone).
 /// Returns the drawn groups only when the diagnostic is enabled.
 #[allow(clippy::too_many_arguments)]
@@ -769,8 +776,9 @@ fn spawn_meshes(
     eyebrow: Option<ddlook::eyebrow::Eyebrow>,
 ) -> Vec<u16> {
     let group_colours = std::env::var_os("DDVIEW_GROUP_COLOURS").is_some();
-    // Opt-in S41 experiment until matched x1 capture verifies fidelity/gain.
-    let compact_skins = std::env::var("DDVIEW_COMPACT_SKINS").is_ok_and(|value| value == "1");
+    let compact_setting = std::env::var_os("DDVIEW_COMPACT_SKINS");
+    let compact_skins = compact_skins_enabled(compact_setting.as_deref());
+    let skin_diagnostics = std::env::var("DDVIEW_SKIN_DIAGNOSTICS").is_ok_and(|value| value == "1");
     let mut drawn_groups = Vec::new();
     let mut group_materials = HashMap::new();
     // Inverse binds from the rest pose (world = parent world x local in
@@ -987,7 +995,7 @@ fn spawn_meshes(
         let (part_bindposes, part_joints) = if let Some((inverse, joints)) = &compact {
             (bindposes.add(SkinnedMeshInverseBindposes::from(inverse.clone())), joints.as_slice())
         } else { (bindposes_handle.clone(), joints) };
-        if compact_skins {
+        if compact_skins && skin_diagnostics {
             info!("SKIN_PALETTE actor={root:?} model={model_path} mesh={mesh_index} original={} retained={} compacted={}",
                 joints.len(), part_joints.len(), compact.is_some());
         }
@@ -1253,6 +1261,32 @@ fn undummy(loader: &Loader, path: &str) -> String {
 #[cfg(test)]
 mod compact_skin_tests {
     use super::*;
+
+    #[test]
+    fn default_palette_and_explicit_opt_out_select_matching_joint_indices() {
+        use std::ffi::OsStr;
+
+        let mut world = World::new();
+        let joints: Vec<_> = (0..8).map(|_| world.spawn_empty().id()).collect();
+        let inverse = vec![Mat4::IDENTITY; 8];
+        // Empty inherited switches keep the normal path. Only zero is the
+        // diagnostic opt-out; no process-global environment mutation is used.
+        for (setting, compact) in [(None, true), (Some(OsStr::new("")), true),
+            (Some(OsStr::new("1")), true), (Some(OsStr::new("0")), false)] {
+            let mut mesh = mesh();
+            let selected = compact_skins_enabled(setting)
+                .then(|| compact_skin_palette(&mut mesh, &inverse, &joints)).flatten();
+            if compact {
+                let (bind, palette) = selected.unwrap();
+                assert_eq!(palette, [joints[2], joints[6], joints[7]]);
+                assert_eq!(bind.len(), palette.len());
+                assert_eq!(indices(&mesh), &[[0, 1, 0, 2]; 3]);
+            } else {
+                assert!(selected.is_none());
+                assert_eq!(indices(&mesh), &[[2, 6, 2, 7]; 3]);
+            }
+        }
+    }
 
     fn mesh() -> Mesh {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD);

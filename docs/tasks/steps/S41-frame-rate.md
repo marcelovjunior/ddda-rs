@@ -884,3 +884,25 @@ the pair independently, then reverse-order matched replication or a
 named CPU diagnostic under new approval/normal leases to separate upload
 cost from the observed GPU clock change. Root's queued visual captures
 take the released GPU first; no additional GUI was launched.
+
+### Head-approved default promotion prepared; validation pending
+
+Parent #7282 independently viewed both corrected PNGs and accepted the
+upload/fidelity checkpoint. Head #7280 approved compact palettes as the
+normal default, retaining explicit `DDVIEW_COMPACT_SKINS=0` for diagnosis;
+this decision does not remove the documented clock confound. The prepared
+change selects compaction for an absent or empty flag, and full palettes
+only for explicit zero. Per-part SKIN_PALETTE startup logs require
+`DDVIEW_SKIN_DIAGNOSTICS=1`, avoiding thousands of diagnostic log records
+on the ordinary default path. Accepted paired captures already used that
+flag on both sides, so their diagnostic behavior is unchanged.
+
+A new regression exercises actual compact entity/bind/index selection
+for absent/empty/1/0 settings without process-global environment mutation.
+Existing animated matrix/posed AABB and invalid-input transactional
+regressions remain. **This default-promotion source is not yet compiled or
+accepted by full suites/release.** Those checks follow root's quiet visual
+queue and coordination of reviewed-main integration. Head #7286 separately
+approves one reverse-order ON→OFF replication under the same original
+39acf70 pin after root's actual GPU release. No new quality/clock setting,
+renderer ABI experiment or game probe is part of that pair.
