@@ -260,8 +260,8 @@ const CONTROLLER_JOINTS: [(i16, i16); CONTROLLERS] = [
     (225, 232), (225, 233), (0, 0),
 ];
 
-/// The uCnsEdit type 0x00812330 gives an eye joint (not translated: the
-/// viewer leaves these joints alone). `None` for the plain type 0.
+/// The uCnsEdit type 0x00812330 gives an eye/ear joint. Configured active
+/// records are applied by `face_constraint`. `None` for the plain type 0.
 pub fn special_kind(id: u8) -> Option<u32> {
     match id {
         0x51 | 0x58 => Some(0x10),
