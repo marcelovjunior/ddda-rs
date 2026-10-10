@@ -69,6 +69,29 @@ combat snapshot regression sets HP scalars explicitly to check boundary
 and observation behavior; it is not a normal-input hit or route replay.
 No game files, resource dumps or decompiler output are committed.
 
+**Demo command checkpoint:** head5475/5579 approved the independent
+`ddnpcrt::demo` controller and the parser-only `Motion::from_demo_record`
+hook. Installed beach graphs now execute body readiness, authored quest
+flags, actor flag masks and typed Wait/Motion/GotoEx/Damage requests.
+The controller keeps the native ClusterWork lifetime and stops on
+Finish/Kill rather than recreating its Core. Source callbacks are
+`0x00533DC0/0x00533A90`, `0x0056CFF0/0x0056F160`,
+`0x0056DCC0/0x0056E230` and `0x0056EBB0/0x0056EDA0`.
+Command tokens reject stale completions; Wait remains running. GotoEx
+retains the installed trace record. Damage requests a native reaction,
+not an HP subtraction. Actual actor movement, reactions, interface
+results and the body-manager retry byte remain unintegrated.
+
+Installed readiness writes are q0 bits10..14, including NPC708's bit14
+(the earlier S24 prose omitted it). Values are read from each graph,
+without a production NPC-to-bit table. Three installed Demo tests passed
+(compile0.82s, tests3.00s), all eleven NPC unit tests passed
+(compile1.25s, tests0.00s), and the four existing installed applied-action
+tests passed (compile0.77s, tests3.25s), all actual exit0 on the prescribed
+shared target. Interface completion in the command-token test is an
+explicit scalar fixture; no native motion playback or full route replay
+is claimed.
+
 **Open:** production scene entry and event player continuation to q1;
 native Demo Wait/Motion/GotoEx/SetDamage controller/body integration;
 actual S30 damage/FSM integration; persistent dragon-death lifecycle;
