@@ -191,3 +191,100 @@ resolved the compile errors without source changes. The core lease was
 released after actual exit. Reaction helper work is isolated on another
 branch and was not part of this acceptance run; the playable route remains
 open.
+**Independent reaction phase helper (head5831/5842):**
+`ddnpcrt::demo_reaction` translates extra/blow action phases from
+`0x0080E4E0/0x0080E4B0` and `0x0080E520/0x0080E560`. It preserves native
+motion arguments (115 for extra; 102/10A/10B/103 for blow), flags&5
+termination, ground byte exactly1 and the current body's Down observation.
+The action+0x50 completion byte and blow+0x7C down endpoint remain distinct;
+interface completion polls at `0x0056EBB0`. `0x0056EDA0` copies the
+authored payload, rather than polling completion. Unknown ground/layers
+cannot advance to landing/completion, and missing adjustment/Down inputs
+remain explicit errors. No HP write, death flag or timer completion exists.
+
+The helper is not connected to the host. Common damage entry
+`0x0080E190`, real motion/body updates and horizontal velocity
+`0x00B73490` remain explicit requests for a future body adapter. In
+particular `0x0080D500 -> 0x00B86010` toggles selected collision-record
+byte+0x90 bit0x40, not the landing byte. Actual NPC ground comes through
+`0x00BAFB00 -> 0x00B61A20 -> 0x0084BA60 -> 0x00885E30`; the last function
+writes body+0x1ED0 from real scenery flags+0x1B68 under update gate
++0x2398 bit4, with axis-present/mode and ground-check masks. The capsule
+mode3 height is set by `0x0080B450` from max(HumanEdit+0xF74,+0xF78),
+then `0x0076C540 -> 0x00CCE580 -> 0x0079DAB0/0x0079E200` builds/sweeps it.
+Those actual HumanEdit/body/physics providers remain unintegrated.
+
+On `step/s31-demo-reaction`, complete `cargo test -p ddnpcrt` actually
+exited0: 38passed, 0failed, compile18.87s. Three new scalar-observation
+regressions passed in0.02s, covering missing/terminal layers, strict ground
+byte, missing adjustment/Down observations and distinct down/recovery
+endpoints; all existing installed NPC suites also passed. These fixtures
+do not execute a native body, ground query or normal-input route. The core
+lease was released after actual exit. Next: supply source-owned NPC morph
+capsule/scenery/body requests before enabling the helper in the host.
+
+**2026-10-10, codex-80 continuation; helper checkpoint:**
+Head8216 approved integrating the independent reaction helper `f128add`
+with reviewed character-creation main `5192882` on this branch; merge
+`f5842a2` retains both previous acceptance sections. No new test count is
+claimed for the combined source yet.
+
+The nested host module `npc_demo_physics.rs` translates the scalar
+prerequisites of the reaction adapter, without activating that adapter:
+
+- `0x00885E30` preserves the previous ground/wall/ceiling bytes unless
+  body update flags+0x2398 contain bit4. Actual scenery flags+0x1B68 use
+  mask3, or mask0x100003 under the extended check. An existing axis and
+  flag0x400 veto ground; an absent axis does not. Unknown scenery is not
+  a synthetic zero observation.
+- `0x00B73490` projects the original horizontal speed through the body's
+  resolved sine/cosine and runtime base vector, preserving vertical
+  velocity. Only afterwards does it add body delta times acceleration to
+  speed, then clear speed/acceleration when old times new is nonpositive.
+  Input validation is project policy; original CRT trig bit parity is
+  still unverified.
+- `0x0080E190` restores only flags0..5 and9..11 from the saved body flags,
+  sets damage mask0x10 and clears masks0x4/0x8. Common damage
+  entry still requires its other body and collision-record effects.
+
+Three new regressions cover disabled/axis/extended ground observations,
+projection-before-deceleration and a sign crossing, and preservation of
+unrelated flags. On frozen `d3afc70383bccde9065b6a103f0cc716cae3edf5`, the
+**complete** `cargo test -p ddnpcrt -p ddhost --jobs 2` run exited0:
+178passed, 0failed, 0ignored across45 summaries (including both doc suites),
+in336.36s wall. All three new host tests and all three merged reaction
+tests occurred exactly once and passed; no installed tests were skipped.
+The log SHA256 is
+`80D52E41678C9B747A44ABC47A70ECFDB54BF68DD5BD4654E7A5F63BD7CB9619`.
+Source hashes and the clean HEAD were unchanged through the full command;
+normal core lease was released after its actual exit. The first Windows
+PowerShell5 runner aborted on Cargo's ordinary stderr under its error
+policy before any tests; that rejected attempt is preserved privately.
+The successful fresh run used PowerShell7. The six new unused-helper
+warnings reflect that production actor composition is not enabled yet.
+
+Further source evidence: `0x00B5B950` copies the shared player-manager
+resource pointer at+0x970 to every body+0x3348, including NPCs. The manager
+loader at `0x0047E6F8..0x0047E71A` walks the installed path table
+`0x0163E660`; its first pointer resolves `param\pl\other\m_pl000_00`.
+The existing installed adjustment reader therefore supplies slots18/19/1A.
+`0x0076C540` mode3 consumes collision height+0xD88 and radius+0xD8C,
+then delegates to `0x00CCE580`; heights shorter than twice the radius
+collapse the segment to a sphere. The native NPC axis kind is3 in
+`0x00B5F0A0`, rather than the player's axis kind2. No default human height,
+fake ground byte, elapsed landing, navigation completion or HP loss was
+added. Production reaction/GotoEx actors and the full S31 route remain open.
+
+**Capsule source correction (head8286):** the earlier handoff and initial
+provider proposal conflated two inline collision fields. The collision
+object starts at body+0x10E0. HumanEdit max(F74,F78) is written at
+body+0x1E64 = collision+0xD84 by `0x0080B450`; it is **not** the mode3
+height. `0x00AC50B2..0x00AC50BA` and `0x00B5F0A0` write installed adjustment
+D3 into body+0x1E68 = collision+0xD88. Disassembly proves the mode3 branch
+reads radiusD8C at `0x0076C72D`, endpoint heightD88 at `0x0076C753`, calls
+`0x00CCE580` at `0x0076C785`, and jumps directly to `0x0076D3A9`.
+The HumanEdit factorD84 reads at `0x0076D1E3/0x0076D270` belong to mode1
+and are bypassed by mode3. `0x01629540` is the native default up vector.
+The optional capsule API remains approved, using actual D3 height and
+the sourced ordinary radius, with no HumanEdit multiplication or default
+height. No capsule API or production actor was activated in this batch.
