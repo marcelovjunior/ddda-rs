@@ -543,7 +543,8 @@ mod tests {
             mtarc::type_hash("rRomPawnInfo")).unwrap()).unwrap();
         let mut record = info.records[14].clone();
         assert_eq!(record.edit.nickname,884,"installed Rook stock uses the final native story-name override");
-        let ledger = ddnpc::Ledger::parse(&vfs.read(r"etc\item\npclist",mtarc::type_hash("rNpcLedgerList")).unwrap()).unwrap();
+        let ledger_bytes = vfs.read(r"etc\item\npclist",mtarc::type_hash("rNpcLedgerList")).unwrap();
+        let ledger = ddnpc::Ledger::parse(&ledger_bytes).unwrap();
         let saved_name = ledger.entries.iter().find(|entry| entry.id == 504).unwrap().name_j;
         record.edit.set_name(saved_name); // Native stock14 override796420.
         record.info_ex_value[0] = 1000.0;
