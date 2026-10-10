@@ -415,3 +415,43 @@ Next action: run full default/trace viewer acceptance under the normal
 shared-target lease after root's integration checks, then obtain current
 route/town baselines and a bounded field trace. Keep GPU default and all
 performance acceptance open; no CPU mode or shader optimization accepted.
+
+### Current checkpoint trace preparation accepted headlessly
+
+Frozen source `84ed50f` includes reviewed main `4a88b39` (S49 perception),
+S46 resume/termination fixes `7e370f1` / `f0e4e6a` and the bounded trace
+implementation `752c101`. Harness metadata now records/restores trace
+configuration and records checkpoint path/SHA-256, demo step, fight and
+time-scale settings; fractional durations use invariant formatting.
+
+- Full default viewer suite: **86 passed, 0 failed, 2 existing ignored**,
+  compilation 40.77 s. Full `profile-trace` suite: **89 passed, 0 failed,
+  2 existing ignored**, test runtime 12.51 s. The dynamic-callsite,
+  actual-stage/wall-delay/hitch and stage-leave tests all explicitly passed;
+  S35's authored-line-endings test is present, guarding against stale
+  shared-target test artifacts.
+- Trace release build **exit 0**, 44.25 s; default release build **exit 0**,
+  44.64 s. Combined session 31555 actually exited 0. M5 was normally leased
+  and released after both pins, with codex-70 next. Only independent
+  existing leased targets overlapped headless compilation; no performance
+  acceptance may overlap compilation. Existing warnings remain.
+- Trace private pin `E:/ddda-re/notes/steps/s41/ddview-trace-84ed50f.exe`,
+  SHA-256 `23194B5592E359D2FCB1FE0CF65E7DE94C9FB5B3422BAB3E44D6EA283DF1178A`.
+  Default private pin `E:/ddda-re/notes/steps/s41/ddview-default-84ed50f.exe`,
+  SHA-256 `59BC3AD5997E633BD864C81717F16761DFC499B51D7F37DEEB06C91C1B9B1986`.
+- Head #6401 requires GUI checks to restore its current private S46
+  checkpoints, regenerated when save formats change. Proposed batch #6455
+  uses x1 default `FieldSettle` and `WalkOut` saved-host baselines with the
+  demo driver disabled, then x4 `FieldWalk` with the trace feature and
+  stage-100 5 s delay / 10 s window. Checkpoint identity is recorded at
+  launch. This proposal awaits head's decision and head #6460's rescue
+  capture has priority. No own GUI was launched.
+- **Pending:** actual trace startup/window markers, bounded file size,
+  normal process exits, scene/image suitability, current opening/town
+  baseline frame/pass counts and source-supported optimization. Real x1
+  rendering is the FPS acceptance mode; accelerated x4 trace/visual runs
+  are diagnostic only. No gain or optimization default is claimed.
+
+Next: obtain the approved current-scene batch after head releases the GPU
+and compilation is quiet; stream the short field trace with the committed
+analyzer, separating renderer handoff/waits from actual system work.
