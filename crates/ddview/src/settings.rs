@@ -187,6 +187,10 @@ fn menu_setup(
         }
     };
     state.available = true;
+    if args.paused && args.unattended && std::env::var("DDVIEW_SETTINGS_CAPTURE").as_deref() == Ok("1") {
+        state.open = true;
+        info!("graphics settings: capture menu opened from installed option labels");
+    }
     // The controls below are a plain temporary viewer menu using runtime
     // native labels. The original layout/atlas widget renderer is unported.
     commands
