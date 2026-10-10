@@ -32,6 +32,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+#[path = "npc_motion.rs"]
+mod npc_motion;
+
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -226,6 +229,7 @@ pub struct Session {
     npcs: HashMap<u32, (Entity, Vec3, f32)>,
     npc_motions: (Option<mtlmt::Motion>, Option<mtlmt::Motion>),
     npc_moving: HashMap<u32, bool>,
+    npc_authored_motion: npc_motion::View,
     npc_adapter: NpcAdapter,
     demo: Option<Demo>,
     /// `--shots <dir>`: a screenshot per step.
@@ -356,6 +360,7 @@ pub fn prepare(
         npcs: HashMap::new(),
         npc_motions: (None, None),
         npc_moving: HashMap::new(),
+        npc_authored_motion: npc_motion::View::load(&vfs, exe)?,
         npc_adapter,
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
@@ -719,6 +724,10 @@ fn sync_npc_models(
             }
             Err(error) => warn!("opening: NPC {id} body unavailable: {error}"),
         }
+    }
+    let bodies: Vec<_> = session.npcs.keys().copied().collect();
+    if let Err(error) = session.npc_authored_motion.bind(&mut *session.host, &bodies) {
+        session.failure = Some(format!("NPC authored motion body: {error}"));
     }
 }
 
@@ -1442,18 +1451,24 @@ pub fn step(
         if let Ok((mut tr, mut pb)) = roots.get_mut(e) {
             tr.translation = at * UNIT;
             tr.rotation = Quat::from_rotation_y(yaw);
-            if s.npc_moving.get(&id) != Some(&moving) {
-                let m = if moving {
-                    s.npc_motions.1.clone()
-                } else {
-                    s.npc_motions.0.clone()
-                };
-                if let Some(m) = m {
-                    pb.change_motion(m, 6.0);
+            if s.npc_authored_motion.show(&*s.host, id, &mut pb) {
+                // A later locomotion interface must restart its presentation
+                // even when its moving/idle value matches the earlier one.
+                s.npc_moving.remove(&id);
+            } else {
+                if s.npc_moving.get(&id) != Some(&moving) {
+                    let m = if moving {
+                        s.npc_motions.1.clone()
+                    } else {
+                        s.npc_motions.0.clone()
+                    };
+                    if let Some(m) = m {
+                        pb.change_motion(m, 6.0);
+                    }
+                    s.npc_moving.insert(id, moving);
                 }
-                s.npc_moving.insert(id, moving);
+                pb.hold_frame = None;
             }
-            pb.hold_frame = None;
         }
     }
     // The party; during a cutscene the camera belongs to the event.

@@ -50,6 +50,10 @@ pub struct StoryNpcs {
     guards: BTreeMap<u32, GuardAction>,
     dialogue: ddnpcrt::guard::DialogueSlot,
     talks: BTreeMap<u32, GuardTalk>,
+    motion_bodies: HashMap<u32, std::sync::Arc<crate::npc_motion::Banks>>,
+    motion_requests: HashMap<u32, (crate::npc_motion::Token, ddnpcrt::schedule::Motion)>,
+    motions: BTreeMap<u32, crate::npc_motion::Actor>,
+    motion_counter: u64,
 }
 
 impl<D: Data, W: StoryWorld> Host<D, W> {
@@ -265,6 +269,9 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.story_npcs.positions.remove(&(intel.npc as u32));
             self.story_npcs.intel_flags.remove(&(intel.npc as u32));
             self.story_npcs.gauge_visible.remove(&(intel.npc as u32));
+            self.story_npcs.motion_bodies.remove(&(intel.npc as u32));
+            self.story_npcs.motion_requests.remove(&(intel.npc as u32));
+            self.story_npcs.motions.remove(&(intel.npc as u32));
             self.story_npcs.lifetimes.remove(&(intel.npc as u32));
             self.world.observe_npc_intel(stage, target, false);
         }
@@ -332,9 +339,119 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.gauge_visible.get(&npc).copied()
     }
 
+    fn story_npc_motion_command(&self, npc: u32) -> Option<u64> {
+        if let Some(applied) = self.story_npcs.applied.get(&npc).filter(|a| !a.action.applied_finished()) {
+            applied.action.motion_command()
+        } else { self.npcs.npcs.get(&npc).and_then(Npc::motion_command) }
+    }
+
+    /// Called only after the actor adapter materializes this lifetime's
+    /// body and resolves its real resource banks. An intel alone cannot
+    /// play or finish motions. Rebinding the same body is idempotent.
+    pub fn bind_story_npc_motion_body(&mut self, owner: NpcLifetime,
+        banks: std::sync::Arc<crate::npc_motion::Banks>) -> Result<bool, HostError> {
+        if self.story_npc_lifetime(owner.npc) != Some(owner) { return Ok(false); }
+        if !self.story_npcs.motion_bodies.contains_key(&owner.npc) {
+            if let Some((token, _)) = self.story_npcs.motion_requests.get_mut(&owner.npc) {
+                self.story_npcs.motion_counter = self.story_npcs.motion_counter.checked_add(1)
+                    .ok_or_else(|| HostError::Npc("NPC motion launch space exhausted".into()))?;
+                token.launch = self.story_npcs.motion_counter;
+            }
+        }
+        self.story_npcs.motion_bodies.insert(owner.npc, banks);
+        self.start_story_npc_motion(owner.npc)?;
+        Ok(true)
+    }
+
+    pub fn unbind_story_npc_motion_body(&mut self, owner: NpcLifetime) -> bool {
+        if self.story_npc_lifetime(owner.npc) != Some(owner) { return false; }
+        self.story_npcs.motion_bodies.remove(&owner.npc);
+        self.story_npcs.motions.remove(&owner.npc);
+        true
+    }
+
+    pub fn story_npc_motion(&self, npc: u32) -> Option<&crate::npc_motion::Actor> {
+        self.story_npcs.motions.get(&npc)
+    }
+
+    pub fn story_npc_motion_resource(&self, npc: u32) -> Option<&mtlmt::Motion> {
+        let actor = self.story_npcs.motions.get(&npc)?;
+        self.story_npcs.motion_bodies.get(&npc)?.resolve(actor.authored.number).ok().map(|(_, r)| r)
+    }
+
+    fn start_story_npc_motion(&mut self, npc: u32) -> Result<(), HostError> {
+        let Some((token, motion)) = self.story_npcs.motion_requests.get(&npc).cloned() else { return Ok(()) };
+        if self.story_npc_lifetime(npc) != Some(token.owner)
+            || self.story_npc_motion_command(npc) != Some(token.command)
+            || self.story_npcs.motions.get(&npc).is_some_and(|a| a.token == token) { return Ok(()); }
+        let Some(banks) = self.story_npcs.motion_bodies.get(&npc) else { return Ok(()) };
+        let (number, resource) = banks.resolve(motion.number).map_err(HostError::Npc)?;
+        let actor = crate::npc_motion::Actor::new(token, motion, number, resource).map_err(HostError::Npc)?;
+        if let Some(flags) = self.story_npcs.intel_flags.get_mut(&npc) {
+            // 0x00576e10 writes vf180 bit0x20 only on an actual NPC body.
+            if actor.authored.talk { *flags |= 0x20; } else { *flags &= !0x20; }
+        }
+        self.story_npcs.motions.insert(npc, actor);
+        Ok(())
+    }
+
+    /// Consume only the current lifetime and launch's real action terminal.
+    /// Does not expose the unrestricted graph Done shortcut to the adapter.
+    pub fn observe_story_npc_motion(&mut self, observation: crate::npc_motion::Observation) -> bool {
+        let npc = observation.token.owner.npc;
+        if self.story_npc_lifetime(npc) != Some(observation.token.owner)
+            || self.story_npcs.talks.contains_key(&npc)
+            || self.story_npc_motion_command(npc) != Some(observation.token.command) { return false; }
+        let Some(actor) = self.story_npcs.motions.get_mut(&npc) else { return false };
+        if !actor.observe(observation) { return false; }
+        if let Some(applied) = self.story_npcs.applied.get_mut(&npc).filter(|a| !a.action.applied_finished()) {
+            applied.action.motion_done(observation.token.command)
+        } else { self.npcs.npcs.get_mut(&npc).is_some_and(|n| n.motion_done(observation.token.command)) }
+    }
+
+    fn step_story_npc_motions(&mut self) -> Result<(), HostError> {
+        let mut observations = Vec::new();
+        // Type1 is the original sPlayerManager+0x99c, represented by the
+        // host-owned party slot0 in co-op, never the viewing seat.
+        let first = match self.party.slots[0] {
+            Some(crate::Member::Arisen(id)) => self.sim.player(id).map(|p| p.position), _ => None,
+        };
+        for (&npc, actor) in &mut self.story_npcs.motions {
+            if self.story_npcs.talks.contains_key(&npc) { continue; }
+            if let Some(placement) = self.story_npcs.intels.values().find(|p| p.npc as u32 == npc) {
+                if let Some(position) = self.story_npcs.positions.get(&npc) {
+                    let target = match actor.authored.target_type {
+                        0 => Some(actor.authored.target_position), 1 => first,
+                        _ => None, // Party/layout target types require their real actor adapters.
+                    };
+                    actor.target(*position, placement.transform.angle[1], target);
+                }
+            }
+            actor.advance(self.clock.delta).map_err(HostError::Npc)?;
+            observations.push(actor.observation());
+        }
+        for observation in observations { self.observe_story_npc_motion(observation); }
+        Ok(())
+    }
+
     pub(crate) fn record_story_npc_requests(&mut self, requests: &[Request]) {
         for request in requests {
             match request {
+                Request::Motion { npc, command, motion: Some(motion), .. } => {
+                    if let Some(owner) = self.story_npc_lifetime(*npc) {
+                        if self.story_npc_motion_command(*npc) != Some(*command) { continue; }
+                        let Some(launch) = self.story_npcs.motion_counter.checked_add(1) else {
+                            self.npc_errors.push((*npc, "NPC motion launch space exhausted".into())); continue;
+                        };
+                        self.story_npcs.motion_counter = launch;
+                        self.story_npcs.motion_requests.insert(*npc, (crate::npc_motion::Token {
+                            owner, command: *command, launch,
+                        }, motion.clone()));
+                        if let Err(error) = self.start_story_npc_motion(*npc) {
+                            self.npc_errors.push((*npc, error.to_string()));
+                        }
+                    }
+                }
                 Request::Gauge { npc, visible } => {
                     if let Some(gauge) = self.story_npcs.gauge_visible.get_mut(npc) { *gauge = *visible; }
                 }
@@ -455,6 +572,10 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         ready.sort_by_key(|((stage, target), npc, _)|
             (*npc, *stage, target.kind, target.group, target.index));
         for ((stage, target), npc, path) in ready {
+            // Applied graph replacement cannot inherit an old motion launch
+            // whose local command number happens to equal its first command.
+            self.story_npcs.motion_requests.remove(&npc);
+            self.story_npcs.motions.remove(&npc);
             let action = Npc::applied(npc, &*data, &path).map_err(|e| HostError::Npc(e.to_string()))?;
             let normal = self
                 .story_npcs
@@ -478,6 +599,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
     }
 
     pub(crate) fn step_story_npcs(&mut self) -> Result<Vec<Request>, HostError> {
+        self.step_story_npc_motions()?;
         // A departed co-op seat cannot leave a shared dialogue stop behind.
         // Retirement is cancellation, never the original actor's TalkEnd.
         let departed: Vec<_> = self.story_npcs.talks.iter()
@@ -521,6 +643,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         for (&npc, applied) in &mut self.story_npcs.applied {
             if applied.action.applied_finished() {
                 if let Some(normal) = applied.normal.take() {
+                    self.story_npcs.motion_requests.remove(&npc);
+                    self.story_npcs.motions.remove(&npc);
                     self.npcs.npcs.insert(npc, normal);
                 }
             }
