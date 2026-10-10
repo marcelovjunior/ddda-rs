@@ -400,3 +400,126 @@ fn retry_rejects_late_chunk_corruption_without_partial_host_replacement() {
     host.load(&checkpoint, NoStoryData).unwrap();
     assert_eq!(host.save().unwrap().to_bytes(), checkpoint.to_bytes());
 }
+
+struct DeathTestGround;
+impl ddsim::Ground for DeathTestGround {
+    fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { Some(0.0) }
+}
+
+fn death_motion_fixture() -> ddsim::Sim {
+    // Deliberately short synthetic layers test exhaustion, not game durations.
+    let motions = [(0x109, 4), (0x128, 3), (0x129, 5), (0x12a, 3)]
+        .into_iter().map(|(id, frames)| (id, ddsim::RootMotion::none(frames))).collect();
+    ddsim::Sim::new(motions)
+}
+
+#[test]
+fn grounded_collapse_exhausts_actual_layer_before_dead_and_survivor_moves() {
+    use ddsim::{DeathPhase, Input, State};
+    let mut sim = death_motion_fixture();
+    sim.add_player(0, [0.0; 3], 0.0);
+    sim.add_player(1, [100.0, 0.0, 0.0], 0.0);
+    let inputs = [(0, Input { stick: [0.0, 1.0], jump: true, light: true,
+        bow: true, ..Default::default() }), (1, Input { stick: [0.0, 1.0],
+        ..Default::default() })].into_iter().collect();
+    sim.begin_grounded_death(0, false, true).unwrap();
+    sim.step(2.0 / ddsim::MOTION_FPS, &inputs, &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().state, State::Death { phase: DeathPhase::Collapse { pawn: false } });
+    assert_eq!(sim.player(0).unwrap().position, [0.0; 3]);
+    assert!(sim.player(1).unwrap().position[2] > 0.0);
+    sim.step(1.0 / ddsim::MOTION_FPS, &inputs, &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().state, State::Death { phase: DeathPhase::ArisenDead });
+    assert_eq!(sim.player(0).unwrap().frame, 3.0);
+    sim.step(2.0 / ddsim::MOTION_FPS, &inputs, &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().frame, 3.0, "Dead retains completed layer");
+    assert_eq!(sim.player(0).unwrap().attacks_started, 0);
+}
+
+#[test]
+fn pawn_down_phases_require_motion_exhaustion_and_return_is_pawn_only() {
+    use ddsim::{DeathPhase, State};
+    let mut sim = death_motion_fixture();
+    sim.add_player(0, [0.0; 3], 0.0);
+    sim.add_player(1, [100.0, 0.0, 0.0], 0.0);
+    sim.begin_grounded_death(0, true, true).unwrap();
+    sim.begin_grounded_death(1, false, true).unwrap();
+    sim.step(3.0 / ddsim::MOTION_FPS, &Default::default(), &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().state, State::Death { phase: DeathPhase::PawnDownStart });
+    sim.step(1.0 / ddsim::MOTION_FPS, &Default::default(), &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().state, State::Death { phase: DeathPhase::PawnDownStart });
+    sim.step(1.0 / ddsim::MOTION_FPS, &Default::default(), &DeathTestGround);
+    assert_eq!(sim.player(0).unwrap().state, State::Death { phase: DeathPhase::PawnDown });
+    assert!(sim.begin_pawn_return(1).is_err());
+    sim.begin_pawn_return(0).unwrap();
+    assert_eq!(sim.player(0).unwrap().motion_id(), 0x12a);
+    sim.step(1.0 / ddsim::MOTION_FPS, &Default::default(), &DeathTestGround);
+    assert!(sim.player(0).unwrap().incapacitated(), "HP recovery does not bypass get-up");
+}
+
+#[test]
+fn fatal_replacement_clears_queued_actions_and_rejects_untranslated_air() {
+    let mut sim = death_motion_fixture();
+    sim.add_player(0, [0.0; 3], 0.0);
+    let player = sim.player_mut(0).unwrap();
+    player.skills.request = Some(0);
+    player.skills.released.push(123);
+    player.bow_latched = true;
+    assert!(sim.begin_grounded_death(0, false, false).unwrap_err().contains("airborne"));
+    assert_eq!(sim.player(0).unwrap().state, ddsim::State::Wait);
+    sim.begin_grounded_death(0, false, true).unwrap();
+    let player = sim.player(0).unwrap();
+    assert_eq!(player.skills.request, None);
+    assert!(player.skills.released.is_empty());
+    assert!(!player.bow_latched);
+    assert_eq!(player.push_rank(), 13);
+    let mut missing = ddsim::Sim::new(Default::default());
+    missing.add_player(0, [0.0; 3], 0.0);
+    assert!(missing.begin_grounded_death(0, false, true).unwrap_err().contains("missing installed"));
+    assert_eq!(missing.player(0).unwrap().state, ddsim::State::Wait);
+}
+
+#[test]
+fn installed_damage_bank_poses_each_kit_and_zero_hp_cannot_emit_queued_attacks() {
+    use ddenemyrt::fight::{Fight, FightData, Kit};
+    let native = std::path::PathBuf::from(std::env::var_os("DDDA_NATIVE_PC")
+        .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into()));
+    if !native.exists() { return; }
+    let vfs = ddvfs::Vfs::open(&native).unwrap();
+    let file = ddexe::ExeFile::next_to(&native).unwrap();
+    let exe = file.image().unwrap();
+    let data = std::sync::Arc::new(FightData::load(&vfs, &exe).unwrap());
+    let mut fight = Fight::new(data);
+    let mut sim = ddsim::Sim::new(ddhost::install::root_motions(&vfs).unwrap());
+    for (seat, kit) in [(0, Kit::Fighter), (1, Kit::Mage), (2, Kit::Strider)] {
+        sim.add_player(seat, [seat as f32 * 100.0, 0.0, 0.0], 0.0);
+        fight.add_arisen_as(seat, kit);
+        fight.equip(&mut sim, seat);
+        let body = &fight.kit(kit).body;
+        for motion in [0x109, 0x128, 0x129, 0x12a] {
+            let id = ddenemyrt::body::MotionId::new(1, motion & 255);
+            let actual = body.motion(id).expect("installed damage layer");
+            assert!(actual.frame_count > 1);
+            assert_eq!(sim.motion_for(sim.player(seat).unwrap().weapon, motion).unwrap().frame_count,
+                actual.frame_count);
+        }
+        if let ddenemyrt::combat::Victim::Player { hp, .. } =
+            &mut fight.arisen.get_mut(&seat).unwrap().fighter.victim { *hp = 0.0; }
+        let p = sim.player_mut(seat).unwrap();
+        p.volleys_fired = 1;
+        p.attacks_started = 1;
+        p.skills.released.push(123);
+        sim.begin_grounded_death(seat, false, true).unwrap();
+    }
+    fight.players_moved(&mut sim, &DeathTestGround, 1.0);
+    fight.volumes(&sim);
+    assert!(fight.shells.is_empty());
+    assert!(fight.arrows.is_empty());
+    assert!(fight.spells.shells.is_empty());
+    for seat in 0..3 {
+        assert!(fight.arisen[&seat].fighter.attacks.is_empty());
+        assert_eq!(fight.arisen[&seat].volleys_seen, 1);
+        assert_eq!(fight.arisen[&seat].attacks_seen, 1);
+        assert!(sim.player(seat).unwrap().skills.released.is_empty());
+        assert!(!fight.bow_errors.contains_key(&seat));
+    }
+}

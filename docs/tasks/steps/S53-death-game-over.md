@@ -110,3 +110,21 @@ Next action: integrate the proven grounded action/pose chain and real pawn
 revive interactions, then run all touched/downstream suites and the default
 release build. Native GUI/save-choice tracing and original comparison are
 still required. No game install/process writes, pushes or main edits.
+
+Source-only continuation: the sim now has the ordinary grounded collapse,
+Arisen dead, pawn down-start/down and pawn return motion phases. Durations
+come from the installed damage bank, loaded for all three starting kits;
+the fatal slot clears queued melee/skill/bow events and prevents zero-HP
+fighters emitting new attacks. Four additional regressions cover actual
+layer exhaustion, living-seat movement, pawn-only return admission, queued
+attack cancellation and the installed bank. These changes have **not been
+compiled or tested**; the new state also needs the approved network body
+tag. Pawn return completion arbitration, external actor completion, fatal
+root correction and airborne/stone variants remain open.
+
+Native tracing further identified `0x0064FB10`: checkpoint option two sets
+save flag bit zero before entering the option-save GUI in mode 15; other
+load choices clear flag bit two. Its load-side consumer and the complete
+attempt restoration still need tracing. Pawn near-death requests CMC
+situation six, list one, at both `0x00AFCFBF` and `0x00AFD17F`; that is an
+urgent request-list index, not a speech priority or ordinary cooldown list.

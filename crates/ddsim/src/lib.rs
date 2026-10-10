@@ -227,6 +227,33 @@ pub const AIR_ROWS_SHIPPED: [(usize, JumpParam); 3] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeathPhase {
+    /// Grounded action 0x1E, entry 0x00AD56F0, completion 0x00AD5AF9.
+    Collapse { pawn: bool },
+    /// Action 0x26 retains the completed collapse layer (0x00AD7AB0).
+    ArisenDead,
+    /// Action 0x80's first motion, before its timer phase (0x00AFD110).
+    PawnDownStart,
+    /// Action 0x80's looping motion, timer phase two (0x00AFD278).
+    PawnDown,
+    /// Action 0x81; HP is restored by the host on entry (0x00AFD8D0).
+    PawnReturn,
+}
+
+impl DeathPhase {
+    /// Translated motion requests from 0x00AD56F0, 0x00AFD110 and
+    /// 0x00AFD8D0 (DDDA.exe 2017-12-13 Steam). Motion data stays installed.
+    pub fn motion_id(self) -> u16 {
+        match self {
+            Self::Collapse { .. } | Self::ArisenDead => 0x109,
+            Self::PawnDownStart => 0x128,
+            Self::PawnDown => 0x129,
+            Self::PawnReturn => 0x12a,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum State {
     Wait,
     /// `relaxed`: the town variant (area flag 0x50), other motion and speed.
@@ -284,6 +311,9 @@ pub enum State {
     },
     /// Secondary bow action, with the runtime-selected lower-layer motion.
     Bow { phase: BowPhase, motion: u16 },
+    /// Native grounded death/down/return chain. Airborne throw and stone
+    /// variants remain untranslated and must not be admitted here.
+    Death { phase: DeathPhase },
 }
 
 /// Phases of `cPlCliffHangBegin::vf06` (0x00ADA980).
@@ -310,7 +340,9 @@ impl State {
     /// Strike1 0x00B51228, Strike2 0x00B5141B), 13 for WandShot (0x00B4E200).
     pub fn push_rank(self) -> u32 {
         match self {
-            State::Wait => 13,
+            // Collapse/Dead/NearDeath/Return push rank: 0x00AD5809,
+            // 0x00AD7BA4, 0x00AFD05B, 0x00AFDBB0.
+            State::Wait | State::Death { .. } => 13,
             State::Walk { .. } | State::Attack { .. } => 14,
             State::Shot { .. } | State::Bow { .. } => attack::shot::PUSH_RANK,
             State::LedgeGrab { .. } | State::LedgeHang { .. } | State::LedgeClimb { .. } => 0,
@@ -367,6 +399,7 @@ impl State {
             State::Attack { attack } => attack.motion(),
             State::Shot { phase } => phase.motion(),
             State::Bow { motion, .. } => motion,
+            State::Death { phase } => phase.motion_id(),
         }
     }
 
@@ -412,6 +445,7 @@ impl State {
                 | State::Fall
                 | State::LedgeHang { .. }
                 | State::Bow { phase: BowPhase::Ready, .. }
+                | State::Death { phase: DeathPhase::PawnDown }
         )
     }
 }
@@ -565,6 +599,27 @@ pub struct Player {
 }
 
 impl Player {
+    /// A fatal/down/return action owns the actor until native completion.
+    pub fn incapacitated(&self) -> bool {
+        matches!(self.state, State::Death { .. })
+    }
+
+    /// Port bookkeeping when the fatal action replaces an attack slot.
+    /// Already spawned projectiles remain independent world actors.
+    pub fn cancel_attack_actions(&mut self) {
+        self.request = None;
+        self.attack_heading = None;
+        self.turn_to = None;
+        self.skills.request = None;
+        self.skills.active = None;
+        self.skills.released.clear();
+        self.shot = attack::ShotState::default();
+        self.bow = None;
+        self.bow_latched = false;
+        self.bow_shot = BowShotState::default();
+        self.bow_shots.clear();
+    }
+
     /// Action constructors set the push-out rank independently of motion:
     /// Broad Cut 0x00B3E0E0, Tusk Toss 0x00B3E7D0 (Steam 2017-12-13).
     pub fn push_rank(&self) -> u32 {
@@ -1029,6 +1084,46 @@ impl Sim {
         self.players.iter_mut().find(|p| p.id == id)
     }
 
+    /// Admit only the ordinary grounded fatal action, after the host has
+    /// applied the source selector's actor guards. The caller supplies the
+    /// native grounded fact; an airborne request is an explicit error.
+    /// Translated entry from 0x00AD56F0 (DDDA.exe 2017-12-13 Steam).
+    pub fn begin_grounded_death(&mut self, id: PlayerId, pawn: bool, grounded: bool) -> Result<(), String> {
+        let p = self.player(id).ok_or_else(|| format!("unknown death seat {id}"))?;
+        if p.incapacitated() { return Ok(()); }
+        if !grounded { return Err("airborne fatal throw action remains untranslated".into()); }
+        let required: &[u16] = if pawn { &[0x109, 0x128, 0x129, 0x12a] } else { &[0x109] };
+        for &motion in required {
+            if self.motion_for(p.weapon, motion).is_none() {
+                return Err(format!("missing installed death motion {motion:#x}"));
+            }
+        }
+        let p = self.player_mut(id).expect("validated seat");
+        p.cancel_attack_actions();
+        p.velocity = [0.0; 3];
+        p.speed = 0.0;
+        p.hold = None;
+        Self::set_state(p, State::Death { phase: DeathPhase::Collapse { pawn } });
+        Ok(())
+    }
+
+    /// The host must first accept a real type-0x18 contact and restore HP.
+    /// Entry motion translated from 0x00AFD8D0. No Arisen revival here.
+    pub fn begin_pawn_return(&mut self, id: PlayerId) -> Result<(), String> {
+        let p = self.player(id).ok_or_else(|| format!("unknown revive seat {id}"))?;
+        if !matches!(p.state, State::Death { phase: DeathPhase::Collapse { pawn: true }
+            | DeathPhase::PawnDownStart | DeathPhase::PawnDown }) {
+            return Err("return requires a downed pawn".into());
+        }
+        if self.motion_for(p.weapon, DeathPhase::PawnReturn.motion_id()).is_none() {
+            return Err("missing installed pawn return motion 0x12a".into());
+        }
+        let p = self.player_mut(id).expect("validated seat");
+        p.cancel_attack_actions();
+        Self::set_state(p, State::Death { phase: DeathPhase::PawnReturn });
+        Ok(())
+    }
+
     fn period_of(&self, motion: u16) -> f32 {
         self.motions.get(&motion).map_or(30.0, RootMotion::period)
     }
@@ -1058,6 +1153,10 @@ impl Sim {
         while self.pending >= TICK {
             self.pending -= TICK;
             for i in 0..self.players.len() {
+                if self.players[i].incapacitated() {
+                    self.death_frame(i, TICK * self.players[i].unit_rate);
+                    continue;
+                }
                 let input = inputs.get(&self.players[i].id).copied().unwrap_or_default();
                 let bow = BowInput { held: input.bow, toggle: input.bow_toggle,
                     ..self.players[i].bow_context };
@@ -1071,6 +1170,45 @@ impl Sim {
                 else { self.time_rate(&self.players[i], self.players[i].state) };
             let p = &mut self.players[i];
             p.rate_queue = [p.rate_queue[1], r];
+        }
+    }
+
+    /// Native phase transitions from 0x00AD5AF9 / 0x00AFD110. This slice
+    /// supports actual motion exhaustion only; actor +0x365C's external
+    /// completion signal and collapse quaternion correction remain open.
+    fn death_frame(&mut self, i: usize, dt: f32) {
+        let State::Death { phase } = self.players[i].state else { return };
+        let Some(motion) = self.motion_for(self.players[i].weapon, phase.motion_id()) else { return };
+        let end = motion.period();
+        let p = &mut self.players[i];
+        p.cancel_attack_actions();
+        p.speed = 0.0;
+        match phase {
+            DeathPhase::ArisenDead => {}, // hold the native completed layer
+            // Presentation reads the installed loop point via Body::wrap_frame.
+            DeathPhase::PawnDown => p.frame += dt,
+            DeathPhase::Collapse { pawn } => {
+                p.frame = (p.frame + dt).min(end);
+                if p.frame >= end {
+                    if pawn {
+                        Self::set_state(p, State::Death { phase: DeathPhase::PawnDownStart });
+                    } else {
+                        // Dead does not request a new motion or reset its frame.
+                        p.state = State::Death { phase: DeathPhase::ArisenDead };
+                    }
+                }
+            },
+            DeathPhase::PawnDownStart => {
+                p.frame = (p.frame + dt).min(end);
+                if p.frame >= end {
+                    Self::set_state(p, State::Death { phase: DeathPhase::PawnDown });
+                }
+            },
+            DeathPhase::PawnReturn => {
+                // 0x00AC9240 marks the action finished at real layer end;
+                // normal host slot arbitration after that is not ported yet.
+                p.frame = (p.frame + dt).min(end);
+            },
         }
     }
 
@@ -1357,6 +1495,7 @@ impl Sim {
             return;
         }
         match state {
+            State::Death { .. } => self.death_frame(i, dt),
             State::Bow { .. } => {
                 // Authority/body correction can remove the layer state;
                 // do not retain a bow action with no underlying controller.

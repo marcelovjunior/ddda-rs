@@ -61,9 +61,16 @@ impl FightData {
             ddcombat::damage::Adjust::parse(&crate::body::load::read(vfs, p, "rAdjustParam")?)
                 .ok_or_else(|| format!("{p}: bad table"))
         };
-        let arisen = ArisenData::fighter(vfs)?;
-        let mage = ArisenData::mage(vfs)?;
+        let mut arisen = ArisenData::fighter(vfs)?;
+        let mut mage = ArisenData::mage(vfs)?;
         let mut strider = ArisenData::strider(vfs)?;
+        // Native damage-bank requests: 0x00AD57CD (collapse),
+        // 0x00AFD110 (near-death), 0x00AFD8D0 (return), Steam 2017-12-13.
+        // Read the player's installed data; no copied durations or poses.
+        let damage_bank = crate::body::load::bank(vfs, r"motion\pl\m\m00\m0000_dm\m0000_dm")?;
+        for kit in [&mut arisen, &mut mage, &mut strider] {
+            kit.body.banks[1] = Some(damage_bank.clone());
+        }
         let bow = BowData::load(vfs)?;
         strider.body.banks.resize(10, None);
         strider.body.banks[9] = Some(bow.player_bank.clone());
@@ -596,6 +603,18 @@ impl Fight {
     pub fn players_moved(&mut self, sim: &mut ddsim::Sim, _ground: &dyn ddsim::Ground, step: f32) {
         let seats: Vec<u8> = self.arisen.keys().copied().collect();
         for seat in seats {
+            let blocked = self.arisen[&seat].fighter.victim.dead()
+                || sim.player(seat).is_some_and(ddsim::Player::incapacitated);
+            if blocked {
+                if let Some(p) = sim.player_mut(seat) {
+                    p.cancel_attack_actions();
+                    let a = self.arisen.get_mut(&seat).expect("seat listed");
+                    a.attacks_seen = p.attacks_started;
+                    a.volleys_seen = p.volleys_fired;
+                    a.fighter.attacks.clear();
+                }
+                continue;
+            }
             let kit = self.arisen[&seat].kit;
             let data = self.kit(kit);
             if sim.player(seat).is_some_and(|p| p.weapon != data.weapon()) {
@@ -669,6 +688,10 @@ impl Fight {
     fn fire_arrows(&mut self, sim: &mut ddsim::Sim) {
         for (&seat, _) in &self.arisen {
             let Some(p) = sim.player_mut(seat) else { continue };
+            if self.arisen[&seat].fighter.victim.dead() || p.incapacitated() {
+                p.bow_shots.clear();
+                continue;
+            }
             for shot in std::mem::take(&mut p.bow_shots) {
                 let result = (|| {
                     let context = self
@@ -897,6 +920,11 @@ impl Fight {
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
             (a.fighter.attacks, a.fighter.hurts) = body.volumes(&acts, &pose, u32::from(seat));
+            // Fatal replacement owns the action slot. Never let a previous
+            // skill/weapon activation continue emitting attacks at zero HP.
+            if a.fighter.victim.dead() || p.incapacitated() {
+                a.fighter.attacks.clear();
+            }
         }
         for g in &mut self.goblins {
             self.positions.insert(g.fighter.owner, g.pos);
