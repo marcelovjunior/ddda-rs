@@ -424,6 +424,31 @@ impl Dispatch for Orders {
                     2 => write(ctx, r, status & 1 != 0)?,
                     3 => write(ctx, r, hit)?,
                     4 => write(ctx, r, status & 8 != 0)?,
+                    5 => {
+                        let Some(shape) = shape else { return Ok(()) };
+                        let check = u(r, "mTargetCheckType")?;
+                        if check > 1 { return Ok(()) }
+                        let mut hits = Vec::new();
+                        for target in targets(r) {
+                            // 0x007643d0 resolves type1/group0 to the Arisen,
+                            // groups1..3 to the party's pawn slots. Treat any
+                            // Arisen seat as satisfying that one logical target
+                            // in co-op; it must not require every player nearby.
+                            match (target.kind, target.group) {
+                                (0, _) | (1, 4..) => {}
+                                (1, 0) if !ctx.env.stage.players.is_empty() => hits.push(
+                                    ctx.env.stage.players.iter().any(|p| shape.hit(p.pos, p.yaw))),
+                                (1, 0) => {}
+                                (1, slot) => {
+                                    if let Some(pawn) = ctx.env.stage.pawns.get(slot as usize - 1) {
+                                        hits.push(shape.hit(pawn.pos, pawn.yaw));
+                                    }
+                                }
+                                _ => return Err(unimplemented(ctx, p, "AreaHit target positions outside the party")),
+                            }
+                        }
+                        write(ctx, r, area_hit_targets(check, &hits))?;
+                    }
                     6 => {
                         if hit {
                             let want = s(r, "mNpcID")?;
@@ -444,7 +469,7 @@ impl Dispatch for Orders {
                             write(ctx, r, n > 0)?;
                         }
                     }
-                    _ => return Err(unimplemented(ctx, p, "mAct 5/7/8")),
+                    _ => return Err(unimplemented(ctx, p, "mAct 7/8")),
                 }
             }
             // Translated from 0x005c0ca0; the per-kind counts are host
@@ -567,6 +592,13 @@ fn tutorial_state(ctx: &mut OrderCtx, p: &Process) -> Result<(), Error> {
             }
         }
     }
+}
+
+// Translated from 0x005c2d70 case5 (DDDA.exe 2017-12-13 Steam).
+// Unresolved/non-model targets are skipped by the caller; no resolved
+// model is false even for the all-targets mode.
+fn area_hit_targets(check: u64, hits: &[bool]) -> bool {
+    !hits.is_empty() && if check == 0 { hits.iter().all(|hit| *hit) } else { hits.iter().any(|hit| *hit) }
 }
 
 /// Every cLinkUnit::cTarget under a record, in order.
@@ -947,5 +979,19 @@ pub fn reward<D: Data + ?Sized>(data: &D, quest: u32) -> Result<Vec<Request>, Er
         }]);
     }
     Ok(vec![])
+}
+
+#[cfg(test)]
+mod area_target_tests {
+    #[test]
+    fn all_and_any_require_at_least_one_resolved_model() {
+        for mode in [0, 1] {
+            assert!(!super::area_hit_targets(mode, &[]));
+            assert!(!super::area_hit_targets(mode, &[false, false]));
+            assert!(super::area_hit_targets(mode, &[true, true]));
+        }
+        assert!(!super::area_hit_targets(0, &[true, false]));
+        assert!(super::area_hit_targets(1, &[true, false]));
+    }
 }
 

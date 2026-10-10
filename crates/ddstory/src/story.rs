@@ -92,6 +92,9 @@ pub struct StageState {
     pub valid_quests: u32,
     /// NPC units this frame (from [`crate::Inputs`]).
     pub npcs: Vec<crate::NpcUnit>,
+    /// Current Arisen seats and party pawn slots for linked-target shape checks.
+    pub players: Vec<crate::Player>,
+    pub pawns: Vec<crate::Player>,
     /// sGameSys request and stop flags the script gate reads (0x0044d430);
     /// the host reports them with [`HostEvent::GameFlags`].
     pub game_flags: GameFlags,
@@ -354,6 +357,8 @@ impl<D: Data> Story<D> {
         }
         let events = self.data.event_table().cloned();
         self.stage.npcs = inputs.npcs.clone();
+        self.stage.players = inputs.players.clone();
+        self.stage.pawns = inputs.pawns.clone();
         // 0x00484050: started, not finished quests (q < 0x80, not 31, not a
         // sudden quest); the per-quest log-slot test is read as "has a log
         // entry" (guessed).

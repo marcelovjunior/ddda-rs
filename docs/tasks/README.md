@@ -150,7 +150,7 @@ Codex lane: see `docs/CODEX.md`.
 | [opening-prologue](opening-prologue.md) | Opening slice: the playable prologue (stage 380) | core | codex-1 | partial merge (setup, encounter facts); chimera + playable route open |
 | [chara-creation-ui](chara-creation-ui.md) | Opening slice: character creation (stage 801) | core | codex-1 | assigned (slice 5) |
 | [opening-movie](opening-movie.md) | Opening slice: WMV movie playback | core | codex-1 | assigned (slice 6) |
-| [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | assigned (slice 7) |
+| [road-to-encampment](road-to-encampment.md) | Opening slice: q0003, field streaming, the Encampment | core | codex-1 | merged 2026-10-09 |
 | [skill-vfx](skill-vfx.md) | Opening slice: effects for attacks, skills, hits | core | codex-1 | assigned (slice 8) |
 | [pawn-actor](pawn-actor.md) | Saved/story pawns as active actors (Rook, prologue companions, Mage input) | core | codex-1 | merged 2026-10-09 |
 | [camera-collision](camera-collision.md) | Follow camera collision as the original (clipping into walls) | core | codex-1 | assigned |

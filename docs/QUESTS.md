@@ -808,3 +808,42 @@ an obstacle. It stops at q0002 boot, before that quest's currently
 untranslated QCT judgment type 18. The displayed completion boundary is
 intentional; it is not a claim that q0002 is playable. No new comparison
 against the original save or original visual sequence has been made.
+
+## q0003: Encampment arrival is not the completion event
+
+The installed `quest\q0003_b00` separates arrival from a cyclops encounter
+and a later report. The first branch waits for stage210, then tests FSM
+volumes3/4 against the linked Arisen target. It requests quest message45;
+near the Riftstone it uses camera8 and quest bits95/30/70. Talking to the
+Riftstone supplies bit5. Leaving its tent through volumes5/9/10 raises
+SceNo1500; the following NPC/camera9 sequence raises1550 and sets bit17.
+The battle branch checks enemy target type2/group20/index0 with
+EnemyCheck flag3 (dead/zero HP), and later raises1700. The report branch
+waits for SceNo1800 before requesting st210 ev00 with end SceNo2000 and
+start position13. Barn's follow-up bit12 raises2100. None of these facts
+allows an arrival adapter to fabricate encounter or conversation success.
+
+The installed `etc\questCtrl\q0003_b00` has seven rows. Bit95 activates
+its Encampment marker; bits5/37/38 update its log, bits17/8/38 change
+markers. Only SceNo exactly2000 clears the quest and sets bit94. Raw table
+records stay in the install; these are interpreted at runtime.
+
+`AreaHit` act5 is now translated for party targets from 0x005c2d70 and
+0x007643d0. Mode0 requires all resolved targets, mode1 any; neither
+succeeds with zero resolved models. Type1/group0 means the original Arisen,
+with any current Arisen seat satisfying that logical target in co-op;
+groups1..3 select pawn slots. Non-party model positions remain an explicit
+unsupported observation. The shape check uses each actor's actual pose,
+independent of the scenario's general detection mask.
+
+Encampment's NPC archive scenario covers SceNo[2600,2800), for a later
+hydra encounter. Callback0x0079d730 returns0 outside that authored range.
+Previously task11 failed even while inactive. The interval gate is now
+translated; acquiring/polling/releasing the active archive lease through
+0x0079d530/0x0079d7a0 is still explicitly unsupported.
+
+Validation: the installed q3 script and QCT run120 ticks for each stage100/
+210 and inside/outside combination. Only an actual second Arisen inside
+stage210's volume requests the voice. No event or SceNo advancement is
+manufactured. This is a headless entry-contract regression, not a walked
+route or original-game comparison.

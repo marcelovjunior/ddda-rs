@@ -847,6 +847,24 @@ fn task_callback(env: &mut Env, e: &Entry) -> Result<u32, Error> {
             env.out.push(Request::Scenario { task: e.param.task, name: e.name.clone(), arg: e.arg.as_deref().cloned() });
             Ok(0)
         }
+        // Translated from 0x0079d730 (DDDA.exe 2017-12-13 Steam).
+        // NPC archive scenarios only acquire their resources within the
+        // authored half-open SceNo interval. Active archive ownership
+        // (0x0079d530 / 0x0079d7a0) remains explicitly unsupported; therefore
+        // there cannot yet be an acquired lease to release outside it.
+        11 => {
+            let Some(arg) = arg.filter(|a| a.class_name == Some("cScenarioArg_NpcArc")) else {
+                return Ok(2);
+            };
+            let start = arg.u("mSceNo_Start").unwrap_or(0) as u16;
+            let end = arg.u("mSceNo_End").unwrap_or(0) as u16;
+            let scene = env.world.sce_no as i32;
+            if scene < i32::from(start) || scene >= i32::from(end) {
+                Ok(0)
+            } else {
+                Err(Error::Unimplemented("active NPC scenario archive ownership (0x0079d530)".into()))
+            }
+        }
         // Translated from 0x00798ce0 / 0x00798250 (DDDA.exe 2017-12-13 Steam):
         // only IDs 1..=11 have callbacks. A null callback retains result zero,
         // so it neither disables nor ends the scenario and emits no action.
@@ -908,8 +926,35 @@ mod tests {
         assert!(env.out.is_empty());
         assert!(env.cmds.is_empty());
         // Known non-null callbacks must still expose missing implementations.
-        areas.tasks[0][0].param.task = 11;
+        areas.tasks[0][0].param.task = 5;
         assert!(matches!(task_callback(&mut env, &areas.tasks[0][0]), Err(Error::Unimplemented(_))));
+    }
+
+    #[test]
+    fn npc_archives_only_load_inside_the_authored_scene_interval() {
+        let host = crate::encounter::EncounterFacts::default();
+        let mut world = crate::World::default();
+        let mut stage = crate::story::StageState::default();
+        let mut out = vec![];
+        let mut cmds = vec![];
+        let mut env = Env { world: &mut world, stage: &mut stage, host: &host,
+            time: Default::default(), out: &mut out, cmds: &mut cmds, events: None };
+        let mut areas = enemy_area([0.0; 3]);
+        let entry = &mut areas.tasks[0][0];
+        entry.param.task = 11;
+        assert_eq!(task_callback(&mut env, entry).unwrap(), 2);
+        entry.arg = Some(Arc::new(Record { class_hash: 0, class_name: Some("cScenarioArg_NpcArc"),
+            fields: vec![("mSceNo_Start".into(), vec![Parameter::Scalar(mtxfs::Value::U(100))]),
+                ("mSceNo_End".into(), vec![Parameter::Scalar(mtxfs::Value::U(200))])] }));
+        for scene in [0, 99, 200, 201, u32::MAX] {
+            env.world.sce_no = scene;
+            assert_eq!(task_callback(&mut env, entry).unwrap(), 0);
+        }
+        for scene in [100, 150, 199] {
+            env.world.sce_no = scene;
+            assert!(matches!(task_callback(&mut env, entry), Err(Error::Unimplemented(_))));
+        }
+        assert!(out.is_empty());
     }
 
     fn enemy_area(anchor: [f32; 3]) -> Scenarios {
