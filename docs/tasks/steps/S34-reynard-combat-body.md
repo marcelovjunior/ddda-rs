@@ -452,3 +452,19 @@ After preserving the PNG and logs, only the executable-path-verified
 owned PID was stopped. Its retained process handle reported actual
 OS exit-1 after421.4 seconds; the wrapper exited1, WMI confirmed no PID,
 and the GPU lease was then released. No original game process was used.
+
+Placement-review diagnostic follow-up leaves production projection intact.
+The optional capture now waits for the actual camera12 resource midpoint
+and reports actor placement, posed model root, rendered model root,
+world bounds/top/anchor, old and current root projection, current anchor
+projection, and old/current camera positions. `TransformHelper` resolves
+the current hierarchy before transform propagation, and a cloned current
+Projection refreshes the viewport aspect for diagnostic comparison only.
+The camera and actor state are never written by this observer.
+Focused release HUD tests passed7 with1 existing ignored (actual exit0,
+compile38.71s/test2.13s), including a changed-lens diagnostic regression
+and unchanged render-camera state. The first attempt exited1 because the
+shared cache supplied S36's unmerged `ddsim::Input.pawn_orders` field;
+a narrow ddsim release clean (7 files/1.5MiB) under the valid M5 lease
+removed it before the successful rerun. Same-frame live evidence and
+any production projection fix are still pending.
