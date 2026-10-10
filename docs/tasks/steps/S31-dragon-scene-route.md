@@ -31,6 +31,89 @@ each exit, and the route continues to q0001 as before.
 
 ## Results
 
+**2026-10-10, codex-80: real-body scenery/joint entry helper checkpoint,
+tested.** Head8627 and parent8655 authorize the real-body continuation;
+accepted main `d02c0cf` was integrated before this batch. `NpcBody` now
+retains the installed model bone-ID map. The common damage joint write
+uses current lifetime-owned attribute bytes and preserves unrelated bits:
+`0x0080D500 -> 0x00B86010` selects model joints through map IDs96/97/99/9B,
+then sets or clears mAttr40. These are **model-joint attributes**, not
+collision records. `uModel::vf23 0x00FFDDB0` copies rModel+110 to body368
+at `0x00FFE00A` and initializes joint+90 at `0x00FFE257`; subsequent
+`0x01054460` and `0x00FFD5D0` do not change that byte. Runtime updates
+such as `0x00B8D980` remain distinct and must retain their current values.
+The API accepts actual held-goods predicate observations; it cannot assume
+that a body has no held goods. Missing/truncated maps or wrong joint count
+reject before any mutation.
+
+The independent `npc_demo_reaction` module queries the existing
+`ddsim::sweep::sweep_capsule` for the actual `NpcFighter`, runtime D3/D4
+capsule, target origin and cScrAdjust settings. Command/launch/generation
+checks precede queries. Missing geometry at the initial provider check or
+any subsequent query preserves the body position. Axis type2 uses the
+actual separate sphere radius and lower capsule endpoint;
+`0x0079E58A..0x0079E6C3` widens capsule radius to f64, multiplies the
+original `0x0161C9F0` double **1.41421356**, narrows to f32, then adds the
+airborne oldY-targetY difference. Type0 disables the axis, while other
+types remain unsupported. The returned scenery observation is deliberately
+separate from vf90 ground-byte projection, preserving frame-order work
+still required. Geometry remains the shared documented exact-distance
+replacement for native MtCollision GJK/MPR.
+
+Four new regressions passed once each in the complete package run:
+`demo_damage_entry_changes_mapped_joint_attributes_and_preserves_other_bits`,
+`installed_beach_damage_entry_uses_model_bone_map_and_current_joint_attributes`,
+`demo_scenery_axis_uses_current_radius_native_double_and_airborne_target`,
+and `installed_demo_scenery_moves_current_body_only_with_available_triangle_provider`.
+The last uses an installed NPC body with an explicit triangle/pool fixture;
+it is not an original scenery observation or production-route replay.
+
+**Verified:** parent8718 granted the full gate after its actual completion
+and normal release. On clean source
+`4a1e3f8c27c0f350d64e0ac13d320ce1a900c653`, the PS7 strict runner executed
+`cargo test -p ddenemyrt -p ddhost --jobs 2` on the existing shared core
+target with canonical install/exe variables. Session43056 actually exited0,
+Cargo0: **347passed, 0failed, 2existing ignored, 66summaries** (64nonempty
+and2doc tests). Independent package parsing yields enemy181passed/2ignored/
+29summaries and host166passed/0ignored/37summaries. All four new names
+occur once as PASS, with no installed-test skips. Compile1m53s, total
+434.3973128s. The six frozen source/test/brief hashes remained unchanged;
+only the five owned Rust file mtimes were refreshed before launch for the
+shared target. Eleven unused-helper warnings reflect the still-disabled
+Host integration. Normal core lease released after actual completion;
+global Cargo/rustc/all ddview pins were quiet. No viewer, original game or
+save was used. `git diff --check` passed.
+
+Private evidence: `E:/ddda-re/notes/steps/S31/full-body-scenery-core-4a1e3f8-first.private.log`
+SHA256 `55DC8C65EA3884CA4DDE6552FB18BC14841B2D1B472A7ABE44054D9C97F50047`;
+the matching `full-body-scenery-core-4a1e3f8-first.proof.private.json`
+SHA256 `136A4D3CF9E2B21E9B90281FAB9349943D9B5F850447D4E1D9E659E7B2D5E4BF`.
+The strict runner SHA256 is
+`3D3C5CF9F41A1C761CA3BE80CDDB6E12A62413A7992EC2AF1B019EC54F7D7D2D`;
+the frozen manifest SHA256 is
+`0FDF51497637D3A90CB4D0DCF96B2EF81DD7D5FBE9265CE9FF775F0D3884A422`.
+No private source exports, game data or raw native bytes are committed.
+
+**Source continuation:** native saved flags are a current-action snapshot:
+uNpc vf134 `0x00BB3F40 -> 0x004C7350`, whose `0x004C73B2..0x004C73B8`
+copies body273C into2740. Common entry `0x0080E190 -> 0x00AC4F70 ->
+0x007F1890` clears current273C for low category206C bit2 before restoring
+the saved subset, so the existing scalar entry helper must consume
+post-base flags. Damage vf13 `0x0080D490` also copies actual bodyE0/E4/E8
+into70F0/70F4/70F8. These prerequisite effects remain source findings,
+not an implemented complete common entry. Native NPC vf111
+`0x00BB3293` calls850100 before its separate2EA3 override; DemoDamage reads
+the rising2EA1 only. Raw-layer init callback `0x010571E0..0x0105754A`
+interpolates custom attributes and does not replace the explicit initial
+layer58 loop restart0 with the positive installed LMT loop marker.
+
+**Next:** fulfill common cPlAction/cEventAct entry and raw layer clock,
+then consume Damage requests on the exact body lifetime and coordinate
+the host frame hook. This module is not scheduled by Host yet. GotoEx
+awaits accepted S59 navigation; the production editor/ev00 patch remains
+disabled and unapplied. No whole S31 route or safe DragonFight checkpoint
+is claimed by this batch.
+
 **2026-10-10, codex-63: source checkpoint; S31 remains open.**
 
 - `OpeningWorld::enable_dragon_scene` disables the q0 camera/quest-bit

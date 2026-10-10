@@ -15,6 +15,31 @@ fn center(v: &Volume) -> [f32; 3] {
 }
 
 #[test]
+fn installed_beach_damage_entry_uses_model_bone_map_and_current_joint_attributes() {
+    let Some((vfs, file)) = installed() else { return };
+    let exe = file.image().unwrap();
+    for npc in 704..=710 {
+        let body = NpcBody::load(&vfs, &exe, npc, npc, 0, 0, 0).unwrap();
+        let bytes = vfs.read(&body.look.base, mtarc::type_hash("rModel")).unwrap();
+        let model = mtmod::parse(&bytes).unwrap();
+        let map = model.bone_map.expect("ordinary installed beach model has its native bone map");
+        let mut expected = vec![0xa5; model.bones.len()];
+        for id in [0x96, 0x97, 0x99, 0x9b] {
+            if map[id] != 0xff { expected[usize::from(map[id])] |= 0x40; }
+        }
+        let mut attributes = vec![0xa5; model.bones.len()];
+        body.damage_joint_attributes(&mut attributes, 0, false).unwrap();
+        assert_eq!(attributes, expected, "NPC{npc} uses the actual installed ID-to-joint map");
+        body.damage_joint_attributes(&mut attributes, 0x200, false).unwrap();
+        assert_eq!(attributes, vec![0xa5; model.bones.len()], "NPC{npc} preserves every unrelated runtime mAttr bit");
+        attributes.pop();
+        let before = attributes.clone();
+        assert!(body.damage_joint_attributes(&mut attributes, 0, false).is_err());
+        assert_eq!(attributes, before, "attributes from a different body lifetime are rejected");
+    }
+}
+
+#[test]
 fn ordinary_mode3_capsule_shortens_real_height_and_collapses_short_spans() {
     use ddenemyrt::npc_body::{ordinary_mode3_capsule, ORDINARY_NPC_SCENERY_RADIUS};
     let radius = ORDINARY_NPC_SCENERY_RADIUS;

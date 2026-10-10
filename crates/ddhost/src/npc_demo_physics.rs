@@ -76,7 +76,7 @@ impl HorizontalVelocity {
 }
 
 /// Restore only the native common-damage entry mask, then set damage and
-/// clear movement flags. Collision-record mode is a separate operation.
+/// clear movement flags. Model-joint mAttr changes are a separate operation.
 // Translated from 0x0080E190 (DDDA.exe 2017-12-13 Steam).
 pub(super) fn damage_entry_flags(current: u32, saved: u32) -> u32 {
     let restored = (current & !0x0e3f) | (saved & 0x0e3f);

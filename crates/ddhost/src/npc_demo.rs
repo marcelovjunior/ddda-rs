@@ -6,6 +6,8 @@ use ddnpcrt::{demo::{self, ActorInputs, Demo, Interface, WorldRequest},
 use ddquest::order::Fields;
 #[path = "npc_demo_physics.rs"]
 mod physics;
+#[path = "npc_demo_reaction.rs"]
+mod reaction;
 
 pub(super) enum Action {
     Npc(Npc),
