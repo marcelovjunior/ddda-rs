@@ -133,3 +133,10 @@ below pitch -0.8 (or actor avoidance), using authored camera parameters.
 hardcode the capture. Next action is load `rCameraParamList` settings and
 translate anchor selection, then compare the fully rendered follow pose.
 The two collision contacts match; this does not close full-pose acceptance.
+
+Sixth checkpoint: added typed `rCameraParamList` reader in mtcamera using
+existing mtxfs. Two synthetic tests pass; install test reads60 unique
+resources with167 normal records, preserving authored array slots. Strict
+clippy passes. Source **0x00420e90** loads `param\cam_param`;
+**0x007dc8a0** picks slot0 for default normal camera. Runtime adapter and
+translated anchor selection still pending; no game parameter table copied.

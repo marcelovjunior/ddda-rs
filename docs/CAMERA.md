@@ -454,3 +454,16 @@ default, and release build passes. These are installed-geometry collision
 comparisons, not full rendered follow-camera acceptance: authored target
 height, runtime anchor selection, camera lag and actor avoidance remain
 incomplete.
+
+### Authored camera parameter reader
+
+`mtcamera::params` reads normal-camera records from the installed
+`rCameraParamList` XFS, preserving array slots and non-normal/null entries.
+Loader **0x007d01b0** uses the reflected object reader; **0x00420e90**
+loads `param\cam_param` into `sCamera+0xcec`, and `uCameraGame::vf22`
+**0x007dc8a0** selects its first parameter slot for the default processor.
+The reader exposes distance, height, FOV, actor-target selector and screen
+adjustment type/flags/height. No authored table is copied. Two synthetic
+reader tests pass, installed-resource validation reads **60 unique paths /
+167 normal records**, and strict crate clippy passes. Viewer integration
+and anchor-selection translation are the next step.
