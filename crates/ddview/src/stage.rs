@@ -140,6 +140,8 @@ pub struct DdParams {
     pub albedo_blend: Vec4,
     /// rgb: `fSpecularColor`, w: `fShininess` (`FLAG_CHARACTER`).
     pub spec: Vec4,
+    pub normal_uv0: Vec4,
+    pub normal_uv1: Vec4,
 }
 
 const FLAG_MAP: u32 = 1;
@@ -161,6 +163,8 @@ const FLAG_CONST_LIGHT: u32 = 512;
 /// `FAlbedoMapAdd` with `FUVViewNormal`: the albedo-blend map added on the
 /// view-normal UV (`albedo_blend`).
 const FLAG_ALBEDO_ADD: u32 = 1024;
+/// Ordinary alpha/green tangent-space normal map on primary UV.
+const FLAG_NORMAL_MAP: u32 = 8192;
 /// Character pixel shaders' specular: the sun's Blinn-Phong lobe, the
 /// environment cube (`FReflectCubeMapShadowLight`), Schlick Fresnel.
 const FLAG_CHARACTER: u32 = 2048;
@@ -297,6 +301,9 @@ pub struct DdExt {
     #[texture(110)]
     #[sampler(111)]
     pub albedo_blend: Option<Handle<Image>>,
+    #[texture(112)]
+    #[sampler(113)]
+    pub normal: Option<Handle<Image>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -892,6 +899,9 @@ impl Loader<'_> {
             if !v.normals.is_empty() {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.normals.clone());
             }
+            if !v.tangents.is_empty() {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, v.tangents.clone());
+            }
             // UV set of the albedo map (FUVAlbedoMap) as UV 0; the
             // transparency map's set (FUVTransparencyMap) as UV 1.
             let slot = |alias: &str| uv_slot(layout, alias).filter(|&k| !v.uvs[k].is_empty());
@@ -1030,6 +1040,13 @@ impl Loader<'_> {
         let mut map = None;
         let mut spec = None;
         let mut env_cube = None;
+        let normal = s.primary_normal_map().and_then(|path| self.texture(path, images));
+        if normal.is_some() {
+            params.flags |= FLAG_NORMAL_MAP;
+            let uv = s.uv_transform.unwrap_or([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]);
+            params.normal_uv0 = Vec4::from_array(uv[0]);
+            params.normal_uv1 = Vec4::from_array(uv[1]);
+        }
         if forward_unlit(s) {
             params.flags |= FLAG_NO_LIGHT_BUFFER;
         }
@@ -1081,6 +1098,7 @@ impl Loader<'_> {
                     sky_mie: Handle::default(),
                     env_cube,
                     albedo_blend: None,
+                    normal,
                 },
             },
             handle: OnceLock::new(),
@@ -1118,6 +1136,13 @@ impl Loader<'_> {
         let base = self.material(shading, false, false, materials, images);
         let (Some(s), PartMaterial::Dd(slot)) = (shading, &base) else { return base };
         let mut m = slot.material.clone();
+        // Only the ordinary world vertex shader's tangent basis is traced
+        // (sc/DX9/Stage200 VS 0x1381d4). Character skin matrices include
+        // the viewer's centimetre conversion; applying that raw basis here
+        // would incorrectly scale T and B. Leave character bump disabled
+        // until the original skinned basis is translated and compared.
+        m.extension.params.flags &= !FLAG_NORMAL_MAP;
+        m.extension.normal = None;
         if let Some(c) = albedo_add(s) {
             if let Some(h) = s.textures.get("tAlbedoBlendMap").and_then(|t| self.texture(t, images)) {
                 m.extension.params.flags |= FLAG_ALBEDO_ADD;
