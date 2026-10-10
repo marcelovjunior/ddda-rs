@@ -632,6 +632,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(perf::MeshBuilderPlugin)
         .add_plugins(stage::ShadingPlugin)
         .add_plugins(audio::GameAudioPlugin(args.native_pc.clone()))
         .add_plugins(sky::SkyPlugin)

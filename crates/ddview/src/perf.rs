@@ -10,19 +10,87 @@ use bevy::prelude::*;
 /// GpuMeshPreprocessPlugin; render/mesh.rs selects its CPU extraction/batching
 /// path, and render/gpu_preprocess.rs skips GPU preprocessing systems.
 pub fn pbr_plugin() -> bevy::pbr::PbrPlugin {
-    let mode = std::env::var("DDVIEW_MESH_BUILDER").ok();
-    let use_gpu = match mode.as_deref() {
-        None | Some("gpu") => true,
-        Some("cpu") => false,
-        Some(value) => {
-            eprintln!("DDVIEW_MESH_BUILDER={value:?}: expected cpu or gpu; using GPU default");
-            true
+    bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: uses_gpu_mesh_builder(), ..default() }
+}
+
+fn uses_gpu_mesh_builder() -> bool {
+    static USE_GPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *USE_GPU.get_or_init(|| {
+        let mode = std::env::var("DDVIEW_MESH_BUILDER").ok();
+        let use_gpu = match mode.as_deref() {
+            None | Some("gpu") => true,
+            Some("cpu") => false,
+            Some(value) => {
+                eprintln!("DDVIEW_MESH_BUILDER={value:?}: expected cpu or gpu; using GPU default");
+                true
+            }
+        };
+        if mode.is_some() {
+            eprintln!("ddview: mesh instance builder {} (renderer experiment)", if use_gpu { "gpu" } else { "cpu" });
         }
-    };
-    if mode.is_some() {
-        eprintln!("ddview: mesh instance builder {} (renderer experiment)", if use_gpu { "gpu" } else { "cpu" });
+        use_gpu
+    })
+}
+
+/// CPU instance buffers and render-phase classification must agree. Setting
+/// PbrPlugin's builder flag alone leaves the device capability at Culling;
+/// Bevy then queues multidraw meshes that its CPU batching path never fills.
+/// Install after DefaultPlugins, before their finish hooks choose render paths.
+pub struct MeshBuilderPlugin;
+
+impl Plugin for MeshBuilderPlugin {
+    fn build(&self, app: &mut App) {
+        configure_mesh_builder(app, uses_gpu_mesh_builder());
     }
-    bevy::pbr::PbrPlugin { use_gpu_instance_buffer_builder: use_gpu, ..default() }
+}
+
+fn configure_mesh_builder(app: &mut App, use_gpu: bool) {
+    use bevy::render::{RenderApp, batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport}};
+    if !use_gpu {
+        if let Some(render) = app.get_sub_app_mut(RenderApp) {
+            render.insert_resource(GpuPreprocessingSupport { max_supported_mode: GpuPreprocessingMode::None });
+        }
+    }
+}
+
+#[cfg(test)]
+mod mesh_builder_tests {
+    use super::*;
+    use bevy::app::SubApp;
+    use bevy::core_pipeline::core_3d::Opaque3d;
+    use bevy::render::{RenderApp, batching::gpu_preprocessing::{GpuPreprocessingMode, GpuPreprocessingSupport},
+        render_phase::{BinnedRenderPhaseBatchSets, BinnedRenderPhaseType, ViewBinnedRenderPhases}, view::RetainedViewEntity};
+
+    #[test]
+    fn cpu_builder_queues_cpu_phase_buffers_even_on_a_gpu_capable_device() {
+        let mut app = App::new();
+        let mut render = SubApp::new();
+        render.insert_resource(GpuPreprocessingSupport { max_supported_mode: GpuPreprocessingMode::Culling });
+        app.insert_sub_app(RenderApp, render);
+        configure_mesh_builder(&mut app, false);
+        let support = app.sub_app(RenderApp).world().resource::<GpuPreprocessingSupport>();
+        assert!(support.max_supported_mode == GpuPreprocessingMode::None);
+        assert!(matches!(BinnedRenderPhaseType::mesh(true, support), BinnedRenderPhaseType::BatchableMesh));
+        let view = RetainedViewEntity::new(Entity::from_raw_u32(1).unwrap().into(), None, 0);
+        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
+        phases.prepare_for_new_frame(view, support.min(GpuPreprocessingMode::Culling));
+        assert!(matches!(phases.get(&view).unwrap().batch_sets, BinnedRenderPhaseBatchSets::DynamicUniforms(_)));
+    }
+
+    #[test]
+    fn default_gpu_builder_retains_device_capability_and_indirect_phases() {
+        let mut app = App::new();
+        let mut render = SubApp::new();
+        render.insert_resource(GpuPreprocessingSupport { max_supported_mode: GpuPreprocessingMode::Culling });
+        app.insert_sub_app(RenderApp, render);
+        configure_mesh_builder(&mut app, true);
+        let support = app.sub_app(RenderApp).world().resource::<GpuPreprocessingSupport>();
+        assert!(support.max_supported_mode == GpuPreprocessingMode::Culling);
+        let view = RetainedViewEntity::new(Entity::from_raw_u32(1).unwrap().into(), None, 0);
+        let mut phases = ViewBinnedRenderPhases::<Opaque3d>::default();
+        phases.prepare_for_new_frame(view, support.min(GpuPreprocessingMode::Culling));
+        assert!(matches!(phases.get(&view).unwrap().batch_sets, BinnedRenderPhaseBatchSets::MultidrawIndirect(_)));
+    }
 }
 
 #[derive(Resource, Default)]
