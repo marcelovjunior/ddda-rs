@@ -302,7 +302,11 @@ fn args() -> Args {
         }
     }
     if a.perf_route {
-        assert!(a.shot.is_none() && a.shots.is_none(), "--perf-route measures without screenshots");
+        // Screenshots stall frames, so a route with shots is a visual
+        // capture, not a timing benchmark (its perf numbers are invalid).
+        if a.shot.is_some() || a.shots.is_some() {
+            eprintln!("ddview: --perf-route with screenshots: visual capture only, perf numbers invalid");
+        }
         a.opening = true;
         a.demo = true;
         a.play = true;
