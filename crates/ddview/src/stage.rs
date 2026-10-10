@@ -34,7 +34,7 @@ use bevy::mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, CompareFunction, Extent3d, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat};
-use bevy::shader::ShaderRef;
+use bevy::shader::{ShaderDefVal, ShaderRef};
 
 use ddvfs::Vfs;
 use mtmrl::shading::{AlphaSource, Shading};
@@ -309,10 +309,33 @@ pub struct DdExt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DdPipelineKey {
     depth: Option<u8>,
+    /// Opt-in compiler specialization, including runtime fade/sky features.
+    /// None preserves the original uniform-driven shader program.
+    features: Option<u32>,
 }
 
 impl From<&DdExt> for DdPipelineKey {
-    fn from(material: &DdExt) -> Self { Self { depth: material.depth } }
+    fn from(material: &DdExt) -> Self {
+        static SPECIALIZE: OnceLock<bool> = OnceLock::new();
+        let enabled = *SPECIALIZE.get_or_init(|| std::env::var("DDVIEW_MATERIAL_SPECIALIZATION").ok().as_deref() == Some("1"));
+        material_pipeline_key(material, enabled)
+    }
+}
+
+fn material_pipeline_key(material: &DdExt, specialize: bool) -> DdPipelineKey {
+    DdPipelineKey { depth: material.depth, features: specialize.then_some(material.params.flags) }
+}
+
+/// Both stages consume the same current feature bits. Keep the uniform ABI
+/// intact: all numerical values/textures still come from their existing binds.
+fn specialize_material_features(descriptor: &mut RenderPipelineDescriptor, features: Option<u32>) {
+    if let Some(features) = features {
+        let define = ShaderDefVal::UInt("DD_MATERIAL_FEATURE_FLAGS".into(), features);
+        descriptor.vertex.shader_defs.push(define.clone());
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push(define);
+        }
+    }
 }
 
 /// MFX compare is forward Z; the viewer's depth buffer is reverse Z.
@@ -348,6 +371,7 @@ impl MaterialExtension for DdExt {
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        specialize_material_features(descriptor, key.bind_group_data.features);
         if let (Some(bits), Some(depth)) = (key.bind_group_data.depth, descriptor.depth_stencil.as_mut()) {
             let (write, compare) = imported_depth(bits);
             depth.depth_write_enabled = Some(write);
@@ -1636,6 +1660,75 @@ mod tests {
         );
         let secondary = [("FAlbedo", "FAlbedoMapAdd"), ("FUVAlbedoBlendMap", "FUVSecondary")];
         assert_eq!(albedo_add(&character_shading(&secondary, [1.0; 4], [1.0; 3])), None);
+    }
+
+    fn feature_material() -> DdMaterial {
+        DdMaterial {
+            base: StandardMaterial { base_color: Color::linear_rgba(0.5, 0.4, 0.3, 0.8),
+                alpha_mode: AlphaMode::Mask(0.5), ..default() },
+            extension: DdExt { depth: Some(15), params: DdParams { flags: FLAG_DD_LIGHTING, ..default() },
+                map: None, spec: None, sky: SkyEnvParams::default(), sky_rayleigh: default(),
+                sky_mie: default(), env_cube: None, albedo_blend: None, normal: None },
+        }
+    }
+
+    #[test]
+    fn specialization_key_follows_real_fade_and_restore_without_losing_sky_changes() {
+        let mut material = feature_material();
+        let original = material_pipeline_key(&material.extension, true);
+        let authored = (material.base.base_color.alpha(), material.base.alpha_mode,
+            material.extension.depth, material.extension.params.flags);
+        character_opacity(&mut material, 0.25, authored);
+        let faded = material_pipeline_key(&material.extension, true);
+        assert_ne!(faded, original);
+        assert_eq!(faded.features, Some(FLAG_DD_LIGHTING | FLAG_BLENDED));
+        assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
+        character_opacity(&mut material, 1.0, authored);
+        assert_eq!(material_pipeline_key(&material.extension, true), original);
+        material.extension.params.flags |= FLAG_SKY_ENV;
+        let sky = material_pipeline_key(&material.extension, true);
+        assert_ne!(sky, original);
+        character_opacity(&mut material, 0.5, authored);
+        character_opacity(&mut material, 1.0, authored);
+        assert_eq!(material_pipeline_key(&material.extension, true), sky);
+    }
+
+    #[test]
+    fn specialization_key_reuses_pipeline_for_lighting_values_and_keeps_all_feature_bits() {
+        let mut material = feature_material();
+        material.extension.params.flags = u32::MAX;
+        let original = material_pipeline_key(&material.extension, true);
+        assert_eq!(original.features, Some(u32::MAX));
+        material.extension.params.sun_color = Vec4::new(0.1, 0.2, 0.3, 0.0);
+        material.extension.params.sh[0] = Vec4::ONE;
+        material.extension.sky.cb[0] = Vec4::ONE;
+        assert_eq!(material_pipeline_key(&material.extension, true), original);
+        let generic = material_pipeline_key(&material.extension, false);
+        material.extension.params.flags = 0;
+        assert_eq!(material_pipeline_key(&material.extension, false), generic);
+        assert_ne!(material_pipeline_key(&material.extension, true), original);
+        assert_eq!(material_pipeline_key(&material.extension, true).features, Some(0));
+    }
+
+    #[test]
+    fn specialization_defines_match_in_vertex_and_fragment_without_changing_default_descriptor() {
+        use bevy::render::render_resource::FragmentState;
+        let mut descriptor = RenderPipelineDescriptor { fragment: Some(FragmentState::default()), ..default() };
+        descriptor.vertex.shader_defs.push(ShaderDefVal::Bool("SKINNED".into(), true));
+        descriptor.fragment.as_mut().unwrap().shader_defs.push(ShaderDefVal::Bool("MAY_DISCARD".into(), true));
+        let generic = descriptor.clone();
+        specialize_material_features(&mut descriptor, None);
+        assert_eq!(descriptor, generic);
+        specialize_material_features(&mut descriptor, Some(FLAG_BLENDED | FLAG_SKY_ENV));
+        let expected = ShaderDefVal::UInt("DD_MATERIAL_FEATURE_FLAGS".into(), FLAG_BLENDED | FLAG_SKY_ENV);
+        assert_eq!(descriptor.vertex.shader_defs.last(), Some(&expected));
+        assert_eq!(descriptor.fragment.as_ref().unwrap().shader_defs.last(), Some(&expected));
+        assert_eq!(descriptor.vertex.shader_defs[0], generic.vertex.shader_defs[0]);
+        assert_eq!(descriptor.fragment.as_ref().unwrap().shader_defs[0], generic.fragment.as_ref().unwrap().shader_defs[0]);
+        let mut shadow = RenderPipelineDescriptor::default();
+        specialize_material_features(&mut shadow, Some(0));
+        assert_eq!(shadow.vertex.shader_defs, vec![ShaderDefVal::UInt("DD_MATERIAL_FEATURE_FLAGS".into(), 0)]);
+        assert!(shadow.fragment.is_none());
     }
 
     #[test]
