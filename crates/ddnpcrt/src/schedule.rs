@@ -79,6 +79,20 @@ pub struct Motion {
 
 impl Motion {
     pub fn from_record(wrapper: &mtfsm::Record) -> Result<Self, Error> {
+        Self::read(wrapper, false)
+    }
+
+    /// DemoSetMotion delegates the same generic motion but requires the
+    /// materialized body in0x0056F160, without an intel-wait property.
+    // Translated from0x0056F160/0x0056F210 (DDDA.exe2017-12-13 Steam).
+    pub fn from_demo_record(wrapper: &mtfsm::Record) -> Result<Self, Error> {
+        if wrapper.class_name != Some("cAIActionInterfaceDemoSetMotion") {
+            return Err(Error::Data("expected DemoSetMotion wrapper".into()));
+        }
+        Self::read(wrapper, true)
+    }
+
+    fn read(wrapper: &mtfsm::Record, demo: bool) -> Result<Self, Error> {
         let motion = wrapper.object("mpMotion")
             .filter(|r| r.class_name == Some("cAIActionInterfaceMotion"))
             .ok_or_else(|| Error::Data("NPC motion missing generic mpMotion".into()))?;
@@ -99,7 +113,9 @@ impl Motion {
             look_start_frame: float("Look Start Frame")?, look_time: float("Look Time")?,
             stop: boolean("Stop")?, fall: boolean("Fall")?, force: boolean("Force")?,
             talk: wrapper.b("会話可能フラグ").ok_or_else(|| missing("talk"))?,
-            wait_in_intel: wrapper.b("Intel状態で再生待ちをする").ok_or_else(|| missing("wait in intel"))?,
+            wait_in_intel: if demo { false } else {
+                wrapper.b("Intel状態で再生待ちをする").ok_or_else(|| missing("wait in intel"))?
+            },
             object_priority: wrapper.u("ＯＢＪ補正優先").and_then(|n| u32::try_from(n).ok()).ok_or_else(|| missing("object priority"))?,
         })
     }

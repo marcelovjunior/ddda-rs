@@ -6,6 +6,7 @@
 //! Field names in the data are the engine's own, often Japanese; the Rust
 //! names translate them and the doc comments keep the originals.
 
+pub mod commands;
 pub mod goap;
 pub mod incl;
 pub mod pawn;

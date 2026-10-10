@@ -952,3 +952,61 @@ This trace has not yet been compared against an ev15 live capture.
 The previously compared Rook records in the save substantiate the stock
 identity and appearance, but not the recruitment frame or full inventory
 side effects.
+## Pawn orders (S36, 2017-12-13 Steam)
+
+The original has three commands on four directions: **Go** (message 9),
+**Come** (10), and **Help** (11 on either left or right). There is no
+separate Wait command in the traced sender. The installed
+`id/message/cockpit/cockpit_eng` labels `pawnorder_go`, `pawnorder_come`
+and `pawnorder_help`, and pause-option labels `option_pawn_go/come/help`,
+confirm those names; the previous `9 = Wait / 10 = Go` guesses were wrong.
+
+`0x0040A6C0` registers UP/DOWN/LEFT/RIGHT at key indices 39..42. Two
+unnamed entries in the registration list caused the previous 37..40
+count. `0x00B52A00` maps those keys to player-pad bits 19..22;
+`0x00B52880` derives rising bits at uPlayer +0x32E0. `0x00B768E0` sends
+9 for Up alone, 10 for Down alone, and 11 for Left, Right or both.
+Combinations of distinct orders are rejected. It broadcasts to every
+nonnull pawn in sPlayerManager +0x9A0/+0x9A4/+0x9A8 without a distance or
+ownership filter. `0x00887250` queues the message, and `0x00887360`
+delivers vf98 in pass C, after the current movement pad was chosen.
+
+Native keyboard defaults (`0x0040AB20`, instructions
+0x0040B369..0x0040B3A0; `0x0040B460` maps scan codes to virtual keys) are
+F1 Go, F2 Come, F3 Help; the left direction is unbound. The viewer also
+reads the four gamepad d-pad buttons. Its second local keyboard uses
+Numpad 7/8/9, and connected controllers map in entity order to local
+Arisen order. Those additional local assignments are viewer choices.
+The standalone viewer's town/field debug toggle moved to F4.
+
+`uPlayerBase::vf98` (`0x00B79FC0`) overwrites a pawn's +0x4ABC mailbox.
+`0x005927F0` consumes it into pending +0x53C, counts actor frames at
++0x544 against delay +0x540, then applies +0x52C and rebuilds priorities
+when the value changed. The constructor `0x00581C20` initializes delay
+0 and duration 600 actor frames; application also advances the active
+age in that update. Repeating the current command refreshes duration
+without rebuilding; repeating the pending command does not reset delay.
+Pending delay pauses active expiry. Feedback +0x548 starts at six actor
+frames and clears only on an overshoot below zero; exactly zero retains
+the native feedback latch. Arisen arbitration `0x00B6D510` separately
+enforces a main-frame repeat cooldown read from adjust ID 0x135; the
+installed `param/pl/other/m_pl000_00` baseline is 15 frames, read at run
+time rather than copied into code.
+
+Co-op filtering is a project decision: either Arisen commands the shared
+main pawn, while hired/support pawns obey their owning seat. Simultaneous
+valid orders are delivered in ascending seat order, so the highest valid
+seat wins a shared-pawn mailbox tie. Repeated held input packets do not
+retrigger. Protocol 8 carries the four held direction bits per Arisen.
+
+Implemented and tested: mailbox/clock boundaries, held input edges,
+recipient ownership using the installed Rook record, actual command
+priority rebuild/expiry, native battle follow modes, input codec and
+keyboard/controller bindings. Full Help support-goal execution, ordinary
+out-of-battle formation-follow geometry, GOAP pre-emption, the Arisen's
+weapon/stance shout playback and pawn chatter cue selection remain open.
+Reply candidates are typed requests, with no fabricated voice cue.
+These checks have not been compared with an original-game order capture.
+The scalar clock accepts native actor-frame units, but its current pawn
+integration receives the existing fight delta; per-unit time-rate scaling
+has not been ported. The cooldown uses the host's main-frame delta.

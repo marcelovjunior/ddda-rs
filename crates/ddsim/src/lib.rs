@@ -418,6 +418,25 @@ impl State {
 
 /// One player's input for a step: a stick in the camera's frame plus the
 /// camera yaw, so movement is camera-relative like the original.
+/// Four held d-pad directions (the native left/right both mean Help).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PawnOrderButtons {
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl PawnOrderButtons {
+    /// Player-pad bits written by 0x00B52A00 for key-config indices
+    /// 39..42: UP, DOWN, LEFT, RIGHT (0x0040A6C0).
+    // Translated from 0x00B52A00 (DDDA.exe 2017-12-13 Steam).
+    pub fn native_bits(self) -> u32 {
+        (u32::from(self.up) << 19) | (u32::from(self.down) << 20)
+            | (u32::from(self.left) << 21) | (u32::from(self.right) << 22)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Input {
     /// Stick, x screen-right and y forward, length 0..1.
@@ -436,6 +455,8 @@ pub struct Input {
     pub bow: bool,
     /// Bow-mode toggle key held; its rising edge toggles this seat's mode.
     pub bow_toggle: bool,
+    /// Pawn orders are held states; the authoritative host derives edges.
+    pub pawn_orders: PawnOrderButtons,
     /// Camera yaw (radians, 0 looks along +Z).
     pub camera_yaw: f32,
 }

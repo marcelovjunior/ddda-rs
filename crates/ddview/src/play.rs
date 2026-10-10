@@ -14,7 +14,7 @@
 //! | quick-use saved restorative | U | Numpad 0 |
 //! | bow toggle / hold | configured STG_TOGGLE_BOW_MODE / STG_SUB_WEP | Numpad - / Numpad / |
 //!
-//! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F2 switches every
+//! The grabbed mouse orbits P1; Esc opens a viewer pause menu. F4 switches every
 //! player between the town (relaxed) walk and run and the field ones; the
 //! area attribute that picks them in the original is not read yet.
 //!
@@ -183,6 +183,7 @@ pub struct PlayState {
     /// The local fight (attacks, hits, pawn, goblins); `None` without the
     /// exe's data.
     pub fight: Option<Fight>,
+    pawn_orders: ddhost::pawn_orders::Orders,
     /// Goblin views, in the fight's goblin order.
     pub goblins: Vec<GoblinView>,
     /// The goblin data for the view (its motion banks), when loaded.
@@ -354,6 +355,7 @@ pub fn setup(
         shown: HashMap::new(),
         visible: HashMap::new(),
         fight,
+        pawn_orders: Default::default(),
         goblins,
         fight_data: data,
         acc: 0.0,
@@ -416,6 +418,11 @@ pub(crate) fn p2_input(keys: &ButtonInput<KeyCode>, cam_yaw: f32) -> Input {
         jump: keys.pressed(KeyCode::Enter) || keys.pressed(KeyCode::NumpadEnter),
         light: keys.pressed(KeyCode::Numpad1),
         heavy: keys.pressed(KeyCode::Numpad2),
+        // Local second-Arisen bindings are a viewer choice; the original
+        // has one keyboard Arisen (F1/F2/F3).
+        pawn_orders: ddsim::PawnOrderButtons { up: keys.pressed(KeyCode::Numpad7) || keys.just_pressed(KeyCode::Numpad7),
+            down: keys.pressed(KeyCode::Numpad8) || keys.just_pressed(KeyCode::Numpad8), left: false,
+            right: keys.pressed(KeyCode::Numpad9) || keys.just_pressed(KeyCode::Numpad9) },
         camera_yaw: cam_yaw,
         ..Default::default()
     }
@@ -440,7 +447,21 @@ pub fn demo_attack(sim: &Sim, fight: Option<&Fight>, seat: PlayerId, cam_yaw: f3
     };
     let heading = (g[0] - p.position[0]).atan2(g[2] - p.position[2]);
     let mut i = Input { camera_yaw: heading, ..Default::default() };
-    if d > 220.0 {
+    // A careful player doesn't swing through a bystander: with a live NPC
+    // body (e.g. Reynard) within 3 m and inside 60 degrees of the swing,
+    // step sideways instead (friendly fire is real outside Japan, S34).
+    let bystander = fight.is_some_and(|f| {
+        f.npcs.values().any(|n| {
+            let (dx, dz) = (n.position[0] - p.position[0], n.position[2] - p.position[2]);
+            let mut a = dx.atan2(dz) - heading;
+            a = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            !n.fighter.victim.dead() && dx.hypot(dz) < 300.0 && a.abs() < 60f32.to_radians()
+        })
+    });
+    if bystander && d <= 400.0 {
+        i.stick = [1.0, 0.0];
+        *press = false;
+    } else if d > 220.0 {
         i.stick = [0.0, 1.0];
         *press = false;
     } else {
@@ -485,6 +506,12 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
         f.enemies(&st.sim, &st.terrain, step);
         f.push_out(&mut st.sim);
         f.volumes(&st.sim);
+        let owner_inputs = local.iter().map(|(&seat, &sim)|
+            (seat, ddhost::PlayerInput { sim, interact: false })).collect();
+        let ownership = f.pawns.iter().map(|(&seat, pawn)| (seat, pawn.owner)).collect();
+        let cooling = st.pawn_orders.advance(step, |seat|
+            !f.arisen.get(&seat).is_some_and(|body| body.fighter.victim.dead()));
+        st.pawn_orders.dispatch(&owner_inputs, &cooling, f, Some(pawn_seat(0)), &ownership);
         for e in &f.events {
             debug!("hit: {} -> {}: {:.1}", e.attacker, e.victim, e.total);
             let d = st.dealt.entry(e.attacker).or_default();
@@ -506,7 +533,7 @@ fn fixed_frame(st: &mut PlayState, local: &HashMap<PlayerId, Input>) {
 pub fn step(
     pause: Res<crate::pause::PauseState>,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    order_devices: PawnOrderDevices,
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     state: Option<ResMut<PlayState>>,
@@ -521,6 +548,8 @@ pub fn step(
     mut pending: Local<HashMap<PlayerId, Input>>,
     mut sounds: Option<ResMut<crate::audio::PlayerMotionSounds>>,
 ) {
+    let keys = &order_devices.keys;
+    let gamepads = &order_devices.gamepads;
     let Some(mut st) = state else { return };
     if pause.paused { pending.clear(); return; }
     if !*projected {
@@ -548,7 +577,7 @@ pub fn step(
             }
         }
     }
-    if keys.just_pressed(KeyCode::F2) {
+    if keys.just_pressed(KeyCode::F4) {
         for p in &mut st.sim.players {
             p.relaxed = !p.relaxed;
         }
@@ -561,10 +590,10 @@ pub fn step(
     let locals = st.locals.clone();
     if crate::skills::keys(&mut st.sim, &locals, &keys) { st.demo = false; }
     if let Some(&p1) = locals.first() {
-        local.insert(p1, p1_input(&keys, &buttons, cam_yaw));
+        local.insert(p1, gamepad_order_input(p1_input(&keys, &buttons, cam_yaw), &gamepads, 0));
     }
     if let Some(&p2) = locals.get(1) {
-        local.insert(p2, p2_input(&keys, cam_yaw));
+        local.insert(p2, gamepad_order_input(p2_input(&keys, cam_yaw), &gamepads, 1));
     }
     for (index, seat) in locals.iter().enumerate() {
         if let Some(input) = local.get_mut(seat) {
@@ -686,6 +715,7 @@ pub fn between(p0: [f32; 3], y0: f32, p1: [f32; 3], y1: f32, alpha: f32) -> ([f3
 
 pub fn active_input(input: &Input) -> bool {
     input.stick != [0.0; 2] || input.jump || input.light || input.heavy || input.bow || input.bow_toggle
+        || input.pawn_orders.native_bits() != 0
 }
 
 /// Retain a short input until a fixed tick consumes it. Held input still
@@ -701,6 +731,10 @@ pub(crate) fn latch_input(previous: Input, mut latest: Input) -> Input {
     latest.heavy |= previous.heavy;
     latest.bow |= previous.bow;
     latest.bow_toggle |= previous.bow_toggle;
+    latest.pawn_orders.up |= previous.pawn_orders.up;
+    latest.pawn_orders.down |= previous.pawn_orders.down;
+    latest.pawn_orders.left |= previous.pawn_orders.left;
+    latest.pawn_orders.right |= previous.pawn_orders.right;
     latest
 }
 
@@ -730,9 +764,37 @@ pub fn p1_input(keys: &ButtonInput<KeyCode>, buttons: &ButtonInput<MouseButton>,
         jump: keys.pressed(KeyCode::Space),
         light: keys.pressed(KeyCode::KeyJ) || buttons.pressed(MouseButton::Left),
         heavy: keys.pressed(KeyCode::KeyK) || buttons.pressed(MouseButton::Middle),
+        // 0x0040AB20: original UP/DOWN/RIGHT defaults are scan codes
+        // 0x3B/0x3C/0x3D, mapped by 0x0040B460 to F1/F2/F3; LEFT unbound.
+        pawn_orders: ddsim::PawnOrderButtons { up: keys.pressed(KeyCode::F1) || keys.just_pressed(KeyCode::F1),
+            down: keys.pressed(KeyCode::F2) || keys.just_pressed(KeyCode::F2), left: false,
+            right: keys.pressed(KeyCode::F3) || keys.just_pressed(KeyCode::F3) },
         camera_yaw: cam_yaw,
         ..Default::default()
     }
+}
+
+/// Connected controller order maps to local Arisen order. LAN guests use
+/// their first local controller regardless of the host-assigned seat.
+/// That assignment is a viewer choice; the four directions are native.
+pub(crate) fn gamepad_order_input(mut input: Input, gamepads: &Query<(Entity, &Gamepad)>, local_index: usize) -> Input {
+    let mut pads: Vec<_> = gamepads.iter().collect();
+    pads.sort_by_key(|(entity, _)| entity.to_bits());
+    if let Some((_, pad)) = pads.get(local_index) {
+        input.pawn_orders.up |= pad.pressed(GamepadButton::DPadUp) || pad.just_pressed(GamepadButton::DPadUp);
+        input.pawn_orders.down |= pad.pressed(GamepadButton::DPadDown) || pad.just_pressed(GamepadButton::DPadDown);
+        input.pawn_orders.left |= pad.pressed(GamepadButton::DPadLeft) || pad.just_pressed(GamepadButton::DPadLeft);
+        input.pawn_orders.right |= pad.pressed(GamepadButton::DPadRight) || pad.just_pressed(GamepadButton::DPadRight);
+    }
+    input
+}
+
+/// Keep keyboard and controllers in one system parameter: the play step
+/// already uses Bevy's maximum number of function parameters.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PawnOrderDevices<'w, 's> {
+    pub keys: Res<'w, ButtonInput<KeyCode>>,
+    pub gamepads: Query<'w, 's, (Entity, &'static Gamepad)>,
 }
 
 /// What the view needs of one Arisen or pawn.
@@ -1203,6 +1265,41 @@ pub fn saved_spot(xml: &str) -> Option<SavedSpot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_order_keys_and_second_local_keys_survive_short_presses() {
+        for (key, mask) in [(KeyCode::F1, 1), (KeyCode::F2, 2), (KeyCode::F3, 8)] {
+            let mut keys = ButtonInput::default();
+            keys.press(key); keys.release(key);
+            let input = p1_input(&keys, &ButtonInput::default(), 0.0);
+            assert_eq!(input.pawn_orders.native_bits() >> 19, mask);
+            assert_eq!(latch_input(input, Input::default()).pawn_orders, input.pawn_orders);
+            assert!(active_input(&input));
+            assert_eq!(p2_input(&keys, 0.0).pawn_orders.native_bits(), 0);
+        }
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Numpad8);
+        assert!(p2_input(&keys, 0.0).pawn_orders.down);
+        assert_eq!(p1_input(&keys, &ButtonInput::default(), 0.0).pawn_orders.native_bits(), 0);
+    }
+
+    #[test]
+    fn dpad_directions_are_scoped_to_the_matching_local_controller() {
+        let mut world = World::new();
+        for button in [GamepadButton::DPadUp, GamepadButton::DPadRight] {
+            let mut pad = Gamepad::default();
+            pad.digital_mut().press(button);
+            world.spawn(pad);
+        }
+        let mut state: bevy::ecs::system::SystemState<Query<(Entity, &Gamepad)>> =
+            bevy::ecs::system::SystemState::new(&mut world);
+        let query = state.get(&world).unwrap();
+        let first = gamepad_order_input(Input::default(), &query, 0);
+        let second = gamepad_order_input(Input::default(), &query, 1);
+        assert_ne!(first.pawn_orders.native_bits(), second.pawn_orders.native_bits());
+        assert_eq!(first.pawn_orders.native_bits() | second.pawn_orders.native_bits(), 0x0048_0000);
+        assert_eq!(gamepad_order_input(Input::default(), &query, 2).pawn_orders.native_bits(), 0);
+    }
 
     /// A wall at z = -100 facing +z.
     struct Wall;

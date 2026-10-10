@@ -40,6 +40,7 @@ fn installed_first_pawn_guard_boots_quest_after_owned_dialogue_exit() {
         host.tick(&Default::default()).unwrap();
         assert!(!host.story.as_ref().unwrap().world.gsf.get(381), "no elapsed completion");
     }
+    assert!(host.npc_errors.is_empty(), "Guard graph errors: {:?}", host.npc_errors);
     let guard = host.story_npc_guard(1).unwrap();
     assert_eq!((guard.kind, guard.message_kind, guard.message, guard.quest), (1, 2, 1, 2));
     let owner = host.story_npc_lifetime(1).unwrap();

@@ -7,6 +7,7 @@
 //! modules. The NPC graphs run on the shared AI core (`ddai::core`).
 
 pub mod guard;
+pub mod demo;
 pub mod quest_talk;
 pub mod schedule;
 pub mod talk;

@@ -15,6 +15,8 @@ use ddpawnai::pawn::{Enemy, Pawn, PawnData, Senses};
 use ddsim::{Input, State};
 use std::collections::HashMap;
 
+pub use ddpawnai::commands::Command;
+
 /// *Placeholder* for the battle flag sGameSys +0xBE2CC (its writer is not
 /// traced): a live enemy this close (cm, horizontal) to the pawn or its
 /// Arisen.
@@ -34,6 +36,13 @@ pub struct PawnSeat {
 /// The pawn data from the install: `AI\PrioThink\cmc` and
 /// `AIPlActParamSword`.
 pub fn load(vfs: &ddvfs::Vfs) -> Result<PawnData, String> {
+    let path = r"param\pl\other\m_pl000_00";
+    let adjust = ddcombat::damage::Adjust::parse(&vfs.read(path, mtarc::type_hash("rAdjustParam"))
+        .map_err(|e| format!("{path}: {e}"))?)
+        .ok_or_else(|| format!("{path}: bad adjust table"))?;
+    let order_cooldown = adjust.0.get(0x135).copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| format!("{path}: invalid order cooldown 0x135"))?;
     let prio = vfs
         .read(r"AI\PrioThink\cmc", mtarc::type_hash("rAIPriorityThink"))
         .map_err(|e| format!("AI\\PrioThink\\cmc: {e}"))?;
@@ -44,6 +53,7 @@ pub fn load(vfs: &ddvfs::Vfs) -> Result<PawnData, String> {
         )
         .map_err(|e| format!("{}: {e}", ddpawnai::plact::SWORD_BANK))?;
     Ok(PawnData {
+        order_cooldown,
         prio: ddpawnai::prio::PriorityThink::parse(&prio)?,
         sword: ddpawnai::plact::parse(&sword)?,
     })
@@ -67,6 +77,15 @@ fn dist_xz(a: [f32; 3], b: [f32; 3]) -> f32 {
 }
 
 impl Fight {
+    /// Deliver an already-authorized party order to one pawn's mailbox.
+    /// The host selects recipients: shared main pawn or the sender's hires.
+    // Translated from 0x00B79FC0 (DDDA.exe 2017-12-13 Steam).
+    pub fn deliver_pawn_order(&mut self, seat: u8, command: Command) -> bool {
+        let Some(pawn) = self.pawns.get_mut(&seat) else { return false };
+        pawn.brain.orders.deliver(command);
+        true
+    }
+
     /// Adds a pawn at `seat` serving seat `owner`'s Arisen: a sim player
     /// with the Fighter kit, and its AI with nine inclination values.
     /// `seed` seeds its random picks.
