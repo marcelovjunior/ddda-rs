@@ -615,3 +615,15 @@ No game process, new GPU run, or original NPC304 comparison was used for
 this batch. The previous contact trace used its documented1000 HP fixture;
 it is preserved as earlier diagnostic evidence rather than relabeled as
 a trace of this newly corrected production initialization.
+
+Parent review integrated committed main797922f into this task branch as
+ea029bd, preserving the separately tested Guard regression correction and
+goblin equipment checkpoint. Independent complete crate suites passed:
+ddenemyrt161 tests, with two existing ignored tests; ddhost93 tests, with
+none ignored. The combined Cargo session70599 completed with exit0;
+compile30.09s. The private full log is
+`E:/ddda-re/notes/steps/S34/full-core-ea029bd.log`.
+This validates the ordinary NPC initializer and damaged-lifetime rebinding
+alongside existing combat/story behavior. Full viewer review of19df967 is
+queued separately. Original NPC304 comparison, pawn/special-ID stat
+overrides and production Japan-only escape/proxy dispatch remain open.
