@@ -268,6 +268,9 @@ pub struct Session {
     npc_authored_motion: npc_motion::View,
     npc_adapter: NpcAdapter,
     demo: Option<Demo>,
+    /// `DDVIEW_OPENING_FROM`: a route checkpoint (Host::save) to load once
+    /// the opening is up, and `DDVIEW_OPENING_STEP` the demo step to resume.
+    resume: Option<PathBuf>,
     /// `--shots <dir>`: a screenshot per step.
     shots: Option<PathBuf>,
     shot_queue: Vec<String>,
@@ -425,6 +428,7 @@ pub fn prepare(
         npc_moving: HashMap::new(),
         npc_authored_motion: npc_motion::View::load(&vfs, exe)?,
         npc_adapter,
+        resume: std::env::var_os("DDVIEW_OPENING_FROM").map(PathBuf::from),
         demo: demo.then_some(Demo {
             step: Step::WeaponTable,
             since: 0.0,
@@ -1058,6 +1062,126 @@ pub fn setup(
     Some(st)
 }
 
+/// Loads `stage` into the view and the host (streamer, collision, quest
+/// cameras, start positions), clears the previous stage's NPCs and reports
+/// StageLoaded to the story: what a JumpArea does. `keep_places` keeps each
+/// seat where it is (a loaded checkpoint) instead of placing the party at
+/// start position `pos`.
+fn enter_stage(
+    stage_view: &mut OpeningStage,
+    st: &mut PlayState,
+    s: &mut Session,
+    stage: u32,
+    pos: u32,
+    keep_places: bool,
+) -> Result<(), String> {
+    let kept: Vec<(ddsim::PlayerId, [f32; 3], f32)> = s.host.sim.players.iter()
+        .map(|p| (p.id, p.position, p.yaw)).collect();
+    let streamer = stage_view.streamer.as_mut().ok_or("opening stage streamer absent")?;
+    let starts = ddhost::install::start_positions(streamer.loader.vfs, stage)?;
+    let start = starts.entries.get(pos as usize).ok_or("stage start position absent")?;
+    let focus = if keep_places {
+        s.host.sim.player(0).map(|p| p.position).unwrap_or([start.position[0], start.position[1], start.position[2]])
+    } else {
+        [start.position[0], start.position[1], start.position[2]]
+    };
+    let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
+        &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
+        stage, focus)?;
+    crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, stage)?;
+    s.host.doors = None;
+    st.door_collision = Default::default();
+    st.terrain = terrain.clone();
+    s.host.set_ground_with_doors(Box::new(terrain));
+    s.starts = starts.entries.iter().map(|e| (
+        [e.position[0], e.position[1], e.position[2]], e.angle,
+        e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),
+    )).collect();
+    s.place_party(pos);
+    if keep_places {
+        for (id, position, yaw) in kept {
+            if let Some(p) = s.host.sim.player_mut(id) {
+                p.position = position;
+                p.yaw = yaw;
+                p.drop_from = position[1];
+            }
+        }
+    }
+    if let Some(server) = &mut s.host.server {
+        if let Some(spot) = &mut server.config.spot {
+            spot.stage = stage;
+        }
+    }
+    s.between.snapshot(&s.host.sim);
+    for (_, (entity, _, _)) in s.npcs.drain() {
+        stage_view.commands.entity(entity).despawn();
+    }
+    s.npc_moving.clear();
+    s.host.npcs.npcs.clear();
+    s.host.npc_parked.clear();
+    s.host.world.npcs.clear();
+    s.host.world.report(ddstory::HostEvent::StageLoaded { stage });
+    Ok(())
+}
+
+/// S46: saves the host as a route checkpoint `<dir>/<name>.ddhs` (the
+/// original's save content: world, places, progression, economy, Rift,
+/// NPC quest masks, running scripts). Refused while an interaction is open,
+/// as in the original; logged, never fatal.
+fn write_checkpoint(s: &Session, dir: &std::path::Path, name: &str) {
+    let result = (|| -> Result<PathBuf, String> {
+        let file = s.host.save().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("{name}.ddhs"));
+        std::fs::write(&path, file.to_bytes()).map_err(|e| e.to_string())?;
+        Ok(path)
+    })();
+    match result {
+        Ok(path) => info!("opening: checkpoint written {}", path.display()),
+        Err(e) => warn!("opening: checkpoint {name} not written: {e}"),
+    }
+}
+
+/// S46: loads a route checkpoint the way the original loads a save:
+/// restores the host (flags, quests, running scripts, places, bags,
+/// progression), enters the saved stage keeping each seat at its saved
+/// place, and resumes the demo at `DDVIEW_OPENING_STEP` if given. Layouts,
+/// NPCs and enemies admit from their gates as usual; nothing is forced.
+fn resume_checkpoint(
+    stage_view: &mut OpeningStage,
+    st: &mut PlayState,
+    s: &mut Session,
+    path: &std::path::Path,
+    native_pc: &std::path::Path,
+) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let file = ddhost::save::SaveFile::from_bytes(&bytes)?;
+    let exe = ddexe::locate(native_pc).map_err(|e| e.to_string())?;
+    let data = InstallData::open(native_pc, Some(&exe)).map_err(|e| e.to_string())?;
+    s.host.load(&file, data).map_err(|e| e.to_string())?;
+    let (stage, start) = (s.world().stage_no, s.world().start_pos);
+    if stage == STAGE {
+        s.host.world.report(ddstory::HostEvent::StageLoaded { stage });
+    } else {
+        enter_stage(stage_view, st, s, stage, start, true)?;
+    }
+    if let (Some(d), Some(name)) = (s.demo.as_mut(), std::env::var("DDVIEW_OPENING_STEP").ok()) {
+        d.step = match name.as_str() {
+            "FieldWalk" => Step::FieldWalk,
+            "FieldSettle" => Step::FieldSettle,
+            "RescueApproach" => Step::RescueApproach,
+            "Rescue" => Step::Rescue,
+            "ThankReynard" => Step::ThankReynard,
+            "RoadWalk" => Step::RoadWalk,
+            other => return Err(format!("DDVIEW_OPENING_STEP {other} not resumable")),
+        };
+        d.path.clear();
+        d.planning = None;
+    }
+    info!("opening: resumed checkpoint {} at stage {stage} (SceNo {})", path.display(), s.world().sce_no);
+    Ok(())
+}
+
 /// The step part: host frames, inputs, the party, NPCs, talks, the menu.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 /// Assets and world entities needed by an actual stage load.
@@ -1324,6 +1448,12 @@ pub fn step(
         s.failure = Some(format!("performance route exceeded {limit} seconds without completing the walk"));
         return;
     }
+    if let Some(path) = s.resume.take() {
+        if let Err(e) = resume_checkpoint(&mut stage_view, st, s, &path, &args.native_pc) {
+            s.failure = Some(format!("checkpoint {}: {e}", path.display()));
+            return;
+        }
+    }
     kit_weapons(&mut stage_view, st, s);
     hired_pawn_bodies(&mut stage_view, st, s);
     if let Some(streamer) = stage_view.streamer.as_mut() {
@@ -1572,40 +1702,7 @@ pub fn step(
                 } => s.place_party(*n),
                 Request::PlaceParty { pos: Some(p), .. } => info!("opening: party placed at {p:?}"),
                 Request::JumpArea { stage, pos, .. } => {
-                    let result = (|| -> Result<(), String> {
-                        let streamer = stage_view.streamer.as_mut().ok_or("opening stage streamer absent")?;
-                        let starts = ddhost::install::start_positions(streamer.loader.vfs, *stage)?;
-                        let start = starts.entries.get(*pos as usize).ok_or("stage start position absent")?;
-                        let terrain = streamer.enter(&mut stage_view.commands, stage_view.entities.iter(),
-                            &mut stage_view.meshes, &mut stage_view.materials, &mut stage_view.images,
-                            *stage, [start.position[0], start.position[1], start.position[2]])?;
-                        crate::quest_camera::install(&mut s.host.world, streamer.loader.vfs, *stage)?;
-                        s.host.doors = None;
-                        st.door_collision = Default::default();
-                        st.terrain = terrain.clone();
-                        s.host.set_ground_with_doors(Box::new(terrain));
-                        s.starts = starts.entries.iter().map(|e| (
-                            [e.position[0], e.position[1], e.position[2]], e.angle,
-                            e.offset_positions.iter().map(|o| [o[0], o[1], o[2]]).collect(),
-                        )).collect();
-                        s.place_party(*pos);
-                        if let Some(server) = &mut s.host.server {
-                            if let Some(spot) = &mut server.config.spot {
-                                spot.stage = *stage;
-                            }
-                        }
-                        s.between.snapshot(&s.host.sim);
-                        for (_, (entity, _, _)) in s.npcs.drain() {
-                            stage_view.commands.entity(entity).despawn();
-                        }
-                        s.npc_moving.clear();
-                        s.host.npcs.npcs.clear();
-                        s.host.npc_parked.clear();
-                        s.host.world.npcs.clear();
-                        s.host.world.report(ddstory::HostEvent::StageLoaded { stage: *stage });
-                        Ok(())
-                    })();
-                    if let Err(e) = result {
+                    if let Err(e) = enter_stage(&mut stage_view, st, s, *stage, *pos, false) {
                         s.failure = Some(format!("stage {stage} handoff failed: {e}"));
                     }
                 }
@@ -2410,6 +2507,9 @@ fn demo_input(s: &mut Session, now: f32, stage_ground: &dyn ddsim::Ground, vocat
         d.check = (now, p);
         d.last_talk = 0.0;
         if matches!(n, Step::ThankReynard | Step::ReynardRepeat) { d.talked = false; }
+    }
+    if let (Some(n), Some(dir)) = (next, std::env::var_os("DDVIEW_CHECKPOINT_DIR")) {
+        write_checkpoint(s, std::path::Path::new(&dir), &format!("{n:?}"));
     }
     if let (Some(yaw), Some(pl)) = (face, s.host.sim.player_mut(0)) {
         // the demo turns the Arisen to the table (the scenario's angle
