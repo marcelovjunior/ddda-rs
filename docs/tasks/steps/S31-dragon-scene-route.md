@@ -177,3 +177,17 @@ now pass: Guard dialogue/quest boot and applied NPC observation/restoration.
 Existing beach body-readiness, Reynard, unsupported-error, NPC combat,
 motion, opening and co-op regressions also passed. This is installed-data
 host acceptance, not an original-game comparison or full playable S31 route.
+
+**Combined bank acceptance:** after integrating reviewed main `797922f`
+and its Guard fix into the bank checkpoint, the complete `ddnpcrt` suite
+passed35 tests (compile2.84s), and complete `ddhost` passed95 tests
+(9 units plus86 integration, all29 integration binaries, compile29.18s).
+Both commands actually exited0 on the prescribed shared core target;
+the host run included the new native-bank motion109 and NPC709 regressions
+alongside Guard, NPC death, co-op, camera and opening suites. Verified stale
+metadata initially hid `ddnpcrt::demo` and `ddpawnai::commands` despite their
+source exports; narrow cleans of those crates removed469.6MiB/56.6MiB and
+resolved the compile errors without source changes. The core lease was
+released after actual exit. Reaction helper work is isolated on another
+branch and was not part of this acceptance run; the playable route remains
+open.
