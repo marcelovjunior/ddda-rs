@@ -708,3 +708,16 @@ sampling through the birth counter simply because both use the same native
 tables. The path helper's caller contract now states that distinction.
 Runtime initialization owners and their later seed writes remain to be
 integrated; these source findings do not establish an active fire emitter.
+
+`GeneratorTransform::bind_path` now connects the verified scaled +Z basis
+to ordinary uncurved life4 construction (`0x010F1230 -> 0x010E5620 ->
+0x012A1330`). Authored total length divided by point-count minus one uses
+the separate particle scalar; force retains the scaled, unnormalized
+direction while point spacing normalizes that direction. Points remain
+relative to the coordinate anchor. Nonzero angular or length velocity,
+rotations and curves reject until their native update adapters exist.
+The new regression distinguishes those two scales and force magnitude,
+relative versus world positions and unsupported modes. Both this test and
+the generator-transform test remain **uncompiled/unrun** at this freeze.
+This is a path input adapter; the production effect lifetime, actual birth,
+world collision query and ordinary damage connection remain open.

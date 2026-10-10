@@ -93,6 +93,45 @@ pub struct GeneratorTransform {
     pub particle_scale: f32,
 }
 
+/// Uncurved zero-angular life4 setup, ready for real emitter displacement.
+/// Points remain relative to the coordinate anchor, as in the native buffer.
+#[derive(Debug, Clone)]
+pub struct BoundPath {
+    pub path: ParticlePath,
+    pub dynamics: PathDynamics,
+}
+
+impl GeneratorTransform {
+    /// The ordinary 0x010F1230 caller supplies +Z, transformed through the
+    /// generator's scaled basis. Force keeps that unnormalized direction;
+    /// only the initial point spacing normalizes it. Particle scalar scales
+    /// the authored total length separately from those generator axis scales.
+    // Translated from 0x010F1230 -> 0x010E5620 -> 0x012A1330
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn bind_path(&self, point_count: u8, parameters: &PathParameters,
+        sampled: SampledPath) -> Result<BoundPath, String> {
+        if point_count < 2 || parameters.flags != 0 || parameters.curves != [0; 4]
+            || sampled.angular_velocity != 0.0 || sampled.length_velocity != 0.0
+            || sampled.rotation != [0.0; 3] {
+            return Err("unsupported curved, angular or changing-length path binding".into());
+        }
+        if self.matrix.iter().flatten().chain([self.particle_scale, sampled.length,
+            sampled.force, sampled.damping, sampled.spring].iter()).any(|v| !v.is_finite()) {
+            return Err("nonfinite native path binding".into());
+        }
+        let direction = [self.matrix[2][0], self.matrix[2][1], self.matrix[2][2]];
+        let dynamics = PathDynamics {
+            segment_length: (sampled.length.max(0.0) / f32::from(point_count - 1))
+                * self.particle_scale,
+            damping: sampled.damping, spring: sampled.spring,
+            taper_points: parameters.taper_points,
+            force: direction.map(|component| component * sampled.force),
+        };
+        let path = ParticlePath::construct(point_count, direction, dynamics, parameters.iterations)?;
+        Ok(BoundPath { path, dynamics })
+    }
+}
+
 impl CoordinateTransform {
     /// Caller supplies the actual uEffect +1A0/+1B0 values and generator
     /// +134 sample. `coordinate_scale_mode` is resource flags bits16..19:
@@ -1369,3 +1408,29 @@ impl CollisionUnit {
         }))
     }
 }
+    #[test]
+    fn path_binding_separates_scaled_direction_force_spacing_and_relative_anchor() {
+        let generator = GeneratorTransform {
+            matrix: [[0.0, 0.0, 2.5, 0.0], [0.0, 9.375, 0.0, 0.0],
+                [-10.0, 0.0, 0.0, 0.0], [11.0, 22.0, 33.0, 1.0]],
+            axis_scale: [-2.5, 9.375, -10.0], particle_scale: 3.125,
+        };
+        let parameters = PathParameters { flags: 0, iterations: 1, selectors: 0x4444,
+            taper_points: 3, ranges: [[0.0; 2]; 6], rotation: [[0.0; 2]; 3], curves: [0; 4] };
+        let sampled = SampledPath { length: 12.0, length_velocity: 0.0,
+            angular_velocity: 0.0, force: 2.0, damping: 0.0, spring: 0.0, rotation: [0.0; 3] };
+        let bound = generator.bind_path(4, &parameters, sampled).unwrap();
+        assert_eq!(bound.dynamics.segment_length, 12.5);
+        assert_eq!(bound.dynamics.force, [-20.0, 0.0, 0.0],
+            "native force uses scaled direction before the constructor normalizes spacing");
+        assert_eq!(bound.path.points,
+            vec![[0.0; 3], [-12.5, 0.0, 0.0], [-25.0, 0.0, 0.0], [-37.5, 0.0, 0.0]]);
+        assert_eq!(bound.path.velocities[1], [-20.0, 0.0, 0.0]);
+        assert_eq!(bound.path.total_length, 37.5);
+        assert!(generator.bind_path(1, &parameters, sampled).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { angular_velocity: 1.0, ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { length_velocity: 1.0, ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { rotation: [0.0, 1.0, 0.0], ..sampled }).is_err());
+        assert!(generator.bind_path(4, &parameters, SampledPath { force: f32::NAN, ..sampled }).is_err());
+    }
+
