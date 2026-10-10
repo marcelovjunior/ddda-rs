@@ -7,6 +7,7 @@
 //! names translate them and the doc comments keep the originals.
 
 pub mod commands;
+pub mod chatter;
 pub mod goap;
 pub mod incl;
 pub mod pawn;
