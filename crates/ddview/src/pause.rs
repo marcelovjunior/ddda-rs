@@ -22,6 +22,7 @@ pub struct PauseMenu;
 #[derive(Component, Clone, Copy)]
 pub enum Action {
     Resume,
+    Items,
     Quit,
 }
 
@@ -70,7 +71,11 @@ pub fn setup(mut commands: Commands, args: Res<crate::Args>, mut pause: ResMut<P
                     ..default()
                 },
             ));
-            for (label, action) in [("Resume (Esc)", Action::Resume), ("Quit", Action::Quit)] {
+            let mut actions = vec![("Resume (Esc)", Action::Resume), ("Quit", Action::Quit)];
+            // This parent screen is viewer policy; the Items child projects
+            // the installed uGUIItemLE resources. Native pause-top VM is open.
+            if args.opening { actions.insert(1, ("Items", Action::Items)); }
+            for (label, action) in actions {
                 c.spawn((
                     Button,
                     action,
@@ -103,6 +108,7 @@ pub fn update(
     mut exit: MessageWriter<AppExit>,
     movie: Option<Res<crate::movie::MoviePlayer>>,
     intro: Option<Res<crate::intro::Intro>>,
+    mut item_menus: ResMut<crate::item_menu::Menus>,
 ) {
     if !pause.enabled || movie.is_some() || intro.is_some() {
         return;
@@ -114,7 +120,8 @@ pub fn update(
     if !window.focused && pause.auto_pause {
         pause.paused = true;
     } else if keys.just_pressed(KeyCode::Escape) {
-        pause.paused = !pause.paused;
+        if item_menus.blocks(0) { item_menus.close(0); pause.paused = false; }
+        else { pause.paused = !pause.paused; }
     }
     for (interaction, action, mut color) in &mut buttons {
         *color = BackgroundColor(if *interaction == Interaction::Hovered {
@@ -125,6 +132,7 @@ pub fn update(
         if was_paused && *interaction == Interaction::Pressed {
             match action {
                 Action::Resume => pause.paused = false,
+                Action::Items => { item_menus.open(0); pause.paused = false; }
                 Action::Quit => {
                     exit.write(AppExit::Success);
                 }
@@ -166,6 +174,7 @@ mod tests {
         })
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<crate::item_menu::Menus>()
         .add_message::<AppExit>()
         .add_systems(Update, update);
         let window = app

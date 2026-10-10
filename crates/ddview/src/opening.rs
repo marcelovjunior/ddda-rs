@@ -308,6 +308,37 @@ pub struct Session {
 pub struct OpeningRes(pub Mutex<Session>);
 
 impl OpeningRes {
+    pub(crate) fn item_menu_snapshot(&self, player: ddsim::PlayerId) -> Option<crate::item_menu::Snapshot> {
+        let session = self.0.lock().unwrap();
+        // Guest inventory requests are not in the LAN protocol. Events and
+        // story-owned menus retain priority over local inventory UI.
+        if session.guest.is_some() || session.cut.is_some() || session.talk.is_some() || session.world_menu().is_some()
+            || ddhost::StoryWorld::player_actions_blocked(&session.host.world, player) { return None; }
+        session.host.roster.seat(player)?;
+        // Co-op policy: this Arisen and the session's active pawn bags, never
+        // another Arisen. Native 0x00669990 requires a member's active actor;
+        // its additional record+0x354 admission flag remains unported.
+        let bags = session.host.item_recipients().into_iter().filter(|r| match r.owner {
+            ddeconomy::inventory::Owner::Arisen(p) => p == player,
+            ddeconomy::inventory::Owner::Pawn(_) => session.host.sim.player(r.seat).is_some()
+                && session.host.fight.as_ref().is_some_and(|f| f.arisen.contains_key(&r.seat)),
+            _ => false,
+        }).filter_map(|r| Some(crate::item_menu::BagView {
+            owner:r.owner, bag:session.host.economy.inventory.bag(r.owner)?.clone(),
+        })).collect::<Vec<_>>();
+        (!bags.is_empty()).then_some(crate::item_menu::Snapshot { bags })
+    }
+
+    pub(crate) fn item_menu_use(&self, player: ddsim::PlayerId, bag: ddeconomy::inventory::Owner, row: &crate::item_menu::Entry) -> Result<(), String> {
+        let mut session = self.0.lock().unwrap();
+        if session.guest.is_some() || session.cut.is_some() || session.talk.is_some() || session.world_menu().is_some() { return Err("item menu is unavailable".into()); }
+        let item = session.host.item_request(player, ddhost::items::ItemRequest::Use {
+            owner:bag,index:row.index,expected:row.slot,
+        })?;
+        info!("opening item menu: seat {player}, bag {bag:?}, used item {item}");
+        Ok(())
+    }
+
     pub(crate) fn vocation_snapshot(&self) -> Option<(usize, usize, bool, bool)> {
         let session = self.0.lock().unwrap();
         let (_, owner) = session.world_menu().filter(|(menu, _)| *menu == Menu::Vocation)?;
@@ -1451,6 +1482,7 @@ pub fn step(
     mut vis: Query<&mut Visibility, Without<Actor>>,
     mut hud: ResMut<play::Hud>,
     vocation_view: Option<Res<crate::vocation_menu::View>>,
+    item_menus: Res<crate::item_menu::Menus>,
 ) {
     let _timing = crate::perf::Section::start("opening::step");
     let keys = &order_devices.keys;
@@ -1544,7 +1576,7 @@ pub fn step(
     if !pause.paused && s.cut.is_none() && s.talk.is_none() && s.world_menu().is_none() {
         for &seat in &st.locals {
             let key = match seat { 0 => KeyCode::KeyU, 1 => KeyCode::Numpad0, _ => continue };
-            if keys.just_pressed(key) {
+            if !item_menus.blocks(seat) && keys.just_pressed(key) {
                 match s.host.item_request(seat, ddhost::items::ItemRequest::QuickUse) {
                     Ok(item) => info!("opening quick-use: seat {seat} used item {item}"),
                     Err(error) => info!("opening quick-use: seat {seat}: {error}"),
@@ -1552,15 +1584,15 @@ pub fn step(
             }
         }
     }
-    if !pause.paused && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
+    if !pause.paused && !item_menus.blocks(0) && pause.mouse_look(buttons.pressed(MouseButton::Right)) {
         play::orbit(st, &buttons, &mouse);
     }
     // Local input: talk and menu keys first, the rest to the host.
     // Local keyboard mapping is viewer policy: E for seat0, numpad Enter
     // for seat1. Host dialogue ownership is the same for either seat.
-    let e_press = !pause.paused && keys.just_pressed(KeyCode::KeyE);
+    let e_press = !pause.paused && !item_menus.blocks(0) && keys.just_pressed(KeyCode::KeyE);
     let talk_press = if e_press { Some(0) }
-        else if !pause.paused && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
+        else if !pause.paused && !item_menus.blocks(1) && st.locals.contains(&1) && keys.just_pressed(KeyCode::NumpadEnter) { Some(1) }
         else { None };
     let near = s.npc_near_for(talk_press.unwrap_or(0));
     let mut input = PlayerInput {
@@ -1630,7 +1662,7 @@ pub fn step(
         s.demo = None;
     }
     // The demo stands in for the keys.
-    if !pause.paused && s.demo.is_some() && s.cut.is_none() {
+    if !pause.paused && !item_menus.blocks(0) && s.demo.is_some() && s.cut.is_none() {
         input = if s.shots.is_some() && s.shots_taken == 0 {
             PlayerInput::default()
         } else {
@@ -1639,6 +1671,10 @@ pub fn step(
     }
     if pause.paused {
         input = PlayerInput::default();
+    }
+    if item_menus.blocks(0) {
+        input = PlayerInput::default();
+        s.pending_input = PlayerInput::default();
     }
     if pause.paused || s.cut.is_some() || s.talk.is_some() || s.world_menu().is_some() {
         s.pending_input = PlayerInput::default();
@@ -1651,8 +1687,9 @@ pub fn step(
         && s.talk.is_none() && s.world_menu().is_none()
     {
         let queued = s.pending_local.entry(1).or_default();
-        *queued = play::latch_input(*queued,
-            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1));
+        *queued = if item_menus.blocks(1) { Input::default() } else { play::latch_input(*queued,
+            play::gamepad_order_input(play::p2_input(&keys, st.cam_yaw), &gamepads, 1))
+        };
     }
     let mut local_inputs = s.pending_local.clone();
     // Host frames at 30 Hz.
@@ -3086,6 +3123,50 @@ fn plan_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_item_menu_uses_selected_slot_through_host_and_rejects_other_bags() {
+        use super::*;
+        let native=std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+        if !native.is_dir() {return;}
+        let exe=ddexe::locate(native).unwrap();
+        let mut session=prepare(native,&exe,2,false,None,false).unwrap();
+        // Explicit gameplay fixture: no cutscene/talk/story-owned menu. Bag
+        // contents still come from the installed authored q1 reward.
+        session.cut=None; session.talk=None; session.host.world.menu=None;
+        let reward=ddstory::orders::reward(&session.host.story.as_ref().unwrap().data,1).unwrap();
+        for request in reward {
+            if let ddstory::Request::Reward {quest,items,..}=request {
+                let host=&mut *session.host;
+                let data=host.item_data.clone().unwrap();
+                for seat in host.roster.ids() {
+                    host.economy.opening_grants.reward(&mut host.economy.inventory,&data.items,seat,quest,&items);
+                }
+            }
+        }
+        let original_other=session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(1)).unwrap().clone();
+        let fight=session.host.fight.as_mut().unwrap();
+        // Preparation stops before the vocation creates fight actors. This
+        // recovery fixture explicitly creates them from installed FightData;
+        // it is not a claim that the route selected a vocation or gave a reward.
+        for seat in [0,1] { fight.add_arisen(seat); }
+        if let ddhost::ddenemyrt::combat::Victim::Player {hp,hp_max,..}=&mut fight.arisen.get_mut(&0).unwrap().fighter.victim { *hp=20.0; *hp_max=1000.0; }
+        let res=OpeningRes(Mutex::new(session));
+        let data=res.item_menu_snapshot(0).unwrap();
+        let index=data.bags[0].bag.slots.iter().position(|s|s.item==43).unwrap();
+        let row=crate::item_menu::Entry {index,slot:data.bags[0].bag.slots[index]};
+        assert!(res.item_menu_use(1,ddeconomy::inventory::Owner::Arisen(0),&row).is_err());
+        res.item_menu_use(0,ddeconomy::inventory::Owner::Arisen(0),&row).unwrap();
+        // The stale stack count no longer matches: never consume a different
+        // live slot using an old presentation row.
+        assert!(res.item_menu_use(0,ddeconomy::inventory::Owner::Arisen(0),&row).is_err());
+        let mut session=res.0.lock().unwrap();
+        assert!(session.host.fight.as_ref().unwrap().arisen[&0].fighter.victim.hp()>20.0);
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(0)).unwrap().count(43),4);
+        assert_eq!(session.host.economy.inventory.bag(ddeconomy::inventory::Owner::Arisen(1)).unwrap(),&original_other);
+        let frame=session.host.frame;
+        session.host.tick(&Default::default()).unwrap();
+        assert_eq!(session.host.frame,frame+1);
+    }
     #[test]
     fn installed_second_arisen_has_an_outfit_and_keeps_the_first_seats_look() {
         let native = std::path::Path::new(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC");
