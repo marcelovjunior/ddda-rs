@@ -306,3 +306,35 @@ fn disable_flags_belong_to_the_materialized_intel_lifetime() {
     host.load_story_npc_intel(p).unwrap();
     assert_eq!(host.story_npc_intel_flags(1), Some(0), "replacement starts with constructor state");
 }
+
+#[test]
+fn retired_actor_cannot_acknowledge_replacement_with_same_id_and_target() {
+    let mut story = Story::new_game(ddhost::data::NoStoryData);
+    story.stage.stage_no = 200;
+    story.world.stage_no = 200;
+    let mut host = Host::new(ddsim::Sim::new(Default::default()), Some(story),
+        ddhost::opening::OpeningWorld::new(), Box::new(Void));
+    host.data.npc = Some(std::sync::Arc::new(GraphsWithFault));
+    let mut p = placement(1);
+    p.authored_action = "flags".into();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    let old = host.story_npc_lifetime(1).unwrap();
+    host.load_story_npc_intel(p.clone()).unwrap();
+    assert_eq!(host.story_npc_lifetime(1), Some(old), "unchanged allocation preserves identity");
+    assert!(host.story_npc_arrived_for(old, [4.0, 5.0, 6.0]));
+    host.unbind_story_npc(200, p.target);
+    assert!(!host.story_npc_arrived_for(old, [8.0, 8.0, 8.0]));
+    host.load_story_npc_intel(p.clone()).unwrap();
+    host.tick(&Default::default()).unwrap();
+    assert!(host.story_npc_action(1).is_some(), "replacement applied owner is actively waiting");
+    let replacement = host.story_npc_lifetime(1).unwrap();
+    assert_ne!(replacement, old);
+    let before = host.state_hash();
+    assert!(!host.story_npc_arrived_for(old, [9.0, 9.0, 9.0]));
+    assert!(!host.observe_story_npc_talk_end_for(old));
+    assert_eq!(host.story_npc_position(1), Some(p.transform.position));
+    assert_eq!(host.state_hash(), before, "stale observations cannot mutate the replacement");
+    assert!(host.observe_story_npc_talk_end_for(replacement), "current owner accepts its observation");
+    assert!(host.story_npc_arrived_for(replacement, [7.0, 8.0, 9.0]));
+    assert_eq!(host.story_npc_position(1), Some([7.0, 8.0, 9.0]));
+}

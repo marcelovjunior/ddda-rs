@@ -623,3 +623,20 @@ q0002 plays from its boot to its clear in `--opening`, the first pawn joins the 
   not universal ineligibility, although actual talk exit does require true.
 - Seven Guard release tests and ddnpcrt clippy pass. Body initialization,
   eligibility observations and active action cleanup still need integration.
+
+### Checked materialized actor lifetime observations (codex-31)
+
+- Added deterministic host lifetime tokens for each new materialized intel.
+  Repeated identical placement snapshots preserve the token; retirement and
+  same-id/same-target reallocation change it. Tokens and allocation counter
+  participate in replay hashing. This is a co-op identity mechanism, not an
+  invented original-game field or an address copied from the game process.
+- Checked arrival and TalkEnd observation APIs reject retired owners. The
+  regression keeps a real replacement applied owner active, proves stale
+  observations cannot mutate it, then proves the new token is accepted.
+  The existing synchronous fixture methods remain for explicit current-owner
+  calls. Nine host placement tests and targeted clippy pass.
+- Scope limit: an actor lifetime is not an individual movement command.
+  An asynchronous mover must additionally validate interface/command identity
+  when an action changes within the same actor. Viewer/Guard wiring will use
+  these tokens instead of equating an NPC id with a permanent actor.

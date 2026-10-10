@@ -6,6 +6,14 @@ use ddnpcrt::schedule::{Clock, Npc, Request};
 use ddstory::{data::Data, Target};
 use std::collections::{BTreeMap, HashMap};
 
+/// Host identity for one materialized intel lifetime. This deterministic
+/// co-op token replaces pointer identity; it is not an original game value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NpcLifetime {
+    pub npc: u32,
+    pub generation: u64,
+}
+
 struct Applied {
     stage: u32,
     target: Target,
@@ -22,6 +30,8 @@ pub struct StoryNpcs {
     bindings: HashMap<(u32, Target), u32>,
     positions: HashMap<u32, [f32; 3]>,
     intel_flags: HashMap<u32, u32>,
+    lifetimes: HashMap<u32, u64>,
+    pub(crate) lifetime_counter: u64,
     pending: HashMap<(u32, Target), String>,
     normal_controllers: HashMap<(u32, Target), bool>,
     applied: BTreeMap<u32, Applied>,
@@ -106,6 +116,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if self.story_npcs.intels.get(&key) == Some(&placement) {
             return Ok(None);
         }
+        let generation = self.story_npcs.lifetime_counter.checked_add(1)
+            .ok_or_else(|| HostError::Npc("NPC lifetime token space exhausted".into()))?;
         if self.story_npcs.bindings.contains_key(&key) {
             self.unbind_story_npc(key.0, key.1);
         } else if self.npcs.npcs.contains_key(&npc) {
@@ -135,6 +147,8 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         self.story_npcs.positions.insert(npc, placement.transform.position);
         // uNpcIntel constructor0x00bbbfa0 initializes +0x5c0 to zero.
         self.story_npcs.intel_flags.insert(npc, 0);
+        self.story_npcs.lifetime_counter = generation;
+        self.story_npcs.lifetimes.insert(npc, generation);
         self.story_npcs.intels.insert(key, placement);
         self.observe_story_npc_normal_controller(key.0, key.1, Some(true));
         self.world.observe_npc_intel(key.0, key.1, true);
@@ -158,6 +172,7 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
             self.npcs.npcs.remove(&(intel.npc as u32));
             self.story_npcs.positions.remove(&(intel.npc as u32));
             self.story_npcs.intel_flags.remove(&(intel.npc as u32));
+            self.story_npcs.lifetimes.remove(&(intel.npc as u32));
             self.world.observe_npc_intel(stage, target, false);
         }
         if let Some(npc) = self.story_npcs.bindings.remove(&(stage, target)) {
@@ -180,6 +195,29 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
         if let Some(applied) = self.story_npcs.applied.get_mut(&npc) {
             applied.action.observe_talk_end(true);
         }
+    }
+
+    pub fn story_npc_lifetime(&self, npc: u32) -> Option<NpcLifetime> {
+        self.story_npcs.lifetimes.get(&npc).map(|&generation| NpcLifetime { npc, generation })
+    }
+
+    /// Reject a delayed observation from a retired actor, even if its NPC id
+    /// and placement target have been reused. Dialogue/action eligibility is
+    /// still the caller's responsibility, as in the synchronous fixture API.
+    pub fn observe_story_npc_talk_end_for(&mut self, owner: NpcLifetime) -> bool {
+        if self.story_npc_lifetime(owner.npc) != Some(owner)
+            || !self.story_npcs.applied.get(&owner.npc).is_some_and(|a| !a.action.applied_finished()) { return false; }
+        self.observe_story_npc_talk_end(owner.npc);
+        true
+    }
+
+    /// Actor-lifetime checked arrival. A future asynchronous mover must ALSO
+    /// validate the current interface/command when an action changes within
+    /// the same actor lifetime; this token alone does not identify a Goto.
+    pub fn story_npc_arrived_for(&mut self, owner: NpcLifetime, position: [f32; 3]) -> bool {
+        if self.story_npc_lifetime(owner.npc) != Some(owner) { return false; }
+        self.story_npc_arrived(owner.npc, position);
+        true
     }
 
     /// Position of the materialized actor, independent of graph suspension
