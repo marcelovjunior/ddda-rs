@@ -1124,6 +1124,30 @@ impl Sim {
         Ok(())
     }
 
+    /// Moves a player by its push-out (step 38's deepest push of the
+    /// frame; x and z only). The original applies it in pass C before the
+    /// scenery sweep (0x0076D6B0, then `uObjModel::vf09`'s adjust), so the
+    /// push collides like any move and cannot carry the body into rising
+    /// ground or a wall. The frame's own move was already swept in
+    /// `step`, so the push gets its own sweep here. Grounds without
+    /// triangles keep the older raw move.
+    // Translated from 0x0076D6B0 / 0x010B0CA0 (DDDA.exe 2017-12-13 Steam).
+    pub fn push_player(&mut self, id: PlayerId, push: [f32; 2], ground: &dyn Ground) {
+        let param = self.sweep_param;
+        let Some(p) = self.player_mut(id) else { return };
+        if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
+            let on_ground = !matches!(p.state,
+                State::Air { .. } | State::Fall | State::SecondJump | State::JumpStart { .. });
+            p.position = sweep::sweep(&param, &sweep::PLAYER_CAPSULE, p.position,
+                [push[0], 0.0, push[1]], on_ground, &|lo, hi, out| {
+                    ground.triangles_in(lo, hi, out);
+                }).position;
+        } else {
+            p.position[0] += push[0];
+            p.position[2] += push[1];
+        }
+    }
+
     fn period_of(&self, motion: u16) -> f32 {
         self.motions.get(&motion).map_or(30.0, RootMotion::period)
     }

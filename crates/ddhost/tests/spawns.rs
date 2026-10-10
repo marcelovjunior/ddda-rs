@@ -95,7 +95,7 @@ fn cassardis_area_goblins_join_the_fight() {
         sim.step(1.0 / 30.0, &HashMap::new(), &Flat);
         night.players_moved(&mut sim, &Flat, 1.0);
         night.enemies(&sim, &Flat, 1.0);
-        night.push_out(&mut sim);
+        night.push_out(&mut sim, &Flat);
         night.volumes(&sim);
     }
     assert!(night.goblins.iter().any(|g| g.log.len() > 1), "the goblins act");
