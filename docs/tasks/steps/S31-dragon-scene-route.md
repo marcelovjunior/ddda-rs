@@ -31,6 +31,51 @@ each exit, and the route continues to q0001 as before.
 
 ## Results
 
+**2026-10-10, codex-80: common-action joint exit continuation, Rust UNRUN.**
+This batch starts from head's accepted main
+`3b48b63f0d239c9601149f5749b4d4ac1e79adfd`. The independent
+`NpcBody::action_exit_joint_attributes` API translates the unconditional
+mode1 call at `0x00AC8A4B..0x00AC8A50 -> 0x00B86010`: clear mAttr40 on the
+four installed bone-map selections, preserving all other current bits.
+The common Extra exit inherits `0x00AC8A10`, while Blow's exit at
+`0x0080DC70` jumps to it. Exit does not reuse the saved-flags/held-goods
+branch from damage entry. The shared validated joint write retains atomic
+rejection for missing/truncated maps and invalid model indices. This API
+is only the joint write; restoring motion banks7/9, the linked event actor
+exit and actual Host scheduling remain open.
+
+Three new regressions are written and **not run**:
+`demo_action_exit_clears_current_joint_bit_with_aliases_and_atomic_validation`,
+`installed_beach_action_exit_restores_current_joint_attributes_after_blocking_entry`,
+and `demo_scenery_radius95_distinguishes_native_double_from_sqrt2`.
+The installed test covers all seven beach bodies, changes unrelated bits
+between entry and exit and rejects a wrong attribute shape atomically.
+The radius95 fixture exposes the one-ULP difference between the native
+double at `0x0161C9F0` and the standard SQRT_2 constant; the existing
+radius35 case produces the same rounded value for both.
+
+**Compared with a bounded original-code fixture:** parent8863 authorized
+one four-case run of the complete original `0x01060730` and its original
+`0x010571E0` callback. It passed in0.0815852s, with235/269/245/382 original
+instructions and7 callback instructions per case. Frames/flags were
+1/0,49.5/1,50/4,0.5/4: the terminal FF04 mask at `0x01060978` and
+`0x010609B4` clears predictive bit1 before setting terminal bit4. All
+normal returns, preserved registers, stack/body canaries and original
+file pages passed. Synthetic nondegenerate current/previous quaternions
+avoided the runtime fallback at `0x01060AE9..0x01060B01`; the unknown BSS
+page was an A5 poison guard with **zero read/write accesses** and unchanged
+bytes, never an invented native constant. The private second proof SHA256
+is `9bc0c8e90e91febb36dc29680c92de9b8ce21682a3fac3df2fa4ca32994ad767`.
+The first attempt failed before execution on that BSS reference; its
+original failure proof remains unchanged. This comparison covers a
+synthetic one-layer positive-speed clock with zero joints/custom attribute
+counts. Runtime fallback initialization, other clock branches, full pose
+evaluation and production frame order remain unresolved.
+
+**Next:** review this helper batch, run full ddenemyrt+ddhost under the
+parent's CPU lease, then continue sourced raw-layer/common-action lifetime
+integration. No viewer route, game process or installation was changed.
+
 **2026-10-10, codex-80: real-body scenery/joint entry helper checkpoint,
 tested.** Head8627 and parent8655 authorize the real-body continuation;
 accepted main `d02c0cf` was integrated before this batch. `NpcBody` now
