@@ -57,8 +57,11 @@ regressions passed (4 tests, compile 13.63 seconds). The full DDNET suite then
 passed all 15 tests: 5 unit, 4 wire, 3 loopback, 2 replication, and 1 story test;
 this includes the installed goblin fight under UDP loss (3.33 seconds) and the
 NPC/cutscene story path (5.67 seconds). The guest view shares parsed motion banks
-by their resource paths; additional owner-keyed pose and body/child removal
-regressions are written and await the M5 lease. The dragon projection, installed
+by their resource paths. The full viewer suite passed 63 tests with 2 existing
+ignored tests (compile 32.31 seconds, tests 13.90 seconds), including the new
+owner-keyed full-rotation/nonuniform-scale pose and identity-replacement/body/
+child-removal regressions. Only the existing `main.rs` Args visibility warning
+remains. The dragon projection, installed
 mixed dragon/goblin host/guest check and visual check await the reviewed S29
 merge. No original-game or dragon LAN acceptance claim is made by this
 preparation checkpoint.
