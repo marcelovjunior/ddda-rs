@@ -57,8 +57,12 @@ Prepared implementation:
   of the full native page sequence. Preview camera/light/idle motion and
   keyboard bindings remain viewer presentation choices.
 - Preset field copying follows `0x00617420`. The native full-preset quirk
-  at `0x00617524` / `0x0061752B` reads `EyeblowColor` for both beard and
-  brow; an asymmetric synthetic-row regression exercises this binding.
+  at `0x00617524` / `0x0061752B` reads `EyeLColor` for both eyes;
+  `cSAVE_DATA_EDIT::vf03` (`0x00787010`) identifies destinations
+  `+0x49` / `+0x4A` as the right/left eye fields. Beard and brow copy
+  their own source `+0x25` / `+0x26` normally. An asymmetric synthetic-row
+  regression exercises this binding. Earlier scratch interpretation as
+  beard/brow was incorrect and was corrected before execution of tests.
   Installed tests exercise all 32 full presets through dressed look creation.
 - Keyboard entry follows `0x0075D71E..0x0075D73A`: 12 single-byte
   characters, otherwise eight. Normalization follows `0x007676E0`,

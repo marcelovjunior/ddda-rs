@@ -100,8 +100,10 @@ impl Presets {
             candidate.set(field, *value);
         }
         // 0x00617524 and 0x0061752B both read +0x23, not +0x22.
-        // Consequently native full presets use EyeblowColor for beard and brow.
-        candidate.set("mColorBeard", values[34]);
+        // Serializer0x00787010 identifies destinations +0x49/+0x4a as
+        // mColorEyeR/mColorEyeL. Both native full-preset eyes use EyeLColor;
+        // beard/brow instead copy their own +0x25/+0x26 fields normally.
+        candidate.set("mColorEyeR", values[31]);
         *edit = candidate;
         Ok(())
     }
@@ -275,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn native_full_preset_keeps_identity_and_reproduces_brow_beard_binding() {
+    fn native_full_preset_keeps_identity_and_reproduces_left_right_eye_binding() {
         let row = std::array::from_fn(|i| (i + 10) as u8);
         let presets = Presets {
             all: [vec![row], vec![row]],
@@ -298,7 +300,9 @@ mod tests {
         assert_eq!(edit.get("mHumanHead"), Some(31));
         assert_eq!(edit.get("mScarNo"), Some(37));
         assert_eq!(edit.get("mMakeupFace"), Some(38));
-        assert_eq!(edit.get("mColorBeard"), Some(44));
+        assert_eq!(edit.get("mColorEyeR"), Some(41));
+        assert_eq!(edit.get("mColorEyeL"), Some(41));
+        assert_eq!(edit.get("mColorBeard"), Some(43));
         assert_eq!(edit.get("mColorEyebrow"), Some(44));
         let old = edit.clone();
         assert!(presets.apply(&mut edit, 2, 0).is_err());
