@@ -25,6 +25,8 @@ use std::sync::Arc;
 /// The goblin's data from the install.
 #[derive(Debug, Clone)]
 pub struct GoblinData {
+    /// The rModel actually loaded for this family; LAN guests load the same path locally.
+    pub model: String,
     pub body: Body,
     pub tables: Arc<Tables>,
     /// Action id -> class name (the unit's action table 0x018335d0).
@@ -37,6 +39,11 @@ pub struct GoblinData {
     /// (the actor copy at +0x5A84 read by `uEnemy::vf90` 0x00AA96E0;
     /// goblin 13).
     pub obj_size: u32,
+    /// Experience for killing it: unit +0x5C24, set by `uEm0100::vf33`
+    /// (0x008CDD80) when the placement gave none: 100 for kind 5 (uEm0100;
+    /// 550 for the uEm0101 kind 6, 1300 / 2000 for kinds 7 / 142), copied
+    /// to +0x59B8 by `uEnemy::vf34` (0x00AA93EC).
+    pub exp: u32,
 }
 
 /// Motion banks of the goblin, by the bank number its motion ids carry.
@@ -49,7 +56,8 @@ pub const BANKS: [(u8, &str); 3] = [
 impl GoblinData {
     /// Loads `em0100` from the install and its think tables from the exe.
     pub fn load(vfs: &ddvfs::Vfs, exe: &ddexe::Exe<'_>) -> Result<Self, String> {
-        let skeleton = load::skeleton(vfs, r"model\em\e01\e0100\e0100")?;
+        let model = r"model\em\e01\e0100\e0100";
+        let skeleton = load::skeleton(vfs, model)?;
         let mut banks = vec![None; 3];
         for (n, path) in BANKS {
             banks[usize::from(n)] = Some(load::bank(vfs, path)?);
@@ -106,6 +114,7 @@ impl GoblinData {
             })
             .collect();
         Ok(GoblinData {
+            model: model.into(),
             // the unit's scale (owner +0x60..+0x68) is *assumed* 1 for a
             // standard goblin
             body: Body {
@@ -119,6 +128,7 @@ impl GoblinData {
             attacker: EnemyAttacker::new(stats.attack, stats.magic_attack),
             defender: EnemyDefender::new(stats.defense, stats.magic_defense),
             regions,
+            exp: 100,
             obj_size: {
                 let x = &gob.common.as_ref().ok_or("em0100: no common params")?.0.object;
                 match x.get(&x.root, "OBJ補正サイズ") {
@@ -207,6 +217,10 @@ pub struct Goblin {
     pub answers: UnitAnswers,
     /// The current target's id.
     pub target: Option<u32>,
+    /// The experience its death awards (0x008573E0 reads +0x59B8): the
+    /// data's default, or the placement's `mExperienceOW` (cSetInfoEnemy
+    /// +0xEC -> unit +0x5C24, 0x007A012C) when that is not 0.
+    pub exp: u32,
     /// Its part in the hit pass (pools, history, volumes).
     pub fighter: Fighter,
     /// Actions started, in order: (frame count of the unit, action id).
@@ -241,6 +255,7 @@ impl Goblin {
                 seed: 0x9e37_79b9 ^ owner,
             },
             target: None,
+            exp: data.exp,
             fighter: Fighter {
                 owner,
                 attacker: Attacker::Enemy(data.attacker),
