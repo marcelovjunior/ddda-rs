@@ -552,6 +552,11 @@ impl<D: Data, W: StoryWorld> Host<D, W> {
                 sim_inputs.entry(id).or_insert(i);
             }
         }
+        if let Some(f) = self.fight.as_mut() {
+            // Player-update Msg10 receipt follows accepted fatal selection.
+            let markers = ddenemyrt::skills::healing::Markers::accepted_death_phases(&self.sim, step);
+            f.apply_player_healing(&mut self.sim, markers);
+        }
         self.sim.step(self.clock.seconds(), &sim_inputs, self.ground.as_ref());
         self.step_arisen_death_clocks(step, &dead_at_start);
         // uNpcIntel line12 precedes the NPC actor/action on line15.

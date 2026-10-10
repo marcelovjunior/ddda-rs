@@ -147,6 +147,8 @@ pub struct ArisenFighter {
     /// Save/curative retention is supported; damage wound-pool reduction
     /// remains untranslated and must not be claimed from this field alone.
     pub hp_max_white: f32,
+    /// Actor-local Msg10 accumulation, reset on lifetime replacement.
+    pub healing_receipt: crate::skills::healing::Receipt,
     /// ddsim's attack and volley counts last seen.
     pub attacks_seen: u32,
     pub volleys_seen: u32,
@@ -206,6 +208,7 @@ pub struct Fight {
     skill_contacts: BTreeMap<u8, (u64, ddsim::skills::Contact)>,
     next_arisen_generation: u64,
     pub skill_errors: BTreeMap<u8, String>,
+    pub healing_errors: BTreeMap<u8, String>,
     /// The Arisen each shell owner id was fired by (kept after the shell).
     pub shooters: BTreeMap<u32, u32>,
     next_shell: u32,
@@ -254,6 +257,7 @@ impl Fight {
             skill_contacts: BTreeMap::new(),
             next_arisen_generation: 0,
             skill_errors: BTreeMap::new(),
+            healing_errors: BTreeMap::new(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
             pawns: BTreeMap::new(),
@@ -340,6 +344,7 @@ impl Fight {
         self.contact_checks.remove(&seat);
         self.skill_contacts.remove(&seat);
         self.skill_errors.remove(&seat);
+        self.healing_errors.remove(&seat);
         for goblin in &mut self.goblins { goblin.distance_hate.retire(u32::from(seat)); }
         let a = self.kit(kit);
         self.arisen.insert(
@@ -347,6 +352,7 @@ impl Fight {
             ArisenFighter {
                 generation,
                 hp_max_white: a.hp_max,
+                healing_receipt: Default::default(),
                 fighter: Fighter {
                     owner: u32::from(seat),
                     attacker: Attacker::Player(a.attacker),
@@ -675,6 +681,34 @@ impl Fight {
             }
         }
         self.skill_contacts.clear();
+    }
+
+    /// B5C3B0's player-update receipt, after this frame's fatal selector and
+    /// before simulation actions. Unknown actor facts block HP gain and keep
+    /// an observable error once per lifetime; they never infer alive from HP.
+    pub fn apply_player_healing(&mut self, sim: &mut ddsim::Sim, markers: crate::skills::healing::Markers) {
+        use crate::skills::healing::Marker;
+        for (&seat, a) in &mut self.arisen {
+            if sim.player(seat).is_none() || !a.healing_receipt.pending { continue; }
+            match markers.actors.get(&seat).copied().unwrap_or(Marker::Unknown) {
+                Marker::Unknown => {
+                    self.healing_errors.entry(seat)
+                        .or_insert_with(|| "unsupported healing recipient dead marker".into());
+                    // B5C637 clears the pending flag in every native branch.
+                    // The unresolved scalar is not cleared or applied by guess.
+                    a.healing_receipt.pending = false;
+                }
+                Marker::Known(dead) => {
+                    if !markers.global_delta.is_finite() || markers.global_delta < 0.0 {
+                        self.healing_errors.entry(seat)
+                            .or_insert_with(|| "unsupported healing global delta".into());
+                        continue;
+                    }
+                    let Victim::Player { hp, hp_max, .. } = &mut a.fighter.victim else { continue; };
+                    a.healing_receipt.apply(dead, markers.global_delta, hp, a.hp_max_white, *hp_max);
+                }
+            }
+        }
     }
 
     /// After the players moved (line 10): each Arisen's weapon is put in

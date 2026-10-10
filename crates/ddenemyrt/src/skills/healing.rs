@@ -2,6 +2,41 @@
 //! recipient's ability to apply HP are separate decisions; zero HP is not
 //! an actor death-marker provider.
 
+/// An authoritative +31EA observation, not a health test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marker {
+    Known(bool),
+    Unknown,
+}
+
+pub struct Markers {
+    pub global_delta: f32,
+    pub actors: std::collections::BTreeMap<u8, Marker>,
+}
+
+impl Markers {
+    /// Head8865's narrow accepted S53 lifecycle provider. Other action states
+    /// remain Unknown; a Wait actor is not proof of the native marker value.
+    // Native fatal vf72 0x00B7C566 sets +31EA; 0x00B735C9 latches +31ED
+    // before fatal requests. 0x00B6D57A clears +31EA before PawnReturn81.
+    // DDDA.exe 2017-12-13 Steam.
+    pub fn accepted_death_phases(sim: &ddsim::Sim, global_delta: f32) -> Self {
+        use ddsim::{DeathPhase, State};
+        Self {
+            global_delta,
+            actors: sim.players.iter().map(|p| {
+                let marker = match p.state {
+                    State::Death { phase: DeathPhase::PawnReturn } => Marker::Known(false),
+                    State::Death { phase: DeathPhase::Collapse { .. } | DeathPhase::ArisenDead
+                        | DeathPhase::PawnDownStart | DeathPhase::PawnDown } => Marker::Known(true),
+                    _ => Marker::Unknown,
+                };
+                (p.id, marker)
+            }).collect(),
+        }
+    }
+}
+
 /// Values retained from the owner's installed HealingSpot/HealingUnit, never
 /// a copied spell table. This reader does not itself spawn a gameplay field.
 #[derive(Debug, Clone)]

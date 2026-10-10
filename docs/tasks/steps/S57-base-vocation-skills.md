@@ -304,3 +304,48 @@ Starters traced by codex-81 (0x006749A0/0x00674A60): Fighter 40 + 272,
 Strider 152 + 350, Mage 210 + 220. Authorized narrow edits: ddsim skill
 modes (dagger/shield/bow), ddenemyrt fight.rs hookup, and the host's
 progression-to-equipped sync; viewer changes come to head as a patch.
+
+## HANDOFF — stopped at head #8885 (2026-10-10)
+
+Branch `step/s57-base-skills`, worktree `E:/ddda-rs-wt/s57-base-skills`.
+This is an incomplete source checkpoint, **not Ready and not mergeable as
+a tested batch**. All 22 new Rust regression names listed above remain
+uncompiled/UNRUN. No Cargo, GPU, original-process control or additional
+native emulation was run during wrap-up. Earlier bounded four-case native
+starting-grant proof returned actual exit 0 (3 base vocations plus known
+return, full learned/equipped arrays, normal native return); this does not
+test the Rust implementation or the six skill effects. The unpacked exe
+SHA-256 is `a1831a438685c50ca530bbb91dc4cbdc36449ffa7d9183e345a8a106782286b5`.
+
+The final scoped WIP also preserves runtime shortbow record selection
+from `0x00b16dc0`, selected bow/shot resource readers, and arrow group/index
+readers using each actual sequence's normal supplement (`0x00bcf1e0`).
+Threefold is **not routed into the per-owner controller or fired-arrow
+runtime yet**; the existing basic constructors/Fight path still require
+that work. No selected shell metadata is rewritten to the basic group.
+
+The draft host healing receipt hook follows fatal selection, with
+actor-local receipts cleared on lifetime replacement. Its provider still
+uses the superseded #8865 rule: ordinary living states are Unknown.
+**Head #8879 requires KnownLiving retained from traced initialization or
+accepted PawnReturn until an accepted fatal/down phase. That correction
+is not implemented or tested.** Do not enable Anodyne gameplay with this
+draft provider. It has no live field/message producer, and no healing-hook
+regressions have been added. The immediate next action is to implement
+that lifecycle provider and its living-Waiting-Arisen healing regression,
+then complete native field placement/lifecycle/admission/child handling
+and per-owner Threefold routing before requesting full package gates.
+Automatic first-choice/equipment refresh callers, native Kisses target
+turn and repeat-history details, unsupported contact actor/filter facts,
+standalone viewer bridges, and original effect comparisons remain open.
+
+Private source/proof notes remain at `E:/ddda-re/notes/steps/S57`, including
+`native-start-grants.private.py/.json`, `bow-parameters.private.txt`,
+`support-params.private.json`, `anodyne-magic-front.private.json`,
+`anodyne-admission-spawn.private.py`, `healing-vtables.private.py`,
+`player-dead-writers.private.py`, and address-named private assembly.
+Referenced earlier private exports are under `notes/steps/S25`, `S26`
+and `S53`. None are committed or copied into this repository. No new
+research, testing, merges or rebases followed the wrap-up instruction.
+All claims are released in the accompanying board report. No processes
+or services are owned by codex-81.
