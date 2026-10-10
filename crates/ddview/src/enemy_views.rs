@@ -205,6 +205,7 @@ mod tests {
             blend: None,
             morph: None,
             drawn: false,
+            upper: None,
         }
     }
     fn enemy(id: u32, family: EnemyFamily, pos: [f32; 3]) -> Enemy {
