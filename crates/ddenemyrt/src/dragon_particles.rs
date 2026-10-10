@@ -44,6 +44,90 @@ pub struct DurationRange {
     pub variation: u16,
 }
 
+/// Installed per-coordinate resource, separate from every generator payload.
+/// Dynamic curve offsets are retained; this reader does not execute curves,
+/// choose a global seed, compose transforms or create an effect.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinateDefinition {
+    pub flags: u32,
+    pub binding_bits: u16,
+    pub scale: [[f32; 2]; 3],
+    pub local_offset: [f32; 3],
+    /// Copied by0x010FBB20, not consumed as a float by0x010FC1D0.
+    /// Its meaning is unresolved; installed resources contain NaN bit patterns.
+    pub offset_tail: u32,
+    pub local_quaternion: [f32; 4],
+    pub seed: i32,
+    pub delay: DurationRange,
+    pub curve_offsets: [u16; 4],
+}
+
+impl CoordinateDefinition {
+    // Translated from 0x01147790, 0x010F9DB0, 0x010FA080 and
+    // 0x010FBB20 (DDDA.exe 2017-12-13 Steam).
+    pub fn read(list: &mteffect::EffectList, index: u16) -> Result<Self, String> {
+        if index >= list.auxiliary_count { return Err("effect coordinate index absent".into()); }
+        // Native +0x76 is a ushort containing unitCount<<4. Reject the
+        // overflowing resource-table case rather than invent an extended format.
+        let table = list.units.len().checked_mul(16).filter(|&v| v <= u16::MAX as usize)
+            .ok_or("effect coordinate table overflow")?;
+        let at = table.checked_add(usize::from(index) * 4).ok_or("coordinate offset overflow")?;
+        let offset = u32::from_le_bytes(list.payload.get(at..at + 4)
+            .ok_or("truncated coordinate offset table")?.try_into().unwrap()) as usize;
+        let resource = list.payload.get(offset..offset.checked_add(0x70)
+            .ok_or("coordinate resource overflow")?).ok_or("truncated coordinate resource")?;
+        let half = |at: usize| u16::from_le_bytes(resource[at..at + 2].try_into().unwrap());
+        let word = |at: usize| u32::from_le_bytes(resource[at..at + 4].try_into().unwrap());
+        let float = |at: usize| -> Result<f32, String> {
+            let value = f32::from_bits(word(at));
+            if !value.is_finite() { return Err("nonfinite coordinate scalar".into()); }
+            Ok(value)
+        };
+        let vector = |at: usize| -> Result<[f32; 4], String> {
+            Ok([float(at)?, float(at + 4)?, float(at + 8)?, float(at + 12)?])
+        };
+        Ok(Self { flags: word(0), binding_bits: half(6),
+            scale: [[float(8)?, float(12)?], [float(16)?, float(20)?], [float(24)?, float(28)?]],
+            local_offset: [float(0x20)?, float(0x24)?, float(0x28)?], offset_tail: word(0x2C),
+            local_quaternion: vector(0x30)?, seed: word(0x60) as i32,
+            delay: DurationRange { base: half(0x64) as i16, variation: half(0x66) },
+            curve_offsets: [half(0x68), half(0x6A), half(0x6C), half(0x6E)] })
+    }
+
+    /// Caller owns the actual global RNG stream selected by effect flags.
+    // Translated from 0x010FA080 (DDDA.exe 2017-12-13 Steam).
+    pub fn initial_counter(&self, mut global_random: impl FnMut() -> u32) -> u32 {
+        if self.seed < 0 { global_random() & 0xFFF } else { self.seed as u32 & 0xFFFF }
+    }
+
+    /// Static coordinate subset only. Readable random tables stay installed;
+    /// caller supplies table access and the owning effect's sampled delay.
+    /// Float multiplication and addition have separate f32 rounding, matching
+    /// MULSS/ADDSS at0x010FBFE4..0x010FC046 (not a fused multiply-add).
+    /// This advances the initialization sampling counter only: 0x00E6E030
+    /// resets the runtime counter to the original low-16-bit seed after the
+    /// coordinate's initial transform. Do not start runtime draws at seed+4.
+    // Translated from 0x010FBB20, delay0x010FC162
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn sample_static(&self, counter: &mut u32, effect_delay: i16,
+        mut random_float: impl FnMut(usize) -> f32,
+        mut random_word: impl FnMut(usize) -> u32) -> Result<([f32; 3], u16), String> {
+        if self.curve_offsets.iter().any(|&offset| offset != 0) {
+            return Err("dynamic coordinate curves need native context".into());
+        }
+        let scale = self.scale.map(|[base, variation]| {
+            *counter = counter.wrapping_add(1);
+            random_float((*counter & 0xFFF) as usize) * variation + base
+        });
+        // Counter advances even when variation is0; the word read does not.
+        *counter = counter.wrapping_add(1);
+        let extra = if self.delay.variation == 0 { 0 } else {
+            random_word((*counter & 0xFFF) as usize) % (u32::from(self.delay.variation) + 1)
+        };
+        Ok((scale, (effect_delay as u16).wrapping_add(self.delay.base as u16).wrapping_add(extra as u16)))
+    }
+}
+
 /// Native world-query descriptor, resolved relative to the life payload.
 /// This is separate from the secondary effect's travel delay at life+0x44.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,6 +231,50 @@ impl ProviderBinding {
             for value in row { *value *= self.effect_scale; }
         }
         Ok(matrix)
+    }
+}
+
+/// Clock in an effect-owned coordinate block, separate from the effect's
+/// fractional clock and every generator's random/update counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordinateClock {
+    initial_delay: u16,
+    remaining: u16,
+    elapsed: u32,
+    phase: CoordinatePhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoordinatePhase { Uninitialized, Waiting, Active }
+
+impl CoordinateClock {
+    /// `initial_delay` is the already-sampled native short at block+0x11C,
+    /// including the owning effect's offset. This does not select its seed.
+    pub fn new(initial_delay: u16) -> Self {
+        Self { initial_delay, remaining: 0, elapsed: 0, phase: CoordinatePhase::Uninitialized }
+    }
+
+    pub fn elapsed(&self) -> u32 { self.elapsed }
+
+    /// One integer coordinate update. The 1->0 delay update remains waiting;
+    /// the following update enters active state and counts its first frame.
+    /// Even a negative native short is a nonzero wrapping counter here.
+    // Translated from 0x010FA010 (DDDA.exe 2017-12-13 Steam).
+    pub fn advance(&mut self) -> bool {
+        if self.phase == CoordinatePhase::Uninitialized {
+            self.elapsed = 0;
+            self.remaining = self.initial_delay;
+            self.phase = CoordinatePhase::Waiting;
+        }
+        if self.phase == CoordinatePhase::Waiting {
+            if self.remaining != 0 {
+                self.remaining = self.remaining.wrapping_sub(1);
+                return false;
+            }
+            self.phase = CoordinatePhase::Active;
+        }
+        self.elapsed = self.elapsed.wrapping_add(1);
+        true
     }
 }
 
@@ -461,6 +589,121 @@ pub fn sample_path(points: &[[f32; 3]], total_length: f32, distance: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coordinate_resource_resolves_relative_table_and_preserves_native_fields() {
+        let mut list = synthetic_list();
+        list.auxiliary_count = 1;
+        let resource = 0x280;
+        list.payload.resize(resource + 0x70, 0);
+        let put = |bytes: &mut [u8], at: usize, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        put(&mut list.payload, 16, resource as u32);
+        put(&mut list.payload, resource, 0x1234_5600);
+        list.payload[resource + 6..resource + 8].copy_from_slice(&0xCAFEu16.to_le_bytes());
+        for (i, value) in [1.0f32, 0.1, 2.0, 0.2, 3.0, 0.3].into_iter().enumerate() {
+            put(&mut list.payload, resource + 8 + i * 4, value.to_bits());
+        }
+        for (i, value) in [11.0f32, 22.0, 33.0, 0.0, 0.1, 0.2, 0.3, 0.9].into_iter().enumerate() {
+            put(&mut list.payload, resource + 0x20 + i * 4, value.to_bits());
+        }
+        put(&mut list.payload, resource + 0x60, (-17i32) as u32);
+        put(&mut list.payload, resource + 0x64, (7 << 16) | 0xFFFD);
+        for (i, value) in [0x70u16, 0x90, 0xB0, 0xD0].into_iter().enumerate() {
+            list.payload[resource + 0x68 + i * 2..resource + 0x6A + i * 2].copy_from_slice(&value.to_le_bytes());
+        }
+        let definition = CoordinateDefinition::read(&list, 0).unwrap();
+        assert_eq!(definition.flags, 0x1234_5600);
+        assert_eq!(definition.binding_bits, 0xCAFE);
+        assert_eq!(definition.scale, [[1.0, 0.1], [2.0, 0.2], [3.0, 0.3]]);
+        assert_eq!(definition.local_offset, [11.0, 22.0, 33.0]);
+        assert_eq!(definition.offset_tail, 0);
+        assert_eq!(definition.local_quaternion, [0.1, 0.2, 0.3, 0.9]);
+        assert_eq!(definition.seed, -17);
+        assert_eq!(definition.delay, DurationRange { base: -3, variation: 7 });
+        assert_eq!(definition.curve_offsets, [0x70, 0x90, 0xB0, 0xD0]);
+        let mut counter = 17;
+        assert!(definition.sample_static(&mut counter, 0, |_| panic!("no dynamic sampling"), |_| panic!("no dynamic sampling")).is_err());
+        assert_eq!(counter, 17);
+        let mut definition = definition;
+        definition.curve_offsets = [0; 4];
+        definition.scale = [[1.0, 0.0], [2.0, 0.5], [3.0, -0.25]];
+        definition.delay = DurationRange { base: -3, variation: 7 };
+        assert_eq!(definition.initial_counter(|| 0xABCD_0FFE), 0xFFE);
+        definition.seed = 0x1234_ABCD;
+        assert_eq!(definition.initial_counter(|| panic!("fixed seed must not advance global RNG")), 0xABCD);
+        let mut floats = Vec::new();
+        let mut words = Vec::new();
+        counter = 0xFFE;
+        let sample = definition.sample_static(&mut counter, -1,
+            |index| { floats.push(index); 0.5 }, |index| { words.push(index); 15 }).unwrap();
+        assert_eq!(sample, ([1.0, 2.25, 2.875], 3));
+        assert_eq!(floats, [0xFFF, 0, 1], "zero-variation scale still consumes its float");
+        assert_eq!(words, [2]);
+        assert_eq!(counter, 0x1002);
+        definition.delay.variation = 0;
+        counter = u32::MAX;
+        let sample = definition.sample_static(&mut counter, 0,
+            |_| 0.0, |_| panic!("zero delay variation must not read word table")).unwrap();
+        assert_eq!(sample.1, (-3i16) as u16);
+        assert_eq!(counter, 3);
+        // Separate MULSS/ADDSS rounds this product to1 before adding-1.
+        // Fusing the operation would retain a small negative residual.
+        definition.scale = [[-1.0, 1.0 - f32::EPSILON]; 3];
+        let sample = definition.sample_static(&mut counter, 0,
+            |_| 1.0 + f32::EPSILON, |_| panic!("no word-table access")).unwrap();
+        assert_eq!(sample.0, [0.0; 3]);
+        assert_ne!((1.0 + f32::EPSILON).mul_add(1.0 - f32::EPSILON, -1.0), 0.0);
+        assert!(CoordinateDefinition::read(&list, 1).is_err());
+        put(&mut list.payload, resource + 0x2C, u32::MAX);
+        assert_eq!(CoordinateDefinition::read(&list, 0).unwrap().offset_tail, u32::MAX,
+            "opaque unused offset word must not be rejected as a NaN geometric coordinate");
+        put(&mut list.payload, resource + 0x20, f32::NAN.to_bits());
+        assert!(CoordinateDefinition::read(&list, 0).is_err());
+        list.payload.truncate(19);
+        assert!(CoordinateDefinition::read(&list, 0).is_err());
+    }
+
+    #[test]
+    fn installed_breath_coordinate_is_distinct_from_generator_payload() {
+        let path = std::env::var_os("DDDA_NATIVE_PC").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "E:/SteamLibrary/steamapps/common/DDDA/nativePC".into());
+        if !path.is_dir() { return; }
+        let vfs = ddvfs::Vfs::open(&path).unwrap();
+        let unit = CollisionUnit::load(&vfs, 0).unwrap();
+        let bytes = vfs.read(&unit.path, mtarc::type_hash("rEffectList")).unwrap();
+        let list = mteffect::EffectList::parse(&bytes).unwrap();
+        assert_eq!(list.auxiliary_count, 1);
+        let coordinate_offset = u32::from_le_bytes(list.payload[16..20].try_into().unwrap());
+        assert_ne!(coordinate_offset, list.units[0].offsets[0], "coordinate table is not generator data");
+        let definition = CoordinateDefinition::read(&list, 0).unwrap();
+        assert!(definition.scale.iter().flatten().all(|v| v.is_finite()));
+        assert!(CoordinateDefinition::read(&list, 1).is_err());
+    }
+
+    #[test]
+    fn coordinate_delay_does_not_admit_the_last_wait_update() {
+        let mut delayed = CoordinateClock::new(2);
+        assert!(!delayed.advance());
+        assert_eq!((delayed.remaining, delayed.elapsed()), (1, 0));
+        assert!(!delayed.advance());
+        assert_eq!((delayed.remaining, delayed.elapsed()), (0, 0));
+        assert!(delayed.advance());
+        assert_eq!(delayed.elapsed(), 1);
+        assert!(delayed.advance());
+        assert_eq!(delayed.elapsed(), 2);
+
+        let mut immediate = CoordinateClock::new(0);
+        assert!(immediate.advance());
+        assert_eq!(immediate.elapsed(), 1);
+        immediate.elapsed = u32::MAX;
+        assert!(immediate.advance());
+        assert_eq!(immediate.elapsed(), 0, "native integer clock wraps");
+
+        let mut negative_short = CoordinateClock::new((-1i16) as u16);
+        assert!(!negative_short.advance());
+        assert_eq!(negative_short.remaining, u16::MAX - 1);
+        assert_eq!(negative_short.elapsed(), 0);
+    }
 
     #[test]
     fn world_query_delay_and_geometry_follow_descriptor_not_secondary_delay() {
