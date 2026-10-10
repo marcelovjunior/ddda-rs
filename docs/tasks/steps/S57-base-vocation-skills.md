@@ -252,6 +252,52 @@ format differences (including baseline lines); that is neither a Rust
 gate pass nor a typecheck. git diff --check passed. Anodyne, Threefold,
 automatic equipment callers, full runtime gates and original behavior
 comparison remain open; this checkpoint does not mark S57 Ready.
+
+**Anodyne reader/receipt/spawn helpers, UNRUN and not connected gameplay:**
+`skills/healing.rs` reads the installed Magic shell's generator, follows
+its `shlList` to the actual HealingSpot and that spot's `shlNoHealing` to
+the HealingUnit. It retains authored lifetime, target budget, child-reset
+flags and rates; it rejects attack rows on the support objects. No
+resource table or shell rate is embedded in production. This reader does
+not yet create the field actor or replace a missing gameplay effect.
+
+`0x00c04180` admits party actors by strict squared distance below 122500
+(`0x0161cdb4`), without an HP or death-phase filter. Unit exit follows
+`0x00c04ada..0x00c04b72`: a distinct 400cm radius (`0x014f70dc`) and actual
+parent link/unit delta control the authored `endFrame` timer. Ordinary
+message 0x10 accumulates an actor-local scalar, then `0x00b5c3b0` applies
+it using global simulation delta and `0x00b7a960` white-HP capping.
+The actual uPlayer vf117 is `0x00b53160`, reading +31EA. A dead marker
+skips gain; zero HP alone is not this marker. The dead branch clears
+pending +3D14 at `0x00b5c637` but retains inert +3D1C, bypassing scalar
+zeroing at `0x00b5c489`; only a subsequent message reactivates that scalar.
+This is distinct from revival: `0x00b6d57a` clears +31EA after PawnReturn
+admission. No guessed corpse filter, HP restoration or dead-marker clear
+has been substituted into Anodyne.
+
+The initial generator-position helper translates the ordinary
+manual0/position0/joint-1 path `0x00b4a324..0x00b4a3f5` and `0x00b4b330`:
+transform the authored offset with the actual model matrix, cast from
+joint4 to that position, apply native 120cm segment-hit backoff, then
+cast down from Y+30 to Y-10000. A ground hit uses its Y plus offsetY+5.
+Each small embedded constant names its executable address in source.
+The provider must supply the native scene/triangle ray filters; missing
+joint4 is an unsupported spawn. This helper is the initial generator
+position, not a guessed final HealingSpot center. Subsequent shell
+placement/lifetime/limit-ID, child reset, generation-safe actor slots,
+status modifiers and the host's after-death-selector receipt hook still
+require integration. Detailed bounded source tracing remains private.
+Additional source regressions, all **uncompiled/unrun** (22 total new
+S57 names now):
+
+- `anodyne_receipt_uses_global_delta_white_cap_and_native_dead_marker_retention`
+- `anodyne_native_sphere_and_unit_parent_exit_use_distinct_radii_and_real_deltas`
+- `healing_spawn_queries_actual_joint_then_ground_without_a_guessed_feet_center`
+- `installed_anodyne_reader_follows_generator_spot_and_unit_without_attack_rows`
+
+rustfmt on the new module/tests and git diff --check returned actual 0;
+these are source/format checks, not typechecking or the runtime gate.
+No Cargo, GPU, original-process call or new native emulation ran here.
 ## Head scope note (2026-10-10, #8501/#8504)
 
 Starters traced by codex-81 (0x006749A0/0x00674A60): Fighter 40 + 272,

@@ -6,6 +6,7 @@ use ddsim::skills::{Definition, Kind};
 use ddskill::catalogue::ExeTables;
 use ddskill::magic::{Magic, MagicList};
 use std::collections::HashMap;
+pub mod healing;
 pub mod spells;
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,129 @@
 use ddenemyrt::{arisen::ArisenData, skills::SkillSet};
 
 #[test]
+fn anodyne_receipt_uses_global_delta_white_cap_and_native_dead_marker_retention() {
+    use ddenemyrt::skills::healing::Receipt;
+    let mut living = Receipt::default();
+    let mut fallen = Receipt::default();
+    let mut hp = [20.0, 0.0];
+    living.receive(4.0);
+    fallen.receive(4.0);
+    assert_eq!(living.apply(false, 0.25, &mut hp[0], 20.5, 100.0), 0.5);
+    assert_eq!(hp[0], 20.5);
+    assert_eq!(living, Receipt::default());
+    assert_eq!(fallen.apply(true, 0.25, &mut hp[1], 50.0, 100.0), 0.0);
+    assert_eq!(hp[1], 0.0);
+    assert_eq!(
+        fallen,
+        Receipt {
+            pending: false,
+            amount: 4.0
+        }
+    );
+    // Clearing +31EA (PawnReturn admission) alone does not reapply a msg.
+    assert_eq!(fallen.apply(false, 0.25, &mut hp[1], 50.0, 100.0), 0.0);
+    fallen.receive(2.0);
+    assert_eq!(fallen.apply(false, 0.25, &mut hp[1], 50.0, 100.0), 1.5);
+    assert_eq!(fallen, Receipt::default());
+    // HP zero without +31EA is not an admission/receipt death substitute.
+    hp[1] = 0.0;
+    fallen.receive(2.0);
+    assert_eq!(fallen.apply(false, 1.0, &mut hp[1], 50.0, 100.0), 2.0);
+    assert_eq!(hp[0], 20.5); // Independent actor-local receipt.
+}
+
+#[test]
+fn anodyne_native_sphere_and_unit_parent_exit_use_distinct_radii_and_real_deltas() {
+    use ddenemyrt::skills::healing::{admits, UnitExit};
+    assert!(admits([0.0; 3], [0.0, 349.0, 0.0]));
+    assert!(!admits([0.0; 3], [0.0, 350.0, 0.0]));
+    assert!(!admits([0.0; 3], [250.0, 250.0, 0.0]));
+    let mut exit = UnitExit::default();
+    assert!(exit.update([0.0, 400.0, 0.0], [0.0; 3], true, 0.25, 0.0));
+    assert!(!exit.update([0.0, 400.01, 0.0], [0.0; 3], true, 0.25, 0.0));
+    assert_eq!(exit.elapsed, 0.25);
+    assert_eq!(exit.gain(8.0, 2.0, false, 0.5), 1.0);
+    assert!(exit.update([0.0; 3], [0.0; 3], true, 0.25, 0.0));
+    assert_eq!(exit.elapsed, 0.0);
+    assert_eq!(exit.gain(8.0, 2.0, false, 0.5), 4.0);
+    assert!(!exit.update([0.0; 3], [0.0; 3], false, 0.5, 0.0));
+    assert_eq!(exit.gain(8.0, 2.0, true, 0.5), 2.0);
+}
+
+#[test]
+fn healing_spawn_queries_actual_joint_then_ground_without_a_guessed_feet_center() {
+    use ddcombat::volumes::{Mat4, Pose, IDENTITY};
+    struct Posed(bool);
+    impl Pose for Posed {
+        fn model_matrix(&self) -> Mat4 {
+            IDENTITY
+        }
+        fn joint_matrix(&self, id: i32) -> Option<Mat4> {
+            if id != 4 || !self.0 {
+                return None;
+            }
+            let mut m = IDENTITY;
+            m[3][1] = 20.0;
+            Some(m)
+        }
+    }
+    let mut queries = Vec::new();
+    let mut ray = |from, to| {
+        queries.push((from, to));
+        if queries.len() == 1 {
+            Some([0.0, 20.0, 100.0])
+        } else {
+            None
+        }
+    };
+    let center =
+        ddenemyrt::skills::healing::generator_position(&Posed(true), [0.0, 20.0, 200.0], &mut ray).unwrap();
+    assert_eq!(queries[0], ([0.0, 20.0, 0.0], [0.0, 20.0, 200.0]));
+    assert_eq!(center, [0.0, 20.0, -20.0]);
+    assert_eq!(queries[1], ([0.0, 50.0, -20.0], [0.0, -9980.0, -20.0]));
+    assert!(
+        ddenemyrt::skills::healing::generator_position(&Posed(false), [0.0; 3], &mut |_, _| panic!(
+            "missing joint must reject before querying"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn installed_anodyne_reader_follows_generator_spot_and_unit_without_attack_rows() {
+    let native = std::path::Path::new("E:/SteamLibrary/steamapps/common/DDDA/nativePC");
+    assert!(
+        native.exists(),
+        "installed gate requires the player's installation"
+    );
+    let vfs = ddvfs::Vfs::open(native).unwrap();
+    let file = ddexe::ExeFile::next_to(native).unwrap();
+    let tables = ddskill::catalogue::ExeTables::from_image(&file.image().unwrap()).unwrap();
+    let action = &tables.actions[5][(tables.skills[220].action & 0xffff) as usize];
+    let magic = ddskill::magic::MagicList::parse(
+        &ddenemyrt::body::load::read(&vfs, r"param\mag_act_param_07", "rMagicActParamList").unwrap(),
+    )
+    .unwrap();
+    let magic = &magic.entries[action.params[2] as usize];
+    let data = ddenemyrt::skills::healing::Data::load(&vfs, magic).unwrap();
+    assert_eq!((magic.manual_type, data.joint), (0, -1));
+    assert_eq!(data.offset, magic.levels[0].shells[0].offset);
+    assert!(data.spot_lifetime > 0.0);
+    assert!(data.target_count > 0 && data.target_count <= 10);
+    assert!(data.reset_child && !data.clear_target_without_child);
+    assert!(!data.one_hit && data.end_frame == 0.0);
+    assert!(data.value > data.value_end && data.value_end > 0.0);
+    assert!(data.generator_rows.iter().all(|(wait, _)| *wait == 0.0));
+    // The recipient applies the installed rate at GLOBAL nominal delta,
+    // with independent white caps; the reader produces no attack payload.
+    let mut receipt = ddenemyrt::skills::healing::Receipt::default();
+    let mut hp = 10.0;
+    receipt.receive(data.value);
+    let gain = receipt.apply(false, 0.25, &mut hp, 11.0, 100.0);
+    assert!((gain - data.value * 0.25).abs() < 0.0001);
+}
+
+#[test]
 fn native_contact_flags_use_actor_callback_facts_and_keep_unknown_faction_explicit() {
     use ddenemyrt::combat::{AcceptedContact, ContactActor};
     let mut contact = AcceptedContact {
