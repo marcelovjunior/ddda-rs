@@ -23,6 +23,7 @@ pub mod prologue;
 pub mod qct;
 pub mod route;
 pub mod scenario;
+pub mod save;
 pub mod script;
 pub mod scripted;
 pub mod story;
