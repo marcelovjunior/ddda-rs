@@ -21,6 +21,27 @@ fn install() -> Option<ddvfs::Vfs> {
 }
 
 #[test]
+fn installed_normal_camera_parameters_are_read_at_runtime() {
+    let Some(vfs) = install() else { return };
+    let hash = mtarc::type_hash("rCameraParamList");
+    let mut resources = 0;
+    let mut normal_records = 0;
+    for path in vfs.paths_of_type(hash) {
+        let bytes = vfs.read(path, hash).unwrap();
+        let parameters = mtcamera::params::Parameters::parse(&bytes)
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        resources += 1;
+        for p in parameters.normal.iter().flatten() {
+            assert!(p.height.is_finite() && p.distance.is_finite());
+            assert!(p.fov_degrees.is_finite());
+            normal_records += 1;
+        }
+    }
+    assert!(resources > 0 && normal_records > 0);
+    eprintln!("camera parameters: {resources} resources, {normal_records} normal records");
+}
+
+#[test]
 fn every_installed_camera_list_copy() {
     let Some(vfs) = install() else {
         return;

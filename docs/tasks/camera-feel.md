@@ -3,7 +3,7 @@
 - **Owner:** codex lane
 - **Branch:** `task/camera-feel`
 - **Board area:** `play/camera-feel`
-- **Status:** open (high: the maintainer's worst complaint after playtesting)
+- **Status:** review (collision batch; full follow-motion milestone remains open)
 
 ## Goal
 
@@ -133,3 +133,36 @@ below pitch -0.8 (or actor avoidance), using authored camera parameters.
 hardcode the capture. Next action is load `rCameraParamList` settings and
 translate anchor selection, then compare the fully rendered follow pose.
 The two collision contacts match; this does not close full-pose acceptance.
+
+Sixth checkpoint: added typed `rCameraParamList` reader in mtcamera using
+existing mtxfs. Two synthetic tests pass; install test reads60 unique
+resources with167 normal records, preserving authored array slots. Strict
+clippy passes. Source **0x00420e90** loads `param\cam_param`;
+**0x007dc8a0** picks slot0 for default normal camera. Runtime adapter and
+translated anchor selection still pending; no game parameter table copied.
+
+Seventh checkpoint: default authored settings now load per PlayState;
+normal anchor selection is translated and the viewer's reversed pitch sign
+is covered by a regression. Authored distance is used; model/world actor
+position currently share simulation position, actor-overlap/special-target
+selection and target-height/lag pipeline remain explicit limitations.
+Three parameter tests and strict clippy pass; nine filtered viewer tests
+pass, one private test ignored by default. Six accepted live samples pass
+optional0.01 cm replay gate (max0.001041 cm). Production build passes34.27s.
+Bounded opening/skip-intro unattended Cassardis smoke loads data, probes
+installed geometry, writes private screenshot and exits0. Direct play
+stage200 instead used field origin and is excluded from visual validation.
+Next: trace target-height/actor-avoidance pipeline before claiming full
+follow-pose equivalence. The original wall/roof collision responses match.
+
+Final handoff: collision batch reviewed by codex-1; commits eeac7ca,
+b819cd3,8190394,d6128ec,b1cc69e,2f0ebfa and7334b51 (plus current-main merge).
+No push or main mutation. Wall and low-lintel collision helper responses
+are measured against the original and pass the private tolerance gate;
+full follow-pose equivalence is explicitly not claimed. Source handoff in
+CAMERA.md identifies **0x007c8880**, target resolution **0x007e1f90**,
+body-height adjustment, horizontal32 cm target shift, dual-ray translation,
+movement lag, predictive distance state and existing actor-provider gap.
+Codex-1 requested closing this reviewed batch and a separate follow-motion /
+actor-provider milestone, freeing the slot for the Encampment objective.
+All build/live claims are released; no viewer or capture process remains.

@@ -160,6 +160,7 @@ pub struct PlayState {
     pub follow: PlayerId,
     pub cam_yaw: f32,
     pub cam_pitch: f32,
+    pub camera_params: mtcamera::params::Normal,
     /// Scripted input for unattended tests: without goblins P1 runs and
     /// jumps and P2 sprints; with one, P1 closes in and attacks it.
     pub demo: bool,
@@ -223,6 +224,11 @@ pub fn setup(
     party: Party,
     data: Option<std::sync::Arc<FightData>>,
 ) -> Result<PlayState, String> {
+    let camera_bytes = loader.vfs.read("param\\cam_param", mtarc::type_hash("rCameraParamList"))
+        .map_err(|e| e.to_string())?;
+    let camera_params = mtcamera::params::Parameters::parse(&camera_bytes)
+        .map_err(|e| e.to_string())?.normal.first().copied().flatten()
+        .ok_or("default normal camera parameter slot is missing")?;
     let mut sim = ddhost::install::sim(loader.vfs)?;
     let mut motions = ViewMotions::load(loader.vfs)?;
     if let Some(data) = data.as_deref() {
@@ -315,6 +321,7 @@ pub fn setup(
         cam_yaw: party.arisen.first().map_or(0.0, |a| a.3),
         // the recordings look down 12-30 degrees
         cam_pitch: 0.35,
+        camera_params,
         demo: false,
         shown: HashMap::new(),
         visible: HashMap::new(),
@@ -755,7 +762,7 @@ pub fn show(
     }
     // Follow camera: behind the followed player at the orbit angles.
     if let (Some(p), Ok(mut cam)) = (bodies.iter().find(|b| b.id == st.follow), cams.single_mut()) {
-        let (eye, target) = follow_camera(&st.door_collision.over(&st.terrain), Vec3::from(p.position), st.cam_yaw, st.cam_pitch);
+        let (eye, target) = follow_camera_with_params(&st.door_collision.over(&st.terrain), Vec3::from(p.position), st.cam_yaw, st.cam_pitch, Some(&st.camera_params));
         cam.translation = (eye - st.origin) * UNIT;
         cam.look_at((target - st.origin) * UNIT, Vec3::Y);
     }
@@ -793,16 +800,34 @@ pub const CAMERA_FOV: f32 = 55.0;
 /// before querying (0x00422f40); the caller retains its final bit-0x10
 /// check (0x007c6f90). Convex contact uses the same geometric replacement
 /// as character collision, not the original GJK callback implementation.
-pub fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
+#[cfg(test)]
+fn follow_camera(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32) -> (Vec3, Vec3) {
+    follow_camera_with_params(ground, feet, yaw, pitch, None)
+}
+
+fn follow_camera_with_params(ground: &dyn ddsim::Ground, feet: Vec3, yaw: f32, pitch: f32,
+    params: Option<&mtcamera::params::Normal>) -> (Vec3, Vec3) {
     let target = feet + Vec3::Y * CAMERA_TARGET_HEIGHT;
     let dir = Vec3::new(yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
-    let desired_eye = target - dir * CAMERA_DISTANCE;
-    collide_camera(ground, desired_eye, target, CAMERA_NEAR)
+    let desired_eye = target - dir * params.map_or(CAMERA_DISTANCE, |p| p.distance);
+    let anchor = match params {
+        // Viewer pitch has the opposite sign to uCameraGame's stored angle.
+        // Actor overlap and model/world root offsets are not yet represented
+        // by this adapter; ordinary followed-actor positions coincide here.
+        Some(p) => p.collision_anchor(target.to_array(), Some((feet.to_array(), feet.to_array())),
+            -pitch, true, false),
+        None => Some(target.to_array()),
+    };
+    match anchor {
+        Some(anchor) => collide_camera_query(ground, desired_eye, target, Vec3::from(anchor), -dir, CAMERA_NEAR),
+        None => (desired_eye, target),
+    }
 }
 
 /// Collision-only pose update, separated from the measured follow offset
 /// so original candidate poses can be compared without assuming its lag,
 /// authored target height or actor avoidance offset.
+#[cfg(test)]
 fn collide_camera(ground: &dyn ddsim::Ground, desired_eye: Vec3, target: Vec3, near: f32) -> (Vec3, Vec3) {
     let view_outward = (desired_eye - target).normalize_or_zero();
     collide_camera_query(ground, desired_eye, target, target, view_outward, near)
@@ -1252,6 +1277,28 @@ mod tests {
     }
 
     #[test]
+    fn camera_authored_anchor_adapter_converts_viewer_pitch_sign() {
+        struct Capture(std::cell::Cell<[f32; 3]>);
+        impl ddsim::Ground for Capture {
+            fn height(&self, _: f32, _: f32, _: f32) -> Option<f32> { None }
+            fn ray_with_flags(&self, from: [f32; 3], _: [f32; 3]) -> Option<(ddsim::RayHit, u32)> {
+                self.0.set(from); None
+            }
+        }
+        let ground = Capture(std::cell::Cell::new([0.0; 3]));
+        let params = mtcamera::params::Normal {
+            distance: 300.0, height: 123.0, fov_degrees: 67.0, camera_target: 0,
+            screen_adjust_type: 0, screen_adjust_flags: 1, screen_adjust_height: 0.0,
+        };
+        let feet = Vec3::new(10.0, 20.0, 30.0);
+        follow_camera_with_params(&ground, feet, 0.0, 0.8, Some(&params));
+        assert_eq!(ground.0.get(), [10.0, 160.0, 30.0]);
+        let (eye, target) = follow_camera_with_params(&ground, feet, 0.0, 0.81, Some(&params));
+        assert_eq!(ground.0.get(), [10.0, 143.0, 30.0]);
+        assert!((eye.distance(target) - 300.0).abs() < 0.001);
+    }
+
+    #[test]
     fn camera_query_keeps_view_direction_separate_from_anchor() {
         // Synthetic perpendicular query: the 0x007de570 angular allowance
         // adds 10 cm, while the near-plane offset remains on the view axis.
@@ -1317,6 +1364,8 @@ mod tests {
         // No recordings are embedded in repo.
         let path = std::env::var("DDDA_CAMERA_POSES").expect("private pose file");
         let native = std::env::var("DDDA_NATIVE_PC").expect("nativePC path");
+        let tolerance = std::env::var("DDDA_CAMERA_TOLERANCE_CM").ok()
+            .map(|value| value.parse::<f32>().expect("camera tolerance in cm"));
         let vfs = ddvfs::Vfs::open(native).unwrap();
         let terrain = ddhost::install::stage_collision(&vfs, 200).unwrap();
         for (index, line) in std::fs::read_to_string(path).unwrap().lines().enumerate() {
@@ -1328,7 +1377,13 @@ mod tests {
             } else {
                 collide_camera(&terrain, point(0), point(3), v[12])
             };
-            eprintln!("camera sample {index}: eye={eye:?} target={target:?}; errors eye={} target={}", eye.distance(point(6)), target.distance(point(9)));
+            let eye_error = eye.distance(point(6));
+            let target_error = target.distance(point(9));
+            eprintln!("camera sample {index}: eye={eye:?} target={target:?}; errors eye={eye_error} target={target_error}");
+            if let Some(tolerance) = tolerance {
+                assert!(eye_error <= tolerance && target_error <= tolerance,
+                    "sample {index} exceeds {tolerance} cm");
+            }
         }
     }
 
