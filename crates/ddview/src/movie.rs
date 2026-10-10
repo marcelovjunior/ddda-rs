@@ -264,6 +264,45 @@ fn skip_input<'a>(keys: &ButtonInput<KeyCode>, pads: impl Iterator<Item = &'a Ga
 mod tests {
     use super::*;
 
+    /// Exercise the real playback system without a decoder/window: input
+    /// completion must remove playback and acknowledge its caller.
+    #[test]
+    fn playback_skip_finishes_the_movie_and_releases_its_entities() {
+        for use_pad in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<Time<Real>>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<Assets<Image>>()
+                .init_resource::<Assets<DecodedAudio>>()
+                .init_resource::<MovieSkip>()
+                .init_resource::<MovieFinished>()
+                .add_systems(Update, update);
+            let root = app.world_mut().spawn_empty().id();
+            let (_tx, frames) = sync_channel(AHEAD);
+            app.insert_resource(MoviePlayer {
+                name: "test".into(), frames: Mutex::new(frames), sound: None,
+                image: Handle::default(), root, start: Some(0.0), next: None,
+                voice: None, ended: false,
+            });
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+            app.update();
+            assert!(!app.world().resource::<MovieFinished>().0);
+            assert!(app.world().contains_resource::<MoviePlayer>());
+            if use_pad {
+                app.world_mut().spawn(Gamepad::default());
+                let mut second = Gamepad::default();
+                second.digital_mut().press(GamepadButton::Start);
+                app.world_mut().spawn(second);
+            } else {
+                app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            }
+            app.update();
+            assert!(app.world().resource::<MovieFinished>().0);
+            assert!(!app.world().contains_resource::<MoviePlayer>());
+            assert!(app.world().get_entity(root).is_err());
+        }
+    }
+
     #[test]
     fn first_movie_accepts_escape_and_any_pad_start_edges_only() {
         let mut keys = ButtonInput::default();

@@ -254,7 +254,8 @@ pub fn prepare(
     if !intro {
         host.world.live(CASSARDIS_ROWS);
         host.world.manual_stages = true;
-    }    let w = &host.story.as_ref().unwrap().world;
+    }
+    let w = &host.story.as_ref().unwrap().world;
     info!(
         "opening: fast-forwarded {} frames in {:.1} s: SceNo ladder {:?}; now stage {}, SceNo {}, start position {}, {:02}:{:02}",
         f.frames,
@@ -337,6 +338,7 @@ pub fn prepare(
 impl Session {
     /// Finish the actual awaited movie, then wait for the quest's editor jump.
     pub fn intro_movie_done(&mut self) -> Result<(), String> {
+        if self.intro_movie.is_none() { return Err("no intro movie awaiting completion".into()); }
         self.host.world.inner.awaiting.take().ok_or("no movie event awaited")?;
         self.host.world.event_done();
         fast_forward(&mut self.host, &[], 240, 30_000, |h| {
@@ -349,6 +351,7 @@ impl Session {
 
     /// Editor confirmation resumes the remaining stand-in dragon route.
     pub fn intro_edit_done(&mut self) -> Result<(), String> {
+        if self.world().stage_no != 801 { return Err("editor confirmation outside stage 801".into()); }
         let route: Vec<_> = to_newly_arisen().into_iter().filter(|w| w.stage == STAGE).collect();
         let f = fast_forward(&mut self.host, &route, 240, 30_000, |h| {
             h.story.as_ref().is_some_and(|s| s.quest(1).is_some())
@@ -2058,16 +2061,19 @@ mod tests {
         assert!(session.host.story.as_ref().unwrap().quest(0).is_some());
         assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
         assert!(session.intro_movie.as_ref().unwrap().ends_with("movie/event/st100ev00.wmv"));
+        assert!(session.intro_edit_done().is_err(), "editor cannot confirm during the movie");
         for _ in 0..120 { session.host.tick(&FrameInputs::new()).unwrap(); }
         assert_eq!(session.host.world.inner.awaiting, Some(row), "movie never auto-completes");
         assert_eq!(session.world().stage_no, 800);
         session.intro_movie_done().unwrap();
         assert_eq!(session.world().stage_no, 801);
+        assert!(session.intro_movie_done().is_err(), "movie completion is consumed once");
         assert!(session.host.story.as_ref().unwrap().quest(1).is_none());
         session.intro_edit_done().unwrap();
         assert_eq!(session.world().stage_no, STAGE);
         assert!(session.host.story.as_ref().unwrap().quest(1).is_some());
         assert_eq!(session.host.roster.ids().count(), 2);
+        assert!(session.intro_edit_done().is_err(), "editor completion is consumed once");
     }
 
     use super::*;
