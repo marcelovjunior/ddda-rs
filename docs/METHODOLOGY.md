@@ -6,6 +6,58 @@ the fastest faithful route is **decompilation-informed reimplementation
 checked against the original**. It is not "decompile everything, then
 port it", and it is not matching decompilation.
 
+## Systematic rebuild (adopted 2026-10-10)
+
+The route-driven method (trace what the opening needs next, translate it,
+fill gaps with stand-ins to keep the route green) produced traced pieces
+but a game full of gaps: intro bypasses, scripted host shortcuts, NPCs that
+stop on untranslated variables. From now on the project follows the nv-rs
+approach: map the whole executable, rebuild it in dependency order, accept
+a piece only when it is traced and tested against the original, and wire
+pieces to the game state last. Playthroughs become acceptance tests.
+
+**Phase 0, the map (done 2026-10-10).** `research/ghidra/ExportInventory.java`
+exports every function and call edge from the DTI-labelled Ghidra project
+(headless, read-only); `scripts/inventory.py build` loads them into
+`E:/ddda-re/notes/inventory/inventory.sqlite` (private: derived from the
+exe) and marks each function the Rust code cites by address. First count:
+
+| status | functions | share | code bytes |
+|---|---:|---:|---:|
+| translated (cited in Rust; upper bound, some are partial) | 1,701 | 3.4% | 8.5% |
+| documented only | 762 | 1.5% | 2.8% |
+| untouched | 48,015 | 95.1% | 88.7% |
+| total (thunks excluded) | 50,478 | | 15.1 MB |
+
+`python scripts/inventory.py summary` prints the current numbers;
+`python scripts/inventory.py next N` lists the untranslated functions most
+called by translated ones (the dependency frontier).
+
+**Phase 1, the frame.** The main loop, its job/move lines and pass order
+(FRAME.md), rebuilt exactly, with every system an explicit slot, so that
+pieces plug into the original's order instead of ad-hoc host code.
+
+**Phase 2, the core in dependency order.** Runtime base classes first
+(the tracker's frontier: memory/containers, MtObject/DTI, resources, unit
+and model bases, actions, collision, the AI core), then families on top.
+Each function moves `untouched -> translated -> verified`: verified means a
+differential test against the original function (the bounded emulation
+harness the agents already use: the original's instructions on original
+pages, synthetic inputs, outputs compared with the Rust port) or a live
+oracle reading. Stand-ins are not allowed: a missing piece is an explicit
+"not yet", never a shortcut that makes a route pass.
+
+**Phase 3, wiring.** Connect the rebuilt pieces to the host's game state;
+the hand-written glue (ScriptedHost shortcuts, the demo driver, route-only
+adapters) is retired as the rebuilt systems take over.
+
+**Acceptance.** The route checkpoints (S46) and playthrough tests prove
+behaviour against the original; S60 (oracle numbers) becomes standard.
+
+**Kept from the route era:** format readers, renderer/platform layer
+(windows, input, audio output, network transport), research docs and the
+tools (oracle, board, checkpoints, emulation harness).
+
 ## The loop
 
 1. **Scope by route.** Each milestone names what the player does (e.g.
