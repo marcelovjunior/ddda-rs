@@ -27,10 +27,10 @@ import harness as h  # noqa: E402
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32  # noqa: E402
 
-INV = "E:/ddda-re/notes/inventory"
-NATIVE = "E:/ddda-re/notes/native"
+INV = os.environ.get("INVENTORY_EXPORT", "E:/ddda-re/notes/inventory")
+NATIVE = os.environ.get("LIFT_DATA", "E:/ddda-re/notes/native")
 LO, HI = 0x00400000, 0x02000000
-DB = f"{INV}/inventory.sqlite"
+DB = os.environ.get("INVENTORY_DB", f"{INV}/inventory.sqlite")
 
 
 def slots(addr, size):
@@ -106,12 +106,12 @@ def first_call(f):
 
 
 def platform():
-    """Boilerplate Rust replaces (no 1:1 port): deleting destructors, DTI
+    """Historical platform provenance (all are eligible for lifting): deleting destructors, DTI
     new-instance allocators (they call the allocator selector 0x00CF5E20
     first), construct-if-memory wrappers, the MT allocator entry points."""
     fams = json.load(open(f"{INV}/exact_families.json"))
     db = sqlite3.connect(DB)
-    pl, why = set(), collections.Counter()
+    pl, why, rules = set(), collections.Counter(), {}
     for f in fams:
         addrs = [m["addr"] for m in f["members"]]
         names = collections.Counter(r[0] for r in db.execute(
@@ -128,10 +128,16 @@ def platform():
             reason = "construct-if-memory wrapper"
         if reason:
             pl.update(addrs)
+            rules.update((str(a), reason) for a in addrs)
             why[reason] += len(addrs)
     pl.update([0x00CF5E20, 0x00DE0B80, 0x00DE0B90, 0x00CFE960, 0x00CFE9A0])
+    rules.update((str(a), "MT allocator entry points") for a in [0x00CF5E20, 0x00DE0B80, 0x00DE0B90, 0x00CFE960, 0x00CFE9A0])
     why["MT allocator entry points"] += 5
-    json.dump(sorted(pl), open(f"{NATIVE}/platform.json", "w"))
+    with open(f"{NATIVE}/platform.json", "w") as stream:
+        json.dump(sorted(pl), stream)
+    with open(f"{NATIVE}/platform_rules.json", "w") as stream:
+        json.dump(rules, stream)
+    db.close()
     print(len(pl), "platform functions", dict(why))
 
 

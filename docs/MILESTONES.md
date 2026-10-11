@@ -848,3 +848,39 @@ opening (codex-31), route perf (codex-29).
   pair and census, then chooses the reciprocal-oracle/CPU contract and traces
   remaining stack-context failures. Initializer `0x0137E490` remains without
   a usable fixture; no live-game/boot claim, shared writes, gate or push.
+
+### L14 platform-inclusive lifting (2026-10-11)
+
+- **Implemented:** both scan paths include historical platform classes.
+  Inventory retains `platform_rule` independently of verification. Per-rule
+  reports distinguish selected bodies, recorder failures, lift rejections and
+  replay mismatches; the five explicit test models remain excluded.
+- **Compared:** 12,602 additional entries / 37,640 cases. All DTI allocation
+  wrappers, construct-if-memory wrappers and base destructor chains verify;
+  deleting destructors reach 3,925/3,926. CRT `__snprintf_s` 0x012ED991 and
+  `__ioinit` 0x012F7C13 gain fixtures. Historical classes total 12,638 verified
+  of 12,804 entries including thunks. This is body/callee-event replay, not
+  a closed CRT startup or live-game claim.
+- **Measured:** selection 43,567 -> 56,169; cases 129,587 -> 167,227, all
+  baseline records unchanged. Verified non-thunks 43,327 -> 55,884 (98.7%,
+  95.7% of summed code bytes), plus 289 verified thunks. Denominator remains
+  56,593 non-thunks / 15,516,093 bytes. Whole-inventory residual: 533 recorder
+  failures, 161 lift rejections, ten quarantines and five models = 709 rows.
+- **Validated:** 69 Python tests; subset 80,009 cases / 26,788 functions plus
+  seven units; final required-vector `cargo test -p ddnative` passes all 32
+  Rust tests and 167,227 lifted cases. Successful invocation compile 4m58s,
+  replay 90.09s, total 398.08s, minimum free 9.70 GiB. External builds caused
+  deferrals and two stopped L14 full-build attempts; only its own process
+  trees were killed. Lowest observed free memory 8.29 GiB; never below 6 GiB.
+  The completed invocation is not a clean-build timing benchmark.
+- **Open:** six new x87 control/status oracle mismatches are quarantined with
+  cases and diagnostics, preserving the four old quarantines. Startup
+  0x012EF8A7 still lacks a fixture and depends on unsupported FS/SEH helpers.
+  Destructor 0x00DB8CD0 exposes unresolved import-tail mock cleanup. Original
+  bodies at the five model entries require a distinct recording/runtime
+  binding contract; no expectations or status bits were normalized.
+- **One next action:** head reviews/adopts the matching private native-L14
+  pair and quarantine evidence, regenerates Rust and platform rule metadata,
+  then rebuilds the shared inventory. Source/docs commits only; generated
+  files and private data are not committed. See L14 Results for per-rule
+  counts, evidence and exact regeneration steps. No shared writes or push.

@@ -31,6 +31,11 @@ def write(path, value):
     temporary.replace(path)
 
 
+def quarantined(root):
+    path = root/'structured_quarantine.json'
+    return set(read(path)) if path.exists() else set()
+
+
 def boundary(selected):
     return {str(f['addr']):lift.vector_key(f) for f in selected if not f.get('ext')}
 
@@ -48,14 +53,13 @@ def prepare(root):
     if context.exists() and any(root.glob('structured-*.jsonl')):
         check_boundary(root, selected)
     write(context, boundary(selected))
-    quarantine_path = root/'structured_quarantine.json'
-    quarantine = set(read(quarantine_path)) if quarantine_path.exists() else set()
+    quarantine = quarantined(root)
     with closing(sqlite3.connect(f'file:{lift.DB}?mode=ro', uri=True)) as db:
         # The rebuilt inventory already merges extra_functions.tsv. No
         # address ceiling: high-address game initializers are candidates.
-        # Thunks are executable entry points too. Verify their actual tail
+        # Historical platform classes and thunks are executable entry points too. Verify their actual tail
         # transfer instead of silently excluding the inventory's thunk flag.
-        rows = db.execute("SELECT address,namespace,name,size FROM functions WHERE status NOT IN ('platform','verified') AND size>=1 ORDER BY address").fetchall()
+        rows = db.execute("SELECT address,namespace,name,size FROM functions WHERE status != 'verified' AND size>=1 ORDER BY address").fetchall()
     candidates, rejected = [], {}
     for a, ns, name, size in rows:
         if a in have or a in h.PLATFORM or a in quarantine:
@@ -119,6 +123,7 @@ def record(root, strategy, seeds, seconds, limit):
     selected = read(root/'patterns/lift.json')
     check_boundary(root, selected)
     have = {f['addr'] for f in selected}
+    quarantine = quarantined(root)
     candidates = read(root/'patterns/structured_candidates.json')
     path = root/f'structured-{strategy}.jsonl'
     prior = records(path) if path.exists() else []
@@ -127,7 +132,7 @@ def record(root, strategy, seeds, seconds, limit):
     # Omit assembly strings from worker arguments; workers need only the
     # existing body and call boundary, not another copy of generated Rust.
     todo = [{k:v for k,v in f.items() if k!='arms'} for f in candidates
-            if f['addr'] not in have and (f['addr'],lift.vector_key(f)) not in done]
+            if f['addr'] not in have and f['addr'] not in quarantine and (f['addr'],lift.vector_key(f)) not in done]
     if limit is not None:
         todo = todo[:limit]
     closed = [f['addr'] for f in selected if not f.get('ext')]
@@ -164,9 +169,10 @@ def adopt(root, strategy):
     check_boundary(root, selected)
     candidates={f['addr']:f for f in read(root/'patterns/structured_candidates.json')}
     have={f['addr'] for f in selected};added=[]
+    quarantine=quarantined(root)
     for r in records(root/f'structured-{strategy}.jsonl'):
         a=r['addr'];f=candidates.get(a)
-        if a not in have and f and r['body_key']==lift.vector_key(f) and r['cases']:
+        if a not in have and a not in quarantine and f and r['body_key']==lift.vector_key(f) and r['cases']:
             selected.append(f);cases.extend(r['cases']);have.add(a);added.append(a)
     write(root/'patterns/lift.json',selected);write(root/'vectors/lift.json',cases)
     prune_no_vectors(root,have)

@@ -56,13 +56,32 @@ def native_declarations(repo=REPO):
     return ported, tested
 
 
+def classify_platform(db, native):
+    """Keep historical shape/range provenance even after verification.
+
+    A legacy platform.json without rule metadata remains usable, explicitly
+    labelled unknown-shape rather than inventing a per-rule attribution.
+    CRT range takes precedence; supplementary entries are exempt from it.
+    """
+    pf = native / "platform.json"
+    rules_file = native / "platform_rules.json"
+    rules = json.loads(rules_file.read_text()) if rules_file.exists() else {}
+    if pf.exists():
+        db.executemany("UPDATE functions SET platform_rule=? WHERE address=?",
+                       [(rules.get(str(a), "legacy shape (rule unavailable)"), a)
+                        for a in json.loads(pf.read_text())])
+    db.execute("UPDATE functions SET platform_rule='CRT/library range' WHERE address >= 0x012E0000 "
+               "AND address NOT IN (SELECT address FROM supplementary)")
+    db.execute("UPDATE functions SET status='platform' WHERE platform_rule IS NOT NULL")
+
+
 def build():
     db = connect()
     db.executescript("""
         DROP TABLE IF EXISTS functions; DROP TABLE IF EXISTS calls; DROP TABLE IF EXISTS cites;
         CREATE TABLE functions(address INTEGER PRIMARY KEY, name TEXT, namespace TEXT,
             size INTEGER, thunk INTEGER, callers INTEGER, callees INTEGER,
-            status TEXT NOT NULL DEFAULT 'untouched');
+            status TEXT NOT NULL DEFAULT 'untouched', platform_rule TEXT);
         CREATE TABLE calls(caller INTEGER, callee INTEGER);
         CREATE TABLE cites(address INTEGER, file TEXT, kind TEXT);
     """)
@@ -107,26 +126,20 @@ def build():
             if a in starts:
                 cites.append((a, rel, kind))
     db.executemany("INSERT INTO cites VALUES (?,?,?)", cites)
-    # platform layer (Rust replaces it, no 1:1 port): deleting destructors,
-    # DTI allocation, construct wrappers, the MT allocators; classified by
-    # shape family in E:/ddda-re/notes/native/platform.json
-    pf = EXPORT.parent / "native" / "platform.json"
-    if pf.exists():
-        db.executemany("UPDATE functions SET status='platform' WHERE address=?",
-                       [(a,) for a in json.loads(pf.read_text())])
-    # the C runtime / library block at the top of .text
-    # The legacy range describes exported CRT functions, not all code above
-    # it: the C++ initializer targets at 0x0132A550..0x0138B2C0 include game
-    # registrations (e.g. 0x0136DDE0 -> MtDTI constructor 0x00CF5780).
-    db.execute("UPDATE functions SET status='platform' WHERE address >= 0x012E0000 "
-               "AND address NOT IN (SELECT address FROM supplementary)")
+    # Historical classification is provenance, not a lifting exclusion.
+    native = Path(os.environ.get("LIFT_DATA", str(EXPORT.parent / "native")))
+    # A private lifted-pair copy may not contain shape metadata yet. Reading
+    # the export's existing classification is safe; build writes only DB.
+    if not (native / "platform.json").exists():
+        native = EXPORT.parent / "native"
+    classify_platform(db, native)
     db.execute("UPDATE functions SET status='documented' WHERE address IN (SELECT address FROM cites WHERE kind='doc')")
     db.execute("UPDATE functions SET status='translated' WHERE address IN (SELECT address FROM cites WHERE kind='code')")
     # crates/ddnative holds whole 1:1 ports, each with a differential test
     # against the original (docs/METHODOLOGY.md, "The 1:1 pipeline")
     # only the "Translated from" line of a port counts (callees named in
     # doc comments are not verified by it)
-    ported, tested = native_declarations()
+    ported, tested = native_declarations(REPO)
     untested = ported - tested
     if untested:
         print("ported without a declared test (not credited):", sorted(hex(a) for a in untested))
@@ -152,6 +165,11 @@ def summary():
             "SELECT status, COUNT(*), SUM(size) FROM functions WHERE NOT thunk GROUP BY status ORDER BY status"):
         print(f"{status:11} {n:6} functions ({100*n/total:5.1f}%), {s:9} bytes ({100*s/size:5.1f}%)")
     print(f"{'total':11} {total:6} functions, {size} bytes")
+    print("Historical platform rules (non-thunks; verified status takes precedence):")
+    for rule, n, v in db.execute("SELECT platform_rule,COUNT(*),SUM(status='verified') FROM functions "
+                                 "WHERE NOT thunk AND platform_rule IS NOT NULL GROUP BY platform_rule"):
+        print(f"  {rule}: {v}/{n} verified")
+    db.close()
 
 
 def next_up(n=25):
