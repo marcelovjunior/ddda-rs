@@ -579,7 +579,15 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 terminated = True
                 break
             elif mn == "jmp" and ops[0].type == X86_OP_MEM:
-                body.append(f"pc = {load(i, ops[0])}; continue;")
+                if ext:
+                    # a target outside the discovered cases leaves the function
+                    # (an unbounded table read beyond its end): the recorder
+                    # mocks that as a tail call, and so does the replay
+                    cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address])))
+                    body.append(f"{{ let t = {load(i, ops[0])}; if matches!(t, {cases}) {{ pc = t; continue; }} "
+                                f"{SAVE} x86::call_ext(m, cpu, t); return; }}")
+                else:
+                    body.append(f"pc = {load(i, ops[0])}; continue;")
                 terminated = True
                 break
             elif mn == "jmp" and not inside(ops[0].imm):
