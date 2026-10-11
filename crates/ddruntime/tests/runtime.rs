@@ -442,3 +442,59 @@ fn the_adapter_answers_from_the_recorded_profile() {
     assert_eq!(hr, 0);
     assert!(quality >= 1);
 }
+
+#[test]
+fn create_device_completes_windowed_parameters_and_counts_references() {
+    use ddruntime::session::Outcome;
+    let Some(exe) = installed_exe() else { return };
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = ddruntime::session::Session::new(&path).expect("session");
+    let token = |s: &ddruntime::session::Session, n: &str| s.imports.iter().find(|i| i.full_name() == n).unwrap().token;
+    let scratch = 0x7EFF_0000;
+    // a window class whose procedure is DefWindowProcW itself
+    let (wc, name) = (scratch, scratch + 0x100);
+    for (k, u) in "W\0".encode_utf16().enumerate() {
+        s.mem.set_u16(name + 2 * k as u32, u);
+    }
+    s.mem.set_u32(wc + 8, token(&s, "USER32.dll!DefWindowProcW"));
+    s.mem.set_u32(wc + 40, name);
+    let Outcome::Returned(_) = s.call(token(&s, "USER32.dll!RegisterClassExW"), 0, &[wc]) else { panic!("RegisterClassExW") };
+    let Outcome::Returned(cpu) = s.call(token(&s, "USER32.dll!CreateWindowExW"), 0,
+        &[0, name, 0, 0x00CA_0000, 0, 0, 1286, 749, 0, 0, 0x0040_0000, 0]) else { panic!("CreateWindowExW") };
+    let hwnd = cpu.eax;
+
+    let Outcome::Returned(cpu) = s.call(token(&s, "d3d9.dll!Direct3DCreate9"), 0, &[32]) else { panic!() };
+    let d3d = cpu.eax;
+    let method = |s: &ddruntime::session::Session, obj: u32, slot: u32| s.mem.u32(s.mem.u32(obj) + 4 * slot);
+    // windowed, size 0x0, format unknown, count 0, discard, auto depth D24S8
+    let (pp, out) = (scratch + 0x200, scratch + 0x300);
+    for (k, v) in [0, 0, 0, 0, 0, 0, 1, hwnd, 1, 1, 75, 0, 0, 0].into_iter().enumerate() {
+        s.mem.set_u32(pp + 4 * k as u32, v);
+    }
+    let create = method(&s, d3d, 16);
+    let Outcome::Returned(cpu) = s.call(create, 0, &[d3d, 0, 1, hwnd, 0x46, pp, out]) else { panic!("CreateDevice") };
+    assert_eq!(cpu.eax, 0, "D3D_OK");
+    let pp_now: Vec<u32> = (0..4).map(|k| s.mem.u32(pp + 4 * k)).collect();
+    assert_eq!(pp_now, [1280, 720, 22, 1], "client size, display format, one back buffer written back");
+    let device = s.mem.u32(out);
+    assert_eq!(ddruntime::d3d9dev::refs(device), Some(("IDirect3DDevice9", 1)));
+
+    let Outcome::Returned(cpu) = s.call(method(&s, device, 4), 0, &[device]) else { panic!() };
+    assert_eq!(cpu.eax, ddruntime::d3d9::profile().texture_memory);
+    // GetBackBuffer(0, 0, MONO) -> a surface with a reference for the caller
+    let Outcome::Returned(cpu) = s.call(method(&s, device, 18), 0, &[device, 0, 0, 0, out]) else { panic!() };
+    assert_eq!(cpu.eax, 0);
+    let back = s.mem.u32(out);
+    assert_eq!(ddruntime::d3d9dev::refs(back), Some(("IDirect3DSurface9", 3)), "swap chain + render target 0 + caller");
+    let desc = scratch + 0x400;
+    let Outcome::Returned(_) = s.call(method(&s, back, 12), 0, &[back, desc]) else { panic!() };
+    let d: Vec<u32> = (0..8).map(|k| s.mem.u32(desc + 4 * k)).collect();
+    assert_eq!(d, [22, 1, 1, 0, 0, 0, 1280, 720]);
+    let Outcome::Returned(cpu) = s.call(method(&s, back, 2), 0, &[back]) else { panic!() };
+    assert_eq!(cpu.eax, 2);
+    // the last Release of the device frees it and everything it holds
+    let Outcome::Returned(cpu) = s.call(method(&s, device, 2), 0, &[device]) else { panic!() };
+    assert_eq!(cpu.eax, 0);
+    assert_eq!(ddruntime::d3d9dev::refs(device), None);
+    assert_eq!(ddruntime::d3d9dev::refs(back), None);
+}

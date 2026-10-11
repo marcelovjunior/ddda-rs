@@ -13,6 +13,7 @@
 //! faults, and a call to code that is neither translated nor modelled stops
 //! with its address instead of returning something made up.
 pub mod d3d9;
+pub mod d3d9dev;
 pub mod dispatch;
 pub mod files;
 pub mod image;

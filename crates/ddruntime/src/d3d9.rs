@@ -31,6 +31,8 @@ const D3DDEVTYPE_HAL: u32 = 1;
 pub struct Profile {
     pub identifier: Vec<u8>,
     pub caps: Vec<u8>,
+    pub device_caps: Vec<u8>,
+    pub texture_memory: u32,
     defaults: HashMap<String, u32>,
     /// (usage, rtype) -> format -> result
     formats: HashMap<(u32, u32), HashMap<u32, u32>>,
@@ -43,7 +45,7 @@ pub struct Profile {
 impl Profile {
     pub fn parse(text: &str) -> Profile {
         let mut p = Profile {
-            identifier: Vec::new(), caps: Vec::new(), defaults: HashMap::new(),
+            identifier: Vec::new(), caps: Vec::new(), device_caps: Vec::new(), texture_memory: 0, defaults: HashMap::new(),
             formats: HashMap::new(), multisample: HashMap::new(), checks: HashMap::new(),
         };
         let hex = |s: &str| u32::from_str_radix(s, 16).unwrap_or_else(|_| panic!("d3d9 profile: bad number {s:?}"));
@@ -53,6 +55,8 @@ impl Profile {
             match f[0] {
                 "identifier" => p.identifier = bytes(f[1]),
                 "caps" => p.caps = bytes(f[1]),
+                "devicecaps" => p.device_caps = bytes(f[1]),
+                "texturememory" => p.texture_memory = hex(f[1]),
                 "default" => {
                     p.defaults.insert(f[1].to_string(), hex(f[2]));
                 }
@@ -71,7 +75,7 @@ impl Profile {
                 }
             }
         }
-        assert_eq!((p.identifier.len(), p.caps.len()), (1100, 304), "d3d9 profile: identifier and caps sizes");
+        assert_eq!((p.identifier.len(), p.caps.len(), p.device_caps.len()), (1100, 304, 304), "d3d9 profile: identifier and caps sizes");
         p
     }
 
@@ -327,7 +331,7 @@ pub const INTERFACES: &[Spec] = &[Spec {
         (6, get_adapter_mode_count), (7, enum_adapter_modes), (8, get_adapter_display_mode),
         (9, check_device_type), (10, check_device_format), (11, check_device_multi_sample_type),
         (12, check_depth_stencil_match), (13, check_device_format_conversion), (14, get_device_caps),
-        (15, get_adapter_monitor),
+        (15, get_adapter_monitor), (16, crate::d3d9dev::create_device),
     ],
     names: IDIRECT3D9,
 }];
@@ -344,5 +348,5 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
         let o = interfaces::create(m, registry, tokens, spec)?;
         with_state(|s| s.objects.insert(spec.name, o));
     }
-    Ok(())
+    crate::d3d9dev::install(m, registry, tokens)
 }

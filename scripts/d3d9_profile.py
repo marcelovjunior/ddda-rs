@@ -13,7 +13,9 @@ Usage: python scripts/d3d9_profile.py [out]
 
 Format, one record per line (hex numbers, '#' comments):
   identifier <2200 hex digits: D3DADAPTER_IDENTIFIER9, 1100 bytes>
-  caps <608 hex digits: D3DCAPS9, 304 bytes>
+  caps <608 hex digits: D3DCAPS9, 304 bytes>      IDirect3D9::GetDeviceCaps
+  devicecaps <608 hex digits>                     IDirect3DDevice9::GetDeviceCaps
+  texturememory <bytes>                           IDirect3DDevice9::GetAvailableTextureMem
   format <usage> <rtype> <hresult> <format>,<format>,...
                                                  CheckDeviceFormat(HAL, X8R8G8B8)
   type <backbuffer format> <windowed> <hresult>  CheckDeviceType(HAL, X8R8G8B8)
@@ -130,6 +132,37 @@ def main():
         for fields, hr, extra in rows:
             if hr != default or any(extra):
                 lines.append(" ".join([kind] + [f"{v:x}" for v in fields + (hr,) + extra]))
+
+    # A device, created the way 0x00DB1480 creates it (hardware vertex
+    # processing, FPU preserve, multithreaded; windowed 1280x720 A8R8G8B8 on
+    # a hidden window), for the answers only a device gives.
+    user32 = ctypes.WinDLL("user32")
+    user32.CreateWindowExW.restype = c_void_p
+    user32.CreateWindowExW.argtypes = [U, ctypes.c_wchar_p, ctypes.c_wchar_p, U, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, c_void_p, c_void_p, c_void_p, c_void_p]
+    hwnd = user32.CreateWindowExW(0, "STATIC", "d3d9 profile", 0x00CA0000, 0, 0, 1286, 749, None, None, None, None)
+    assert hwnd, "CreateWindowExW failed"
+    # x64 D3DPRESENT_PARAMETERS has an 8-byte HWND at offset 32 (x86: 4 bytes at 28)
+    pp64 = ctypes.create_string_buffer(64)
+    fields = [(0, 1280), (4, 720), (8, 21), (12, 1), (16, 0), (20, 0), (24, 1)]
+    for off, v in fields:
+        ctypes.memmove(ctypes.addressof(pp64) + off, ctypes.byref(U(v)), 4)
+    ctypes.memmove(ctypes.addressof(pp64) + 32, ctypes.byref(c_void_p(hwnd)), 8)
+    for off, v in [(40, 1), (44, 0), (48, 0), (52, 0), (56, 0), (60, 0x80000000)]:
+        ctypes.memmove(ctypes.addressof(pp64) + off, ctypes.byref(U(v)), 4)
+    create_device = method(16, U, U, c_void_p, U, c_void_p, POINTER(c_void_p))
+    dev = c_void_p()
+    hr = create_device(0, HAL, hwnd, 0x46, pp64, byref(dev))
+    assert hr == 0 and dev.value, f"CreateDevice failed: {hr:#x}"
+    dvtbl = ctypes.cast(ctypes.cast(dev.value, POINTER(c_void_p))[0], POINTER(c_void_p))
+    texture_mem = ctypes.WINFUNCTYPE(U, c_void_p)(dvtbl[4])(dev.value)
+    lines.append(f"texturememory {texture_mem:x}")
+    dcaps = ctypes.create_string_buffer(304)
+    assert ctypes.WINFUNCTYPE(c_long, c_void_p, c_void_p)(dvtbl[7])(dev.value, dcaps) == 0
+    lines.append("devicecaps " + dcaps.raw.hex())
+    ctypes.WINFUNCTYPE(c_uint32, c_void_p)(dvtbl[2])(dev.value)
+    user32.DestroyWindow.argtypes = [c_void_p]
+    user32.DestroyWindow(hwnd)
 
     # IDirect3D9::Release
     ctypes.WINFUNCTYPE(c_uint32, c_void_p)(vtbl[2])(d3d)

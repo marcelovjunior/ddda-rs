@@ -221,6 +221,9 @@ fn frame(style: u32) -> [i32; 4] {
 }
 
 /// Client rectangle size of a window.
+pub fn client_size_of(w: &Window) -> (i32, i32) {
+    client_size(w)
+}
 fn client_size(w: &Window) -> (i32, i32) {
     let f = frame(w.style);
     (
