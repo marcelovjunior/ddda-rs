@@ -12,7 +12,10 @@
 //!
 //! Bring-up version: frames are read back and re-uploaded (simple and
 //! robust); sharing one device comes when performance matters. Input is
-//! not forwarded yet (brief L16).
+//! not forwarded yet (brief L16). Audio plays on the default output
+//! device (`sink`, brief L19).
+mod sink;
+
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -142,6 +145,7 @@ impl App {
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
                 ddruntime::session::install_fault_hook();
+                sink::start(ddruntime::audio::output());
                 match ddgpu::WgpuBackend::headless() {
                     Some(mut backend) => {
                         backend.read_frames = false;
