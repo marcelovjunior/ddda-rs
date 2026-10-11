@@ -588,8 +588,10 @@ module; behaviour choices are labelled in the code.
 | Files: read-only install plus a sandbox overlay for every write; paths outside both refused | `files.rs` | done, tested (synchronous I/O only) |
 | Interface objects (C++ thiscall and COM stdcall): vtables of named method tokens, services per implemented method | `interfaces.rs` | done |
 | Steam: exports plus seven `ISteam*` objects; language english, app id 367500, no depots | `steam.rs` | started |
-| USER32 window model | `win32.rs` | metrics only (AdjustWindowRect, GetSystemMetrics) |
-| Guest threads, SEH (`fs:`), D3D9, audio, input, delay imports | | not started |
+| USER32 window model: classes, windows, one guest thread's message queue; guest window procedures (0x00DF1550) called through the dispatcher with Windows' message order (create: WM_NCCREATE, WM_CREATE; show: WM_SHOWWINDOW, WM_ACTIVATEAPP, WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS, WM_WINDOWPOSCHANGED -> DefWindowProc -> WM_SIZE/WM_MOVE; WM_PAINT); DefWindowProc, PeekMessage/DispatchMessage/PostQuitMessage, DestroyWindow, geometry, properties, cursor, resource handles, GDI stock objects, WINMM timers. Non-client painting, IME and Z-order negotiation messages are not sent (headless) | `user32.rs` | done, tested |
+| D3D9 adapter: identifier, caps and all format/multisample/depth/conversion checks answered from a profile recorded from a real driver (`scripts/d3d9_profile.py` -> `data/d3d9_profile.txt`, RTX 4060); fixed 60 Hz mode list up to the 1920x1080 desktop; unrecorded usages or adapter formats stop | `d3d9.rs` | done, tested |
+| D3D9 device: CreateDevice (completes windowed parameters as D3D9 does), implicit and additional swap chains, back buffers, auto depth-stencil, COM reference counts; device caps and texture memory from the profile; headless Present | `d3d9dev.rs` | started (17 device methods) |
+| Guest threads, SEH (`fs:`), D3D9 resources and drawing (wgpu), audio, input, delay imports | | not started |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry
