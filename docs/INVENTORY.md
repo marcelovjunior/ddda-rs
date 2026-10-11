@@ -170,16 +170,17 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off (2026-10-11, commit 9091c6c; the gate
-prints the current numbers after every run):
+With the platform layer split off (2026-10-11, commit b4c7eb4, 56,577
+functions including the supplementary entries; the gate prints the current
+numbers after every run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
-| platform (Rust replaces) | 12,735 | 25.2% | 5.2% |
-| verified (1:1 + differential test) | 31,590 | 62.6% | 72.7% |
-| translated (cited, not verified) | 414 | 0.8% | 2.4% |
-| documented only | 195 | 0.4% | 0.9% |
-| untouched | 5,544 | 11.0% | 18.8% |
+| platform (Rust replaces) | 12,707 | 22.5% | 5.0% |
+| verified (1:1 + differential test) | 41,516 | 73.4% | 85.8% |
+| translated (cited, not verified) | 169 | 0.3% | 1.3% |
+| documented only | 98 | 0.2% | 0.3% |
+| untouched | 2,087 | 3.7% | 7.6% |
 
 Nearly all verified functions come from the lifter (`research/native/lift.py`,
 docs/NATIVE_PIPELINE.md "The lifter"): 31,580 lifted, most of them in ext
