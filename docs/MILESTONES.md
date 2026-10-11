@@ -884,3 +884,29 @@ opening (codex-31), route perf (codex-29).
   then rebuilds the shared inventory. Source/docs commits only; generated
   files and private data are not committed. See L14 Results for per-rule
   counts, evidence and exact regeneration steps. No shared writes or push.
+
+### L15 runtime prerequisites — verified privately, ready for adoption
+
+- **Implemented:** distinct original-entry recorder contracts at model
+  addresses; per-Cpu FS base and Unicorn GDT/TEB setup; general mock cleanup
+  fixes for startup calls and named import tails. Details and addresses are
+  in `docs/tasks/L15-runtime-prereqs.md` and `docs/NATIVE_PIPELINE.md`.
+- **Compared against the original:** 137 additions / 394 cases,
+  including three allocator originals, memset, `__mtinit`, `__cinit`,
+  twelve FS bodies and destructor 0x00DB8CD0. Baseline scan 533 candidates /
+  161 rejections becomes 554 / 145 (now including memcpy's rejection).
+- **Tested:** 65 native Python tests, nine inventory tests, subset replay,
+  and all 32 Rust tests with required vectors pass. Full replay covers
+  56,306 entries / 167,621 cases, preserving every old record/case. The
+  private inventory reaches 56,021 verified non-thunks (99.0%, 96.1% of
+  code bytes), plus 289 thunks. Full build/test took 415 s at four jobs,
+  with 9.81 GiB minimum free RAM; no build/vector overlap in final testing.
+- **Open:** memcpy 0x012EFEA0 needs a nonzero switch-index proof; SEH frame
+  helpers need explicit caller-frame fixtures. In total, 417 entries still
+  lack fixtures, 145 reject lifting, and ten stay quarantined. Image bytes
+  were already real: startup gains come from evidenced mock ABI cleanup.
+- **One next action:** head reviews/adopts the private native-L15 pair,
+  regenerates/replays and rebuilds shared inventory, then sets runtime
+  thread FS bases and binds the verified original entries. See L15 Results
+  for exact addresses, evidence and regeneration steps. No shared writes,
+  generated-code commits, native gate, runtime edits or push.

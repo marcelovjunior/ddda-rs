@@ -70,6 +70,8 @@ pub struct Cpu {
     pub xmm: [[u32; 4]; 8],
     pub fl: Flags,
     pub df: bool,
+    /// Guest thread's FS segment base (TEB); other supported segments are flat.
+    pub fs_base: u32,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
 }
@@ -79,7 +81,7 @@ impl From<Entry> for Cpu {
         let mut xmm = [[0u32; 4]; 8];
         xmm[0][0] = r.xmm0;
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
-              xmm, fl: Flags::default(), df: false, st: Default::default() }
+              xmm, fl: Flags::default(), df: false, fs_base: 0, st: Default::default() }
     }
 }
 

@@ -20,14 +20,15 @@ class CensusTests(unittest.TestCase):
                 d.executemany('INSERT INTO functions VALUES(?,?,?,?,?,?)',[
                     (1,'','hand-port',5,0,'verified'),(2,'','model',5,0,'platform'),
                     (3,'','thunk',5,1,'untouched'),(0xDE0B80,'','explicit-model',5,0,'platform')])
-            with patch.object(s.lift,'DB',str(db)),patch.object(s.lift,'seed_closed_contracts',return_value=set()),patch.object(s.lift,'lift',return_value=[]),patch.object(s.lift,'BODY_INFO',{2:dict(body=[2]),3:dict(body=[3])}):
+            with patch.object(s.lift,'DB',str(db)),patch.object(s.lift,'seed_closed_contracts',return_value=set()),patch.object(s.lift,'lift',return_value=[]),patch.object(s.lift,'BODY_INFO',{2:dict(body=[2]),3:dict(body=[3]),0xDE0B80:dict(body=[0xDE0B80])}):
                 s.prepare(root)
-            self.assertEqual([r['addr'] for r in s.read(root/'patterns/structured_candidates.json')],[2,3])
+            self.assertEqual([r['addr'] for r in s.read(root/'patterns/structured_candidates.json')],[2,3,0xDE0B80])
+            self.assertTrue(s.read(root/'patterns/structured_candidates.json')[-1]['original_entry'])
             # A future full scan must retain thunks too. Unlike the missing-
             # entry scan, it deliberately includes verified call dependencies.
             with patch.object(s.lift,'DB',str(db)),patch.object(s.lift,'N',str(root)),patch.object(s.lift,'lift',return_value=[]):
                 s.lift.scan()
-            self.assertEqual([r['addr'] for r in s.read(root/'patterns/lift.json')],[1,2,3])
+            self.assertEqual([r['addr'] for r in s.read(root/'patterns/lift.json')],[1,2,3,0xDE0B80])
 
     def test_all_unverified_rows_including_thunks_and_stale_trials(self):
         with tempfile.TemporaryDirectory() as tmp:

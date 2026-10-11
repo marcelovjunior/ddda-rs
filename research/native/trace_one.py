@@ -61,6 +61,7 @@ def main():
         try:
             kw = {"end": addr + f["size"], "lifted": closed} if f.get("ext") else {"size": f["size"]}
             kw.update(body=f.get("body"), noreturn_sites=f.get("noreturn_sites", []),
+                      original_entry=f.get("original_entry", False),
                       noreturn_targets=lift.noreturn_entries(), x87_push=f.get("x87_push", []))
             case = {"addr": addr, **h.run_sparse(addr, (addr << 8) ^ s, **kw)}
             print("seed", s)

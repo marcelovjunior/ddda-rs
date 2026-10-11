@@ -7,7 +7,7 @@ lifted: lifted functions share the whole machine state (x86::Cpu), and
 Verified by run_sparse vectors (random registers, random memory on
 demand, every byte read and written recorded).
 
-    python lift.py scan [N]     # lift every function it can (except test-model entries); patterns/lift.json
+    python lift.py scan [N]     # lift every function it can; original model bodies use ext entry contracts
     python lift.py scan-extra   # append supplementary entries, preserving existing boundaries
     python lift.py vectors      # record sparse vectors for each lifted function
     python lift.py gen          # crates/ddlift/lift_*/src/generated + ddnative facade/test
@@ -503,7 +503,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
 
     def mem_addr(i, op):
         m = op.mem
-        if m.segment != 0:
+        segment = i.reg_name(m.segment) if m.segment else None
+        if segment not in (None, 'fs', 'ds', 'es', 'ss'):
             raise Unsupported("segment override")
         parts = []
         if m.base != 0:
@@ -515,6 +516,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
             e = f"{e}.wrapping_add({p})"
         if m.disp:
             e = f"{e}.wrapping_add(0x{m.disp & 0xFFFFFFFF:X})"
+        if segment == 'fs' and i.mnemonic != 'lea':
+            e = f"cpu.fs_base.wrapping_add({e})"
         return e
 
     def load(i, op):
@@ -650,12 +653,18 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"cpu.df = {str(mn == 'std').lower()};")
             elif (mn.split()[-1] in ("movsb", "movsw", "movsd", "stosb", "stosw", "stosd")
                   and not any(o.type == X86_OP_REG and i.reg_name(o.reg) in XMM for o in ops)):
-                if i.addr_size != 4 or any(o.type == X86_OP_MEM and o.mem.segment and i.reg_name(o.mem.segment) not in ("es", "ds") for o in ops):
+                if i.addr_size != 4 or any(o.type == X86_OP_MEM and o.mem.segment and i.reg_name(o.mem.segment) not in ("es", "ds", "ss", "fs") for o in ops):
                     raise Unsupported("string address/segment override")
                 op = mn.split()[-1]
                 if mn not in (op, "rep " + op):
                     raise Unsupported("string repeat prefix")
-                body.append(f"x86::string(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()});")
+                fs = any(o.type == X86_OP_MEM and i.reg_name(o.mem.segment) == 'fs' for o in ops)
+                if fs:
+                    body.append('{ let source_base = cpu.fs_base;')
+                helper, segment = ('string_from', ', source_base') if fs else ('string', '')
+                body.append(f"x86::{helper}(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()}{segment});")
+                if fs:
+                    body.append('}')
             elif mn.startswith("prefetch"):
                 pass  # an architectural hint, not a demand memory read
             elif mn == "sfence":
@@ -938,6 +947,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     body.append(set_reg("ax", "st.status() as u32"))
                 else:
                     raw = bytes(i.bytes)
+                    while raw and raw[0] in (0x26, 0x36, 0x3e, 0x64):
+                        raw = raw[1:]  # segment applied by mem_addr, not host x87
                     if len(raw) < 2 or not 0xD8 <= raw[0] <= 0xDF:
                         raise Unsupported(f"x87-prefix {mn}")
                     mem = next((o for o in ops if o.type == X86_OP_MEM), None)
@@ -1066,9 +1077,9 @@ def scan(limit=None):
     db.close()
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
-    # a platform model's own address is never lifted: run_sparse runs the
-    # model there, so its vectors would describe the model, not the code
-    rows = sorted(r for r in rows if r[0] not in h.PLATFORM)
+    # Model bodies get a separate original-entry contract in the ext pass.
+    # They never join the closed set: callers must keep using the models.
+    rows = sorted(rows)
     rows = rows[:limit]
     # rounds: a function whose calls all go to functions lifted in an earlier
     # round (or earlier in this one) lifts too; repeat until nothing changes
@@ -1077,7 +1088,7 @@ def scan(limit=None):
         rnd += 1
         why, before = Counter(), len(ok)
         for a, ns, nm, sz in rows:
-            if a in done:
+            if a in done or a in h.PLATFORM:
                 continue
             try:
                 arms = lift(a, sz, done)
@@ -1101,6 +1112,8 @@ def scan(limit=None):
             arms = lift(a, sz, done, ext=True)
             ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, []),
                        "ext": True, **BODY_INFO.get(a, {})})
+            if a in h.PLATFORM:
+                ok[-1]['original_entry'] = True
             release_body(a, sz)
         except Unsupported as e:
             why[str(e).split(" ")[0]] += 1
@@ -1132,7 +1145,7 @@ def relift():
     keep, dropped = [], []
     for f in lifted:
         try:
-            if f["addr"] in h.PLATFORM:
+            if f["addr"] in h.PLATFORM and not f.get('original_entry'):
                 raise Unsupported("platform model address")
             f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
             f["x87_push"] = X87_PUSH_SITES.get(f["addr"], [])
@@ -1241,6 +1254,8 @@ def vector_key(f):
         return None
     import hashlib
     fields = [f.get(k) for k in ("body", "noreturn_sites", "calls", "ext", "x87_push")]
+    if f.get('original_entry'):
+        fields.append('original-entry-v1')
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -1259,6 +1274,8 @@ def _vectors_for(args):
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
+    if len(args) > 8 and args[8]:
+        inputs['original_entry'] = True
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     out, got, seed = [], 0, 0
@@ -1334,7 +1351,7 @@ def vectors(per=3):
     nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]])
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
@@ -1546,6 +1563,7 @@ fn every_lifted_function_matches_the_original() {{
         x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
+            cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
             f(&mut m, &mut cpu);
             if c.get("x87_control").is_some() {{
                 assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
