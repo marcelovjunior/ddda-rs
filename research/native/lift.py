@@ -579,12 +579,12 @@ def scan(limit=None):
     from collections import Counter
     ok, why = [], Counter()
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
-                      "AND status NOT IN ('verified', 'platform') AND size BETWEEN 6 AND 2000 "
+                      "AND status NOT IN ('verified', 'platform') AND size >= 1 "
                       "AND address < 0x012E0000 ORDER BY address").fetchall()
     # verified functions are lifted too (hand ports keep their own tests): a
     # caller can only lift if its callees are lifted
     rows += db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified' "
-                       "AND NOT thunk AND size BETWEEN 6 AND 2000 AND address < 0x012E0000").fetchall()
+                       "AND NOT thunk AND size >= 1 AND address < 0x012E0000").fetchall()
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     # a platform model's own address is never lifted: run_sparse runs the

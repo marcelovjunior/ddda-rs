@@ -38,4 +38,20 @@ no AI trailer, never push. Document findings in docs/NATIVE_PIPELINE.md.
 
 ## Results
 
-(Codex fills this in.)
+Codex's session was stopped by Claude Code during its final full build
+(the machine ran out of memory: 8 compile jobs of this crate at about 6 GB
+each plus vector workers). Its uncommitted work on `task/L02-large-functions`
+showed the result: 313 of the 1,214 large functions lift (116 closed, 197
+ext); the rest are mostly x87-return (207), "disassembly" (183), lahf (137).
+It also found a recorder bug (premap decoded a fixed 15-byte window, which
+can cross into an unmapped page); that fix is in main.
+
+The head finished the task in main without the separate large-scan
+commands: `scan` has no upper size bound any more, and the vectors for the
+new functions were recorded fresh (Codex's copies could carry the st0
+capture bug fixed in the same batch). Gate: 26,788 verified, 53.1% of
+functions and 36.3% of code bytes (from 29.5%); generated code 99 MB, full
+gate 7 minutes.
+
+Lesson for briefs: cap `CARGO_BUILD_JOBS` at 4 for this crate on a 32 GB
+machine when anything else runs.

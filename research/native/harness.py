@@ -246,11 +246,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             written.update(range(addr, addr + size))
 
     decoded = {}
+    instruction_sizes = {}
 
     def check_float(uc_, access, addr, size, value, _):
         eip = uc_.reg_read(UC_X86_REG_EIP)
         if eip not in decoded:
-            ins = list(md.disasm(bytes(uc_.mem_read(eip, 15)), eip, 1))
+            ins = list(md.disasm(bytes(uc_.mem_read(eip, instruction_sizes[eip])), eip, 1))
             if not ins:  # data access from undecodable code: report, don't crash
                 bad.append(f"undecodable code at {eip:#010x} reading {addr:#010x}")
                 uc_.emu_stop()
@@ -276,7 +277,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     def two_nans(uc_, addr):
         if addr not in sse_dec:
             try:
-                i = next(nmd.disasm(bytes(uc_.mem_read(addr, 15)), addr))
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
                 sse_dec[addr] = i if i.mnemonic in SSE_BINARY else None
             except (UcError, StopIteration):
                 sse_dec[addr] = None
@@ -308,7 +309,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     def premap(uc_, addr):
         if addr not in mem_ops:
             try:
-                i = next(nmd.disasm(bytes(uc_.mem_read(addr, 15)), addr))
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
                 mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
                                   i.reg_name(o.mem.index) if o.mem.index else None,
                                   o.mem.scale, o.mem.disp, max(o.size, 1))
@@ -334,6 +335,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
 
     def on_code(uc_, addr, size, _):
+        # Unicorn has already decoded this instruction. Reading an arbitrary
+        # 15-byte window can cross an unmapped next page even when the whole
+        # instruction is mapped, breaking both premap and float checks.
+        instruction_sizes[addr] = size
         if own_ret[0] and addr != RET:
             bad.append(f"returned to {addr:#010x} instead of the caller (return address overwritten)")
             uc_.emu_stop()
@@ -518,7 +523,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.mem_map(cap, 0x1000)
         uc.mem_map(tramp, 0x1000)  # a fresh page: Unicorn caches code it has already translated
         uc.mem_write(tramp, bytes([0xD9, 0x1D]) + struct.pack("<I", cap) + bytes([0x90]))
+        own_ret[0] = False  # the capture runs after the function's own ret
         uc.emu_start(tramp, tramp + 6)
+        if bad:
+            raise Rejected("st0 capture: " + "; ".join(bad))
         st0 = struct.unpack("<I", bytes(uc.mem_read(cap, 4)))[0]
         written.difference_update(range(cap, cap + 4))
     # the return address read by `ret` is part of the inputs
