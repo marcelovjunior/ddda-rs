@@ -103,23 +103,24 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off (2026-10-11, commit c91112f; the gate
+With the platform layer split off (2026-10-11, commit 763404d; the gate
 prints the current numbers after every run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
-| platform (Rust replaces) | 12,737 | 25.2% | 5.2% |
-| verified (1:1 + differential test) | 12,432 | 24.6% | 8.4% |
-| translated (cited, not verified) | about 1,550 | 3.1% | |
-| documented only | about 700 | 1.4% | |
-| untouched | 23,243 | 46.0% | 75.7% |
+| platform (Rust replaces) | 12,735 | 25.2% | 5.2% |
+| verified (1:1 + differential test) | 26,432 | 52.4% | 29.5% |
+| translated (cited, not verified) | 879 | 1.7% | 6.9% |
+| documented only | 328 | 0.6% | 1.9% |
+| untouched | 10,104 | 20.0% | 56.5% |
 
-Most verified functions come from the lifter (`research/native/lift.py`,
-docs/NATIVE_PIPELINE.md "The lifter"). Its latest scan lifts 29,165 of the
-36,398 non-platform functions up to 2,000 bytes (80%), 16,558 of them in
-ext mode (calls to untranslated code mocked); their vectors were being
-recorded at the time of writing. By bytes the picture is different: the
-1,214 non-platform functions over 2,000 bytes hold 39% of the game code
-and have not been scanned yet.
+Nearly all verified functions come from the lifter (`research/native/lift.py`,
+docs/NATIVE_PIPELINE.md "The lifter"): 26,421 lifted, 16,000-odd of them in
+ext mode (calls to untranslated code mocked and replayed). Its scan lifts
+30,046 of the 36,395 non-platform functions up to 2,000 bytes (83%); the
+rest lack vectors or hit unsupported instructions (x87-return 1,210,
+"disassembly" 838, indirect 776, "falls" 699, ...). By bytes the picture
+is different: the 1,214 non-platform functions over 2,000 bytes hold 39%
+of the game code and are brief L02.
 
 The game to rebuild is about **37,970 functions** (14.3 MB of code).
