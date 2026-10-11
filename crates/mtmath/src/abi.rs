@@ -335,12 +335,71 @@ pub fn f_007ad7a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     yaw_tail(cpu, angle, entry_esp, ebp);
 }
 
+/// The CRT's float sine and cosine (SSE2 entries: x in xmm0, result in
+/// xmm0), not ported (platform code).
+const CRT_SINF: u32 = 0x012F_0906;
+const CRT_COSF: u32 = 0x012F_0A55;
+/// The global vector 0x007AD8E0 rotates (`base`).
+const ROTATE_BASE: u32 = 0x018C_FE80;
+
+/// `MtVector4 *rotate_about_y(float distance, float angle)`, output
+/// through ESI (also returned in EAX); the caller pops the arguments.
+/// Builds a 16-aligned 0x20-byte frame, spills the base vector, the sine
+/// and the result's z; calls the CRT sinf and cosf.
+pub fn f_007ad8e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (entry_esp, ebp) = (cpu.esp, cpu.ebp);
+    let (distance, angle) = (arg_f32(m, cpu, 0), arg_f32(m, cpu, 1));
+    let base = [F32::from_bits(m.u32(ROTATE_BASE)), F32::from_bits(m.u32(ROTATE_BASE + 4))];
+    let f = aligned_frame(cpu, 0x20);
+    pushed(m, cpu, 1, ebp);
+    cpu.ebp = entry_esp.wrapping_sub(4);
+    cpu.esp = f;
+    spill(m, f + 0x10, base[0]);
+    spill(m, f + 0x14, base[1]);
+    let out = angle::rotate_about_y(
+        base,
+        distance,
+        angle,
+        |a| {
+            cpu.xmm[0] = scalar(a);
+            call_out(m, cpu, CRT_SINF, 0x007A_D90F);
+            let s = F32::from_bits(cpu.xmm[0][0]);
+            spill(m, f + 8, s);
+            cpu.xmm[0] = scalar(a);
+            call_out(m, cpu, CRT_COSF, 0x007A_D91F);
+            (s, F32::from_bits(cpu.xmm[0][0]))
+        },
+    );
+    for (k, v) in out.into_iter().enumerate() {
+        m.set_u32(cpu.esi.wrapping_add(4 * k as u32), v.to_bits());
+    }
+    // registers and spills as the original's tail leaves them
+    let s = F32::from_bits(m.u32(f + 8));
+    let o = F32::ZERO;
+    spill(m, f + 8, base[1] * o);
+    spill(m, f + 0xC, out[2]);
+    let sign = 0x8000_0000;
+    cpu.xmm[0] = [out[2].to_bits(), sign, sign, sign];
+    cpu.xmm[1] = cpu.xmm[0];
+    cpu.xmm[2] = scalar(out[3]);
+    cpu.xmm[3] = scalar(base[0] * o);
+    cpu.xmm[4] = scalar(distance * o);
+    cpu.xmm[5] = scalar(out[1]);
+    cpu.xmm[6] = scalar(s * distance);
+    cpu.xmm[7] = [0; 4];
+    cpu.eax = cpu.esi;
+    cpu.esp = entry_esp;
+    cpu.ebp = ebp;
+    ret(cpu, 0);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
 pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D7A0, f_007ad7a0, 0b1111_1111),
     (0x007A_D870, f_007ad870, 0b0001_1111),
+    (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
     (0x00CF_C770, f_00cfc770, 0b0000_0001),
     (0x00CF_C810, f_00cfc810, 0b0000_0001),

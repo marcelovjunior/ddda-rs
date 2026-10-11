@@ -139,3 +139,31 @@ pub fn yaw_of_direction(from: Vec3, to: Vec3, atan2: impl FnOnce(f64, f64) -> f6
     let (x, z) = direction_xz(from, to);
     wrap_angle(F32(atan2(x.0 as f64, z.0 as f64) as f32)).result
 }
+
+/// The point `(base[0], base[1], distance)` rotated about the y axis by
+/// `angle`, as a homogeneous point (w = 1): `x' = c x + s z`, `y' = y`,
+/// `z' = c z - s x`. The original multiplies through a full rotation matrix,
+/// so the zero entries stay as `* 0.0` terms (they turn an infinite or NaN
+/// coordinate into NaN, as in the original). `sin_cos` gives the sine,
+/// then the cosine, of `angle`: the CRT's float routines (0x012F0906, then
+/// 0x012F0A55). `base` is the global vector at 0x018CFE80 (zero in the
+/// exe's image).
+///
+/// The original takes `distance` and `angle` on the stack and writes the
+/// result through ESI.
+// Translated from 0x007AD8E0 (DDDA.exe 2017-12-13 Steam), point rotated about y.
+pub fn rotate_about_y(
+    base: [F32; 2],
+    distance: F32,
+    angle: F32,
+    sin_cos: impl FnOnce(F32) -> (F32, F32),
+) -> [F32; 4] {
+    let (s, c) = sin_cos(angle);
+    let ([x, y], z, o) = (base, distance, F32::ZERO);
+    [
+        c * x + y * o + s * z,
+        x * o + y + z * o,
+        -s * x + y * o + c * z,
+        y * o + x * o + z * o + ONE,
+    ]
+}

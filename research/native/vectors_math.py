@@ -54,7 +54,7 @@ BELOW, ABOVE = 0x200, 0x40  # the stack window around ESP (callees' frames inclu
 # callee runs in Unicorn; the case records the machine at its entry and at
 # its return (registers, all xmm lanes, the stack window), and the replay
 # checks the entry and restores the return state (crates/mtmath/tests).
-CALLOUTS = {0x012F1109}  # CRT atan2 (doubles in xmm0/xmm1)
+CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55}  # CRT atan2 (doubles), sinf, cosf
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -70,7 +70,9 @@ PORTS = {
     0x00CFDB10: ("reflect", 1),
     0x007AD9D0: ("yaw", 0),
     0x007AD7A0: ("yaw", 0),
+    0x007AD8E0: ("rotate", 2),
 }
+ROTATE_BASE = 0x018CFE80  # global vector read by 0x007AD8E0 (poked, recorded as a window)
 VEC = [h.SCRATCH + 0x20, h.SCRATCH + 0x40, h.SCRATCH + 0x60, h.SCRATCH + 0x80]  # input vectors
 
 NANS = [0x7FC00000, 0xFFC00000, 0x7FC12345, 0x7F800001, 0xFFA00007]
@@ -91,8 +93,10 @@ class Dropped(Exception):
     pass
 
 
-def run(addr, regs, xmm, obj, args):
-    """One call of the original; returns the recorded case."""
+def run(addr, regs, xmm, obj, args, globals_=()):
+    """One call of the original; returns the recorded case. `globals_` are
+    (address, bytes) written into the image first and recorded as extra
+    memory windows."""
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.ctl_set_tcg_buffer_size(h.TCG_BUFFER)
     base, secs = h.image()
@@ -113,6 +117,8 @@ def run(addr, regs, xmm, obj, args):
     stack[BELOW:BELOW + len(frame)] = frame
     uc.mem_write(stack_window[0], bytes(stack))
     uc.mem_write(OBJ_WINDOW[0], bytes(obj))
+    for ga, gb in globals_:
+        uc.mem_write(ga, gb)
     for name, r in zip(GPR, UC_GPR):
         uc.reg_write(r, regs[name])
     for k, r in enumerate(UC_XMM):
@@ -181,10 +187,11 @@ def run(addr, regs, xmm, obj, args):
     return {
         "addr": addr,
         "regs_in": regs, "xmm_in": xmm,
-        "mem_in": [[OBJ_WINDOW[0], bytes(obj).hex()], [stack_window[0], bytes(stack).hex()]],
+        "mem_in": [[OBJ_WINDOW[0], bytes(obj).hex()], [stack_window[0], bytes(stack).hex()],
+                   *[[ga, gb.hex()] for ga, gb in globals_]],
         "regs_out": {n: uc.reg_read(r) for n, r in zip(GPR, UC_GPR)},
         "xmm_out": [read_xmm(r) for r in UC_XMM],
-        "mem_out": [[w[0], bytes(uc.mem_read(w[0], w[1])).hex()] for w in (OBJ_WINDOW, stack_window)],
+        "mem_out": [[w[0], bytes(uc.mem_read(w[0], w[1])).hex()] for w in (OBJ_WINDOW, stack_window, *[(ga, len(gb)) for ga, gb in globals_])],
         "nan_fixups": fixed[0],
         "calls": calls,
     }
@@ -251,8 +258,14 @@ def edge_cases(addr, kind, nargs, n, seed):
             for k, v in enumerate(vecs):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             args = VEC[:nargs]
+        globals_ = ()
+        if kind == "rotate":
+            regs["esi"] = OBJ
+            args = [floats(rnd) if rnd.random() < 0.4 else f2b(rnd.uniform(-20, 20)) for _ in range(2)]
+            base = [0, 0] if rnd.random() < 0.4 else [floats(rnd), floats(rnd)]
+            globals_ = [(ROTATE_BASE, struct.pack("<2I", *base))]
         try:
-            cases.append(run(addr, regs, xmm, obj, args))
+            cases.append(run(addr, regs, xmm, obj, args, globals_))
         except Dropped:
             continue
     return cases
