@@ -935,9 +935,17 @@ fn game_adpcm_format(m: &mut dyn Mem, f: u32) {
     }
     m.set_u32(f + 4, 48000);
     m.set_u32(f + 8, 0x668a);
-    for (i, (a, b)) in [(256, 0), (512, -256), (0, 0), (192, 64), (240, 0), (460, -208), (392, -232)]
-        .into_iter()
-        .enumerate()
+    for (i, (a, b)) in [
+        (256, 0),
+        (512, -256),
+        (0, 0),
+        (192, 64),
+        (240, 0),
+        (460, -208),
+        (392, -232),
+    ]
+    .into_iter()
+    .enumerate()
     {
         m.set_u16(f + 22 + 4 * i as u32, a as i16 as u16);
         m.set_u16(f + 24 + 4 * i as u32, b as i16 as u16);
@@ -970,7 +978,10 @@ fn xaudio_decodes_the_games_adpcm_bank_format() {
     for (i, b) in bytes.iter().enumerate() {
         m.set_u8(DATA + 0x3000 + i as u32, *b);
     }
-    for (i, v) in [0x40, 210, DATA + 0x3000, 0, 0, 0, 0, 0, 7].into_iter().enumerate() {
+    for (i, v) in [0x40, 210, DATA + 0x3000, 0, 0, 0, 0, 0, 7]
+        .into_iter()
+        .enumerate()
+    {
         m.set_u32(DATA + 0x200 + 4 * i as u32, v);
     }
     assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
@@ -982,7 +993,9 @@ fn xaudio_decodes_the_games_adpcm_bank_format() {
         *b = m.u8(f + i as u32);
     }
     let mut want = vec![];
-    ddaudio::Format::parse(&format).unwrap().decode(&bytes, 0, 384, &mut want);
+    ddaudio::Format::parse(&format)
+        .unwrap()
+        .decode(&bytes, 0, 384, &mut want);
     // The first decoded sample (block 0's second header sample) is not 0.
     assert_contains(&left, &want);
     assert_contains(&right, &want);
@@ -1039,7 +1052,14 @@ fn xaudio_runs_guest_xapos_and_skips_unlifted_ones() {
     for (object, lock) in [(DATA + 0xc00, 0x3000u32), (DATA + 0xc80, 0x10c0)] {
         let vt = object + 0x40;
         m.set_u32(object, vt);
-        for (slot, target) in [(0, 0x10b0), (1, 0x1080), (2, 0x1090), (8, lock), (9, 0x1010), (10, 0x10d0)] {
+        for (slot, target) in [
+            (0, 0x10b0),
+            (1, 0x1080),
+            (2, 0x1090),
+            (8, lock),
+            (9, 0x1010),
+            (10, 0x10d0),
+        ] {
             m.set_u32(vt + 4 * slot, target);
         }
     }

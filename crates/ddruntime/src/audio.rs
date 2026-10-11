@@ -70,7 +70,9 @@ impl Format {
             },
             coefs: if m.u16(p) == 2 && m.u16(p + 16) >= 4 {
                 let n = (m.u16(p + 20) as u32).min((m.u16(p + 16) as u32 - 4) / 4);
-                (0..n).map(|i| (m.u16(p + 22 + 4 * i) as i16, m.u16(p + 24 + 4 * i) as i16)).collect()
+                (0..n)
+                    .map(|i| (m.u16(p + 22 + 4 * i) as i16, m.u16(p + 24 + 4 * i) as i16))
+                    .collect()
             } else {
                 vec![]
             },
@@ -741,7 +743,11 @@ struct Snapshot {
 
 /// Mixes the pass for `engine`: the mastering voice's output block.
 fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
-    const KINDS: [ddaudio::Kind; 3] = [ddaudio::Kind::Source, ddaudio::Kind::Submix, ddaudio::Kind::Mastering];
+    const KINDS: [ddaudio::Kind; 3] = [
+        ddaudio::Kind::Source,
+        ddaudio::Kind::Submix,
+        ddaudio::Kind::Mastering,
+    ];
     let (snapshot, mut mixer) = state(|s| {
         let snapshot: Vec<Snapshot> = s
             .voices
@@ -772,7 +778,10 @@ fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
                         // A matrix set with a NULL destination applies to
                         // the only destination.
                         let single = v.sends.len() == 1;
-                        let m = v.matrices.get(d).or_else(|| v.matrices.get(&0).filter(|_| single));
+                        let m = v
+                            .matrices
+                            .get(d)
+                            .or_else(|| v.matrices.get(&0).filter(|_| single));
                         (*d, m.cloned())
                     })
                     .collect(),
@@ -811,14 +820,21 @@ fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
             sends: n
                 .sends
                 .iter()
-                .map(|(d, m)| ddaudio::Send { dest: *d, matrix: m.as_deref() })
+                .map(|(d, m)| ddaudio::Send {
+                    dest: *d,
+                    matrix: m.as_deref(),
+                })
                 .collect(),
         })
         .collect();
     let out = mixer.render(&nodes, &mut GuestEffects { m, c });
     state(|s| s.mixer = mixer);
     let (channels, sample_rate) = master?;
-    Some(AudioBlock { sample_rate, channels, samples: out? })
+    Some(AudioBlock {
+        sample_rate,
+        channels,
+        samples: out?,
+    })
 }
 
 // IXAPO (xapo.h): QueryInterface 0, Release 2, LockForProcess 8,
@@ -877,7 +893,14 @@ impl GuestEffects<'_> {
                 6 => 0x60f,
                 _ => 0,
             };
-            for (o, v) in [(0, 0xfffe), (2, channels), (12, channels * 4), (14, 32), (16, 22), (18, 32)] {
+            for (o, v) in [
+                (0, 0xfffe),
+                (2, channels),
+                (12, channels * 4),
+                (14, 32),
+                (16, 22),
+                (18, 32),
+            ] {
                 self.m.set_u16(f + o, v as u16);
             }
             self.m.set_u32(f + 4, rate);
