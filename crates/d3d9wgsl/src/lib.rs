@@ -110,7 +110,7 @@ pub struct Options {
     /// (integer formats arrive as integers and are converted, as D3D9 does).
     pub vs_input_types: Option<Vec<InputType>>,
     /// Vertex shaders: apply D3D9's half-pixel offset, position.xy +=
-    /// hp.xy * position.w, with `hp` = (-1/width, 1/height) of the viewport
+    /// hp.xy * position.w, with `hp` = (1/width, -1/height) of the viewport
     /// (VertexConstants.hp).
     pub half_pixel: bool,
     /// Pixel shaders: D3D9's fixed-function alpha test, from
@@ -349,8 +349,8 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         // 6 not-equal, 7 greater-equal, 8 always; failing pixels are discarded
         writeln!(w, "  if (k.alpha.x != 0u) {{").unwrap();
         writeln!(w, "    let a = clamp(oC0.w, 0.0, 1.0); let r = f32(k.alpha.z) / 255.0; let f = k.alpha.y;").unwrap();
-        writeln!(w, "    let pass = (f == 8u) || (f == 2u && a < r) || (f == 3u && a == r) || (f == 4u && a <= r) || (f == 5u && a > r) || (f == 6u && a != r) || (f == 7u && a >= r);").unwrap();
-        writeln!(w, "    if (!pass) {{ discard; }}").unwrap();
+        writeln!(w, "    let passed = (f == 8u) || (f == 2u && a < r) || (f == 3u && a == r) || (f == 4u && a <= r) || (f == 5u && a > r) || (f == 6u && a != r) || (f == 7u && a >= r);").unwrap();
+        writeln!(w, "    if (!passed) {{ discard; }}").unwrap();
         writeln!(w, "  }}").unwrap();
     }
     write!(w, "  return Out(").unwrap();

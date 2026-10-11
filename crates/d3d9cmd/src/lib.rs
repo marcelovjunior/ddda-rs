@@ -52,6 +52,9 @@ pub struct Target {
     pub width: u32,
     pub height: u32,
     pub texture: Option<u32>,
+    /// for a texture's surface: its index among the texture's level
+    /// surfaces (face * levels + level)
+    pub level: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

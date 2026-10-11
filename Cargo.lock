@@ -2422,6 +2422,16 @@ name = "ddexe"
 version = "0.1.0"
 
 [[package]]
+name = "ddgpu"
+version = "0.1.0"
+dependencies = [
+ "d3d9cmd",
+ "d3d9shader",
+ "d3d9wgsl",
+ "wgpu",
+]
+
+[[package]]
 name = "ddhost"
 version = "0.1.0"
 dependencies = [

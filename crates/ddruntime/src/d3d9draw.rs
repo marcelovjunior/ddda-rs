@@ -141,12 +141,19 @@ fn target(surface: u32) -> Option<Target> {
     if surface == 0 {
         return None;
     }
-    objects(|o| match o.live.get(&surface).map(|x| &x.kind) {
-        Some(Kind::Surface { desc, owner, .. }) => Some(Target {
+    objects(|o| {
+        let (desc, owner) = match o.live.get(&surface).map(|x| &x.kind) {
+            Some(Kind::Surface { desc, owner, .. }) => (desc.clone(), *owner),
+            _ => return None,
+        };
+        let level = match o.live.get(&owner).map(|x| &x.kind) {
+            Some(Kind::Texture { data, .. }) => data.surfaces.iter().position(|&s| s == surface).unwrap_or(0) as u32,
+            _ => 0,
+        };
+        Some(Target {
             surface, format: desc.format, width: desc.width, height: desc.height,
-            texture: (*owner != 0).then_some(*owner),
-        }),
-        _ => None,
+            texture: (owner != 0).then_some(owner), level,
+        })
     })
 }
 
