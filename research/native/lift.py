@@ -758,6 +758,11 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     raise Unsupported("string address/segment override")
                 repeat = {"repe": 1, "repne": 2}.get(mn.split()[0], 0)
                 body.append(f"x86::scan(m, cpu, {dict(b=1, w=2, d=4)[mn[-1]]}, {repeat});")
+            elif mn == "xlatb":
+                if i.addr_size != 4 or any(p in (0x26, 0x2E, 0x36, 0x64, 0x65) for p in i.prefix):
+                    raise Unsupported("xlatb address/segment override")
+                # AL = [EBX + zero-extended AL] (Intel SDM, XLAT)
+                body.append(set_reg("al", "(m.u8(ebx.wrapping_add(eax & 0xFF)) as u32)"))
             elif mn == "pause":
                 body.append("std::hint::spin_loop();")  # a spin-wait hint: no architectural effect
             elif mn in ("pslldq", "psrldq") and len(ops) == 2 and ops[1].type == X86_OP_IMM:

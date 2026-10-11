@@ -99,6 +99,12 @@ class RemainingTests(unittest.TestCase):
             with self.assertRaisesRegex(h.Rejected,'noreturn'):
                 self.program(trap,True)
 
+    def test_xlatb_reads_ebx_plus_al(self):
+        arms,_,c=self.program('d7c3',True)
+        self.assertIn('m.u8(ebx.wrapping_add(eax & 0xFF))',' '.join(arms))
+        self.assertEqual(c['regs_out']['eax'] & ~0xFF, c['regs_in']['eax'] & ~0xFF)
+        with self.assertRaises(lift.Unsupported):self.program('64d7c3')  # fs: override
+
     def test_platform_state_has_explicit_contracts(self):
         # L22: CPUID/RDTSC answers are recorded machine events, segment
         # reads record the selectors, POPFD follows CPL3 or rejects.
