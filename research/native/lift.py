@@ -75,13 +75,13 @@ BODY_INFO = {}
 _BODY_CACHE = {}
 
 
-def cached_body(addr, size):
+def cached_body(addr, size, ext=False):
     """Only the callable set changes between scan rounds, not decoded bytes."""
     import harness as h
-    key = (addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries())
+    key = (addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries(), ext)
     if key not in _BODY_CACHE:
         try:
-            _BODY_CACHE[key] = decode_body(addr, size)
+            _BODY_CACHE[key] = decode_body(addr, size, ext=ext)
         except Unsupported as e:
             _BODY_CACHE[key] = str(e)
     result = _BODY_CACHE[key]
@@ -92,7 +92,8 @@ def cached_body(addr, size):
 
 def release_body(addr, size):
     import harness as h
-    _BODY_CACHE.pop((addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries()), None)
+    for ext in (False, True):
+        _BODY_CACHE.pop((addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries(), ext), None)
 
 
 @lru_cache(maxsize=1)
@@ -115,13 +116,15 @@ def noreturn_entries():
         return frozenset(a for a, name in db.execute("SELECT address, name FROM functions") if name in names)
 
 
-def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None):
+def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None, ext=False):
     """Deterministic reachable instructions. Inventory sizes are not spans.
 
     Direct branches to another inventory entry are tail calls. Shared tails
     reached at interior addresses are decoded in both bodies. Unbounded
     switch discovery stays within the entry's inventory band (or an already
     discovered shared island); explicit cmp bounds can extend beyond it.
+    In ext mode, non-switch indirect jumps retain all discovered local
+    starts as possible destinations; other runtime targets are external.
     """
     import bisect
     import heapq
@@ -171,9 +174,19 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
                 else:
                     accept = lambda t: ((addr <= t < upper or t in found) and
                                         (t == addr or t not in entries) and is_code(t))
-                    targets = switch_targets(history, len(history) - 1, addr, upper, read,
-                                             accept=accept, discover=True,
-                                             bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
+                    try:
+                        targets = switch_targets(history, len(history) - 1, addr, upper, read,
+                                                 accept=accept, discover=True,
+                                                 bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
+                    except Unsupported as error:
+                        if (not ext or mn != "jmp" or i.operands[0].size != 4
+                                or str(error) != "indirect jump (not an absolute switch table)"):
+                            raise
+                        # No speculative decode through a runtime pointer.
+                        # Known instruction starts remain local destinations;
+                        # every other target crosses the external boundary.
+                        switches[pc] = None
+                        break
                     switches[pc] = targets
                     for target in targets:
                         heapq.heappush(todo, target)
@@ -181,6 +194,9 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
                     break
             pc += i.size
     ins = sorted(found.values(), key=lambda i: i.address)
+    for pc, targets in switches.items():
+        if targets is None:
+            switches[pc] = sorted(found)
     ranges = []
     for i in ins:
         if ranges and ranges[-1][1] == i.address:
@@ -390,7 +406,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
-    ins, switches, stops, ranges = cached_body(addr, size)
+    ins, switches, stops, ranges = cached_body(addr, size, ext)
     starts = {i.address for i in ins}
     entries = function_entries()
     inside = lambda t: t in starts and (t == addr or t not in entries)
@@ -665,11 +681,11 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
                 terminated = True
                 break
-            elif mn == "jmp" and ops[0].type == X86_OP_MEM:
+            elif mn == "jmp" and ops[0].type != X86_OP_IMM:
                 if ext:
-                    # a target outside the discovered cases leaves the function
-                    # (an unbounded table read beyond its end): the recorder
-                    # mocks that as a tail call, and so does the replay
+                    # Targets outside known local destinations leave the body
+                    # (switch overflow or a non-switch function pointer).
+                    # The recorder and replay share this tail-call boundary.
                     cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address])))
                     body.append(f"{{ let t = {load(i, ops[0])}; if matches!(t, {cases}) {{ pc = t; continue; }} "
                                 f"{SAVE} x86::call_ext(m, cpu, t); return; }}")

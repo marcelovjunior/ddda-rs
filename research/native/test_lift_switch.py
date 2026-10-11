@@ -56,10 +56,12 @@ class SwitchTests(unittest.TestCase):
             with self.subTest(jump=jump), self.assertRaises(lift.Unsupported):
                 self.targets(self.fixture(jump=bytes.fromhex(jump)))
 
-    def test_ext_pass_does_not_mock_indirect_jumps(self):
+    def test_ext_pass_mocks_indirect_jumps_closed_stays_strict(self):
         code, _, read, _, _ = self.fixture(jump=bytes.fromhex("ffe0"))
-        with patch.object(harness, "executable", return_value=True), patch.object(harness, "code", read), self.assertRaises(lift.Unsupported):
-            lift.lift(0x1000, len(code), ext=True)
+        with patch.object(harness, "executable", return_value=True), patch.object(harness, "code", read):
+            self.assertIn('x86::call_ext(m, cpu, t)', ' '.join(lift.lift(0x1000, len(code), ext=True)))
+            with self.assertRaises(lift.Unsupported):
+                lift.lift(0x1000, len(code))
 
     def test_checks_unsigned_bounds(self):
         for branch, limit in ((0x77, 1), (0x73, 2)):

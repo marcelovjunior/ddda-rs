@@ -538,18 +538,26 @@ last pass with `ext=True`: any other call (direct to an untranslated
 function, indirect through a vtable or function pointer, through the
 import table) and any outward jump becomes `x86::call_ext(m, cpu,
 target)`. Such functions are marked `"ext": true` and are never callable
-by others (a caller treats them as untranslated too). Indirect *jumps*
-must pass the same switch-table recognition even in this pass; other
-indirect jumps stay rejected, never becoming mocked external tail calls.
+by others (a caller treats them as untranslated too). In ext mode, a
+non-switch dword register/memory `jmp` reads its target with the original
+wrapping address calculation through `Mem`. A known instruction start in
+the discovered body continues locally; other targets go through `call_ext`
+as tail calls (no extra pushed return address). Every possible known local
+destination becomes a block leader and participates in the x87 depth check.
+Closed functions still require recognized switches. Ambiguous absolute
+switch tables (including unsupported remapping) remain rejected; the new
+fallback applies only to non-switch operand shapes. It does not discover
+additional code by guessing runtime pointer values.
 
 Their vectors come from `run_sparse(addr, seed, end=..., lifted=...)`,
 which **mocks** each call or jump from the function's own code to
 anything outside it that is neither lifted nor a platform model: the
 callee does not run; the recorder logs `{target, regs (all eight at the
 call), out}` in the vector's `calls` and returns random eax/ecx/edx,
-random finite xmm0 lanes and the callee's stack pop (direct targets:
-the `ret N` of the target; indirect: the bytes pushed by the function
-since its previous call, after the register-saving prologue). The test
+random finite xmm0 lanes and an inferred stack pop (direct targets:
+consistent reachable `ret N`, or zero if unknown; indirect calls: bytes
+pushed since the previous call, excluding recognized saved registers and
+immediate caller cleanup). See the L11 diagnosis below for limitations. The test
 installs a replay as the `call_ext` handler (`x86::set_ext_calls`): it
 checks the target and every register at each call (so vtable lookups and
 register arguments are verified), reads the return address like the
@@ -944,6 +952,27 @@ extended precision and nearest-even rounding; that is a fixture initial state,
 not a claim about the game's live thread state.
 
 ## Debugging a failing lifted function
+
+For a function that cannot yet produce a vector, use
+`PY research/native/trace_recorder.py 0xADDR --strategy objects-v1 --seed 1`.
+It searches the private selected/candidate lists and emits JSON with the
+rejection, recent original instructions, root ownership, ESP, and mocked
+control transfers. It makes no Rust build and never resumes a fault. Redirect
+the output into private research data. Use fresh trial logs after changing
+the recorder; resumption keys describe the body/boundary, not Python source.
+
+L11 traced three mock ABI inference errors: interleaved callee saves counted
+as arguments (`0x004065EA`, `0x0040D826`); a linear `ret N` search reading a
+neighbouring function after a tail jump (`0x00D009E6`); and explicit caller
+cleanup after an indirect call being applied twice (`0x0040846C`). The
+recorder now recognizes unmodified nonvolatile saves with matching own pops
+on paths before the first call, follows direct control flow for a consistent
+`ret N` (512-instruction bound, zero fallback if unknown), and subtracts
+immediate caller cleanup from inferred indirect-call cleanup. These remain
+mock ABI heuristics, not recovered callee contracts. Every chosen pop is
+recorded and checked during Rust replay. Return-address, stack, page,
+instruction, time, flags and x87 guards are unchanged; unexplained failures
+stay rejected. Existing accepted vectors retain their recorded mock behavior.
 
 1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
    --test lifted`: prints that function's panic message (e.g. `call target`
