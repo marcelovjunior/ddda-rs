@@ -21,6 +21,14 @@
 //! them as they were; `research/native/math_liveness.py` checks every
 //! direct call site of every function here: no caller reads a lane the
 //! adapter does not reproduce after the call before writing it.
+//!
+//! Where the original calls code that is not ported (the CRT's float
+//! routines), the adapter makes the same call on the machine: it sets up
+//! the registers, pushes and spills the original has at that call, pushes
+//! the original's return address and goes through `x86::call_ext`, as the
+//! lifted body does; whatever the callee leaves is the adapter's starting
+//! point afterwards. A call to another port (0x007AEED0 from 0x007AF5B0 and
+//! 0x007AF450) calls that port's adapter the same way.
 
 use crate::angle;
 use crate::euler;
