@@ -14,7 +14,7 @@
 //! First version: one render pass per draw and per clear, per-draw
 //! uniform buffers. Correctness first; batching comes after the draws are
 //! checked against the D3D9 driver.
-use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
+use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
 use std::collections::HashMap;
 use std::future::Future;
 
@@ -249,7 +249,23 @@ pub struct WgpuBackend {
     pub errors: Vec<String>,
     /// Called with every presented frame (a window host shows them).
     pub on_present: Option<Box<dyn FnMut(&Frame) + Send>>,
+    /// occlusion counting: wgpu query sets of OCCLUSION_SET slots each;
+    /// one slot per draw made while guest queries count
+    occlusion_sets: Vec<wgpu::QuerySet>,
+    free_slots: Vec<u32>,
+    /// slot -> how many guest queries include it
+    slot_users: HashMap<u32, u32>,
+    /// guest query -> the slots of the draws it counted
+    query_slots: HashMap<u32, Vec<u32>>,
+    /// guest query -> its resolved count
+    query_counts: HashMap<u32, u64>,
+    /// guest queries between D3DISSUE_BEGIN and D3DISSUE_END
+    active_queries: Vec<u32>,
+    gamma: Option<Box<GammaRamp>>,
 }
+
+/// Occlusion query slots per wgpu query set.
+const OCCLUSION_SET: u32 = 256;
 
 impl WgpuBackend {
     /// A backend on the default adapter without a window.
@@ -278,7 +294,61 @@ impl WgpuBackend {
             read_frames: true,
             errors: Vec::new(),
             on_present: None,
+            occlusion_sets: Vec::new(),
+            free_slots: Vec::new(),
+            slot_users: HashMap::new(),
+            query_slots: HashMap::new(),
+            query_counts: HashMap::new(),
+            active_queries: Vec::new(),
+            gamma: None,
         })
+    }
+
+    /// A free occlusion slot (a new query set when none is left).
+    fn occlusion_slot(&mut self) -> u32 {
+        if self.free_slots.is_empty() {
+            let set = self.occlusion_sets.len() as u32;
+            self.occlusion_sets.push(self.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("occlusion"), ty: wgpu::QueryType::Occlusion, count: OCCLUSION_SET,
+            }));
+            self.free_slots.extend((0..OCCLUSION_SET).rev().map(|k| set * OCCLUSION_SET + k));
+        }
+        self.free_slots.pop().unwrap()
+    }
+
+    /// Forget a guest query's slots and count.
+    fn drop_query(&mut self, query: u32) {
+        for s in self.query_slots.remove(&query).unwrap_or_default() {
+            let users = self.slot_users.entry(s).or_insert(1);
+            *users -= 1;
+            if *users == 0 {
+                self.slot_users.remove(&s);
+                self.free_slots.push(s);
+            }
+        }
+        self.query_counts.remove(&query);
+    }
+
+    /// The samples the draws in `slots` passed, from the GPU.
+    fn resolve(&self, slots: &[u32]) -> Option<u64> {
+        if slots.is_empty() {
+            return Some(0);
+        }
+        // resolve destinations are 256-byte aligned: one slot per 256 bytes
+        let size = 256 * slots.len() as u64;
+        let resolved = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        for (k, &s) in slots.iter().enumerate() {
+            let i = s % OCCLUSION_SET;
+            enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
+        }
+        enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
+        self.queue.submit([enc.finish()]);
+        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        let data = read.slice(..).get_mapped_range();
+        Some((0..slots.len()).map(|k| u64::from_le_bytes(data[256 * k..256 * k + 8].try_into().unwrap())).sum())
     }
 
     fn texture_for(&mut self, b: &TextureBinding) -> Option<&Tex> {
@@ -745,12 +815,15 @@ impl WgpuBackend {
         };
         let mut attrs: Vec<Vec<wgpu::VertexAttribute>> = Vec::new();
         let mut strides = Vec::new();
+        let mut steps = Vec::new();
+        let (instances, instanced) = instancing(d)?;
         for &s in &streams {
             attrs.push(elements.iter().filter(|e| e.0 == s).map(|e| wgpu::VertexAttribute { format: e.2, offset: e.1, shader_location: e.3 }).collect());
             strides.push(stride_of(s)? as u64);
+            steps.push(if instanced.contains(&s) { wgpu::VertexStepMode::Instance } else { wgpu::VertexStepMode::Vertex });
         }
-        let layouts: Vec<wgpu::VertexBufferLayout> = attrs.iter().zip(&strides)
-            .map(|(a, &st)| wgpu::VertexBufferLayout { array_stride: st, step_mode: wgpu::VertexStepMode::Vertex, attributes: a })
+        let layouts: Vec<wgpu::VertexBufferLayout> = attrs.iter().zip(&strides).zip(&steps)
+            .map(|((a, &st), &step_mode)| wgpu::VertexBufferLayout { array_stride: st, step_mode, attributes: a })
             .collect();
         // bind group layouts: 0 = vertex constants (binding 2) and pixel
         // constants (binding 0); 1 = pixel textures; 2 = vertex textures
@@ -877,6 +950,15 @@ impl WgpuBackend {
             4 => 3 * d.primitives,
             _ => d.primitives + 2,
         } };
+        // a draw made while guest occlusion queries count gets its own slot
+        let slot = (!self.active_queries.is_empty()).then(|| self.occlusion_slot());
+        if let Some(s) = slot {
+            self.slot_users.insert(s, self.active_queries.len() as u32);
+            for q in &self.active_queries {
+                self.query_slots.entry(*q).or_default().push(s);
+            }
+        }
+        let query_set = slot.map(|s| self.occlusion_sets[(s / OCCLUSION_SET) as usize].clone());
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = colour[..max_out].iter().map(|c| c.as_ref().map(|(view, _)| wgpu::RenderPassColorAttachment {
@@ -892,9 +974,12 @@ impl WgpuBackend {
                     stencil_ops: f.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
                 }),
                 timestamp_writes: None,
-                occlusion_query_set: None,
+                occlusion_query_set: query_set.as_ref(),
                 multiview_mask: None,
             });
+            if let Some(s) = slot {
+                pass.begin_occlusion_query(s % OCCLUSION_SET);
+            }
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &group0, &[]);
             pass.set_bind_group(1, &groups[0], &[]);
@@ -913,14 +998,45 @@ impl WgpuBackend {
             match index {
                 Some(ib) => {
                     pass.set_index_buffer(ib.slice(..), format);
-                    pass.draw_indexed(first..first + count, if fan { 0 } else { d.base_vertex }, 0..1);
+                    pass.draw_indexed(first..first + count, if fan { 0 } else { d.base_vertex }, 0..instances);
                 }
-                None => pass.draw(first..first + count, 0..1),
+                None => pass.draw(first..first + count, 0..instances),
+            }
+            if slot.is_some() {
+                pass.end_occlusion_query();
             }
         }
         self.queue.submit([enc.finish()]);
         Ok(())
     }
+}
+
+/// D3D9 hardware instancing (SetStreamSourceFreq): stream 0 set to
+/// D3DSTREAMSOURCE_INDEXEDDATA | n draws indexed geometry n times; streams
+/// set to D3DSTREAMSOURCE_INSTANCEDATA | 1 advance once per instance.
+/// Measured on the driver (ddgpu tests, instanced_draws_match_the_d3d9_driver):
+/// a non-indexed draw ignores the count and draws once, its instance-data
+/// streams still giving every vertex instance 0's element. Returns the
+/// instance count and the instanced streams.
+fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
+    const INDEXEDDATA: u32 = 0x4000_0000;
+    const INSTANCEDATA: u32 = 0x8000_0000;
+    let Vertices::Streams(streams) = &d.vertices else { return Ok((1, vec![])) };
+    let geometry = streams.iter().find(|s| s.0 == 0).map(|s| s.4).unwrap_or(1);
+    if geometry & INDEXEDDATA == 0 {
+        return Ok((1, vec![]));
+    }
+    let mut instanced = Vec::new();
+    for s in streams {
+        if s.4 & INSTANCEDATA != 0 {
+            if s.4 & 0x3FFF_FFFF != 1 {
+                return Err(format!("instance data divisor {} on stream {} (wgpu steps every instance)", s.4 & 0x3FFF_FFFF, s.0));
+            }
+            instanced.push(s.0);
+        }
+    }
+    let count = if matches!(d.indices, Indices::None) { 1 } else { (geometry & 0x3FFF_FFFF).max(1) };
+    Ok((count, instanced))
 }
 
 fn vertex_format(ty: u8) -> Option<(wgpu::VertexFormat, d3d9wgsl::InputType)> {
@@ -1138,9 +1254,57 @@ impl GraphicsBackend for WgpuBackend {
         self.queue.submit([enc.finish()]);
     }
 
+    fn query_begin(&mut self, query: u32) {
+        self.drop_query(query);
+        self.query_slots.insert(query, Vec::new());
+        if !self.active_queries.contains(&query) {
+            self.active_queries.push(query);
+        }
+    }
+
+    fn query_end(&mut self, query: u32) {
+        self.active_queries.retain(|&q| q != query);
+        self.query_slots.entry(query).or_default();
+    }
+
+    fn query_result(&mut self, query: u32) -> Option<u64> {
+        if let Some(&n) = self.query_counts.get(&query) {
+            return Some(n);
+        }
+        let slots = self.query_slots.get(&query)?.clone();
+        let n = self.resolve(&slots)?;
+        // the count stays; the slots are free for later draws
+        self.drop_query(query);
+        self.query_slots.insert(query, Vec::new());
+        self.query_counts.insert(query, n);
+        Some(n)
+    }
+
+    fn gamma(&mut self, ramp: Option<&GammaRamp>) {
+        self.gamma = ramp.map(|r| Box::new(*r));
+    }
+
+    fn release(&mut self, resource: u32) {
+        self.textures.remove(&resource);
+        self.pending.remove(&resource);
+        self.buffers.remove(&resource);
+        self.surfaces.remove(&resource);
+        self.active_queries.retain(|&q| q != resource);
+        self.drop_query(resource);
+    }
+
     fn present(&mut self, back_buffer: &Target) {
         if self.read_frames || self.on_present.is_some() {
             self.last_frame = self.read_surface(back_buffer.surface);
+            // a full-screen gamma ramp maps each 8-bit channel through its
+            // table (the high byte of the 16-bit entry)
+            if let (Some(r), Some(f)) = (self.gamma.as_ref(), self.last_frame.as_mut()) {
+                for px in f.rgba.chunks_exact_mut(4) {
+                    for c in 0..3 {
+                        px[c] = (r[c][px[c] as usize] >> 8) as u8;
+                    }
+                }
+            }
         }
         if let (Some(f), Some(frame)) = (self.on_present.as_mut(), self.last_frame.as_ref()) {
             f(frame);

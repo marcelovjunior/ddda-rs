@@ -16,7 +16,16 @@ const DRAW_PRIMITIVE: usize = 81;
 const DRAW_INDEXED_PRIMITIVE: usize = 82;
 const DRAW_INDEXED_PRIMITIVE_UP: usize = 84;
 const SET_STREAM_SOURCE: usize = 100;
+const SET_STREAM_SOURCE_FREQ: usize = 102;
 const SET_INDICES: usize = 104;
+const CREATE_QUERY: usize = 118;
+// IDirect3DQuery9 slots
+const QUERY_ISSUE: usize = 6;
+const QUERY_GET_DATA: usize = 7;
+const QUERYTYPE_OCCLUSION: u32 = 9;
+const ISSUE_END: u32 = 1;
+const ISSUE_BEGIN: u32 = 2;
+const GETDATA_FLUSH: u32 = 1;
 
 /// A frame read back from a target: RGBA8, rows top to bottom.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,9 +39,18 @@ impl Oracle {
     /// Execute `clear` then `draws` with `uploads` as the resources' contents
     /// and read `read` (an A8R8G8B8/X8R8G8B8 target) back.
     pub fn render(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target) -> Result<Frame, String> {
+        self.render_counted(uploads, clear, draws, read, &[]).map(|(f, _)| f)
+    }
+
+    /// [`Oracle::render`] with D3DQUERYTYPE_OCCLUSION queries: query k is
+    /// issued with D3DISSUE_BEGIN before draw `spans[k].start` and
+    /// D3DISSUE_END after draw `spans[k].end - 1` (an empty span begins and
+    /// ends at once). Returns the frame and each query's sample count.
+    pub fn render_counted(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target,
+                          spans: &[std::ops::Range<usize>]) -> Result<(Frame, Vec<u32>), String> {
         unsafe {
             let mut created: Vec<Obj> = Vec::new();
-            let r = self.render_inner(uploads, clear, draws, read, &mut created);
+            let r = self.render_inner(uploads, clear, draws, read, spans, &mut created);
             // unbind what the device holds before releasing it
             let d = self.device;
             for k in 0..16 {
@@ -50,7 +68,7 @@ impl Oracle {
     }
 
     unsafe fn render_inner(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target,
-                           created: &mut Vec<Obj>) -> Result<Frame, String> {
+                           spans: &[std::ops::Range<usize>], created: &mut Vec<Obj>) -> Result<(Frame, Vec<u32>), String> {
         let d = self.device;
         // targets by surface
         let mut targets: HashMap<u32, Obj> = HashMap::new();
@@ -88,15 +106,74 @@ impl Oracle {
             _ => None,
         }).collect();
         let mut textures: HashMap<u32, Obj> = HashMap::new();
-        for draw in draws {
-            let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
-            if r.is_err() {
-                com!(d, END_SCENE, ());
-                return r.map(|_| Frame { width: 0, height: 0, rgba: vec![] });
-            }
+        let mut queries: Vec<Obj> = Vec::new();
+        for _ in spans {
+            let mut q: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_QUERY, (u32, *mut Obj), QUERYTYPE_OCCLUSION, &mut q), "CreateQuery")?;
+            created.push(q);
+            queries.push(q);
         }
+        let issue = |at: usize, end: bool| {
+            for (k, s) in spans.iter().enumerate() {
+                if end && s.end == at {
+                    com!(queries[k], QUERY_ISSUE, (u32), ISSUE_END);
+                } else if !end && s.start == at {
+                    com!(queries[k], QUERY_ISSUE, (u32), ISSUE_BEGIN);
+                    if s.end == at {
+                        com!(queries[k], QUERY_ISSUE, (u32), ISSUE_END);
+                    }
+                }
+            }
+        };
+        for (k, draw) in draws.iter().enumerate() {
+            issue(k, false);
+            let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
+            if let Err(e) = r {
+                com!(d, END_SCENE, ());
+                return Err(e);
+            }
+            issue(k + 1, true);
+        }
+        issue(draws.len(), false);
         com!(d, END_SCENE, ());
-        self.read_frame(rt, read, created)
+        let mut counts = Vec::new();
+        for &q in &queries {
+            let mut n = 0u32;
+            loop {
+                let hr = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+                check(hr, "GetData")?;
+                if hr == 0 {
+                    break;
+                }
+            }
+            counts.push(n);
+        }
+        Ok((self.read_frame(rt, read, created)?, counts))
+    }
+
+    /// What an occlusion query's GetData returns (HRESULTs) before any
+    /// Issue, between D3DISSUE_BEGIN and D3DISSUE_END, and after an END
+    /// with no draw (with the count).
+    pub fn occlusion_states(&mut self) -> Result<[i32; 4], String> {
+        unsafe {
+            let d = self.device;
+            let mut q: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_QUERY, (u32, *mut Obj), QUERYTYPE_OCCLUSION, &mut q), "CreateQuery")?;
+            let mut n = 0xDEADu32;
+            let before = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+            com!(q, QUERY_ISSUE, (u32), ISSUE_BEGIN);
+            let building = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+            com!(q, QUERY_ISSUE, (u32), ISSUE_END);
+            let mut after;
+            loop {
+                after = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+                if after != 1 {
+                    break;
+                }
+            }
+            release(q);
+            Ok([before, building, after, n as i32])
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -190,11 +267,12 @@ impl Oracle {
                      draw.primitive, draw.min_index, draw.vertex_count, draw.primitives, ib.as_ptr(), *format, bytes.as_ptr(), *stride)
             }
             (Vertices::Streams(streams), indices) => {
-                for &(n, res, off, stride, _) in streams {
+                for &(n, res, off, stride, freq) in streams {
                     let data = buffers.get(&res).ok_or_else(|| format!("no upload for vertex buffer {res:#x}"))?;
                     let vb = self.buffer(CREATE_VERTEX_BUFFER, data, 0)?;
                     created.push(vb);
                     com!(d, SET_STREAM_SOURCE, (u32, Obj, u32, u32), n, vb, off, stride);
+                    com!(d, SET_STREAM_SOURCE_FREQ, (u32, u32), n, freq.max(1));
                 }
                 match indices {
                     Indices::None => com!(d, DRAW_PRIMITIVE, (u32, u32, u32), draw.primitive, draw.start, draw.primitives),
@@ -211,6 +289,9 @@ impl Oracle {
             }
             _ => return Err("unsupported vertex/index combination".into()),
         };
+        for k in 0..16 {
+            com!(d, SET_STREAM_SOURCE_FREQ, (u32, u32), k, 1);
+        }
         check(hr, "Draw")
     }
 
