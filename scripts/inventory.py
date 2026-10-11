@@ -10,14 +10,22 @@ committed.
     python scripts/inventory.py build      # (re)build from the export + repo scan
     python scripts/inventory.py summary    # coverage numbers
     python scripts/inventory.py next [N]   # untranslated functions most called by translated ones
+
+INVENTORY_EXPORT selects the read-only Ghidra TSV directory. INVENTORY_EXTRA
+selects a supplementary discovery TSV (default: EXPORT/extra_functions.tsv).
+INVENTORY_DB selects the output database; set it for private worktrees.
 """
 import re
+import os
+import csv
+import json
 import sqlite3
 import sys
 from pathlib import Path
 
-EXPORT = Path("E:/ddda-re/notes/inventory")
-DB = EXPORT / "inventory.sqlite"
+EXPORT = Path(os.environ.get("INVENTORY_EXPORT", "E:/ddda-re/notes/inventory"))
+DB = Path(os.environ.get("INVENTORY_DB", str(EXPORT / "inventory.sqlite")))
+EXTRA = Path(os.environ.get("INVENTORY_EXTRA", str(EXPORT / "extra_functions.tsv")))
 REPO = Path(__file__).resolve().parent.parent
 ADDR = re.compile(r"0x(00[4-9A-Fa-f][0-9A-Fa-f]{5}|01[0-9A-Fa-f]{6})\b")
 
@@ -65,11 +73,31 @@ def build():
             a, name, ns, size, thunk, callers, callees = line.rstrip("\n").split("\t")
             rows.append((int(a, 16), name, ns, int(size), thunk == "true", int(callers), int(callees)))
     db.executemany("INSERT INTO functions(address,name,namespace,size,thunk,callers,callees) VALUES (?,?,?,?,?,?,?)", rows)
+    db.execute("DROP TABLE IF EXISTS supplementary")
+    db.execute("CREATE TABLE supplementary(address INTEGER PRIMARY KEY, sources TEXT, evidence TEXT, size_kind TEXT)")
+    if EXTRA.exists():
+        with EXTRA.open(encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f, delimiter="\t"):
+                a, size = int(r['address'], 16), int(r['size'])
+                if size < 1:
+                    raise ValueError(f"invalid supplementary size: {a:#x}")
+                db.execute("INSERT INTO supplementary VALUES (?,?,?,?)",
+                           (a, r['sources'], r['evidence'], r['size_kind']))
+                db.execute("INSERT OR IGNORE INTO functions(address,name,namespace,size,thunk,callers,callees) VALUES (?,?,?,?,0,0,0)",
+                           (a, f"entry_{a:08X}", "Supplementary", size))
     with open(EXPORT / "calls.tsv", encoding="utf-8") as f:
         next(f)
         db.executemany("INSERT INTO calls VALUES (?,?)",
                        ((int(a, 16), int(b, 16)) for a, b in (l.rstrip("\n").split("\t") for l in f)))
-    starts = set(r[0] for r in rows)
+    # Supplementary direct calls are real edges. Initializer slots and
+    # virtual slots are potential roots, not unconditional call edges.
+    for a, evidence in db.execute("SELECT address,evidence FROM supplementary").fetchall():
+        for ev in json.loads(evidence):
+            if ev.get('source') == 'call':
+                db.execute("INSERT INTO calls SELECT ?,? WHERE NOT EXISTS "
+                           "(SELECT 1 FROM calls WHERE caller=? AND callee=?)",
+                           (ev['caller'], a, ev['caller'], a))
+    starts = {a for a, in db.execute("SELECT address FROM functions")}
     cites = []
     for path in list(REPO.glob("crates/**/*.rs")) + list(REPO.glob("docs/**/*.md")):
         kind = "code" if path.suffix == ".rs" else "doc"
@@ -84,11 +112,14 @@ def build():
     # shape family in E:/ddda-re/notes/native/platform.json
     pf = EXPORT.parent / "native" / "platform.json"
     if pf.exists():
-        import json
         db.executemany("UPDATE functions SET status='platform' WHERE address=?",
                        [(a,) for a in json.loads(pf.read_text())])
     # the C runtime / library block at the top of .text
-    db.execute("UPDATE functions SET status='platform' WHERE address >= 0x012E0000")
+    # The legacy range describes exported CRT functions, not all code above
+    # it: the C++ initializer targets at 0x0132A550..0x0138B2C0 include game
+    # registrations (e.g. 0x0136DDE0 -> MtDTI constructor 0x00CF5780).
+    db.execute("UPDATE functions SET status='platform' WHERE address >= 0x012E0000 "
+               "AND address NOT IN (SELECT address FROM supplementary)")
     db.execute("UPDATE functions SET status='documented' WHERE address IN (SELECT address FROM cites WHERE kind='doc')")
     db.execute("UPDATE functions SET status='translated' WHERE address IN (SELECT address FROM cites WHERE kind='code')")
     # crates/ddnative holds whole 1:1 ports, each with a differential test
@@ -102,7 +133,6 @@ def build():
     ported &= tested
     # families: same body modulo one constant, each member replayed by the
     # family's differential test (E:/ddda-re/notes/native/families/*.json)
-    import json
     for fam in (EXPORT.parent / "native" / "families").glob("*.json"):
         f = json.loads(fam.read_text())
         if f["representative"] in ported:
@@ -111,7 +141,8 @@ def build():
     db.execute("CREATE INDEX calls_caller ON calls(caller)")
     db.execute("CREATE INDEX calls_callee ON calls(callee)")
     db.commit()
-    print(f"built {DB}: {len(rows)} functions, {len(cites)} citations")
+    db.close()
+    print(f"built {DB}: {len(starts)} functions, {len(cites)} citations")
 
 
 def summary():

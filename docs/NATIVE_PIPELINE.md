@@ -224,6 +224,62 @@ member is still replayed by the family test.
 
 ## The lifter (main engine)
 
+### Supplementary inventory entries (L10)
+
+`scripts/discover_functions.py` reads the installed PE, the original
+`functions.tsv`, and a lifted manifest. It emits a **private**
+`extra_functions.tsv` and a sibling JSON report with input hashes. It never
+contacts Ghidra. Evidence records distinguish C/C++ initializer slots,
+RTTI-backed virtual slots, and decoded direct-call instructions. Initializer
+bounds are checked against the driver at `0x012EDA5E`; see
+[INVENTORY.md](INVENTORY.md#supplementary-discovery-l10) for the admission
+rules and limitations. Bulk entries and evidence are never committed.
+
+`INVENTORY_DB` selects the database for **all** lifter entry and noreturn
+lookups, scanning and vector workers. `LIFT_DATA` alone does not select an
+inventory. For an isolated worktree in PowerShell (research Python as `PY`):
+
+```powershell
+$env:LIFT_DATA = 'E:/ddda-re/notes/native-L10'
+$env:INVENTORY_DB = "$env:LIFT_DATA/inventory.sqlite"
+$env:INVENTORY_EXTRA = "$env:LIFT_DATA/extra_functions.tsv"
+# INVENTORY_EXPORT defaults to the shared, read-only Ghidra TSV directory.
+PY scripts/discover_functions.py --lifted "$env:LIFT_DATA/patterns/lift.json" --out $env:INVENTORY_EXTRA
+PY scripts/inventory.py build
+PY research/native/lift.py scan-extra
+$env:LIFT_WORKERS = '6'
+PY research/native/lift.py vectors
+PY research/native/lift.py gen
+$env:CARGO_BUILD_JOBS = '4'
+$env:CARGO_INCREMENTAL = '0'
+$env:DDNATIVE_REQUIRE_VECTORS = '1'
+cargo test -p ddnative --test lifted --test units
+PY scripts/inventory.py build
+PY scripts/inventory.py summary
+```
+
+`scan-extra` retains the existing selected bodies and mocking boundaries
+verbatim, restores their closed x87 contracts in dependency order, and
+scans missing supplementary entries in external-call mode against that
+same closed set. Each decoded body is released immediately. Its rejection
+report is `patterns/lift_extra_rejections.json`. New entries do not become
+closed callees automatically, so old fixtures stay valid. This measures an
+incremental selection, not a fresh full scan of every old function.
+`scan` remains available for a complete boundary refresh and uses inventory
+status rather than an address ceiling: game initializers above
+`0x012E0000` must not be excluded as CRT. Refreshing boundaries requires the
+normal vector invalidation and replay checks below.
+
+Run discovery again on the expanded lifted manifest to expose additional
+direct-call targets or constructor-backed tables. Keep the discovery input
+manifest if exact reproduction is required (its hash is in the report).
+Do not overwrite a discovery table with a narrower subset manifest.
+Builds and vector runs are sequential; watch available RAM and stop the
+task's process tree if it falls below 6 GiB. No shared gate is needed for
+private verification.
+
+### Translation and verification
+
 `research/native/lift.py` translates functions into literal Rust, one
 Rust statement group per x86 instruction, and `harness.run_sparse`
 verifies them with automatic vectors. A function lifts when every
