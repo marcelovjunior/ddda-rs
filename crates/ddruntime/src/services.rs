@@ -165,24 +165,6 @@ pub fn onexit(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 0);
 }
 
-/// 0x012F8177: CRT `__calloc_crt` (Ghidra: library function, single
-/// match, Visual Studio 2010 Release). cdecl
-/// `void *__calloc_crt(size_t count, size_t size)`: a zeroed block of
-/// count * size bytes, or NULL (the original retries with growing waits
-/// before giving up; the runtime heap either has the space or not).
-pub fn calloc_crt(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let (count, size) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let block = count.checked_mul(size).and_then(|n| with_state(|s| s.heap.alloc(n)).map(|b| (b, n)));
-    cpu.eax = match block {
-        Some((b, n)) => {
-            zero(m, b, n);
-            b
-        }
-        None => 0,
-    };
-    ret(m, cpu, 0);
-}
-
 /// KERNEL32 `EncodePointer` / `DecodePointer` (stdcall, one argument): the
 /// identity. The real ones XOR with a per-process secret; the guest only ever
 /// passes an encoded value back through the matching call, so the identity
@@ -375,8 +357,9 @@ pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), Ins
 
 /// Every service and the original address it replaces.
 pub const SERVICES: &[(u32, fn(&mut dyn Mem, &mut Cpu))] = &[
+    // until the lifter handles its SEH frame (brief L15): the recorder
+    // rejects the original body
     (0x012E_D89C, onexit),
-    (0x012F_8177, calloc_crt),
 ];
 
 #[derive(Debug)]

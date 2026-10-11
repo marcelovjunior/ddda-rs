@@ -583,7 +583,7 @@ module; behaviour choices are labelled in the code.
 | Dispatcher: one binding per address (every lifted function, ext included, plus services); unbound targets stop with target, caller, registers | `dispatch.rs` | done, tested |
 | `x86::call_ext` reentrant (handler is an `Rc<dyn Fn>` cloned per call) | `ddnative-base/src/x86.rs` | done |
 | Guest heap (16-byte blocks, exact-size reuse, requested sizes) | `services.rs` | done, tested |
-| CRT services: `__onexit`, `__calloc_crt` (to be replaced by the lifted CRT, brief L14) | `services.rs` | done |
+| CRT services: only `__onexit` remains (its original body awaits the SEH frame support of brief L15); the rest of the CRT is lifted (L14) | `services.rs` | done |
 | Win32: errors, identity, time (QPC 10 MHz), TLS, heaps, VirtualAlloc, start-up info, module names, code pages (en-US), std handles (no console), interlocked, critical sections (one guest thread), LoadLibrary (presence only), MessageBoxA, ExitProcess | `win32.rs` | done (48+ APIs) |
 | Files: read-only install plus a sandbox overlay for every write; paths outside both refused | `files.rs` | done, tested (synchronous I/O only) |
 | Interface objects (C++ thiscall and COM stdcall): vtables of named method tokens, services per implemented method | `interfaces.rs` | done |

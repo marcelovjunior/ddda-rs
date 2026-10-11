@@ -1,4 +1,4 @@
-# L15: runtime prerequisites: original allocator bodies and the FS segment
+# L15: runtime prerequisites: original allocator bodies, the FS segment, image-backed reads
 
 Owner: Codex (same session). Branch `task/L15-runtime-prereqs` from the head's
 `main` after L14 is merged, worktree `E:\ddda-rs-wt\L15`.
@@ -60,6 +60,23 @@ may stay models in the runtime, but lift them too if they lift.
    size (KERNEL32!LeaveCriticalSection: 4 bytes), propose the smallest
    general mechanism (a table of import argument sizes with its source)
    and apply it.
+
+## Task C: image-backed reads for start-up code
+
+The runtime now starts the program through the CRT start-up steps
+(`Session::start`, a temporary translation of 0x012EF8A7). Two steps are
+recorder rejections with "execution outside the image": `__mtinit`
+0x012F982C and `__cinit` 0x012EDA5E. They call through function pointers
+stored in the image's data (encoded FLS pointers, `_FPinit`, the
+initializer tables), and the recorder's random fill makes those calls
+jump to garbage. Add a structured-input strategy in which reads inside the
+image's `.rdata` and `.data` (file-backed part) return the exe's actual
+bytes, as in the loaded process, while everything else stays as today.
+Keep it a separate strategy (no change to existing cases), record the
+outside-image rejections with it (all 533 recorder failures are
+candidates, these two first), and report what verifies. Where such a call
+reaches an import (GetProcAddress results, FLS functions), the callee is
+mocked as usual.
 
 Out of scope: exception dispatch itself (RaiseException, unwinding), which
 the runtime implements.

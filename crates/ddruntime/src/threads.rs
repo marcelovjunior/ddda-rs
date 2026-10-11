@@ -643,6 +643,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     runtime::enter(rt.clone());
     CURRENT_TID.with(|c| c.set(tid));
     registry.install();
+    ddnative_base::platform::redirect(&crate::session::REDIRECTED_MODELS);
     let s = rt.lock.lock();
     rt.lock.acquire_locked(s);
     load_context(&rt);

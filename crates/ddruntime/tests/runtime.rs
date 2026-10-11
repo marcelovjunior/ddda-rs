@@ -201,13 +201,6 @@ fn heap_blocks_are_aligned_distinct_zeroed_and_reused_by_size() {
     h.free(a).unwrap();
     assert_eq!(h.free(a), Err(a), "double free is reported");
     assert_eq!(h.alloc(12).unwrap(), a, "a freed block of the same size is reused");
-    let (mut m, _) = stack();
-    let mut r = Registry::new();
-    services::install(&mut m, &mut r).unwrap();
-    let cpu = call_service(services::calloc_crt, &mut m, &[3, 8]);
-    assert!(cpu.eax >= services::HEAP_BASE);
-    assert_eq!(m.read(cpu.eax, 24).unwrap(), vec![0; 24]);
-    assert_eq!(cpu.esp, 0x0011_0000 - 8, "cdecl: the caller pops the arguments");
 }
 
 #[test]
@@ -640,4 +633,17 @@ fn read_file_ex_completes_at_the_next_alertable_sleep() {
     assert_eq!(call_from_guest(&mut m, c, threads::sleep_ex, &[0, 1]), 0, "nothing queued");
     x86::set_ext_calls(None);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_crt_start_up_bridge_runs_the_heap_initialisation() {
+    // Session::start translates 0x012EF8A7; each step reports where it stops.
+    // The heap is the first step and must succeed on the installed exe.
+    let Some(exe) = installed_exe() else { return };
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = ddruntime::session::Session::new(&path).expect("session");
+    ddruntime::session::install_fault_hook();
+    let started = s.start();
+    let _ = std::panic::take_hook();
+    assert_ne!(started.step, "__heap_init", "{}", started.outcome);
 }

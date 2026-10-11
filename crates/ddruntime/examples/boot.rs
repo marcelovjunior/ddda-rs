@@ -10,7 +10,7 @@ use ddnative_base::x86::Cpu;
 use ddruntime::dispatch::{Registry, Unbound};
 use ddruntime::memory::{GuestMemory, READ, WRITE};
 use ddruntime::win32::Exit;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 const CRT_ENTRY: u32 = 0x012E_FA14;
 const STACK_TOP: u32 = 0x7F00_0000;
@@ -32,7 +32,7 @@ fn main() {
     println!("{} bindings ({apis} of {} imports have services)", registry.len(), imports.len());
     let registry = Rc::new(registry);
     registry.install();
-    std::panic::set_hook(Box::new(|_| {}));
+    ddruntime::session::install_fault_hook();
 
     let mut cpu = Cpu { esp: STACK_TOP - 0x10, ..Cpu::default() };
     cpu.esp -= 4;

@@ -11,6 +11,13 @@ use ddnative_base::x86::Cpu;
 use std::sync::Arc;
 
 pub const STACK_TOP: u32 = 0x7F00_0000;
+
+/// The platform models (ddnative_base::platform) the runtime replaces by
+/// whatever the dispatcher has at their address: the game's allocators
+/// must be the original bodies (they share state with the allocator
+/// object at 0x018D0AA0 that other code calls directly). memset and memcpy
+/// stay models: they are exact and have no hidden state.
+pub const REDIRECTED_MODELS: [u32; 3] = [0x00CF_73F0, 0x00DE_0B80, 0x00DE_0B90];
 pub const STACK_SIZE: u32 = 0x0010_0000;
 /// The return address a driver pushes for a top-level call: never executed
 /// (a lifted `ret` returns to the Rust caller), only kept on the stack.
@@ -59,6 +66,7 @@ impl Session {
         let registry = Arc::new(registry);
         crate::threads::set_machine(mem.share(), registry.clone());
         registry.install();
+        ddnative_base::platform::redirect(&REDIRECTED_MODELS);
         Ok(Session { mem, registry, imports, exe_path: exe_path.to_string() })
     }
 
@@ -88,7 +96,9 @@ impl Session {
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "panic".into());
                     let regs = [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi];
-                    Outcome::Fault(msg, self.backtrace(cpu.esp), regs)
+                    // the guest functions from the fault hook, else the stack scan
+                    let frames = GUEST_FRAMES.with(|g| std::mem::take(&mut *g.borrow_mut()));
+                    Outcome::Fault(msg, if frames.is_empty() { self.backtrace(cpu.esp) } else { frames }, regs)
                 }
             }
         }
@@ -146,13 +156,111 @@ impl std::fmt::Display for Outcome {
                        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7])?;
                 if !bt.is_empty() {
                     write!(f, "
-  guest return addresses on the stack (innermost first):")?;
+  guest frames (innermost first):")?;
                     for r in bt {
                         write!(f, " {r:#010x}")?;
                     }
                 }
                 Ok(())
             }
+        }
+    }
+}
+
+thread_local! {
+    static GUEST_FRAMES: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Replace the panic hook (which would print every guest fault) with one
+/// that silently records the translated functions on the Rust stack at the
+/// fault: lifted function `f_XXXXXXXX` is the guest function at
+/// 0xXXXXXXXX, so this is the guest call chain, innermost first, including
+/// direct lifted-to-lifted calls the stack scan cannot see. Needs symbols
+/// (debug builds have them).
+pub fn install_fault_hook() {
+    std::panic::set_hook(Box::new(|_| {
+        let bt = std::backtrace::Backtrace::force_capture().to_string();
+        let mut frames = Vec::new();
+        for line in bt.lines() {
+            if let Some(k) = line.find("::f_") {
+                let hex = &line[k + 4..];
+                if hex.len() >= 8 {
+                    if let Ok(a) = u32::from_str_radix(&hex[..8], 16) {
+                        if frames.last() != Some(&a) {
+                            frames.push(a);
+                        }
+                    }
+                }
+            }
+        }
+        GUEST_FRAMES.with(|g| *g.borrow_mut() = frames);
+    }));
+}
+
+/// One step of the CRT start-up that did not succeed, or WinMain's outcome.
+pub struct Started {
+    /// The step that stopped the start-up ("WinMain" if it got that far).
+    pub step: &'static str,
+    pub outcome: Outcome,
+}
+
+impl Session {
+    /// Start the program the way the CRT entry does: the body of
+    /// `___tmainCRTStartup`.
+    ///
+    /// Translated from 0x012EF8A7 (DDDA.exe 2017-12-13 Steam), without its
+    /// SEH frame: `__SEH_prolog4`/`__SEH_epilog4` need the FS segment
+    /// (brief L15), so the original body cannot be lifted yet. This is a
+    /// temporary bridge; once L15 lands the lifted body replaces it. Each
+    /// step calls the lifted CRT function at its address and checks its
+    /// result as the original does (where the original would exit, the
+    /// start-up stops with that step). GetStartupInfoW's flags have no
+    /// STARTF_USESHOWWINDOW in this runtime, so WinMain gets SW_SHOWDEFAULT
+    /// (10), as the original computes. The HeapSetInformation call at
+    /// 0x012EF8CC and `__RTC_Initialize` have no effect the steps below
+    /// depend on but are called for fidelity.
+    pub fn start(&mut self) -> Started {
+        let ok = |o: &Outcome, good: &dyn Fn(u32) -> bool| matches!(o, Outcome::Returned(c) if good(c.eax));
+        // (name, address, cdecl arguments, success test)
+        let steps: [(&'static str, u32, &[u32], &dyn Fn(u32) -> bool); 8] = [
+            ("__heap_init", 0x012F_E354, &[], &|r| r != 0),
+            ("__mtinit", 0x012F_982C, &[], &|r| r != 0),
+            ("__RTC_Initialize", 0x012F_99A7, &[], &|_| true),
+            ("__ioinit", 0x012F_7C13, &[], &|r| (r as i32) >= 0),
+            ("__setargv", 0x012F_E202, &[], &|r| (r as i32) >= 0),
+            ("_setenvp", 0x012F_DF8C, &[], &|r| (r as i32) >= 0),
+            ("__cinit", 0x012E_DA5E, &[1], &|r| r == 0),
+            ("__wincmdln", 0x012F_DF2D, &[], &|_| true),
+        ];
+        let mut cmdln = 0;
+        for (k, (name, addr, args, good)) in steps.iter().enumerate() {
+            if k == 4 {
+                // between __ioinit and __setargv: _acmdln = GetCommandLineA(),
+                // _aenvptr = __crtGetEnvironmentStringsA() (0x012EF956..0x012EF966)
+                let line = self.import_call("KERNEL32.dll!GetCommandLineA");
+                self.mem.set_u32(0x019A_B1C4, line);
+                let env = self.call(0x012F_E2BD, 0, &[]);
+                let Outcome::Returned(c) = env else { return Started { step: "__crtGetEnvironmentStringsA", outcome: env } };
+                self.mem.set_u32(0x018D_7A18, c.eax);
+            }
+            let o = self.call(*addr, 0, args);
+            if !ok(&o, good) {
+                return Started { step: name, outcome: o };
+            }
+            if let Outcome::Returned(c) = &o {
+                cmdln = c.eax; // the last step's result: the WinMain command line
+            }
+        }
+        let outcome = self.call(0x0040_79E0, 0, &[0x0040_0000, 0, cmdln, 10]);
+        Started { step: "WinMain", outcome }
+    }
+
+    /// Call an import's service (no arguments) and return eax.
+    fn import_call(&mut self, name: &str) -> u32 {
+        let token = self.imports.iter().find(|i| i.full_name() == name).unwrap_or_else(|| panic!("{name} is not imported")).token;
+        match self.call(token, 0, &[]) {
+            Outcome::Returned(c) => c.eax,
+            o => panic!("{name}: {o}"),
         }
     }
 }

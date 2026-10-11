@@ -15,7 +15,7 @@ fn main() {
     let ecx = a.get(1).map(|s| hex(s)).unwrap_or(0);
     let args: Vec<u32> = a.iter().skip(2).map(|s| hex(s)).collect();
     let mut s = Session::new(r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe").unwrap_or_else(|e| panic!("{e}"));
-    std::panic::set_hook(Box::new(|_| {}));
+    ddruntime::session::install_fault_hook();
     if after_inits {
         let inits = s.initializers();
         let done = inits.iter().filter(|&&(_, t)| t != target && matches!(s.call(t, 0, &[]), Outcome::Returned(_))).count();
