@@ -27,25 +27,19 @@
 //! - inputs: the k-th declared input (`dcl_<usage> v#`) at `@location(k)`.
 //! - outputs: oC_n at `@location(n)`, oDepth as `frag_depth`.
 //!
-//! Multiplication follows D3D9's rule, not IEEE's: 0 * anything is 0, also
-//! 0 * inf and 0 * NaN (shader model 3 hardware; the reference driver
-//! shows it, and DXVK emulates the same). It applies to mul, mad, the dot
-//! products, the matrix macros, nrm, lrp and pow (exp2(y * log2|x|)).
+//! Arithmetic follows what the host's D3D9 driver computes, bit for bit
+//! (see [`HELPERS`]): D3D9's multiplication rule (0 * anything = 0, with
+//! denormals counting as 0, NaN kept; shader model 3 hardware, and DXVK
+//! emulates the same), and fused multiply-adds where the driver fuses them
+//! (mad, the dot products, the matrix macros, dp2add, lrp, crs).
 //!
 //! Relative constant reads outside the register file return 0 (as the
 //! reference driver does; WGSL would clamp the index).
 //!
-//! Checked so far (tests/against_d3d9.rs, random inputs): 600 of 600 pixel
-//! shaders of root/Stage100 and all of Title match; 295 of the first 300
-//! vertex shaders of root/Stage100 and all of Title match. The five
-//! remaining vertex differences are of two kinds, both driven by random
-//! inputs rather than by a translation error the bisection could find:
-//! (1) rounding cascades: a cancellation leaves D3D9 with a tiny residue
-//! (1e-8) where wgpu computes 0 (fused vs separate multiply-add in the GPU
-//! compilers), which a later rsq/normalise amplifies, and sincos results
-//! that differ around 1e-5; (2) shaders whose loops and a0 indices come
-//! from the random constants (counts up to 255, indices outside the bone
-//! palettes), which need structured inputs like the CPU-side recorder's.
+//! Checked (tests/against_d3d9.rs): every arithmetic instruction of both
+//! stages bit for bit on random and special operands; the game's shaders
+//! with random constants, inputs and textures (the `sweep` test; results in
+//! docs/tasks/L23-shader-sweep.md).
 //!
 //! Pixel-shader texture reads use implicit derivatives (texld, texldp,
 //! texldb's bias, texldd's gradients) as D3D9 does; vertex shaders and
@@ -147,6 +141,38 @@ struct Ctx<'a> {
 }
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
+
+/// D3D9's arithmetic, as the host driver computes it (measured against it
+/// on random and special operands, tests/against_d3d9.rs `rule_*`):
+/// - multiplication: a zero or denormal factor gives +0, whatever the other
+///   factor (also inf and NaN); zero is tested on the bits because GPU
+///   compilers may fold float compares as if there were no NaNs, and NaN *
+///   x must stay NaN;
+/// - mad is one fused multiply-add (rounded once), with the same zero rule
+///   for its product (+0 + c: -0 and denormal addends give +0; written as
+///   an fma of zeros because compilers fold `0.0 + c` to `c`);
+/// - dp3/dp4 (and the matrix macros) are a fused chain in component order:
+///   x*x', then fma(y, y', .), fma(z, z', .), fma(w, w', .);
+/// - dp2add is fma(y, y', x*x') + c, lrp is fma(a, b - c, c);
+/// - crs's x is fma(a.y, b.z, -(a.z * b.y)) in pixel shaders but
+///   fma(-a.z, b.y, a.y * b.z) in vertex shaders (and so on cyclically);
+/// - frc reads a denormal operand as 0, and so does sincos in pixel shaders
+///   (sin(-0) is +0 there, -0 in vertex shaders);
+/// - lit clamps its exponent to [-128, 128] (not the reference
+///   rasteriser's 127.9961).
+const HELPERS: &str = "fn zero9(a: vec4<f32>) -> vec4<bool> { return (bitcast<vec4<u32>>(a) & vec4<u32>(0x7f800000u)) == vec4<u32>(0u); }
+fn zero1(a: f32) -> bool { return (bitcast<u32>(a) & 0x7f800000u) == 0u; }
+fn m9(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return select(a * b, vec4<f32>(0.0), zero9(a) | zero9(b)); }
+fn m1(a: f32, b: f32) -> f32 { return select(a * b, 0.0, zero1(a) || zero1(b)); }
+fn fma9(a: vec4<f32>, b: vec4<f32>, c: vec4<f32>) -> vec4<f32> { let z = zero9(a) | zero9(b); return fma(select(a, vec4<f32>(0.0), z), select(b, vec4<f32>(0.0), z), c); }
+fn fma1(a: f32, b: f32, c: f32) -> f32 { let z = zero1(a) || zero1(b); return fma(select(a, 0.0, z), select(b, 0.0, z), c); }
+fn dot3_9(a: vec4<f32>, b: vec4<f32>) -> f32 { return fma1(a.z, b.z, fma1(a.y, b.y, m1(a.x, b.x))); }
+fn dot4_9(a: vec4<f32>, b: vec4<f32>) -> f32 { return fma1(a.w, b.w, fma1(a.z, b.z, fma1(a.y, b.y, m1(a.x, b.x)))); }
+fn dp2add9(a: vec4<f32>, b: vec4<f32>, c: f32) -> f32 { return fma1(a.y, b.y, m1(a.x, b.x)) + c; }
+fn crs9(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return vec4<f32>(fma1(a.y, b.z, -m1(a.z, b.y)), fma1(a.z, b.x, -m1(a.x, b.z)), fma1(a.x, b.y, -m1(a.y, b.x)), 0.0); }
+fn crs9v(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return vec4<f32>(fma1(-a.z, b.y, m1(a.y, b.z)), fma1(-a.x, b.z, m1(a.z, b.x)), fma1(-a.y, b.x, m1(a.x, b.y)), 0.0); }
+fn sincos9(a: f32) -> vec4<f32> { let x = select(a, 0.0, zero1(a)); return vec4<f32>(cos(x), sin(x), 0.0, 0.0); }
+fn frc9(a: vec4<f32>) -> vec4<f32> { let f = select(a, vec4<f32>(0.0), zero9(a)); return f - floor(f); }";
 
 enum Sampling {
     Implicit,
@@ -259,13 +285,7 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32> }}").unwrap();
         writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
     }
-    // D3D9 multiplication: 0 * anything = 0
-    // (zero tested on the bits: GPU compilers may fold float compares as if
-    // there were no NaNs, and NaN * x must stay NaN)
-    writeln!(w, "fn zero9(a: vec4<f32>) -> vec4<bool> {{ return (bitcast<vec4<u32>>(a) & vec4<u32>(0x7fffffffu)) == vec4<u32>(0u); }}").unwrap();
-    writeln!(w, "fn m9(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {{ return select(a * b, vec4<f32>(0.0), zero9(a) | zero9(b)); }}").unwrap();
-    writeln!(w, "fn dot3_9(a: vec4<f32>, b: vec4<f32>) -> f32 {{ let p = m9(a, b); return p.x + p.y + p.z; }}").unwrap();
-    writeln!(w, "fn dot4_9(a: vec4<f32>, b: vec4<f32>) -> f32 {{ let p = m9(a, b); return p.x + p.y + p.z + p.w; }}").unwrap();
+    writeln!(w, "{HELPERS}").unwrap();
     for &(n, kind) in &iface.samplers {
         let t = match kind {
             TextureKind::Flat => "texture_2d<f32>",
@@ -657,13 +677,10 @@ impl Ctx<'_> {
             op::ADD => format!("({} + {})", src(0)?, src(1)?),
             op::SUB => format!("({} - {})", src(0)?, src(1)?),
             op::MUL => format!("m9({}, {})", src(0)?, src(1)?),
-            op::MAD => format!("(m9({}, {}) + {})", src(0)?, src(1)?, src(2)?),
+            op::MAD => format!("fma9({}, {}, {})", src(0)?, src(1)?, src(2)?),
             op::DP3 => v4(format!("dot3_9({}, {})", src(0)?, src(1)?)),
             op::DP4 => v4(format!("dot4_9({}, {})", src(0)?, src(1)?)),
-            op::DP2ADD => {
-                let p = format!("m9({}, {})", src(0)?, src(1)?);
-                v4(format!("({p}).x + ({p}).y + ({}).x", src(2)?))
-            }
+            op::DP2ADD => v4(format!("dp2add9({}, {}, ({}).x)", src(0)?, src(1)?, src(2)?)),
             op::MIN => format!("min({}, {})", src(0)?, src(1)?),
             op::MAX => format!("max({}, {})", src(0)?, src(1)?),
             op::SLT => format!("select(vec4<f32>(0.0), vec4<f32>(1.0), {} < {})", src(0)?, src(1)?),
@@ -673,7 +690,7 @@ impl Ctx<'_> {
             op::EXP => v4(format!("exp2({})", self.scalar(&ins.src[0])?)),
             op::LOG => v4(format!("log2(abs({}))", self.scalar(&ins.src[0])?)),
             op::POW => v4(format!("exp2(m9(vec4<f32>({}), vec4<f32>(log2(abs({})))).x)", self.scalar(&ins.src[1])?, self.scalar(&ins.src[0])?)),
-            op::FRC => format!("fract({})", src(0)?),
+            op::FRC => format!("frc9({})", src(0)?),
             op::ABS => format!("abs({})", src(0)?),
             op::NRM => {
                 let a = src(0)?;
@@ -681,14 +698,20 @@ impl Ctx<'_> {
             }
             op::LRP => {
                 let (a, b, c) = (src(0)?, src(1)?, src(2)?);
-                format!("(m9({a}, {b} - {c}) + {c})")
+                format!("fma9({a}, {b} - {c}, {c})")
             }
             op::CMP => format!("select({}, {}, {} >= vec4<f32>(0.0))", src(2)?, src(1)?, src(0)?),
             op::CND => format!("select({}, {}, {} > vec4<f32>(0.5))", src(2)?, src(1)?, src(0)?),
-            op::CRS => format!("vec4<f32>(cross(({}).xyz, ({}).xyz), 0.0)", src(0)?, src(1)?),
+            op::CRS if self.shader.stage == Stage::Vertex => format!("crs9v({}, {})", src(0)?, src(1)?),
+            op::CRS => format!("crs9({}, {})", src(0)?, src(1)?),
             op::SINCOS => {
                 let x = self.scalar(&ins.src[0])?;
-                format!("vec4<f32>(cos({x}), sin({x}), 0.0, 0.0)")
+                if self.shader.stage == Stage::Vertex {
+                    format!("vec4<f32>(cos({x}), sin({x}), 0.0, 0.0)")
+                } else {
+                    // pixel shaders: a zero or denormal angle is +0 (sin(-0) = +0)
+                    format!("sincos9({x})")
+                }
             }
             op::MOVA => src(0)?,
             op::SGN => format!("sign({})", src(0)?),
@@ -696,7 +719,7 @@ impl Ctx<'_> {
             op::LOGP => v4(format!("log2(abs({}))", self.scalar(&ins.src[0])?)),
             op::LIT => {
                 let a = src(0)?;
-                format!("vec4<f32>(1.0, max(({a}).x, 0.0), select(0.0, exp2(m9(vec4<f32>(clamp(({a}).w, -127.9961, 127.9961)), vec4<f32>(log2(({a}).y))).x), ({a}).x > 0.0 && ({a}).y > 0.0), 1.0)")
+                format!("vec4<f32>(1.0, max(({a}).x, 0.0), select(0.0, exp2(m9(vec4<f32>(clamp(({a}).w, -128.0, 128.0)), vec4<f32>(log2(({a}).y))).x), ({a}).x > 0.0 && ({a}).y > 0.0), 1.0)")
             }
             op::DST => format!("vec4<f32>(1.0, m9({}, {}).y, ({}).z, ({}).w)", src(0)?, src(1)?, src(0)?, src(1)?),
             op::DSX => format!("dpdx({})", src(0)?),
