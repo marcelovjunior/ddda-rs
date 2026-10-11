@@ -780,6 +780,10 @@ def _vectors_for(args):
             continue
         out.append({"addr": addr, **r})
         got += 1
+    # each Unicorn instance sits in reference cycles (hooks close over it):
+    # collect them now, or a long run creeps up by about 1 MB per function
+    import gc
+    gc.collect()
     return addr, out
 
 
@@ -830,7 +834,9 @@ def vectors(per=3):
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
     log = open(prog, "a")
-    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,)) as pool:
+    # workers are recycled so no process grows without bound over a long run
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,),
+              maxtasksperchild=200) as pool:
         for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=8)):
             cases += out
             if not out:
