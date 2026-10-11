@@ -579,7 +579,7 @@ module; behaviour choices are labelled in the code.
 |---|---|---|
 | Guest address space: software page table, read/write permissions, lazily backed regions, wrapping and page-crossing accesses, faults naming address/width/reason | `memory.rs` | done, tested |
 | Image loader: headers and sections at their VAs from the player's exe, zero BSS, `.data` writable, code read-only | `image.rs` | done, tested |
-| Import binding: all 273 normal imports get a distinct token in their IAT slot, named `DLL!function`; delay imports not yet | `image.rs` | done, tested |
+| Import binding: all 273 normal imports get a distinct token in their IAT slot, named `DLL!function`; WMVCore delay exports resolve through LoadLibrary/GetProcAddress | `image.rs`, `movies.rs` | tested, including all three original WMVCore delay thunks |
 | Dispatcher: one binding per address (every lifted function, ext included, plus services); unbound targets stop with target, caller, registers | `dispatch.rs` | done, tested |
 | `x86::call_ext` reentrant (handler is an `Rc<dyn Fn>` cloned per call) | `ddnative-base/src/x86.rs` | done |
 | Guest heap (16-byte blocks, exact-size reuse, requested sizes) | `services.rs` | done, tested |
@@ -605,7 +605,8 @@ module; behaviour choices are labelled in the code.
 
 | Headless input: USER32 keys/hooks/settings/raw-device queries, DirectInput 8A mouse/keyboard profile, XInput 1.3 four-port state/rumble and host event channel (`0x00DF43E0`, `0x00DFA0C0`, `0x00E05120`) | `input.rs` | implemented, contract tested; physical devices / legacy joystick FF not implemented |
 | XAudio2 2.7 engine, source/submix/master voice ABI and AudioReverb identity (`0x00DCE0E0`, `0x00DCE600`); clocked silent graph, buffer completion/loop/stream callbacks on a guest audio thread, XAPO parameter callbacks and bounded output channel | `audio.rs` | implemented, contract tested; no audible DSP or original-game audio comparison; [census and limits](tasks/L16-input-audio-services.md#results) |
-| SEH dispatch, remaining Windows services (brief L17), delay imports | | not started |
+| WMVCore synchronous movie reader, output media props, header attributes and sample buffers (`0x00F7DEB0`, `0x00F7CA40`, `0x00F7C200`); YV12/PCM via system WMVCore and dispatched guest IStream callbacks | `movies.rs`, `movies/windows.rs` | contract tested; six installed movies decoded through a fixture guest stream and lifted format selector; original stream still needs three native entries, capture encoding remains unbound; [L18 census and limits](tasks/L18-movies.md#results) |
+| SEH dispatch, remaining Windows services (brief L17) | | not started |
 
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
