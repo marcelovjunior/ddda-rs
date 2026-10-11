@@ -2787,6 +2787,8 @@ dependencies = [
  "ddexe",
  "ddnative",
  "ddnative-base",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

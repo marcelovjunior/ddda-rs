@@ -41,6 +41,7 @@ impl<T> GuestCell<T> {
 
 #[derive(Default)]
 pub struct Runtime {
+    pub(crate) movies: GuestCell<crate::movies::Movies>,
     pub(crate) input: GuestCell<crate::input::Input>,
     pub(crate) audio: GuestCell<crate::audio::Audio>,
     pub(crate) lock: crate::threads::GuestLock,
