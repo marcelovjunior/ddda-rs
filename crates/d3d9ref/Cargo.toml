@@ -1,0 +1,13 @@
+[package]
+name = "d3d9ref"
+version = "0.1.0"
+description = "Reference execution of Direct3D 9 shaders on the host's real D3D9 driver (test oracle for the shader translator)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+d3d9shader = { path = "../d3d9shader" }
+
+[dev-dependencies]
+mtarc = { path = "../mtarc" }
