@@ -191,7 +191,11 @@ class Rejected(Exception):
 
 
 PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1')
+# Zero-return strategies: every mocked callee returns 0. Pages and registers
+# come from the named page strategy (None: the default random fill).
+MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
+RETURN_STRATEGIES = tuple(MOCKZERO)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', *RETURN_STRATEGIES)
 
 
 def import_pops(_cache={}):
@@ -437,6 +441,179 @@ def local_alloc_sites(address, body):
     return result
 
 
+def frame_exit(address, body, limit=4096, _cache={}):
+    """Exit ESP of a call-free caller-frame helper, derived from its code.
+
+    Ordinary functions return with ESP = entry ESP + 4 + N. Frame helpers
+    (`__SEH_prolog4`, `__SEH_epilog4`, `__EH_prolog3`) instead move the
+    caller's frame: prolog4 returns with entry ESP - 24 - entry [esp+8],
+    epilog4 with entry EBP + 4. This walks every path of the body with
+    symbolic values `(base, constant, terms)`: base 'esp'/'ebp' (the entry
+    register) or None, terms `((sign, k), ...)` adding or subtracting the
+    entry stack dword at entry ESP + k (k >= 0, read before any write).
+    Returns that value for every `ret` (all must agree), or None: any call,
+    indirect or outward jump, trap, unmodelled ESP write, aliasing store
+    before a stack load, or disagreement. None keeps the ordinary contract.
+    """
+    if body is None:
+        return None
+    key = (address, frozenset(body), code)
+    if key not in _cache:
+        _cache.clear()  # one function per recorder run; bound the memory
+        _cache[key] = _frame_exit(address, key[1], limit)
+    return _cache[key]
+
+
+def _frame_exit(address, body, limit):
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    names = ('eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi')
+
+    def add(a, b, sign=1):
+        if a is None or b is None or (a[0] is not None and b[0] is not None):
+            return None
+        if b[0] is not None and sign < 0:
+            return None
+        terms = tuple(sorted(a[2] + tuple((sign * t, k) for t, k in b[2])))
+        return (a[0] or b[0], (a[1] + sign * b[1]) & 0xffffffff, terms)
+
+    def address_of(i, o, regs):
+        if o.mem.segment:
+            return 'other' if i.reg_name(o.mem.segment) == 'fs' else None
+        if o.mem.index or not o.mem.base:
+            return None
+        base = regs.get(i.reg_name(o.mem.base))
+        value = add(base, (None, o.mem.disp & 0xffffffff, ()))
+        return value
+
+    def offset(a):
+        k = a[1]
+        return k - (1 << 32) if k & 0x80000000 else k
+
+    def stack(a):
+        return a == 'other' or (a is not None and a[0] == 'esp' and not a[2])
+
+    def load(a, size, stores, clobbered):
+        if not stack(a) or a == 'other':
+            return None
+        k = offset(a)
+        for start, value in stores:
+            if start < k + size and k < start + 4:
+                return value if (start, size) == (k, 4) else None
+        if clobbered or size != 4 or k < 0:
+            return None
+        return (None, 0, ((1, k),))
+
+    def store(a, size, value, stores, clobbered):
+        if a == 'other':
+            return stores, clobbered
+        if not stack(a):
+            return stores, True
+        k = offset(a)
+        kept = tuple((s, v) for s, v in stores if not (s < k + size and k < s + 4))
+        return kept + (((k, value if size == 4 else None),)), clobbered
+
+    def operand(i, o, regs, stores, clobbered):
+        if o.type == 1:
+            name = i.reg_name(o.reg)
+            return regs.get(name) if name in names else None
+        if o.type == 2:
+            return (None, o.imm & 0xffffffff, ())
+        if o.type == 3:
+            return load(address_of(i, o, regs), o.size, stores, clobbered)
+        return None
+
+    start = {n: None for n in names}
+    start.update(esp=('esp', 0, ()), ebp=('ebp', 0, ()))
+    todo = [(address, tuple(sorted(start.items())), (), False)]
+    seen, exits, decoded = set(), set(), {}
+    while todo:
+        pc, regs, stores, clobbered = todo.pop()
+        key = (pc, regs, stores, clobbered)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > limit or pc not in body:
+            return None
+        regs = dict(regs)
+        if pc not in decoded:
+            decoded[pc] = next(md.disasm(code(pc, 15), pc, count=1), None)
+        i = decoded[pc]
+        if i is None:
+            return None
+        mn, ops = i.mnemonic, i.operands
+        if mn in ('ret', 'retn'):
+            exits.add(add(regs['esp'], (None, 4 + (ops[0].imm if ops else 0), ())))
+            continue
+        if mn.startswith('j'):
+            if ops[0].type != 2:
+                return None
+            target = ops[0].imm & 0xffffffff
+            if target not in body:
+                return None
+            todo.append((target, tuple(sorted(regs.items())), stores, clobbered))
+            if mn != 'jmp':
+                todo.append((pc + i.size, tuple(sorted(regs.items())), stores, clobbered))
+            continue
+        if mn in ('call', 'int3', 'ud2', 'hlt', 'leave', 'pushal', 'popal', 'pushfd', 'popfd'):
+            return None
+        esp = regs['esp']
+        if mn == 'push':
+            value = operand(i, ops[0], regs, stores, clobbered)
+            regs['esp'] = add(esp, (None, 4, ()), -1)
+            if regs['esp'] is None:
+                return None
+            stores, clobbered = store(regs['esp'], 4, value, stores, clobbered)
+        elif mn == 'pop' and ops[0].type == 1 and i.reg_name(ops[0].reg) in names and i.reg_name(ops[0].reg) != 'esp':
+            value = load(esp, 4, stores, clobbered)
+            regs['esp'] = add(esp, (None, 4, ()))
+            regs[i.reg_name(ops[0].reg)] = value
+        elif mn in ('mov', 'lea', 'add', 'sub') and ops[0].type == 1 and i.reg_name(ops[0].reg) in names:
+            name = i.reg_name(ops[0].reg)
+            if mn == 'lea':
+                o = ops[1]
+                value = (None if o.mem.index or o.mem.segment or not o.mem.base else
+                         add(regs.get(i.reg_name(o.mem.base)), (None, o.mem.disp & 0xffffffff, ())))
+            else:
+                value = operand(i, ops[1], regs, stores, clobbered)
+                if mn != 'mov':
+                    value = add(regs[name], value, 1 if mn == 'add' else -1)
+            regs[name] = value
+        else:
+            written = {i.reg_name(r) for r in i.regs_access()[1]}
+            if 'esp' in written or 'sp' in written:
+                return None
+            for name in names:
+                if name in written or name[1:] in written or (name[1] + 'l') in written or (name[1] + 'h') in written:
+                    regs[name] = None
+            for o in ops:
+                if o.type == 3 and o.access & 2:
+                    value = operand(i, ops[1], regs, stores, clobbered) if mn == 'mov' and len(ops) == 2 else None
+                    stores, clobbered = store(address_of(i, o, regs), o.size, value, stores, clobbered)
+        if regs['esp'] is None:
+            return None
+        todo.append((pc + i.size, tuple(sorted(regs.items())), stores, clobbered))
+    return exits.pop() if len(exits) == 1 else None
+
+
+def caller_frame(contract):
+    """True for a frame-relative exit (entry EBP, or entry stack slots).
+
+    A plain `entry ESP + constant` exit is the ordinary form and keeps the
+    4..0x404 range check even when it falls outside (misdecoded data such
+    as 0x004E4843 ends in `ret 0x57e`): the contract never widens it.
+    """
+    return contract is not None and (contract[0] != 'esp' or bool(contract[2]))
+
+
+def frame_text(contract):
+    base, constant, terms = contract
+    signed = constant - (1 << 32) if constant & 0x80000000 else constant
+    text = base + (f' - {-signed:#x}' if signed < 0 else f' + {signed:#x}' if signed else '')
+    return text + ''.join(f" {'+' if t > 0 else '-'} [esp+{k:#x}]" for t, k in terms)
+
+
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False):
@@ -480,6 +657,17 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
+
+    `mockzero-v1` keeps the default random pages and registers but makes
+    every mocked callee return zero (eax, ecx, edx, xmm0 and any st0 push;
+    the inferred stack pop is unchanged). Loops that wait until a call
+    returns 0 and then test a flag in memory (worker threads around
+    WaitForSingleObject) need both: zero returns to leave the wait, random
+    memory to find the flag set. `small-mockzero-v1` and
+    `objects-mockzero-v1` do the same over small-v1/objects-v1 pages and
+    registers, for such loops that also walk a count read from memory; each
+    is identical to its page strategy up to the first mocked call. These are
+    test inputs, not callee models.
     """
     import random
     import time
@@ -489,7 +677,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         raise ValueError('input_strategy and zero_inputs are mutually exclusive')
     # Image pages have always held original bytes. This explicit strategy
     # retains the random distribution elsewhere and tags that input policy.
-    inputs = SparseInputs(input_strategy) if input_strategy not in (None, 'image-v1') else None
+    if input_strategy is not None and input_strategy not in INPUT_STRATEGIES:
+        raise ValueError(f'unknown input strategy: {input_strategy}')
+    page_strategy = MOCKZERO.get(input_strategy, input_strategy)
+    inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
+    mock_zero = input_strategy in MOCKZERO
     deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
@@ -966,6 +1158,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         if inputs:
             out.update(inputs.returns(rnd))
+        if mock_zero:
+            out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX)):
             uc_.reg_write(r, out[n])
         uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
@@ -974,6 +1168,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0]
             if inputs:
                 v = inputs.float_bits(rnd)
+            if mock_zero:
+                v = 0
             out["st_push"] = v
             uc_.mem_write(X87_SLOT, struct.pack("<II", v, ret))
             ret = X87_TRAMP
@@ -1022,7 +1218,22 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # pages are mapped before each instruction (premap), so a fault here
         # is real; resuming would lose QEMU's lazy flags: never resume
         bad.append(f"{e} at {uc.reg_read(UC_X86_REG_EIP):#010x}")
-    if not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
+    # Caller-frame helpers (frame_exit) are checked against their exact
+    # derived exit ESP; every other function keeps the ordinary range.
+    contract = frame_exit(address, body) if not bad and body is not None else None
+    stack_contract = None
+    if not bad and caller_frame(contract):
+        want = regs_in[contract[0]] + contract[1]
+        for sign, k in contract[2]:
+            slot = [reads.get((regs_in["esp"] + k + n) & 0xFFFFFFFF) for n in range(4)]
+            if None in slot:
+                bad.append(f"caller-frame slot [esp+{k:#x}] was not an input")
+                break
+            want += sign * int.from_bytes(bytes(slot), "little")
+        if not bad and uc.reg_read(UC_X86_REG_ESP) != want & 0xFFFFFFFF:
+            bad.append(f"returned with ESP not {frame_text(contract)} (caller-frame contract)")
+        stack_contract = {"rule": "caller-frame-v1", "exit_esp": frame_text(contract)}
+    elif not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
@@ -1064,4 +1275,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
-            **({"input_strategy": input_strategy} if input_strategy else {})}
+            **({"input_strategy": input_strategy} if input_strategy else {}),
+            **({"stack_contract": stack_contract} if stack_contract else {})}
