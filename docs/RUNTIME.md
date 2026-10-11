@@ -597,7 +597,12 @@ module; behaviour choices are labelled in the code.
 | D3D9 shader bytecode (SM2/SM3) decoder and disassembler: all 29,198 distinct shaders of the 76 shader packages print exactly like Microsoft's D3DDisassemble (`DDDA_ALL_SHADERS=1 cargo test -p d3d9shader`); the base for translating the game's shaders to the GPU backend | `crates/d3d9shader` | done, tested |
 | D3D9 reference execution: any shader run on the host's real D3D9 driver with chosen constants, inputs and textures (pixel shaders on 1x1 float targets; vertex shaders by capturing every output through a point and pass-through pixel shaders) | `crates/d3d9ref` | done, tested |
 | Shader translation to WGSL: literal per-instruction translation of vs_3_0/ps_3_0 with D3D9's multiplication rule (0 * anything = 0, NaN kept; zero tested on the bits); pixel shaders checked against the driver (600/600 of root/Stage100 plus Title; full sweep running); vertex shaders in progress | `crates/d3d9wgsl` | pixel: tested; vertex: started |
-| SEH (`fs:`), D3D9 resources and drawing (wgpu), audio and input (brief L16), delay imports | | not started |
+| D3D9 device state machine: render/sampler/stage states with a fresh driver device's recorded defaults, textures per stage, viewport/scissor, transforms, shader and declaration objects, constants, streams, indices, scenes; Set* reference counting | `d3d9state.rs` | done, tested |
+| D3D9 resources: textures (2D/cube/volume, mip chains), surfaces, vertex/index buffers; Lock into guest-memory shadows with D3D9's pitches and block layouts, D3D9's lock rules, level surfaces sharing the texture's count | `d3d9res.rs` | done, tested |
+| D3D9 draws: DrawPrimitive/Indexed/UP, Clear, Present as backend commands (`crates/d3d9cmd`) with dirty uploads and a complete state snapshot; a recording backend by default | `d3d9draw.rs`, `crates/d3d9cmd` | done, tested |
+| The wgpu backend: textures (format conversions to D3D9's sampled values, DXT as BC), buffers, targets, translated and linked shaders, half-pixel offset, alpha test, render states as pipeline state, samplers, vertex layouts, fans; first frames pixel-exact | `crates/ddgpu` | started, tested |
+| Whole-draw reference: the same commands executed on the host's D3D9 driver and read back, for pixel comparisons with the wgpu backend | `crates/d3d9ref` (replay) | started |
+| SEH dispatch, audio and input (brief L16), remaining Windows services (brief L17), delay imports, a window/presentation host | | not started |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry
