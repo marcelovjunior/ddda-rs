@@ -52,6 +52,7 @@ class IntegerSseTests(unittest.TestCase):
         programs.append(load+'660fc4051010400003'+store)
         programs.append('5589e583ec10b801000000c9c3')  # LEAVE restores saved EBP/ESP.
         programs.append('b878563412f3c3')  # REP RET is a return, not fallthrough.
+        programs.append(load+'0f2b05003000000faef80f100500300000'+store)  # streaming store, SFENCE, load
         for op in ('0f50c0', '660f50c0', '660fd7c0'):
             programs.append(load+op+'c3')
         for op in ('660f2f0510104000', '660f2e0510104000'):

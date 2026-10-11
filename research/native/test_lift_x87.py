@@ -47,6 +47,8 @@ class X87Tests(unittest.TestCase):
             (load + integer + op + store + "c3")
             for op in ("dec1", "dec9", "dee9", "dee1", "def9", "def1")
         ]
+        programs += [op+store+'c3' for op in ('d9ea','d9ed')]
+        programs += [op+'c3' for op in ('d9ea','d9ed')]
         programs += [load + integer + "d9c9" + "dd1d00200000dd1d08200000c3",
                      load + "d9c0" + "ddd9" + store + "c3",
                      load + integer + "ded9dfe09ec3",  # fcompp; fnstsw ax; sahf

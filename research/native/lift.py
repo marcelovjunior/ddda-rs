@@ -57,7 +57,7 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
-X87_PUSH = {"fld", "fld1", "fldz", "fild"}
+X87_PUSH = {"fld", "fld1", "fldz", "fild", "fldl2e", "fldln2"}
 X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi"}
 X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr",
             "fiadd", "fisub", "fisubr", "fimul", "fidiv", "fidivr", "fxch", "fcom", "fucom", "ficom",
@@ -658,6 +658,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"x86::string(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()});")
             elif mn.startswith("prefetch"):
                 pass  # an architectural hint, not a demand memory read
+            elif mn == "sfence":
+                body.append("x86::sfence();")
             elif mn == "mov":
                 body.append(store(i, ops[0], load(i, ops[1])))
             elif mn in ("movzx", "movsx"):
@@ -1054,13 +1056,14 @@ def scan(limit=None):
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     from collections import Counter
     ok, why = [], Counter()
-    rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
-                      "AND status NOT IN ('verified', 'platform') AND size >= 1 "
+    rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE "
+                      "status NOT IN ('verified', 'platform') AND size >= 1 "
                       "ORDER BY address").fetchall()
     # verified functions are lifted too (hand ports keep their own tests): a
     # caller can only lift if its callees are lifted
     rows += db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified' "
-                       "AND NOT thunk AND size >= 1").fetchall()
+                       "AND size >= 1").fetchall()
+    db.close()
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     # a platform model's own address is never lifted: run_sparse runs the
@@ -1104,8 +1107,10 @@ def scan(limit=None):
         except Exception as e:  # noqa: BLE001
             why["error:" + type(e).__name__] += 1
     print(f"ext pass: +{len(ok) - before}", flush=True)
-    json.dump(ok, open(f"{N}/patterns/lift.json", "w"))
-    json.dump(dict(why.most_common()), open(f"{N}/patterns/lift_rejections.json", "w"))
+    with open(f"{N}/patterns/lift.json", "w") as stream:
+        json.dump(ok, stream)
+    with open(f"{N}/patterns/lift_rejections.json", "w") as stream:
+        json.dump(dict(why.most_common()), stream)
     print(len(ok), "lifted of", len(rows), "; top rejections:", why.most_common(14))
 
 

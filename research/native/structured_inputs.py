@@ -53,7 +53,9 @@ def prepare(root):
     with closing(sqlite3.connect(f'file:{lift.DB}?mode=ro', uri=True)) as db:
         # The rebuilt inventory already merges extra_functions.tsv. No
         # address ceiling: high-address game initializers are candidates.
-        rows = db.execute("SELECT address,namespace,name,size FROM functions WHERE NOT thunk AND status!='platform' AND size>=1 ORDER BY address").fetchall()
+        # Thunks are executable entry points too. Verify their actual tail
+        # transfer instead of silently excluding the inventory's thunk flag.
+        rows = db.execute("SELECT address,namespace,name,size FROM functions WHERE status NOT IN ('platform','verified') AND size>=1 ORDER BY address").fetchall()
     candidates, rejected = [], {}
     for a, ns, name, size in rows:
         if a in have or a in h.PLATFORM or a in quarantine:

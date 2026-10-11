@@ -591,8 +591,8 @@ check must stay static.
 INT3 and UD2 terminate decoding and emit explicit traps; any fixture executing
 one is rejected by the recorder's noreturn guard. This does not model SEH.
 CPUID, RDTSC and PUSHFD explicitly reject without a platform event/state
-contract. Approximate reciprocals, segment overrides and SFENCE remain
-unsupported; no host-dependent replacement or ordering assumption is made.
+contract. Approximate reciprocals and segment overrides remain unsupported;
+see the L13 evaluation below for their required execution contracts.
 
 A platform model's own address is never lifted (`scan` skips
 `harness.PLATFORM`): `run_sparse` runs the model at that address, so the
@@ -991,6 +991,31 @@ The recorder excludes a straight entry-prefix allocation only with matching
 cleanup immediately before an own return, no memory store and no further
 ESP adjustment except pushes before the first call. This remains a mock ABI
 heuristic, not proof of the callee contract; all acceptance guards remain.
+
+L13 also follows strictly bounded switches during `static_pop`, using the
+lifter's bound/remap recognizer with table-only discovery disabled. This fixes
+the zero-cleanup fallback at callees such as `0x00E0BED0` (switch jump at
+`0x00E0BF48`). Every discovered return must agree, decoded instructions cannot
+overlap, and the 512-instruction limit remains. Unknown indirect flow still
+falls back to zero; this refines a mock contract, not execution of the callee.
+
+SFENCE emits the host SFENCE with a compiler memory barrier. The instruction
+orders stores ([Intel SDM, SFENCE](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf));
+guest `Mem` writes remain synchronous. This preserves the instruction without
+claiming a guest thread, device or weak-memory model. FLDL2E/FLDLN2 execute
+through the existing saved x87 hardware state, including its control word;
+no rounded Rust constant is substituted.
+
+`probe_approx.py` is a synthetic diagnostic, not a fixture admission path.
+With MXCSR `0x1f80`, it compares legacy RCPPS/RCPSS/RSQRTPS on the host and
+Unicorn and writes private `approx-probe.json`. All 128 tested vectors per
+instruction differ on this machine (Unicorn 2.1.4). A host instruction oracle
+could compare one CPU faithfully, but would make fixtures dependent on that
+CPU's approximation behavior. It needs explicit oracle/CPU provenance and a
+cross-CPU replay policy; silently replacing Unicorn's result would hide this
+boundary. These instructions remain rejected. Likewise FS-based exception
+chain accesses (`0x00CEE947`, `0x00CEE95F`) require a guest thread/SEH contract,
+not a substitution of host FS or an ignored access.
 
 1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
    --test lifted`: prints that function's panic message (e.g. `call target`

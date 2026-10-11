@@ -1,5 +1,53 @@
 # Inventory: how much of DDDA.exe is rebuilt (Phase 0 findings)
 
+## Exhaustive residual census (L13)
+
+`research/native/residual_census.py --require-evidence` writes one private
+`LIFT_DATA/residual-census.json` table covering **every** inventory row whose
+status is neither `platform` nor `verified`, including thunks. Run it after
+rebuilding `INVENTORY_DB` privately from the generated set that passed Rust
+replay. Each row retains inventory status/size/thunk flag, an entry instruction,
+category, reason, and matching-body trial logs with seeds and failures.
+Lift rejections include diagnostic instruction addresses; direct thunk targets
+include their inventory status. Stale-body trials cannot establish evidence.
+Missing candidates, unrecorded entries, unadopted cases, and selected entries
+without inventory credit make strict census completion fail.
+
+The L12 starting database has **832** such rows: **588 non-thunks and 244
+thunks**. Its status columns are 724 untouched, 59 documented, 49 translated.
+Those statuses overlap the lifter lists; they are not additional populations:
+
+| Starting category | Entries | Evidence |
+|---|---:|---|
+| Previously excluded thunks | 244 | Inventory thunk flag, decoded jump and target |
+| Liftable but no accepted fixture | 493 | Candidate body and bounded recorder failures |
+| Lift rejection | 86 | Strict decoder/emitter rejection |
+| Quarantine | 4 | Existing invalid-return/mismatch exclusion list |
+| Explicit platform-model overlap | 5 | `harness.PLATFORM` and platform implementation |
+
+The old 497-candidate list also included four **already verified** hand ports:
+`0x008D4840`, `0x008FBDD0`, `0x0095A810`, `0x009C5890`. The missing-entry scan
+now excludes verified inventory rows and includes unverified thunks. The five
+model overlaps are `0x00CF73F0` (pool allocation), `0x00DE0B80` (allocation),
+`0x00DE0B90` (free), `0x012EFE20` (memset), and `0x012EFEA0` (memcpy). Code
+citations had given these `translated` status after platform classification;
+they are explicit replacements, not missing instruction translations. L13
+records that distinction without relabeling the shared database.
+
+No otherwise unexplained non-platform entry remains outside these categories.
+An entry's failure does not prove it is data or an invalid function: some
+supplementary entries require internal stack/register context, e.g.
+`0x00D97031` reaches an epilogue that restores a frame not established at that
+entry. Such contexts remain unverified rather than being removed from inventory.
+The final strict census has **559 entries**, all non-thunks: 467 recorder
+rejections, 83 lift rejections, four quarantines and five platform-model
+overlaps. There are **zero unaccounted, unrecorded or unadopted entries**.
+All 244 formerly excluded thunks have verified tail-transfer fixtures; they
+remain excluded from the conventional non-thunk coverage denominator.
+Input SHA-256 hashes identify the inventory and matching manifests used.
+Current resource/test results are in
+[L13 Results](tasks/L13-residual-census.md#results).
+
 ## Supplementary discovery (L10)
 
 The Ghidra export is not a complete entry-point census. Static initialization
