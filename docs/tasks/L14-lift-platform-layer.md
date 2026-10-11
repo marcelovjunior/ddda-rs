@@ -177,7 +177,23 @@ platform selection/model exclusion, status/rule independence, supplementary
 range exemption, quarantine adoption, and report evidence checks. After the
 six quarantines, subset replay passes 80,009 cases / 26,788 functions and
 seven Rust units. Final subset compile 27.87s, replay 21.67s, total 52.02s,
-minimum free RAM 19.44 GiB. Full replay result pending.
+minimum free RAM 19.44 GiB. Final required-vector `cargo test -p ddnative`
+passes all **32 Rust tests**, including **167,227 cases / 56,169 entries**.
+Successful invocation: compile 4m58s, lifted replay 90.09s, total 398.08s,
+minimum free RAM **9.70 GiB**, four jobs and incremental compilation disabled.
+Legacy tests retain their fixture-dependent behavior; the lifted test requires
+and consumes the complete private vector set.
+
+Own builds and vector runs were serialized. Main-worktree jobs repeatedly
+caused launch deferrals; an external build overlapped the tail of the completed
+zero-object run, and two full-build attempts were stopped by killing only the
+L14 Cargo trees when other shard compilers appeared. The lowest observed free
+memory was **8.29 GiB** during the second interrupted attempt; the 6 GiB
+threshold was never crossed. The final invocation completed without another
+Cargo job observed. Its timing is not a clean-build benchmark after those
+interruptions. `audit-final.json` confirms all baseline records/cases unchanged,
+matching selected/case address sets, exclusion of all ten quarantines, and
+hashes of the final pair and supplementary TSV.
 
 **Handoff/regeneration:** adopt the matching private
 `E:/ddda-re/notes/native-L14/patterns/lift.json` and `vectors/lift.json`, plus
