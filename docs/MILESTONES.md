@@ -658,3 +658,25 @@ opening (codex-31), route perf (codex-29).
   patterns/vectors and regenerate on main; the 209 remaining additions
   are listed in private `unverified-L08.json`. Source commits exclude
   generated shards and all private data; shared native data was untouched.
+
+## Batch 2026-10-11 (R01: Phase 1 runtime design)
+
+- **Designed, not implemented:** [RUNTIME.md](RUNTIME.md) proposes guest
+  memory, ABI dispatch, threading/services, graphics/audio boundaries,
+  existing-crate reuse and staged boot/title/load/co-op gates. No runtime
+  code or new gameplay behavior was added.
+- **Measured:** WinMain `0x004079E0` has 276 known direct-reachable entries,
+  89 lifted; adding the main ctor and inspected vtable roots gives 1,591
+  known, 991 lifted. The complete 43-entry non-platform-labelled direct
+  gap list is in the plan. Static graphs do not measure dynamic frequency.
+- **New blocker:** CRT initialization at `0x012EDABC..0x012EDAC9` invokes
+  5,656 non-null targets, but 5,651 are absent from inventory. Examples
+  include game DTI registration at `0x0136DDF0`; treating every high-address
+  function as replaceable CRT would skip required game initialization.
+- **Checked:** installed/analysis section bytes and 273 normal imports
+  match; read-only measurement/probe scripts and report/document consistency
+  checks pass. XAudio2 2.7 creation and thread/APC boundaries are addressed.
+  No runtime build or original-game boot was performed. Ghidra was
+  unavailable; executable evidence came from read-only disassembly.
+- **One next action:** head reviews the design, then commissions the
+  initializer and dynamic-target manifest before runtime implementation.
