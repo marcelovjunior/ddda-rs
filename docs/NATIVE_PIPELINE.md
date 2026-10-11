@@ -507,6 +507,15 @@ call handlers remain thread-local. A missing lifted target panics; it
 never falls back to an external mock. Cached patterns and vectors keep
 their previous call boundaries, so splitting needs no new recordings.
 
+**Vector runs and memory.** Each Unicorn instance gets a 32 MB translation
+buffer (`harness.TCG_BUFFER`; the 1 GB default let workers reach 4 GB).
+`lift.py vectors` collects garbage after each function, replaces a worker
+after 8 functions (`chunksize=1`, `maxtasksperchild=8`) and gives each
+function at most `LIFT_FN_SECONDS` (default 20) of seeds: loops over a
+random count of random pointers can take minutes per seed and never give a
+vector. Use `LIFT_WORKERS=6` while anything else runs, and keep a watch on
+free memory; Claude Code stops background jobs when the machine runs low.
+
 **Commands.** `PY lift.py scan` (lift everything it can; prints each
 round and the rejection reasons), `PY lift.py vectors` (parallel;
 `LIFT_WORKERS=4` to leave the PC usable), `python lift.py gen`, then
