@@ -149,6 +149,8 @@ impl Registry {
     /// Install this registry as this thread's `call_ext` handler. An
     /// unbound target panics with its [`Unbound`] report as the payload.
     pub fn install(self: &Arc<Self>) {
+        // CPUID/RDTSC in lifted code answer from the recorded machine.
+        ddnative_base::platform::set_machine(Some(std::rc::Rc::new(crate::machine::Recorded::new())));
         let me = Arc::clone(self);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
             if let Err(u) = me.call(m, cpu, target) {

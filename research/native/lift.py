@@ -39,6 +39,7 @@ SUB8 = {"al": ("eax", 0), "cl": ("ecx", 0), "dl": ("edx", 0), "bl": ("ebx", 0),
         "ah": ("eax", 8), "ch": ("ecx", 8), "dh": ("edx", 8), "bh": ("ebx", 8)}
 SUB16 = {"ax": "eax", "cx": "ecx", "dx": "edx", "bx": "ebx", "sp": "esp", "bp": "ebp", "si": "esi", "di": "edi"}
 XMM = [f"xmm{i}" for i in range(8)]
+SEGMENTS = ("es", "cs", "ss", "ds", "fs", "gs")  # read from Cpu::seg (L22)
 
 
 class Unsupported(Exception):
@@ -523,6 +524,9 @@ def lift(addr, size, callable=frozenset(), ext=False):
             return f"(({r} >> {sh}) & 0xFF)"
         if name in SUB16:
             return f"({SUB16[name]} & 0xFFFF)"
+        if name in SEGMENTS:
+            # MOV r32, Sreg zero-extends on P6 and later (Intel SDM, MOV).
+            return f"(cpu.seg.{name} as u32)"
         raise Unsupported(f"register {name}")
 
     def set_reg(name, v):
@@ -775,6 +779,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append("edx = if (eax as i32) < 0 { u32::MAX } else { 0 };")
             elif mn.startswith("set"):
                 body.append(store(i, ops[0], f"fl.cond(\"{mn[3:]}\") as u32"))
+            elif mn == "push" and ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) in SEGMENTS:
+                # A 32-bit PUSH Sreg writes 2 or 4 bytes depending on the
+                # processor model (Intel SDM, PUSH): no single semantics.
+                raise Unsupported("push segment register (model-specific width)")
             elif mn == "push":
                 body.append(f"{{ let v = {load(i, ops[0])}; esp = esp.wrapping_sub(4); m.set_u32(esp, v); }}")
             elif mn == "pop":
@@ -787,8 +795,14 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f'panic!("guest {mn} trap at 0x{i.address:08X}");')
                 terminated = True
                 break
-            elif mn in ("cpuid", "rdtsc", "pushfd"):
-                raise Unsupported(f"platform-dependent {mn} (no event/state contract)")
+            elif mn in ("cpuid", "rdtsc"):
+                # The machine answers (platform::Machine): the runtime's
+                # recorded profile, or the events a vector recorded.
+                body.append(f"crate::platform::{mn}(cpu);")
+            elif mn == "pushfd":
+                body.append("{ let v = x86::pushfd_image(cpu); esp = esp.wrapping_sub(4); m.set_u32(esp, v); }")
+            elif mn == "popfd":
+                body.append("{ let v = m.u32(esp); esp = esp.wrapping_add(4); x86::popfd(cpu, v); }")
             elif mn in ("ret", "retn", "repz ret"):
                 extra = ops[0].imm if ops else 0
                 body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
@@ -1591,6 +1605,21 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
     }})
 }}
 
+/// The CPUID/RDTSC answers a vector recorded, in order (platform::Machine).
+struct Recorded(RefCell<VecDeque<Value>>);
+impl ddnative::platform::Machine for Recorded {{
+    fn cpuid(&self, leaf: u32, subleaf: u32) -> [u32; 4] {{
+        let e = self.0.borrow_mut().pop_front().expect("unrecorded cpuid");
+        assert_eq!((e[0].as_str(), u(&e[1]), u(&e[2])), (Some("cpuid"), leaf, subleaf), "cpuid leaf/subleaf");
+        [u(&e[3]), u(&e[4]), u(&e[5]), u(&e[6])]
+    }}
+    fn rdtsc(&self) -> u64 {{
+        let e = self.0.borrow_mut().pop_front().expect("unrecorded rdtsc");
+        assert_eq!(e[0].as_str(), Some("rdtsc"), "machine event");
+        u(&e[1]) as u64 | (u(&e[2]) as u64) << 32
+    }}
+}}
+
 {decl}
 #[test]
 fn every_lifted_function_matches_the_original() {{
@@ -1617,9 +1646,16 @@ fn every_lifted_function_matches_the_original() {{
         let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
             .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
         x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
+        let machine = Rc::new(Recorded(RefCell::new(c.get("machine").and_then(|v| v.as_array()).cloned()
+            .unwrap_or_default().into_iter().collect())));
+        ddnative::platform::set_machine(Some(machine.clone()));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
+            if let Some(s) = c.get("segments") {{
+                let k = |n: &str| u(&s[n]) as u16;
+                cpu.seg = x86::Segments {{ es: k("es"), cs: k("cs"), ss: k("ss"), ds: k("ds"), fs: k("fs"), gs: k("gs") }};
+            }}
             // x87 entry contract: the values the recorder left on the stack, deepest first
             for v in c.get("st_in").and_then(|v| v.as_array()).into_iter().flatten().rev() {{
                 let mut data = [0u8; 10];
@@ -1636,7 +1672,7 @@ fn every_lifted_function_matches_the_original() {{
             }}
             cpu.exit()
         }}));
-        let all_calls_made = calls.borrow().is_empty();
+        let all_calls_made = calls.borrow().is_empty() && machine.0.borrow().is_empty();
         let ok = match result {{
             Err(e) => {{
                 if debug == Some(addr) {{

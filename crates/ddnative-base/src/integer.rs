@@ -269,3 +269,24 @@ pub fn scan(m: &mut dyn Mem, cpu: &mut Cpu, width: u32, repeat: u8) {
         }
     }
 }
+
+/// EFLAGS bits besides the arithmetic flags and DF that a POPFD at CPL3
+/// changes: NT (14), AC (18), ID (21). IF, IOPL, RF, VIF and VIP keep their
+/// values (measured with research/native/probe_machine.rs, L22).
+pub const SYSTEM_FLAGS: u32 = 0x4000 | 0x4_0000 | 0x20_0000;
+
+/// The EFLAGS image PUSHFD stores: the arithmetic flags (all must be
+/// defined), DF, IF and reserved bit 1 set, and the NT/AC/ID state.
+pub fn pushfd_image(cpu: &Cpu) -> u32 {
+    let (value, defined) = cpu.fl.snapshot();
+    assert_eq!(defined & ARITH_FLAGS, ARITH_FLAGS, "pushfd of undefined x86 flags");
+    (value & ARITH_FLAGS) | ((cpu.df as u32) << 10) | 0x202 | (cpu.sys_flags & SYSTEM_FLAGS)
+}
+
+/// POPFD at CPL3. TF would single-step (a trap): unsupported.
+pub fn popfd(cpu: &mut Cpu, value: u32) {
+    assert_eq!(value & 0x100, 0, "popfd sets TF (single-step trap unsupported)");
+    cpu.fl = Flags::new(RAW, 0, 0, value & ARITH_FLAGS, 32);
+    cpu.df = value & 0x400 != 0;
+    cpu.sys_flags = value & SYSTEM_FLAGS;
+}

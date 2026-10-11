@@ -445,3 +445,43 @@ fn added_x87_forms_match_cpu() {
     st.exec::<0x18dd>(&mut data);
     assert_eq!(f64::from_le_bytes(data[..8].try_into().unwrap()), 1.0);
 }
+
+#[test]
+fn pushfd_popfd_follow_cpl3() {
+    // L22: measured in a 32-bit Windows process (research/native/probe_machine.rs):
+    // IF and bit 1 read as set; POPFD changes the arithmetic flags, DF, NT, AC, ID only.
+    let mut cpu = Cpu::default();
+    cpu.fl = Flags::new(RAW, 0, 0, 0x44, 32); // ZF, PF
+    assert_eq!(pushfd_image(&cpu), 0x246);
+    popfd(&mut cpu, 0x0020_0000 | 0x4_0000 | 0x4000 | 0x400 | 0x3000 | 0x8d5);
+    assert_eq!(pushfd_image(&cpu), 0x0020_0000 | 0x4_0000 | 0x4000 | 0x400 | 0x202 | 0x8d5, "IOPL is kept");
+    assert!(cpu.df);
+    assert_eq!(cpu.fl.snapshot().0 & ARITH_FLAGS, 0x8d5);
+    assert_eq!(Cpu::default().seg, Segments { es: 0x2b, cs: 0x23, ss: 0x2b, ds: 0x2b, fs: 0x53, gs: 0x2b });
+}
+
+#[test]
+#[should_panic(expected = "undefined x86 flags")]
+fn pushfd_of_undefined_flags_traps() {
+    let mut cpu = Cpu::default();
+    cpu.fl = Flags::partial(0, 0x40);
+    pushfd_image(&cpu);
+}
+
+#[test]
+fn machine_answers_cpuid_and_rdtsc() {
+    use ddnative_base::platform::{self, Machine};
+    struct Fixed;
+    impl Machine for Fixed {
+        fn cpuid(&self, leaf: u32, subleaf: u32) -> [u32; 4] { [leaf, subleaf, 3, 4] }
+        fn rdtsc(&self) -> u64 { 0x1122_3344_5566_7788 }
+    }
+    platform::set_machine(Some(std::rc::Rc::new(Fixed)));
+    let mut cpu = Cpu::default();
+    (cpu.eax, cpu.ecx) = (7, 1);
+    platform::cpuid(&mut cpu);
+    assert_eq!((cpu.eax, cpu.ebx, cpu.ecx, cpu.edx), (7, 1, 3, 4));
+    platform::rdtsc(&mut cpu);
+    assert_eq!((cpu.eax, cpu.edx), (0x5566_7788, 0x1122_3344));
+    platform::set_machine(None);
+}

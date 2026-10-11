@@ -506,6 +506,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     import x87_host
     oracle = x87_host.Oracle(lambda uc_, i, op: effective_address(uc_, i, op))
     uc.hook_add(UC_HOOK_CODE, oracle.on_flush)
+    # L22: CPUID/RDTSC answers, selector reads and CPL3 POPFD (machine_events).
+    import machine_events
+    machine = machine_events.Machine(uc)
+    uc.hook_add(UC_HOOK_CODE, machine.on_code)
     base, secs = image()
     pages_in = {}
 
@@ -1046,6 +1050,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     oracle.flush(uc)  # the last x87 instruction's host result
     if oracle.problem:
         bad.append(oracle.problem)
+    machine.flush(uc)
+    if machine.problem:
+        bad.append(machine.problem)
     if not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
@@ -1092,5 +1099,6 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),
             **({"st_in": st_in} if st_in else {}),
+            **machine.result(uc),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {})}

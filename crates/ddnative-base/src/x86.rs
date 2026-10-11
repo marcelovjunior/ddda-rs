@@ -72,6 +72,11 @@ pub struct Cpu {
     pub df: bool,
     /// Guest thread's FS segment base (TEB); other supported segments are flat.
     pub fs_base: u32,
+    /// Segment selectors, read by `mov r/m, sreg` (L22).
+    pub seg: Segments,
+    /// EFLAGS bits outside `fl` and `df` that POPFD can change at CPL3:
+    /// NT, AC and ID (L22; IF and reserved bit 1 read as set).
+    pub sys_flags: u32,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
 }
@@ -81,7 +86,8 @@ impl From<Entry> for Cpu {
         let mut xmm = [[0u32; 4]; 8];
         xmm[0][0] = r.xmm0;
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
-              xmm, fl: Flags::default(), df: false, fs_base: 0, st: Default::default() }
+              xmm, fl: Flags::default(), df: false, fs_base: 0, seg: Segments::default(), sys_flags: 0,
+              st: Default::default() }
     }
 }
 
@@ -89,6 +95,20 @@ impl Cpu {
     pub fn exit(&self) -> Exit {
         Exit { eax: self.eax, ecx: self.ecx, edx: self.edx, ebx: self.ebx, esp: self.esp, ebp: self.ebp,
                esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.top_f32() }
+    }
+}
+
+/// The segment selectors of a 32-bit Windows thread (WOW64): CS 0x23, FS
+/// 0x53 (its base is `Cpu::fs_base`), the others 0x2B. Measured on Windows
+/// 11 26200 with research/native/probe_machine.rs (L22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segments {
+    pub es: u16, pub cs: u16, pub ss: u16, pub ds: u16, pub fs: u16, pub gs: u16,
+}
+
+impl Default for Segments {
+    fn default() -> Self {
+        Segments { es: 0x2b, cs: 0x23, ss: 0x2b, ds: 0x2b, fs: 0x53, gs: 0x2b }
     }
 }
 
