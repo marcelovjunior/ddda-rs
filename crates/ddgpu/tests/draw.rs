@@ -292,3 +292,35 @@ fn random_states_and_formats_match_the_d3d9_driver() {
     }
     assert!(failures.is_empty());
 }
+
+#[test]
+fn copies_fills_and_read_back() {
+    use d3d9cmd::{CopyCall, FillCall};
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else { return };
+    // source: the textured draw's target; destination: another 4x4 target
+    let texels: Vec<u8> = [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 255, 255]].concat();
+    gpu.upload(Upload::Image { resource: 0x200, index: 0, format: 21, width: 2, height: 2, depth: 1, pitch: 8, slice: 16, bytes: texels });
+    let mut states = [0u32; 14];
+    for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
+        states[k] = v;
+    }
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
+    gpu.draw(&draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]));
+    let other = Target { surface: 0x101, format: 21, width: 4, height: 4, texture: None, level: 0 };
+    // a same-size copy is exact
+    gpu.copy(&CopyCall { src: back_buffer(), src_rect: [0; 4], dst: other.clone(), dst_rect: [0; 4], filter: 1 });
+    let a = gpu.read_back(&back_buffer()).unwrap();
+    let b = gpu.read_back(&other).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(&a[0..4], &[0, 0, 255, 255], "D3D9 A8R8G8B8 byte order (B, G, R, A): red");
+    // a fill of the top-left 2x2 rectangle
+    gpu.fill(&FillCall { dst: other.clone(), rect: [0, 0, 2, 2], colour: 0xFF20_4060 });
+    let b = gpu.read_back(&other).unwrap();
+    assert_eq!(&b[0..4], &[0x60, 0x40, 0x20, 0xFF]);
+    assert_eq!(&b[(2 * 4 + 2) * 4..(2 * 4 + 2) * 4 + 4], &a[(2 * 4 + 2) * 4..(2 * 4 + 2) * 4 + 4], "outside the rectangle unchanged");
+    // a scaled copy (point): the 4x4 source's top-left 2x2 into the whole 4x4 target
+    gpu.copy(&CopyCall { src: back_buffer(), src_rect: [0, 0, 2, 2], dst: other.clone(), dst_rect: [0; 4], filter: 1 });
+    let b = gpu.read_back(&other).unwrap();
+    assert!(b.chunks_exact(4).all(|px| px == [0, 0, 255, 255]), "the top-left 2x2 of the source is all red");
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+}

@@ -9,6 +9,7 @@
 //! headless for now: Present counts frames and nothing is drawn; methods
 //! are added as the game reaches them, the rest stop with their name.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3DFMT_X8R8G8B8, D3D_OK};
+use crate::d3d9copy as cp;
 use crate::d3d9draw as draw;
 use crate::d3d9res as res;
 use crate::d3d9state as st;
@@ -57,6 +58,8 @@ pub enum Kind {
     Surface { device: u32, desc: SurfaceDesc, container: u32, owner: u32, image: crate::d3d9res::Image },
     Texture { device: u32, data: Box<crate::d3d9res::TextureData> },
     Buffer { device: u32, data: Box<crate::d3d9res::BufferData> },
+    /// IDirect3DQuery9: D3DQUERYTYPE, whether issued, the sampled value
+    Query { device: u32, ty: u32, issued: bool, value: u64 },
 }
 
 #[derive(Debug)]
@@ -138,7 +141,7 @@ pub(crate) fn release_of(object: u32) -> u32 {
                 data.image.free();
                 vec![]
             }
-            Kind::Shader { .. } | Kind::Declaration { .. } => vec![],
+            Kind::Shader { .. } | Kind::Declaration { .. } | Kind::Query { .. } => vec![],
         };
         for h in held {
             release_of(h);
@@ -497,7 +500,7 @@ fn get_device(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (this, out) = (arg(m, cpu, 0), arg(m, cpu, 1));
     let device = objects(|o| match o.live.get(&this).map(|x| &x.kind) {
         Some(Kind::SwapChain { device, .. }) | Some(Kind::Surface { device, .. }) | Some(Kind::Shader { device, .. })
-        | Some(Kind::Declaration { device, .. }) | Some(Kind::Texture { device, .. }) | Some(Kind::Buffer { device, .. }) => *device,
+        | Some(Kind::Declaration { device, .. }) | Some(Kind::Texture { device, .. }) | Some(Kind::Buffer { device, .. }) | Some(Kind::Query { device, .. }) => *device,
         _ => panic!("GetDevice on {this:#x}"),
     });
     hand_out(m, out, device);
@@ -578,6 +581,8 @@ pub const INTERFACES: &[Spec] = &[
             (17, present), (18, get_back_buffer), (23, res::create_texture), (24, res::create_volume_texture),
             (25, res::create_cube_texture), (26, res::create_vertex_buffer), (27, res::create_index_buffer),
             (28, res::create_render_target), (29, res::create_depth_stencil_surface),
+            (30, cp::update_surface), (31, cp::update_texture), (32, cp::get_render_target_data),
+            (34, cp::stretch_rect), (35, cp::color_fill), (118, cp::create_query),
             (36, res::create_offscreen_plain_surface), (37, st::set_render_target), (38, get_render_target),
             (39, st::set_depth_stencil_surface), (40, get_depth_stencil_surface), (41, st::begin_scene),
             (42, st::end_scene), (43, draw::clear), (44, st::set_transform), (45, st::get_transform),
@@ -672,6 +677,15 @@ pub const INTERFACES: &[Spec] = &[
             (11, res::buffer_lock), (12, res::buffer_unlock), (13, res::buffer_get_desc),
         ],
         names: IBUFFER9,
+    },
+    Spec {
+        name: "IDirect3DQuery9",
+        slots: 8,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (4, cp::query_get_type),
+            (5, cp::query_get_data_size), (6, cp::query_issue), (7, cp::query_get_data),
+        ],
+        names: &["QueryInterface", "AddRef", "Release", "GetDevice", "GetType", "GetDataSize", "Issue", "GetData"],
     },
     Spec {
         name: "IDirect3DVertexShader9",

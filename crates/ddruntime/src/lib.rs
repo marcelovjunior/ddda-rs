@@ -15,6 +15,7 @@
 pub mod audio;
 pub mod input;
 pub mod d3d9;
+pub mod d3d9copy;
 pub mod d3d9dev;
 pub mod d3d9draw;
 pub mod d3d9res;

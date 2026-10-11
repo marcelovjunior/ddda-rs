@@ -894,3 +894,46 @@ fn a_draw_reaches_the_backend_with_its_uploads_and_complete_state() {
     assert_eq!(com(&mut s, dev, 17, &[0, 0, 0, 0]), 0);
     assert_eq!(recorded(|r| r.presents).unwrap(), 1);
 }
+
+#[test]
+fn surface_copies_and_queries_follow_d3d9() {
+    use ddruntime::d3d9draw::recorded;
+    let Some((mut s, dev)) = device_session() else { return };
+    let scratch = 0x7EFF_0A00;
+    let (out, locked) = (scratch, scratch + 0x10);
+    // a system-memory surface written by the CPU, copied to a default-pool one
+    assert_eq!(com(&mut s, dev, 36, &[4, 4, 21, 2, out, 0]), 0);
+    let sys = s.mem.u32(out);
+    assert_eq!(com(&mut s, sys, 13, &[locked, 0, 0]), 0);
+    let bits = s.mem.u32(locked + 4);
+    s.mem.set_u32(bits + 16 + 4, 0x1122_3344); // row 1, column 1
+    com(&mut s, sys, 14, &[]);
+    assert_eq!(com(&mut s, dev, 23, &[4, 4, 1, 0x200, 21, 0, out, 0]), 0);
+    let tex = s.mem.u32(out);
+    com(&mut s, tex, 18, &[0, out]);
+    let level = s.mem.u32(out);
+    let point = scratch + 0x40;
+    s.mem.set_u32(point, 1);
+    s.mem.set_u32(point + 4, 1);
+    assert_eq!(com(&mut s, dev, 30, &[sys, 0, level, point]), 0, "UpdateSurface to (1, 1)");
+    com(&mut s, tex, 19, &[0, locked, 0, 0x10]);
+    let dst = s.mem.u32(locked + 4);
+    assert_eq!(s.mem.u32(dst + 2 * 16 + 2 * 4), 0x1122_3344, "the texel moved by (1, 1)");
+    com(&mut s, tex, 20, &[0]);
+    // StretchRect and ColorFill reach the backend
+    com(&mut s, dev, 38, &[0, out]);
+    let back = s.mem.u32(out);
+    assert_eq!(com(&mut s, dev, 34, &[level, 0, back, 0, 2]), 0);
+    assert_eq!(com(&mut s, dev, 35, &[back, 0, 0xFF00_FF00]), 0);
+    assert_eq!(recorded(|r| (r.copies.len(), r.fills.len())).unwrap(), (1, 1));
+    // an event query completes once issued
+    assert_eq!(com(&mut s, dev, 118, &[8, 0]), 0, "event queries are supported");
+    assert_eq!(com(&mut s, dev, 118, &[8, out]), 0);
+    let q = s.mem.u32(out);
+    let data = scratch + 0x50;
+    assert_eq!(com(&mut s, q, 7, &[data, 4, 1]), 1, "S_FALSE before Issue");
+    assert_eq!(com(&mut s, q, 6, &[1]), 0);
+    assert_eq!(com(&mut s, q, 7, &[data, 4, 1]), 0);
+    assert_eq!(s.mem.u32(data), 1);
+    assert_eq!(com(&mut s, dev, 118, &[99, 0]), ddruntime::d3d9::D3DERR_NOTAVAILABLE);
+}
