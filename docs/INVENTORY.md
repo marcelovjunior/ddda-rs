@@ -103,23 +103,26 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off (2026-10-11, commit b541eb1; the gate
+With the platform layer split off (2026-10-11, commit 9091c6c; the gate
 prints the current numbers after every run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
 | platform (Rust replaces) | 12,735 | 25.2% | 5.2% |
-| verified (1:1 + differential test) | 28,675 | 56.8% | 47.0% |
-| translated (cited, not verified) | 666 | 1.3% | 4.8% |
-| documented only | 280 | 0.6% | 1.6% |
-| untouched | 8,122 | 16.1% | 41.4% |
+| verified (1:1 + differential test) | 31,590 | 62.6% | 72.7% |
+| translated (cited, not verified) | 414 | 0.8% | 2.4% |
+| documented only | 195 | 0.4% | 0.9% |
+| untouched | 5,544 | 11.0% | 18.8% |
 
 Nearly all verified functions come from the lifter (`research/native/lift.py`,
-docs/NATIVE_PIPELINE.md "The lifter"): 28,665 lifted, most of them in ext
-mode (calls to untranslated code mocked and replayed), with exact x87
-arithmetic since L05. The scan has no size bounds; it lifts 31,977 of the
-37,728 non-platform functions (85%); the rest lack vectors or hit
-unsupported code: "disassembly" 1,025, indirect 860, "falls" 820, sbb 414,
-packed 362, div 263, ...
+docs/NATIVE_PIPELINE.md "The lifter"): 31,580 lifted, most of them in ext
+mode (calls to untranslated code mocked and replayed). The scan lifts
+36,793 of the 37,728 non-platform functions (97.5%); about 3,200 of those
+still lack a usable vector (random inputs cannot drive them: loops over
+random counts of random pointers and the like; they need structured
+inputs). The remaining rejections are indirect jumps that are not switch
+tables (717), x87 inputs a mocked callee would have to provide (147), int3
+(26), approximate reciprocals rsqrtps/rcpps (30, CPU-specific results) and
+a handful of others.
 
 The game to rebuild is about **37,970 functions** (14.3 MB of code).
