@@ -555,13 +555,18 @@ impl WgpuBackend {
             _ => None,
         };
         // pipeline state
-        let blend = (state(27) != 0).then(|| {
-            let colour = wgpu::BlendComponent { src_factor: blend_factor(state(19)), dst_factor: blend_factor(state(20)), operation: blend_op(state(171)) };
-            let alpha = if state(206) != 0 {
-                wgpu::BlendComponent { src_factor: blend_factor(state(207)), dst_factor: blend_factor(state(208)), operation: blend_op(state(209)) }
+        // D3D9 ignores the factors of MIN/MAX blending; wgpu wants them One
+        let component = |src: u32, dst: u32, op: u32| {
+            let operation = blend_op(op);
+            if matches!(operation, wgpu::BlendOperation::Min | wgpu::BlendOperation::Max) {
+                wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation }
             } else {
-                colour
-            };
+                wgpu::BlendComponent { src_factor: blend_factor(src), dst_factor: blend_factor(dst), operation }
+            }
+        };
+        let blend = (state(27) != 0).then(|| {
+            let colour = component(state(19), state(20), state(171));
+            let alpha = if state(206) != 0 { component(state(207), state(208), state(209)) } else { colour };
             wgpu::BlendState { color: colour, alpha }
         });
         let writes = [168u32, 190, 191, 192];

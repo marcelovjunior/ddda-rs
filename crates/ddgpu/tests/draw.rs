@@ -188,3 +188,107 @@ fn frames_match_the_d3d9_driver() {
     let max = ours.iter().zip(&theirs).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
     assert!(max <= 1, "blended: ours {:?} / D3D9 {:?}", &ours[..4], &theirs[..4]);
 }
+
+/// xorshift32
+struct Rng(u32);
+impl Rng {
+    fn next(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        self.0
+    }
+    fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+        v[(self.next() as usize) % v.len()]
+    }
+}
+
+/// Random texel bytes of a 4x4 texture in `format`, with its pitch.
+fn texels(rng: &mut Rng, format: u32) -> (Vec<u8>, u32) {
+    let dxt = |c: &[u8; 4]| u32::from_le_bytes(*c);
+    let (bytes, pitch) = if format == dxt(b"DXT1") {
+        (8, 8)
+    } else if format == dxt(b"DXT3") || format == dxt(b"DXT5") {
+        (16, 16)
+    } else {
+        let bpp = match format { 21 | 22 | 32 | 33 => 4, 23 | 24 | 25 | 26 | 51 => 2, _ => 1 };
+        (16 * bpp, 4 * bpp)
+    };
+    ((0..bytes).map(|_| rng.next() as u8).collect(), pitch)
+}
+
+#[test]
+fn random_states_and_formats_match_the_d3d9_driver() {
+    let (Some(mut d3d9), Some(_)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let cases: usize = std::env::var("DDGPU_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(150);
+    let formats = [21u32, 22, 23, 24, 25, 26, 50, 51, 28, 32, 33, u32::from_le_bytes(*b"DXT1"), u32::from_le_bytes(*b"DXT3"), u32::from_le_bytes(*b"DXT5")];
+    let mut rng = Rng(0xC0FF_EE11);
+    let mut failures = Vec::new();
+    let mut unsupported = std::collections::BTreeSet::new();
+    for case in 0..cases {
+        let format = rng.pick(&formats);
+        let (bytes, pitch) = texels(&mut rng, format);
+        let dxt = pitch >= 8 && (format > 255);
+        let upload = Upload::Image { resource: 0x300, index: 0, format, width: 4, height: 4, depth: 1, pitch, slice: if dxt { pitch } else { pitch * 4 }, bytes };
+        let mut states = [0u32; 14];
+        let address = rng.pick(&[1u32, 2, 3]);
+        let filter = rng.pick(&[1u32, 2]);
+        for (k, v) in [(1, address), (2, address), (3, address), (5, filter), (6, filter)] {
+            states[k] = v;
+        }
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, states };
+        let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
+        // random fixed-function state
+        let blend = rng.next() % 2;
+        let src = rng.pick(&[1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let dst = rng.pick(&[1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let op = rng.pick(&[1u32, 2, 3, 4, 5]);
+        let alpha_test = rng.next() % 2;
+        let alpha_func = rng.pick(&[1u32, 2, 3, 4, 5, 6, 7, 8]);
+        let alpha_ref = rng.next() % 256;
+        let mask = rng.next() % 16;
+        let cull = rng.pick(&[1u32, 2, 3]);
+        d.render_states.retain(|s| ![22, 27, 168].contains(&s.0));
+        d.render_states.extend([(22, cull), (27, blend), (19, src), (20, dst), (171, op), (15, alpha_test), (25, alpha_func), (24, alpha_ref), (168, mask)]);
+        d.render_states.sort();
+        // random winding: swap two vertices half the time (CW vs CCW)
+        if rng.next() % 2 == 1 {
+            if let Vertices::Inline { bytes, .. } = &mut d.vertices {
+                let (a, b) = bytes.split_at_mut(24);
+                a.swap_with_slice(&mut b[..24]);
+            }
+        }
+        let clear = ClearCall { colour: rng.next(), ..blue_clear() };
+        let theirs = match d3d9.render(&[upload.clone()], Some(&clear), &[d.clone()], &back_buffer()) {
+            Ok(f) => f.rgba,
+            Err(e) if e.contains("CreateTexture") => {
+                // the driver does not offer this format as a texture
+                unsupported.insert(format);
+                continue;
+            }
+            Err(e) => panic!("D3D9: {e}"),
+        };
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        gpu.upload(upload);
+        gpu.clear(&clear);
+        gpu.draw(&d);
+        gpu.present(&back_buffer());
+        if !gpu.errors.is_empty() {
+            failures.push(format!("case {case}: backend error {:?}", gpu.errors));
+            continue;
+        }
+        let ours = gpu.last_frame.unwrap().rgba;
+        let max = ours.iter().zip(&theirs).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        if max > 1 {
+            failures.push(format!("case {case}: format {format:#x} address {address} filter {filter} blend {blend} ({src},{dst},op {op}) alpha test {alpha_test} (func {alpha_func}, ref {alpha_ref}) mask {mask:#x} cull {cull}: max diff {max}, ours {:?} / D3D9 {:?}", &ours[..8], &theirs[..8]));
+        }
+    }
+    eprintln!("{} of {cases} cases differ; formats the driver refuses as textures: {unsupported:x?}", failures.len());
+    for f in failures.iter().take(12) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty());
+}
