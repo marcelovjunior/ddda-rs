@@ -56,6 +56,20 @@ caller-frame helpers (e.g. paired prolog/epilog fixtures in a caller-shaped
 frame, or a declared exit-ESP relation checked exactly), record them and
 0x01306F7F, and report. No address exceptions without a general rule.
 
+## Part C (Codex, with part B): a strategy for worker-thread loops
+
+The game's worker threads are loops of the shape "wait for an event until
+the wait returns 0, then break if a quit flag in memory is set, else do one
+step and signal" (the renderer worker 0x00DAC090, `DAT_018D08F4+0xDE`; the
+resource worker 0x00DBA9A0). No current strategy drives them: random mock
+returns almost never make the wait return 0 (runaway), and zero inputs make
+the wait succeed but keep the flag clear forever (runaway). Add a
+structured-input strategy in which mocked calls return 0 while memory stays
+random (`mockzero-v1`, a separate strategy as before), record the remaining
+runaway/outside-image failures with it, and report what verifies; these two
+thread entries first (the runtime cannot run their threads until they are
+lifted and verified).
+
 ## Rules
 
 As before (docs/tasks/L12-remaining-lift-rejections.md, "Rules"):
