@@ -11,3 +11,6 @@ d3d9cmd = { path = "../d3d9cmd" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9wgsl = { path = "../d3d9wgsl" }
 wgpu = "29.0.4"
+
+[dev-dependencies]
+d3d9ref = { path = "../d3d9ref" }

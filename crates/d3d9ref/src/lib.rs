@@ -218,6 +218,9 @@ macro_rules! com {
     }};
 }
 
+mod replay;
+pub use replay::Frame;
+
 unsafe fn release(o: Obj) {
     if !o.is_null() {
         let f: unsafe extern "system" fn(Obj) -> u32 = std::mem::transmute(method(o, 2));

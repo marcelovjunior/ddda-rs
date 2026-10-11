@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 d3d9shader = { path = "../d3d9shader" }
+d3d9cmd = { path = "../d3d9cmd" }
 
 [dev-dependencies]
 mtarc = { path = "../mtarc" }

@@ -133,3 +133,58 @@ fn a_textured_triangle_samples_the_uploaded_level() {
     assert_eq!(px(0, 3), &[0, 0, 255, 255]);
     assert_eq!(px(3, 3), &[255, 255, 255, 255]);
 }
+
+/// The same commands on the host's D3D9 driver and on the wgpu backend
+/// produce the same pixels.
+fn compare(uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall]) -> (Vec<u8>, Vec<u8>) {
+    let mut d3d9 = d3d9ref::Oracle::new().expect("D3D9");
+    let reference = d3d9.render(uploads, Some(clear), draws, &back_buffer()).expect("D3D9 render");
+    let mut gpu = ddgpu::WgpuBackend::headless().expect("adapter");
+    for u in uploads {
+        gpu.upload(u.clone());
+    }
+    gpu.clear(clear);
+    for d in draws {
+        gpu.draw(d);
+    }
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    gpu.present(&back_buffer());
+    (gpu.last_frame.unwrap().rgba, reference.rgba)
+}
+
+fn blue_clear() -> ClearCall {
+    ClearCall { rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0, targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0] }
+}
+
+#[test]
+fn frames_match_the_d3d9_driver() {
+    if d3d9ref::Oracle::new().is_none() || ddgpu::WgpuBackend::headless().is_none() {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    }
+    // constant colour
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [0.25f32.to_bits(), 0.75f32.to_bits(), 0.2f32.to_bits(), 1f32.to_bits()];
+    let (ours, theirs) = compare(&[], &blue_clear(), &[draw(ps_constant(), c.clone(), vec![])]);
+    assert_eq!(ours, theirs, "constant colour");
+    // textured
+    let texels: Vec<u8> = [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 255, 255]].concat();
+    let upload = Upload::Image { resource: 0x200, index: 0, format: 21, width: 2, height: 2, depth: 1, pitch: 8, slice: 16, bytes: texels };
+    let mut states = [0u32; 14];
+    for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
+        states[k] = v;
+    }
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
+    let (ours, theirs) = compare(&[upload], &blue_clear(), &[draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding])]);
+    assert_eq!(ours, theirs, "textured");
+    // alpha blending over the clear colour: SRCALPHA / INVSRCALPHA
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 0.0f32.to_bits(), 0.0f32.to_bits(), 0.25f32.to_bits()];
+    let mut d = draw(ps_constant(), c, vec![]);
+    d.render_states.extend([(27, 1), (19, 5), (20, 6), (171, 1)]);
+    d.render_states.sort();
+    d.render_states.dedup_by_key(|s| s.0);
+    let (ours, theirs) = compare(&[], &blue_clear(), &[d]);
+    let max = ours.iter().zip(&theirs).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+    assert!(max <= 1, "blended: ours {:?} / D3D9 {:?}", &ours[..4], &theirs[..4]);
+}
