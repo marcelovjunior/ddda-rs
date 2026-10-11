@@ -70,3 +70,76 @@ mod alu {
         }
     }
 }
+#[cfg(target_arch = "x86_64")]
+mod x87_exact {
+    use ddnative::x87::X87;
+    use ddnative::x86::{Flags, ADD};
+
+    fn load_i64(x: &mut X87, v: i64) {
+        let mut b = [0; 10]; b[..8].copy_from_slice(&v.to_le_bytes()); x.exec::<0x28df>(&mut b);
+    }
+    fn control(x: &mut X87, cw: u16) {
+        let mut b = [0; 10]; b[..2].copy_from_slice(&cw.to_le_bytes()); x.exec::<0x28d9>(&mut b);
+    }
+    fn integer(x: &mut X87) -> i64 {
+        let mut b = [0; 10]; x.exec::<0x38df>(&mut b); i64::from_le_bytes(b[..8].try_into().unwrap())
+    }
+    #[test]
+    fn extended_values_and_precision_control() {
+        for (cw, want) in [(0x037f, 1), (0x027f, 0), (0x007f, 0)] {
+            let mut x = X87::default(); control(&mut x, cw);
+            load_i64(&mut x, 1i64 << 60); x.register::<0xe8d9>(); // fld1
+            x.register::<0xc1de>(); // faddp st(1), st(0)
+            load_i64(&mut x, 1i64 << 60); x.register::<0xe9de>(); // fsubp st(1), st(0)
+            assert_eq!(integer(&mut x), want);
+            assert!(x.is_empty()); assert_eq!(x.control(), cw);
+        }
+    }
+    #[test]
+    fn rounding_and_integer_indefinite() {
+        for (rc, positive, negative) in [(0, 2, -2), (1, 1, -2), (2, 2, -1), (3, 1, -1)] {
+            let mut x = X87::default(); control(&mut x, 0x037f | rc << 10);
+            x.push(1.5f32.to_bits()); assert_eq!(integer(&mut x), positive);
+            x.push((-1.5f32).to_bits()); assert_eq!(integer(&mut x), negative);
+        }
+        let mut x = X87::default(); x.push(f32::INFINITY.to_bits());
+        assert_eq!(integer(&mut x), i64::MIN); assert_ne!(x.status() & 1, 0);
+    }
+    #[test]
+    fn compare_status_top_and_flags() {
+        assert_eq!(Flags::default().lahf(), 2);
+        assert_eq!(Flags::new(ADD, 15, 1, 16, 32).lahf() & 0x10, 0x10);
+        for (a, b, condition) in [(1., 2., 0x100), (2., 1., 0), (1., 1., 0x4000)] {
+            let mut x = X87::default(); x.push((b as f32).to_bits()); x.push((a as f32).to_bits());
+            x.register::<0xd9d8>(); // fcomp st(1)
+            assert_eq!(x.status() & 0x4500, condition);
+            assert_eq!((x.status() >> 11) & 7, 7);
+            let mut f = Flags::new(ADD, 0x7fffffff, 1, 0x80000000, 32);
+            f.sahf((x.status() >> 8) as u8);
+            assert!(f.of()); assert_eq!(f.cf(), condition & 0x100 != 0);
+            assert_eq!(f.zf(), condition & 0x4000 != 0);
+            assert_eq!(f.lahf() & 0xd5, (x.status() >> 8) as u8 & 0xd5);
+        }
+    }
+    #[test]
+    fn qword_registers_sqrt_and_host_state() {
+        let mut x = X87::default();
+        let mut data = [0; 10]; data[..8].copy_from_slice(&(1.0f64 + f64::EPSILON).to_bits().to_le_bytes());
+        x.exec::<0x00dd>(&mut data); x.register::<0xc0d9>(); // fld st(0)
+        let mut out = [0; 10]; x.exec::<0x18dd>(&mut out);
+        assert_eq!(data[..8], out[..8]);
+        x.push(4f32.to_bits()); x.register::<0xfad9>();
+        assert_eq!(x.top_f32(), Some(2f32.to_bits()));
+        let mut before = 0u16; let mut after = 0u16; let mut value = 0u32;
+        unsafe { std::arch::asm!("fnstcw [{p}]", "fld1", p=in(reg) &mut before); }
+        control(&mut x, 0x0f7f); x.register::<0xc9d9>(); // fxch st(1)
+        unsafe { std::arch::asm!("fnstcw [{p}]", "fstp dword ptr [{v}]", p=in(reg) &mut after, v=in(reg) &mut value); }
+        assert_eq!(before, after); assert_eq!(value, 1f32.to_bits());
+    }
+    #[test]
+    fn arithmetic_flags_compare() {
+        let mut x = X87::default(); x.push(2f32.to_bits()); x.push(1f32.to_bits());
+        let f = x.compare_flags::<0xf1df>(); // fcomip st(0),st(1)
+        assert!(f.cf()); assert!(!f.zf()); assert!(!f.of()); assert!(!f.af());
+    }
+}

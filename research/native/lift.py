@@ -55,8 +55,11 @@ def callees(arms):
 
 
 X87_PUSH = {"fld", "fld1", "fldz", "fild"}
-X87_POP = {"fstp"}
-X87_READ = {"fst", "fchs", "fabs"}
+X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi"}
+X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr",
+            "fiadd", "fisub", "fisubr", "fimul", "fidiv", "fidivr", "fxch", "fcom", "fucom", "ficom",
+            "fsqrt", "fsin", "fcos", "fcomi", "fucomi"}
+X87_SUPPORTED = X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw"}
 X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
@@ -108,12 +111,21 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False):
                 break  # already walked with this depth or less
             seen[i.address] = depth
             mn = i.mnemonic
-            if mn in X87_POP or mn in X87_READ:
-                if depth == 0:
-                    raise Unsupported(f"x87-return (st0 read at {i.address:#x} with nothing pushed)")
-                depth -= mn in X87_POP
-            elif mn in X87_PUSH:
-                depth += 1
+            if mn in X87_SUPPORTED and mn not in X87_CONTROL:
+                regs = [int(i.reg_name(o.reg)[3:-1]) for o in i.operands
+                        if o.type == 1 and i.reg_name(o.reg).startswith("st(")]
+                needed = max([r + 1 for r in regs] + [0 if mn in X87_PUSH else 1])
+                if mn in ("fcompp", "fucompp"):
+                    needed = 2
+                if mn in ("fcom", "fcomp", "fucom", "fucomp", "fxch") and not i.operands:
+                    needed = 2
+                if depth < needed:
+                    raise Unsupported(f"x87-return (needs {needed} values at {i.address:#x}, has {depth})")
+                depth += (mn in X87_PUSH) - (mn in X87_POP or mn == "ficomp")
+                if mn in ("fcompp", "fucompp"):
+                    depth -= 2
+                if depth > 8:
+                    raise Unsupported("x87-overflow")
             elif mn == "call" and k + 1 < len(ins):
                 direct = i.operands[0].type == X86_OP_IMM
                 t = i.operands[0].imm if direct else None
@@ -433,8 +445,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
                                    (ops[0].imm not in callable and ops[0].imm not in h.PLATFORM)):
                 if not ext:
                     raise Unsupported("icall" if ops[0].type != X86_OP_IMM else "call")
-                if k + 1 < len(ins) and ins[k + 1].mnemonic.startswith("f") and                         ins[k + 1].mnemonic not in ("fld", "fldz", "fld1"):
-                    raise Unsupported("x87-return")  # the mock returns nothing on the x87 stack
+                # x87_depth_check and x87_push already describe mocked float
+                # returns, including an immediate consuming instruction.
                 # the operand is evaluated before the return address is pushed
                 body.append(f"{{ let t = {load(i, ops[0])}; esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{nxt:X}); "
                             f"{SAVE} x86::call_ext(m, cpu, t); {LOAD} }}")
@@ -511,20 +523,34 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(store(i, ops[0], f"x86::cvttss2si({s})"))
             elif mn == "cvtsi2ss":
                 body.append(f"{xmm(i, ops[0])}[0] = x86::cvtsi2ss({load(i, ops[1])});")
-            # ---- x87 copies only
-            elif mn == "fld" and ops[0].type == X86_OP_MEM and ops[0].size == 4:
-                body.append(f"st.push(crate::x87_copy(f32::from_bits(m.u32({mem_addr(i, ops[0])}))).to_bits());")
-            elif mn in ("fstp", "fst") and ops[0].type == X86_OP_MEM and ops[0].size == 4:
-                take = "st.pop().expect(\"x87 stack\")" if mn == "fstp" else "*st.last().expect(\"x87 stack\")"
-                body.append(f"{{ let v = {take}; m.set_u32({mem_addr(i, ops[0])}, v); }}")
-            elif mn == "fstp" and ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) == "st(0)":
-                body.append("st.pop();")
-            elif mn in ("fld1", "fldz"):
-                body.append(f"st.push({'0x3F800000' if mn == 'fld1' else '0'});")
-            elif mn == "fchs":
-                body.append("{ let v = st.pop().expect(\"x87 stack\"); st.push(v ^ 0x8000_0000); }")
-            elif mn == "fabs":
-                body.append("{ let v = st.pop().expect(\"x87 stack\"); st.push(v & 0x7FFF_FFFF); }")
+            # Hardware x87 over saved 80-bit state. Keep original opcode and
+            # register operands; memory ModRM becomes [rax] in the helper.
+            elif mn in X87_SUPPORTED:
+                if mn in ("fnstsw", "fstsw") and ops[0].type == X86_OP_REG:
+                    body.append(set_reg("ax", "st.status() as u32"))
+                else:
+                    raw = bytes(i.bytes)
+                    if len(raw) < 2 or not 0xD8 <= raw[0] <= 0xDF:
+                        raise Unsupported(f"x87-prefix {mn}")
+                    mem = next((o for o in ops if o.type == X86_OP_MEM), None)
+                    if mem is not None:
+                        if mem.size not in (2, 4, 8, 10):
+                            raise Unsupported(f"x87-width {mn}")
+                        opcode = raw[0] | ((raw[1] & 0x38) << 8)
+                        write = mn in ("fst", "fstp", "fist", "fistp", "fnstcw", "fnstsw", "fstsw")
+                        body.append(f"st.memory::<0x{opcode:04x}, {mem.size}, {str(write).lower()}>(m, {mem_addr(i, mem)});")
+                    else:
+                        opcode = raw[0] | (raw[1] << 8)
+                        if mn in ("fcomi", "fcompi", "fucomi", "fucompi"):
+                            body.append(f"fl = st.compare_flags::<0x{opcode:04x}>();")
+                        else:
+                            body.append(f"st.register::<0x{opcode:04x}>();")
+            elif mn == "sahf":
+                body.append("fl.sahf((eax >> 8) as u8);")
+            elif mn == "lahf":
+                body.append("eax = (eax & !0xff00) | ((fl.lahf() as u32) << 8);")
+            elif mn in ("wait", "fwait"):
+                pass  # masked x87 exceptions: wait has no effect
             else:
                 raise Unsupported(f"{mn} {i.op_str}")
             k += 1
@@ -954,6 +980,12 @@ fn every_lifted_function_matches_the_original() {{
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             f(&mut m, &mut cpu);
+            if c.get("x87_control").is_some() {{
+                assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
+                assert_eq!(cpu.st.depth(), u(&c["x87_depth"]), "x87 depth");
+                let extended = c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16));
+                assert_eq!(cpu.st.top_extended(), extended, "extended st0");
+            }}
             cpu.exit()
         }}));
         let all_calls_made = calls.borrow().is_empty();

@@ -18,8 +18,9 @@ anything; INVENTORY.md has the numbers and the map.
    "nicer" model in ddnative; the game layer above can wrap it.
 3. **Bit-exact arithmetic.** Single-precision SSE in the original is `f32`
    in Rust in the same operation order; no fused multiply-add, no
-   reordering. x87 loads/stores go through `ddnative::x87_copy` (see
-   pitfalls). Integer wrap-around is `wrapping_*` where the original can
+   reordering. Lifted x87 uses the full hardware state model below;
+   hand-ported f32 copies use `ddnative::x87_copy` (see pitfalls).
+   Integer wrap-around is `wrapping_*` where the original can
    wrap.
 4. **Verified, not assumed.** A port counts only when its differential test
    replays vectors recorded from the original and passes. Commit only
@@ -272,10 +273,10 @@ functions per module) and `lifted.rs` (re-exports every function and the
 - SSE scalar ops use `x86::addss(a, b)` etc. (std::arch intrinsics): the
   original's operand order, so NaN propagation matches the CPU. Packed
   add/sub/mul run the scalar op per lane.
-- x87: only copies (`fld`/`fstp`/`fst` dword, `fld1`, `fldz`, `fchs`,
-  `fabs`, `fstp st(0)`); the stack is a `Vec<u32>` of single bits with the
-  hardware signalling-NaN rule (`x87_copy`). x87 arithmetic rejects the
-  function (precision control: see below).
+- x87: saved hardware state preserves extended values, rounding, precision
+  control, tags and status. Integer/real loads and stores, arithmetic,
+  comparisons and stack operations execute on the host x87. See
+  "Exact x87 arithmetic (L05)" below for supported forms and limits.
 
 **Codegen conventions (L03).** The private `patterns/lift.json` cache
 continues to hold the local-register statement groups produced by `lift()`.
@@ -343,6 +344,24 @@ Cases are rejected (another seed is tried) when:
   wrong and a `ret` went astray, or a jump through random data), or returns
   with ESP not 4..0x404 above its entry value;
 - it ends with an x87 stack fault, or the emulator faults.
+
+L05 explicitly initializes the control word to `0x037F` and tags to empty.
+The installed Unicorn build actually resets those registers to `0x0000`
+and `0x5555` (confirmed by register reads and a synthetic `fnstcw`), so
+assuming hardware reset defaults is insufficient. It checks occupied/empty slots before
+each x87 instruction. Unicorn does not reliably flag a ninth push. Six
+new arithmetic callers exposed this: loops call `0x012F05C0` with a value
+in st0, but the generic external-call mock does not consume that value.
+The original conversion routine pops it at `0x012F05D2` on its SSE path
+(its fallback also consumes it); this needs an explicit platform model.
+The stack eventually fills; hardware produces an indefinite value while
+Unicorn overwrites slots without raising SF. Those runs are rejected,
+not translated to reproduce the overflow. Modelling x87-consuming external
+callees remains separate work; other usable paths can still be compared.
+New cases additionally carry `st0_ext` (80-bit mantissa/exponent),
+`x87_control` and `x87_depth`, checked by generated replay. Older cases
+retain their original float-return comparison; they are not retroactively
+claimed to check full extended precision.
 
 Functions with no usable case are dropped from the batch, not counted;
 `patterns/lift_novector.json` remembers them so later runs skip them.
@@ -465,10 +484,8 @@ of yield: indirect calls through vtables (needs a dispatch table from
 address to lifted function), calls into hand-ported or platform code
 (the allocator: a Rust model with the same observable effects),
 `mul`/`div`, `rep movs/stos`,
-`movsx`/`cwde`, `sbb`/`adc`, `shld`/`shrd`, x87 arithmetic (needs the
-game's x87 precision control word: DirectX 9 sets single precision unless
-the device was created with FPU_PRESERVE; check the original's control
-word live before modelling it).
+`movsx`/`cwde`, `sbb`/`adc`, `shld`/`shrd`, and remaining x87 forms.
+DDDA's D3D creation flags preserve FPU precision; see the evidence below.
 
 **Pitfalls.** Unicorn's UNMAPPED hook is not reliable: for SSE stores and
 even plain byte stores it can map the page and still raise. Resuming after
@@ -636,6 +653,52 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 `python scripts/inventory.py summary` gives the live count.
 
+## Exact x87 arithmetic (L05)
+
+`Cpu.st` holds an x87 FSAVE image: eight 80-bit values, tags, TOP,
+control word and status. On x86-64, each supported instruction swaps in
+that state with `FNSAVE`/`FRSTOR`, executes the original opcode with its
+original register operands (or a bounded private memory operand), saves
+the resulting state, and restores the host x87 state. SSE and MXCSR are
+untouched. Memory operands still read/write through `Mem` at their exact
+original widths. No float intermediate is narrowed to f32. The host
+must be x86-64; unsupported hosts fail explicitly, without a lossy fallback.
+See the [Intel instruction reference](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2a-manual.pdf)
+for FNSAVE/FRSTOR.
+
+Supported families include integer loads/stores; real dword/qword/tbyte
+loads and stores; stack copies/exchanges; add/subtract/multiply/divide,
+including integer-memory, reverse and pop forms; ordered/unordered
+comparisons (status-word and integer-flags forms); square root, sine,
+cosine; sign/absolute value; control/status words; and SAHF/LAHF.
+The depth check requires every referenced stack slot, accounts for all
+pops, and rejects overflow. The instruction emitter rejects environment
+loads/stores that would expose host instruction/data pointers. Unmasked
+x87 exceptions are also unsupported: the recorder rejects such FLDCW
+inputs and the Rust helper rejects them before changing host state.
+Masked exceptions, rounding, precision control, and condition bits use
+hardware semantics; emulator discrepancies must not redefine them.
+Run `PY -m unittest discover -s research/native -p test_lift_x87.py` for
+synthetic instruction replay and stack-fault/return-contract regressions,
+and `cargo test -p ddnative --test units` for precision-control, rounding,
+comparison and host-state preservation tests. Keep builds and vector runs
+sequential; use two Cargo jobs and four vector workers on the 32 GB host.
+
+**DDDA's D3D flags (exe evidence).** In the function at `0x00DB1480`,
+`Direct3DCreate9` is called at `0x00DB1650` through the import thunk
+`0x012E1B78` (IAT `0x0139D420`). The returned interface lives at object
+`+0xA0`. Its vtable slot `+0x40` is called at `0x00DB1960`, with device
+behavior flags `0x46` (push at `0x00DB192A`) or `0x26` (push at
+`0x00DB194B`). Both include `D3DCREATE_FPU_PRESERVE` (`0x2`). Thus this
+creation path **preserves** the calling thread's control word; it does
+not establish single precision. This follows Microsoft's
+[D3DCREATE contract](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dcreate).
+The runtime must carry each thread's actual control word through platform
+calls. These flags alone do not establish the incoming control word for
+every thread. Sparse vectors and default `Cpu` explicitly start at `0x037F`,
+extended precision and nearest-even rounding; that is a fixture initial state,
+not a claim about the game's live thread state.
+
 ## Debugging a failing lifted function
 
 1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
@@ -655,10 +718,8 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 ## What to do next
 
-1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): functions over
-   2,000 bytes (L02); then x87-return (floats returned in st0 by a callee:
-   the largest rejection), x87 arithmetic (check the precision-control
-   word first), sbb/adc, lahf, div/mul, rep movs/stos, Ghidra boundary
+1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): remaining stack/call
+   analysis and x87 forms, sbb/adc, div/mul, rep movs/stos, Ghidra boundary
    problems ("disassembly", "falls").
 2. The Phase 1 runtime: the memory model, a production `call_ext`
    dispatcher, platform services (file/archive I/O, D3D9 to wgpu, audio,
