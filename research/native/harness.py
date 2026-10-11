@@ -58,6 +58,7 @@ def code(address, length):
 def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=100000, poke=None):
     """Call `address`. Returns dict(eax, edx, scratch, insns)."""
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
     base, secs = image()
     for va, b in secs:
         start = va & ~0xFFF
@@ -138,6 +139,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
             0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
+TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 
 
@@ -203,6 +205,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     rnd = random.Random(seed)
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
     # Unicorn's reset tag word reads 0x5555 (eight zero values), not an
     # empty x87 stack. Match the fixture's actual empty-stack contract.
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
