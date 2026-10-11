@@ -3,6 +3,19 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x0052DE00 (DDDA.exe 2017-12-13 Steam), aStage401::DTI_newInstance.
+pub fn f_0052de00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0x52DE00;
+    loop {
+        match pc {
+            0x52DE00 => { { let v = 0x19A9890u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0x52DE0A);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.ecx = m.u32(0u32.wrapping_add(0x19A98AC)); cpu.edx = m.u32(cpu.eax); cpu.edx = m.u32(cpu.edx.wrapping_add(0x1C)); { let r = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = r; } { let v = cpu.ecx; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0x10u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0xA70u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.ecx = cpu.eax; { let t = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0x52DE24);  x86::call_ext(m, cpu, t);  } { let r = cpu.fl.alu_and(cpu.eax, cpu.eax, 32); } pc = if cpu.fl.cond("e") { 0x52DE2D } else { 0x52DE28 }; continue; }
+            0x52DE28 => {  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x52E4C0))(m, cpu); return; }
+            0x52DE2D => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x0052DE30 (DDDA.exe 2017-12-13 Steam), aStage402::DTI_newInstance.
 pub fn f_0052de30(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x52DE30;
@@ -4827,9 +4840,4 @@ pub fn f_00537f20(m: &mut dyn Mem, cpu: &mut Cpu) {
             _ => unreachable!(),
         }
     }
-}
-
-// Translated from 0x00537F80 (DDDA.exe 2017-12-13 Steam), cCmcDashFollow::getDTI.
-pub fn f_00537f80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x198E380u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

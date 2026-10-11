@@ -3,6 +3,11 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x005BB560 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_005BB560.
+pub fn f_005bb560(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0x200u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x005BB5B0 (DDDA.exe 2017-12-13 Steam), cFSMOrder::cFSMOrderParamS32::vf07.
 pub fn f_005bb5b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x5BB5B0;
@@ -5355,21 +5360,6 @@ pub fn f_005cf390(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x5CF483 => { cpu.edx = m.u32(cpu.eax.wrapping_add(0x26A0)); cpu.eax = m.u32(cpu.eax.wrapping_add(0x26A4)); { let r = cpu.fl.alu_and(cpu.eax, 0x4u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_xor(cpu.ecx, cpu.ecx, 32); cpu.ecx = r; } m.set_u32(cpu.esp, cpu.edx); pc = if cpu.fl.cond("ne") { 0x5CF3BF } else { 0x5CF49D }; continue; }
             0x5CF49D => { { let r = cpu.fl.alu_and(cpu.eax, cpu.eax, 32); } pc = if cpu.fl.cond("ne") { 0x5CF3BF } else { 0x5CF4A5 }; continue; }
             0x5CF4A5 => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } { let r = cpu.fl.alu_add(cpu.esp, 0x8u32, 32); cpu.esp = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x005CF4B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_005cf4b0.
-pub fn f_005cf4b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let mut pc: u32 = 0x5CF4B0;
-    loop {
-        match pc {
-            0x5CF4B0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x7Fu32, 32); } pc = if cpu.fl.cond("a") { 0x5CF4D2 } else { 0x5CF4B5 }; continue; }
-            0x5CF4B5 => { cpu.ecx = m.u32(cpu.eax.wrapping_mul(8).wrapping_add(0x1529FE0)); { let r = cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); } pc = if cpu.fl.cond("e") { 0x5CF4D2 } else { 0x5CF4C0 }; continue; }
-            0x5CF4C0 => { cpu.eax = m.u32(cpu.eax.wrapping_mul(8).wrapping_add(0x1529FE4)); { let a = cpu.eax & u32::MAX; let n = 0x3u32 & 31; if n != 0 { let r = (a >> n) & u32::MAX; cpu.fl = Flags::new(x86::SHR, a, n, r, 32); cpu.eax = r; } } { let r = cpu.fl.alu_sub(cpu.edx, cpu.eax, 32); } pc = if cpu.fl.cond("ae") { 0x5CF4D2 } else { 0x5CF4CE }; continue; }
-            0x5CF4CE => { cpu.eax = m.u32(cpu.ecx.wrapping_add(cpu.edx.wrapping_mul(8))); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x5CF4D2 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
     }

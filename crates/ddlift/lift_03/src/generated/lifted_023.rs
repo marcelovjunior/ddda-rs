@@ -3,6 +3,26 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x013971E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013971e0.
+pub fn f_013971e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    m.set_u32(0u32.wrapping_add(0x19A401C), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013971F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013971f0.
+pub fn f_013971f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    m.set_u32(0u32.wrapping_add(0x19A431C), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01397200 (DDDA.exe 2017-12-13 Steam), Global::FUN_01397200.
+pub fn f_01397200(m: &mut dyn Mem, cpu: &mut Cpu) {
+    m.set_u32(0u32.wrapping_add(0x19A3FFC), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01397210 (DDDA.exe 2017-12-13 Steam), Global::FUN_01397210.
+pub fn f_01397210(m: &mut dyn Mem, cpu: &mut Cpu) {
+    m.set_u32(0u32.wrapping_add(0x19A42FC), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x01397220 (DDDA.exe 2017-12-13 Steam), Global::FUN_01397220.
 pub fn f_01397220(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(0u32.wrapping_add(0x19A427C), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
@@ -1981,24 +2001,4 @@ pub fn f_01398b60(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01398B70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01398b70.
 pub fn f_01398b70(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(0u32.wrapping_add(0x19A772C), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01398B80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01398b80.
-pub fn f_01398b80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    m.set_u32(0u32.wrapping_add(0x19A777C), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01398B90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01398b90.
-pub fn f_01398b90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    m.set_u32(0u32.wrapping_add(0x19A77A4), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01398BA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01398ba0.
-pub fn f_01398ba0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    m.set_u32(0u32.wrapping_add(0x19A77CC), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01398BB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01398bb0.
-pub fn f_01398bb0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    m.set_u32(0u32.wrapping_add(0x19A77F4), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
