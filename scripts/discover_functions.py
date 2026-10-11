@@ -152,6 +152,26 @@ def vtables(pe, md, roots, known=frozenset(), stores=None):
             tables[slot+4] = dict(rtti='MSVC', descriptor=value, name=name)
         except (ValueError, struct.error):
             continue
+    # L22: a table without RTTI (e.g. a COM interface such as the movie
+    # player's IStream at 0x01436E78, stored by its constructor at
+    # 0x00F7C4AB). Anchor: an object-vtable store (offset 0, as for MT
+    # tables) of a read-only address, and corroboration: at least one slot
+    # of the run is already a known function. The run is cut as below.
+    for start in sorted(stores or ()):
+        section = pe.section(start, 4)
+        if start in tables or not section or section['name'] != '.rdata':
+            continue
+        run = []
+        for k in range(600):
+            slot = start+4*k
+            if (k and (slot in tables or slot in stores)) or not pe.section(slot, 4) or pe.section(slot, 4)['name'] != '.rdata':
+                break
+            a = pe.word(slot)
+            if not pe.executable(a) or not code_entry(pe, md, a):
+                break
+            run.append(a)
+        if any(a in known for a in run):
+            tables[start] = dict(rtti='none', stores=sorted(stores[start]))
     starts = sorted(tables)
     for idx, start in enumerate(starts):
         end = starts[idx+1] if idx+1 < len(starts) else 0xffffffff

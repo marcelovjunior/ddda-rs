@@ -54,6 +54,22 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(r[-1][1]['registration'], 0x110A)
         self.assertEqual(r[-1][1]['descriptor'], 0x7000)
 
+    def test_rttiless_table_needs_store_and_known_slot(self):
+        # L22: e.g. a COM interface table stored by its constructor.
+        p = FakeImage(); m = d.decoder()
+        for a in (0x1300, 0x1310, 0x1320): p.put(a, bytes([0xC3]))  # ret
+        for k, a in enumerate((0x1300, 0x1310, 0x1320, 0x5000)):
+            p.word_at(0x3100+4*k, a)
+        self.assertEqual(list(d.vtables(p, m, set(), known={0x1300})), [])          # no store
+        self.assertEqual(list(d.vtables(p, m, set(), stores={0x3100: {0x1400}})), [])  # no known slot
+        r = list(d.vtables(p, m, set(), known={0x1310}, stores={0x3100: {0x1400}}))
+        self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])               # cut at data
+        self.assertEqual(r[0][1]['rtti'], 'none')
+        self.assertEqual(r[0][1]['stores'], [0x1400])
+        # A store into .data is not a read-only table.
+        p.word_at(0x5100, 0x1300)
+        self.assertEqual(list(d.vtables(p, m, set(), known={0x1300}, stores={0x5100: {0x1400}})), [])
+
     def test_msvc_requires_matching_hierarchy(self):
         p = FakeImage();m=d.decoder();p.put(0x1200,b'\xc3')
         for a,v in [(0x3100,0x3200),(0x3104,0x1200),(0x320C,0x3500),(0x3210,0x3300),
