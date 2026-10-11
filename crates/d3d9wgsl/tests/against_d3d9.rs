@@ -79,8 +79,14 @@ impl Gpu {
         let adapter_name = format!("{} ({:?}, {} {})", info.name, info.backend, info.driver, info.driver_info);
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::FLOAT32_FILTERABLE,
+            // four Rgba32Float targets: 64 bytes per sample (the default
+            // limit is 32)
+            required_limits: wgpu::Limits {
+                max_color_attachment_bytes_per_sample: adapter.limits().max_color_attachment_bytes_per_sample,
+                ..Default::default()
+            },
             ..Default::default()
-        })).ok()?;
+        })).map_err(|e| eprintln!("request_device: {e}")).ok()?;
         let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("vs"), source: wgpu::ShaderSource::Wgsl(VS.into()) });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -1071,8 +1077,12 @@ fn sweep_one(gpu: &Gpu, oracle: &mut Oracle, tokens: &[u32], vertex: bool, sets:
 #[test]
 fn sweep() {
     let Some(dir) = std::env::var_os("DDDA_SHADER_SWEEP").map(std::path::PathBuf::from) else { return };
-    let (Some(mut oracle), Some(gpu)) = (Oracle::new(), Gpu::new()) else {
-        eprintln!("skipped: no D3D9 device or no wgpu adapter with FLOAT32_FILTERABLE");
+    let (oracle, gpu) = (Oracle::new(), Gpu::new());
+    let (has_oracle, has_gpu) = (oracle.is_some(), gpu.is_some());
+    let (Some(mut oracle), Some(gpu)) = (oracle, gpu) else {
+        // (D3D9 refuses a device while another program holds the display
+        // exclusively, e.g. a full-screen game)
+        eprintln!("skipped: D3D9 device: {has_oracle}, wgpu adapter with FLOAT32_FILTERABLE: {has_gpu}");
         return;
     };
     std::fs::create_dir_all(&dir).unwrap();
@@ -1989,4 +1999,193 @@ fn defined_constants_keep_their_bits() {
             assert!(bits_equal(ours, theirs, 0xF), "{name}");
         }
     }
+}
+
+impl Gpu {
+    /// A vertex shader as the runtime's backend builds it (ddgpu: integer
+    /// and float vertex inputs, the half-pixel offset) in a pipeline with a
+    /// fragment stage reading every output it passes on.
+    fn backend_vertex_pipeline(&self, shader: &d3d9shader::Shader) -> Result<(), String> {
+        let n = d3d9wgsl::translate(shader).map_err(|e| e.to_string())?.interface.inputs.len();
+        let types: Vec<d3d9wgsl::InputType> = (0..n).map(|k| [d3d9wgsl::InputType::Float, d3d9wgsl::InputType::Uint, d3d9wgsl::InputType::Sint][k % 3]).collect();
+        let t = d3d9wgsl::translate_with(shader, d3d9wgsl::Options { vs_input_types: Some(types.clone()), half_pixel: true, ..Default::default() }).map_err(|e| e.to_string())?;
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let vs = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("vs"), source: wgpu::ShaderSource::Wgsl(t.wgsl.as_str().into()) });
+        let mut fs = String::from("struct FIn {\n");
+        for l in 0..t.interface.outputs_vs.len() {
+            fs.push_str(&format!("  @location({l}) x{l}: vec4<f32>,\n"));
+        }
+        fs.push_str("  @builtin(position) p: vec4<f32>,\n}\n");
+        let sum: Vec<String> = (0..t.interface.outputs_vs.len()).map(|l| format!("i.x{l}")).chain(["i.p".to_string()]).collect();
+        fs.push_str(&format!("@fragment fn main(i: FIn) -> @location(0) vec4<f32> {{ return {}; }}\n", sum.join(" + ")));
+        let fsm = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fs"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
+        let uniform = wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let layout0 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uniform] });
+        let layout1 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        let layout2 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &sampler_entries(&t.interface, wgpu::ShaderStages::VERTEX) });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&layout0), Some(&layout1), Some(&layout2)],
+            immediate_size: 0,
+        });
+        let attributes: Vec<wgpu::VertexAttribute> = types.iter().enumerate().map(|(k, ty)| wgpu::VertexAttribute {
+            format: match ty {
+                d3d9wgsl::InputType::Float => wgpu::VertexFormat::Float32x4,
+                d3d9wgsl::InputType::Uint => wgpu::VertexFormat::Uint8x4,
+                d3d9wgsl::InputType::Sint => wgpu::VertexFormat::Sint16x4,
+            },
+            offset: 16 * k as u64,
+            shader_location: k as u32,
+        }).collect();
+        let buffers = [wgpu::VertexBufferLayout { array_stride: 16 * n.max(1) as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attributes }];
+        let _pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &vs, entry_point: Some("main"), compilation_options: Default::default(), buffers: &buffers },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fsm,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        match block_on(scope.pop()) {
+            Some(e) => Err(format!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    /// A pixel shader as the runtime's backend builds it (ddgpu: inputs
+    /// linked to a vertex stage's outputs, here at shifted locations with
+    /// the first input unwritten; the alpha test) in a pipeline with a
+    /// vertex stage writing those locations.
+    fn backend_pixel_pipeline(&self, shader: &d3d9shader::Shader) -> Result<(), String> {
+        let n = d3d9wgsl::translate(shader).map_err(|e| e.to_string())?.interface.inputs.len() as u32;
+        let locations: Vec<Option<u32>> = (0..n).map(|k| if k == 0 && n > 1 { None } else { Some(n - k) }).collect();
+        let t = d3d9wgsl::translate_with(shader, d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, ..Default::default() }).map_err(|e| e.to_string())?;
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fs = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fs"), source: wgpu::ShaderSource::Wgsl(t.wgsl.as_str().into()) });
+        let mut vs = String::from("struct VOut {\n  @builtin(position) p: vec4<f32>,\n");
+        for l in 0..=n {
+            vs.push_str(&format!("  @location({l}) x{l}: vec4<f32>,\n"));
+        }
+        let fields: Vec<String> = (0..=n + 1).map(|_| "vec4<f32>(0.0)".to_string()).collect();
+        vs.push_str(&format!("}}\n@vertex fn main() -> VOut {{ return VOut({}); }}\n", fields.join(", ")));
+        let vsm = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("vs"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
+        let uniform = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let layout0 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uniform] });
+        let layout1 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &sampler_entries(&t.interface, wgpu::ShaderStages::FRAGMENT) });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&layout0), Some(&layout1)],
+            immediate_size: 0,
+        });
+        let max = t.interface.outputs.iter().copied().max().unwrap_or(0) as usize;
+        let targets: Vec<Option<wgpu::ColorTargetState>> = (0..=max)
+            .map(|k| t.interface.outputs.contains(&(k as u32)).then_some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }))
+            .collect();
+        let _pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &vsm, entry_point: Some("main"), compilation_options: Default::default(), buffers: &[] },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState { module: &fs, entry_point: Some("main"), compilation_options: Default::default(), targets: &targets }),
+            multiview_mask: None,
+            cache: None,
+        });
+        match block_on(scope.pop()) {
+            Some(e) => Err(format!("{e}")),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Texture and sampler bindings for an interface's samplers.
+fn sampler_entries(iface: &d3d9wgsl::Interface, visibility: wgpu::ShaderStages) -> Vec<wgpu::BindGroupLayoutEntry> {
+    let mut entries = Vec::new();
+    for &(n, kind) in &iface.samplers {
+        let view_dimension = match kind {
+            d3d9wgsl::TextureKind::Flat => wgpu::TextureViewDimension::D2,
+            d3d9wgsl::TextureKind::Cube => wgpu::TextureViewDimension::Cube,
+            d3d9wgsl::TextureKind::Volume => wgpu::TextureViewDimension::D3,
+        };
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 2 * n,
+            visibility,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension, multisampled: false },
+            count: None,
+        });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 2 * n + 1,
+            visibility,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+    }
+    entries
+}
+
+/// Every shader in a wgpu pipeline as the runtime's backend builds it
+/// ([`Gpu::backend_vertex_pipeline`], [`Gpu::backend_pixel_pipeline`]):
+/// wgpu's validation, including the interface between the stages, and the
+/// driver's pipeline compilation accept it. DDDA_ALL_SHADERS=1: every
+/// package, otherwise Title.
+#[test]
+fn every_translation_makes_a_backend_pipeline() {
+    let Some(gpu) = Gpu::new() else {
+        eprintln!("skipped: no wgpu adapter with FLOAT32_FILTERABLE");
+        return;
+    };
+    let packages: Vec<String> = if std::env::var_os("DDDA_ALL_SHADERS").is_some() { all_packages() } else { vec!["Title".into()] };
+    let mut seen = std::collections::HashSet::new();
+    let (mut built, mut bad) = (0usize, Vec::new());
+    for name in &packages {
+        for tokens in pixel_shaders(name).into_iter().chain(vertex_shaders(name)) {
+            if !seen.insert(tokens.clone()) {
+                continue;
+            }
+            let shader = d3d9shader::parse(&tokens).unwrap();
+            let r = if shader.stage == d3d9shader::Stage::Vertex { gpu.backend_vertex_pipeline(&shader) } else { gpu.backend_pixel_pipeline(&shader) };
+            match r {
+                Ok(()) => built += 1,
+                Err(e) => bad.push(format!("{name} {}: {e}", tag(&tokens))),
+            }
+        }
+        if std::env::var_os("DDDA_ALL_SHADERS").is_some() {
+            eprintln!("{name}: {built} pipelines so far, {} failed", bad.len());
+        }
+    }
+    eprintln!("{built} pipelines built, {} failed ({})", bad.len(), gpu.adapter);
+    for b in bad.iter().take(3) {
+        eprintln!("{}", &b[..b.len().min(3000)]);
+    }
+    assert!(built > 0, "nothing built");
+    assert!(bad.is_empty());
 }
