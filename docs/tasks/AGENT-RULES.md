@@ -26,7 +26,7 @@ These rules hold for every brief in `docs/tasks/` that points here.
   `ddruntime` and `ddplay`, plus vector recording, gen and the native gate,
   runs inside a machine-wide slot (two slots exist):
   `E:/ddda-re/tools/pyenv/Scripts/python.exe E:/ddda-re/tools/heavy.py <your-name> -- <command...>`,
-  with `CARGO_BUILD_JOBS=4`. The slot waits, runs the command, releases
+  (the slot caps `CARGO_BUILD_JOBS` at 3). The slot waits, runs the command, releases
   itself and passes the exit code through. `heavy.py status` shows the
   holders. Batch your edits so heavy builds are rare.
 - **Memory guard.** Below 1.5 GB of free RAM, a guard kills the largest
