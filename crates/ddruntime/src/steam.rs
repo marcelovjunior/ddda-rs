@@ -58,13 +58,13 @@ fn installed_depots(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 const SLOTS: u32 = 64;
 pub const INTERFACES: &[Spec] = &[
-    Spec { name: "ISteamUtils", slots: SLOTS, methods: &[(9, app_id), (16, method_1_void)] },
-    Spec { name: "ISteamUser", slots: SLOTS, methods: &[] },
-    Spec { name: "ISteamUserStats", slots: SLOTS, methods: &[] },
-    Spec { name: "ISteamFriends", slots: SLOTS, methods: &[] },
-    Spec { name: "ISteamApps", slots: SLOTS, methods: &[(4, current_game_language), (17, installed_depots)] },
-    Spec { name: "ISteamRemoteStorage", slots: SLOTS, methods: &[] },
-    Spec { name: "ISteamScreenshots", slots: SLOTS, methods: &[] },
+    Spec { name: "ISteamUtils", slots: SLOTS, methods: &[(9, app_id), (16, method_1_void)], names: &[] },
+    Spec { name: "ISteamUser", slots: SLOTS, methods: &[], names: &[] },
+    Spec { name: "ISteamUserStats", slots: SLOTS, methods: &[], names: &[] },
+    Spec { name: "ISteamFriends", slots: SLOTS, methods: &[], names: &[] },
+    Spec { name: "ISteamApps", slots: SLOTS, methods: &[(4, current_game_language), (17, installed_depots)], names: &[] },
+    Spec { name: "ISteamRemoteStorage", slots: SLOTS, methods: &[], names: &[] },
+    Spec { name: "ISteamScreenshots", slots: SLOTS, methods: &[], names: &[] },
 ];
 
 fn accessor(m: &mut dyn Mem, cpu: &mut Cpu, name: &str) {

@@ -24,6 +24,9 @@ pub struct Spec {
     pub slots: u32,
     /// (slot index, service)
     pub methods: &'static [(u32, Method)],
+    /// Method names in vtable order, for diagnostics (may be shorter than
+    /// `slots`; unnamed slots are reported as slotN).
+    pub names: &'static [&'static str],
 }
 
 /// Allocates method tokens across all interfaces.
@@ -44,19 +47,37 @@ impl Tokens {
     }
 }
 
-/// Create one object for `spec`: its vtable and the object on the guest
-/// heap, its tokens named and bound. Returns the object's address.
-pub fn create(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens, spec: &Spec) -> Result<u32, Conflict> {
+/// Build the vtable for `spec` (once per interface type, while the
+/// registry is still being assembled): method tokens named and bound.
+pub fn vtable(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens, spec: &Spec) -> Result<u32, Conflict> {
     let vtable = with_state(|s| s.heap.alloc(4 * spec.slots)).expect("guest heap");
-    let object = with_state(|s| s.heap.alloc(4)).expect("guest heap");
-    m.set_u32(object, vtable);
     for k in 0..spec.slots {
         let t = tokens.take();
         m.set_u32(vtable + 4 * k, t);
-        registry.name(t, format!("{}::slot{k}", spec.name));
+        match spec.names.get(k as usize) {
+            Some(n) => registry.name(t, format!("{}::{n} (slot {k})", spec.name)),
+            None => registry.name(t, format!("{}::slot{k}", spec.name)),
+        }
         if let Some((_, f)) = spec.methods.iter().find(|(slot, _)| *slot == k) {
             registry.insert(t, Binding::Service(*f))?;
         }
     }
-    Ok(object)
+    Ok(vtable)
+}
+
+/// A new object of an interface whose vtable exists: `size` bytes (at
+/// least the vtable pointer), zeroed, first word = vtable. Usable at run
+/// time (resources a device creates).
+pub fn object(m: &mut dyn Mem, vtable: u32, size: u32) -> u32 {
+    let size = size.max(4);
+    let o = with_state(|s| s.heap.alloc(size)).expect("guest heap");
+    crate::services::zero(m, o, size);
+    m.set_u32(o, vtable);
+    o
+}
+
+/// One object with its own vtable (singletons such as Steam interfaces).
+pub fn create(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens, spec: &Spec) -> Result<u32, Conflict> {
+    let v = vtable(m, registry, tokens, spec)?;
+    Ok(object(m, v, 4))
 }

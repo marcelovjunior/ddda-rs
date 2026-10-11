@@ -50,6 +50,7 @@ impl Session {
         // interface objects (Steam now; COM devices later)
         let mut tokens = crate::interfaces::Tokens::default();
         crate::steam::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
+        crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
         let registry = Rc::new(registry);
         registry.install();

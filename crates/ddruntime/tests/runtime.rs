@@ -283,3 +283,22 @@ fn files_read_from_the_install_and_write_only_to_the_overlay() {
     assert_eq!(call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax, u32::MAX);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// --- Direct3D 9 through the import table and a COM vtable ---------------------
+
+#[test]
+fn direct3d_create9_and_a_com_call_through_its_vtable() {
+    let Some(exe) = installed_exe() else { return };
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = ddruntime::session::Session::new(&path).expect("session");
+    let create = s.imports.iter().find(|i| i.full_name() == "d3d9.dll!Direct3DCreate9").unwrap().token;
+    let ddruntime::session::Outcome::Returned(cpu) = s.call(create, 0, &[32]) else { panic!("Direct3DCreate9") };
+    let d3d = cpu.eax;
+    let vtable = s.mem.u32(d3d);
+    let get_mode = s.mem.u32(vtable + 0x20); // slot 8, as 0x00DB1480 calls it
+    let mode = 0x7EFF_0000; // a scratch spot on the session stack
+    let ddruntime::session::Outcome::Returned(cpu) = s.call(get_mode, 0, &[d3d, 0, mode]) else { panic!("GetAdapterDisplayMode") };
+    assert_eq!(cpu.eax, 0, "D3D_OK");
+    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [1920, 1080, 60, 22]);
+    assert_eq!(cpu.esp, ddruntime::session::STACK_TOP - 0x100, "stdcall: this + 2 arguments popped");
+}

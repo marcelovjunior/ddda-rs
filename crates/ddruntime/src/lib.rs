@@ -12,6 +12,7 @@
 //! Nothing here invents behaviour: an access the original would fault on
 //! faults, and a call to code that is neither translated nor modelled stops
 //! with its address instead of returning something made up.
+pub mod d3d9;
 pub mod dispatch;
 pub mod files;
 pub mod image;
