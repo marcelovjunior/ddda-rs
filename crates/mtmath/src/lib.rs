@@ -12,6 +12,7 @@
 //! - [`vector`]: out-of-line vector helpers.
 //! - [`matrix`]: matrix builders.
 //! - [`angle`]: angle helpers.
+//! - [`quat`]: `Quat` (MtQuaternion) and its out-of-line helpers.
 //! - [`euler`]: matrix to Euler angles (six rotation orders).
 //! - [`abi`]: the ports behind the lifted calling convention; the lifted
 //!   program calls these instead of the lifted bodies.
@@ -20,6 +21,7 @@ pub mod abi;
 pub mod angle;
 pub mod euler;
 pub mod matrix;
+pub mod quat;
 pub mod random;
 pub mod scalar;
 pub mod types;

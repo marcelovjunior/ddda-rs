@@ -81,6 +81,7 @@ PORTS = {
     0x007AF450: ("basis_up", 3),
     0x007ADC00: ("between", 0),
     0x007ADCA0: ("cone", 2),
+    0x007AE860: ("quat", 2),
     0x007AF5B0: ("basis", 2),
     0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
@@ -377,6 +378,32 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             args = VEC[:nargs]
         globals_ = ()
+        if kind == "quat":
+            import math
+            def unit():
+                v = [rnd.gauss(0, 1) for _ in range(4)]
+                n = math.sqrt(sum(x * x for x in v)) or 1.0
+                return [x / n for x in v]
+            quiet = lambda b: b | 0x400000 if is_nan(b) else b
+            pick = rnd.random()
+            qv = unit()
+            if pick < 0.3:  # the target a small turn away: often within reach
+                tv = [x + rnd.uniform(-0.05, 0.05) for x in qv]
+            else:
+                tv = unit()
+            qb = [f2b(x * rnd.choice([1.0, 1.0, 2.5])) for x in qv]
+            tb = [f2b(x) for x in tv]
+            if 0.3 <= pick < 0.4:
+                qb = [0, 0, 0, 0] if rnd.random() < 0.5 else [0x80000000, 0, 0, 0]  # zero: the fallback inverse
+            if 0.4 <= pick < 0.55:
+                qb = [floats(rnd) for _ in range(4)]
+                tb = [floats(rnd)] + [quiet(floats(rnd)) for _ in range(3)]
+            struct.pack_into("<4I", obj, VEC[0] - OBJ_WINDOW[0], *qb)
+            struct.pack_into("<4I", obj, VEC[1] - OBJ_WINDOW[0], *tb)
+            regs["esi"], regs["edi"] = VEC[0], OBJ
+            args = [VEC[1], rnd.choice([f2b(rnd.uniform(0, 3.2)), f2b(rnd.uniform(0, 0.2)), floats(rnd), 0xBF800000])]
+            fb = [0, 0, 0, 0x3F800000] if rnd.random() < 0.5 else [f2b(rnd.uniform(-1, 1)) for _ in range(4)]
+            globals_ = [(0x018CFF10, struct.pack("<4I", *fb))]
         if kind == "fov":
             args = [floats(rnd) if rnd.random() < 0.3 else f2b(rnd.uniform(-3, 3) * 10 ** rnd.uniform(-2, 3))
                     for _ in range(nargs)]

@@ -100,7 +100,8 @@ fn cpu_regs(cpu: &Cpu) -> [u32; 8] {
 /// test's contract: the eight general registers, xmm0's low lane, and
 /// exactly the bytes the original wrote (reading any byte the original did
 /// not read panics).
-// verifies 0x007AD7A0 0x007AD870 0x007AD8E0 0x007AD9D0 0x007ADC00 0x007ADCA0 0x007AEED0 0x007AF450
+// verifies 0x007AD7A0 0x007AD870 0x007AD8E0 0x007AD9D0 0x007ADC00 0x007ADCA0 0x007AE860 0x007AEED0
+// verifies 0x007AF450
 // verifies 0x007AF5B0 0x00CFC1D0
 // verifies 0x00CFC350
 // verifies 0x00CFC4B0
@@ -169,7 +170,8 @@ fn windows(v: &Value) -> BTreeMap<u32, u8> {
 /// denormals, random states): all general registers, every lane of each
 /// xmm register the port reproduces (the others must keep their entry
 /// values), and every byte of the object and stack windows.
-// verifies 0x007AD7A0 0x007AD870 0x007AD8E0 0x007AD9D0 0x007ADC00 0x007ADCA0 0x007AEED0 0x007AF450
+// verifies 0x007AD7A0 0x007AD870 0x007AD8E0 0x007AD9D0 0x007ADC00 0x007ADCA0 0x007AE860 0x007AEED0
+// verifies 0x007AF450
 // verifies 0x007AF5B0 0x00CFC1D0
 // verifies 0x00CFC350
 // verifies 0x00CFC4B0

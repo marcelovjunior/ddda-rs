@@ -25,6 +25,7 @@
 use crate::angle;
 use crate::euler;
 use crate::matrix::{self, ONE};
+use crate::quat;
 use crate::random::Random;
 use crate::scalar::F32;
 use crate::types::{Mat44, Plane, Vec3};
@@ -877,6 +878,109 @@ pub fn f_007adca0(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+fn load_quat(m: &dyn Mem, addr: u32) -> quat::Quat {
+    let f = |k: u32| F32::from_bits(m.u32(addr.wrapping_add(4 * k)));
+    quat::Quat::new(f(0), f(1), f(2), f(3))
+}
+
+/// `MtQuaternion *rotate_toward(q /* esi */, out /* edi */, const
+/// MtQuaternion *target, float max_angle)`, returns `out` in EAX; the
+/// caller pops the arguments. A 16-aligned 0x2C-byte frame plus a push of
+/// EBX; spills as the original does; the CRT calls (acosf, cosf, sinf) go
+/// through `x86::call_ext` with the registers the original has there.
+pub fn f_007ae860(m: &mut dyn Mem, cpu: &mut Cpu) {
+    use quat::QuatCall;
+    let (entry_esp, ebp, ebx) = (cpu.esp, cpu.ebp, cpu.ebx);
+    let (pt, max_angle) = (arg(m, cpu, 0), arg_f32(m, cpu, 1));
+    let (q, t) = (load_quat(m, cpu.esi), load_quat(m, pt));
+    // the global is read only when q is zero, as in the original
+    let n = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    let fallback = if n > F32::ZERO { quat::Quat::default() } else { load_quat(m, quat::FALLBACK_INVERSE) };
+    let f = aligned_frame(cpu, 0x2C);
+    let local = |off: u32| f.wrapping_sub(4).wrapping_add(off);
+    pushed(m, cpu, 1, ebp);
+    m.set_u32(f.wrapping_sub(4), ebx);
+    (cpu.ebp, cpu.ebx, cpu.esp) = (entry_esp.wrapping_sub(4), pt, f.wrapping_sub(4));
+    let r = quat::inverse_or(q, fallback);
+    let (p, flipped) = quat::shortest(quat::relative(t, r));
+    let mut acos_upper = [0u32; 3];
+    let (mut full, mut cos_half, mut sin_half, mut calls) = (F32::ZERO, F32::ZERO, F32::ZERO, 0);
+    let sign = F32::from_bits(0x8000_0000);
+    let o = quat::rotate_toward(q, t, max_angle, fallback, |call, v| {
+        calls += 1;
+        match call {
+            QuatCall::Acos => {
+                for (off, x) in [(4, t.x), (8, q.x), (0x10, p.x), (0x14, p.y), (0x18, p.z), (0x1C, r.w)] {
+                    spill(m, local(off), x);
+                }
+                cpu.xmm = [
+                    scalar(v), scalar(ONE), scalar(p.y), scalar(p.w), scalar(matrix::MINUS_ONE),
+                    scalar(if flipped { sign } else { t.y * r.x }), scalar(t.z * r.x), scalar(t.x * r.z),
+                ];
+                call_out(m, cpu, CRT_ACOSF, 0x007A_EA63);
+                acos_upper = [cpu.xmm[0][1], cpu.xmm[0][2], cpu.xmm[0][3]];
+                full = F32::from_bits(cpu.xmm[0][0]) * matrix::TWO;
+            }
+            QuatCall::Cos => {
+                let max = quat::step(F32::ZERO, max_angle).0;
+                let kept_full = !(full >= max);
+                spill(m, local(4), v);
+                cpu.xmm[0] = [v.to_bits(), 0, 0, 0];
+                if kept_full {
+                    cpu.xmm[0][1..].copy_from_slice(&acos_upper);
+                }
+                cpu.xmm[1] = scalar(max);
+                cpu.xmm[2] = [0; 4];
+                call_out(m, cpu, CRT_COSF, 0x007A_EABE);
+                cos_half = F32::from_bits(cpu.xmm[0][0]);
+                spill(m, local(0x2C), cos_half);
+            }
+            QuatCall::Sin => {
+                let v2 = p.y * p.y + p.x * p.x + p.z * p.z;
+                let inv = ONE / v2.sqrt();
+                spill(m, local(0xC), inv);
+                cpu.xmm[0] = scalar(v);
+                cpu.xmm[1] = scalar(inv);
+                cpu.xmm[2] = scalar(p.z * p.z);
+                call_out(m, cpu, CRT_SINF, 0x007A_EB14);
+                sin_half = F32::from_bits(cpu.xmm[0][0]);
+            }
+        }
+        F32::from_bits(cpu.xmm[0][0])
+    });
+    let out = cpu.edi;
+    if calls == 1 {
+        // the target is within reach: copied, y/z/w through the x87
+        cpu.st.memory::<0x00d9, 4, false>(m, pt.wrapping_add(4));
+        cpu.st.memory::<0x18d9, 4, true>(m, out.wrapping_add(4));
+        m.set_u32(out, t.x.to_bits());
+        for k in 2..4u32 {
+            cpu.st.memory::<0x00d9, 4, false>(m, pt.wrapping_add(4 * k));
+            cpu.st.memory::<0x18d9, 4, true>(m, out.wrapping_add(4 * k));
+        }
+        let max = quat::step(F32::ZERO, max_angle).0;
+        cpu.xmm[0] = scalar(t.x);
+        cpu.xmm[1] = scalar(max);
+        cpu.xmm[2] = [0; 4];
+        debug_assert_eq!(o.x, t.x);
+    } else {
+        let half = F32::from_bits(m.u32(local(4)));
+        let s = quat::rotation(p, half, cos_half, |_| sin_half);
+        for (off, x) in [(0xC, q.w * s.y), (0x1C, s.w), (0x2C, o.w), (0x20, o.x)] {
+            spill(m, local(off), x);
+        }
+        for (k, x) in [o.x, o.y, o.z, o.w].into_iter().enumerate() {
+            m.set_u32(out.wrapping_add(4 * k as u32), x.to_bits());
+        }
+        cpu.xmm = [
+            scalar(o.w), scalar(o.y), scalar(o.x), scalar(s.y),
+            scalar(s.z), scalar(q.w * s.z), scalar(q.y * s.x), scalar(q.z * s.x),
+        ];
+    }
+    (cpu.eax, cpu.ebx, cpu.ebp, cpu.esp) = (out, ebx, ebp, entry_esp);
+    ret(cpu, 0);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -887,6 +991,7 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
     (0x007A_DC00, f_007adc00, 0b1111_1111),
     (0x007A_DCA0, f_007adca0, 0b1111_1111),
+    (0x007A_E860, f_007ae860, 0b1111_1111),
     (0x007A_EED0, f_007aeed0, 0b1111_1111),
     (0x007A_F450, f_007af450, 0b1111_1111),
     (0x007A_F5B0, f_007af5b0, 0b1111_1111),
