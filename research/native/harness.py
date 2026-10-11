@@ -353,12 +353,24 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
             branch[0] = i if i.mnemonic == "call" or i.mnemonic.startswith("j") else None
             if i.mnemonic == "call":  # its arguments: what was pushed since the previous call
                 pushed[2], pushed[0] = pushed[0], 0
-            if i.mnemonic == "push" and pushed[1]:
-                pushed[0] += 4
-            elif not (i.mnemonic == "push" and i.operands[0].type == 1):  # 1: X86_OP_REG
+            prologue = (i.mnemonic == "push" and i.operands[0].type == 1) or                 (i.mnemonic == "mov" and i.op_str == "ebp, esp") or                 (i.mnemonic in ("sub", "and") and i.op_str.startswith("esp, "))
+            if not pushed[1] and not prologue:
                 pushed[1] = True
+            if pushed[1]:  # argument space: pushes and `sub esp, N` (float args stored with movss)
+                if i.mnemonic == "push":
+                    pushed[0] += 4
+                elif i.mnemonic == "sub" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
+                    pushed[0] += i.operands[1].imm
+                elif i.mnemonic == "add" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
+                    pushed[0] = max(0, pushed[0] - i.operands[1].imm)
             return
         i, branch[0] = branch[0], None
+        if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000:
+            # running code outside the exe: a mocked callee's stack pop was
+            # wrong and a `ret` went astray. Not a valid case.
+            bad.append(f"execution outside the image at {pc:#010x}")
+            uc_.emu_stop()
+            return
         if i is None or pc in lifted or pc in PLATFORM:
             return
         esp = uc_.reg_read(UC_X86_REG_ESP)
@@ -431,6 +443,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
                     for p in {a & ~0xFFF, (a + op.size - 1) & ~0xFFF}:
                         if p not in pages_in:
                             on_unmapped(uc, None, p, 1, 0, None)
+    if not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
+        bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
     if bad:

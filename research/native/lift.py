@@ -23,7 +23,11 @@ import sqlite3
 import struct
 import sys
 
-N = "E:/ddda-re/notes/native"
+# Private pipeline data (patterns/lift.json, vectors/lift.json, ...).
+# LIFT_DATA points a worktree at its own copy so parallel work never
+# overwrites the main run's files (the generated test reads the same
+# variable at run time).
+N = os.environ.get("LIFT_DATA", "E:/ddda-re/notes/native")
 DB = "E:/ddda-re/notes/inventory/inventory.sqlite"
 R = os.path.join(os.path.dirname(__file__), "..", "..")
 
@@ -505,20 +509,34 @@ def vectors(per=3):
     old = json.load(open(path)) if os.path.exists(path) else []
     want = {f["addr"] for f in lifted}
     cases = [c for c in old if c["addr"] in want]
+    # an interrupted run left its results in the progress file: keep them
+    prog = f"{N}/vectors/lift_progress.jsonl"
+    failed = []
+    if os.path.exists(prog):
+        for line in open(prog):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue  # a line cut off by the interruption
+            cases += [c for c in r["cases"] if c["addr"] in want]
+            if not r["cases"]:
+                failed.append(r["addr"])
     have = {c["addr"] for c in cases}
     # functions that already failed to get a vector are not retried (each costs 8x the seeds)
     nov_path = f"{N}/patterns/lift_novector.json"
-    novector = set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()
+    novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None)
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
-    failed = []
+    log = open(prog, "a")
     with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,)) as pool:
         for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=8)):
             cases += out
             if not out:
                 failed.append(addr)
+            log.write(json.dumps({"addr": addr, "cases": out}) + "\n")
+            log.flush()
             if n % 1000 == 999:
                 print(n + 1, "recorded", flush=True)
     json.dump(sorted(novector | set(failed)), open(nov_path, "w"))
@@ -531,6 +549,8 @@ def vectors(per=3):
     cases = [c for c in cases if c["addr"] in keep]
     json.dump([f for f in lifted if f["addr"] in keep], open(f"{N}/patterns/lift.json", "w"))
     json.dump(cases, open(f"{N}/vectors/lift.json", "w"))
+    log.close()
+    os.remove(prog)  # everything is in lift.json now
     print(len(cases), "cases over", len(keep), "functions;", len(failed), "without a usable vector (dropped)")
 
 
@@ -579,7 +599,8 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 fn vectors(name: &str) -> Option<Vec<Value>> {{
-    let path = format!("E:/ddda-re/notes/native/vectors/{{name}}.json");
+    let dir = std::env::var("LIFT_DATA").unwrap_or_else(|_| "E:/ddda-re/notes/native".into());
+    let path = format!("{{dir}}/vectors/{{name}}.json");
     let text = match std::fs::read_to_string(&path) {{
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{{path}}: {{e}}"),
