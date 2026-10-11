@@ -606,6 +606,50 @@ initializers in CRT order: 5,651 complete), `boot` (the CRT entry
 `sApp` start-up and stops where the CRT's `__snprintf_s` is needed), `call`
 (one guest function), `imports` (the import list).
 
+Graphics backend design (2026-10-11, head). The D3D9 object boundary
+above, concretely, in the order it will be built:
+
+1. **Device state** (`d3d9dev.rs`): everything the D3D9 state machine holds
+   (render and sampler states, textures per stage including vertex
+   samplers 257..260, stream sources and frequencies, index buffer, vertex
+   declaration or FVF, shaders and their float/int/bool constants,
+   viewport, scissor, render targets, depth-stencil, clip planes), with
+   D3D9's documented defaults; Get* answers from it. State blocks capture
+   and apply subsets of it.
+2. **Resources**: textures (2D, cube, volume; every mip level), surfaces,
+   vertex and index buffers. Lock returns a pointer into a guest-memory
+   shadow of the resource (the guest writes there directly); Unlock marks
+   the range dirty and the backend uploads before the next draw that uses
+   it. Pools: MANAGED and SYSTEMMEM keep the guest copy; DEFAULT render
+   targets live on the GPU and are read back only on GetRenderTargetData /
+   LockRect. Formats: DXT1-5 as BC1-3, A8R8G8B8/X8R8G8B8 as BGRA8,
+   A16B16G16R16F/A32B32G32R32F/R16F/R32F/G16R16F as their float formats,
+   L8/A8L8/A8/R5G6B5/A1R5G5B5/A4R4G4B4 converted at upload, D24S8/D16 as
+   depth formats, FOURCC INTZ/RAWZ/DF24 as sampleable depth (the game
+   probes INTZ, R2VB; d3d9_profile answers which exist).
+3. **Shaders**: the game's bytecode through `d3d9wgsl` (checked against the
+   driver by `d3d9ref`). A VS/PS pair is linked by usage/index: the pixel
+   shader's input locations are remapped to the vertex shader's outputs.
+   The vertex stage adds D3D9's half-pixel offset (position.xy +=
+   (-1/width, +1/height) * position.w). Alpha test, which D3D9 does in
+   fixed function, is appended to the pixel shader as a discard against
+   the reference value. sRGB reads/writes follow the sampler and render
+   states.
+4. **Pipelines**: cached by (shaders, vertex declaration, blend, depth,
+   stencil, raster state, target formats). Vertex declarations map to
+   wgpu vertex layouts (FLOAT1-4, D3DCOLOR as BGRA unorm, UBYTE4(N),
+   SHORT2/4(N), USHORT2N, FLOAT16_2/4, DEC3N unpacked in the shader).
+   Triangle fans are converted to lists; D3D9's default clockwise culling
+   maps to wgpu's front face setting.
+5. **Draws and presentation**: Draw(Indexed)Primitive(UP) record into the
+   current pass (render-target changes split passes); Clear, StretchRect,
+   ColorFill, UpdateSurface/Texture as copies or small passes; Present
+   copies the back buffer to the window surface (host layer). Queries
+   (occlusion, event) answer from the GPU when the guest asks.
+6. **Checks**: each piece is compared against the host's D3D9 driver like
+   the shaders (`d3d9ref` grows from single shaders to whole draws: same
+   resources and states, both outputs read back).
+
 Findings for the next stages (2026-10-11, Ghidra):
 
 - Exceptions are rare: only three helpers (0x012E1A13, 0x012E1A60,
