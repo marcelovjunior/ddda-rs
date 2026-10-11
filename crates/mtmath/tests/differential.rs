@@ -45,7 +45,8 @@ fn cpu_regs(cpu: &Cpu) -> [u32; 8] {
 /// test's contract: the eight general registers, xmm0's low lane, and
 /// exactly the bytes the original wrote (reading any byte the original did
 /// not read panics).
-// verifies 0x007AD870 0x00CFC770 0x00CFC810 0x00CFC8B0 0x00CFC940 0x00D00690 0x00D006C0
+// verifies 0x007AD870 0x00CFC770 0x00CFC810 0x00CFC8B0 0x00CFC940 0x00CFD5E0 0x00CFD890 0x00CFDB10
+// verifies 0x00D00690 0x00D006C0
 #[test]
 fn ports_replay_the_lifted_vectors() {
     let Some(cases) = vectors("math_lift") else { return };
@@ -105,7 +106,8 @@ fn windows(v: &Value) -> BTreeMap<u32, u8> {
 /// denormals, random states): all general registers, every lane of each
 /// xmm register the port reproduces (the others must keep their entry
 /// values), and every byte of the object and stack windows.
-// verifies 0x007AD870 0x00CFC770 0x00CFC810 0x00CFC8B0 0x00CFC940 0x00D00690 0x00D006C0
+// verifies 0x007AD870 0x00CFC770 0x00CFC810 0x00CFC8B0 0x00CFC940 0x00CFD5E0 0x00CFD890 0x00CFDB10
+// verifies 0x00D00690 0x00D006C0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
     let Some(cases) = vectors("math_edge") else { return };

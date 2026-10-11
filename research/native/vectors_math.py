@@ -16,9 +16,12 @@ register and all eight xmm registers (all lanes) are recorded on entry and
 exit. MXCSR is 0x1F80 and the x87 control word 0x037F, as in run_sparse.
 
 Unicorn applies the x87 NaN rule (larger payload) where SSE hardware returns
-the first operand's NaN, so a case in which one SSE instruction meets two
-NaNs that differ (after quieting) is dropped; a case with a single NaN
-input, or the same NaN twice, is kept.
+the first operand's NaN, quieted (Intel SDM vol. 1, 4.8.3.5; checked on the
+host CPU by mtmath's scalar test). When an SSE add/sub/mul/div meets two
+NaNs, the recorder overwrites those result lanes with the hardware's
+answer before the next instruction runs, and counts it in the case's
+"nan_fixups". min/max return their second operand on any NaN, which
+Unicorn already does. Everything else is the emulator's.
 
 Reads the user's own exe at run time; nothing from it is committed.
 """
@@ -45,8 +48,8 @@ UC_XMM = [getattr(xc, f"UC_X86_REG_XMM{k}") for k in range(8)]
 
 OBJ = h.SCRATCH + 0x100       # `this`: 0x100 garbage bytes either side
 OBJ_WINDOW = (h.SCRATCH, 0x300)
-ESP = h.STACK + h.STACK_SIZE - 0x1000
-STACK_WINDOW = (ESP - 0x40, 0x80)
+ESP = h.STACK + h.STACK_SIZE - 0x1000  # minus 0, 4, 8 or 12: every frame alignment
+BELOW, ABOVE = 0x80, 0x40  # the stack window around ESP
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -57,7 +60,11 @@ PORTS = {
     0x00CFC8B0: ("projection", 4),
     0x00CFC940: ("projection", 4),
     0x007AD870: ("angle", 0),
+    0x00CFD5E0: ("look_at", 3),
+    0x00CFD890: ("look_at", 3),
+    0x00CFDB10: ("reflect", 1),
 }
+VEC = [h.SCRATCH + 0x20, h.SCRATCH + 0x40, h.SCRATCH + 0x60, h.SCRATCH + 0x80]  # input vectors
 
 NANS = [0x7FC00000, 0xFFC00000, 0x7FC12345, 0x7F800001, 0xFFA00007]
 SPECIAL = [0x00000000, 0x80000000, 0x3F800000, 0xBF800000, 0x00000001, 0x80400000, 0x007FFFFF,
@@ -92,11 +99,12 @@ def run(addr, regs, xmm, obj, args):
     uc.reg_write(xc.UC_X86_REG_MXCSR, 0x1F80)
     uc.reg_write(xc.UC_X86_REG_FPCW, 0x037F)
     uc.reg_write(xc.UC_X86_REG_FPTAG, 0xFFFF)
-    rnd = random.Random(regs["ecx"] ^ addr)
-    stack = bytearray(rnd.randbytes(STACK_WINDOW[1]))
+    rnd = random.Random(regs["eax"] ^ addr)
+    stack_window = (regs["esp"] - BELOW, BELOW + ABOVE)
+    stack = bytearray(rnd.randbytes(stack_window[1]))
     frame = struct.pack("<I", h.RET) + b"".join(struct.pack("<I", a) for a in args)
-    stack[0x40:0x40 + len(frame)] = frame
-    uc.mem_write(STACK_WINDOW[0], bytes(stack))
+    stack[BELOW:BELOW + len(frame)] = frame
+    uc.mem_write(stack_window[0], bytes(stack))
     uc.mem_write(OBJ_WINDOW[0], bytes(obj))
     for name, r in zip(GPR, UC_GPR):
         uc.reg_write(r, regs[name])
@@ -105,6 +113,8 @@ def run(addr, regs, xmm, obj, args):
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     md.detail = True
     bad = []
+    fixups = []   # [(register, {lane: bits})] to apply before the next instruction
+    fixed = [0]
 
     def lanes(i, op):
         if op.type == 1:
@@ -117,16 +127,22 @@ def run(addr, regs, xmm, obj, args):
         return list(struct.unpack(f"<{n}I", bytes(uc.mem_read(ea & 0xFFFFFFFF, 4 * n))))
 
     def hook(uc_, a, size, _):
+        while fixups:
+            reg, want = fixups.pop()
+            v = uc_.reg_read(reg)
+            for lane, bits in want.items():
+                v = (v & ~(0xFFFFFFFF << (32 * lane))) | (bits << (32 * lane))
+            uc_.reg_write(reg, v)
         i = next(md.disasm(bytes(uc_.mem_read(a, size)), a))
         if i.mnemonic == "call":
             bad.append(f"call at {a:#x}")
             uc_.emu_stop()
-        if i.mnemonic in h.SSE_BINARY and i.mnemonic.endswith(("ss", "ps")):
+        if i.mnemonic[:3] in ("add", "sub", "mul", "div") and i.mnemonic.endswith(("ss", "ps")):
             x, y = lanes(i, i.operands[0]), lanes(i, i.operands[1])
-            for p, q in zip(x, y):
-                if is_nan(p) and is_nan(q) and (p | 0x400000) != (q | 0x400000):
-                    bad.append(f"two different NaNs at {a:#x}")
-                    uc_.emu_stop()
+            want = {k: p | 0x400000 for k, (p, q) in enumerate(zip(x, y)) if is_nan(p) and is_nan(q)}
+            if want:
+                fixups.append((UC_XMM[int(i.reg_name(i.operands[0].reg)[3:])], want))
+                fixed[0] += 1
 
     uc.hook_add(UC_HOOK_CODE, hook)
     try:
@@ -141,10 +157,11 @@ def run(addr, regs, xmm, obj, args):
     return {
         "addr": addr,
         "regs_in": regs, "xmm_in": xmm,
-        "mem_in": [[OBJ_WINDOW[0], bytes(obj).hex()], [STACK_WINDOW[0], bytes(stack).hex()]],
+        "mem_in": [[OBJ_WINDOW[0], bytes(obj).hex()], [stack_window[0], bytes(stack).hex()]],
         "regs_out": {n: uc.reg_read(r) for n, r in zip(GPR, UC_GPR)},
         "xmm_out": [read_xmm(r) for r in UC_XMM],
-        "mem_out": [[w[0], bytes(uc.mem_read(w[0], w[1])).hex()] for w in (OBJ_WINDOW, STACK_WINDOW)],
+        "mem_out": [[w[0], bytes(uc.mem_read(w[0], w[1])).hex()] for w in (OBJ_WINDOW, stack_window)],
+        "nan_fixups": fixed[0],
     }
 
 
@@ -167,7 +184,7 @@ def edge_cases(addr, kind, nargs, n, seed):
     while len(cases) < n and tries < n * 20:
         tries += 1
         regs = {r: rnd.getrandbits(32) for r in GPR}
-        regs["esp"] = ESP
+        regs["esp"] = ESP - 4 * rnd.randrange(4)
         regs["ecx"] = OBJ
         xmm = [[rnd.getrandbits(32) for _ in range(4)] for _ in range(8)]
         obj = bytearray(rnd.randbytes(OBJ_WINDOW[1]))
@@ -184,6 +201,23 @@ def edge_cases(addr, kind, nargs, n, seed):
             args = [floats(rnd) for _ in range(4)]
         elif kind == "angle":
             xmm[0][0], xmm[1][0] = floats(rnd), floats(rnd)
+        elif kind in ("look_at", "reflect"):
+            vecs = [[floats(rnd) for _ in range(4)] for _ in range(3)]
+            pick = rnd.random()
+            if kind == "look_at" and pick < 0.15:
+                vecs[1][:3] = vecs[0][:3]  # at == eye: nothing to normalize
+            elif kind == "look_at" and pick < 0.3:
+                # up along the view direction: up x z is (nearly) zero
+                eye = [rnd.uniform(-50, 50) for _ in range(3)]
+                d = [rnd.choice([0.0, rnd.uniform(-5, 5)]) for _ in range(3)]
+                s = rnd.choice([1.0, -3.0, 1e-9])
+                vecs = [[f2b(v) for v in eye] + [0], [f2b(e + v) for e, v in zip(eye, d)] + [0],
+                        [f2b(v * s) for v in d] + [0]]
+            elif pick < 0.6:
+                vecs = [[f2b(rnd.uniform(-100, 100)) for _ in range(4)] for _ in range(3)]
+            for k, v in enumerate(vecs):
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            args = VEC[:nargs]
         try:
             cases.append(run(addr, regs, xmm, obj, args))
         except Dropped:
@@ -206,7 +240,7 @@ def edge():
     cases = []
     for addr, (kind, nargs) in sorted(PORTS.items()):
         got = edge_cases(addr, kind, nargs, 300, addr)
-        print(f"0x{addr:08X} {kind}: {len(got)} cases")
+        print(f"0x{addr:08X} {kind}: {len(got)} cases, {sum(c['nan_fixups'] > 0 for c in got)} with two-NaN fixups")
         cases += got
     json.dump(cases, open(f"{OUT}/math_edge.json", "w"))
     print(f"math_edge.json: {len(cases)} cases")

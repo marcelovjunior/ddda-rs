@@ -23,10 +23,10 @@
 //! adapter does not reproduce after the call before writing it.
 
 use crate::angle;
-use crate::matrix;
+use crate::matrix::{self, ONE};
 use crate::random::Random;
 use crate::scalar::F32;
-use crate::types::Mat44;
+use crate::types::{Mat44, Plane, Vec3};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 
@@ -54,6 +54,28 @@ fn store_matrix(m: &mut dyn Mem, addr: u32, mat: &Mat44) {
     for i in 0..16 {
         m.set_u32(addr.wrapping_add(4 * i as u32), mat.at(i).to_bits());
     }
+}
+
+fn load_vec3(m: &dyn Mem, addr: u32) -> Vec3 {
+    let f = |k: u32| F32::from_bits(m.u32(addr.wrapping_add(4 * k)));
+    Vec3::new(f(0), f(1), f(2))
+}
+
+/// A float the original spills to its stack frame.
+fn spill(m: &mut dyn Mem, addr: u32, v: F32) {
+    m.set_u32(addr, v.to_bits());
+}
+
+/// The frame of `push ebp; mov ebp, esp; and esp, -16; sub esp, size`,
+/// relative to the ESP at entry.
+fn aligned_frame(cpu: &Cpu, size: u32) -> u32 {
+    (cpu.esp.wrapping_sub(4) & !0xF).wrapping_sub(size)
+}
+
+/// An xmm register holding one float (`movss` from memory zeroes the
+/// upper lanes, and every later write keeps them zero).
+fn scalar(v: F32) -> [u32; 4] {
+    [v.to_bits(), 0, 0, 0]
 }
 
 fn load_random(m: &dyn Mem, addr: u32) -> Random {
@@ -165,6 +187,63 @@ pub fn f_007ad870(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+/// thiscall `MtMatrix *lookAtRH/LH(const MtVector3 *eye, const
+/// MtVector3 *at, const MtVector3 *up)`, `ret 0xC`. The original builds
+/// an aligned frame and spills the eye, the axes and some products to it;
+/// EAX ends as `up`. Every xmm register ends holding one float.
+fn look_at(m: &mut dyn Mem, cpu: &mut Cpu, left_handed: bool) {
+    let (pe, pa, pu) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
+    let (eye, at, up) = (load_vec3(m, pe), load_vec3(m, pa), load_vec3(m, pu));
+    let la = if left_handed { matrix::look_at_lh(eye, at, up) } else { matrix::look_at_rh(eye, at, up) };
+    store_matrix(m, cpu.ecx, &la.matrix);
+    let (x, y, z) = (la.x, la.y, la.z);
+    let f = aligned_frame(cpu, 0x40);
+    pushed(m, cpu, 1, cpu.ebp);
+    for (off, v) in [(4, eye.x), (8, eye.y), (0xC, eye.z), (0x10, z.x), (0x14, z.y), (0x18, z.z)] {
+        spill(m, f + off, v);
+    }
+    if la.x_normalized {
+        spill(m, f + 0x34, x.y);
+    }
+    let sign = F32::from_bits(0x8000_0000);
+    if left_handed {
+        spill(m, f + 0x28, x.z);
+        spill(m, f + 0x38, eye.z);
+        let ey = eye.y * y.y + eye.x * y.x + eye.z * y.z;
+        cpu.xmm = [ONE, eye.z * z.z, z.x, z.y, z.z, eye.x * z.x, sign, -ey].map(scalar);
+    } else {
+        spill(m, f + 0x20, eye.x);
+        spill(m, f + 0x28, eye.z);
+        spill(m, f + 0x38, x.z);
+        cpu.xmm = [ONE, sign, eye.x * z.x, eye.z * z.z, eye.z * y.z, -z.x, -z.y, -z.z].map(scalar);
+    }
+    cpu.eax = pu;
+    ret(cpu, 0xC);
+}
+
+pub fn f_00cfd5e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    look_at(m, cpu, false);
+}
+
+pub fn f_00cfd890(m: &mut dyn Mem, cpu: &mut Cpu) {
+    look_at(m, cpu, true);
+}
+
+/// thiscall `MtMatrix *reflect(const MtPlane *plane)`, `ret 4`. EAX ends
+/// as `plane`; every xmm register ends holding one float (xmm3 zero).
+pub fn f_00cfdb10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pp = arg(m, cpu, 0);
+    let f = |k: u32| F32::from_bits(m.u32(pp.wrapping_add(4 * k)));
+    let plane = Plane { a: f(0), b: f(1), c: f(2), d: f(3) };
+    let r = matrix::reflect(plane);
+    store_matrix(m, cpu.ecx, &r.matrix);
+    let k = Vec3::new(r.n.x * matrix::MINUS_TWO, r.n.y * matrix::MINUS_TWO, r.n.z * matrix::MINUS_TWO);
+    let nz2 = r.n.z * matrix::TWO * r.n.z;
+    cpu.xmm = [k.x * r.d, k.y * r.d, k.z * r.d, F32::ZERO, ONE, r.d, nz2, ONE - nz2].map(scalar);
+    cpu.eax = pp;
+    ret(cpu, 4);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -174,6 +253,9 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x00CF_C810, f_00cfc810, 0b0000_0001),
     (0x00CF_C8B0, f_00cfc8b0, 0b0000_0001),
     (0x00CF_C940, f_00cfc940, 0b0000_0001),
+    (0x00CF_D5E0, f_00cfd5e0, 0b1111_1111),
+    (0x00CF_D890, f_00cfd890, 0b1111_1111),
+    (0x00CF_DB10, f_00cfdb10, 0b1111_1111),
     (0x00D0_0690, f_00d00690, 0b1111_1111),
     (0x00D0_06C0, f_00d006c0, 0b1111_1111),
 ];

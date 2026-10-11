@@ -97,3 +97,26 @@ sse_binary!(Add, add, "addss", +);
 sse_binary!(Sub, sub, "subss", -);
 sse_binary!(Mul, mul, "mulss", *);
 sse_binary!(Div, div, "divss", /);
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod tests {
+    use super::F32;
+
+    /// The host CPU's rule, which `F32` keeps and the vector recorder
+    /// applies where Unicorn differs (Intel SDM vol. 1, 4.8.3.5): with
+    /// two NaN operands, SSE returns the first one, quieted.
+    #[test]
+    fn two_nans_give_the_first_operand_quieted() {
+        let q = F32::from_bits(0x7FC0_1234);
+        let s = F32::from_bits(0xFFA0_0007);
+        let ops: [fn(F32, F32) -> F32; 4] = [|a, b| a + b, |a, b| a - b, |a, b| a * b, |a, b| a / b];
+        for op in ops {
+            assert_eq!(op(q, s).to_bits(), 0x7FC0_1234);
+            assert_eq!(op(s, q).to_bits(), 0xFFE0_0007);
+        }
+        // one NaN: that NaN, quieted, whichever side it is on
+        assert_eq!((F32(1.0) * s).to_bits(), 0xFFE0_0007);
+        // invalid operations give the x86 default NaN
+        assert_eq!((F32(f32::INFINITY) - F32(f32::INFINITY)).to_bits(), 0xFFC0_0000);
+    }
+}

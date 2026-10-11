@@ -25,6 +25,25 @@ impl Vec3 {
     pub const fn new(x: F32, y: F32, z: F32) -> Vec3 {
         Vec3 { x, y, z, pad: F32::ZERO }
     }
+
+    /// The length as MtVector3 computes it: `sqrt((y*y + x*x) + z*z)`.
+    pub fn length(self) -> F32 {
+        (self.y * self.y + self.x * self.x + self.z * self.z).sqrt()
+    }
+}
+
+/// `MtPlane`: `a x + b y + c z + d = 0` (16 bytes).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct Plane {
+    /// +0x00
+    pub a: F32,
+    /// +0x04
+    pub b: F32,
+    /// +0x08
+    pub c: F32,
+    /// +0x0C
+    pub d: F32,
 }
 
 /// `MtMatrix`: a 4x4 matrix of floats, row-major (64 bytes, 16-aligned).

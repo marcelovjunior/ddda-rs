@@ -1,11 +1,12 @@
-//! `MtMatrix` builders: projection matrices (the original's equivalents of
-//! the D3DX `PerspectiveRH/LH` and `OrthoRH/LH` builders).
+//! `MtMatrix` builders: projections, view (look-at) and reflection matrices
+//! (the original's equivalents of the D3DX `PerspectiveRH/LH`,
+//! `OrthoRH/LH`, `LookAtRH/LH` and `Reflect` builders).
 //!
 //! Each function writes all sixteen elements. The arithmetic is the
 //! original's, operation by operation (see `crate::scalar`).
 
 use crate::scalar::F32;
-use crate::types::Mat44;
+use crate::types::{Mat44, Plane, Vec3};
 
 /// 2.0, read by the builders from 0x01406CEC.
 pub const TWO: F32 = F32(2.0);
@@ -13,6 +14,11 @@ pub const TWO: F32 = F32(2.0);
 pub const ONE: F32 = F32(1.0);
 /// -1.0, read from 0x0161C20C.
 pub const MINUS_ONE: F32 = F32(-1.0);
+/// -2.0, read from 0x0161C908.
+pub const MINUS_TWO: F32 = F32(-2.0);
+/// Vectors shorter than this (FLT_EPSILON, 0x34000000, read from
+/// 0x01407124) are left as they are instead of being normalized.
+pub const NORMALIZE_EPSILON: F32 = F32::from_bits(0x3400_0000);
 
 const O: F32 = F32::ZERO;
 
@@ -76,4 +82,128 @@ pub fn ortho_lh(width: F32, height: F32, near: F32, far: F32) -> Mat44 {
             [O, O, near / (near - far), ONE],
         ],
     }
+}
+
+/// The camera axes a look-at builder computes on the way to its matrix
+/// (the ABI adapters rebuild the original's scratch registers from them).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookAt {
+    pub matrix: Mat44,
+    /// The view direction `at - eye`, normalized unless shorter than
+    /// [`NORMALIZE_EPSILON`].
+    pub z: Vec3,
+    /// `up x z`, normalized under the same rule.
+    pub x: Vec3,
+    /// Whether `x` was normalized.
+    pub x_normalized: bool,
+    /// `z x x`.
+    pub y: Vec3,
+}
+
+/// The two look-at builders share everything up to the matrix, except for
+/// the order of two products when normalizing (which only matters for
+/// the payload when two different NaNs meet, see `crate::scalar`).
+fn look_at_axes(eye: Vec3, at: Vec3, up: Vec3, left_handed: bool) -> (Vec3, Vec3, bool, Vec3) {
+    let d = Vec3::new(at.x - eye.x, at.y - eye.y, at.z - eye.z);
+    let len = d.length();
+    let z = if NORMALIZE_EPSILON > len {
+        d
+    } else {
+        let inv = ONE / len;
+        let x = if left_handed { d.x * inv } else { inv * d.x };
+        Vec3::new(x, inv * d.y, inv * d.z)
+    };
+    let c = Vec3::new(up.y * z.z - up.z * z.y, up.z * z.x - z.z * up.x, z.y * up.x - up.y * z.x);
+    let len = c.length();
+    let x_normalized = !(NORMALIZE_EPSILON > len);
+    let x = if x_normalized {
+        let inv = ONE / len;
+        let cz = if left_handed { c.z * inv } else { inv * c.z };
+        Vec3::new(inv * c.x, inv * c.y, cz)
+    } else {
+        c
+    };
+    let y = Vec3::new(x.z * z.y - x.y * z.z, z.z * x.x - x.z * z.x, x.y * z.x - z.y * x.x);
+    (z, x, x_normalized, y)
+}
+
+/// `eye . axis` for the three translation terms, in the original's order.
+fn eye_dots(eye: Vec3, x: Vec3, y: Vec3, z: Vec3) -> [F32; 3] {
+    [
+        eye.y * x.y + x.x * eye.x + eye.z * x.z,
+        eye.y * y.y + eye.x * y.x + eye.z * y.z,
+        eye.y * z.y + eye.x * z.x + eye.z * z.z,
+    ]
+}
+
+/// Right-handed view matrix: the camera at `eye` looks at `at`, `up`
+/// roughly up. Columns hold the negated side axis, the up axis and the
+/// negated view direction, so the camera looks down its -z
+/// (D3DXMatrixLookAtRH).
+// Translated from 0x00CFD5E0 (DDDA.exe 2017-12-13 Steam), MtMatrix::lookAtRH.
+pub fn look_at_rh(eye: Vec3, at: Vec3, up: Vec3) -> LookAt {
+    let (z, x, x_normalized, y) = look_at_axes(eye, at, up, false);
+    let [ex, ey, ez] = eye_dots(eye, x, y, z);
+    let matrix = Mat44 {
+        m: [
+            [-x.x, y.x, -z.x, O],
+            [-x.y, y.y, -z.y, O],
+            [-x.z, y.z, -z.z, O],
+            [ex, -ey, ez, ONE],
+        ],
+    };
+    LookAt { matrix, z, x, x_normalized, y }
+}
+
+/// Left-handed view matrix (D3DXMatrixLookAtLH): columns hold the side,
+/// up and view axes; the translation is minus the eye in those axes.
+// Translated from 0x00CFD890 (DDDA.exe 2017-12-13 Steam), MtMatrix::lookAtLH.
+pub fn look_at_lh(eye: Vec3, at: Vec3, up: Vec3) -> LookAt {
+    let (z, x, x_normalized, y) = look_at_axes(eye, at, up, true);
+    let [ex, ey, ez] = eye_dots(eye, x, y, z);
+    let matrix = Mat44 {
+        m: [
+            [x.x, y.x, z.x, O],
+            [x.y, y.y, z.y, O],
+            [x.z, y.z, z.z, O],
+            [-ex, -ey, -ez, ONE],
+        ],
+    };
+    LookAt { matrix, z, x, x_normalized, y }
+}
+
+/// What [`reflect`] computes on the way to its matrix.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reflection {
+    pub matrix: Mat44,
+    /// The plane normal, normalized unless shorter than
+    /// [`NORMALIZE_EPSILON`].
+    pub n: Vec3,
+    /// `d` divided by the normal's original length (also when the normal
+    /// was too short to normalize).
+    pub d: F32,
+}
+
+/// The matrix that mirrors points in `plane` (D3DXMatrixReflect):
+/// `I - 2 n n^T` with the translation `-2 d n`.
+// Translated from 0x00CFDB10 (DDDA.exe 2017-12-13 Steam), MtMatrix::reflect.
+pub fn reflect(plane: Plane) -> Reflection {
+    let len = Vec3::new(plane.a, plane.b, plane.c).length();
+    let n = if NORMALIZE_EPSILON > len {
+        Vec3::new(plane.a, plane.b, plane.c)
+    } else {
+        let inv = ONE / len;
+        Vec3::new(inv * plane.a, plane.b * inv, plane.c * inv)
+    };
+    let d = plane.d / len;
+    let k = Vec3::new(n.x * MINUS_TWO, n.y * MINUS_TWO, n.z * MINUS_TWO);
+    let matrix = Mat44 {
+        m: [
+            [ONE - n.x * TWO * n.x, k.y * n.x, k.z * n.x, O],
+            [k.x * n.y, ONE - n.y * TWO * n.y, k.z * n.y, O],
+            [k.x * n.z, k.y * n.z, ONE - n.z * TWO * n.z, O],
+            [k.x * d, k.y * d, k.z * d, ONE],
+        ],
+    };
+    Reflection { matrix, n, d }
 }
