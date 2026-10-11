@@ -164,7 +164,7 @@ def static_pop(target, _cache={}):
     return _cache[target]
 
 
-def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
+def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -176,7 +176,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
     nor a PLATFORM model are mocked: the callee does not run; the event is
     recorded in "calls" (target, all eight registers at entry) with what the
     mock returns (random eax/ecx/edx, random finite xmm0, the callee's
-    stack pop). ddnative's tests replay these through x86::call_ext."""
+    stack pop). ddnative's tests replay these through x86::call_ext.
+
+    `zero_inputs` is an opt-in boundary fixture: non-image memory, initial
+    general registers except ESP, and mocked return values are zero. Image
+    bytes, stack/return setup, instruction execution and recording are unchanged.
+    This exercises switch index zero and empty counts that full-width random
+    inputs almost never select; it is a test input, not a game-state model.
+    """
     import random
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
@@ -194,6 +201,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
                 buf = bytearray(0x1000)
                 buf[lo - page:hi - page] = b[lo - va:hi - va]
                 return bytes(buf)
+        if zero_inputs:
+            return bytes(0x1000)
         prnd = random.Random((seed << 32) ^ page)
         return prnd.randbytes(0x1000)
 
@@ -285,6 +294,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
         return any(nan((a >> 32 * k) & 0xFFFFFFFF) and nan((b >> 32 * k) & 0xFFFFFFFF) for k in range(lanes))
 
     def on_code(uc_, addr, size, _):
+        # The ext recorder already rejects stray returns in on_ext. Closed
+        # runs must not accidentally execute seeded heap/stack bytes either.
+        # The only non-image code we intentionally execute is the st0 capture.
+        if (end is None and addr != 0x0DEAF000
+                and not any(va <= addr < va + len(data) for va, data in secs)):
+            bad.append(f"execution outside the image at {addr:#010x}")
+            uc_.emu_stop()
+            return
         if two_nans(uc_, addr):
             bad.append(f"two NaN operands at {addr:#010x}")
             uc_.emu_stop()
@@ -389,6 +406,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
                "pop": pop}
+        if zero_inputs:
+            out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX)):
             uc_.reg_write(r, out[n])
         uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
@@ -406,6 +425,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
     regs_in = {}
     for name, r in GPR:
         v = rnd.getrandbits(32)
+        if zero_inputs:
+            v = 0
         if name == "esp":
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
         regs_in[name] = v
@@ -484,4 +505,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
         return [[a, bytes(b).hex()] for a, b in out]
     final = {a: uc.mem_read(a, 1)[0] for a in written}
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
-            "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth, **({"calls": calls} if end is not None else {})}
+            "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
+            **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {})}

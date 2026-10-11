@@ -66,7 +66,15 @@ def x87_depth_check(ins, addr, end):
     callee, which mocked calls cannot provide: reject."""
     at = {i.address: k for k, i in enumerate(ins)}
     seen, todo = {}, [(0, 0)]
-    while todo:
+    # blocks only reachable through a switch table are walked afterwards
+    # from depth 0 (conservative: a switch inside x87 code is rare)
+    pending = list(range(len(ins)))
+    while todo or pending:
+        if not todo:
+            k = pending.pop(0)
+            if ins[k].address not in seen:
+                todo.append((k, 0))
+            continue
         k, depth = todo.pop()
         while k < len(ins):
             i = ins[k]
@@ -91,6 +99,74 @@ def x87_depth_check(ins, addr, end):
             k += 1
 
 
+def switch_targets(ins, k, addr, end, read):
+    """Recognise an absolute x86 dword switch table, never a computed tail call.
+
+    The image supplies discovery only; generated code still reads through Mem.
+    A nearby cmp/ja (or cmp/jae) bounds either the dword table or an optional
+    byte remapping table. Other shapes retain the conservative table-only check.
+    """
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    jump = ins[k]
+    op = jump.operands[0]
+    if (jump.mnemonic != "jmp" or op.type != X86_OP_MEM or op.size != 4
+            or op.mem.segment or op.mem.base or not op.mem.index
+            or op.mem.scale != 4):
+        raise Unsupported("indirect jump (not an absolute switch table)")
+    table = op.mem.disp & 0xFFFFFFFF
+    starts = {i.address for i in ins}
+    targets = []
+    cursor = table
+    while cursor <= 0xFFFFFFFC:
+        try:
+            data = read(cursor, 4)
+        except KeyError:
+            break
+        if len(data) != 4:
+            break
+        target, = struct.unpack("<I", data)
+        if not addr <= target < end:
+            break
+        if target not in starts:
+            raise Unsupported("indirect jump (switch target is not an instruction start)")
+        targets.append(target)
+        cursor += 4
+    if not targets:
+        raise Unsupported("indirect jump (empty or unmapped switch table)")
+
+    # MSVC commonly compresses a sparse switch with a byte lookup immediately
+    # before the jump. The cmp bounds that lookup, not the dword table.
+    index = op.mem.index
+    remap = None
+    prev = k - 1
+    if prev >= 0 and ins[prev].mnemonic == "movzx":
+        dst, src = ins[prev].operands
+        if dst.type == X86_OP_REG and dst.reg == index:
+            if (dst.size != 4 or src.type != X86_OP_MEM or src.size != 1
+                    or src.mem.segment or src.mem.index or src.mem.base != index):
+                raise Unsupported("indirect jump (unrecognised switch remapping)")
+            remap = src.mem.disp & 0xFFFFFFFF
+            prev -= 1
+    if prev >= 1 and ins[prev].mnemonic in ("ja", "jae"):
+        cmp = ins[prev - 1]
+        if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
+                and cmp.operands[0].type == X86_OP_REG
+                and cmp.operands[0].reg == index and cmp.operands[0].size == 4
+                and cmp.operands[1].type == X86_OP_IMM):
+            count = (cmp.operands[1].imm & 0xFFFFFFFF) + (ins[prev].mnemonic == "ja")
+            if remap is None:
+                if count != len(targets):
+                    raise Unsupported("indirect jump (switch bound disagrees with table)")
+            else:
+                try:
+                    indices = read(remap, count)
+                except KeyError:
+                    indices = b""
+                if not count or len(indices) != count or max(indices) >= len(targets):
+                    raise Unsupported("indirect jump (switch remapping exceeds table)")
+    return targets
+
+
 def lift(addr, size, callable=frozenset(), ext=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
@@ -111,13 +187,14 @@ def lift(addr, size, callable=frozenset(), ext=False):
     for k, i in enumerate(ins):
         if i.mnemonic.startswith("j"):
             if i.operands[0].type != X86_OP_IMM:
-                raise Unsupported("indirect jump")  # mostly switch tables: targets inside the function
-            t = i.operands[0].imm
-            if not (addr <= t < end):
-                if t not in callable and t not in h.PLATFORM and not ext:
-                    raise Unsupported("jump out of the function")
+                leaders.update(switch_targets(ins, k, addr, end, h.code))
             else:
-                leaders.add(t)
+                t = i.operands[0].imm
+                if not (addr <= t < end):
+                    if t not in callable and t not in h.PLATFORM and not ext:
+                        raise Unsupported("jump out of the function")
+                else:
+                    leaders.add(t)
             if k + 1 < len(ins):
                 leaders.add(ins[k + 1].address)
         if i.mnemonic in ("ret", "retn") and k + 1 < len(ins):
@@ -282,6 +359,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
                 terminated = True
                 break
+            elif mn == "jmp" and ops[0].type == X86_OP_MEM:
+                body.append(f"pc = {load(i, ops[0])}; continue;")
+                terminated = True
+                break
             elif mn == "jmp" and not (addr <= ops[0].imm < end):
                 # tail call: the callee returns straight to our caller
                 body.append(f"{SAVE} {target(ops[0].imm)}(m, cpu); return;")
@@ -431,7 +512,7 @@ def rust_fn(addr, name, arms):
 
 
 def scan(limit=None):
-    db = sqlite3.connect(DB)
+    db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     from collections import Counter
     ok, why = [], Counter()
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
@@ -542,14 +623,15 @@ def _vectors_for(args):
     addr, per, end = args
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
+    inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
     out, got, seed = [], 0, 0
     while got < per and seed < per * 8:
         seed += 1
         try:
             if end is None:
-                r = h.run_sparse(addr, (addr << 8) ^ seed)
+                r = h.run_sparse(addr, (addr << 8) ^ seed, **inputs)
             else:  # ext: calls to untranslated code are mocked
-                r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED)
+                r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED, **inputs)
         except h.Rejected:
             continue
         except Exception:  # noqa: BLE001  (emulator errors: no vector)
@@ -560,16 +642,31 @@ def _vectors_for(args):
 
 
 def vectors(per=3):
-    """Record vectors for every lifted function that has none yet (a vector
-    depends only on the original code and the seed, so earlier ones stay
-    valid), then drop functions without one and, transitively, their callers.
-    LIFT_WORKERS limits the worker processes (default: every core)."""
+    """Record vectors for every lifted function that has none yet, then drop
+    functions without one and, transitively, their callers. Existing cases
+    remain valid only if their call-mocking boundary has not changed.
+    LIFT_WORKERS limits the worker processes (default: every core).
+    LIFT_ZERO_INPUTS=1 requests zero boundary fixtures for missing functions;
+    it does not replace existing vectors or retry cached no-vector results.
+    """
     from multiprocessing import Pool
     lifted = json.load(open(f"{N}/patterns/lift.json"))
     path = f"{N}/vectors/lift.json"
     old = json.load(open(path)) if os.path.exists(path) else []
     want = {f["addr"] for f in lifted}
-    cases = [c for c in old if c["addr"] in want]
+    # a cached case is stale when its call boundary changed: a function that
+    # is now closed must make no mocked calls, and an ext function's mocked
+    # target must not have become lifted since
+    closed_now = {f["addr"] for f in lifted if not f.get("ext")}
+    def fresh(c):
+        calls = c.get("calls") or []
+        if c["addr"] in closed_now:
+            return not calls
+        return not any(e["target"] in closed_now for e in calls)
+    stale = {c["addr"] for c in old if c["addr"] in want and not fresh(c)}
+    cases = [c for c in old if c["addr"] in want and c["addr"] not in stale]
+    if stale:
+        print(len(stale), "functions have stale vectors (call boundary changed): re-recording", flush=True)
     # an interrupted run left its results in the progress file: keep them
     prog = f"{N}/vectors/lift_progress.jsonl"
     failed = []

@@ -228,7 +228,7 @@ Rust statement group per x86 instruction, and `harness.run_sparse`
 verifies them with automatic vectors. A function lifts when every
 instruction is in the supported subset and every `call` (or jump out of
 the function, i.e. a tail call) goes to a function that is itself lifted;
-indirect calls and jumps reject it. This is how most functions get verified; the
+indirect calls and unrecognised indirect jumps reject it. This is how most functions get verified; the
 hand-written ports above are for the important ones, where a readable
 typed API matters.
 
@@ -250,6 +250,19 @@ functions per module) and `lifted.rs` (re-exports every function and the
   pair the tests and hand ports use.
 - Registers are locals; 8/16-bit registers are masked views (`al` =
   `eax & 0xFF`). Basic blocks become `loop { match pc { ... } }`.
+- Switch jumps lift only in the absolute dword form `jmp [index*4 + TABLE]`
+  (no base register or segment override). `switch_targets` reads TABLE through
+  `harness.code`, stops at the first target outside the function, and requires
+  a nonempty table whose every target is a decoded instruction start. All
+  targets become block leaders. An immediately preceding `cmp index, N;
+  ja/jae default` must agree with the table length. With an intervening
+  `movzx index, byte ptr [index + INDEX]`, the bound instead sizes INDEX;
+  every byte in that image range must select an existing dword entry.
+  Without that recognised bound shape, discovery uses the table alone.
+  Rust executes `pc = m.u32(address); continue;`, including the original
+  wrapping address calculation and byte remapping instructions. It never
+  embeds table values or substitutes a Rust array lookup. The default
+  `match pc` arm panics on an unknown target.
 - Flags: each flag-setting instruction stores `Flags::new(kind, a, b,
   result, bits)`; `jcc`/`setcc` call `fl.cond("be")` etc., which computes
   CF/ZF/SF/OF/PF exactly (add, sub/cmp/neg, logic/test, inc/dec keeping
@@ -280,6 +293,18 @@ CPU's), when it runs more than 20,000 instructions on random data
 (runaway loops over garbage counts), or when the emulator faults.
 Functions with no usable case are dropped from the batch, not counted.
 
+For boundary fixtures, `run_sparse(..., zero_inputs=True)` (or
+`LIFT_ZERO_INPUTS=1` with `lift.py vectors`) zeros initial general registers
+except ESP, non-image sparse pages and mocked return values. Executable
+image bytes, the stack/return setup and the original instructions remain
+unchanged. This supplies empty counts and switch index zero instead of
+almost always taking a default branch on full-width random values. Such
+cases are tagged `"zero_inputs": true`; they are additional inputs, not a
+model of real game state or a substitute for random/other-branch coverage.
+The option affects only missing vectors. For a private retry in another
+input mode, first remove those addresses from the private no-vector cache;
+keep successful cases and report functions that still have no usable case.
+
 **Rounds.** `scan` lifts in rounds: round 1 gets the leaves, each later
 round the functions whose callees all lifted earlier (the `callable` set
 grows inside a round too). It stops when a round adds nothing, so call
@@ -294,7 +319,8 @@ function, indirect through a vtable or function pointer, through the
 import table) and any outward jump becomes `x86::call_ext(m, cpu,
 target)`. Such functions are marked `"ext": true` and are never callable
 by others (a caller treats them as untranslated too). Indirect *jumps*
-stay rejected: most are switch tables inside the function.
+must pass the same switch-table recognition even in this pass; other
+indirect jumps stay rejected, never becoming mocked external tail calls.
 
 Their vectors come from `run_sparse(addr, seed, end=..., lifted=...)`,
 which **mocks** each call or jump from the function's own code to
@@ -326,15 +352,37 @@ round and the rejection reasons), `PY lift.py vectors` (parallel;
 Rust (leaf form: calls reject).
 
 `vectors` only records functions that have none in `vectors/lift.json`:
-a vector depends on the original code and the seed alone, so old ones
-stay valid when the lifter changes. Functions with no usable vector are
+a vector depends on the original code, seed, input mode and, for external-call cases,
+the mocked-call boundary. Ordinary vectors stay valid when the lifter
+changes, but do not reuse external-call vectors when a newly callable
+function changes which callees execute versus get mocked. The cache does
+not detect that change automatically: invalidate affected external-call
+cases in the private batch before recording. Functions with no usable vector are
 dropped, then (repeatedly) every function that calls a dropped one,
 since its Rust would not compile. Never run `gen` between `scan` and
 `vectors`: the test requires a vector for every generated function.
 
 **Extending it.** Rejections are counted by reason (`call` = a call to
-something not lifted, `icall` = indirect call, `jump` = indirect jump or
-a jump out of the function to something not lifted). To support a new
+something not lifted, `icall` = indirect call, `indirect` = an unrecognised
+indirect jump, `jump` = a direct jump out of the function to something not
+lifted, or into an instruction). Switch recognition is deliberately narrow:
+register jumps, base-relative tables, targets outside the function and
+targets in the middle of instructions are not new switch forms to accept
+without evidence. A byte index table's bounds constant is **not** the
+number of dword entries. Keep table discovery separate from the runtime
+memory read, so sparse vectors verify the bytes the CPU actually consumed.
+Run `PY -m unittest discover -s research/native -p test_lift_switch.py` for
+synthetic recognizer checks, then scan, record original-exe vectors and
+replay the generated Rust for every newly admitted function and its callees.
+Random vectors can take only the default branch: inspect table-read coverage
+before claiming switch-path comparison. Functions dropped for lack of a
+usable vector are liftable, not verified. To isolate a caller whose callees
+lack usable vectors, a separate private batch may use `lift(..., ext=True)`
+with an empty callable set and record with an empty lifted set, then merge
+the resulting functions and cases for replay. This checks the caller's
+instructions with mocked callees; it does not verify those callees. Never
+reuse the caller's earlier vectors across that change of call boundary.
+To support a new
 instruction, add a branch in `lift()` that emits its exact semantics
 (including flags), regenerate, and let the vectors judge. Ideas in order
 of yield: indirect calls through vtables (needs a dispatch table from
@@ -355,6 +403,12 @@ code into a page that has already been executed or translated (the st0
 capture first ran on the return page and silently executed stale bytes).
 Generated code is literal, not idiomatic; refactoring a function into a
 typed API is welcome later, but the vectors must keep passing.
+Closed sparse runs also reject execution outside the mapped exe sections
+(except the deliberate st0 capture trampoline). A fragment entered with
+the wrong stack can return into seeded data and eventually reach the return
+sentinel; that is not a valid original-exe vector. L01 exposed such an older
+cached case at `0x00786D74`. Clear invalid cached cases rather than changing
+the translation to reproduce execution of random bytes.
 
 ## Pattern families
 
