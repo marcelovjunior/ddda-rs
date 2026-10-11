@@ -503,6 +503,9 @@ def rust_fn(addr, name, arms):
         "              mut fl, mut st } = std::mem::take(cpu);",
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
+        *([] if os.environ.get("LIFT_TRACE", "").lower() not in (f"0x{addr:x}", f"{addr:x}") else [
+            '        eprintln!("trace {pc:#x} eax={eax:#x} ecx={ecx:#x} edx={edx:#x} ebx={ebx:#x} esp={esp:#x} '
+            'ebp={ebp:#x} esi={esi:#x} edi={edi:#x}");']),
         "        match pc {",
         *arms,
         "            _ => unreachable!(),",
@@ -739,7 +742,18 @@ def gen(chunk=400):
               + "".join(f"pub use super::{m}::*;\n" for m in mods)
               + "\n/// Every lifted function: (address, function).\npub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {\n"
               "    let mut v = Vec::new();\n" + "".join(f"    v.extend_from_slice(super::{m}::FUNCTIONS_{m[-3:]});\n" for m in mods)
-              + "    v\n}\n")
+              + "    v\n}\n"
+              + "\n/// Lifted functions that call untranslated code (ext): a call through\n"
+              "/// x86::call_ext never runs them directly (the vectors mocked them).\n"
+              "pub const EXT: &[u32] = &[" + ", ".join(f"0x{f['addr']:08X}" for f in lifted if f.get("ext")) + "];\n"
+              + "\n/// What x86::call_ext may run itself: every lifted function that is not\n"
+              "/// ext, and the platform models (same rule as harness.run_sparse).\n"
+              "pub fn dispatch_table() -> std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)> {\n"
+              "    let ext: std::collections::HashSet<u32> = EXT.iter().copied().collect();\n"
+              "    let mut t: std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)> =\n"
+              "        all().into_iter().filter(|(a, _)| !ext.contains(a)).collect();\n"
+              "    for &(a, _, f) in crate::platform::MODELS { t.insert(a, f); }\n"
+              "    t\n}\n")
     open(os.path.join(out_dir, "lifted.rs"), "w").write(lookup)
     if "pub mod lifted;" not in open(os.path.join(out_dir, "mod.rs")).read():
         open(os.path.join(out_dir, "mod.rs"), "a").write("pub mod lifted;\n")
@@ -768,10 +782,17 @@ fn vectors(name: &str) -> Option<Vec<Value>> {{
 }}
 fn u(v: &Value) -> u32 {{ v.as_u64().unwrap() as u32 }}
 
+type Dispatch = std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)>;
+
 /// Replays the calls to untranslated code a vector recorded: checks the
 /// target and every register at the call, then returns what the mock did.
-fn replay(calls: Rc<RefCell<VecDeque<Value>>>) -> Box<x86::ExtCall> {{
+fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::ExtCall> {{
     Box::new(move |m: &mut dyn Mem, cpu: &mut Cpu, target: u32| {{
+        // lifted (not ext) functions and platform models run, exactly as the
+        // recorder ran them; anything else was mocked and is replayed
+        if let Some(f) = table.get(&target) {{
+            return f(m, cpu);
+        }}
         let ev = calls.borrow_mut().pop_front().unwrap_or_else(|| panic!("unrecorded call to {{target:#x}}"));
         assert_eq!(target, u(&ev["target"]), "call target");
         let r = &ev["regs"];
@@ -793,6 +814,7 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>) -> Box<x86::ExtCall> {{
 fn every_lifted_function_matches_the_original() {{
     let Some(cases) = vectors("lift") else {{ return }};
     let all = lifted::all();
+    let table = Rc::new(lifted::dispatch_table());
     let mut seen = std::collections::HashSet::new();
     let mut failures = Vec::new();
     // LIFT_DEBUG=0xADDR prints what differs for that function's vectors
@@ -812,7 +834,7 @@ fn every_lifted_function_matches_the_original() {{
             esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0 }};
         let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
             .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
-        x86::set_ext_calls(Some(replay(calls.clone())));
+        x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             f(&mut m, &mut cpu);
@@ -820,7 +842,14 @@ fn every_lifted_function_matches_the_original() {{
         }}));
         let all_calls_made = calls.borrow().is_empty();
         let ok = match result {{
-            Err(_) => false,
+            Err(e) => {{
+                if debug == Some(addr) {{
+                    let msg = e.downcast_ref::<String>().cloned()
+                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                    eprintln!("{{addr:#x}}: panicked: {{msg}}");
+                }}
+                false
+            }}
             Ok(x) => {{
                 let ro = &c["regs_out"];
                 let regs = [x.eax, x.ecx, x.edx, x.ebx, x.esp, x.ebp, x.esi, x.edi]

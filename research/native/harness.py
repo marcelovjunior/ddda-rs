@@ -371,7 +371,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     own = {}
 
     def on_ext(uc_, pc, size, _):
-        if address <= pc < end:
+        # a call to the function's own entry (recursion) leaves it like any
+        # other call: the lifted code makes it through call_ext, so mock it
+        recursion = pc == address and branch[0] is not None and branch[0].mnemonic == "call"
+        if address <= pc < end and not recursion:
             if pc not in own:
                 own[pc] = next(dmd.disasm(code(pc, 15), pc))  # the function's own code: from the image
             i = own[pc]

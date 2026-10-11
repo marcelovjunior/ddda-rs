@@ -287,11 +287,22 @@ which **panics on any read of a byte the original did not read**; the
 test compares all eight registers, xmm0, st0 and the exact set of written
 bytes.
 
-Cases are rejected (another seed is tried) when the original loads a NaN
-or infinity float from memory (Unicorn's NaN behaviour differs from the
-CPU's), when it runs more than 20,000 instructions on random data
-(runaway loops over garbage counts), or when the emulator faults.
-Functions with no usable case are dropped from the batch, not counted.
+Cases are rejected (another seed is tried) when:
+
+- the original loads a NaN or infinity float from memory, or runs an SSE
+  arithmetic instruction with two NaN operands (Unicorn/QEMU picks the
+  result NaN by the x87 rule, larger payload; SSE hardware returns the
+  first operand);
+- it runs more than 20,000 instructions (runaway loops over garbage counts);
+- it maps more than 256 distinct pages (`harness.MAX_PAGES`: a loop over a
+  random count of random pointers costs minutes per run otherwise);
+- it executes code outside the exe image (a mocked callee's stack pop was
+  wrong and a `ret` went astray, or a jump through random data), or returns
+  with ESP not 4..0x404 above its entry value;
+- it ends with an x87 stack fault, or the emulator faults.
+
+Functions with no usable case are dropped from the batch, not counted;
+`patterns/lift_novector.json` remembers them so later runs skip them.
 
 For boundary fixtures, `run_sparse(..., zero_inputs=True)` (or
 `LIFT_ZERO_INPUTS=1` with `lift.py vectors`) zeros initial general registers
@@ -341,9 +352,23 @@ for *every* callee behaviour, so verifying it against arbitrary mocked
 callees verifies it for the real one. What it does not verify is the
 callee; that is the callee's own vector. A wrong pop guess only makes the
 case degenerate (it usually faults and is rejected), never a false pass.
-Limits: if the instruction after an ext call is x87 (a float returned in
-st0), the function is rejected (`x87-return`); runs that end with an x87
-stack fault are rejected.
+Limits: a function that reads a float a callee returned in st0 is
+rejected (`x87-return`): `x87_depth_check` walks the control flow from
+x87 depth 0 (calls push nothing) and rejects any x87 read or pop at depth
+0. Unicorn does not flag the stack underflow itself, so this check must be
+static. (It is also conservative for closed calls whose lifted callee does
+return in st0; refining that is open.)
+
+A platform model's own address is never lifted (`scan` skips
+`harness.PLATFORM`): `run_sparse` runs the model at that address, so the
+vectors would describe the model, not the code.
+
+Cached vectors go stale when a function's call boundary changes, e.g. a
+callee becomes lifted and the caller now calls it directly instead of
+mocking it. `vectors` drops (and re-records) cases of a closed function
+that contain mocked calls, and cases of an ext function that mocked a
+target which is now lifted. `relift` drops functions that no longer lift
+under a stricter lifter, and then their callers.
 
 **Commands.** `PY lift.py scan` (lift everything it can; prints each
 round and the rejection reasons), `PY lift.py vectors` (parallel;
