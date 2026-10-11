@@ -1747,3 +1747,47 @@ fn every_l17_import_is_bound_to_a_service() {
         assert!(matches!(registry.get(i.token), Some(Binding::Service(_))), "{} has no service", i.full_name());
     }
 }
+
+// --- L21: thread information blocks -----------------------------------------
+
+/// A start routine that records its FS base and the NT_TIB it points at
+/// (ExceptionList, StackBase, StackLimit, Self) at 0x300400.
+fn record_tib(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let fs = cpu.fs_base;
+    let out = 0x0030_0400;
+    for (k, v) in [fs, m.u32(fs), m.u32(fs + 4), m.u32(fs + 8), m.u32(fs + 0x18), cpu.esp].into_iter().enumerate() {
+        m.set_u32(out + 4 * k as u32, v);
+    }
+    cpu.eax = 0;
+    let _ = m.u32(cpu.esp);
+    cpu.esp += 8;
+}
+
+#[test]
+fn every_guest_thread_gets_a_thread_information_block() {
+    let mut m = GuestMemory::new();
+    m.map(0x0010_0000, 0x10000, READ | WRITE).unwrap();
+    m.map(0x0030_0000, 0x1000, READ | WRITE).unwrap();
+    m.map_lazy(threads::STACKS_BASE, threads::STACKS_SIZE, READ | WRITE).unwrap();
+    let mut r = Registry::new();
+    r.insert(0x0060_0000, Binding::Lifted(record_tib)).unwrap();
+    let r = Rc::new(r);
+    r.install();
+    threads::set_machine(m.share(), r.clone());
+    // the main thread's block, as Session::new sets it up
+    let main = threads::init_teb(&mut m, services::MAIN_THREAD_ID, 0x7F00_0000, 0x7EF0_0000);
+    assert_eq!(main, threads::TEBS_BASE);
+    assert_eq!([m.u32(main), m.u32(main + 4), m.u32(main + 8), m.u32(main + 0x18)], [0xFFFF_FFFF, 0x7F00_0000, 0x7EF0_0000, main]);
+    let mut cpu = Cpu { esp: 0x0011_0000, ..Cpu::default() };
+    let tid_out = 0x0030_0200;
+    let h = call_from_guest(&mut m, &mut cpu, threads::create_thread, &[0, 0, 0x0060_0000, 0, 0, tid_out]);
+    assert_eq!(call_from_guest(&mut m, &mut cpu, threads::wait_for_single_object, &[h, threads::INFINITE]), threads::WAIT_OBJECT_0);
+    let tid = m.u32(tid_out);
+    let got: Vec<u32> = (0..6).map(|k| m.u32(0x0030_0400 + 4 * k)).collect();
+    let teb = threads::teb_of(tid);
+    assert_ne!(teb, main);
+    assert_eq!(&got[..5], &[teb, 0xFFFF_FFFF, got[2], got[2] - 0x0010_0000, teb], "FS: ExceptionList end marker, 1 MB stack, Self");
+    assert!(got[5] < got[2] && got[5] > got[3], "the thread runs on the stack its block describes");
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+    x86::set_ext_calls(None);
+}

@@ -56,6 +56,11 @@ pub const STACKS_SIZE: u32 = 0x0600_0000;
 const DEFAULT_STACK: u32 = 0x0010_0000;
 /// Where a thread's start routine returns to (never executed).
 pub const THREAD_RETURN: u32 = 0xFFFF_FFD0;
+/// Each guest thread's thread information block, one page per thread in
+/// thread-id order (the main thread first); the thread's FS segment base
+/// points at it. Each page is mapped (lazily backed) when its thread starts.
+pub const TEBS_BASE: u32 = 0x7FB0_0000;
+pub const TEBS_SIZE: u32 = 0x0010_0000;
 /// A guest thread that faults ends with this exit code
 /// (STATUS_ACCESS_VIOLATION), and the fault is kept for the session.
 pub const FAULT_EXIT: u32 = 0xC000_0005;
@@ -584,6 +589,36 @@ pub(crate) struct Machine {
 
 /// Give the current runtime the address space and dispatcher its new
 /// threads run on (Session::new does this).
+/// The thread information block of guest thread `tid` (see [`TEBS_BASE`]).
+pub fn teb_of(tid: u32) -> u32 {
+    let k = (tid - MAIN_THREAD_ID) / 4;
+    assert!(k < TEBS_SIZE / 0x1000, "no thread information block for thread {tid:#x}");
+    TEBS_BASE + 0x1000 * k
+}
+
+/// Set up the thread information block of a new guest thread and return
+/// its address (the thread's FS base). It holds the documented NT_TIB
+/// fields (winnt.h): ExceptionList +0x00, the head of the thread's SEH
+/// chain, starts as the end-of-chain marker 0xFFFFFFFF (the frame the
+/// system's thread start installs is not modelled: the runtime does not
+/// dispatch exceptions); StackBase +0x04 and StackLimit +0x08, the stack's
+/// top and bottom (the whole reservation is usable, the runtime backs pages
+/// on use); Self +0x18. Everything else is zero. The exe reads only
+/// FS:[0] (53 instructions, all SEH frame links: `__SEH_prolog4`,
+/// `__EH_prolog3` and compiler-inlined frames; Ghidra search).
+pub fn init_teb(m: &mut GuestMemory, tid: u32, stack_base: u32, stack_limit: u32) -> u32 {
+    let teb = teb_of(tid);
+    if !m.is_mapped(teb) {
+        m.map_lazy(teb, 0x1000, crate::memory::READ | crate::memory::WRITE).expect("the thread information block region");
+    }
+    crate::services::zero(m, teb, 0x1000);
+    m.set_u32(teb, 0xFFFF_FFFF);
+    m.set_u32(teb + 0x04, stack_base);
+    m.set_u32(teb + 0x08, stack_limit);
+    m.set_u32(teb + 0x18, teb);
+    teb
+}
+
 pub fn set_machine(memory: GuestMemory, registry: Arc<Registry>) {
     runtime::with(|rt| rt.machine.with(|mm| *mm = Some(Machine { memory, registry })));
 }
@@ -607,7 +642,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     // the stack: the reservation (at least the exe's default), 64 KiB granular
     let reserve = if flags & STACK_SIZE_PARAM_IS_A_RESERVATION != 0 { stack } else { stack.max(DEFAULT_STACK) };
     let reserve = reserve.max(DEFAULT_STACK).next_multiple_of(0x1_0000);
-    let (tid, h, stack_top) = kernel(|k| {
+    let (tid, h, stack_top, stack_bottom) = kernel(|k| {
         if k.next_tid == 0 {
             k.next_tid = MAIN_THREAD_ID;
         }
@@ -621,7 +656,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
         k.next_stack += reserve;
         let o = k.add(Object::Thread { tid, exit: None });
         k.threads.insert(tid, o);
-        (tid, k.handle(o), base + reserve)
+        (tid, k.handle(o), base + reserve, base)
     });
     if flags & CREATE_SUSPENDED != 0 {
         rt.lock.lock().suspended.insert(tid, 1);
@@ -630,7 +665,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     std::thread::Builder::new()
         .name(format!("guest thread {tid:#x}"))
         .stack_size(64 << 20)
-        .spawn(move || run_thread(rt2, memory, registry, tid, start, param, stack_top))
+        .spawn(move || run_thread(rt2, memory, registry, tid, start, param, stack_top, stack_bottom))
         .expect("host thread for a guest thread");
     if tid_out != 0 {
         m.set_u32(tid_out, tid);
@@ -639,7 +674,8 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 24);
 }
 
-fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32) {
+#[allow(clippy::too_many_arguments)]
+fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32, stack_bottom: u32) {
     runtime::enter(rt.clone());
     CURRENT_TID.with(|c| c.set(tid));
     registry.install();
@@ -647,7 +683,8 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     let s = rt.lock.lock();
     rt.lock.acquire_locked(s);
     load_context(&rt);
-    let mut cpu = Cpu { esp: stack_top - 16, ..Cpu::default() };
+    let fs_base = init_teb(&mut memory, tid, stack_top, stack_bottom);
+    let mut cpu = Cpu { esp: stack_top - 16, fs_base, ..Cpu::default() };
     cpu.esp -= 4;
     memory.set_u32(cpu.esp, param);
     cpu.esp -= 4;

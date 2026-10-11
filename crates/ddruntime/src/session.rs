@@ -65,6 +65,7 @@ impl Session {
         crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
         mem.map_lazy(crate::threads::STACKS_BASE, crate::threads::STACKS_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
+        crate::threads::init_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP, STACK_TOP - STACK_SIZE);
         let registry = Arc::new(registry);
         crate::threads::set_machine(mem.share(), registry.clone());
         registry.install();
@@ -76,7 +77,9 @@ impl Session {
     /// right to left (stdcall/cdecl; `ecx` for thiscall), on a fresh frame
     /// of the session stack.
     pub fn call(&mut self, target: u32, ecx: u32, args: &[u32]) -> Outcome {
-        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, ..Cpu::default() };
+        // the main thread's (top-level calls run on it)
+        let fs_base = crate::threads::teb_of(crate::services::MAIN_THREAD_ID);
+        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, fs_base, ..Cpu::default() };
         for &a in args.iter().rev() {
             cpu.esp -= 4;
             self.mem.set_u32(cpu.esp, a);
