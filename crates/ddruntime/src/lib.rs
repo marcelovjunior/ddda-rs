@@ -19,6 +19,7 @@ pub mod files;
 pub mod image;
 pub mod interfaces;
 pub mod memory;
+pub mod runtime;
 pub mod services;
 pub mod session;
 pub mod steam;

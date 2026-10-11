@@ -16,7 +16,6 @@
 use crate::services::{arg, ret, with_state};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu};
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 
 type Api = fn(&mut dyn Mem, &mut Cpu);
@@ -97,7 +96,7 @@ pub struct Msg {
 }
 
 #[derive(Default)]
-struct Desktop {
+pub(crate) struct Desktop {
     classes: Vec<Class>,
     windows: HashMap<u32, Window>,
     next_hwnd: u32,
@@ -113,12 +112,8 @@ struct Desktop {
     period_ms: Vec<u32>,
 }
 
-thread_local! {
-    static DESKTOP: RefCell<Desktop> = RefCell::new(Desktop::default());
-}
-
 fn desk<R>(f: impl FnOnce(&mut Desktop) -> R) -> R {
-    DESKTOP.with(|d| f(&mut d.borrow_mut()))
+    crate::runtime::with(|rt| rt.desktop.with(f))
 }
 
 /// Forget every class, window and message (a new session).

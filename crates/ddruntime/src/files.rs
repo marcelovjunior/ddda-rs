@@ -55,12 +55,8 @@ pub struct Files {
     next: u32,
 }
 
-thread_local! {
-    static FILES: std::cell::RefCell<Files> = std::cell::RefCell::new(Files::default());
-}
-
 fn with_files<R>(f: impl FnOnce(&mut Files) -> R) -> R {
-    FILES.with(|s| f(&mut s.borrow_mut()))
+    crate::runtime::with(|rt| rt.files.with(f))
 }
 
 /// Set the roots: the install directory (read-only) and the sandbox.

@@ -14,7 +14,6 @@ use crate::dispatch::{Binding, Conflict, Registry};
 use crate::memory::{GuestMemory, Overlap, READ, WRITE};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Where the guest heap lives (an address range the image and stack do not
@@ -97,7 +96,7 @@ pub(crate) struct State {
 }
 
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    STATE.with(|s| f(&mut s.borrow_mut()))
+    crate::runtime::with(|rt| rt.state.with(f))
 }
 
 /// Record the loaded exe's path (GetModuleFileName, GetCommandLine).
@@ -105,17 +104,13 @@ pub fn set_exe_path(path: &str) {
     with_state(|s| s.exe_path = path.to_string());
 }
 
-thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State::default());
-}
-
 /// Functions registered to run at exit, in registration order.
 pub fn exit_list() -> Vec<u32> {
-    STATE.with(|s| s.borrow().exit_list.clone())
+    with_state(|s| s.exit_list.clone())
 }
 
 pub fn heap_size_of(block: u32) -> Option<u32> {
-    STATE.with(|s| s.borrow().heap.size_of(block))
+    with_state(|s| s.heap.size_of(block))
 }
 
 pub(crate) fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
@@ -139,7 +134,7 @@ pub(crate) fn zero(m: &mut dyn Mem, block: u32, size: u32) {
 /// registers `func` and returns it (NULL only when the table cannot grow).
 pub fn onexit(m: &mut dyn Mem, cpu: &mut Cpu) {
     let func = arg(m, cpu, 0);
-    STATE.with(|s| s.borrow_mut().exit_list.push(func));
+    with_state(|s| s.exit_list.push(func));
     cpu.eax = func;
     ret(m, cpu, 0);
 }
@@ -151,7 +146,7 @@ pub fn onexit(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// before giving up; the runtime heap either has the space or not).
 pub fn calloc_crt(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (count, size) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let block = count.checked_mul(size).and_then(|n| STATE.with(|s| s.borrow_mut().heap.alloc(n)).map(|b| (b, n)));
+    let block = count.checked_mul(size).and_then(|n| with_state(|s| s.heap.alloc(n)).map(|b| (b, n)));
     cpu.eax = match block {
         Some((b, n)) => {
             zero(m, b, n);
@@ -262,7 +257,7 @@ pub fn is_processor_feature_present(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// raise guest exceptions yet, so the filter is never called.
 pub fn set_unhandled_exception_filter(m: &mut dyn Mem, cpu: &mut Cpu) {
     let filter = arg(m, cpu, 0);
-    cpu.eax = STATE.with(|s| std::mem::replace(&mut s.borrow_mut().exception_filter, filter));
+    cpu.eax = with_state(|s| std::mem::replace(&mut s.exception_filter, filter));
     ret(m, cpu, 4);
 }
 

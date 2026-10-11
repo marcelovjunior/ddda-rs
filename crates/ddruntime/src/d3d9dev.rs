@@ -14,7 +14,6 @@ use crate::interfaces::{self, Spec, Tokens};
 use crate::services::{arg, ret, with_state};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 pub const D3DERR_NOTFOUND: u32 = 0x8876_0866;
@@ -57,17 +56,13 @@ pub struct Object {
 }
 
 #[derive(Default)]
-struct Objects {
+pub(crate) struct Objects {
     vtables: HashMap<&'static str, u32>,
     live: HashMap<u32, Object>,
 }
 
-thread_local! {
-    static OBJECTS: RefCell<Objects> = RefCell::new(Objects::default());
-}
-
 fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {
-    OBJECTS.with(|o| f(&mut o.borrow_mut()))
+    crate::runtime::with(|rt| rt.d3d.with(f))
 }
 
 /// The interface and reference count of a live object (tests, diagnostics).
