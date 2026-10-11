@@ -2,7 +2,8 @@
 
 Owners: Part A, a second Claude Code agent (headless session "claude-2",
 driven by the head like Codex), branch `task/L17-windows-services`,
-worktree `E:\ddda-rs-wt\L17`. Part B, Codex after L16 (its own branch).
+worktree `E:\ddda-rs-wt\L17`. Parts B and C, a third Claude Code agent
+("claude-3"), branch `task/L17-seh-workers`, worktree `E:\ddda-rs-wt\L17BC`.
 
 ## Why
 
