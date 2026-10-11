@@ -1,0 +1,12 @@
+[package]
+name = "ddruntime"
+version = "0.1.0"
+description = "Phase 1 runtime: guest memory, image loading and dispatch for the lifted DDDA.exe (docs/RUNTIME.md)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddnative-base = { path = "../ddnative-base" }
+ddnative = { path = "../ddnative" }
+ddexe = { path = "../ddexe" }

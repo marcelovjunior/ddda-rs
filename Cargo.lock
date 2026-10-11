@@ -2727,6 +2727,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddruntime"
+version = "0.1.0"
+dependencies = [
+ "ddexe",
+ "ddnative",
+ "ddnative-base",
+]
+
+[[package]]
 name = "ddsave"
 version = "0.1.0"
 dependencies = [

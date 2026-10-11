@@ -96,7 +96,7 @@ impl Cpu {
 /// The handler runs with the return address already pushed and must leave
 /// the state as the callee's `ret` would. Tests install a replay of the
 /// calls a vector recorded; the game installs its dispatcher.
-pub type ExtCall = dyn FnMut(&mut dyn crate::mem::Mem, &mut Cpu, u32);
+pub type ExtCall = dyn Fn(&mut dyn crate::mem::Mem, &mut Cpu, u32);
 
 /// A lifted function and the immutable resolver installed by the facade.
 /// Direct cross-shard calls must never use the external/mock call handler.
@@ -118,20 +118,23 @@ pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
 }
 
 thread_local! {
-    static EXT: std::cell::RefCell<Option<Box<ExtCall>>> = std::cell::RefCell::new(None);
+    static EXT: std::cell::RefCell<Option<std::rc::Rc<ExtCall>>> = std::cell::RefCell::new(None);
 }
 
 /// Install the handler for `call_ext` on this thread; returns the old one.
-pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<Box<ExtCall>> {
-    EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), f))
+pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<std::rc::Rc<ExtCall>> {
+    EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), f.map(std::rc::Rc::from)))
 }
 
-/// A call from lifted code to `target`, which is not lifted.
+/// A call from lifted code to `target`, which is not lifted. The handler is
+/// cloned out of the thread-local slot (a reference count), not taken, so a
+/// handler that dispatches into lifted code which calls `call_ext` again
+/// (nested calls, callbacks, recursion) finds it installed, and a panic
+/// inside the handler leaves it in place.
 pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let mut f = EXT.with(|e| e.borrow_mut().take())
+    let f = EXT.with(|e| e.borrow().clone())
         .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
     f(m, cpu, target);
-    EXT.with(|e| *e.borrow_mut() = Some(f));
 }
 
 impl Flags {
