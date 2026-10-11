@@ -228,6 +228,8 @@ pub struct WgpuBackend {
     pub last_frame: Option<Frame>,
     pub read_frames: bool,
     pub errors: Vec<String>,
+    /// Called with every presented frame (a window host shows them).
+    pub on_present: Option<Box<dyn FnMut(&Frame) + Send>>,
 }
 
 impl WgpuBackend {
@@ -255,6 +257,7 @@ impl WgpuBackend {
             last_frame: None,
             read_frames: true,
             errors: Vec::new(),
+            on_present: None,
         })
     }
 
@@ -943,8 +946,11 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn present(&mut self, back_buffer: &Target) {
-        if self.read_frames {
+        if self.read_frames || self.on_present.is_some() {
             self.last_frame = self.read_surface(back_buffer.surface);
+        }
+        if let (Some(f), Some(frame)) = (self.on_present.as_mut(), self.last_frame.as_ref()) {
+            f(frame);
         }
     }
 }

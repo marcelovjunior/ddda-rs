@@ -47,8 +47,9 @@
 //! from the random constants (counts up to 255, indices outside the bone
 //! palettes), which need structured inputs like the CPU-side recorder's.
 //!
-//! Texture reads use explicit level 0 for now (exact for single-level
-//! textures); derivative-based level selection comes with the backend.
+//! Pixel-shader texture reads use implicit derivatives (texld, texldp,
+//! texldb's bias, texldd's gradients) as D3D9 does; vertex shaders and
+//! texldl use an explicit level.
 use d3d9shader::{op, reg, Instruction, Param, Shader, Stage};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -147,6 +148,13 @@ struct Ctx<'a> {
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
 
+enum Sampling {
+    Implicit,
+    Bias(String),
+    Grad(String, String),
+    Level(String),
+}
+
 /// Translate a vs_3_0 or ps_3_0 shader.
 pub fn translate(shader: &Shader) -> Result<Translation, Error> {
     translate_with(shader, Options::default())
@@ -238,6 +246,11 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     }
 
     let mut w = String::new();
+    // D3D9 allows texld/dsx/dsy anywhere (their derivatives are undefined
+    // only in divergent branches); WGSL's uniformity check would refuse them
+    if !vertex {
+        writeln!(w, "diagnostic(off, derivative_uniformity);").unwrap();
+    }
     let floats = if vertex { 256 } else { 224 };
     if vertex {
         writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, hp: vec4<f32> }}").unwrap();
@@ -604,7 +617,11 @@ impl Ctx<'_> {
         }
     }
 
-    fn sample(&self, coord: &str, sampler: &Param, lod: Option<String>) -> Result<String, Error> {
+    /// A texture read. Pixel shaders sample with implicit derivatives
+    /// (D3D9's texld picks the mip level from them; `Sampling::Bias` and
+    /// `Sampling::Grad` are texldb and texldd), vertex shaders and texldl at
+    /// an explicit level.
+    fn sample(&self, coord: &str, sampler: &Param, how: Sampling) -> Result<String, Error> {
         let n = sampler.index;
         let kind = self.shader.instructions.iter()
             .find(|i| i.opcode == op::DCL && i.dst.as_ref().is_some_and(|d| d.kind == reg::SAMPLER && d.index == n))
@@ -614,9 +631,19 @@ impl Ctx<'_> {
             3 | 4 => format!("({coord}).xyz"),
             _ => format!("({coord}).xy"),
         };
+        let grad = |g: &str| match kind {
+            3 | 4 => format!("({g}).xyz"),
+            _ => format!("({g}).xy"),
+        };
+        let call = match how {
+            Sampling::Level(lod) => format!("textureSampleLevel(t{n}, s{n}, {c}, {lod})"),
+            _ if self.shader.stage == Stage::Vertex => format!("textureSampleLevel(t{n}, s{n}, {c}, 0.0)"),
+            Sampling::Implicit => format!("textureSample(t{n}, s{n}, {c})"),
+            Sampling::Bias(b) => format!("textureSampleBias(t{n}, s{n}, {c}, {b})"),
+            Sampling::Grad(x, y) => format!("textureSampleGrad(t{n}, s{n}, {c}, {}, {})", grad(&x), grad(&y)),
+        };
         // the sampler's swizzle applies to the result
-        let lod = lod.unwrap_or_else(|| "0.0".into());
-        Ok(format!("textureSampleLevel(t{n}, s{n}, {c}, {lod}){}", swizzle(sampler.mask_or_swizzle)))
+        Ok(format!("{call}{}", swizzle(sampler.mask_or_swizzle)))
     }
 
     fn instruction(&mut self, ins: &Instruction) -> Result<(), Error> {
@@ -698,14 +725,19 @@ impl Ctx<'_> {
             }
             op::TEX => {
                 let coord = src(0)?;
-                let coord = if ins.control == 1 { format!("({coord} / ({coord}).w)") } else { coord };
-                self.sample(&coord, &ins.src[1], None)?
+                match ins.control {
+                    // texldp: projective
+                    1 => self.sample(&format!("({coord} / ({coord}).w)"), &ins.src[1], Sampling::Implicit)?,
+                    // texldb: level-of-detail bias from .w
+                    2 => self.sample(&coord, &ins.src[1], Sampling::Bias(format!("({coord}).w")))?,
+                    _ => self.sample(&coord, &ins.src[1], Sampling::Implicit)?,
+                }
             }
             op::TEXLDL => {
                 let coord = src(0)?;
-                self.sample(&coord, &ins.src[1], Some(format!("({coord}).w")))?
+                self.sample(&coord, &ins.src[1], Sampling::Level(format!("({coord}).w")))?
             }
-            op::TEXLDD => self.sample(&src(0)?, &ins.src[1], None)?,
+            op::TEXLDD => self.sample(&src(0)?, &ins.src[1], Sampling::Grad(src(2)?, src(3)?))?,
             op::TEXKILL => {
                 let d = ins.dst.as_ref().unwrap();
                 let name = match d.kind {

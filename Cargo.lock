@@ -2729,6 +2729,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddplay"
+version = "0.1.0"
+dependencies = [
+ "ddgpu",
+ "ddruntime",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "ddprogress"
 version = "0.1.0"
 dependencies = [
