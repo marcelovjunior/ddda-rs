@@ -465,6 +465,66 @@ The option affects only missing vectors. For a private retry in another
 input mode, first remove those addresses from the private no-vector cache;
 keep successful cases and report functions that still have no usable case.
 
+**Structured fixtures (L09).** `run_sparse(input_strategy=...)` offers
+three versioned, opt-in distributions for inputs that otherwise drive
+unbounded loops. These are synthetic test distributions, not claims about
+real object layouts, allocator behavior or game constants:
+
+- `small-v1`: non-image pages contain seeded 32-bit words chosen from
+  0..31, with zero/one favored; initial registers and mocked integer returns
+  are aligned multiples of four in 0..28 (usable as pointers or counts).
+  Mocked float results are -1, 0 or 1.
+- `zero-objects-v1`: initial registers and mocked EAX point into a bounded
+  32-page synthetic object region at `0x20000000`; non-image pages and
+  other mocked returns are zero. Object addresses can alias.
+- `objects-v1`: ECX starts at a synthetic object, other registers are
+  small, and non-image words mix small values with object pointers (one
+  choice in eight). Mocked EAX is an object pointer, ECX/EDX are small.
+
+Each page is filled once, before the guest reads it, using a seed and page
+address. The recorder never changes a previously read value to influence
+a branch. Image bytes and original instructions are preserved. The vector
+records `input_strategy`, complete consumed input bytes and mocked returns;
+the same strict Rust replay checks them. `zero_inputs` and `input_strategy`
+are mutually exclusive. Default random fixtures keep their original input
+generation. All existing rejection guards remain active.
+
+`research/native/structured_inputs.py` provides private investigation:
+
+```powershell
+# Set private LIFT_DATA and INVENTORY_DB first; DB must include supplementary entries.
+PY research/native/structured_inputs.py prepare
+PY research/native/structured_inputs.py record --strategy random --seeds 3 --seconds 20
+PY research/native/structured_inputs.py adopt --strategy random
+PY research/native/structured_inputs.py record --strategy zero --seeds 3 --seconds 20
+PY research/native/structured_inputs.py adopt --strategy zero
+PY research/native/structured_inputs.py record --strategy small-v1 --seeds 3 --seconds 20
+PY research/native/structured_inputs.py adopt --strategy small-v1
+# Repeat record/adopt with zero-objects-v1 and objects-v1 as desired.
+# Adoption is provisional: gen and required Rust replay must pass afterwards.
+```
+
+Preparation scans missing entries with existing closed callees and releases
+each decoded body immediately. It includes high-address supplementary
+entries. An optional private `structured_quarantine.json` array excludes
+known mismatches. Strategy-specific JSONL files retain each attempted seed,
+raw rejection reason and successful cases, allowing interrupted trials to
+resume by body key, requested seeds and budget. Different strategies never
+share failure caches. Changed closed-call boundaries reject recording or
+adoption; use a fresh trial directory and prepare again. Successful
+adoptions leave existing selected bodies and cases unchanged. The ordinary
+`lift_novector.json` cache is not used to suppress these explicit trials;
+accepted addresses are removed from that historical failure list. Adoption
+history is cumulative across resumed chunks. The final trial remainder,
+rather than the old cache alone, is the authoritative missing-candidate set.
+
+Each function has a wall-clock budget as well as instruction/page limits;
+`run_sparse(max_seconds=...)` rejects at an instruction boundary when the
+deadline expires and never resumes after a fault. Worker recycling and
+garbage collection still apply. The command requires an explicit private
+`LIFT_DATA`, refusing the shared native directory. Keep builds and trial
+runs sequential and monitor free memory as for ordinary vector recording.
+
 **Rounds.** `scan` lifts in rounds: round 1 gets the leaves, each later
 round the functions whose callees all lifted earlier (the `callable` set
 grows inside a round too). It stops when a round adds nothing, so call

@@ -711,3 +711,35 @@ opening (codex-31), route perf (codex-29).
   artifacts and the exact shared regeneration procedure.
 - **One next action:** head reviews/adopts the supplementary inventory and
   matching verified pattern/vector pair before runtime boot-manifest work.
+
+## Batch 2026-10-11 (L09: structured native fixtures)
+
+- **Implemented:** versioned small-word, zero-object and mixed-object
+  recorder inputs; bounded per-instruction wall-clock rejection; private
+  missing-entry scan, per-seed diagnostics and resumable strategy trials.
+  Existing memory, return, x87 and flag guards remain active. Each decoded
+  body is released; the supplementary inventory is included.
+- **Measured:** 5,244 missing functions still lift against the existing
+  closed set. Random retry unlocks 1,317, zero inputs 2,435, small words 85,
+  zero objects 13, mixed objects 21: **3,871 additional passing lifts**.
+  The three new distributions contribute 119 beyond random/zero. The old
+  selection and fixtures are preserved verbatim; no closed boundary changed.
+- **Verified:** 41,512 lifted functions / 123,574 cases, up from
+  37,641 / 112,266. Six additions overlap existing hand ports, giving
+  **41,516 inventory-verified functions (73.4%) and 85.8% of summed code
+  bytes**. All 47 Python regressions, the addition/dependency replay subset
+  and the final full `cargo test -p ddnative` pass (32 Rust tests).
+  `aGameMain::vf06` at `0x004FB3E0` now has sampled mock-boundary replay;
+  this is not proof of a working frame or game boot.
+- **Resources:** final full compilation 4m25s, lifted replay 55.64s,
+  minimum observed free memory 14.94 GiB at four jobs, incremental off.
+  Vector workers stayed at six, recycled every eight functions. No
+  build/vector overlap, shared writes, gate invocation, Ghidra restart or
+  push. Private accepted data and reports remain under `native-L09`.
+- **Open:** 1,373 missing candidates still lack cases (1,118 primarily
+  outside-image execution in the final strategy), 971 reject during lifting,
+  and four known mismatches remain quarantined. `0x0041DD60` and initializer
+  `0x0137E490` still lack fixtures. Historical no-vector cache counts are not
+  an exhaustive current candidate census; see the L09 Results and reports.
+- **One next action:** head reviews/adopts the verified pair, then traces
+  representative remaining outside-image failures without relaxing guards.
