@@ -78,6 +78,7 @@ PORTS = {
     0x00CFCE60: ("euler", 1),
     0x00CFCF80: ("euler", 1),
     0x007AEED0: ("normal", 1),
+    0x007AF450: ("basis_up", 3),
     0x007AF5B0: ("basis", 2),
     0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
@@ -285,6 +286,22 @@ def edge_cases(addr, kind, nargs, n, seed):
             if 0.5 <= pick < 0.65:  # z or t inside the output: the order of reads and writes shows
                 regs["edx"] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
                 args[1] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
+        elif kind == "basis_up":
+            vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
+            pick = rnd.random()
+            if pick < 0.2:  # hint along up: the fallback decides
+                vecs[0][:3] = vecs[1][:3]
+            if 0.1 < pick < 0.25:  # and d along up too: failure
+                vecs[2][:3] = vecs[1][:3]
+            if 0.3 <= pick < 0.5:
+                vecs = [[floats(rnd) for _ in range(4)] for _ in range(4)]
+            for k, v in enumerate(vecs):
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            regs["eax"], regs["edx"] = VEC[0], VEC[2]
+            args = [OBJ, VEC[1], VEC[3]]
+            if 0.5 <= pick < 0.65:  # up or t inside the output
+                args[1] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
+                args[2] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
         elif kind == "normal":
             vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
             pick = rnd.random()

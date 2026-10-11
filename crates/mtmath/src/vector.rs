@@ -97,3 +97,44 @@ pub fn basis_from_forward(z: Vec3, hint: Vec3, e: Vec3, t: Vec3) -> Option<crate
         m: [[x.x, x.y, x.z, o], [y.x, y.y, y.z, o], [z.x, z.y, z.z, o], [t.x, t.y, t.z, ONE]],
     })
 }
+
+/// `x x up`, normalized unless shorter than FLT_EPSILON (row 2 of
+/// [`basis_from_up`]).
+pub fn basis_side(x: Vec3, up: Vec3) -> Vec3 {
+    let r = Vec3::new(up.z * x.y - up.y * x.z, up.x * x.z - x.x * up.z, x.x * up.y - up.x * x.y);
+    let len = r.length();
+    if NORMALIZE_EPSILON > len {
+        return r;
+    }
+    let inv = ONE / len;
+    Vec3::new(r.x * inv, r.y * inv, r.z * inv)
+}
+
+/// `up` normalized unless shorter than FLT_EPSILON (row 1 of
+/// [`basis_from_up`]; note `inv * z`).
+pub fn basis_up(up: Vec3) -> Vec3 {
+    let len = up.length();
+    if NORMALIZE_EPSILON > len {
+        return up;
+    }
+    let inv = ONE / len;
+    Vec3::new(up.x * inv, up.y * inv, inv * up.z)
+}
+
+/// An orthonormal frame around the up vector `up`: row 0 is the unit normal
+/// of `up x hint` ([`unit_normal`], falling back to `up x d`), row 1
+/// [`basis_up`], row 2 [`basis_side`] of row 0 and `up`, row 3 the
+/// translation `t`; `None` if both normals fail.
+///
+/// The original reads `up` again after writing rows 0 and 2, and `t` last;
+/// the ABI adapter keeps that order. It takes `hint` in EAX, `d` in EDX,
+/// the output, `up` and `t` on the stack.
+// Translated from 0x007AF450 (DDDA.exe 2017-12-13 Steam), frame from an up vector.
+pub fn basis_from_up(hint: Vec3, up: Vec3, d: Vec3, t: Vec3) -> Option<crate::types::Mat44> {
+    let x = unit_normal(hint, up, || (d, up)).result?;
+    let (side, up) = (basis_side(x, up), basis_up(up));
+    let o = F32::ZERO;
+    Some(crate::types::Mat44 {
+        m: [[x.x, x.y, x.z, o], [up.x, up.y, up.z, o], [side.x, side.y, side.z, o], [t.x, t.y, t.z, ONE]],
+    })
+}
