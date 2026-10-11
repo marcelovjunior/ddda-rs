@@ -28,7 +28,8 @@ pub const HEAP_SIZE: u32 = 0x4000_0000;
 #[derive(Default)]
 pub struct Heap {
     next: u32,
-    sizes: HashMap<u32, u32>,
+    /// live block -> (rounded size, requested size)
+    sizes: HashMap<u32, (u32, u32)>,
     free: HashMap<u32, Vec<u32>>,
 }
 
@@ -38,7 +39,7 @@ impl Heap {
     pub fn alloc(&mut self, size: u32) -> Option<u32> {
         let rounded = size.max(1).checked_add(15)? & !15;
         if let Some(b) = self.free.get_mut(&rounded).and_then(|v| v.pop()) {
-            self.sizes.insert(b, rounded);
+            self.sizes.insert(b, (rounded, size));
             return Some(b);
         }
         if self.next == 0 {
@@ -50,31 +51,56 @@ impl Heap {
             return None;
         }
         self.next = end;
-        self.sizes.insert(b, rounded);
+        self.sizes.insert(b, (rounded, size));
         Some(b)
     }
 
     /// Release a block; freeing something that is not a live block is a
     /// guest bug the runtime reports instead of corrupting the heap.
     pub fn free(&mut self, block: u32) -> Result<(), u32> {
-        let size = self.sizes.remove(&block).ok_or(block)?;
-        self.free.entry(size).or_default().push(block);
+        let (rounded, _) = self.sizes.remove(&block).ok_or(block)?;
+        self.free.entry(rounded).or_default().push(block);
         Ok(())
     }
 
+    /// The usable size of a live block (rounded to 16).
     pub fn size_of(&self, block: u32) -> Option<u32> {
-        self.sizes.get(&block).copied()
+        self.sizes.get(&block).map(|&(r, _)| r)
+    }
+
+    /// The size the block was requested with (what `HeapSize` reports).
+    pub fn requested_size(&self, block: u32) -> Option<u32> {
+        self.sizes.get(&block).map(|&(_, n)| n)
     }
 }
 
 #[derive(Default)]
-struct State {
-    heap: Heap,
+pub(crate) struct State {
+    pub(crate) heap: Heap,
     /// Functions registered with `_onexit`/`atexit`, in registration order
     /// (the CRT runs them in reverse at exit).
     exit_list: Vec<u32>,
     /// The guest's unhandled-exception filter (SetUnhandledExceptionFilter).
     exception_filter: u32,
+    /// GetLastError / SetLastError.
+    pub(crate) last_error: u32,
+    /// TLS slots (TlsAlloc): None = free.
+    pub(crate) tls: Vec<Option<u32>>,
+    /// Next VirtualAlloc address (page-granular bump in the virtual region).
+    pub(crate) virtual_next: u32,
+    /// Strings the runtime hands the guest once (command line, environment).
+    pub(crate) strings: HashMap<&'static str, u32>,
+    /// Path of the exe the runtime loaded (GetModuleFileName, command line).
+    pub(crate) exe_path: String,
+}
+
+pub(crate) fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+    STATE.with(|s| f(&mut s.borrow_mut()))
+}
+
+/// Record the loaded exe's path (GetModuleFileName, GetCommandLine).
+pub fn set_exe_path(path: &str) {
+    with_state(|s| s.exe_path = path.to_string());
 }
 
 thread_local! {
@@ -90,17 +116,17 @@ pub fn heap_size_of(block: u32) -> Option<u32> {
     STATE.with(|s| s.borrow().heap.size_of(block))
 }
 
-fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
+pub(crate) fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
     m.u32(cpu.esp.wrapping_add(4 + 4 * k))
 }
 
 /// `ret N`: pop the return address and N bytes of arguments.
-fn ret(m: &dyn Mem, cpu: &mut Cpu, n: u32) {
+pub(crate) fn ret(m: &dyn Mem, cpu: &mut Cpu, n: u32) {
     let _ = m.u32(cpu.esp);
     cpu.esp = cpu.esp.wrapping_add(4 + n);
 }
 
-fn zero(m: &mut dyn Mem, block: u32, size: u32) {
+pub(crate) fn zero(m: &mut dyn Mem, block: u32, size: u32) {
     for k in 0..size {
         m.set_u8(block.wrapping_add(k), 0);
     }
@@ -298,7 +324,8 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     let mut bound = 0;
     for i in imports {
         registry.name(i.token, i.full_name());
-        if let Some((_, _, f)) = APIS.iter().find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name) {
+        let found = APIS.iter().chain(crate::win32::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
         }
@@ -309,6 +336,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
 /// Map the heap region and bind every service at its address.
 pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), InstallError> {
     mem.map_lazy(HEAP_BASE, HEAP_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
+    mem.map_lazy(crate::win32::VIRTUAL_BASE, crate::win32::VIRTUAL_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
     for (addr, f) in SERVICES {
         registry.insert(*addr, Binding::Service(*f)).map_err(InstallError::Conflict)?;
     }

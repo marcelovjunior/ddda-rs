@@ -16,3 +16,4 @@ pub mod dispatch;
 pub mod image;
 pub mod memory;
 pub mod services;
+pub mod win32;
