@@ -1606,3 +1606,74 @@ fn tap(tokens: &[u32], k: usize, dst: u32) -> Option<(Vec<u32>, String, u8)> {
     out.push(0x0000_FFFF);
     Some((out, text, mask))
 }
+
+/// Every translation, with the options the runtime's backend uses (ddgpu:
+/// vertex input types and the half-pixel offset; linked pixel input
+/// locations and the alpha test) as well as the defaults, parses and
+/// validates as WGSL in naga (the sweep creates the default translations'
+/// pipelines in wgpu). DDDA_ALL_SHADERS=1: every package, otherwise Title
+/// and root.
+#[test]
+fn every_translation_is_valid_wgsl() {
+    let packages: Vec<String> = if std::env::var_os("DDDA_ALL_SHADERS").is_some() { all_packages() } else { vec!["Title".into(), "root".into()] };
+    let mut seen = std::collections::HashSet::new();
+    let (mut checked, mut bad) = (0usize, Vec::new());
+    for name in &packages {
+        for tokens in pixel_shaders(name).into_iter().chain(vertex_shaders(name)) {
+            if !seen.insert(tokens.clone()) {
+                continue;
+            }
+            let shader = d3d9shader::parse(&tokens).unwrap();
+            let vertex = shader.stage == d3d9shader::Stage::Vertex;
+            let base = match d3d9wgsl::translate(&shader) {
+                Ok(t) => t,
+                Err(e) => {
+                    bad.push(format!("{name} {}: not translated: {e}", tag(&tokens)));
+                    continue;
+                }
+            };
+            let n = base.interface.inputs.len();
+            let variants = if vertex {
+                let mixed = (0..n).map(|k| [d3d9wgsl::InputType::Uint, d3d9wgsl::InputType::Sint, d3d9wgsl::InputType::Float][k % 3]).collect();
+                vec![
+                    d3d9wgsl::Options::default(),
+                    d3d9wgsl::Options { vs_input_types: Some(vec![d3d9wgsl::InputType::Float; n]), half_pixel: true, ..Default::default() },
+                    d3d9wgsl::Options { vs_input_types: Some(mixed), half_pixel: true, ..Default::default() },
+                ]
+            } else {
+                // one input the vertex stage does not write, the others moved
+                let locations = (0..n as u32).map(|k| if k == 0 { None } else { Some(k + 3) }).collect();
+                vec![
+                    d3d9wgsl::Options::default(),
+                    d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, ..Default::default() },
+                ]
+            };
+            for options in variants {
+                let label = format!("{options:?}");
+                let t = match d3d9wgsl::translate_with(&shader, options) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        bad.push(format!("{name} {} {label}: not translated: {e}", tag(&tokens)));
+                        continue;
+                    }
+                };
+                checked += 1;
+                let result = naga::front::wgsl::parse_str(&t.wgsl).map_err(|e| e.emit_to_string(&t.wgsl)).and_then(|module| {
+                    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+                        .validate(&module)
+                        .map(|_| ())
+                        .map_err(|e| e.emit_to_string(&t.wgsl))
+                });
+                if let Err(e) = result {
+                    bad.push(format!("{name} {} {label}: {e}", tag(&tokens)));
+                }
+            }
+        }
+    }
+    eprintln!("{checked} translations validated, {} failed", bad.len());
+    for b in bad.iter().take(3) {
+        eprintln!("{}", &b[..b.len().min(3000)]);
+    }
+    assert!(checked > 0 || packages.iter().all(|p| pixel_shaders(p).is_empty()), "nothing checked");
+    assert!(bad.is_empty());
+}

@@ -2294,6 +2294,7 @@ dependencies = [
  "d3d9ref",
  "d3d9shader",
  "mtarc",
+ "naga",
  "wgpu",
 ]
 
