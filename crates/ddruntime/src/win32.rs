@@ -446,7 +446,40 @@ pub fn terminate_process(m: &mut dyn Mem, cpu: &mut Cpu) {
     std::panic::panic_any(Exit(arg(m, cpu, 1)));
 }
 
+/// LoadLibraryA/W(name): the runtime loads no DLLs; it hands back a module
+/// handle so presence checks pass (WinMain refuses to start without
+/// WMVCORE.DLL), and GetProcAddress on it finds nothing.
+pub const MODULE_HANDLE: u32 = 0x7FD0_0000;
+pub fn load_library_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = MODULE_HANDLE;
+    ret(m, cpu, 4);
+}
+pub fn free_library(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 1;
+    ret(m, cpu, 4);
+}
+/// USER32 MessageBoxA(hwnd, text, caption, type): printed to stderr,
+/// answered IDOK (1).
+pub fn message_box_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let text = read_cstr(m, arg(m, cpu, 1));
+    let caption = read_cstr(m, arg(m, cpu, 2));
+    eprintln!("[guest MessageBox] {caption}: {text}");
+    cpu.eax = 1;
+    ret(m, cpu, 16);
+}
+
+fn read_cstr(m: &dyn Mem, p: u32) -> String {
+    if p == 0 {
+        return String::new();
+    }
+    (0..1024).map(|k| m.u8(p.wrapping_add(k))).take_while(|&b| b != 0).map(|b| b as char).collect()
+}
+
 pub const APIS: &[(&str, &str, Api)] = &[
+    ("KERNEL32.dll", "LoadLibraryA", load_library_a),
+    ("KERNEL32.dll", "LoadLibraryW", load_library_a),
+    ("KERNEL32.dll", "FreeLibrary", free_library),
+    ("USER32.dll", "MessageBoxA", message_box_a),
     ("KERNEL32.dll", "GetLastError", get_last_error),
     ("KERNEL32.dll", "SetLastError", set_last_error),
     ("KERNEL32.dll", "GetCurrentThreadId", get_current_thread_id),

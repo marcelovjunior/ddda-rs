@@ -92,6 +92,8 @@ pub(crate) struct State {
     pub(crate) strings: HashMap<&'static str, u32>,
     /// Path of the exe the runtime loaded (GetModuleFileName, command line).
     pub(crate) exe_path: String,
+    /// Interface objects the runtime created (crate::interfaces), by name.
+    pub(crate) objects: HashMap<&'static str, u32>,
 }
 
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -324,7 +326,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     let mut bound = 0;
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
