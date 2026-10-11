@@ -1,4 +1,4 @@
-//! File services: the KERNEL32 file API over two roots (docs/RUNTIME.md,
+//! File services: the KERNEL32 file API over three roots (docs/RUNTIME.md,
 //! "Platform services").
 //!
 //! - The **install** (the directory of the player's DDDA.exe): read-only.
@@ -6,6 +6,10 @@
 //! - The **sandbox** ([`crate::services::sandbox_home`]): an overlay that
 //!   mirrors install-relative paths. Every write lands here; reads look here
 //!   first, so the guest sees its own writes.
+//! - The **home** (the rest of the sandbox): the guest's known folders
+//!   (crate::services::sh_get_folder_path_w), e.g. the game's settings file
+//!   `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini` (MtRegistry
+//!   0x00CFFF00). Read and written in place.
 //!
 //! Guest paths are resolved against the guest's current directory (the
 //! install, as when Steam launches the game). An absolute path must lie in
@@ -27,6 +31,7 @@ const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_NO_MORE_FILES: u32 = 18;
 const ERROR_HANDLE_EOF: u32 = 38;
 const ERROR_FILE_EXISTS: u32 = 80;
+const ERROR_BAD_PATHNAME: u32 = 161;
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
@@ -49,7 +54,10 @@ struct Found {
 #[derive(Default)]
 pub struct Files {
     install: PathBuf,
+    /// The overlay (sandbox\overlay).
     sandbox: PathBuf,
+    /// The sandbox root (the home).
+    home: PathBuf,
     /// The guest's current directory, relative to the install root.
     cwd: PathBuf,
     handles: HashMap<u32, Open>,
@@ -65,6 +73,7 @@ pub fn set_roots(install: &Path, sandbox: &Path) {
     with_files(|f| {
         f.install = install.to_path_buf();
         f.sandbox = sandbox.join("overlay");
+        f.home = sandbox.to_path_buf();
         f.cwd = PathBuf::new();
     });
 }
@@ -109,6 +118,45 @@ fn read_path(f: &Files, rel: &Path) -> PathBuf {
     if over.exists() { over } else { f.install.join(rel) }
 }
 
+/// A guest path resolved to host paths.
+pub(crate) struct Place {
+    /// Where the guest's view of the file is read from.
+    pub(crate) read: PathBuf,
+    /// Where writes go (the overlay, or the home path itself).
+    pub(crate) write: PathBuf,
+    /// The install's file under this path (None in the home), never written.
+    pub(crate) install: Option<PathBuf>,
+}
+
+/// Resolve a guest path in the install (with its overlay) or the home;
+/// None if it is outside both (refused).
+fn place_in(f: &Files, guest: &str) -> Option<Place> {
+    if let Some(rel) = relative(f, guest) {
+        return Some(Place { read: read_path(f, &rel), write: f.sandbox.join(&rel), install: Some(f.install.join(rel)) });
+    }
+    let r = Path::new(guest).strip_prefix(&f.home).ok()?;
+    let mut out = f.home.clone();
+    let depth = out.components().count();
+    for c in r.components() {
+        match c {
+            Component::Normal(x) => out.push(x),
+            Component::ParentDir => {
+                if out.components().count() == depth {
+                    return None;
+                }
+                out.pop();
+            }
+            _ => {}
+        }
+    }
+    Some(Place { read: out.clone(), write: out, install: None })
+}
+
+/// [`place_in`] for the other service modules (crate::profile).
+pub(crate) fn place(guest: &str) -> Option<Place> {
+    with_files(|f| place_in(f, guest))
+}
+
 fn guest_str_a(m: &dyn Mem, p: u32) -> String {
     (0..).map(|k| m.u8(p.wrapping_add(k))).take_while(|&b| b != 0).map(|b| b as char).collect()
 }
@@ -133,17 +181,20 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     let name = if wide { guest_str_w(m, arg(m, cpu, 0)) } else { guest_str_a(m, arg(m, cpu, 0)) };
     let (access, disposition) = (arg(m, cpu, 1), arg(m, cpu, 4));
     let result = with_files(|f| -> Result<u32, u32> {
-        let rel = relative(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
+        let pl = place_in(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
         let write = access & GENERIC_WRITE != 0 || matches!(disposition, 1 | 2 | 5);
         let file = if write {
             // writes go to the overlay; existing install contents are copied first
-            let over = f.sandbox.join(&rel);
-            if let Some(dir) = over.parent() {
-                std::fs::create_dir_all(dir).map_err(|_| ERROR_PATH_NOT_FOUND)?;
+            let over = pl.write.clone();
+            let orig = pl.install.clone().unwrap_or_else(|| over.clone());
+            if pl.install.is_some() {
+                if let Some(dir) = over.parent() {
+                    std::fs::create_dir_all(dir).map_err(|_| ERROR_PATH_NOT_FOUND)?;
+                }
             }
-            let existed = over.exists() || f.install.join(&rel).exists();
-            if !over.exists() && f.install.join(&rel).is_file() && disposition != 2 && disposition != 5 {
-                std::fs::copy(f.install.join(&rel), &over).map_err(|_| ERROR_ACCESS_DENIED)?;
+            let existed = over.exists() || orig.exists();
+            if !over.exists() && orig.is_file() && disposition != 2 && disposition != 5 {
+                std::fs::copy(&orig, &over).map_err(|_| ERROR_ACCESS_DENIED)?;
             }
             let mut o = OpenOptions::new();
             o.read(true).write(true);
@@ -162,7 +213,7 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
             }
             file
         } else {
-            let path = read_path(f, &rel);
+            let path = pl.read;
             if path.is_dir() {
                 return Err(ERROR_ACCESS_DENIED);
             }
@@ -356,8 +407,7 @@ pub fn flush_file_buffers(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn file_attributes(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     let name = if wide { guest_str_w(m, arg(m, cpu, 0)) } else { guest_str_a(m, arg(m, cpu, 0)) };
     let attrs = with_files(|f| {
-        let rel = relative(f, &name)?;
-        let md = std::fs::metadata(read_path(f, &rel)).ok()?;
+        let md = std::fs::metadata(place_in(f, &name)?.read).ok()?;
         Some(if md.is_dir() { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL })
     });
     cpu.eax = attrs.unwrap_or_else(|| {
@@ -377,11 +427,11 @@ pub fn get_file_attributes_w(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn create_directory_a(m: &mut dyn Mem, cpu: &mut Cpu) {
     let name = guest_str_a(m, arg(m, cpu, 0));
     let r = with_files(|f| {
-        let rel = relative(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
-        if read_path(f, &rel).exists() {
+        let pl = place_in(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
+        if pl.read.exists() {
             return Err(ERROR_ALREADY_EXISTS);
         }
-        std::fs::create_dir_all(f.sandbox.join(rel)).map_err(|_| ERROR_PATH_NOT_FOUND)
+        std::fs::create_dir_all(pl.write).map_err(|_| ERROR_PATH_NOT_FOUND)
     });
     cpu.eax = r.is_ok() as u32;
     if let Err(e) = r {
@@ -395,11 +445,12 @@ pub fn create_directory_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn find_first_file_a(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (pattern, data) = (guest_str_a(m, arg(m, cpu, 0)), arg(m, cpu, 1));
     let r = with_files(|f| -> Result<(u32, Found), u32> {
-        let rel = relative(f, &pattern).ok_or(ERROR_ACCESS_DENIED)?;
-        let mask = rel.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let dir = rel.parent().unwrap_or(Path::new("")).to_path_buf();
+        let pl = place_in(f, &pattern).ok_or(ERROR_ACCESS_DENIED)?;
+        let mask = pl.write.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let dirs: Vec<PathBuf> = [Some(&pl.write), pl.install.as_ref()].into_iter().flatten()
+            .map(|p| p.parent().unwrap_or(Path::new("")).to_path_buf()).collect();
         let mut found: Vec<Found> = Vec::new();
-        for root in [f.sandbox.join(&dir), f.install.join(&dir)] {
+        for root in dirs {
             for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
                 if wildcard(&mask, &name.to_lowercase()) && !found.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
@@ -519,6 +570,210 @@ pub fn set_current_directory_a(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 4);
 }
 
+/// The file a write-side operation may change: the overlay copy or a home
+/// file. A file that exists only in the install is read-only for the
+/// guest: ERROR_ACCESS_DENIED, which Windows also answers for a read-only
+/// file (Microsoft Learn, DeleteFileA remarks).
+fn writable_existing(pl: &Place) -> Result<PathBuf, u32> {
+    if pl.write.exists() {
+        return Ok(pl.write.clone());
+    }
+    match &pl.install {
+        Some(orig) if orig.exists() => Err(ERROR_ACCESS_DENIED),
+        _ => Err(missing_error(&pl.read)),
+    }
+}
+
+/// ERROR_FILE_NOT_FOUND, or ERROR_PATH_NOT_FOUND when the directory is
+/// missing too.
+fn missing_error(p: &Path) -> u32 {
+    if p.parent().is_some_and(Path::is_dir) { ERROR_FILE_NOT_FOUND } else { ERROR_PATH_NOT_FOUND }
+}
+
+/// Whether the directory a new file would go into exists in the guest's
+/// view (the overlay's or the install's copy of it, or the home).
+fn parent_exists(pl: &Place) -> bool {
+    [Some(&pl.write), pl.install.as_ref()].into_iter().flatten().any(|p| p.parent().is_some_and(Path::is_dir))
+}
+
+fn bool_result(m: &mut dyn Mem, cpu: &mut Cpu, r: Result<(), u32>, args: u32) {
+    cpu.eax = match r {
+        Ok(()) => 1,
+        Err(e) => {
+            set_error(e);
+            0
+        }
+    };
+    ret(m, cpu, args);
+}
+
+/// DeleteFileA(lpFileName) (Microsoft Learn "DeleteFileA function
+/// (fileapi.h)"): deletes a file in the overlay or the home. FALSE with
+/// ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND (missing), ERROR_ACCESS_DENIED
+/// (a directory, a file only the read-only install has, or a path outside
+/// the roots). Caller: 0x00D0CDB0 (at 0x00D0CDC5).
+pub fn delete_file_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let name = guest_str_a(m, arg(m, cpu, 0));
+    let r = with_files(|f| {
+        let pl = place_in(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
+        let p = writable_existing(&pl)?;
+        if p.is_dir() {
+            return Err(ERROR_ACCESS_DENIED);
+        }
+        std::fs::remove_file(p).map_err(|_| ERROR_ACCESS_DENIED)
+    });
+    bool_result(m, cpu, r, 4);
+}
+
+/// MoveFileA(lpExistingFileName, lpNewFileName) (Microsoft Learn
+/// "MoveFileA function (winbase.h)"): renames a file or directory of the
+/// overlay or the home. FALSE with ERROR_ALREADY_EXISTS (the new name
+/// exists in the guest's view), ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND,
+/// ERROR_ACCESS_DENIED (the source is only in the read-only install, or a
+/// path is outside the roots). Caller: 0x00D0CDE0 (at 0x00D0CE0D).
+pub fn move_file_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (from, to) = (guest_str_a(m, arg(m, cpu, 0)), guest_str_a(m, arg(m, cpu, 1)));
+    let r = with_files(|f| {
+        let src = place_in(f, &from).ok_or(ERROR_ACCESS_DENIED)?;
+        let dst = place_in(f, &to).ok_or(ERROR_ACCESS_DENIED)?;
+        let p = writable_existing(&src)?;
+        if dst.read.exists() {
+            return Err(ERROR_ALREADY_EXISTS);
+        }
+        if !parent_exists(&dst) {
+            return Err(ERROR_PATH_NOT_FOUND);
+        }
+        if let Some(dir) = dst.write.parent() {
+            std::fs::create_dir_all(dir).map_err(|_| ERROR_PATH_NOT_FOUND)?;
+        }
+        std::fs::rename(p, &dst.write).map_err(|_| ERROR_ACCESS_DENIED)
+    });
+    bool_result(m, cpu, r, 8);
+}
+
+/// CopyFileA(lpExistingFileName, lpNewFileName, bFailIfExists) (Microsoft
+/// Learn "CopyFileA function (winbase.h)"): copies the guest's view of the
+/// source into the overlay or the home. FALSE with ERROR_FILE_EXISTS (the
+/// target exists and bFailIfExists), ERROR_FILE_NOT_FOUND /
+/// ERROR_PATH_NOT_FOUND, ERROR_ACCESS_DENIED (a directory as source, a path
+/// outside the roots). Caller: 0x00D0CFC0 (bFailIfExists FALSE).
+pub fn copy_file_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (from, to, fail_if_exists) = (guest_str_a(m, arg(m, cpu, 0)), guest_str_a(m, arg(m, cpu, 1)), arg(m, cpu, 2));
+    let r = with_files(|f| {
+        let src = place_in(f, &from).ok_or(ERROR_ACCESS_DENIED)?;
+        let dst = place_in(f, &to).ok_or(ERROR_ACCESS_DENIED)?;
+        if !src.read.exists() {
+            return Err(missing_error(&src.read));
+        }
+        if src.read.is_dir() {
+            return Err(ERROR_ACCESS_DENIED);
+        }
+        if dst.read.exists() && fail_if_exists != 0 {
+            return Err(ERROR_FILE_EXISTS);
+        }
+        if !parent_exists(&dst) {
+            return Err(ERROR_PATH_NOT_FOUND);
+        }
+        if let Some(dir) = dst.write.parent() {
+            std::fs::create_dir_all(dir).map_err(|_| ERROR_PATH_NOT_FOUND)?;
+        }
+        std::fs::copy(&src.read, &dst.write).map(|_| ()).map_err(|_| ERROR_ACCESS_DENIED)
+    });
+    bool_result(m, cpu, r, 12);
+}
+
+/// SetEndOfFile(hFile) (Microsoft Learn "SetEndOfFile function
+/// (fileapi.h)"): the file ends at its current position. FALSE with
+/// ERROR_ACCESS_DENIED for a handle opened for reading, ERROR_INVALID_HANDLE
+/// for anything that is not an open file. Callers: MtFile::vf14 (at
+/// 0x00D0D031) and MtFileEx::vf14 (at 0x00D0DE1A) (seek, SetEndOfFile,
+/// seek back), the CRT's `__chsize_nolock`.
+pub fn set_end_of_file(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let h = arg(m, cpu, 0);
+    let r = with_files(|f| match f.handles.get_mut(&h) {
+        Some(Open::File(file)) => {
+            let pos = file.stream_position().map_err(|_| ERROR_INVALID_HANDLE)?;
+            file.set_len(pos).map_err(|_| ERROR_ACCESS_DENIED)
+        }
+        _ => Err(ERROR_INVALID_HANDLE),
+    });
+    bool_result(m, cpu, r, 4);
+}
+
+/// The volume GetDiskFreeSpaceA reports for every path the guest may use:
+/// one real NTFS volume, recorded like the D3D9 profile (the maintainer's
+/// E: drive holding the install, 2026-10-11): 8 sectors per cluster, 512
+/// bytes per sector, 16,192,600 of 122,092,543 clusters free. Fixed, so a
+/// session does not depend on the host's disks.
+pub const VOLUME: [u32; 4] = [8, 512, 16_192_600, 122_092_543];
+
+/// GetDiskFreeSpaceA(lpRootPathName, lpSectorsPerCluster,
+/// lpBytesPerSector, lpNumberOfFreeClusters, lpTotalNumberOfClusters)
+/// (Microsoft Learn "GetDiskFreeSpaceA function (fileapi.h)"): fills the
+/// non-NULL out-parameters from [`VOLUME`]; TRUE. The root may be NULL
+/// (the current directory's volume), a drive ("X:" or "X:\") or any
+/// directory on it (Windows 11 accepts all of these, measured); only the
+/// install's and the sandbox's drives are modelled, other paths stop. The
+/// caller MtFile::vf05 (at 0x00D0D109) opens a file synchronously instead
+/// of overlapped when more than 0x800 clusters are free.
+pub fn get_disk_free_space_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let root = arg(m, cpu, 0);
+    if root != 0 {
+        let path = guest_str_a(m, root);
+        let drive = |p: &str| p.get(..2).filter(|d| d.ends_with(':')).map(str::to_ascii_uppercase);
+        let known = with_files(|f| {
+            let wanted = drive(&path);
+            wanted.is_some() && [&f.install, &f.home].iter().any(|r| drive(&r.to_string_lossy()) == wanted)
+        });
+        if !known {
+            panic!("GetDiskFreeSpaceA({path:?}) is not modelled: not on the install's or the sandbox's drive (crate::files)");
+        }
+    }
+    for k in 0..4 {
+        let p = arg(m, cpu, 1 + k);
+        if p != 0 {
+            m.set_u32(p, VOLUME[k as usize]);
+        }
+    }
+    cpu.eax = 1;
+    ret(m, cpu, 20);
+}
+
+/// SHELL32 SHCreateDirectoryExW(hwnd, pszPath, psa) (Microsoft Learn
+/// "SHCreateDirectoryExW function (shlobj_core.h)"): creates the directory
+/// and any missing parents in the overlay or the home and returns
+/// ERROR_SUCCESS, or the error as the result: ERROR_ALREADY_EXISTS (a
+/// directory or a file has that name), ERROR_BAD_PATHNAME (a relative or
+/// empty path), ERROR_PATH_NOT_FOUND (a parent is a file),
+/// ERROR_ACCESS_DENIED (outside the roots); `..` is resolved first (all
+/// measured on Windows 11). Caller: MtRegistry's constructor 0x00CFFF00
+/// (at 0x00CFFF82), for `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN`.
+pub fn sh_create_directory_ex_w(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let path = guest_str_w(m, arg(m, cpu, 1));
+    let absolute = path.as_bytes().get(1) == Some(&b':') || path.starts_with("\\\\");
+    let r = if !absolute {
+        Err(ERROR_BAD_PATHNAME)
+    } else {
+        with_files(|f| {
+            let pl = place_in(f, &path).ok_or(ERROR_ACCESS_DENIED)?;
+            if pl.read.exists() {
+                return Err(ERROR_ALREADY_EXISTS);
+            }
+            // a parent that is a file (in the guest's view) stops it
+            let mut p = pl.read.parent();
+            while let Some(dir) = p {
+                if dir.is_file() {
+                    return Err(ERROR_PATH_NOT_FOUND);
+                }
+                p = dir.parent();
+            }
+            std::fs::create_dir_all(&pl.write).map_err(|_| ERROR_PATH_NOT_FOUND)
+        })
+    };
+    cpu.eax = r.err().unwrap_or(0);
+    ret(m, cpu, 12);
+}
+
 pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "CreateFileA", create_file_a),
     ("KERNEL32.dll", "CreateFileW", create_file_w),
@@ -537,4 +792,10 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "FindClose", find_close),
     ("KERNEL32.dll", "GetCurrentDirectoryA", get_current_directory_a),
     ("KERNEL32.dll", "SetCurrentDirectoryA", set_current_directory_a),
+    ("KERNEL32.dll", "DeleteFileA", delete_file_a),
+    ("KERNEL32.dll", "MoveFileA", move_file_a),
+    ("KERNEL32.dll", "CopyFileA", copy_file_a),
+    ("KERNEL32.dll", "SetEndOfFile", set_end_of_file),
+    ("KERNEL32.dll", "GetDiskFreeSpaceA", get_disk_free_space_a),
+    ("SHELL32.dll", "SHCreateDirectoryExW", sh_create_directory_ex_w),
 ];

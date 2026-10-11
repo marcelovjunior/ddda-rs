@@ -894,3 +894,813 @@ fn a_draw_reaches_the_backend_with_its_uploads_and_complete_state() {
     assert_eq!(com(&mut s, dev, 17, &[0, 0, 0, 0]), 0);
     assert_eq!(recorded(|r| r.presents).unwrap(), 1);
 }
+
+// --- L17: strings, code pages, system, registry, profile and file services ---
+// Expected values are Windows 11 (build 26200) answers measured with the
+// probes in research/runtime/windows.
+
+use ddruntime::{files, profile, registry, system, text, win32};
+
+/// A guest with the heap mapped and scratch space at 0x300000.
+fn guest() -> GuestMemory {
+    let (mut m, _) = stack();
+    m.map_lazy(services::HEAP_BASE, services::HEAP_SIZE, READ | WRITE).unwrap();
+    m.map(0x0030_0000, 0x4000, READ | WRITE).unwrap();
+    m
+}
+
+fn put_w(m: &mut GuestMemory, at: u32, s: &str) {
+    for (k, u) in s.encode_utf16().chain([0]).enumerate() {
+        m.set_u16(at + 2 * k as u32, u);
+    }
+}
+
+fn units(m: &GuestMemory, at: u32, n: u32) -> Vec<u16> {
+    (0..n).map(|k| m.u16(at + 2 * k)).collect()
+}
+
+fn fill(m: &mut GuestMemory, at: u32, n: u32, b: u8) {
+    for k in 0..n {
+        m.set_u8(at + k, b);
+    }
+}
+
+fn last_error(m: &mut GuestMemory) -> u32 {
+    call_service(win32::get_last_error, m, &[]).eax
+}
+
+fn set_last_error(m: &mut GuestMemory, e: u32) {
+    call_service(win32::set_last_error, m, &[e]);
+}
+
+/// The panic message of a service call that must stop the session.
+fn stops(f: fn(&mut dyn Mem, &mut Cpu), m: &mut GuestMemory, args: &[u32]) -> String {
+    let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { call_service(f, m, args); }))
+        .expect_err("the service must stop");
+    e.downcast_ref::<String>().cloned().unwrap_or_default()
+}
+
+#[test]
+fn multi_byte_to_wide_char_follows_windows() {
+    let mut m = guest();
+    let (src, dst) = (0x0030_0000, 0x0030_0100);
+    m.poke(src, b"abc\0").unwrap();
+    // size queries count the NUL with -1
+    assert_eq!(call_service(text::multi_byte_to_wide_char, &mut m, &[1252, 0, src, 3, 0, 0]).eax, 3);
+    let cpu = call_service(text::multi_byte_to_wide_char, &mut m, &[0, 1, src, u32::MAX, dst, 4]);
+    assert_eq!((cpu.eax, cpu.esp), (4, 0x0011_0000), "4 units; stdcall pops 24 bytes");
+    assert_eq!(units(&m, dst, 4), [0x61, 0x62, 0x63, 0]);
+    // a short buffer gets the first units and ERROR_INSUFFICIENT_BUFFER
+    fill(&mut m, dst, 16, 0xEE);
+    assert_eq!(call_service(text::multi_byte_to_wide_char, &mut m, &[1252, 0, src, u32::MAX, dst, 2]).eax, 0);
+    assert_eq!(last_error(&mut m), 122);
+    assert_eq!(units(&m, dst, 3), [0x61, 0x62, 0xEEEE]);
+    // code page 1252's 0x80..0x9F, including the undefined 0x81 (no error)
+    m.poke(src, &[0x80, 0x81, 0x9F, 0xFF]).unwrap();
+    assert_eq!(call_service(text::multi_byte_to_wide_char, &mut m, &[1252, 9, src, 4, dst, 8]).eax, 4);
+    assert_eq!(units(&m, dst, 4), [0x20AC, 0x0081, 0x0178, 0x00FF]);
+    // parameter and flag errors
+    for (args, err) in [
+        ([1252, 0, src, 0, dst, 4], 87),           // cbMultiByte 0
+        ([1252, 0, 0, 3, dst, 4], 87),             // no input
+        ([1252, 0, src, 3, dst, u32::MAX], 87),    // cchWideChar < 0
+        ([1252, 0, src, 3, src, 4], 87),           // the same buffer
+        ([1252, 3, src, 3, dst, 4], 1004),         // MB_PRECOMPOSED | MB_COMPOSITE
+        ([1252, 0x10, src, 3, dst, 4], 1004),      // unknown flag
+        ([65001, 0x80, src, 3, dst, 4], 1004),
+    ] {
+        assert_eq!(call_service(text::multi_byte_to_wide_char, &mut m, &args).eax, 0, "{args:x?}");
+        assert_eq!(last_error(&mut m), err, "{args:x?}");
+    }
+    // UTF-8: invalid parts become U+FFFD as Windows groups them
+    let utf8 = |m: &mut GuestMemory, bytes: &[u8], flags: u32| {
+        m.poke(src, bytes).unwrap();
+        fill(m, dst, 32, 0xEE);
+        let r = call_service(text::multi_byte_to_wide_char, m, &[65001, flags, src, bytes.len() as u32, dst, 8]).eax;
+        (r, units(m, dst, r.max(3)))
+    };
+    assert_eq!(utf8(&mut m, &[0x61, 0x80, 0x62], 0), (3, vec![0x61, 0xFFFD, 0x62]));
+    assert_eq!(utf8(&mut m, &[0xF0, 0x9F, 0x98, 0x80], 0).1[..2], [0xD83D, 0xDE00]);
+    assert_eq!(utf8(&mut m, &[0xC0, 0x80], 0).1[..2], [0xFFFD, 0xFFFD]);
+    assert_eq!(utf8(&mut m, &[0xE2, 0x82], 0), (1, vec![0xFFFD, 0xEEEE, 0xEEEE]));
+    assert_eq!(utf8(&mut m, &[0xE0, 0x80, 0x9F], 0).0, 2, "lead + out-of-range second byte is one U+FFFD");
+    assert_eq!(utf8(&mut m, &[0xF4, 0x90, 0x80, 0x80], 0).0, 3);
+    assert_eq!(utf8(&mut m, &[0x61, 0x62, 0x63], 3).0, 3, "UTF-8 ignores MB_PRECOMPOSED | MB_COMPOSITE");
+    // MB_ERR_INVALID_CHARS: fails, but the text is written
+    assert_eq!(utf8(&mut m, &[0x61, 0x80, 0x62], 8), (0, vec![0x61, 0xFFFD, 0x62]));
+    assert_eq!(last_error(&mut m), 1113);
+    // a short buffer splits a surrogate pair and wins over the invalid-char error
+    m.poke(src, &[0x61, 0x80, 0x62]).unwrap();
+    assert_eq!(call_service(text::multi_byte_to_wide_char, &mut m, &[65001, 8, src, 3, dst, 1]).eax, 0);
+    assert_eq!(last_error(&mut m), 122);
+    // code pages beyond 1252/UTF-8 stop
+    assert!(stops(text::multi_byte_to_wide_char, &mut m, &[437, 0, src, 3, dst, 4]).contains("code page 437"));
+}
+
+#[test]
+fn wide_char_to_multi_byte_follows_windows() {
+    let mut m = guest();
+    let (src, dst, used, def) = (0x0030_0000, 0x0030_0100, 0x0030_0200, 0x0030_0204);
+    let conv = |m: &mut GuestMemory, cp: u32, flags: u32, s: &[u16], cb: u32, def_p: u32, used_p: u32| {
+        for (k, &u) in s.iter().enumerate() {
+            m.set_u16(src + 2 * k as u32, u);
+        }
+        fill(m, dst, 16, 0xEE);
+        m.set_u32(used, 0x55);
+        let cpu = call_service(text::wide_char_to_multi_byte, m, &[cp, flags, src, s.len() as u32, dst, cb, def_p, used_p]);
+        assert_eq!(cpu.esp, 0x0011_0000, "stdcall pops 32 bytes");
+        (cpu.eax, m.read(dst, 6).unwrap(), m.u32(used))
+    };
+    // 1252: own bytes, best fit, default character
+    assert_eq!(conv(&mut m, 1252, 0, &[0x61, 0x100, 0x20AC], 8, 0, used), (3, vec![0x61, 0x41, 0x80, 0xEE, 0xEE, 0xEE], 0));
+    assert_eq!(conv(&mut m, 1252, 0, &[0x61, 0x4E00], 8, 0, used).1[..2], [0x61, b'?']);
+    assert_eq!(m.u32(used), 1);
+    m.poke(def, b"*\0").unwrap();
+    assert_eq!(conv(&mut m, 1252, 0, &[0x61, 0x4E00], 8, def, used).1[..2], [0x61, b'*']);
+    assert_eq!(conv(&mut m, 1252, 0x400, &[0x100], 8, 0, used), (1, vec![b'?', 0xEE, 0xEE, 0xEE, 0xEE, 0xEE], 1), "WC_NO_BEST_FIT_CHARS");
+    assert_eq!(conv(&mut m, 1252, 0, &[0xD83D, 0xDE00], 8, 0, used).1[..2], [b'?', b'?'], "a pair is two units");
+    // size query: the count, and lpUsedDefaultChar is written
+    assert_eq!(conv(&mut m, 1252, 0, &[0x61, 0x4E00], 0, 0, used).0, 2);
+    assert_eq!(m.u32(used), 1);
+    // a short buffer gets the first bytes
+    assert_eq!(conv(&mut m, 1252, 0, &[0x61, 0x62, 0x63], 2, 0, used).1[..3], [0x61, 0x62, 0xEE]);
+    assert_eq!(last_error(&mut m), 122);
+    // -1 counts the NUL
+    put_w(&mut m, src, "abc");
+    assert_eq!(call_service(text::wide_char_to_multi_byte, &mut m, &[1252, 0, src, u32::MAX, 0, 0, 0, 0]).eax, 4);
+    // errors
+    for (cp, flags, cch, cb, err) in [(1252, 0x80, 3, 8, 1004), (1252, 0x40, 3, 8, 1004), (1252, 0x1000, 3, 8, 1004),
+                                     (65001, 0x1, 3, 8, 1004), (1252, 0, 0, 8, 87), (1252, 0, 3, u32::MAX, 87)] {
+        assert_eq!(call_service(text::wide_char_to_multi_byte, &mut m, &[cp, flags, src, cch, dst, cb, 0, 0]).eax, 0);
+        assert_eq!(last_error(&mut m), err, "cp {cp} flags {flags:#x}");
+    }
+    // UTF-8
+    assert_eq!(conv(&mut m, 65001, 0, &[0x61, 0x20AC], 8, 0, 0).1[..4], [0x61, 0xE2, 0x82, 0xAC]);
+    assert_eq!(conv(&mut m, 65001, 0, &[0xD800, 0x61], 8, 0, 0).1[..4], [0xEF, 0xBF, 0xBD, 0x61]);
+    assert_eq!(conv(&mut m, 65001, 0x80, &[0xD800, 0x61], 8, 0, 0).0, 0, "WC_ERR_INVALID_CHARS");
+    assert_eq!(last_error(&mut m), 1113);
+    assert_eq!(m.read(dst, 4).unwrap(), [0xEF, 0xBF, 0xBD, 0x61], "written anyway");
+    assert_eq!(conv(&mut m, 65001, 0, &[0x61, 0x20AC], 2, 0, 0).1[..3], [0x61, 0xEE, 0xEE], "whole characters only");
+    assert_eq!(last_error(&mut m), 122);
+    assert_eq!(conv(&mut m, 65001, 0x400, &[0x61], 8, def, used), (1, vec![0x61, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE], 0),
+               "Windows 11 accepts 1252 flags, lpDefaultChar and lpUsedDefaultChar for UTF-8");
+}
+
+#[test]
+fn string_types_case_mapping_and_sort_keys_follow_en_us_windows() {
+    let mut m = guest();
+    let (src, dst, src2) = (0x0030_0000, 0x0030_0100, 0x0030_0200);
+    put_w(&mut m, src, "aB1");
+    fill(&mut m, dst, 16, 0xEE);
+    let cpu = call_service(text::get_string_type_w, &mut m, &[1, src, u32::MAX, dst]);
+    assert_eq!((cpu.eax, cpu.esp), (1, 0x0011_0000));
+    assert_eq!(units(&m, dst, 5), [0x0382, 0x0381, 0x0284, 0x0220, 0xEEEE], "CT_CTYPE1, the NUL included");
+    assert_eq!(call_service(text::get_string_type_w, &mut m, &[3, src, 3, dst]).eax, 0);
+    assert_eq!(last_error(&mut m), 1004);
+    assert_eq!(call_service(text::get_string_type_w, &mut m, &[1, src, 0, dst]).eax, 0);
+    assert_eq!(last_error(&mut m), 87);
+    // LCMapStringW case mapping
+    put_w(&mut m, src, "Abc");
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x200, src, u32::MAX, 0, 0]).eax, 4);
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x200, src, u32::MAX, dst, 4]).eax, 4);
+    assert_eq!(units(&m, dst, 4), [0x41, 0x42, 0x43, 0]);
+    fill(&mut m, dst, 16, 0xEE);
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x100, src, u32::MAX, dst, 2]).eax, 0);
+    assert_eq!((last_error(&mut m), m.u16(dst)), (122, 0xEEEE), "nothing written");
+    put_w(&mut m, src, "\u{FF}\u{160}");
+    call_service(text::lc_map_string_w, &mut m, &[0x400, 0x200, src, 2, dst, 4]);
+    assert_eq!(units(&m, dst, 2), [0x178, 0x160]);
+    call_service(text::lc_map_string_w, &mut m, &[0, 0x100, src, 2, dst, 4]);
+    assert_eq!(units(&m, dst, 2), [0xFF, 0x161]);
+    for (flags, err) in [(0, 1004), (0x500, 1004), (0x1200, 1004), (0x201, 1004)] {
+        assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, flags, src, 2, dst, 4]).eax, 0);
+        assert_eq!(last_error(&mut m), err, "{flags:#x}");
+    }
+    // sort keys: "A" and "ab" as Windows builds them
+    put_w(&mut m, src, "A");
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x400, src, u32::MAX, dst, 32]).eax, 8);
+    assert_eq!(m.read(dst, 8).unwrap(), [0x0E, 0x02, 0x01, 0x01, 0x12, 0x01, 0x01, 0x00]);
+    put_w(&mut m, src, "ab");
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x400, src, u32::MAX, 0, 0]).eax, 9);
+    assert_eq!(call_service(text::lc_map_string_w, &mut m, &[0x409, 0x400, src, u32::MAX, dst, 4]).eax, 0);
+    assert_eq!(last_error(&mut m), 122);
+    // CompareStringW
+    let cmp = |m: &mut GuestMemory, flags: u32, a: &str, b: &str| {
+        put_w(m, src, a);
+        put_w(m, src2, b);
+        let cpu = call_service(text::compare_string_w, m, &[0x409, flags, src, u32::MAX, src2, u32::MAX]);
+        assert_eq!(cpu.esp, 0x0011_0000);
+        cpu.eax
+    };
+    assert_eq!(cmp(&mut m, 0x1001, "abc", "ABC"), 2, "NORM_IGNORECASE | SORT_STRINGSORT (the CRT's flags)");
+    assert_eq!(cmp(&mut m, 0, "abc", "ABC"), 1);
+    assert_eq!(cmp(&mut m, 0x1000, "co-op", "coop"), 1);
+    assert_eq!(cmp(&mut m, 0x2, "\u{E9}", "e"), 2, "NORM_IGNORENONSPACE");
+    put_w(&mut m, src, "a");
+    m.poke(src2, &[0x61, 0, 0, 0, 0x62, 0]).unwrap();
+    assert_eq!(call_service(text::compare_string_w, &mut m, &[0x409, 0x1000, src, u32::MAX, src2, 3]).eax, 1, "NUL is ignorable");
+    assert_eq!(call_service(text::compare_string_w, &mut m, &[0x409, 0x1000, src, u32::MAX, src2, 2]).eax, 2);
+    assert_eq!(call_service(text::compare_string_w, &mut m, &[0x409, 0x8000_0000, src, 1, src2, 1]).eax, 0);
+    assert_eq!(last_error(&mut m), 1004);
+    assert_eq!(call_service(text::compare_string_w, &mut m, &[0x409, 0, 0, 1, src2, 1]).eax, 0);
+    assert_eq!(last_error(&mut m), 87);
+    // not modelled: word sort of a hyphen, other locales, other characters
+    put_w(&mut m, src, "co-op");
+    assert!(stops(text::compare_string_w, &mut m, &[0x409, 0, src, u32::MAX, src2, 1]).contains("word sort"));
+    assert!(stops(text::compare_string_w, &mut m, &[0x411, 0, src, u32::MAX, src2, 1]).contains("locale 0x411"));
+    put_w(&mut m, src, "\u{4E00}");
+    assert!(stops(text::get_string_type_w, &mut m, &[1, src, 1, dst]).contains("U+4E00"));
+}
+
+/// Differential check against vectors recorded from the host's own
+/// functions by research/runtime/windows/Vectors.cs (not committed; set
+/// DDRUNTIME_WINDOWS_VECTORS to their directory to run it).
+#[test]
+fn conversions_and_sort_keys_match_recorded_windows_vectors() {
+    let Some(dir) = std::env::var_os("DDRUNTIME_WINDOWS_VECTORS") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    let hex = |s: &str| -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect() };
+    let hexw = |s: &str| -> Vec<u16> {
+        if s == "-" { return Vec::new(); }
+        (0..s.len()).step_by(4).map(|i| u16::from_str_radix(&s[i..i + 4], 16).unwrap()).collect()
+    };
+    let mut checked = 0;
+    for line in std::fs::read_to_string(dir.join("utf8_decode.txt")).unwrap().lines() {
+        let p: Vec<&str> = line.split(' ').collect();
+        let (out, invalid) = text::check::decode_utf8(&hex(p[0]));
+        if p[1] == "8" && invalid {
+            assert_eq!((p[2], p[3]), ("0", "1113"), "{line}");
+        } else {
+            assert_eq!(out, hexw(p.get(4).copied().unwrap_or("-")), "{line}");
+        }
+        checked += 1;
+    }
+    for line in std::fs::read_to_string(dir.join("wc_encode.txt")).unwrap().lines() {
+        let p: Vec<&str> = line.split(' ').collect();
+        if p[0] != "1252" {
+            continue;
+        }
+        let flags: u32 = p[2].parse().unwrap();
+        let mut used = false;
+        let out: Vec<u8> = hexw(p[1]).iter().map(|&u| text::check::encode_1252(u, flags & 0x400 == 0).unwrap_or_else(|| { used = true; b'?' })).collect();
+        assert_eq!((out, used as u32), (hex(p[5]), p[6].parse().unwrap()), "{line}");
+        checked += 1;
+    }
+    std::panic::set_hook(Box::new(|_| {}));
+    for line in std::fs::read_to_string(dir.join("sortkeys.txt")).unwrap().lines() {
+        let p: Vec<&str> = line.split(' ').collect();
+        if line.contains("ERR") {
+            continue; // empty strings: ERROR_INVALID_PARAMETER for LCMapStringW
+        }
+        let flags: u32 = p[1].parse().unwrap();
+        if p[0] == "K" {
+            if let Some(k) = text::check::sort_key(&hexw(p[2]), flags) {
+                assert_eq!(k, hex(p[3]), "{line}");
+                checked += 1;
+            }
+        } else if let (Some(a), Some(b)) = (text::check::sort_key(&hexw(p[2]), flags), text::check::sort_key(&hexw(p[3]), flags)) {
+            assert_eq!(a.cmp(&b) as i32 + 2, p[4].parse::<i32>().unwrap(), "{line}");
+            checked += 1;
+        }
+    }
+    let _ = std::panic::take_hook();
+    assert!(checked > 40_000, "{checked}");
+}
+
+#[test]
+fn time_zone_and_file_times_follow_windows() {
+    let mut m = guest();
+    let (tzi, ft, st) = (0x0030_0000, 0x0030_0200, 0x0030_0300);
+    fill(&mut m, tzi, 172, 0xEE);
+    let cpu = call_service(system::get_time_zone_information, &mut m, &[tzi]);
+    assert_eq!((cpu.eax, cpu.esp), (0, 0x0011_0000), "TIME_ZONE_ID_UNKNOWN");
+    let name = |m: &GuestMemory, at: u32| String::from_utf16(&units(m, at, 26)).unwrap();
+    assert_eq!((m.u32(tzi), m.u32(tzi + 84), m.u32(tzi + 168)), (0, 0, 0), "biases");
+    assert_eq!((name(&m, tzi + 4), name(&m, tzi + 88)), ("Coordinated Universal Time".into(), "Coordinated Universal Time".into()));
+    assert_eq!(m.read(tzi + 68, 16).unwrap(), [0; 16], "no transition date");
+    for (t, want) in [
+        (0u64, [1601, 1, 1, 1, 0, 0, 0, 0]),
+        (0x7FFF_FFFF_FFFF_FFFF, [30828, 9, 4, 14, 2, 48, 5, 477]),
+        (0x01CD_DA4F_ACCD_0000, [2012, 12, 5, 14, 23, 6, 40, 0]),
+        (0x0123_4567_89AB_CDEF, [1860, 10, 6, 20, 15, 48, 41, 648]),
+        (0x0058_D15E_1762_8000, [1680, 3, 5, 22, 4, 26, 40, 0]),
+    ] {
+        m.set_u32(ft, t as u32);
+        m.set_u32(ft + 4, (t >> 32) as u32);
+        assert_eq!(call_service(system::file_time_to_system_time, &mut m, &[ft, st]).eax, 1);
+        assert_eq!(units(&m, st, 8), want, "{t:#x}");
+    }
+    m.set_u32(ft + 4, 0x8000_0000);
+    fill(&mut m, st, 16, 0xEE);
+    assert_eq!(call_service(system::file_time_to_system_time, &mut m, &[ft, st]).eax, 0);
+    assert_eq!((last_error(&mut m), m.u16(st)), (87, 0xEEEE));
+    // UTC: local file time is the same
+    m.set_u32(ft, 0x1234_5678);
+    m.set_u32(ft + 4, 0x01D0_0000);
+    let cpu = call_service(system::file_time_to_local_file_time, &mut m, &[ft, st]);
+    assert_eq!((cpu.eax, cpu.esp, m.u32(st), m.u32(st + 4)), (1, 0x0011_0000, 0x1234_5678, 0x01D0_0000));
+}
+
+#[test]
+fn global_and_local_memory_follow_windows() {
+    let mut m = guest();
+    // GHND: a handle, locked to a zeroed block
+    let h = call_service(system::global_alloc, &mut m, &[0x42, 10]).eax;
+    assert!(h != 0 && m.perm(h) == 0, "a moveable handle is not a pointer");
+    let p = call_service(system::global_lock, &mut m, &[h]).eax;
+    assert!(p >= services::HEAP_BASE);
+    assert_eq!(m.read(p, 10).unwrap(), [0; 10]);
+    assert_eq!(call_service(system::global_lock, &mut m, &[h]).eax, p);
+    set_last_error(&mut m, 77);
+    assert_eq!(call_service(system::global_unlock, &mut m, &[h]).eax, 1, "still locked");
+    assert_eq!(last_error(&mut m), 77, "untouched");
+    assert_eq!(call_service(system::global_unlock, &mut m, &[h]).eax, 0);
+    assert_eq!(last_error(&mut m), 0, "unlocked: NO_ERROR");
+    assert_eq!(call_service(system::global_unlock, &mut m, &[h]).eax, 0);
+    assert_eq!(last_error(&mut m), 158, "ERROR_NOT_LOCKED");
+    let cpu = call_service(system::global_free, &mut m, &[h]);
+    assert_eq!((cpu.eax, cpu.esp), (0, 0x0011_0000));
+    assert_eq!(call_service(system::global_free, &mut m, &[h]).eax, h, "a second free fails");
+    assert_eq!(last_error(&mut m), 6);
+    assert_eq!(call_service(system::global_lock, &mut m, &[h]).eax, 0);
+    // GPTR: the block itself
+    let f = call_service(system::global_alloc, &mut m, &[0x40, 16]).eax;
+    assert_eq!(call_service(system::global_lock, &mut m, &[f]).eax, f);
+    assert_eq!(call_service(system::global_unlock, &mut m, &[f]).eax, 1);
+    assert_eq!(call_service(system::global_free, &mut m, &[f]).eax, 0);
+    assert_eq!(call_service(system::global_free, &mut m, &[0]).eax, 0, "NULL is accepted");
+    // a moveable object of 0 bytes is discarded
+    let z = call_service(system::global_alloc, &mut m, &[2, 0]).eax;
+    assert_eq!(call_service(system::global_lock, &mut m, &[z]).eax, 0);
+    assert_eq!(last_error(&mut m), 157);
+    assert_ne!(call_service(system::global_alloc, &mut m, &[0, 0]).eax, 0, "a fixed 0-byte block exists");
+    // flags: GlobalAlloc takes 0x7F72, LocalAlloc 0x0F72
+    for (f, flags, ok) in [(system::global_alloc as fn(&mut dyn Mem, &mut Cpu), 0x8, false), (system::global_alloc, 0x80, false),
+                           (system::global_alloc, 0x7F72, true), (system::local_alloc, 0x7F72, false), (system::local_alloc, 0x0F72, true)] {
+        let r = call_service(f, &mut m, &[flags, 8]).eax;
+        assert_eq!(r != 0, ok, "{flags:#x}");
+        if !ok {
+            assert_eq!(last_error(&mut m), 87);
+        }
+    }
+    let l = call_service(system::local_alloc, &mut m, &[0x40, 16]).eax;
+    assert_eq!(m.read(l, 16).unwrap(), [0; 16], "LPTR zeroes");
+}
+
+#[test]
+fn the_environment_starts_empty_and_keeps_windows_order() {
+    let mut m = guest();
+    let block = |m: &mut GuestMemory| {
+        let p = call_service(win32::get_environment_strings_w, m, &[]).eax;
+        let mut v = Vec::new();
+        for k in 0.. {
+            let u = m.u16(p + 2 * k);
+            v.push(u);
+            if u == 0 && v.len() >= 2 && v[v.len() - 2] == 0 {
+                break;
+            }
+        }
+        assert_eq!(call_service(win32::free_environment_strings_w, m, &[p]).eax, 1);
+        String::from_utf16(&v).unwrap()
+    };
+    assert_eq!(block(&mut m), "\0\0");
+    let set = |m: &mut GuestMemory, name: Option<&str>, value: Option<&str>| {
+        let (n, v) = (0x0030_0000, 0x0030_0100);
+        if let Some(s) = name { put_str(m, n, s); }
+        if let Some(s) = value { put_str(m, v, s); }
+        let cpu = call_service(system::set_environment_variable_a, m, &[if name.is_some() { n } else { 0 }, if value.is_some() { v } else { 0 }]);
+        assert_eq!(cpu.esp, 0x0011_0000);
+        cpu.eax
+    };
+    assert_eq!(set(&mut m, Some("ZZ_B"), Some("2")), 1);
+    assert_eq!(set(&mut m, Some("ZZ_A"), Some("1")), 1);
+    assert_eq!(set(&mut m, Some("zz_c"), Some("3")), 1);
+    assert_eq!(set(&mut m, Some("zz_a"), Some("8")), 1, "replaces ZZ_A, keeping its name");
+    assert_eq!(set(&mut m, Some("=X"), Some("1")), 1, "a leading '=' is allowed");
+    assert_eq!(block(&mut m), "=X=1\0ZZ_A=8\0ZZ_B=2\0zz_c=3\0\0");
+    assert_eq!(set(&mut m, Some("ZZ_B"), None), 1);
+    assert_eq!(set(&mut m, Some("NOPE"), None), 1, "deleting a missing variable succeeds");
+    assert_eq!(block(&mut m), "=X=1\0ZZ_A=8\0zz_c=3\0\0");
+    for name in [Some("A=B"), Some(""), None] {
+        assert_eq!(set(&mut m, name, Some("1")), 0, "{name:?}");
+        assert_eq!(last_error(&mut m), 87);
+    }
+}
+
+#[test]
+fn standard_handles_and_the_absent_console_follow_windows() {
+    let mut m = guest();
+    let out = 0x0030_0000;
+    assert_eq!(call_service(win32::get_std_handle, &mut m, &[(-11i32) as u32]).eax, 0, "a GUI process has none");
+    let cpu = call_service(system::set_std_handle, &mut m, &[(-11i32) as u32, 0x1234]);
+    assert_eq!((cpu.eax, cpu.esp), (1, 0x0011_0000));
+    assert_eq!(call_service(win32::get_std_handle, &mut m, &[(-11i32) as u32]).eax, 0x1234);
+    assert_eq!(call_service(system::set_std_handle, &mut m, &[5, 0x1234]).eax, 0);
+    assert_eq!(last_error(&mut m), 6);
+    assert_eq!(call_service(win32::get_std_handle, &mut m, &[5]).eax, u32::MAX);
+    assert_eq!(last_error(&mut m), 6);
+    m.set_u32(out, 0x55);
+    let cpu = call_service(system::get_console_mode, &mut m, &[0x1234, out]);
+    assert_eq!((cpu.eax, cpu.esp, m.u32(out)), (0, 0x0011_0000, 0x55));
+    assert_eq!(last_error(&mut m), 6);
+    set_last_error(&mut m, 0);
+    assert_eq!(call_service(system::get_console_cp, &mut m, &[]).eax, 0);
+    assert_eq!(last_error(&mut m), 6);
+    let cpu = call_service(system::write_console_w, &mut m, &[0x1234, out + 8, 2, out, 0]);
+    assert_eq!((cpu.eax, cpu.esp, m.u32(out)), (0, 0x0011_0000, 0x55));
+}
+
+#[test]
+fn version_checks_answer_as_windows_does_for_an_exe_without_supported_os() {
+    let mut m = guest();
+    // VerSetConditionMask: one condition per call, bit 63 marks the mask
+    let mask = |m: &mut GuestMemory, prev: u64, t: u32, c: u32| {
+        let cpu = call_service(system::ver_set_condition_mask, m, &[prev as u32, (prev >> 32) as u32, t, c]);
+        assert_eq!(cpu.esp, 0x0011_0000, "16 bytes of arguments");
+        cpu.eax as u64 | (cpu.edx as u64) << 32
+    };
+    assert_eq!(mask(&mut m, 0, 3, 3), 0x8000_0000_0000_0018, "MAJOR wins over MINOR");
+    assert_eq!(mask(&mut m, 0, 1, 3), 0x8000_0000_0000_0003);
+    assert_eq!(mask(&mut m, 0, 0, 3), 0);
+    assert_eq!(mask(&mut m, 0, 3, 8), 0x8000_0000_0000_0000);
+    assert_eq!(mask(&mut m, 0, 0xC0, 1), 0x8000_0000_0020_0000);
+    assert_eq!(mask(&mut m, 0x8000_0000_0000_0018, 1, 3), 0x8000_0000_0000_001B);
+    // the game's call (sPad 0x00DFA0C0): OSVERSIONINFOEXA 5.1, MAJOR|MINOR, >=
+    let info = 0x0030_0000;
+    let verify = |m: &mut GuestMemory, major: u32, minor: u32, build: u32, t: u32, mask: u64| {
+        fill(m, info, 156, 0);
+        for (off, v) in [(0, 156), (4, major), (8, minor), (12, build), (16, 2)] {
+            m.set_u32(info + off, v);
+        }
+        m.set_u8(info + 154, 1);
+        let cpu = call_service(system::verify_version_info_a, m, &[info, t, mask as u32, (mask >> 32) as u32]);
+        assert_eq!(cpu.esp, 0x0011_0000);
+        cpu.eax
+    };
+    assert_eq!(verify(&mut m, 5, 1, 0, 3, 0x8000_0000_0000_0018), 1);
+    assert_eq!(verify(&mut m, 6, 2, 0, 3, 0x8000_0000_0000_0009), 1, "6.2 ==");
+    assert_eq!(verify(&mut m, 6, 3, 0, 3, 0x8000_0000_0000_0018), 0, "not 8.1");
+    assert_eq!(last_error(&mut m), 1150);
+    assert_eq!(verify(&mut m, 10, 0, 0, 3, 0x8000_0000_0000_0018), 0, "not 10");
+    assert_eq!(verify(&mut m, 0, 0, 9200, 4, 0x8000_0000_0000_00C0), 1, "build >= 9200");
+    assert_eq!(verify(&mut m, 0, 0, 9201, 4, 0x8000_0000_0000_00C0), 0);
+    assert_eq!(verify(&mut m, 0, 0, 9200, 4, 0x8000_0000_0000_0080), 0, "build > 9200");
+    assert_eq!(verify(&mut m, 0, 0, 0, 8, 0x8000_0000_0000_0200), 1, "platform == 2");
+    assert_eq!(verify(&mut m, 0, 0, 0, 0x80, 0x8000_0000_0020_0000), 1, "workstation");
+    assert_eq!(verify(&mut m, 5, 1, 0, 0, 0x8000_0000_0000_0018), 0);
+    assert_eq!(last_error(&mut m), 160, "ERROR_BAD_ARGUMENTS");
+    // the hierarchy rules, replayed against the answers of a Windows 11
+    // process that sees 10.0 (research/runtime/windows/Probe3.cs, Probe4.cs)
+    let ten = system::OsVersion { major: 10, minor: 0, ..system::VERSION };
+    let v = |major, minor| system::OsVersion { major, minor, ..system::VERSION };
+    let ge = 0x8000_0000_0000_0018u64;
+    for (want, info, t, mask) in [
+        (true, v(5, 1), 3, ge), (true, v(10, 0), 3, ge), (false, v(10, 1), 3, ge), (false, v(11, 0), 3, ge),
+        (false, v(0, 1), 1, ge), (false, v(0, 1), 1, 0x8000_0000_0000_0003), (true, v(10, 5), 2, 0x8000_0000_0000_0008),
+        (true, v(10, 0), 3, 0x8000_0000_0000_0009), (true, v(6, 9), 3, 0x8000_0000_0000_001D), (false, v(10, 9), 3, 0x8000_0000_0000_001D),
+        (true, v(10, 1), 3, 0x8000_0000_0000_002B), (true, v(10, 0), 2, 0x8000_0000_0000_0000), (false, v(5, 0), 2, 0x8000_0000_0000_0000),
+        (false, v(11, 0), 2, 0x8000_0000_0000_0000), (false, v(5, 0), 2, 0x8000_0000_0000_0030), (true, v(10, 0), 2, 0x8000_0000_0000_0030),
+        (true, v(9, 0), 2, 0x8000_0000_0000_0010), (true, v(10, 0), 2, 0x8000_0000_0000_0010), (true, v(11, 0), 2, 0x8000_0000_0000_0020),
+        (true, v(10, 0), 3, 0x8000_0000_0000_0011), (true, v(10, 0), 3, 0x8000_0000_0000_000A), (true, v(10, 1), 3, 0x8000_0000_0000_000C),
+        (true, v(10, 0), 3, 0x8000_0000_0000_0019), (true, v(10, 0), 3, 0x8000_0000_0000_001A),
+    ] {
+        assert_eq!(system::verify_version(&ten, &info, t, mask), Ok(want), "{info:?} type {t:#x} mask {mask:#x}");
+    }
+}
+
+#[test]
+fn debug_break_and_raise_exception_stop_with_a_report() {
+    let mut m = guest();
+    let msg = stops(system::debug_break, &mut m, &[]);
+    assert!(msg.contains("DebugBreak called from 0x00405678"), "{msg}");
+    let args = 0x0030_0000;
+    for (k, v) in [0x1993_0520u32, 0x0012_3456, 0x0140_0000].into_iter().enumerate() {
+        m.set_u32(args + 4 * k as u32, v);
+    }
+    let msg = stops(system::raise_exception, &mut m, &[0xE06D_7363, 1, 3, args]);
+    assert!(msg.contains("code 0xe06d7363 (a C++ exception, msc), flags 0x1, arguments [0x19930520, 0x123456, 0x1400000]"), "{msg}");
+    assert!(msg.contains("from 0x00405678"), "{msg}");
+}
+
+#[test]
+fn psapi_module_name_and_wininet_state() {
+    let mut m = guest();
+    services::set_exe_path(r"E:\Games\DDDA\DDDA.exe");
+    let buf = 0x0030_0000;
+    let cpu = call_service(system::get_module_file_name_ex_a, &mut m, &[win32::PSEUDO_PROCESS, 0, buf, 260]);
+    assert_eq!((cpu.eax, cpu.esp), (22, 0x0011_0000));
+    assert_eq!(m.read(buf, 23).unwrap(), b"E:\\Games\\DDDA\\DDDA.exe\0");
+    assert_eq!(call_service(system::get_module_file_name_ex_a, &mut m, &[win32::PSEUDO_PROCESS, win32::IMAGE_BASE, buf, 5]).eax, 4);
+    assert_eq!(m.read(buf, 5).unwrap(), b"E:\\G\0");
+    assert_eq!(call_service(system::get_module_file_name_ex_a, &mut m, &[0x1234, 0, buf, 260]).eax, 0);
+    assert_eq!(last_error(&mut m), 6);
+    m.set_u32(buf, 0x55);
+    let cpu = call_service(system::internet_get_connected_state, &mut m, &[buf, 0]);
+    assert_eq!((cpu.eax, cpu.esp, m.u32(buf)), (0, 0x0011_0000, 0));
+}
+
+#[test]
+fn the_registry_answers_the_recorded_processor_key() {
+    let mut m = guest();
+    let (name, out, typ, data, cb) = (0x0030_0000, 0x0030_0100, 0x0030_0104, 0x0030_0200, 0x0030_0108);
+    const HKLM: u32 = 0x8000_0002;
+    let open = |m: &mut GuestMemory, root: u32, path: Option<&str>, sam: u32| {
+        if let Some(p) = path { put_str(m, name, p); }
+        m.set_u32(out, 0x55);
+        let cpu = call_service(registry::reg_open_key_ex_a, m, &[root, if path.is_some() { name } else { 0 }, 0, sam, out]);
+        assert_eq!(cpu.esp, 0x0011_0000);
+        (cpu.eax, m.u32(out))
+    };
+    let cpu_key = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0";
+    let (r, key) = open(&mut m, HKLM, Some(cpu_key), 0x2_0019);
+    assert_eq!(r, 0);
+    assert_ne!(key, 0);
+    assert_eq!(open(&mut m, HKLM, Some(&cpu_key.to_lowercase()), 0x2_0019).0, 0, "case-insensitive");
+    assert_eq!(open(&mut m, HKLM, Some(r"HARDWARE\\DESCRIPTION\"), 0x2_0019).0, 0, "empty components");
+    assert_eq!(open(&mut m, HKLM, Some(r"HARDWARE\Nope"), 0x2_0019), (2, 0));
+    assert_eq!(open(&mut m, HKLM, Some(r"SOFTWARE\Capcom"), 0x2_0019), (2, 0));
+    assert_eq!(open(&mut m, HKLM, Some(cpu_key), 0x2_0006), (5, 0), "KEY_WRITE");
+    assert_eq!(open(&mut m, HKLM, Some(&format!("\\{cpu_key}")), 0x2_0019), (161, 0));
+    assert_eq!(open(&mut m, 0x1234, Some("x"), 0x2_0019), (6, 0));
+    assert_eq!(open(&mut m, 0x8000_0001, None, 0x2_0019).0, 0, "a root itself");
+    // values
+    let query = |m: &mut GuestMemory, value: Option<&str>, size: Option<u32>, with_data: bool| {
+        if let Some(v) = value { put_str(m, name, v); }
+        m.set_u32(typ, 0x55);
+        if let Some(s) = size { m.set_u32(cb, s); }
+        fill(m, data, 0x110, 0xEE);
+        let cpu = call_service(registry::reg_query_value_ex_a, m, &[key, if value.is_some() { name } else { 0 }, 0, typ,
+                                                                     if with_data { data } else { 0 }, if size.is_some() { cb } else { 0 }]);
+        assert_eq!(cpu.esp, 0x0011_0000);
+        (cpu.eax, m.u32(typ), m.u32(cb))
+    };
+    assert_eq!(query(&mut m, Some("~MHz"), Some(4), true), (0, 4, 4));
+    assert_eq!(m.u32(data), 3000);
+    assert_eq!(query(&mut m, Some("~mhz"), Some(2), true), (234, 4, 4), "ERROR_MORE_DATA");
+    assert_eq!(m.u32(data), 0xEEEE_EEEE);
+    assert_eq!(query(&mut m, Some("~MHz"), Some(0), false), (0, 4, 4), "size only");
+    m.set_u32(cb, 0x77);
+    assert_eq!(query(&mut m, Some("~MHz"), None, true).0, 87);
+    assert_eq!(m.u32(typ), 0x55, "lpType untouched");
+    assert_eq!(query(&mut m, Some("ProcessorNameString"), Some(0xFF), true), (0, 1, 48));
+    assert_eq!(m.read(data, 48).unwrap(), b"AMD Ryzen 7 5700X3D 8-Core Processor           \0");
+    assert_eq!(m.read(data + 48, 4).unwrap(), [b'r', 0, b'e', 0], "the UTF-16 text's tail, as Windows leaves it");
+    assert_eq!(m.u8(data + 98), 0xEE);
+    assert_eq!(query(&mut m, Some("ProcessorNameString"), Some(48), true), (0, 1, 48));
+    assert_eq!(m.u8(data + 48), 0xEE, "a buffer too small for UTF-16 gets the ANSI text only");
+    assert_eq!(query(&mut m, None, Some(4), true), (2, 0, 4), "no default value; lpType zeroed");
+    put_str(&mut m, name, "Update Revision");
+    assert!(stops(registry::reg_query_value_ex_a, &mut m, &[key, name, 0, 0, 0, 0]).contains("not modelled"));
+    let cpu = call_service(registry::reg_query_value_ex_a, &mut m, &[0x1234, 0, 0, typ, 0, 0]);
+    assert_eq!((cpu.eax, m.u32(typ)), (6, 0));
+    // an intermediate key exists and has no values here
+    let (_, mid) = open(&mut m, HKLM, Some(r"HARDWARE\DESCRIPTION"), 0x2_0019);
+    put_str(&mut m, name, "x");
+    assert_eq!(call_service(registry::reg_query_value_ex_a, &mut m, &[mid, name, 0, 0, 0, 0]).eax, 2);
+    // a sub key of an open key
+    put_str(&mut m, name, r"System\CentralProcessor\0");
+    assert_eq!(call_service(registry::reg_open_key_ex_a, &mut m, &[mid, name, 0, 0x2_0019, out]).eax, 0);
+    // closing
+    assert_eq!(call_service(registry::reg_close_key, &mut m, &[key]).eax, 0);
+    assert_eq!(call_service(registry::reg_close_key, &mut m, &[key]).eax, 6);
+    assert_eq!(call_service(registry::reg_close_key, &mut m, &[HKLM]).eax, 6, "a root (measured)");
+}
+
+/// Install and sandbox roots in a fresh temporary directory.
+fn file_roots(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("ddruntime-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (install, sandbox) = (root.join("install"), root.join("sandbox"));
+    std::fs::create_dir_all(install.join("nativePC")).unwrap();
+    std::fs::create_dir_all(&sandbox).unwrap();
+    files::set_roots(&install, &sandbox);
+    (root, install, sandbox)
+}
+
+#[test]
+fn profile_files_read_and_write_as_windows_does() {
+    let mut m = guest();
+    let (root, _install, sandbox) = file_roots("profile");
+    let docs = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    std::fs::create_dir_all(&docs).unwrap();
+    let ini = docs.join("p.ini");
+    std::fs::write(&ini, b"[Display]\r\nWidth = 1280 \r\n  Name=\"quoted\"  \r\nSingle='q'\r\nEmpty=\r\nNoEq\r\n;comment=1\r\n[ other ]\r\nk=v\r\nk=second\r\n[Display]\r\nLater=x\r\n").unwrap();
+    let (app_p, key_p, def_p, buf, file_p) = (0x0030_0000, 0x0030_0100, 0x0030_0200, 0x0030_0400, 0x0030_1000);
+    let get = |m: &mut GuestMemory, file: &std::path::Path, app: Option<&str>, key: Option<&str>, def: Option<&str>, size: u32| {
+        for (p, s) in [(app_p, app), (key_p, key), (def_p, def)] {
+            if let Some(s) = s { put_w(m, p, s); }
+        }
+        put_w(m, file_p, &file.to_string_lossy());
+        fill(m, buf, 0x100, 0xEE);
+        set_last_error(m, 0x77);
+        let cpu = call_service(profile::get_private_profile_string_w, m, &[
+            if app.is_some() { app_p } else { 0 }, if key.is_some() { key_p } else { 0 }, if def.is_some() { def_p } else { 0 }, buf, size, file_p]);
+        assert_eq!(cpu.esp, 0x0011_0000, "24 bytes");
+        let shown: String = units(m, buf, cpu.eax + 2).into_iter().map(|u| match u {
+            0 => "|".to_string(),
+            0xEEEE => "#".to_string(),
+            u => char::from_u32(u as u32).unwrap().to_string(),
+        }).collect();
+        (cpu.eax, last_error(m), shown)
+    };
+    let d = Some("d");
+    for (app, key, def, size, want) in [
+        (Some("Display"), Some("Width"), d, 32, (4, 0, "1280|#")),
+        (Some("display"), Some("WIDTH"), d, 32, (4, 0, "1280|#")),
+        (Some("Display"), Some("Name"), d, 32, (6, 0, "quoted|#")),
+        (Some("Display"), Some("Single"), d, 32, (1, 0, "q|#")),
+        (Some("Display"), Some("Empty"), d, 32, (0, 0, "|#")),
+        (Some("Display"), Some("NoEq"), d, 32, (1, 2, "d|#")),
+        (Some("Display"), Some(";comment"), d, 32, (1, 2, "d|#")),
+        (Some("Display"), Some("Missing"), Some("def  "), 32, (3, 2, "def|#")),
+        (Some("Display"), Some("Missing"), Some("  def"), 32, (5, 2, "  def|#")),
+        (Some("Display"), Some("Missing"), None, 32, (0, 2, "|#")),
+        (Some("other"), Some("k"), d, 32, (1, 0, "v|#")),
+        (Some("Display"), Some("Later"), d, 32, (1, 2, "d|#")),
+        (Some("Display"), Some("Width"), d, 3, (2, 234, "12|#")),
+        (Some("Display"), Some("Width"), d, 1, (0, 234, "|#")),
+        (Some("Display"), Some("Width"), d, 0, (0, 234, "##")),
+        (Some("Display"), Some("Name"), d, 4, (3, 234, "quo|#")),
+        (None, None, d, 64, (22, 0, "Display|other|Display||#")),
+        (None, None, d, 10, (8, 234, "Display|||")),
+        (Some("Display"), None, d, 64, (24, 0, "Width|Name|Single|Empty||#")),
+        (Some("Display"), None, d, 8, (6, 234, "Width|||")),
+        (Some("Nope"), None, Some("dd"), 64, (2, 2, "dd|#")),
+        (Some("Display"), Some("Missing"), Some("default"), 4, (3, 2, "def|#")),
+    ] {
+        assert_eq!(get(&mut m, &ini, app, key, def, size), (want.0, want.1, want.2.to_string()), "{app:?} {key:?} {size}");
+    }
+    assert_eq!(get(&mut m, &docs.join("nope.ini"), Some("Display"), Some("Width"), Some("dflt"), 32), (4, 2, "dflt|#".into()));
+    // quotes, odd section lines, line breaks, tabs, a UTF-8 BOM
+    let q = docs.join("q.ini");
+    std::fs::write(&q, b"[A]\r\na=\"x\r\nb=x\"\r\nc=\"x'\r\nd=\"\"\r\ne=\"\r\nf= \"x y\" \r\ng=  \r\n[B] junk\r\nh=1\r\n[C\ri=1\n k=2\r\n\tt\t=\t1\t\r\n").unwrap();
+    for (app, key, want) in [("A", "a", "\"x"), ("A", "b", "x\""), ("A", "c", "\"x'"), ("A", "d", ""), ("A", "e", "\""), ("A", "f", "x y"), ("A", "g", ""),
+                             ("B", "h", "1"), ("C", "i", "1"), ("C", "k", "2"), ("C", "t", "1")] {
+        assert_eq!(get(&mut m, &q, Some(app), Some(key), d, 32).2, format!("{want}|#"), "{app}.{key}");
+    }
+    assert_eq!(get(&mut m, &q, Some("A"), None, d, 15), (13, 234, "a|b|c|d|e|f|g||".into()), "an exact fit is too small");
+    std::fs::write(&q, [0xEF, 0xBB, 0xBF, b'[', b'A', b']', 13, 10, b'x', b'=', b'1']).unwrap();
+    assert_eq!(get(&mut m, &q, Some("A"), Some("x"), d, 32).1, 2, "a UTF-8 BOM is part of the first line");
+
+    // writing: the file the measured sequence produced on Windows
+    let w = docs.join("w.ini");
+    let put = |m: &mut GuestMemory, file: &std::path::Path, app: Option<&str>, key: Option<&str>, val: Option<&str>| {
+        for (p, s) in [(app_p, app), (key_p, key), (def_p, val)] {
+            if let Some(s) = s { put_w(m, p, s); }
+        }
+        put_w(m, file_p, &file.to_string_lossy());
+        set_last_error(m, 0x77);
+        let cpu = call_service(profile::write_private_profile_string_w, m, &[
+            if app.is_some() { app_p } else { 0 }, if key.is_some() { key_p } else { 0 }, if val.is_some() { def_p } else { 0 }, file_p]);
+        assert_eq!(cpu.esp, 0x0011_0000, "16 bytes");
+        (cpu.eax, last_error(m))
+    };
+    let content = |p: &std::path::Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned();
+    for (app, key, val, want) in [
+        (Some("Sec"), Some("Key"), Some("Val"), "[Sec]\r\nKey=Val\r\n"),
+        (Some("Sec"), Some("Key2"), Some("V2"), "[Sec]\r\nKey=Val\r\nKey2=V2\r\n"),
+        (Some("sec"), Some("key"), Some("New Value"), "[Sec]\r\nKey=New Value\r\nKey2=V2\r\n"),
+        (Some("Two"), Some("A"), Some("1"), "[Sec]\r\nKey=New Value\r\nKey2=V2\r\n[Two]\r\nA=1\r\n"),
+        (Some("Two"), Some("B"), Some("  x  "), "[Sec]\r\nKey=New Value\r\nKey2=V2\r\n[Two]\r\nA=1\r\nB=  x  \r\n"),
+        (Some("Sec"), Some("Key2"), None, "[Sec]\r\nKey=New Value\r\n[Two]\r\nA=1\r\nB=  x  \r\n"),
+        (Some("Two"), None, None, "[Sec]\r\nKey=New Value\r\n"),
+        (Some("Sec"), Some("E"), Some(""), "[Sec]\r\nKey=New Value\r\nE=\r\n"),
+        (Some(" S "), Some(" k "), Some(" v "), "[Sec]\r\nKey=New Value\r\nE=\r\n[S]\r\nk= v \r\n"),
+        (Some("Nope"), None, None, "[Sec]\r\nKey=New Value\r\nE=\r\n[S]\r\nk= v \r\n"),
+    ] {
+        assert_eq!(put(&mut m, &w, app, key, val), (1, 0x77), "{app:?} {key:?} {val:?}: TRUE, last error untouched");
+        assert_eq!(content(&w), want, "{app:?} {key:?} {val:?}");
+    }
+    put(&mut m, &w, Some("Sec"), Some("U"), Some("\u{E9}\u{4E00}"));
+    assert!(std::fs::read(&w).unwrap().ends_with(b"U=\xE9?\r\n[S]\r\nk= v \r\n"), "code page 1252, best fit/default");
+    assert_eq!(get(&mut m, &w, Some("Sec"), Some("U"), d, 32).2, "\u{E9}?|#");
+    // a value's surrounding text is kept; new keys go after the last key line
+    let s = docs.join("s.ini");
+    std::fs::write(&s, b"[A]\r\n  x = 1  \r\n\r\n;c\r\n[B]\r\ny=2").unwrap();
+    put(&mut m, &s, Some("A"), Some("X"), Some("new"));
+    put(&mut m, &s, Some("A"), Some("z"), Some("3"));
+    put(&mut m, &s, Some("B"), Some("w"), Some("4"));
+    assert_eq!(content(&s), "[A]\r\n  x =new  \r\nz=3\r\n\r\n;c\r\n[B]\r\ny=2\r\nw=4\r\n");
+    let n = docs.join("n.ini");
+    std::fs::write(&n, b"[A]\r\nx=1").unwrap();
+    put(&mut m, &n, Some("B"), Some("y"), Some("2"));
+    assert_eq!(content(&n), "[A]\r\nx=1\r\n[B]\r\ny=2\r\n");
+    // a UTF-16 file stays UTF-16 (a BOM-only file gets a line break first)
+    let u = docs.join("u.ini");
+    std::fs::write(&u, [0xFF, 0xFE]).unwrap();
+    put(&mut m, &u, Some("S"), Some("K"), Some("\u{E9}\u{4E00}"));
+    let want: Vec<u8> = [0xFF, 0xFE].into_iter().chain("\r\n[S]\r\nK=\u{E9}\u{4E00}\r\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    assert_eq!(std::fs::read(&u).unwrap(), want);
+    assert_eq!(get(&mut m, &u, Some("S"), Some("K"), d, 32).2, "\u{E9}\u{4E00}|#");
+    // deleting from a missing file creates it empty
+    let e = docs.join("e.ini");
+    assert_eq!(put(&mut m, &e, Some("A"), Some("x"), None).0, 1);
+    assert_eq!(std::fs::read(&e).unwrap(), b"");
+    // failures
+    assert_eq!(put(&mut m, &w, None, Some("k"), Some("v")), (0, 2), "lpAppName NULL");
+    assert_eq!(put(&mut m, &docs.join(r"nodir\x.ini"), Some("A"), Some("k"), Some("v")), (0, 3));
+    assert_eq!(put(&mut m, std::path::Path::new(r"C:\Windows\ddruntime-test.ini"), Some("A"), Some("k"), Some("v")), (0, 5));
+    assert!(!std::path::Path::new(r"C:\Windows\ddruntime-test.ini").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn delete_move_copy_and_truncate_never_touch_the_install() {
+    let mut m = guest();
+    let (root, install, sandbox) = file_roots("files17");
+    std::fs::write(install.join(r"nativePC\orig.arc"), b"original").unwrap();
+    let (a, b, h_buf) = (0x0030_0000, 0x0030_0200, 0x0030_0400);
+    let path = |m: &mut GuestMemory, at: u32, s: &str| put_str(m, at, s);
+    let call1 = |m: &mut GuestMemory, f: fn(&mut dyn Mem, &mut Cpu), args: &[u32], pops: u32| {
+        let cpu = call_service(f, m, args);
+        assert_eq!(cpu.esp, 0x0011_0000 - 4 * args.len() as u32 + pops, "stdcall pops {pops}");
+        (cpu.eax, if cpu.eax == 0 { last_error(m) } else { 0 })
+    };
+    // the install's file is read-only for the guest
+    path(&mut m, a, r"nativePC\orig.arc");
+    assert_eq!(call1(&mut m, files::delete_file_a, &[a], 4), (0, 5));
+    path(&mut m, b, r"nativePC\moved.arc");
+    assert_eq!(call1(&mut m, files::move_file_a, &[a, b], 8), (0, 5));
+    // copying it makes an overlay file the guest can change
+    assert_eq!(call1(&mut m, files::copy_file_a, &[a, b, 0], 12).0, 1);
+    assert_eq!(std::fs::read(sandbox.join(r"overlay\nativePC\moved.arc")).unwrap(), b"original");
+    assert_eq!(call1(&mut m, files::copy_file_a, &[a, b, 1], 12), (0, 80), "bFailIfExists");
+    path(&mut m, a, r"nativePC\moved.arc");
+    path(&mut m, b, r"nativePC\renamed.arc");
+    assert_eq!(call1(&mut m, files::move_file_a, &[a, b], 8).0, 1);
+    assert!(sandbox.join(r"overlay\nativePC\renamed.arc").exists() && !sandbox.join(r"overlay\nativePC\moved.arc").exists());
+    path(&mut m, a, r"nativePC\orig.arc");
+    assert_eq!(call1(&mut m, files::move_file_a, &[b, a], 8), (0, 183), "the target exists (in the install)");
+    path(&mut m, a, r"nativePC\renamed.arc");
+    assert_eq!(call1(&mut m, files::delete_file_a, &[a], 4).0, 1);
+    assert_eq!(call1(&mut m, files::delete_file_a, &[a], 4), (0, 2));
+    path(&mut m, a, r"nope\x.arc");
+    assert_eq!(call1(&mut m, files::delete_file_a, &[a], 4), (0, 3));
+    path(&mut m, a, r"C:\Windows\win.ini");
+    assert_eq!(call1(&mut m, files::delete_file_a, &[a], 4), (0, 5));
+    assert_eq!(std::fs::read(install.join(r"nativePC\orig.arc")).unwrap(), b"original", "the install is untouched");
+    // SetEndOfFile at the file pointer
+    path(&mut m, a, r"nativePC\t.bin");
+    let h = call_service(files::create_file_a, &mut m, &[a, 0xC000_0000, 0, 0, 2, 0x80, 0]).eax;
+    m.poke(h_buf, b"12345678").unwrap();
+    call_service(files::write_file, &mut m, &[h, h_buf, 8, 0, 0]);
+    call_service(files::set_file_pointer, &mut m, &[h, 3, 0, 0]);
+    assert_eq!(call1(&mut m, files::set_end_of_file, &[h], 4).0, 1);
+    call_service(files::close_handle, &mut m, &[h]);
+    assert_eq!(std::fs::read(sandbox.join(r"overlay\nativePC\t.bin")).unwrap(), b"123");
+    path(&mut m, a, r"nativePC\orig.arc");
+    let h = call_service(files::create_file_a, &mut m, &[a, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax;
+    assert_eq!(call1(&mut m, files::set_end_of_file, &[h], 4), (0, 5), "opened for reading");
+    assert_eq!(call1(&mut m, files::set_end_of_file, &[0x4444], 4), (0, 6));
+    // the recorded volume; NULL out-parameters are skipped
+    let free = 0x0030_0600;
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[0, 0, 0, free, 0], 20).0, 1);
+    assert_eq!(m.u32(free), files::VOLUME[2]);
+    path(&mut m, a, &install.to_string_lossy()[..3]);
+    let outs = [0x0030_0610, 0x0030_0614, 0x0030_0618, 0x0030_061C];
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, outs[0], outs[1], outs[2], outs[3]], 20).0, 1);
+    assert_eq!(outs.map(|p| m.u32(p)), files::VOLUME);
+    // SHCreateDirectoryExW in the home
+    let home = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    let shc = |m: &mut GuestMemory, p: &str| {
+        put_w(m, a, p);
+        let cpu = call_service(files::sh_create_directory_ex_w, m, &[0, a, 0]);
+        assert_eq!(cpu.esp, 0x0011_0000, "12 bytes");
+        cpu.eax
+    };
+    assert_eq!(shc(&mut m, &home.to_string_lossy()), 0);
+    assert!(home.is_dir());
+    assert_eq!(shc(&mut m, &home.to_string_lossy()), 183);
+    std::fs::write(home.join("f"), b"x").unwrap();
+    assert_eq!(shc(&mut m, &home.join("f").to_string_lossy()), 183);
+    assert_eq!(shc(&mut m, &home.join(r"f\g").to_string_lossy()), 3);
+    assert_eq!(shc(&mut m, r"rel\dir"), 161);
+    assert_eq!(shc(&mut m, ""), 161);
+    assert_eq!(shc(&mut m, &home.join(r"x\..\y").to_string_lossy()), 0);
+    assert!(home.join("y").is_dir() && !home.join("x").exists());
+    assert_eq!(shc(&mut m, r"C:\Windows\ddruntime-test"), 5);
+    // the home is readable through the other file services too
+    put_w(&mut m, a, &home.join("f").to_string_lossy());
+    assert_eq!(call_service(files::get_file_attributes_w, &mut m, &[a]).eax, 0x80);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn every_l17_import_is_bound_to_a_service() {
+    let Some(exe) = installed_exe() else { return };
+    let mut m = GuestMemory::new();
+    ddruntime::image::load(&mut m, &exe).unwrap();
+    let imports = ddruntime::image::bind_imports(&mut m, &exe).unwrap();
+    let mut registry = Registry::new();
+    services::bind_apis(&mut registry, &imports).unwrap();
+    for name in ["MultiByteToWideChar", "WideCharToMultiByte", "LCMapStringW", "CompareStringW", "GetStringTypeW",
+                 "GetPrivateProfileStringW", "WritePrivateProfileStringW", "RegOpenKeyExA", "RegQueryValueExA", "RegCloseKey",
+                 "DeleteFileA", "MoveFileA", "CopyFileA", "SetEndOfFile", "GetDiskFreeSpaceA", "SHCreateDirectoryExW",
+                 "GetTimeZoneInformation", "FileTimeToSystemTime", "FileTimeToLocalFileTime", "GlobalAlloc", "GlobalLock",
+                 "GlobalUnlock", "GlobalFree", "LocalAlloc", "SetEnvironmentVariableA", "SetStdHandle", "GetConsoleMode",
+                 "GetConsoleCP", "WriteConsoleW", "VerifyVersionInfoA", "VerSetConditionMask", "DebugBreak", "RaiseException",
+                 "GetModuleFileNameExA", "InternetGetConnectedState"] {
+        let i = imports.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} is not imported"));
+        assert!(matches!(registry.get(i.token), Some(Binding::Service(_))), "{} has no service", i.full_name());
+    }
+}

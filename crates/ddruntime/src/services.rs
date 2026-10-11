@@ -102,6 +102,12 @@ pub(crate) struct State {
     /// Module names the runtime handed out handles for, in handle order
     /// (crate::win32::MODULE_HANDLE + 0x10000 * (k + 1)).
     pub(crate) modules: Vec<String>,
+    /// Global/Local memory, environment, standard handles (crate::system).
+    pub(crate) system: crate::system::System,
+    /// Open registry keys (crate::registry).
+    pub(crate) registry: crate::registry::Keys,
+    /// Blocks GetEnvironmentStringsW handed out and not yet freed.
+    pub(crate) environment_blocks: Vec<u32>,
 }
 
 pub(crate) fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -347,7 +353,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     });
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
