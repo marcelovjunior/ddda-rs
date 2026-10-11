@@ -425,3 +425,20 @@ fn window_properties_and_class_atoms() {
     assert_eq!(call_service(user32::get_prop, &mut m, &[hwnd, key]).eax, 0);
     x86::set_ext_calls(None);
 }
+
+#[test]
+fn the_adapter_answers_from_the_recorded_profile() {
+    let p = ddruntime::d3d9::profile();
+    // D3DCAPS9: shader model 3 (VertexShaderVersion at 196, PixelShaderVersion at 204),
+    // the minimum 0x00DB1480 accepts
+    let word = |o: usize| u32::from_le_bytes(p.caps[o..o + 4].try_into().unwrap());
+    assert!(word(196) & 0xFFFF >= 0x300 && word(204) & 0xFFFF >= 0x300, "SM3");
+    // checks the game makes in 0x00DA9EC0: A16B16G16R16F vertex texture,
+    // render-target X8R8G8B8 with post-pixel-shader blending
+    assert_eq!(p.format(0x10_0000, 3, 0x71), 0);
+    assert_eq!(p.format(1, 1, 0x15), 0);
+    assert_eq!(p.format(0x8_0000, 3, 0x15), 0);
+    let (hr, quality) = p.multisample(0x15, 1, 4);
+    assert_eq!(hr, 0);
+    assert!(quality >= 1);
+}
