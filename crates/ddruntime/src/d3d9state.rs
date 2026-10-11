@@ -58,7 +58,8 @@ impl DeviceState {
         render.insert(RS_ZENABLE, auto_depth as u32);
         let mut sampler = HashMap::new();
         for &(s, t, v) in &p.sampler_states {
-            let range: Vec<u32> = if s == 0 { (0..16).collect() } else { (257..261).collect() };
+            // the displacement-map sampler 256 starts like the vertex samplers
+            let range: Vec<u32> = if s == 0 { (0..16).collect() } else { (256..261).collect() };
             for k in range {
                 sampler.insert((k, t), v);
             }
@@ -181,10 +182,12 @@ pub fn get_texture_stage_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- textures, viewport, scissor, transforms ---------------------------------------
 
-/// SetTexture(this, stage, texture or NULL).
+/// SetTexture(this, stage, texture or NULL): pixel samplers 0..15,
+/// D3DDMAPSAMPLER (256, the displacement-map sampler; the game clears it in
+/// 0x00DA6EA0) and the vertex samplers 257..260.
 pub fn set_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, st, tex) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    cpu.eax = if st < 16 || (257..261).contains(&st) {
+    cpu.eax = if st < 16 || (256..261).contains(&st) {
         let old = state(dev, |s| if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }).unwrap_or(0);
         rebind(old, tex);
         D3D_OK

@@ -202,3 +202,156 @@ A16B16G16R16F 113, R32F 114, G32R32F 115, A32B32G32R32F 116, DXT1, DXT3,
 DXT5. Primitive types: point, line list, line strip, triangle list,
 triangle strip (no fans).
 
+### 2. Device methods (`crates/ddruntime/src/d3d9dev.rs`, `d3d9copy.rs`, `d3d9state.rs`)
+
+- **Reset (16).** Invalid present parameters fail with D3DERR_INVALIDCALL
+  and touch nothing (Wine `d3d9_device_reset` validates first). Otherwise
+  every binding is released and the state goes back to a fresh device's
+  (Wine `state_unbind_resources`, Microsoft Learn IDirect3DDevice9::Reset:
+  "all state information to be lost"). D3DPOOL_DEFAULT textures,
+  buffers, standalone surfaces and additional swap chains that are still
+  alive fail the call. So do the implicit swap chain, its back buffers and
+  the automatic depth-stencil surface while the application holds a
+  reference (Wine `reset_enum_callback`; Learn: release explicit render
+  targets, depth-stencil surfaces, additional swap chains and DEFAULT
+  resources). A failed Reset leaves the device waiting for another:
+  TestCooperativeLevel returns D3DERR_DEVICENOTRESET and Present returns
+  D3DERR_DEVICELOST (Wine `D3D9_DEVICE_STATE_NOT_RESET`). On success the
+  completed parameters are written back, the old back buffers and
+  automatic depth-stencil surface are freed, and new ones are bound with
+  a fresh state: viewport and scissor at the new size.
+- **Ownership fixes found on the way.** The device now owns the automatic
+  depth-stencil surface (one reference besides the binding), so
+  SetDepthStencilSurface(another) no longer frees it. Additional swap
+  chains are held by the application only, so their last Release removes
+  them and GetNumberOfSwapChains drops.
+- **SetGammaRamp (21).** The ramp is kept with its swap chain. Present
+  hands it to the backend (`GraphicsBackend::gamma`) when the chain is
+  full-screen: the recorded caps have D3DCAPS2_FULLSCREENGAMMA and no
+  CANCALIBRATEGAMMA, and Learn says an unsupported mode ignores the ramp.
+  ddgpu maps each channel of the presented frame through the ramp's
+  high byte. GetGammaRamp (22) stays unimplemented: the game never calls
+  it.
+- **SetTexture(256)**, D3DDMAPSAMPLER, is accepted (`FUN_00DA6EA0` clears
+  it). Its sampler states start like the vertex samplers'.
+- **Freed objects** (surfaces, textures, buffers, queries) are reported to
+  the backend (`GraphicsBackend::release`). The guest heap reuses 16-byte
+  object blocks, and ddgpu kept textures and targets by address, so a
+  surface created after a Reset could pick up a freed one's texture.
+- **Occlusion queries.** Issue(BEGIN/END) are passed to the backend.
+  GetData follows the driver (measured, ddgpu
+  `occlusion_query_states_on_the_d3d9_driver`): S_OK with 0xDDDDDDDD
+  written before any Issue, S_FALSE between BEGIN and END, and S_OK with
+  the sample count after END. The recording backend counts nothing and
+  answers S_FALSE. An END without a BEGIN counts nothing (Wine's model;
+  not measured, and the game always pairs them).
+- Tests: `crates/ddruntime/tests/d3d9_device.rs` (new file, so it doesn't
+  collide with L17A in `tests/runtime.rs`).
+
+### 3. Fixed function
+
+Not needed: the game never draws without shaders (census). Nothing was
+added.
+
+### 4. Occlusion queries and instancing (`crates/ddgpu`, `crates/d3d9cmd`, `crates/d3d9ref`)
+
+- New backend commands `query_begin`, `query_end`, `query_result`. ddgpu
+  gives every draw made while queries count its own slot in a wgpu
+  occlusion query set (256 slots per set, freed when a result is read or
+  a query is begun again or released), resolves a query's slots when the
+  guest asks, and sums them.
+- wgpu's own counts are not guaranteed exact: its DX12 backend uses
+  BINARY_OCCLUSION, and its Vulkan backend begins queries without the
+  PRECISE flag. On this machine (RTX 4060, Vulkan, driver 610.62) the
+  counts equal the D3D9 driver's for every case tried: depth pass and
+  fail, depth off, alpha-test kill, culling, scissor, and an empty query
+  (`occlusion_counts_match_the_d3d9_driver`). Overlapping queries are
+  not compared. The driver does not count them independently (a query
+  spanning six draws while others ran counted only the last draw), and
+  the game issues one at a time (`FUN_011481B0`/`FUN_011481F0`).
+- **Instancing** (census: the game draws instanced with
+  SetStreamSourceFreq). ddgpu now draws INDEXEDDATA|n indexed draws n
+  times with INSTANCEDATA|1 streams stepping per instance. The base
+  vertex does not offset instance data, as on the driver. Measured on the
+  driver (`instanced_draws_match_the_d3d9_driver`): a non-indexed draw
+  ignores the count and draws once, but its instance-data streams still
+  give every vertex instance 0's element (the game's draw command 2 does
+  this). All three cases equal the driver.
+- d3d9ref replay gained `render_counted` (occlusion queries around
+  draws), `occlusion_states`, and stream frequencies. It now creates
+  textures before any state, so a refused format leaves the device
+  unchanged.
+
+### 5. State coverage against the driver
+
+`render_states_match_the_d3d9_driver` (`DDGPU_FUZZ` cases, default 150)
+randomises one group per case on a neutral baseline:
+- texture formats and sampler states (address modes incl. border, border
+  colours, filters, mip filters, LOD bias, MAXMIPLEVEL, anisotropy, sRGB
+  read);
+- blend (ops, separate alpha, blend factor, write masks);
+- alpha test, cull and scissor;
+- depth (function, writes, bias, slope-scaled bias);
+- stencil (all functions and ops, masks, two-sided, depth-fail paths);
+- sRGB write with blending.
+
+Each case draws a textured triangle over a D24S8 target, then a probe
+draw whose depth and stencil tests show what the first draw left in that
+target. **Result: 982 of 982 compared cases equal the driver within one
+step per channel** (`DDGPU_FUZZ=1000`; the driver refuses
+A8B8G8R8/X8B8G8R8/Q16W16V16U16 as textures). The older
+`random_states_and_formats_match_the_d3d9_driver` and the other draw
+tests still pass. `alpha_rounding_and_fill_modes_match_the_d3d9_driver`
+asserts the alpha-test rounding and point/solid fill.
+
+Fixed from the comparisons:
+- the depth-stencil surface was only attached with ZENABLE on, so a
+  stencil-only draw had no stencil test;
+- two-sided stencil used the clockwise states for both faces;
+- MIPFILTER NONE samples level 0 whatever MAXMIPLEVEL says, but the
+  driver chooses MAG- or MINFILTER on the level clamped to MAXMIPLEVEL
+  (so MAXMIPLEVEL > 0 always minifies), while Vulkan chooses on its own
+  clamp (handled with a [0, 1/4] clamp);
+- the alpha test compares the alpha rounded to 8 bits (47.6/255 equals
+  ALPHAREF 48);
+- MIPMAPLODBIAS: wgpu samplers have none, so it is added by the pixel
+  shader (d3d9wgsl `lod_bias`);
+- DEPTHBIAS: hardware bias steps are implementation-defined (the NVIDIA
+  Vulkan driver steps 2^-23 for D24, giving twice D3D9's offset, which
+  adds the value itself), so depth + DEPTHBIAS + SLOPESCALEDEPTHBIAS *
+  max(|dz/dx|, |dz/dy|) is written as frag_depth (d3d9wgsl `depth_bias`,
+  only for draws with a bias);
+- border colours (transparent black, opaque black, opaque white;
+  ADDRESS_MODE_CLAMP_TO_BORDER requested);
+- anisotropy;
+- point and wireframe fill (POLYGON_MODE features requested);
+- sRGB texture views;
+- new formats A2B10G10R10, G16R16, A16B16G16R16, Q8W8V8U8, V16U16, L16,
+  Q16W16V16U16, and render targets A2B10G10R10 and A16B16G16R16.
+
+**Cannot match exactly (and why):**
+- **Fractional-LOD trilinear weights.** Both NVIDIA drivers apply their
+  trilinear optimisation with different weights at the same LOD
+  (mip-level blend factor at LOD fraction 0.25/0.5/0.75: D3D9
+  0.0625/0.5/0.9375, Vulkan 0.4375/0.875/1). Integer LODs match. Fixing
+  this would mean filtering in the shader with one driver's curve.
+- **Anisotropic filtering** at MAXANISOTROPY > 1: sample patterns are
+  implementation-specific, and wgpu needs linear mips for anisotropy, so
+  MIPFILTER NONE/POINT drop to linear filtering.
+- **Border colours on formats without all channels.** D3D9 applies the
+  border only to the channels the format has (the rest read 1, e.g.
+  R5G6B5 alpha, R32F green/blue/alpha). wgpu offers only three border
+  colours, so this matches only with the white border. Other border
+  colours report an error.
+- **D3DTADDRESS_MIRRORONCE**: no wgpu equivalent; reported as an error.
+- **sRGB reads of 16-bit packed formats** (R5G6B5, X1R5G5B5, A1R5G5B5,
+  A4R4G4B4): D3D9 decodes the 4/5/6-bit value, ddgpu the value widened to
+  8 bits. Off by up to 2.
+- **Wireframe fill**: D3D9's line rasterisation lit different pixels
+  than the Vulkan driver's for the same triangle.
+- **Clear and SRGBWRITEENABLE**: D3D9's Clear converts the colour when
+  SRGBWRITEENABLE is on (seen in the fuzz); ClearCall does not carry
+  render states. The game never sets SRGBWRITEENABLE, so this is not
+  modelled.
+- **Render-target formats** beyond A8R8G8B8 are not compared (the oracle
+  reads 8-bit targets only).
