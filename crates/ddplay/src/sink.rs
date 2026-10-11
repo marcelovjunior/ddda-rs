@@ -18,7 +18,7 @@
 //! plays silence. Neither stalls the guest's audio thread (the runtime's
 //! channel never blocks).
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, SizedSample};
+use cpal::{FromSample, Sample, SizedSample};
 use ddruntime::audio::AudioBlock;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
