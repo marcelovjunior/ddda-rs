@@ -29,7 +29,7 @@ const PASS: usize = 480;
 // ---------------------------------------------------------------------
 // Capture XAPO
 
-#[implement(IXAPO)]
+#[implement(IXAPO, IXAPO27)]
 struct Capture {
     data: Arc<Mutex<Vec<f32>>>,
     channels: Mutex<u32>,
@@ -132,6 +132,350 @@ impl IXAPO_Impl for Capture_Impl {
 }
 
 // ---------------------------------------------------------------------
+// Host engines: XAudio2 2.7 (the game's version, the DirectX June 2010
+// redistributable's COM server XAudio2_7.dll) and 2.9 (xaudio2_9.dll).
+// Their voice interfaces share one layout; the engine interfaces differ
+// (2.7 has GetDeviceCount, GetDeviceDetails and Initialize at slots 3..5,
+// and a device index instead of a device id string).
+
+/// IXAudio2, version 2.7 (IID at the game's 0x0142AC40).
+#[windows::core::interface("8bcf1f58-9fe7-4583-8ac6-e2adc465c8bb")]
+unsafe trait IXAudio27: windows::core::IUnknown {
+    unsafe fn GetDeviceCount(&self, count: *mut u32) -> windows::core::HRESULT;
+    unsafe fn GetDeviceDetails(&self, index: u32, details: *mut u8) -> windows::core::HRESULT;
+    unsafe fn Initialize(&self, flags: u32, processor: u32) -> windows::core::HRESULT;
+    unsafe fn RegisterForCallbacks(&self, cb: *mut core::ffi::c_void) -> windows::core::HRESULT;
+    unsafe fn UnregisterForCallbacks(&self, cb: *mut core::ffi::c_void);
+    unsafe fn CreateSourceVoice(
+        &self,
+        voice: *mut *mut core::ffi::c_void,
+        format: *const WAVEFORMATEX,
+        flags: u32,
+        max_ratio: f32,
+        callback: *mut core::ffi::c_void,
+        sends: *const XAUDIO2_VOICE_SENDS,
+        effects: *const XAUDIO2_EFFECT_CHAIN,
+    ) -> windows::core::HRESULT;
+    unsafe fn CreateSubmixVoice(
+        &self,
+        voice: *mut *mut core::ffi::c_void,
+        channels: u32,
+        rate: u32,
+        flags: u32,
+        stage: u32,
+        sends: *const XAUDIO2_VOICE_SENDS,
+        effects: *const XAUDIO2_EFFECT_CHAIN,
+    ) -> windows::core::HRESULT;
+    unsafe fn CreateMasteringVoice(
+        &self,
+        voice: *mut *mut core::ffi::c_void,
+        channels: u32,
+        rate: u32,
+        flags: u32,
+        device: u32,
+        effects: *const XAUDIO2_EFFECT_CHAIN,
+    ) -> windows::core::HRESULT;
+    unsafe fn StartEngine(&self) -> windows::core::HRESULT;
+    unsafe fn StopEngine(&self);
+}
+
+/// IXAPO with the 2.7 IID (game rdata 0x0142AF28); same methods as 2.9's.
+#[windows::core::interface("a90bc001-e897-e897-55e4-9e4700000000")]
+unsafe trait IXAPO27: windows::core::IUnknown {
+    unsafe fn GetRegistrationProperties(
+        &self,
+        pp: *mut *mut XAPO_REGISTRATION_PROPERTIES,
+    ) -> windows::core::HRESULT;
+    unsafe fn IsInputFormatSupported(
+        &self,
+        a: *const WAVEFORMATEX,
+        b: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::HRESULT;
+    unsafe fn IsOutputFormatSupported(
+        &self,
+        a: *const WAVEFORMATEX,
+        b: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::HRESULT;
+    unsafe fn Initialize(&self, data: *const core::ffi::c_void, size: u32) -> windows::core::HRESULT;
+    unsafe fn Reset(&self);
+    unsafe fn LockForProcess(
+        &self,
+        ic: u32,
+        input: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+        oc: u32,
+        output: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+    ) -> windows::core::HRESULT;
+    unsafe fn UnlockForProcess(&self);
+    unsafe fn Process(
+        &self,
+        ic: u32,
+        input: *const XAPO_PROCESS_BUFFER_PARAMETERS,
+        oc: u32,
+        output: *mut XAPO_PROCESS_BUFFER_PARAMETERS,
+        enabled: BOOL,
+    );
+    unsafe fn CalcInputFrames(&self, n: u32) -> u32;
+    unsafe fn CalcOutputFrames(&self, n: u32) -> u32;
+}
+
+impl IXAPO27_Impl for Capture_Impl {
+    unsafe fn GetRegistrationProperties(
+        &self,
+        pp: *mut *mut XAPO_REGISTRATION_PROPERTIES,
+    ) -> windows::core::HRESULT {
+        match IXAPO_Impl::GetRegistrationProperties(self) {
+            Ok(p) => {
+                unsafe { *pp = p };
+                windows::core::HRESULT(0)
+            }
+            Err(e) => e.code(),
+        }
+    }
+    unsafe fn IsInputFormatSupported(
+        &self,
+        a: *const WAVEFORMATEX,
+        b: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::HRESULT {
+        IXAPO_Impl::IsInputFormatSupported(self, a, b, pp).into()
+    }
+    unsafe fn IsOutputFormatSupported(
+        &self,
+        a: *const WAVEFORMATEX,
+        b: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::HRESULT {
+        IXAPO_Impl::IsOutputFormatSupported(self, a, b, pp).into()
+    }
+    unsafe fn Initialize(&self, data: *const core::ffi::c_void, size: u32) -> windows::core::HRESULT {
+        IXAPO_Impl::Initialize(self, data, size).into()
+    }
+    unsafe fn Reset(&self) {}
+    unsafe fn LockForProcess(
+        &self,
+        ic: u32,
+        input: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+        oc: u32,
+        output: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+    ) -> windows::core::HRESULT {
+        IXAPO_Impl::LockForProcess(self, ic, input, oc, output).into()
+    }
+    unsafe fn UnlockForProcess(&self) {}
+    unsafe fn Process(
+        &self,
+        ic: u32,
+        input: *const XAPO_PROCESS_BUFFER_PARAMETERS,
+        oc: u32,
+        output: *mut XAPO_PROCESS_BUFFER_PARAMETERS,
+        enabled: BOOL,
+    ) {
+        IXAPO_Impl::Process(self, ic, input, oc, output, enabled)
+    }
+    unsafe fn CalcInputFrames(&self, n: u32) -> u32 {
+        n
+    }
+    unsafe fn CalcOutputFrames(&self, n: u32) -> u32 {
+        n
+    }
+}
+
+/// The XAudio2 versions the oracle renders on.
+const VERSIONS: [u32; 2] = [7, 9];
+
+enum Engine {
+    V27(IXAudio27),
+    V29(IXAudio2),
+}
+
+fn voice_from<T: Interface>(raw: *mut core::ffi::c_void) -> T {
+    assert!(!raw.is_null());
+    unsafe { T::from_raw(raw) }
+}
+
+fn chain_ptr(chain: Option<&XAUDIO2_EFFECT_CHAIN>) -> *const XAUDIO2_EFFECT_CHAIN {
+    chain.map_or(std::ptr::null(), |c| c as *const _)
+}
+
+impl Engine {
+    fn new(version: u32) -> Self {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            match version {
+                7 => {
+                    // CLSID_XAudio2 2.7, the game's 0x0142AC50
+                    let clsid = GUID::from_u128(0x5a508685_a254_4fba_9b82_9a24b00306af);
+                    let e: IXAudio27 = windows::Win32::System::Com::CoCreateInstance(
+                        &clsid,
+                        None,
+                        windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+                    )
+                    .expect("XAudio2 2.7 (DirectX June 2010 redistributable)");
+                    // XAUDIO2_DEFAULT_PROCESSOR in 2.7 is XAUDIO2_ANY_PROCESSOR
+                    e.Initialize(0, u32::MAX).ok().unwrap();
+                    e.StopEngine();
+                    Engine::V27(e)
+                }
+                _ => {
+                    let mut raw = std::ptr::null_mut();
+                    // NTDDI_WIN10 = 0x0A000000
+                    xaudio2_9()(&mut raw, 0, 1, 0x0A00_0000)
+                        .ok()
+                        .expect("XAudio2 2.9");
+                    let e = IXAudio2::from_raw(raw);
+                    e.StopEngine();
+                    Engine::V29(e)
+                }
+            }
+        }
+    }
+    fn mastering(&self, channels: u32, chain: Option<&XAUDIO2_EFFECT_CHAIN>) -> IXAudio2MasteringVoice {
+        let mut raw = std::ptr::null_mut();
+        unsafe {
+            match self {
+                Engine::V27(e) => e
+                    .CreateMasteringVoice(&mut raw, channels, RATE, 0, 0, chain_ptr(chain))
+                    .ok()
+                    .expect("a mastering voice (needs an audio output device)"),
+                Engine::V29(e) => {
+                    let mut v = None;
+                    e.CreateMasteringVoice(
+                        &mut v,
+                        channels,
+                        RATE,
+                        0,
+                        PCWSTR::null(),
+                        chain.map(|c| c as *const _),
+                        AudioCategory_GameEffects,
+                    )
+                    .expect("a mastering voice (needs an audio output device)");
+                    return v.unwrap();
+                }
+            }
+        }
+        voice_from(raw)
+    }
+    fn submix(
+        &self,
+        channels: u32,
+        stage: u32,
+        sends: Option<&XAUDIO2_VOICE_SENDS>,
+        chain: Option<&XAUDIO2_EFFECT_CHAIN>,
+    ) -> IXAudio2Voice {
+        let mut raw = std::ptr::null_mut();
+        let sends = sends.map_or(std::ptr::null(), |s| s as *const _);
+        unsafe {
+            match self {
+                Engine::V27(e) => e
+                    .CreateSubmixVoice(&mut raw, channels, RATE, 0, stage, sends, chain_ptr(chain))
+                    .ok(),
+                Engine::V29(e) => {
+                    let mut v = None;
+                    let r = e.CreateSubmixVoice(
+                        &mut v,
+                        channels,
+                        RATE,
+                        0,
+                        stage,
+                        Some(sends),
+                        Some(chain_ptr(chain)),
+                    );
+                    if let Some(v) = v {
+                        raw = v.into_raw();
+                    }
+                    r
+                }
+            }
+            .unwrap();
+        }
+        voice_from(raw)
+    }
+    fn source(
+        &self,
+        format: &[u8],
+        max_ratio: f32,
+        sends: Option<&XAUDIO2_VOICE_SENDS>,
+    ) -> IXAudio2SourceVoice {
+        let mut raw = std::ptr::null_mut();
+        let sends = sends.map_or(std::ptr::null(), |s| s as *const _);
+        let f = format.as_ptr() as *const WAVEFORMATEX;
+        unsafe {
+            match self {
+                Engine::V27(e) => e
+                    .CreateSourceVoice(
+                        &mut raw,
+                        f,
+                        0,
+                        max_ratio,
+                        std::ptr::null_mut(),
+                        sends,
+                        std::ptr::null(),
+                    )
+                    .ok(),
+                Engine::V29(e) => {
+                    let mut v = None;
+                    let r = e.CreateSourceVoice(
+                        &mut v,
+                        f,
+                        0,
+                        max_ratio,
+                        None::<&IXAudio2VoiceCallback>,
+                        Some(sends),
+                        None,
+                    );
+                    if let Some(v) = v {
+                        raw = v.into_raw();
+                    }
+                    r
+                }
+            }
+            .unwrap();
+        }
+        voice_from(raw)
+    }
+    /// AudioReverb of this version: CLSID_AudioReverb 2.7 (the game's
+    /// 0x0142AC70) through COM, or xaudio2_9.dll's CreateAudioReverb.
+    fn reverb(&self) -> windows::core::IUnknown {
+        match self {
+            Engine::V27(_) => unsafe {
+                let clsid = GUID::from_u128(0x6a93130e_1d53_41d1_a9cf_e758800bb179);
+                windows::Win32::System::Com::CoCreateInstance(
+                    &clsid,
+                    None,
+                    windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+                )
+                .expect("AudioReverb 2.7")
+            },
+            Engine::V29(_) => create_reverb_2_9(),
+        }
+    }
+    /// The reverb parameter block for this version from the game's 2.7 one.
+    fn reverb_parameters(&self, p: &[u8]) -> Vec<u8> {
+        match self {
+            Engine::V27(_) => p.to_vec(),
+            Engine::V29(_) => reverb_params_2_9(p),
+        }
+    }
+    fn start(&self) {
+        unsafe {
+            match self {
+                Engine::V27(e) => e.StartEngine().ok().unwrap(),
+                Engine::V29(e) => e.StartEngine().unwrap(),
+            }
+        }
+    }
+    fn stop(&self) {
+        unsafe {
+            match self {
+                Engine::V27(e) => e.StopEngine(),
+                Engine::V29(e) => e.StopEngine(),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Graph description shared by both renderers
 
 #[derive(Clone)]
@@ -142,6 +486,8 @@ enum Dest {
 
 #[derive(Clone)]
 struct SubmixSpec {
+    /// AudioReverb parameters, 2.7 layout (52 bytes), as the only effect.
+    reverb: Option<Vec<u8>>,
     channels: u32,
     stage: u32,
     dest: Dest,
@@ -194,12 +540,37 @@ fn xaudio2_9() -> CreateFn {
     }
 }
 
+/// AudioReverb from xaudio2_9.dll (`CreateAudioReverb`).
+fn create_reverb_2_9() -> windows::core::IUnknown {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    type Create = unsafe extern "system" fn(*mut *mut core::ffi::c_void) -> windows::core::HRESULT;
+    unsafe {
+        let lib = LoadLibraryW(windows::core::w!("xaudio2_9.dll")).unwrap();
+        let f: Create =
+            std::mem::transmute(GetProcAddress(lib, windows::core::s!("CreateAudioReverb")).unwrap());
+        let mut raw = std::ptr::null_mut();
+        f(&mut raw).ok().unwrap();
+        windows::core::IUnknown::from_raw(raw)
+    }
+}
+
+/// The 2.7 parameter block (52 bytes) in 2.9's layout: SideDelay (unused
+/// below 7.1; the 2.7 RearDelay's value, within its [0, 5] range) after
+/// RearDelay, DisableLateField FALSE at the end.
+fn reverb_params_2_9(p: &[u8]) -> Vec<u8> {
+    let mut q = p[..10].to_vec();
+    q.push(p[9].min(5));
+    q.extend_from_slice(&p[10..52]);
+    q.extend(0u32.to_le_bytes());
+    q
+}
+
 fn as_voice<T: Interface>(v: &T) -> IXAudio2Voice {
     unsafe { IXAudio2Voice::from_raw(v.as_raw()) }
 }
 
-fn host_render(g: &Graph, passes: usize) -> Vec<f32> {
-    host_render_with(g, passes, &[])
+fn host_render(version: u32, g: &Graph, passes: usize) -> Vec<f32> {
+    host_render_with(version, g, passes, &[])
 }
 
 /// A level change applied while the host runs: after `delay` of real time,
@@ -209,16 +580,9 @@ struct HostChange {
     apply: Box<dyn Fn(&[IXAudio2SourceVoice], &[IXAudio2Voice])>,
 }
 
-fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32> {
+fn host_render_with(version: u32, g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let mut raw = std::ptr::null_mut();
-        // NTDDI_WIN10 = 0x0A000000
-        xaudio2_9()(&mut raw, 0, 1, 0x0A00_0000)
-            .ok()
-            .expect("XAudio2 2.9");
-        let xa = IXAudio2::from_raw(raw);
-        xa.StopEngine();
+        let xa = Engine::new(version);
         let data = Arc::new(Mutex::new(Vec::new()));
         let capture: IXAPO = Capture {
             data: data.clone(),
@@ -235,18 +599,7 @@ fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32
             EffectCount: 1,
             pEffectDescriptors: fx.as_mut_ptr(),
         };
-        let mut master = None;
-        xa.CreateMasteringVoice(
-            &mut master,
-            g.master_channels,
-            RATE,
-            0,
-            PCWSTR::null(),
-            Some(&chain),
-            AudioCategory_GameEffects,
-        )
-        .expect("a mastering voice (needs an audio output device)");
-        let master = master.unwrap();
+        let master = xa.mastering(g.master_channels, Some(&chain));
         let master_v = as_voice(&master);
         let mut subs: Vec<IXAudio2Voice> = vec![];
         let dest_voice = |d: &Dest, subs: &[IXAudio2Voice]| match d {
@@ -262,16 +615,36 @@ fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32
                 SendCount: 1,
                 pSends: sends.as_mut_ptr(),
             };
-            let mut v = None;
-            xa.CreateSubmixVoice(&mut v, s.channels, RATE, 0, s.stage, Some(&list), None)
-                .unwrap();
-            let v = as_voice(&v.unwrap());
+            let reverb = s.reverb.as_ref().map(|_| xa.reverb());
+            let mut fx = reverb
+                .iter()
+                .map(|r| XAUDIO2_EFFECT_DESCRIPTOR {
+                    pEffect: std::mem::ManuallyDrop::new(Some(r.clone())),
+                    InitialState: true.into(),
+                    OutputChannels: s.channels,
+                })
+                .collect::<Vec<_>>();
+            let chain = XAUDIO2_EFFECT_CHAIN {
+                EffectCount: fx.len() as u32,
+                pEffectDescriptors: fx.as_mut_ptr(),
+            };
+            let v = xa.submix(
+                s.channels,
+                s.stage,
+                Some(&list),
+                (!fx.is_empty()).then_some(&chain),
+            );
             let d = dest_voice(&s.dest, &subs);
             if let Some(m) = &s.matrix {
                 let dc = m.len() as u32 / s.channels;
                 v.SetOutputMatrix(&d, s.channels, dc, m.as_ptr(), 0).unwrap();
             }
             v.SetVolume(s.volume, 0).unwrap();
+            if let Some(p) = &s.reverb {
+                let p = xa.reverb_parameters(p);
+                v.SetEffectParameters(0, p.as_ptr() as *const _, p.len() as u32, 0)
+                    .unwrap();
+            }
             subs.push(v);
         }
         let mut sources = vec![];
@@ -289,18 +662,7 @@ fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32
                 SendCount: sends.len() as u32,
                 pSends: sends.as_mut_ptr(),
             };
-            let mut v = None;
-            xa.CreateSourceVoice(
-                &mut v,
-                s.format_bytes.as_ptr() as *const WAVEFORMATEX,
-                0,
-                4.0,
-                None::<&IXAudio2VoiceCallback>,
-                Some(&list),
-                None,
-            )
-            .unwrap();
-            let v = v.unwrap();
+            let v = xa.source(&s.format_bytes, 4.0, Some(&list));
             let vv = as_voice(&v);
             for (d, m) in &s.dests {
                 if let Some(m) = m {
@@ -325,7 +687,7 @@ fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32
             sources.push(v);
         }
         data.lock().unwrap().clear();
-        xa.StartEngine().unwrap();
+        xa.start();
         for c in changes {
             std::thread::sleep(c.delay);
             (c.apply)(&sources, &subs);
@@ -334,7 +696,7 @@ fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32
         while data.lock().unwrap().len() < want {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        xa.StopEngine();
+        xa.stop();
         for v in sources {
             v.DestroyVoice();
         }
@@ -416,7 +778,15 @@ fn mixer_render_with(g: &Graph, passes: usize, changes: &[(usize, Graph)]) -> Ve
                 ratio: 1.0,
                 volume: s.volume,
                 channel_volumes: &[],
-                effects: vec![],
+                effects: s
+                    .reverb
+                    .iter()
+                    .map(|p| ddaudio::Effect {
+                        kind: ddaudio::EffectKind::Reverb(p),
+                        enabled: true,
+                        channels: s.channels,
+                    })
+                    .collect(),
                 sends: vec![Send {
                     dest: dest_id(&s.dest),
                     matrix: s.matrix.as_deref(),
@@ -572,15 +942,14 @@ struct Compare {
 /// signal-to-error ratio, over the frames both cover.
 fn compare(host: &[f32], ours: &[f32], channels: usize) -> Compare {
     let frames = host.len() / channels;
-    let mut best = Compare {
-        lag: 0,
-        max_error: f32::MAX,
-        ser_db: f64::MIN,
-    };
+    let mut best: Option<(f64, Compare)> = None;
     for lag in -8isize..=8 {
         let (mut sig, mut err, mut max) = (0f64, 0f64, 0f32);
-        for f in 16..frames - 16 {
+        for f in 0..frames {
             let g = f as isize + lag;
+            if g < 0 || g as usize >= frames {
+                continue;
+            }
             for c in 0..channels {
                 let h = host[f * channels + c];
                 let o = ours[g as usize * channels + c];
@@ -589,29 +958,42 @@ fn compare(host: &[f32], ours: &[f32], channels: usize) -> Compare {
                 max = max.max((h - o).abs());
             }
         }
-        let ser = 10.0 * (sig / err.max(1e-30)).log10();
-        if ser > best.ser_db {
-            best = Compare {
-                lag,
-                max_error: max,
-                ser_db: ser,
-            };
+        let ser_db = if err == 0.0 { f64::INFINITY } else { 10.0 * (sig / err).log10() };
+        if best.as_ref().is_none_or(|(e, _)| err < *e) {
+            best = Some((err, Compare { lag, max_error: max, ser_db }));
         }
     }
-    best
+    best.unwrap().1
 }
 
+/// Renders `g` on each host version and on ddaudio. Returns the worst
+/// comparison (largest error, lowest SER; lag 99 when the versions differ).
 fn run(name: &str, g: &Graph, passes: usize) -> Compare {
-    let host = host_render(g, passes);
+    run_on(name, g, passes, &VERSIONS)
+}
+
+fn run_on(name: &str, g: &Graph, passes: usize, versions: &[u32]) -> Compare {
     let ours = mixer_render(g, passes);
-    let energy: f64 = host.iter().map(|x| (*x as f64).powi(2)).sum();
-    assert!(energy > 1.0, "{name}: the host rendered silence");
-    let c = compare(&host, &ours, g.master_channels as usize);
-    println!(
-        "{name}: lag {} frames, max |error| {:e}, SER {:.1} dB",
-        c.lag, c.max_error, c.ser_db
-    );
-    c
+    let mut worst: Option<Compare> = None;
+    for &version in versions {
+        let host = host_render(version, g, passes);
+        let energy: f64 = host.iter().map(|x| (*x as f64).powi(2)).sum();
+        assert!(energy > 1e-6, "{name}: XAudio2 2.{version} rendered silence");
+        let c = compare(&host, &ours, g.master_channels as usize);
+        println!(
+            "{name} vs 2.{version}: lag {} frames, max |error| {:e}, SER {:.1} dB",
+            c.lag, c.max_error, c.ser_db
+        );
+        worst = Some(match worst {
+            None => c,
+            Some(w) => Compare {
+                lag: if w.lag == c.lag { c.lag } else { 99 },
+                max_error: w.max_error.max(c.max_error),
+                ser_db: w.ser_db.min(c.ser_db),
+            },
+        });
+    }
+    worst.unwrap()
 }
 
 fn mono_source(
@@ -632,7 +1014,7 @@ fn mono_source(
 }
 
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn pcm16_unit_ratio_is_exact() {
     let g = Graph {
         master_channels: 2,
@@ -650,7 +1032,7 @@ fn pcm16_unit_ratio_is_exact() {
 }
 
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn adpcm_unit_ratio_is_exact() {
     let g = Graph {
         master_channels: 2,
@@ -670,7 +1052,7 @@ fn adpcm_unit_ratio_is_exact() {
 /// Random nibbles drive the step size past 32 bits; the host wraps it
 /// (two's complement), which only `wrapping_mul` on i32 reproduces.
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn adpcm_step_overflow_matches_the_host() {
     let mut r = Lcg(9);
     let mut data = vec![];
@@ -703,7 +1085,7 @@ fn adpcm_step_overflow_matches_the_host() {
 /// bit for bit (frequency ratios as SetFrequencyRatio at 0x00DC6D8F sets
 /// them, up to the game's maximum of 2).
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn resampling_matches_the_host() {
     for ratio in [0.5f32, 0.75, 0.9439, 1.0595, 1.5, 2.0] {
         let g = Graph {
@@ -725,33 +1107,16 @@ fn resampling_matches_the_host() {
 /// The host's default send matrices (`GetOutputMatrix` without a prior
 /// `SetOutputMatrix`), source channels 1/2/6 into submix voices of 1/2/6
 /// channels and into the stereo mastering voice.
-fn host_default_matrices() -> Vec<((u32, u32, bool), Vec<f32>)> {
+fn host_default_matrices(version: u32) -> Vec<((u32, u32, bool), Vec<f32>)> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let mut raw = std::ptr::null_mut();
-        xaudio2_9()(&mut raw, 0, 1, 0x0A00_0000).ok().unwrap();
-        let xa = IXAudio2::from_raw(raw);
-        xa.StopEngine();
-        let mut master = None;
-        xa.CreateMasteringVoice(
-            &mut master,
-            2,
-            RATE,
-            0,
-            PCWSTR::null(),
-            None,
-            AudioCategory_GameEffects,
-        )
-        .unwrap();
-        let master = master.unwrap();
+        let xa = Engine::new(version);
+        let master = xa.mastering(2, None);
         let mut out = vec![];
         for dst in [1u32, 2, 6, 0] {
             let dest: IXAudio2Voice = if dst == 0 {
                 as_voice(&master)
             } else {
-                let mut v = None;
-                xa.CreateSubmixVoice(&mut v, dst, RATE, 0, 0, None, None).unwrap();
-                as_voice(&v.unwrap())
+                xa.submix(dst, 0, None, None)
             };
             let dc = if dst == 0 { 2 } else { dst };
             for src in [1u32, 2, 6] {
@@ -763,19 +1128,7 @@ fn host_default_matrices() -> Vec<((u32, u32, bool), Vec<f32>)> {
                     SendCount: 1,
                     pSends: sends.as_mut_ptr(),
                 };
-                let fmt = wave(&Format::pcm16(src, RATE));
-                let mut v = None;
-                xa.CreateSourceVoice(
-                    &mut v,
-                    fmt.as_ptr() as *const WAVEFORMATEX,
-                    0,
-                    2.0,
-                    None::<&IXAudio2VoiceCallback>,
-                    Some(&list),
-                    None,
-                )
-                .unwrap();
-                let v = v.unwrap();
+                let v = xa.source(&wave(&Format::pcm16(src, RATE)), 2.0, Some(&list));
                 let mut m = vec![0f32; (src * dc) as usize];
                 let voice = as_voice(&v);
                 let vt = Interface::vtable(&voice);
@@ -793,14 +1146,26 @@ fn host_default_matrices() -> Vec<((u32, u32, bool), Vec<f32>)> {
 }
 
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn default_matrices_match_the_host() {
-    for ((src, dst, master), m) in host_default_matrices() {
-        println!(
-            "{src} -> {dst}{}: {m:?}",
-            if master { " (mastering)" } else { "" }
-        );
-        assert_eq!(m, ddaudio::mixer::default_matrix(src, dst), "{src} -> {dst}");
+    // 2.9's 6 -> 2 default: front at full scale, centre and back at -3 dB
+    // (10^(-3/20) as f32), no LFE.
+    const M3DB: f32 = 0.70794576;
+    let v29_6_2 = [1.0, 0.0, M3DB, 0.0, M3DB, 0.0, 0.0, 1.0, M3DB, 0.0, 0.0, M3DB];
+    for version in VERSIONS {
+        for ((src, dst, master), m) in host_default_matrices(version) {
+            let kind = if master { " (mastering)" } else { "" };
+            println!("2.{version} {src} -> {dst}{kind}: {m:?}");
+            if version == 9 && (src, dst) == (6, 2) {
+                assert_eq!(m, v29_6_2, "2.9 6 -> 2{kind}");
+            } else {
+                assert_eq!(
+                    m,
+                    ddaudio::mixer::default_matrix(src, dst),
+                    "2.{version} {src} -> {dst}{kind}"
+                );
+            }
+        }
     }
     // And they are what the host mixes with: 1, 2 and 6 channel sources
     // into the stereo mastering voice, and 6 channels through a mono and a
@@ -814,6 +1179,7 @@ fn default_matrices_match_the_host() {
         channel_volumes: vec![],
     };
     let sub = |channels, stage| SubmixSpec {
+        reverb: None,
         channels,
         stage,
         dest: Dest::Master,
@@ -831,7 +1197,7 @@ fn default_matrices_match_the_host() {
             src(2, 15, Dest::Submix(1)),
         ],
     };
-    let c = run("default matrices", &g, 50);
+    let c = run_on("default matrices", &g, 50, &[7]);
     assert_eq!(c.lag, 0);
     assert!(c.max_error <= 1e-6, "{}", c.max_error);
 }
@@ -842,7 +1208,7 @@ fn default_matrices_match_the_host() {
 /// mastering voice; plus a mono send through a stage-1 mono submix.
 /// Voice volumes and channel volumes on top.
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn matrices_volumes_and_stages_match_the_host() {
     let pan = |l: f32, r: f32, c: f32, lfe: f32, bl: f32, br: f32| vec![l, r, c, lfe, bl, br];
     let src =
@@ -859,6 +1225,7 @@ fn matrices_volumes_and_stages_match_the_host() {
         submixes: vec![
             // 0: stage 4 -> master, 6->2 matrix
             SubmixSpec {
+                reverb: None,
                 channels: 6,
                 stage: 4,
                 dest: Dest::Master,
@@ -867,6 +1234,7 @@ fn matrices_volumes_and_stages_match_the_host() {
             },
             // 1: stage 3 -> 0
             SubmixSpec {
+                reverb: None,
                 channels: 6,
                 stage: 3,
                 dest: Dest::Submix(0),
@@ -875,6 +1243,7 @@ fn matrices_volumes_and_stages_match_the_host() {
             },
             // 2: stage 2 -> 1
             SubmixSpec {
+                reverb: None,
                 channels: 6,
                 stage: 2,
                 dest: Dest::Submix(1),
@@ -883,6 +1252,7 @@ fn matrices_volumes_and_stages_match_the_host() {
             },
             // 3: stage 1 mono -> 1 with a 1->6 matrix
             SubmixSpec {
+                reverb: None,
                 channels: 1,
                 stage: 1,
                 dest: Dest::Submix(1),
@@ -930,12 +1300,13 @@ fn matrices_volumes_and_stages_match_the_host() {
 /// change at the next pass after the call, so the test finds that pass in
 /// the host's output and replays the change there.
 #[test]
-#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
 fn level_changes_ramp_like_the_host() {
     let ms = std::time::Duration::from_millis;
     let base = Graph {
         master_channels: 2,
         submixes: vec![SubmixSpec {
+            reverb: None,
             channels: 6,
             stage: 0,
             dest: Dest::Master,
@@ -978,20 +1349,92 @@ fn level_changes_ramp_like_the_host() {
         },
     ];
     let passes = 60;
-    let host = host_render_with(&base, passes, &changes);
-    let mut at: Vec<(usize, Graph)> = vec![];
-    for g in &wanted {
+    for version in VERSIONS {
+        let host = host_render_with(version, &base, passes, &changes);
+        let mut at: Vec<(usize, Graph)> = vec![];
+        for g in &wanted {
+            let ours = mixer_render_with(&base, passes, &at);
+            let frame = (0..host.len())
+                .find(|&i| (host[i] - ours[i]).abs() > 1e-6)
+                .expect("the change is audible")
+                / 2;
+            println!("change landed at pass {} (+{})", frame / PASS, frame % PASS);
+            at.push((frame / PASS, g.clone()));
+        }
         let ours = mixer_render_with(&base, passes, &at);
-        let frame = (0..host.len())
-            .find(|&i| (host[i] - ours[i]).abs() > 1e-6)
-            .expect("the change is audible")
-            / 2;
-        println!("change landed at pass {} (+{})", frame / PASS, frame % PASS);
-        at.push((frame / PASS, g.clone()));
+        let c = compare(&host, &ours, 2);
+        println!(
+            "level ramps vs 2.{version}: lag {}, max |error| {:e}",
+            c.lag, c.max_error
+        );
+        // 2.9 differs by its default 6 -> 2 matrix (the submix's send here).
+        if version == 7 {
+            assert_eq!(c.lag, 0);
+            assert!(c.max_error <= 1e-6, "{}", c.max_error);
+        }
     }
-    let ours = mixer_render_with(&base, passes, &at);
-    let c = compare(&host, &ours, 2);
-    println!("level ramps: lag {}, max |error| {:e}", c.lag, c.max_error);
-    assert_eq!(c.lag, 0);
-    assert!(c.max_error <= 1e-6, "{}", c.max_error);
+}
+
+/// XAUDIO2FX_REVERB_PARAMETERS, 2.7 layout (52 bytes, pack 1).
+#[allow(clippy::too_many_arguments)]
+fn reverb_params(
+    wet_dry: f32,
+    reflections_delay: u32,
+    reverb_delay: u8,
+    bytes: [u8; 11],
+    floats: [f32; 8],
+) -> Vec<u8> {
+    let mut p = vec![];
+    p.extend(wet_dry.to_le_bytes());
+    p.extend(reflections_delay.to_le_bytes());
+    p.push(reverb_delay);
+    p.extend(bytes);
+    for f in floats {
+        p.extend(f.to_le_bytes());
+    }
+    assert_eq!(p.len(), 52);
+    p
+}
+
+/// The SDK defaults (xaudio2fx.h XAUDIO2FX_REVERB_DEFAULT_*), with a wet/dry mix.
+fn default_reverb(wet_dry: f32) -> Vec<u8> {
+    // RearDelay 5, positions 6 6 27 27, diffusion 8 8, low EQ 8 4, high EQ 8 4
+    reverb_params(
+        wet_dry,
+        5,
+        5,
+        [5, 6, 6, 27, 27, 8, 8, 8, 4, 8, 4],
+        [5000.0, 0.0, 0.0, 0.0, 0.0, 1.0, 100.0, 100.0],
+    )
+}
+
+fn impulse_graph(reverb: Vec<u8>) -> Graph {
+    let mut data = vec![0u8; 2 * 96000];
+    data[0..2].copy_from_slice(&16384i16.to_le_bytes());
+    Graph {
+        master_channels: 2,
+        submixes: vec![SubmixSpec {
+            reverb: Some(reverb),
+            channels: 1,
+            stage: 0,
+            dest: Dest::Master,
+            matrix: Some(vec![1.0, 0.0]),
+            volume: 1.0,
+        }],
+        sources: vec![mono_source(
+            wave(&Format::pcm16(1, RATE)),
+            data,
+            1.0,
+            Dest::Submix(0),
+            None,
+        )],
+    }
+}
+
+/// With WetDryMix 0 the reverb passes its input unchanged (both versions).
+#[test]
+#[ignore = "needs the host's XAudio2 2.7 and 2.9 and an audio output device"]
+fn reverb_dry_path_is_exact() {
+    let c = run("reverb, wet/dry 0", &impulse_graph(default_reverb(0.0)), 50);
+    assert_eq!((c.lag, c.max_error), (0, 0.0));
 }

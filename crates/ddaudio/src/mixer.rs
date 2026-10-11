@@ -129,17 +129,24 @@ struct Dsp {
 }
 
 /// Volume, channel-volume and matrix changes ramp linearly over this many
-/// frames from the old to the new level: the host's XAudio2 2.9 does so at
-/// 48 kHz, starting at the first pass after the change; the pass's frame 0
-/// still has the old level (oracle `level_changes_ramp_like_the_host`).
+/// frames from the old to the new level, starting at the first pass after
+/// the change; the pass's frame 0 still has the old level. XAudio2 2.7
+/// adds a step of (new - old) / 48 per frame and lands on the new level at
+/// frame 48 (2.9 interpolates instead, differing in the last float bits).
+/// Measured at 48 kHz (oracle `level_changes_ramp_like_the_host`).
 pub const RAMP_FRAMES: usize = 48;
 
+/// The level at frame `k` of a pass whose level changes from `old` to `new`.
 fn ramp(old: f32, new: f32, k: usize) -> f32 {
     if k >= RAMP_FRAMES || old == new {
-        new
-    } else {
-        old + (new - old) * (k as f32 / RAMP_FRAMES as f32)
+        return new;
     }
+    let step = (new - old) / RAMP_FRAMES as f32;
+    let mut g = old;
+    for _ in 0..k {
+        g += step;
+    }
+    g
 }
 
 #[derive(Default)]
@@ -157,16 +164,16 @@ struct Bus {
 
 /// XAudio2's default matrix when a send has no `SetOutputMatrix`, for the
 /// channel counts the game's voices have (1, 2, 6; the endpoint is stereo).
-/// Values: `GetOutputMatrix` of the host's XAudio2 2.9 for voices without a
-/// custom matrix (oracle `default_matrices_match_the_host`, which also
-/// renders them); mono to stereo agrees with "XAudio2 Default Channel
-/// Mapping" (both front channels at full scale). The same matrices apply
-/// to a stereo mastering voice. Other channel pairs were not measured: they
-/// fall back to a channel-for-channel diagonal (an unverified guess; the
-/// game creates no such pair).
+/// Values: `GetOutputMatrix` of the host's XAudio2 2.7 (the game's version)
+/// for voices without a custom matrix (oracle
+/// `default_matrices_match_the_host`, which also renders them); mono to
+/// stereo agrees with "XAudio2 Default Channel Mapping" (both front
+/// channels at full scale). The same matrices apply to a stereo mastering
+/// voice. 2.9 differs only in 6 -> 2 (FL/FR 1, FC and back -3 dB, no LFE).
+/// Other channel pairs were not measured: they fall back to a
+/// channel-for-channel diagonal (an unverified guess; the game creates no
+/// such pair).
 pub fn default_matrix(src: u32, dst: u32) -> Vec<f32> {
-    // -3 dB, as the host reports it (10^(-3/20) rounded to f32).
-    const M3DB: f32 = 0.70794576;
     let (s, d) = (src as usize, dst as usize);
     let measured: Option<&[f32]> = match (src, dst) {
         (1, 1) => Some(&[1.0]),
@@ -175,8 +182,11 @@ pub fn default_matrix(src: u32, dst: u32) -> Vec<f32> {
         (6, 1) => Some(&[0.16666666; 6]),
         (1, 2) => Some(&[1.0, 1.0]),
         (2, 2) => Some(&[1.0, 0.0, 0.0, 1.0]),
-        // FL, FR, FC, LFE, BL, BR: centre and back at -3 dB, LFE dropped.
-        (6, 2) => Some(&[1.0, 0.0, M3DB, 0.0, M3DB, 0.0, 0.0, 1.0, M3DB, 0.0, 0.0, M3DB]),
+        // FL, FR, FC, LFE, BL, BR (the LFE weight is 1/11).
+        (6, 2) => Some(&[
+            0.29454544, 0.0, 0.20818181, 0.09090909, 0.25181818, 0.15454546, 0.0, 0.29454544, 0.20818181,
+            0.09090909, 0.15454546, 0.25181818,
+        ]),
         (1, 6) => Some(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
         _ => None,
     };
