@@ -46,6 +46,12 @@ class IntegerSseTests(unittest.TestCase):
         # Full XMM stores compare every lane and make source width observable.
         load='0f100500104000'  # movups xmm0,[401000]
         store='0f110500200000c3'
+        # Every packed word, masked immediate, unchanged lanes, and m16 input.
+        for word in (*range(8), 11):
+            programs.append(load+'b878563412660fc4c0'+f'{word:02x}'+'660fc5d0'+f'{word:02x}'+store)
+        programs.append(load+'660fc4051010400003'+store)
+        programs.append('5589e583ec10b801000000c9c3')  # LEAVE restores saved EBP/ESP.
+        programs.append('b878563412f3c3')  # REP RET is a return, not fallthrough.
         for op in ('0f50c0', '660f50c0', '660fd7c0'):
             programs.append(load+op+'c3')
         for op in ('660f2f0510104000', '660f2e0510104000'):

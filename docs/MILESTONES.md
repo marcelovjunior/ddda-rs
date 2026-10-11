@@ -780,3 +780,36 @@ opening (codex-31), route perf (codex-29).
   pair and regenerates; then investigate switch remappings and residual
   mock-stack failures without relaxing guards. Source/tests/docs only;
   no runtime code, Ghidra restart, shared gate or push.
+
+## Batch 2026-10-11 (L12: remaining lift rejections)
+
+- **Implemented:** strict cross-register byte-remapped switch tables;
+  delayed mocked x87 returns through supported x87 work/direct branches;
+  INT3/UD2 terminal traps, LEAVE, PINSRW/PEXTRW and REP RET. Platform-dependent
+  CPUID/RDTSC/PUSHFD reject explicitly. See L12 Results and the native pipeline.
+- **Recorder evidence:** delayed local allocation at `0x008AA2D5` and
+  `0x00782D15` was counted as outgoing arguments, then popped twice. A
+  constrained matching-epilogue hint excludes it; this remains mock ABI
+  inference. A same-seed retry adds 14 functions. No guard was relaxed.
+- **Measured:** scan rejections **595 -> 86**, 509 newly liftable bodies;
+  selected functions **42,781 -> 43,294**, cases **127,303 -> 128,772**.
+  All baseline records remain unchanged. The 513 additions include 306
+  switch bodies, 140 x87 cases, 20 trap-path functions, six singleton
+  instruction cases and 41 previously liftable functions.
+- **Inventory:** **43,298 verified, 76.5% of functions, 90.8% of code bytes**
+  (14,081,075 summed bytes). Sixteen supplementary entries increase the
+  denominator to 56,593 non-thunks. This is sampled instruction comparison
+  with external mocks; no live-game or game-boot claim.
+- **Validation:** 63 Python tests pass; the addition/dependency subset passes
+  43,838 cases / 14,699 functions and seven Rust units. Final required-vector
+  `cargo test -p ddnative` passes all 32 Rust tests, including all 128,772
+  lifted cases. Compile 4m13s, replay 58.15s, total 318.06s; minimum free RAM
+  14.29 GiB. Four Cargo jobs, incremental off, six vector workers, no overlap
+  or memory-threshold crossing.
+- **Open:** 497 liftable candidates still lack fixtures (287 primarily
+  outside-image in the final strategy), 86 lift rejections and four unchanged
+  quarantines. Initializer `0x0137E490` remains without a usable fixture.
+- **One next action:** head reviews/adopts the matching private `native-L12`
+  pair and regenerates, then traces residual recorder failures and resolves
+  ambiguous indirect x87 flow without weakening guards. Shared data remains
+  read-only; source/tests/docs only, no runtime code, gate, Ghidra restart or push.

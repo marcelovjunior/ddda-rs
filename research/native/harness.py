@@ -247,7 +247,7 @@ def static_pop(target, _cache={}):
                 except (KeyError, StopIteration):
                     unknown = True
                     break
-                if i.mnemonic in ('ret', 'retn'):
+                if i.mnemonic in ('ret', 'retn', 'repz ret'):
                     pops.add(i.operands[0].imm if i.operands else 0)
                     break
                 if i.mnemonic in ('int3', 'ud2', 'hlt'):
@@ -293,7 +293,7 @@ def saved_push_sites(address, body):
         seen.add((pc, available))
         eligible = set(available)
         i = next(md.disasm(code(pc, 15), pc, count=1), None)
-        if i is None or i.mnemonic in ('call','ret','retn'):
+        if i is None or i.mnemonic in ('call','ret','retn','repz ret'):
             continue
         if i.mnemonic == 'push' and i.operands[0].type == 1:
             name = i.reg_name(i.operands[0].reg)
@@ -315,6 +315,59 @@ def saved_push_sites(address, body):
         todo.append((pc+i.size, frozenset(eligible)))
     saved -= invalid
     return saved
+
+
+def local_alloc_sites(address, body):
+    """Conservative mock-ABI hint for interleaved entry-frame allocations.
+
+    A matching add-ESP immediately before an own return must exist. Require
+    a straight-line entry prefix and no stores or further ESP adjustment
+    between the allocation and first call: initialized outgoing argument
+    space must not be mistaken for local storage. This is not an ABI proof.
+    """
+    if body is None:
+        return set()
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    decoded = {}
+    def instruction(pc):
+        if pc not in body:
+            return None
+        if pc not in decoded:
+            decoded[pc] = next(md.disasm(code(pc, 15), pc, count=1), None)
+        return decoded[pc]
+    cleanup = set()
+    for pc in body:
+        # ADD ESP,imm has one of these two encodings in this 32-bit subset.
+        if code(pc, 2) not in (b'\x83\xc4', b'\x81\xc4'):
+            continue
+        i = instruction(pc)
+        after = instruction(pc + i.size) if i else None
+        if after and after.mnemonic in ('ret', 'retn', 'repz ret'):
+            cleanup.add(i.operands[1].imm)
+    result, pc, pending = set(), address, None
+    while pc in body:
+        i = instruction(pc)
+        if i is None:
+            break
+        mn = i.mnemonic
+        if mn == 'call':
+            if pending is not None:
+                result.add(pending)
+            break
+        if mn.startswith('j') or mn in ('ret','retn','repz ret','int3','ud2'):
+            break
+        adjustment = mn != 'push' and any(i.reg_name(r) == 'esp' for r in i.regs_access()[1])
+        if pending is not None:
+            if adjustment or any(o.type == 3 and o.access & 2 for o in i.operands):
+                pending = None
+                break
+        if (mn == 'sub' and i.op_str.startswith('esp, ') and i.operands[1].type == 2
+                and i.operands[1].imm > 0 and i.operands[1].imm in cleanup):
+            pending = pc
+        pc += i.size
+    return result
 
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
@@ -636,7 +689,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if root_frame[0] and is_own(addr):
             if addr not in rets:
                 try:
-                    rets[addr] = next(nmd.disasm(code(addr, 15), addr)).mnemonic in ("ret", "retn")
+                    rets[addr] = next(nmd.disasm(code(addr, 15), addr)).mnemonic in ("ret", "retn", "repz ret")
                 except (KeyError, StopIteration):
                     rets[addr] = False
             own_ret[0] = rets[addr]
@@ -762,6 +815,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     dmd.detail = True
     own = {}
     saved_pushes = saved_push_sites(address, body) if end is not None else set()
+    local_allocations = local_alloc_sites(address, body) if end is not None else set()
 
     def on_ext(uc_, pc, size, _):
         # a call to the function's own entry (recursion) leaves it like any
@@ -780,7 +834,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             if pushed[1]:  # argument space: pushes and `sub esp, N` (float args stored with movss)
                 if i.mnemonic == "push" and i.address not in saved_pushes:
                     pushed[0] += 4
-                elif i.mnemonic == "sub" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
+                elif (i.mnemonic == "sub" and i.op_str.startswith("esp, ") and i.operands[1].type == 2
+                      and i.address not in local_allocations):
                     pushed[0] += i.operands[1].imm
                 elif i.mnemonic == "add" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
                     pushed[0] = max(0, pushed[0] - i.operands[1].imm)

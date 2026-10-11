@@ -345,8 +345,10 @@ Each lifted function is `fn(&mut dyn Mem, &mut Cpu)`:
   a nonempty table whose every target is a decoded instruction start. All
   targets become block leaders. An immediately preceding `cmp index, N;
   ja/jae default` must agree with the table length. With an intervening
-  `movzx index, byte ptr [index + INDEX]`, the bound instead sizes INDEX;
+  `movzx output, byte ptr [input + INDEX]`, the bound on `input` instead sizes INDEX;
   every byte in that image range must select an existing dword entry.
+  Input and output may differ; a cross-register remap without that adjacent
+  proven input bound rejects. Targets must still be decoded instruction starts.
   Without that recognised bound shape, discovery uses the table alone.
   Rust executes `pc = m.u32(address); continue;`, including the original
   wrapping address calculation and byte remapping instructions. It never
@@ -573,8 +575,11 @@ Floats returned in st0 (MSVC returns float and double there):
 `x87_depth_check` walks the control flow from x87 depth 0. A direct call
 to a closed lifted function adds that function's net x87 effect at its
 `ret` (`X87_NET`, computed when it lifts; inconsistent rets reject callers
-with `x87-callee`). A mocked call adds 1 where the rest of its basic block
-consumes st0 before pushing anything (`returns_float`): those call sites
+with `x87-callee`). From the current depth, `returns_float` follows known
+direct control flow and supported x87 effects after a mocked call. A deficit
+of exactly one value identifies a return, including consumption after other
+x87 pushes or a branch. Analysis stops at another call, unknown indirect
+jump, return or trap; multiple missing values and overflow reject. Those call sites
 are stored per function as `"x87_push"` (return addresses). There the
 recorder's mock pushes a random finite float through a trampoline on its
 own page (`fld dword [X87_SLOT]; jmp [X87_SLOT + 4]`, `harness.X87_TRAMP`)
@@ -582,6 +587,12 @@ and records it as `"st_push"`; the replay pushes the same bits onto
 `cpu.st`. Any other x87 read or pop at depth 0 still rejects
 (`x87-return`). Unicorn does not flag the stack underflow itself, so this
 check must stay static.
+
+INT3 and UD2 terminate decoding and emit explicit traps; any fixture executing
+one is rejected by the recorder's noreturn guard. This does not model SEH.
+CPUID, RDTSC and PUSHFD explicitly reject without a platform event/state
+contract. Approximate reciprocals, segment overrides and SFENCE remain
+unsupported; no host-dependent replacement or ordering assumption is made.
 
 A platform model's own address is never lifted (`scan` skips
 `harness.PLATFORM`): `run_sparse` runs the model at that address, so the
@@ -973,6 +984,13 @@ mock ABI heuristics, not recovered callee contracts. Every chosen pop is
 recorded and checked during Rust replay. Return-address, stack, page,
 instruction, time, flags and x87 guards are unchanged; unexplained failures
 stay rejected. Existing accepted vectors retain their recorded mock behavior.
+
+L12 also traces delayed local allocation (`sub esp, 12` at `0x00782D15`,
+`sub esp, 8` at `0x008AA2D5`) incorrectly counted as outgoing arguments.
+The recorder excludes a straight entry-prefix allocation only with matching
+cleanup immediately before an own return, no memory store and no further
+ESP adjustment except pushes before the first call. This remains a mock ABI
+heuristic, not proof of the callee contract; all acceptance guards remain.
 
 1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
    --test lifted`: prints that function's panic message (e.g. `call target`

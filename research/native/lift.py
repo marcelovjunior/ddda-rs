@@ -161,7 +161,10 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
             owners.update((a, pc) for a in range(pc, pc + i.size))
             history.append(i)
             mn = i.mnemonic
-            if mn in ("ret", "retn", "int3", "ud2", "hlt"):
+            if mn in ("int3", "ud2"):
+                stops.add(pc)
+                break
+            if mn in ("ret", "retn", "repz ret", "hlt"):
                 break
             if mn == "call" and i.operands[0].type == 2 and i.operands[0].imm in noreturn:
                 stops.add(pc)
@@ -206,22 +209,61 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
     return ins, switches, stops, ranges
 
 
-def returns_float(ins, k):
-    """Does the code after the call at ins[k] consume st0 before pushing
-    anything? Then the callee returned a float there (MSVC returns float and
-    double in st0). Looks at the rest of the call's basic block only."""
-    pc = ins[k].address + ins[k].size
-    for i in ins[k + 1:]:
-        if i.address != pc:
-            return False
-        pc += i.size
-        mn = i.mnemonic
-        if mn == "call" or mn.startswith("j") or mn in ("ret", "retn"):
-            return False
-        if not mn.startswith("f") or mn in X87_CONTROL:
+def x87_effect(i):
+    """Required stack depth and net change for supported x87 instructions."""
+    mn = i.mnemonic
+    regs = [int(i.reg_name(o.reg)[3:-1]) for o in i.operands
+            if o.type == 1 and i.reg_name(o.reg).startswith("st(")]
+    needed = max([r + 1 for r in regs] + [0 if mn in X87_PUSH else 1])
+    if mn in ("fcompp", "fucompp"):
+        needed = 2
+    if mn in ("fcom", "fcomp", "fucom", "fucomp", "fxch") and not i.operands:
+        needed = 2
+    delta = (mn in X87_PUSH) - (mn in X87_POP or mn == "ficomp")
+    if mn in ("fcompp", "fucompp"):
+        delta -= 2
+    return needed, delta
+
+
+def returns_float(ins, k, depth=0):
+    """Prove a one-value deficit downstream of this mocked call.
+
+    Track supported x87 work and direct branches, stopping at another call,
+    an unknown jump, trap or return. Never supply entry-stack arguments or
+    guess across intervening callees. One mock can return only one value.
+    """
+    at = {i.address: i for i in ins}
+    todo = [(ins[k].address + ins[k].size, depth, 0)]
+    seen, required = set(), 0
+    while todo:
+        pc, current, added = todo.pop()
+        if pc not in at or (pc, current, added) in seen:
             continue
-        return mn not in X87_PUSH
-    return False
+        seen.add((pc, current, added))
+        i = at[pc]
+        mn = i.mnemonic
+        if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt"):
+            continue
+        if mn in X87_SUPPORTED and mn not in X87_CONTROL:
+            needed, delta = x87_effect(i)
+            missing = max(0, needed - current)
+            added += missing
+            if added > 1:
+                return False
+            required = max(required, added)
+            current += missing + delta
+            if current > 8:
+                return False
+        elif mn.startswith('f') and mn not in X87_CONTROL:
+            return False
+        if mn.startswith('j'):
+            if i.operands[0].type != 2:
+                continue
+            todo.append((i.operands[0].imm & 0xffffffff, current, added))
+            if mn == 'jmp':
+                continue
+        todo.append((pc + i.size, current, added))
+    return required == 1
 
 
 def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset()):
@@ -252,20 +294,14 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
             seen[i.address] = depth
             mn = i.mnemonic
             if mn in X87_SUPPORTED and mn not in X87_CONTROL:
-                regs = [int(i.reg_name(o.reg)[3:-1]) for o in i.operands
-                        if o.type == 1 and i.reg_name(o.reg).startswith("st(")]
-                needed = max([r + 1 for r in regs] + [0 if mn in X87_PUSH else 1])
-                if mn in ("fcompp", "fucompp"):
-                    needed = 2
-                if mn in ("fcom", "fcomp", "fucom", "fucomp", "fxch") and not i.operands:
-                    needed = 2
+                needed, delta = x87_effect(i)
                 if depth < needed:
                     raise Unsupported(f"x87-return (needs {needed} values at {i.address:#x}, has {depth})")
-                depth += (mn in X87_PUSH) - (mn in X87_POP or mn == "ficomp")
-                if mn in ("fcompp", "fucompp"):
-                    depth -= 2
+                depth += delta
                 if depth > 8:
                     raise Unsupported("x87-overflow")
+            elif mn.startswith('f') and mn not in X87_CONTROL:
+                raise Unsupported(f"x87-unsupported {mn}")
             elif mn == "call" and k + 1 < len(ins):
                 direct = i.operands[0].type == X86_OP_IMM
                 t = i.operands[0].imm if direct else None
@@ -274,12 +310,12 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                     if net is None:
                         raise Unsupported(f"x87-callee (inconsistent x87 effect of {t:#x})")
                     depth += net
-                elif ext and returns_float(ins, k):
+                elif ext and returns_float(ins, k, depth):
                     depth += 1
                     push_sites.add(ins[k + 1].address)
             if i.address in stops:
                 break
-            if mn in ("ret", "retn"):
+            if mn in ("ret", "retn", "repz ret"):
                 exits.add(depth)
                 break
             if mn.startswith("j"):
@@ -312,18 +348,21 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     # A proven adjacent bound determines the slots to discover even when
     # the case code is outside the entry's inventory band.
     bound, remap_addr = None, None
+    bound_index = op.mem.index
     prev_bound = k - 1
     if prev_bound >= 0 and ins[prev_bound].mnemonic == "movzx":
         dst, src = ins[prev_bound].operands
         if (dst.type == X86_OP_REG and dst.reg == op.mem.index and dst.size == 4
                 and src.type == X86_OP_MEM and src.size == 1 and not src.mem.segment
-                and not src.mem.index and src.mem.base == op.mem.index):
+                and not src.mem.index and src.mem.base
+                and ins[prev_bound].reg_name(src.mem.base) in GPR32):
             remap_addr = src.mem.disp & 0xffffffff
+            bound_index = src.mem.base
             prev_bound -= 1
     if prev_bound >= 1 and ins[prev_bound].mnemonic in ("ja", "jae"):
         cmp = ins[prev_bound - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
-                and cmp.operands[0].type == X86_OP_REG and cmp.operands[0].reg == op.mem.index
+                and cmp.operands[0].type == X86_OP_REG and cmp.operands[0].reg == bound_index
                 and cmp.operands[0].size == 4 and cmp.operands[1].type == X86_OP_IMM):
             bound = (cmp.operands[1].imm & 0xffffffff) + (ins[prev_bound].mnemonic == "ja")
             if not 0 < bound <= 4096:
@@ -336,6 +375,8 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                 if len(remapped) != bound:
                     raise Unsupported("indirect jump (unmapped switch remapping)")
                 bound = max(remapped) + 1
+    if remap_addr is not None and bound_index != op.mem.index and bound is None:
+        raise Unsupported("indirect jump (remapping source lacks proven bound)")
     starts = {i.address for i in ins}
     targets = []
     cursor = table
@@ -373,7 +414,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
         dst, src = ins[prev].operands
         if dst.type == X86_OP_REG and dst.reg == index:
             if (dst.size != 4 or src.type != X86_OP_MEM or src.size != 1
-                    or src.mem.segment or src.mem.index or src.mem.base != index):
+                    or src.mem.segment or src.mem.index or src.mem.base != bound_index):
                 raise Unsupported("indirect jump (unrecognised switch remapping)")
             remap = src.mem.disp & 0xFFFFFFFF
             prev -= 1
@@ -381,7 +422,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
         cmp = ins[prev - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
                 and cmp.operands[0].type == X86_OP_REG
-                and cmp.operands[0].reg == index and cmp.operands[0].size == 4
+                and cmp.operands[0].reg == bound_index and cmp.operands[0].size == 4
                 and cmp.operands[1].type == X86_OP_IMM):
             count = (cmp.operands[1].imm & 0xFFFFFFFF) + (ins[prev].mnemonic == "ja")
             if remap is None:
@@ -426,7 +467,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     leaders.add(t)
             if i.address + i.size in starts:
                 leaders.add(i.address + i.size)
-        if (i.mnemonic in ("ret", "retn") or i.address in stops) and k + 1 < len(ins):
+        if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
     exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops)
     X87_PUSH_SITES[addr] = push_sites
@@ -676,7 +717,17 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"{{ let v = {load(i, ops[0])}; esp = esp.wrapping_sub(4); m.set_u32(esp, v); }}")
             elif mn == "pop":
                 body.append(f"{{ let v = m.u32(esp); esp = esp.wrapping_add(4); {store(i, ops[0], 'v')} }}")
-            elif mn in ("ret", "retn"):
+            elif mn == "leave":
+                if 0x66 in i.prefix or 0x67 in i.prefix:
+                    raise Unsupported("leave operand/address size")
+                body.append("esp = ebp; ebp = m.u32(esp); esp = esp.wrapping_add(4);")
+            elif mn in ("int3", "ud2"):
+                body.append(f'panic!("guest {mn} trap at 0x{i.address:08X}");')
+                terminated = True
+                break
+            elif mn in ("cpuid", "rdtsc", "pushfd"):
+                raise Unsupported(f"platform-dependent {mn} (no event/state contract)")
+            elif mn in ("ret", "retn", "repz ret"):
                 extra = ops[0].imm if ops else 0
                 body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
                 terminated = True
@@ -740,6 +791,16 @@ def lift(addr, size, callable=frozenset(), ext=False):
                             f"{SAVE} {target(t)}(m, cpu); {LOAD}")
             elif mn == "nop":
                 pass
+            elif mn == "pextrw" and len(ops) == 3 and ops[2].type == X86_OP_IMM:
+                word = ops[2].imm & 7
+                value = f"(({xmm(i, ops[1])}[{word // 2}] >> {(word % 2) * 16}) & 0xFFFF)"
+                body.append(store(i, ops[0], value))
+            elif mn == "pinsrw" and len(ops) == 3 and ops[2].type == X86_OP_IMM:
+                word = ops[2].imm & 7
+                lane, shift = word // 2, (word % 2) * 16
+                dst = xmm(i, ops[0])
+                body.append(f"{{ let v = {load(i, ops[1])} & 0xFFFF; "
+                            f"{dst}[{lane}] = ({dst}[{lane}] & !(0xFFFFu32 << {shift})) | (v << {shift}); }}")
             elif mn == "movd":
                 if ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) in XMM:
                     body.append(f"{xmm(i, ops[0])} = [{load(i, ops[1])}, 0, 0, 0];")
