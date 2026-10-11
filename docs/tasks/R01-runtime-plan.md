@@ -64,4 +64,55 @@ private notes). Same git rules as before (identity, no trailer, no push).
 
 ## Results
 
-(Codex fills this in.)
+Delivered [RUNTIME.md](../RUNTIME.md) for head review, with no runtime
+implementation. It evaluates a reserved 4 GiB arena against checked/page
+table alternatives; specifies guest/host ownership, ABI and reentrant
+dispatch requirements; identifies thread and callback entry points;
+proposes platform, graphics/audio and existing-crate boundaries; and gives
+staged gates from startup manifests to title/load/walk and co-op ownership.
+Executable claims cite addresses, repo claims cite source paths, and
+proposals and unconfirmed behavior are separated from measurements.
+
+Key findings on `9091c6c`:
+
+- The 31,580-entry lifted list has 14,186 closed and 17,394 ext entries.
+  WinMain `0x004079E0` has 276 known entries in its direct graph closure:
+  89 lifted, 187 absent (144 inventory-platform, 43 other). Adding the
+  main constructor and inspected main vtable slots gives 1,591 known,
+  991 lifted, 600 absent. These are static sets, not boot call frequencies.
+- The CRT initializer loop at `0x012EDABC..0x012EDAC9` walks 104,456
+  slots with 5,656 distinct non-null targets, only five inventoried.
+  Game registration at `0x0136DDF0` demonstrates why the whole high-address
+  block cannot be discarded as CRT. Five of six C initializer targets are
+  also absent from the inventory. Initializer discovery is the proposed
+  first prerequisite, ahead of a boot implementation.
+- Complete installed/analysis `.text`, `.rdata`, `.data`, `.rsrc` raw bytes
+  and all 273 normal imports match. Entry points differ. Runtime image
+  data can come from the player's installation; BSS, imports, initializers
+  and ABI state still need a loader/startup contract.
+- Audio creation at `0x00DCE117` uses the XAudio2 2.7 COM identity;
+  callback-based file completion at `0x00D0D548`/`0x00D0D552` requires
+  alertable guest-thread delivery. Thread entry pointers and atomic import
+  sites are listed in the design.
+- Current `call_ext` is not reentrant while its handler dispatches another
+  ext function; current fixture free is a no-op, and generated direct
+  platform calls bypass the ext registry. The plan identifies these as
+  prerequisites, not already implemented runtime services.
+
+Validation: both small read-only scripts ran successfully against the
+private inputs; original/full-detail and final/lightweight census results
+agree on all four root summaries, import sites and atomic candidates.
+Cross-checks pass for the complete 43-entry documented frontier, PE section
+equality, initializer counts, Python syntax and local document links.
+Private reports are under `E:/ddda-re/notes/runtime-R01`; scripts refuse
+outputs under the repo/shared native input. No Cargo tests/build, vectors,
+native gate, inventory rebuild or game execution was needed/performed.
+
+Limit: Ghidra endpoint `127.0.0.1:8089` refused connections; the local bridge
+also lacked its `mcp` dependency. Head was notified. Research continued via
+read-only disassembly/inventory and prior addressed FRAME.md evidence;
+no canonical project changes or server restart. No runtime functionality
+or live boot comparison is claimed. Open review decisions are the initial
+memory/thread access policy, D3D9 versus a separately researched higher-level
+render bridge, Steam service policy and initializer/virtual-target discovery.
+Source/docs only, required git identity, no trailer, no push.
