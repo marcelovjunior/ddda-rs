@@ -767,7 +767,11 @@ def _vectors_for(args):
     import harness as h
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
     out, got, seed = [], 0, 0
-    while got < per and seed < per * 8:
+    # a time budget per function: loops over random counts of random
+    # pointers can take minutes per seed and never give a vector
+    import time
+    deadline = time.time() + float(os.environ.get("LIFT_FN_SECONDS", "20"))
+    while got < per and seed < per * 8 and time.time() < deadline:
         seed += 1
         try:
             if end is None:
