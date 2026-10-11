@@ -594,7 +594,8 @@ module; behaviour choices are labelled in the code.
 | Per-session `Runtime` holding all runtime state, shared by the guest's host threads (`GuestCell`, accessed only by the guest-lock holder); guest memory as a shareable handle | `runtime.rs`, `memory.rs` | done |
 | Guest threads: one host thread each, one running at a time (the guest lock), handed over only in services (waits, contended critical sections, Sleep, API calls after a 2 ms slice); exact here because the game's atomics are all imported Interlocked* calls. Per-thread last error and TLS; CreateThread (suspended, own stacks), Resume/Suspend, exit codes; events, semaphores, mutexes, WaitForSingle/MultipleObjects | `threads.rs` | done, tested (stress-run 50x) |
 | Asynchronous file reads: ReadFileEx at the OVERLAPPED offset, completion routine queued to the issuing thread and run at its next alertable SleepEx (the MtFile reader 0x00D0D440) | `files.rs`, `threads.rs` | done, tested |
-| SEH (`fs:`), D3D9 resources and drawing (wgpu), audio, input, delay imports | | not started |
+| D3D9 shader bytecode (SM2/SM3) decoder and disassembler: all 29,198 distinct shaders of the 76 shader packages print exactly like Microsoft's D3DDisassemble (`DDDA_ALL_SHADERS=1 cargo test -p d3d9shader`); the base for translating the game's shaders to the GPU backend | `crates/d3d9shader` | done, tested |
+| SEH (`fs:`), D3D9 resources and drawing (wgpu), shader translation, audio, input, delay imports | | not started |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry

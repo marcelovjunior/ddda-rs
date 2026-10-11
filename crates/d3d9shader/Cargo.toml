@@ -1,0 +1,12 @@
+[package]
+name = "d3d9shader"
+version = "0.1.0"
+description = "Direct3D 9 shader bytecode (SM2/SM3): decoder and D3DDisassemble-format text"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+mtarc = { path = "../mtarc" }
