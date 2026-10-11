@@ -218,29 +218,25 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-After L14 lifted the platform layer too (2026-10-11, commit 84458c8; 56,593
-non-thunk functions including the supplementary entries; the gate prints
-the current numbers after every run):
+After L15 (2026-10-11, commit 790a049; 56,593 non-thunk functions including
+the supplementary entries; the gate prints the current numbers after every
+run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
-| verified (1:1 + differential test) | 55,884 | 98.7% | 95.7% |
-| untouched | 463 | 0.8% | 3.4% |
-| platform (model addresses, not yet lifted) | 139 | 0.2% | 0.2% |
-| documented only | 59 | 0.1% | 0.1% |
-| translated (cited, not verified) | 48 | 0.1% | 0.5% |
+| verified (1:1 + differential test) | 56,021 | 99.0% | 96.1% |
+| not verified (each with a recorded reason) | 572 | 1.0% | 3.9% |
 
-Plus 289 verified thunks. Nearly all verified functions come from the
-lifter (`research/native/lift.py`, docs/NATIVE_PIPELINE.md "The lifter"),
-56,169 lifted entries with 167,227 recorded cases. The former platform
-classes (deleting destructors, DTI allocators, construct-if-memory
-wrappers, base destructor chains, the CRT) are lifted like everything else
-since L14; `scripts/inventory.py summary` reports them per historical rule.
-The 709 unverified rows each have a recorded reason (`research/native/
-platform_report.py`, `residual_census.py`): 533 recorder failures (random
-inputs cannot drive them; L15 adds image-backed reads), 161 lift
-rejections (FS segment accesses, x87 returns, a few instructions), ten
-quarantines (x87 status-word differences between the host and Unicorn)
-and five platform-model addresses (L15 task A).
+Plus 289 verified thunks; 56,306 lifted entries with 167,621 recorded
+cases. The former platform classes (deleting destructors, DTI allocators,
+construct-if-memory wrappers, base destructor chains, the CRT, the MT
+allocator entries) are lifted like everything else since L14/L15;
+`scripts/inventory.py summary` reports them per historical rule. What
+remains: 417 lifted entries without a fixture (random and image-backed
+inputs cannot drive them), 145 lift rejections (x87 returns, a jump table
+the recognizer cannot bound in memcpy, segment-register reads, a few
+instructions), ten quarantines (x87 status-word differences between the
+host and Unicorn); the CRT's SEH prolog/epilog need a caller-frame
+fixture contract (brief L17).
 
 The game to rebuild is about **37,970 functions** (14.3 MB of code).
