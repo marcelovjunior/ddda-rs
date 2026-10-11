@@ -6,7 +6,9 @@
 #   scripts/native_gate.sh && git commit ...
 set -euo pipefail
 cd "$(dirname "$0")/.."
-DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p ddnative
+# No incremental cache: every regeneration rewrites most generated modules,
+# and the cache of the ~100 MB crate grew to 20 GB of stale sessions.
+CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p ddnative
 out=$(python scripts/inventory.py build)
 echo "$out"
 if echo "$out" | grep -q "ported without a declared test"; then
