@@ -13,7 +13,7 @@
 use crate::d3d9::{D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{objects, with_device, Kind};
 use crate::d3d9res::Image;
-pub use d3d9cmd::{ClearCall, DrawCall, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
+pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -26,6 +26,8 @@ pub struct Recorder {
     pub draws: Vec<DrawCall>,
     pub clears: Vec<ClearCall>,
     pub presents: u64,
+    pub copies: Vec<CopyCall>,
+    pub fills: Vec<FillCall>,
     /// keep only counts after this many draws (long headless runs)
     pub limit: usize,
 }
@@ -47,6 +49,16 @@ impl GraphicsBackend for Recorder {
     fn present(&mut self, _back_buffer: &Target) {
         self.presents += 1;
     }
+    fn copy(&mut self, copy: &CopyCall) {
+        self.copies.push(copy.clone());
+    }
+    fn fill(&mut self, fill: &FillCall) {
+        self.fills.push(fill.clone());
+    }
+    /// A recorder draws nothing, so it has nothing to read back.
+    fn read_back(&mut self, _target: &Target) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 pub struct Graphics(pub Box<dyn GraphicsBackend>);
@@ -62,7 +74,7 @@ pub fn set_backend(backend: Box<dyn GraphicsBackend>) {
     crate::runtime::with(|rt| rt.graphics.with(|g| g.0 = backend));
 }
 
-fn backend<R>(f: impl FnOnce(&mut dyn GraphicsBackend) -> R) -> R {
+pub(crate) fn backend<R>(f: impl FnOnce(&mut dyn GraphicsBackend) -> R) -> R {
     crate::runtime::with(|rt| rt.graphics.with(|g| f(g.0.as_mut())))
 }
 
@@ -88,7 +100,7 @@ fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image
 }
 
 /// Upload what `resource` has dirty (texture levels, a surface, a buffer).
-fn flush(m: &dyn Mem, resource: u32) {
+pub(crate) fn flush(m: &dyn Mem, resource: u32) {
     let mut out = Vec::new();
     // collect dirty images, clearing the flags
     let surfaces = objects(|o| match o.live.get_mut(&resource).map(|x| &mut x.kind) {
@@ -137,7 +149,7 @@ fn flush(m: &dyn Mem, resource: u32) {
 
 // --- snapshots -------------------------------------------------------------------
 
-fn target(surface: u32) -> Option<Target> {
+pub(crate) fn target(surface: u32) -> Option<Target> {
     if surface == 0 {
         return None;
     }

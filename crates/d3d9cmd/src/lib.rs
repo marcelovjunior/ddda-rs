@@ -114,11 +114,36 @@ pub struct ClearCall {
 }
 
 /// What draws the frames.
+/// StretchRect: a rectangle (left, top, right, bottom) of one target
+/// copied, scaled with `filter` (D3DTEXTUREFILTERTYPE), to a rectangle of
+/// another.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CopyCall {
+    pub src: Target,
+    pub src_rect: [i32; 4],
+    pub dst: Target,
+    pub dst_rect: [i32; 4],
+    pub filter: u32,
+}
+
+/// ColorFill: a rectangle of a target set to a D3DCOLOR.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FillCall {
+    pub dst: Target,
+    pub rect: [i32; 4],
+    pub colour: u32,
+}
+
 pub trait GraphicsBackend: Send + std::any::Any {
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     fn clear(&mut self, clear: &ClearCall);
     /// Show the back buffer surface.
     fn present(&mut self, back_buffer: &Target);
+    fn copy(&mut self, copy: &CopyCall);
+    fn fill(&mut self, fill: &FillCall);
+    /// A target's contents in its D3D9 format, rows tightly packed
+    /// (GetRenderTargetData); None when the backend cannot read targets.
+    fn read_back(&mut self, target: &Target) -> Option<Vec<u8>>;
 }
 
