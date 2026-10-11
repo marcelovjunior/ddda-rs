@@ -122,6 +122,8 @@ def disasm(address, length=0x200, stop_at_ret=True):
 # --- sparse runs: any function, automatic inputs --------------------------
 from unicorn import UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE  # noqa: E402
 from unicorn.x86_const import UC_X86_REG_XMM0, UC_X86_REG_FPSW  # noqa: E402
+import unicorn.x86_const as _xc  # noqa: E402
+XMM_REGS = {f"xmm{k}": getattr(_xc, f"UC_X86_REG_XMM{k}") for k in range(8)}
 
 GPR = [("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX), ("ebx", UC_X86_REG_EBX),
        ("esp", UC_X86_REG_ESP), ("ebp", UC_X86_REG_EBP), ("esi", UC_X86_REG_ESI), ("edi", UC_X86_REG_EDI)]
@@ -136,16 +138,44 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 
 
+SSE_BINARY = {"addss", "subss", "mulss", "divss", "minss", "maxss", "addps", "subps", "mulps", "divps",
+              "minps", "maxps"}
+
+
 class Rejected(Exception):
     """The case is not a valid vector (NaN float input, runaway loop, ...)."""
 
 
-def run_sparse(address, seed, max_insn=20000):
+def static_pop(target, _cache={}):
+    """Bytes a function pops with its `ret N` (first ret in a linear sweep;
+    0 when none is found or the target is outside the image)."""
+    if target not in _cache:
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        pop = 0
+        try:
+            for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(code(target, 0x1000), target):
+                if i.mnemonic in ("ret", "retn"):
+                    pop = int(i.op_str, 0) if i.op_str else 0
+                    break
+        except KeyError:
+            pass
+        _cache[target] = pop
+    return _cache[target]
+
+
+def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
     {"regs_in", "pages_in", "regs_out", "pages_out", "xmm0_out", "st0_out"};
-    pages are {page_address: hex}. Raises Rejected for unusable cases."""
+    pages are {page_address: hex}. Raises Rejected for unusable cases.
+
+    With `end` (the function's end address), calls and jumps from the
+    function's own code to anything outside it that is neither in `lifted`
+    nor a PLATFORM model are mocked: the callee does not run; the event is
+    recorded in "calls" (target, all eight registers at entry) with what the
+    mock returns (random eax/ecx/edx, random finite xmm0, the callee's
+    stack pop). ddnative's tests replay these through x86::call_ext."""
     import random
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
@@ -198,7 +228,12 @@ def run_sparse(address, seed, max_insn=20000):
     def check_float(uc_, access, addr, size, value, _):
         eip = uc_.reg_read(UC_X86_REG_EIP)
         if eip not in decoded:
-            decoded[eip] = next(md.disasm(bytes(uc_.mem_read(eip, 15)), eip)).mnemonic
+            ins = list(md.disasm(bytes(uc_.mem_read(eip, 15)), eip, 1))
+            if not ins:  # data access from undecodable code: report, don't crash
+                bad.append(f"undecodable code at {eip:#010x} reading {addr:#010x}")
+                uc_.emu_stop()
+                return
+            decoded[eip] = ins[0].mnemonic
         if decoded[eip] in FLOAT_LOADS and size in (4, 8):
             raw = bytes(uc_.mem_read(addr, size))
             bits = int.from_bytes(raw, "little")
@@ -209,7 +244,43 @@ def run_sparse(address, seed, max_insn=20000):
 
     count, bad = [0], []
 
+    # SSE ops with two NaN operands: the CPU returns the first operand's NaN,
+    # Unicorn (QEMU) applies the x87 rule (larger payload). Such a case
+    # cannot be judged by the emulator: reject it.
+    nmd = Cs(CS_ARCH_X86, CS_MODE_32)
+    nmd.detail = True
+    sse_dec = {}
+
+    def two_nans(uc_, addr):
+        if addr not in sse_dec:
+            try:
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, 15)), addr))
+                sse_dec[addr] = i if i.mnemonic in SSE_BINARY else None
+            except (UcError, StopIteration):
+                sse_dec[addr] = None
+        i = sse_dec[addr]
+        if i is None:
+            return False
+        lanes = 4 if i.mnemonic.endswith("ps") else 1
+        a = uc_.reg_read(XMM_REGS[i.reg_name(i.operands[0].reg)])
+        o = i.operands[1]
+        if o.type == 1:  # register
+            b = uc_.reg_read(XMM_REGS[i.reg_name(o.reg)])
+        else:
+            mm = o.mem
+            ea = mm.disp + (uc_.reg_read(dict(GPR)[i.reg_name(mm.base)]) if mm.base else 0) +                 (uc_.reg_read(dict(GPR)[i.reg_name(mm.index)]) * mm.scale if mm.index else 0)
+            try:
+                b = int.from_bytes(bytes(uc_.mem_read(ea & 0xFFFFFFFF, 4 * lanes)), "little")
+            except UcError:
+                return False
+        nan = lambda v: (v & 0x7F800000) == 0x7F800000 and (v & 0x7FFFFF) != 0  # noqa: E731
+        return any(nan((a >> 32 * k) & 0xFFFFFFFF) and nan((b >> 32 * k) & 0xFFFFFFFF) for k in range(lanes))
+
     def on_code(uc_, addr, size, _):
+        if two_nans(uc_, addr):
+            bad.append(f"two NaN operands at {addr:#010x}")
+            uc_.emu_stop()
+            return
         count[0] += 1
         if count[0] > max_insn:
             bad.append("runaway")
@@ -265,6 +336,48 @@ def run_sparse(address, seed, max_insn=20000):
 
     for a in PLATFORM:
         uc.hook_add(UC_HOOK_CODE, on_platform, None, a, a)
+
+    calls = []
+    branch = [None]          # the last instruction of the function itself, if it can leave it
+    pushed = [0, False, 0]   # bytes pushed since the last call (after the register-saving
+                             # prologue), prologue over, the count at the last call
+    dmd = Cs(CS_ARCH_X86, CS_MODE_32)
+    dmd.detail = True
+    own = {}
+
+    def on_ext(uc_, pc, size, _):
+        if address <= pc < end:
+            if pc not in own:
+                own[pc] = next(dmd.disasm(code(pc, 15), pc))  # the function's own code: from the image
+            i = own[pc]
+            branch[0] = i if i.mnemonic == "call" or i.mnemonic.startswith("j") else None
+            if i.mnemonic == "call":  # its arguments: what was pushed since the previous call
+                pushed[2], pushed[0] = pushed[0], 0
+            if i.mnemonic == "push" and pushed[1]:
+                pushed[0] += 4
+            elif not (i.mnemonic == "push" and i.operands[0].type == 1):  # 1: X86_OP_REG
+                pushed[1] = True
+            return
+        i, branch[0] = branch[0], None
+        if i is None or pc in lifted or pc in PLATFORM:
+            return
+        esp = uc_.reg_read(UC_X86_REG_ESP)
+        ev = {"target": pc, "regs": {n: uc_.reg_read(r) for n, r in GPR}}
+        direct = i.operands[0].type == 2  # X86_OP_IMM
+        pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
+        ret = struct.unpack("<I", mread(esp, 4))[0]
+        out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
+               "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
+               "pop": pop}
+        for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX)):
+            uc_.reg_write(r, out[n])
+        uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
+        uc_.reg_write(UC_X86_REG_ESP, (esp + 4 + pop) & 0xFFFFFFFF)
+        uc_.reg_write(UC_X86_REG_EIP, ret)
+        calls.append({**ev, "out": out})
+
+    if end is not None:
+        uc.hook_add(UC_HOOK_CODE, on_ext)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
     uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
     uc.hook_add(UC_HOOK_MEM_READ, check_float)
@@ -301,7 +414,11 @@ def run_sparse(address, seed, max_insn=20000):
                 bad.append(f"{e} at {pc:#010x}")
                 break
             retried.add(pc)
-            i = next(md.disasm(bytes(uc.mem_read(pc, 15)), pc))
+            try:
+                i = next(md.disasm(bytes(uc.mem_read(pc, 15)), pc))
+            except (UcError, StopIteration):
+                bad.append(f"{e} at {pc:#010x}")
+                break
             for op in i.operands:
                 if op.type == 3:  # X86_OP_MEM
                     mm = op.mem
@@ -314,6 +431,8 @@ def run_sparse(address, seed, max_insn=20000):
                     for p in {a & ~0xFFF, (a + op.size - 1) & ~0xFFF}:
                         if p not in pages_in:
                             on_unmapped(uc, None, p, 1, 0, None)
+    if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
+        bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
     if bad:
         raise Rejected("; ".join(bad))
     regs_out = {name: uc.reg_read(r) for name, r in GPR}
@@ -343,4 +462,4 @@ def run_sparse(address, seed, max_insn=20000):
         return [[a, bytes(b).hex()] for a, b in out]
     final = {a: uc.mem_read(a, 1)[0] for a in written}
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
-            "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth}
+            "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth, **({"calls": calls} if end is not None else {})}

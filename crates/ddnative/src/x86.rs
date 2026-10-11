@@ -74,6 +74,31 @@ impl Cpu {
     }
 }
 
+/// Where a lifted function's call to code that is not lifted goes
+/// (`call_ext`): a direct call to an untranslated function, any indirect
+/// call (vtables, function pointers, imports) or a tail jump out of it.
+/// The handler runs with the return address already pushed and must leave
+/// the state as the callee's `ret` would. Tests install a replay of the
+/// calls a vector recorded; the game installs its dispatcher.
+pub type ExtCall = dyn FnMut(&mut dyn crate::mem::Mem, &mut Cpu, u32);
+
+thread_local! {
+    static EXT: std::cell::RefCell<Option<Box<ExtCall>>> = std::cell::RefCell::new(None);
+}
+
+/// Install the handler for `call_ext` on this thread; returns the old one.
+pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<Box<ExtCall>> {
+    EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), f))
+}
+
+/// A call from lifted code to `target`, which is not lifted.
+pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
+    let mut f = EXT.with(|e| e.borrow_mut().take())
+        .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
+    f(m, cpu, target);
+    EXT.with(|e| *e.borrow_mut() = Some(f));
+}
+
 impl Flags {
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }

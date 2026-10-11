@@ -21,6 +21,18 @@ pub use super::lifted_015::*;
 pub use super::lifted_016::*;
 pub use super::lifted_017::*;
 pub use super::lifted_018::*;
+pub use super::lifted_019::*;
+pub use super::lifted_020::*;
+pub use super::lifted_021::*;
+pub use super::lifted_022::*;
+pub use super::lifted_023::*;
+pub use super::lifted_024::*;
+pub use super::lifted_025::*;
+pub use super::lifted_026::*;
+pub use super::lifted_027::*;
+pub use super::lifted_028::*;
+pub use super::lifted_029::*;
+pub use super::lifted_030::*;
 
 /// Every lifted function: (address, function).
 pub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {
@@ -44,5 +56,17 @@ pub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {
     v.extend_from_slice(super::lifted_016::FUNCTIONS_016);
     v.extend_from_slice(super::lifted_017::FUNCTIONS_017);
     v.extend_from_slice(super::lifted_018::FUNCTIONS_018);
+    v.extend_from_slice(super::lifted_019::FUNCTIONS_019);
+    v.extend_from_slice(super::lifted_020::FUNCTIONS_020);
+    v.extend_from_slice(super::lifted_021::FUNCTIONS_021);
+    v.extend_from_slice(super::lifted_022::FUNCTIONS_022);
+    v.extend_from_slice(super::lifted_023::FUNCTIONS_023);
+    v.extend_from_slice(super::lifted_024::FUNCTIONS_024);
+    v.extend_from_slice(super::lifted_025::FUNCTIONS_025);
+    v.extend_from_slice(super::lifted_026::FUNCTIONS_026);
+    v.extend_from_slice(super::lifted_027::FUNCTIONS_027);
+    v.extend_from_slice(super::lifted_028::FUNCTIONS_028);
+    v.extend_from_slice(super::lifted_029::FUNCTIONS_029);
+    v.extend_from_slice(super::lifted_030::FUNCTIONS_030);
     v
 }

@@ -288,6 +288,37 @@ in `patterns/lift.json` lists its `calls`. A vector for a caller runs
 the original callee code in Unicorn, so the caller's test checks the
 composition too.
 
+**Calls to untranslated code (ext).** After the rounds, `scan` makes a
+last pass with `ext=True`: any other call (direct to an untranslated
+function, indirect through a vtable or function pointer, through the
+import table) and any outward jump becomes `x86::call_ext(m, cpu,
+target)`. Such functions are marked `"ext": true` and are never callable
+by others (a caller treats them as untranslated too). Indirect *jumps*
+stay rejected: most are switch tables inside the function.
+
+Their vectors come from `run_sparse(addr, seed, end=..., lifted=...)`,
+which **mocks** each call or jump from the function's own code to
+anything outside it that is neither lifted nor a platform model: the
+callee does not run; the recorder logs `{target, regs (all eight at the
+call), out}` in the vector's `calls` and returns random eax/ecx/edx,
+random finite xmm0 lanes and the callee's stack pop (direct targets:
+the `ret N` of the target; indirect: the bytes pushed by the function
+since its previous call, after the register-saving prologue). The test
+installs a replay as the `call_ext` handler (`x86::set_ext_calls`): it
+checks the target and every register at each call (so vtable lookups and
+register arguments are verified), reads the return address like the
+mock did, and applies the same results; a vector also fails if a
+recorded call was never made.
+
+Why this is sound: a literal translation must behave like the original
+for *every* callee behaviour, so verifying it against arbitrary mocked
+callees verifies it for the real one. What it does not verify is the
+callee; that is the callee's own vector. A wrong pop guess only makes the
+case degenerate (it usually faults and is rejected), never a false pass.
+Limits: if the instruction after an ext call is x87 (a float returned in
+st0), the function is rejected (`x87-return`); runs that end with an x87
+stack fault are rejected.
+
 **Commands.** `PY lift.py scan` (lift everything it can; prints each
 round and the rejection reasons), `PY lift.py vectors` (parallel;
 `LIFT_WORKERS=4` to leave the PC usable), `python lift.py gen`, then

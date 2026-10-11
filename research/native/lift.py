@@ -50,9 +50,11 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
-def lift(addr, size, callable=frozenset()):
+def lift(addr, size, callable=frozenset(), ext=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
-    holds the lifted functions a `call` or an outward (tail) jump may go to."""
+    holds the lifted functions a `call` or an outward (tail) jump may go to.
+    With `ext`, any other call or outward jump (direct, indirect, imports)
+    goes through x86::call_ext, which the vectors replay."""
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
@@ -68,10 +70,10 @@ def lift(addr, size, callable=frozenset()):
     for k, i in enumerate(ins):
         if i.mnemonic.startswith("j"):
             if i.operands[0].type != X86_OP_IMM:
-                raise Unsupported("indirect jump")
+                raise Unsupported("indirect jump")  # mostly switch tables: targets inside the function
             t = i.operands[0].imm
             if not (addr <= t < end):
-                if t not in callable and t not in h.PLATFORM:
+                if t not in callable and t not in h.PLATFORM and not ext:
                     raise Unsupported("jump out of the function")
             else:
                 leaders.add(t)
@@ -150,8 +152,13 @@ def lift(addr, size, callable=frozenset()):
         return n
 
     def target(t):
-        """Rust path of a call target: a platform model or a lifted function."""
-        return f"crate::platform::{h.PLATFORM[t]}" if t in h.PLATFORM else f"super::lifted::f_{t:08x}"
+        """Rust path of a call target: a platform model, a lifted function,
+        or (ext) the untranslated-code handler."""
+        if t in h.PLATFORM:
+            return f"crate::platform::{h.PLATFORM[t]}"
+        if t in callable:
+            return f"super::lifted::f_{t:08x}"
+        return f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x{t:X}))"
 
     def sx(v, bits):
         return f"(({v}) as i{bits} as i32 as u32)" if bits in (8, 16) else v
@@ -242,21 +249,32 @@ def lift(addr, size, callable=frozenset()):
                 body.append(f"pc = 0x{ops[0].imm:X}; continue;")
                 terminated = True
                 break
+            elif mn.startswith("j") and mn != "jmp" and nxt is None:
+                raise Unsupported("falls off the end (conditional jump last)")
             elif mn.startswith("j") and not (addr <= ops[0].imm < end):
                 body.append(f"if fl.cond(\"{mn[1:]}\") {{ {SAVE} {target(ops[0].imm)}(m, cpu); return; }} "
                             f"pc = 0x{nxt:X}; continue;")
                 terminated = True
                 break
+            elif mn.startswith("j") and nxt is None:
+                raise Unsupported("falls off the end (conditional jump last)")
             elif mn.startswith("j"):
                 body.append(f"pc = if fl.cond(\"{mn[1:]}\") {{ 0x{ops[0].imm:X} }} else {{ 0x{nxt:X} }}; continue;")
                 terminated = True
                 break
+            elif mn == "call" and nxt is None:
+                raise Unsupported("noreturn call (last instruction)")
+            elif mn == "call" and (ops[0].type != X86_OP_IMM or
+                                   (ops[0].imm not in callable and ops[0].imm not in h.PLATFORM)):
+                if not ext:
+                    raise Unsupported("icall" if ops[0].type != X86_OP_IMM else "call")
+                if k + 1 < len(ins) and ins[k + 1].mnemonic.startswith("f") and                         ins[k + 1].mnemonic not in ("fld", "fldz", "fld1"):
+                    raise Unsupported("x87-return")  # the mock returns nothing on the x87 stack
+                # the operand is evaluated before the return address is pushed
+                body.append(f"{{ let t = {load(i, ops[0])}; esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{nxt:X}); "
+                            f"{SAVE} x86::call_ext(m, cpu, t); {LOAD} }}")
             elif mn == "call":
-                if ops[0].type != X86_OP_IMM:
-                    raise Unsupported("icall")
                 t = ops[0].imm
-                if t not in callable and t not in h.PLATFORM:
-                    raise Unsupported("call")
                 # push the return address, run the callee on the whole state, carry on
                 body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{nxt:X}); "
                             f"{SAVE} {target(t)}(m, cpu); {LOAD}")
@@ -403,6 +421,21 @@ def scan(limit=None):
         print(f"round {rnd}: +{len(ok) - before}", flush=True)
         if len(ok) == before:
             break
+    # last pass: the rest may call untranslated code through x86::call_ext
+    # (vectors mock those calls); such functions are not callable themselves
+    why, before = Counter(), len(ok)
+    for a, ns, nm, sz in rows:
+        if a in done:
+            continue
+        try:
+            arms = lift(a, sz, done, ext=True)
+            ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms),
+                       "ext": True})
+        except Unsupported as e:
+            why[str(e).split(" ")[0]] += 1
+        except Exception as e:  # noqa: BLE001
+            why["error:" + type(e).__name__] += 1
+    print(f"ext pass: +{len(ok) - before}", flush=True)
     json.dump(ok, open(f"{N}/patterns/lift.json", "w"))
     print(len(ok), "lifted of", len(rows), "; top rejections:", why.most_common(14))
 
@@ -411,9 +444,9 @@ def relift():
     """Re-translate the current list in place after a codegen change (same
     functions, same callees; their vectors stay valid)."""
     lifted = json.load(open(f"{N}/patterns/lift.json"))
-    have = {f["addr"] for f in lifted}
+    closed = {f["addr"] for f in lifted if not f.get("ext")}
     for f in lifted:
-        f["arms"] = lift(f["addr"], f["size"], have)
+        f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
         assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
     json.dump(lifted, open(f"{N}/patterns/lift.json", "w"))
     print(len(lifted), "functions re-lifted")
@@ -432,15 +465,26 @@ if __name__ == "__main__":
         print(rust_fn(a, f"{ns}::{nm}", lift(a, sz)))
 
 
+_CLOSED = frozenset()
+
+
+def _init_worker(closed):
+    global _CLOSED
+    _CLOSED = frozenset(closed)
+
+
 def _vectors_for(args):
-    addr, per = args
+    addr, per, end = args
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     out, got, seed = [], 0, 0
     while got < per and seed < per * 8:
         seed += 1
         try:
-            r = h.run_sparse(addr, (addr << 8) ^ seed)
+            if end is None:
+                r = h.run_sparse(addr, (addr << 8) ^ seed)
+            else:  # ext: calls to untranslated code are mocked
+                r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED)
         except h.Rejected:
             continue
         except Exception:  # noqa: BLE001  (emulator errors: no vector)
@@ -465,10 +509,12 @@ def vectors(per=3):
     # functions that already failed to get a vector are not retried (each costs 8x the seeds)
     nov_path = f"{N}/patterns/lift_novector.json"
     novector = set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()
-    todo = [(f["addr"], per) for f in lifted if f["addr"] not in have and f["addr"] not in novector]
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None)
+            for f in lifted if f["addr"] not in have and f["addr"] not in novector]
+    closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
     failed = []
-    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count()))) as pool:
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,)) as pool:
         for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=8)):
             cases += out
             if not out:
@@ -525,8 +571,12 @@ def gen(chunk=400):
     test = f'''//! Generated by research/native/lift.py: do not edit.
 use ddnative::generated::lifted;
 use ddnative::mem::Sparse;
-use ddnative::x86::{{Cpu, Entry}};
+use ddnative::mem::Mem;
+use ddnative::x86::{{self, Cpu, Entry}};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
 
 fn vectors(name: &str) -> Option<Vec<Value>> {{
     let path = format!("E:/ddda-re/notes/native/vectors/{{name}}.json");
@@ -539,6 +589,26 @@ fn vectors(name: &str) -> Option<Vec<Value>> {{
 }}
 fn u(v: &Value) -> u32 {{ v.as_u64().unwrap() as u32 }}
 
+/// Replays the calls to untranslated code a vector recorded: checks the
+/// target and every register at the call, then returns what the mock did.
+fn replay(calls: Rc<RefCell<VecDeque<Value>>>) -> Box<x86::ExtCall> {{
+    Box::new(move |m: &mut dyn Mem, cpu: &mut Cpu, target: u32| {{
+        let ev = calls.borrow_mut().pop_front().unwrap_or_else(|| panic!("unrecorded call to {{target:#x}}"));
+        assert_eq!(target, u(&ev["target"]), "call target");
+        let r = &ev["regs"];
+        assert_eq!([cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi],
+                   ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&r[k])), "registers at the call");
+        let ret = m.u32(cpu.esp);
+        let _ = ret;
+        let o = &ev["out"];
+        cpu.eax = u(&o["eax"]);
+        cpu.ecx = u(&o["ecx"]);
+        cpu.edx = u(&o["edx"]);
+        for k in 0..4 {{ cpu.xmm[0][k] = u(&o["xmm0"][k]); }}
+        cpu.esp = cpu.esp.wrapping_add(4 + u(&o["pop"]));
+    }})
+}}
+
 {decl}
 #[test]
 fn every_lifted_function_matches_the_original() {{
@@ -546,6 +616,8 @@ fn every_lifted_function_matches_the_original() {{
     let all = lifted::all();
     let mut seen = std::collections::HashSet::new();
     let mut failures = Vec::new();
+    // LIFT_DEBUG=0xADDR prints what differs for that function's vectors
+    let debug = std::env::var("LIFT_DEBUG").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
     for c in &cases {{
         let addr = u(&c["addr"]);
         let f = all.iter().find(|e| e.0 == addr).expect("lifted function").1;
@@ -559,11 +631,15 @@ fn every_lifted_function_matches_the_original() {{
         let ri = &c["regs_in"];
         let entry = Entry {{ eax: u(&ri["eax"]), ecx: u(&ri["ecx"]), edx: u(&ri["edx"]), ebx: u(&ri["ebx"]),
             esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0 }};
+        let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
+            .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
+        x86::set_ext_calls(Some(replay(calls.clone())));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             f(&mut m, &mut cpu);
             cpu.exit()
         }}));
+        let all_calls_made = calls.borrow().is_empty();
         let ok = match result {{
             Err(_) => false,
             Ok(x) => {{
@@ -578,7 +654,15 @@ fn every_lifted_function_matches_the_original() {{
                     }}
                 }}
                 let st0 = c["st0_out"].as_u64().map(|v| v as u32);
-                regs && m.written == want && x.xmm0 == u(&c["xmm0_out"]) && (st0.is_none() || x.st0 == st0)
+                if debug == Some(addr) {{
+                    let ro = &c["regs_out"];
+                    eprintln!("{{addr:#x}}: calls made {{all_calls_made}}; got {{x:x?}}");
+                    eprintln!("  want regs {{:x?}} xmm0 {{:#x}} st0 {{st0:x?}}",
+                        ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&ro[k])), u(&c["xmm0_out"]));
+                    for (a, v) in &want {{ if m.written.get(a) != Some(v) {{ eprintln!("  [{{a:#x}}] want {{v:#04x}} got {{:x?}}", m.written.get(a)); }} }}
+                    for (a, v) in &m.written {{ if !want.contains_key(a) {{ eprintln!("  [{{a:#x}}] extra write {{v:#04x}}"); }} }}
+                }}
+                all_calls_made && regs && m.written == want && x.xmm0 == u(&c["xmm0_out"]) && (st0.is_none() || x.st0 == st0)
             }}
         }};
         if !ok {{ failures.push(format!("{{addr:#010x}}")); }}
