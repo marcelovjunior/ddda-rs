@@ -167,3 +167,62 @@ pub fn rotate_about_y(
         y * o + x * o + z * o + ONE,
     ]
 }
+
+/// The angle between two vectors in radians: `acos` of their dot product
+/// over the product of their lengths, clamped to `[-1, 1]` (a NaN passes
+/// through). `acos` is the CRT's acosf (0x012F161F).
+///
+/// The original takes `a` in EAX and `b` in ECX.
+// Translated from 0x007ADC00 (DDDA.exe 2017-12-13 Steam), angle between vectors.
+pub fn angle_between(a: Vec3, b: Vec3, acos: impl FnOnce(F32) -> F32) -> F32 {
+    acos(angle_cosine(a, b))
+}
+
+/// The clamped cosine [`angle_between`] takes the arccosine of.
+pub fn angle_cosine(a: Vec3, b: Vec3) -> F32 {
+    let dot = a.y * b.y + a.x * b.x + b.z * a.z;
+    let lengths = (b.y * b.y + b.x * b.x + b.z * b.z).sqrt() * (a.y * a.y + a.x * a.x + a.z * a.z).sqrt();
+    let c = dot / lengths;
+    if c > ONE {
+        ONE
+    } else if F32(-1.0) > c {
+        F32(-1.0)
+    } else {
+        c
+    }
+}
+
+/// Whether `target` lies inside the horizontal cone of half-angle
+/// `half_angle` around the direction `yaw`, seen from `eye`: in the x/z
+/// plane, the unit direction to the target dotted with `(sin yaw, 0,
+/// cos yaw)` is at least `cos(half_angle)`. False when the target is
+/// horizontally within sqrt(FLT_EPSILON) of `eye` (its squared distance not
+/// above FLT_EPSILON) or for NaN. The y terms of the dot product are the
+/// original's `(inv * 0) * 0`. `trig` is the CRT's sinf/cosf, called as
+/// sin(yaw), cos(yaw), then cos(half_angle) only if the distance passes.
+///
+/// The original takes `eye` in EDI, `target` in ESI, `yaw` and
+/// `half_angle` on the stack, and answers in AL.
+// Translated from 0x007ADCA0 (DDDA.exe 2017-12-13 Steam), target inside a view cone.
+pub fn in_view_cone(eye: Vec3, target: Vec3, yaw: F32, half_angle: F32,
+                    mut trig: impl FnMut(crate::matrix::Trig, F32) -> F32) -> bool {
+    use crate::matrix::Trig::{Cos, Sin};
+    let (s, c) = (trig(Sin, yaw), trig(Cos, yaw));
+    match view_cone_dot(eye, target, s, c) {
+        Some(dot) => dot >= trig(Cos, half_angle),
+        None => false,
+    }
+}
+
+/// The dot product of [`in_view_cone`], or `None` if the horizontal
+/// distance is too short.
+pub fn view_cone_dot(eye: Vec3, target: Vec3, s: F32, c: F32) -> Option<F32> {
+    let (dx, dz) = (target.x - eye.x, target.z - eye.z);
+    let d2 = dz * dz + dx * dx;
+    if !(d2 > NORMALIZE_EPSILON) {
+        return None;
+    }
+    let inv = ONE / d2.sqrt();
+    let zero = F32::ZERO; // read from 0x01521690
+    Some(inv * dx * s + inv * zero * zero + dz * inv * c)
+}

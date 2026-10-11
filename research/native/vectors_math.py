@@ -54,7 +54,7 @@ BELOW, ABOVE = 0x200, 0x40  # the stack window around ESP (callees' frames inclu
 # callee runs in Unicorn; the case records the machine at its entry and at
 # its return (registers, all xmm lanes, the stack window), and the replay
 # checks the entry and restores the return state (crates/mtmath/tests).
-CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55, 0x012F0D4C, 0x012F0BAC}  # CRT atan2 (doubles), sinf, cosf, asinf, tanf
+CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55, 0x012F0D4C, 0x012F0BAC, 0x012F161F}  # CRT atan2 (doubles), sinf, cosf, asinf, tanf, acosf
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -79,6 +79,8 @@ PORTS = {
     0x00CFCF80: ("euler", 1),
     0x007AEED0: ("normal", 1),
     0x007AF450: ("basis_up", 3),
+    0x007ADC00: ("between", 0),
+    0x007ADCA0: ("cone", 2),
     0x007AF5B0: ("basis", 2),
     0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
@@ -302,6 +304,23 @@ def edge_cases(addr, kind, nargs, n, seed):
             if 0.5 <= pick < 0.65:  # up or t inside the output
                 args[1] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
                 args[2] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
+        elif kind in ("between", "cone"):
+            vecs = [[f2b(rnd.uniform(-20, 20)) for _ in range(4)] for _ in range(2)]
+            pick = rnd.random()
+            if pick < 0.25:
+                vecs = [[floats(rnd) for _ in range(4)] for _ in range(2)]
+            elif pick < 0.35:  # the same point, or parallel vectors
+                vecs[1] = list(vecs[0])
+            elif pick < 0.45:  # a hair apart horizontally
+                vecs[1] = [f2b(struct.unpack("<f", struct.pack("<I", v))[0] + rnd.uniform(-1e-4, 1e-4)) for v in vecs[0]]
+            for k, v in enumerate(vecs):
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            if kind == "between":
+                regs["eax"], regs["ecx"] = VEC[0], VEC[1]
+            else:
+                regs["edi"], regs["esi"] = VEC[0], VEC[1]
+                args = [floats(rnd) if rnd.random() < 0.2 else f2b(rnd.uniform(-7, 7)),
+                        floats(rnd) if rnd.random() < 0.2 else f2b(rnd.uniform(0, 3.2))]
         elif kind == "normal":
             vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
             pick = rnd.random()

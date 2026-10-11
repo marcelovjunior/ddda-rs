@@ -784,6 +784,99 @@ pub fn f_007af450(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+/// The CRT's float arccosine (x in xmm0, result in xmm0), not ported.
+const CRT_ACOSF: u32 = 0x012F_161F;
+
+/// `float angle_between(const MtVector3 *a /* eax */, const MtVector3 *b
+/// /* ecx */)`: the CRT acosf's result in xmm0 (a tail of
+/// `call acosf; mov esp, ebp; pop ebp; ret`).
+pub fn f_007adc00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (a, b) = (load_vec3(m, cpu.eax), load_vec3(m, cpu.ecx));
+    let (entry_esp, ebp) = (cpu.esp, cpu.ebp);
+    pushed(m, cpu, 1, ebp);
+    cpu.ebp = entry_esp.wrapping_sub(4);
+    cpu.esp = cpu.ebp & !7;
+    angle::angle_between(a, b, |c| {
+        // the registers at the call, as the original leaves its scratch
+        let sq = |v: Vec3| v.y * v.y + v.x * v.x + v.z * v.z;
+        let raw = (a.y * b.y + a.x * b.x + b.z * a.z) / (sq(b).sqrt() * sq(a).sqrt());
+        cpu.xmm = [
+            scalar(c),
+            scalar(if raw > ONE { ONE } else { F32(-1.0) }),
+            scalar(sq(a).sqrt()),
+            scalar(sq(a)),
+            scalar(a.z * a.z),
+            scalar(sq(b)),
+            scalar(b.z * b.z),
+            scalar(b.z * a.z),
+        ];
+        call_out(m, cpu, CRT_ACOSF, 0x007A_DC99);
+        F32::from_bits(cpu.xmm[0][0])
+    });
+    (cpu.ebp, cpu.esp) = (ebp, entry_esp);
+    ret(cpu, 0);
+}
+
+/// `bool in_view_cone(eye /* edi */, target /* esi */, float yaw, float
+/// half_angle)`, result in AL over the EAX the last CRT call left; the
+/// caller pops the arguments. Spills the sine and then the dot product.
+pub fn f_007adca0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (entry_esp, ebp) = (cpu.esp, cpu.ebp);
+    let (yaw, half) = (arg_f32(m, cpu, 0), arg_f32(m, cpu, 1));
+    pushed(m, cpu, 1, ebp);
+    cpu.ebp = entry_esp.wrapping_sub(4);
+    let slot = (cpu.ebp & !7).wrapping_sub(8).wrapping_add(4);
+    cpu.esp = slot.wrapping_sub(4);
+    let (pe, pt) = (cpu.edi, cpu.esi);
+    let calls = [0x007A_DCB3, 0x007A_DCC3, 0x007A_DD40];
+    let mut k = 0;
+    let mut state: Option<(F32, F32)> = None; // (sin, cos) of yaw
+    let inside = angle::in_view_cone(load_xz(m, pe), load_xz(m, pt), yaw, half, |which, v| {
+        if k == 2 {
+            // before the third call: the dot product is spilled and the
+            // scratch registers hold the terms of the dot product
+            let (s, c) = state.unwrap();
+            let (eye, target) = (load_xz(m, pe), load_xz(m, pt));
+            let (dx, dz) = (target.x - eye.x, target.z - eye.z);
+            let inv = ONE / (dz * dz + dx * dx).sqrt();
+            let dot = angle::view_cone_dot(eye, target, s, c).unwrap();
+            spill(m, slot, dot);
+            cpu.xmm[1] = scalar(dot);
+            cpu.xmm[2] = scalar(inv);
+            cpu.xmm[3] = scalar(inv * F32::ZERO * F32::ZERO);
+            cpu.xmm[4] = scalar(dz * inv * c);
+        }
+        cpu.xmm[0] = scalar(v);
+        let target = if which == matrix::Trig::Sin { CRT_SINF } else { CRT_COSF };
+        call_out(m, cpu, target, calls[k]);
+        let r = F32::from_bits(cpu.xmm[0][0]);
+        match k {
+            0 => {
+                spill(m, slot, r);
+                state = Some((r, F32::ZERO));
+            }
+            1 => state = Some((state.unwrap().0, r)),
+            _ => {}
+        }
+        k += 1;
+        r
+    });
+    if k == 2 {
+        // the distance test failed after cos(yaw)
+        let (eye, target) = (load_xz(m, pe), load_xz(m, pt));
+        let (dx, dz) = (target.x - eye.x, target.z - eye.z);
+        cpu.xmm[1] = scalar(dz * dz + dx * dx);
+        cpu.xmm[2] = scalar(dx * dx);
+        cpu.xmm[3] = scalar(dx);
+        cpu.xmm[4] = scalar(dz);
+    } else {
+        cpu.xmm[1] = scalar(F32::from_bits(m.u32(slot)));
+    }
+    cpu.eax = cpu.eax & !0xFF | inside as u32;
+    (cpu.ebp, cpu.esp) = (ebp, entry_esp);
+    ret(cpu, 0);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -792,6 +885,8 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D870, f_007ad870, 0b0001_1111),
     (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
+    (0x007A_DC00, f_007adc00, 0b1111_1111),
+    (0x007A_DCA0, f_007adca0, 0b1111_1111),
     (0x007A_EED0, f_007aeed0, 0b1111_1111),
     (0x007A_F450, f_007af450, 0b1111_1111),
     (0x007A_F5B0, f_007af5b0, 0b1111_1111),
