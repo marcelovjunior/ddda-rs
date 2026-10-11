@@ -603,6 +603,24 @@ initializers in CRT order: 5,651 complete), `boot` (the CRT entry
 `sApp` start-up and stops where the CRT's `__snprintf_s` is needed), `call`
 (one guest function), `imports` (the import list).
 
+Findings for the next stages (2026-10-11, Ghidra):
+
+- Exceptions are rare: only three helpers (0x012E1A13, 0x012E1A60,
+  0x012E1AD4, STL failure paths) and the CRT's own `FindHandler` call
+  `__CxxThrowException@8` (0x012F530B); RaiseException is otherwise used
+  by `__raise_exc_ex` and the delay-load helper. The runtime can stop with
+  a report on RaiseException; what it needs first is the SEH frame
+  bookkeeping (`__SEH_prolog4`/`__SEH_epilog4`, `fs:[0]`), brief L15.
+- Allocators: lifted code calls the five platform models directly; the
+  runtime redirects the three allocator models (`ddnative_base::platform::
+  redirect`) to the original bodies (L15 lifts them), because the game also
+  frees through its allocator object at 0x018D0AA0 directly.
+- Input: `sKeyboard` (ctor 0x00DF43E0) creates the DirectInput8 object and
+  installs a low-level keyboard hook (`SetWindowsHookExA(WH_KEYBOARD_LL,
+  0x00DF3C40)`); XInputGetState is called from five pad functions
+  (0x00DF52B0, 0x00DF6DD0, 0x00DF9C90, 0x00DF9D50, 0x00DF9EE0). The host
+  layer will feed keys through the window message queue and these APIs.
+
 Lesson: never reimplement C-runtime functions as services. They are
 ordinary code in the exe; lift them (L14) and implement only operating
 system and device imports.
