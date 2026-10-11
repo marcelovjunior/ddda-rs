@@ -7,7 +7,7 @@ lifted: lifted functions share the whole machine state (x86::Cpu), and
 Verified by run_sparse vectors (random registers, random memory on
 demand, every byte read and written recorded).
 
-    python lift.py scan [N]     # lift every non-platform function it can; patterns/lift.json
+    python lift.py scan [N]     # lift every function it can (except test-model entries); patterns/lift.json
     python lift.py scan-extra   # append supplementary entries, preserving existing boundaries
     python lift.py vectors      # record sparse vectors for each lifted function
     python lift.py gen          # crates/ddlift/lift_*/src/generated + ddnative facade/test
@@ -1057,7 +1057,7 @@ def scan(limit=None):
     from collections import Counter
     ok, why = [], Counter()
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE "
-                      "status NOT IN ('verified', 'platform') AND size >= 1 "
+                      "status != 'verified' AND size >= 1 "
                       "ORDER BY address").fetchall()
     # verified functions are lifted too (hand ports keep their own tests): a
     # caller can only lift if its callees are lifted

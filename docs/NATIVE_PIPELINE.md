@@ -70,7 +70,7 @@ Python (stdlib only).
 
 | command | what it does |
 |---|---|
-| `build` | loads the export, marks `translated` (Rust cites the address), `documented` (docs cite it), `platform` (platform.json + the CRT block >= 0x012E0000), `verified` (a `Translated from` line in `crates/ddnative/src`, plus every member of a family whose representative is ported) |
+| `build` | loads the export, marks `translated` (Rust cites the address), `documented` (docs cite it), `platform` (historical platform.json + CRT range, retained separately as `platform_rule`), `verified` (a `Translated from` line in `crates/ddnative/src`, plus every member of a family whose representative is ported) |
 | `summary` | counts and bytes per status |
 | `next N` | untranslated functions most called by translated ones (dependency frontier) |
 | `partial` | how many `translated` functions are really complete (all callees translated, no gap note nearby) |
@@ -132,7 +132,7 @@ r = h.run(addr, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=10000
 
 1. **Pick.** `python scripts/inventory.py next 30`, or
    `PY research/native/families.py show 30` for families (best yield), or a
-   class you are rebuilding. Skip platform code (below). Prefer functions
+   class you are rebuilding. The historical platform split below no longer excludes lifter candidates. Prefer functions
    with no direct calls first; then ones whose callees are already
    verified or can sit behind a trait.
 2. **Read the original.** `h.disasm(addr, size, stop_at_ret=False)`: use
@@ -509,7 +509,8 @@ PY research/native/structured_inputs.py adopt --strategy small-v1
 Preparation scans missing entries with existing closed callees and releases
 each decoded body immediately. It includes high-address supplementary
 entries. An optional private `structured_quarantine.json` array excludes
-known mismatches. Strategy-specific JSONL files retain each attempted seed,
+known mismatches. Recording and adoption also honor that list, so stale
+successful trial logs cannot re-admit a quarantined body. Strategy-specific JSONL files retain each attempted seed,
 raw rejection reason and successful cases, allowing interrupted trials to
 resume by body key, requested seeds and budget. Different strategies never
 share failure caches. Changed closed-call boundaries reject recording or
@@ -811,8 +812,16 @@ E:/ddda-re/notes/native/     platform.json
 
 ## The platform layer
 
-Code Rust replaces instead of translating. `families.py platform` and
-`inventory.py build` classify it:
+Historical hand-port classification, **not a lifter or runtime exclusion**.
+Both `scan` and `structured_inputs.py prepare` now include these functions.
+Only the five explicit test-model entries below remain excluded.
+`families.py platform` writes `platform.json` and `platform_rules.json` under
+`LIFT_DATA`; `INVENTORY_EXPORT` and `INVENTORY_DB` select its read inputs.
+`inventory.py build` preserves `functions.platform_rule` independently of
+status: a declared, tested body becomes `verified` without losing its class.
+The CRT range wins over a shape rule; supplementary entries remain exempt
+from the range. Old lists without rule metadata are labelled unknown shape.
+These are classification rules, not claims about equivalent replacements:
 
 | rule | example |
 |---|---|
@@ -823,9 +832,35 @@ Code Rust replaces instead of translating. `families.py platform` and
 | MT allocator / memory-manager entry points (0x00CF5E20, 0x00DE0B80, 0x00DE0B90, 0x00CFE960, 0x00CFE9A0) | 5 |
 | the C runtime / library block, 0x012E0000 and above | 5,588 |
 
-What platform code *does* still matters to the port: the in-place
-constructor that runs after the allocator is game state (it is ported);
-only allocation, freeing and type registration are replaced.
+Regenerate privately with `families.py platform`, `inventory.py build`,
+`structured_inputs.py prepare`, then the normal record/adopt/gen/replay
+sequence. Rebuild inventory after successful replay and run
+`research/native/platform_report.py` for per-rule totals and residual
+reasons (`platform-report.json`). It requires the baseline manifest saved
+as `patterns/lift-baseline.json`, plus `inventory-baseline.sqlite`. Optional
+`quarantine_evidence.json` records observed replay failures; the report keeps
+them distinct from recorder rejections and refuses unexplained rows or
+unadopted successes. A selected body is not verified until
+its differential replay passes. Reports include thunks explicitly.
+
+The five model entry addresses retain their existing caller-test contract.
+A direct L14 body probe found 0x00CF73F0, 0x00DE0B80, 0x00DE0B90 and
+0x012EFE20 syntactically liftable; 0x012EFEA0 rejects an unproven indirect
+switch table. The pool body calls through IAT 0x0139D160 at 0x00CF73F6;
+the MT wrappers read allocator state at 0x018D0AA0 (0x00DE0B81 and
+0x00DE0B90). These originals should eventually exist for image-backed
+runtime execution, but normal sparse recording intercepts their entries
+and cannot verify them. L14 does not generate unverified runtime-only
+bodies or substitute model fixtures for original instructions. A distinct
+original-entry recorder contract and runtime binding policy are required;
+existing caller fixtures and model tests remain unchanged.
+
+L14 replay also isolates six x87 state/oracle mismatches: control-word
+readback at 0x012FC159 and observable status bits in 0x012FCEBC, 0x01314930,
+0x013149B0, 0x013179A0 and 0x01317A00. Their original cases and outputs are
+retained privately and the bodies remain quarantined; neither status bits
+nor expected values are normalized. See the L14 task Results for exact
+observations and the per-rule residual census.
 
 ### Platform models (calls from lifted code)
 

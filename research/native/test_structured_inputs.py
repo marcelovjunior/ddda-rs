@@ -97,6 +97,11 @@ class InputTests(unittest.TestCase):
             record=dict(addr=2,body_key=trials.lift.vector_key(new),cases=[dict(addr=2)])
             path=root/'structured-small-v1.jsonl'
             path.write_text(json.dumps({**record,'body_key':'stale'})+'\n'+json.dumps(record)+'\n'+json.dumps(record)+'\n')
+            trials.write(root/'structured_quarantine.json',[2])
+            with contextlib.redirect_stdout(io.StringIO()):trials.adopt(root,'small-v1')
+            self.assertEqual(trials.read(root/'patterns/lift.json'),[old])
+            self.assertEqual(trials.read(root/'vectors/lift.json'),[oldcase])
+            trials.write(root/'structured_quarantine.json',[])
             with contextlib.redirect_stdout(io.StringIO()):trials.adopt(root,'small-v1')
             self.assertEqual(trials.read(root/'patterns/lift.json'),[old,new])
             self.assertEqual(trials.read(root/'vectors/lift.json'),[oldcase,dict(addr=2)])

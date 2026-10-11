@@ -848,3 +848,27 @@ opening (codex-31), route perf (codex-29).
   pair and census, then chooses the reciprocal-oracle/CPU contract and traces
   remaining stack-context failures. Initializer `0x0137E490` remains without
   a usable fixture; no live-game/boot claim, shared writes, gate or push.
+
+### L14 platform-inclusive lifting (2026-10-11; full replay pending)
+
+- Both scan paths include historical platform classes. Inventory retains
+  `platform_rule` independently of verification; per-rule private reports
+  distinguish selected bodies, recorder failures, lift rejections and replay
+  mismatches. The five existing test models remain explicit exclusions.
+- Subset-verified additions: 12,602 entries / 37,640 cases. All DTI allocation
+  wrappers, construct-if-memory wrappers and base destructor chains now have
+  fixtures; deleting destructors reach 3,925/3,926. CRT `__snprintf_s`
+  0x012ED991 and `__ioinit` 0x012F7C13 gain fixtures. This is caller/callee-
+  event replay, not a closed CRT startup or live-game claim.
+- Validation so far: 69 Python tests and subset Rust replay of 80,009 cases /
+  26,788 functions plus seven unit tests pass. Six x87 control/status oracle
+  mismatches remain quarantined with their original cases and diagnostics;
+  four previous quarantines are unchanged. Baseline records/cases are intact.
+- Blocker: main-worktree builds repeatedly overlapped the final full build;
+  both L14 full-build attempts were stopped by this agent, only its own Cargo
+  trees, to honor one build/vector run at a time. The last overlap reached
+  about 9 GiB free, above the 6 GiB stop threshold. Full replay is pending.
+- One next action: finish required-vector `cargo test -p ddnative` in a clear
+  heavy-job window, then hand off private native-L14 data for adoption.
+  Detailed per-rule counts, known startup/SEH/import-tail issues and
+  regeneration instructions are in the L14 task Results.
