@@ -11,3 +11,4 @@ ddruntime = { path = "../ddruntime" }
 ddgpu = { path = "../ddgpu" }
 wgpu = "29.0.4"
 winit = "0.30.13"
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController"] }

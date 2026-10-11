@@ -35,6 +35,7 @@ fn setup() -> (GuestMemory, Arc<Registry>) {
         (0x1080, fx_ref),
         (0x1090, fx_release),
         (0x10a0, fx_parameters),
+        (0x10b0, user32::def_window_proc),
     ] {
         r.insert(a, Binding::Service(f)).unwrap();
     }
@@ -874,4 +875,39 @@ fn all_input_audio_import_names_bind_including_xinput_ordinals() {
             i.full_name()
         );
     }
+}
+
+#[test]
+fn host_input_without_a_window_handle_goes_to_the_focused_window() {
+    let (mut m, _r) = setup();
+    let host = input::connect();
+    // a window like the game's: 1286x749 at (32, 32), style 0xCA0000, so its
+    // client area starts at (35, 58) on the screen
+    let (wc, name) = (DATA + 0xa00, DATA + 0xa80);
+    m.set_u8(name, b'W');
+    m.set_u32(wc, 0x30);
+    m.set_u32(wc + 8, 0x10b0);
+    m.set_u32(wc + 40, name);
+    assert_ne!(api(&mut m, user32::register_class_ex_a, &[wc]), 0);
+    let hwnd = api(&mut m, user32::create_window_ex_a, &[0, name, 0, 0x00CA_0000, 32, 32, 1286, 749, 0, 0, 0, 0]);
+    assert_ne!(hwnd, 0);
+    api(&mut m, user32::show_window, &[hwnd, 1]);
+    // drain the start-up messages; dispatching WM_PAINT to DefWindowProc validates the window
+    while api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]) != 0 {
+        api(&mut m, user32::dispatch_message, &[DATA]);
+    }
+    host.events
+        .send(input::Event::Key { hwnd: 0, vk: 0x42, scan: 48, down: true, extended: false, system: false })
+        .unwrap();
+    assert_eq!(api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]), 1);
+    assert_eq!((m.u32(DATA), m.u32(DATA + 4), m.u32(DATA + 8)), (hwnd, 0x100, 0x42));
+    host.events
+        .send(input::Event::Mouse { hwnd: 0, x: 10, y: 20, dx: 0, dy: 0, wheel: 0, buttons: [false; 8] })
+        .unwrap();
+    assert_eq!(api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]), 1);
+    assert_eq!((m.u32(DATA), m.u32(DATA + 4)), (hwnd, 0x200));
+    assert_eq!(m.u32(DATA + 12), 20 << 16 | 10, "client coordinates as sent");
+    let point = DATA + 0xb00;
+    assert_eq!(api(&mut m, user32::get_cursor_pos, &[point]), 1);
+    assert_eq!((m.u32(point), m.u32(point + 4)), (45, 78), "the cursor on the screen");
 }
