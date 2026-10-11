@@ -57,12 +57,16 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
-X87_PUSH = {"fld", "fld1", "fldz", "fild", "fldl2e", "fldln2"}
-X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi"}
+X87_PUSH = {"fld", "fld1", "fldz", "fild", "fldl2e", "fldln2", "fldpi"}
+X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi",
+           "fyl2x", "fpatan"}
 X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr",
             "fiadd", "fisub", "fisubr", "fimul", "fidiv", "fidivr", "fxch", "fcom", "fucom", "ficom",
-            "fsqrt", "fsin", "fcos", "fcomi", "fucomi"}
-X87_SUPPORTED = X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw"}
+            "fsqrt", "fsin", "fcos", "fcomi", "fucomi", "frndint", "fxam", "f2xm1", "fscale", "fprem", "fprem1"}
+# L22: fptan replaces st0 and pushes 1.0 (net +1); fnclex clears the status
+# exception flags. All execute on the host x87 like the forms above.
+X87_SUPPORTED = (X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw",
+                                                  "fptan", "fnclex"})
 X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
@@ -219,7 +223,9 @@ def x87_effect(i):
         needed = 2
     if mn in ("fcom", "fcomp", "fucom", "fucomp", "fxch") and not i.operands:
         needed = 2
-    delta = (mn in X87_PUSH) - (mn in X87_POP or mn == "ficomp")
+    if mn in ("fyl2x", "fpatan", "fscale", "fprem", "fprem1"):
+        needed = 2  # st0 and st1 (implicit operands)
+    delta = (mn in X87_PUSH or mn == "fptan") - (mn in X87_POP or mn == "ficomp")
     if mn in ("fcompp", "fucompp"):
         delta -= 2
     return needed, delta
@@ -232,8 +238,15 @@ def returns_float(ins, k, depth=0):
     an unknown jump, trap or return. Never supply entry-stack arguments or
     guess across intervening callees. One mock can return only one value.
     """
+    return x87_deficit(ins, ins[k].address + ins[k].size, depth, 1) == 1
+
+
+def x87_deficit(ins, start, depth, limit):
+    """Values missing below `depth` on the x87 paths from `start` up to the
+    next call, unknown jump, trap or return; None if more than `limit`,
+    on overflow or an unsupported x87 instruction."""
     at = {i.address: i for i in ins}
-    todo = [(ins[k].address + ins[k].size, depth, 0)]
+    todo = [(start, depth, 0)]
     seen, required = set(), 0
     while todo:
         pc, current, added = todo.pop()
@@ -248,14 +261,14 @@ def returns_float(ins, k, depth=0):
             needed, delta = x87_effect(i)
             missing = max(0, needed - current)
             added += missing
-            if added > 1:
-                return False
+            if added > limit:
+                return None
             required = max(required, added)
             current += missing + delta
             if current > 8:
-                return False
+                return None
         elif mn.startswith('f') and mn not in X87_CONTROL:
-            return False
+            return None
         if mn.startswith('j'):
             if i.operands[0].type != 2:
                 continue
@@ -263,19 +276,32 @@ def returns_float(ins, k, depth=0):
             if mn == 'jmp':
                 continue
         todo.append((pc + i.size, current, added))
-    return required == 1
+    return required
 
 
-def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset()):
+def runtime_jump(i):
+    """An indirect jump that is not an absolute dword switch table: in ext
+    mode its target is a runtime value (decode_body keeps every known start
+    as a possible local destination, then the external boundary)."""
+    from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+    op = i.operands[0] if i.operands else None
+    if i.mnemonic != "jmp" or op is None or op.type == X86_OP_IMM:
+        return False
+    return not (op.type == X86_OP_MEM and op.size == 4 and not op.mem.segment and not op.mem.base
+                and op.mem.index and op.mem.scale == 4)
+
+
+def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset(), entry=0):
     """Every x87 read or pop must find a value on the stack: walk the
-    control flow from depth 0. A direct call to a closed lifted function adds
+    control flow from depth `entry` (values the caller left on the x87
+    stack; 0 except for an ext entry contract). A direct call to a closed lifted function adds
     its net effect (X87_NET); a mocked call adds 1 where its result is
     consumed (returns_float: the recorder's mock and the replay push a
     value there) and 0 elsewhere. Anything else read at depth 0 rejects.
     Returns (set of depths at the function's rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
-    seen, todo = {}, [(at[addr], 0)]
+    seen, todo = {}, [(at[addr], entry)]
     exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
@@ -322,8 +348,13 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
                 if t in at and (t == addr or t not in function_entries()):
                     todo.append((at[t], depth))
-                for target in (switches or {}).get(i.address, []):
-                    todo.append((at[target], depth))
+                # A runtime jump's local destinations are all statically
+                # reachable starts, walked with their own static depths;
+                # its value is not a proof of the depth there. The recorder
+                # rejects any run whose x87 access meets an empty slot.
+                if not runtime_jump(i):
+                    for target in (switches or {}).get(i.address, []):
+                        todo.append((at[target], depth))
                 if mn == "jmp":
                     break
             k = at.get(i.address + i.size, len(ins))
@@ -469,10 +500,17 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
-    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops)
+    # x87 entry contract (ext only, never callable): the minimal number of
+    # values the caller must have left on the x87 stack (MSVC's float
+    # intrinsics such as _ftol2 and _CIsin take their argument in st0). The
+    # recorder seeds that many random finite values; the replay loads them.
+    # Only reads before any call or return count, so a value is never
+    # attributed to the caller when a callee could have returned it.
+    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext else 0
+    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
     X87_PUSH_SITES[addr] = push_sites
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
-                       "noreturn_sites": sorted(stops)}
+                       "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {})}
     if not ext:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
@@ -1256,6 +1294,8 @@ def vector_key(f):
     fields = [f.get(k) for k in ("body", "noreturn_sites", "calls", "ext", "x87_push")]
     if f.get('original_entry'):
         fields.append('original-entry-v1')
+    if f.get('x87_entry'):
+        fields.append(f"x87-entry-v1:{f['x87_entry']}")
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -1276,6 +1316,8 @@ def _vectors_for(args):
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
     if len(args) > 8 and args[8]:
         inputs['original_entry'] = True
+    if len(args) > 9 and args[9]:
+        inputs['x87_entry'] = args[9]
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     out, got, seed = [], 0, 0
@@ -1351,7 +1393,7 @@ def vectors(per=3):
     nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False))
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
@@ -1564,6 +1606,13 @@ fn every_lifted_function_matches_the_original() {{
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
+            // x87 entry contract: the values the recorder left on the stack, deepest first
+            for v in c.get("st_in").and_then(|v| v.as_array()).into_iter().flatten().rev() {{
+                let mut data = [0u8; 10];
+                data[..8].copy_from_slice(&v[0].as_u64().unwrap().to_le_bytes());
+                data[8..].copy_from_slice(&(u(&v[1]) as u16).to_le_bytes());
+                cpu.st.exec::<0x28db>(&mut data); // fld m80real
+            }}
             f(&mut m, &mut cpu);
             if c.get("x87_control").is_some() {{
                 assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");

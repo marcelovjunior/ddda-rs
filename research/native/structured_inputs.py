@@ -108,7 +108,7 @@ def trial(args):
             result = h.run_sparse(f['addr'], seed, end=f['addr']+f['size'], lifted=_CLOSED,
                                   body=f['body'], x87_push=f.get('x87_push',[]),
                                   noreturn_sites=f.get('noreturn_sites',[]), noreturn_targets=_NORETURN,
-                                  original_entry=f.get('original_entry',False),
+                                  original_entry=f.get('original_entry',False), x87_entry=f.get('x87_entry',0),
                                   max_seconds=remaining, **kw)
             cases.append(dict(addr=f['addr'],seed=seed,body_key=key,**result))
             attempts.append(dict(reason='ok',seed=seed))

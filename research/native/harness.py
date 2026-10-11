@@ -439,7 +439,7 @@ def local_alloc_sites(address, body):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False):
+               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -1023,6 +1023,20 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
+    # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`
+    # values on the x87 stack. Random finite doubles (drawn only for such
+    # bodies, so other fixtures keep their streams), loaded by the host's
+    # fld m64; recorded st0 first as 80-bit (mantissa, exponent).
+    st_in = []
+    if x87_entry:
+        state = x87_host.initial_state()
+        for _ in range(x87_entry):
+            value = 0.0 if zero_inputs else rnd.uniform(-1000, 1000)
+            if inputs:
+                value = struct.unpack("<f", struct.pack("<I", inputs.float_bits(rnd)))[0]
+            state, _, _ = x87_host.execute(state, 0xDD, 0x00, struct.pack("<d", value))
+        x87_host.set_unicorn_state(uc, state)
+        st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     try:
         uc.emu_start(address, RET)
     except UcError as e:
@@ -1077,5 +1091,6 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),
+            **({"st_in": st_in} if st_in else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {})}

@@ -59,9 +59,19 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(push,[]);self.assertEqual(c['x87_depth'],0)
         self.assertNotIn('st_push',c['calls'][0]['out'])
 
-    def test_two_missing_values_and_entry_arguments_reject(self):
-        for code in ('e8fb000000ded9c3','d9e0c3'):
-            with self.assertRaises(lift.Unsupported):self.program(code)
+    def test_two_missing_values_reject(self):
+        with self.assertRaises(lift.Unsupported):self.program('e8fb000000ded9c3')
+
+    def test_entry_arguments_are_an_explicit_contract(self):
+        # L22: x87 values read before any call are the caller's (MSVC float
+        # intrinsics); a read after a call stays the mock's or rejects.
+        _,push,info=self.program('d9e0c3')
+        self.assertEqual(info['x87_entry'],1);self.assertEqual(push,[])
+        _,_,info=self.program('d9e0dec9c3')
+        self.assertEqual(info['x87_entry'],2)
+        _,push,info=self.program('d9e0e8f7000000ded9c3')  # caller value + one mocked return
+        self.assertEqual((info['x87_entry'],push),(1,[0x400007]))
+        with self.assertRaises(lift.Unsupported):self.program('d9e0e8f7000000ded9ded9c3')
 
     def test_intervening_call_owns_the_return(self):
         _,push,_=self.program('e8fb000000e8f6000000d91d00200000c3')
