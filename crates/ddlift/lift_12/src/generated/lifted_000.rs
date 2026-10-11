@@ -6162,17 +6162,17 @@ pub fn f_00c23aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
     }
 }
 
+// Translated from 0x00C23BD0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C23BD0.
+pub fn f_00c23bd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0x19A5E2Cu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x00C23BE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C23BE0.
+pub fn f_00c23be0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0x19A5ECCu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x00C23BF0 (DDDA.exe 2017-12-13 Steam), uOmSwingBaseInstancing::vf14.
 pub fn f_00c23bf0(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u8(cpu.ecx.wrapping_add(0x44C), (0x1u32) as u8); m.set_u16(cpu.ecx.wrapping_add(0x44A), (0x0u32) as u16);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00DEAB30))(m, cpu); return;
-}
-
-// Translated from 0x00C23C10 (DDDA.exe 2017-12-13 Steam), uOmObjBaseInstancing::getDTI.
-pub fn f_00c23c10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A557Cu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00C23C20 (DDDA.exe 2017-12-13 Steam), uOmSwingBaseInstancing::getDTI.
-pub fn f_00c23c20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A559Cu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
