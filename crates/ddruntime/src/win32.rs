@@ -61,10 +61,6 @@ pub fn set_last_error(m: &mut dyn Mem, cpu: &mut Cpu) {
     set_error(arg(m, cpu, 0));
     ret(m, cpu, 4);
 }
-pub fn get_current_thread_id(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = crate::services::MAIN_THREAD_ID;
-    ret(m, cpu, 0);
-}
 pub fn get_current_process_id(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = MAIN_PROCESS_ID;
     ret(m, cpu, 0);
@@ -106,18 +102,10 @@ pub fn get_system_time_as_file_time(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(p.wrapping_add(4), (t >> 32) as u32);
     ret(m, cpu, 4);
 }
-/// Sleep(ms) / SleepEx(ms, alertable): with one guest thread nothing can
-/// happen meanwhile, so the runtime does not block (SleepEx returns 0).
-pub fn sleep(m: &mut dyn Mem, cpu: &mut Cpu) {
-    ret(m, cpu, 4);
-}
-pub fn sleep_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0;
-    ret(m, cpu, 8);
-}
 
-/// GetSystemInfo(SYSTEM_INFO*), 36 bytes. One processor until guest
-/// threads exist (the game sizes its worker pool from this).
+/// GetSystemInfo(SYSTEM_INFO*), 36 bytes. One processor: one guest
+/// thread runs at a time (crate::threads); the game sizes its worker pool
+/// from this.
 pub fn get_system_info(m: &mut dyn Mem, cpu: &mut Cpu) {
     let p = arg(m, cpu, 0);
     zero(m, p, 36);
@@ -179,10 +167,12 @@ pub fn tls_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = with_state(|s| match s.tls.iter().position(Option::is_none) {
         Some(i) => {
             s.tls[i] = Some(0);
+            s.tls_epoch[i] += 1;
             i as u32
         }
         None if s.tls.len() < 1088 => {
             s.tls.push(Some(0));
+            s.tls_epoch.push(1);
             (s.tls.len() - 1) as u32
         }
         None => u32::MAX,
@@ -574,15 +564,12 @@ pub const APIS: &[(&str, &str, Api)] = &[
     ("USER32.dll", "MessageBoxA", message_box_a),
     ("KERNEL32.dll", "GetLastError", get_last_error),
     ("KERNEL32.dll", "SetLastError", set_last_error),
-    ("KERNEL32.dll", "GetCurrentThreadId", get_current_thread_id),
     ("KERNEL32.dll", "GetCurrentProcessId", get_current_process_id),
     ("KERNEL32.dll", "GetCurrentProcess", get_current_process),
     ("KERNEL32.dll", "IsDebuggerPresent", is_debugger_present),
     ("KERNEL32.dll", "QueryPerformanceFrequency", query_performance_frequency),
     ("KERNEL32.dll", "QueryPerformanceCounter", query_performance_counter),
     ("KERNEL32.dll", "GetSystemTimeAsFileTime", get_system_time_as_file_time),
-    ("KERNEL32.dll", "Sleep", sleep),
-    ("KERNEL32.dll", "SleepEx", sleep_ex),
     ("KERNEL32.dll", "GetSystemInfo", get_system_info),
     ("KERNEL32.dll", "InterlockedIncrement", interlocked_increment),
     ("KERNEL32.dll", "InterlockedDecrement", interlocked_decrement),

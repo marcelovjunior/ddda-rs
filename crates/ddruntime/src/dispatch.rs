@@ -13,7 +13,7 @@ use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu, LiftFn};
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// What runs at an address.
 #[derive(Clone, Copy)]
@@ -125,6 +125,10 @@ impl Registry {
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
         match self.get(target) {
             Some(b) => {
+                if let Binding::Service(_) = b {
+                    // an API call: where a guest thread's time slice may end
+                    crate::threads::maybe_yield();
+                }
                 b.function()(m, cpu);
                 Ok(())
             }
@@ -144,8 +148,8 @@ impl Registry {
 
     /// Install this registry as this thread's `call_ext` handler. An
     /// unbound target panics with its [`Unbound`] report as the payload.
-    pub fn install(self: &Rc<Self>) {
-        let me = Rc::clone(self);
+    pub fn install(self: &Arc<Self>) {
+        let me = Arc::clone(self);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
             if let Err(u) = me.call(m, cpu, target) {
                 std::panic::panic_any(u);

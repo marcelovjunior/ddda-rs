@@ -23,5 +23,6 @@ pub mod runtime;
 pub mod services;
 pub mod session;
 pub mod steam;
+pub mod threads;
 pub mod user32;
 pub mod win32;

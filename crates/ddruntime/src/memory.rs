@@ -10,8 +10,9 @@
 //!
 //! This is the checked, portable backing RUNTIME.md proposes to start with;
 //! a reserved host arena can replace it later behind the same interface,
-//! once measured. Single-threaded for now: guest threads (one `Cpu` each)
-//! and synchronised shared access come with stage R05.
+//! once measured. The guest's threads share one address space: each holds
+//! its own [`GuestMemory`] handle ([`GuestMemory::share`]), and only the
+//! holder of the guest lock (crate::runtime) accesses it.
 use ddnative_base::mem::Mem;
 use std::fmt;
 
@@ -46,20 +47,50 @@ pub struct Overlap {
     pub page: u32,
 }
 
-pub struct GuestMemory {
+struct Space {
     pages: Vec<Option<Box<[u8]>>>,
     perms: Vec<u8>,
 }
 
+struct SharedSpace(std::cell::UnsafeCell<Space>);
+
+// SAFETY: the address space is accessed only by the host thread holding the
+// guest lock (crate::runtime); the lock's hand-over orders those accesses.
+unsafe impl Sync for SharedSpace {}
+unsafe impl Send for SharedSpace {}
+
+/// A handle to a guest address space.
+pub struct GuestMemory {
+    space: std::sync::Arc<SharedSpace>,
+}
+
 impl Default for GuestMemory {
     fn default() -> Self {
-        GuestMemory { pages: (0..PAGES).map(|_| None).collect(), perms: vec![0; PAGES] }
+        let space = Space { pages: (0..PAGES).map(|_| None).collect(), perms: vec![0; PAGES] };
+        GuestMemory { space: std::sync::Arc::new(SharedSpace(std::cell::UnsafeCell::new(space))) }
     }
 }
 
 impl GuestMemory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Another handle to the same address space (for another guest thread).
+    pub fn share(&self) -> GuestMemory {
+        GuestMemory { space: self.space.clone() }
+    }
+
+    fn s(&self) -> &Space {
+        // SAFETY: see SharedSpace; no handle's mutable access overlaps this
+        // one, because only the guest-lock holder runs and it borrows the
+        // space for single accesses only.
+        unsafe { &*self.space.0.get() }
+    }
+
+    fn s_mut(&mut self) -> &mut Space {
+        // SAFETY: as for `s`.
+        unsafe { &mut *self.space.0.get() }
     }
 
     /// Map [addr, addr + len) rounded out to whole pages, zero-filled, with
@@ -70,8 +101,8 @@ impl GuestMemory {
             return Err(Overlap { page: (p as u32) * PAGE });
         }
         for p in pages {
-            self.pages[p] = Some(vec![0u8; PAGE as usize].into_boxed_slice());
-            self.perms[p] = perm;
+            self.s_mut().pages[p] = Some(vec![0u8; PAGE as usize].into_boxed_slice());
+            self.s_mut().perms[p] = perm;
         }
         Ok(())
     }
@@ -84,20 +115,21 @@ impl GuestMemory {
             return Err(Overlap { page: (p as u32) * PAGE });
         }
         for p in pages {
-            self.perms[p] = perm | LAZY;
+            self.s_mut().perms[p] = perm | LAZY;
         }
         Ok(())
     }
 
     fn mapped(&self, p: usize) -> bool {
-        self.pages[p].is_some() || self.perms[p] & LAZY != 0
+        self.s().pages[p].is_some() || self.s().perms[p] & LAZY != 0
     }
 
     /// Change the permissions of mapped pages in [addr, addr + len).
     pub fn protect(&mut self, addr: u32, len: u32, perm: u8) {
         for p in page_range(addr, len) {
             assert!(self.mapped(p), "protect of unmapped page {:#010x}", p as u32 * PAGE);
-            self.perms[p] = perm | (self.perms[p] & LAZY);
+            let lazy = self.s().perms[p] & LAZY;
+            self.s_mut().perms[p] = perm | lazy;
         }
     }
 
@@ -106,12 +138,12 @@ impl GuestMemory {
     }
 
     pub fn perm(&self, addr: u32) -> u8 {
-        self.perms[(addr / PAGE) as usize] & (READ | WRITE)
+        self.s().perms[(addr / PAGE) as usize] & (READ | WRITE)
     }
 
     /// Pages that have host memory behind them (diagnostics).
     pub fn backed_pages(&self) -> usize {
-        self.pages.iter().filter(|p| p.is_some()).count()
+        self.s().pages.iter().filter(|p| p.is_some()).count()
     }
 
     /// Privileged copy into mapped pages, ignoring permissions (the loader
@@ -134,7 +166,7 @@ impl GuestMemory {
             let need = if write { WRITE } else { READ };
             let reason = if !self.mapped(p) {
                 "unmapped page"
-            } else if self.perms[p] & need == 0 {
+            } else if self.s().perms[p] & need == 0 {
                 if write { "page is not writable" } else { "page is not readable" }
             } else {
                 continue;
@@ -151,14 +183,14 @@ impl GuestMemory {
     }
 
     fn byte(&self, a: u32) -> u8 {
-        match &self.pages[(a / PAGE) as usize] {
+        match &self.s().pages[(a / PAGE) as usize] {
             Some(page) => page[(a % PAGE) as usize],
             None => 0, // a lazy page not written yet
         }
     }
 
     fn byte_mut(&mut self, a: u32) -> &mut u8 {
-        let page = self.pages[(a / PAGE) as usize].get_or_insert_with(|| vec![0u8; PAGE as usize].into_boxed_slice());
+        let page = self.s_mut().pages[(a / PAGE) as usize].get_or_insert_with(|| vec![0u8; PAGE as usize].into_boxed_slice());
         &mut page[(a % PAGE) as usize]
     }
 
@@ -169,7 +201,7 @@ impl GuestMemory {
         let off = addr % PAGE;
         if off + width <= PAGE {
             // within one page: a single slice read (a lazy page reads zero)
-            let Some(page) = self.pages[(addr / PAGE) as usize].as_ref() else { return 0 };
+            let Some(page) = self.s().pages[(addr / PAGE) as usize].as_ref() else { return 0 };
             let mut v = [0u8; 4];
             v[..width as usize].copy_from_slice(&page[off as usize..(off + width) as usize]);
             u32::from_le_bytes(v)

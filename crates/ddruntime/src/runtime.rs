@@ -41,6 +41,10 @@ impl<T> GuestCell<T> {
 
 #[derive(Default)]
 pub struct Runtime {
+    pub(crate) lock: crate::threads::GuestLock,
+    pub(crate) kernel: GuestCell<crate::threads::Kernel>,
+    /// The address space and dispatcher new guest threads run on.
+    pub(crate) machine: GuestCell<Option<crate::threads::Machine>>,
     pub(crate) state: GuestCell<crate::services::State>,
     pub(crate) files: GuestCell<crate::files::Files>,
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,

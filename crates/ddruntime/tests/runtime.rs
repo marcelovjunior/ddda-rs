@@ -4,7 +4,7 @@ use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu};
 use ddruntime::dispatch::{Binding, Registry, Unbound};
 use ddruntime::memory::{GuestMemory, PAGE, READ, WRITE};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 fn fault_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
     let e = std::panic::catch_unwind(f).expect_err("expected a guest fault");
@@ -497,4 +497,102 @@ fn create_device_completes_windowed_parameters_and_counts_references() {
     assert_eq!(cpu.eax, 0);
     assert_eq!(ddruntime::d3d9dev::refs(device), None);
     assert_eq!(ddruntime::d3d9dev::refs(back), None);
+}
+
+// --- guest threads -------------------------------------------------------------
+
+use ddruntime::threads;
+
+const CS: u32 = 0x0030_0000;
+const COUNTER: u32 = 0x0030_0100;
+const EVENT_SLOT: u32 = 0x0030_0104;
+
+/// Add 1 to the counter `n` times, each under the critical section, with
+/// a read-modify-write that spans the Leave call (where a slice may end).
+fn count_under_lock(m: &mut dyn Mem, cpu: &mut Cpu, n: u32) {
+    for _ in 0..n {
+        call_from_guest(m, cpu, services::enter_critical_section, &[CS]);
+        let v = m.u32(COUNTER);
+        std::thread::sleep(std::time::Duration::from_micros(20));
+        m.set_u32(COUNTER, v + 1);
+        call_from_guest(m, cpu, services::leave_critical_section, &[CS]);
+    }
+}
+
+/// A guest thread's start routine (stdcall, one parameter): counts, sets
+/// the event whose handle is stored at EVENT_SLOT, returns its parameter.
+fn worker(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let param = m.u32(cpu.esp + 4);
+    count_under_lock(m, cpu, 300);
+    let ev = m.u32(EVENT_SLOT);
+    call_from_guest(m, cpu, threads::set_event, &[ev]);
+    cpu.eax = param;
+    let _ = m.u32(cpu.esp);
+    cpu.esp += 8;
+}
+
+#[test]
+fn guest_threads_share_memory_and_synchronise() {
+    let mut m = GuestMemory::new();
+    m.map(0x0010_0000, 0x10000, READ | WRITE).unwrap();
+    m.map(0x0030_0000, 0x1000, READ | WRITE).unwrap();
+    m.map_lazy(threads::STACKS_BASE, threads::STACKS_SIZE, READ | WRITE).unwrap();
+    let mut r = Registry::new();
+    r.insert(0x0060_0000, Binding::Lifted(worker)).unwrap();
+    let r = Rc::new(r);
+    r.install();
+    threads::set_machine(m.share(), r.clone());
+    let mut cpu = Cpu { esp: 0x0011_0000, ..Cpu::default() };
+    let c = &mut cpu;
+
+    call_from_guest(&mut m, c, services::initialize_critical_section, &[CS]);
+    let ev = call_from_guest(&mut m, c, threads::create_event, &[0, 0, 0, 0]); // auto reset, not set
+    m.set_u32(EVENT_SLOT, ev);
+    let tid_out = 0x0030_0200;
+    let h = call_from_guest(&mut m, c, threads::create_thread, &[0, 0, 0x0060_0000, 42, 4, tid_out]); // CREATE_SUSPENDED
+    assert_ne!(h, 0);
+    assert_ne!(m.u32(tid_out), services::MAIN_THREAD_ID);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[h, 50]), threads::WAIT_TIMEOUT, "suspended");
+    assert_eq!(m.u32(COUNTER), 0, "a suspended thread does not run");
+    assert_eq!(call_from_guest(&mut m, c, threads::resume_thread, &[h]), 1);
+    count_under_lock(&mut m, c, 300);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[h, threads::INFINITE]), threads::WAIT_OBJECT_0);
+    assert_eq!(m.u32(COUNTER), 600, "no lost update: the critical section excluded the other thread");
+    let code = 0x0030_0204;
+    assert_eq!(call_from_guest(&mut m, c, threads::get_exit_code_thread, &[h, code]), 1);
+    assert_eq!(m.u32(code), 42);
+    // the worker set the auto-reset event: one wait consumes it
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[ev, 0]), threads::WAIT_OBJECT_0);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[ev, 0]), threads::WAIT_TIMEOUT);
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+    assert_eq!(cpu.esp, 0x0011_0000);
+    x86::set_ext_calls(None);
+}
+
+#[test]
+fn semaphores_and_mutexes_follow_their_contracts() {
+    let (mut m, mut cpu) = stack();
+    let c = &mut cpu;
+    m.map(0x0030_0000, 0x1000, READ | WRITE).unwrap();
+    let sem = call_from_guest(&mut m, c, threads::create_semaphore, &[0, 1, 2, 0]);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[sem, 0]), threads::WAIT_OBJECT_0);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[sem, 0]), threads::WAIT_TIMEOUT);
+    let prev = 0x0030_0000;
+    assert_eq!(call_from_guest(&mut m, c, threads::release_semaphore, &[sem, 2, prev]), 1);
+    assert_eq!(m.u32(prev), 0);
+    assert_eq!(call_from_guest(&mut m, c, threads::release_semaphore, &[sem, 1, prev]), 0, "past the maximum");
+    // a mutex is recursive for its owner
+    let mx = call_from_guest(&mut m, c, threads::create_mutex, &[0, 1, 0]);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[mx, 0]), threads::WAIT_OBJECT_0);
+    assert_eq!(call_from_guest(&mut m, c, threads::release_mutex, &[mx]), 1);
+    assert_eq!(call_from_guest(&mut m, c, threads::release_mutex, &[mx]), 1);
+    assert_eq!(call_from_guest(&mut m, c, threads::release_mutex, &[mx]), 0, "not owned any more");
+    // wait-all on a set mix
+    let a = call_from_guest(&mut m, c, threads::create_event, &[0, 1, 1, 0]);
+    let handles = 0x0030_0010;
+    m.set_u32(handles, a);
+    m.set_u32(handles + 4, sem);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_multiple_objects, &[2, handles, 1, 0]), threads::WAIT_OBJECT_0);
+    assert_eq!(call_from_guest(&mut m, c, ddruntime::files::close_handle, &[a]), 1);
+    assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[a, 0]), threads::WAIT_FAILED);
 }

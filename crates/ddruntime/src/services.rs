@@ -85,6 +85,9 @@ pub(crate) struct State {
     pub(crate) last_error: u32,
     /// TLS slots (TlsAlloc): None = free.
     pub(crate) tls: Vec<Option<u32>>,
+    /// How often each TLS index was allocated (a thread's saved value
+    /// belongs to one allocation; crate::threads).
+    pub(crate) tls_epoch: Vec<u32>,
     /// Next VirtualAlloc address (page-granular bump in the virtual region).
     pub(crate) virtual_next: u32,
     /// Strings the runtime hands the guest once (command line, environment).
@@ -166,8 +169,8 @@ pub fn encode_pointer(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 4);
 }
 
-/// The guest's thread id while the runtime is single-threaded (stage R05
-/// brings guest threads). Any nonzero value is a valid Windows thread id.
+/// The main guest thread's id (any nonzero value is a valid Windows thread
+/// id; crate::threads numbers the others after it).
 pub const MAIN_THREAD_ID: u32 = 0x0000_1000;
 
 // CRITICAL_SECTION (winnt.h RTL_CRITICAL_SECTION, 24 bytes on x86):
@@ -197,17 +200,23 @@ pub fn initialize_critical_section_and_spin_count(m: &mut dyn Mem, cpu: &mut Cpu
     ret(m, cpu, 8);
 }
 
-/// KERNEL32 `EnterCriticalSection(cs)` (stdcall), single guest thread:
-/// takes ownership or recurses. Another owner would mean a second guest
-/// thread, which does not exist yet: stop rather than pretend to wait.
+/// KERNEL32 `EnterCriticalSection(cs)` (stdcall): takes ownership or
+/// recurses; while another guest thread owns it, waits without the guest
+/// lock (crate::threads) until it is released. LockCount counts the
+/// owner's entries (waiters are not counted in it).
 pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
     let cs = arg(m, cpu, 0);
-    let owner = m.u32(cs.wrapping_add(12));
-    assert!(owner == 0 || owner == MAIN_THREAD_ID,
-            "EnterCriticalSection({cs:#x}) owned by thread {owner:#x}: guest threads are not implemented");
+    let me = crate::threads::current_tid();
+    loop {
+        let owner = m.u32(cs.wrapping_add(12));
+        if owner == 0 || owner == me {
+            break;
+        }
+        crate::threads::block(None);
+    }
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
     m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
-    m.set_u32(cs.wrapping_add(12), MAIN_THREAD_ID);
+    m.set_u32(cs.wrapping_add(12), me);
     ret(m, cpu, 4);
 }
 
@@ -215,12 +224,13 @@ pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
     let cs = arg(m, cpu, 0);
     let rec = m.u32(cs.wrapping_add(8));
-    assert!(rec > 0 && m.u32(cs.wrapping_add(12)) == MAIN_THREAD_ID,
+    assert!(rec > 0 && m.u32(cs.wrapping_add(12)) == crate::threads::current_tid(),
             "LeaveCriticalSection({cs:#x}) without a matching Enter");
     m.set_u32(cs.wrapping_add(8), rec - 1);
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
     if rec == 1 {
         m.set_u32(cs.wrapping_add(12), 0);
+        crate::threads::signal();
     }
     ret(m, cpu, 4);
 }
@@ -321,7 +331,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     let mut bound = 0;
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;

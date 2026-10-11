@@ -8,7 +8,7 @@ use crate::memory::{GuestMemory, READ, WRITE};
 use crate::win32::Exit;
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub const STACK_TOP: u32 = 0x7F00_0000;
 pub const STACK_SIZE: u32 = 0x0010_0000;
@@ -18,7 +18,7 @@ pub const RETURN_SENTINEL: u32 = 0xFFFF_FFF0;
 
 pub struct Session {
     pub mem: GuestMemory,
-    pub registry: Rc<Registry>,
+    pub registry: Arc<Registry>,
     pub imports: Vec<Import>,
     pub exe_path: String,
 }
@@ -55,7 +55,9 @@ impl Session {
         crate::steam::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
-        let registry = Rc::new(registry);
+        mem.map_lazy(crate::threads::STACKS_BASE, crate::threads::STACKS_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
+        let registry = Arc::new(registry);
+        crate::threads::set_machine(mem.share(), registry.clone());
         registry.install();
         Ok(Session { mem, registry, imports, exe_path: exe_path.to_string() })
     }

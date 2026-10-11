@@ -294,7 +294,7 @@ pub fn get_file_size(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// CloseHandle(handle): files and find handles; unknown handles fail.
 pub fn close_handle(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
-    cpu.eax = with_files(|f| f.handles.remove(&h).is_some()) as u32;
+    cpu.eax = (crate::threads::close(h) || with_files(|f| f.handles.remove(&h).is_some())) as u32;
     if cpu.eax == 0 {
         set_error(ERROR_INVALID_HANDLE);
     }
