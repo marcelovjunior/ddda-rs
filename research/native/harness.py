@@ -717,7 +717,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             valid_flags[0] = 0x40
         elif mn in ("bt","bts","btr","btc"):
             valid_flags[0] = (valid_flags[0]&0x40)|1
-        elif mn in ("rol","ror","shld","shrd"):
+        elif mn in ("rol","ror","rcl","rcr","shld","shrd"):
             op=i.operands[-1]
             n=(op.imm if op.type==2 else uc_.reg_read(_xc.UC_X86_REG_CL))&31
             if n:

@@ -60,8 +60,23 @@ binary!(
     paddd, paddq, psubb, psubw, psubd, psubq, pcmpeqb, pcmpeqw, pcmpeqd, pcmpgtb, pcmpgtw, pcmpgtd, pslld,
     psllw, psllq, psrld, psrlw, psrlq, psrad, psraw, pmullw, pmulhw, pmulhuw, pmuludq, pmaddwd, punpcklbw,
     punpcklwd, punpckldq, punpcklqdq, punpckhbw, punpckhwd, punpckhdq, punpckhqdq, packsswb, packssdw,
-    packuswb, paddusb, paddusw, paddsb, paddsw, psubusb, psubusw, psubsb, psubsw
+    packuswb, paddusb, paddusw, paddsb, paddsw, psubusb, psubusw, psubsb, psubsw, pmaxsw, pminsw
 );
+
+macro_rules! byte_shift {
+    ($($op:ident),* $(,)?) => {$(
+        /// Whole-register byte shift by an immediate (no MXCSR involvement).
+        pub fn $op<const IMM:u8>(a:[u32;4])->[u32;4] {
+            let mut a:__m128i=unsafe{std::mem::transmute(a)};
+            unsafe {
+                asm!(concat!(stringify!($op), " {a}, {imm}"), a=inout(xmm_reg) a, imm=const IMM,
+                     options(nostack,preserves_flags,pure,nomem));
+                std::mem::transmute(a)
+            }
+        }
+    )*};
+}
+byte_shift!(pslldq, psrldq);
 
 macro_rules! immediate {
     ($($name:ident => $op:literal),* $(,)?) => {$(

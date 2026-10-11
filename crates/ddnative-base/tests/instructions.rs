@@ -326,3 +326,122 @@ fn string_df_overlap_and_zero_count() {
     string(&mut m, &mut cpu, 4, false, true);
     assert_eq!(cpu.edi, 117);
 }
+
+fn rotate_carry_cpu(mut a: u32, n: u32, carry: bool, bits: u32, right: bool) -> (u32, u32) {
+    let flags: u64;
+    macro_rules! op {($op:literal)=>{unsafe {
+        asm!("bt {carry}, 0",$op,"pushfq","pop {flags}",
+             inout("eax") a,in("ecx") n,carry=in(reg) carry as u64,flags=lateout(reg) flags);
+    }}}
+    match (bits, right) {
+        (8, false) => op!("rcl al, cl"),
+        (8, true) => op!("rcr al, cl"),
+        (16, false) => op!("rcl ax, cl"),
+        (16, true) => op!("rcr ax, cl"),
+        (32, false) => op!("rcl eax, cl"),
+        (32, true) => op!("rcr eax, cl"),
+        _ => unreachable!(),
+    }
+    (a & (u32::MAX >> (32 - bits)), flags as u32)
+}
+
+#[test]
+fn rotate_through_carry_matches_cpu() {
+    // L22: RCR/RCL (the CRT's 64-bit divide helpers use rcr r32, 1).
+    for bits in [8, 16, 32] {
+        for a in [0u32, 1, 0x80, 0x81, 0x7fff, 0x8000, 0x8001, 0x7fffffff, 0x80000000, 0xdeadbeef, u32::MAX] {
+            for n in 0..40 {
+                for carry in [false, true] {
+                    for right in [false, true] {
+                        let mut f = Flags::new(RAW, 0, 0, carry as u32 | 0x40, 32);
+                        let r = f.rotate_carry(a, n, bits, right);
+                        let (want, flags) = rotate_carry_cpu(a, n, carry, bits, right);
+                        let (got, valid) = f.snapshot();
+                        let check = if n & 31 == 1 { 0x801 } else { 1 };
+                        assert_eq!(r, want, "a={a:x} n={n} bits={bits} cf={carry} right={right}");
+                        assert_eq!(got & check, flags & check, "flags a={a:x} n={n} bits={bits} cf={carry} right={right}");
+                        assert_eq!(valid & check, check);
+                        assert!(got & 0x40 != 0, "ZF is kept");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn scan_matches_cpu() {
+    use ddnative_base::mem::{Mem, Sparse};
+    let data: Vec<u8> = b"abcxabcy\0zz".to_vec();
+    for (needle, repeat, count, df) in [(b'x', 2u8, 11u32, false), (b'\0', 2, 11, false), (b'q', 2, 11, false),
+                                        (b'a', 1, 11, false), (b'a', 2, 0, false), (b'c', 2, 3, true), (b'y', 0, 5, false)] {
+        let mut m = Sparse::default();
+        for (k, b) in data.iter().enumerate() {
+            m.set_u8(0x1000 + k as u32, *b);
+        }
+        let start = if df { 0x1000 + 6 } else { 0x1000 };
+        let mut cpu = Cpu::default();
+        cpu.fl = Flags::new(RAW, 0, 0, 0x44, 32);
+        cpu.eax = 0x12345600 | needle as u32;
+        cpu.edi = start;
+        cpu.ecx = count;
+        cpu.df = df;
+        scan(&mut m, &mut cpu, 1, repeat);
+        // the host, over the same bytes
+        let base = data.as_ptr() as u64;
+        let mut rdi = base + (start - 0x1000) as u64;
+        let mut rcx = count as u64;
+        let flags: u64;
+        unsafe {
+            macro_rules! op {($op:literal)=>{asm!("xor {f:e}, {f:e}", "cmp {f:e}, 0", // ZF set as in the model
+                 "test {df}, 1", "jz 2f", "std", "2:", $op, "pushfq", "pop {f}", "cld",
+                 df=in(reg) df as u64, f=out(reg) flags, inout("rdi") rdi, inout("rcx") rcx, in("al") needle)}}
+            match repeat { 0 => op!("scasb"), 1 => op!("repe scasb"), _ => op!("repne scasb") }
+        }
+        let host_edi = start.wrapping_add((rdi as i64 - (base + (start - 0x1000) as u64) as i64) as u32);
+        assert_eq!((cpu.edi, cpu.ecx), (host_edi, if repeat == 0 { count } else { rcx as u32 }), "{needle} {repeat} {count} {df}");
+        assert_eq!(cpu.fl.snapshot().0 & ARITH_FLAGS, flags as u32 & ARITH_FLAGS, "{needle} {repeat} {count} {df}");
+    }
+}
+
+#[test]
+fn word_max_min_and_byte_shifts_match_cpu() {
+    use std::arch::x86_64::*;
+    let a = [0x8000_7fffu32, 0x0001_ffff, 0x1234_5678, 0xffff_0000];
+    let b = [0x7fff_8000u32, 0xffff_0001, 0x5678_1234, 0x0000_ffff];
+    let (av, bv): (__m128i, __m128i) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
+    let host = |v: __m128i| -> [u32; 4] { unsafe { std::mem::transmute(v) } };
+    unsafe {
+        assert_eq!(pmaxsw(a, b), host(_mm_max_epi16(av, bv)));
+        assert_eq!(pminsw(a, b), host(_mm_min_epi16(av, bv)));
+        assert_eq!(pslldq::<8>(a), host(_mm_slli_si128::<8>(av)));
+        assert_eq!(psrldq::<3>(a), host(_mm_srli_si128::<3>(av)));
+        assert_eq!(pslldq::<16>(a), [0; 4]);
+    }
+}
+
+#[test]
+fn added_x87_forms_match_cpu() {
+    use ddnative_base::x87::X87;
+    // fldpi; fld1; fpatan; fstp m64  vs the host
+    let mut st = X87::default();
+    let mut data = [0u8; 10];
+    st.register::<0xebd9>(); // fldpi
+    st.register::<0xe8d9>(); // fld1
+    st.register::<0xf3d9>(); // fpatan: atan(st1 / st0)
+    st.exec::<0x18dd>(&mut data); // fstp m64
+    let mut host = 0f64;
+    unsafe { asm!("fldpi", "fld1", "fpatan", "fstp qword ptr [{p}]", p = in(reg) &mut host); }
+    assert_eq!(f64::from_le_bytes(data[..8].try_into().unwrap()).to_bits(), host.to_bits());
+    assert_eq!(st.depth(), 0);
+    // fptan pushes 1.0 above tan(x); fxam and fnclex keep the depth
+    let mut st = X87::default();
+    st.register::<0xebd9>();
+    st.register::<0xf2d9>();
+    assert_eq!(st.depth(), 2);
+    st.register::<0xe5d9>();
+    st.register::<0xe2db>();
+    assert_eq!(st.status() & 0x3f, 0);
+    st.exec::<0x18dd>(&mut data);
+    assert_eq!(f64::from_le_bytes(data[..8].try_into().unwrap()), 1.0);
+}

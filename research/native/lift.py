@@ -645,6 +645,19 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(set_reg("ax", "q | (r << 8)") if bits == 8 else
                             set_reg("ax" if bits == 16 else "eax", "q") + set_reg("dx" if bits == 16 else "edx", "r"))
                 body.append("fl = Flags::partial(0, 0); }")
+            elif mn in ("rcl", "rcr"):
+                body.append(f"{{ let a = {load(i, ops[0])}; let n = {load(i, ops[1]) if len(ops) == 2 else '1u32'}; "
+                            f"let r = fl.rotate_carry(a, n, {bits}, {str(mn == 'rcr').lower()}); {store(i, ops[0], 'r')} }}")
+            elif mn.split()[-1] in ("scasb", "scasw", "scasd") and mn.split()[0] in ("scasb", "scasw", "scasd", "repe", "repne"):
+                if i.addr_size != 4 or any(o.type == X86_OP_MEM and o.mem.segment and i.reg_name(o.mem.segment) != "es" for o in ops):
+                    raise Unsupported("string address/segment override")
+                repeat = {"repe": 1, "repne": 2}.get(mn.split()[0], 0)
+                body.append(f"x86::scan(m, cpu, {dict(b=1, w=2, d=4)[mn[-1]]}, {repeat});")
+            elif mn == "pause":
+                body.append("std::hint::spin_loop();")  # a spin-wait hint: no architectural effect
+            elif mn in ("pslldq", "psrldq") and len(ops) == 2 and ops[1].type == X86_OP_IMM:
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::{mn}::<{ops[1].imm & 255}>({d});")
             elif mn in ("rol", "ror", "shld", "shrd"):
                 right = str(mn in ("ror", "shrd")).lower()
                 expression = (f"fl.rotate(a, n, {bits}, {right})" if len(ops) == 2 else
@@ -894,7 +907,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
                         "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq", "pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
                         "pslld", "psllw", "psllq", "psrld", "psrlw", "psrlq", "psrad", "psraw", "pmullw", "pmulhw", "pmulhuw", "pmuludq", "pmaddwd",
                         "punpcklbw", "punpcklwd", "punpckldq", "punpcklqdq", "punpckhbw", "punpckhwd", "punpckhdq", "punpckhqdq",
-                        "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw"):
+                        "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw",
+                        "pmaxsw", "pminsw"):
                 d = xmm(i, ops[0])
                 body.append(f"{d} = x86::{mn}({d}, {vector(i, ops[1])});")
             elif mn in ("pshufd", "pshuflw", "pshufhw", "shufpd"):
