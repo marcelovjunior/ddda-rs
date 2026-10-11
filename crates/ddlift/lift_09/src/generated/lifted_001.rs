@@ -5648,6 +5648,21 @@ pub fn f_00927fc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     }
 }
 
+// Translated from 0x00928190 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00928190.
+pub fn f_00928190(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0x928190;
+    loop {
+        match pc {
+            0x928190 => { cpu.ecx = m.u32(cpu.esp.wrapping_add(0x14)); { let r = cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); } pc = if cpu.fl.cond("e") { 0x9281BC } else { 0x928198 }; continue; }
+            0x928198 => { cpu.eax = m.u32(cpu.esp.wrapping_add(0xC)); { let r = cpu.fl.alu_sub(cpu.eax, 0x3E8u32, 32); } pc = if cpu.fl.cond("b") { 0x9281B1 } else { 0x9281A3 }; continue; }
+            0x9281A3 => { { let v = cpu.ecx; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.ecx = m.u32(cpu.esp.wrapping_add(0x14)); { let t = 0x8AB100u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0x9281AD);  x86::call_ext(m, cpu, t);  } { let r = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0x9281B1 => { cpu.edx = m.u32(cpu.esp.wrapping_add(0x10)); { let v = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let t = 0x9281C0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0x9281BB);  x86::call_ext(m, cpu, t);  } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0x9281BC => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x009281C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_009281c0.
 pub fn f_009281c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9281C0;
@@ -6697,9 +6712,4 @@ pub fn f_0092a7b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             _ => unreachable!(),
         }
     }
-}
-
-// Translated from 0x0092A7E0 (DDDA.exe 2017-12-13 Steam), cEm0500ActAppearCoffin::getDTI.
-pub fn f_0092a7e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19991D8u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

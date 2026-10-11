@@ -5201,6 +5201,32 @@ pub fn f_00b43a00(m: &mut dyn Mem, cpu: &mut Cpu) {
     }
 }
 
+// Translated from 0x00B43B10 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00B43B10.
+pub fn f_00b43b10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xB43B10;
+    loop {
+        match pc {
+            0xB43B10 => { { let r = cpu.fl.alu_sub((m.u8(cpu.esp.wrapping_add(0x4)) as u32), 0x0u32, 8); } pc = if cpu.fl.cond("e") { 0xB43B26 } else { 0xB43B17 }; continue; }
+            0xB43B17 => { cpu.eax = 0x100u32; { let r = cpu.fl.alu_or((m.u16(cpu.ecx.wrapping_add(0xF0)) as u32), (cpu.eax & 0xFFFF), 16); m.set_u16(cpu.ecx.wrapping_add(0xF0), (r) as u16); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            0xB43B26 => { cpu.edx = 0xFEFFu32; { let r = cpu.fl.alu_and((m.u16(cpu.ecx.wrapping_add(0xF0)) as u32), (cpu.edx & 0xFFFF), 16); m.set_u16(cpu.ecx.wrapping_add(0xF0), (r) as u16); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00B43B40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00B43B40.
+pub fn f_00b43b40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xB43B40;
+    loop {
+        match pc {
+            0xB43B40 => { { let r = cpu.fl.alu_and(m.u32(cpu.ecx.wrapping_add(0xF0)), 0x100u32, 32); } pc = if cpu.fl.cond("e") { 0xB43B56 } else { 0xB43B4C }; continue; }
+            0xB43B4C => { cpu.eax = m.u32(cpu.esp.wrapping_add(0x4)); m.set_u32(cpu.ecx.wrapping_add(0xFC), cpu.eax); pc = 0xB43B56; continue; }
+            0xB43B56 => { cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x00B43B60 (DDDA.exe 2017-12-13 Steam), Global::FUN_00b43b60.
 pub fn f_00b43b60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0xB43B60;
@@ -5590,22 +5616,4 @@ pub fn f_00b44480(m: &mut dyn Mem, cpu: &mut Cpu) {
             _ => unreachable!(),
         }
     }
-}
-
-// Translated from 0x00B444B0 (DDDA.exe 2017-12-13 Steam), cPlActWpnWandAirStrike::vf16.
-pub fn f_00b444b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let mut pc: u32 = 0xB444B0;
-    loop {
-        match pc {
-            0xB444B0 => { cpu.eax = m.u32(cpu.esp.wrapping_add(0x4)); { let r = cpu.fl.alu_and(cpu.eax, cpu.eax, 32); } pc = if cpu.fl.cond("e") { 0xB444C0 } else { 0xB444B8 }; continue; }
-            0xB444B8 => { cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xB444BD);  super::lifted::f_00b444e0(m, cpu);  cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
-            0xB444C0 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x00B444D0 (DDDA.exe 2017-12-13 Steam), cPlActWpnWandAirStrike::getDTI.
-pub fn f_00b444d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A3610u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
