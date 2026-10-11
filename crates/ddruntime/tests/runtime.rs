@@ -718,3 +718,106 @@ fn the_device_state_machine_answers_d3d9s_defaults_and_counts_bound_references()
     assert_eq!(call(&mut s, 41, &[]), ddruntime::d3d9::D3DERR_INVALIDCALL);
     assert_eq!(call(&mut s, 42, &[]), 0);
 }
+
+/// A session with a window and a D3D9 device (windowed 1280x720, auto
+/// depth D24S8); None without the game.
+fn device_session() -> Option<(ddruntime::session::Session, u32)> {
+    use ddruntime::session::Outcome;
+    let exe = installed_exe()?;
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = ddruntime::session::Session::new(&path).expect("session");
+    let token = |s: &ddruntime::session::Session, n: &str| s.imports.iter().find(|i| i.full_name() == n).unwrap().token;
+    let scratch = 0x7EFF_0000;
+    let (wc, name) = (scratch, scratch + 0x100);
+    s.mem.set_u16(name, b'W' as u16);
+    s.mem.set_u32(wc + 8, token(&s, "USER32.dll!DefWindowProcW"));
+    s.mem.set_u32(wc + 40, name);
+    let Outcome::Returned(_) = s.call(token(&s, "USER32.dll!RegisterClassExW"), 0, &[wc]) else { panic!() };
+    let Outcome::Returned(cpu) = s.call(token(&s, "USER32.dll!CreateWindowExW"), 0, &[0, name, 0, 0x00CA_0000, 0, 0, 1286, 749, 0, 0, 0x0040_0000, 0]) else { panic!() };
+    let hwnd = cpu.eax;
+    let Outcome::Returned(cpu) = s.call(token(&s, "d3d9.dll!Direct3DCreate9"), 0, &[32]) else { panic!() };
+    let d3d = cpu.eax;
+    let (pp, out) = (scratch + 0x200, scratch + 0x300);
+    for (k, v) in [0, 0, 0, 0, 0, 0, 1, hwnd, 1, 1, 75, 0, 0, 0].into_iter().enumerate() {
+        s.mem.set_u32(pp + 4 * k as u32, v);
+    }
+    let create = s.mem.u32(s.mem.u32(d3d) + 4 * 16);
+    let Outcome::Returned(_) = s.call(create, 0, &[d3d, 0, 1, hwnd, 0x46, pp, out]) else { panic!() };
+    let dev = s.mem.u32(out);
+    Some((s, dev))
+}
+
+/// Call COM method `slot` of `obj` with `args` (this first); eax.
+fn com(s: &mut ddruntime::session::Session, obj: u32, slot: u32, args: &[u32]) -> u32 {
+    let f = s.mem.u32(s.mem.u32(obj) + 4 * slot);
+    let mut a = vec![obj];
+    a.extend_from_slice(args);
+    match s.call(f, 0, &a) {
+        ddruntime::session::Outcome::Returned(c) => c.eax,
+        o => panic!("slot {slot}: {o}"),
+    }
+}
+
+#[test]
+fn textures_and_buffers_lock_into_guest_memory_with_d3d9s_layouts() {
+    let Some((mut s, dev)) = device_session() else { return };
+    const INVALID: u32 = ddruntime::d3d9::D3DERR_INVALIDCALL;
+    let scratch = 0x7EFF_0800;
+    let (out, locked, desc) = (scratch, scratch + 0x10, scratch + 0x20);
+    let dxt1 = u32::from_le_bytes(*b"DXT1");
+    // CreateTexture(256, 256, levels 0 = full chain, usage 0, DXT1, MANAGED)
+    assert_eq!(com(&mut s, dev, 23, &[256, 256, 0, 0, dxt1, 1, out, 0]), 0);
+    let tex = s.mem.u32(out);
+    assert_eq!(com(&mut s, tex, 13, &[]), 9, "256 -> 1: nine levels");
+    assert_eq!(com(&mut s, tex, 17, &[3, desc]), 0);
+    assert_eq!((s.mem.u32(desc), s.mem.u32(desc + 24), s.mem.u32(desc + 28)), (dxt1, 32, 32));
+    // level 0: 64 blocks of 8 bytes per row; a rect at (8, 4) starts one
+    // block row and two blocks in
+    let rect = scratch + 0x40;
+    for (k, v) in [8u32, 4, 16, 8].into_iter().enumerate() {
+        s.mem.set_u32(rect + 4 * k as u32, v);
+    }
+    assert_eq!(com(&mut s, tex, 19, &[0, locked, 0, 0]), 0);
+    let (pitch, bits) = (s.mem.u32(locked), s.mem.u32(locked + 4));
+    assert_eq!(pitch, 512);
+    s.mem.set_u32(bits, 0xDEAD_BEEF);
+    assert_eq!(com(&mut s, tex, 19, &[0, locked, 0, 0]), INVALID, "already locked");
+    assert_eq!(com(&mut s, tex, 20, &[0]), 0);
+    assert_eq!(com(&mut s, tex, 19, &[0, locked, rect, 0]), 0);
+    assert_eq!(s.mem.u32(locked + 4), bits + 512 + 16, "the rectangle's first block");
+    assert_eq!(s.mem.u32(bits), 0xDEAD_BEEF, "the shadow keeps what the guest wrote");
+    com(&mut s, tex, 20, &[0]);
+    // level surfaces count on the texture
+    assert_eq!(com(&mut s, tex, 18, &[1, out]), 0);
+    let surf = s.mem.u32(out);
+    assert_eq!(ddruntime::d3d9dev::refs(tex), Some(("IDirect3DTexture9", 2)));
+    assert_eq!(com(&mut s, surf, 2, &[]), 1, "Release on the surface releases the texture");
+    // a DEFAULT-pool texture without DYNAMIC cannot be locked; with it, it can
+    assert_eq!(com(&mut s, dev, 23, &[64, 64, 1, 0, 21, 0, out, 0]), 0);
+    let gpu_only = s.mem.u32(out);
+    assert_eq!(com(&mut s, gpu_only, 19, &[0, locked, 0, 0]), INVALID);
+    assert_eq!(com(&mut s, dev, 23, &[64, 64, 1, 0x200, 21, 0, out, 0]), 0);
+    let dynamic = s.mem.u32(out);
+    assert_eq!(com(&mut s, dynamic, 19, &[0, locked, 0, 0]), 0);
+    assert_eq!(s.mem.u32(locked), 256, "64 A8R8G8B8 texels");
+    // a non-lockable render target refuses LockRect
+    assert_eq!(com(&mut s, dev, 28, &[128, 64, 21, 0, 0, 0, out, 0]), 0);
+    let rt = s.mem.u32(out);
+    assert_eq!(com(&mut s, rt, 13, &[locked, 0, 0]), INVALID);
+    // vertex buffer: lock a range, unlock, describe
+    assert_eq!(com(&mut s, dev, 26, &[1024, 0x208, 0, 0, out, 0]), 0);
+    let vb = s.mem.u32(out);
+    assert_eq!(com(&mut s, vb, 11, &[64, 32, out, 0]), 0);
+    let p = s.mem.u32(out);
+    assert_eq!(com(&mut s, vb, 11, &[0, 0, out, 0]), 0, "buffers may be locked again");
+    assert_eq!(s.mem.u32(out) + 64, p);
+    assert_eq!(com(&mut s, vb, 12, &[]), 0);
+    assert_eq!(com(&mut s, vb, 12, &[]), 0);
+    assert_eq!(com(&mut s, vb, 12, &[]), INVALID, "more unlocks than locks");
+    assert_eq!(com(&mut s, vb, 11, &[1000, 100, out, 0]), INVALID, "past the end");
+    assert_eq!(com(&mut s, vb, 13, &[desc]), 0);
+    assert_eq!([s.mem.u32(desc), s.mem.u32(desc + 4), s.mem.u32(desc + 16)], [100, 6, 1024]);
+    // the last Release frees the texture and its level surfaces
+    assert_eq!(com(&mut s, tex, 2, &[]), 0);
+    assert_eq!(ddruntime::d3d9dev::refs(surf), None);
+}

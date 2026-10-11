@@ -14,6 +14,7 @@
 //! with its address instead of returning something made up.
 pub mod d3d9;
 pub mod d3d9dev;
+pub mod d3d9res;
 pub mod d3d9state;
 pub mod dispatch;
 pub mod files;

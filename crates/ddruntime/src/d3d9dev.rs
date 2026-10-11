@@ -9,6 +9,7 @@
 //! headless for now: Present counts frames and nothing is drawn; methods
 //! are added as the game reaches them, the rest stop with their name.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3DFMT_X8R8G8B8, D3D_OK};
+use crate::d3d9res as res;
 use crate::d3d9state as st;
 use crate::dispatch::{Conflict, Registry};
 use crate::interfaces::{self, Spec, Tokens};
@@ -50,7 +51,11 @@ pub enum Kind {
     /// IDirect3DVertexDeclaration9: the elements (8 bytes each, END excluded)
     Declaration { device: u32, elements: Vec<[u8; 8]> },
     SwapChain { device: u32, pp: PresentParameters, back_buffers: Vec<u32>, presents: u64 },
-    Surface { device: u32, desc: SurfaceDesc, container: u32 },
+    /// `owner`: the texture whose reference count this level surface
+    /// shares (0 for standalone surfaces and back buffers)
+    Surface { device: u32, desc: SurfaceDesc, container: u32, owner: u32, image: crate::d3d9res::Image },
+    Texture { device: u32, data: Box<crate::d3d9res::TextureData> },
+    Buffer { device: u32, data: Box<crate::d3d9res::BufferData> },
 }
 
 #[derive(Debug)]
@@ -84,6 +89,7 @@ pub(crate) fn new_object(m: &mut dyn Mem, iface: &'static str, kind: Kind) -> u3
 }
 
 pub(crate) fn add_ref_to(object: u32) -> u32 {
+    let object = counted(object);
     objects(|o| {
         let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("AddRef on {object:#x}, not a live D3D9 object"));
         x.refs += 1;
@@ -94,6 +100,7 @@ pub(crate) fn add_ref_to(object: u32) -> u32 {
 /// Release one reference; at zero the object goes, releasing what it holds
 /// (a swap chain its back buffers, a device its swap chains and surfaces).
 pub(crate) fn release_of(object: u32) -> u32 {
+    let object = counted(object);
     let (left, gone) = objects(|o| {
         let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
         x.refs -= 1;
@@ -107,7 +114,30 @@ pub(crate) fn release_of(object: u32) -> u32 {
                     .filter(|&p| p != 0).collect()
             }
             Kind::SwapChain { back_buffers, .. } => back_buffers,
-            Kind::Surface { .. } | Kind::Shader { .. } | Kind::Declaration { .. } => vec![],
+            Kind::Surface { image, .. } => {
+                image.free();
+                vec![]
+            }
+            Kind::Texture { data, .. } => {
+                // the level surfaces go with the texture (they share its count)
+                for s in &data.surfaces {
+                    if let Some(x) = objects(|o| o.live.remove(s)) {
+                        if let Kind::Surface { image, .. } = x.kind {
+                            image.free();
+                        }
+                        with_state(|st| st.heap.free(*s)).expect("surface object block");
+                    }
+                }
+                for v in &data.volumes {
+                    v.free();
+                }
+                vec![]
+            }
+            Kind::Buffer { data, .. } => {
+                data.image.free();
+                vec![]
+            }
+            Kind::Shader { .. } | Kind::Declaration { .. } => vec![],
         };
         for h in held {
             release_of(h);
@@ -139,7 +169,17 @@ pub(crate) fn hand_out(m: &mut dyn Mem, out: u32, object: u32) {
 /// The back buffers and auto depth-stencil surface a swap chain's present
 /// parameters describe.
 fn surface(m: &mut dyn Mem, device: u32, desc: SurfaceDesc, container: u32) -> u32 {
-    new_object(m, "IDirect3DSurface9", Kind::Surface { device, desc, container })
+    let image = crate::d3d9res::Image::new(desc.format, desc.width, desc.height, 1).unwrap_or_default();
+    new_object(m, "IDirect3DSurface9", Kind::Surface { device, desc, container, owner: 0, image })
+}
+
+/// The object whose reference count `object` uses (a texture's level
+/// surfaces count on the texture).
+fn counted(object: u32) -> u32 {
+    objects(|o| match o.live.get(&object).map(|x| &x.kind) {
+        Some(Kind::Surface { owner, .. }) if *owner != 0 => *owner,
+        _ => object,
+    })
 }
 
 /// Complete windowed present parameters as D3D9 does: a zero back buffer
@@ -452,7 +492,7 @@ fn get_device(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (this, out) = (arg(m, cpu, 0), arg(m, cpu, 1));
     let device = objects(|o| match o.live.get(&this).map(|x| &x.kind) {
         Some(Kind::SwapChain { device, .. }) | Some(Kind::Surface { device, .. }) | Some(Kind::Shader { device, .. })
-        | Some(Kind::Declaration { device, .. }) => *device,
+        | Some(Kind::Declaration { device, .. }) | Some(Kind::Texture { device, .. }) | Some(Kind::Buffer { device, .. }) => *device,
         _ => panic!("GetDevice on {this:#x}"),
     });
     hand_out(m, out, device);
@@ -490,7 +530,7 @@ fn surface_get_desc(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(Kind::Surface { desc, .. }) => desc.clone(),
         _ => panic!("GetDesc on {this:#x}, not a surface"),
     });
-    for (k, v) in [d.format, D3DRTYPE_SURFACE, d.usage, d.pool, d.multisample, d.quality, d.width, d.height].into_iter().enumerate() {
+    for (k, v) in [d.format, D3DRTYPE_SURFACE, d.usage & !crate::d3d9res::NOT_LOCKABLE, d.pool, d.multisample, d.quality, d.width, d.height].into_iter().enumerate() {
         m.set_u32(out + 4 * k as u32, v);
     }
     cpu.eax = D3D_OK;
@@ -507,6 +547,17 @@ pub const ISURFACE9: &[&str] = &[
     "LockRect", "UnlockRect", "GetDC", "ReleaseDC",
 ];
 
+pub const ITEXTURE9: &[&str] = &[
+    "QueryInterface", "AddRef", "Release", "GetDevice", "SetPrivateData", "GetPrivateData", "FreePrivateData",
+    "SetPriority", "GetPriority", "PreLoad", "GetType", "SetLOD", "GetLOD", "GetLevelCount", "SetAutoGenFilterType",
+    "GetAutoGenFilterType", "GenerateMipSubLevels", "GetLevelDesc", "GetSurfaceLevel", "LockRect", "UnlockRect",
+    "AddDirtyRect",
+];
+pub const IBUFFER9: &[&str] = &[
+    "QueryInterface", "AddRef", "Release", "GetDevice", "SetPrivateData", "GetPrivateData", "FreePrivateData",
+    "SetPriority", "GetPriority", "PreLoad", "GetType", "Lock", "Unlock", "GetDesc",
+];
+
 pub const INTERFACES: &[Spec] = &[
     Spec {
         name: "IDirect3DDevice9",
@@ -516,7 +567,10 @@ pub const INTERFACES: &[Spec] = &[
             (4, get_available_texture_mem), (5, evict_managed_resources), (6, get_direct3d),
             (7, get_device_caps), (8, get_display_mode), (9, get_creation_parameters),
             (13, create_additional_swap_chain), (14, get_swap_chain), (15, get_number_of_swap_chains),
-            (17, present), (18, get_back_buffer), (37, st::set_render_target), (38, get_render_target),
+            (17, present), (18, get_back_buffer), (23, res::create_texture), (24, res::create_volume_texture),
+            (25, res::create_cube_texture), (26, res::create_vertex_buffer), (27, res::create_index_buffer),
+            (28, res::create_render_target), (29, res::create_depth_stencil_surface),
+            (36, res::create_offscreen_plain_surface), (37, st::set_render_target), (38, get_render_target),
             (39, st::set_depth_stencil_surface), (40, get_depth_stencil_surface), (41, st::begin_scene),
             (42, st::end_scene), (43, st::clear), (44, st::set_transform), (45, st::get_transform),
             (47, st::set_viewport), (48, st::get_viewport), (57, st::set_render_state), (58, st::get_render_state),
@@ -544,6 +598,73 @@ pub const INTERFACES: &[Spec] = &[
         names: ISWAPCHAIN9,
     },
     Spec {
+        name: "IDirect3DTexture9",
+        slots: 22,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (11, res::texture_set_lod), (12, res::texture_get_lod), (13, res::texture_get_level_count),
+            (14, res::texture_set_autogen_filter), (15, res::texture_get_autogen_filter), (16, res::texture_generate_mips),
+            (17, res::texture_get_level_desc), (18, res::texture_get_surface_level), (19, res::texture_lock_rect),
+            (20, res::texture_unlock_rect), (21, res::texture_add_dirty),
+        ],
+        names: ITEXTURE9,
+    },
+    Spec {
+        name: "IDirect3DCubeTexture9",
+        slots: 22,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (11, res::texture_set_lod), (12, res::texture_get_lod), (13, res::texture_get_level_count),
+            (14, res::texture_set_autogen_filter), (15, res::texture_get_autogen_filter), (16, res::texture_generate_mips),
+            (18, res::cube_get_surface), (19, res::cube_lock_rect), (20, res::cube_unlock_rect), (21, res::cube_add_dirty),
+        ],
+        names: &[
+            "QueryInterface", "AddRef", "Release", "GetDevice", "SetPrivateData", "GetPrivateData", "FreePrivateData",
+            "SetPriority", "GetPriority", "PreLoad", "GetType", "SetLOD", "GetLOD", "GetLevelCount",
+            "SetAutoGenFilterType", "GetAutoGenFilterType", "GenerateMipSubLevels", "GetLevelDesc",
+            "GetCubeMapSurface", "LockRect", "UnlockRect", "AddDirtyRect",
+        ],
+    },
+    Spec {
+        name: "IDirect3DVolumeTexture9",
+        slots: 22,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (11, res::texture_set_lod), (12, res::texture_get_lod), (13, res::texture_get_level_count),
+            (14, res::texture_set_autogen_filter), (15, res::texture_get_autogen_filter), (16, res::texture_generate_mips),
+            (17, res::volume_get_level_desc), (19, res::volume_lock_box), (20, res::volume_unlock_box), (21, res::texture_add_dirty),
+        ],
+        names: &[
+            "QueryInterface", "AddRef", "Release", "GetDevice", "SetPrivateData", "GetPrivateData", "FreePrivateData",
+            "SetPriority", "GetPriority", "PreLoad", "GetType", "SetLOD", "GetLOD", "GetLevelCount",
+            "SetAutoGenFilterType", "GetAutoGenFilterType", "GenerateMipSubLevels", "GetLevelDesc",
+            "GetVolumeLevel", "LockBox", "UnlockBox", "AddDirtyBox",
+        ],
+    },
+    Spec {
+        name: "IDirect3DVertexBuffer9",
+        slots: 14,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (11, res::buffer_lock), (12, res::buffer_unlock), (13, res::buffer_get_desc),
+        ],
+        names: IBUFFER9,
+    },
+    Spec {
+        name: "IDirect3DIndexBuffer9",
+        slots: 14,
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (11, res::buffer_lock), (12, res::buffer_unlock), (13, res::buffer_get_desc),
+        ],
+        names: IBUFFER9,
+    },
+    Spec {
         name: "IDirect3DVertexShader9",
         slots: 5,
         methods: &[(0, query_interface), (1, add_ref), (2, release), (3, get_device), (4, st::shader_get_function)],
@@ -564,7 +685,11 @@ pub const INTERFACES: &[Spec] = &[
     Spec {
         name: "IDirect3DSurface9",
         slots: 17,
-        methods: &[(0, query_interface), (1, add_ref), (2, release), (3, get_device), (12, surface_get_desc)],
+        methods: &[
+            (0, query_interface), (1, add_ref), (2, release), (3, get_device), (7, res::resource_set_priority),
+            (8, res::resource_get_priority), (9, res::resource_preload), (10, res::resource_get_type),
+            (12, surface_get_desc), (13, res::surface_lock_rect), (14, res::surface_unlock_rect),
+        ],
         names: ISURFACE9,
     },
 ];
