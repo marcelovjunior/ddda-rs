@@ -78,6 +78,10 @@ impl Flags {
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }
     }
+    /// imul (2/3-operand, 32-bit): CF = OF = the signed product does not fit.
+    fn imul_overflow(&self) -> bool {
+        (self.a as i32 as i64) * (self.b as i32 as i64) != self.r as i32 as i64
+    }
     fn mask(&self) -> u32 { if self.bits == 32 { u32::MAX } else { (1 << self.bits) - 1 } }
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
     pub fn zf(&self) -> bool {
@@ -95,7 +99,7 @@ impl Flags {
             SHL => (self.a >> (self.bits - self.b)) & 1 != 0 && self.b <= self.bits,
             SHR => self.b <= self.bits && (self.a >> (self.b - 1)) & 1 != 0,
             SAR => if self.b >= self.bits { self.sign(self.a) } else { ((((self.a << (32 - self.bits)) as i32) >> (32 - self.bits)) >> (self.b - 1)) & 1 != 0 },
-            IMUL => panic!("flags after imul are not modelled"),
+            IMUL => self.imul_overflow(),
             _ => false, // logic
         }
     }
@@ -108,7 +112,7 @@ impl Flags {
             DEC => a && !r,
             SHL => self.b == 1 && (r != self.cf()),
             SHR => self.b == 1 && a,
-            IMUL => panic!("flags after imul are not modelled"),
+            IMUL => self.imul_overflow(),
             _ => false, // logic, sar
         }
     }

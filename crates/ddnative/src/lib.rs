@@ -20,6 +20,7 @@ pub mod generated;
 pub mod mem;
 pub mod model;
 pub mod particle;
+pub mod platform;
 pub mod player_action;
 pub mod species;
 pub mod unit;

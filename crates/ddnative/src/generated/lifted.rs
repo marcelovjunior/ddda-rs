@@ -20,6 +20,7 @@ pub use super::lifted_014::*;
 pub use super::lifted_015::*;
 pub use super::lifted_016::*;
 pub use super::lifted_017::*;
+pub use super::lifted_018::*;
 
 /// Every lifted function: (address, function).
 pub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {
@@ -42,5 +43,6 @@ pub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {
     v.extend_from_slice(super::lifted_015::FUNCTIONS_015);
     v.extend_from_slice(super::lifted_016::FUNCTIONS_016);
     v.extend_from_slice(super::lifted_017::FUNCTIONS_017);
+    v.extend_from_slice(super::lifted_018::FUNCTIONS_018);
     v
 }

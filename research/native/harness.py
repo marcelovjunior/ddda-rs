@@ -129,6 +129,13 @@ FLOAT_LOADS = {"movss", "comiss", "ucomiss", "addss", "subss", "mulss", "divss",
                "fld", "cvtss2sd", "cvttss2si", "cvtss2si"}
 
 
+# Platform services lifted code may call: run_sparse runs these models
+# (identical to crates/ddnative/src/platform.rs) instead of the original.
+PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_free",
+            0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
+HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
+
+
 class Rejected(Exception):
     """The case is not a valid vector (NaN float input, runaway loop, ...)."""
 
@@ -208,6 +215,56 @@ def run_sparse(address, seed, max_insn=20000):
             bad.append("runaway")
             uc_.emu_stop()
 
+    heap = [HEAP_BASE]
+
+    def ensure(a, n):
+        for p in range(a & ~0xFFF, ((a + n - 1) & ~0xFFF) + 1, 0x1000):
+            if p not in pages_in and p != RET & ~0xFFF:
+                on_unmapped(uc, None, p, 1, 0, None)
+
+    def mread(a, n):
+        ensure(a, n)
+        cur = bytes(uc.mem_read(a, n))
+        for k in range(n):
+            if a + k not in written and a + k not in reads:
+                reads[a + k] = cur[k]
+        return cur
+
+    def mwrite(a, data):
+        ensure(a, len(data))
+        uc.mem_write(a, data)
+        written.update(range(a, a + len(data)))
+
+    def alloc(size):
+        a = heap[0]
+        heap[0] = ((a + max(size, 1) + 15) & ~15) & 0xFFFFFFFF
+        return a
+
+    def on_platform(uc_, addr, size, _):
+        """platform.rs, line for line: arguments, effects, then `ret`."""
+        name = PLATFORM[addr]
+        esp = uc_.reg_read(UC_X86_REG_ESP)
+        eax = uc_.reg_read(UC_X86_REG_EAX)
+        arg = lambda k: struct.unpack("<I", mread(esp + 4 + 4 * k, 4))[0]  # noqa: E731
+        if name == "pool40_alloc":
+            eax = alloc(0x28)
+        elif name == "mt_alloc":
+            eax = alloc(uc_.reg_read(UC_X86_REG_ECX))
+        elif name in ("memset", "memcpy"):
+            dst, x, n = arg(0), arg(1), arg(2)
+            if n > 0x10000:
+                bad.append(f"{name} of {n:#x} bytes")
+                uc_.emu_stop()
+                return
+            mwrite(dst, bytes([x & 0xFF]) * n if name == "memset" else mread(x, n))
+            eax = dst
+        ret = struct.unpack("<I", mread(esp, 4))[0]
+        uc_.reg_write(UC_X86_REG_EAX, eax)
+        uc_.reg_write(UC_X86_REG_ESP, esp + 4)
+        uc_.reg_write(UC_X86_REG_EIP, ret)
+
+    for a in PLATFORM:
+        uc.hook_add(UC_HOOK_CODE, on_platform, None, a, a)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
     uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
     uc.hook_add(UC_HOOK_MEM_READ, check_float)
@@ -227,10 +284,36 @@ def run_sparse(address, seed, max_insn=20000):
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
-    try:
-        uc.emu_start(address, RET)
-    except UcError as e:
-        bad.append(str(e))
+    # Unicorn's SSE memory helpers can raise UNMAPPED for a page the hook has
+    # just mapped (or never call the hook): map what the faulting instruction
+    # touches and resume from it, once per instruction (the machine state is
+    # intact; the instruction has not retired).
+    md.detail = True
+    regs = dict(GPR)
+    pc, retried = address, set()
+    while True:
+        try:
+            uc.emu_start(pc, RET)
+            break
+        except UcError as e:
+            pc = uc.reg_read(UC_X86_REG_EIP)
+            if "UNMAPPED" not in str(e) or bad or pc in retried:
+                bad.append(f"{e} at {pc:#010x}")
+                break
+            retried.add(pc)
+            i = next(md.disasm(bytes(uc.mem_read(pc, 15)), pc))
+            for op in i.operands:
+                if op.type == 3:  # X86_OP_MEM
+                    mm = op.mem
+                    a = mm.disp
+                    if mm.base:
+                        a += uc.reg_read(regs[i.reg_name(mm.base)])
+                    if mm.index:
+                        a += uc.reg_read(regs[i.reg_name(mm.index)]) * mm.scale
+                    a &= 0xFFFFFFFF
+                    for p in {a & ~0xFFF, (a + op.size - 1) & ~0xFFF}:
+                        if p not in pages_in:
+                            on_unmapped(uc, None, p, 1, 0, None)
     if bad:
         raise Rejected("; ".join(bad))
     regs_out = {name: uc.reg_read(r) for name, r in GPR}

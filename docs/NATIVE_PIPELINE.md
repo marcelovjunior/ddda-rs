@@ -315,7 +315,11 @@ game's x87 precision control word: DirectX 9 sets single precision unless
 the device was created with FPU_PRESERVE; check the original's control
 word live before modelling it).
 
-**Pitfalls.** Unicorn caches translated code per page: never write new
+**Pitfalls.** Unicorn's SSE memory helpers (movq/movaps stores) can
+raise UNMAPPED for a page the hook has just mapped; `run_sparse` maps
+whatever the faulting instruction touches and resumes at it, once per
+instruction (before this, such functions silently got no vectors).
+Unicorn caches translated code per page: never write new
 code into a page that has already been executed or translated (the st0
 capture first ran on the return page and silently executed stale bytes).
 Generated code is literal, not idiomatic; refactoring a function into a
@@ -369,6 +373,39 @@ Code Rust replaces instead of translating. `families.py platform` and
 What platform code *does* still matters to the port: the in-place
 constructor that runs after the allocator is game state (it is ported);
 only allocation, freeing and type registration are replaced.
+
+### Platform models (calls from lifted code)
+
+Lifted code may call a platform service when that service has a model in
+`crates/ddnative/src/platform.rs` (table `MODELS`; the same addresses are
+in `harness.PLATFORM`). A model starts where the original starts (the
+return address at `[esp]`), does the service's observable effect, sets
+eax and ends with the original's `ret`; every other register, the flags,
+xmm and x87 are left alone. While recording vectors, `run_sparse` runs
+the identical model (Python, `on_platform`) in place of the original, so
+the vector verifies the *caller's* code around the call.
+
+| address | model | effect |
+|---|---|---|
+| 0x00CF73F0 | `pool40_alloc` | the global pool of 0x28-byte nodes (critical section, free list): eax = a fresh block |
+| 0x00DE0B80 | `mt_alloc` | MT allocator, `ecx` bytes: eax = a fresh block |
+| 0x00DE0B90 | `mt_free` | MT allocator free of `ecx`: nothing observable |
+| 0x012EFE20 | `memset` | CRT memset(dst, c, n), cdecl, eax = dst |
+| 0x012EFEA0 | `memcpy` | CRT memcpy(dst, src, n) with memmove overlap rules, eax = dst |
+
+Fresh blocks come from `Mem::alloc`; `Sparse` (and `run_sparse`) hand them
+out with the same bump rule from `mem::HEAP_BASE` = 0x0C000000 (16-byte
+steps), so a replay sees the addresses the vector saw. memset and memcpy
+are checked against the real CRT code (both SSE2 paths, overlaps) by
+`tests/platform.rs`, vectors from `research/native/vectors_platform.py`.
+The allocators are replacements by design: no vector can compare them
+with the original's pool bookkeeping, which Rust does not keep.
+
+To add a model: write it in `platform.rs` (+ `MODELS`), mirror it line
+for line in `harness.run_sparse`'s `on_platform` (same reads in the same
+order: the recorded inputs must match what the Rust reads), add it to
+`harness.PLATFORM`, rescan. Reject impossible inputs in the Python model
+(memset/memcpy over 64 KB) rather than modelling them.
 
 ## Pitfalls (all hit for real)
 

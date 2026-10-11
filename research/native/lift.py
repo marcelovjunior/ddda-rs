@@ -10,6 +10,7 @@ demand, every byte read and written recorded).
     python lift.py scan [N]     # lift every non-platform function it can; patterns/lift.json
     python lift.py vectors      # record sparse vectors for each lifted function
     python lift.py gen          # crates/ddnative/src/generated/lifted*.rs + tests/lifted.rs
+    python lift.py relift       # after a codegen change: re-translate the current list
     python lift.py one ADDR     # print the Rust for one function
 
 Run scan/vectors/one with E:/ddda-re/tools/pyenv/Scripts/python.exe;
@@ -70,7 +71,7 @@ def lift(addr, size, callable=frozenset()):
                 raise Unsupported("indirect jump")
             t = i.operands[0].imm
             if not (addr <= t < end):
-                if t not in callable:
+                if t not in callable and t not in h.PLATFORM:
                     raise Unsupported("jump out of the function")
             else:
                 leaders.add(t)
@@ -148,6 +149,10 @@ def lift(addr, size, callable=frozenset()):
             raise Unsupported(f"xmm {n}")
         return n
 
+    def target(t):
+        """Rust path of a call target: a platform model or a lifted function."""
+        return f"crate::platform::{h.PLATFORM[t]}" if t in h.PLATFORM else f"super::lifted::f_{t:08x}"
+
     def sx(v, bits):
         return f"(({v}) as i{bits} as i32 as u32)" if bits in (8, 16) else v
 
@@ -213,8 +218,8 @@ def lift(addr, size, callable=frozenset()):
                 c = load(i, ops[2]) if len(ops) == 3 else load(i, ops[1])
                 if bits != 32:
                     raise Unsupported("imul width")
-                body.append(f"{{ let r = ({a} as i32).wrapping_mul({c} as i32) as u32; "
-                            f"fl = Flags::new(x86::IMUL, 0, 0, r, 32); {store(i, ops[0], 'r')} }}")
+                body.append(f"{{ let (a, c) = ({a}, {c}); let r = (a as i32).wrapping_mul(c as i32) as u32; "
+                            f"fl = Flags::new(x86::IMUL, a, c, r, 32); {store(i, ops[0], 'r')} }}")
             elif mn == "cdq":
                 body.append("edx = if (eax as i32) < 0 { u32::MAX } else { 0 };")
             elif mn.startswith("set"):
@@ -230,7 +235,7 @@ def lift(addr, size, callable=frozenset()):
                 break
             elif mn == "jmp" and not (addr <= ops[0].imm < end):
                 # tail call: the callee returns straight to our caller
-                body.append(f"{SAVE} super::lifted::f_{ops[0].imm:08x}(m, cpu); return;")
+                body.append(f"{SAVE} {target(ops[0].imm)}(m, cpu); return;")
                 terminated = True
                 break
             elif mn == "jmp":
@@ -238,7 +243,7 @@ def lift(addr, size, callable=frozenset()):
                 terminated = True
                 break
             elif mn.startswith("j") and not (addr <= ops[0].imm < end):
-                body.append(f"if fl.cond(\"{mn[1:]}\") {{ {SAVE} super::lifted::f_{ops[0].imm:08x}(m, cpu); return; }} "
+                body.append(f"if fl.cond(\"{mn[1:]}\") {{ {SAVE} {target(ops[0].imm)}(m, cpu); return; }} "
                             f"pc = 0x{nxt:X}; continue;")
                 terminated = True
                 break
@@ -250,11 +255,11 @@ def lift(addr, size, callable=frozenset()):
                 if ops[0].type != X86_OP_IMM:
                     raise Unsupported("icall")
                 t = ops[0].imm
-                if t not in callable:
+                if t not in callable and t not in h.PLATFORM:
                     raise Unsupported("call")
                 # push the return address, run the callee on the whole state, carry on
                 body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{nxt:X}); "
-                            f"{SAVE} super::lifted::f_{t:08x}(m, cpu); {LOAD}")
+                            f"{SAVE} {target(t)}(m, cpu); {LOAD}")
             elif mn == "nop":
                 pass
             # ---- SSE
@@ -370,13 +375,12 @@ def scan(limit=None):
     from collections import Counter
     ok, why = [], Counter()
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
-                      "AND status NOT IN ('verified', 'platform') AND size BETWEEN 6 AND 600 "
+                      "AND status NOT IN ('verified', 'platform') AND size BETWEEN 6 AND 2000 "
                       "AND address < 0x012E0000 ORDER BY address").fetchall()
-    # functions the lifter already verifies stay in the list (their status is 'verified')
-    test = os.path.join(R, "crates/ddnative/tests/lifted.rs")
-    mine = {int(x, 16) for l in open(test) if l.startswith("// verifies") for x in l.split()[2:]}         if os.path.exists(test) else set()
-    rows += [r for r in db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified'")
-             if r[0] in mine]
+    # verified functions are lifted too (hand ports keep their own tests): a
+    # caller can only lift if its callees are lifted
+    rows += db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified' "
+                       "AND NOT thunk AND size BETWEEN 6 AND 2000 AND address < 0x012E0000").fetchall()
     rows.sort()
     rows = rows[:limit]
     # rounds: a function whose calls all go to functions lifted in an earlier
@@ -403,8 +407,22 @@ def scan(limit=None):
     print(len(ok), "lifted of", len(rows), "; top rejections:", why.most_common(14))
 
 
+def relift():
+    """Re-translate the current list in place after a codegen change (same
+    functions, same callees; their vectors stay valid)."""
+    lifted = json.load(open(f"{N}/patterns/lift.json"))
+    have = {f["addr"] for f in lifted}
+    for f in lifted:
+        f["arms"] = lift(f["addr"], f["size"], have)
+        assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
+    json.dump(lifted, open(f"{N}/patterns/lift.json", "w"))
+    print(len(lifted), "functions re-lifted")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
+    if cmd == "relift":
+        relift()
     if cmd == "scan":
         scan(int(sys.argv[2]) if len(sys.argv) > 2 else None)
     elif cmd == "one":

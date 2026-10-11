@@ -22,7 +22,17 @@ pub trait Mem {
             self.set_u8(addr.wrapping_add(i as u32), b);
         }
     }
+    /// A fresh block of `size` bytes (the platform allocator models in
+    /// crate::platform call this instead of the game's allocators).
+    fn alloc(&mut self, size: u32) -> u32 {
+        let _ = size;
+        panic!("this Mem has no allocator")
+    }
 }
+
+/// Where Sparse hands out fresh blocks: research/native/harness.py uses the
+/// same base and rounding, so a replay gets the addresses the vector saw.
+pub const HEAP_BASE: u32 = 0x0C00_0000;
 
 /// A Mem over one contiguous image starting at `base` (tests, tools).
 pub struct Image {
@@ -46,6 +56,8 @@ impl Mem for Image {
 pub struct Sparse {
     pub bytes: std::collections::HashMap<u32, u8>,
     pub written: std::collections::BTreeMap<u32, u8>,
+    /// Next fresh block (0 = HEAP_BASE): a bump allocator, 16-byte steps.
+    pub heap: u32,
 }
 
 impl Mem for Sparse {
@@ -57,5 +69,13 @@ impl Mem for Sparse {
     }
     fn set_u8(&mut self, addr: u32, v: u8) {
         self.written.insert(addr, v);
+    }
+    fn alloc(&mut self, size: u32) -> u32 {
+        if self.heap == 0 {
+            self.heap = HEAP_BASE;
+        }
+        let a = self.heap;
+        self.heap = self.heap.wrapping_add(size.max(1)).wrapping_add(15) & !15;
+        a
     }
 }
