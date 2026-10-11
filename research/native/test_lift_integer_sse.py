@@ -24,6 +24,22 @@ class IntegerSseTests(unittest.TestCase):
 
     def test_emitted_integer_and_sse(self):
         programs=[]
+        # FS uses a GDT base in Unicorn32; SS must retain a 32-bit stack.
+        # Exercise widths, read/modify/write, indexed and wrapping addresses,
+        # x87/SSE common memory paths, and LEA ignoring the segment prefix.
+        programs += [
+            '64a100000000506489050400000058c3',
+            '64c605000000007f6466c705020000003412640fb60500000000640fb71502000000c3',
+            'b8fcffffffb90200000064c744880878563412648b548808c3',
+            'b80020028064c70078563412648b00c3',  # base+effective wraps to zero
+            'b800010000648d5004c3',
+            '64c705000000000000803f64d9050000000064d91d04000000c3',
+            '64c705000000000000803f64f30f10050000000064f30f110504000000c3',
+            '36a1001040003ea10010400026a100104000c3',
+        ]
+        for setup in ('b903000000fc','b903000000fd','31c9fc'):
+            for op in ('a4','66a5','a5'):
+                programs.append('be10000000bf10002000'+setup+'64f3'+op+'fcc3')
         # Carry and borrow chains, all widths and subregister preservation.
         for op in ('19c8','11c8','6619c8','6611c8','18c8','10c8'):
             programs.append('b8ffffffffb90100000039c8'+op+'9fc3')
@@ -78,6 +94,7 @@ class IntegerSseTests(unittest.TestCase):
                 arms=lift.lift(0x400000,len(code))
             source+=lift.rust_fn(0x400000,'synthetic integer/SSE',arms).replace('f_00400000',f'fixture_{k}')
             source+=f'#[test] fn case_{k}() {{ let mut m=mem::Sparse::default(); let mut c=Cpu::default();\n'
+            source+=f'c.fs_base={h.TEB_BASE};\n'
             for reg,value in case['regs_in'].items():source+=f'c.{reg}={value};\n'
             for addr,raw in case['reads']:
                 for offset,byte in enumerate(bytes.fromhex(raw)):source+=f'm.bytes.insert({addr+offset},{byte});\n'

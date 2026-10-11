@@ -814,7 +814,8 @@ E:/ddda-re/notes/native/     platform.json
 
 Historical hand-port classification, **not a lifter or runtime exclusion**.
 Both `scan` and `structured_inputs.py prepare` now include these functions.
-Only the five explicit test-model entries below remain excluded.
+The five explicit test-model entries use the separate original-entry
+contract below; they never join the closed-callee set.
 `families.py platform` writes `platform.json` and `platform_rules.json` under
 `LIFT_DATA`; `INVENTORY_EXPORT` and `INVENTORY_DB` select its read inputs.
 `inventory.py build` preserves `functions.platform_rule` independently of
@@ -844,16 +845,64 @@ unadopted successes. A selected body is not verified until
 its differential replay passes. Reports include thunks explicitly.
 
 The five model entry addresses retain their existing caller-test contract.
-A direct L14 body probe found 0x00CF73F0, 0x00DE0B80, 0x00DE0B90 and
-0x012EFE20 syntactically liftable; 0x012EFEA0 rejects an unproven indirect
-switch table. The pool body calls through IAT 0x0139D160 at 0x00CF73F6;
-the MT wrappers read allocator state at 0x018D0AA0 (0x00DE0B81 and
-0x00DE0B90). These originals should eventually exist for image-backed
-runtime execution, but normal sparse recording intercepts their entries
-and cannot verify them. L14 does not generate unverified runtime-only
-bodies or substitute model fixtures for original instructions. A distinct
-original-entry recorder contract and runtime binding policy are required;
-existing caller fixtures and model tests remain unchanged.
+L15's `original_entry: true` metadata extends only those entries' body keys
+with `original-entry-v1`. The recorder executes their own instructions;
+nested calls to model addresses still use the models. They are ext entries
+in `lifted::all()` for runtime binding, while `dispatch_table()` still puts
+the models at those addresses for replay. `platform::redirect` is the
+runtime's opt-in override. No caller records or cases need migration.
+Both `scan` and `structured_inputs.py prepare` support this contract.
+The pool body calls through IAT 0x0139D160 at 0x00CF73F6; MT wrappers
+read allocator state at 0x018D0AA0 (0x00DE0B81 and 0x00DE0B90).
+Memcpy 0x012EFEA0 still rejects: at 0x012EFF11 its alignment table starts
+at 0x012EFF24 with an invalid slot zero. The branch at 0x012EFEEA excludes
+that slot, but the recognizer cannot yet prove the nonzero index range.
+
+**FS/TEB (L15).** `Cpu::fs_base` defaults to zero; the runtime sets it per
+guest thread. Common memory-address lowering adds it with wrapping u32
+arithmetic for FS operands; DS/ES/SS remain flat and LEA ignores segments.
+MOVS applies the segment only to its source; its ES destination remains
+flat, and ESI/EDI retain offset values and the original DF behavior.
+The recorder and generated replay use fixed TEB base `0x7FFD_E000`.
+Unicorn 2.1.4 ignores `UC_X86_REG_FS_BASE` in 32-bit mode (a load still
+reads address zero), so `configure_fs` installs a writable, 4 GiB GDT
+descriptor at `0x7FFD_C000`, selector 16. It also loads a flat 32-bit SS
+descriptor, selector 8: otherwise loading FS exposes Unicorn's reset
+16-bit stack cache. The TEB is demand-mapped and its reads/writes are
+ordinary fixture memory. No case-format change or TEB bytes are embedded
+in source. The GDT page is emulator configuration, not fixture memory.
+
+SEH helpers are not ordinary callee frames: `__SEH_prolog4` 0x012F71E0
+returns with ESP equal to entry ESP minus 24 minus the allocation size
+from entry `[esp+8]`; `__SEH_epilog4` 0x012F7225 returns with ESP equal to
+entry EBP plus 4. They can return to the recorder sentinel but fail its
+ordinary positive stack-delta guard. A caller-frame entry/exit contract
+and paired-frame fixtures are needed; L15 does not relax that guard or
+special-case their addresses. Exception dispatch remains a runtime task.
+
+**Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
+image-backed input policy, with seeded random inputs elsewhere. Existing
+`fill` already supplies the original executable bytes for *all* image
+sections, including file-backed `.rdata`/`.data` and zero-filled tails;
+the new tag does not claim a new byte source. Previously accepted fixtures
+are unchanged. Startup failures were mock stack cleanup: `__cinit` uses
+POP ECX after the indirect call at 0x012EDA7E; `__mtinit` leaves arguments
+pending across DecodePointer at 0x012F994B/0x012F997A. The recorder now
+recognizes consecutive volatile-register pops as caller cleanup, tracks
+pending arguments across calls by the actual return ESP, recognizes
+nonvolatile saves after calls, and treats `mov edi,edi` as value-preserving.
+These remain mock ABI heuristics, not recovered callee implementations.
+
+`import_pops` resolves IAT slots and their initial values from the private
+PE, with named x86 WINAPI cleanup for three one-pointer functions:
+[EncodePointer](https://learn.microsoft.com/en-us/previous-versions/bb432254(v=vs.85)),
+[DecodePointer](https://learn.microsoft.com/en-us/previous-versions/ee388304(v=vs.85)),
+and [LeaveCriticalSection](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-leavecriticalsection).
+Each pops four bytes. A direct tail through a known IAT slot contributes
+that cleanup to `static_pop`; unknown imports keep the existing fallback.
+For example, 0x00DB8BF0 tails through LeaveCriticalSection's IAT slot
+0x0139D164 at 0x00DB8C9B, which gives its caller 0x00DB8CD0 the correct
+mock cleanup. Return values and effects remain mocked and recorded.
 
 L14 replay also isolates six x87 state/oracle mismatches: control-word
 readback at 0x012FC159 and observable status bits in 0x012FCEBC, 0x01314930,
@@ -1048,9 +1097,9 @@ instruction differ on this machine (Unicorn 2.1.4). A host instruction oracle
 could compare one CPU faithfully, but would make fixtures dependent on that
 CPU's approximation behavior. It needs explicit oracle/CPU provenance and a
 cross-CPU replay policy; silently replacing Unicorn's result would hide this
-boundary. These instructions remain rejected. Likewise FS-based exception
-chain accesses (`0x00CEE947`, `0x00CEE95F`) require a guest thread/SEH contract,
-not a substitution of host FS or an ignored access.
+boundary. These instructions remain rejected. FS-based exception-chain
+accesses (`0x00CEE947`, `0x00CEE95F`) now use the guest TEB described above;
+exception dispatch itself remains a runtime responsibility.
 
 1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
    --test lifted`: prints that function's panic message (e.g. `call target`

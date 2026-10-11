@@ -173,13 +173,19 @@ pub fn divide(lo: u32, hi: u32, d: u32, bits: u32, is_signed: bool) -> Option<(u
 
 /// Literal sequential accesses preserve overlap and DF, including wraparound.
 pub fn string(m: &mut dyn Mem, cpu: &mut Cpu, width: u32, copy: bool, repeat: bool) {
+    string_from(m, cpu, width, copy, repeat, 0);
+}
+
+/// MOVS may override its source segment; the ES destination stays flat.
+pub fn string_from(m: &mut dyn Mem, cpu: &mut Cpu, width: u32, copy: bool, repeat: bool, source_base: u32) {
     let mut count = if repeat { cpu.ecx } else { 1 };
     while count != 0 {
         let v = if copy {
+            let source = source_base.wrapping_add(cpu.esi);
             match width {
-                1 => m.u8(cpu.esi) as u32,
-                2 => m.u16(cpu.esi) as u32,
-                _ => m.u32(cpu.esi),
+                1 => m.u8(source) as u32,
+                2 => m.u16(source) as u32,
+                _ => m.u32(source),
             }
         } else {
             cpu.eax

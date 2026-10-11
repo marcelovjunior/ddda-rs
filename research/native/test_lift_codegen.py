@@ -86,9 +86,10 @@ class CodegenTests(unittest.TestCase):
         reference = '''fn f_00001000(m: &mut dyn Mem, cpu: &mut Cpu) {
             let Cpu { mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi,
                 xmm: [mut xmm0, mut xmm1, mut xmm2, mut xmm3, mut xmm4, mut xmm5, mut xmm6, mut xmm7],
-                mut fl, mut st, .. } = std::mem::take(cpu);
+                mut fl, mut st, mut fs_base, .. } = std::mem::take(cpu);
             let pc = 0x1000; loop { match pc { ARMS _ => unreachable!() } }
-        }'''.replace('ARMS', '\n'.join(arms))
+        }'''.replace('ARMS', '\n'.join(arms).replace(lift.SAVE, lift.SAVE.replace('df: cpu.df', 'df: cpu.df, fs_base'))
+                    .replace(lift.LOAD, lift.LOAD.replace('df: _', 'df: _, fs_base')))
         generated = lift.rust_fn(0x1000, 'synthetic', arms)
         root = Path(__file__).resolve().parents[2]
         source = f'''#![allow(warnings)]
@@ -118,12 +119,13 @@ class CodegenTests(unittest.TestCase):
                 c.fl = Flags::new(x86::SUB, c.eax, c.edx, c.eax.wrapping_sub(c.edx), 32);
                 c.eax = c.eax.wrapping_add(7); c.xmm[3][2] ^= c.ebx;
                 c.st.push(c.esi); c.esp = c.esp.wrapping_add(4);
+                c.fs_base = c.fs_base.wrapping_add(0x1000);
             }
             #[test] fn same_state_and_ordered_memory_events() {
                 for value in [0u32, 1, 0x7fffffff, 0x80000000, 0xffffffff] {
                     let mut initial = Cpu::default();
                     initial.eax = value; initial.edx = value; initial.esp = 64;
-                    initial.ebx = 11; initial.esi = 13; initial.edi = 17;
+                    initial.ebx = 11; initial.esi = 13; initial.edi = 17; initial.fs_base = 0x7ffde000;
                     initial.fl = Flags::new(x86::SUB, 0, 1, u32::MAX, 32);
                     initial.st.push(31); initial.st.push(37);
                     for i in 0..8 { for j in 0..4 { initial.xmm[i][j] = (i*4+j) as u32; } }

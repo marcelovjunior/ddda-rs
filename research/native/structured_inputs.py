@@ -62,13 +62,15 @@ def prepare(root):
         rows = db.execute("SELECT address,namespace,name,size FROM functions WHERE status != 'verified' AND size>=1 ORDER BY address").fetchall()
     candidates, rejected = [], {}
     for a, ns, name, size in rows:
-        if a in have or a in h.PLATFORM or a in quarantine:
+        if a in have or a in quarantine:
             continue
         try:
             arms = lift.lift(a, size, closed, ext=True)
             candidates.append(dict(addr=a,name=f'{ns}::{name}',size=size,arms=arms,
                                    calls=lift.callees(arms),x87_push=lift.X87_PUSH_SITES.get(a,[]),
                                    ext=True,**lift.BODY_INFO[a]))
+            if a in h.PLATFORM:
+                candidates[-1]['original_entry'] = True
         except lift.Unsupported as e:
             rejected[a] = str(e)
         finally:
@@ -106,6 +108,7 @@ def trial(args):
             result = h.run_sparse(f['addr'], seed, end=f['addr']+f['size'], lifted=_CLOSED,
                                   body=f['body'], x87_push=f.get('x87_push',[]),
                                   noreturn_sites=f.get('noreturn_sites',[]), noreturn_targets=_NORETURN,
+                                  original_entry=f.get('original_entry',False),
                                   max_seconds=remaining, **kw)
             cases.append(dict(addr=f['addr'],seed=seed,body_key=key,**result))
             attempts.append(dict(reason='ok',seed=seed))

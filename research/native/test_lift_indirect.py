@@ -54,6 +54,18 @@ class IndirectTests(unittest.TestCase):
         c=self.record('906a016a02ffd083c408c3')
         self.assertEqual(c['calls'][0]['out']['pop'],0)
         self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
+        c=self.record('906a016a02ffd05959c3')
+        self.assertEqual(c['calls'][0]['out']['pop'],0)
+
+    def test_hotpatch_and_saves_after_calls(self):
+        c=self.record('8bff57ffd0566a01ffd05e5fc3')
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[0,4])
+
+    def test_pending_arguments_survive_intervening_import_call(self):
+        # Push next callee's argument, then DecodePointer's one argument.
+        with patch.object(h,'import_pops',return_value=({}, {0x12345678:4})):
+            c=self.record('906a016a02b878563412ffd0ffd0c3')
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[4,4])
 
     def test_static_pop_follows_tail_not_neighbour(self):
         image=(bytes.fromhex('eb0eccc20800')+b'\xcc'*10+bytes.fromhex('c3')).ljust(4096,b'\xcc')
@@ -63,6 +75,12 @@ class IndirectTests(unittest.TestCase):
         image=bytes.fromhex('85c07403c20400c20800').ljust(4096,b'\xcc')
         with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])):
             self.assertEqual(h.static_pop(0x400000),0)
+
+    def test_static_pop_import_tail_uses_named_contract(self):
+        image=bytes.fromhex('ff2500005000').ljust(4096,b'\xcc')
+        with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])), \
+             patch.object(h,'import_pops',return_value=({0x500000:4},{})):
+            self.assertEqual(h.static_pop(0x400000),4)
 
     def test_invalid_return_still_rejected(self):
         with self.assertRaises(h.Rejected):self.record('6a00c3')

@@ -26,7 +26,7 @@ class InputTests(unittest.TestCase):
     def tearDown(self): gc.collect()
 
     def test_page_repeatability_and_distribution(self):
-        for name in h.INPUT_STRATEGIES:
+        for name in h.PAGE_STRATEGIES:
             s=h.SparseInputs(name)
             self.assertEqual(s.page(7,0x21000000),s.page(7,0x21000000))
             words=struct.unpack('<1024I',s.page(7,0x21000000))
@@ -52,6 +52,28 @@ class InputTests(unittest.TestCase):
             c=self.record(code,strategy)
             self.assertEqual(c['regs_out']['eax'],0x12345678)
             self.assertEqual(c['regs_out']['edx']&0xff,0x5a)
+
+    def test_explicit_image_policy_preserves_original_bytes_and_random_inputs(self):
+        code=bytes.fromhex('a1000240008b11c3').ljust(0x200,b'\xcc')+struct.pack('<I',0x12345678)
+        ordinary=self.record(code)
+        image=self.record(code,'image-v1')
+        self.assertEqual(image.pop('input_strategy'),'image-v1')
+        self.assertEqual(image,ordinary)
+
+    def test_original_model_entry_is_distinct_and_callees_still_use_models(self):
+        a=0x00CF73F0
+        for text,expected in [('b878563412c3',0x12345678),
+                              ('e8fbfffffff3c3',h.HEAP_BASE)]:
+            code=bytes.fromhex(text)
+            body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(code,a)]
+            with patch.object(h,'image',return_value=(a,[(a,code.ljust(4096,b'\xcc'))])):
+                c=h.run_sparse(a,19,body=body,end=a+len(code),original_entry=True)
+                self.assertEqual(c['regs_out']['eax'],expected)
+                self.assertEqual(c['calls'],[])
+                model=h.run_sparse(a,19,body=body,end=a+len(code))
+                self.assertEqual(model['regs_out']['eax'],h.HEAP_BASE)
+        f=dict(addr=a,body=body,calls=[],ext=True)
+        self.assertNotEqual(trials.lift.vector_key(f),trials.lift.vector_key({**f,'original_entry':True}))
 
     def test_object_root_and_mock_return_are_recorded(self):
         # call mocked 0x400100; mov eax,[eax]; ret

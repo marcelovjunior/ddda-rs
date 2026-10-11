@@ -159,6 +159,26 @@ MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
 MODEL_BYTES = 1 << 20  # run_sparse rejects runs whose memset/memcpy calls touch more in total
 TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
+TEB_BASE, GDT_BASE = 0x7FFDE000, 0x7FFDC000
+
+
+def configure_fs(uc):
+    """32-bit Unicorn ignores FS_BASE; load an ordinary writable GDT segment.
+
+    The TEB remains demand mapped and recorded. The separate GDT page is
+    emulator configuration, not guest fixture data. Limit is 4 GiB.
+    """
+    base, limit = TEB_BASE, 0xfffff
+    descriptor = ((limit & 0xffff) | ((base & 0xffff) << 16)
+                  | (((base >> 16) & 0xff) << 32) | (0x93 << 40)
+                  | ((limit >> 16) << 48) | (0xc << 52) | ((base >> 24) << 56))
+    uc.mem_map(GDT_BASE, 0x1000)
+    # Loading a segment makes Unicorn consult SS's cached B bit for PUSH.
+    # Its reset SS cache is 16-bit: explicitly keep the flat 32-bit stack.
+    uc.mem_write(GDT_BASE + 8, struct.pack('<QQ', 0x00CF93000000FFFF, descriptor))
+    uc.reg_write(_xc.UC_X86_REG_GDTR, (0, GDT_BASE, 0xfff, 0))
+    uc.reg_write(_xc.UC_X86_REG_SS, 8)
+    uc.reg_write(_xc.UC_X86_REG_FS, 16)
 
 
 SSE_BINARY = {"addss", "subss", "mulss", "divss", "minss", "maxss", "addps", "subps", "mulps", "divps",
@@ -170,7 +190,28 @@ class Rejected(Exception):
     """The case is not a valid vector (NaN float input, runaway loop, ...)."""
 
 
-INPUT_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
+PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1')
+
+
+def import_pops(_cache={}):
+    """Named x86 WINAPI cleanup; resolve slots/initial targets from the PE.
+
+    Sources: Microsoft Learn EncodePointer/DecodePointer (Winbase.h),
+    LeaveCriticalSection (synchapi.h): each has one pointer argument.
+    See NATIVE_PIPELINE.md for links. No import behavior is emulated here.
+    """
+    if EXE not in _cache:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
+        from measure import PE
+        pe = PE(EXE)
+        names = {'kernel32.dll!'+n for n in ('EncodePointer','DecodePointer','LeaveCriticalSection')}
+        slots = {a:4 for a,n in pe.imports().items()
+                 if n.split('!')[0].lower()+'!'+n.split('!')[1] in names}
+        _cache[EXE] = slots, {pe.word(a):v for a,v in slots.items()}
+    return _cache[EXE]
 
 
 class SparseInputs:
@@ -184,7 +225,7 @@ class SparseInputs:
     OBJECT_PAGES = 32
 
     def __init__(self, name):
-        if name not in INPUT_STRATEGIES:
+        if name not in PAGE_STRATEGIES:
             raise ValueError(f'unknown input strategy: {name}')
         self.name = name
 
@@ -264,6 +305,12 @@ def static_pop(target, _cache={}):
                     break
                 if i.mnemonic.startswith('j'):
                     if i.operands[0].type != 2:
+                        op = i.operands[0]
+                        if (i.mnemonic == 'jmp' and op.type == 3 and not op.mem.base
+                                and not op.mem.index and not op.mem.segment
+                                and (op.mem.disp & 0xffffffff) in import_pops()[0]):
+                            pops.add(import_pops()[0][op.mem.disp & 0xffffffff])
+                            break
                         # Reuse the lifter's bound/remap validation. The false
                         # unbounded accept predicate forbids table-only guesses.
                         import lift
@@ -282,11 +329,12 @@ def static_pop(target, _cache={}):
 
 
 def saved_push_sites(address, body):
-    """Recognize interleaved callee saves on paths before the first call.
+    """Recognize interleaved callee saves, including after calls.
 
     This refines the mock ABI heuristic, not a recovered callee contract.
     Require an unmodified nonvolatile register and a matching own pop;
-    stop at calls and returns. Never infer from random memory.
+    Calls preserve nonvolatile registers under this mock ABI. Stop at returns.
+    Never infer from random memory.
     """
     if body is None:
         return set()
@@ -309,7 +357,7 @@ def saved_push_sites(address, body):
         seen.add((pc, available))
         eligible = set(available)
         i = next(md.disasm(code(pc, 15), pc, count=1), None)
-        if i is None or i.mnemonic in ('call','ret','retn','repz ret'):
+        if i is None or i.mnemonic in ('ret','retn','repz ret'):
             continue
         if i.mnemonic == 'push' and i.operands[0].type == 1:
             name = i.reg_name(i.operands[0].reg)
@@ -318,7 +366,10 @@ def saved_push_sites(address, body):
                 eligible.remove(name)
             else:
                 invalid.add(pc)
-        for r in i.regs_access()[1]:
+        identity = (i.mnemonic == 'mov' and len(i.operands) == 2
+                    and all(o.type == 1 for o in i.operands)
+                    and i.operands[0].reg == i.operands[1].reg)
+        for r in (() if identity else i.regs_access()[1]):
             name = i.reg_name(r)
             if name in ('bl','bh','bx'): name = 'ebx'
             if name in ('bp','si','di'): name = 'e'+name
@@ -388,7 +439,7 @@ def local_alloc_sites(address, body):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None):
+               max_seconds=None, input_strategy=None, original_entry=False):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -436,11 +487,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     rnd = random.Random(seed)
     if input_strategy is not None and zero_inputs:
         raise ValueError('input_strategy and zero_inputs are mutually exclusive')
-    inputs = SparseInputs(input_strategy) if input_strategy is not None else None
+    # Image pages have always held original bytes. This explicit strategy
+    # retains the random distribution elsewhere and tags that input policy.
+    inputs = SparseInputs(input_strategy) if input_strategy not in (None, 'image-v1') else None
     deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
+    configure_fs(uc)
     # Unicorn's reset tag word reads 0x5555 (eight zero values), not an
     # empty x87 stack. Match the fixture's actual empty-stack contract.
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
@@ -559,8 +613,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if o.type == 1:  # register
             b = uc_.reg_read(XMM_REGS[i.reg_name(o.reg)])
         else:
-            mm = o.mem
-            ea = mm.disp + (uc_.reg_read(dict(GPR)[i.reg_name(mm.base)]) if mm.base else 0) +                 (uc_.reg_read(dict(GPR)[i.reg_name(mm.index)]) * mm.scale if mm.index else 0)
+            ea = effective_address(uc_, i, o)
             try:
                 b = int.from_bytes(bytes(uc_.mem_read(ea & 0xFFFFFFFF, width // 8 * lanes)), "little")
             except UcError:
@@ -586,15 +639,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 x87_ops[addr] = i if i.mnemonic.startswith("f") else None
                 mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
                                   i.reg_name(o.mem.index) if o.mem.index else None,
-                                  o.mem.scale, o.mem.disp, max(o.size, 1))
-                                 for o in i.operands if o.type == 3 and (not o.mem.segment or i.reg_name(o.mem.segment) in ("es", "ds"))]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
+                                  o.mem.scale, o.mem.disp, max(o.size, 1),
+                                  TEB_BASE if i.reg_name(o.mem.segment) == 'fs' else 0)
+                                 for o in i.operands if o.type == 3 and (not o.mem.segment or i.reg_name(o.mem.segment) in ("es", "ds", "ss", "fs"))]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
             except (UcError, StopIteration):
                 mem_ops[addr] = []
                 x87_ops[addr] = None
         esp = uc_.reg_read(UC_X86_REG_ESP)
         need = {(esp - 0x40) & ~0xFFF, esp & ~0xFFF}  # implicit stack accesses
-        for base, index, scale, disp, sz in mem_ops[addr]:
-            a = disp
+        for base, index, scale, disp, sz, segment in mem_ops[addr]:
+            a = disp + segment
             if base:
                 a += uc_.reg_read(gpr[base]) if base in gpr else 0
             if index:
@@ -674,7 +728,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return None
 
     def effective_address(uc_,i,op):
-        v=op.mem.disp
+        v=op.mem.disp + (TEB_BASE if i.reg_name(op.mem.segment) == 'fs' else 0)
         for reg,scale in ((op.mem.base,1),(op.mem.index,op.mem.scale)):
             if reg:
                 v+=uc_.reg_read(getattr(_xc,"UC_X86_REG_"+i.reg_name(reg).upper()))*scale
@@ -722,13 +776,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
-        if addr in integer_ops and addr not in PLATFORM and uc_.reg_read(UC_X86_REG_EIP) == addr:
+        if addr in integer_ops and not model_entry(addr) and uc_.reg_read(UC_X86_REG_EIP) == addr:
             reason = check_integer_flags(uc_, integer_ops[addr])
             if reason:
                 bad.append(f"{reason} at {addr:#010x}")
                 uc_.emu_stop()
                 return
-        if body is not None and addr not in PLATFORM and addr != RET:
+        if body is not None and not model_entry(addr) and addr != RET:
             if addr not in flow:
                 try:
                     flow[addr] = next(nmd.disasm(bytes(uc_.mem_read(addr, ins_len(addr))), addr)).mnemonic
@@ -794,8 +848,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         heap[0] = ((a + max(size, 1) + 15) & ~15) & 0xFFFFFFFF
         return a
 
+    def model_entry(addr):
+        return addr in PLATFORM and not (original_entry and addr == address and not frames)
+
     def on_platform(uc_, addr, size, _):
         """platform.rs, line for line: arguments, effects, then `ret`."""
+        if not model_entry(addr):
+            return
         name = PLATFORM[addr]
         esp = uc_.reg_read(UC_X86_REG_ESP)
         eax = uc_.reg_read(UC_X86_REG_EAX)
@@ -827,6 +886,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     branch = [None]          # the last instruction of the function itself, if it can leave it
     pushed = [0, False, 0]   # bytes pushed since the last call (after the register-saving
                              # prologue), prologue over, the count at the last call
+    pending_call = [None]  # return PC, caller ESP, outstanding arguments
     dmd = Cs(CS_ARCH_X86, CS_MODE_32)
     dmd.detail = True
     own = {}
@@ -838,11 +898,17 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # other call: the lifted code makes it through call_ext, so mock it
         recursion = pc == address and branch[0] is not None and branch[0].mnemonic == "call"
         if root_frame[0] and is_own(pc) and not recursion:
+            if pending_call[0] is not None and pc == pending_call[0][0]:
+                _, before, arguments = pending_call[0]
+                consumed = (uc_.reg_read(UC_X86_REG_ESP) - before) & 0xffffffff
+                pushed[0] = max(0, arguments - consumed)
+                pending_call[0] = None
             if pc not in own:
                 own[pc] = next(dmd.disasm(code(pc, 15), pc))  # the function's own code: from the image
             i = own[pc]
             branch[0] = i if i.mnemonic == "call" or i.mnemonic.startswith("j") else None
             if i.mnemonic == "call":  # its arguments: what was pushed since the previous call
+                pending_call[0] = (i.address+i.size, uc_.reg_read(UC_X86_REG_ESP), pushed[0])
                 pushed[2], pushed[0] = pushed[0], 0
             prologue = (i.mnemonic == "push" and i.operands[0].type == 1) or                 (i.mnemonic == "mov" and i.op_str == "ebp, esp") or                 (i.mnemonic in ("sub", "and") and i.op_str.startswith("esp, "))
             if not pushed[1] and not prologue:
@@ -855,6 +921,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     pushed[0] += i.operands[1].imm
                 elif i.mnemonic == "add" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
                     pushed[0] = max(0, pushed[0] - i.operands[1].imm)
+                elif i.mnemonic == 'pop' and i.operands[0].type == 1:
+                    pushed[0] = max(0, pushed[0] - 4)
             return
         i, branch[0] = branch[0], None
         if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000                 and not X87_TRAMP <= pc < X87_TRAMP + 12:
@@ -872,13 +940,24 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # Explicit immediate caller cleanup means these argument bytes are
         # not callee-popped. This is still a mock ABI inference, not execution
         # of the unavailable callee. Preserve its value in the recorded event.
-        if not direct and i.mnemonic == "call":
+        known_pop = import_pops()[1].get(pc)
+        if known_pop is not None:
+            pop = known_pop
+        elif not direct and i.mnemonic == "call":
             after = i.address + i.size
-            if is_own(after):
+            for _ in range(16):
+                if not is_own(after):
+                    break
                 cleanup = next(dmd.disasm(code(after, 15), after, count=1), None)
                 if (cleanup is not None and cleanup.mnemonic == "add"
                         and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
                     pop = max(0, pop - max(0, cleanup.operands[1].imm))
+                elif (cleanup is not None and cleanup.mnemonic == 'pop'
+                      and cleanup.op_str in ('eax','ecx','edx')):
+                    pop = max(0, pop - 4)
+                else:
+                    break
+                after += cleanup.size
         ret = struct.unpack("<I", mread(esp, 4))[0]
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
@@ -985,4 +1064,4 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
-            **({"input_strategy": input_strategy} if inputs else {})}
+            **({"input_strategy": input_strategy} if input_strategy else {})}
