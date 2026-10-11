@@ -69,3 +69,84 @@ fn file_bytes<'a>(exe: &'a ExeFile, s: &Section) -> &'a [u8] {
     let start = (s.raw_offset as usize).min(exe.bytes.len());
     &exe.bytes[start..(start + len).min(exe.bytes.len())]
 }
+
+/// One imported function: where the guest's import slot is, which token the
+/// runtime wrote into it, and what it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub dll: String,
+    /// The function name, or `#ordinal`.
+    pub name: String,
+    /// The IAT slot the guest calls through (`call dword ptr [slot]`).
+    pub slot: u32,
+    /// The guest address written into the slot; services bind to it.
+    pub token: u32,
+}
+
+impl Import {
+    pub fn full_name(&self) -> String {
+        format!("{}!{}", self.dll, self.name)
+    }
+}
+
+/// Import tokens live on reserved pages no image section uses; they are
+/// addresses for the dispatcher, never executed or read as code.
+pub const IMPORT_TOKENS: u32 = 0x7FF0_0000;
+const TOKEN_STRIDE: u32 = 0x10;
+
+/// Bind the exe's normal imports (data directory 1): every IAT slot gets a
+/// distinct token address (read-only token pages are mapped so the guest may
+/// compare or copy such pointers). Delay-load imports (directory 13) are not
+/// bound here; they go through the CRT's delay-load helper.
+pub fn bind_imports(mem: &mut GuestMemory, exe: &ExeFile) -> Result<Vec<Import>, LoadError> {
+    let b = &exe.bytes;
+    let rd32 = |o: usize| -> u32 { u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) };
+    let rd16 = |o: usize| -> u16 { u16::from_le_bytes(b[o..o + 2].try_into().unwrap()) };
+    let image = exe.image().map_err(LoadError::Exe)?;
+    let base = image.image_base();
+    // file offset of an RVA, through the section table
+    let off = |rva: u32| -> Option<usize> {
+        image.sections().iter().find(|s| rva >= s.va - base && rva < s.va - base + s.raw_size.max(s.virtual_size))
+            .map(|s| (rva - (s.va - base) + s.raw_offset) as usize)
+    };
+    let cstr = |o: usize| -> String { b[o..].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect() };
+    let pe = rd32(0x3c) as usize;
+    let opt = pe + 24;
+    let (dir_rva, _dir_size) = (rd32(opt + 96 + 8), rd32(opt + 96 + 12));
+    let mut out = Vec::new();
+    let mut desc = off(dir_rva).expect("import directory in a section");
+    loop {
+        let (ilt, name_rva, iat) = (rd32(desc), rd32(desc + 12), rd32(desc + 16));
+        if name_rva == 0 && iat == 0 {
+            break;
+        }
+        let dll = cstr(off(name_rva).expect("dll name"));
+        // the lookup table (or the IAT itself when there is none) names the functions
+        let mut lookup = off(if ilt != 0 { ilt } else { iat }).expect("import lookup table");
+        let mut slot = base + iat;
+        loop {
+            let entry = rd32(lookup);
+            if entry == 0 {
+                break;
+            }
+            let name = if entry & 0x8000_0000 != 0 {
+                format!("#{}", entry & 0xFFFF)
+            } else {
+                let hint_name = off(entry).expect("hint/name");
+                let _hint = rd16(hint_name);
+                cstr(hint_name + 2)
+            };
+            let token = IMPORT_TOKENS + TOKEN_STRIDE * out.len() as u32;
+            out.push(Import { dll: dll.clone(), name, slot, token });
+            slot += 4;
+            lookup += 4;
+        }
+        desc += 20;
+    }
+    let span = (TOKEN_STRIDE * out.len() as u32).max(1);
+    mem.map(IMPORT_TOKENS, span, READ).map_err(LoadError::Overlap)?;
+    for i in &out {
+        mem.poke(i.slot, &i.token.to_le_bytes()).expect("IAT inside a mapped section");
+    }
+    Ok(out)
+}

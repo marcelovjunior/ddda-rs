@@ -173,3 +173,69 @@ fn the_installed_exe_maps_at_its_virtual_addresses() {
     let text = image.sections().iter().find(|s| s.name == ".text").unwrap();
     assert_eq!(m.perm(text.va), READ);
 }
+
+// --- services -------------------------------------------------------------
+
+use ddruntime::services;
+
+fn call_service(f: fn(&mut dyn Mem, &mut Cpu), m: &mut GuestMemory, args: &[u32]) -> Cpu {
+    let mut cpu = Cpu { esp: 0x0011_0000, ..Cpu::default() };
+    for &a in args.iter().rev() {
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, a);
+    }
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, 0x0040_5678);
+    f(m, &mut cpu);
+    cpu
+}
+
+#[test]
+fn heap_blocks_are_aligned_distinct_zeroed_and_reused_by_size() {
+    let mut h = services::Heap::default();
+    let a = h.alloc(10).unwrap();
+    let b = h.alloc(10).unwrap();
+    assert_eq!(a % 16, 0);
+    assert_ne!(a, b);
+    assert_eq!(h.size_of(a), Some(16));
+    h.free(a).unwrap();
+    assert_eq!(h.free(a), Err(a), "double free is reported");
+    assert_eq!(h.alloc(12).unwrap(), a, "a freed block of the same size is reused");
+    let (mut m, _) = stack();
+    let mut r = Registry::new();
+    services::install(&mut m, &mut r).unwrap();
+    let cpu = call_service(services::calloc_crt, &mut m, &[3, 8]);
+    assert!(cpu.eax >= services::HEAP_BASE);
+    assert_eq!(m.read(cpu.eax, 24).unwrap(), vec![0; 24]);
+    assert_eq!(cpu.esp, 0x0011_0000 - 8, "cdecl: the caller pops the arguments");
+}
+
+#[test]
+fn critical_sections_count_recursion_and_release() {
+    let (mut m, _) = stack();
+    let cs = 0x0010_8000;
+    call_service(services::initialize_critical_section, &mut m, &[cs]);
+    assert_eq!(m.u32(cs + 4), u32::MAX, "LockCount starts at -1");
+    call_service(services::enter_critical_section, &mut m, &[cs]);
+    call_service(services::enter_critical_section, &mut m, &[cs]);
+    assert_eq!((m.u32(cs + 8), m.u32(cs + 12)), (2, services::MAIN_THREAD_ID));
+    call_service(services::leave_critical_section, &mut m, &[cs]);
+    let cpu = call_service(services::leave_critical_section, &mut m, &[cs]);
+    assert_eq!((m.u32(cs + 4), m.u32(cs + 8), m.u32(cs + 12)), (u32::MAX, 0, 0));
+    assert_eq!(cpu.esp, 0x0011_0000, "stdcall: the callee pops its argument");
+}
+
+#[test]
+fn every_import_gets_a_distinct_named_token() {
+    let Some(exe) = installed_exe() else { return };
+    let mut m = GuestMemory::new();
+    ddruntime::image::load(&mut m, &exe).unwrap();
+    let imports = ddruntime::image::bind_imports(&mut m, &exe).unwrap();
+    assert_eq!(imports.len(), 273, "R01 counted 273 normal imports");
+    let tokens: std::collections::HashSet<u32> = imports.iter().map(|i| i.token).collect();
+    assert_eq!(tokens.len(), imports.len());
+    for i in &imports {
+        assert_eq!(m.u32(i.slot), i.token, "{}", i.full_name());
+    }
+    assert!(imports.iter().any(|i| i.full_name() == "KERNEL32.dll!EncodePointer"));
+}

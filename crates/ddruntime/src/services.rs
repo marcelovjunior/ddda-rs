@@ -73,6 +73,8 @@ struct State {
     /// Functions registered with `_onexit`/`atexit`, in registration order
     /// (the CRT runs them in reverse at exit).
     exit_list: Vec<u32>,
+    /// The guest's unhandled-exception filter (SetUnhandledExceptionFilter).
+    exception_filter: u32,
 }
 
 thread_local! {
@@ -130,6 +132,178 @@ pub fn calloc_crt(m: &mut dyn Mem, cpu: &mut Cpu) {
         None => 0,
     };
     ret(m, cpu, 0);
+}
+
+/// KERNEL32 `EncodePointer` / `DecodePointer` (stdcall, one argument): the
+/// identity. The real ones XOR with a per-process secret; the guest only ever
+/// passes an encoded value back through the matching call, so the identity
+/// is observably the same.
+pub fn encode_pointer(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = arg(m, cpu, 0);
+    ret(m, cpu, 4);
+}
+
+/// The guest's thread id while the runtime is single-threaded (stage R05
+/// brings guest threads). Any nonzero value is a valid Windows thread id.
+pub const MAIN_THREAD_ID: u32 = 0x0000_1000;
+
+// CRITICAL_SECTION (winnt.h RTL_CRITICAL_SECTION, 24 bytes on x86):
+// +0 DebugInfo, +4 LockCount, +8 RecursionCount, +12 OwningThread,
+// +16 LockSemaphore, +20 SpinCount.
+
+/// KERNEL32 `InitializeCriticalSection(cs)` (stdcall): the documented
+/// initial state: unowned, LockCount -1, recursion 0. DebugInfo is set to
+/// -1 as Windows 8 and later do when no debug info is allocated (not
+/// observed for this game; nothing in it is known to read the field).
+pub fn initialize_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    for (off, v) in [(0, u32::MAX), (4, u32::MAX), (8, 0), (12, 0), (16, 0), (20, 0)] {
+        m.set_u32(cs.wrapping_add(off), v);
+    }
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `InitializeCriticalSectionAndSpinCount(cs, spin)` (stdcall):
+/// as InitializeCriticalSection, spin count stored; returns TRUE.
+pub fn initialize_critical_section_and_spin_count(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (cs, spin) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    for (off, v) in [(0, u32::MAX), (4, u32::MAX), (8, 0), (12, 0), (16, 0), (20, spin)] {
+        m.set_u32(cs.wrapping_add(off), v);
+    }
+    cpu.eax = 1;
+    ret(m, cpu, 8);
+}
+
+/// KERNEL32 `EnterCriticalSection(cs)` (stdcall), single guest thread:
+/// takes ownership or recurses. Another owner would mean a second guest
+/// thread, which does not exist yet: stop rather than pretend to wait.
+pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let owner = m.u32(cs.wrapping_add(12));
+    assert!(owner == 0 || owner == MAIN_THREAD_ID,
+            "EnterCriticalSection({cs:#x}) owned by thread {owner:#x}: guest threads are not implemented");
+    m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
+    m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
+    m.set_u32(cs.wrapping_add(12), MAIN_THREAD_ID);
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `LeaveCriticalSection(cs)` (stdcall): undoes one Enter.
+pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let rec = m.u32(cs.wrapping_add(8));
+    assert!(rec > 0 && m.u32(cs.wrapping_add(12)) == MAIN_THREAD_ID,
+            "LeaveCriticalSection({cs:#x}) without a matching Enter");
+    m.set_u32(cs.wrapping_add(8), rec - 1);
+    m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
+    if rec == 1 {
+        m.set_u32(cs.wrapping_add(12), 0);
+    }
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `DeleteCriticalSection(cs)` (stdcall): nothing to release.
+pub fn delete_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `IsProcessorFeaturePresent(feature)` (stdcall): the host CPU's
+/// answer for the features a 32-bit x86 program asks about (winnt.h
+/// PF_* values); FALSE for anything else.
+pub fn is_processor_feature_present(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let feature = arg(m, cpu, 0);
+    // winnt.h: 0 FLOATING_POINT_PRECISION_ERRATA, 1 FLOATING_POINT_EMULATED,
+    // 2 COMPARE_EXCHANGE_DOUBLE, 3 MMX, 6 XMMI (SSE), 7 3DNOW, 8 RDTSC,
+    // 9 PAE_ENABLED, 10 XMMI64 (SSE2), 12 NX_ENABLED, 13 SSE3,
+    // 17 COMPARE_EXCHANGE128
+    #[cfg(target_arch = "x86_64")]
+    let present = match feature {
+        2 | 3 | 6 | 8 | 9 | 10 | 12 => true, // every x86-64 CPU and Windows has these
+        13 => std::arch::is_x86_feature_detected!("sse3"),
+        17 => std::arch::is_x86_feature_detected!("cmpxchg16b"),
+        _ => false, // errata, emulation, 3DNow!, and anything not listed
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let present = false;
+    cpu.eax = present as u32;
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `SetUnhandledExceptionFilter(filter)` (stdcall): records the
+/// filter, returns the previous one (none before). The runtime does not
+/// raise guest exceptions yet, so the filter is never called.
+pub fn set_unhandled_exception_filter(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let filter = arg(m, cpu, 0);
+    cpu.eax = STATE.with(|s| std::mem::replace(&mut s.borrow_mut().exception_filter, filter));
+    ret(m, cpu, 4);
+}
+
+/// Where the guest's "known folders" point: a sandbox, never the user's
+/// real Documents (ddda-rs must not read or write the player's saves
+/// without being asked). `DDRUNTIME_HOME` overrides the default
+/// `%TEMP%\ddruntime`.
+pub fn sandbox_home() -> std::path::PathBuf {
+    std::env::var_os("DDRUNTIME_HOME").map(Into::into)
+        .unwrap_or_else(|| std::env::temp_dir().join("ddruntime"))
+}
+
+/// SHELL32 `SHGetFolderPathW(hwnd, csidl, token, flags, path)` (stdcall,
+/// 5 arguments): writes the folder as UTF-16 (at most MAX_PATH including
+/// the terminator) into `path` and returns S_OK. Every folder maps into the
+/// sandbox, named by its CSIDL.
+pub fn sh_get_folder_path_w(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (csidl, path) = (arg(m, cpu, 1), arg(m, cpu, 4));
+    let dir = sandbox_home().join(format!("csidl-{:#06x}", csidl & 0xFF));
+    let _ = std::fs::create_dir_all(&dir);
+    let wide: Vec<u16> = dir.to_string_lossy().encode_utf16().take(259).chain([0]).collect();
+    for (k, w) in wide.iter().enumerate() {
+        m.set_u16(path.wrapping_add(2 * k as u32), *w);
+    }
+    cpu.eax = 0; // S_OK
+    ret(m, cpu, 20);
+}
+
+/// KERNEL32 `GetTickCount()` (stdcall, no arguments): milliseconds since
+/// the runtime started (Windows counts from boot; the guest only uses
+/// differences). Wraps at 2^32 like the original.
+pub fn get_tick_count(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = runtime_clock().as_millis() as u32;
+    ret(m, cpu, 0);
+}
+
+/// Time since the runtime's first clock read.
+pub fn runtime_clock() -> std::time::Duration {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// Windows API services, by DLL (case-insensitive) and function name.
+pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
+    ("KERNEL32.dll", "EncodePointer", encode_pointer),
+    ("KERNEL32.dll", "DecodePointer", encode_pointer),
+    ("KERNEL32.dll", "InitializeCriticalSection", initialize_critical_section),
+    ("KERNEL32.dll", "InitializeCriticalSectionAndSpinCount", initialize_critical_section_and_spin_count),
+    ("KERNEL32.dll", "EnterCriticalSection", enter_critical_section),
+    ("KERNEL32.dll", "LeaveCriticalSection", leave_critical_section),
+    ("KERNEL32.dll", "DeleteCriticalSection", delete_critical_section),
+    ("KERNEL32.dll", "IsProcessorFeaturePresent", is_processor_feature_present),
+    ("KERNEL32.dll", "SetUnhandledExceptionFilter", set_unhandled_exception_filter),
+    ("SHELL32.dll", "SHGetFolderPathW", sh_get_folder_path_w),
+    ("KERNEL32.dll", "GetTickCount", get_tick_count),
+];
+
+/// Name every import token for diagnostics and bind the ones with a service.
+/// Returns how many imports are bound.
+pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> Result<usize, Conflict> {
+    let mut bound = 0;
+    for i in imports {
+        registry.name(i.token, i.full_name());
+        if let Some((_, _, f)) = APIS.iter().find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name) {
+            registry.insert(i.token, Binding::Service(*f))?;
+            bound += 1;
+        }
+    }
+    Ok(bound)
 }
 
 /// Map the heap region and bind every service at its address.

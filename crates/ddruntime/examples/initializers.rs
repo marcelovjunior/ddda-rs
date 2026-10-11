@@ -40,6 +40,9 @@ fn main() {
     let mut registry = Registry::with_lifted_program();
     let lifted = registry.len();
     ddruntime::services::install(&mut m, &mut registry).unwrap_or_else(|e| panic!("{e:?}"));
+    let imports = ddruntime::image::bind_imports(&mut m, &exe).unwrap_or_else(|e| panic!("{e}"));
+    let apis = ddruntime::services::bind_apis(&mut registry, &imports).unwrap_or_else(|e| panic!("{e:?}"));
+    println!("{} imports bound to tokens, {apis} with services", imports.len());
     let registry = Rc::new(registry);
     registry.install();
     println!("{lifted} lifted functions and {} services bound", registry.len() - lifted);
@@ -86,8 +89,9 @@ fn main() {
     let mut top: Vec<_> = unbound.into_iter().collect();
     top.sort_by(|a, b| b.1.cmp(&a.1));
     println!("untranslated targets reached (most frequent first):");
+    let names: std::collections::HashMap<u32, String> = imports.iter().map(|i| (i.token, i.full_name())).collect();
     for (t, n) in top.iter().take(25) {
-        println!("  {n:5} x {t:#010x}");
+        println!("  {n:5} x {t:#010x} {}", names.get(t).map(String::as_str).unwrap_or(""));
     }
     let mut fl: Vec<_> = faults.into_iter().collect();
     fl.sort_by(|a, b| b.1.cmp(&a.1));
@@ -114,9 +118,7 @@ fn run(m: &mut GuestMemory, registry: &Registry, target: u32) -> Outcome {
                 let msg = e.downcast_ref::<String>().cloned()
                     .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_else(|| "panic".into());
-                // group faults by kind, not by address
-                let kind = msg.split(" at 0x").next().unwrap_or(&msg).to_string();
-                Outcome::Fault(kind)
+                Outcome::Fault(msg)
             }
         }
     }
