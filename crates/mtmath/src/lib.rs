@@ -17,6 +17,10 @@
 //! - [`abi`]: the ports behind the lifted calling convention; the lifted
 //!   program calls these instead of the lifted bodies.
 
+// `!(a > b)` is how the ports spell the original's `comiss` + `jbe`: it is
+// true for NaN, which `a <= b` is not.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 pub mod abi;
 pub mod angle;
 pub mod euler;

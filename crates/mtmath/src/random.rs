@@ -66,6 +66,7 @@ pub struct Seeded {
 impl Random {
     /// The next 32-bit value. The state shifts down one word and the new
     /// word, which is also the result, becomes `w`.
+    #[allow(clippy::should_implement_trait)] // the original's name
     // Translated from 0x00D00690 (DDDA.exe 2017-12-13 Steam), MtRandom::next.
     pub fn next(&mut self) -> Drawn {
         let t = spread(self.x);

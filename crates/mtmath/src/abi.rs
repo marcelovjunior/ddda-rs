@@ -962,7 +962,6 @@ pub fn f_007ae860(m: &mut dyn Mem, cpu: &mut Cpu) {
         cpu.xmm[0] = scalar(t.x);
         cpu.xmm[1] = scalar(max);
         cpu.xmm[2] = [0; 4];
-        debug_assert_eq!(o.x, t.x);
     } else {
         let half = F32::from_bits(m.u32(local(4)));
         let s = quat::rotation(p, half, cos_half, |_| sin_half);

@@ -243,6 +243,7 @@ pub fn perspective_fov_rh(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: 
 
 /// [`perspective_fov_rh`] with the x and y scales multiplied by `sx` and
 /// `sy`.
+#[allow(clippy::too_many_arguments)] // the original's arguments
 // Translated from 0x00CFC4B0 (DDDA.exe 2017-12-13 Steam), MtMatrix::perspectiveFovRH (scaled).
 pub fn perspective_fov_rh_scaled(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: F32, sx: F32, sy: F32,
                                  tan: impl FnOnce(F32) -> F32) -> Mat44 {
