@@ -341,20 +341,73 @@ pub fn free_environment_strings_w(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// GetModuleHandleA/W(name): NULL is the exe (its image base). Other
 /// modules are not loaded in the runtime: NULL with ERROR_MOD_NOT_FOUND,
 /// as Windows answers for a module that is not loaded.
-pub fn get_module_handle_a(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let name = arg(m, cpu, 0);
-    cpu.eax = if name == 0 { IMAGE_BASE } else { set_error(126); 0 };
+/// The system DLLs every process has loaded (a module handle for them is
+/// answered by GetModuleHandle without LoadLibrary).
+const SYSTEM_MODULES: &[&str] = &["kernel32.dll", "ntdll.dll", "kernelbase.dll", "user32.dll", "gdi32.dll", "advapi32.dll"];
+
+/// A module name as Windows compares it: the file name, lower case, with
+/// ".dll" added when it has no extension.
+fn module_key(name: &str) -> String {
+    let file = name.rsplit(['\\', '/']).next().unwrap_or(name).to_ascii_lowercase();
+    if file.contains('.') { file } else { format!("{file}.dll") }
+}
+
+/// The handle of a module the process has (a system DLL, a DLL the exe
+/// imports, or one loaded with LoadLibrary when `load`).
+fn module_handle(name: &str, load: bool) -> Option<u32> {
+    let key = module_key(name);
+    with_state(|s| {
+        if let Some(k) = s.modules.iter().position(|m| *m == key) {
+            return Some(MODULE_HANDLE + 0x1_0000 * (k as u32 + 1));
+        }
+        let known = SYSTEM_MODULES.contains(&key.as_str()) || s.exports.keys().any(|(dll, _)| *dll == key);
+        (known || load).then(|| {
+            s.modules.push(key);
+            MODULE_HANDLE + 0x1_0000 * s.modules.len() as u32
+        })
+    })
+}
+
+fn module_name(h: u32) -> Option<String> {
+    let k = h.checked_sub(MODULE_HANDLE)? / 0x1_0000;
+    with_state(|s| s.modules.get(k.checked_sub(1)? as usize).cloned())
+}
+
+fn get_module_handle(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
+    let p = arg(m, cpu, 0);
+    cpu.eax = if p == 0 {
+        IMAGE_BASE
+    } else {
+        let name = if wide { crate::user32::guest_str_w(m, p) } else { crate::user32::guest_str_a(m, p) };
+        module_handle(&name, false).unwrap_or_else(|| {
+            set_error(126); // ERROR_MOD_NOT_FOUND
+            0
+        })
+    };
     ret(m, cpu, 4);
 }
-pub fn get_module_handle_w(m: &mut dyn Mem, cpu: &mut Cpu) {
-    get_module_handle_a(m, cpu)
-}
-/// GetProcAddress(module, name): no dynamically looked-up functions are
-/// provided yet: NULL with ERROR_PROC_NOT_FOUND (callers such as the CRT's
-/// FlsAlloc probe fall back to their documented alternatives).
+/// GetModuleHandleA/W(name): NULL is the exe; system DLLs and the DLLs the
+/// exe imports have handles; anything else ERROR_MOD_NOT_FOUND.
+pub fn get_module_handle_a(m: &mut dyn Mem, cpu: &mut Cpu) { get_module_handle(m, cpu, false) }
+pub fn get_module_handle_w(m: &mut dyn Mem, cpu: &mut Cpu) { get_module_handle(m, cpu, true) }
+
+/// GetProcAddress(module, name): a function the exe imports from that
+/// module resolves to its bound token (the same service as the import);
+/// anything else is NULL with ERROR_PROC_NOT_FOUND, as on a system without
+/// that export (the CRT's FlsAlloc probe then takes its documented TLS
+/// fallback). Ordinals are not resolved.
 pub fn get_proc_address(m: &mut dyn Mem, cpu: &mut Cpu) {
-    set_error(ERROR_PROC_NOT_FOUND);
-    cpu.eax = 0;
+    let (h, p) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let found = if p >= 0x1_0000 {
+        let name = crate::user32::guest_str_a(m, p);
+        module_name(h).and_then(|dll| with_state(|s| s.exports.get(&(dll, name)).copied()))
+    } else {
+        None
+    };
+    cpu.eax = found.unwrap_or_else(|| {
+        set_error(ERROR_PROC_NOT_FOUND);
+        0
+    });
     ret(m, cpu, 8);
 }
 /// GetModuleFileNameA/W(module, buffer, size): the exe's path, truncated
@@ -440,10 +493,17 @@ pub fn terminate_process(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// handle so presence checks pass (WinMain refuses to start without
 /// WMVCORE.DLL), and GetProcAddress on it finds nothing.
 pub const MODULE_HANDLE: u32 = 0x7FD0_0000;
-pub fn load_library_a(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = MODULE_HANDLE;
+/// LoadLibraryA/W(name): a module handle (the runtime provides the DLLs'
+/// services through the import table; presence is what callers such as
+/// WinMain's WMVCORE check test).
+fn load_library(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
+    let p = arg(m, cpu, 0);
+    let name = if wide { crate::user32::guest_str_w(m, p) } else { crate::user32::guest_str_a(m, p) };
+    cpu.eax = module_handle(&name, true).unwrap_or(0);
     ret(m, cpu, 4);
 }
+pub fn load_library_a(m: &mut dyn Mem, cpu: &mut Cpu) { load_library(m, cpu, false) }
+pub fn load_library_w(m: &mut dyn Mem, cpu: &mut Cpu) { load_library(m, cpu, true) }
 pub fn free_library(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = 1;
     ret(m, cpu, 4);
@@ -559,7 +619,7 @@ pub const APIS: &[(&str, &str, Api)] = &[
     ("ole32.dll", "CoTaskMemAlloc", co_task_mem_alloc),
     ("ole32.dll", "CoTaskMemFree", co_task_mem_free),
     ("KERNEL32.dll", "LoadLibraryA", load_library_a),
-    ("KERNEL32.dll", "LoadLibraryW", load_library_a),
+    ("KERNEL32.dll", "LoadLibraryW", load_library_w),
     ("KERNEL32.dll", "FreeLibrary", free_library),
     ("USER32.dll", "MessageBoxA", message_box_a),
     ("KERNEL32.dll", "GetLastError", get_last_error),
