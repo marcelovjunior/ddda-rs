@@ -1,5 +1,6 @@
 """Synthetic L11 indirect transfers and mock ABI inference; no game bytes."""
 import gc
+import struct
 import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
@@ -65,5 +66,20 @@ class IndirectTests(unittest.TestCase):
 
     def test_invalid_return_still_rejected(self):
         with self.assertRaises(h.Rejected):self.record('6a00c3')
+
+    def test_static_pop_follows_only_bounded_switches(self):
+        # cmp eax,1; ja default; jmp [eax*4+table]; default: ret 4
+        prefix=bytes.fromhex('83f8017707ff248500104000c20400')
+        for tail,want in ((bytes.fromhex('c20400'),4),(bytes.fromhex('c20800'),0)):
+            data=prefix.ljust(32,b'\xcc')+tail
+            sections=[(0x400000,data.ljust(4096,b'\xcc')),
+                      (0x401000,struct.pack('<II',0x40000c,0x400020))]
+            with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True):
+                self.assertEqual(h.static_pop(0x400000),want)
+                self.assertEqual(h.static_pop(0x400005),0)  # no input bound
+        # A table target in another instruction's interior is not a contract.
+        sections[1]=(0x401000,struct.pack('<II',0x40000d,0x400020))
+        with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True):
+            self.assertEqual(h.static_pop(0x400000),0)
 
 if __name__=='__main__': unittest.main()

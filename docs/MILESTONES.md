@@ -813,3 +813,38 @@ opening (codex-31), route perf (codex-29).
   pair and regenerates, then traces residual recorder failures and resolves
   ambiguous indirect x87 flow without weakening guards. Shared data remains
   read-only; source/tests/docs only, no runtime code, gate, Ghidra restart or push.
+
+## Batch 2026-10-11 (L13: exhaustive residual census)
+
+- **Accounted:** all 832 initially non-platform/unverified entries, including
+  244 thunks omitted from old scans. Four already verified hand ports were in
+  the old no-fixture list; five explicit platform models had `translated`
+  status from later citations. The scanner now includes unverified thunks
+  and excludes verified entries. No shared inventory relabeling.
+- **Closed:** all 244 thunk entries, three SFENCE bodies and 26 recorder
+  failures acquire fixtures. SFENCE executes the host instruction; FLDL2E/
+  FLDLN2 use saved x87 state and pass synthetic extended-value comparisons.
+  Bounded switches now inform mock cleanup (`0x00E0BF48`), with consistent
+  returns, overlap rejection and the existing 512-instruction limit.
+- **Evidence:** a 24-function same-input trace sample improves from zero to
+  two successes; other failures remain guarded. Host/Unicorn reciprocal
+  probes differ on 128/128 vectors per instruction, so a CPU-specific oracle
+  and replay contract remain open. FS exception-chain access needs guest
+  thread/SEH state. Details and regeneration are in `docs/INVENTORY.md` and
+  L13 Results; private JSON retains per-entry instruction/trial evidence.
+- **Measured:** selected entries **43,294 -> 43,567**, cases **128,772 ->
+  129,587**, baseline records unchanged. Conventional non-thunk verification
+  **43,298 -> 43,327 (76.6%, 90.9% code bytes)**, plus 244 verified thunks.
+  Denominator remains 56,593 non-thunks / 15,516,093 summed bytes.
+- **Validated:** 66 Python tests; subset 43,184 cases / 14,459 functions and
+  seven Rust units pass. Strict final census has **559** entries: 467 recorder
+  failures, 83 lift rejections, four quarantines, five platform overlaps;
+  zero unexplained/unrecorded/unadopted rows. Final required-vector
+  `cargo test -p ddnative` passes 32 tests / 129,587 lifted cases. Compile
+  4m23s, replay 59.86s, total 330.06s, minimum free RAM 12.73 GiB. Own heavy
+  jobs serialized; external builds caused launch deferrals, with no 6 GiB
+  threshold crossing. Generated files remain outside the source commit.
+- **One next action:** head reviews/adopts the matching private `native-L13`
+  pair and census, then chooses the reciprocal-oracle/CPU contract and traces
+  remaining stack-context failures. Initializer `0x0137E490` remains without
+  a usable fixture; no live-game/boot claim, shared writes, gate or push.

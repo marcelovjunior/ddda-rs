@@ -226,7 +226,8 @@ class SparseInputs:
 def static_pop(target, _cache={}):
     """Bounded reachable ret cleanup, following direct tails, never neighbours.
 
-    Unknown, indirect or inconsistent exits retain the zero-pop fallback.
+    Proven bounded switches are followed; unknown indirect or inconsistent
+    exits retain the zero-pop fallback.
     The cache includes the reader so synthetic images cannot contaminate it.
     """
     key = (target, code, image)
@@ -235,8 +236,10 @@ def static_pop(target, _cache={}):
         md = Cs(CS_ARCH_X86, CS_MODE_32)
         md.detail = True
         todo, seen, pops, unknown = [target], set(), set(), False
+        owners = {}
         while todo and not unknown:
             pc = todo.pop()
+            history = []
             while pc not in seen:
                 if len(seen) >= 512:
                     unknown = True
@@ -247,6 +250,12 @@ def static_pop(target, _cache={}):
                 except (KeyError, StopIteration):
                     unknown = True
                     break
+                if any(a in owners and owners[a] != pc for a in range(pc, pc+i.size)):
+                    unknown = True
+                    break
+                owners.update((a,pc) for a in range(pc,pc+i.size))
+                history.append(i)
+                history = history[-4:]
                 if i.mnemonic in ('ret', 'retn', 'repz ret'):
                     pops.add(i.operands[0].imm if i.operands else 0)
                     break
@@ -255,7 +264,14 @@ def static_pop(target, _cache={}):
                     break
                 if i.mnemonic.startswith('j'):
                     if i.operands[0].type != 2:
-                        unknown = True
+                        # Reuse the lifter's bound/remap validation. The false
+                        # unbounded accept predicate forbids table-only guesses.
+                        import lift
+                        try:
+                            todo.extend(lift.switch_targets(history,len(history)-1,target,None,
+                                code,accept=lambda _:False,discover=True,bounded_accept=executable))
+                        except lift.Unsupported:
+                            unknown = True
                         break
                     todo.append(i.operands[0].imm & 0xffffffff)
                     if i.mnemonic == 'jmp':
