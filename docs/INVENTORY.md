@@ -103,14 +103,23 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off:
+With the platform layer split off (2026-10-11, commit c91112f; the gate
+prints the current numbers after every run):
 
-| status | functions | share |
-|---|---:|---:|
-| platform (Rust replaces) | 12,364 | 24.5% |
-| verified (1:1 port + differential test) | 972 | 1.9% |
-| translated (cited, not verified) | 1,696 | 3.4% |
-| documented only | 762 | 1.5% |
-| untouched | 34,684 | 68.7% |
+| status | functions | share | code bytes |
+|---|---:|---:|---:|
+| platform (Rust replaces) | 12,737 | 25.2% | 5.2% |
+| verified (1:1 + differential test) | 12,432 | 24.6% | 8.4% |
+| translated (cited, not verified) | about 1,550 | 3.1% | |
+| documented only | about 700 | 1.4% | |
+| untouched | 23,243 | 46.0% | 75.7% |
 
-The game to rebuild is about **38,100 functions**; 972 (2.6%) verified.
+Most verified functions come from the lifter (`research/native/lift.py`,
+docs/NATIVE_PIPELINE.md "The lifter"). Its latest scan lifts 29,165 of the
+36,398 non-platform functions up to 2,000 bytes (80%), 16,558 of them in
+ext mode (calls to untranslated code mocked); their vectors were being
+recorded at the time of writing. By bytes the picture is different: the
+1,214 non-platform functions over 2,000 bytes hold 39% of the game code
+and have not been scanned yet.
+
+The game to rebuild is about **37,970 functions** (14.3 MB of code).

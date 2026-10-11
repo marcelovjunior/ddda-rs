@@ -54,6 +54,43 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
+X87_PUSH = {"fld", "fld1", "fldz"}
+X87_POP = {"fstp"}
+X87_READ = {"fst", "fchs", "fabs"}
+
+
+def x87_depth_check(ins, addr, end):
+    """Every x87 read or pop must find a value this function pushed: walk
+    the control flow from depth 0 (a call pushes nothing as far as the
+    function knows). A value read at depth 0 was returned in st0 by a
+    callee, which mocked calls cannot provide: reject."""
+    at = {i.address: k for k, i in enumerate(ins)}
+    seen, todo = {}, [(0, 0)]
+    while todo:
+        k, depth = todo.pop()
+        while k < len(ins):
+            i = ins[k]
+            if seen.get(i.address, 99) <= depth:
+                break  # already walked with this depth or less
+            seen[i.address] = depth
+            mn = i.mnemonic
+            if mn in X87_POP or mn in X87_READ:
+                if depth == 0:
+                    raise Unsupported(f"x87-return (st0 read at {i.address:#x} with nothing pushed)")
+                depth -= mn in X87_POP
+            elif mn in X87_PUSH:
+                depth += 1
+            if mn in ("ret", "retn"):
+                break
+            if mn.startswith("j"):
+                t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
+                if t is not None and addr <= t < end and t in at:
+                    todo.append((at[t], depth))
+                if mn == "jmp":
+                    break
+            k += 1
+
+
 def lift(addr, size, callable=frozenset(), ext=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
@@ -87,6 +124,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
             leaders.add(ins[k + 1].address)
     if not leaders <= {i.address for i in ins}:
         raise Unsupported("jump into the middle of an instruction")
+    x87_depth_check(ins, addr, end)
 
     def reg(name):
         """Read a register as a u32 expression."""
@@ -403,7 +441,11 @@ def scan(limit=None):
     # caller can only lift if its callees are lifted
     rows += db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified' "
                        "AND NOT thunk AND size BETWEEN 6 AND 2000 AND address < 0x012E0000").fetchall()
-    rows.sort()
+    sys.path.insert(0, os.path.dirname(__file__))
+    import harness as h
+    # a platform model's own address is never lifted: run_sparse runs the
+    # model there, so its vectors would describe the model, not the code
+    rows = sorted(r for r in rows if r[0] not in h.PLATFORM)
     rows = rows[:limit]
     # rounds: a function whose calls all go to functions lifted in an earlier
     # round (or earlier in this one) lifts too; repeat until nothing changes
@@ -448,12 +490,31 @@ def relift():
     """Re-translate the current list in place after a codegen change (same
     functions, same callees; their vectors stay valid)."""
     lifted = json.load(open(f"{N}/patterns/lift.json"))
+    sys.path.insert(0, os.path.dirname(__file__))
+    import harness as h
     closed = {f["addr"] for f in lifted if not f.get("ext")}
+    keep, dropped = [], []
     for f in lifted:
-        f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
-        assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
-    json.dump(lifted, open(f"{N}/patterns/lift.json", "w"))
-    print(len(lifted), "functions re-lifted")
+        try:
+            if f["addr"] in h.PLATFORM:
+                raise Unsupported("platform model address")
+            f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
+            assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
+            keep.append(f)
+        except Unsupported as e:  # a stricter lifter: the function no longer qualifies
+            dropped.append((f["addr"], str(e)))
+    # callers of a dropped function cannot compile: drop them too
+    have = {f["addr"] for f in keep}
+    while True:
+        bad = [f for f in keep if not set(f.get("calls", [])) <= have]
+        if not bad:
+            break
+        dropped += [(f["addr"], "calls a dropped function") for f in bad]
+        keep = [f for f in keep if f not in bad]
+        have = {f["addr"] for f in keep}
+    json.dump(keep, open(f"{N}/patterns/lift.json", "w"))
+    print(len(keep), "functions re-lifted;", len(dropped), "dropped:",
+          [(hex(a), w[:40]) for a, w in dropped[:12]])
 
 
 if __name__ == "__main__":

@@ -136,6 +136,7 @@ FLOAT_LOADS = {"movss", "comiss", "ucomiss", "addss", "subss", "mulss", "divss",
 PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_free",
             0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
+MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
 
 
 SSE_BINARY = {"addss", "subss", "mulss", "divss", "minss", "maxss", "addps", "subps", "mulps", "divps",
@@ -197,6 +198,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset()):
         return prnd.randbytes(0x1000)
 
     def on_unmapped(uc_, access, addr, size, value, _):
+        if len(pages_in) > MAX_PAGES:
+            # a loop over a random count of random pointers: thousands of
+            # random pages, minutes per run, and no useful vector
+            if not bad:
+                bad.append(f"touches over {MAX_PAGES} pages")
+            uc_.emu_stop()
+            return False
         page = addr & ~0xFFF
         for p in {page, (addr + size - 1) & ~0xFFF}:
             try:
