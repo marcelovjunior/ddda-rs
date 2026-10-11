@@ -25,6 +25,7 @@ const ERROR_PATH_NOT_FOUND: u32 = 3;
 const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_NO_MORE_FILES: u32 = 18;
+const ERROR_HANDLE_EOF: u32 = 38;
 const ERROR_FILE_EXISTS: u32 = 80;
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const GENERIC_WRITE: u32 = 0x4000_0000;
@@ -216,6 +217,48 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
         }
         None => {
             set_error(ERROR_INVALID_HANDLE);
+            0
+        }
+    };
+    ret(m, cpu, 20);
+}
+
+/// ReadFileEx(handle, buffer, count, OVERLAPPED*, completion routine):
+/// the read happens now, at the OVERLAPPED's 64-bit offset (Offset +8,
+/// OffsetHigh +12; asynchronous handles have no file pointer), and the
+/// completion routine (error, bytes, OVERLAPPED*) is queued to this thread,
+/// to run at its next alertable wait (SleepEx), as Windows delivers it. A
+/// read starting at or past the end fails with ERROR_HANDLE_EOF; one that
+/// reaches the end completes with the bytes there were. The game's reader
+/// is MtFile::vf08 (0x00D0D440) with completion 0x00D0D430.
+pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
+    let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
+    let data = with_files(|f| match f.handles.get_mut(&h) {
+        Some(Open::File(file)) => {
+            let size = file.metadata().map(|md| md.len()).unwrap_or(0);
+            if offset >= size {
+                return Err(ERROR_HANDLE_EOF);
+            }
+            let mut v = vec![0u8; count.min((size - offset) as u32) as usize];
+            file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(&mut v)).map_err(|_| ERROR_HANDLE_EOF)?;
+            Ok(v)
+        }
+        _ => Err(ERROR_INVALID_HANDLE),
+    });
+    cpu.eax = match data {
+        Ok(v) => {
+            for (k, &b) in v.iter().enumerate() {
+                m.set_u8(buf.wrapping_add(k as u32), b);
+            }
+            m.set_u32(ov, 0); // Internal: STATUS_SUCCESS
+            m.set_u32(ov + 4, v.len() as u32); // InternalHigh: bytes
+            crate::threads::queue_apc(crate::threads::current_tid(), routine, [0, v.len() as u32, ov]);
+            set_error(0);
+            1
+        }
+        Err(e) => {
+            set_error(e);
             0
         }
     };
@@ -480,6 +523,7 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "CreateFileA", create_file_a),
     ("KERNEL32.dll", "CreateFileW", create_file_w),
     ("KERNEL32.dll", "ReadFile", read_file),
+    ("KERNEL32.dll", "ReadFileEx", read_file_ex),
     ("KERNEL32.dll", "WriteFile", write_file),
     ("KERNEL32.dll", "SetFilePointer", set_file_pointer),
     ("KERNEL32.dll", "GetFileSize", get_file_size),

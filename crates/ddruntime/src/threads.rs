@@ -261,6 +261,9 @@ pub(crate) struct Kernel {
     contexts: HashMap<u32, Context>,
     /// thread id -> its object
     threads: HashMap<u32, u32>,
+    /// Queued asynchronous procedure calls per thread: (routine, three
+    /// stdcall arguments), run at the thread's next alertable wait.
+    apcs: HashMap<u32, std::collections::VecDeque<(u32, [u32; 3])>>,
     /// Faults that ended guest threads: (thread id, message).
     pub(crate) faults: Vec<(u32, String)>,
 }
@@ -515,12 +518,53 @@ fn sleep_for(ms: u32) {
         _ => sleep_unlocked(Duration::from_millis(ms as u64)),
     }
 }
-/// SleepEx(ms, alertable): as Sleep; no I/O completion is queued yet, so
-/// an alertable sleep is never cut short (returns 0).
+/// Queue an asynchronous procedure call (an I/O completion routine) to
+/// guest thread `tid`; it runs at that thread's next alertable wait.
+pub(crate) fn queue_apc(tid: u32, routine: u32, args: [u32; 3]) {
+    kernel(|k| k.apcs.entry(tid).or_default().push_back((routine, args)));
+    signal();
+}
+
+/// Run this thread's queued APCs, oldest first; whether any ran.
+fn run_apcs(m: &mut dyn Mem, cpu: &mut Cpu) -> bool {
+    let me = current_tid();
+    let mut ran = false;
+    while let Some((routine, args)) = kernel(|k| k.apcs.get_mut(&me).and_then(|q| q.pop_front())) {
+        crate::services::call_guest(m, cpu, routine, &args);
+        ran = true;
+    }
+    ran
+}
+
+pub const WAIT_IO_COMPLETION: u32 = 0xC0;
+
+/// SleepEx(ms, alertable): an alertable sleep first runs the thread's
+/// queued completion routines and returns WAIT_IO_COMPLETION if there were
+/// any; otherwise it sleeps like Sleep, returning early (also
+/// WAIT_IO_COMPLETION) if a completion is queued to this thread meanwhile.
 pub fn sleep_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let ms = arg(m, cpu, 0);
-    sleep_for(ms);
-    cpu.eax = 0;
+    let (ms, alertable) = (arg(m, cpu, 0), arg(m, cpu, 1) != 0);
+    cpu.eax = if !alertable {
+        sleep_for(ms);
+        0
+    } else {
+        let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
+        loop {
+            if run_apcs(m, cpu) {
+                break WAIT_IO_COMPLETION;
+            }
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                break 0;
+            }
+            if ms == 0 {
+                yield_now();
+                break 0;
+            }
+            // nothing queued yet: wait for a state change (a completion
+            // queued to this thread signals) or the deadline
+            block(deadline);
+        }
+    };
     ret(m, cpu, 8);
 }
 

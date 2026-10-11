@@ -120,6 +120,29 @@ pub(crate) fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
     m.u32(cpu.esp.wrapping_add(4 + 4 * k))
 }
 
+/// Where guest code the runtime calls (window procedures, I/O completion
+/// routines, thread starts) returns to (never executed).
+pub const CALLBACK_RETURN: u32 = 0xFFFF_FFE0;
+
+/// Call guest code `target` as stdcall with `args`, from inside a service:
+/// the arguments and a return address are pushed below the service's frame
+/// and the dispatcher runs the target. eax is the result; ecx and edx are
+/// the callee's to clobber (as across any call), the other registers are
+/// preserved by the callee's own ABI and checked here.
+pub fn call_guest(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, args: &[u32]) -> u32 {
+    let (esp, ebx, ebp, esi, edi) = (cpu.esp, cpu.ebx, cpu.ebp, cpu.esi, cpu.edi);
+    for &a in args.iter().rev() {
+        cpu.esp = cpu.esp.wrapping_sub(4);
+        m.set_u32(cpu.esp, a);
+    }
+    cpu.esp = cpu.esp.wrapping_sub(4);
+    m.set_u32(cpu.esp, CALLBACK_RETURN);
+    ddnative_base::x86::call_ext(m, cpu, target);
+    assert_eq!(cpu.esp, esp, "guest callback {target:#010x} did not return with stdcall cleanup of {} argument(s)", args.len());
+    assert_eq!((cpu.ebx, cpu.ebp, cpu.esi, cpu.edi), (ebx, ebp, esi, edi), "guest callback {target:#010x} clobbered a callee-saved register");
+    cpu.eax
+}
+
 /// `ret N`: pop the return address and N bytes of arguments.
 pub(crate) fn ret(m: &dyn Mem, cpu: &mut Cpu, n: u32) {
     let _ = m.u32(cpu.esp);

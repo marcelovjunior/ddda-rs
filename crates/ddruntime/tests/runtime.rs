@@ -596,3 +596,48 @@ fn semaphores_and_mutexes_follow_their_contracts() {
     assert_eq!(call_from_guest(&mut m, c, ddruntime::files::close_handle, &[a]), 1);
     assert_eq!(call_from_guest(&mut m, c, threads::wait_for_single_object, &[a, 0]), threads::WAIT_FAILED);
 }
+
+/// The game's completion routine 0x00D0D430: clears the OVERLAPPED's
+/// hEvent field (its pending flag), stdcall with three arguments.
+fn completion(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let ov = m.u32(cpu.esp + 12);
+    m.set_u32(ov + 0x10, 0);
+    let _ = m.u32(cpu.esp);
+    cpu.esp += 16;
+}
+
+#[test]
+fn read_file_ex_completes_at_the_next_alertable_sleep() {
+    let root = std::env::temp_dir().join(format!("ddruntime-async-{}", std::process::id()));
+    let (install, sandbox) = (root.join("install"), root.join("sandbox"));
+    std::fs::create_dir_all(&install).unwrap();
+    let content: Vec<u8> = (0..3000u32).map(|k| (k * 7) as u8).collect();
+    std::fs::write(install.join("arc.bin"), &content).unwrap();
+    ddruntime::files::set_roots(&install, &sandbox);
+    let (mut m, mut cpu) = stack();
+    let mut r = Registry::new();
+    r.insert(0x0061_0000, Binding::Lifted(completion)).unwrap();
+    let r = Rc::new(r);
+    r.install();
+    let c = &mut cpu;
+    let (name, buf, ov) = (0x0010_9000, 0x0010_A000, 0x0010_C000);
+    put_str(&mut m, name, "arc.bin");
+    // FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING, as an MtFile opens archives
+    let h = call_from_guest(&mut m, c, ddruntime::files::create_file_a, &[name, 0x8000_0000, 1, 0, 3, 0x6000_0000, 0]);
+    assert_ne!(h, u32::MAX);
+    m.set_u32(ov + 8, 0x800); // Offset: the second sector
+    m.set_u32(ov + 0x10, 1); // pending
+    assert_eq!(call_from_guest(&mut m, c, ddruntime::files::read_file_ex, &[h, buf, 0x800, ov, 0x0061_0000]), 1);
+    assert_eq!(m.u32(ov + 0x10), 1, "the completion has not run yet");
+    assert_eq!(call_from_guest(&mut m, c, threads::sleep_ex, &[threads::INFINITE, 1]), threads::WAIT_IO_COMPLETION);
+    assert_eq!(m.u32(ov + 0x10), 0, "delivered by the alertable sleep");
+    assert_eq!(m.u32(ov + 4), 3000 - 0x800, "a read reaching the end transfers what is there");
+    assert_eq!(m.read(buf, 3000 - 0x800).unwrap(), &content[0x800..]);
+    // a read starting past the end fails at once
+    m.set_u32(ov + 8, 0x1000);
+    assert_eq!(call_from_guest(&mut m, c, ddruntime::files::read_file_ex, &[h, buf, 0x800, ov, 0x0061_0000]), 0);
+    assert_eq!(call_from_guest(&mut m, c, ddruntime::win32::get_last_error, &[]), 38);
+    assert_eq!(call_from_guest(&mut m, c, threads::sleep_ex, &[0, 1]), 0, "nothing queued");
+    x86::set_ext_calls(None);
+    let _ = std::fs::remove_dir_all(&root);
+}

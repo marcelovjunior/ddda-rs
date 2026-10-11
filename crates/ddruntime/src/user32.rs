@@ -15,7 +15,7 @@
 //! through [`post`].
 use crate::services::{arg, ret, with_state};
 use ddnative_base::mem::Mem;
-use ddnative_base::x86::{self, Cpu};
+use ddnative_base::x86::Cpu;
 use std::collections::{HashMap, VecDeque};
 
 type Api = fn(&mut dyn Mem, &mut Cpu);
@@ -56,8 +56,6 @@ const ATOM_BASE: u32 = 0xC000;
 /// icons, cursors, stock GDI objects, accelerator tables, the system
 /// menu, paint DCs, device notifications.
 pub const RESOURCE_HANDLES: u32 = 0x7FC0_0000;
-/// Where a window procedure the runtime calls returns to (never executed).
-pub const CALLBACK_RETURN: u32 = 0xFFFF_FFE0;
 
 #[derive(Clone, Debug)]
 pub struct Class {
@@ -179,29 +177,10 @@ fn name_arg(m: &dyn Mem, p: u32, wide: bool) -> String {
 
 // --- calling guest window procedures ----------------------------------------
 
-/// Call guest code `target` as stdcall with `args`, from inside a service:
-/// the arguments and a return address are pushed below the service's frame
-/// and the dispatcher runs the target. eax is the result; ecx and edx are
-/// the callee's to clobber (as across any call), the other registers are
-/// preserved by the callee's own ABI and checked here.
-pub fn call_guest(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, args: &[u32]) -> u32 {
-    let (esp, ebx, ebp, esi, edi) = (cpu.esp, cpu.ebx, cpu.ebp, cpu.esi, cpu.edi);
-    for &a in args.iter().rev() {
-        cpu.esp = cpu.esp.wrapping_sub(4);
-        m.set_u32(cpu.esp, a);
-    }
-    cpu.esp = cpu.esp.wrapping_sub(4);
-    m.set_u32(cpu.esp, CALLBACK_RETURN);
-    x86::call_ext(m, cpu, target);
-    assert_eq!(cpu.esp, esp, "guest callback {target:#010x} did not return with stdcall cleanup of {} argument(s)", args.len());
-    assert_eq!((cpu.ebx, cpu.ebp, cpu.esi, cpu.edi), (ebx, ebp, esi, edi), "guest callback {target:#010x} clobbered a callee-saved register");
-    cpu.eax
-}
-
 /// SendMessage: the window procedure, synchronously (single guest thread).
 pub fn send(m: &mut dyn Mem, cpu: &mut Cpu, hwnd: u32, message: u32, wparam: u32, lparam: u32) -> u32 {
     let Some(proc_) = desk(|d| d.windows.get(&hwnd).map(|w| w.wndproc)) else { return 0 };
-    call_guest(m, cpu, proc_, &[hwnd, message, wparam, lparam])
+    crate::services::call_guest(m, cpu, proc_, &[hwnd, message, wparam, lparam])
 }
 
 fn lo_hi(lo: i32, hi: i32) -> u32 {
