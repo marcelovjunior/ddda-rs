@@ -72,7 +72,7 @@ class CodegenTests(unittest.TestCase):
                let r = (a.wrapping_add(c) & u32::MAX);
                fl = Flags::new(x86::ADD, a, c, r, 32); eax = r; }}
             xmm7 = [eax, xmm0[1], xmm2[2], xmm7[3]];
-            st.push(eax); {{ let v = st.pop().unwrap(); m.set_u32(128, v); }}
+            st.push(eax); {{ let v = st.top_f32().unwrap(); st.register::<0xd8dd>(); m.set_u32(128, v); }}
             if fl.cond("b") {{ {lift.SAVE} callee(m, cpu); return; }}
             esp = esp.wrapping_sub(4); m.set_u32(esp, 0x1009);
             {lift.SAVE} callee(m, cpu); {lift.LOAD}
@@ -90,6 +90,7 @@ class CodegenTests(unittest.TestCase):
         source = f'''#![allow(warnings)]
             #[path = "{(root / 'crates/ddnative/src/mem.rs').as_posix()}"] mod mem;
             #[path = "{(root / 'crates/ddnative/src/x86.rs').as_posix()}"] mod x86;
+            #[path = "{(root / 'crates/ddnative/src/x87.rs').as_posix()}"] mod x87;
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod reference {{ use super::*; pub(super) fn run(m: &mut dyn Mem, c: &mut Cpu) {{ f_00001000(m,c); }} {reference} }}
             mod generated {{ use super::*; {generated} }}
@@ -109,7 +110,7 @@ class CodegenTests(unittest.TestCase):
             }
             fn callee(m: &mut dyn Mem, c: &mut Cpu) {
                 let ret = m.u32(c.esp);
-                m.set_u32(180, ret ^ c.xmm[7][3] ^ c.st.last().copied().unwrap());
+                m.set_u32(180, ret ^ c.xmm[7][3] ^ c.st.top_f32().unwrap());
                 c.fl = Flags::new(x86::SUB, c.eax, c.edx, c.eax.wrapping_sub(c.edx), 32);
                 c.eax = c.eax.wrapping_add(7); c.xmm[3][2] ^= c.ebx;
                 c.st.push(c.esi); c.esp = c.esp.wrapping_add(4);
@@ -120,7 +121,7 @@ class CodegenTests(unittest.TestCase):
                     initial.eax = value; initial.edx = value; initial.esp = 64;
                     initial.ebx = 11; initial.esi = 13; initial.edi = 17;
                     initial.fl = Flags::new(x86::SUB, 0, 1, u32::MAX, 32);
-                    initial.st = vec![31, 37];
+                    initial.st.push(31); initial.st.push(37);
                     for i in 0..8 { for j in 0..4 { initial.xmm[i][j] = (i*4+j) as u32; } }
                     let mut results = Vec::new();
                     for run in [reference::run as fn(&mut dyn Mem, &mut Cpu), generated::f_00001000] {

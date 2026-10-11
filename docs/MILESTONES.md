@@ -582,3 +582,27 @@ opening (codex-31), route perf (codex-29).
   vector comparison, with external callees mocked, not gameplay comparison.
 - **One next action:** the head should resolve the recorder call contract
   and the four remaining baseline mismatches, then rerun the full replay.
+
+## Batch 2026-10-11 (L05: native lifter x87 arithmetic)
+
+- **Implemented:** hardware-backed 80-bit x87 registers, control/status,
+  arithmetic, conversions, comparisons and SAHF/LAHF, preserving host state.
+  Scan: 30,527 -> 31,977 liftable functions; rejections 7,201 -> 5,751.
+  See [L05 results](tasks/L05-lifter-x87-arithmetic.md#results).
+- **Tested / compared with the original:** 21 Python regressions, seven
+  Rust unit tests and the full 84,312-case replay over 28,244 functions pass.
+  All 26,834 prepared functions remain; 1,346 newly liftable functions and
+  64 dependencies are added. One final full build takes 9m19s, replay 29.83s,
+  with two Cargo jobs and no concurrent vector run. This is sampled
+  instruction comparison; external callees remain mocked where documented.
+- **Evidence / recorder:** DDDA creates its D3D device with FPU_PRESERVE;
+  incoming live-thread control words still need capture. Unicorn's actual
+  reset differs from the assumed fixture default, so sparse fixtures now
+  explicitly set CW 0x037F and empty tags. Affected vectors were re-recorded;
+  stack faults are rejected and new cases compare full 80-bit st0 and CW.
+- **Blockers / limits:** 104 new candidates lack usable fixtures; generic
+  external mocks do not consume x87 arguments. Unmasked exceptions and
+  environment instructions remain unsupported. Private L05 data and
+  generated files are excluded from the source commit.
+- **One next action:** create structured original-exe fixtures for the 104
+  candidates in `E:/ddda-re/notes/native-L05/unverified-L05.json`.

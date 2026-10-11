@@ -3,9 +3,9 @@
 //! operations with the original operand order.
 
 /// The last flag-setting operation: kind, operands, result, width in bits.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Flags {
-    pub kind: u8, // 0 none, 1 add, 2 sub (cmp), 3 logic (and/or/xor/test), 4 inc, 5 dec, 6 shift-zs, 7 comiss
+    pub kind: u8, // 1 add, 2 sub, 3 logic, 4 inc, 5 dec, 6 shift-zs, 7 comiss; 12 raw EFLAGS
     pub a: u32,
     pub b: u32,
     pub r: u32,
@@ -24,6 +24,11 @@ pub const SHL: u8 = 8;
 pub const SHR: u8 = 9;
 pub const SAR: u8 = 10;
 pub const IMUL: u8 = 11;
+pub const RAW: u8 = 12;
+
+impl Default for Flags {
+    fn default() -> Self { Self::new(RAW, 0, 0, 2, 32) }
+}
 
 /// The machine state a lifted function starts from (cdecl/thiscall/fastcall
 /// alike: everything is in registers and the stack in memory).
@@ -54,8 +59,8 @@ pub struct Cpu {
     pub esp: u32, pub ebp: u32, pub esi: u32, pub edi: u32,
     pub xmm: [[u32; 4]; 8],
     pub fl: Flags,
-    /// x87 stack as single-precision bits, top last.
-    pub st: Vec<u32>,
+    /// Full x87 state, including 80-bit stack values and control/status words.
+    pub st: crate::x87::X87,
 }
 
 impl From<Entry> for Cpu {
@@ -63,14 +68,14 @@ impl From<Entry> for Cpu {
         let mut xmm = [[0u32; 4]; 8];
         xmm[0][0] = r.xmm0;
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
-              xmm, fl: Flags::default(), st: Vec::new() }
+              xmm, fl: Flags::default(), st: Default::default() }
     }
 }
 
 impl Cpu {
     pub fn exit(&self) -> Exit {
         Exit { eax: self.eax, ecx: self.ecx, edx: self.edx, ebx: self.ebx, esp: self.esp, ebp: self.ebp,
-               esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.last().copied() }
+               esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.top_f32() }
     }
 }
 
@@ -100,6 +105,18 @@ pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
 }
 
 impl Flags {
+    pub fn af(&self) -> bool {
+        if self.kind == RAW { return self.r & 0x10 != 0; }
+        matches!(self.kind, ADD | SUB | INC | DEC) && (self.a ^ self.b ^ self.r) & 0x10 != 0
+    }
+    pub fn lahf(&self) -> u8 {
+        2 | self.cf() as u8 | ((self.pf() as u8) << 2) | ((self.af() as u8) << 4)
+            | ((self.zf() as u8) << 6) | ((self.sf() as u8) << 7)
+    }
+    pub fn sahf(&mut self, ah: u8) {
+        let bits = (ah as u32 & 0xd5) | ((self.of() as u32) << 11);
+        *self = Self::new(RAW, 0, 0, bits, 32);
+    }
     /// Binary lifted ALU operations. The operands are evaluated by the
     /// caller before this helper; the destination store follows it. Width
     /// is 8, 16 or 32, as in the literal instruction templates in lift.py.
@@ -150,13 +167,15 @@ impl Flags {
     fn mask(&self) -> u32 { if self.bits == 32 { u32::MAX } else { (1 << self.bits) - 1 } }
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
     pub fn zf(&self) -> bool {
+        if self.kind == RAW { return self.r & 0x40 != 0; }
         if self.kind == COMISS { return self.r != 1 && self.r != 2 } // r: 0 equal, 1 greater, 2 less, 3 unordered
         self.r & self.mask() == 0
     }
-    pub fn sf(&self) -> bool { self.kind != COMISS && self.sign(self.r) }
+    pub fn sf(&self) -> bool { if self.kind == RAW { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
     pub fn cf(&self) -> bool {
         let m = self.mask();
         match self.kind {
+            RAW => self.r & 1 != 0,
             ADD => (self.a & m) as u64 + (self.b & m) as u64 > m as u64,
             SUB => (self.a & m) < (self.b & m),
             INC | DEC => self.cf_in,
@@ -169,6 +188,7 @@ impl Flags {
         }
     }
     pub fn of(&self) -> bool {
+        if self.kind == RAW { return self.r & 0x800 != 0; }
         let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r));
         match self.kind {
             ADD => a == b && r != a,
@@ -182,6 +202,7 @@ impl Flags {
         }
     }
     pub fn pf(&self) -> bool {
+        if self.kind == RAW { return self.r & 4 != 0; }
         if self.kind == COMISS { return self.r == 3 }
         (self.r & 0xFF).count_ones() % 2 == 0
     }

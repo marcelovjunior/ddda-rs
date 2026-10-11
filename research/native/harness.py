@@ -128,7 +128,8 @@ XMM_REGS = {f"xmm{k}": getattr(_xc, f"UC_X86_REG_XMM{k}") for k in range(8)}
 GPR = [("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX), ("ebx", UC_X86_REG_EBX),
        ("esp", UC_X86_REG_ESP), ("ebp", UC_X86_REG_EBP), ("esi", UC_X86_REG_ESI), ("edi", UC_X86_REG_EDI)]
 FLOAT_LOADS = {"movss", "comiss", "ucomiss", "addss", "subss", "mulss", "divss", "minss", "maxss", "sqrtss",
-               "fld", "cvtss2sd", "cvttss2si", "cvtss2si"}
+               "fld", "fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr", "fcom", "fcomp",
+               "cvtss2sd", "cvttss2si", "cvtss2si"}
 
 
 # Platform services lifted code may call: run_sparse runs these models
@@ -202,6 +203,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     rnd = random.Random(seed)
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    # Unicorn's reset tag word reads 0x5555 (eight zero values), not an
+    # empty x87 stack. Match the fixture's actual empty-stack contract.
+    uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
+    uc.reg_write(_xc.UC_X86_REG_FPCW, 0x037f)
     base, secs = image()
     pages_in = {}
 
@@ -265,10 +270,18 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 uc_.emu_stop()
                 return
             decoded[eip] = ins[0].mnemonic
-        if decoded[eip] in FLOAT_LOADS and size in (4, 8):
+        if decoded[eip] == "fldcw" and size == 2:
+            cw = int.from_bytes(uc_.mem_read(addr, 2), "little")
+            if cw & 0x3f != 0x3f:
+                bad.append("unmasked x87 exceptions unsupported")
+                uc_.emu_stop()
+                return
+        if decoded[eip] in FLOAT_LOADS and size in (4, 8, 10):
             raw = bytes(uc_.mem_read(addr, size))
             bits = int.from_bytes(raw, "little")
-            nan = ((bits >> 23) & 0xFF) == 0xFF if size == 4 else ((bits >> 52) & 0x7FF) == 0x7FF
+            nan = (((bits >> 23) & 0xFF) == 0xFF if size == 4 else
+                   ((bits >> 52) & 0x7FF) == 0x7FF if size == 8 else
+                   ((bits >> 64) & 0x7FFF) == 0x7FFF)
             if nan:
                 bad.append("NaN/Inf float input")
                 uc_.emu_stop()
@@ -311,6 +324,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # UNMAPPED hook is not reliable (it can map the page and still raise),
     # and resuming after such a fault loses QEMU's lazily computed flags.
     mem_ops = {}
+    x87_ops = {}
     rets = {}
     gpr = dict(GPR)
 
@@ -318,12 +332,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if addr not in mem_ops:
             try:
                 i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
+                x87_ops[addr] = i if i.mnemonic.startswith("f") else None
                 mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
                                   i.reg_name(o.mem.index) if o.mem.index else None,
                                   o.mem.scale, o.mem.disp, max(o.size, 1))
                                  for o in i.operands if o.type == 3 and not o.mem.segment]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
             except (UcError, StopIteration):
                 mem_ops[addr] = []
+                x87_ops[addr] = None
         esp = uc_.reg_read(UC_X86_REG_ESP)
         need = {(esp - 0x40) & ~0xFFF, esp & ~0xFFF}  # implicit stack accesses
         for base, index, scale, disp, sz in mem_ops[addr]:
@@ -368,6 +384,26 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
+        i = x87_ops.get(addr)
+        if i is not None and uc_.reg_read(UC_X86_REG_EIP) == addr:
+            # QEMU does not reliably set SF on overflow/underflow. Reject
+            # these inputs before execution instead of recording overwritten
+            # stack registers as successful arithmetic.
+            top = (uc_.reg_read(UC_X86_REG_FPSW) >> 11) & 7
+            tags = uc_.reg_read(_xc.UC_X86_REG_FPTAG)
+            empty = lambda k: (tags >> (2 * ((top + k) & 7))) & 3 == 3
+            pushes = i.mnemonic in {"fld", "fild", "fld1", "fldz", "fldpi", "fldl2e", "fldl2t", "fldlg2", "fldln2"}
+            slots = [int(i.reg_name(o.reg)[3:-1]) for o in i.operands
+                     if o.type == 1 and i.reg_name(o.reg).startswith("st(")]
+            control = i.mnemonic in {"fnstcw", "fldcw", "fnstsw", "fstsw", "fnclex", "fninit"}
+            if not pushes and not control:
+                slots.append(0)
+            if i.mnemonic in {"fcompp", "fucompp"}:
+                slots.append(1)
+            if any(empty(k) for k in slots) or (pushes and not empty(-1)):
+                bad.append(f"x87 stack fault before {i.mnemonic} at {addr:#010x}")
+                uc_.emu_stop()
+                return
         if two_nans(uc_, addr):
             bad.append(f"two NaN operands at {addr:#010x}")
             uc_.emu_stop()
@@ -538,7 +574,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # x87 values left on the stack: depth from TOP; read st0 as a single
     # with an `fstp dword [cap]` run from the return page
     top = (uc.reg_read(UC_X86_REG_FPSW) >> 11) & 7
-    depth = (8 - top) % 8
+    tags = uc.reg_read(_xc.UC_X86_REG_FPTAG)
+    depth = sum((tags >> (2 * k)) & 3 != 3 for k in range(8))
+    st0_ext = list(uc.reg_read(_xc.UC_X86_REG_FP0 + top)) if depth else None
+    x87_control = uc.reg_read(_xc.UC_X86_REG_FPCW)
     st0 = None
     if depth:
         cap, tramp = 0x0DEAE000, 0x0DEAF000
@@ -564,4 +603,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     final = {a: uc.mem_read(a, 1)[0] for a in written}
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
+            "st0_ext": st0_ext, "x87_control": x87_control,
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {})}
