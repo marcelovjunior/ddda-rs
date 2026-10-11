@@ -602,7 +602,9 @@ module; behaviour choices are labelled in the code.
 | D3D9 draws: DrawPrimitive/Indexed/UP, Clear, Present as backend commands (`crates/d3d9cmd`) with dirty uploads and a complete state snapshot; a recording backend by default | `d3d9draw.rs`, `crates/d3d9cmd` | done, tested |
 | The wgpu backend: textures (format conversions to D3D9's sampled values, DXT as BC), buffers, targets, translated and linked shaders, half-pixel offset, alpha test, render states as pipeline state, samplers, vertex layouts, fans; first frames pixel-exact | `crates/ddgpu` | started, tested |
 | Whole-draw reference: the same commands executed on the host's D3D9 driver and read back, for pixel comparisons with the wgpu backend | `crates/d3d9ref` (replay) | started |
-| SEH dispatch, audio and input (brief L16), remaining Windows services (brief L17), delay imports, a window/presentation host | | not started |
+| Headless input: USER32 keys/hooks/settings/raw-device queries, DirectInput 8A mouse/keyboard profile, XInput 1.3 four-port state/rumble and host event channel (`0x00DF43E0`, `0x00DFA0C0`, `0x00E05120`) | `input.rs` | implemented, contract tested; physical devices / legacy joystick FF not implemented |
+| XAudio2 2.7 engine, source/submix/master voice ABI and AudioReverb identity (`0x00DCE0E0`, `0x00DCE600`); clocked silent graph, buffer completion/loop/stream callbacks on a guest audio thread, XAPO parameter callbacks and bounded output channel | `audio.rs` | implemented, contract tested; no audible DSP or original-game audio comparison; [census and limits](tasks/L16-input-audio-services.md#results) |
+| SEH dispatch, remaining Windows services (brief L17), movies (delay-loaded WMVCore, brief L18), audible audio output |  | not started |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry

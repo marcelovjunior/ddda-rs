@@ -910,3 +910,32 @@ opening (codex-31), route perf (codex-29).
   thread FS bases and binds the verified original entries. See L15 Results
   for exact addresses, evidence and regeneration steps. No shared writes,
   generated-code commits, native gate, runtime edits or push.
+
+### L16: headless runtime input and audio services (2026-10-11)
+
+- **Implemented:** 17 import bindings; DirectInput8A/system mouse/keyboard,
+  XInput 1.3's four independent ports, USER32 key state/hooks/settings and host
+  event/rumble channels. XAudio2 2.7 engine and voice ABI, null endpoint,
+  descriptor/range/loop timing, EOS and flush completion, guest audio worker
+  callbacks, effect parameter callbacks, and a bounded float-block output seam.
+- **Evidence:** keyboard ctor `0x00DF43E0`, mouse `0x00E05120`, pad paths
+  `0x00DF52B0..0x00DF9EE0`; XAudio engine `0x00DCE0E0`, AudioReverb 2.7
+  CLSID `0x0142AC70` used at `0x00DCE600`, streaming-ring completion callback
+  `0x00DCCD00`. The full API/COM census and SDK contracts are in
+  [L16 Results](tasks/L16-input-audio-services.md#results).
+- **Validation:** `cargo test -p ddruntime`: 36 passed (13 new + 23 existing).
+  Private original-engine fixture also passes: lifted `0x00DCE0E0` creates the
+  engine/mastering voice and reads the endpoint format through these services.
+  Tests exercise import/COM stdcall
+  cleanup and output layouts, device injection, worker callback identity,
+  real-time PCM/ADPCM consumption, loops/flush/EOS, effect parameters and
+  per-session isolation. Not compared against live game input/audio.
+- **Blockers / limits:** output is deliberately silent; decoding, audible
+  mixing/effects and physical host backends remain. No legacy joystick force
+  feedback or general multi-thread keyboard-hook chains are advertised.
+  Static caller roles do not establish original OS thread IDs. Callback
+  `0x00DCCD00` is missing from the inventory/generated program (head notified);
+  real game streaming requires that native entry.
+- **One next action:** head integrates the services into the startup trace and
+  captures the next dynamic input/audio boundary before wiring host devices
+  or claiming audible parity.
