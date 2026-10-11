@@ -233,9 +233,15 @@ indirect calls and unrecognised indirect jumps reject it. This is how most funct
 hand-written ports above are for the important ones, where a readable
 typed API matters.
 
-**Generated code.** `crates/ddnative/src/generated/lifted_NNN.rs` (400
-functions per module) and `lifted.rs` (re-exports every function and the
-`all()` lookup). Each function is `fn(&mut dyn Mem, &mut Cpu)`:
+**Generated code.** `crates/ddlift/lift_00` through `lift_15` hold the
+lifted bodies in `src/generated/lifted_NNN.rs` (400 functions per module).
+The fixed shard is `(address >> 20) % 16`: 1 MiB address bands, independent
+of lifting rounds or the selected function set. `ddnative-base` holds
+`Mem`, `Cpu`, `Flags`, x87 and platform models; every shard depends only on
+that base. `ddnative` keeps the hand ports and re-exports the base modules,
+preserving existing imports. Its generated `lifted.rs` is a small facade
+with the public `f_ADDRESS` entries, `all()` and `dispatch_table()`.
+Each lifted function is `fn(&mut dyn Mem, &mut Cpu)`:
 
 - `x86::Cpu` is the whole machine state: the eight general registers,
   xmm0-7, the flags and the x87 stack. Calling conventions disappear:
@@ -243,8 +249,11 @@ functions per module) and `lifted.rs` (re-exports every function and the
   stack, which lives in `Mem` at `esp`). Generated functions update the
   borrowed `Cpu` in place; they do not unpack and copy the whole state.
 - A lifted `call T` pushes the return address into `Mem` exactly as the
-  CPU does and runs `super::lifted::f_T(m, cpu)`; a tail `jmp T` (or a
-  conditional one) runs T and returns. Because the callee sees the full state, even
+  CPU does. Within a shard it calls `super::lifted::f_T(m, cpu)`; across
+  shards it uses `x86::call_lifted` and an immutable function resolver.
+  A tail `jmp T` (or a conditional one) runs T and returns. This resolver
+  is separate from `call_ext`: direct lifted calls never become mocks.
+  Because the callee sees the full state, even
   whole-program-optimised calls that pass values in odd registers stay
   exact. `Cpu::from(Entry)` / `cpu.exit()` convert to the `Entry`/`Exit`
   pair the tests and hand ports use.
@@ -439,13 +448,34 @@ that contain mocked calls, and cases of an ext function that mocked a
 target which is now lifted. `relift` drops functions that no longer lift
 under a stricter lifter, and then their callers.
 
-**Memory.** The generated code is about 100 MB; one rustc process for the
-`ddnative` library needs about 11 GB. The crate sets `[lib] test = false`
-(its unit tests are in `tests/units.rs`) so `cargo test` compiles the
-library once; with a lib unit-test target it compiled it twice in parallel
-and ran a 32 GB machine out of memory. Run the gate with
-`CARGO_BUILD_JOBS=2` while anything else is running, and never two builds
-(or a build and a vector run with many workers) at once.
+**Memory.** L05's monolithic library peaked at 17.82 GiB for about 123 MB
+of generated Rust. L06 separates it into 16 crates (one address band is
+currently empty). See [L06 measurements](tasks/L06-lifter-crate-split.md#results)
+for per-process peaks and clean/one-shard rebuild timings at two and four
+jobs. Each crate sets `[lib] test = false`; unit tests remain in
+`ddnative/tests/units.rs`, so libraries compile once. Test-profile debug
+line tables (`debug = 1`) apply to every shard and the base.
+The gate defaults to `CARGO_BUILD_JOBS=2`. Never run two builds, or a build
+and a vector run, concurrently; use four jobs only when the machine has
+room for the measured concurrent shard footprint.
+
+`lift.py gen` writes only changed files, removes stale generated modules,
+and removes the old monolithic `lifted_NNN.rs` bodies. Regenerating the same
+input leaves Cargo's fingerprints intact; changing one body rebuilds its
+shard and the dependent facade/test, not unrelated shards. Inserting a
+function can shift 400-function module boundaries inside its own shard.
+After merging source-only crate skeletons, run `gen` before Cargo: private
+generated contents are required and are not committed with the skeletons.
+The inventory scans the new shard directories for `Translated from` and
+the existing integration test for `// verifies`, ignoring stale old bodies.
+
+The facade's public entries, `all()` and `dispatch_table()` install the
+resolver automatically. A caller entering a raw `ddlift_*` function must
+call `ddnative::generated::lifted::init()` first. The resolver is global,
+immutable and reentrant; it contains no machine/player state. External
+call handlers remain thread-local. A missing lifted target panics; it
+never falls back to an external mock. Cached patterns and vectors keep
+their previous call boundaries, so splitting needs no new recordings.
 
 **Commands.** `PY lift.py scan` (lift everything it can; prints each
 round and the rejection reasons), `PY lift.py vectors` (parallel;
@@ -575,7 +605,7 @@ only allocation, freeing and type registration are replaced.
 ### Platform models (calls from lifted code)
 
 Lifted code may call a platform service when that service has a model in
-`crates/ddnative/src/platform.rs` (table `MODELS`; the same addresses are
+`crates/ddnative-base/src/platform.rs` (table `MODELS`; the same addresses are
 in `harness.PLATFORM`). A model starts where the original starts (the
 return address at `[esp]`), does the service's observable effect, sets
 eax and ends with the original's `ret`; every other register, the flags,

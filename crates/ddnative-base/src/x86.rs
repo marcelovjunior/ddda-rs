@@ -87,6 +87,25 @@ impl Cpu {
 /// calls a vector recorded; the game installs its dispatcher.
 pub type ExtCall = dyn FnMut(&mut dyn crate::mem::Mem, &mut Cpu, u32);
 
+/// A lifted function and the immutable resolver installed by the facade.
+/// Direct cross-shard calls must never use the external/mock call handler.
+pub type LiftFn = fn(&mut dyn crate::mem::Mem, &mut Cpu);
+pub type LiftLookup = fn(u32) -> Option<LiftFn>;
+static LIFTED: std::sync::OnceLock<LiftLookup> = std::sync::OnceLock::new();
+
+pub fn set_lifted_lookup(lookup: LiftLookup) {
+    let installed = LIFTED.get_or_init(|| lookup);
+    assert!(std::ptr::fn_addr_eq(*installed, lookup), "a different lifted program is already installed");
+}
+
+/// Ordinary lifted call: the caller already performed any stack push.
+/// Copy the function pointer before calling, so nested calls are reentrant.
+pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
+    let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
+    let f = lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"));
+    f(m, cpu);
+}
+
 thread_local! {
     static EXT: std::cell::RefCell<Option<Box<ExtCall>>> = std::cell::RefCell::new(None);
 }

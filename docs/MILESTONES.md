@@ -606,3 +606,26 @@ opening (codex-31), route perf (codex-29).
   generated files are excluded from the source commit.
 - **One next action:** create structured original-exe fixtures for the 104
   candidates in `E:/ddda-re/notes/native-L05/unverified-L05.json`.
+
+## Batch 2026-10-11 (L06: native lifter crate split)
+
+- **Implemented:** 16 fixed address shards depend on a small machine-state
+  base crate. Cross-shard direct calls use an immutable resolver, separate
+  from external-call mocks; the ddnative facade preserves existing APIs.
+  Regeneration writes only changed files, and the inventory finds citations
+  in shard sources. See [L06 results](tasks/L06-lifter-crate-split.md#results).
+- **Tested / compared with the original:** the unchanged 28,244-function,
+  84,312-case batch and seven Rust units pass after clean builds at two and
+  four jobs. No functions or cases were dropped or re-recorded. Synthetic
+  regressions cover cross-crate nesting, initialization, mock boundaries,
+  missing callees, stable regeneration and inventory declarations.
+- **Measured:** maximum observed rustc working set falls from L05's
+  17.82 GiB to 1.59 GiB. Clean compilation takes 3m34s at two jobs or
+  2m02s at four, versus the recorded monolithic 9m19s. Two jobs remain the
+  gate default; builds and vector recording must not overlap.
+- **Blockers / limits:** no split blocker. This preserves sampled fixture
+  coverage, not gameplay verification; release builds and larger future
+  batches were not benchmarked. Source-only crate skeletons require
+  regeneration before building after merge.
+- **One next action:** the head should regenerate the shards on main and
+  run the full native gate with its complete private fixture collection.

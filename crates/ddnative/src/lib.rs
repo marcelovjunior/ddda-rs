@@ -17,15 +17,12 @@ pub mod action;
 pub mod character;
 pub mod enemy;
 pub mod generated;
-pub mod mem;
+pub use ddnative_base::{mem, platform, x86, x87};
 pub mod model;
 pub mod particle;
-pub mod platform;
 pub mod player_action;
 pub mod species;
 pub mod unit;
-pub mod x86;
-pub mod x87;
 
 /// An `fld dword` / `fstp dword` pair: the value is kept, except that a
 /// signalling NaN becomes quiet (the x87 load raises the masked invalid

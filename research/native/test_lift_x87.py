@@ -55,7 +55,7 @@ class X87Tests(unittest.TestCase):
                      load + "9b" + store + "c3"]  # waiting forms with masked exceptions
         root = Path(__file__).resolve().parents[2]
         source = "#![allow(warnings)]\n" + "".join(
-            f'#[path="{(root / f"crates/ddnative/src/{m}.rs").as_posix()}"] mod {m};\n'
+            f'#[path="{(root / f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n'
             for m in ("mem", "x86", "x87"))
         source += "use mem::Mem; use x86::{Cpu, Flags};\n"
         for k, hexcode in enumerate(programs):
