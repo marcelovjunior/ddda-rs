@@ -1320,6 +1320,17 @@ fn fused_arithmetic_follows_the_driver() {
             ("literal fma(r0, r2, r1*r3)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[0][i], c[2][i], fz(c[1][i], c[3][i]))))),
             ("contracted fma(r1, r3, r0*r2)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[1][i], c[3][i], fz(c[0][i], c[2][i]))))),
         ]),
+        // two products with a common factor feeding a mad
+        ("mul,mul+mad", asm::ps(&[
+            asm::ins(op::MUL, &[asm::dst(d3d9shader::reg::TEMP, 1, 0xF), asm::r(1), asm::src(d3d9shader::reg::TEMP, 3, 0xFF, 0)]),
+            asm::ins(op::MUL, &[asm::dst(d3d9shader::reg::TEMP, 2, 0xF), asm::r(2), asm::src(d3d9shader::reg::TEMP, 3, 0xFF, 0)]),
+            asm::ins(op::MAD, &[asm::oc0(), asm::r(0), asm::r(1), asm::r(2)]),
+        ]), vec![
+            ("literal fma(r0, r1*w, r2*w)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[0][i], fz(c[1][i], c[3][3]), fz(c[2][i], c[3][3]))))),
+            ("factored fma(r0, r1, r2) * w", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fz(fma_z(c[0][i], c[1][i], c[2][i]), c[3][3])))),
+            ("fma(r0*r1, w, r2*w)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(fz(c[0][i], c[1][i]), c[3][3], fz(c[2][i], c[3][3]))))),
+            ("fma(r0, r1*w, r2) * ..", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(fz(c[0][i], c[1][i]), c[3][3], fz(c[2][i], c[3][3]))))),
+        ]),
         ("lrp", asm::ps(&[asm::ins(op::LRP, &[asm::oc0(), asm::r(0), asm::r(1), asm::r(2)])]), vec![
             ("a*(b-c)+c unfused", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fz(c[0][i], c[1][i] - c[2][i]) + c[2][i]))),
             ("fma(a, b-c, c)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[0][i], c[1][i] - c[2][i], c[2][i])))),
@@ -1360,6 +1371,15 @@ fn fused_arithmetic_follows_the_driver() {
             eprintln!("{} {name}: translation {ours_ok}/{trials}", if vertex { "vs" } else { "ps" });
             for (m, (label, _)) in models.iter().enumerate() {
                 eprintln!("  {label}: {}/{trials}", hits[m]);
+            }
+            if *name == "mul,mul+mad" && !vertex {
+                // the driver's pixel-shader compiler factors the common
+                // multiplier out: (a * b + c) * w, an optimisation across
+                // instructions rather than a D3D9 rule; the translation stays
+                // literal (it matches the vertex stage, where the driver is
+                // literal too)
+                failures += trials - hits[1];
+                continue;
             }
             failures += trials - ours_ok;
         }
@@ -1676,4 +1696,297 @@ fn every_translation_is_valid_wgsl() {
     }
     assert!(checked > 0 || packages.iter().all(|p| pixel_shaders(p).is_empty()), "nothing checked");
     assert!(bad.is_empty());
+}
+
+// --- attributing the inexact results ---------------------------------------------
+
+/// The raw tokens of instruction `k` (counted as [`tap`] counts) and the
+/// token index where it starts.
+fn raw_instruction(tokens: &[u32], k: usize) -> Option<(usize, Vec<u32>)> {
+    use d3d9shader::op;
+    let s = d3d9shader::parse(tokens).ok()?;
+    let (mut at, mut n) = (1, 0);
+    for ins in &s.instructions {
+        let t = tokens[at];
+        let len = if ins.opcode == op::COMMENT { ((t >> 16) & 0x7FFF) as usize } else { ((t >> 24) & 0xF) as usize };
+        let start = at;
+        at += 1 + len;
+        if matches!(ins.opcode, op::COMMENT | op::DCL | op::DEF | op::DEFI | op::DEFB) {
+            continue;
+        }
+        if n == k {
+            return Some((start, tokens[start..at].to_vec()));
+        }
+        n += 1;
+    }
+    None
+}
+
+/// The operands of a raw instruction: (token, address token if relative).
+fn operands(raw: &[u32]) -> Vec<(u32, Option<u32>)> {
+    let mut v = Vec::new();
+    let mut i = 1;
+    while i < raw.len() {
+        let t = raw[i];
+        if t & 0x2000 != 0 && i + 1 < raw.len() {
+            v.push((t, Some(raw[i + 1])));
+            i += 2;
+        } else {
+            v.push((t, None));
+            i += 1;
+        }
+    }
+    v
+}
+
+fn register_type(t: u32) -> u8 {
+    (((t >> 28) & 7) | ((t >> 8) & 0x18)) as u8
+}
+
+/// The shader reading source operand `src` (its register, whole: no
+/// swizzle or modifier) right before instruction `k`, into the output
+/// `dst`, through a spare temp as [`tap`] does.
+fn read_before(tokens: &[u32], k: usize, src: (u32, Option<u32>), dst: u32) -> Option<Vec<u32>> {
+    use d3d9shader::{op, reg};
+    let s = d3d9shader::parse(tokens).ok()?;
+    let spare = s.instructions.iter()
+        .flat_map(|i| i.dst.iter().chain(i.src.iter()))
+        .filter(|p| p.kind == reg::TEMP)
+        .map(|p| p.index + 1)
+        .max()
+        .unwrap_or(0);
+    if spare > 31 {
+        return None;
+    }
+    let (start, _) = raw_instruction(tokens, k)?;
+    let whole = (src.0 & !0x0FFF_0000) | 0x00E4_0000;
+    let mut read = vec![if src.1.is_some() { 0x0300_0001 } else { 0x0200_0001 }, 0x800F_0000 | spare, whole];
+    read.extend(src.1);
+    let mut out = vec![tokens[0]];
+    let (mut at, mut started, mut ended) = (1, false, false);
+    for ins in &s.instructions {
+        let t = tokens[at];
+        let len = if ins.opcode == op::COMMENT { ((t >> 16) & 0x7FFF) as usize } else { ((t >> 24) & 0xF) as usize };
+        let span = &tokens[at..at + 1 + len];
+        let here = at;
+        at += 1 + len;
+        if ins.opcode == op::RET && !ended {
+            out.extend_from_slice(&[0x0200_0001, dst, 0x80E4_0000 | spare]);
+            ended = true;
+        }
+        if !matches!(ins.opcode, op::COMMENT | op::DCL | op::DEF | op::DEFI | op::DEFB) && !started {
+            out.extend_from_slice(&[0x0200_0001, 0x800F_0000 | spare, 0xA0E4_0000]);
+            started = true;
+        }
+        if here == start {
+            out.extend_from_slice(&read);
+        }
+        out.extend_from_slice(span);
+    }
+    if !ended {
+        out.extend_from_slice(&[0x0200_0001, dst, 0x80E4_0000 | spare]);
+    }
+    out.push(0x0000_FFFF);
+    Some(out)
+}
+
+/// Run a whole (possibly rewritten) shader with set `set` of `original`'s
+/// random inputs; the value of its output `dst` (oC0, or the position) on
+/// both sides.
+fn run_both(gpu: &Gpu, oracle: &mut Oracle, original: &[u32], shader: &[u32], vertex: bool, set: u32) -> Option<([f32; 4], [f32; 4])> {
+    let full = d3d9wgsl::translate_with(&d3d9shader::parse(original).ok()?, options(vertex)).ok()?;
+    let ct = d3d9wgsl::translate_with(&d3d9shader::parse(shader).ok()?, options(vertex)).ok()?;
+    let mut rng = seed(original, set);
+    if vertex {
+        let run = random_vertex_run(&mut rng, &full.interface);
+        let a = gpu.run_vertex(&ct.wgsl, &ct.interface, &run).ok()?;
+        let b = oracle.run_vertex(shader, &run).ok()?;
+        Some((a[ct.interface.outputs_vs.len()], b.iter().find(|o| o.usage == 0 && o.index == 0)?.value?))
+    } else {
+        let run = random_pixel_run(&mut rng, &full.interface);
+        Some((gpu.run(&ct.wgsl, &ct.interface, &run).ok()?[0], oracle.run_pixel(shader, &run).ok()?[0]))
+    }
+}
+
+/// Equal as floats in the masked components (+0 and -0 equal, any NaN
+/// equal to any NaN): what the sweep counts as exact.
+fn value_equal(a: [f32; 4], b: [f32; 4], mask: u8) -> bool {
+    (0..4).all(|c| mask & (1 << c) == 0 || ulps(a[c], b[c]) == 0)
+}
+
+fn bits_equal(a: [f32; 4], b: [f32; 4], mask: u8) -> bool {
+    (0..4).all(|c| mask & (1 << c) == 0 || a[c].to_bits() == b[c].to_bits() || (a[c].is_nan() && b[c].is_nan()))
+}
+
+/// Why shader `tokens` is not bit-exact: the first set whose outputs
+/// differ in bits, the first instruction whose result differs there, and
+/// that instruction run alone on the inputs it had (read from the driver's
+/// run): if alone it differs, the translation of the instruction is wrong
+/// ("instruction"); if alone it gives our in-context result, the driver's
+/// compiler computed it differently in context ("driver rewrite"); if it
+/// gives the driver's, our GPU compiler did ("wgpu rewrite").
+fn attribute(gpu: &Gpu, oracle: &mut Oracle, tokens: &[u32], vertex: bool, sets: u32) -> String {
+    use d3d9shader::{op, reg};
+    let shader = d3d9shader::parse(tokens).unwrap();
+    let Ok(t) = d3d9wgsl::translate_with(&shader, options(vertex)) else { return "untranslated".into() };
+    let output = output_token(vertex, &t.interface);
+    // the first inexact set
+    let mut inexact = None;
+    for set in 0..sets {
+        let mut rng = seed(tokens, set);
+        let compared = if vertex {
+            let run = random_vertex_run(&mut rng, &t.interface);
+            let (Ok(a), Ok(b)) = (gpu.run_vertex(&t.wgsl, &t.interface, &run), oracle.run_vertex(tokens, &run)) else { return "not run".into() };
+            vertex_outputs(&a, &b, &t.interface)
+        } else {
+            let run = random_pixel_run(&mut rng, &t.interface);
+            let (Ok(a), Ok(b)) = (gpu.run(&t.wgsl, &t.interface, &run), oracle.run_pixel(tokens, &run)) else { return "not run".into() };
+            pixel_outputs(&a, &b, &t.interface)
+        };
+        if compared.iter().any(|(a, b, m, _)| !value_equal(*a, *b, *m)) {
+            inexact = Some(set);
+            break;
+        }
+    }
+    let Some(set) = inexact else { return "exact now".into() };
+    for k in 0..tokens.len() {
+        let Some((cut, text, mask)) = tap(tokens, k, output) else {
+            if raw_instruction(tokens, k).is_none() {
+                break;
+            }
+            continue;
+        };
+        let Some((ours, theirs)) = run_both(gpu, oracle, tokens, &cut, vertex, set) else { continue };
+        if value_equal(ours, theirs, mask) {
+            continue;
+        }
+        let u = (0..4).filter(|c| mask & (1 << c) != 0).map(|c| ulps(ours[c], theirs[c])).max().unwrap_or(0);
+        let ins = shader.instructions.iter()
+            .filter(|i| !matches!(i.opcode, op::COMMENT | op::DCL | op::DEF | op::DEFI | op::DEFB)).nth(k).unwrap().clone();
+        let head = format!("set {set} instruction {k} `{text}` {u} ulp");
+        let Some((_, raw)) = raw_instruction(tokens, k) else { return format!("{head}: other") };
+        let ops = operands(&raw);
+        let arithmetic = !matches!(ins.opcode, op::TEX | op::TEXLDL | op::TEXLDD | op::DSX | op::DSY | op::TEXKILL | op::SETP | op::MOVA)
+            && ins.predicate.is_none()
+            && ops.len() >= 2
+            && ops.len() <= 4
+            && ops[1..].iter().all(|o| register_type(o.0) != reg::SAMPLER);
+        if !arithmetic {
+            return format!("{head}: not isolable ({})", text.split_whitespace().next().unwrap_or(""));
+        }
+        // the inputs as the driver had them (and whether ours agree)
+        let mut inputs = Vec::new();
+        let mut same_inputs = true;
+        for &src in &ops[1..] {
+            let Some(read) = read_before(tokens, k, src, output) else { return format!("{head}: inputs not read") };
+            let Some((a, b)) = run_both(gpu, oracle, tokens, &read, vertex, set) else { return format!("{head}: inputs not read") };
+            same_inputs &= value_equal(a, b, 0xF);
+            inputs.push(b);
+        }
+        // the instruction alone on those inputs (r0.. = c0..; result via r4)
+        let mut alone = vec![ins.opcode as u32 | (((ops.len()) as u32) << 24), 0x8000_0000 | (ops[0].0 & 0x0FFF_0000) | 4];
+        for (j, src) in ops[1..].iter().enumerate() {
+            alone.push(0x8000_0000 | (src.0 & 0x0FFF_0000) | j as u32);
+        }
+        let body = vec![
+            asm::ins(op::MOV, &[asm::dst(reg::TEMP, 4, 0xF), asm::c(5)]),
+            alone,
+            asm::ins(op::MOV, &[if vertex { asm::dst(reg::OUTPUT, 1, 0xF) } else { asm::oc0() }, asm::r(4)]),
+        ];
+        let iso = if vertex { asm::vs(&body) } else { asm::ps(&body) };
+        let mut consts = inputs.clone();
+        consts.resize(4, [0.0; 4]);
+        let parsed = d3d9shader::parse(&iso);
+        if parsed.is_err() || d3d9wgsl::translate_with(parsed.as_ref().unwrap(), options(vertex)).is_err() {
+            return format!("{head}: not isolable");
+        }
+        let (a, b) = if vertex {
+            let run = d3d9ref::VertexRun { constants: consts, ..Default::default() };
+            let t = d3d9wgsl::translate_with(&d3d9shader::parse(&iso).unwrap(), options(true)).unwrap();
+            let (Ok(a), Ok(b)) = (gpu.run_vertex(&t.wgsl, &t.interface, &run), oracle.run_vertex(&iso, &run)) else { return format!("{head}: not isolable") };
+            (a[0], b.iter().find(|o| o.register == 1).unwrap().value.unwrap())
+        } else {
+            let run = PixelRun { constants: consts, ..Default::default() };
+            let t = d3d9wgsl::translate(&d3d9shader::parse(&iso).unwrap()).unwrap();
+            let (Ok(a), Ok(b)) = (gpu.run(&t.wgsl, &t.interface, &run), oracle.run_pixel(&iso, &run)) else { return format!("{head}: not isolable") };
+            (a[0], b[0])
+        };
+        let class = if !same_inputs {
+            "inputs differ"
+        } else if !value_equal(a, b, mask) {
+            "instruction"
+        } else if value_equal(b, ours, mask) {
+            "driver rewrite"
+        } else if value_equal(b, theirs, mask) {
+            "wgpu rewrite"
+        } else {
+            "both rewrite"
+        };
+        return format!("{head}: {class}");
+    }
+    format!("set {set}: not located")
+}
+
+/// DDDA_SHADER_ATTRIBUTE=<sweep report directory>: every shader the sweep
+/// reports as close but not bit-exact, attributed by [`attribute`];
+/// written to attribution.txt there (DDDA_SHADER_LIMIT=n per package).
+#[test]
+fn attribute_inexact() {
+    let Some(dir) = std::env::var_os("DDDA_SHADER_ATTRIBUTE").map(std::path::PathBuf::from) else { return };
+    let (Some(mut oracle), Some(gpu)) = (Oracle::new(), Gpu::new()) else { return };
+    let limit: usize = std::env::var("DDDA_SHADER_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+    let only: Option<Vec<String>> = std::env::var("DDDA_SHADER_PACKAGES").ok().map(|v| v.split(',').map(String::from).collect());
+    let mut out = String::new();
+    for name in all_packages() {
+        if only.as_ref().is_some_and(|o| !o.contains(&name)) {
+            continue;
+        }
+        let Ok(report) = std::fs::read_to_string(dir.join(format!("{name}.txt"))) else { continue };
+        let sets: u32 = report.split_whitespace().skip_while(|w| *w != "sets").nth(1).and_then(|v| v.parse().ok()).unwrap_or(4);
+        let close: Vec<(bool, String, String)> = report.lines()
+            .filter_map(|l| l.strip_prefix("close "))
+            .map(|l| {
+                let w: Vec<&str> = l.split_whitespace().collect();
+                (w[0] == "vertex", w[2].trim_end_matches(':').to_string(), w[3].to_string())
+            })
+            .take(limit)
+            .collect();
+        if close.is_empty() {
+            continue;
+        }
+        let pixel: Vec<Vec<u32>> = pixel_shaders(&name);
+        let vertex: Vec<Vec<u32>> = vertex_shaders(&name);
+        for (is_vertex, id, u) in close {
+            let list = if is_vertex { &vertex } else { &pixel };
+            let Some(tokens) = list.iter().find(|t| tag(t) == id) else { continue };
+            let why = attribute(&gpu, &mut oracle, tokens, is_vertex, sets);
+            let line = format!("{name} {} {id} ({u} ulp): {why}\n", if is_vertex { "vertex" } else { "pixel" });
+            eprint!("{line}");
+            out.push_str(&line);
+            std::fs::write(dir.join("attribution.txt"), &out).unwrap();
+        }
+    }
+}
+
+/// A shader's own definitions keep their bits: def c0 = (-0, 0, -0, NaN)
+/// read back unchanged, directly and through cmp.
+#[test]
+fn defined_constants_keep_their_bits() {
+    let (Some(mut oracle), Some(gpu)) = (Oracle::new(), Gpu::new()) else {
+        eprintln!("skipped: no D3D9 device or no wgpu adapter with FLOAT32_FILTERABLE");
+        return;
+    };
+    use d3d9shader::{op, reg};
+    let def = vec![op::DEF as u32 | (5 << 24), asm::dst(reg::CONST, 6, 0xF), 0x8000_0000, 0, 0x8000_0000, 0x7FC0_0000];
+    // definitions come first
+    let with_def = |body: Vec<u32>| -> Vec<u32> { [&body[..1], &def[..], &body[1..]].concat() };
+    let direct = with_def(asm::ps(&[asm::ins(op::MOV, &[asm::oc0(), asm::c(6)])]));
+    let picked = with_def(asm::ps(&[asm::ins(op::CMP, &[asm::oc0(), asm::r(0), asm::src(reg::CONST, 6, 0x00, 0), asm::src(reg::CONST, 6, 0x55, 0)])]));
+    for (name, tokens) in [("mov", direct), ("cmp", picked)] {
+        for x in [1.0f32, -1.0] {
+            let (ours, theirs) = both(&mut oracle, &gpu, &tokens, &[[x; 4]]);
+            eprintln!("{name} {x}: ours {:08x?} / D3D9 {:08x?}", ours.map(f32::to_bits), theirs.map(f32::to_bits));
+            assert!(bits_equal(ours, theirs, 0xF), "{name}");
+        }
+    }
 }
