@@ -32,13 +32,37 @@ fn method_1_void(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 4);
 }
 
+/// ISteamApps::GetCurrentGameLanguage (slot 4, thiscall, no arguments):
+/// "english". The game picks its text language from this.
+fn current_game_language(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = crate::win32::persistent(m, "steam language", b"english\0");
+    ret(m, cpu, 0);
+}
+
+/// ISteamUtils::GetAppID (slot 9, thiscall, no arguments): Dragon's
+/// Dogma: Dark Arisen's Steam app id. (ISteamUtils' slot order is pinned
+/// by WinMain calling SetWarningMessageHook at slot 16, offset 0x40.)
+pub const APP_ID: u32 = 367_500;
+fn app_id(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = APP_ID;
+    ret(m, cpu, 0);
+}
+
+/// ISteamApps::GetInstalledDepots (slot 17, thiscall: appId, depots*,
+/// max) -> count. The runtime knows of no installed depots: 0 (start-up
+/// then takes its "depot 367505 not installed" path, 0x00DF3154).
+fn installed_depots(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0;
+    ret(m, cpu, 12);
+}
+
 const SLOTS: u32 = 64;
 pub const INTERFACES: &[Spec] = &[
-    Spec { name: "ISteamUtils", slots: SLOTS, methods: &[(16, method_1_void)] },
+    Spec { name: "ISteamUtils", slots: SLOTS, methods: &[(9, app_id), (16, method_1_void)] },
     Spec { name: "ISteamUser", slots: SLOTS, methods: &[] },
     Spec { name: "ISteamUserStats", slots: SLOTS, methods: &[] },
     Spec { name: "ISteamFriends", slots: SLOTS, methods: &[] },
-    Spec { name: "ISteamApps", slots: SLOTS, methods: &[] },
+    Spec { name: "ISteamApps", slots: SLOTS, methods: &[(4, current_game_language), (17, installed_depots)] },
     Spec { name: "ISteamRemoteStorage", slots: SLOTS, methods: &[] },
     Spec { name: "ISteamScreenshots", slots: SLOTS, methods: &[] },
 ];

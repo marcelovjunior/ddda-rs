@@ -37,7 +37,7 @@ fn write_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
 
 /// A string the runtime hands the guest once and keeps (GetCommandLineA,
 /// GetEnvironmentStringsW): allocated on the guest heap on first use.
-fn persistent(m: &mut dyn Mem, key: &'static str, bytes: &[u8]) -> u32 {
+pub(crate) fn persistent(m: &mut dyn Mem, key: &'static str, bytes: &[u8]) -> u32 {
     if let Some(p) = with_state(|s| s.strings.get(key).copied()) {
         return p;
     }
@@ -475,7 +475,89 @@ fn read_cstr(m: &dyn Mem, p: u32) -> String {
     (0..1024).map(|k| m.u8(p.wrapping_add(k))).take_while(|&b| b != 0).map(|b| b as char).collect()
 }
 
+/// ole32 CoInitialize(reserved): S_OK (the runtime's COM is the interface
+/// objects it creates itself; there is no apartment to set up).
+pub fn co_initialize(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0;
+    ret(m, cpu, 4);
+}
+pub fn co_uninitialize(m: &mut dyn Mem, cpu: &mut Cpu) {
+    ret(m, cpu, 0);
+}
+/// ole32 CoTaskMemAlloc(size) / CoTaskMemFree(block): the guest heap.
+pub fn co_task_mem_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let size = arg(m, cpu, 0);
+    cpu.eax = with_state(|s| s.heap.alloc(size)).unwrap_or(0);
+    ret(m, cpu, 4);
+}
+pub fn co_task_mem_free(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let block = arg(m, cpu, 0);
+    if block != 0 {
+        with_state(|s| s.heap.free(block)).unwrap_or_else(|b| panic!("CoTaskMemFree of {b:#x}, not a live block"));
+    }
+    ret(m, cpu, 4);
+}
+
+// --- USER32: a headless desktop ---------------------------------------------
+// Until the presentation layer exists, windows are records the runtime
+// keeps; metrics are those of Windows 10 at 96 DPI on a 1920x1080 display.
+
+const WS_THICKFRAME: u32 = 0x0004_0000;
+const WS_CAPTION: u32 = 0x00C0_0000;
+const WS_BORDER: u32 = 0x0080_0000;
+pub const SCREEN_W: u32 = 1920;
+pub const SCREEN_H: u32 = 1080;
+
+/// AdjustWindowRect(RECT*, style, menu): grows the client rectangle by the
+/// frame (3 px fixed, 4 px sizing frame), the caption (23 px) and a menu
+/// bar (20 px) if asked. TRUE.
+pub fn adjust_window_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (r, style, menu) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
+    let frame: i32 = if style & WS_THICKFRAME != 0 { 4 } else if style & (WS_BORDER | WS_CAPTION) != 0 { 3 } else { 0 };
+    let caption: i32 = if style & WS_CAPTION == WS_CAPTION { 23 } else { 0 };
+    let menu_bar: i32 = if menu != 0 { 20 } else { 0 };
+    let get = |m: &dyn Mem, k: u32| m.u32(r + 4 * k) as i32;
+    let (l, t, rt, b) = (get(m, 0), get(m, 1), get(m, 2), get(m, 3));
+    m.set_u32(r, (l - frame) as u32);
+    m.set_u32(r + 4, (t - frame - caption - menu_bar) as u32);
+    m.set_u32(r + 8, (rt + frame) as u32);
+    m.set_u32(r + 12, (b + frame) as u32);
+    cpu.eax = 1;
+    ret(m, cpu, 12);
+}
+
+/// SystemParametersInfoA(action, uparam, pvparam, winini): settings changes
+/// are accepted and not applied (the host desktop is not the guest's); a
+/// query fills nothing it does not know and still succeeds. TRUE.
+pub fn system_parameters_info_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 1;
+    ret(m, cpu, 16);
+}
+
+/// GetSystemMetrics(index): the screen size; 0 for anything else.
+pub fn get_system_metrics(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = match arg(m, cpu, 0) {
+        0 | 16 | 78 => SCREEN_W,                 // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
+        1 | 79 => SCREEN_H,                      // SM_CYSCREEN, SM_CYVIRTUALSCREEN
+        17 => SCREEN_H - 23,                      // SM_CYFULLSCREEN (minus caption)
+        4 => 23,                                  // SM_CYCAPTION
+        5 | 6 => 1,                               // SM_CXBORDER, SM_CYBORDER
+        7 | 8 => 3,                               // SM_CXFIXEDFRAME, SM_CYFIXEDFRAME
+        32 | 33 => 4,                             // SM_CXSIZEFRAME, SM_CYSIZEFRAME
+        80 => 1,                                  // SM_CMONITORS
+        _ => 0,
+    };
+    ret(m, cpu, 4);
+}
+
 pub const APIS: &[(&str, &str, Api)] = &[
+    ("USER32.dll", "AdjustWindowRect", adjust_window_rect),
+    ("USER32.dll", "SystemParametersInfoA", system_parameters_info_a),
+    ("USER32.dll", "GetSystemMetrics", get_system_metrics),
+    ("ole32.dll", "CoInitialize", co_initialize),
+    ("ole32.dll", "CoUninitialize", co_uninitialize),
+    ("ole32.dll", "CoTaskMemAlloc", co_task_mem_alloc),
+    ("ole32.dll", "CoTaskMemFree", co_task_mem_free),
     ("KERNEL32.dll", "LoadLibraryA", load_library_a),
     ("KERNEL32.dll", "LoadLibraryW", load_library_a),
     ("KERNEL32.dll", "FreeLibrary", free_library),

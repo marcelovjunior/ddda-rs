@@ -29,7 +29,8 @@ pub enum Outcome {
     Returned(Cpu),
     Unbound(Unbound),
     Exit(u32),
-    Fault(String),
+    /// message, likely return addresses, registers at the fault
+    Fault(String, Vec<u32>, [u32; 8]),
 }
 
 impl Session {
@@ -77,12 +78,48 @@ impl Session {
                 } else if let Some(Exit(code)) = e.downcast_ref::<Exit>() {
                     Outcome::Exit(*code)
                 } else {
-                    Outcome::Fault(e.downcast_ref::<String>().cloned()
+                    let msg = e.downcast_ref::<String>().cloned()
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "panic".into()))
+                        .unwrap_or_else(|| "panic".into());
+                    let regs = [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi];
+                    Outcome::Fault(msg, self.backtrace(cpu.esp), regs)
                 }
             }
         }
+    }
+
+    /// Likely return addresses on the guest stack above `esp`: words that
+    /// point into .text right after a `call` instruction (E8 rel32, or
+    /// FF /2 through a register or memory operand). Lifted code keeps the
+    /// registers in `Cpu`, so after a fault `esp` is the faulting frame's.
+    pub fn backtrace(&self, esp: u32) -> Vec<u32> {
+        const TEXT: std::ops::Range<u32> = 0x0040_1000..0x0139_D000;
+        let mut out = Vec::new();
+        for k in 0..0x800u32 {
+            let a = esp.wrapping_add(4 * k);
+            if self.mem.check(a, 4, false).is_err() {
+                break;
+            }
+            let v = self.mem.u32(a);
+            if !TEXT.contains(&v) {
+                continue;
+            }
+            let is_call = |back: u32, ok: &dyn Fn(&[u8]) -> bool| {
+                self.mem.read(v - back, back).map(|b| ok(&b)).unwrap_or(false)
+            };
+            let call = is_call(5, &|b: &[u8]| b[0] == 0xE8)
+                || is_call(2, &|b: &[u8]| b[0] == 0xFF && (b[1] >> 3) & 7 == 2)
+                || is_call(3, &|b: &[u8]| b[0] == 0xFF && (b[1] >> 3) & 7 == 2)
+                || is_call(6, &|b: &[u8]| b[0] == 0xFF && (b[1] >> 3) & 7 == 2)
+                || is_call(7, &|b: &[u8]| b[0] == 0xFF && (b[1] >> 3) & 7 == 2);
+            if call {
+                out.push(v);
+                if out.len() == 12 {
+                    break;
+                }
+            }
+        }
+        out
     }
 
     /// The name of an import token, if `addr` is one.
@@ -97,7 +134,19 @@ impl std::fmt::Display for Outcome {
             Outcome::Returned(cpu) => write!(f, "returned eax={:#x}", cpu.eax),
             Outcome::Unbound(u) => write!(f, "stopped: {u}"),
             Outcome::Exit(c) => write!(f, "ExitProcess({c:#x})"),
-            Outcome::Fault(s) => write!(f, "stopped: {s}"),
+            Outcome::Fault(s, bt, r) => {
+                write!(f, "stopped: {s}
+  eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x}",
+                       r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7])?;
+                if !bt.is_empty() {
+                    write!(f, "
+  guest return addresses on the stack (innermost first):")?;
+                    for r in bt {
+                        write!(f, " {r:#010x}")?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
