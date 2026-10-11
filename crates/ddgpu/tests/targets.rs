@@ -1,0 +1,294 @@
+//! Render targets of every format the renderer uses (brief L29 census:
+//! A8R8G8B8, A16B16G16R16F, A2B10G10R10, R32F, G16R16, A32B32G32R32F),
+//! several at once (MRT), and D24S8 depth, compared with the host's D3D9
+//! driver as the bits each target holds. Skips without D3D9 or an adapter.
+use d3d9cmd::{ClearCall, Constants, DrawCall, GraphicsBackend, Indices, Target, Upload, Vertices};
+
+/// vs_3_0: o0 = v0 (position only)
+fn vs() -> Vec<u32> {
+    vec![
+        0xFFFE_0300,
+        0x0200_001F, 0x8000_0000, 0x900F_0000, // dcl_position v0
+        0x0200_001F, 0x8000_0000, 0xE00F_0000, // dcl_position o0
+        0x0200_0001, 0xE00F_0000, 0x90E4_0000, // mov o0, v0
+        0x0000_FFFF,
+    ]
+}
+
+/// ps_3_0 writing oC_k = c_k for k < `outputs`
+fn ps(outputs: u32) -> Vec<u32> {
+    let mut t = vec![0xFFFF_0300];
+    for k in 0..outputs {
+        t.extend_from_slice(&[0x0200_0001, 0x800F_0800 | k, 0xA0E4_0000 | k]);
+    }
+    t.push(0x0000_FFFF);
+    t
+}
+
+fn target(surface: u32, format: u32) -> Target {
+    Target { surface, format, width: 4, height: 4, texture: None, level: 0 }
+}
+
+fn depth_target() -> Target {
+    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0 }
+}
+
+/// A triangle over the whole 4x4 target at depth `z` (float4 positions).
+fn triangle(z: f32) -> Vec<u8> {
+    [[-1.0f32, -1.0, z, 1.0], [-1.0, 3.0, z, 1.0], [3.0, -1.0, z, 1.0]].iter().flatten().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// The render states every draw sets (the D3D9 device keeps state between
+/// draws, so each draw names all it depends on), with `extra` on top.
+fn states(extra: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = vec![
+        (7, 0), (14, 0), (23, 4), (15, 0), (22, 1), (27, 0), (19, 2), (20, 1), (171, 1), (206, 0), (207, 2), (208, 1),
+        (209, 1), (193, 0xFFFF_FFFF), (168, 0xF), (190, 0xF), (191, 0xF), (192, 0xF), (174, 0), (194, 0), (195, 0), (175, 0),
+        (52, 0), (185, 0), (8, 3),
+    ];
+    for &(k, val) in extra {
+        v.retain(|s| s.0 != k);
+        v.push((k, val));
+    }
+    v.sort();
+    v
+}
+
+/// A draw of constants `c` (one per output) into `targets`.
+fn draw(c: &[[f32; 4]], targets: [Option<Target>; 4], z: f32, extra: &[(u32, u32)]) -> DrawCall {
+    let mut ps_constants = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    for (k, v) in c.iter().enumerate() {
+        ps_constants.f[k] = v.map(f32::to_bits);
+    }
+    DrawCall {
+        primitive: 4,
+        primitives: 1,
+        start: 0,
+        base_vertex: 0,
+        min_index: 0,
+        vertex_count: 3,
+        vertices: Vertices::Inline { bytes: triangle(z), stride: 16 },
+        indices: Indices::None,
+        vertex_shader: Some(vs()),
+        pixel_shader: Some(ps(c.len() as u32)),
+        declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]],
+        fvf: 0,
+        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
+        ps_constants,
+        textures: vec![],
+        render_states: states(extra),
+        viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
+        scissor: [0, 0, 4, 4],
+        targets,
+        depth: None,
+    }
+}
+
+fn clear_of(targets: &[Target], colour: u32) -> ClearCall {
+    let mut t: [Option<Target>; 4] = [None, None, None, None];
+    for (k, x) in targets.iter().enumerate() {
+        t[k] = Some(x.clone());
+    }
+    ClearCall { rects: vec![], flags: 1, colour, z: 1.0, stencil: 0, targets: t, depth: None, viewport: [0, 0, 4, 4, 0, 0] }
+}
+
+/// Draw on the wgpu backend and read every target of `reads` back.
+fn ours(uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+    let mut gpu = ddgpu::WgpuBackend::headless().ok_or("no adapter")?;
+    for u in uploads {
+        gpu.upload(u.clone());
+    }
+    gpu.clear(clear);
+    for d in draws {
+        gpu.draw(d);
+    }
+    let out: Option<Vec<Vec<u8>>> = reads.iter().map(|t| gpu.read_back(t)).collect();
+    if !gpu.errors.is_empty() {
+        return Err(format!("{:?}", gpu.errors));
+    }
+    out.ok_or_else(|| "read back".into())
+}
+
+fn available() -> Option<d3d9ref::Oracle> {
+    let d3d9 = d3d9ref::Oracle::new()?;
+    ddgpu::WgpuBackend::headless()?;
+    Some(d3d9)
+}
+
+/// A pixel's channels as numbers for messages.
+fn decode(format: u32, px: &[u8]) -> Vec<f64> {
+    let u16le = |k: usize| u16::from_le_bytes([px[2 * k], px[2 * k + 1]]);
+    let f32le = |k: usize| f32::from_le_bytes(px[4 * k..4 * k + 4].try_into().unwrap()) as f64;
+    let half = |h: u16| {
+        let (s, e, m) = ((h >> 15) as i32, ((h >> 10) & 31) as i32, (h & 1023) as f64);
+        let v = if e == 0 { m * 2f64.powi(-24) } else if e == 31 { if m == 0.0 { f64::INFINITY } else { f64::NAN } } else { (1.0 + m / 1024.0) * 2f64.powi(e - 15) };
+        if s == 1 { -v } else { v }
+    };
+    match format {
+        21 | 22 => vec![px[2] as f64, px[1] as f64, px[0] as f64, px[3] as f64],
+        113 => (0..4).map(|k| half(u16le(k))).collect(),
+        111 => vec![half(u16le(0))],
+        112 => (0..2).map(|k| half(u16le(k))).collect(),
+        114 => vec![f32le(0)],
+        115 => (0..2).map(f32le).collect(),
+        116 => (0..4).map(f32le).collect(),
+        34 => (0..2).map(|k| u16le(k) as f64).collect(),
+        36 => (0..4).map(|k| u16le(k) as f64).collect(),
+        31 => {
+            let v = u32::from_le_bytes(px[..4].try_into().unwrap());
+            vec![(v & 1023) as f64, ((v >> 10) & 1023) as f64, ((v >> 20) & 1023) as f64, (v >> 30) as f64]
+        }
+        _ => px.iter().map(|&b| b as f64).collect(),
+    }
+}
+
+/// The formats of the census plus the other float targets the backend maps.
+const FORMATS: [u32; 10] = [21, 113, 31, 114, 34, 116, 111, 112, 115, 36];
+
+/// xorshift32
+struct Rng(u32);
+impl Rng {
+    fn next(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        self.0
+    }
+    fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+        v[(self.next() as usize) % v.len()]
+    }
+    fn value(&mut self) -> f32 {
+        self.pick(&[0.0f32, 1.0, 0.5, 0.25, 0.1, 0.3333, 0.75, 1.5, 2.0, 65504.0, 100000.0, -0.5, -1.0, -3.0, 1e-5, 6e-8, 0.999, 0.5001])
+    }
+}
+
+/// Every target format, cleared then drawn with random values (in and out
+/// of [0, 1], negative, beyond half range, denormal), blending (factors,
+/// ops, separate alpha), write masks and sRGB writes, compared as bits.
+/// TARGETS_FUZZ sets the number of cases.
+#[test]
+fn target_formats_match_the_d3d9_driver() {
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let cases: usize = std::env::var("TARGETS_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let mut rng = Rng(0x7A26_0029);
+    let blends = [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15];
+    let mut failures = Vec::new();
+    let mut refused = std::collections::BTreeSet::new();
+    let mut compared = 0;
+    for case in 0..cases {
+        let format = FORMATS[case % FORMATS.len()];
+        let t = target(0x100, format);
+        let c = [[rng.value(), rng.value(), rng.value(), rng.value()]];
+        let blend = rng.next() % 2;
+        let extra = vec![
+            (27, blend), (19, rng.pick(&blends)), (20, rng.pick(&blends)), (171, rng.pick(&[1u32, 2, 3, 4, 5])),
+            (206, rng.next() % 2), (207, rng.pick(&blends)), (208, rng.pick(&blends)), (209, rng.pick(&[1u32, 2, 3, 4, 5])),
+            (193, rng.next()), (168, if rng.next() % 4 == 0 { rng.next() % 16 } else { 0xF }), (194, if rng.next() % 4 == 0 { 1 } else { 0 }),
+        ];
+        let d = draw(&c, [Some(t.clone()), None, None, None], 0.5, &extra);
+        let clear = clear_of(&[t.clone()], rng.next());
+        let theirs = match d3d9.render_targets(&[], Some(&clear), &[d.clone()], &[t.clone()]) {
+            Ok(r) => r,
+            Err(e) if e.contains("CreateRenderTarget") || e.contains("CreateOffscreenPlainSurface") => {
+                refused.insert(format);
+                continue;
+            }
+            Err(e) => panic!("D3D9: {e}"),
+        };
+        compared += 1;
+        match ours(&[], &clear, &[d], &[t.clone()]) {
+            Ok(o) if o == theirs => {}
+            Ok(o) => failures.push(format!("case {case} format {format}: ours {:?} D3D9 {:?}; constant {:?} clear {:#010x} states {:?}",
+                                           decode(format, &o[0][..16.min(o[0].len())]), decode(format, &theirs[0][..16.min(theirs[0].len())]), c[0], clear.colour, extra)),
+            Err(e) => failures.push(format!("case {case} format {format}: backend error {e}; states {extra:?}")),
+        }
+    }
+    eprintln!("{} of {compared} compared cases differ; formats the driver refuses as targets: {refused:?}", failures.len());
+    for f in failures.iter().take(30) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty());
+}
+
+/// Two to four targets at once (MRT), each written from its own output,
+/// with per-target write masks and blending; mixed formats (the device has
+/// D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS).
+#[test]
+fn mrt_draws_match_the_d3d9_driver() {
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let mut rng = Rng(0x0000_4D52);
+    let sets: [&[u32]; 5] = [&[21, 21], &[21, 21, 21, 21], &[113, 113, 21], &[21, 114, 31, 113], &[113, 34, 114]];
+    let mut failures = Vec::new();
+    for case in 0..40 {
+        let formats = sets[case % sets.len()];
+        let ts: Vec<Target> = formats.iter().enumerate().map(|(k, &f)| target(0x100 + k as u32, f)).collect();
+        let mut targets: [Option<Target>; 4] = [None, None, None, None];
+        for (k, t) in ts.iter().enumerate() {
+            targets[k] = Some(t.clone());
+        }
+        let c: Vec<[f32; 4]> = (0..ts.len()).map(|_| [rng.value(), rng.value(), rng.value(), rng.value()]).collect();
+        let extra = vec![
+            (27, rng.next() % 2), (19, rng.pick(&[2u32, 5, 9])), (20, rng.pick(&[1u32, 2, 6])), (171, rng.pick(&[1u32, 4])),
+            (168, rng.next() % 16), (190, rng.next() % 16), (191, rng.next() % 16), (192, rng.next() % 16),
+        ];
+        let d = draw(&c, targets, 0.5, &extra);
+        let clear = clear_of(&ts, rng.next());
+        let theirs = d3d9.render_targets(&[], Some(&clear), &[d.clone()], &ts).expect("D3D9");
+        match ours(&[], &clear, &[d], &ts) {
+            Ok(o) => {
+                for (k, (a, b)) in o.iter().zip(&theirs).enumerate() {
+                    if a != b {
+                        failures.push(format!("case {case} target {k} ({}): ours {:?} D3D9 {:?}; constants {c:?} states {extra:?}",
+                                              formats[k], decode(formats[k], &a[..16.min(a.len())]), decode(formats[k], &b[..16.min(b.len())])));
+                    }
+                }
+            }
+            Err(e) => failures.push(format!("case {case}: backend error {e}")),
+        }
+    }
+    for f in failures.iter().take(20) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty(), "{} MRT targets differ", failures.len());
+}
+
+/// D24S8 depth precision: a draw at z1 writes depth, a second at
+/// z1 + delta tests against it (LESS, EQUAL, LESSEQUAL, GREATER); deltas
+/// around the 24-bit step 2^-24 show how depth values are quantised.
+#[test]
+fn depth_precision_matches_the_d3d9_driver() {
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let rt = target(0x100, 21);
+    let mut failures = Vec::new();
+    for z1 in [0.5f32, 0.25, 0.9, 0.1, 0.33333334] {
+        for delta_steps in [0.0f32, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, -0.5, -1.0] {
+            for func in [2u32, 3, 4, 5] {
+                let z2 = z1 + delta_steps * 2f32.powi(-24);
+                let mut first = draw(&[[1.0, 0.0, 0.0, 1.0]], [Some(rt.clone()), None, None, None], z1, &[(7, 1), (14, 1), (23, 8)]);
+                first.depth = Some(depth_target());
+                let mut second = draw(&[[0.0, 1.0, 0.0, 1.0]], [Some(rt.clone()), None, None, None], z2, &[(7, 1), (14, 0), (23, func)]);
+                second.depth = Some(depth_target());
+                let clear = ClearCall { flags: 7, z: 1.0, depth: Some(depth_target()), ..clear_of(&[rt.clone()], 0xFF00_00FF) };
+                let theirs = d3d9.render_targets(&[], Some(&clear), &[first.clone(), second.clone()], &[rt.clone()]).expect("D3D9");
+                match ours(&[], &clear, &[first, second], &[rt.clone()]) {
+                    Ok(o) if o == theirs => {}
+                    Ok(o) => failures.push(format!("z1 {z1} delta {delta_steps}x2^-24 func {func}: ours {:?} D3D9 {:?}", &o[0][..4], &theirs[0][..4])),
+                    Err(e) => failures.push(format!("backend error {e}")),
+                }
+            }
+        }
+    }
+    for f in failures.iter().take(30) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty(), "{} depth cases differ", failures.len());
+}
