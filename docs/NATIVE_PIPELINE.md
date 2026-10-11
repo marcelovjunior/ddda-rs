@@ -420,6 +420,14 @@ that contain mocked calls, and cases of an ext function that mocked a
 target which is now lifted. `relift` drops functions that no longer lift
 under a stricter lifter, and then their callers.
 
+**Memory.** The generated code is about 100 MB; one rustc process for the
+`ddnative` library needs about 11 GB. The crate sets `[lib] test = false`
+(its unit tests are in `tests/units.rs`) so `cargo test` compiles the
+library once; with a lib unit-test target it compiled it twice in parallel
+and ran a 32 GB machine out of memory. Run the gate with
+`CARGO_BUILD_JOBS=2` while anything else is running, and never two builds
+(or a build and a vector run with many workers) at once.
+
 **Commands.** `PY lift.py scan` (lift everything it can; prints each
 round and the rejection reasons), `PY lift.py vectors` (parallel;
 `LIFT_WORKERS=4` to leave the PC usable), `python lift.py gen`, then

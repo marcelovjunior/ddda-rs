@@ -103,24 +103,23 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off (2026-10-11, commit 763404d; the gate
+With the platform layer split off (2026-10-11, commit 776ae0c; the gate
 prints the current numbers after every run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
 | platform (Rust replaces) | 12,735 | 25.2% | 5.2% |
-| verified (1:1 + differential test) | 26,432 | 52.4% | 29.5% |
-| translated (cited, not verified) | 879 | 1.7% | 6.9% |
-| documented only | 328 | 0.6% | 1.9% |
-| untouched | 10,104 | 20.0% | 56.5% |
+| verified (1:1 + differential test) | 26,844 | 53.2% | 36.7% |
+| translated (cited, not verified) | 844 | 1.7% | 6.1% |
+| documented only | 318 | 0.6% | |
+| untouched | 9,737 | 19.3% | 50.4% |
 
 Nearly all verified functions come from the lifter (`research/native/lift.py`,
-docs/NATIVE_PIPELINE.md "The lifter"): 26,421 lifted, 16,000-odd of them in
-ext mode (calls to untranslated code mocked and replayed). Its scan lifts
-30,046 of the 36,395 non-platform functions up to 2,000 bytes (83%); the
-rest lack vectors or hit unsupported instructions (x87-return 1,210,
-"disassembly" 838, indirect 776, "falls" 699, ...). By bytes the picture
-is different: the 1,214 non-platform functions over 2,000 bytes hold 39%
-of the game code and are brief L02.
+docs/NATIVE_PIPELINE.md "The lifter"): 26,834 lifted, about 17,000 of them
+in ext mode (calls to untranslated code mocked and replayed). The scan has
+no size bounds; it lifts 30,527 of the 37,728 non-platform functions (81%);
+the rest lack vectors or hit unsupported code: "disassembly" 1,025,
+indirect 860, "falls" 736, x87-return 717, lahf 486, fild 470, sbb 389, ...
+(x87 arithmetic is brief L05).
 
 The game to rebuild is about **37,970 functions** (14.3 MB of code).
