@@ -45,9 +45,9 @@ class Unsupported(Exception):
 
 
 SAVE = ("*cpu = Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
-        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st };")
+        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st, df: cpu.df };")
 LOAD = ("Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
-        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st } = std::mem::take(cpu);")
+        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st, df: _ } = std::mem::take(cpu);")
 CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})\(")
 
 
@@ -485,6 +485,18 @@ def lift(addr, size, callable=frozenset(), ext=False):
             raise Unsupported(f"xmm {n}")
         return n
 
+    def vector(i, op, width=None):
+        if op.type == X86_OP_REG:
+            return xmm(i, op)
+        if op.type == X86_OP_IMM:
+            return f"[{op.imm & 0xffffffff}u32, 0, 0, 0]"
+        width = op.size if width is None else width
+        if width not in (4, 8, 16):
+            raise Unsupported("SSE memory width")
+        a = mem_addr(i, op)
+        values = [f"m.u32(a.wrapping_add({k * 4}))" if k * 4 < width else "0" for k in range(4)]
+        return f"{{ let a = {a}; [{', '.join(values)}] }}"
+
     def target(t):
         """Rust path of a call target: a platform model, a lifted function,
         or (ext) the untranslated-code handler."""
@@ -517,7 +529,78 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 break
             bits = ops[0].size * 8 if ops else 32
             mask = "u32::MAX" if bits == 32 else f"0x{(1 << bits) - 1:X}"
-            if mn == "mov":
+            if mn in ("sbb", "adc"):
+                body.append(f"{{ let (a, b) = ({load(i, ops[0])}, {load(i, ops[1])}); "
+                            f"let r = fl.alu_carry(a, b, {bits}, {str(mn == 'sbb').lower()}); {store(i, ops[0], 'r')} }}")
+            elif mn in ("mul", "imul") and len(ops) == 1:
+                if bits not in (8, 16, 32):
+                    raise Unsupported("multiply width")
+                body.append(f"{{ let b = {load(i, ops[0])}; let (lo, hi) = fl.multiply(eax, b, {bits}, {str(mn == 'imul').lower()});")
+                body.append(set_reg("ax", "lo | (hi << 8)") if bits == 8 else
+                            set_reg("ax" if bits == 16 else "eax", "lo") + set_reg("dx" if bits == 16 else "edx", "hi"))
+                body.append("}")
+            elif mn in ("div", "idiv"):
+                if bits not in (8, 16, 32):
+                    raise Unsupported("divide width")
+                body.append(f"{{ let d = {load(i, ops[0])}; let (q, r) = x86::divide(eax, {'eax >> 8' if bits == 8 else 'edx'}, d, {bits}, {str(mn == 'idiv').lower()}).expect(\"x86 divide error\");")
+                body.append(set_reg("ax", "q | (r << 8)") if bits == 8 else
+                            set_reg("ax" if bits == 16 else "eax", "q") + set_reg("dx" if bits == 16 else "edx", "r"))
+                body.append("fl = Flags::partial(0, 0); }")
+            elif mn in ("rol", "ror", "shld", "shrd"):
+                right = str(mn in ("ror", "shrd")).lower()
+                expression = (f"fl.rotate(a, n, {bits}, {right})" if len(ops) == 2 else
+                              f"fl.double_shift(a, b, n, {bits}, {right})")
+                body.append(f"{{ let a = {load(i, ops[0])}; let n = {load(i, ops[-1])}; "
+                            + (f"let b = {load(i, ops[1])}; " if len(ops) == 3 else "")
+                            + f"let r = {expression}; {store(i, ops[0], 'r')} }}")
+            elif mn in ("bsf", "bsr"):
+                body.append(f"{{ let v = {load(i, ops[1])}; let r = fl.bit_scan(v, {bits}, {str(mn == 'bsr').lower()}); {store(i, ops[0], 'r')} }}")
+            elif mn in ("bt", "bts", "btr", "btc"):
+                if bits not in (16, 32):
+                    raise Unsupported("bit-test width")
+                change = {"bt":0,"bts":1,"btr":2,"btc":3}[mn]
+                body.append(f"{{ let index = {load(i, ops[1])};")
+                if ops[0].type == X86_OP_MEM:
+                    signed_index = "index as i16 as i32" if bits == 16 else "index as i32"
+                    adjustment = (f".wrapping_add((({signed_index} >> {4 if bits == 16 else 5}).wrapping_mul({bits//8})) as u32)"
+                                  if ops[1].type == X86_OP_REG else "")
+                    # Register indices address a signed bit string; immediates
+                    # use only the low log2(width) bits within the operand.
+                    body.append(f"let a = {mem_addr(i, ops[0])}{adjustment}; let v = m.u{bits}(a) as u32; let r = fl.bit_test(v, index, {bits}, {change});")
+                    if change:
+                        body.append(f"m.set_u{bits}(a, r as u{bits});")
+                else:
+                    body.append(f"let v = {load(i, ops[0])}; let r = fl.bit_test(v, index, {bits}, {change});")
+                    if change:
+                        body.append(store(i, ops[0], "r"))
+                body.append("}")
+            elif mn == "xchg":
+                body.append(f"{{ let (a, b) = ({load(i, ops[0])}, {load(i, ops[1])});")
+                if ops[1].type == X86_OP_MEM:
+                    body.append(store(i, ops[1], "a") + store(i, ops[0], "b"))
+                else:
+                    body.append(store(i, ops[0], "b") + store(i, ops[1], "a"))
+                body.append("}")
+            elif mn.startswith("cmov"):
+                # CMOV reads its memory source even if the condition is false.
+                body.append(f"{{ let v = {load(i, ops[1])}; if fl.cond(\"{mn[4:]}\") {{ {store(i, ops[0], 'v')} }} }}")
+            elif mn in ("cwde", "cbw", "cwd"):
+                body.append({"cwde": set_reg("eax", "eax as i16 as i32 as u32"),
+                             "cbw": set_reg("ax", "eax as i8 as i32 as u32"),
+                             "cwd": set_reg("dx", "if eax & 0x8000 != 0 { 0xffff } else { 0 }")}[mn])
+            elif mn in ("cld", "std"):
+                body.append(f"cpu.df = {str(mn == 'std').lower()};")
+            elif (mn.split()[-1] in ("movsb", "movsw", "movsd", "stosb", "stosw", "stosd")
+                  and not any(o.type == X86_OP_REG and i.reg_name(o.reg) in XMM for o in ops)):
+                if i.addr_size != 4 or any(o.type == X86_OP_MEM and o.mem.segment and i.reg_name(o.mem.segment) not in ("es", "ds") for o in ops):
+                    raise Unsupported("string address/segment override")
+                op = mn.split()[-1]
+                if mn not in (op, "rep " + op):
+                    raise Unsupported("string repeat prefix")
+                body.append(f"x86::string(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()});")
+            elif mn.startswith("prefetch"):
+                pass  # an architectural hint, not a demand memory read
+            elif mn == "mov":
                 body.append(store(i, ops[0], load(i, ops[1])))
             elif mn in ("movzx", "movsx"):
                 v = load(i, ops[1])
@@ -561,10 +644,13 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn == "imul" and len(ops) in (2, 3):
                 a = load(i, ops[1]) if len(ops) == 3 else load(i, ops[0])
                 c = load(i, ops[2]) if len(ops) == 3 else load(i, ops[1])
-                if bits != 32:
+                if bits == 32:
+                    body.append(f"{{ let (a, c) = ({a}, {c}); let r = (a as i32).wrapping_mul(c as i32) as u32; "
+                                f"fl = Flags::new(x86::IMUL, a, c, r, 32); {store(i, ops[0], 'r')} }}")
+                elif bits == 16:
+                    body.append(f"{{ let (a, c) = ({a}, {c}); let (r, _) = fl.multiply(a, c, 16, true); {store(i, ops[0], 'r')} }}")
+                else:
                     raise Unsupported("imul width")
-                body.append(f"{{ let (a, c) = ({a}, {c}); let r = (a as i32).wrapping_mul(c as i32) as u32; "
-                            f"fl = Flags::new(x86::IMUL, a, c, r, 32); {store(i, ops[0], 'r')} }}")
             elif mn == "cdq":
                 body.append("edx = if (eax as i32) < 0 { u32::MAX } else { 0 };")
             elif mn.startswith("set"):
@@ -637,6 +723,65 @@ def lift(addr, size, callable=frozenset(), ext=False):
                             f"{SAVE} {target(t)}(m, cpu); {LOAD}")
             elif mn == "nop":
                 pass
+            elif mn == "movd":
+                if ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) in XMM:
+                    body.append(f"{xmm(i, ops[0])} = [{load(i, ops[1])}, 0, 0, 0];")
+                else:
+                    body.append(store(i, ops[0], f"{xmm(i, ops[1])}[0]"))
+            elif mn == "movsd":
+                if ops[0].type == X86_OP_REG:
+                    d = xmm(i, ops[0])
+                    body.append(f"{{ let s = {vector(i, ops[1])}; {d} = [s[0], s[1], "
+                                + (f"{d}[2], {d}[3]" if ops[1].type == X86_OP_REG else "0, 0") + "]; }")
+                else:
+                    d, s = mem_addr(i, ops[0]), xmm(i, ops[1])
+                    body.append(f"{{ let a = {d}; m.set_u32(a, {s}[0]); m.set_u32(a.wrapping_add(4), {s}[1]); }}")
+            elif mn in ("movhlps", "movlhps"):
+                d, s = xmm(i, ops[0]), xmm(i, ops[1])
+                body.append(f"{d} = [{s}[2], {s}[3], {d}[2], {d}[3]];" if mn == "movhlps" else
+                            f"{d} = [{d}[0], {d}[1], {s}[0], {s}[1]];")
+            elif mn in ("movlps", "movhps", "movlpd", "movhpd"):
+                lane = 2 if mn.startswith("movh") else 0
+                if ops[0].type == X86_OP_REG:
+                    d = xmm(i, ops[0])
+                    body.append(f"{{ let s = {vector(i, ops[1])}; {d}[{lane}] = s[0]; {d}[{lane+1}] = s[1]; }}")
+                else:
+                    s = xmm(i, ops[1])
+                    body.append(f"{{ let a = {mem_addr(i, ops[0])}; m.set_u32(a, {s}[{lane}]); m.set_u32(a.wrapping_add(4), {s}[{lane+1}]); }}")
+            elif mn in ("cvtss2si", "cvtsd2si", "cvttsd2si"):
+                body.append(store(i, ops[0], f"x86::{mn}({vector(i, ops[1])})"))
+            elif mn == "cvtsi2sd":
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::cvtsi2sd({d}, {load(i, ops[1])});")
+            elif mn in ("movmskps", "movmskpd", "pmovmskb"):
+                extract, count = {"movmskps":("(s[k] >> 31)",4), "movmskpd":("(s[2*k+1] >> 31)",2),
+                                  "pmovmskb":("((s[k/4] >> (8*(k%4)+7)) & 1)",16)}[mn]
+                body.append(f"{{ let s = {vector(i, ops[1])}; let mut r = 0u32; for k in 0..{count} {{ r |= {extract} << k; }} {store(i, ops[0], 'r')} }}")
+            elif mn in ("comisd", "ucomisd"):
+                # Capstone 5 labels this memory operand m128, but COMISD
+                # and UCOMISD consume only a scalar m64 (Intel SDM).
+                body.append(f"fl = x86::comisd({vector(i, ops[0])}, {vector(i, ops[1], 8)});")
+            elif mn in ("divps", "minps", "maxps", "sqrtps", "addpd", "subpd", "mulpd", "divpd", "minpd", "maxpd", "sqrtpd",
+                        "addsd", "subsd", "mulsd", "divsd", "minsd", "maxsd", "sqrtsd", "cvtps2pd", "cvtpd2ps", "cvtss2sd", "cvtsd2ss",
+                        "cvtdq2ps", "cvttps2dq", "cvtps2dq", "cvtdq2pd", "cvttpd2dq", "cvtpd2dq", "unpcklps", "unpckhps", "unpcklpd", "unpckhpd",
+                        "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq", "pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
+                        "pslld", "psllw", "psllq", "psrld", "psrlw", "psrlq", "psrad", "psraw", "pmullw", "pmulhw", "pmulhuw", "pmuludq", "pmaddwd",
+                        "punpcklbw", "punpcklwd", "punpckldq", "punpcklqdq", "punpckhbw", "punpckhwd", "punpckhdq", "punpckhqdq",
+                        "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw"):
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::{mn}({d}, {vector(i, ops[1])});")
+            elif mn in ("pshufd", "pshuflw", "pshufhw", "shufpd"):
+                helper = dict(pshufd="shuffle_d", pshuflw="shuffle_lw", pshufhw="shuffle_hw", shufpd="shuffle_pd")[mn]
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::{helper}::<{ops[2].imm & 255}>({d}, {vector(i, ops[1])});")
+            elif mn.startswith("cmp") and mn[-2:] in ("ps", "pd", "ss", "sd"):
+                predicate = mn[3:-2]
+                predicates = {"eq":0, "lt":1, "le":2, "unord":3, "neq":4, "nlt":5, "nle":6, "ord":7}
+                imm = ops[2].imm if len(ops) == 3 else predicates.get(predicate)
+                if imm is None or not 0 <= imm < 8:
+                    raise Unsupported("SSE comparison predicate")
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::compare_{mn[-2:]}::<{imm}>({d}, {vector(i, ops[1])});")
             # ---- SSE
             elif mn == "movss":
                 if ops[0].type == X86_OP_REG and ops[1].type == X86_OP_MEM:
@@ -645,7 +790,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     body.append(f"m.set_u32({mem_addr(i, ops[0])}, {xmm(i, ops[1])}[0]);")
                 else:
                     body.append(f"{xmm(i, ops[0])}[0] = {xmm(i, ops[1])}[0];")
-            elif mn in ("movaps", "movups", "movdqa", "movdqu"):
+            elif mn in ("movaps", "movups", "movdqa", "movdqu", "movapd", "movupd", "movntps", "movntpd", "movntdq"):
                 if ops[0].type == X86_OP_REG and ops[1].type == X86_OP_REG:
                     body.append(f"{xmm(i, ops[0])} = {xmm(i, ops[1])};")
                 elif ops[0].type == X86_OP_REG:
@@ -667,7 +812,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 a = mem_addr(i, ops[0])
                 x = xmm(i, ops[1])
                 body.append(f"{{ let a = {a}; m.set_u32(a, {x}[0]); m.set_u32(a.wrapping_add(4), {x}[1]); }}")
-            elif mn in ("xorps", "pxor", "andps", "orps", "andnps"):
+            elif mn in ("xorps", "pxor", "andps", "orps", "andnps", "xorpd", "andpd", "orpd", "andnpd", "pand", "por", "pandn"):
                 d = xmm(i, ops[0])
                 src = xmm(i, ops[1]) if ops[1].type == X86_OP_REG else None
                 if src is None:
@@ -676,7 +821,8 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     src = "s"
                 else:
                     body.append("{")
-                f = {"xorps": "d ^ s", "pxor": "d ^ s", "andps": "d & s", "orps": "d | s", "andnps": "!d & s"}[mn]
+                f = ("d ^ s" if mn in ("xorps", "xorpd", "pxor") else "d & s" if mn in ("andps", "andpd", "pand") else
+                     "d | s" if mn in ("orps", "orpd", "por") else "!d & s")
                 body.append(f"for k in 0..4 {{ let (d, s) = ({d}[k], {src}[k]); {d}[k] = {f}; }} }}")
             elif mn in ("addss", "subss", "mulss", "divss", "minss", "maxss", "sqrtss"):
                 d = xmm(i, ops[0])
@@ -685,15 +831,17 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("addps", "subps", "mulps"):
                 d = xmm(i, ops[0])
                 if ops[1].type != X86_OP_REG:
-                    raise Unsupported("packed memory operand")
-                s = xmm(i, ops[1])
-                body.append(f"for k in 0..4 {{ {d}[k] = x86::{mn[:3]}ss({d}[k], {s}[k]); }}")
+                    body.append(f"{d} = x86::{mn}({d}, {vector(i, ops[1])});")
+                else:
+                    s = xmm(i, ops[1])
+                    body.append(f"for k in 0..4 {{ {d}[k] = x86::{mn[:3]}ss({d}[k], {s}[k]); }}")
             elif mn == "shufps":
                 d, s = xmm(i, ops[0]), (xmm(i, ops[1]) if ops[1].type == X86_OP_REG else None)
                 if s is None:
-                    raise Unsupported("shufps memory")
-                imm = ops[2].imm
-                body.append(f"{d} = [{d}[{imm & 3}], {d}[{(imm >> 2) & 3}], {s}[{(imm >> 4) & 3}], {s}[{(imm >> 6) & 3}]];")
+                    body.append(f"{d} = x86::shuffle_ps::<{ops[2].imm & 255}>({d}, {vector(i, ops[1])});")
+                else:
+                    imm = ops[2].imm
+                    body.append(f"{d} = [{d}[{imm & 3}], {d}[{(imm >> 2) & 3}], {s}[{(imm >> 4) & 3}], {s}[{(imm >> 6) & 3}]];")
             elif mn in ("comiss", "ucomiss"):
                 d = xmm(i, ops[0])
                 s = f"{xmm(i, ops[1])}[0]" if ops[1].type == X86_OP_REG else f"m.u32({mem_addr(i, ops[1])})"
@@ -780,6 +928,8 @@ def cpu_arm(arm):
     Substitute whole identifiers, leaving Rust strings untouched.
     """
     arm = compact_alu(arm).replace(SAVE, "").replace(LOAD, "")
+    # Prepared pre-DF caches use the old state-transfer markers.
+    arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
     fields.update({r: f"cpu.xmm[{i}]" for i, r in enumerate(XMM)})
     return re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
@@ -877,6 +1027,7 @@ def scan(limit=None):
             why["error:" + type(e).__name__] += 1
     print(f"ext pass: +{len(ok) - before}", flush=True)
     json.dump(ok, open(f"{N}/patterns/lift.json", "w"))
+    json.dump(dict(why.most_common()), open(f"{N}/patterns/lift_rejections.json", "w"))
     print(len(ok), "lifted of", len(rows), "; top rejections:", why.most_common(14))
 
 
