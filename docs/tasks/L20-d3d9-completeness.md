@@ -2,7 +2,7 @@
 
 - **Owner:** claude-5
 - **Branch:** `task/L20-d3d9-completeness` (worktree `E:\ddda-rs-wt\L20`)
-- **Status:** in progress (claude-5)
+- **Status:** review (claude-5)
 
 ## Why
 
@@ -355,3 +355,43 @@ Fixed from the comparisons:
   modelled.
 - **Render-target formats** beyond A8R8G8B8 are not compared (the oracle
   reads 8-bit targets only).
+
+### 6. Commits, verification, what is left
+
+Commits on `task/L20-d3d9-completeness`:
+- 1b02df2: census;
+- 6feb306: occlusion counts, instancing, gamma, release; d3d9ref queries
+  and frequencies;
+- c9ae408 and 4159466: state coverage and fuzz; d3d9wgsl lod_bias,
+  depth_bias and 8-bit alpha test;
+- 6e6fce1: runtime Reset, SetGammaRamp, queries, DMAP sampler and
+  ownership; docs; `research/runtime/d3d9_census.py`.
+
+Verification:
+- **Implemented and tested:** `cargo test -p ddgpu --test draw` (12
+  tests); `cargo test -p d3d9wgsl`; `cargo test -p ddruntime --test
+  d3d9_device` (4); the D3D9 tests in `--test runtime` (7).
+- **Compared against the original driver** (host D3D9, RTX 4060 driver
+  610.62, through d3d9ref):
+  - occlusion counts and GetData states;
+  - instanced draws;
+  - the state fuzz (982 of 982 at `DDGPU_FUZZ=1000`);
+  - alpha-test rounding;
+  - point and solid fill;
+  - depth-bias thresholds and mip selection
+    (`explore_d3d9_semantics`, ignored, prints).
+- **Census re-run:** `research/runtime/d3d9_census.py` reproduces the
+  census exactly (46 methods, the same sites).
+- **Not compared against the running game:** Reset and the gamma ramp are
+  checked against D3D9's documented contract and Wine's d3d9, not
+  against the game itself. The runtime does not reach the renderer yet.
+
+Left:
+- The known differences in section 5.
+- Render-target formats other than A8R8G8B8 against the driver (the
+  oracle's read-back is 8-bit only).
+- Overlapping occlusion queries (not used by the game).
+- claude-9 (L25) will put pipeline, shader and bind-group caches into
+  `ddgpu::try_draw` on top of 4159466. Agreed: the cache keys include
+  instancing step modes, the occlusion slot, depth bias and the
+  stencil-only attachment rule, and the fuzz is the regression gate.
