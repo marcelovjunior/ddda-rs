@@ -137,6 +137,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
             0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
+X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 
 
 SSE_BINARY = {"addss", "subss", "mulss", "divss", "minss", "maxss", "addps", "subps", "mulps", "divps",
@@ -164,7 +165,8 @@ def static_pop(target, _cache={}):
     return _cache[target]
 
 
-def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None):
+def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
+               x87_push=frozenset()):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -182,6 +184,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     the function's own `ret` goes back to the caller: random inputs can
     overwrite the return address (a store through a random pointer), and the
     original then runs on into whatever is there. Such a case is rejected.
+
+    `x87_push` holds return addresses of mocked call sites whose callee is
+    taken to return a float in st0 (lift.returns_float): there the mock
+    pushes a random finite float onto the x87 stack (through a trampoline,
+    `fld dword [X87_SLOT]; jmp [X87_SLOT + 4]`) and records it as
+    "st_push"; the replay pushes the same bits.
 
     `zero_inputs` is an opt-in boundary fixture: non-image memory, initial
     general registers except ESP, and mocked return values are zero. Image
@@ -451,7 +459,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     pushed[0] = max(0, pushed[0] - i.operands[1].imm)
             return
         i, branch[0] = branch[0], None
-        if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000:
+        if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000                 and not X87_TRAMP <= pc < X87_TRAMP + 12:
             # running code outside the exe: a mocked callee's stack pop was
             # wrong and a `ret` went astray. Not a valid case.
             bad.append(f"execution outside the image at {pc:#010x}")
@@ -473,11 +481,25 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.reg_write(r, out[n])
         uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
         uc_.reg_write(UC_X86_REG_ESP, (esp + 4 + pop) & 0xFFFFFFFF)
+        if ret in x87_push:  # the callee returns a float: push it on the way back
+            v = struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0]
+            out["st_push"] = v
+            uc_.mem_write(X87_SLOT, struct.pack("<II", v, ret))
+            ret = X87_TRAMP
         uc_.reg_write(UC_X86_REG_EIP, ret)
         calls.append({**ev, "out": out})
 
     if end is not None:
         uc.hook_add(UC_HOOK_CODE, on_ext)
+    if x87_push:
+        # fixed code on its own page (Unicorn caches translated code per
+        # page): fld dword [X87_SLOT]; jmp dword [X87_SLOT + 4]
+        uc.mem_map(X87_TRAMP, 0x1000)
+        uc.mem_map(X87_SLOT, 0x1000)
+        uc.mem_write(X87_TRAMP, bytes([0xD9, 0x05]) + struct.pack("<I", X87_SLOT)
+                     + bytes([0xFF, 0x25]) + struct.pack("<I", X87_SLOT + 4))
+        pages_in[X87_TRAMP] = bytes(0x1000)  # premap: already mapped
+        pages_in[X87_SLOT] = bytes(0x1000)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
     uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
     uc.hook_add(UC_HOOK_MEM_READ, check_float)

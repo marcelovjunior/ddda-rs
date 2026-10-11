@@ -38,32 +38,3 @@ pub fn x87_copy(v: f32) -> f32 {
     }
 }
 
-#[cfg(all(test, target_arch = "x86_64"))]
-mod x87_hardware {
-    /// Ground truth from the CPU itself: the emulator used for the
-    /// differential vectors does not model this case (research/native).
-    fn hardware(bits: u32) -> u32 {
-        let src = bits;
-        let mut dst = 0u32;
-        unsafe {
-            std::arch::asm!("fld dword ptr [{s}]", "fstp dword ptr [{d}]",
-                s = in(reg) &src, d = in(reg) &mut dst, out("st(0)") _);
-        }
-        dst
-    }
-
-    #[test]
-    fn x87_copy_matches_the_cpu() {
-        let mut cases = vec![0, 0x8000_0000, 0x3F80_0000, 0x7F80_0000, 0xFF80_0000,
-            0x7F80_0001, 0xFFA0_0000, 0x7FBF_FFFF, 0x7FC0_0001, 0xFFC0_0000, 0x0000_0001];
-        let mut x = 0x1234_5678u32;
-        for _ in 0..2000 {
-            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-            cases.push(x);
-            cases.push(x | 0x7F80_0000); // NaN/inf space
-        }
-        for bits in cases {
-            assert_eq!(super::x87_copy(f32::from_bits(bits)).to_bits(), hardware(bits), "{bits:#010x}");
-        }
-    }
-}

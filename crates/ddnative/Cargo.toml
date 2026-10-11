@@ -7,3 +7,8 @@ publish.workspace = true
 
 [dev-dependencies]
 serde_json = "1"
+
+[lib]
+# Unit tests are in tests/units.rs: a lib test build would compile the
+# generated code (~100 MB) twice in parallel (over 20 GB of memory).
+test = false

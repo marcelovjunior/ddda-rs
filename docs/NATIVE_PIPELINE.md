@@ -395,12 +395,19 @@ for *every* callee behaviour, so verifying it against arbitrary mocked
 callees verifies it for the real one. What it does not verify is the
 callee; that is the callee's own vector. A wrong pop guess only makes the
 case degenerate (it usually faults and is rejected), never a false pass.
-Limits: a function that reads a float a callee returned in st0 is
-rejected (`x87-return`): `x87_depth_check` walks the control flow from
-x87 depth 0 (calls push nothing) and rejects any x87 read or pop at depth
-0. Unicorn does not flag the stack underflow itself, so this check must be
-static. (It is also conservative for closed calls whose lifted callee does
-return in st0; refining that is open.)
+Floats returned in st0 (MSVC returns float and double there):
+`x87_depth_check` walks the control flow from x87 depth 0. A direct call
+to a closed lifted function adds that function's net x87 effect at its
+`ret` (`X87_NET`, computed when it lifts; inconsistent rets reject callers
+with `x87-callee`). A mocked call adds 1 where the rest of its basic block
+consumes st0 before pushing anything (`returns_float`): those call sites
+are stored per function as `"x87_push"` (return addresses). There the
+recorder's mock pushes a random finite float through a trampoline on its
+own page (`fld dword [X87_SLOT]; jmp [X87_SLOT + 4]`, `harness.X87_TRAMP`)
+and records it as `"st_push"`; the replay pushes the same bits onto
+`cpu.st`. Any other x87 read or pop at depth 0 still rejects
+(`x87-return`). Unicorn does not flag the stack underflow itself, so this
+check must stay static.
 
 A platform model's own address is never lifted (`scan` skips
 `harness.PLATFORM`): `run_sparse` runs the model at that address, so the

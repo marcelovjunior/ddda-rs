@@ -54,18 +54,44 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
-X87_PUSH = {"fld", "fld1", "fldz"}
+X87_PUSH = {"fld", "fld1", "fldz", "fild"}
 X87_POP = {"fstp"}
 X87_READ = {"fst", "fchs", "fabs"}
+X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
+# Net x87 stack effect of each closed lifted function at its `ret` (filled by
+# lift(); a caller adds it at a direct call). None: inconsistent between rets.
+X87_NET = {}
+# Per function, the return addresses of mocked call sites whose callee is
+# taken to return a float in st0 (filled by lift(); stored in lift.json as
+# "x87_push" for the recorder and the replay).
+X87_PUSH_SITES = {}
 
 
-def x87_depth_check(ins, addr, end):
-    """Every x87 read or pop must find a value this function pushed: walk
-    the control flow from depth 0 (a call pushes nothing as far as the
-    function knows). A value read at depth 0 was returned in st0 by a
-    callee, which mocked calls cannot provide: reject."""
+def returns_float(ins, k):
+    """Does the code after the call at ins[k] consume st0 before pushing
+    anything? Then the callee returned a float there (MSVC returns float and
+    double in st0). Looks at the rest of the call's basic block only."""
+    for i in ins[k + 1:]:
+        mn = i.mnemonic
+        if mn == "call" or mn.startswith("j") or mn in ("ret", "retn"):
+            return False
+        if not mn.startswith("f") or mn in X87_CONTROL:
+            continue
+        return mn not in X87_PUSH
+    return False
+
+
+def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False):
+    """Every x87 read or pop must find a value on the stack: walk the
+    control flow from depth 0. A direct call to a closed lifted function adds
+    its net effect (X87_NET); a mocked call adds 1 where its result is
+    consumed (returns_float: the recorder's mock and the replay push a
+    value there) and 0 elsewhere. Anything else read at depth 0 rejects.
+    Returns (set of depths at the function's rets, push sites)."""
+    from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
     seen, todo = {}, [(0, 0)]
+    exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
     pending = list(range(len(ins)))
@@ -88,7 +114,19 @@ def x87_depth_check(ins, addr, end):
                 depth -= mn in X87_POP
             elif mn in X87_PUSH:
                 depth += 1
+            elif mn == "call" and k + 1 < len(ins):
+                direct = i.operands[0].type == X86_OP_IMM
+                t = i.operands[0].imm if direct else None
+                if direct and t in callable:
+                    net = X87_NET.get(t, 0)
+                    if net is None:
+                        raise Unsupported(f"x87-callee (inconsistent x87 effect of {t:#x})")
+                    depth += net
+                elif ext and returns_float(ins, k):
+                    depth += 1
+                    push_sites.add(ins[k + 1].address)
             if mn in ("ret", "retn"):
+                exits.add(depth)
                 break
             if mn.startswith("j"):
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
@@ -97,6 +135,7 @@ def x87_depth_check(ins, addr, end):
                 if mn == "jmp":
                     break
             k += 1
+    return exits, sorted(push_sites)
 
 
 def switch_targets(ins, k, addr, end, read):
@@ -201,7 +240,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
             leaders.add(ins[k + 1].address)
     if not leaders <= {i.address for i in ins}:
         raise Unsupported("jump into the middle of an instruction")
-    x87_depth_check(ins, addr, end)
+    exits, push_sites = x87_depth_check(ins, addr, end, callable, ext)
+    X87_PUSH_SITES[addr] = push_sites
+    if not ext:  # callers add this at a direct call
+        X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
     def reg(name):
         """Read a register as a u32 expression."""
@@ -602,7 +644,7 @@ def scan(limit=None):
                 continue
             try:
                 arms = lift(a, sz, done)
-                ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms)})
+                ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, [])})
                 done.add(a)
             except Unsupported as e:
                 why[str(e).split(" ")[0]] += 1
@@ -619,7 +661,7 @@ def scan(limit=None):
             continue
         try:
             arms = lift(a, sz, done, ext=True)
-            ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms),
+            ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, []),
                        "ext": True})
         except Unsupported as e:
             why[str(e).split(" ")[0]] += 1
@@ -637,12 +679,21 @@ def relift():
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     closed = {f["addr"] for f in lifted if not f.get("ext")}
+    # closed functions' x87 effects first: a caller adds its callee's
+    for _ in range(2):
+        for f in lifted:
+            if f["addr"] in closed and f["addr"] not in h.PLATFORM:
+                try:
+                    lift(f["addr"], f["size"], closed)
+                except Unsupported:
+                    pass
     keep, dropped = [], []
     for f in lifted:
         try:
             if f["addr"] in h.PLATFORM:
                 raise Unsupported("platform model address")
             f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
+            f["x87_push"] = X87_PUSH_SITES.get(f["addr"], [])
             assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
             keep.append(f)
         except Unsupported as e:  # a stricter lifter: the function no longer qualifies
@@ -685,6 +736,7 @@ def _init_worker(closed):
 def _vectors_for(args):
     addr, per, end = args[:3]
     size = args[3] if len(args) > 3 else None
+    push = frozenset(args[4]) if len(args) > 4 else frozenset()
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
@@ -695,7 +747,7 @@ def _vectors_for(args):
             if end is None:
                 r = h.run_sparse(addr, (addr << 8) ^ seed, size=size, **inputs)
             else:  # ext: calls to untranslated code are mocked
-                r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED, **inputs)
+                r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED, x87_push=push, **inputs)
         except h.Rejected:
             continue
         except Exception:  # noqa: BLE001  (emulator errors: no vector)
@@ -747,7 +799,7 @@ def vectors(per=3):
     # functions that already failed to get a vector are not retried (each costs 8x the seeds)
     nov_path = f"{N}/patterns/lift_novector.json"
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"])
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
@@ -867,6 +919,9 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
         cpu.edx = u(&o["edx"]);
         for k in 0..4 {{ cpu.xmm[0][k] = u(&o["xmm0"][k]); }}
         cpu.esp = cpu.esp.wrapping_add(4 + u(&o["pop"]));
+        if let Some(v) = o.get("st_push").and_then(|v| v.as_u64()) {{
+            cpu.st.push(v as u32); // the mocked callee returned this float in st0
+        }}
     }})
 }}
 
