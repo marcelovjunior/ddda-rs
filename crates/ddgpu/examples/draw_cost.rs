@@ -65,7 +65,7 @@ fn main() {
         ps_c.f[0] = [((k % 7) as f32 / 7.0).to_bits(), 0.5f32.to_bits(), 1f32.to_bits(), 1f32.to_bits()];
         let mut states = vec![(7, 0), (22, 1), (168, 0xF), (190, 0xF), (191, 0xF), (192, 0xF), (15, 0)];
         // half the draws alpha-blended
-        states.extend(if k % 2 == 0 { vec![(27, 0)] } else { vec![(27, 1), (19, 5), (20, 6), (171, 1)] });
+        states.extend(if k.is_multiple_of(2) { vec![(27, 0)] } else { vec![(27, 1), (19, 5), (20, 6), (171, 1)] });
         states.sort();
         DrawCall {
             primitive: 4, primitives: 1, start: 3 * (k % 64), base_vertex: 0, min_index: 0, vertex_count: 3,
