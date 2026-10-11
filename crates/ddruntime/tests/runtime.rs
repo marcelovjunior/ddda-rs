@@ -302,3 +302,126 @@ fn direct3d_create9_and_a_com_call_through_its_vtable() {
     assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [1920, 1080, 60, 22]);
     assert_eq!(cpu.esp, ddruntime::session::STACK_TOP - 0x100, "stdcall: this + 2 arguments popped");
 }
+
+// --- USER32: windows, messages and guest window procedures -------------------
+
+use ddruntime::user32;
+
+thread_local! {
+    static WNDPROC_LOG: std::cell::RefCell<Vec<(u32, u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Push `args` and a return address and run a service, as lifted code's
+/// `call` would from inside a window procedure.
+fn call_from_guest(m: &mut dyn Mem, cpu: &mut Cpu, f: fn(&mut dyn Mem, &mut Cpu), args: &[u32]) -> u32 {
+    for &a in args.iter().rev() {
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, a);
+    }
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, 0x0040_9999);
+    f(m, cpu);
+    cpu.eax
+}
+
+/// A guest window procedure: logs (hwnd, msg, wparam), posts WM_QUIT on
+/// WM_DESTROY like the game's (0x00DF1550 case 2), refuses nothing, and
+/// leaves everything else to DefWindowProcW (a tail call: same frame).
+fn test_wndproc(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (hwnd, msg, wparam) = (m.u32(cpu.esp + 4), m.u32(cpu.esp + 8), m.u32(cpu.esp + 12));
+    WNDPROC_LOG.with(|l| l.borrow_mut().push((hwnd, msg, wparam)));
+    if msg == user32::WM_DESTROY {
+        call_from_guest(m, cpu, user32::post_quit_message, &[7]);
+    }
+    user32::def_window_proc(m, cpu);
+}
+
+fn desktop() -> (GuestMemory, Rc<Registry>) {
+    let (mut m, _) = stack();
+    m.map_lazy(services::HEAP_BASE, services::HEAP_SIZE, READ | WRITE).unwrap();
+    m.map(0x0030_0000, 0x1000, READ | WRITE).unwrap(); // structures the guest passes
+    let mut r = Registry::new();
+    r.insert(0x0050_0000, Binding::Lifted(test_wndproc)).unwrap();
+    let r = Rc::new(r);
+    r.install();
+    user32::reset();
+    WNDPROC_LOG.with(|l| l.borrow_mut().clear());
+    (m, r)
+}
+
+fn messages() -> Vec<u32> {
+    WNDPROC_LOG.with(|l| l.borrow_mut().drain(..).map(|(_, msg, _)| msg).collect())
+}
+
+#[test]
+fn a_window_gets_windows_creation_show_and_paint_messages_in_order() {
+    let (mut m, _r) = desktop();
+    // WNDCLASSEXW at 0x300000, class name L"MT" at 0x300100
+    let (wc, name) = (0x0030_0000, 0x0030_0100);
+    for (k, u) in "MT\0".encode_utf16().enumerate() {
+        m.set_u16(name + 2 * k as u32, u);
+    }
+    m.set_u32(wc, 0x30);
+    m.set_u32(wc + 8, 0x0050_0000);
+    m.set_u32(wc + 40, name);
+    let cpu = call_service(user32::register_class_ex_w, &mut m, &[wc]);
+    assert_eq!((cpu.eax, cpu.esp), (0xC000, 0x0011_0000), "an atom; stdcall pops 1 argument");
+    assert_eq!(call_service(user32::register_class_ex_w, &mut m, &[wc]).eax, 0, "the class exists");
+
+    // CreateWindowExW as 0x00DF1200 calls it (style 0xCA0000, 1280x720 client)
+    let cpu = call_service(user32::create_window_ex_w, &mut m, &[0, name, 0, 0x00CA_0000, 32, 32, 1286, 749, 0, 0, 0x0040_0000, 0]);
+    let hwnd = cpu.eax;
+    assert_ne!(hwnd, 0);
+    assert_eq!(cpu.esp, 0x0011_0000, "12 arguments popped");
+    assert_eq!(messages(), [0x81, 0x01], "WM_NCCREATE, WM_CREATE");
+
+    assert_eq!(call_service(user32::show_window, &mut m, &[hwnd, 1]).eax, 0, "was hidden");
+    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x07, 0x47, 0x05, 0x03],
+               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
+    call_service(user32::update_window, &mut m, &[hwnd]);
+    assert_eq!(messages(), [0x0F], "WM_PAINT");
+    call_service(user32::update_window, &mut m, &[hwnd]);
+    assert_eq!(messages(), Vec::<u32>::new(), "DefWindowProc validated it");
+
+    // client rectangle: 1286x749 minus the fixed frame (3+3) and caption (23+3)
+    let rect = 0x0030_0200;
+    call_service(user32::get_client_rect, &mut m, &[hwnd, rect]);
+    assert_eq!([m.u32(rect), m.u32(rect + 4), m.u32(rect + 8), m.u32(rect + 12)], [0, 0, 1280, 720]);
+
+    // the message loop: a posted WM_CLOSE goes through DefWindowProc to
+    // DestroyWindow, whose WM_DESTROY posts WM_QUIT
+    user32::post(user32::Msg { hwnd, message: user32::WM_CLOSE, wparam: 0, lparam: 0 });
+    let msg = 0x0030_0300;
+    assert_eq!(call_service(user32::peek_message, &mut m, &[msg, 0, 0, 0, 1]).eax, 1);
+    assert_eq!(m.u32(msg + 4), user32::WM_CLOSE);
+    call_service(user32::dispatch_message, &mut m, &[msg]);
+    assert_eq!(messages(), [0x10, 0x02, 0x82], "WM_CLOSE, WM_DESTROY, WM_NCDESTROY");
+    assert!(user32::window(hwnd).is_none());
+    assert_eq!(call_service(user32::peek_message, &mut m, &[msg, 0, 0, 0, 1]).eax, 1);
+    assert_eq!((m.u32(msg + 4), m.u32(msg + 8)), (user32::WM_QUIT, 7));
+    assert_eq!(call_service(user32::peek_message, &mut m, &[msg, 0, 0, 0, 1]).eax, 0, "queue empty");
+    x86::set_ext_calls(None);
+}
+
+#[test]
+fn window_properties_and_class_atoms() {
+    let (mut m, _r) = desktop();
+    let (wc, name) = (0x0030_0000, 0x0030_0100);
+    m.set_u8(name, b'A');
+    m.set_u32(wc + 8, 0x0050_0000);
+    m.set_u32(wc + 40, name);
+    let atom = call_service(user32::register_class_ex_a, &mut m, &[wc]).eax;
+    // created by atom (MAKEINTATOM)
+    let hwnd = call_service(user32::create_window_ex_a, &mut m, &[0, atom, 0, 0, 0, 0, 100, 100, 0, 0, 0, 0]).eax;
+    assert_ne!(hwnd, 0);
+    let key = 0x0030_0200;
+    for (k, b) in b"Prop\0".iter().enumerate() {
+        m.set_u8(key + k as u32, *b);
+    }
+    assert_eq!(call_service(user32::get_prop, &mut m, &[hwnd, key]).eax, 0);
+    assert_eq!(call_service(user32::set_prop, &mut m, &[hwnd, key, 0x1234]).eax, 1);
+    assert_eq!(call_service(user32::get_prop, &mut m, &[hwnd, key]).eax, 0x1234);
+    assert_eq!(call_service(user32::remove_prop, &mut m, &[hwnd, key]).eax, 0x1234);
+    assert_eq!(call_service(user32::get_prop, &mut m, &[hwnd, key]).eax, 0);
+    x86::set_ext_calls(None);
+}

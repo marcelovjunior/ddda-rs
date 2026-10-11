@@ -43,6 +43,7 @@ impl Session {
         let mut registry = Registry::with_lifted_program();
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
+        crate::user32::reset();
         let install = std::path::Path::new(exe_path).parent().ok_or("exe has no directory")?;
         crate::files::set_roots(install, &crate::services::sandbox_home());
         let imports = crate::image::bind_imports(&mut mem, &exe).map_err(|e| e.to_string())?;

@@ -513,17 +513,27 @@ pub const SCREEN_H: u32 = 1080;
 /// bar (20 px) if asked. TRUE.
 pub fn adjust_window_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (r, style, menu) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let frame: i32 = if style & WS_THICKFRAME != 0 { 4 } else if style & (WS_BORDER | WS_CAPTION) != 0 { 3 } else { 0 };
-    let caption: i32 = if style & WS_CAPTION == WS_CAPTION { 23 } else { 0 };
-    let menu_bar: i32 = if menu != 0 { 20 } else { 0 };
-    let get = |m: &dyn Mem, k: u32| m.u32(r + 4 * k) as i32;
-    let (l, t, rt, b) = (get(m, 0), get(m, 1), get(m, 2), get(m, 3));
-    m.set_u32(r, (l - frame) as u32);
-    m.set_u32(r + 4, (t - frame - caption - menu_bar) as u32);
-    m.set_u32(r + 8, (rt + frame) as u32);
-    m.set_u32(r + 12, (b + frame) as u32);
+    let mut rect = [0i32; 4];
+    for (k, v) in rect.iter_mut().enumerate() {
+        *v = m.u32(r + 4 * k as u32) as i32;
+    }
+    adjust_rect(&mut rect, style, menu != 0);
+    for (k, v) in rect.into_iter().enumerate() {
+        m.set_u32(r + 4 * k as u32, v as u32);
+    }
     cpu.eax = 1;
     ret(m, cpu, 12);
+}
+
+/// AdjustWindowRect's arithmetic on (left, top, right, bottom).
+pub(crate) fn adjust_rect(r: &mut [i32; 4], style: u32, menu: bool) {
+    let frame: i32 = if style & WS_THICKFRAME != 0 { 4 } else if style & (WS_BORDER | WS_CAPTION) != 0 { 3 } else { 0 };
+    let caption: i32 = if style & WS_CAPTION == WS_CAPTION { 23 } else { 0 };
+    let menu_bar: i32 = if menu { 20 } else { 0 };
+    r[0] -= frame;
+    r[1] -= frame + caption + menu_bar;
+    r[2] += frame;
+    r[3] += frame;
 }
 
 /// SystemParametersInfoA(action, uparam, pvparam, winini): settings changes

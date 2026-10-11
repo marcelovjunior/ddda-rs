@@ -21,4 +21,5 @@ pub mod memory;
 pub mod services;
 pub mod session;
 pub mod steam;
+pub mod user32;
 pub mod win32;
