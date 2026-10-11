@@ -26,8 +26,9 @@ fn hex_bytes(s: &str) -> impl Iterator<Item = u8> + '_ {
     (0..s.len() / 2).map(move |k| u8::from_str_radix(&s[2 * k..2 * k + 2], 16).unwrap())
 }
 
-fn port(addr: u32) -> ddnative_base::x86::LiftFn {
-    PORTS.iter().find(|p| p.0 == addr).unwrap_or_else(|| panic!("no port for {addr:#x}")).1
+fn port(addr: u32) -> (ddnative_base::x86::LiftFn, u8) {
+    let p = PORTS.iter().find(|p| p.0 == addr).unwrap_or_else(|| panic!("no port for {addr:#x}"));
+    (p.1, p.2)
 }
 
 const REGS: [&str; 8] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
@@ -62,7 +63,7 @@ fn ports_replay_the_lifted_vectors() {
             eax: u(&ri["eax"]), ecx: u(&ri["ecx"]), edx: u(&ri["edx"]), ebx: u(&ri["ebx"]),
             esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0,
         });
-        port(addr)(&mut m, &mut cpu);
+        port(addr).0(&mut m, &mut cpu);
         assert_eq!(cpu_regs(&cpu), regs(&c["regs_out"]), "{addr:#x}: registers");
         assert_eq!(cpu.xmm[0][0], u(&c["xmm0_out"]), "{addr:#x}: xmm0");
         let mut want = BTreeMap::new();
@@ -101,8 +102,9 @@ fn windows(v: &Value) -> BTreeMap<u32, u8> {
 }
 
 /// Edge cases recorded from the original (NaNs, infinities, signed zeros,
-/// denormals, random states): all general registers, all four lanes of
-/// xmm0, and every byte of the object and stack windows.
+/// denormals, random states): all general registers, every lane of each
+/// xmm register the port reproduces (the others must keep their entry
+/// values), and every byte of the object and stack windows.
 // verifies 0x007AD870 0x00CFC770 0x00CFC810 0x00CFC8B0 0x00CFC940 0x00D00690 0x00D006C0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
@@ -121,13 +123,17 @@ fn ports_match_the_original_on_edge_cases() {
                 cpu.xmm[k][lane] = u(&c["xmm_in"][k][lane]);
             }
         }
-        port(addr)(&mut m, &mut cpu);
-        let xmm0: [u32; 4] = std::array::from_fn(|lane| u(&c["xmm_out"][0][lane]));
-        let ok = cpu_regs(&cpu) == regs(&c["regs_out"]) && cpu.xmm[0] == xmm0
+        let entry = cpu.xmm;
+        let (f, exact) = port(addr);
+        f(&mut m, &mut cpu);
+        let want: [[u32; 4]; 8] = std::array::from_fn(|k| {
+            if exact >> k & 1 != 0 { std::array::from_fn(|lane| u(&c["xmm_out"][k][lane])) } else { entry[k] }
+        });
+        let ok = cpu_regs(&cpu) == regs(&c["regs_out"]) && cpu.xmm == want
             && m.0 == windows(&c["mem_out"]) && cpu.st.is_empty();
         if !ok {
-            failures.push(format!("case {n} at {addr:#x}: regs {:x?} want {:x?}; xmm0 {:x?} want {xmm0:x?}",
-                                  cpu_regs(&cpu), regs(&c["regs_out"]), cpu.xmm[0]));
+            failures.push(format!("case {n} at {addr:#x}: regs {:x?} want {:x?}; xmm {:x?} want {want:x?}",
+                                  cpu_regs(&cpu), regs(&c["regs_out"]), cpu.xmm));
         }
         seen.insert(addr);
     }

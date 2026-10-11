@@ -16,10 +16,11 @@
 //! - every byte the original writes, including its pushes below ESP;
 //! - xmm0 (all four lanes) and the x87 state.
 //!
-//! The other xmm registers the original uses as scratch keep their entry
-//! values. `research/native/math_liveness.py` checks every direct call site
-//! of every function here: no caller reads one of them after the call
-//! before writing it.
+//! Where the original leaves scratch values in other xmm registers, the
+//! adapter either reproduces them too (the mask in [`PORTS`]) or leaves
+//! them as they were; `research/native/math_liveness.py` checks every
+//! direct call site of every function here: no caller reads a lane the
+//! adapter does not reproduce after the call before writing it.
 
 use crate::angle;
 use crate::matrix;
@@ -133,24 +134,46 @@ pub fn f_00cfc940(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// `float angle_difference(float a /* xmm0 */, float b /* xmm1 */)`,
 /// result in xmm0. Pushes EBP (an aligned frame it never uses).
+///
+/// Callers go on to the CRT's SSE2 `atan2`/`pow`, whose packed operations
+/// carry the upper lanes of xmm2 and xmm4 along, so this adapter rebuilds
+/// all of xmm0..xmm4 as the original leaves them.
 pub fn f_007ad870(m: &mut dyn Mem, cpu: &mut Cpu) {
+    use angle::AnglePath::*;
+    let lanes = |v: F32, upper: [u32; 3]| [v.to_bits(), upper[0], upper[1], upper[2]];
     let (a, b) = (F32::from_bits(cpu.xmm[0][0]), F32::from_bits(cpu.xmm[1][0]));
-    let (v, path) = angle::angle_difference_path(a, b);
+    let up0: [u32; 3] = cpu.xmm[0][1..].try_into().unwrap();
+    let up1: [u32; 3] = cpu.xmm[1][1..].try_into().unwrap();
+    let t = angle::angle_difference_traced(a, b);
     pushed(m, cpu, 1, cpu.ebp);
-    cpu.xmm[0][0] = v.to_bits();
-    if path == angle::AnglePath::WrappedUp {
-        cpu.xmm[0][1..].fill(0);
+    let two_pi = lanes(angle::TWO_PI, [0; 3]);
+    if t.path == SameSide {
+        cpu.xmm[0] = lanes(t.result, up0);
+        cpu.xmm[2] = [0; 4];
+        cpu.xmm[3] = lanes(a * b, up0);
+    } else {
+        let gap = lanes(t.a - t.b, up0);
+        cpu.xmm[2] = gap;
+        cpu.xmm[3] = two_pi;
+        cpu.xmm[4] = gap.map(|v| v & 0x7FFF_FFFF);
+        (cpu.xmm[0], cpu.xmm[1]) = match t.path {
+            Shifted => (lanes(t.result, up0), lanes(t.b, up1)),
+            WrappedUp => (lanes(t.result, [0; 3]), lanes(t.b - t.a, up1)),
+            _ => (lanes(t.result, up0), two_pi),
+        };
     }
     ret(cpu, 0);
 }
 
-/// Every port above with its original address (sorted).
-pub const PORTS: &[(u32, ddnative_base::x86::LiftFn)] = &[
-    (0x007A_D870, f_007ad870),
-    (0x00CF_C770, f_00cfc770),
-    (0x00CF_C810, f_00cfc810),
-    (0x00CF_C8B0, f_00cfc8b0),
-    (0x00CF_C940, f_00cfc940),
-    (0x00D0_0690, f_00d00690),
-    (0x00D0_06C0, f_00d006c0),
+/// Every port above with its original address and the xmm registers it
+/// leaves exactly as the original does (bit k = xmmk; the others keep their
+/// entry values, see the module comment).
+pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
+    (0x007A_D870, f_007ad870, 0b0001_1111),
+    (0x00CF_C770, f_00cfc770, 0b0000_0001),
+    (0x00CF_C810, f_00cfc810, 0b0000_0001),
+    (0x00CF_C8B0, f_00cfc8b0, 0b0000_0001),
+    (0x00CF_C940, f_00cfc940, 0b0000_0001),
+    (0x00D0_0690, f_00d00690, 0b1111_1111),
+    (0x00D0_06C0, f_00d006c0, 0b1111_1111),
 ];
