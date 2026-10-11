@@ -218,27 +218,29 @@ the tracker's **platform** status (no 1:1 port):
 Gameplay families are worth one port each: the action in-place
 constructor (957 classes, `ddnative::action::construct`) was the first.
 
-With the platform layer split off (2026-10-11, commit b4c7eb4, 56,577
-functions including the supplementary entries; the gate prints the current
-numbers after every run):
+After L14 lifted the platform layer too (2026-10-11, commit 84458c8; 56,593
+non-thunk functions including the supplementary entries; the gate prints
+the current numbers after every run):
 
 | status | functions | share | code bytes |
 |---|---:|---:|---:|
-| platform (Rust replaces) | 12,707 | 22.5% | 5.0% |
-| verified (1:1 + differential test) | 41,516 | 73.4% | 85.8% |
-| translated (cited, not verified) | 169 | 0.3% | 1.3% |
-| documented only | 98 | 0.2% | 0.3% |
-| untouched | 2,087 | 3.7% | 7.6% |
+| verified (1:1 + differential test) | 55,884 | 98.7% | 95.7% |
+| untouched | 463 | 0.8% | 3.4% |
+| platform (model addresses, not yet lifted) | 139 | 0.2% | 0.2% |
+| documented only | 59 | 0.1% | 0.1% |
+| translated (cited, not verified) | 48 | 0.1% | 0.5% |
 
-Nearly all verified functions come from the lifter (`research/native/lift.py`,
-docs/NATIVE_PIPELINE.md "The lifter"): 31,580 lifted, most of them in ext
-mode (calls to untranslated code mocked and replayed). The scan lifts
-36,793 of the 37,728 non-platform functions (97.5%); about 3,200 of those
-still lack a usable vector (random inputs cannot drive them: loops over
-random counts of random pointers and the like; they need structured
-inputs). The remaining rejections are indirect jumps that are not switch
-tables (717), x87 inputs a mocked callee would have to provide (147), int3
-(26), approximate reciprocals rsqrtps/rcpps (30, CPU-specific results) and
-a handful of others.
+Plus 289 verified thunks. Nearly all verified functions come from the
+lifter (`research/native/lift.py`, docs/NATIVE_PIPELINE.md "The lifter"),
+56,169 lifted entries with 167,227 recorded cases. The former platform
+classes (deleting destructors, DTI allocators, construct-if-memory
+wrappers, base destructor chains, the CRT) are lifted like everything else
+since L14; `scripts/inventory.py summary` reports them per historical rule.
+The 709 unverified rows each have a recorded reason (`research/native/
+platform_report.py`, `residual_census.py`): 533 recorder failures (random
+inputs cannot drive them; L15 adds image-backed reads), 161 lift
+rejections (FS segment accesses, x87 returns, a few instructions), ten
+quarantines (x87 status-word differences between the host and Unicorn)
+and five platform-model addresses (L15 task A).
 
 The game to rebuild is about **37,970 functions** (14.3 MB of code).
