@@ -68,4 +68,36 @@ and the "Drivers" paragraph.
 
 ## Results
 
-(open)
+### Boot log
+
+Headless runs use `cargo run -p ddruntime --example winmain` in the heavy
+slot (`CARGO_TARGET_DIR=C:/ddda-targets/L21`). Each entry gives the step
+`Session::start` reports, the stop, its cause and its fix or owner.
+
+1. main 5985a5b (L17A merged). Step `__mtinit` (the second CRT step;
+   `__heap_init` passed). Stop: call to untranslated code at 0x012F71E0
+   (`__SEH_prolog4`), called from just before 0x012F95C2. Cause: an
+   unverified CRT SEH helper (cause 2). Owner: claude-3 (L17 B/C), whose
+   provisional data is used below for look-ahead only.
+2. Generated (locally, uncommitted) from `E:/ddda-re/notes/native-L17`
+   (58,989 entries: the verified baseline plus 76 provisional additions,
+   among them `__SEH_prolog4`/`__SEH_epilog4`). Step `__mtinit`. Stop:
+   guest read of 4 bytes at 0x00000000 inside `__SEH_prolog4`. Cause:
+   runtime gap (cause 1). `push dword ptr fs:[0]` read FS:[0], but guest
+   threads ran with FS base 0 and had no thread information block. The exe
+   uses FS only at offset 0: Ghidra finds 53 instructions, all SEH chain
+   links. Fix: e754622 gives every guest thread an NT_TIB page (winnt.h:
+   ExceptionList = 0xFFFFFFFF end marker, StackBase, StackLimit, Self) at
+   0x7FB00000 + 0x1000 per thread, mapped when the thread starts, and sets
+   its FS base. Test `every_guest_thread_gets_a_thread_information_block`.
+3. With e754622: `__mtinit`, `__RTC_Initialize` and `__ioinit` pass. Step
+   `__setargv`. Stop: call to untranslated code at 0x012FB049
+   (`__setmbcp`), called from just before 0x012FB1F3. Cause: the inventory
+   gives `__setmbcp` status `platform` (rule "CRT/library range"). All 116
+   such CRT functions have no lifted body and are outside the residual
+   census. Besides `__setmbcp` they include `___updatetlocinfo`,
+   `__control87`, `___set_fpsr_sse2`, `___tzset`, the 64-bit division
+   helpers, the stdio/lowio layer and about 60 unnamed functions in
+   0x012E0EA0..0x0132A390. Only memset/memcpy have platform models.
+   Reported to the head with this list: lifting them is native-workflow
+   work (head / claude-6), not a runtime service.
