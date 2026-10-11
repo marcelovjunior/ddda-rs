@@ -4171,6 +4171,14 @@ name = "mtlot"
 version = "0.1.0"
 
 [[package]]
+name = "mtmath"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
+]
+
+[[package]]
 name = "mtmod"
 version = "0.1.0"
 dependencies = [
