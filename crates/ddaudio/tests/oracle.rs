@@ -199,6 +199,17 @@ fn as_voice<T: Interface>(v: &T) -> IXAudio2Voice {
 }
 
 fn host_render(g: &Graph, passes: usize) -> Vec<f32> {
+    host_render_with(g, passes, &[])
+}
+
+/// A level change applied while the host runs: after `delay` of real time,
+/// `apply` gets the source voices and the submix voices.
+struct HostChange {
+    delay: std::time::Duration,
+    apply: Box<dyn Fn(&[IXAudio2SourceVoice], &[IXAudio2Voice])>,
+}
+
+fn host_render_with(g: &Graph, passes: usize, changes: &[HostChange]) -> Vec<f32> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let mut raw = std::ptr::null_mut();
@@ -315,6 +326,10 @@ fn host_render(g: &Graph, passes: usize) -> Vec<f32> {
         }
         data.lock().unwrap().clear();
         xa.StartEngine().unwrap();
+        for c in changes {
+            std::thread::sleep(c.delay);
+            (c.apply)(&sources, &subs);
+        }
         let want = passes * PASS * g.master_channels as usize;
         while data.lock().unwrap().len() < want {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -339,6 +354,11 @@ fn host_render(g: &Graph, passes: usize) -> Vec<f32> {
 // floor(fraction + rate * ratio / 100) frames per pass.
 
 fn mixer_render(g: &Graph, passes: usize) -> Vec<f32> {
+    mixer_render_with(g, passes, &[])
+}
+
+/// Renders `g`, switching to `changes[i].1` from pass `changes[i].0` on.
+fn mixer_render_with(g: &Graph, passes: usize, changes: &[(usize, Graph)]) -> Vec<f32> {
     let mut mixer = Mixer::new();
     let master = 1u32;
     let sub_id = |i: usize| 100 + i as u32;
@@ -355,7 +375,12 @@ fn mixer_render(g: &Graph, passes: usize) -> Vec<f32> {
     let mut cursor = vec![0u64; g.sources.len()];
     let mut fraction = vec![0f64; g.sources.len()];
     let mut out = vec![];
-    for _ in 0..passes {
+    for pass in 0..passes {
+        let g = changes
+            .iter()
+            .rev()
+            .find(|(p, _)| *p <= pass)
+            .map_or(g, |(_, g)| g);
         for (i, s) in g.sources.iter().enumerate() {
             let f = &formats[i];
             let x = fraction[i] + f.rate as f64 * s.ratio as f64 / 100.0;
@@ -695,4 +720,278 @@ fn resampling_matches_the_host() {
         let c = run(&format!("pcm16 mono, ratio {ratio}"), &g, 40);
         assert_eq!((c.lag, c.max_error), (0, 0.0), "ratio {ratio}");
     }
+}
+
+/// The host's default send matrices (`GetOutputMatrix` without a prior
+/// `SetOutputMatrix`), source channels 1/2/6 into submix voices of 1/2/6
+/// channels and into the stereo mastering voice.
+fn host_default_matrices() -> Vec<((u32, u32, bool), Vec<f32>)> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let mut raw = std::ptr::null_mut();
+        xaudio2_9()(&mut raw, 0, 1, 0x0A00_0000).ok().unwrap();
+        let xa = IXAudio2::from_raw(raw);
+        xa.StopEngine();
+        let mut master = None;
+        xa.CreateMasteringVoice(
+            &mut master,
+            2,
+            RATE,
+            0,
+            PCWSTR::null(),
+            None,
+            AudioCategory_GameEffects,
+        )
+        .unwrap();
+        let master = master.unwrap();
+        let mut out = vec![];
+        for dst in [1u32, 2, 6, 0] {
+            let dest: IXAudio2Voice = if dst == 0 {
+                as_voice(&master)
+            } else {
+                let mut v = None;
+                xa.CreateSubmixVoice(&mut v, dst, RATE, 0, 0, None, None).unwrap();
+                as_voice(&v.unwrap())
+            };
+            let dc = if dst == 0 { 2 } else { dst };
+            for src in [1u32, 2, 6] {
+                let mut sends = [XAUDIO2_SEND_DESCRIPTOR {
+                    Flags: 0,
+                    pOutputVoice: std::mem::ManuallyDrop::new(Some(dest.clone())),
+                }];
+                let list = XAUDIO2_VOICE_SENDS {
+                    SendCount: 1,
+                    pSends: sends.as_mut_ptr(),
+                };
+                let fmt = wave(&Format::pcm16(src, RATE));
+                let mut v = None;
+                xa.CreateSourceVoice(
+                    &mut v,
+                    fmt.as_ptr() as *const WAVEFORMATEX,
+                    0,
+                    2.0,
+                    None::<&IXAudio2VoiceCallback>,
+                    Some(&list),
+                    None,
+                )
+                .unwrap();
+                let v = v.unwrap();
+                let mut m = vec![0f32; (src * dc) as usize];
+                let voice = as_voice(&v);
+                let vt = Interface::vtable(&voice);
+                (vt.GetOutputMatrix)(voice.as_raw(), dest.as_raw(), src, dc, m.as_mut_ptr());
+                out.push(((src, dc, dst == 0), m));
+                v.DestroyVoice();
+            }
+            if dst != 0 {
+                dest.DestroyVoice();
+            }
+        }
+        master.DestroyVoice();
+        out
+    }
+}
+
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn default_matrices_match_the_host() {
+    for ((src, dst, master), m) in host_default_matrices() {
+        println!(
+            "{src} -> {dst}{}: {m:?}",
+            if master { " (mastering)" } else { "" }
+        );
+        assert_eq!(m, ddaudio::mixer::default_matrix(src, dst), "{src} -> {dst}");
+    }
+    // And they are what the host mixes with: 1, 2 and 6 channel sources
+    // into the stereo mastering voice, and 6 channels through a mono and a
+    // 6-channel submix, all without SetOutputMatrix.
+    let src = |ch: u32, seed, dest| SourceSpec {
+        format_bytes: wave(&Format::pcm16(ch, RATE)),
+        data: pcm16_signal(ch, 48000, seed),
+        ratio: 1.0,
+        dests: vec![(dest, None)],
+        volume: 0.25,
+        channel_volumes: vec![],
+    };
+    let sub = |channels, stage| SubmixSpec {
+        channels,
+        stage,
+        dest: Dest::Master,
+        matrix: None,
+        volume: 1.0,
+    };
+    let g = Graph {
+        master_channels: 2,
+        submixes: vec![sub(1, 0), sub(6, 1)],
+        sources: vec![
+            src(1, 11, Dest::Master),
+            src(2, 12, Dest::Master),
+            src(6, 13, Dest::Master),
+            src(6, 14, Dest::Submix(0)),
+            src(2, 15, Dest::Submix(1)),
+        ],
+    };
+    let c = run("default matrices", &g, 50);
+    assert_eq!(c.lag, 0);
+    assert!(c.max_error <= 1e-6, "{}", c.max_error);
+}
+
+/// The game's shape (census in the L19 brief): mono/stereo/5.1 sources
+/// with explicit 1-to-6 (and 2/6-to-6) matrices into 6-channel stage-2
+/// submixes, into a stage-3 submix, into a stage-4 submix, into the
+/// mastering voice; plus a mono send through a stage-1 mono submix.
+/// Voice volumes and channel volumes on top.
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn matrices_volumes_and_stages_match_the_host() {
+    let pan = |l: f32, r: f32, c: f32, lfe: f32, bl: f32, br: f32| vec![l, r, c, lfe, bl, br];
+    let src =
+        |ch: u32, seed, dests: Vec<(Dest, Option<Vec<f32>>)>, volume, channel_volumes: Vec<f32>| SourceSpec {
+            format_bytes: wave(&Format::pcm16(ch, RATE)),
+            data: pcm16_signal(ch, 48000, seed),
+            ratio: 1.0,
+            dests,
+            volume,
+            channel_volumes,
+        };
+    let g = Graph {
+        master_channels: 2,
+        submixes: vec![
+            // 0: stage 4 -> master, 6->2 matrix
+            SubmixSpec {
+                channels: 6,
+                stage: 4,
+                dest: Dest::Master,
+                matrix: Some(vec![0.9, 0.0, 0.5, 0.1, 0.6, 0.0, 0.0, 0.9, 0.5, 0.1, 0.0, 0.6]),
+                volume: 0.8,
+            },
+            // 1: stage 3 -> 0
+            SubmixSpec {
+                channels: 6,
+                stage: 3,
+                dest: Dest::Submix(0),
+                matrix: None,
+                volume: 1.0,
+            },
+            // 2: stage 2 -> 1
+            SubmixSpec {
+                channels: 6,
+                stage: 2,
+                dest: Dest::Submix(1),
+                matrix: None,
+                volume: 0.7,
+            },
+            // 3: stage 1 mono -> 1 with a 1->6 matrix
+            SubmixSpec {
+                channels: 1,
+                stage: 1,
+                dest: Dest::Submix(1),
+                matrix: Some(pan(0.3, 0.3, 0.2, 0.0, 0.4, 0.4)),
+                volume: 1.0,
+            },
+        ],
+        sources: vec![
+            src(
+                1,
+                21,
+                vec![
+                    (Dest::Submix(2), Some(pan(0.8, 0.2, 0.3, 0.05, 0.4, 0.1))),
+                    (Dest::Submix(3), Some(vec![0.35])),
+                ],
+                0.6,
+                vec![],
+            ),
+            src(
+                2,
+                22,
+                vec![(
+                    Dest::Submix(2),
+                    Some(vec![0.7, 0.0, 0.0, 0.7, 0.3, 0.3, 0.0, 0.0, 0.5, 0.0, 0.0, 0.5]),
+                )],
+                1.0,
+                vec![0.5, 1.2],
+            ),
+            src(
+                6,
+                23,
+                vec![(Dest::Submix(1), None)],
+                0.4,
+                vec![1.0, 0.9, 0.8, 0.7, 0.6, 0.5],
+            ),
+            src(1, 24, vec![(Dest::Master, Some(vec![-0.3, 0.6]))], 1.0, vec![]),
+        ],
+    };
+    let c = run("matrices, volumes, stages", &g, 50);
+    assert_eq!(c.lag, 0);
+    assert!(c.max_error <= 1e-6, "{}", c.max_error);
+}
+
+/// Level changes ramp over 48 frames on the host. The host applies a
+/// change at the next pass after the call, so the test finds that pass in
+/// the host's output and replays the change there.
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn level_changes_ramp_like_the_host() {
+    let ms = std::time::Duration::from_millis;
+    let base = Graph {
+        master_channels: 2,
+        submixes: vec![SubmixSpec {
+            channels: 6,
+            stage: 0,
+            dest: Dest::Master,
+            matrix: None,
+            volume: 1.0,
+        }],
+        sources: vec![SourceSpec {
+            format_bytes: wave(&Format::pcm16(1, RATE)),
+            data: pcm16_signal(1, 48000, 31),
+            ratio: 1.0,
+            dests: vec![(Dest::Submix(0), Some(vec![1.0, 0.5, 0.2, 0.0, 0.3, 0.1]))],
+            volume: 1.0,
+            channel_volumes: vec![],
+        }],
+    };
+    let mut a = base.clone();
+    a.sources[0].dests[0].1 = Some(vec![0.1, 0.9, 0.0, 0.0, 0.6, -0.4]);
+    let mut b = a.clone();
+    b.sources[0].volume = 0.3;
+    let mut c = b.clone();
+    c.submixes[0].volume = 0.5;
+    let wanted = [a, b, c];
+    let changes = vec![
+        HostChange {
+            delay: ms(120),
+            apply: Box::new(|src, sub| unsafe {
+                let m = [0.1f32, 0.9, 0.0, 0.0, 0.6, -0.4];
+                as_voice(&src[0])
+                    .SetOutputMatrix(&sub[0], 1, 6, m.as_ptr(), 0)
+                    .unwrap();
+            }),
+        },
+        HostChange {
+            delay: ms(120),
+            apply: Box::new(|src, _| unsafe { as_voice(&src[0]).SetVolume(0.3, 0).unwrap() }),
+        },
+        HostChange {
+            delay: ms(120),
+            apply: Box::new(|_, sub| unsafe { sub[0].SetVolume(0.5, 0).unwrap() }),
+        },
+    ];
+    let passes = 60;
+    let host = host_render_with(&base, passes, &changes);
+    let mut at: Vec<(usize, Graph)> = vec![];
+    for g in &wanted {
+        let ours = mixer_render_with(&base, passes, &at);
+        let frame = (0..host.len())
+            .find(|&i| (host[i] - ours[i]).abs() > 1e-6)
+            .expect("the change is audible")
+            / 2;
+        println!("change landed at pass {} (+{})", frame / PASS, frame % PASS);
+        at.push((frame / PASS, g.clone()));
+    }
+    let ours = mixer_render_with(&base, passes, &at);
+    let c = compare(&host, &ours, 2);
+    println!("level ramps: lag {}, max |error| {:e}", c.lag, c.max_error);
+    assert_eq!(c.lag, 0);
+    assert!(c.max_error <= 1e-6, "{}", c.max_error);
 }

@@ -122,6 +122,24 @@ struct Dsp {
     channels: u32,
     resampler: Resampler,
     reverbs: BTreeMap<usize, Reverb>,
+    /// The levels in effect at the end of the last pass, ramped from.
+    volume: Option<f32>,
+    channel_volumes: Vec<f32>,
+    matrices: HashMap<VoiceId, Vec<f32>>,
+}
+
+/// Volume, channel-volume and matrix changes ramp linearly over this many
+/// frames from the old to the new level: the host's XAudio2 2.9 does so at
+/// 48 kHz, starting at the first pass after the change; the pass's frame 0
+/// still has the old level (oracle `level_changes_ramp_like_the_host`).
+pub const RAMP_FRAMES: usize = 48;
+
+fn ramp(old: f32, new: f32, k: usize) -> f32 {
+    if k >= RAMP_FRAMES || old == new {
+        new
+    } else {
+        old + (new - old) * (k as f32 / RAMP_FRAMES as f32)
+    }
 }
 
 #[derive(Default)]
@@ -137,27 +155,38 @@ struct Bus {
     valid: bool,
 }
 
-/// XAudio2's default matrix when a send has no `SetOutputMatrix`.
-/// Mono to stereo: both front channels at full scale ("XAudio2 Default
-/// Channel Mapping"). Other pairs: `GetOutputMatrix` of the host's XAudio2
-/// 2.9 for a voice without a custom matrix (tests/oracle.rs,
-/// `default_matrices_match_the_host`).
+/// XAudio2's default matrix when a send has no `SetOutputMatrix`, for the
+/// channel counts the game's voices have (1, 2, 6; the endpoint is stereo).
+/// Values: `GetOutputMatrix` of the host's XAudio2 2.9 for voices without a
+/// custom matrix (oracle `default_matrices_match_the_host`, which also
+/// renders them); mono to stereo agrees with "XAudio2 Default Channel
+/// Mapping" (both front channels at full scale). The same matrices apply
+/// to a stereo mastering voice. Other channel pairs were not measured: they
+/// fall back to a channel-for-channel diagonal (an unverified guess; the
+/// game creates no such pair).
 pub fn default_matrix(src: u32, dst: u32) -> Vec<f32> {
+    // -3 dB, as the host reports it (10^(-3/20) rounded to f32).
+    const M3DB: f32 = 0.70794576;
     let (s, d) = (src as usize, dst as usize);
+    let measured: Option<&[f32]> = match (src, dst) {
+        (1, 1) => Some(&[1.0]),
+        (2, 1) => Some(&[0.5, 0.5]),
+        // The host's value is one ulp below 1.0f32 / 6.0.
+        (6, 1) => Some(&[0.16666666; 6]),
+        (1, 2) => Some(&[1.0, 1.0]),
+        (2, 2) => Some(&[1.0, 0.0, 0.0, 1.0]),
+        // FL, FR, FC, LFE, BL, BR: centre and back at -3 dB, LFE dropped.
+        (6, 2) => Some(&[1.0, 0.0, M3DB, 0.0, M3DB, 0.0, 0.0, 1.0, M3DB, 0.0, 0.0, M3DB]),
+        (1, 6) => Some(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+        _ => None,
+    };
+    if let Some(m) = measured {
+        return m.to_vec();
+    }
+    // 2 -> 6 and 6 -> 6 measured as this diagonal too.
     let mut m = vec![0.0; s * d];
-    match (src, dst) {
-        (1, _) => {
-            // Mono feeds the front left/right pair (or the only channel).
-            m[0] = 1.0;
-            if d > 1 {
-                m[1] = 1.0;
-            }
-        }
-        _ => {
-            for c in 0..s.min(d) {
-                m[s * c + c] = 1.0;
-            }
-        }
+    for c in 0..s.min(d) {
+        m[s * c + c] = 1.0;
     }
     m
 }
@@ -222,8 +251,14 @@ impl Mixer {
             };
             let frames = (samples.len() / n.channels.max(1) as usize) as u32;
             // (1) volume
-            if n.volume != 1.0 {
-                samples.iter_mut().for_each(|x| *x *= n.volume);
+            {
+                let dsp = self.dsp.entry(n.id).or_default();
+                let old = dsp.volume.unwrap_or(n.volume);
+                for (k, frame) in samples.chunks_mut(n.channels.max(1) as usize).enumerate() {
+                    let g = ramp(old, n.volume, k);
+                    frame.iter_mut().for_each(|x| *x *= g);
+                }
+                dsp.volume = Some(n.volume);
             }
             // (2) effect chain
             let (mut samples, mut channels, mut valid) = (samples, n.channels, valid);
@@ -259,14 +294,25 @@ impl Mixer {
                 channels = e.channels;
             }
             // (3) channel volumes
-            if !n.channel_volumes.is_empty() {
-                for (i, x) in samples.iter_mut().enumerate() {
-                    *x *= n
-                        .channel_volumes
-                        .get(i % channels as usize)
-                        .copied()
-                        .unwrap_or(1.0);
+            {
+                let ch = channels.max(1) as usize;
+                let new: Vec<f32> = (0..ch)
+                    .map(|c| n.channel_volumes.get(c).copied().unwrap_or(1.0))
+                    .collect();
+                let dsp = self.dsp.entry(n.id).or_default();
+                let old = if dsp.channel_volumes.len() == ch {
+                    std::mem::take(&mut dsp.channel_volumes)
+                } else {
+                    new.clone()
+                };
+                if old != new || new.iter().any(|g| *g != 1.0) {
+                    for (k, frame) in samples.chunks_mut(ch).enumerate() {
+                        for (c, x) in frame.iter_mut().enumerate() {
+                            *x *= ramp(old[c], new[c], k);
+                        }
+                    }
                 }
+                dsp.channel_volumes = new;
             }
             if n.kind == Kind::Mastering {
                 master = Some(samples);
@@ -289,19 +335,23 @@ impl Mixer {
                 _ => samples,
             };
             // (4) one matrix mix per destination
+            let dsp = self.dsp.entry(n.id).or_default();
+            dsp.matrices.retain(|d, _| n.sends.iter().any(|s| s.dest == *d));
             for send in &n.sends {
                 let Some(bus) = buses.get_mut(&send.dest) else {
                     continue;
                 };
-                let default;
                 let m = match send.matrix {
-                    Some(m) => m,
-                    None => {
-                        default = default_matrix(channels, bus.channels);
-                        &default
-                    }
+                    Some(m) => m.to_vec(),
+                    None => default_matrix(channels, bus.channels),
                 };
-                mix(&samples, channels, m, &mut bus.samples, bus.channels);
+                let old = dsp
+                    .matrices
+                    .remove(&send.dest)
+                    .filter(|o| o.len() == m.len())
+                    .unwrap_or_else(|| m.clone());
+                mix_ramped(&samples, channels, &old, &m, &mut bus.samples, bus.channels);
+                dsp.matrices.insert(send.dest, m);
                 bus.valid = true;
             }
         }
@@ -318,6 +368,31 @@ impl Mixer {
         let step = n.rate as f64 * n.ratio as f64 / rate as f64;
         d.resampler.render(n.channels, step, (rate / 100) as usize)
     }
+}
+
+/// [`mix`], with the matrix ramping from `old` to `new` over the first
+/// [`RAMP_FRAMES`] frames.
+pub fn mix_ramped(input: &[f32], src: u32, old: &[f32], new: &[f32], out: &mut [f32], dst: u32) {
+    let (s, d) = (src as usize, dst as usize);
+    let head = if old == new {
+        0
+    } else {
+        RAMP_FRAMES.min(input.len() / s.max(1))
+    };
+    let mut m = vec![0.0; new.len()];
+    for k in 0..head {
+        for (j, x) in m.iter_mut().enumerate() {
+            *x = ramp(old[j], new[j], k);
+        }
+        mix(
+            &input[k * s..(k + 1) * s],
+            src,
+            &m,
+            &mut out[k * d..(k + 1) * d],
+            dst,
+        );
+    }
+    mix(&input[head * s..], src, new, &mut out[head * d..], dst);
 }
 
 /// `out[d] += in[s] * m[src * d + s]` for every frame.
