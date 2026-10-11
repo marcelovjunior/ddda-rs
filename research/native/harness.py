@@ -224,20 +224,97 @@ class SparseInputs:
 
 
 def static_pop(target, _cache={}):
-    """Bytes a function pops with its `ret N` (first ret in a linear sweep;
-    0 when none is found or the target is outside the image)."""
-    if target not in _cache:
+    """Bounded reachable ret cleanup, following direct tails, never neighbours.
+
+    Unknown, indirect or inconsistent exits retain the zero-pop fallback.
+    The cache includes the reader so synthetic images cannot contaminate it.
+    """
+    key = (target, code, image)
+    if key not in _cache:
         from capstone import Cs, CS_ARCH_X86, CS_MODE_32
-        pop = 0
-        try:
-            for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(code(target, 0x1000), target):
-                if i.mnemonic in ("ret", "retn"):
-                    pop = int(i.op_str, 0) if i.op_str else 0
+        md = Cs(CS_ARCH_X86, CS_MODE_32)
+        md.detail = True
+        todo, seen, pops, unknown = [target], set(), set(), False
+        while todo and not unknown:
+            pc = todo.pop()
+            while pc not in seen:
+                if len(seen) >= 512:
+                    unknown = True
                     break
-        except KeyError:
-            pass
-        _cache[target] = pop
-    return _cache[target]
+                seen.add(pc)
+                try:
+                    i = next(md.disasm(code(pc, 15), pc, count=1))
+                except (KeyError, StopIteration):
+                    unknown = True
+                    break
+                if i.mnemonic in ('ret', 'retn'):
+                    pops.add(i.operands[0].imm if i.operands else 0)
+                    break
+                if i.mnemonic in ('int3', 'ud2', 'hlt'):
+                    unknown = True
+                    break
+                if i.mnemonic.startswith('j'):
+                    if i.operands[0].type != 2:
+                        unknown = True
+                        break
+                    todo.append(i.operands[0].imm & 0xffffffff)
+                    if i.mnemonic == 'jmp':
+                        break
+                pc += i.size
+        _cache[key] = pops.pop() if not unknown and len(pops) == 1 else 0
+    return _cache[key]
+
+
+def saved_push_sites(address, body):
+    """Recognize interleaved callee saves on paths before the first call.
+
+    This refines the mock ABI heuristic, not a recovered callee contract.
+    Require an unmodified nonvolatile register and a matching own pop;
+    stop at calls and returns. Never infer from random memory.
+    """
+    if body is None:
+        return set()
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    restored = set()
+    for pc in body:
+        byte = code(pc, 1)
+        if byte and 0x58 <= byte[0] <= 0x5f:
+            restored.add(byte[0] - 0x58)
+    eligible = {name for k, name in enumerate(('eax','ecx','edx','ebx','esp','ebp','esi','edi'))
+                if k in restored and name in ('ebx','ebp','esi','edi')}
+    saved, invalid, seen = set(), set(), set()
+    todo = [(address, frozenset(eligible))]
+    while todo:
+        pc, available = todo.pop()
+        if pc not in body or (pc, available) in seen:
+            continue
+        seen.add((pc, available))
+        eligible = set(available)
+        i = next(md.disasm(code(pc, 15), pc, count=1), None)
+        if i is None or i.mnemonic in ('call','ret','retn'):
+            continue
+        if i.mnemonic == 'push' and i.operands[0].type == 1:
+            name = i.reg_name(i.operands[0].reg)
+            if name in eligible:
+                saved.add(pc)
+                eligible.remove(name)
+            else:
+                invalid.add(pc)
+        for r in i.regs_access()[1]:
+            name = i.reg_name(r)
+            if name in ('bl','bh','bx'): name = 'ebx'
+            if name in ('bp','si','di'): name = 'e'+name
+            eligible.discard(name)
+        if i.mnemonic.startswith('j'):
+            if i.operands[0].type == 2:
+                todo.append((i.operands[0].imm & 0xffffffff, frozenset(eligible)))
+            if i.mnemonic == 'jmp':
+                continue
+        todo.append((pc+i.size, frozenset(eligible)))
+    saved -= invalid
+    return saved
 
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
@@ -684,6 +761,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     dmd = Cs(CS_ARCH_X86, CS_MODE_32)
     dmd.detail = True
     own = {}
+    saved_pushes = saved_push_sites(address, body) if end is not None else set()
 
     def on_ext(uc_, pc, size, _):
         # a call to the function's own entry (recursion) leaves it like any
@@ -700,7 +778,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             if not pushed[1] and not prologue:
                 pushed[1] = True
             if pushed[1]:  # argument space: pushes and `sub esp, N` (float args stored with movss)
-                if i.mnemonic == "push":
+                if i.mnemonic == "push" and i.address not in saved_pushes:
                     pushed[0] += 4
                 elif i.mnemonic == "sub" and i.op_str.startswith("esp, ") and i.operands[1].type == 2:
                     pushed[0] += i.operands[1].imm
@@ -720,6 +798,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         ev = {"target": pc, "regs": {n: uc_.reg_read(r) for n, r in GPR}}
         direct = i.operands[0].type == 2  # X86_OP_IMM
         pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
+        # Explicit immediate caller cleanup means these argument bytes are
+        # not callee-popped. This is still a mock ABI inference, not execution
+        # of the unavailable callee. Preserve its value in the recorded event.
+        if not direct and i.mnemonic == "call":
+            after = i.address + i.size
+            if is_own(after):
+                cleanup = next(dmd.disasm(code(after, 15), after, count=1), None)
+                if (cleanup is not None and cleanup.mnemonic == "add"
+                        and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
+                    pop = max(0, pop - max(0, cleanup.operands[1].imm))
         ret = struct.unpack("<I", mread(esp, 4))[0]
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],

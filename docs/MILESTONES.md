@@ -743,3 +743,40 @@ opening (codex-31), route perf (codex-29).
   an exhaustive current candidate census; see the L09 Results and reports.
 - **One next action:** head reviews/adopts the verified pair, then traces
   representative remaining outside-image failures without relaxing guards.
+
+
+## Batch 2026-10-11 (L11: indirect tails and recorder stack cleanup)
+
+- **Implemented:** non-switch dword register/memory jumps in ext mode read
+  their target through guest memory/registers, continue at known local
+  instruction starts, and otherwise tail-call through `call_ext`. Closed
+  decoding stays strict; ambiguous absolute switches remain rejected.
+- **Traced and corrected:** mock argument counting included interleaved
+  callee saves (`0x004065EA`, `0x0040D826`); linear stack-pop discovery read
+  a neighbouring function after a tail jump (`0x00D009E6`); indirect caller
+  cleanup could be applied twice (`0x0040846C`). Recorded pop values remain
+  explicit mock ABI guesses; every existing validity guard remains active.
+  New `trace_recorder.py` diagnoses unusable fixtures without a Rust build.
+- **Measured:** missing-entry lift rejections **971 -> 595**; 376 new
+  liftable bodies, 371 now verified. Recorder fixes/retries add another 898
+  previously liftable functions. A controlled 60-function sample drops
+  outside-image failures from 57 to 13; 53 original failures followed own
+  returns and four mocked tail returns. Residual causes are not assumed.
+- **Verified:** selection **41,512 -> 42,781**, cases **123,574 -> 127,303**,
+  all baseline records unchanged. All 53 Python tests, the 46,098-case
+  addition/dependency subset, and final full `cargo test -p ddnative` pass
+  (32 Rust tests). `sBbsRpgMain::vf06` at `0x0041DD60` now has sampled
+  original-instruction replay with mocked callees; no game-boot claim.
+- **Inventory/resources:** 42,785 verified, **75.6%** of current 56,577
+  non-thunk entries and **87.5%** of summed code-size estimates. Five added
+  supplementary entries explain the denominator change since L09. Final
+  compile 4m20s, replay 57.42s, total 324.06s; minimum free RAM 16.26 GiB.
+  Four Cargo jobs, incremental off, six vector workers, no build/vector
+  overlap or memory-threshold crossing. Shared data stays read-only.
+- **Open:** 485 recorder failures (286 primarily outside-image in the last
+  input pass), 595 lift rejections (333 unsupported switch remappings), and
+  four unchanged quarantines. Initializer `0x0137E490` still lacks fixtures.
+- **One next action:** head reviews/adopts the matching private `native-L11`
+  pair and regenerates; then investigate switch remappings and residual
+  mock-stack failures without relaxing guards. Source/tests/docs only;
+  no runtime code, Ghidra restart, shared gate or push.
