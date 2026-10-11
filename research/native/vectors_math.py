@@ -49,7 +49,12 @@ UC_XMM = [getattr(xc, f"UC_X86_REG_XMM{k}") for k in range(8)]
 OBJ = h.SCRATCH + 0x100       # `this`: 0x100 garbage bytes either side
 OBJ_WINDOW = (h.SCRATCH, 0x300)
 ESP = h.STACK + h.STACK_SIZE - 0x1000  # minus 0, 4, 8 or 12: every frame alignment
-BELOW, ABOVE = 0x80, 0x40  # the stack window around ESP
+BELOW, ABOVE = 0x200, 0x40  # the stack window around ESP (callees' frames included)
+# Calls the ported functions make to code that is not ported. The original
+# callee runs in Unicorn; the case records the machine at its entry and at
+# its return (registers, all xmm lanes, the stack window), and the replay
+# checks the entry and restores the return state (crates/mtmath/tests).
+CALLOUTS = {0x012F1109}  # CRT atan2 (doubles in xmm0/xmm1)
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -63,6 +68,8 @@ PORTS = {
     0x00CFD5E0: ("look_at", 3),
     0x00CFD890: ("look_at", 3),
     0x00CFDB10: ("reflect", 1),
+    0x007AD9D0: ("yaw", 0),
+    0x007AD7A0: ("yaw", 0),
 }
 VEC = [h.SCRATCH + 0x20, h.SCRATCH + 0x40, h.SCRATCH + 0x60, h.SCRATCH + 0x80]  # input vectors
 
@@ -115,6 +122,11 @@ def run(addr, regs, xmm, obj, args):
     bad = []
     fixups = []   # [(register, {lane: bits})] to apply before the next instruction
     fixed = [0]
+    calls, inside = [], []  # recorded callouts; [(return address, esp after return)]
+    read_xmm = lambda r: [(uc.reg_read(r) >> (32 * k)) & 0xFFFFFFFF for k in range(4)]
+
+    def machine():
+        return {"regs": {n: uc.reg_read(r) for n, r in zip(GPR, UC_GPR)}, "xmm": [read_xmm(r) for r in UC_XMM]}
 
     def lanes(i, op):
         if op.type == 1:
@@ -133,10 +145,23 @@ def run(addr, regs, xmm, obj, args):
             for lane, bits in want.items():
                 v = (v & ~(0xFFFFFFFF << (32 * lane))) | (bits << (32 * lane))
             uc_.reg_write(reg, v)
+        if inside:
+            back, esp = inside[-1]
+            if a == back and uc_.reg_read(xc.UC_X86_REG_ESP) == esp:
+                inside.pop()
+                calls[-1]["out"] = machine()
+                calls[-1]["out"]["stack"] = bytes(uc_.mem_read(*stack_window)).hex()
+            return  # the callee is recorded, not judged
         i = next(md.disasm(bytes(uc_.mem_read(a, size)), a))
         if i.mnemonic == "call":
-            bad.append(f"call at {a:#x}")
-            uc_.emu_stop()
+            target = i.operands[0].imm & 0xFFFFFFFF if i.operands[0].type == 2 else None
+            if target not in CALLOUTS:
+                bad.append(f"call at {a:#x}")
+                uc_.emu_stop()
+                return
+            calls.append({"target": target, "in": machine()})
+            inside.append((a + size, uc_.reg_read(xc.UC_X86_REG_ESP)))
+            return
         if i.mnemonic[:3] in ("add", "sub", "mul", "div") and i.mnemonic.endswith(("ss", "ps")):
             x, y = lanes(i, i.operands[0]), lanes(i, i.operands[1])
             want = {k: p | 0x400000 for k, (p, q) in enumerate(zip(x, y)) if is_nan(p) and is_nan(q)}
@@ -151,9 +176,8 @@ def run(addr, regs, xmm, obj, args):
         raise Dropped(f"{e}")
     if bad:
         raise Dropped(bad[0])
-    if uc.reg_read(xc.UC_X86_REG_EIP) != h.RET:
+    if uc.reg_read(xc.UC_X86_REG_EIP) != h.RET or inside:
         raise Dropped("did not return")
-    read_xmm = lambda r: [(uc.reg_read(r) >> (32 * k)) & 0xFFFFFFFF for k in range(4)]
     return {
         "addr": addr,
         "regs_in": regs, "xmm_in": xmm,
@@ -162,6 +186,7 @@ def run(addr, regs, xmm, obj, args):
         "xmm_out": [read_xmm(r) for r in UC_XMM],
         "mem_out": [[w[0], bytes(uc.mem_read(w[0], w[1])).hex()] for w in (OBJ_WINDOW, stack_window)],
         "nan_fixups": fixed[0],
+        "calls": calls,
     }
 
 
@@ -201,6 +226,14 @@ def edge_cases(addr, kind, nargs, n, seed):
             args = [floats(rnd) for _ in range(4)]
         elif kind == "angle":
             xmm[0][0], xmm[1][0] = floats(rnd), floats(rnd)
+        elif kind == "yaw":
+            regs["ecx"], regs["eax"] = VEC[0], VEC[1]
+            for k in range(2):
+                v = ([f2b(rnd.uniform(-100, 100)) for _ in range(4)] if rnd.random() < 0.5
+                     else [floats(rnd) for _ in range(4)])
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            if rnd.random() < 0.1:  # the same point twice
+                obj[VEC[1] - OBJ_WINDOW[0]:VEC[1] - OBJ_WINDOW[0] + 16] = obj[VEC[0] - OBJ_WINDOW[0]:VEC[0] - OBJ_WINDOW[0] + 16]
         elif kind in ("look_at", "reflect"):
             vecs = [[floats(rnd) for _ in range(4)] for _ in range(3)]
             pick = rnd.random()

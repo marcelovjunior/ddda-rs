@@ -28,7 +28,7 @@ use crate::random::Random;
 use crate::scalar::F32;
 use crate::types::{Mat44, Plane, Vec3};
 use ddnative_base::mem::Mem;
-use ddnative_base::x86::Cpu;
+use ddnative_base::x86::{self, Cpu};
 
 /// The 32-bit stack argument `k` (0 = the first, at `[esp + 4]`).
 fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
@@ -244,11 +244,104 @@ pub fn f_00cfdb10(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 4);
 }
 
+/// A call the original makes to code that is not ported: pushes the
+/// return address and goes where the lifted body's call goes
+/// (`x86::call_ext`: the runtime's dispatcher, or a recorded replay in
+/// tests), with the machine in the state the original has at that call.
+fn call_out(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, return_to: u32) {
+    cpu.esp = cpu.esp.wrapping_sub(4);
+    m.set_u32(cpu.esp, return_to);
+    x86::call_ext(m, cpu, target);
+}
+
+/// The CRT's double-precision atan2 (SSE2 entry: y in xmm0, x in xmm1,
+/// result in xmm0), not ported (platform code).
+const CRT_ATAN2: u32 = 0x012F_1109;
+
+/// `cvtps2pd`/`cvtss2sd` of a single float into a cleared register: the
+/// double in lanes 0..1, zero above.
+fn double_lanes(v: f64) -> [u32; 4] {
+    let b = v.to_bits();
+    [b as u32, (b >> 32) as u32, 0, 0]
+}
+
+/// Calls the CRT atan2 from inside `push ebp; mov ebp, esp; and esp, -8`
+/// and returns its result (xmm0 lanes 0..1).
+fn atan2_out(m: &mut dyn Mem, cpu: &mut Cpu, y: f64, x: f64, return_to: u32) -> f64 {
+    cpu.xmm[0] = double_lanes(y);
+    cpu.xmm[1] = double_lanes(x);
+    call_out(m, cpu, CRT_ATAN2, return_to);
+    f64::from_bits(cpu.xmm[0][0] as u64 | (cpu.xmm[0][1] as u64) << 32)
+}
+
+/// The registers the shared tail of the yaw helpers leaves, from the
+/// angle the CRT returned, then `mov esp, ebp; pop ebp; ret`.
+fn yaw_tail(cpu: &mut Cpu, angle: f64, entry_esp: u32, ebp: u32) {
+    let a = F32(angle as f32);
+    let w = angle::wrap_angle(a);
+    cpu.xmm[0] = scalar(w.result);
+    cpu.xmm[1] = scalar(a);
+    cpu.xmm[2] = scalar(angle::TWO_PI);
+    cpu.xmm[3] = scalar(F32(w.turns as f32) * angle::TWO_PI);
+    cpu.eax = w.turns as u32;
+    cpu.esp = entry_esp;
+    cpu.ebp = ebp;
+    ret(cpu, 0);
+}
+
+/// Enters the yaw helpers' frame: `push ebp; mov ebp, esp; and esp, -8`.
+fn yaw_frame(m: &mut dyn Mem, cpu: &mut Cpu) -> (u32, u32) {
+    let (entry_esp, ebp) = (cpu.esp, cpu.ebp);
+    pushed(m, cpu, 1, ebp);
+    cpu.ebp = entry_esp.wrapping_sub(4);
+    cpu.esp = cpu.ebp & !7;
+    (entry_esp, ebp)
+}
+
+fn load_xz(m: &dyn Mem, addr: u32) -> Vec3 {
+    let f = |k: u32| F32::from_bits(m.u32(addr.wrapping_add(4 * k)));
+    Vec3::new(f(0), F32::ZERO, f(2))
+}
+
+/// `float yaw_between(const MtVector3 *from /* ecx */, const MtVector3
+/// *to /* eax */)`, result in xmm0; reads only x and z. Calls the CRT
+/// atan2; leaves the whole turns it removed in EAX.
+pub fn f_007ad9d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (from, to) = (load_xz(m, cpu.ecx), load_xz(m, cpu.eax));
+    let (entry_esp, ebp) = yaw_frame(m, cpu);
+    let mut angle = 0.0;
+    angle::yaw_between(from, to, |y, x| {
+        angle = atan2_out(m, cpu, y, x, 0x007A_D9F3);
+        angle
+    });
+    yaw_tail(cpu, angle, entry_esp, ebp);
+}
+
+/// `float yaw_of_direction(const MtVector3 *from /* ecx */, const
+/// MtVector3 *to /* eax */)`, result in xmm0. Calls the CRT atan2; leaves
+/// the whole turns it removed in EAX.
+pub fn f_007ad7a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (from, to) = (load_vec3(m, cpu.ecx), load_vec3(m, cpu.eax));
+    let (entry_esp, ebp) = yaw_frame(m, cpu);
+    let mut angle = 0.0;
+    angle::yaw_of_direction(from, to, |y, x| {
+        // before the call: xmm2 holds dx, xmm3 the z the yaw is taken of
+        let (_, z) = angle::direction_xz(from, to);
+        cpu.xmm[2] = scalar(from.x - to.x);
+        cpu.xmm[3] = scalar(z);
+        angle = atan2_out(m, cpu, y, x, 0x007A_D818);
+        angle
+    });
+    yaw_tail(cpu, angle, entry_esp, ebp);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
 pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
+    (0x007A_D7A0, f_007ad7a0, 0b1111_1111),
     (0x007A_D870, f_007ad870, 0b0001_1111),
+    (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
     (0x00CF_C770, f_00cfc770, 0b0000_0001),
     (0x00CF_C810, f_00cfc810, 0b0000_0001),
     (0x00CF_C8B0, f_00cfc8b0, 0b0000_0001),
