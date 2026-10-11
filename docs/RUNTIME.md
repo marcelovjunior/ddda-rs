@@ -570,6 +570,38 @@ be reported as the R06/R07 fidelity gates. No stage grants a blanket
 “return zero” handler for unimplemented APIs. A successful failure-path
 fixture is useful evidence, not proof the success path works.
 
+## Implementation status (crates/ddruntime, 2026-10-11)
+
+Built by the head after the plan above was accepted. Each item cites its
+module; behaviour choices are labelled in the code.
+
+| Piece | Module | State |
+|---|---|---|
+| Guest address space: software page table, read/write permissions, lazily backed regions, wrapping and page-crossing accesses, faults naming address/width/reason | `memory.rs` | done, tested |
+| Image loader: headers and sections at their VAs from the player's exe, zero BSS, `.data` writable, code read-only | `image.rs` | done, tested |
+| Import binding: all 273 normal imports get a distinct token in their IAT slot, named `DLL!function`; delay imports not yet | `image.rs` | done, tested |
+| Dispatcher: one binding per address (every lifted function, ext included, plus services); unbound targets stop with target, caller, registers | `dispatch.rs` | done, tested |
+| `x86::call_ext` reentrant (handler is an `Rc<dyn Fn>` cloned per call) | `ddnative-base/src/x86.rs` | done |
+| Guest heap (16-byte blocks, exact-size reuse, requested sizes) | `services.rs` | done, tested |
+| CRT services: `__onexit`, `__calloc_crt` (to be replaced by the lifted CRT, brief L14) | `services.rs` | done |
+| Win32: errors, identity, time (QPC 10 MHz), TLS, heaps, VirtualAlloc, start-up info, module names, code pages (en-US), std handles (no console), interlocked, critical sections (one guest thread), LoadLibrary (presence only), MessageBoxA, ExitProcess | `win32.rs` | done (48+ APIs) |
+| Files: read-only install plus a sandbox overlay for every write; paths outside both refused | `files.rs` | done, tested (synchronous I/O only) |
+| Interface objects (C++ thiscall and COM stdcall): vtables of named method tokens, services per implemented method | `interfaces.rs` | done |
+| Steam: exports plus seven `ISteam*` objects; language english, app id 367500, no depots | `steam.rs` | started |
+| USER32 window model | `win32.rs` | metrics only (AdjustWindowRect, GetSystemMetrics) |
+| Guest threads, SEH (`fs:`), D3D9, audio, input, delay imports | | not started |
+
+Drivers (`examples/`): `initializers` (census of all 5,662 static
+initializers in CRT order: 5,651 complete), `boot` (the CRT entry
+0x012EFA14: stops at `__tmainCRTStartup`, platform-classified, L14),
+`winmain` (initializers, then WinMain: runs through the Steam checks into
+`sApp` start-up and stops where the CRT's `__snprintf_s` is needed), `call`
+(one guest function), `imports` (the import list).
+
+Lesson: never reimplement C-runtime functions as services. They are
+ordinary code in the exe; lift them (L14) and implement only operating
+system and device imports.
+
 ## Reproduction and review checklist
 
 Only the two small measurement scripts were added. They open the inventory
