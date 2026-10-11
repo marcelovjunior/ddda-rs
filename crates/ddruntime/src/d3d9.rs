@@ -38,6 +38,11 @@ pub struct Profile {
     formats: HashMap<(u32, u32), HashMap<u32, u32>>,
     /// (format, windowed, type) -> (result, quality levels)
     multisample: HashMap<(u32, u32, u32), (u32, u32)>,
+    /// A fresh device's render states, sampler states (sampler 0 and vertex
+    /// sampler 257) and texture stage states (stages 0 and 1).
+    pub render_states: Vec<(u32, u32)>,
+    pub sampler_states: Vec<(u32, u32, u32)>,
+    pub stage_states: Vec<(u32, u32, u32)>,
     /// other kinds: (kind, fields) -> result
     checks: HashMap<(String, Vec<u32>), u32>,
 }
@@ -47,6 +52,7 @@ impl Profile {
         let mut p = Profile {
             identifier: Vec::new(), caps: Vec::new(), device_caps: Vec::new(), texture_memory: 0, defaults: HashMap::new(),
             formats: HashMap::new(), multisample: HashMap::new(), checks: HashMap::new(),
+            render_states: Vec::new(), sampler_states: Vec::new(), stage_states: Vec::new(),
         };
         let hex = |s: &str| u32::from_str_radix(s, 16).unwrap_or_else(|_| panic!("d3d9 profile: bad number {s:?}"));
         let bytes = |s: &str| (0..s.len()).step_by(2).map(|k| u8::from_str_radix(&s[k..k + 2], 16).unwrap()).collect::<Vec<u8>>();
@@ -66,6 +72,9 @@ impl Profile {
                         entry.insert(hex(fmt), hex(f[3]));
                     }
                 }
+                "renderstate" => p.render_states.push((hex(f[1]), hex(f[2]))),
+                "samplerstate" => p.sampler_states.push((hex(f[1]), hex(f[2]), hex(f[3]))),
+                "stagestate" => p.stage_states.push((hex(f[1]), hex(f[2]), hex(f[3]))),
                 "multisample" => {
                     p.multisample.insert((hex(f[1]), hex(f[2]), hex(f[3])), (hex(f[4]), hex(f[5])));
                 }

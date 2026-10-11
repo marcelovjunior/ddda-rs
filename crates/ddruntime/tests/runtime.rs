@@ -647,3 +647,74 @@ fn the_crt_start_up_bridge_runs_the_heap_initialisation() {
     let _ = std::panic::take_hook();
     assert_ne!(started.step, "__heap_init", "{}", started.outcome);
 }
+
+#[test]
+fn the_device_state_machine_answers_d3d9s_defaults_and_counts_bound_references() {
+    use ddruntime::session::Outcome;
+    let Some(exe) = installed_exe() else { return };
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = ddruntime::session::Session::new(&path).expect("session");
+    let token = |s: &ddruntime::session::Session, n: &str| s.imports.iter().find(|i| i.full_name() == n).unwrap().token;
+    let scratch = 0x7EFF_0000;
+    let (wc, name) = (scratch, scratch + 0x100);
+    s.mem.set_u16(name, b'W' as u16);
+    s.mem.set_u32(wc + 8, token(&s, "USER32.dll!DefWindowProcW"));
+    s.mem.set_u32(wc + 40, name);
+    let Outcome::Returned(_) = s.call(token(&s, "USER32.dll!RegisterClassExW"), 0, &[wc]) else { panic!() };
+    let Outcome::Returned(cpu) = s.call(token(&s, "USER32.dll!CreateWindowExW"), 0, &[0, name, 0, 0x00CA_0000, 0, 0, 1286, 749, 0, 0, 0x0040_0000, 0]) else { panic!() };
+    let hwnd = cpu.eax;
+    let Outcome::Returned(cpu) = s.call(token(&s, "d3d9.dll!Direct3DCreate9"), 0, &[32]) else { panic!() };
+    let d3d = cpu.eax;
+    let method = |s: &ddruntime::session::Session, obj: u32, slot: u32| s.mem.u32(s.mem.u32(obj) + 4 * slot);
+    let (pp, out) = (scratch + 0x200, scratch + 0x300);
+    for (k, v) in [0, 0, 0, 0, 0, 0, 1, hwnd, 1, 1, 75, 0, 0, 0].into_iter().enumerate() {
+        s.mem.set_u32(pp + 4 * k as u32, v);
+    }
+    let Outcome::Returned(_) = s.call(method(&s, d3d, 16), 0, &[d3d, 0, 1, hwnd, 0x46, pp, out]) else { panic!() };
+    let dev = s.mem.u32(out);
+    let mut call = |s: &mut ddruntime::session::Session, slot: u32, args: &[u32]| -> u32 {
+        let mut a = vec![dev];
+        a.extend_from_slice(args);
+        let f = method(s, dev, slot);
+        match s.call(f, 0, &a) { Outcome::Returned(c) => c.eax, o => panic!("slot {slot}: {o}") }
+    };
+    let v = scratch + 0x400;
+    // defaults: CULLMODE (22) is CCW (3); ZENABLE (7) is TRUE with an auto depth buffer
+    assert_eq!(call(&mut s, 58, &[22, v]), 0);
+    assert_eq!(s.mem.u32(v), 3);
+    call(&mut s, 58, &[7, v]);
+    assert_eq!(s.mem.u32(v), 1);
+    // set/get round trip; sampler 0's MINFILTER (6) default is POINT (1)
+    call(&mut s, 57, &[27, 1]);
+    call(&mut s, 58, &[27, v]);
+    assert_eq!(s.mem.u32(v), 1);
+    call(&mut s, 68, &[0, 6, v]);
+    assert_eq!(s.mem.u32(v), 1);
+    // a vertex shader from guest memory: ps_3_0 rejected, vs_3_0 kept verbatim
+    let code = scratch + 0x500;
+    let tokens = [0xFFFE_0300u32, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0000, 0xE00F_0000,
+                  0x0200_0001, 0xE00F_0000, 0x90E4_0000, 0x0000_FFFF];
+    for (k, t) in tokens.iter().enumerate() {
+        s.mem.set_u32(code + 4 * k as u32, *t);
+    }
+    assert_eq!(call(&mut s, 91, &[code, out]), 0);
+    let vs = s.mem.u32(out);
+    assert_eq!(call(&mut s, 106, &[code, out]), ddruntime::d3d9::D3DERR_INVALIDCALL, "not a pixel shader");
+    assert_eq!(call(&mut s, 92, &[vs]), 0);
+    assert_eq!(ddruntime::d3d9dev::refs(vs), Some(("IDirect3DVertexShader9", 2)), "the device holds a reference");
+    let size = scratch + 0x600;
+    let Outcome::Returned(_) = s.call(method(&s, vs, 4), 0, &[vs, 0, size]) else { panic!() };
+    assert_eq!(s.mem.u32(size), 44);
+    let copy = scratch + 0x700;
+    let Outcome::Returned(_) = s.call(method(&s, vs, 4), 0, &[vs, copy, size]) else { panic!() };
+    assert_eq!((0..11).map(|k| s.mem.u32(copy + 4 * k)).collect::<Vec<_>>(), tokens);
+    assert_eq!(call(&mut s, 92, &[0]), 0);
+    assert_eq!(ddruntime::d3d9dev::refs(vs), Some(("IDirect3DVertexShader9", 1)), "unbinding releases it");
+    // constants: c255 is the last vertex register, c224 is past the pixel ones
+    assert_eq!(call(&mut s, 94, &[255, v, 1]), 0);
+    assert_eq!(call(&mut s, 109, &[224, v, 1]), ddruntime::d3d9::D3DERR_INVALIDCALL);
+    // scenes do not nest
+    assert_eq!(call(&mut s, 41, &[]), 0);
+    assert_eq!(call(&mut s, 41, &[]), ddruntime::d3d9::D3DERR_INVALIDCALL);
+    assert_eq!(call(&mut s, 42, &[]), 0);
+}

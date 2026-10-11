@@ -16,6 +16,9 @@ Format, one record per line (hex numbers, '#' comments):
   caps <608 hex digits: D3DCAPS9, 304 bytes>      IDirect3D9::GetDeviceCaps
   devicecaps <608 hex digits>                     IDirect3DDevice9::GetDeviceCaps
   texturememory <bytes>                           IDirect3DDevice9::GetAvailableTextureMem
+  renderstate <state> <value>                     a fresh device's GetRenderState
+  samplerstate <sampler> <state> <value>          ... GetSamplerState (sampler 0, vertex sampler 257)
+  stagestate <stage> <state> <value>              ... GetTextureStageState (stages 0, 1)
   format <usage> <rtype> <hresult> <format>,<format>,...
                                                  CheckDeviceFormat(HAL, X8R8G8B8)
   type <backbuffer format> <windowed> <hresult>  CheckDeviceType(HAL, X8R8G8B8)
@@ -160,6 +163,26 @@ def main():
     dcaps = ctypes.create_string_buffer(304)
     assert ctypes.WINFUNCTYPE(c_long, c_void_p, c_void_p)(dvtbl[7])(dev.value, dcaps) == 0
     lines.append("devicecaps " + dcaps.raw.hex())
+    # the fresh device's state: GetRenderState (slot 58) for every state
+    # type the device accepts, GetSamplerState (slot 68) for sampler 0 and
+    # vertex sampler 257, GetTextureStageState (slot 66) for stage 0 and 1
+    get_rs = ctypes.WINFUNCTYPE(c_long, c_void_p, U, POINTER(U))(dvtbl[58])
+    get_ss = ctypes.WINFUNCTYPE(c_long, c_void_p, U, U, POINTER(U))(dvtbl[68])
+    get_ts = ctypes.WINFUNCTYPE(c_long, c_void_p, U, U, POINTER(U))(dvtbl[66])
+    for state in range(256):
+        v = U(0)
+        if get_rs(dev.value, state, byref(v)) == 0:
+            lines.append(f"renderstate {state:x} {v.value:x}")
+    for sampler in (0, 257):
+        for state in range(1, 14):
+            v = U(0)
+            if get_ss(dev.value, sampler, state, byref(v)) == 0:
+                lines.append(f"samplerstate {sampler:x} {state:x} {v.value:x}")
+    for stage in (0, 1):
+        for state in range(1, 33):
+            v = U(0)
+            if get_ts(dev.value, stage, state, byref(v)) == 0:
+                lines.append(f"stagestate {stage:x} {state:x} {v.value:x}")
     ctypes.WINFUNCTYPE(c_uint32, c_void_p)(dvtbl[2])(dev.value)
     user32.DestroyWindow.argtypes = [c_void_p]
     user32.DestroyWindow(hwnd)

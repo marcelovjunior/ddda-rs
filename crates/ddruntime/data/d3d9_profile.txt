@@ -3407,3 +3407,287 @@ conversion 32315659 1f 0
 conversion 32315659 23 0
 texturememory ffc00000
 devicecaps 010000000000000000000200000002e0a00300000f00008001000000f0be1b00f2ce2f0091217307ff000000ff3f0000ff3f0000ff00000008420800c5ec01000007030300030303000303033f0000003f0000001f000000004000000040000000080000002000000040000010000000f902155020bcbecc20bcbecc20bcbe4c20bcbe4c00000000ff01000008001800fffffe0308000000080000007b0100000a00000008000000040000000800000000000046ffffff00ffffff0010000000ff0000000003feff000100000003ffff00e07f475100000000000000000000000000000000000000010000000f0300000400000000030003010000001800000020000000040000001f0000001800000020000000040000000002000000070303ffff0000ffff00000010000000100000
+renderstate 0 baadcafe
+renderstate 7 0
+renderstate 8 3
+renderstate 9 2
+renderstate e 1
+renderstate f 0
+renderstate 10 1
+renderstate 13 2
+renderstate 14 1
+renderstate 16 3
+renderstate 17 4
+renderstate 18 0
+renderstate 19 8
+renderstate 1a 0
+renderstate 1b 0
+renderstate 1c 0
+renderstate 1d 0
+renderstate 22 0
+renderstate 23 0
+renderstate 24 0
+renderstate 25 3f800000
+renderstate 26 3f800000
+renderstate 28 0
+renderstate 2a baadcafe
+renderstate 2f baadcafe
+renderstate 30 0
+renderstate 32 baadcafe
+renderstate 34 0
+renderstate 35 1
+renderstate 36 1
+renderstate 37 1
+renderstate 38 8
+renderstate 39 0
+renderstate 3a ffffffff
+renderstate 3b ffffffff
+renderstate 3c ffffffff
+renderstate 3d baadcafe
+renderstate 3e baadcafe
+renderstate 3f baadcafe
+renderstate 60 baadcafe
+renderstate 61 baadcafe
+renderstate 62 baadcafe
+renderstate 63 baadcafe
+renderstate 64 baadcafe
+renderstate 65 baadcafe
+renderstate 66 baadcafe
+renderstate 67 baadcafe
+renderstate 68 baadcafe
+renderstate 69 baadcafe
+renderstate 6a baadcafe
+renderstate 6b baadcafe
+renderstate 6c baadcafe
+renderstate 6d baadcafe
+renderstate 6e baadcafe
+renderstate 6f baadcafe
+renderstate 70 baadcafe
+renderstate 71 baadcafe
+renderstate 72 baadcafe
+renderstate 73 baadcafe
+renderstate 74 baadcafe
+renderstate 75 baadcafe
+renderstate 76 baadcafe
+renderstate 77 baadcafe
+renderstate 78 baadcafe
+renderstate 79 baadcafe
+renderstate 7a baadcafe
+renderstate 7b baadcafe
+renderstate 7c baadcafe
+renderstate 7d baadcafe
+renderstate 7e baadcafe
+renderstate 7f baadcafe
+renderstate 80 0
+renderstate 81 0
+renderstate 82 0
+renderstate 83 0
+renderstate 84 0
+renderstate 85 0
+renderstate 86 0
+renderstate 87 0
+renderstate 88 1
+renderstate 89 1
+renderstate 8a baadcafe
+renderstate 8b 0
+renderstate 8c 0
+renderstate 8d 1
+renderstate 8e 1
+renderstate 8f 0
+renderstate 91 1
+renderstate 92 2
+renderstate 93 0
+renderstate 94 0
+renderstate 95 baadcafe
+renderstate 96 baadcafe
+renderstate 97 0
+renderstate 98 0
+renderstate 9a 3f800000
+renderstate 9b 3f800000
+renderstate 9c 0
+renderstate 9d 0
+renderstate 9e 3f800000
+renderstate 9f 0
+renderstate a0 0
+renderstate a1 1
+renderstate a2 ffffffff
+renderstate a3 0
+renderstate a5 baadcafe
+renderstate a6 46000000
+renderstate a7 0
+renderstate a8 f
+renderstate a9 baadcafe
+renderstate aa 0
+renderstate ab 1
+renderstate ac 3
+renderstate ad 1
+renderstate ae 0
+renderstate af 0
+renderstate b0 0
+renderstate b1 baadcafe
+renderstate b2 3f800000
+renderstate b3 3f800000
+renderstate b4 0
+renderstate b5 0
+renderstate b6 3f800000
+renderstate b7 0
+renderstate b8 0
+renderstate b9 0
+renderstate ba 1
+renderstate bb 1
+renderstate bc 1
+renderstate bd 8
+renderstate be f
+renderstate bf f
+renderstate c0 f
+renderstate c1 ffffffff
+renderstate c2 0
+renderstate c3 0
+renderstate c6 0
+renderstate c7 0
+renderstate c8 0
+renderstate c9 0
+renderstate ca 0
+renderstate cb 0
+renderstate cc 0
+renderstate cd 0
+renderstate ce 0
+renderstate cf 2
+renderstate d0 1
+renderstate d1 1
+renderstate d2 baadcafe
+renderstate d3 baadcafe
+renderstate d4 baadcafe
+renderstate d5 baadcafe
+renderstate d6 baadcafe
+renderstate d7 baadcafe
+renderstate d8 baadcafe
+renderstate d9 baadcafe
+renderstate da baadcafe
+renderstate db baadcafe
+renderstate dc baadcafe
+renderstate dd baadcafe
+renderstate de baadcafe
+renderstate df baadcafe
+renderstate e0 baadcafe
+renderstate e1 baadcafe
+renderstate e2 baadcafe
+renderstate e3 baadcafe
+renderstate e4 baadcafe
+renderstate e5 baadcafe
+renderstate e6 baadcafe
+renderstate e7 baadcafe
+renderstate e8 baadcafe
+renderstate e9 baadcafe
+renderstate ea baadcafe
+renderstate eb baadcafe
+renderstate ec baadcafe
+renderstate ed baadcafe
+renderstate ee baadcafe
+renderstate ef baadcafe
+renderstate f0 baadcafe
+renderstate f1 baadcafe
+renderstate f2 baadcafe
+renderstate f3 baadcafe
+renderstate f4 baadcafe
+renderstate f5 baadcafe
+renderstate f6 baadcafe
+renderstate f7 baadcafe
+renderstate f8 baadcafe
+renderstate f9 baadcafe
+renderstate fa baadcafe
+renderstate fb baadcafe
+renderstate fc baadcafe
+renderstate fd baadcafe
+renderstate fe baadcafe
+renderstate ff baadcafe
+samplerstate 0 1 1
+samplerstate 0 2 1
+samplerstate 0 3 1
+samplerstate 0 4 0
+samplerstate 0 5 1
+samplerstate 0 6 1
+samplerstate 0 7 0
+samplerstate 0 8 0
+samplerstate 0 9 0
+samplerstate 0 a 1
+samplerstate 0 b 0
+samplerstate 0 c 0
+samplerstate 0 d 0
+samplerstate 101 1 1
+samplerstate 101 2 1
+samplerstate 101 3 1
+samplerstate 101 4 0
+samplerstate 101 5 1
+samplerstate 101 6 1
+samplerstate 101 7 0
+samplerstate 101 8 0
+samplerstate 101 9 0
+samplerstate 101 a 1
+samplerstate 101 b 0
+samplerstate 101 c 0
+samplerstate 101 d 0
+stagestate 0 1 4
+stagestate 0 2 2
+stagestate 0 3 1
+stagestate 0 4 2
+stagestate 0 5 2
+stagestate 0 6 1
+stagestate 0 7 0
+stagestate 0 8 0
+stagestate 0 9 0
+stagestate 0 a 0
+stagestate 0 b 0
+stagestate 0 c baadcafe
+stagestate 0 d baadcafe
+stagestate 0 e baadcafe
+stagestate 0 f baadcafe
+stagestate 0 10 baadcafe
+stagestate 0 11 baadcafe
+stagestate 0 12 baadcafe
+stagestate 0 13 baadcafe
+stagestate 0 14 baadcafe
+stagestate 0 15 baadcafe
+stagestate 0 16 0
+stagestate 0 17 0
+stagestate 0 18 0
+stagestate 0 19 baadcafe
+stagestate 0 1a 1
+stagestate 0 1b 1
+stagestate 0 1c 1
+stagestate 0 1d baadcafe
+stagestate 0 1e baadcafe
+stagestate 0 1f baadcafe
+stagestate 0 20 0
+stagestate 1 1 1
+stagestate 1 2 2
+stagestate 1 3 1
+stagestate 1 4 1
+stagestate 1 5 2
+stagestate 1 6 1
+stagestate 1 7 0
+stagestate 1 8 0
+stagestate 1 9 0
+stagestate 1 a 0
+stagestate 1 b 1
+stagestate 1 c baadcafe
+stagestate 1 d baadcafe
+stagestate 1 e baadcafe
+stagestate 1 f baadcafe
+stagestate 1 10 baadcafe
+stagestate 1 11 baadcafe
+stagestate 1 12 baadcafe
+stagestate 1 13 baadcafe
+stagestate 1 14 baadcafe
+stagestate 1 15 baadcafe
+stagestate 1 16 0
+stagestate 1 17 0
+stagestate 1 18 0
+stagestate 1 19 baadcafe
+stagestate 1 1a 1
+stagestate 1 1b 1
+stagestate 1 1c 1
+stagestate 1 1d baadcafe
+stagestate 1 1e baadcafe
+stagestate 1 1f baadcafe
+stagestate 1 20 0

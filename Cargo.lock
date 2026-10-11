@@ -2755,6 +2755,7 @@ dependencies = [
 name = "ddruntime"
 version = "0.1.0"
 dependencies = [
+ "d3d9shader",
  "ddexe",
  "ddnative",
  "ddnative-base",
