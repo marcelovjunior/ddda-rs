@@ -233,6 +233,28 @@ indirect calls and unrecognised indirect jumps reject it. This is how most funct
 hand-written ports above are for the important ones, where a readable
 typed API matters.
 
+**Function bodies.** `decode_body` follows reachable instructions from the
+entry, following fall-through, direct branches and recognized switch cases.
+Inventory `size` is only a hint: Ghidra's exporter uses
+`getBody().getNumAddresses()`, which counts bytes but does not describe a
+contiguous address span. Bodies can skip data, extend beyond that hint or
+share an interior epilogue with another function. A direct branch to a
+different inventory entry remains a tail call. Returns and known noreturn
+calls end a path. The narrow noreturn set is resolved from inventory CRT
+names (`_abort`, `_exit`, `__exit`, `__amsg_exit`); other termination routines
+are not inferred. Recording rejects those paths, and generated code panics
+if a mocked noreturn callee returns.
+
+Discovery is deterministic and checks executable PE sections, instruction
+alignment and a 20,000-instruction limit. A proven adjacent switch bound
+permits remote cases; without a bound, table discovery stays in the band
+before the next inventory entry, plus already discovered shared code.
+Tables are capped at 4,096 entries. These limits reject ambiguous code.
+Patterns store instruction starts in `body`, merged byte `body_ranges` and
+`noreturn_sites`. The recorder and trace tool use the same body membership
+for external calls and own-return checks. Nested calls track return PC and
+stack depth so a shared callee epilogue is not mistaken for the root return.
+
 **Generated code.** `crates/ddlift/lift_00` through `lift_15` hold the
 lifted bodies in `src/generated/lifted_NNN.rs` (400 functions per module).
 The fixed shard is `(address >> 20) % 16`: 1 MiB address bands, independent
@@ -448,6 +470,14 @@ that contain mocked calls, and cases of an ext function that mocked a
 target which is now lifted. `relift` drops functions that no longer lift
 under a stricter lifter, and then their callers.
 
+Body-aware vectors also carry a versioned `body_key` over instruction
+starts, noreturn sites, direct callees, external-call mode and x87 return
+sites. A changed key invalidates successful cases and cached recording
+failures (`lift_novector_keys.json`), including interrupted progress. Legacy
+vectors have no key and are re-recorded by default. An explicit private
+migration may retain cases only after checking unchanged emitted arms and
+call boundaries; the required Rust replay must still pass.
+
 **Memory.** L05's monolithic library peaked at 17.82 GiB for about 123 MB
 of generated Rust. L06 separates it into 16 crates (one address band is
 currently empty). See [L06 measurements](tasks/L06-lifter-crate-split.md#results)
@@ -455,9 +485,9 @@ for per-process peaks and clean/one-shard rebuild timings at two and four
 jobs. Each crate sets `[lib] test = false`; unit tests remain in
 `ddnative/tests/units.rs`, so libraries compile once. Test-profile debug
 line tables (`debug = 1`) apply to every shard and the base.
-The gate defaults to `CARGO_BUILD_JOBS=2`. Never run two builds, or a build
-and a vector run, concurrently; use four jobs only when the machine has
-room for the measured concurrent shard footprint.
+The gate defaults to `CARGO_BUILD_JOBS=4` and `CARGO_INCREMENTAL=0` to bound
+the disk cache. Never run two builds, or a build and a vector run,
+concurrently.
 
 `lift.py gen` writes only changed files, removes stale generated modules,
 and removes the old monolithic `lifted_NNN.rs` bodies. Regenerating the same
@@ -487,10 +517,10 @@ Rust (leaf form: calls reject).
 a vector depends on the original code, seed, input mode and, for external-call cases,
 the mocked-call boundary. Ordinary vectors stay valid when the lifter
 changes, but do not reuse external-call vectors when a newly callable
-function changes which callees execute versus get mocked. `vectors` now
-invalidates cases with mocked calls in a newly closed function, or a mocked
-target that has become closed. Other changes to the mocking contract still
-need explicit private-cache invalidation. Functions with no usable vector are
+function changes which callees execute versus get mocked. `vectors`
+invalidates changed body keys, cases with mocked calls in a newly closed
+function, or a mocked target that has become closed. Other changes to the
+mocking contract still need explicit private-cache invalidation. Functions with no usable vector are
 dropped, then (repeatedly) every function that calls a dropped one,
 since its Rust would not compile. Never run `gen` between `scan` and
 `vectors`: the test requires a vector for every generated function.

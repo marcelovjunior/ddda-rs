@@ -55,9 +55,27 @@ def code(address, length):
     raise KeyError(hex(address))
 
 
+def executable(address, length=1, _ranges=[]):
+    """PE executable sections, rather than a guessed .text address limit."""
+    if not _ranges:
+        with open(EXE, "rb") as f:
+            data = f.read()
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        opt = pe + 24
+        base = struct.unpack_from("<I", data, opt + 28)[0]
+        sec = opt + struct.unpack_from("<H", data, pe + 20)[0]
+        for k in range(struct.unpack_from("<H", data, pe + 6)[0]):
+            o = sec + k * 40
+            vsize, va, rsize = struct.unpack_from("<III", data, o + 8)
+            if struct.unpack_from("<I", data, o + 36)[0] & 0x20000000:
+                _ranges.append((base + va, base + va + max(vsize, rsize)))
+    return any(a <= address and address + length <= b for a, b in _ranges)
+
+
 def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=100000, poke=None):
     """Call `address`. Returns dict(eax, edx, scratch, insns)."""
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
     base, secs = image()
     for va, b in secs:
         start = va & ~0xFFF
@@ -138,6 +156,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
             0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
+TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 
 
@@ -167,21 +186,26 @@ def static_pop(target, _cache={}):
 
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
-               x87_push=frozenset()):
+               x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset()):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
     {"regs_in", "pages_in", "regs_out", "pages_out", "xmm0_out", "st0_out"};
     pages are {page_address: hex}. Raises Rejected for unusable cases.
 
-    With `end` (the function's end address), calls and jumps from the
+    With `end` (legacy extent, also enables external-call recording), calls and jumps from the
     function's own code to anything outside it that is neither in `lifted`
     nor a PLATFORM model are mocked: the callee does not run; the event is
     recorded in "calls" (target, all eight registers at entry) with what the
     mock returns (random eax/ecx/edx, random finite xmm0, the callee's
     stack pop). ddnative's tests replay these through x86::call_ext.
 
-    `size` (the function's size; implied by `end`) lets the run check that
+    `body` gives exact instruction starts, including disjoint/shared blocks.
+    It replaces the size/end range for ownership and own-return checks.
+    Nested calls into shared body code are tracked by return PC and ESP,
+    so their returns are not mistaken for the root function's return.
+    Known noreturn paths reject instead of manufacturing a returning mock.
+    Without a body, legacy `size` (implied by `end`) lets the run check that
     the function's own `ret` goes back to the caller: random inputs can
     overwrite the return address (a store through a random pointer), and the
     original then runs on into whatever is there. Such a case is rejected.
@@ -203,6 +227,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     rnd = random.Random(seed)
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
     # Unicorn's reset tag word reads 0x5555 (eight zero values), not an
     # empty x87 stack. Match the fixture's actual empty-stack contract.
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
@@ -356,25 +381,46 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 on_unmapped(uc_, None, p, 1, 0, None)
 
     body_end = end if end is not None else (address + size if size else None)
+    body = frozenset(body) if body is not None else None
+    is_own = lambda pc: pc in body if body is not None else body_end is not None and address <= pc < body_end
+    frames = []  # (return PC, caller ESP), distinguishing calls into shared code
+    root_frame = [True]
+    flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
+
+    def on_frame(uc_, addr, size, _):
+        # Must precede on_ext: the first root instruction after a closed
+        # callee returns can itself be another call that needs recording.
+        esp_now = uc_.reg_read(UC_X86_REG_ESP)
+        while frames and addr == frames[-1][0] and esp_now >= frames[-1][1]:
+            frames.pop()
+        root_frame[0] = not frames
+        if addr in noreturn_targets:
+            bad.append(f"noreturn target at {addr:#010x}")
+            uc_.emu_stop()
 
     def on_code(uc_, addr, size, _):
         # Unicorn has already decoded this instruction. Reading an arbitrary
         # 15-byte window can cross an unmapped next page even when the whole
         # instruction is mapped, breaking both premap and float checks.
         instruction_sizes[addr] = size
+        esp_now = uc_.reg_read(UC_X86_REG_ESP)
         if own_ret[0] and addr != RET:
             bad.append(f"returned to {addr:#010x} instead of the caller (return address overwritten)")
             uc_.emu_stop()
             return
         own_ret[0] = False
-        if body_end is not None and address <= addr < body_end:
+        if root_frame[0] and is_own(addr):
             if addr not in rets:
                 try:
                     rets[addr] = next(nmd.disasm(code(addr, 15), addr)).mnemonic in ("ret", "retn")
                 except (KeyError, StopIteration):
                     rets[addr] = False
             own_ret[0] = rets[addr]
+            if addr in noreturn_sites:
+                bad.append(f"noreturn call at {addr:#010x}")
+                uc_.emu_stop()
+                return
         # The ext recorder already rejects stray returns in on_ext. Closed
         # runs must not accidentally execute seeded heap/stack bytes either.
         # The only non-image code we intentionally execute is the st0 capture.
@@ -384,6 +430,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
+        if body is not None and addr not in PLATFORM and addr != RET:
+            if addr not in flow:
+                try:
+                    flow[addr] = next(nmd.disasm(bytes(uc_.mem_read(addr, size)), addr)).mnemonic
+                except (UcError, StopIteration):
+                    flow[addr] = ""
+            if flow[addr] == "call" and uc_.reg_read(UC_X86_REG_EIP) == addr:
+                frames.append((addr + size, esp_now))
         i = x87_ops.get(addr)
         if i is not None and uc_.reg_read(UC_X86_REG_EIP) == addr:
             # QEMU does not reliably set SF on overflow/underflow. Reject
@@ -476,7 +530,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # a call to the function's own entry (recursion) leaves it like any
         # other call: the lifted code makes it through call_ext, so mock it
         recursion = pc == address and branch[0] is not None and branch[0].mnemonic == "call"
-        if address <= pc < end and not recursion:
+        if root_frame[0] and is_own(pc) and not recursion:
             if pc not in own:
                 own[pc] = next(dmd.disasm(code(pc, 15), pc))  # the function's own code: from the image
             i = own[pc]
@@ -525,6 +579,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc_.reg_write(UC_X86_REG_EIP, ret)
         calls.append({**ev, "out": out})
 
+    if body is not None:
+        uc.hook_add(UC_HOOK_CODE, on_frame)
     if end is not None:
         uc.hook_add(UC_HOOK_CODE, on_ext)
     if x87_push:

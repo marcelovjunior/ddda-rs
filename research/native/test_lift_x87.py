@@ -12,6 +12,11 @@ import lift
 
 
 class X87Tests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(harness, "executable", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_recorder_rejects_stack_faults(self):
         for code in (bytes.fromhex("d9e8") * 9 + b'\xc3', bytes.fromhex("ddd8c3")):
             with patch.object(harness, "image", return_value=(0x400000, [(0x400000, code.ljust(0x1000, b'\x90'))])):
@@ -22,7 +27,7 @@ class X87Tests(unittest.TestCase):
         # call outside the function; fstp [0x2000]; ret. L04's push-site
         # contract covers an immediate consumer as well as one after mov.
         code = bytes.fromhex("e8fb000000d91d00200000c3")
-        with patch.object(harness, "code", return_value=code):
+        with patch.object(harness, "code", side_effect=lambda a,n: code[a-0x400000:a-0x400000+n]):
             arms = lift.lift(0x400000, len(code), ext=True)
         self.assertEqual(lift.X87_PUSH_SITES[0x400000], [0x400005])
         self.assertIn("call_ext", " ".join(arms))
@@ -30,7 +35,7 @@ class X87Tests(unittest.TestCase):
     def test_stack_requirements_and_control(self):
         for code in ("d8c1c3", "d9c0c3", "d9e8ded9c3", "d9e8d9c9c3"):
             data = bytes.fromhex(code)
-            with patch.object(harness, "code", return_value=data), self.assertRaises(lift.Unsupported):
+            with patch.object(harness, "code", side_effect=lambda a,n: data[a-0x400000:a-0x400000+n]), self.assertRaises(lift.Unsupported):
                 lift.lift(0x400000, len(data))
 
     def test_instruction_forms_against_unicorn(self):

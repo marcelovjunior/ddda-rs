@@ -22,6 +22,8 @@ import re
 import sqlite3
 import struct
 import sys
+from functools import lru_cache
+from contextlib import closing
 
 # Private pipeline data (patterns/lift.json, vectors/lift.json, ...).
 # LIFT_DATA points a worktree at its own copy so parallel work never
@@ -68,13 +70,134 @@ X87_NET = {}
 # taken to return a float in st0 (filled by lift(); stored in lift.json as
 # "x87_push" for the recorder and the replay).
 X87_PUSH_SITES = {}
+BODY_INFO = {}
+_BODY_CACHE = {}
+
+
+def cached_body(addr, size):
+    """Only the callable set changes between scan rounds, not decoded bytes."""
+    import harness as h
+    key = (addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries())
+    if key not in _BODY_CACHE:
+        try:
+            _BODY_CACHE[key] = decode_body(addr, size)
+        except Unsupported as e:
+            _BODY_CACHE[key] = str(e)
+    result = _BODY_CACHE[key]
+    if isinstance(result, str):
+        raise Unsupported(result)
+    return result
+
+
+def release_body(addr, size):
+    import harness as h
+    _BODY_CACHE.pop((addr, size, h.code, h.image, h.executable, function_entries(), noreturn_entries()), None)
+
+
+@lru_cache(maxsize=1)
+def function_entries():
+    with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+        return frozenset(a for a, in db.execute("SELECT address FROM functions"))
+
+
+@lru_cache(maxsize=8)
+def ordered_entries(entries):
+    return sorted(entries)
+
+
+@lru_cache(maxsize=1)
+def noreturn_entries():
+    # These inventory symbols name CRT routines with a non-returning contract.
+    # Addresses come from the player's inventory, not a copied address table.
+    names = {"_abort", "_exit", "__exit", "__amsg_exit"}
+    with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+        return frozenset(a for a, name in db.execute("SELECT address, name FROM functions") if name in names)
+
+
+def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None):
+    """Deterministic reachable instructions. Inventory sizes are not spans.
+
+    Direct branches to another inventory entry are tail calls. Shared tails
+    reached at interior addresses are decoded in both bodies. Unbounded
+    switch discovery stays within the entry's inventory band (or an already
+    discovered shared island); explicit cmp bounds can extend beyond it.
+    """
+    import bisect
+    import heapq
+    import harness as h
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    entries = function_entries() if entries is None else entries
+    noreturn = noreturn_entries() if noreturn is None else noreturn
+    read = h.code if read is None else read
+    is_code = h.executable if is_code is None else is_code
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    ordered = ordered_entries(frozenset(entries))
+    band = bisect.bisect_right(ordered, addr)
+    upper = ordered[band] if band < len(ordered) else 0x100000000
+    found, owners, switches, stops = {}, {}, {}, set()
+    todo = [addr]
+    while todo:
+        pc = heapq.heappop(todo)
+        history = []
+        while pc not in found:
+            if pc in owners:
+                raise Unsupported("disassembly branch into instruction interior")
+            if len(found) >= 20000:
+                raise Unsupported("body instruction limit")
+            if not is_code(pc):
+                raise Unsupported("disassembly outside executable sections")
+            try:
+                i = next(md.disasm(read(pc, 15), pc, count=1))
+            except (KeyError, StopIteration):
+                raise Unsupported("disassembly undecodable reachable instruction") from None
+            if not is_code(pc, i.size) or any(a in owners for a in range(pc, pc + i.size)):
+                raise Unsupported("disassembly overlapping instruction")
+            found[pc] = i
+            owners.update((a, pc) for a in range(pc, pc + i.size))
+            history.append(i)
+            mn = i.mnemonic
+            if mn in ("ret", "retn", "int3", "ud2", "hlt"):
+                break
+            if mn == "call" and i.operands[0].type == 2 and i.operands[0].imm in noreturn:
+                stops.add(pc)
+                break
+            if mn.startswith("j"):
+                if i.operands[0].type == 2:
+                    target = i.operands[0].imm & 0xffffffff
+                    if target == addr or target not in entries:
+                        heapq.heappush(todo, target)
+                else:
+                    accept = lambda t: ((addr <= t < upper or t in found) and
+                                        (t == addr or t not in entries) and is_code(t))
+                    targets = switch_targets(history, len(history) - 1, addr, upper, read,
+                                             accept=accept, discover=True,
+                                             bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
+                    switches[pc] = targets
+                    for target in targets:
+                        heapq.heappush(todo, target)
+                if mn == "jmp":
+                    break
+            pc += i.size
+    ins = sorted(found.values(), key=lambda i: i.address)
+    ranges = []
+    for i in ins:
+        if ranges and ranges[-1][1] == i.address:
+            ranges[-1][1] += i.size
+        else:
+            ranges.append([i.address, i.address + i.size])
+    return ins, switches, stops, ranges
 
 
 def returns_float(ins, k):
     """Does the code after the call at ins[k] consume st0 before pushing
     anything? Then the callee returned a float there (MSVC returns float and
     double in st0). Looks at the rest of the call's basic block only."""
+    pc = ins[k].address + ins[k].size
     for i in ins[k + 1:]:
+        if i.address != pc:
+            return False
+        pc += i.size
         mn = i.mnemonic
         if mn == "call" or mn.startswith("j") or mn in ("ret", "retn"):
             return False
@@ -84,7 +207,7 @@ def returns_float(ins, k):
     return False
 
 
-def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False):
+def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset()):
     """Every x87 read or pop must find a value on the stack: walk the
     control flow from depth 0. A direct call to a closed lifted function adds
     its net effect (X87_NET); a mocked call adds 1 where its result is
@@ -93,7 +216,7 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False):
     Returns (set of depths at the function's rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
-    seen, todo = {}, [(0, 0)]
+    seen, todo = {}, [(at[addr], 0)]
     exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
@@ -137,20 +260,24 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False):
                 elif ext and returns_float(ins, k):
                     depth += 1
                     push_sites.add(ins[k + 1].address)
+            if i.address in stops:
+                break
             if mn in ("ret", "retn"):
                 exits.add(depth)
                 break
             if mn.startswith("j"):
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
-                if t is not None and addr <= t < end and t in at:
+                if t in at and (t == addr or t not in function_entries()):
                     todo.append((at[t], depth))
+                for target in (switches or {}).get(i.address, []):
+                    todo.append((at[target], depth))
                 if mn == "jmp":
                     break
-            k += 1
+            k = at.get(i.address + i.size, len(ins))
     return exits, sorted(push_sites)
 
 
-def switch_targets(ins, k, addr, end, read):
+def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded_accept=None):
     """Recognise an absolute x86 dword switch table, never a computed tail call.
 
     The image supplies discovery only; generated code still reads through Mem.
@@ -165,10 +292,41 @@ def switch_targets(ins, k, addr, end, read):
             or op.mem.scale != 4):
         raise Unsupported("indirect jump (not an absolute switch table)")
     table = op.mem.disp & 0xFFFFFFFF
+    # A proven adjacent bound determines the slots to discover even when
+    # the case code is outside the entry's inventory band.
+    bound, remap_addr = None, None
+    prev_bound = k - 1
+    if prev_bound >= 0 and ins[prev_bound].mnemonic == "movzx":
+        dst, src = ins[prev_bound].operands
+        if (dst.type == X86_OP_REG and dst.reg == op.mem.index and dst.size == 4
+                and src.type == X86_OP_MEM and src.size == 1 and not src.mem.segment
+                and not src.mem.index and src.mem.base == op.mem.index):
+            remap_addr = src.mem.disp & 0xffffffff
+            prev_bound -= 1
+    if prev_bound >= 1 and ins[prev_bound].mnemonic in ("ja", "jae"):
+        cmp = ins[prev_bound - 1]
+        if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
+                and cmp.operands[0].type == X86_OP_REG and cmp.operands[0].reg == op.mem.index
+                and cmp.operands[0].size == 4 and cmp.operands[1].type == X86_OP_IMM):
+            bound = (cmp.operands[1].imm & 0xffffffff) + (ins[prev_bound].mnemonic == "ja")
+            if not 0 < bound <= 4096:
+                raise Unsupported("indirect jump (switch bound limit)")
+            if remap_addr is not None:
+                try:
+                    remapped = read(remap_addr, bound)
+                except KeyError:
+                    remapped = b""
+                if len(remapped) != bound:
+                    raise Unsupported("indirect jump (unmapped switch remapping)")
+                bound = max(remapped) + 1
     starts = {i.address for i in ins}
     targets = []
     cursor = table
     while cursor <= 0xFFFFFFFC:
+        if discover and bound is not None and len(targets) == bound:
+            break
+        if len(targets) >= 4096:
+            raise Unsupported("indirect jump (switch table limit)")
         try:
             data = read(cursor, 4)
         except KeyError:
@@ -176,14 +334,18 @@ def switch_targets(ins, k, addr, end, read):
         if len(data) != 4:
             break
         target, = struct.unpack("<I", data)
-        if not addr <= target < end:
+        valid = (bounded_accept(target) if discover and bound is not None and bounded_accept
+                 else accept(target) if accept else addr <= target < end)
+        if not valid:
             break
-        if target not in starts:
+        if not discover and target not in starts:
             raise Unsupported("indirect jump (switch target is not an instruction start)")
         targets.append(target)
         cursor += 4
     if not targets:
         raise Unsupported("indirect jump (empty or unmapped switch table)")
+    if discover and bound is not None and len(targets) != bound:
+        raise Unsupported("indirect jump (switch bound disagrees with table)")
 
     # MSVC commonly compresses a sparse switch with a byte lookup immediately
     # before the jump. The cmp bounds that lookup, not the dword table.
@@ -227,34 +389,33 @@ def lift(addr, size, callable=frozenset(), ext=False):
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
-    md = Cs(CS_ARCH_X86, CS_MODE_32)
-    md.detail = True
-    ins = list(md.disasm(h.code(addr, size), addr))
-    if not ins or sum(i.size for i in ins) != size:
-        raise Unsupported("disassembly does not cover the function")
-    end = addr + size
-    # basic blocks
+    ins, switches, stops, ranges = cached_body(addr, size)
+    starts = {i.address for i in ins}
+    entries = function_entries()
+    inside = lambda t: t in starts and (t == addr or t not in entries)
     leaders = {addr}
     for k, i in enumerate(ins):
+        if k and ins[k-1].address + ins[k-1].size != i.address:
+            leaders.add(i.address)
         if i.mnemonic.startswith("j"):
             if i.operands[0].type != X86_OP_IMM:
-                leaders.update(switch_targets(ins, k, addr, end, h.code))
+                leaders.update(switches[i.address])
             else:
                 t = i.operands[0].imm
-                if not (addr <= t < end):
+                if not inside(t):
                     if t not in callable and t not in h.PLATFORM and not ext:
                         raise Unsupported("jump out of the function")
                 else:
                     leaders.add(t)
-            if k + 1 < len(ins):
-                leaders.add(ins[k + 1].address)
-        if i.mnemonic in ("ret", "retn") and k + 1 < len(ins):
+            if i.address + i.size in starts:
+                leaders.add(i.address + i.size)
+        if (i.mnemonic in ("ret", "retn") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
-    if not leaders <= {i.address for i in ins}:
-        raise Unsupported("jump into the middle of an instruction")
-    exits, push_sites = x87_depth_check(ins, addr, end, callable, ext)
+    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops)
     X87_PUSH_SITES[addr] = push_sites
-    if not ext:  # callers add this at a direct call
+    BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
+                       "noreturn_sites": sorted(stops)}
+    if not ext:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
     def reg(name):
@@ -328,10 +489,14 @@ def lift(addr, size, callable=frozenset(), ext=False):
         """Rust path of a call target: a platform model, a lifted function,
         or (ext) the untranslated-code handler."""
         if t in h.PLATFORM:
-            return f"crate::platform::{h.PLATFORM[t]}"
-        if t in callable:
-            return f"super::lifted::f_{t:08x}"
-        return f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x{t:X}))"
+            path = f"crate::platform::{h.PLATFORM[t]}"
+        elif t in callable:
+            path = f"super::lifted::f_{t:08x}"
+        else:
+            path = f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x{t:X}))"
+        if t in noreturn_entries():
+            return f'(|m: &mut dyn Mem, cpu: &mut Cpu| {{ {path}(m, cpu); panic!("noreturn callee returned"); }})'
+        return path
 
     def sx(v, bits):
         return f"(({v}) as i{bits} as i32 as u32)" if bits in (8, 16) else v
@@ -345,7 +510,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
         while k < len(ins):
             i = ins[k]
             mn, ops = i.mnemonic, i.operands
-            nxt = ins[k + 1].address if k + 1 < len(ins) else None
+            nxt = i.address + i.size if i.address + i.size in starts else None
             if i.address != b and i.address in leaders:
                 body.append(f"pc = 0x{i.address:X}; continue;")
                 terminated = True
@@ -417,7 +582,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f"pc = {load(i, ops[0])}; continue;")
                 terminated = True
                 break
-            elif mn == "jmp" and not (addr <= ops[0].imm < end):
+            elif mn == "jmp" and not inside(ops[0].imm):
                 # tail call: the callee returns straight to our caller
                 body.append(f"{SAVE} {target(ops[0].imm)}(m, cpu); return;")
                 terminated = True
@@ -428,7 +593,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 break
             elif mn.startswith("j") and mn != "jmp" and nxt is None:
                 raise Unsupported("falls off the end (conditional jump last)")
-            elif mn.startswith("j") and not (addr <= ops[0].imm < end):
+            elif mn.startswith("j") and not inside(ops[0].imm):
                 body.append(f"if fl.cond(\"{mn[1:]}\") {{ {SAVE} {target(ops[0].imm)}(m, cpu); return; }} "
                             f"pc = 0x{nxt:X}; continue;")
                 terminated = True
@@ -437,6 +602,13 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 raise Unsupported("falls off the end (conditional jump last)")
             elif mn.startswith("j"):
                 body.append(f"pc = if fl.cond(\"{mn[1:]}\") {{ 0x{ops[0].imm:X} }} else {{ 0x{nxt:X} }}; continue;")
+                terminated = True
+                break
+            elif mn == "call" and i.address in stops:
+                if not ext and ops[0].imm not in callable:
+                    raise Unsupported("noreturn call")
+                body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{i.address + i.size:X}); "
+                            f"{SAVE} {target(ops[0].imm)}(m, cpu); panic!(\"noreturn callee returned\");")
                 terminated = True
                 break
             elif mn == "call" and nxt is None:
@@ -670,8 +842,9 @@ def scan(limit=None):
                 continue
             try:
                 arms = lift(a, sz, done)
-                ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, [])})
+                ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, []), **BODY_INFO.get(a, {})})
                 done.add(a)
+                release_body(a, sz)
             except Unsupported as e:
                 why[str(e).split(" ")[0]] += 1
             except Exception as e:  # noqa: BLE001
@@ -688,7 +861,8 @@ def scan(limit=None):
         try:
             arms = lift(a, sz, done, ext=True)
             ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms), "x87_push": X87_PUSH_SITES.get(a, []),
-                       "ext": True})
+                       "ext": True, **BODY_INFO.get(a, {})})
+            release_body(a, sz)
         except Unsupported as e:
             why[str(e).split(" ")[0]] += 1
         except Exception as e:  # noqa: BLE001
@@ -720,7 +894,8 @@ def relift():
                 raise Unsupported("platform model address")
             f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
             f["x87_push"] = X87_PUSH_SITES.get(f["addr"], [])
-            assert callees(f["arms"]) == sorted(f.get("calls", [])), hex(f["addr"])
+            f["calls"] = callees(f["arms"])
+            f.update(BODY_INFO[f["addr"]])
             keep.append(f)
         except Unsupported as e:  # a stricter lifter: the function no longer qualifies
             dropped.append((f["addr"], str(e)))
@@ -754,6 +929,15 @@ if __name__ == "__main__":
 _CLOSED = frozenset()
 
 
+def vector_key(f):
+    """Versioned recorder boundary; old caches need an explicit migration."""
+    if "body" not in f:
+        return None
+    import hashlib
+    fields = [f.get(k) for k in ("body", "noreturn_sites", "calls", "ext", "x87_push")]
+    return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
+
+
 def _init_worker(closed):
     global _CLOSED
     _CLOSED = frozenset(closed)
@@ -763,11 +947,20 @@ def _vectors_for(args):
     addr, per, end = args[:3]
     size = args[3] if len(args) > 3 else None
     push = frozenset(args[4]) if len(args) > 4 else frozenset()
+    body = args[5] if len(args) > 5 else None
+    stops = args[6] if len(args) > 6 else []
+    key = args[7] if len(args) > 7 else None
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
+    if body is not None:
+        inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     out, got, seed = [], 0, 0
-    while got < per and seed < per * 8:
+    # a time budget per function: loops over random counts of random
+    # pointers can take minutes per seed and never give a vector
+    import time
+    deadline = time.time() + float(os.environ.get("LIFT_FN_SECONDS", "20"))
+    while got < per and seed < per * 8 and time.time() < deadline:
         seed += 1
         try:
             if end is None:
@@ -778,8 +971,12 @@ def _vectors_for(args):
             continue
         except Exception:  # noqa: BLE001  (emulator errors: no vector)
             continue
-        out.append({"addr": addr, **r})
+        out.append({"addr": addr, **r, **({"body_key": key} if key else {})})
         got += 1
+    # each Unicorn instance sits in reference cycles (hooks close over it):
+    # collect them now, or a long run creeps up by about 1 MB per function
+    import gc
+    gc.collect()
     return addr, out
 
 
@@ -800,7 +997,10 @@ def vectors(per=3):
     # is now closed must make no mocked calls, and an ext function's mocked
     # target must not have become lifted since
     closed_now = {f["addr"] for f in lifted if not f.get("ext")}
+    keys = {f["addr"]: vector_key(f) for f in lifted}
     def fresh(c):
+        if keys.get(c["addr"]) is not None and c.get("body_key") != keys[c["addr"]]:
+            return False
         calls = c.get("calls") or []
         if c["addr"] in closed_now:
             return not calls
@@ -818,28 +1018,35 @@ def vectors(per=3):
                 r = json.loads(line)
             except ValueError:
                 continue  # a line cut off by the interruption
-            cases += [c for c in r["cases"] if c["addr"] in want]
-            if not r["cases"]:
+            cases += [c for c in r["cases"] if c["addr"] in want and fresh(c)]
+            if not r["cases"] and r.get("body_key") == keys.get(r["addr"]):
                 failed.append(r["addr"])
     have = {c["addr"] for c in cases}
     # functions that already failed to get a vector are not retried (each costs 8x the seeds)
     nov_path = f"{N}/patterns/lift_novector.json"
+    nov_keys_path = f"{N}/patterns/lift_novector_keys.json"
+    nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []))
+    novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]])
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
     log = open(prog, "a")
-    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,)) as pool:
-        for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=8)):
+    # a worker is replaced after 8 functions: some functions leave hundreds of
+    # MB of Unicorn state behind that gc does not free (workers reached 3 GB)
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,),
+              maxtasksperchild=8) as pool:
+        for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=1)):
             cases += out
             if not out:
                 failed.append(addr)
-            log.write(json.dumps({"addr": addr, "cases": out}) + "\n")
+            log.write(json.dumps({"addr": addr, "cases": out, "body_key": keys[addr]}) + "\n")
             log.flush()
             if n % 1000 == 999:
                 print(n + 1, "recorded", flush=True)
     json.dump(sorted(novector | set(failed)), open(nov_path, "w"))
+    json.dump({a: keys.get(a) for a in novector | set(failed)}, open(nov_keys_path, "w"))
     keep = {c["addr"] for c in cases}
     while True:  # a caller of a dropped function cannot be compiled
         drop = {f["addr"] for f in lifted if f["addr"] in keep and not set(f.get("calls", [])) <= keep}

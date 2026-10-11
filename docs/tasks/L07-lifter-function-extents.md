@@ -43,4 +43,25 @@ changed where generated code lives, follow its new layout.
 
 ## Results
 
-(Codex fills this in.)
+Codex implemented the task (recursive-descent bodies in `lift.decode_body`:
+reachable instructions from the entry, bounded by the next inventory entry,
+shared tails decoded in each owner, noreturn CRT calls (`_abort`, `_exit`,
+`__exit`, `__amsg_exit`) end a path, switch discovery within the band or
+with a proven bound; `harness.run_sparse(body=...)` uses the body's
+addresses for ownership and tracks call frames so shared code is not taken
+for the root's return; 30 Python tests pass). Its after-scan has no
+"disassembly" or "falls" rejections left. Its session was stopped by Claude
+Code (low memory) during the vector run; the head finished that run.
+
+The memory problem was the recorder, not the lifter: some functions loop
+over a random count of random pointers and map hundreds of random pages per
+seed (minutes per function, no vector), and long-lived workers grew to
+3-4 GB. Fixes in main and here: Unicorn's translation buffer capped at
+32 MB per instance, `gc.collect()` after each function, a worker replaced
+after 8 functions (`chunksize=1`), and a 20-second budget per function
+(`LIFT_FN_SECONDS`).
+
+Result on the batch: 28,665 functions with vectors (from 28,244), 947 of
+them re-recorded because their call boundary changed; 1,117 candidates have
+no usable vector (mostly the random-count loops; they need structured
+inputs, e.g. `LIFT_ZERO_INPUTS`).

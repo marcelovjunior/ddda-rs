@@ -58,7 +58,7 @@ class SwitchTests(unittest.TestCase):
 
     def test_ext_pass_does_not_mock_indirect_jumps(self):
         code, _, read, _, _ = self.fixture(jump=bytes.fromhex("ffe0"))
-        with patch.object(harness, "code", read), self.assertRaises(lift.Unsupported):
+        with patch.object(harness, "executable", return_value=True), patch.object(harness, "code", read), self.assertRaises(lift.Unsupported):
             lift.lift(0x1000, len(code), ext=True)
 
     def test_checks_unsigned_bounds(self):
@@ -81,7 +81,7 @@ class SwitchTests(unittest.TestCase):
 
     def test_codegen_reads_mem_and_dispatches_to_case_leaders(self):
         code, _, read, _, _ = self.fixture()
-        with patch.object(harness, "code", read):
+        with patch.object(harness, "executable", return_value=True), patch.object(harness, "code", read):
             arms = lift.lift(0x1000, len(code))
         rust = lift.rust_fn(0x1000, "synthetic", arms)
         self.assertIn("pc = m.u32(cpu.eax.wrapping_mul(4).wrapping_add(0x2000)); continue;", rust)
