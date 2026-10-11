@@ -1,7 +1,8 @@
 # L17: the remaining Windows services, and the SEH frame contract
 
-Owner: Codex (same session), after L16. Branch `task/L17-windows-services`
-from the head's `main`, worktree `E:\ddda-rs-wt\L17`.
+Owners: Part A, a second Claude Code agent (headless session "claude-2",
+driven by the head like Codex), branch `task/L17-windows-services`,
+worktree `E:\ddda-rs-wt\L17`. Part B, Codex after L16 (its own branch).
 
 ## Why
 
