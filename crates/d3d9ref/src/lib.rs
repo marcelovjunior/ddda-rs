@@ -165,6 +165,7 @@ const GET_RENDER_TARGET_DATA: usize = 32;
 const CREATE_OFFSCREEN_PLAIN_SURFACE: usize = 36;
 const SET_RENDER_TARGET: usize = 37;
 const BEGIN_SCENE: usize = 41;
+const CLEAR: usize = 43;
 const END_SCENE: usize = 42;
 const SET_RENDER_STATE: usize = 57;
 const SET_TEXTURE: usize = 65;
@@ -182,7 +183,6 @@ const SET_PIXEL_SHADER_CONSTANT_I: usize = 111;
 const SET_PIXEL_SHADER_CONSTANT_B: usize = 113;
 
 const FMT_A32B32G32R32F: u32 = 116;
-const POOL_DEFAULT: u32 = 0;
 const POOL_MANAGED: u32 = 1;
 const POOL_SYSTEMMEM: u32 = 2;
 
@@ -334,6 +334,8 @@ impl Oracle {
             }
         }
         check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;
+        // a discarded pixel leaves the target as cleared (0, like wgpu's clear)
+        check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), 1, 0, 1.0, 0), "Clear")?;
         let quad: [f32; 16] = [-1.0, -1.0, 0.0, 1.0, -1.0, 1.0, 0.0, 1.0, 1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0];
         let hr = com!(d, DRAW_PRIMITIVE_UP, (u32, u32, *const f32, u32), 5, 2, quad.as_ptr(), 16);
         com!(d, END_SCENE, ());

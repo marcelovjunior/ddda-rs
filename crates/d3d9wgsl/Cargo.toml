@@ -1,0 +1,15 @@
+[package]
+name = "d3d9wgsl"
+version = "0.1.0"
+description = "Direct3D 9 ps_3_0 shaders translated to WGSL (checked against the host's D3D9 driver)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+d3d9shader = { path = "../d3d9shader" }
+
+[dev-dependencies]
+d3d9ref = { path = "../d3d9ref" }
+mtarc = { path = "../mtarc" }
+wgpu = "29.0.4"
