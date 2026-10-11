@@ -51,4 +51,94 @@ than one full build at a time, `CARGO_BUILD_JOBS=2` until the split is in.
 
 ## Results
 
-(Codex fills this in.)
+Implemented 16 fixed address shards: `(address >> 20) % 16`, with 400
+functions per generated module. Address-band membership does not change
+when another function becomes liftable. Current bodies occupy 15 shards
+(3 is empty); the largest generated shard is 10,435,929 bytes. Shared
+`Mem`, `Cpu`, `Flags`, x87 and platform models moved unchanged into
+`ddnative-base`, apart from the new direct-call resolver. `ddnative`
+re-exports those modules, preserving hand-port/test imports.
+
+Cross-shard direct calls use an immutable resolver in the base crate;
+intra-shard calls remain direct Rust calls. The current cached bodies have
+23,256 cross-shard and 6,991 same-shard direct call sites. No shard depends
+on another shard or on `ddnative`, so call-graph cycles cannot create Cargo
+dependency cycles. A topological split was not needed and would make
+placement depend on the selected call graph. Public facade entry points,
+`all()` and `dispatch_table()` initialize the resolver automatically; raw
+shard users must call facade `init()` first. The resolver copies a function
+pointer before invoking it, so nested calls, multiple threads and a prior
+unwind cannot leave a borrowed dispatch table. It is separate from
+`call_ext`, with no fallback that could silently change mock boundaries.
+
+Generation preserves unchanged file timestamps and removes obsolete
+generated modules. A body-only edit touches one shard; its facade and test
+dependents relink, while unrelated shard crates remain fresh. The generated
+facade preserves public `f_ADDRESS` entry points and the sorted `all()` API.
+Generated shard source totals 123,633,044 bytes, plus a 2,836,261-byte facade.
+Source-only handoff: the head must run `lift.py gen` before building the
+merged skeletons. Generated bodies, facade, test and old-body deletions are
+not part of the source commit.
+
+Coverage is deliberately unchanged: **28,244 functions / 84,312 cases**;
+no scan, new vectors, rejected functions or modified call boundaries.
+The prepared pattern/vector files are hash-checked. The inventory now reads
+shard `Translated from` citations, ignores obsolete monolithic bodies, and
+retains the existing test declarations. Its read-only declaration check
+finds **28,250 ports / 28,250 declarations, zero undeclared ports**, including
+hand ports (family expansion is a separate inventory step). The shared
+inventory database and native data were not modified, and the gate was not
+run. The gate now defaults to two Cargo jobs and still tests `ddnative`,
+which compiles all shard dependencies.
+
+Full required replay and all seven Rust units pass after both clean builds.
+The unchanged batch remains 28,244 functions / 84,312 cases. No new vector
+recording is needed for this build-only change.
+
+Measurements use the test profile, the same worktree target directory and
+sequential Cargo runs (no vector workers or second build). Per-process
+Windows peak working sets and concurrent working sets were sampled once
+per second; these are observed resident memory, not total system commit.
+The monolithic row is the recorded L05 reference, not another large build
+run during L06. Clean four-job measurement used package-scoped Cargo cleanup
+of all compiled packages, including test dependencies.
+
+| Build | Jobs | Cargo build | Full replay | Command wall | Max rustc | Combined compilers/linkers |
+|---|---:|---:|---:|---:|---:|---:|
+| L05 monolithic reference | 2 | 9m19s | 29.83s | 590.69s | 17.82 GiB | not recorded |
+| L06 clean | 2 | 3m34s | 29.20s | 244.19s | 1.59 GiB | 2.94 GiB |
+| L06 clean | 4 | 2m02s | 29.42s | 153.29s | 1.59 GiB | 5.30 GiB |
+| L06 one-shard body edit | 2 | 10.90s | 29.24s | 41.94s | 1.06 GiB | 1.26 GiB |
+| L06 one-shard body edit | 4 | 10.99s | 29.38s | 41.86s | 1.10 GiB | 1.38 GiB |
+
+The maximum process is shard 11; the facade stays below 0.83 GiB. Compared
+with the recorded L05 run, the two-job clean compile is about 62% faster
+and maximum compiler working set falls about 91%. All measurements/logs
+and the monitor script are private under `native-L06`.
+
+Incremental measurements regenerate shard 05 after adding a temporary
+guest-state-neutral `black_box` expression to one cached function body.
+Only shard 05, ddnative and its integration tests recompile. This exercises
+a real body change, not just an mtime or comment; the earlier comment-only
+probe took 10.89s at two jobs. All probes pass the full replay. Pattern bytes
+are restored immediately after generation, and the original unmodified
+generated body is restored before final validation. These timings exclude
+generation itself; the command wall column includes compilation and replay.
+
+23 Python regressions pass, including a synthetic multi-crate build with
+nested same/cross-shard calls, automatic initialization, external dispatch
+filtering, another thread, recovery after a missing-target panic, missing
+callee rejection, stable writes, empty/stale shard cleanup and inventory
+declarations. No new opcode semantics or coverage changes are included.
+
+Final `cargo test -p ddnative` also passes (32 integration tests, including
+the restored 84,312-case replay). The lifted test reads native-L06. Legacy
+hand-port tests still have hard-coded shared fixture paths; this additional
+suite check reads them without writes and permits absent fixtures to skip.
+The required private lifted replay above is independent of that check.
+
+Open limits: release builds and larger future batches are not benchmarked;
+the resolver supports one immutable generated program per process. Raw
+shard callers must initialize the facade. The head should regenerate after
+merging and run its full native gate with the complete fixture collection.
+No shared data writes, inventory rebuild, gate invocation or push occurred.

@@ -26,6 +26,28 @@ def connect():
     return sqlite3.connect(DB)
 
 
+def native_declarations(repo=REPO):
+    """Whole ports and declared tests, including generated lift crates.
+
+    Legacy lifted_NNN files are excluded even if a checkout still has them;
+    lift.py gen migrates those bodies into ddlift's generated directories.
+    This helper is read-only and does not open the shared inventory database.
+    """
+    ported, tested = set(), set()
+    paths = [p for p in repo.glob("crates/ddnative/src/**/*.rs")
+             if not p.name.startswith("lifted_")]
+    paths += list(repo.glob("crates/ddlift/lift_*/src/generated/**/*.rs"))
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "Translated from" in line:
+                ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    for path in repo.glob("crates/ddnative/tests/*.rs"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("// verifies"):
+                tested.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    return ported, tested
+
+
 def build():
     db = connect()
     db.executescript("""
@@ -73,18 +95,7 @@ def build():
     # against the original (docs/METHODOLOGY.md, "The 1:1 pipeline")
     # only the "Translated from" line of a port counts (callees named in
     # doc comments are not verified by it)
-    ported = set()
-    for path in REPO.glob("crates/ddnative/src/**/*.rs"):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if "Translated from" in line:
-                ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
-    # a port counts only when a differential test declares it
-    # ("// verifies 0x..." above the test in crates/ddnative/tests)
-    tested = set()
-    for path in REPO.glob("crates/ddnative/tests/*.rs"):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("// verifies"):
-                tested.update(int(m.group(1), 16) for m in ADDR.finditer(line))
+    ported, tested = native_declarations()
     untested = ported - tested
     if untested:
         print("ported without a declared test (not credited):", sorted(hex(a) for a in untested))

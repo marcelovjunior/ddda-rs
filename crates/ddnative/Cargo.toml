@@ -9,6 +9,25 @@ publish.workspace = true
 serde_json = "1"
 
 [lib]
-# Unit tests are in tests/units.rs: a lib test build would compile the
-# generated code (~100 MB) twice in parallel (over 20 GB of memory).
+# Unit tests are in tests/units.rs, avoiding a second facade compilation.
+# The generated shard libraries also disable their lib test targets.
 test = false
+
+[dependencies]
+ddnative-base = { path = "../ddnative-base" }
+ddlift-00 = { path = "../ddlift/lift_00" }
+ddlift-01 = { path = "../ddlift/lift_01" }
+ddlift-02 = { path = "../ddlift/lift_02" }
+ddlift-03 = { path = "../ddlift/lift_03" }
+ddlift-04 = { path = "../ddlift/lift_04" }
+ddlift-05 = { path = "../ddlift/lift_05" }
+ddlift-06 = { path = "../ddlift/lift_06" }
+ddlift-07 = { path = "../ddlift/lift_07" }
+ddlift-08 = { path = "../ddlift/lift_08" }
+ddlift-09 = { path = "../ddlift/lift_09" }
+ddlift-10 = { path = "../ddlift/lift_10" }
+ddlift-11 = { path = "../ddlift/lift_11" }
+ddlift-12 = { path = "../ddlift/lift_12" }
+ddlift-13 = { path = "../ddlift/lift_13" }
+ddlift-14 = { path = "../ddlift/lift_14" }
+ddlift-15 = { path = "../ddlift/lift_15" }
