@@ -463,10 +463,22 @@ game's x87 precision control word: DirectX 9 sets single precision unless
 the device was created with FPU_PRESERVE; check the original's control
 word live before modelling it).
 
-**Pitfalls.** Unicorn's SSE memory helpers (movq/movaps stores) can
-raise UNMAPPED for a page the hook has just mapped; `run_sparse` maps
-whatever the faulting instruction touches and resumes at it, once per
-instruction (before this, such functions silently got no vectors).
+**Pitfalls.** Unicorn's UNMAPPED hook is not reliable: for SSE stores and
+even plain byte stores it can map the page and still raise. Resuming after
+such a fault is wrong too: QEMU keeps EFLAGS lazily, and a stop/restart
+between a `cmp` and its `jcc` loses the comparison (three bad vectors came
+from that, e.g. `0x00D4E940`). So `run_sparse` maps every page an
+instruction will touch *before* it runs (`premap`: memory operands, not
+`lea`/`nop`/prefetch, plus the stack just below ESP) and never resumes: a
+fault rejects the case.
+
+The function's own `ret` must return to the caller (`run_sparse(...,
+size=)`, passed by `lift.py vectors` for every function): a store through
+a random pointer can overwrite the return address, and the original then
+runs on into image data until it happens to reach the sentinel. Such a
+case is rejected (`0x00C1D790`, `0x00D9EF20`, `0x00FB9A10` had only such
+vectors). A call to the function's own entry (recursion) is mocked like
+any other call: the lifted code makes it through `call_ext`.
 Unicorn caches translated code per page: never write new
 code into a page that has already been executed or translated (the st0
 capture first ran on the return page and silently executed stale bytes).
@@ -617,16 +629,33 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 `python scripts/inventory.py summary` gives the live count.
 
+## Debugging a failing lifted function
+
+1. `LIFT_DEBUG=0xADDR DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
+   --test lifted`: prints that function's panic message (e.g. `call target`
+   with left/right, `registers at the call`, `unrecorded call`), or its
+   register and memory differences.
+2. `PY research/native/trace_one.py 0xADDR [seed]`: records one vector,
+   traces the original's registers at every block start, builds a
+   throwaway test with the function's Rust (block trace via `LIFT_TRACE`)
+   against the already-built crate (seconds), and prints the first block
+   where the two disagree. Agreeing traces with a failing result mean the
+   difference is in the last block or the final memory.
+3. So far every disagreement has been in the *recorder* (Unicorn quirks,
+   corrupted cases), not in the translation. Fix the recorder, re-record
+   (drop the function's cases from `vectors/lift.json`), and never bend the
+   translation to match a bad vector.
+
 ## What to do next
 
-0. `python scripts/inventory.py ready 30`: functions whose direct callees
-   are all verified (portable now). Each verified base unlocks its callers.
-1. Families first (`families.py show 40`): each is one port for many
-   verified functions. The geometry wrappers (`MtGeomSphere::vf*`, 61/46/25
-   members) and the per-enemy `uEm7000::vf115` (59) are the largest.
-2. Pure gameplay leaves in the core classes (cPlAct*, uPlayerBase,
-   uCharacterBase, uEnemy, uEm0100, uNpc, cAI*): a capstone scan for
-   functions without any call finds about 200 of them.
-3. The dependency frontier (`inventory.py next`) once the leaves under a
-   class are done, so its larger functions can be ported whole.
-4. Keep this file's table and INVENTORY.md current with each batch.
+1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): functions over
+   2,000 bytes (L02); then x87-return (floats returned in st0 by a callee:
+   the largest rejection), x87 arithmetic (check the precision-control
+   word first), sbb/adc, lahf, div/mul, rep movs/stos, Ghidra boundary
+   problems ("disassembly", "falls").
+2. The Phase 1 runtime: the memory model, a production `call_ext`
+   dispatcher, platform services (file/archive I/O, D3D9 to wgpu, audio,
+   input). Lifted code only becomes a game through it.
+3. Hand ports stay for the functions where a typed, readable API matters;
+   they keep their own differential tests (table above).
+4. Keep INVENTORY.md and the numbers in this file current with each batch.

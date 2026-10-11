@@ -556,15 +556,16 @@ def rust_fn(addr, name, arms):
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",
     ]
-    body = straight_line(addr, arms)
+    traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
+    body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
     if body is not None:
         return "\n".join([*header, "    " + cpu_arm(body), "}", ""])
     return "\n".join([*header,
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
-        *([] if os.environ.get("LIFT_TRACE", "").lower() not in (f"0x{addr:x}", f"{addr:x}") else [
-            '        eprintln!("trace {pc:#x} eax={eax:#x} ecx={ecx:#x} edx={edx:#x} ebx={ebx:#x} esp={esp:#x} '
-            'ebp={ebp:#x} esi={esi:#x} edi={edi:#x}");']),
+        *([] if not traced else [
+            '        eprintln!("trace {pc:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x}", '
+            'cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi);']),
         "        match pc {",
         *(cpu_arm(a) for a in arms),
         "            _ => unreachable!(),",
