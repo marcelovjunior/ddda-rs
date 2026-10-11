@@ -161,7 +161,8 @@ X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse
 
 
 SSE_BINARY = {"addss", "subss", "mulss", "divss", "minss", "maxss", "addps", "subps", "mulps", "divps",
-              "minps", "maxps"}
+              "minps", "maxps", "addpd", "subpd", "mulpd", "divpd", "minpd", "maxpd",
+              "addsd", "subsd", "mulsd", "divsd", "minsd", "maxsd"}
 
 
 class Rejected(Exception):
@@ -232,6 +233,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # empty x87 stack. Match the fixture's actual empty-stack contract.
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
     uc.reg_write(_xc.UC_X86_REG_FPCW, 0x037f)
+    uc.reg_write(_xc.UC_X86_REG_MXCSR, 0x1f80)
     base, secs = image()
     pages_in = {}
 
@@ -330,7 +332,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         i = sse_dec[addr]
         if i is None:
             return False
-        lanes = 4 if i.mnemonic.endswith("ps") else 1
+        width = 64 if i.mnemonic.endswith(("pd", "sd")) else 32
+        lanes = 128 // width if i.mnemonic.endswith(("ps", "pd")) else 1
         a = uc_.reg_read(XMM_REGS[i.reg_name(i.operands[0].reg)])
         o = i.operands[1]
         if o.type == 1:  # register
@@ -339,16 +342,18 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             mm = o.mem
             ea = mm.disp + (uc_.reg_read(dict(GPR)[i.reg_name(mm.base)]) if mm.base else 0) +                 (uc_.reg_read(dict(GPR)[i.reg_name(mm.index)]) * mm.scale if mm.index else 0)
             try:
-                b = int.from_bytes(bytes(uc_.mem_read(ea & 0xFFFFFFFF, 4 * lanes)), "little")
+                b = int.from_bytes(bytes(uc_.mem_read(ea & 0xFFFFFFFF, width // 8 * lanes)), "little")
             except UcError:
                 return False
-        nan = lambda v: (v & 0x7F800000) == 0x7F800000 and (v & 0x7FFFFF) != 0  # noqa: E731
-        return any(nan((a >> 32 * k) & 0xFFFFFFFF) and nan((b >> 32 * k) & 0xFFFFFFFF) for k in range(lanes))
+        exponent, fraction = (0x7ff0000000000000, 0xfffffffffffff) if width == 64 else (0x7f800000, 0x7fffff)
+        nan = lambda v: v & exponent == exponent and v & fraction != 0
+        return any(nan(a >> width*k) and nan(b >> width*k) for k in range(lanes))
 
     # Map every page an instruction will touch *before* it runs. Unicorn's
     # UNMAPPED hook is not reliable (it can map the page and still raise),
     # and resuming after such a fault loses QEMU's lazily computed flags.
     mem_ops = {}
+    integer_ops = {}
     x87_ops = {}
     rets = {}
     gpr = dict(GPR)
@@ -357,11 +362,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if addr not in mem_ops:
             try:
                 i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
+                integer_ops[addr] = i
                 x87_ops[addr] = i if i.mnemonic.startswith("f") else None
                 mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
                                   i.reg_name(o.mem.index) if o.mem.index else None,
                                   o.mem.scale, o.mem.disp, max(o.size, 1))
-                                 for o in i.operands if o.type == 3 and not o.mem.segment]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
+                                 for o in i.operands if o.type == 3 and (not o.mem.segment or i.reg_name(o.mem.segment) in ("es", "ds"))]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
             except (UcError, StopIteration):
                 mem_ops[addr] = []
                 x87_ops[addr] = None
@@ -376,6 +382,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             a &= 0xFFFFFFFF
             need.add(a & ~0xFFF)
             need.add(((a + sz - 1) & 0xFFFFFFFF) & ~0xFFF)
+        i = integer_ops.get(addr)
+        if i is not None and i.mnemonic in ("bt", "bts", "btr", "btc") and i.operands[0].type == 3 and i.operands[1].type == 1:
+            operand, index = i.operands
+            bits = operand.size * 8
+            offset = uc_.reg_read(getattr(_xc, "UC_X86_REG_" + i.reg_name(index.reg).upper()))
+            offset &= (1 << bits) - 1
+            if offset & (1 << (bits - 1)):
+                offset -= 1 << bits
+            a = (effective_address(uc_, i, operand) + (offset // bits) * operand.size) & 0xffffffff
+            need.update((a & ~0xfff, ((a + operand.size - 1) & 0xffffffff) & ~0xfff))
         for p in need:
             if p not in pages_in and p != RET & ~0xFFF:
                 on_unmapped(uc_, None, p, 1, 0, None)
@@ -387,6 +403,62 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     root_frame = [True]
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
+    valid_flags = [0x8d5]
+
+    def check_integer_flags(uc_, i):
+        # Undefined flags differ between real CPUs and QEMU. Reject observed
+        # reads instead of assigning them invented semantics in a fixture.
+        import capstone.x86_const as xc
+        if i.mnemonic in ("fcomi", "fcompi", "fucomi", "fucompi"):
+            valid_flags[0] = 0x8d5
+            return None
+        if i.mnemonic.startswith("f"):
+            return None  # Capstone's detail union contains x87 status flags here
+        mapping = (("CF",1),("PF",4),("AF",0x10),("ZF",0x40),("SF",0x80),("OF",0x800))
+        reads = sum(bit for name,bit in mapping if i.eflags & getattr(xc,"X86_EFLAGS_TEST_"+name))
+        if i.mnemonic in ("adc","sbb","inc","dec"):
+            reads |= 1
+        if i.mnemonic == "lahf":
+            reads |= 0xd5  # Capstone describes these as PRIOR, not TEST
+        if reads & ~valid_flags[0]:
+            return "read of undefined integer flags"
+        mn = i.mnemonic
+        defined = sum(bit for name,bit in mapping if i.eflags & (
+            getattr(xc,"X86_EFLAGS_MODIFY_"+name)|getattr(xc,"X86_EFLAGS_SET_"+name)|getattr(xc,"X86_EFLAGS_RESET_"+name)))
+        if mn in ("div","idiv"):
+            valid_flags[0] = 0
+        elif mn in ("mul", "imul"):
+            valid_flags[0] = 0x801
+        elif mn in ("bsf","bsr"):
+            op=i.operands[1]
+            v=uc_.reg_read(getattr(_xc,"UC_X86_REG_"+i.reg_name(op.reg).upper())) if op.type==1 else int.from_bytes(uc_.mem_read(effective_address(uc_,i,op),op.size),"little")
+            if not v:
+                return "undefined bit-scan destination"
+            valid_flags[0] = 0x40
+        elif mn in ("bt","bts","btr","btc"):
+            valid_flags[0] = (valid_flags[0]&0x40)|1
+        elif mn in ("rol","ror","shld","shrd"):
+            op=i.operands[-1]
+            n=(op.imm if op.type==2 else uc_.reg_read(_xc.UC_X86_REG_CL))&31
+            if n:
+                if mn in ("shld","shrd"):
+                    if n>i.operands[0].size*8:
+                        return "undefined double-shift count"
+                    valid_flags[0]=0xc5|(0x800 if n==1 else 0)
+                else:
+                    valid_flags[0]=(valid_flags[0]&~0x801)|1|(0x800 if n==1 else 0)
+        elif mn in ("and","or","xor","test"):
+            valid_flags[0]=0x8d5  # existing logical helper's AF convention
+        else:
+            valid_flags[0] |= defined
+        return None
+
+    def effective_address(uc_,i,op):
+        v=op.mem.disp
+        for reg,scale in ((op.mem.base,1),(op.mem.index,op.mem.scale)):
+            if reg:
+                v+=uc_.reg_read(getattr(_xc,"UC_X86_REG_"+i.reg_name(reg).upper()))*scale
+        return v&0xffffffff
 
     def on_frame(uc_, addr, size, _):
         # Must precede on_ext: the first root instruction after a closed
@@ -430,6 +502,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
+        if addr in integer_ops and addr not in PLATFORM and uc_.reg_read(UC_X86_REG_EIP) == addr:
+            reason = check_integer_flags(uc_, integer_ops[addr])
+            if reason:
+                bad.append(f"{reason} at {addr:#010x}")
+                uc_.emu_stop()
+                return
         if body is not None and addr not in PLATFORM and addr != RET:
             if addr not in flow:
                 try:

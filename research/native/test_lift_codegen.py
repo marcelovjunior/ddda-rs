@@ -27,6 +27,10 @@ class CodegenTests(unittest.TestCase):
         self.assertIn('super::lifted::f_00002000(m, cpu);', rust)
         self.assertNotIn('std::mem::take', rust)
         self.assertNotIn('*cpu =', rust)
+        legacy = [arm.replace(', df: cpu.df', '').replace(', df: _', '')]
+        legacy_rust = lift.rust_fn(0x1000, 'pre-DF cache', legacy)
+        self.assertNotIn('std::mem::take', legacy_rust)
+        self.assertNotIn('*cpu =', legacy_rust)
 
     def test_binary_templates_and_conservative_fallback(self):
         for bits, mask in ((8, '0xFF'), (16, '0xFFFF'), (32, 'u32::MAX')):
@@ -82,7 +86,7 @@ class CodegenTests(unittest.TestCase):
         reference = '''fn f_00001000(m: &mut dyn Mem, cpu: &mut Cpu) {
             let Cpu { mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi,
                 xmm: [mut xmm0, mut xmm1, mut xmm2, mut xmm3, mut xmm4, mut xmm5, mut xmm6, mut xmm7],
-                mut fl, mut st } = std::mem::take(cpu);
+                mut fl, mut st, .. } = std::mem::take(cpu);
             let pc = 0x1000; loop { match pc { ARMS _ => unreachable!() } }
         }'''.replace('ARMS', '\n'.join(arms))
         generated = lift.rust_fn(0x1000, 'synthetic', arms)

@@ -551,9 +551,53 @@ instruction, add a branch in `lift()` that emits its exact semantics
 of yield: indirect calls through vtables (needs a dispatch table from
 address to lifted function), calls into hand-ported or platform code
 (the allocator: a Rust model with the same observable effects),
-`mul`/`div`, `rep movs/stos`,
-`movsx`/`cwde`, `sbb`/`adc`, `shld`/`shrd`, and remaining x87 forms.
+remaining indirect forms, reciprocal approximations, and remaining x87 forms.
 DDDA's D3D creation flags preserve FPU precision; see the evidence below.
+
+**Integer and SSE extensions (L08).** `ddnative-base/src/integer.rs`
+implements ADC/SBB at 8/16/32 bits, one-operand MUL/IMUL and DIV/IDIV,
+16-bit two/three-operand IMUL, rotates, double shifts, bit scans and bit
+tests. CMOV reads its source even when its condition is false. XCHG reads
+both operands before writing either, including an address register exchanged
+with memory. CBW/CWDE/CWD preserve unaffected register bits. Bit-string
+memory operands use a signed register index to select the addressed word;
+immediate indices wrap within the operand. The recorder pre-maps that
+effective address as well as ordinary memory operands.
+
+Undefined arithmetic flags from the new operations are represented by
+`PARTIAL` with a defined-bit mask. Reading an unavailable flag panics
+in replay, and the recorder rejects that execution path. Defined flags are
+checked against host instructions in the base-crate tests. Zero-divisor and
+quotient-overflow paths produce no vectors; the Rust divide helper reports
+an error instead of trapping the host. A zero bit-scan source and oversized
+16-bit double-shift count also reject. This deliberately makes no promise
+about CPU-specific values of undefined flags or destinations.
+
+MOVS/STOS and their REP forms execute sequential memory accesses, including
+overlap, a zero count, 32-bit address wrapping and either direction. CLD/STD
+update a separate `Cpu::df`, which arithmetic does not overwrite. Explicit
+16-bit string addressing and unsupported segment overrides still reject.
+Guest memory execution remains serialized; this is not a guest-thread
+atomicity or cache-ordering model.
+
+`sse2.rs` uses legacy SSE/SSE2 inline assembly with fixed operand order for
+packed memory arithmetic, double arithmetic, conversions, comparisons,
+unpacks, shuffles and packed integer operations. MOVD/MOVSD, partial XMM
+moves and sign-mask extraction preserve or clear upper lanes as specified.
+These helpers use masked round-to-nearest MXCSR `0x1f80` and restore the
+host word; the recorder initializes the same state. Guest MXCSR changes
+remain unsupported. Reciprocal/reciprocal-square-root approximations remain
+rejected: CPU-dependent approximation bits cannot be equated with QEMU's
+results. The existing two-NaN recorder exclusion also covers new double
+arithmetic. Hardware semantics follow the
+[Intel SDM, volume 2](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+Run `cargo test -p ddnative-base --test instructions` for small hardware
+tests, and `PY -m unittest discover -s research/native -p 'test_lift*.py'`
+for synthetic emitted programs and recorder checks. These run without the
+full generated library. Full required lifted replay is still necessary
+before accepting a new private batch. `scan` also saves complete reason
+counts in private `patterns/lift_rejections.json`.
 
 **Pitfalls.** Unicorn's UNMAPPED hook is not reliable: for SSE stores and
 even plain byte stores it can map the page and still raise. Resuming after
@@ -779,16 +823,21 @@ not a claim about the game's live thread state.
    against the already-built crate (seconds), and prints the first block
    where the two disagree. Agreeing traces with a failing result mean the
    difference is in the last block or the final memory.
-3. So far every disagreement has been in the *recorder* (Unicorn quirks,
-   corrupted cases), not in the translation. Fix the recorder, re-record
-   (drop the function's cases from `vectors/lift.json`), and never bend the
-   translation to match a bad vector.
+3. Check both the emitter and recorder. L08 found Capstone describing
+   COMISD/UCOMISD memory sources as m128 although the instructions read m64;
+   the emitter now overrides that width. Separately, large-argument FSIN
+   can differ between Unicorn and the CPU: an isolated calculation from
+   `0x00F276C0` produced `0x181c7560` in Unicorn and `0x181c74e9` on the CPU.
+   That function is quarantined in the private mismatch list. Never bend
+   hardware semantics to match an emulator discrepancy. Re-record cases
+   when fixing the recorder or changing a recorded call boundary.
 
 ## What to do next
 
-1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): remaining stack/call
-   analysis and x87 forms, sbb/adc, div/mul, rep movs/stos, Ghidra boundary
-   problems ("disassembly", "falls").
+1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): remaining indirect
+   jumps, x87 input contracts and usable fixtures for newly supported
+   integer/SSE functions. L07 handles recursive body discovery; L08 adds
+   carry/borrow, divide/multiply, string operations and SSE families.
 2. The Phase 1 runtime: the memory model, a production `call_ext`
    dispatcher, platform services (file/archive I/O, D3D9 to wgpu, audio,
    input). Lifted code only becomes a game through it.

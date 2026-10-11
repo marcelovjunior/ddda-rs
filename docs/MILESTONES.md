@@ -629,3 +629,32 @@ opening (codex-31), route perf (codex-29).
   regeneration before building after merge.
 - **One next action:** the head should regenerate the shards on main and
   run the full native gate with its complete private fixture collection.
+
+## Batch 2026-10-11 (L08: native lifter integer/SSE coverage)
+
+- **Implemented:** carry/borrow, multiply/divide widths, rotates and double
+  shifts, bit operations, conditional moves, exchanges, sign extension,
+  direction-aware MOVS/STOS and SSE/SSE2 arithmetic, conversions and lane
+  operations. Defined flags are exact; observed undefined results reject.
+  Same scan candidates: 33,669 -> 36,793 liftable, 4,059 -> 935 rejected.
+  See [L08 results](tasks/L08-lifter-integer-sse.md#results).
+- **Tested / compared with the original:** 31,580 functions / 94,088 cases
+  pass private full replay, retaining all 28,665 prepared functions and
+  adding 2,915. Also pass: 32 Python regressions (79 synthetic instruction
+  programs), seven new hardware-comparison tests and seven existing Rust
+  units. Compilation takes 3m25s and replay 44.21s at four jobs, without
+  incremental compilation or concurrent recording; minimum free memory
+  during the final build/replay is 17.97 GiB. These are sampled fixtures,
+  with external-call mocks, not gameplay coverage.
+- **Evidence / limits:** replay caught a Capstone COMISD/UCOMISD operand
+  width error, now fixed and regression-tested. Of 3,124 raw additions,
+  206 lack usable fixtures, two need unavailable x87 callee contracts and
+  `0x00F276C0` is quarantined for a separately reproduced large-argument
+  FSIN difference between Unicorn and CPU. Five new roots stay external
+  as callees to preserve prepared callers' usable boundaries. Vector
+  worker growth persists: recording was reduced from six to three workers
+  proactively; free memory never crossed the user's 6 GiB threshold.
+- **One next action:** the head should review/adopt private `native-L08`
+  patterns/vectors and regenerate on main; the 209 remaining additions
+  are listed in private `unverified-L08.json`. Source commits exclude
+  generated shards and all private data; shared native data was untouched.
