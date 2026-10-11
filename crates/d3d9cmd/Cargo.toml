@@ -1,0 +1,9 @@
+[package]
+name = "d3d9cmd"
+version = "0.1.0"
+description = "Direct3D 9 commands from the runtime to a graphics backend"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

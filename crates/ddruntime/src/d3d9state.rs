@@ -22,13 +22,7 @@ const TSS_TEXCOORDINDEX: u32 = 11;
 pub const VS_FLOATS: u32 = 256;
 pub const PS_FLOATS: u32 = 224;
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Constants {
-    /// float registers as raw bits
-    pub f: Vec<[u32; 4]>,
-    pub i: [[i32; 4]; 16],
-    pub b: [u32; 16],
-}
+pub use d3d9cmd::Constants;
 
 #[derive(Clone, Debug)]
 pub struct DeviceState {

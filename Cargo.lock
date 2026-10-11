@@ -2268,6 +2268,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "d3d9cmd"
+version = "0.1.0"
+
+[[package]]
 name = "d3d9ref"
 version = "0.1.0"
 dependencies = [
@@ -2755,6 +2759,7 @@ dependencies = [
 name = "ddruntime"
 version = "0.1.0"
 dependencies = [
+ "d3d9cmd",
  "d3d9shader",
  "ddexe",
  "ddnative",

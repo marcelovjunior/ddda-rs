@@ -120,12 +120,7 @@ impl Image {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TexKind {
-    Flat,
-    Cube,
-    Volume,
-}
+pub use d3d9cmd::TexKind;
 
 /// The texture record (Kind::Texture).
 #[derive(Debug)]
