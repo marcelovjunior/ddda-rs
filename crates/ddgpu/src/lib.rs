@@ -16,6 +16,8 @@
 //! checked against the D3D9 driver.
 use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
 use std::collections::HashMap;
+
+pub mod present;
 use std::future::Future;
 
 fn block_on<F: Future>(f: F) -> F::Output {
@@ -247,8 +249,10 @@ pub struct WgpuBackend {
     pub last_frame: Option<Frame>,
     pub read_frames: bool,
     pub errors: Vec<String>,
-    /// Called with every presented frame (a window host shows them).
+    /// Called with every presented frame, read back (headless capture).
     pub on_present: Option<Box<dyn FnMut(&Frame) + Send>>,
+    /// Shown every presented back buffer on the GPU (a window host).
+    pub present_sink: Option<Box<dyn PresentSink>>,
     /// occlusion counting: wgpu query sets of OCCLUSION_SET slots each;
     /// one slot per draw made while guest queries count
     occlusion_sets: Vec<wgpu::QuerySet>,
@@ -264,15 +268,44 @@ pub struct WgpuBackend {
     gamma: Option<Box<GammaRamp>>,
 }
 
+/// Where a host shows presented frames without reading them back: called
+/// at every Present, after the frame's commands were submitted, on the
+/// backend's device and queue (submissions run in order, so the back
+/// buffer holds the complete frame for whatever the sink submits now).
+pub trait PresentSink: Send {
+    fn present(&mut self, frame: &Presented);
+}
+
+/// The back buffer of one Present, as a sink gets it.
+pub struct Presented<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    /// the back buffer surface's texture (TEXTURE_BINDING | COPY_SRC)
+    pub texture: &'a wgpu::Texture,
+    pub format: wgpu::TextureFormat,
+    pub width: u32,
+    pub height: u32,
+    /// the ramp set by SetGammaRamp, applied to each 8-bit channel (the
+    /// entry's high byte), if any
+    pub gamma: Option<&'a GammaRamp>,
+}
+
 /// Occlusion query slots per wgpu query set.
 const OCCLUSION_SET: u32 = 256;
 
 impl WgpuBackend {
+    /// The device features the backend needs: hosts that create the
+    /// device themselves (a window sharing it with its surface) request
+    /// these.
+    pub fn required_features() -> wgpu::Features {
+        wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::TEXTURE_COMPRESSION_BC
+    }
+
     /// A backend on the default adapter without a window.
     pub fn headless() -> Option<WgpuBackend> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-        let needed = wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::TEXTURE_COMPRESSION_BC;
+        let needed = Self::required_features();
         if !adapter.features().contains(needed) {
             return None;
         }
@@ -280,7 +313,16 @@ impl WgpuBackend {
             required_features: needed,
             ..Default::default()
         })).ok()?;
-        Some(WgpuBackend {
+        Some(Self::new(device, queue))
+    }
+
+    /// A backend on a device the host created (with
+    /// [`required_features`](Self::required_features)), e.g. the one a
+    /// window's surface is configured with, so presenting needs no copy
+    /// between devices. `read_frames` starts on, as in headless mode; a
+    /// host that shows frames through a [`PresentSink`] turns it off.
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> WgpuBackend {
+        WgpuBackend {
             device,
             queue,
             textures: HashMap::new(),
@@ -294,6 +336,7 @@ impl WgpuBackend {
             read_frames: true,
             errors: Vec::new(),
             on_present: None,
+            present_sink: None,
             occlusion_sets: Vec::new(),
             free_slots: Vec::new(),
             slot_users: HashMap::new(),
@@ -301,7 +344,7 @@ impl WgpuBackend {
             query_counts: HashMap::new(),
             active_queries: Vec::new(),
             gamma: None,
-        })
+        }
     }
 
     /// A free occlusion slot (a new query set when none is left).
@@ -1308,6 +1351,12 @@ impl GraphicsBackend for WgpuBackend {
         }
         if let (Some(f), Some(frame)) = (self.on_present.as_mut(), self.last_frame.as_ref()) {
             f(frame);
+        }
+        if let (Some(sink), Some(rt)) = (self.present_sink.as_mut(), self.surfaces.get(&back_buffer.surface)) {
+            sink.present(&Presented {
+                device: &self.device, queue: &self.queue, texture: &rt.texture, format: rt.format,
+                width: rt.width, height: rt.height, gamma: self.gamma.as_deref(),
+            });
         }
     }
 }
