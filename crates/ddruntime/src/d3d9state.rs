@@ -22,7 +22,7 @@ const TSS_TEXCOORDINDEX: u32 = 11;
 pub const VS_FLOATS: u32 = 256;
 pub const PS_FLOATS: u32 = 224;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Constants {
     /// float registers as raw bits
     pub f: Vec<[u32; 4]>,
@@ -312,12 +312,6 @@ pub fn end_scene(m: &mut dyn Mem, cpu: &mut Cpu) {
     let dev = arg(m, cpu, 0);
     cpu.eax = if state(dev, |s| std::mem::replace(&mut s.in_scene, false)) { D3D_OK } else { D3DERR_INVALIDCALL };
     ret(m, cpu, 4);
-}
-/// Clear(this, count, rects, flags, colour, z, stencil): accepted (the
-/// headless device draws nothing yet).
-pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = D3D_OK;
-    ret(m, cpu, 28);
 }
 
 // --- shaders and constants -------------------------------------------------------

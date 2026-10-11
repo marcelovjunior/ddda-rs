@@ -821,3 +821,76 @@ fn textures_and_buffers_lock_into_guest_memory_with_d3d9s_layouts() {
     assert_eq!(com(&mut s, tex, 2, &[]), 0);
     assert_eq!(ddruntime::d3d9dev::refs(surf), None);
 }
+
+#[test]
+fn a_draw_reaches_the_backend_with_its_uploads_and_complete_state() {
+    use ddruntime::d3d9draw::{recorded, Indices, Upload, Vertices};
+    let Some((mut s, dev)) = device_session() else { return };
+    const INVALID: u32 = ddruntime::d3d9::D3DERR_INVALIDCALL;
+    let scratch = 0x7EFF_0900;
+    let out = scratch;
+    // a vertex buffer with three float4 positions, written through Lock
+    assert_eq!(com(&mut s, dev, 26, &[48, 0x8, 0, 1, out, 0]), 0);
+    let vb = s.mem.u32(out);
+    com(&mut s, vb, 11, &[0, 0, out, 0]);
+    let p = s.mem.u32(out);
+    for k in 0..12u32 {
+        s.mem.set_u32(p + 4 * k, (k as f32).to_bits());
+    }
+    com(&mut s, vb, 12, &[]);
+    // a 4x4 A8R8G8B8 texture with one texel set
+    assert_eq!(com(&mut s, dev, 23, &[4, 4, 1, 0, 21, 1, out, 0]), 0);
+    let tex = s.mem.u32(out);
+    let locked = scratch + 0x10;
+    com(&mut s, tex, 19, &[0, locked, 0, 0]);
+    s.mem.set_u32(s.mem.u32(locked + 4), 0xFF00_FF00);
+    com(&mut s, tex, 20, &[0]);
+    // declaration: float4 position; shaders: the pass-through pair
+    let decl = scratch + 0x40;
+    for (k, w) in [0u16, 0, 3, 0, 0x00FF, 0, 17, 0].iter().enumerate() {
+        s.mem.set_u16(decl + 2 * k as u32, *w);
+    }
+    com(&mut s, dev, 86, &[decl, out]);
+    let vd = s.mem.u32(out);
+    let code = scratch + 0x80;
+    let vs = [0xFFFE_0300u32, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0000, 0xE00F_0000,
+              0x0200_0001, 0xE00F_0000, 0x90E4_0000, 0x0000_FFFF];
+    for (k, t) in vs.iter().enumerate() {
+        s.mem.set_u32(code + 4 * k as u32, *t);
+    }
+    com(&mut s, dev, 91, &[code, out]);
+    let vso = s.mem.u32(out);
+    com(&mut s, dev, 87, &[vd]);
+    com(&mut s, dev, 92, &[vso]);
+    com(&mut s, dev, 100, &[0, vb, 0, 16]);
+    com(&mut s, dev, 65, &[0, tex]);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), INVALID, "outside a scene");
+    com(&mut s, dev, 41, &[]);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    let (uploads, draw) = recorded(|r| (r.uploads.clone(), r.draws.last().cloned())).expect("recording backend");
+    let draw = draw.expect("a draw");
+    assert!(uploads.iter().any(|u| matches!(u, Upload::Buffer { resource, bytes } if *resource == vb && bytes[4..8] == 1f32.to_le_bytes())));
+    assert!(uploads.iter().any(|u| matches!(u, Upload::Image { resource, bytes, pitch: 16, .. } if *resource == tex && bytes[0..4] == 0xFF00_FF00u32.to_le_bytes())));
+    assert_eq!((draw.primitive, draw.primitives, draw.vertex_count), (4, 1, 3));
+    assert_eq!(draw.vertices, Vertices::Streams(vec![(0, vb, 0, 16, 1)]));
+    assert_eq!(draw.indices, Indices::None);
+    assert_eq!(draw.vertex_shader.as_deref(), Some(&vs[..]));
+    assert_eq!(draw.declaration.len(), 1);
+    assert_eq!(draw.textures.len(), 1);
+    assert_eq!((draw.textures[0].sampler, draw.textures[0].resource, draw.textures[0].format), (0, tex, 21));
+    assert_eq!(draw.targets[0].as_ref().map(|t| (t.width, t.height)), Some((1280, 720)));
+    // a second draw uploads nothing new (nothing is dirty)
+    let before = recorded(|r| r.uploads.len()).unwrap();
+    com(&mut s, dev, 81, &[4, 0, 1]);
+    assert_eq!(recorded(|r| r.uploads.len()).unwrap(), before);
+    // DrawPrimitiveUP carries its data and unsets stream 0
+    let up = scratch + 0x100;
+    assert_eq!(com(&mut s, dev, 83, &[4, 1, up, 16]), 0);
+    let d = recorded(|r| r.draws.last().cloned()).unwrap().unwrap();
+    assert!(matches!(d.vertices, Vertices::Inline { stride: 16, ref bytes } if bytes.len() == 48));
+    com(&mut s, dev, 101, &[0, out, scratch + 0x20, scratch + 0x24]);
+    assert_eq!(s.mem.u32(out), 0, "stream 0 is unset after a UP draw");
+    com(&mut s, dev, 42, &[]);
+    assert_eq!(com(&mut s, dev, 17, &[0, 0, 0, 0]), 0);
+    assert_eq!(recorded(|r| r.presents).unwrap(), 1);
+}

@@ -9,6 +9,7 @@
 //! headless for now: Present counts frames and nothing is drawn; methods
 //! are added as the game reaches them, the rest stop with their name.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3DFMT_X8R8G8B8, D3D_OK};
+use crate::d3d9draw as draw;
 use crate::d3d9res as res;
 use crate::d3d9state as st;
 use crate::dispatch::{Conflict, Registry};
@@ -471,7 +472,11 @@ fn with_chain<R>(chain: u32, f: impl FnOnce(u32, &mut PresentParameters, &mut Ve
 }
 /// Present(this, src, dst, window, dirty, flags): a frame (headless).
 fn chain_present(m: &mut dyn Mem, cpu: &mut Cpu) {
-    with_chain(arg(m, cpu, 0), |_, _, _, n| *n += 1);
+    let chain = arg(m, cpu, 0);
+    with_chain(chain, |_, _, _, n| *n += 1);
+    if let Some(back) = back_buffer_of(chain, 0) {
+        draw::present_back_buffer(m, back);
+    }
     cpu.eax = D3D_OK;
     ret(m, cpu, 24);
 }
@@ -511,6 +516,9 @@ fn chain_get_present_parameters(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     let chain = with_device(arg(m, cpu, 0), |d| d.swap_chains[0]);
     with_chain(chain, |_, _, _, n| *n += 1);
+    if let Some(back) = back_buffer_of(chain, 0) {
+        draw::present_back_buffer(m, back);
+    }
     cpu.eax = D3D_OK;
     ret(m, cpu, 20);
 }
@@ -572,11 +580,12 @@ pub const INTERFACES: &[Spec] = &[
             (28, res::create_render_target), (29, res::create_depth_stencil_surface),
             (36, res::create_offscreen_plain_surface), (37, st::set_render_target), (38, get_render_target),
             (39, st::set_depth_stencil_surface), (40, get_depth_stencil_surface), (41, st::begin_scene),
-            (42, st::end_scene), (43, st::clear), (44, st::set_transform), (45, st::get_transform),
+            (42, st::end_scene), (43, draw::clear), (44, st::set_transform), (45, st::get_transform),
             (47, st::set_viewport), (48, st::get_viewport), (57, st::set_render_state), (58, st::get_render_state),
             (64, st::get_texture), (65, st::set_texture), (66, st::get_texture_stage_state),
             (67, st::set_texture_stage_state), (68, st::get_sampler_state), (69, st::set_sampler_state),
-            (75, st::set_scissor_rect), (76, st::get_scissor_rect), (86, st::create_vertex_declaration),
+            (75, st::set_scissor_rect), (81, draw::draw_primitive), (82, draw::draw_indexed_primitive),
+            (83, draw::draw_primitive_up), (84, draw::draw_indexed_primitive_up), (76, st::get_scissor_rect), (86, st::create_vertex_declaration),
             (87, st::set_vertex_declaration), (88, st::get_vertex_declaration), (89, st::set_fvf), (90, st::get_fvf),
             (91, st::create_vertex_shader), (92, st::set_vertex_shader), (93, st::get_vertex_shader),
             (94, st::set_vs_f), (95, st::get_vs_f), (96, st::set_vs_i), (97, st::get_vs_i), (98, st::set_vs_b),

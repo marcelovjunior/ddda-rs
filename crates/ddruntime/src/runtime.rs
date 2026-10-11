@@ -49,6 +49,7 @@ pub struct Runtime {
     pub(crate) files: GuestCell<crate::files::Files>,
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,
     pub(crate) d3d: GuestCell<crate::d3d9dev::Objects>,
+    pub(crate) graphics: GuestCell<crate::d3d9draw::Graphics>,
 }
 
 thread_local! {
