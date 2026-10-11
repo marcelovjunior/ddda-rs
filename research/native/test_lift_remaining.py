@@ -88,9 +88,21 @@ class RemainingTests(unittest.TestCase):
             with self.assertRaisesRegex(h.Rejected,'noreturn'):
                 self.program(trap,True)
 
-    def test_platform_state_is_not_invented(self):
-        for code in ('0fa2c3','0f31c3','9cc3'):
-            with self.assertRaisesRegex(lift.Unsupported,'platform-dependent'):self.program(code)
+    def test_platform_state_has_explicit_contracts(self):
+        # L22: CPUID/RDTSC answers are recorded machine events, segment
+        # reads record the selectors, POPFD follows CPL3 or rejects.
+        import machine_events
+        arms,_,c=self.program('0fa2c3',True)
+        self.assertIn('crate::platform::cpuid(cpu);',' '.join(arms))
+        self.assertEqual(c['machine'],[['cpuid',0,0,*machine_events.host_cpuid(0,0)]])
+        arms,_,c=self.program('0f31c3',True)
+        self.assertEqual([e[0] for e in c['machine']],['rdtsc'])
+        arms,_,c=self.program('9c9dc3',True)
+        self.assertIn('x86::pushfd_image(cpu)',' '.join(arms));self.assertIn('x86::popfd(cpu, v)',' '.join(arms))
+        _,_,c=self.program('668cd0c3',True)
+        self.assertEqual(set(c['segments']),{'es','cs','ss','ds','fs','gs'})
+        with self.assertRaisesRegex(h.Rejected,'popfd'):self.program('68000100009dc3',True)  # sets TF
+        with self.assertRaisesRegex(lift.Unsupported,'push segment'):self.program('1ec3')
 
     def test_interleaved_local_allocation_is_not_a_mock_argument(self):
         _,_,c=self.program('8b018b501083ec0889f1ffd231c083c408c3',True)
