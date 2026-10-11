@@ -227,6 +227,18 @@ run):
 | verified (1:1 + differential test) | 56,021 | 99.0% | 96.1% |
 | not verified (each with a recorded reason) | 572 | 1.0% | 3.9% |
 
+After the address-taken discovery rule (2026-10-11, commit 066d970:
+labels whose address is stored as data, such as CRT handlers, become
+functions; 59,290 non-thunk functions):
+
+| status | functions | share | code bytes |
+|---|---:|---:|---:|
+| verified (1:1 + differential test) | 58,628 | 98.9% | 96.0% |
+| not verified (each with a recorded reason) | 662 | 1.1% | 4.0% |
+
+58,913 lifted entries with 175,425 recorded cases. The L15 table above and its notes below are
+kept for history.
+
 Plus 289 verified thunks; 56,306 lifted entries with 167,621 recorded
 cases. The former platform classes (deleting destructors, DTI allocators,
 construct-if-memory wrappers, base destructor chains, the CRT, the MT
