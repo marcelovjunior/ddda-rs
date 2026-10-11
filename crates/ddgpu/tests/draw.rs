@@ -359,9 +359,10 @@ fn occlusion_query_states_on_the_d3d9_driver() {
         eprintln!("skipped: no D3D9 device");
         return;
     };
-    let [before, building, after, count] = d3d9.occlusion_states().expect("D3D9 queries");
-    eprintln!("GetData before Issue {before:#x}, between BEGIN and END {building:#x}, after END {after:#x} (count {count})");
+    let [before, left, building, after, count] = d3d9.occlusion_states().expect("D3D9 queries");
+    eprintln!("GetData before Issue {before:#x} (buffer {left:#x}), between BEGIN and END {building:#x}, after END {after:#x} (count {count})");
     // the runtime's answers (crates/ddruntime/src/d3d9copy.rs) follow these
+    assert_eq!(building, 1, "S_FALSE while counting");
     assert_eq!((after, count), (0, 0), "an ended query with no draws counts 0");
 }
 
@@ -519,4 +520,330 @@ fn a_released_surface_address_can_be_reused() {
     gpu.present(&bigger);
     let f = gpu.last_frame.unwrap();
     assert_eq!((f.width, f.height), (8, 2));
+}
+
+/// An IEEE half from an f32 in [0, 1] (round to nearest).
+fn half(v: f32) -> u16 {
+    if v == 0.0 {
+        return 0;
+    }
+    let b = v.to_bits();
+    let e = ((b >> 23) & 0xFF) as i32 - 127 + 15;
+    if e <= 0 {
+        return ((v * 16_777_216.0).round() as u32) as u16; // subnormal: v / 2^-24
+    }
+    let m = b & 0x7F_FFFF;
+    let r = ((e as u32) << 10) + (m >> 13) + ((m >> 12) & 1);
+    r as u16
+}
+
+/// Random texels of one `w` x `h` level of `format` (float formats in
+/// [0, 1]), with the level's pitch and the bytes of one block row.
+fn level_texels(rng: &mut Rng, format: u32, w: u32, h: u32) -> (Vec<u8>, u32) {
+    let dxt1 = u32::from_le_bytes(*b"DXT1");
+    if format > 255 {
+        let block = if format == dxt1 { 8 } else { 16 };
+        let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+        return ((0..block * bw * bh).map(|_| rng.next() as u8).collect(), block * bw);
+    }
+    let unit = |rng: &mut Rng| (rng.next() % 1001) as f32 / 1000.0;
+    let mut bytes = Vec::new();
+    for _ in 0..w * h {
+        match format {
+            114 => bytes.extend(unit(rng).to_le_bytes()),
+            115 => (0..2).for_each(|_| bytes.extend(unit(rng).to_le_bytes())),
+            116 => (0..4).for_each(|_| bytes.extend(unit(rng).to_le_bytes())),
+            111 => bytes.extend(half(unit(rng)).to_le_bytes()),
+            112 => (0..2).for_each(|_| bytes.extend(half(unit(rng)).to_le_bytes())),
+            113 => (0..4).for_each(|_| bytes.extend(half(unit(rng)).to_le_bytes())),
+            _ => {
+                let bpp = match format {
+                    21 | 22 | 32 | 33 | 31 | 34 | 63 | 64 => 4,
+                    23 | 24 | 25 | 26 | 51 | 81 => 2,
+                    36 | 110 => 8,
+                    _ => 1,
+                };
+                bytes.extend((0..bpp).map(|_| rng.next() as u8));
+            }
+        }
+    }
+    let pitch = bytes.len() as u32 / h;
+    (bytes, pitch)
+}
+
+/// Every render state, sampler state and texture format of the census
+/// (brief L20 Results 1) at random, compared with the D3D9 driver: a
+/// textured draw with random blend, write-mask, alpha-test, cull,
+/// scissor, sRGB, depth (function, writes, bias) and stencil (one- and
+/// two-sided) states over a D24S8 target, then a probe draw whose depth
+/// and stencil tests show what the first draw left in that target.
+/// DDGPU_FUZZ sets the number of cases.
+#[test]
+fn render_states_match_the_d3d9_driver() {
+    let (Some(mut d3d9), Some(probe_gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    drop(probe_gpu);
+    let cases: usize = std::env::var("DDGPU_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(150);
+    let fourcc = |s: &[u8; 4]| u32::from_le_bytes(*s);
+    let formats = [21u32, 22, 23, 24, 25, 26, 28, 31, 32, 33, 34, 36, 50, 51, 63, 64, 81, 110, 111, 112, 113, 114, 115, 116,
+                   fourcc(b"DXT1"), fourcc(b"DXT3"), fourcc(b"DXT5")];
+    let mut rng = Rng(0x5EED_1020);
+    let mut failures = Vec::new();
+    let mut unsupported = std::collections::BTreeSet::new();
+    let mut compared = 0;
+    for case in 0..cases {
+        // one group of states at random per case, the others neutral, so
+        // that a difference points at its group
+        let group = case % 6;
+        let names = ["texture and sampler", "blend", "alpha test, cull, scissor", "depth", "stencil", "sRGB write"];
+        // texture: 4x4 with three levels
+        let format = if group == 0 { rng.pick(&formats) } else { 21 };
+        let mut uploads = Vec::new();
+        for (level, size) in [4u32, 2, 1].into_iter().enumerate() {
+            let (bytes, pitch) = level_texels(&mut rng, format, size, size);
+            let rows = if format > 255 { size.div_ceil(4) } else { size };
+            uploads.push(Upload::Image { resource: 0x300, index: level as u32, format, width: size, height: size, depth: 1, pitch, slice: pitch * rows, bytes });
+        }
+        // neutral sampler: wrap, point, no mips, no bias
+        let mut st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
+        if group == 0 {
+            st[1] = rng.pick(&[1u32, 2, 3, 4]);
+            st[2] = rng.pick(&[1u32, 2, 3, 4]);
+            st[4] = rng.pick(&[0u32, 0xFF00_0000, 0xFFFF_FFFF]);
+            st[5] = rng.pick(&[1u32, 2]);
+            st[6] = rng.pick(&[1u32, 2, 3]);
+            st[7] = rng.pick(&[0u32, 1, 2]);
+            st[8] = rng.pick(&[0f32, 0.5, -0.5, 1.0, -1.0]).to_bits();
+            st[9] = rng.pick(&[0u32, 1, 2]);
+            st[10] = rng.pick(&[1u32, 2, 4, 16]);
+            st[11] = rng.next() % 2;
+        }
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, states: st };
+        // the draw
+        let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
+        let z = if group == 3 { rng.pick(&[0.2f32, 0.5, 0.8]) } else { 0.5 };
+        d.vertices = Vertices::Inline { bytes: triangle_at(z), stride: 24 };
+        if matches!(group, 2 | 4) && rng.next() % 2 == 1 {
+            if let Vertices::Inline { bytes, .. } = &mut d.vertices {
+                let (a, b) = bytes.split_at_mut(24);
+                a.swap_with_slice(&mut b[..24]);
+            }
+        }
+        d.depth = Some(depth_target());
+        let blends = [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15];
+        let stencil_ops = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let funcs = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let masks = [0xFFu32, 0x0F, 0xF0, rng.next() % 256];
+        // neutral: no depth, stencil, blend, alpha test, culling, scissor, sRGB
+        let mut states: Vec<(u32, u32)> = vec![
+            (7, 0), (14, 0), (23, 4), (15, 0), (25, 8), (24, 0), (27, 0), (19, 2), (20, 1), (171, 1), (206, 0), (207, 2),
+            (208, 1), (209, 1), (193, 0xFFFF_FFFF), (168, 0xF), (22, 1), (174, 0), (194, 0), (195, 0), (175, 0), (52, 0),
+            (56, 8), (53, 1), (54, 1), (55, 1), (57, 0), (58, 0xFF), (59, 0xFF), (185, 0), (189, 8), (186, 1), (187, 1), (188, 1),
+        ];
+        let mut set = |k: u32, v: u32| {
+            states.retain(|s| s.0 != k);
+            states.push((k, v));
+        };
+        match group {
+            1 | 5 => {
+                set(27, rng.next() % 2);
+                set(19, rng.pick(&blends));
+                set(20, rng.pick(&blends));
+                set(171, rng.pick(&[1u32, 2, 3, 4, 5]));
+                set(206, rng.next() % 2);
+                set(207, rng.pick(&blends));
+                set(208, rng.pick(&blends));
+                set(209, rng.pick(&[1u32, 2, 3, 4, 5]));
+                set(193, rng.next());
+                set(168, rng.next() % 16);
+                if group == 5 {
+                    set(194, 1);
+                }
+            }
+            2 => {
+                set(15, rng.next() % 2);
+                set(25, rng.pick(&funcs));
+                set(24, rng.next() % 256);
+                set(22, rng.pick(&[1u32, 2, 3]));
+                set(174, rng.next() % 2);
+            }
+            3 => {
+                set(7, rng.next() % 2);
+                set(14, rng.next() % 2);
+                set(23, rng.pick(&funcs));
+                set(195, rng.pick(&[0f32, 0.25, -0.25]).to_bits());
+                set(175, rng.pick(&[0f32, 1.0]).to_bits());
+            }
+            4 => {
+                set(52, 1);
+                set(56, rng.pick(&funcs));
+                set(53, rng.pick(&stencil_ops));
+                set(54, rng.pick(&stencil_ops));
+                set(55, rng.pick(&stencil_ops));
+                set(57, rng.next() % 256);
+                set(58, rng.pick(&masks));
+                set(59, rng.pick(&masks));
+                set(185, rng.next() % 2);
+                set(189, rng.pick(&funcs));
+                set(186, rng.pick(&stencil_ops));
+                set(187, rng.pick(&stencil_ops));
+                set(188, rng.pick(&stencil_ops));
+                // half the time the depth test fails, for the ZFAIL ops
+                set(7, rng.next() % 2);
+                set(23, 2);
+            }
+            _ => {}
+        }
+        for &(k, v) in &states {
+            d.render_states.retain(|s| s.0 != k);
+            d.render_states.push((k, v));
+        }
+        d.render_states.sort();
+        let x0 = (rng.next() % 3) as i32;
+        let y0 = (rng.next() % 3) as i32;
+        d.scissor = [x0, y0, x0 + 1 + (rng.next() % (4 - x0 as u32)) as i32, y0 + 1 + (rng.next() % (4 - y0 as u32)) as i32];
+        // the probe: depth LESS at a random depth, stencil LESS (ref < value)
+        let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+        c.f[0] = [0.1f32.to_bits(), 0.9f32.to_bits(), 0.4f32.to_bits(), 1f32.to_bits()];
+        let mut probe = draw(ps_constant(), c, vec![]);
+        probe.vertices = Vertices::Inline { bytes: triangle_at(rng.pick(&[0.3f32, 0.6, 0.9])), stride: 24 };
+        probe.depth = Some(depth_target());
+        // every state the draw set (the D3D9 device keeps them), at the
+        // probe's values
+        probe.render_states = d.render_states.clone();
+        for (k, v) in [(7, 1), (14, 0), (23, 2), (52, 1), (56, 2), (57, rng.next() % 256), (58, 0xFF), (59, 0xFF), (53, 1), (54, 1), (55, 1),
+                       (185, 0), (15, 0), (27, 0), (168, 0xF), (22, 1), (174, 0), (194, 0), (195, 0), (175, 0)] {
+            probe.render_states.retain(|s| s.0 != k);
+            probe.render_states.push((k, v));
+        }
+        probe.render_states.sort();
+        let clear = ClearCall {
+            flags: 7, colour: rng.next(), z: rng.pick(&[0.35f32, 0.65]), stencil: rng.next() % 256,
+            depth: Some(depth_target()), ..blue_clear()
+        };
+        let draws = [d.clone(), probe];
+        let theirs = match d3d9.render(&uploads, Some(&clear), &draws, &back_buffer()) {
+            Ok(f) => f.rgba,
+            Err(e) if e.contains("CreateTexture") => {
+                unsupported.insert(format);
+                continue;
+            }
+            Err(e) => panic!("D3D9: {e}"),
+        };
+        compared += 1;
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        for u in &uploads {
+            gpu.upload(u.clone());
+        }
+        gpu.clear(&clear);
+        for dr in &draws {
+            gpu.draw(dr);
+        }
+        gpu.present(&back_buffer());
+        let changed: Vec<(u32, u32)> = states.iter().copied().filter(|s| ![(7, 0), (14, 0), (23, 4), (15, 0), (25, 8), (24, 0), (27, 0), (19, 2), (20, 1), (171, 1), (206, 0), (207, 2),
+            (208, 1), (209, 1), (193, 0xFFFF_FFFF), (168, 0xF), (22, 1), (174, 0), (194, 0), (195, 0), (175, 0), (52, 0),
+            (56, 8), (53, 1), (54, 1), (55, 1), (57, 0), (58, 0xFF), (59, 0xFF), (185, 0), (189, 8), (186, 1), (187, 1), (188, 1)].contains(s)).collect();
+        let describe = || format!("[{}] format {format:#x} sampler {:?} states {:?} scissor {:?} z {z} clear z {} stencil {}",
+                                  names[group], &st[1..12], changed, d.scissor, clear.z, clear.stencil);
+        if !gpu.errors.is_empty() {
+            failures.push(format!("case {case}: backend error {:?}; {}", gpu.errors, describe()));
+            continue;
+        }
+        let ours = gpu.last_frame.unwrap().rgba;
+        let max = ours.iter().zip(&theirs).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        if max > 1 {
+            failures.push(format!("case {case}: max diff {max}, ours {:?} / D3D9 {:?}; {}", &ours[..16], &theirs[..16], describe()));
+        }
+    }
+    eprintln!("{} of {compared} compared cases differ; formats the driver refuses as textures: {unsupported:x?}", failures.len());
+    for f in failures.iter().take(40) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty());
+}
+
+/// One set of draws on both, the top-left pixel of each (D3D9, wgpu,
+/// backend errors).
+fn both(d3d9: &mut d3d9ref::Oracle, uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall]) -> Result<([u8; 4], [u8; 4], Vec<String>), String> {
+    let theirs = d3d9.render(uploads, Some(clear), draws, &back_buffer())?.rgba;
+    let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+    for u in uploads {
+        gpu.upload(u.clone());
+    }
+    gpu.clear(clear);
+    for d in draws {
+        gpu.draw(d);
+    }
+    gpu.present(&back_buffer());
+    let ours = gpu.last_frame.map(|f| f.rgba).unwrap_or_default();
+    Ok((theirs[..4].try_into().unwrap(), ours.get(..4).map(|p| p.try_into().unwrap()).unwrap_or([0; 4]), gpu.errors))
+}
+
+/// Exploration of D3D9 behaviour (run with --ignored --nocapture).
+#[test]
+#[ignore]
+fn explore_d3d9_semantics() {
+    let Some(mut d3d9) = d3d9ref::Oracle::new() else { return };
+    eprintln!("adapter {:?}", ddgpu::WgpuBackend::headless().map(|g| g.adapter));
+    // depth bias: clear 0.65, draw at 0.2 with ZFUNC GREATER
+    for bias in [0f32, 0.05, 0.1, 0.15, 0.2, 0.25, 0.44, 0.46, 0.5, 1.0] {
+        let clear = ClearCall { flags: 7, z: 0.65, depth: Some(depth_target()), ..blue_clear() };
+        let d = depth_draw(0.2, 1.0, &[(23, 5), (14, 0), (195, bias.to_bits())]);
+        eprintln!("depth bias {bias}: {:?}", both(&mut d3d9, &[], &clear, &[d]));
+    }
+    // mip selection: levels red, green, blue (4x4, 2x2, 1x1); the
+    // triangle maps 2 texels per pixel (level 1 by derivatives)
+    let level = |size: u32, bgra: [u8; 4]| bgra.repeat((size * size) as usize);
+    let uploads: Vec<Upload> = [(4u32, [0u8, 0, 255, 255]), (2, [0, 255, 0, 255]), (1, [255, 0, 0, 255])].iter().enumerate()
+        .map(|(k, &(size, c))| Upload::Image { resource: 0x300, index: k as u32, format: 21, width: size, height: size, depth: 1, pitch: 4 * size, slice: 4 * size * size, bytes: level(size, c) })
+        .collect();
+    for mip in [0u32, 1, 2] {
+        for maxmip in [0u32, 1, 2] {
+            for bias in [0f32, -1.0, 1.0] {
+                let st = [0u32, 1, 1, 1, 0, 1, 1, mip, bias.to_bits(), maxmip, 1, 0, 0, 0];
+                let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 4, height: 4, depth: 1, levels: 3, states: st };
+                let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+                eprintln!("mipfilter {mip} maxmiplevel {maxmip} bias {bias}: {:?}", both(&mut d3d9, &uploads, &blue_clear(), &[d]));
+            }
+        }
+    }
+    // border colours per format: a 4x4 level of 0.25, linear, border white
+    for format in [21u32, 114, 111, 116, 113] {
+        let texel: Vec<u8> = match format {
+            21 => vec![0x40, 0x40, 0x40, 0x40],
+            114 => 0.25f32.to_le_bytes().to_vec(),
+            116 => [0.25f32; 4].iter().flat_map(|f| f.to_le_bytes()).collect(),
+            111 => half(0.25).to_le_bytes().to_vec(),
+            _ => [half(0.25); 4].iter().flat_map(|f| f.to_le_bytes()).collect(),
+        };
+        for (mag, min, maxmip, mip) in [(1u32, 2u32, 0u32, 0u32), (2, 2, 0, 0), (1, 2, 2, 0), (1, 1, 0, 0)] {
+            let up = Upload::Image { resource: 0x300, index: 0, format, width: 4, height: 4, depth: 1, pitch: 4 * texel.len() as u32, slice: 16 * texel.len() as u32, bytes: texel.repeat(16) };
+            let st = [0u32, 4, 4, 1, 0xFFFF_FFFF, mag, min, mip, 0, maxmip, 1, 0, 0, 0];
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, states: st };
+            let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+            let theirs = d3d9.render(&[up.clone()], Some(&blue_clear()), &[d.clone()], &back_buffer()).unwrap().rgba;
+            let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+            gpu.upload(up);
+            gpu.clear(&blue_clear());
+            gpu.draw(&d);
+            gpu.present(&back_buffer());
+            let ours = gpu.last_frame.unwrap().rgba;
+            let red = |f: &[u8]| f.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>();
+            eprintln!("border format {format} mag {mag} min {min} maxmip {maxmip}: D3D9 {:?} wgpu {:?}", red(&theirs), red(&ours));
+        }
+    }
+    // sRGB reads per format: one texel of a mid value
+    for (format, texel) in [(21u32, vec![0x80u8, 0x40, 0x20, 0xFF]), (22, vec![0x80, 0x40, 0x20, 0xFF]), (23, vec![0x10, 0x84]), (24, vec![0x10, 0x42]),
+                            (25, vec![0x10, 0xC2]), (26, vec![0x84, 0xF2]), (50, vec![0x80]), (51, vec![0x80, 0xFF]), (28, vec![0x80]),
+                            (31, vec![0x00, 0x02, 0x08, 0xE0])] {
+        for srgb in [0u32, 1] {
+            let up = Upload::Image { resource: 0x300, index: 0, format, width: 1, height: 1, depth: 1, pitch: texel.len() as u32, slice: texel.len() as u32, bytes: texel.clone() };
+            let st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, srgb, 0, 0];
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 1, height: 1, depth: 1, levels: 1, states: st };
+            let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+            eprintln!("format {format} srgb {srgb}: {:?}", both(&mut d3d9, &[up], &blue_clear(), &[d]));
+        }
+    }
 }

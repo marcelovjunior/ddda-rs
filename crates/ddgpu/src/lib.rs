@@ -61,6 +61,13 @@ enum Conversion {
     G32R32F,
     R16F,
     G16R16F,
+    /// 16-bit unsigned/signed normalised channels widened to float, as
+    /// D3D9 samples them (missing channels 1)
+    G16R16,
+    A16B16G16R16,
+    L16,
+    V16U16,
+    Q16W16V16U16,
 }
 
 /// (wgpu format, conversion, bytes per texel or per 4x4 block, block size)
@@ -85,6 +92,13 @@ fn sampled_format(d3d: u32) -> Option<(wgpu::TextureFormat, Conversion, u32, u32
         115 => (F::Rgba32Float, G32R32F, 8, 1),
         111 => (F::Rgba16Float, R16F, 2, 1),
         112 => (F::Rgba16Float, G16R16F, 4, 1),
+        31 => (F::Rgb10a2Unorm, Direct, 4, 1),
+        34 => (F::Rgba32Float, G16R16, 4, 1),
+        36 => (F::Rgba32Float, A16B16G16R16, 8, 1),
+        81 => (F::Rgba32Float, L16, 2, 1),
+        63 => (F::Rgba8Snorm, Direct, 4, 1),
+        64 => (F::Rgba32Float, V16U16, 4, 1),
+        110 => (F::Rgba32Float, Q16W16V16U16, 8, 1),
         f if f == fourcc(b"DXT1") => (F::Bc1RgbaUnorm, Direct, 8, 4),
         f if f == fourcc(b"DXT2") || f == fourcc(b"DXT3") => (F::Bc2RgbaUnorm, Direct, 16, 4),
         f if f == fourcc(b"DXT4") || f == fourcc(b"DXT5") => (F::Bc3RgbaUnorm, Direct, 16, 4),
@@ -105,6 +119,8 @@ fn target_format(d3d: u32, srgb: bool) -> Option<wgpu::TextureFormat> {
         111 => F::R16Float,
         115 => F::Rg32Float,
         34 => F::Rg16Unorm,
+        36 => F::Rgba16Unorm,
+        31 => F::Rgb10a2Unorm,
         75 | 77 | 79 => F::Depth24PlusStencil8,
         80 => F::Depth16Unorm,
         71 | 82 => F::Depth32Float,
@@ -164,6 +180,22 @@ fn convert(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bp
                     let (r0, g0) = if conv == Conversion::R32F { (f32le(r, k), 1.0) } else { (f32le(r, 2 * k), f32le(r, 2 * k + 1)) };
                     for v in [r0, g0, 1.0, 1.0] {
                         out.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+            }
+            Conversion::G16R16 | Conversion::A16B16G16R16 | Conversion::L16 | Conversion::V16U16 | Conversion::Q16W16V16U16 => {
+                let un = |k: usize| u16le(r, k) as f32 / 65535.0;
+                let sn = |k: usize| (u16le(r, k) as i16 as f32 / 32767.0).max(-1.0);
+                for k in 0..w {
+                    let v = match conv {
+                        Conversion::G16R16 => [un(2 * k), un(2 * k + 1), 1.0, 1.0],
+                        Conversion::A16B16G16R16 => [un(4 * k), un(4 * k + 1), un(4 * k + 2), un(4 * k + 3)],
+                        Conversion::L16 => [un(k), un(k), un(k), 1.0],
+                        Conversion::V16U16 => [sn(2 * k), sn(2 * k + 1), 1.0, 1.0],
+                        _ => [sn(4 * k), sn(4 * k + 1), sn(4 * k + 2), sn(4 * k + 3)],
+                    };
+                    for x in v {
+                        out.extend_from_slice(&x.to_le_bytes());
                     }
                 }
             }
@@ -240,7 +272,8 @@ pub struct WgpuBackend {
     /// standalone surfaces used as targets (back buffers, render targets,
     /// depth-stencil)
     surfaces: HashMap<u32, Rt>,
-    modules: HashMap<(u64, u64), (wgpu::ShaderModule, d3d9wgsl::Interface)>,
+    /// translated shaders by (shader hash, linked vertex shader hash, depth bias)
+    modules: HashMap<(u64, u64, bool), (wgpu::ShaderModule, d3d9wgsl::Interface)>,
     samplers: HashMap<[u32; 14], wgpu::Sampler>,
     blits: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// the last presented frame, if reading frames back is enabled
@@ -262,6 +295,8 @@ pub struct WgpuBackend {
     /// guest queries between D3DISSUE_BEGIN and D3DISSUE_END
     active_queries: Vec<u32>,
     gamma: Option<Box<GammaRamp>>,
+    /// the adapter drawing (its backend decides some rasteriser details)
+    pub adapter: wgpu::AdapterInfo,
 }
 
 /// Occlusion query slots per wgpu query set.
@@ -276,8 +311,12 @@ impl WgpuBackend {
         if !adapter.features().contains(needed) {
             return None;
         }
+        // used where the adapter has them: D3DTADDRESS_BORDER, 16-bit
+        // normalised targets (G16R16, A16B16G16R16), D3DFILL_WIREFRAME/POINT
+        let optional = wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::POLYGON_MODE_POINT;
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: needed,
+            required_features: needed | (adapter.features() & optional),
             ..Default::default()
         })).ok()?;
         Some(WgpuBackend {
@@ -301,6 +340,7 @@ impl WgpuBackend {
             query_counts: HashMap::new(),
             active_queries: Vec::new(),
             gamma: None,
+            adapter: adapter.get_info(),
         })
     }
 
@@ -372,7 +412,8 @@ impl WgpuBackend {
                 dimension,
                 format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
+                // D3DSAMP_SRGBTEXTURE reads through the sRGB view
+                view_formats: &[format.add_srgb_suffix()],
             });
             self.textures.insert(b.resource, Tex {
                 texture, kind: b.kind, format: b.format, gpu_format: format, levels: b.levels,
@@ -577,39 +618,69 @@ impl WgpuBackend {
         Some((view, view_format))
     }
 
-    fn sampler(&mut self, states: &[u32; 14]) -> wgpu::Sampler {
+    /// A wgpu sampler for D3DSAMPLERSTATETYPE values `states` (1..13).
+    /// D3D9 behaviour wgpu samplers cannot express is an error:
+    /// D3DTADDRESS_MIRRORONCE, border colours other than transparent
+    /// black, opaque black and opaque white. MIPMAPLODBIAS is applied in
+    /// the pixel shader (d3d9wgsl's lod_bias).
+    fn sampler(&mut self, states: &[u32; 14]) -> Result<wgpu::Sampler, String> {
         if let Some(s) = self.samplers.get(states) {
-            return s.clone();
+            return Ok(s.clone());
+        }
+        let border = states[1..4].contains(&4);
+        if border && !self.device.features().contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER) {
+            return Err("D3DTADDRESS_BORDER: the adapter has no clamp-to-border".into());
+        }
+        if states[1..4].contains(&5) {
+            return Err("D3DTADDRESS_MIRRORONCE is not implemented (wgpu has no mirror-clamp-to-edge)".into());
         }
         let address = |v: u32| match v {
             2 => wgpu::AddressMode::MirrorRepeat,
-            3 | 5 => wgpu::AddressMode::ClampToEdge,
+            3 => wgpu::AddressMode::ClampToEdge,
             4 => wgpu::AddressMode::ClampToBorder,
             _ => wgpu::AddressMode::Repeat,
         };
-        let filter = |v: u32| if v >= 2 { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest };
-        let mip = |v: u32| if v >= 2 { wgpu::MipmapFilterMode::Linear } else { wgpu::MipmapFilterMode::Nearest };
+        let border_color = match (border, states[4]) {
+            (false, _) => None,
+            (true, 0) => Some(wgpu::SamplerBorderColor::TransparentBlack),
+            (true, 0xFF00_0000) => Some(wgpu::SamplerBorderColor::OpaqueBlack),
+            (true, 0xFFFF_FFFF) => Some(wgpu::SamplerBorderColor::OpaqueWhite),
+            (true, c) => return Err(format!("border colour {c:#010x} (wgpu has transparent black, opaque black and opaque white)")),
+        };
+        // D3DTEXF_ANISOTROPIC (3) minification filters anisotropically up to
+        // MAXANISOTROPY; wgpu needs every filter linear for anisotropy
+        // (not with MIPFILTER NONE: wgpu would blend in level 1, see below)
+        let anisotropic = states[6] == 3 && states[10] > 1 && states[7] != 0;
+        let filter = |v: u32| if v >= 2 || anisotropic { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest };
+        let mip = |v: u32| if v >= 2 || anisotropic { wgpu::MipmapFilterMode::Linear } else { wgpu::MipmapFilterMode::Nearest };
         let s = self.device.create_sampler(&wgpu::SamplerDescriptor {
             label: None,
             address_mode_u: address(states[1]),
             address_mode_v: address(states[2]),
             address_mode_w: address(states[3]),
-            mag_filter: filter(states[5]),
+            // with MIPFILTER NONE D3D9 still clamps the level of detail to
+            // MAXMIPLEVEL before choosing MAGFILTER or MINFILTER (measured:
+            // explore_d3d9_semantics), so MAXMIPLEVEL > 0 always minifies
+            mag_filter: filter(if states[7] == 0 && states[9] > 0 { states[6] } else { states[5] }),
             min_filter: filter(states[6]),
             mipmap_filter: mip(states[7]),
-            // D3DSAMP_MIPFILTER NONE samples level 0 only; MAXMIPLEVEL is the
-            // most detailed level used
-            lod_min_clamp: states[9] as f32,
-            lod_max_clamp: if states[7] == 0 { states[9] as f32 } else { 32.0 },
+            // D3DSAMP_MIPFILTER NONE samples level 0, whatever MAXMIPLEVEL
+            // says (measured: explore_d3d9_semantics), choosing MAGFILTER or
+            // MINFILTER by the unclamped level of detail. Vulkan chooses by
+            // the clamped one, so the clamp is [0, 1/4]: a minified sample
+            // still picks MINFILTER and the nearest level is 0. Otherwise
+            // MAXMIPLEVEL is the most detailed level used.
+            lod_min_clamp: if states[7] == 0 { 0.0 } else { states[9] as f32 },
+            lod_max_clamp: if states[7] == 0 { 0.25 } else { 32.0 },
             compare: None,
-            anisotropy_clamp: 1,
-            border_color: if address(states[1]) == wgpu::AddressMode::ClampToBorder { Some(wgpu::SamplerBorderColor::TransparentBlack) } else { None },
+            anisotropy_clamp: if anisotropic { states[10].min(16) as u16 } else { 1 },
+            border_color,
         });
         self.samplers.insert(*states, s.clone());
-        s
+        Ok(s)
     }
 
-    fn module(&mut self, tokens: &[u32], options: d3d9wgsl::Options, key: (u64, u64)) -> Result<(wgpu::ShaderModule, d3d9wgsl::Interface), String> {
+    fn module(&mut self, tokens: &[u32], options: d3d9wgsl::Options, key: (u64, u64, bool)) -> Result<(wgpu::ShaderModule, d3d9wgsl::Interface), String> {
         if let Some((m, i)) = self.modules.get(&key) {
             return Ok((m.clone(), i.clone()));
         }
@@ -637,7 +708,7 @@ impl WgpuBackend {
         b
     }
 
-    fn uniform(&self, c: &d3d9cmd::Constants, floats: usize, last: [u32; 4]) -> wgpu::Buffer {
+    fn uniform(&self, c: &d3d9cmd::Constants, floats: usize, extra: &[[u32; 4]]) -> wgpu::Buffer {
         let mut bytes = Vec::with_capacity(floats * 16 + 528);
         for k in 0..floats {
             for w in c.f.get(k).copied().unwrap_or([0; 4]) {
@@ -654,7 +725,7 @@ impl WgpuBackend {
                 bytes.extend_from_slice(&w.to_le_bytes());
             }
         }
-        for w in last {
+        for w in extra.iter().flatten() {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
         self.inline_buffer(&bytes, wgpu::BufferUsages::UNIFORM)
@@ -725,7 +796,7 @@ impl WgpuBackend {
             types.push(ty);
             elements.push((u16::from_le_bytes([e[0], e[1]]) as u32, u16::from_le_bytes([e[2], e[3]]) as u64, format, k as u32));
         }
-        let (vs_module, vs_iface) = self.module(vs_tokens, d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0))?;
+        let (vs_module, vs_iface) = self.module(vs_tokens, d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0, false))?;
         // link the pixel inputs to the vertex outputs
         let ps_shader = d3d9shader::parse(ps_tokens).map_err(|e| e.to_string())?;
         let mut locations = Vec::new();
@@ -737,7 +808,10 @@ impl WgpuBackend {
                 }
             }
         }
-        let (ps_module, ps_iface) = self.module(ps_tokens, d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, ..Default::default() }, (ph, vh))?;
+        // D3D9's depth bias in the pixel shader (see d3d9wgsl Options::depth_bias)
+        let depth_bias = d.depth.is_some() && state(7) != 0 && (state(195) != 0 || state(175) != 0);
+        let ps_options = d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, lod_bias: true, depth_bias, ..Default::default() };
+        let (ps_module, ps_iface) = self.module(ps_tokens, ps_options, (ph, vh, depth_bias))?;
 
         // targets
         let srgb = state(194) != 0;
@@ -748,8 +822,11 @@ impl WgpuBackend {
                 _ => None,
             });
         }
+        // the depth-stencil surface takes part when depth or stencil testing
+        // is on; with ZENABLE off the depth buffer is neither tested nor written
+        let z_on = state(7) != 0;
         let depth = match &d.depth {
-            Some(t) if state(7) != 0 => self.target_view(t, false),
+            Some(t) if z_on || state(52) != 0 => self.target_view(t, false),
             _ => None,
         };
         // pipeline state
@@ -776,20 +853,28 @@ impl WgpuBackend {
         })).collect();
         let depth_state = depth.as_ref().map(|(_, f)| wgpu::DepthStencilState {
             format: *f,
-            depth_write_enabled: Some(state(14) != 0),
-            depth_compare: Some(compare(state(23))),
+            depth_write_enabled: Some(z_on && state(14) != 0),
+            depth_compare: Some(if z_on { compare(state(23)) } else { wgpu::CompareFunction::Always }),
             stencil: if state(52) != 0 && f.has_stencil_aspect() {
-                let face = wgpu::StencilFaceState {
-                    compare: compare(state(56)),
-                    fail_op: stencil_op(state(53)),
-                    depth_fail_op: stencil_op(state(54)),
-                    pass_op: stencil_op(state(55)),
+                let face = |func, fail, zfail, pass| wgpu::StencilFaceState {
+                    compare: compare(state(func)),
+                    fail_op: stencil_op(state(fail)),
+                    depth_fail_op: stencil_op(state(zfail)),
+                    pass_op: stencil_op(state(pass)),
                 };
-                wgpu::StencilState { front: face, back: face, read_mask: state(58), write_mask: state(59) }
+                // front faces are D3D9's clockwise ones (FrontFace::Cw);
+                // TWOSIDEDSTENCILMODE gives counter-clockwise faces the CCW_ states
+                let front = face(56, 53, 54, 55);
+                let back = if state(185) != 0 { face(189, 186, 187, 188) } else { front };
+                wgpu::StencilState { front, back, read_mask: state(58), write_mask: state(59) }
             } else {
                 wgpu::StencilState::default()
             },
-            bias: wgpu::DepthBiasState { constant: 0, slope_scale: f32::from_bits(state(175)), clamp: 0.0 },
+            // DEPTHBIAS and SLOPESCALEDEPTHBIAS are added by the pixel shader:
+            // hardware bias scales the constant by an implementation-defined
+            // step (measured 2^-23 for D24 on the NVIDIA Vulkan driver, where
+            // D3D9 adds the value itself)
+            bias: wgpu::DepthBiasState::default(),
         });
         let topology = match d.primitive {
             1 => wgpu::PrimitiveTopology::PointList,
@@ -803,6 +888,19 @@ impl WgpuBackend {
             3 => Some(wgpu::Face::Back),
             _ => None,
         };
+        let polygon_mode = match state(8) {
+            1 => wgpu::PolygonMode::Point,
+            2 => wgpu::PolygonMode::Line,
+            _ => wgpu::PolygonMode::Fill,
+        };
+        let needs = match polygon_mode {
+            wgpu::PolygonMode::Point => wgpu::Features::POLYGON_MODE_POINT,
+            wgpu::PolygonMode::Line => wgpu::Features::POLYGON_MODE_LINE,
+            _ => wgpu::Features::empty(),
+        };
+        if !self.device.features().contains(needs) {
+            return Err(format!("D3DFILLMODE {}: the adapter cannot rasterise it", state(8)));
+        }
         // vertex buffers by stream
         let mut streams: Vec<u32> = elements.iter().map(|e| e.0).collect();
         streams.sort();
@@ -861,7 +959,7 @@ impl WgpuBackend {
             label: None,
             layout: Some(&layout),
             vertex: wgpu::VertexState { module: &vs_module, entry_point: Some("main"), compilation_options: Default::default(), buffers: &layouts },
-            primitive: wgpu::PrimitiveState { topology, front_face: wgpu::FrontFace::Cw, cull_mode: cull, ..Default::default() },
+            primitive: wgpu::PrimitiveState { topology, front_face: wgpu::FrontFace::Cw, cull_mode: cull, polygon_mode, ..Default::default() },
             depth_stencil: depth_state,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &targets }),
@@ -876,8 +974,16 @@ impl WgpuBackend {
         // D3D9 samples pixels at their integer corner, wgpu at the centre:
         // the geometry moves half a pixel right and down
         let hp = [(1.0 / vw).to_bits(), (-1.0 / vh_).to_bits(), 0, 0];
-        let vsu = self.uniform(&d.vs_constants, 256, hp);
-        let psu = self.uniform(&d.ps_constants, 224, [state(15), state(25), state(24) & 0xFF, 0]);
+        let vsu = self.uniform(&d.vs_constants, 256, &[hp]);
+        // the alpha test, then each pixel sampler's MIPMAPLODBIAS (float bits)
+        let mut ps_extra = vec![[state(15), state(25), state(24) & 0xFF, 0], [0; 4], [0; 4], [0; 4], [0; 4]];
+        for t in d.textures.iter().filter(|t| t.sampler < 16) {
+            ps_extra[1 + t.sampler as usize / 4][t.sampler as usize % 4] = t.states[8];
+        }
+        if depth_bias {
+            ps_extra.push([state(195), state(175), 0, 0]);
+        }
+        let psu = self.uniform(&d.ps_constants, 224, &ps_extra);
         let group0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &layout0,
@@ -902,7 +1008,7 @@ impl WgpuBackend {
                     }
                     None => return Err(format!("sampler s{n} has no texture bound")),
                 };
-                views.push((n, view, self.sampler(&states)));
+                views.push((n, view, self.sampler(&states)?));
             }
             let mut entries = Vec::new();
             for (n, v, s) in &views {

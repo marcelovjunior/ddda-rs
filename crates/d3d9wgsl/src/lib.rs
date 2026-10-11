@@ -117,6 +117,16 @@ pub struct Options {
     /// Pixel shaders: D3D9's fixed-function alpha test, from
     /// Constants.alpha: x enabled, y D3DCMPFUNC, z the reference (0..255).
     pub alpha_test: bool,
+    /// Pixel shaders: each sampler's D3DSAMP_MIPMAPLODBIAS added to the
+    /// level texld and texldb pick (wgpu samplers have no LOD bias), from
+    /// Constants.bias (sampler n at bias[n / 4][n % 4], after `alpha`).
+    pub lod_bias: bool,
+    /// Pixel shaders that do not write oDepth: D3D9's depth bias, depth +
+    /// DEPTHBIAS + SLOPESCALEDEPTHBIAS * max(|dz/dx|, |dz/dy|), written as
+    /// frag_depth from Constants.zbias (x constant, y slope; after `bias`
+    /// if present, else after `alpha`). Hardware depth bias scales the
+    /// constant by an implementation-defined step, so it is done here.
+    pub depth_bias: bool,
 }
 
 /// The class of a vertex attribute format.
@@ -144,6 +154,7 @@ struct Ctx<'a> {
     loop_depth: u32,
     out: String,
     indent: usize,
+    lod_bias: bool,
 }
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
@@ -175,6 +186,7 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         loop_depth: 0,
         out: String::new(),
         indent: 1,
+        lod_bias: options.lod_bias && !vertex,
     };
     let mut iface = Interface::default();
     for ins in &shader.instructions {
@@ -256,7 +268,9 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, hp: vec4<f32> }}").unwrap();
         writeln!(w, "@group(0) @binding(2) var<uniform> k: VertexConstants;").unwrap();
     } else {
-        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32> }}").unwrap();
+        let bias = if cx.lod_bias { ", bias: array<vec4<f32>, 4>" } else { "" };
+        let zbias = if options.depth_bias { ", zbias: vec4<f32>" } else { "" };
+        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32>{bias}{zbias} }}").unwrap();
         writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
     }
     // D3D9 multiplication: 0 * anything = 0
@@ -329,7 +343,8 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     for &n in &iface.outputs {
         writeln!(w, "  @location({n}) oC{n}: vec4<f32>,").unwrap();
     }
-    if iface.writes_depth {
+    let biased_depth = options.depth_bias && !iface.writes_depth;
+    if iface.writes_depth || biased_depth {
         writeln!(w, "  @builtin(frag_depth) depth: f32,").unwrap();
     }
     if iface.outputs.is_empty() && !iface.writes_depth {
@@ -370,6 +385,8 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     let mut fields: Vec<String> = iface.outputs.iter().map(|n| format!("oC{n}")).collect();
     if iface.writes_depth {
         fields.push("oDepth.x".into());
+    } else if biased_depth {
+        fields.push("input.position.z + k.zbias.x + k.zbias.y * max(abs(dpdx(input.position.z)), abs(dpdy(input.position.z)))".into());
     }
     writeln!(w, "{});\n}}", fields.join(", ")).unwrap();
     Ok(Translation { wgsl: w, interface: iface })
@@ -635,10 +652,13 @@ impl Ctx<'_> {
             3 | 4 => format!("({g}).xyz"),
             _ => format!("({g}).xy"),
         };
+        let sampler_bias = format!("k.bias[{}].{}", n / 4, COMPONENTS[(n % 4) as usize]);
         let call = match how {
             Sampling::Level(lod) => format!("textureSampleLevel(t{n}, s{n}, {c}, {lod})"),
             _ if self.shader.stage == Stage::Vertex => format!("textureSampleLevel(t{n}, s{n}, {c}, 0.0)"),
+            Sampling::Implicit if self.lod_bias => format!("textureSampleBias(t{n}, s{n}, {c}, {sampler_bias})"),
             Sampling::Implicit => format!("textureSample(t{n}, s{n}, {c})"),
+            Sampling::Bias(b) if self.lod_bias => format!("textureSampleBias(t{n}, s{n}, {c}, {b} + {sampler_bias})"),
             Sampling::Bias(b) => format!("textureSampleBias(t{n}, s{n}, {c}, {b})"),
             Sampling::Grad(x, y) => format!("textureSampleGrad(t{n}, s{n}, {c}, {}, {})", grad(&x), grad(&y)),
         };
