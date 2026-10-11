@@ -615,10 +615,24 @@ fn render_states_match_the_d3d9_driver() {
             st[5] = rng.pick(&[1u32, 2]);
             st[6] = rng.pick(&[1u32, 2, 3]);
             st[7] = rng.pick(&[0u32, 1, 2]);
-            st[8] = rng.pick(&[0f32, 0.5, -0.5, 1.0, -1.0]).to_bits();
+            // integer biases: at a fractional level of detail the NVIDIA
+            // D3D9 and Vulkan drivers blend mip levels with different
+            // weights (trilinear optimisation; explore_d3d9_semantics)
+            st[8] = rng.pick(&[0f32, 1.0, -1.0, 2.0]).to_bits();
             st[9] = rng.pick(&[0u32, 1, 2]);
             st[10] = rng.pick(&[1u32, 2, 4, 16]);
             st[11] = rng.next() % 2;
+            // formats with missing channels: D3D9 borders only the channels
+            // the format has (the others read 1); wgpu's border colours
+            // cannot express (0, 1, 1, 1), so these get the white border
+            if [22u32, 23, 24, 28, 33, 34, 50, 51, 64, 81, 111, 112, 114, 115].contains(&format) {
+                st[4] = 0xFFFF_FFFF;
+            }
+            // anisotropic filtering takes implementation-specific samples:
+            // MINFILTER ANISOTROPIC is compared at MAXANISOTROPY 1 (linear)
+            if st[6] == 3 {
+                st[10] = 1;
+            }
         }
         let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, states: st };
         // the draw
@@ -753,7 +767,10 @@ fn render_states_match_the_d3d9_driver() {
         }
         let ours = gpu.last_frame.unwrap().rgba;
         let max = ours.iter().zip(&theirs).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
-        if max > 1 {
+        // sRGB reads of 16-bit packed formats: D3D9 decodes the 4/5/6-bit
+        // value, the backend the value widened to 8 bits (off by up to 2)
+        let tolerance = if st[11] != 0 && [23u32, 24, 25, 26].contains(&format) { 2 } else { 1 };
+        if max > tolerance {
             failures.push(format!("case {case}: max diff {max}, ours {:?} / D3D9 {:?}; {}", &ours[..16], &theirs[..16], describe()));
         }
     }
@@ -779,6 +796,50 @@ fn both(d3d9: &mut d3d9ref::Oracle, uploads: &[Upload], clear: &ClearCall, draws
     gpu.present(&back_buffer());
     let ours = gpu.last_frame.map(|f| f.rgba).unwrap_or_default();
     Ok((theirs[..4].try_into().unwrap(), ours.get(..4).map(|p| p.try_into().unwrap()).unwrap_or([0; 4]), gpu.errors))
+}
+
+/// The alpha test compares the shader's alpha rounded to 8 bits; point and
+/// solid fill modes rasterise like the driver (wireframe does not: D3D9's
+/// line rules differ from the Vulkan driver's, see the brief's Results).
+#[test]
+fn alpha_rounding_and_fill_modes_match_the_d3d9_driver() {
+    let (Some(mut d3d9), Some(_)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let k = 48f32 / 255.0;
+    for alpha in [k, f32::from_bits(k.to_bits() - 1), f32::from_bits(k.to_bits() + 1), 47.6 / 255.0, 47.4 / 255.0, 48.4 / 255.0, 48.6 / 255.0] {
+        for func in [2u32, 3, 4, 5, 6, 7] {
+            let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+            c.f[0] = [1f32.to_bits(), 0, 0, alpha.to_bits()];
+            let mut d = draw(ps_constant(), c, vec![]);
+            d.render_states.retain(|s| ![15, 25, 24].contains(&s.0));
+            d.render_states.extend([(15, 1), (25, func), (24, 48)]);
+            d.render_states.sort();
+            let (theirs, ours, errors) = both(&mut d3d9, &[], &blue_clear(), &[d]).unwrap();
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(ours, theirs, "alpha {} func {func}", alpha * 255.0);
+        }
+    }
+    for fill in [1u32, 3] {
+        let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+        c.f[0] = [1f32.to_bits(), 1f32.to_bits(), 0, 1f32.to_bits()];
+        let mut d = draw(ps_constant(), c, vec![]);
+        let v: [[f32; 6]; 3] = [[-0.9, 0.9, 0.0, 1.0, 0.0, 0.0], [0.6, 0.9, 0.0, 1.0, 0.0, 0.0], [-0.9, -0.6, 0.0, 1.0, 0.0, 0.0]];
+        d.vertices = Vertices::Inline { bytes: v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect(), stride: 24 };
+        d.render_states.retain(|s| s.0 != 8);
+        d.render_states.push((8, fill));
+        d.render_states.sort();
+        let theirs = d3d9.render(&[], Some(&blue_clear()), &[d.clone()], &back_buffer()).unwrap().rgba;
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        gpu.clear(&blue_clear());
+        gpu.draw(&d);
+        gpu.present(&back_buffer());
+        if gpu.errors.iter().any(|e| e.contains("cannot rasterise")) {
+            continue;
+        }
+        assert_eq!(gpu.last_frame.unwrap().rgba, theirs, "fill mode {fill}");
+    }
 }
 
 /// Exploration of D3D9 behaviour (run with --ignored --nocapture).
@@ -809,6 +870,76 @@ fn explore_d3d9_semantics() {
             }
         }
     }
+    // alpha test precision: alpha near 48/255 against ref 48
+    let k = 48f32 / 255.0;
+    for alpha in [k, f32::from_bits(k.to_bits() - 1), f32::from_bits(k.to_bits() + 1), 47.6 / 255.0, 47.4 / 255.0, 48.4 / 255.0, 48.6 / 255.0] {
+        for func in [3u32, 5, 7] {
+            let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+            c.f[0] = [1f32.to_bits(), 0, 0, alpha.to_bits()];
+            let mut d = draw(ps_constant(), c, vec![]);
+            d.render_states.retain(|s| ![15, 25, 24].contains(&s.0));
+            d.render_states.extend([(15, 1), (25, func), (24, 48)]);
+            d.render_states.sort();
+            let r = both(&mut d3d9, &[], &blue_clear(), &[d]).unwrap();
+            eprintln!("alpha {} ({:#x}) func {func} ref 48: D3D9 {:?} wgpu {:?}", alpha * 255.0, alpha.to_bits(), r.0, r.1);
+        }
+    }
+    // a texel of alpha 48 (A8R8G8B8) against ref 48
+    for func in [3u32, 6] {
+        let up = Upload::Image { resource: 0x300, index: 0, format: 21, width: 1, height: 1, depth: 1, pitch: 4, slice: 4, bytes: vec![0, 0, 255, 48] };
+        let st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
+        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 1, height: 1, depth: 1, levels: 1, states: st };
+        let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+        d.render_states.retain(|s| ![15, 25, 24].contains(&s.0));
+        d.render_states.extend([(15, 1), (25, func), (24, 48)]);
+        d.render_states.sort();
+        let r = both(&mut d3d9, &[up], &blue_clear(), &[d]).unwrap();
+        eprintln!("texel alpha 48 func {func} ref 48: D3D9 {:?} wgpu {:?}", r.0, r.1);
+    }
+    // A2B10G10R10 with MINFILTER ANISOTROPIC, MAXANISOTROPY 1, mips
+    for (min, maxaniso, mip) in [(3u32, 1u32, 2u32), (2, 1, 2), (3, 1, 0), (3, 2, 2), (2, 1, 1)] {
+        let mut rng = Rng(77);
+        let uploads: Vec<Upload> = [4u32, 2, 1].iter().enumerate().map(|(k, &size)| {
+            let (bytes, pitch) = level_texels(&mut rng, 31, size, size);
+            Upload::Image { resource: 0x300, index: k as u32, format: 31, width: size, height: size, depth: 1, pitch, slice: pitch * size, bytes }
+        }).collect();
+        let st = [0u32, 1, 1, 1, 0, 1, min, mip, 0.5f32.to_bits(), 0, maxaniso, 0, 0, 0];
+        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 31, width: 4, height: 4, depth: 1, levels: 3, states: st };
+        let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+        eprintln!("A2B10G10R10 min {min} maxaniso {maxaniso} mip {mip}: {:?}", both(&mut d3d9, &uploads, &blue_clear(), &[d]));
+    }
+    // fill modes: a triangle inside the 4x4 target
+    for fill in [1u32, 2, 3] {
+        let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+        c.f[0] = [1f32.to_bits(), 1f32.to_bits(), 0, 1f32.to_bits()];
+        let mut d = draw(ps_constant(), c, vec![]);
+        let v: [[f32; 6]; 3] = [[-0.9, 0.9, 0.0, 1.0, 0.0, 0.0], [0.6, 0.9, 0.0, 1.0, 0.0, 0.0], [-0.9, -0.6, 0.0, 1.0, 0.0, 0.0]];
+        d.vertices = Vertices::Inline { bytes: v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect(), stride: 24 };
+        d.render_states.retain(|s| s.0 != 8);
+        d.render_states.push((8, fill));
+        d.render_states.sort();
+        let theirs = d3d9.render(&[], Some(&blue_clear()), &[d.clone()], &back_buffer()).unwrap().rgba;
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        gpu.clear(&blue_clear());
+        gpu.draw(&d);
+        gpu.present(&back_buffer());
+        let lit = |f: &[u8]| f.chunks_exact(4).enumerate().filter(|(_, p)| p[2] == 0).map(|(k, _)| k).collect::<Vec<_>>();
+        eprintln!("fill {fill}: D3D9 lit {:?} wgpu lit {:?} {:?}", lit(&theirs), gpu.last_frame.as_ref().map(|f| lit(&f.rgba)), gpu.errors);
+    }
+    // mip LINEAR blends per format and bias: levels 0x00, 0x80, 0xFF grey
+    for format in [21u32, 31] {
+        for bias in [0f32, 0.25, 0.5, 0.75, 1.0] {
+            let uploads: Vec<Upload> = [(4u32, 0u32), (2, 0x80), (1, 0xFF)].iter().enumerate().map(|(k, &(size, v))| {
+                let texel = if format == 21 { u32::from_le_bytes([v as u8, v as u8, v as u8, 255]) } else { let t = v * 1023 / 255; t | t << 10 | t << 20 | 3 << 30 };
+                Upload::Image { resource: 0x300, index: k as u32, format, width: size, height: size, depth: 1, pitch: 4 * size, slice: 4 * size * size, bytes: texel.to_le_bytes().repeat((size * size) as usize) }
+            }).collect();
+            let st = [0u32, 1, 1, 1, 0, 2, 2, 2, bias.to_bits(), 0, 1, 0, 0, 0];
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, states: st };
+            let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
+            let r = both(&mut d3d9, &uploads, &blue_clear(), &[d]).unwrap();
+            eprintln!("mip linear format {format} bias {bias}: D3D9 {:?} wgpu {:?}", r.0, r.1);
+        }
+    }
     // border colours per format: a 4x4 level of 0.25, linear, border white
     for format in [21u32, 114, 111, 116, 113] {
         let texel: Vec<u8> = match format {
@@ -823,7 +954,7 @@ fn explore_d3d9_semantics() {
             let st = [0u32, 4, 4, 1, 0xFFFF_FFFF, mag, min, mip, 0, maxmip, 1, 0, 0, 0];
             let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, states: st };
             let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
-            let theirs = d3d9.render(&[up.clone()], Some(&blue_clear()), &[d.clone()], &back_buffer()).unwrap().rgba;
+            let theirs = d3d9.render(std::slice::from_ref(&up), Some(&blue_clear()), std::slice::from_ref(&d), &back_buffer()).unwrap().rgba;
             let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
             gpu.upload(up);
             gpu.clear(&blue_clear());

@@ -97,10 +97,10 @@ impl Oracle {
         // any state of this call reaches the device
         let mut textures: HashMap<u32, Obj> = HashMap::new();
         for b in draws.iter().flat_map(|d| &d.textures) {
-            if !textures.contains_key(&b.resource) {
+            if let std::collections::hash_map::Entry::Vacant(e) = textures.entry(b.resource) {
                 let t = self.texture_from(b, uploads)?;
                 created.push(t);
-                textures.insert(b.resource, t);
+                e.insert(t);
             }
         }
         check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;

@@ -374,9 +374,12 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     w.push_str(&cx.out);
     if options.alpha_test && iface.outputs.contains(&0) {
         // D3DCMPFUNC: 1 never, 2 less, 3 equal, 4 less-equal, 5 greater,
-        // 6 not-equal, 7 greater-equal, 8 always; failing pixels are discarded
+        // 6 not-equal, 7 greater-equal, 8 always; failing pixels are
+        // discarded. The driver compares the alpha rounded to 8 bits with
+        // ALPHAREF (measured, ddgpu explore_d3d9_semantics: 47.6/255 equals
+        // 48, 47.4/255 does not)
         writeln!(w, "  if (k.alpha.x != 0u) {{").unwrap();
-        writeln!(w, "    let a = clamp(oC0.w, 0.0, 1.0); let r = f32(k.alpha.z) / 255.0; let f = k.alpha.y;").unwrap();
+        writeln!(w, "    let a = u32(floor(clamp(oC0.w, 0.0, 1.0) * 255.0 + 0.5)); let r = k.alpha.z; let f = k.alpha.y;").unwrap();
         writeln!(w, "    let passed = (f == 8u) || (f == 2u && a < r) || (f == 3u && a == r) || (f == 4u && a <= r) || (f == 5u && a > r) || (f == 6u && a != r) || (f == 7u && a >= r);").unwrap();
         writeln!(w, "    if (!passed) {{ discard; }}").unwrap();
         writeln!(w, "  }}").unwrap();
