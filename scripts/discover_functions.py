@@ -175,7 +175,14 @@ def vtables(pe, md, roots, known=frozenset(), stores=None):
             yield a, dict(source='vtable', table=start, slot=slot, index=k, **tables[start])
 
 
-def discover(pe, known, lifted):
+def inside(extents, a):
+    """Whether `a` lies strictly inside a known function's extent."""
+    import bisect
+    k = bisect.bisect_right(extents, (a, float('inf'))) - 1
+    return k >= 0 and extents[k][0] < a < extents[k][0] + extents[k][1]
+
+
+def discover(pe, known, lifted, extents=()):
     md = decoder()
     evidence, rejected = collections.defaultdict(list), []
     init = list(initializers(pe, md))
@@ -191,6 +198,14 @@ def discover(pe, known, lifted):
                     i.operands[0].mem.base and not i.operands[0].mem.index and
                     i.operands[0].mem.disp == 0 and i.operands[1].type == 2):
                 stores[i.operands[1].imm & 0xffffffff].add(pc)
+            # address-taken code: an immediate (push imm32 / mov ..., imm32)
+            # naming an executable address outside every known function, e.g.
+            # the CRT's FlsAlloc stand-in 0x012F953C stored by __mtinit at
+            # 0x012F98B8, or the FLS callback pushed at 0x012F9940
+            if (i and i.mnemonic in ('push', 'mov') and i.operands[-1].type == 2 and i.operands[-1].size == 4):
+                v = i.operands[-1].imm & 0xffffffff
+                if pe.executable(v) and v not in known and not inside(extents, v):
+                    candidates.append((v, dict(source='address_taken', function=f['addr'], instruction=pc)))
             if i and i.mnemonic == 'call' and i.operands[0].type == 2:
                 if i.operands[0].imm == i.address+i.size:
                     continue  # call/pop position acquisition, not a function
@@ -234,11 +249,13 @@ def main():
     if args.out.resolve() in {p.resolve() for p in (args.exe, args.export, args.lifted)}:
         ap.error('output must not overwrite an input')
     with args.export.open(encoding='utf-8') as f:
-        known = {int(r['address'], 16) for r in csv.DictReader(f, delimiter='\t')}
+        rows_in = list(csv.DictReader(f, delimiter='\t'))
+    known = {int(r['address'], 16) for r in rows_in}
+    extents = sorted((int(r['address'], 16), int(r['size'] or 1)) for r in rows_in)
     with args.lifted.open() as f:
         lifted = json.load(f)
     pe = Image(args.exe)
-    rows, rejected = discover(pe, known, lifted)
+    rows, rejected = discover(pe, known, lifted, extents)
     with args.out.open('w', encoding='utf-8', newline='') as f:
         w = csv.DictWriter(f, fieldnames=['address', 'size', 'size_kind', 'sources', 'evidence'], delimiter='\t')
         w.writeheader(); w.writerows(rows)
@@ -246,7 +263,7 @@ def main():
     report = dict(image_sha256=hashlib.sha256(pe.data).hexdigest(),
                   export_sha256=hashlib.sha256(args.export.read_bytes()).hexdigest(),
                   lifted_sha256=hashlib.sha256(args.lifted.read_bytes()).hexdigest(),
-                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call')},
+                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call', 'address_taken')},
                   size_kinds=dict(collections.Counter(r['size_kind'] for r in rows)), rejected=rejected)
     args.out.with_suffix('.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k != 'rejected'}, indent=2))
