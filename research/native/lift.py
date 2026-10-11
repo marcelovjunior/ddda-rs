@@ -8,6 +8,7 @@ Verified by run_sparse vectors (random registers, random memory on
 demand, every byte read and written recorded).
 
     python lift.py scan [N]     # lift every non-platform function it can; patterns/lift.json
+    python lift.py scan-extra   # append supplementary entries, preserving existing boundaries
     python lift.py vectors      # record sparse vectors for each lifted function
     python lift.py gen          # crates/ddlift/lift_*/src/generated + ddnative facade/test
     python lift.py relift       # after a codegen change: re-translate the current list
@@ -30,7 +31,7 @@ from contextlib import closing
 # overwrites the main run's files (the generated test reads the same
 # variable at run time).
 N = os.environ.get("LIFT_DATA", "E:/ddda-re/notes/native")
-DB = "E:/ddda-re/notes/inventory/inventory.sqlite"
+DB = os.environ.get("INVENTORY_DB", "E:/ddda-re/notes/inventory/inventory.sqlite")
 R = os.path.join(os.path.dirname(__file__), "..", "..")
 
 GPR32 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
@@ -978,11 +979,11 @@ def scan(limit=None):
     ok, why = [], Counter()
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
                       "AND status NOT IN ('verified', 'platform') AND size >= 1 "
-                      "AND address < 0x012E0000 ORDER BY address").fetchall()
+                      "ORDER BY address").fetchall()
     # verified functions are lifted too (hand ports keep their own tests): a
     # caller can only lift if its callees are lifted
     rows += db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified' "
-                       "AND NOT thunk AND size >= 1 AND address < 0x012E0000").fetchall()
+                       "AND NOT thunk AND size >= 1").fetchall()
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     # a platform model's own address is never lifted: run_sparse runs the
@@ -1072,10 +1073,68 @@ def relift():
           [(hex(a), w[:40]) for a, w in dropped[:12]])
 
 
+def scan_extra():
+    """Add supplementary entries without changing existing mock boundaries.
+
+    Existing selected bodies are retained verbatim. All additions use ext
+    mode and only the already selected closed callees, so successful old
+    recordings remain valid. A later full scan may choose new boundaries
+    and must use the normal vector invalidation path.
+    """
+    import harness as h
+    from collections import Counter
+    with open(f"{N}/patterns/lift.json") as stream:
+        selected = json.load(stream)
+    have = {f['addr'] for f in selected}
+    closed = {f['addr'] for f in selected if not f.get('ext')}
+    # Restore closed x87 contracts in dependency order. Only float users
+    # need retranslation; the others have zero net stack effect.
+    pending = [f for f in selected if f['addr'] in closed]
+    while pending:
+        ready = [f for f in pending if set(f.get('calls', [])) <= X87_NET.keys()]
+        if not ready:
+            raise ValueError('selected closed call graph has a cycle or missing callee')
+        for f in ready:
+            a, size = f['addr'], f['size']
+            try:
+                if any('st.' in arm for arm in f['arms']) or any(X87_NET[x] for x in f.get('calls', [])):
+                    lift(a, size, closed)
+                else:
+                    X87_NET[a] = 0
+            finally:
+                release_body(a, size)
+        ready_addrs = {f['addr'] for f in ready}
+        pending = [f for f in pending if f['addr'] not in ready_addrs]
+    with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+        rows = db.execute('SELECT f.address,f.name,f.size FROM supplementary s JOIN functions f USING(address) ORDER BY address').fetchall()
+    rejected, added = {}, 0
+    for a, name, size in rows:
+        if a in have or a in h.PLATFORM:
+            continue
+        try:
+            arms = lift(a, size, closed, ext=True)
+            selected.append(dict(addr=a, name=f'Supplementary::{name}', size=size, arms=arms,
+                                 calls=callees(arms), x87_push=X87_PUSH_SITES.get(a, []),
+                                 ext=True, **BODY_INFO[a]))
+            added += 1
+        except Unsupported as e:
+            rejected[a] = str(e)
+        finally:
+            release_body(a, size)
+    with open(f'{N}/patterns/lift.json', 'w') as stream:
+        json.dump(selected, stream)
+    with open(f'{N}/patterns/lift_extra_rejections.json', 'w') as stream:
+        json.dump(rejected, stream, indent=2)
+    print(f'{len(have)} retained; {added} supplementary entries lifted; {len(rejected)} rejected', flush=True)
+    print(Counter(s.split()[0] for s in rejected.values()), flush=True)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "relift":
         relift()
+    if cmd == "scan-extra":
+        scan_extra()
     if cmd == "scan":
         scan(int(sys.argv[2]) if len(sys.argv) > 2 else None)
     elif cmd == "one":

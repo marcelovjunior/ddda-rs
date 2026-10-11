@@ -680,3 +680,34 @@ opening (codex-31), route perf (codex-29).
   unavailable; executable evidence came from read-only disassembly.
 - **One next action:** head reviews the design, then commissions the
   initializer and dynamic-target manifest before runtime implementation.
+
+### L10: supplementary native entry points (2026-10-11)
+
+- **Implemented:** deterministic installed-PE initializer/RTTI/direct-call
+  discovery, private supplementary TSV and SQL evidence table, configurable
+  inventory database, and incremental lifting that preserves existing
+  fixtures. MT vtables require registration, getDTI and an object-vtable
+  store; arbitrary executable-pointer runs are excluded. Ghidra stayed down.
+- **Measured:** 6,094 missing entries: 5,656 C/C++ initializers and 438
+  virtual targets; no additional direct-call targets even after expansion.
+  6,072 lift and 6,061 pass original-instruction replay. `0x00533360`,
+  `0x004FB960`, `0x004FBA60`, `0x00533840`, and initializer `0x0136DDE0`
+  (the actual entry containing R01's `0x0136DDF0` site) now verify.
+- **Verified:** private selection 31,580 -> 37,641 functions, 94,088 ->
+  112,266 cases, with every prepared record retained. Seven new and 32
+  existing Python regressions pass; the addition/dependency subset and one
+  final full `cargo test -p ddnative` pass (32 Rust tests). Inventory now
+  has 56,572 non-thunk entries, 37,651 verified (66.6%; 73.4% of summed
+  size estimates). This is bounded per-function replay, not game boot.
+- **Memory:** final build 3m34s plus 48.60s lifted replay at four jobs,
+  incremental off, minimum observed free RAM 15.63 GiB. A full scan was
+  proactively stopped at 11.45 GiB free; the incremental scan released
+  bodies and used little memory. No free-memory reading fell below 6 GiB;
+  no build/vector overlap, shared writes, gate invocation or push.
+- **Open:** 22 lift rejections (21 indirect jumps, one interior branch),
+  11 without fixtures, and RTTI tables lacking store corroboration remain
+  outside the verified set. Twenty-two size hints and overlapping shared
+  tails limit byte-percentage precision. See the L10 Results for private
+  artifacts and the exact shared regeneration procedure.
+- **One next action:** head reviews/adopts the supplementary inventory and
+  matching verified pattern/vector pair before runtime boot-manifest work.

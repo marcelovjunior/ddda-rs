@@ -1,5 +1,72 @@
 # Inventory: how much of DDDA.exe is rebuilt (Phase 0 findings)
 
+## Supplementary discovery (L10)
+
+The Ghidra export is not a complete entry-point census. Static initialization
+at `0x012EDABC..0x012EDAC9` reaches thousands of functions absent from it.
+`scripts/discover_functions.py` reads the player's installed PE and emits
+`extra_functions.tsv` alongside a JSON input-hash/report file, both private.
+`scripts/inventory.py build` merges the table with the original export;
+existing exported names and sizes win on duplicate addresses. The separate
+`supplementary` SQL table retains every entry's sources, evidence and size
+classification. Direct-call evidence adds real call edges; initializer and
+virtual slots are potential roots, not unconditional graph edges.
+
+Admission is deliberately conservative:
+
+- C and C++ table bounds are checked against instructions at
+  `0x012EDA8A/8F/94` and `0x012EDAAB/B0` before reading the slots. Every
+  nonzero target must start a decodable executable basic block.
+  The registration previously cited at `0x0136DDF0` is inside the initializer
+  whose actual table entry is `0x0136DDE0`; discovery records the latter.
+- MT Framework RTTI requires a forward-decoded registration through
+  `0x00CF5780` from an initializer, a `mov eax,descriptor; ret` slot 4,
+  and a matching object-vtable store in a lifted body. For example,
+  `aTitle`'s constructor store at `0x00531159` anchors `0x0156F7A8`, whose
+  slot 8 at `0x0156F7C8` names missing entry `0x00533360`. `aGameMain`'s
+  store at `0x004FAE89` anchors `0x0156CCFC`, including `0x004FB960` and
+  `0x004FBA60`. Requiring the store avoids mistaking later slots returning
+  a parent descriptor for the start of another table.
+- MSVC PE32 RTTI requires a Complete Object Locator, a named type
+  descriptor and a class hierarchy whose first base descriptor names the
+  same type. Slots must point into executable sections and decode as code.
+- MT slot runs stop at another recognized table, a non-code pointer or an
+  unconfirmed unaligned target. This avoids pointer-looking trailing
+  strings. Arbitrary pointer runs are never admitted. The conservative
+  rule can miss tables whose constructor is not in the input manifest.
+- Direct calls are decoded only at instruction starts in lifted bodies;
+  call-to-next-instruction position acquisition is excluded. The target
+  must pass the executable-entry check. A raw search for `E8` is not used.
+
+Sizes are reachable decoded instruction bytes when recursive descent
+succeeds, otherwise a one-byte **hint**, identified in `size_kind`. The
+lifter discovers bodies independently. Inventory byte totals sum function
+sizes; they are not a union of executable bytes (shared tails can overlap,
+and hints undercount undecoded bodies). Discovery is not verification:
+only generated declarations with tests earn verified status, after the
+required replay passes.
+
+The old blanket CRT classification above `0x012E0000` now excludes
+supplementary entries. An address in that range alone does not prove that
+Rust may replace its initialization. Existing platform shape classifications
+remain intact; new entries stay unclassified until evidence or verification
+establishes their status.
+
+For a private rebuild, set `INVENTORY_DB` and `INVENTORY_EXTRA` under the
+worktree's `LIFT_DATA`; `INVENTORY_EXPORT` can keep pointing at the shared
+read-only TSVs. See [pipeline commands](NATIVE_PIPELINE.md#supplementary-inventory-entries-l10).
+To regenerate the **shared** inventory after review, the head runs discovery
+with the accepted full lifted manifest and
+`--out E:/ddda-re/notes/inventory/extra_functions.tsv`, clears private
+`INVENTORY_DB`/`INVENTORY_EXTRA` overrides, then runs `inventory.py build`,
+`summary`, `partial`, `attribute`, `systems`. Regenerate Rust from the
+accepted pattern/vector pair before building the final coverage database.
+L10 itself writes neither the shared export directory nor shared native data.
+
+The following earlier snapshots remain historical, not the expanded
+denominator. Current L10 measurements are recorded in the
+[task results](tasks/L10-inventory-gaps.md#results).
+
 Source: the headless Ghidra export (`research/ghidra/ExportInventory.java`)
 loaded by `scripts/inventory.py` into the private tracker
 `E:/ddda-re/notes/inventory/inventory.sqlite`. Numbers as of 2026-10-10,
