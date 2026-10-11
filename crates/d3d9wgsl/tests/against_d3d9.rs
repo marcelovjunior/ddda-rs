@@ -182,6 +182,7 @@ impl Gpu {
             let b = run.bools.get(k).copied().unwrap_or(false) as u32;
             consts.extend([b, 0, 0, 0].iter().flat_map(|f| f.to_le_bytes()));
         }
+        consts.extend([0u8; 16]); // hp / alpha: unused here
         let mut varyings: Vec<u8> = Vec::new();
         for k in 0..16 {
             let v = run.varyings.get(k).copied().unwrap_or([0.0; 4]);
@@ -367,6 +368,7 @@ impl Gpu {
             let b = run.bools.get(k).copied().unwrap_or(false) as u32;
             consts.extend([b, 0, 0, 0].iter().flat_map(|f| f.to_le_bytes()));
         }
+        consts.extend([0u8; 16]); // hp / alpha: unused here
         let cbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: consts.len() as u64,
@@ -691,7 +693,7 @@ fn translated_vertex_shaders_compute_what_d3d9_computes() {
                 break 'outer;
             }
             let shader = d3d9shader::parse(&vs).unwrap();
-            let t = match d3d9wgsl::translate_with(&shader, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]) }) {
+            let t = match d3d9wgsl::translate_with(&shader, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]), ..Default::default() }) {
                 Ok(t) => t,
                 Err(e) => {
                     untranslated.push(format!("{name}: {e}"));
@@ -753,7 +755,7 @@ fn translated_vertex_shaders_compute_what_d3d9_computes() {
                     for k in 0..vs.len() {
                         let Some((cut, text, mask)) = prefix_to(&vs, k, 0xE00F_0000 | pos) else { continue };
                         let cs = d3d9shader::parse(&cut).unwrap();
-                        let Ok(ct) = d3d9wgsl::translate_with(&cs, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]) }) else { continue };
+                        let Ok(ct) = d3d9wgsl::translate_with(&cs, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]), ..Default::default() }) else { continue };
                         let (Ok(a), Ok(b)) = (gpu.run_vertex(&ct.wgsl, &ct.interface, &run), oracle.run_vertex(&cut, &run)) else { continue };
                         let mine = a[ct.interface.outputs_vs.len()];
                         let Some(theirs) = b.iter().find(|o| o.usage == 0 && o.index == 0).and_then(|o| o.value) else { continue };

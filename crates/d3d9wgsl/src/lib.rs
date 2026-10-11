@@ -98,9 +98,33 @@ pub struct Interface {
 /// captured at the location after the others, with the rasterised
 /// position replaced by a fixed value (the oracle reads every output that
 /// way).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     pub capture_position: Option<[f32; 4]>,
+    /// Pixel shaders: the location of each declared input in declaration
+    /// order, from linking with the vertex stage's outputs by usage and
+    /// index; None for an input the vertex stage does not write (it reads
+    /// 0). Without this, input k is at location k.
+    pub ps_input_locations: Option<Vec<Option<u32>>>,
+    /// Vertex shaders: the class of each declared input's vertex format
+    /// (integer formats arrive as integers and are converted, as D3D9 does).
+    pub vs_input_types: Option<Vec<InputType>>,
+    /// Vertex shaders: apply D3D9's half-pixel offset, position.xy +=
+    /// hp.xy * position.w, with `hp` = (-1/width, 1/height) of the viewport
+    /// (VertexConstants.hp).
+    pub half_pixel: bool,
+    /// Pixel shaders: D3D9's fixed-function alpha test, from
+    /// Constants.alpha: x enabled, y D3DCMPFUNC, z the reference (0..255).
+    pub alpha_test: bool,
+}
+
+/// The class of a vertex attribute format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputType {
+    #[default]
+    Float,
+    Uint,
+    Sint,
 }
 
 pub struct Translation {
@@ -216,10 +240,10 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     let mut w = String::new();
     let floats = if vertex { 256 } else { 224 };
     if vertex {
-        writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16> }}").unwrap();
+        writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, hp: vec4<f32> }}").unwrap();
         writeln!(w, "@group(0) @binding(2) var<uniform> k: VertexConstants;").unwrap();
     } else {
-        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16> }}").unwrap();
+        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32> }}").unwrap();
         writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
     }
     // D3D9 multiplication: 0 * anything = 0
@@ -272,14 +296,20 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         writeln!(w, "fn l{label}() {{\n{}}}", cx.out).unwrap();
     }
     if vertex {
-        return finish_vertex(w, cx, &main, iface, options);
+        return finish_vertex(w, cx, &main, iface, &options);
     }
     // entry point
     writeln!(w, "struct In {{").unwrap();
     writeln!(w, "  @builtin(position) position: vec4<f32>,").unwrap();
     writeln!(w, "  @builtin(front_facing) front: bool,").unwrap();
+    let locations: Vec<Option<u32>> = match &options.ps_input_locations {
+        Some(l) => l.clone(),
+        None => (0..iface.inputs.len() as u32).map(Some).collect(),
+    };
     for (k, &(_, _, r)) in iface.inputs.iter().enumerate() {
-        writeln!(w, "  @location({k}) v{r}: vec4<f32>,").unwrap();
+        if let Some(Some(l)) = locations.get(k) {
+            writeln!(w, "  @location({l}) v{r}: vec4<f32>,").unwrap();
+        }
     }
     writeln!(w, "}}").unwrap();
     writeln!(w, "struct Out {{").unwrap();
@@ -299,8 +329,10 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         cx.instruction(ins)?;
     }
     writeln!(w, "@fragment\nfn main(input: In) -> Out {{").unwrap();
-    for &(_, _, r) in &iface.inputs {
-        writeln!(w, "  v{r} = input.v{r};").unwrap();
+    for (k, &(_, _, r)) in iface.inputs.iter().enumerate() {
+        if let Some(Some(_)) = locations.get(k) {
+            writeln!(w, "  v{r} = input.v{r};").unwrap();
+        }
     }
     // D3D9's vPos is the pixel's integer position (no half-pixel offset)
     writeln!(w, "  vPos = vec4<f32>(floor(input.position.xy), 0.0, 0.0);").unwrap();
@@ -312,6 +344,15 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         }
     }
     w.push_str(&cx.out);
+    if options.alpha_test && iface.outputs.contains(&0) {
+        // D3DCMPFUNC: 1 never, 2 less, 3 equal, 4 less-equal, 5 greater,
+        // 6 not-equal, 7 greater-equal, 8 always; failing pixels are discarded
+        writeln!(w, "  if (k.alpha.x != 0u) {{").unwrap();
+        writeln!(w, "    let a = clamp(oC0.w, 0.0, 1.0); let r = f32(k.alpha.z) / 255.0; let f = k.alpha.y;").unwrap();
+        writeln!(w, "    let pass = (f == 8u) || (f == 2u && a < r) || (f == 3u && a == r) || (f == 4u && a <= r) || (f == 5u && a > r) || (f == 6u && a != r) || (f == 7u && a >= r);").unwrap();
+        writeln!(w, "    if (!pass) {{ discard; }}").unwrap();
+        writeln!(w, "  }}").unwrap();
+    }
     write!(w, "  return Out(").unwrap();
     let mut fields: Vec<String> = iface.outputs.iter().map(|n| format!("oC{n}")).collect();
     if iface.writes_depth {
@@ -321,13 +362,18 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     Ok(Translation { wgsl: w, interface: iface })
 }
 
-fn finish_vertex(mut w: String, mut cx: Ctx, main: &[&Instruction], iface: Interface, options: Options) -> Result<Translation, Error> {
+fn finish_vertex(mut w: String, mut cx: Ctx, main: &[&Instruction], iface: Interface, options: &Options) -> Result<Translation, Error> {
     let position = iface.position.ok_or_else(|| Error::Unsupported("a vertex shader without a position output".into()))?;
     // (WGSL has no empty structs: a shader without inputs takes none)
     if !iface.inputs.is_empty() {
         writeln!(w, "struct In {{").unwrap();
         for (k, &(_, _, r)) in iface.inputs.iter().enumerate() {
-            writeln!(w, "  @location({k}) v{r}: vec4<f32>,").unwrap();
+            let ty = match options.vs_input_types.as_ref().and_then(|t| t.get(k)).copied().unwrap_or_default() {
+                InputType::Float => "vec4<f32>",
+                InputType::Uint => "vec4<u32>",
+                InputType::Sint => "vec4<i32>",
+            };
+            writeln!(w, "  @location({k}) v{r}: {ty},").unwrap();
         }
         writeln!(w, "}}").unwrap();
     }
@@ -351,7 +397,7 @@ fn finish_vertex(mut w: String, mut cx: Ctx, main: &[&Instruction], iface: Inter
         writeln!(w, "@vertex\nfn main(input: In) -> Out {{").unwrap();
     }
     for &(_, _, r) in &iface.inputs {
-        writeln!(w, "  v{r} = input.v{r};").unwrap();
+        writeln!(w, "  v{r} = vec4<f32>(input.v{r});").unwrap();
     }
     if cx.relative_constants {
         writeln!(w, "  cc = k.c;").unwrap();
@@ -360,6 +406,9 @@ fn finish_vertex(mut w: String, mut cx: Ctx, main: &[&Instruction], iface: Inter
         }
     }
     w.push_str(&cx.out);
+    if options.half_pixel {
+        writeln!(w, "  o{position} = vec4<f32>(o{position}.xy + k.hp.xy * o{position}.w, o{position}.zw);").unwrap();
+    }
     let mut fields = vec![match options.capture_position {
         Some(p) => vec4_literal(&p),
         None => format!("o{position}"),
