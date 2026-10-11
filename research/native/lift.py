@@ -1073,19 +1073,8 @@ def relift():
           [(hex(a), w[:40]) for a, w in dropped[:12]])
 
 
-def scan_extra():
-    """Add supplementary entries without changing existing mock boundaries.
-
-    Existing selected bodies are retained verbatim. All additions use ext
-    mode and only the already selected closed callees, so successful old
-    recordings remain valid. A later full scan may choose new boundaries
-    and must use the normal vector invalidation path.
-    """
-    import harness as h
-    from collections import Counter
-    with open(f"{N}/patterns/lift.json") as stream:
-        selected = json.load(stream)
-    have = {f['addr'] for f in selected}
+def seed_closed_contracts(selected):
+    """Restore the selected closed x87 contracts without retaining bodies."""
     closed = {f['addr'] for f in selected if not f.get('ext')}
     # Restore closed x87 contracts in dependency order. Only float users
     # need retranslation; the others have zero net stack effect.
@@ -1105,6 +1094,23 @@ def scan_extra():
                 release_body(a, size)
         ready_addrs = {f['addr'] for f in ready}
         pending = [f for f in pending if f['addr'] not in ready_addrs]
+    return closed
+
+
+def scan_extra():
+    """Add supplementary entries without changing existing mock boundaries.
+
+    Existing selected bodies are retained verbatim. All additions use ext
+    mode and only the already selected closed callees, so successful old
+    recordings remain valid. A later full scan may choose new boundaries
+    and must use the normal vector invalidation path.
+    """
+    import harness as h
+    from collections import Counter
+    with open(f"{N}/patterns/lift.json") as stream:
+        selected = json.load(stream)
+    have = {f['addr'] for f in selected}
+    closed = seed_closed_contracts(selected)
     with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
         rows = db.execute('SELECT f.address,f.name,f.size FROM supplementary s JOIN functions f USING(address) ORDER BY address').fetchall()
     rejected, added = {}, 0

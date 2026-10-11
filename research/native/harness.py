@@ -170,6 +170,59 @@ class Rejected(Exception):
     """The case is not a valid vector (NaN float input, runaway loop, ...)."""
 
 
+INPUT_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
+
+
+class SparseInputs:
+    """Synthetic fixture distributions, not inferred game object layouts.
+
+    Page contents are fixed before the first guest access. Never rewrite a
+    value in response to a branch/load: overlapping reads and guest writes
+    must describe one consistent initial memory image.
+    """
+    OBJECT_BASE = 0x20000000
+    OBJECT_PAGES = 32
+
+    def __init__(self, name):
+        if name not in INPUT_STRATEGIES:
+            raise ValueError(f'unknown input strategy: {name}')
+        self.name = name
+
+    def pointer(self, rnd):
+        return self.OBJECT_BASE + rnd.randrange(self.OBJECT_PAGES)*0x1000 + 0x100
+
+    def word(self, rnd):
+        if self.name == 'zero-objects-v1':
+            return 0
+        if self.name == 'objects-v1' and rnd.randrange(8) == 0:
+            return self.pointer(rnd)
+        return rnd.choice((0,0,0,1,1,2,3,4,7,15,31))
+
+    def page(self, seed, page):
+        import random
+        if self.name == 'zero-objects-v1':
+            return bytes(0x1000)
+        rnd = random.Random((seed << 32) ^ page)
+        return b''.join(struct.pack('<I',self.word(rnd)) for _ in range(0x400))
+
+    def register(self, rnd, name):
+        if self.name == 'zero-objects-v1' or (self.name == 'objects-v1' and name == 'ecx'):
+            return self.pointer(rnd)
+        # They may be interpreted as pointers or counts: alignment avoids
+        # combining two adjacent small words into a huge unaligned load.
+        return rnd.randrange(8)*4
+
+    def returns(self, rnd):
+        zero = self.name == 'zero-objects-v1'
+        return dict(eax=self.pointer(rnd) if self.name != 'small-v1' else rnd.randrange(8)*4,
+                    ecx=0 if zero else rnd.randrange(8)*4, edx=0 if zero else rnd.randrange(8)*4,
+                    xmm0=[self.float_bits(rnd) for _ in range(4)])
+
+    def float_bits(self, rnd):
+        value = 0.0 if self.name == 'zero-objects-v1' else rnd.choice((-1.0,0.0,1.0))
+        return struct.unpack('<I',struct.pack('<f',value))[0]
+
+
 def static_pop(target, _cache={}):
     """Bytes a function pops with its `ret N` (first ret in a linear sweep;
     0 when none is found or the target is outside the image)."""
@@ -188,7 +241,8 @@ def static_pop(target, _cache={}):
 
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
-               x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset()):
+               x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
+               max_seconds=None, input_strategy=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -223,10 +277,21 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     bytes, stack/return setup, instruction execution and recording are unchanged.
     This exercises switch index zero and empty counts that full-width random
     inputs almost never select; it is a test input, not a game-state model.
+
+    `input_strategy` selects an opt-in, versioned SparseInputs distribution
+    for non-image pages, registers and mocked returns. It is mutually
+    exclusive with zero_inputs and recorded in successful vectors. Original
+    image bytes, executed instructions and rejection checks never change.
+    `max_seconds` bounds a trial at instruction boundaries (no resume).
     """
     import random
+    import time
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
+    if input_strategy is not None and zero_inputs:
+        raise ValueError('input_strategy and zero_inputs are mutually exclusive')
+    inputs = SparseInputs(input_strategy) if input_strategy is not None else None
+    deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.ctl_set_tcg_buffer_size(TCG_BUFFER)  # default 1 GB per instance: workers reached 4 GB
@@ -249,6 +314,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 return bytes(buf)
         if zero_inputs:
             return bytes(0x1000)
+        if inputs:
+            return inputs.page(seed, page)
         prnd = random.Random((seed << 32) ^ page)
         return prnd.randbytes(0x1000)
 
@@ -548,6 +615,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         count[0] += 1
+        if deadline is not None and count[0] % 256 == 1 and time.monotonic() >= deadline:
+            bad.append("function time budget")
+            uc_.emu_stop()
         if count[0] > max_insn:
             bad.append("runaway")
             uc_.emu_stop()
@@ -656,12 +726,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                "pop": pop}
         if zero_inputs:
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
+        if inputs:
+            out.update(inputs.returns(rnd))
         for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX)):
             uc_.reg_write(r, out[n])
         uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
         uc_.reg_write(UC_X86_REG_ESP, (esp + 4 + pop) & 0xFFFFFFFF)
         if ret in x87_push:  # the callee returns a float: push it on the way back
             v = struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0]
+            if inputs:
+                v = inputs.float_bits(rnd)
             out["st_push"] = v
             uc_.mem_write(X87_SLOT, struct.pack("<II", v, ret))
             ret = X87_TRAMP
@@ -691,6 +765,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         v = rnd.getrandbits(32)
         if zero_inputs:
             v = 0
+        if inputs:
+            v = inputs.register(rnd, name)
         if name == "esp":
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
         regs_in[name] = v
@@ -749,4 +825,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
-            **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {})}
+            **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
+            **({"input_strategy": input_strategy} if inputs else {})}
