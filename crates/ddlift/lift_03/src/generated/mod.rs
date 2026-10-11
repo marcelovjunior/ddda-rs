@@ -17,6 +17,11 @@ mod lifted_013; pub use lifted_013::*;
 mod lifted_014; pub use lifted_014::*;
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
+(0x01301D90, f_01301d90),
+(0x01304DFC, f_01304dfc),
+(0x0130A5A0, f_0130a5a0),
+(0x0130D420, f_0130d420),
+(0x0130D6D0, f_0130d6d0),
 (0x0132A550, f_0132a550),
 (0x0132A560, f_0132a560),
 (0x0132A5A0, f_0132a5a0),
@@ -4744,6 +4749,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x0137DF50, f_0137df50),
 (0x0137DF90, f_0137df90),
 (0x0137DFD0, f_0137dfd0),
+(0x0137DFF0, f_0137dff0),
 (0x0137E010, f_0137e010),
 (0x0137E050, f_0137e050),
 (0x0137E070, f_0137e070),
