@@ -26,6 +26,7 @@ fn main() {
     let mut registry = Registry::with_lifted_program();
     ddruntime::services::install(&mut m, &mut registry).unwrap_or_else(|e| panic!("{e:?}"));
     ddruntime::services::set_exe_path(&path);
+    ddruntime::files::set_roots(std::path::Path::new(&path).parent().expect("install dir"), &ddruntime::services::sandbox_home());
     let imports = ddruntime::image::bind_imports(&mut m, &exe).unwrap_or_else(|e| panic!("{e}"));
     let apis = ddruntime::services::bind_apis(&mut registry, &imports).unwrap_or_else(|e| panic!("{e:?}"));
     println!("{} bindings ({apis} of {} imports have services)", registry.len(), imports.len());

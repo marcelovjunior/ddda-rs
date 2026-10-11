@@ -239,3 +239,47 @@ fn every_import_gets_a_distinct_named_token() {
     }
     assert!(imports.iter().any(|i| i.full_name() == "KERNEL32.dll!EncodePointer"));
 }
+
+// --- files --------------------------------------------------------------
+
+fn put_str(m: &mut GuestMemory, at: u32, s: &str) {
+    for (k, b) in s.bytes().chain([0]).enumerate() {
+        m.set_u8(at + k as u32, b);
+    }
+}
+
+#[test]
+fn files_read_from_the_install_and_write_only_to_the_overlay() {
+    let root = std::env::temp_dir().join(format!("ddruntime-files-{}", std::process::id()));
+    let (install, sandbox) = (root.join("install"), root.join("sandbox"));
+    std::fs::create_dir_all(install.join("nativePC")).unwrap();
+    std::fs::write(install.join("nativePC/a.txt"), b"original").unwrap();
+    ddruntime::files::set_roots(&install, &sandbox);
+    let (mut m, _) = stack();
+    let (name, buf, out) = (0x0010_9000, 0x0010_A000, 0x0010_B000);
+    put_str(&mut m, name, r"nativePC\a.txt");
+    // read: GENERIC_READ (0x80000000), OPEN_EXISTING (3)
+    let h = call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax;
+    assert_ne!(h, u32::MAX);
+    let ok = call_service(ddruntime::files::read_file, &mut m, &[h, buf, 100, out, 0]).eax;
+    assert_eq!((ok, m.u32(out)), (1, 8));
+    assert_eq!(m.read(buf, 8).unwrap(), b"original");
+    call_service(ddruntime::files::close_handle, &mut m, &[h]);
+    // write to the same path: CREATE_ALWAYS (2) lands in the overlay
+    let h = call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x4000_0000, 0, 0, 2, 0x80, 0]).eax;
+    put_str(&mut m, buf, "changed!");
+    assert_eq!(call_service(ddruntime::files::write_file, &mut m, &[h, buf, 8, out, 0]).eax, 1);
+    call_service(ddruntime::files::close_handle, &mut m, &[h]);
+    assert_eq!(std::fs::read(install.join("nativePC/a.txt")).unwrap(), b"original", "the install is untouched");
+    assert_eq!(std::fs::read(sandbox.join("overlay/nativePC/a.txt")).unwrap(), b"changed!");
+    // and the guest now reads its own write
+    let h = call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax;
+    call_service(ddruntime::files::read_file, &mut m, &[h, buf, 100, out, 0]);
+    assert_eq!(m.read(buf, 8).unwrap(), b"changed!");
+    // paths outside the roots are refused
+    put_str(&mut m, name, r"C:\Windows\win.ini");
+    assert_eq!(call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax, u32::MAX);
+    put_str(&mut m, name, r"..\..\escape.txt");
+    assert_eq!(call_service(ddruntime::files::create_file_a, &mut m, &[name, 0x8000_0000, 1, 0, 3, 0x80, 0]).eax, u32::MAX);
+    let _ = std::fs::remove_dir_all(&root);
+}
