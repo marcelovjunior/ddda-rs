@@ -1023,7 +1023,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
                         "pslld", "psllw", "psllq", "psrld", "psrlw", "psrlq", "psrad", "psraw", "pmullw", "pmulhw", "pmulhuw", "pmuludq", "pmaddwd",
                         "punpcklbw", "punpcklwd", "punpckldq", "punpcklqdq", "punpckhbw", "punpckhwd", "punpckhdq", "punpckhqdq",
                         "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw",
-                        "pmaxsw", "pminsw"):
+                        "pmaxsw", "pminsw", "rcpps", "rsqrtps", "rcpss", "rsqrtss"):
                 d = xmm(i, ops[0])
                 body.append(f"{d} = x86::{mn}({d}, {vector(i, ops[1])});")
             elif mn in ("pshufd", "pshuflw", "pshufhw", "shufpd"):
@@ -1731,8 +1731,19 @@ fn every_lifted_function_matches_the_original() {{
     let mut failures = Vec::new();
     // LIFT_DEBUG=0xADDR prints what differs for that function's vectors
     let debug = std::env::var("LIFT_DEBUG").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+    // Cases that ran a CPU-dependent instruction (x87_host.CPU_DEPENDENT,
+    // approximations) are compared on the processor that recorded them.
+    let brand: String = unsafe {{
+        (0x8000_0002u32..=0x8000_0004).flat_map(|l| {{ let r = std::arch::x86_64::__cpuid(l);
+            [r.eax, r.ebx, r.ecx, r.edx] }}).flat_map(|w| w.to_le_bytes()).map(|b| b as char).collect()
+    }};
+    let brand = brand.trim_end_matches('\\0');
+    let mut other_cpu = Vec::new();
     for c in &cases {{
         let addr = u(&c["addr"]);
+        if let Some(cpu) = c.get("cpu_dependent").and_then(|v| v.as_str()) {{
+            if cpu != brand {{ other_cpu.push(format!("{{addr:#010x}}")); seen.insert(addr); continue; }}
+        }}
         let f = all.iter().find(|e| e.0 == addr).expect("lifted function").1;
         let mut m = Sparse::default();
         for run in c["reads"].as_array().unwrap() {{
@@ -1808,6 +1819,10 @@ fn every_lifted_function_matches_the_original() {{
         }};
         if !ok {{ failures.push(format!("{{addr:#010x}}")); }}
         seen.insert(addr);
+    }}
+    if !other_cpu.is_empty() {{
+        eprintln!("{{}} CPU-dependent cases recorded on another processor were not compared: {{:?}}",
+            other_cpu.len(), &other_cpu[..other_cpu.len().min(40)]);
     }}
     failures.sort(); failures.dedup();
     assert!(failures.is_empty(), "{{}} lifted functions differ: {{:?}}", failures.len(), &failures[..failures.len().min(40)]);

@@ -1098,6 +1098,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),
+            **({"cpu_dependent": machine_events.host_brand()} if oracle.cpu_dependent else {}),
             **({"st_in": st_in} if st_in else {}),
             **machine.result(uc),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),

@@ -485,3 +485,18 @@ fn machine_answers_cpuid_and_rdtsc() {
     assert_eq!((cpu.eax, cpu.edx), (0x5566_7788, 0x1122_3344));
     platform::set_machine(None);
 }
+
+#[test]
+fn approximations_are_the_host_instructions() {
+    use std::arch::x86_64::*;
+    let a = [0x4040_0000u32, 0x3f33_3333, 0x42f6_8000, 0x3a83_126f];
+    let b = [0x40b0_0000u32, 7, 8, 9];
+    let (av, bv): (__m128, __m128) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
+    let host = |v: __m128| -> [u32; 4] { unsafe { std::mem::transmute(v) } };
+    unsafe {
+        assert_eq!(rcpps(b, a), host(_mm_rcp_ps(av)));
+        assert_eq!(rsqrtps(b, a), host(_mm_rsqrt_ps(av)));
+        assert_eq!(rcpss(b, a), host(_mm_rcp_ss(_mm_move_ss(bv, av))));
+        assert_eq!(rsqrtss(a, b), host(_mm_rsqrt_ss(_mm_move_ss(av, bv))));
+    }
+}

@@ -48,6 +48,12 @@ def host_cpuid(leaf, subleaf):
     return [int.from_bytes(out[8 + 4 * k:12 + 4 * k], "little") for k in range(4)]
 
 
+def host_brand():
+    """The host processor's CPUID brand string (leaves 0x80000002..4)."""
+    words = [w for leaf in (0x80000002, 0x80000003, 0x80000004) for w in host_cpuid(leaf, 0)]
+    return b"".join(w.to_bytes(4, "little") for w in words).rstrip(b"\0").decode("ascii", "replace")
+
+
 class Machine:
     def __init__(self, uc):
         self.md = Cs(CS_ARCH_X86, CS_MODE_32)

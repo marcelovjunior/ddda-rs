@@ -60,7 +60,10 @@ binary!(
     paddd, paddq, psubb, psubw, psubd, psubq, pcmpeqb, pcmpeqw, pcmpeqd, pcmpgtb, pcmpgtw, pcmpgtd, pslld,
     psllw, psllq, psrld, psrlw, psrlq, psrad, psraw, pmullw, pmulhw, pmulhuw, pmuludq, pmaddwd, punpcklbw,
     punpcklwd, punpckldq, punpcklqdq, punpckhbw, punpckhwd, punpckhdq, punpckhqdq, packsswb, packssdw,
-    packuswb, paddusb, paddusw, paddsb, paddsw, psubusb, psubusw, psubsb, psubsw, pmaxsw, pminsw
+    packuswb, paddusb, paddusw, paddsb, paddsw, psubusb, psubusw, psubsb, psubsw, pmaxsw, pminsw,
+    // L22: hardware approximations; the result is the executing CPU's (the
+    // recorder's oracle takes the same host result, cases carry the CPU).
+    rcpps, rsqrtps, rcpss, rsqrtss
 );
 
 macro_rules! byte_shift {

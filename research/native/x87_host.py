@@ -170,6 +170,12 @@ def initial_state(control=0x037F):
 
 # ---- recorder oracle
 
+# Results that differ between processor models (Intel SDM: approximations
+# with relative error bounds; transcendental accuracy). Cases that ran one
+# record the host CPU (`cpu_dependent`); the replay compares them only there.
+CPU_DEPENDENT = {"fsin", "fcos", "fsincos", "fptan", "fpatan", "fyl2x", "fyl2xp1", "f2xm1"}
+APPROXIMATIONS = {"rcpps": "0f53c1", "rsqrtps": "0f52c1", "rcpss": "f30f53c1", "rsqrtss": "f30f52c1"}
+
 STORES = {"fst", "fstp", "fist", "fistp", "fisttp", "fnstcw", "fnstsw", "fstsw", "fstcw", "fbstp"}
 COMPARE_FLAGS = {"fcomi", "fcompi", "fucomi", "fucompi", "fcomip", "fucomip"}
 VERSION = "host-v1"
@@ -199,6 +205,7 @@ class Oracle:
         self.pending = None
         self.problem = None
         self.used = False
+        self.cpu_dependent = False
 
     def decode(self, uc, addr, size):
         if addr not in self.decoded:
@@ -206,7 +213,8 @@ class Oracle:
                 i = next(self.md.disasm(bytes(uc.mem_read(addr, max(1, min(size, 15)))), addr))
             except StopIteration:
                 i = None
-            self.decoded[addr] = i if i is not None and encoding(i) is not None else None
+            self.decoded[addr] = i if i is not None and (encoding(i) is not None
+                                                         or i.mnemonic in APPROXIMATIONS) else None
         return self.decoded[addr]
 
     def on_compute(self, uc, addr, size, _):
@@ -216,6 +224,10 @@ class Oracle:
         i = self.decode(uc, addr, size)
         if i is None:
             return
+        if i.mnemonic in APPROXIMATIONS:
+            self.approximation(uc, i)
+            return
+        self.cpu_dependent |= i.mnemonic in CPU_DEPENDENT
         enc = encoding(i)
         if enc is None:
             return
@@ -237,8 +249,29 @@ class Oracle:
         self.pending = (state, target and (target[0], out[:target[1]]),
                         flags & 0x45 if i.mnemonic in COMPARE_FLAGS else None, addr)
 
+    def approximation(self, uc, i):
+        """RCPPS/RSQRTPS/RCPSS/RSQRTSS: the host's result for the same
+        operands (Unicorn's differs: probe_approx.py)."""
+        from unicorn import x86_const as xc
+        reg = lambda o: getattr(xc, "UC_X86_REG_" + i.reg_name(o.reg).upper())
+        dst, src = i.operands
+        dest = uc.reg_read(reg(dst)).to_bytes(16, "little")
+        if src.type == X86_OP_MEM:
+            source = bytes(uc.mem_read(self.address_of(uc, i, src), src.size)).ljust(16, b"\0")
+        else:
+            source = uc.reg_read(reg(src)).to_bytes(16, "little")
+        code = bytes.fromhex("0f1001" "0f104910" + APPROXIMATIONS[i.mnemonic] + "0f1101" "c3")
+        out = native(code, dest + source)[:16]
+        self.used = self.cpu_dependent = True
+        self.pending = ("xmm", reg(dst), int.from_bytes(out, "little"), i.address)
+
     def flush(self, uc):
         if self.pending is None:
+            return
+        if self.pending[0] == "xmm":
+            _, register, value, _ = self.pending
+            self.pending = None
+            uc.reg_write(register, value)
             return
         from unicorn.x86_const import UC_X86_REG_EFLAGS
         state, store, flags, addr = self.pending

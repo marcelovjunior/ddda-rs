@@ -66,3 +66,27 @@ class OracleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApproximationTest(unittest.TestCase):
+    def test_oracle_takes_the_host_approximation(self):
+        # movups xmm1,[ecx]; rcpps xmm0,xmm1; rsqrtps xmm2,xmm1; rcpss xmm3,[ecx+16]  (same bytes 32/64-bit)
+        body = bytes.fromhex("0f10090f53c10f52d1f30f535910")
+        operands = struct.pack("<4f", 3.0, 0.7, 123.25, 1e-3) + struct.pack("<f", 5.5)
+        uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.mem_map(0x1000, 0x2000)
+        uc.mem_write(0x1000, body)
+        uc.mem_write(0x2000, operands)
+        uc.reg_write(xc.UC_X86_REG_ECX, 0x2000)
+        oracle = x87_host.Oracle(lambda u, i, op: (u.reg_read(xc.UC_X86_REG_ECX) + op.mem.disp) & 0xFFFFFFFF)
+        uc.hook_add(UC_HOOK_CODE, oracle.on_flush)
+        uc.hook_add(UC_HOOK_CODE, oracle.on_compute)
+        uc.emu_start(0x1000, 0x1000 + len(body))
+        oracle.flush(uc)
+        got = [uc.reg_read(getattr(xc, f"UC_X86_REG_XMM{k}")).to_bytes(16, "little") for k in (0, 2, 3)]
+        # natively: the same instructions, then store xmm0, xmm2, xmm3 after the operands
+        code = (bytes.fromhex("0f57c00f57d20f57db") + body
+                + bytes.fromhex("0f114120" "0f115130" "0f115940" "c3"))
+        out = x87_host.native(code, operands.ljust(0x50, b"\0"))
+        self.assertEqual(got, [out[0x20:0x30], out[0x30:0x40], out[0x40:0x50]])
+        self.assertTrue(oracle.cpu_dependent)
