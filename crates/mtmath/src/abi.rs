@@ -530,6 +530,63 @@ pub fn f_00cfcf80(m: &mut dyn Mem, cpu: &mut Cpu) {
     to_euler(m, cpu, 5);
 }
 
+/// The CRT's float tangent (x in xmm0, result in xmm0), not ported.
+const CRT_TANF: u32 = 0x012F_0BAC;
+
+/// The three field-of-view builders, thiscall `(MtMatrix *this, float
+/// near, float far, float fovy, float aspect[, float sx, float sy])`.
+/// Each stores `q` over its `far` argument, pushes ESI, copies the base
+/// matrix (all 16 elements, or 15 for the left-handed one), and calls
+/// the CRT tanf.
+fn perspective_fov(m: &mut dyn Mem, cpu: &mut Cpu, kind: u32) {
+    let (entry_esp, esi, this) = (cpu.esp, cpu.esi, cpu.ecx);
+    let (near, far, fovy, aspect) = (arg_f32(m, cpu, 0), arg_f32(m, cpu, 1), arg_f32(m, cpu, 2), arg_f32(m, cpu, 3));
+    let (sx, sy) = if kind == 1 { (arg_f32(m, cpu, 4), arg_f32(m, cpu, 5)) } else { (F32::ZERO, F32::ZERO) };
+    let q = far / (far - near);
+    m.set_u32(entry_esp.wrapping_add(8), q.to_bits());
+    let copied = if kind == 2 { 15 } else { 16 };
+    let mut base = Mat44::ZERO;
+    for i in 0..copied {
+        base.m[i / 4][i % 4] = F32::from_bits(m.u32(matrix::BASE_MATRIX + 4 * i as u32));
+    }
+    pushed(m, cpu, 1, esi);
+    (cpu.esi, cpu.esp) = (this, entry_esp.wrapping_sub(4));
+    let back = [0x00CF_C44E, 0x00CF_C5AE, 0x00CF_C711][kind as usize];
+    let tan = |v: F32| {
+        cpu.xmm[0] = scalar(v);
+        cpu.xmm[1] = scalar(far - near);
+        call_out(m, cpu, CRT_TANF, back);
+        F32::from_bits(cpu.xmm[0][0])
+    };
+    let mat = match kind {
+        0 => matrix::perspective_fov_rh(&base, near, far, fovy, aspect, tan),
+        1 => matrix::perspective_fov_rh_scaled(&base, near, far, fovy, aspect, sx, sy, tan),
+        _ => matrix::perspective_fov_lh(&base, near, far, fovy, aspect, tan),
+    };
+    store_matrix(m, this, &mat);
+    let z = -(q * near);
+    if kind == 2 {
+        cpu.xmm[0] = [z.to_bits(), 0x8000_0000, 0x8000_0000, 0x8000_0000];
+        cpu.xmm[1] = scalar(ONE);
+    } else {
+        cpu.xmm[0] = scalar(z);
+        cpu.xmm[1] = [0x8000_0000, 0, 0, 0];
+    }
+    cpu.xmm[2] = [0; 4];
+    (cpu.esi, cpu.esp) = (esi, entry_esp);
+    ret(cpu, if kind == 1 { 0x18 } else { 0x10 });
+}
+
+pub fn f_00cfc350(m: &mut dyn Mem, cpu: &mut Cpu) {
+    perspective_fov(m, cpu, 0);
+}
+pub fn f_00cfc4b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    perspective_fov(m, cpu, 1);
+}
+pub fn f_00cfc620(m: &mut dyn Mem, cpu: &mut Cpu) {
+    perspective_fov(m, cpu, 2);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -538,6 +595,9 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D870, f_007ad870, 0b0001_1111),
     (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
+    (0x00CF_C350, f_00cfc350, 0b1111_1111),
+    (0x00CF_C4B0, f_00cfc4b0, 0b1111_1111),
+    (0x00CF_C620, f_00cfc620, 0b1111_1111),
     (0x00CF_C770, f_00cfc770, 0b0000_0001),
     (0x00CF_C810, f_00cfc810, 0b0000_0001),
     (0x00CF_C8B0, f_00cfc8b0, 0b0000_0001),

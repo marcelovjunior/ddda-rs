@@ -207,3 +207,69 @@ pub fn reflect(plane: Plane) -> Reflection {
     };
     Reflection { matrix, n, d }
 }
+
+/// 0.5, read from 0x01406CF0.
+pub const HALF: F32 = F32(0.5);
+
+/// The global matrix the field-of-view builders start from (0x016295C0,
+/// the identity in the exe's image).
+pub const BASE_MATRIX: u32 = 0x0162_95C0;
+
+/// What the field-of-view builders share: `q = far / (far - near)` and
+/// `1 / tan(fovy / 2)`, `tan` being the CRT's tanf (0x012F0BAC).
+fn fov_terms(near: F32, far: F32, fovy: F32, tan: impl FnOnce(F32) -> F32) -> (F32, F32) {
+    let q = far / (far - near);
+    (q, ONE / tan(fovy * HALF))
+}
+
+/// Right-handed perspective projection from a vertical field of view
+/// (D3DXMatrixPerspectiveFovRH), written over a copy of `base` (the
+/// global at [`BASE_MATRIX`]): x and y scale by `cot(fovy/2) / aspect` and
+/// `cot(fovy/2)`, depth maps `-near..-far` to `0..1`. Elements 1..4, 6..9,
+/// 12 and 13 keep `base`'s values.
+// Translated from 0x00CFC350 (DDDA.exe 2017-12-13 Steam), MtMatrix::perspectiveFovRH.
+pub fn perspective_fov_rh(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: F32,
+                          tan: impl FnOnce(F32) -> F32) -> Mat44 {
+    let (q, ys) = fov_terms(near, far, fovy, tan);
+    let mut m = *base;
+    m.m[0][0] = ys / aspect;
+    m.m[1][1] = ys;
+    m.m[2][2] = -q;
+    m.m[2][3] = MINUS_ONE;
+    m.m[3][2] = -(q * near);
+    m.m[3][3] = O;
+    m
+}
+
+/// [`perspective_fov_rh`] with the x and y scales multiplied by `sx` and
+/// `sy`.
+// Translated from 0x00CFC4B0 (DDDA.exe 2017-12-13 Steam), MtMatrix::perspectiveFovRH (scaled).
+pub fn perspective_fov_rh_scaled(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: F32, sx: F32, sy: F32,
+                                 tan: impl FnOnce(F32) -> F32) -> Mat44 {
+    let (q, ys) = fov_terms(near, far, fovy, tan);
+    let mut m = *base;
+    m.m[0][0] = ys / aspect * sx;
+    m.m[1][1] = ys * sy;
+    m.m[2][2] = -q;
+    m.m[2][3] = MINUS_ONE;
+    m.m[3][2] = -(q * near);
+    m.m[3][3] = O;
+    m
+}
+
+/// Left-handed perspective projection from a vertical field of view
+/// (D3DXMatrixPerspectiveFovLH) over a copy of `base` (element 15 of
+/// `base` is not read: it is set to 0): depth maps `near..far` to `0..1`.
+// Translated from 0x00CFC620 (DDDA.exe 2017-12-13 Steam), MtMatrix::perspectiveFovLH.
+pub fn perspective_fov_lh(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: F32,
+                          tan: impl FnOnce(F32) -> F32) -> Mat44 {
+    let (q, ys) = fov_terms(near, far, fovy, tan);
+    let mut m = *base;
+    m.m[0][0] = ys / aspect;
+    m.m[1][1] = ys;
+    m.m[2][2] = q;
+    m.m[2][3] = ONE;
+    m.m[3][2] = -(q * near);
+    m.m[3][3] = O;
+    m
+}

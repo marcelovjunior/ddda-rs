@@ -54,7 +54,7 @@ BELOW, ABOVE = 0x200, 0x40  # the stack window around ESP (callees' frames inclu
 # callee runs in Unicorn; the case records the machine at its entry and at
 # its return (registers, all xmm lanes, the stack window), and the replay
 # checks the entry and restores the return state (crates/mtmath/tests).
-CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55, 0x012F0D4C}  # CRT atan2 (doubles), sinf, cosf, asinf
+CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55, 0x012F0D4C, 0x012F0BAC}  # CRT atan2 (doubles), sinf, cosf, asinf, tanf
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -77,7 +77,11 @@ PORTS = {
     0x00CFCD40: ("euler", 1),
     0x00CFCE60: ("euler", 1),
     0x00CFCF80: ("euler", 1),
+    0x00CFC350: ("fov", 4),
+    0x00CFC4B0: ("fov", 6),
+    0x00CFC620: ("fov", 4),
 }
+BASE_MATRIX = 0x016295C0  # the identity the field-of-view builders copy (poked, recorded)
 MATRIX = h.SCRATCH + 0x200  # the input matrix of the Euler conversions
 PIVOTS = {0x00CFC9E0: 2, 0x00CFCB00: 1, 0x00CFCC20: 6, 0x00CFCD40: 4, 0x00CFCE60: 8, 0x00CFCF80: 9}
 
@@ -290,6 +294,15 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             args = VEC[:nargs]
         globals_ = ()
+        if kind == "fov":
+            args = [floats(rnd) if rnd.random() < 0.3 else f2b(rnd.uniform(-3, 3) * 10 ** rnd.uniform(-2, 3))
+                    for _ in range(nargs)]
+            if rnd.random() < 0.5:  # a plausible camera
+                args[:4] = [f2b(rnd.uniform(0.01, 2)), f2b(rnd.uniform(10, 5000)), f2b(rnd.uniform(0.1, 3)),
+                            f2b(rnd.uniform(0.5, 2.5))]
+            ident = [0x3F800000 if i % 5 == 0 else 0 for i in range(16)]
+            base = ident if rnd.random() < 0.5 else [rnd.getrandbits(32) for _ in range(16)]
+            globals_ = [(BASE_MATRIX, struct.pack("<16I", *base))]
         if kind == "rotate":
             regs["esi"] = OBJ
             args = [floats(rnd) if rnd.random() < 0.4 else f2b(rnd.uniform(-20, 20)) for _ in range(2)]
