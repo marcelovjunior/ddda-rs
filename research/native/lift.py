@@ -623,7 +623,8 @@ def _init_worker(closed):
 
 
 def _vectors_for(args):
-    addr, per, end = args
+    addr, per, end = args[:3]
+    size = args[3] if len(args) > 3 else None
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
@@ -632,7 +633,7 @@ def _vectors_for(args):
         seed += 1
         try:
             if end is None:
-                r = h.run_sparse(addr, (addr << 8) ^ seed, **inputs)
+                r = h.run_sparse(addr, (addr << 8) ^ seed, size=size, **inputs)
             else:  # ext: calls to untranslated code are mocked
                 r = h.run_sparse(addr, (addr << 8) ^ seed, end=end, lifted=_CLOSED, **inputs)
         except h.Rejected:
@@ -686,7 +687,7 @@ def vectors(per=3):
     # functions that already failed to get a vector are not retried (each costs 8x the seeds)
     nov_path = f"{N}/patterns/lift_novector.json"
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None)
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"])
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)

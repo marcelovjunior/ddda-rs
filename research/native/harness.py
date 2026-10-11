@@ -121,7 +121,7 @@ def disasm(address, length=0x200, stop_at_ret=True):
 
 # --- sparse runs: any function, automatic inputs --------------------------
 from unicorn import UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE  # noqa: E402
-from unicorn.x86_const import UC_X86_REG_XMM0, UC_X86_REG_FPSW  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_XMM0, UC_X86_REG_FPSW, UC_X86_REG_EFLAGS  # noqa: E402
 import unicorn.x86_const as _xc  # noqa: E402
 XMM_REGS = {f"xmm{k}": getattr(_xc, f"UC_X86_REG_XMM{k}") for k in range(8)}
 
@@ -164,7 +164,7 @@ def static_pop(target, _cache={}):
     return _cache[target]
 
 
-def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False):
+def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -177,6 +177,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     recorded in "calls" (target, all eight registers at entry) with what the
     mock returns (random eax/ecx/edx, random finite xmm0, the callee's
     stack pop). ddnative's tests replay these through x86::call_ext.
+
+    `size` (the function's size; implied by `end`) lets the run check that
+    the function's own `ret` goes back to the caller: random inputs can
+    overwrite the return address (a store through a random pointer), and the
+    original then runs on into whatever is there. Such a case is rejected.
 
     `zero_inputs` is an opt-in boundary fixture: non-image memory, initial
     general registers except ESP, and mocked return values are zero. Image
@@ -293,7 +298,54 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         nan = lambda v: (v & 0x7F800000) == 0x7F800000 and (v & 0x7FFFFF) != 0  # noqa: E731
         return any(nan((a >> 32 * k) & 0xFFFFFFFF) and nan((b >> 32 * k) & 0xFFFFFFFF) for k in range(lanes))
 
+    # Map every page an instruction will touch *before* it runs. Unicorn's
+    # UNMAPPED hook is not reliable (it can map the page and still raise),
+    # and resuming after such a fault loses QEMU's lazily computed flags.
+    mem_ops = {}
+    rets = {}
+    gpr = dict(GPR)
+
+    def premap(uc_, addr):
+        if addr not in mem_ops:
+            try:
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, 15)), addr))
+                mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
+                                  i.reg_name(o.mem.index) if o.mem.index else None,
+                                  o.mem.scale, o.mem.disp, max(o.size, 1))
+                                 for o in i.operands if o.type == 3 and not o.mem.segment]                     if not (i.mnemonic in ("lea", "nop") or i.mnemonic.startswith("prefetch")) else []
+            except (UcError, StopIteration):
+                mem_ops[addr] = []
+        esp = uc_.reg_read(UC_X86_REG_ESP)
+        need = {(esp - 0x40) & ~0xFFF, esp & ~0xFFF}  # implicit stack accesses
+        for base, index, scale, disp, sz in mem_ops[addr]:
+            a = disp
+            if base:
+                a += uc_.reg_read(gpr[base]) if base in gpr else 0
+            if index:
+                a += (uc_.reg_read(gpr[index]) if index in gpr else 0) * scale
+            a &= 0xFFFFFFFF
+            need.add(a & ~0xFFF)
+            need.add(((a + sz - 1) & 0xFFFFFFFF) & ~0xFFF)
+        for p in need:
+            if p not in pages_in and p != RET & ~0xFFF:
+                on_unmapped(uc_, None, p, 1, 0, None)
+
+    body_end = end if end is not None else (address + size if size else None)
+    own_ret = [False]  # the previous instruction was one of the function's own `ret`s
+
     def on_code(uc_, addr, size, _):
+        if own_ret[0] and addr != RET:
+            bad.append(f"returned to {addr:#010x} instead of the caller (return address overwritten)")
+            uc_.emu_stop()
+            return
+        own_ret[0] = False
+        if body_end is not None and address <= addr < body_end:
+            if addr not in rets:
+                try:
+                    rets[addr] = next(nmd.disasm(code(addr, 15), addr)).mnemonic in ("ret", "retn")
+                except (KeyError, StopIteration):
+                    rets[addr] = False
+            own_ret[0] = rets[addr]
         # The ext recorder already rejects stray returns in on_ext. Closed
         # runs must not accidentally execute seeded heap/stack bytes either.
         # The only non-image code we intentionally execute is the st0 capture.
@@ -302,6 +354,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             bad.append(f"execution outside the image at {addr:#010x}")
             uc_.emu_stop()
             return
+        premap(uc_, addr)
         if two_nans(uc_, addr):
             bad.append(f"two NaN operands at {addr:#010x}")
             uc_.emu_stop()
@@ -441,40 +494,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
-    # Unicorn's SSE memory helpers can raise UNMAPPED for a page the hook has
-    # just mapped (or never call the hook): map what the faulting instruction
-    # touches and resume from it, once per instruction (the machine state is
-    # intact; the instruction has not retired).
-    md.detail = True
-    regs = dict(GPR)
-    pc, retried = address, set()
-    while True:
-        try:
-            uc.emu_start(pc, RET)
-            break
-        except UcError as e:
-            pc = uc.reg_read(UC_X86_REG_EIP)
-            if "UNMAPPED" not in str(e) or bad or pc in retried:
-                bad.append(f"{e} at {pc:#010x}")
-                break
-            retried.add(pc)
-            try:
-                i = next(md.disasm(bytes(uc.mem_read(pc, 15)), pc))
-            except (UcError, StopIteration):
-                bad.append(f"{e} at {pc:#010x}")
-                break
-            for op in i.operands:
-                if op.type == 3:  # X86_OP_MEM
-                    mm = op.mem
-                    a = mm.disp
-                    if mm.base:
-                        a += uc.reg_read(regs[i.reg_name(mm.base)])
-                    if mm.index:
-                        a += uc.reg_read(regs[i.reg_name(mm.index)]) * mm.scale
-                    a &= 0xFFFFFFFF
-                    for p in {a & ~0xFFF, (a + op.size - 1) & ~0xFFF}:
-                        if p not in pages_in:
-                            on_unmapped(uc, None, p, 1, 0, None)
+    try:
+        uc.emu_start(address, RET)
+    except UcError as e:
+        # pages are mapped before each instruction (premap), so a fault here
+        # is real; resuming would lose QEMU's lazy flags: never resume
+        bad.append(f"{e} at {uc.reg_read(UC_X86_REG_EIP):#010x}")
     if not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
