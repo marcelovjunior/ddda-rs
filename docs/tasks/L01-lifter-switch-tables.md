@@ -59,5 +59,88 @@ image, often preceded by a bounds check and sometimes a byte index table
 
 ## Results
 
-(Codex fills this in: what lifts now, rejection counts before/after, test
-result, commits.)
+Implemented strict absolute dword switch discovery from `harness.code`;
+all entries must target instruction starts in the function. Direct unsigned
+bounds and byte-remapping bounds are checked separately. Runtime jumps read
+through `Mem` and use the existing panic-on-unknown-target dispatch. Other
+indirect jumps still reject, including in the external-call pass. No image
+tables or generated Rust are committed.
+
+Full scans of the same 36,398 inventory candidates:
+
+| Result / rejection reason | Before | After |
+|---|---:|---:|
+| Liftable | 29,165 | 30,111 |
+| Rejected, total | 7,233 | 6,287 |
+| indirect | 2,107 | 776 |
+| disassembly | 838 | 838 |
+| falls | 656 | 699 |
+| x87-return | 573 | 639 |
+| fild | 375 | 407 |
+| lahf | 309 | 331 |
+| sbb | 297 | 362 |
+| packed | 209 | 222 |
+| div | 187 | 212 |
+| rep | 175 | 181 |
+| cvtps2pd | 169 | 188 |
+| mul | 168 | 172 |
+| movd | 116 | 127 |
+| movsd | 96 | 101 |
+| Other reasons combined | 958 | 1,032 |
+
+The 946 newly liftable functions contain 977 switch jumps; 240 functions
+have byte remapping. Another 48 existing functions become callable without
+external-call mocking. Of the 1,331 fewer indirect rejections, 385 expose a
+later unsupported instruction or structural rejection instead of lifting.
+Private scan logs, selection lists and vector data are under
+`E:/ddda-re/notes/native-L01`; the shared native directory was only read.
+
+Verification (2026-10-11):
+
+- **12 synthetic tests pass:**
+  `PY -m unittest discover -s research/native -p test_lift_switch.py`.
+  These cover recognition/rejection, direct and remapped bounds, memory-read
+  emission, external-pass rejection, boundary fixtures and stray execution.
+- **Rust replay passes:** `DDNATIVE_REQUIRE_VECTORS=1 cargo test -p ddnative
+  --test lifted`, with `LIFT_DATA=E:/ddda-re/notes/native-L01`,
+  `LIFT_WORKERS=2`, `CARGO_BUILD_JOBS=4`. One integration test checks **4,551
+  cases over 1,525 functions**, including **931 newly liftable functions and
+  all 48 promoted callers**. Existing generated-code warnings remain.
+- The initial 1,592-function dependency batch was costly on random callee
+  chains. Completed, dependency-closed results were retained; remaining
+  callers were recorded in separate batches using the existing external-call
+  mode with an empty callable set. The x87-dependent `0x00B0FEF0` instead
+  retains its two verified callees. The final batch contains 748 closed and
+  777 external-call functions; mocked callee internals are not verified by
+  their callers' tests.
+- Added opt-in `LIFT_ZERO_INPUTS=1` / `run_sparse(zero_inputs=True)` for
+  boundary inputs, with synthetic tests. Image bytes and instructions are
+  unchanged. The final cases comprise 2,694 random-input cases and 1,857 zero
+  boundary cases. Failed zero fixtures were also tried with standard random
+  inputs (up to 24 seeds); every newly liftable function was attempted.
+- **Switch-path evidence:** 798 cases read jump tables in **274 functions**,
+  including 37 with byte remapping; 300 distinct table entries were read.
+  Passing vectors for the other functions do not establish switch-branch
+  coverage. This is not exhaustive branch or table-entry verification.
+- The first replay exposed an old invalid cached fixture for `0x00786D74`,
+  seed 24: the original runs into seeded, non-image bytes before returning.
+  Reproduced and fixed the harness to reject such execution in closed mode,
+  with a regression test. This unused dependency and its invalid case were
+  excluded; no newly liftable function was excluded for a Rust mismatch.
+
+**Open:** 15 newly liftable functions still have no usable vector and are
+**not verified**; addresses/names are in the private `unverified-new.json`.
+They need structured input fixtures. The 776 remaining indirect rejections
+are outside this recognizer's accepted forms. When merging, invalidate
+affected external-call vectors if the callable set changes: the existing
+cache does not automatically detect that boundary change.
+
+Evidence: private `before-scan.log`, `after-scan.log`,
+`verification-summary.json`, `coverage-summary.json`, `cargo-lifted.log`,
+`patterns/lift.json` and `vectors/lift.json`. Generated source/test files
+were restored after replay and are not committed. The shared inventory was
+read-only; no shared native writes, native gate, game-install writes or push.
+
+Commit: **`2c57291`** implements the recognizer, verification helpers, tests
+and pipeline documentation. This Results section and the milestone update
+are committed separately as the L01 verification handoff on the same branch.

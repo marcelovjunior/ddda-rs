@@ -538,3 +538,25 @@ opening (codex-31), route perf (codex-29).
   codex-80), navigation (S59), starting skills (S57), frame rate toward
   180 fps (S41: ~10.6 ms field frame vs 5.5 ms), Ghidra MCP down since the
   low-memory stop.
+
+## Batch 2026-10-11 (L01: native lifter switch tables)
+
+- **Implemented:** strict absolute dword switch tables, including byte-index
+  remapping; image-derived targets become block leaders and runtime jumps
+  read through `Mem`. Unknown targets panic. Scan: 29,165 -> 30,111 liftable
+  functions; indirect rejections 2,107 -> 776. See
+  [L01 results](tasks/L01-lifter-switch-tables.md#results).
+- **Tested / compared with the original:** 12 synthetic tests pass; required
+  Rust vector replay passes 4,551 cases over 1,525 functions, including 931
+  new switch functions and all 48 promoted callers. Table reads occur in
+  274 functions (37 byte-remapped), across 300 distinct entries. This is
+  sampled coverage, with external callees mocked where documented.
+- **Verification tooling:** opt-in zero boundary inputs improve switch-path
+  coverage; closed sparse runs now reject execution of non-image bytes,
+  after one invalid older cached fixture was reproduced. Private L01 data
+  only; generated Rust/test files are not part of the source handoff.
+- **Blockers / limits:** 15 newly liftable functions have no usable vector;
+  remaining indirect forms stay rejected. External-call vector caches need
+  invalidation when the callable set changes.
+- **One next action:** build structured original-exe fixtures for the 15
+  unverified functions listed in `E:/ddda-re/notes/native-L01/unverified-new.json`.
