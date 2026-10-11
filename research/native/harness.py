@@ -103,7 +103,7 @@ def run(address, ecx=0, args=(), scratch=b"", regs=None, allow=(), max_insn=1000
         if count[0] > max_insn:
             bad.append(f"over {max_insn} instructions")
             uc_.emu_stop()
-        insn = uc_.mem_read(addr, size)
+        insn = uc_.mem_read(addr, size if 0 < size <= 15 else 5)  # the hook size can be a huge sentinel
         if insn[0] == 0xE8:  # direct call: must be explicitly allowed
             target = (addr + size + struct.unpack("<i", bytes(insn[1:5]))[0]) & 0xFFFFFFFF
             if target not in allow:
@@ -156,6 +156,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
             0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
+MODEL_BYTES = 1 << 20  # run_sparse rejects runs whose memset/memcpy calls touch more in total
 TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 
@@ -288,10 +289,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     decoded = {}
     instruction_sizes = {}
 
+    def ins_len(pc):
+        # the size Unicorn's code hook reports, clamped: it is sometimes a
+        # huge sentinel (one read of ~4 GB took a worker to 3.9 GB)
+        n = instruction_sizes.get(pc, 0)
+        return n if 0 < n <= 15 else min(15, 0x1000 - (pc & 0xFFF))  # stay on the mapped page
+
     def check_float(uc_, access, addr, size, value, _):
         eip = uc_.reg_read(UC_X86_REG_EIP)
         if eip not in decoded:
-            ins = list(md.disasm(bytes(uc_.mem_read(eip, instruction_sizes[eip])), eip, 1))
+            ins = list(md.disasm(bytes(uc_.mem_read(eip, ins_len(eip))), eip, 1))
             if not ins:  # data access from undecodable code: report, don't crash
                 bad.append(f"undecodable code at {eip:#010x} reading {addr:#010x}")
                 uc_.emu_stop()
@@ -325,7 +332,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     def two_nans(uc_, addr):
         if addr not in sse_dec:
             try:
-                i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, ins_len(addr))), addr))
                 sse_dec[addr] = i if i.mnemonic in SSE_BINARY else None
             except (UcError, StopIteration):
                 sse_dec[addr] = None
@@ -361,7 +368,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     def premap(uc_, addr):
         if addr not in mem_ops:
             try:
-                i = next(nmd.disasm(bytes(uc_.mem_read(addr, instruction_sizes[addr])), addr))
+                i = next(nmd.disasm(bytes(uc_.mem_read(addr, ins_len(addr))), addr))
                 integer_ops[addr] = i
                 x87_ops[addr] = i if i.mnemonic.startswith("f") else None
                 mem_ops[addr] = [(i.reg_name(o.mem.base) if o.mem.base else None,
@@ -511,7 +518,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if body is not None and addr not in PLATFORM and addr != RET:
             if addr not in flow:
                 try:
-                    flow[addr] = next(nmd.disasm(bytes(uc_.mem_read(addr, size)), addr)).mnemonic
+                    flow[addr] = next(nmd.disasm(bytes(uc_.mem_read(addr, ins_len(addr))), addr)).mnemonic
                 except (UcError, StopIteration):
                     flow[addr] = ""
             if flow[addr] == "call" and uc_.reg_read(UC_X86_REG_EIP) == addr:
@@ -546,6 +553,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
 
     heap = [HEAP_BASE]
+    model_bytes = [0]  # bytes memset/memcpy touched in this run
 
     def ensure(a, n):
         for p in range(a & ~0xFFF, ((a + n - 1) & ~0xFFF) + 1, 0x1000):
@@ -582,8 +590,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             eax = alloc(uc_.reg_read(UC_X86_REG_ECX))
         elif name in ("memset", "memcpy"):
             dst, x, n = arg(0), arg(1), arg(2)
-            if n > 0x10000:
-                bad.append(f"{name} of {n:#x} bytes")
+            model_bytes[0] += n
+            if n > 0x10000 or model_bytes[0] > MODEL_BYTES:
+                # one huge copy, or a loop of them: every byte becomes a
+                # Python dict/set entry (a worker once reached 3.7 GB)
+                bad.append(f"{name} of {n:#x} bytes ({model_bytes[0]:#x} in this run)")
                 uc_.emu_stop()
                 return
             mwrite(dst, bytes([x & 0xFF]) * n if name == "memset" else mread(x, n))
