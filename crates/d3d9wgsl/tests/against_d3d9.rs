@@ -978,25 +978,15 @@ fn options(vertex: bool) -> d3d9wgsl::Options {
     }
 }
 
-/// The first instruction whose result is outside `close` (pixel shaders:
-/// through oC0; vertex shaders: through the position output), with set
-/// `set`'s inputs.
+/// The first instruction whose result is outside `close` (read through a
+/// [`tap`]: pixel shaders through oC0, vertex shaders through the position
+/// output), with set `set`'s inputs.
 fn first_difference(gpu: &Gpu, oracle: &mut Oracle, tokens: &[u32], vertex: bool, set: u32) -> String {
     let shader = d3d9shader::parse(tokens).unwrap();
     let Ok(full) = d3d9wgsl::translate_with(&shader, options(vertex)) else { return "(not translated)".into() };
     let mut last = String::from("(not located)");
     for k in 0..tokens.len() {
-        let cut = if vertex {
-            prefix_to(tokens, k, 0xE00F_0000 | full.interface.position.unwrap())
-        } else {
-            prefix(tokens, k)
-        };
-        let Some((cut, text, mask)) = cut else {
-            if prefix_blocked(tokens, k) {
-                return format!("{last}; flow control follows");
-            }
-            continue;
-        };
+        let Some((cut, text, mask)) = tap(tokens, k, output_token(vertex, &full.interface)) else { continue };
         let cs = d3d9shader::parse(&cut).unwrap();
         let Ok(ct) = d3d9wgsl::translate_with(&cs, options(vertex)) else { continue };
         // the full shader's random set, so the inputs are the same
@@ -1019,22 +1009,9 @@ fn first_difference(gpu: &Gpu, oracle: &mut Oracle, tokens: &[u32], vertex: bool
     last
 }
 
-/// Whether instruction `k` (counted as [`prefix_to`] counts) comes at or
-/// after the first flow control, where prefixes cannot be cut.
-fn prefix_blocked(tokens: &[u32], k: usize) -> bool {
-    use d3d9shader::op;
-    let Ok(s) = d3d9shader::parse(tokens) else { return false };
-    let mut n = 0;
-    for ins in &s.instructions {
-        if matches!(ins.opcode, op::COMMENT | op::DCL | op::DEF | op::DEFI | op::DEFB) {
-            continue;
-        }
-        if matches!(ins.opcode, op::IF | op::IFC | op::LOOP | op::REP | op::CALL | op::CALLNZ) {
-            return n <= k;
-        }
-        n += 1;
-    }
-    false
+/// The output a [`tap`] writes: oC0, or the vertex shader's position.
+fn output_token(vertex: bool, iface: &d3d9wgsl::Interface) -> u32 {
+    if vertex { 0xE00F_0000 | iface.position.unwrap() } else { 0x800F_0800 }
 }
 
 /// One shader through translation, the pipeline and `sets` random sets.
@@ -1127,6 +1104,9 @@ fn sweep() {
             let (mut exact, mut near, mut worst, mut differ) = (0, 0, 0u64, 0);
             let (mut untranslated, mut rejected, mut skipped, mut located) = (0, 0, 0, 0);
             for (k, tokens) in mine.iter().enumerate() {
+                if k % 250 == 249 {
+                    eprintln!("  {name} {label}: {} of {} ({} s)", k + 1, mine.len(), started.elapsed().as_secs());
+                }
                 let id = tag(tokens);
                 match sweep_one(&gpu, &mut oracle, tokens, vertex, sets) {
                     Verdict::Exact => exact += 1,
@@ -1173,7 +1153,7 @@ fn sweep() {
 /// One shader traced instruction by instruction: DDDA_SHADER_PROBE=
 /// <package>:<pixel|vertex>:<tag or index> (the sweep report's names)
 /// prints the disassembly, then for every instruction that writes a temp
-/// (up to the first flow control) both results and their ULP distance,
+/// both results (read through a [`tap`]) and their ULP distance,
 /// with set DDDA_SHADER_PROBE_SET (default 0).
 #[test]
 fn probe() {
@@ -1193,14 +1173,7 @@ fn probe() {
         eprintln!("{}", full.wgsl);
     }
     for k in 0..tokens.len() {
-        let cut = if vertex { prefix_to(&tokens, k, 0xE00F_0000 | full.interface.position.unwrap()) } else { prefix(&tokens, k) };
-        let Some((cut, text, mask)) = cut else {
-            if prefix_blocked(&tokens, k) {
-                eprintln!("(flow control)");
-                break;
-            }
-            continue;
-        };
+        let Some((cut, text, mask)) = tap(&tokens, k, output_token(vertex, &full.interface)) else { continue };
         let ct = d3d9wgsl::translate_with(&d3d9shader::parse(&cut).unwrap(), options(vertex)).unwrap();
         let mut rng = seed(&tokens, set);
         let (mine, theirs) = if vertex {
@@ -1342,6 +1315,11 @@ fn fused_arithmetic_follows_the_driver() {
             ("fma(ay, bz, -az*by)", Box::new(move |c: &[[f32; 4]]| { let (a, b) = (c[0], c[1]); [fma_z(a[1], b[2], -fz(a[2], b[1])), fma_z(a[2], b[0], -fz(a[0], b[2])), fma_z(a[0], b[1], -fz(a[1], b[0])), 0.0] })),
             ("fma(-az, by, ay*bz)", Box::new(move |c: &[[f32; 4]]| { let (a, b) = (c[0], c[1]); [fma_z(-a[2], b[1], fz(a[1], b[2])), fma_z(-a[0], b[2], fz(a[2], b[0])), fma_z(-a[1], b[0], fz(a[0], b[1])), 0.0] })),
         ]),
+        // mul feeding mad's addend (r1 dead afterwards)
+        ("mul+mad", asm::ps(&[asm::ins(op::MUL, &[asm::dst(d3d9shader::reg::TEMP, 1, 0xF), asm::r(1), asm::r(3)]), asm::ins(op::MAD, &[asm::oc0(), asm::r(0), asm::r(2), asm::r(1)])]), vec![
+            ("literal fma(r0, r2, r1*r3)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[0][i], c[2][i], fz(c[1][i], c[3][i]))))),
+            ("contracted fma(r1, r3, r0*r2)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[1][i], c[3][i], fz(c[0][i], c[2][i]))))),
+        ]),
         ("lrp", asm::ps(&[asm::ins(op::LRP, &[asm::oc0(), asm::r(0), asm::r(1), asm::r(2)])]), vec![
             ("a*(b-c)+c unfused", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fz(c[0][i], c[1][i] - c[2][i]) + c[2][i]))),
             ("fma(a, b-c, c)", Box::new(move |c: &[[f32; 4]]| std::array::from_fn(|i| fma_z(c[0][i], c[1][i] - c[2][i], c[2][i])))),
@@ -1366,7 +1344,7 @@ fn fused_arithmetic_follows_the_driver() {
             let mut hits = vec![0usize; models.len()];
             let mut ours_ok = 0;
             for _ in 0..trials {
-                let consts: Vec<[f32; 4]> = (0..3).map(|_| rng.vec4()).collect();
+                let consts: Vec<[f32; 4]> = (0..4).map(|_| rng.vec4()).collect();
                 let (ours, theirs) = if vertex { both_vs(&mut oracle, &gpu, &tokens, &consts) } else { both(&mut oracle, &gpu, &tokens, &consts) };
                 let lanes = if matches!(*name, "dp3" | "dp4" | "dp2add") { 1 } else if *name == "crs" { 3 } else { 4 };
                 for (m, (_, f)) in models.iter().enumerate() {
@@ -1558,4 +1536,73 @@ fn lit_clamps_its_exponent_at_128() {
             }
         }
     }
+}
+
+/// The shader with instruction `k`'s temp destination copied into a spare
+/// temp right after it, and that spare written to the output `dst` (a
+/// destination token: oC0, or the vertex position) at the end of the main
+/// program. Unlike [`prefix_to`] the program stays whole, so instructions
+/// inside loops, branches and subroutines can be compared too (the value
+/// is the one of the last execution; c0 if it never runs). None if `k`
+/// does not write a temp.
+fn tap(tokens: &[u32], k: usize, dst: u32) -> Option<(Vec<u32>, String, u8)> {
+    use d3d9shader::{op, reg};
+    let s = d3d9shader::parse(tokens).ok()?;
+    let lines = d3d9shader::disasm::disassemble(&s);
+    let spare = s.instructions.iter()
+        .flat_map(|i| i.dst.iter().chain(i.src.iter()))
+        .filter(|p| p.kind == reg::TEMP)
+        .map(|p| p.index + 1)
+        .max()
+        .unwrap_or(0);
+    if spare > 31 {
+        return None;
+    }
+    let mut out = vec![tokens[0]];
+    let (mut at, mut n, mut line) = (1, 0, 0);
+    let (mut found, mut ended, mut started) = (None, false, false);
+    let finish = |out: &mut Vec<u32>| out.extend_from_slice(&[0x0200_0001, dst, 0x80E4_0000 | spare]);
+    for ins in &s.instructions {
+        let t = tokens[at];
+        let len = if ins.opcode == op::COMMENT { ((t >> 16) & 0x7FFF) as usize } else { ((t >> 24) & 0xF) as usize };
+        let span = &tokens[at..at + 1 + len];
+        at += 1 + len;
+        if ins.opcode == op::COMMENT {
+            out.extend_from_slice(span);
+            continue;
+        }
+        line += 1;
+        // the end of the main program: its first top-level ret, or END
+        if ins.opcode == op::RET && !ended {
+            finish(&mut out);
+            ended = true;
+        }
+        if matches!(ins.opcode, op::DCL | op::DEF | op::DEFI | op::DEFB) {
+            out.extend_from_slice(span);
+            continue;
+        }
+        if !started {
+            // the spare starts as c0 (the same on both sides), so an
+            // instruction that never runs compares equal
+            out.extend_from_slice(&[0x0200_0001, 0x800F_0000 | spare, 0xA0E4_0000]);
+            started = true;
+        }
+        out.extend_from_slice(span);
+        if n == k {
+            let d = ins.dst.as_ref()?;
+            if d.kind != reg::TEMP || ins.opcode == op::TEXKILL {
+                return None;
+            }
+            // mov r_spare (same mask), r_d
+            out.extend_from_slice(&[0x0200_0001, 0x8000_0000 | ((d.mask_or_swizzle as u32) << 16) | spare, 0x80E4_0000 | d.index]);
+            found = Some((lines[line].trim().to_string(), d.mask_or_swizzle));
+        }
+        n += 1;
+    }
+    let (text, mask) = found?;
+    if !ended {
+        finish(&mut out);
+    }
+    out.push(0x0000_FFFF);
+    Some((out, text, mask))
 }
