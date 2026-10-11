@@ -223,21 +223,31 @@ member is still replayed by the family test.
 
 ## The lifter (main engine)
 
-`research/native/lift.py` translates **leaf functions** (no `call`, no
-indirect jump, no jump out of the function) into literal Rust, one Rust
-statement group per x86 instruction, and `harness.run_sparse` verifies
-them with automatic vectors. This is how most functions get verified; the
+`research/native/lift.py` translates functions into literal Rust, one
+Rust statement group per x86 instruction, and `harness.run_sparse`
+verifies them with automatic vectors. A function lifts when every
+instruction is in the supported subset and every `call` (or jump out of
+the function, i.e. a tail call) goes to a function that is itself lifted;
+indirect calls and jumps reject it. This is how most functions get verified; the
 hand-written ports above are for the important ones, where a readable
 typed API matters.
 
 **Generated code.** `crates/ddnative/src/generated/lifted_NNN.rs` (400
-functions per module) and `lifted.rs` (`all()` lookup). Each function is
-`fn(&mut dyn Mem, Entry) -> Exit`:
+functions per module) and `lifted.rs` (re-exports every function and the
+`all()` lookup). Each function is `fn(&mut dyn Mem, &mut Cpu)`:
 
-- `Entry`/`Exit` (ddnative::x86) carry the eight general registers, the
-  low lane of xmm0 and (Exit) the x87 top of stack. Calling conventions
-  disappear: arguments are wherever the original reads them (registers,
-  or the stack, which lives in `Mem` at `esp`).
+- `x86::Cpu` is the whole machine state: the eight general registers,
+  xmm0-7, the flags and the x87 stack. Calling conventions disappear:
+  arguments are wherever the original reads them (registers, or the
+  stack, which lives in `Mem` at `esp`). A function copies `Cpu` into
+  locals on entry and writes them back before it returns.
+- A lifted `call T` pushes the return address into `Mem` exactly as the
+  CPU does, writes the locals back, runs `super::lifted::f_T(m, cpu)`
+  and reloads the locals; a tail `jmp T` (or a conditional one) writes
+  back, runs T and returns. Because the callee sees the full state, even
+  whole-program-optimised calls that pass values in odd registers stay
+  exact. `Cpu::from(Entry)` / `cpu.exit()` convert to the `Entry`/`Exit`
+  pair the tests and hand ports use.
 - Registers are locals; 8/16-bit registers are masked views (`al` =
   `eax & 0xFF`). Basic blocks become `loop { match pc { ... } }`.
 - Flags: each flag-setting instruction stores `Flags::new(kind, a, b,
@@ -270,17 +280,36 @@ CPU's), when it runs more than 20,000 instructions on random data
 (runaway loops over garbage counts), or when the emulator faults.
 Functions with no usable case are dropped from the batch, not counted.
 
-**Commands.** `PY lift.py scan` (lift every non-platform leaf; prints the
-rejection reasons), `PY lift.py vectors` (parallel, all cores), `python
-lift.py gen`, then `scripts/native_gate.sh`. `PY lift.py one 0xADDR`
-prints one function's Rust.
+**Rounds.** `scan` lifts in rounds: round 1 gets the leaves, each later
+round the functions whose callees all lifted earlier (the `callable` set
+grows inside a round too). It stops when a round adds nothing, so call
+chains of any depth lift bottom-up and recursion never does. Each entry
+in `patterns/lift.json` lists its `calls`. A vector for a caller runs
+the original callee code in Unicorn, so the caller's test checks the
+composition too.
 
-**Extending it.** Rejections are counted by reason (`call` dominates:
-functions that call others are the next stage). To support a new
+**Commands.** `PY lift.py scan` (lift everything it can; prints each
+round and the rejection reasons), `PY lift.py vectors` (parallel;
+`LIFT_WORKERS=4` to leave the PC usable), `python lift.py gen`, then
+`scripts/native_gate.sh`. `PY lift.py one 0xADDR` prints one function's
+Rust (leaf form: calls reject).
+
+`vectors` only records functions that have none in `vectors/lift.json`:
+a vector depends on the original code and the seed alone, so old ones
+stay valid when the lifter changes. Functions with no usable vector are
+dropped, then (repeatedly) every function that calls a dropped one,
+since its Rust would not compile. Never run `gen` between `scan` and
+`vectors`: the test requires a vector for every generated function.
+
+**Extending it.** Rejections are counted by reason (`call` = a call to
+something not lifted, `icall` = indirect call, `jump` = indirect jump or
+a jump out of the function to something not lifted). To support a new
 instruction, add a branch in `lift()` that emits its exact semantics
 (including flags), regenerate, and let the vectors judge. Ideas in order
-of yield: calls to already-verified or lifted functions (inline the call
-as a Rust call with the same Entry/Exit), `mul`/`div`, `rep movs/stos`,
+of yield: indirect calls through vtables (needs a dispatch table from
+address to lifted function), calls into hand-ported or platform code
+(the allocator: a Rust model with the same observable effects),
+`mul`/`div`, `rep movs/stos`,
 `movsx`/`cwde`, `sbb`/`adc`, `shld`/`shrd`, x87 arithmetic (needs the
 game's x87 precision control word: DirectX 9 sets single precision unless
 the device was created with FPU_PRESERVE; check the original's control

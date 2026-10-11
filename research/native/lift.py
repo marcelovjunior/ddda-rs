@@ -1,10 +1,13 @@
-"""The lifter: translates a leaf function (no calls) of DDDA.exe into
+"""The lifter: translates a function of DDDA.exe into
 literal Rust over ddnative::mem::Mem, instruction by instruction, with
 exact x86 semantics for the supported subset, and rejects anything else.
+A `call` (or outward tail jump) is supported when its target is itself
+lifted: lifted functions share the whole machine state (x86::Cpu), and
+`scan` repeats rounds until no further function lifts.
 Verified by run_sparse vectors (random registers, random memory on
 demand, every byte read and written recorded).
 
-    python lift.py scan [N]     # lift every non-platform leaf; patterns/lift.json
+    python lift.py scan [N]     # lift every non-platform function it can; patterns/lift.json
     python lift.py vectors      # record sparse vectors for each lifted function
     python lift.py gen          # crates/ddnative/src/generated/lifted*.rs + tests/lifted.rs
     python lift.py one ADDR     # print the Rust for one function
@@ -14,6 +17,7 @@ gen needs only the system Python. docs/NATIVE_PIPELINE.md, "The lifter".
 """
 import json
 import os
+import re
 import sqlite3
 import struct
 import sys
@@ -33,8 +37,21 @@ class Unsupported(Exception):
     pass
 
 
-def lift(addr, size):
-    """Rust function body for the function, or raise Unsupported."""
+SAVE = ("*cpu = Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
+        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st };")
+LOAD = ("Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
+        "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st } = std::mem::take(cpu);")
+CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})\(")
+
+
+def callees(arms):
+    """Lifted functions the arms call or tail-jump to."""
+    return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
+
+
+def lift(addr, size, callable=frozenset()):
+    """Rust match arms for the function, or raise Unsupported. `callable`
+    holds the lifted functions a `call` or an outward (tail) jump may go to."""
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
@@ -53,8 +70,10 @@ def lift(addr, size):
                 raise Unsupported("indirect jump")
             t = i.operands[0].imm
             if not (addr <= t < end):
-                raise Unsupported("jump out of the function")
-            leaders.add(t)
+                if t not in callable:
+                    raise Unsupported("jump out of the function")
+            else:
+                leaders.add(t)
             if k + 1 < len(ins):
                 leaders.add(ins[k + 1].address)
         if i.mnemonic in ("ret", "retn") and k + 1 < len(ins):
@@ -206,17 +225,36 @@ def lift(addr, size):
                 body.append(f"{{ let v = m.u32(esp); esp = esp.wrapping_add(4); {store(i, ops[0], 'v')} }}")
             elif mn in ("ret", "retn"):
                 extra = ops[0].imm if ops else 0
-                body.append(f"esp = esp.wrapping_add(4 + {extra}); return Exit {{ eax, ecx, edx, ebx, esp, ebp, esi, edi, xmm0: xmm0[0], st0: st.last().copied() }};")
+                body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
+                terminated = True
+                break
+            elif mn == "jmp" and not (addr <= ops[0].imm < end):
+                # tail call: the callee returns straight to our caller
+                body.append(f"{SAVE} super::lifted::f_{ops[0].imm:08x}(m, cpu); return;")
                 terminated = True
                 break
             elif mn == "jmp":
                 body.append(f"pc = 0x{ops[0].imm:X}; continue;")
                 terminated = True
                 break
+            elif mn.startswith("j") and not (addr <= ops[0].imm < end):
+                body.append(f"if fl.cond(\"{mn[1:]}\") {{ {SAVE} super::lifted::f_{ops[0].imm:08x}(m, cpu); return; }} "
+                            f"pc = 0x{nxt:X}; continue;")
+                terminated = True
+                break
             elif mn.startswith("j"):
                 body.append(f"pc = if fl.cond(\"{mn[1:]}\") {{ 0x{ops[0].imm:X} }} else {{ 0x{nxt:X} }}; continue;")
                 terminated = True
                 break
+            elif mn == "call":
+                if ops[0].type != X86_OP_IMM:
+                    raise Unsupported("icall")
+                t = ops[0].imm
+                if t not in callable:
+                    raise Unsupported("call")
+                # push the return address, run the callee on the whole state, carry on
+                body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{nxt:X}); "
+                            f"{SAVE} super::lifted::f_{t:08x}(m, cpu); {LOAD}")
             elif mn == "nop":
                 pass
             # ---- SSE
@@ -313,12 +351,10 @@ def rust_fn(addr, name, arms):
     return "\n".join([
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         "#[allow(unused_mut, unused_variables, unused_assignments, unreachable_code, clippy::all)]",
-        f"pub fn f_{addr:08x}(m: &mut dyn Mem, r: Entry) -> Exit {{",
-        "    let Entry { mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi, xmm0: x0in } = r;",
-        "    let (mut xmm0, mut xmm1, mut xmm2, mut xmm3) = ([x0in, 0, 0, 0], [0u32; 4], [0u32; 4], [0u32; 4]);",
-        "    let (mut xmm4, mut xmm5, mut xmm6, mut xmm7) = ([0u32; 4], [0u32; 4], [0u32; 4], [0u32; 4]);",
-        "    let mut fl = Flags::default();",
-        "    let mut st: Vec<u32> = Vec::new();",
+        f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",
+        "    let Cpu { mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi,",
+        "              xmm: [mut xmm0, mut xmm1, mut xmm2, mut xmm3, mut xmm4, mut xmm5, mut xmm6, mut xmm7],",
+        "              mut fl, mut st } = std::mem::take(cpu);",
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
         "        match pc {",
@@ -336,16 +372,35 @@ def scan(limit=None):
     rows = db.execute("SELECT address, namespace, name, size FROM functions WHERE NOT thunk "
                       "AND status NOT IN ('verified', 'platform') AND size BETWEEN 6 AND 600 "
                       "AND address < 0x012E0000 ORDER BY address").fetchall()
-    for a, ns, nm, sz in rows[:limit]:
-        try:
-            arms = lift(a, sz)
-            ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms})
-        except Unsupported as e:
-            why[str(e).split(" ")[0]] += 1
-        except Exception as e:  # noqa: BLE001
-            why["error:" + type(e).__name__] += 1
+    # functions the lifter already verifies stay in the list (their status is 'verified')
+    test = os.path.join(R, "crates/ddnative/tests/lifted.rs")
+    mine = {int(x, 16) for l in open(test) if l.startswith("// verifies") for x in l.split()[2:]}         if os.path.exists(test) else set()
+    rows += [r for r in db.execute("SELECT address, namespace, name, size FROM functions WHERE status='verified'")
+             if r[0] in mine]
+    rows.sort()
+    rows = rows[:limit]
+    # rounds: a function whose calls all go to functions lifted in an earlier
+    # round (or earlier in this one) lifts too; repeat until nothing changes
+    done, rnd = set(), 0
+    while True:
+        rnd += 1
+        why, before = Counter(), len(ok)
+        for a, ns, nm, sz in rows:
+            if a in done:
+                continue
+            try:
+                arms = lift(a, sz, done)
+                ok.append({"addr": a, "name": f"{ns}::{nm}", "size": sz, "arms": arms, "calls": callees(arms)})
+                done.add(a)
+            except Unsupported as e:
+                why[str(e).split(" ")[0]] += 1
+            except Exception as e:  # noqa: BLE001
+                why["error:" + type(e).__name__] += 1
+        print(f"round {rnd}: +{len(ok) - before}", flush=True)
+        if len(ok) == before:
+            break
     json.dump(ok, open(f"{N}/patterns/lift.json", "w"))
-    print(len(ok), "lifted of", len(rows[:limit]), "; top rejections:", why.most_common(14))
+    print(len(ok), "lifted of", len(rows), "; top rejections:", why.most_common(14))
 
 
 if __name__ == "__main__":
@@ -359,24 +414,57 @@ if __name__ == "__main__":
         print(rust_fn(a, f"{ns}::{nm}", lift(a, sz)))
 
 
-def vectors(per=3):
+def _vectors_for(args):
+    addr, per = args
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
+    out, got, seed = [], 0, 0
+    while got < per and seed < per * 8:
+        seed += 1
+        try:
+            r = h.run_sparse(addr, (addr << 8) ^ seed)
+        except h.Rejected:
+            continue
+        except Exception:  # noqa: BLE001  (emulator errors: no vector)
+            continue
+        out.append({"addr": addr, **r})
+        got += 1
+    return addr, out
+
+
+def vectors(per=3):
+    """Record vectors for every lifted function that has none yet (a vector
+    depends only on the original code and the seed, so earlier ones stay
+    valid), then drop functions without one and, transitively, their callers.
+    LIFT_WORKERS limits the worker processes (default: every core)."""
+    from multiprocessing import Pool
     lifted = json.load(open(f"{N}/patterns/lift.json"))
-    cases, failed = [], []
-    for f in lifted:
-        got, seed = 0, 0
-        while got < per and seed < per * 8:
-            seed += 1
-            try:
-                r = h.run_sparse(f["addr"], (f["addr"] << 8) ^ seed)
-            except h.Rejected:
-                continue
-            cases.append({"addr": f["addr"], **r})
-            got += 1
-        if got == 0:
-            failed.append(f["addr"])
+    path = f"{N}/vectors/lift.json"
+    old = json.load(open(path)) if os.path.exists(path) else []
+    want = {f["addr"] for f in lifted}
+    cases = [c for c in old if c["addr"] in want]
+    have = {c["addr"] for c in cases}
+    # functions that already failed to get a vector are not retried (each costs 8x the seeds)
+    nov_path = f"{N}/patterns/lift_novector.json"
+    novector = set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()
+    todo = [(f["addr"], per) for f in lifted if f["addr"] not in have and f["addr"] not in novector]
+    print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
+    failed = []
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count()))) as pool:
+        for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=8)):
+            cases += out
+            if not out:
+                failed.append(addr)
+            if n % 1000 == 999:
+                print(n + 1, "recorded", flush=True)
+    json.dump(sorted(novector | set(failed)), open(nov_path, "w"))
     keep = {c["addr"] for c in cases}
+    while True:  # a caller of a dropped function cannot be compiled
+        drop = {f["addr"] for f in lifted if f["addr"] in keep and not set(f.get("calls", [])) <= keep}
+        if not drop:
+            break
+        keep -= drop
+    cases = [c for c in cases if c["addr"] in keep]
     json.dump([f for f in lifted if f["addr"] in keep], open(f"{N}/patterns/lift.json", "w"))
     json.dump(cases, open(f"{N}/vectors/lift.json", "w"))
     print(len(cases), "cases over", len(keep), "functions;", len(failed), "without a usable vector (dropped)")
@@ -391,11 +479,12 @@ def gen(chunk=400):
         name = f"lifted_{k // chunk:03}"
         mods.append(name)
         L = ["//! Generated by research/native/lift.py: do not edit.",
-             "//! Leaf functions lifted instruction by instruction (docs/NATIVE_PIPELINE.md).",
-             "use crate::mem::Mem;", "use crate::x86::{self, Entry, Exit, Flags};", ""]
+             "//! Functions lifted instruction by instruction (docs/NATIVE_PIPELINE.md).",
+             "#![allow(warnings)] // literal x86 translation: redundant parens, self-moves",
+             "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
         for f in part:
             L.append(rust_fn(f["addr"], f["name"], f["arms"]))
-        L.append("pub const FUNCTIONS: &[(u32, fn(&mut dyn Mem, Entry) -> Exit)] = &[")
+        L.append(f"pub const FUNCTIONS_{k // chunk:03}: &[(u32, fn(&mut dyn Mem, &mut Cpu))] = &[")
         L += [f"    (0x{f['addr']:08X}, f_{f['addr']:08x})," for f in part]
         L += ["];", ""]
         open(os.path.join(out_dir, f"{name}.rs"), "w").write("\n".join(L))
@@ -403,9 +492,11 @@ def gen(chunk=400):
     mod = [l for l in mod if not l.startswith("pub mod lifted_")] + [f"pub mod {m};" for m in mods]
     mod += [] if any("pub fn lifted(" in l for l in mod) else []
     open(os.path.join(out_dir, "mod.rs"), "w").write("\n".join(mod) + "\n")
-    lookup = ("//! Generated by research/native/lift.py: do not edit.\nuse crate::mem::Mem;\nuse crate::x86::{Entry, Exit};\n\n"
-              "/// Every lifted function: (address, function).\npub fn all() -> Vec<(u32, fn(&mut dyn Mem, Entry) -> Exit)> {\n"
-              "    let mut v = Vec::new();\n" + "".join(f"    v.extend_from_slice(super::{m}::FUNCTIONS);\n" for m in mods)
+    # every function is reachable as super::lifted::f_xxxxxxxx (lifted calls use that path)
+    lookup = ("//! Generated by research/native/lift.py: do not edit.\nuse crate::mem::Mem;\nuse crate::x86::Cpu;\n\n"
+              + "".join(f"pub use super::{m}::*;\n" for m in mods)
+              + "\n/// Every lifted function: (address, function).\npub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> {\n"
+              "    let mut v = Vec::new();\n" + "".join(f"    v.extend_from_slice(super::{m}::FUNCTIONS_{m[-3:]});\n" for m in mods)
               + "    v\n}\n")
     open(os.path.join(out_dir, "lifted.rs"), "w").write(lookup)
     if "pub mod lifted;" not in open(os.path.join(out_dir, "mod.rs")).read():
@@ -416,7 +507,7 @@ def gen(chunk=400):
     test = f'''//! Generated by research/native/lift.py: do not edit.
 use ddnative::generated::lifted;
 use ddnative::mem::Sparse;
-use ddnative::x86::Entry;
+use ddnative::x86::{{Cpu, Entry}};
 use serde_json::Value;
 
 fn vectors(name: &str) -> Option<Vec<Value>> {{
@@ -450,7 +541,11 @@ fn every_lifted_function_matches_the_original() {{
         let ri = &c["regs_in"];
         let entry = Entry {{ eax: u(&ri["eax"]), ecx: u(&ri["ecx"]), edx: u(&ri["edx"]), ebx: u(&ri["ebx"]),
             esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0 }};
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut m, entry)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
+            let mut cpu = Cpu::from(entry);
+            f(&mut m, &mut cpu);
+            cpu.exit()
+        }}));
         let ok = match result {{
             Err(_) => false,
             Ok(x) => {{

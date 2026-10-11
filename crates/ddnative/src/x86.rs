@@ -44,6 +44,36 @@ pub struct Exit {
     pub st0: Option<u32>,
 }
 
+/// The whole machine state a lifted function runs on. Lifted functions
+/// take it by `&mut` so a lifted `call` hands the callee exactly what the
+/// original would see (every register, all of xmm0-7, flags, x87 stack)
+/// and the caller continues from whatever the callee leaves.
+#[derive(Debug, Clone, Default)]
+pub struct Cpu {
+    pub eax: u32, pub ecx: u32, pub edx: u32, pub ebx: u32,
+    pub esp: u32, pub ebp: u32, pub esi: u32, pub edi: u32,
+    pub xmm: [[u32; 4]; 8],
+    pub fl: Flags,
+    /// x87 stack as single-precision bits, top last.
+    pub st: Vec<u32>,
+}
+
+impl From<Entry> for Cpu {
+    fn from(r: Entry) -> Cpu {
+        let mut xmm = [[0u32; 4]; 8];
+        xmm[0][0] = r.xmm0;
+        Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
+              xmm, fl: Flags::default(), st: Vec::new() }
+    }
+}
+
+impl Cpu {
+    pub fn exit(&self) -> Exit {
+        Exit { eax: self.eax, ecx: self.ecx, edx: self.edx, ebx: self.ebx, esp: self.esp, ebp: self.ebp,
+               esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.last().copied() }
+    }
+}
+
 impl Flags {
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }
