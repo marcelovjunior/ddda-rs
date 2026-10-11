@@ -1,0 +1,698 @@
+//! The oracle: renders the same graph on the host's XAudio2 2.9
+//! (`xaudio2_9.dll`, shipped with Windows 10+) and on `ddaudio`, and
+//! compares the mastering voice's input sample by sample.
+//!
+//! The host's mix is captured by a pass-through XAPO on the mastering
+//! voice. It records each pass and then silences it, so nothing plays on
+//! the speakers. The host renders in real time, so these tests need an
+//! audio output device and take about a second each; they are ignored by
+//! default:
+//!
+//!     cargo test -p ddaudio --test oracle -- --ignored --nocapture
+//!
+//! The game runs XAudio2 2.7; where 2.9 may differ is recorded in the L19
+//! brief.
+#![cfg(windows)]
+#![allow(non_snake_case)]
+
+use ddaudio::format::Format;
+use ddaudio::mixer::{Kind, Mixer, NoGuestEffects, Node, Send};
+use std::sync::{Arc, Mutex};
+use windows::core::{implement, Interface, BOOL, GUID, PCWSTR};
+use windows::Win32::Media::Audio::XAudio2::*;
+use windows::Win32::Media::Audio::{AudioCategory_GameEffects, WAVEFORMATEX};
+use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemAlloc, COINIT_MULTITHREADED};
+
+const RATE: u32 = 48000;
+const PASS: usize = 480;
+
+// ---------------------------------------------------------------------
+// Capture XAPO
+
+#[implement(IXAPO)]
+struct Capture {
+    data: Arc<Mutex<Vec<f32>>>,
+    channels: Mutex<u32>,
+}
+
+impl IXAPO_Impl for Capture_Impl {
+    fn GetRegistrationProperties(&self) -> windows::core::Result<*mut XAPO_REGISTRATION_PROPERTIES> {
+        unsafe {
+            let p = CoTaskMemAlloc(size_of::<XAPO_REGISTRATION_PROPERTIES>())
+                as *mut XAPO_REGISTRATION_PROPERTIES;
+            let mut r = XAPO_REGISTRATION_PROPERTIES::default();
+            r.clsid = GUID::from_u128(0x6ddaa0d1_0000_4000_8000_000000000019);
+            r.MajorVersion = 1;
+            r.Flags = XAPO_FLAG_CHANNELS_MUST_MATCH
+                | XAPO_FLAG_FRAMERATE_MUST_MATCH
+                | XAPO_FLAG_BITSPERSAMPLE_MUST_MATCH
+                | XAPO_FLAG_BUFFERCOUNT_MUST_MATCH
+                | XAPO_FLAG_INPLACE_REQUIRED
+                | XAPO_FLAG_INPLACE_SUPPORTED;
+            r.MinInputBufferCount = 1;
+            r.MaxInputBufferCount = 1;
+            r.MinOutputBufferCount = 1;
+            r.MaxOutputBufferCount = 1;
+            p.write_unaligned(r);
+            Ok(p)
+        }
+    }
+    fn IsInputFormatSupported(
+        &self,
+        _: *const WAVEFORMATEX,
+        _: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::Result<()> {
+        if !pp.is_null() {
+            unsafe { *pp = std::ptr::null_mut() };
+        }
+        Ok(())
+    }
+    fn IsOutputFormatSupported(
+        &self,
+        _: *const WAVEFORMATEX,
+        _: *const WAVEFORMATEX,
+        pp: *mut *mut WAVEFORMATEX,
+    ) -> windows::core::Result<()> {
+        if !pp.is_null() {
+            unsafe { *pp = std::ptr::null_mut() };
+        }
+        Ok(())
+    }
+    fn Initialize(&self, _: *const core::ffi::c_void, _: u32) -> windows::core::Result<()> {
+        Ok(())
+    }
+    fn Reset(&self) {}
+    fn LockForProcess(
+        &self,
+        _: u32,
+        input: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+        _: u32,
+        _: *const XAPO_LOCKFORPROCESS_PARAMETERS,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            let f = (*input).pFormat;
+            *self.channels.lock().unwrap() = std::ptr::addr_of!((*f).nChannels).read_unaligned() as u32;
+        }
+        Ok(())
+    }
+    fn UnlockForProcess(&self) {}
+    fn Process(
+        &self,
+        _: u32,
+        input: *const XAPO_PROCESS_BUFFER_PARAMETERS,
+        _: u32,
+        output: *mut XAPO_PROCESS_BUFFER_PARAMETERS,
+        _: BOOL,
+    ) {
+        unsafe {
+            let p = input.read_unaligned();
+            let n = p.ValidFrameCount as usize * *self.channels.lock().unwrap() as usize;
+            let buf = std::slice::from_raw_parts_mut(p.pBuffer as *mut f32, n);
+            let mut d = self.data.lock().unwrap();
+            let flags = p.BufferFlags;
+            if flags == XAPO_BUFFER_VALID {
+                d.extend_from_slice(buf);
+            } else {
+                d.extend(std::iter::repeat_n(0.0, n));
+            }
+            buf.fill(0.0);
+            let mut o = output.read_unaligned();
+            o.BufferFlags = XAPO_BUFFER_SILENT;
+            o.ValidFrameCount = p.ValidFrameCount;
+            output.write_unaligned(o);
+        }
+    }
+    fn CalcInputFrames(&self, n: u32) -> u32 {
+        n
+    }
+    fn CalcOutputFrames(&self, n: u32) -> u32 {
+        n
+    }
+}
+
+// ---------------------------------------------------------------------
+// Graph description shared by both renderers
+
+#[derive(Clone)]
+enum Dest {
+    Master,
+    Submix(usize),
+}
+
+#[derive(Clone)]
+struct SubmixSpec {
+    channels: u32,
+    stage: u32,
+    dest: Dest,
+    matrix: Option<Vec<f32>>,
+    volume: f32,
+}
+
+#[derive(Clone)]
+struct SourceSpec {
+    format_bytes: Vec<u8>,
+    data: Vec<u8>,
+    ratio: f32,
+    dests: Vec<(Dest, Option<Vec<f32>>)>,
+    volume: f32,
+    channel_volumes: Vec<f32>,
+}
+
+#[derive(Clone)]
+struct Graph {
+    master_channels: u32,
+    submixes: Vec<SubmixSpec>,
+    sources: Vec<SourceSpec>,
+}
+
+fn wave(format: &Format) -> Vec<u8> {
+    let mut b = vec![];
+    b.extend((format.tag).to_le_bytes());
+    b.extend((format.channels as u16).to_le_bytes());
+    b.extend(format.rate.to_le_bytes());
+    b.extend((format.rate * format.block_align).to_le_bytes());
+    b.extend((format.block_align as u16).to_le_bytes());
+    b.extend((format.bits as u16).to_le_bytes());
+    b.extend(0u16.to_le_bytes());
+    b
+}
+
+// ---------------------------------------------------------------------
+// Host renderer
+
+type CreateFn =
+    unsafe extern "system" fn(*mut *mut core::ffi::c_void, u32, u32, u32) -> windows::core::HRESULT;
+
+fn xaudio2_9() -> CreateFn {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    unsafe {
+        let lib = LoadLibraryW(windows::core::w!("xaudio2_9.dll")).expect("xaudio2_9.dll");
+        let f = GetProcAddress(lib, windows::core::s!("XAudio2CreateWithVersionInfo"))
+            .expect("XAudio2CreateWithVersionInfo");
+        std::mem::transmute(f)
+    }
+}
+
+fn as_voice<T: Interface>(v: &T) -> IXAudio2Voice {
+    unsafe { IXAudio2Voice::from_raw(v.as_raw()) }
+}
+
+fn host_render(g: &Graph, passes: usize) -> Vec<f32> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let mut raw = std::ptr::null_mut();
+        // NTDDI_WIN10 = 0x0A000000
+        xaudio2_9()(&mut raw, 0, 1, 0x0A00_0000)
+            .ok()
+            .expect("XAudio2 2.9");
+        let xa = IXAudio2::from_raw(raw);
+        xa.StopEngine();
+        let data = Arc::new(Mutex::new(Vec::new()));
+        let capture: IXAPO = Capture {
+            data: data.clone(),
+            channels: Mutex::new(0),
+        }
+        .into();
+        let unknown: windows::core::IUnknown = capture.cast().unwrap();
+        let mut fx = [XAUDIO2_EFFECT_DESCRIPTOR {
+            pEffect: std::mem::ManuallyDrop::new(Some(unknown.clone())),
+            InitialState: true.into(),
+            OutputChannels: g.master_channels,
+        }];
+        let chain = XAUDIO2_EFFECT_CHAIN {
+            EffectCount: 1,
+            pEffectDescriptors: fx.as_mut_ptr(),
+        };
+        let mut master = None;
+        xa.CreateMasteringVoice(
+            &mut master,
+            g.master_channels,
+            RATE,
+            0,
+            PCWSTR::null(),
+            Some(&chain),
+            AudioCategory_GameEffects,
+        )
+        .expect("a mastering voice (needs an audio output device)");
+        let master = master.unwrap();
+        let master_v = as_voice(&master);
+        let mut subs: Vec<IXAudio2Voice> = vec![];
+        let dest_voice = |d: &Dest, subs: &[IXAudio2Voice]| match d {
+            Dest::Master => master_v.clone(),
+            Dest::Submix(i) => subs[*i].clone(),
+        };
+        for s in &g.submixes {
+            let mut sends = [XAUDIO2_SEND_DESCRIPTOR {
+                Flags: 0,
+                pOutputVoice: std::mem::ManuallyDrop::new(Some(dest_voice(&s.dest, &subs))),
+            }];
+            let list = XAUDIO2_VOICE_SENDS {
+                SendCount: 1,
+                pSends: sends.as_mut_ptr(),
+            };
+            let mut v = None;
+            xa.CreateSubmixVoice(&mut v, s.channels, RATE, 0, s.stage, Some(&list), None)
+                .unwrap();
+            let v = as_voice(&v.unwrap());
+            let d = dest_voice(&s.dest, &subs);
+            if let Some(m) = &s.matrix {
+                let dc = m.len() as u32 / s.channels;
+                v.SetOutputMatrix(&d, s.channels, dc, m.as_ptr(), 0).unwrap();
+            }
+            v.SetVolume(s.volume, 0).unwrap();
+            subs.push(v);
+        }
+        let mut sources = vec![];
+        for s in &g.sources {
+            let format = Format::parse(&s.format_bytes).unwrap();
+            let mut sends: Vec<XAUDIO2_SEND_DESCRIPTOR> = s
+                .dests
+                .iter()
+                .map(|(d, _)| XAUDIO2_SEND_DESCRIPTOR {
+                    Flags: 0,
+                    pOutputVoice: std::mem::ManuallyDrop::new(Some(dest_voice(d, &subs))),
+                })
+                .collect();
+            let list = XAUDIO2_VOICE_SENDS {
+                SendCount: sends.len() as u32,
+                pSends: sends.as_mut_ptr(),
+            };
+            let mut v = None;
+            xa.CreateSourceVoice(
+                &mut v,
+                s.format_bytes.as_ptr() as *const WAVEFORMATEX,
+                0,
+                4.0,
+                None::<&IXAudio2VoiceCallback>,
+                Some(&list),
+                None,
+            )
+            .unwrap();
+            let v = v.unwrap();
+            let vv = as_voice(&v);
+            for (d, m) in &s.dests {
+                if let Some(m) = m {
+                    let dc = m.len() as u32 / format.channels;
+                    vv.SetOutputMatrix(&dest_voice(d, &subs), format.channels, dc, m.as_ptr(), 0)
+                        .unwrap();
+                }
+            }
+            vv.SetVolume(s.volume, 0).unwrap();
+            if !s.channel_volumes.is_empty() {
+                vv.SetChannelVolumes(&s.channel_volumes, 0).unwrap();
+            }
+            v.SetFrequencyRatio(s.ratio, 0).unwrap();
+            let buffer = XAUDIO2_BUFFER {
+                Flags: XAUDIO2_END_OF_STREAM,
+                AudioBytes: s.data.len() as u32,
+                pAudioData: s.data.as_ptr(),
+                ..Default::default()
+            };
+            v.SubmitSourceBuffer(&buffer, None).unwrap();
+            v.Start(0, 0).unwrap();
+            sources.push(v);
+        }
+        data.lock().unwrap().clear();
+        xa.StartEngine().unwrap();
+        let want = passes * PASS * g.master_channels as usize;
+        while data.lock().unwrap().len() < want {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        xa.StopEngine();
+        for v in sources {
+            v.DestroyVoice();
+        }
+        for v in subs.into_iter().rev() {
+            v.DestroyVoice();
+        }
+        master.DestroyVoice();
+        drop(xa);
+        let mut d = data.lock().unwrap().clone();
+        d.truncate(want);
+        d
+    }
+}
+
+// ---------------------------------------------------------------------
+// ddaudio renderer, fed the way ddruntime's clock consumes buffers:
+// floor(fraction + rate * ratio / 100) frames per pass.
+
+fn mixer_render(g: &Graph, passes: usize) -> Vec<f32> {
+    let mut mixer = Mixer::new();
+    let master = 1u32;
+    let sub_id = |i: usize| 100 + i as u32;
+    let src_id = |i: usize| 1000 + i as u32;
+    let dest_id = |d: &Dest| match d {
+        Dest::Master => master,
+        Dest::Submix(i) => sub_id(*i),
+    };
+    let formats: Vec<Format> = g
+        .sources
+        .iter()
+        .map(|s| Format::parse(&s.format_bytes).unwrap())
+        .collect();
+    let mut cursor = vec![0u64; g.sources.len()];
+    let mut fraction = vec![0f64; g.sources.len()];
+    let mut out = vec![];
+    for _ in 0..passes {
+        for (i, s) in g.sources.iter().enumerate() {
+            let f = &formats[i];
+            let x = fraction[i] + f.rate as f64 * s.ratio as f64 / 100.0;
+            fraction[i] = x.fract();
+            let total = f.frames(s.data.len() as u64);
+            let n = (x.floor() as u64).min(total - cursor[i]);
+            let mut frames = vec![];
+            f.decode(&s.data, cursor[i], n, &mut frames);
+            cursor[i] += n;
+            mixer.feed(src_id(i), f.channels, &frames);
+        }
+        let mut nodes = vec![Node {
+            id: master,
+            kind: Kind::Mastering,
+            channels: g.master_channels,
+            rate: RATE,
+            stage: 0,
+            running: true,
+            ratio: 1.0,
+            volume: 1.0,
+            channel_volumes: &[],
+            effects: vec![],
+            sends: vec![],
+        }];
+        for (i, s) in g.submixes.iter().enumerate() {
+            nodes.push(Node {
+                id: sub_id(i),
+                kind: Kind::Submix,
+                channels: s.channels,
+                rate: RATE,
+                stage: s.stage,
+                running: true,
+                ratio: 1.0,
+                volume: s.volume,
+                channel_volumes: &[],
+                effects: vec![],
+                sends: vec![Send {
+                    dest: dest_id(&s.dest),
+                    matrix: s.matrix.as_deref(),
+                }],
+            });
+        }
+        for (i, s) in g.sources.iter().enumerate() {
+            nodes.push(Node {
+                id: src_id(i),
+                kind: Kind::Source,
+                channels: formats[i].channels,
+                rate: formats[i].rate,
+                stage: 0,
+                running: true,
+                ratio: s.ratio,
+                volume: s.volume,
+                channel_volumes: &s.channel_volumes,
+                effects: vec![],
+                sends: s
+                    .dests
+                    .iter()
+                    .map(|(d, m)| Send {
+                        dest: dest_id(d),
+                        matrix: m.as_deref(),
+                    })
+                    .collect(),
+            });
+        }
+        out.extend(mixer.render(&nodes, &mut NoGuestEffects).unwrap());
+    }
+    out
+}
+
+// ---------------------------------------------------------------------
+// Signals and comparison
+
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 33) as u32
+    }
+}
+
+fn pcm16_signal(channels: u32, frames: usize, seed: u64) -> Vec<u8> {
+    let mut r = Lcg(seed);
+    let mut b = vec![];
+    for i in 0..frames {
+        for c in 0..channels {
+            let t = i as f64 / RATE as f64;
+            let tone = (2.0 * std::f64::consts::PI * (220.0 * (c + 1) as f64) * t).sin() * 12000.0;
+            let noise = (r.next() % 8000) as f64 - 4000.0;
+            b.extend(((tone + noise) as i16).to_le_bytes());
+        }
+    }
+    b
+}
+
+/// A tone-plus-noise signal encoded as mono MS ADPCM blocks (70 bytes,
+/// 128 samples) with the standard coefficients: a greedy encoder picks the
+/// coefficient pair with the smallest first-step error and, per sample, the
+/// nibble closest to the target. Bounded step sizes, like real encoder output.
+fn adpcm_signal(blocks: usize, seed: u64) -> Vec<u8> {
+    const ADAPTATION: [i32; 16] = [
+        230, 230, 230, 230, 307, 409, 512, 614, 768, 614, 512, 409, 307, 230, 230, 230,
+    ];
+    const COEF: [(i32, i32); 7] = [
+        (256, 0),
+        (512, -256),
+        (0, 0),
+        (192, 64),
+        (240, 0),
+        (460, -208),
+        (392, -232),
+    ];
+    let mut r = Lcg(seed);
+    let pcm: Vec<i32> = (0..blocks * 128)
+        .map(|i| {
+            let t = i as f64 / RATE as f64;
+            ((2.0 * std::f64::consts::PI * 330.0 * t).sin() * 9000.0 + (r.next() % 6000) as f64 - 3000.0)
+                as i32
+        })
+        .collect();
+    let mut b = vec![];
+    for blk in pcm.chunks(128) {
+        let encode = |p: usize, out: &mut Vec<u8>| -> i64 {
+            let (c1, c2) = COEF[p];
+            let mut delta = 16.max((blk[2] - blk[1]).abs() / 4);
+            out.push(p as u8);
+            out.extend((delta as i16).to_le_bytes());
+            out.extend((blk[1] as i16).to_le_bytes());
+            out.extend((blk[0] as i16).to_le_bytes());
+            let (mut s1, mut s2, mut err) = (blk[1], blk[0], 0i64);
+            let mut nibbles = vec![];
+            for &x in &blk[2..] {
+                let predict = (s1 * c1 + s2 * c2) >> 8;
+                let n = ((x - predict) as f64 / delta as f64).round().clamp(-8.0, 7.0) as i32;
+                let sample = (predict + n * delta).clamp(-32768, 32767);
+                err += ((x - sample) as i64).pow(2);
+                s2 = s1;
+                s1 = sample;
+                delta = ((ADAPTATION[(n & 15) as usize] * delta) >> 8).max(16);
+                nibbles.push((n & 15) as u8);
+            }
+            for pair in nibbles.chunks(2) {
+                out.push(pair[0] << 4 | pair[1]);
+            }
+            err
+        };
+        let best = (0..7).min_by_key(|&p| encode(p, &mut vec![])).unwrap();
+        encode(best, &mut b);
+    }
+    b
+}
+
+fn game_adpcm_format() -> Vec<u8> {
+    // The ADPCMWAVEFORMAT 0x00DCE1F0 builds on its stack.
+    let mut b = vec![];
+    for w in [2u16, 1] {
+        b.extend(w.to_le_bytes());
+    }
+    b.extend(48000u32.to_le_bytes());
+    b.extend(0x668au32.to_le_bytes());
+    for w in [70u16, 4, 32, 128, 7] {
+        b.extend(w.to_le_bytes());
+    }
+    for (a, c) in [
+        (256, 0),
+        (512, -256),
+        (0, 0),
+        (192, 64),
+        (240, 0),
+        (460, -208),
+        (392, -232),
+    ] {
+        b.extend((a as i16).to_le_bytes());
+        b.extend((c as i16).to_le_bytes());
+    }
+    b
+}
+
+struct Compare {
+    lag: isize,
+    max_error: f32,
+    ser_db: f64,
+}
+
+/// Best alignment of `ours` against `host` within +-8 frames (`ours`
+/// delayed by `lag` frames), its maximum absolute error and its
+/// signal-to-error ratio, over the frames both cover.
+fn compare(host: &[f32], ours: &[f32], channels: usize) -> Compare {
+    let frames = host.len() / channels;
+    let mut best = Compare {
+        lag: 0,
+        max_error: f32::MAX,
+        ser_db: f64::MIN,
+    };
+    for lag in -8isize..=8 {
+        let (mut sig, mut err, mut max) = (0f64, 0f64, 0f32);
+        for f in 16..frames - 16 {
+            let g = f as isize + lag;
+            for c in 0..channels {
+                let h = host[f * channels + c];
+                let o = ours[g as usize * channels + c];
+                sig += (h as f64).powi(2);
+                err += ((h - o) as f64).powi(2);
+                max = max.max((h - o).abs());
+            }
+        }
+        let ser = 10.0 * (sig / err.max(1e-30)).log10();
+        if ser > best.ser_db {
+            best = Compare {
+                lag,
+                max_error: max,
+                ser_db: ser,
+            };
+        }
+    }
+    best
+}
+
+fn run(name: &str, g: &Graph, passes: usize) -> Compare {
+    let host = host_render(g, passes);
+    let ours = mixer_render(g, passes);
+    let energy: f64 = host.iter().map(|x| (*x as f64).powi(2)).sum();
+    assert!(energy > 1.0, "{name}: the host rendered silence");
+    let c = compare(&host, &ours, g.master_channels as usize);
+    println!(
+        "{name}: lag {} frames, max |error| {:e}, SER {:.1} dB",
+        c.lag, c.max_error, c.ser_db
+    );
+    c
+}
+
+fn mono_source(
+    format: Vec<u8>,
+    data: Vec<u8>,
+    ratio: f32,
+    dest: Dest,
+    matrix: Option<Vec<f32>>,
+) -> SourceSpec {
+    SourceSpec {
+        format_bytes: format,
+        data,
+        ratio,
+        dests: vec![(dest, matrix)],
+        volume: 1.0,
+        channel_volumes: vec![],
+    }
+}
+
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn pcm16_unit_ratio_is_exact() {
+    let g = Graph {
+        master_channels: 2,
+        submixes: vec![],
+        sources: vec![mono_source(
+            wave(&Format::pcm16(1, RATE)),
+            pcm16_signal(1, 48000, 1),
+            1.0,
+            Dest::Master,
+            Some(vec![1.0, 1.0]),
+        )],
+    };
+    let c = run("pcm16 mono, ratio 1", &g, 60);
+    assert_eq!((c.lag, c.max_error), (0, 0.0));
+}
+
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn adpcm_unit_ratio_is_exact() {
+    let g = Graph {
+        master_channels: 2,
+        submixes: vec![],
+        sources: vec![mono_source(
+            game_adpcm_format(),
+            adpcm_signal(300, 2),
+            1.0,
+            Dest::Master,
+            Some(vec![1.0, 0.0]),
+        )],
+    };
+    let c = run("game MS ADPCM, ratio 1", &g, 60);
+    assert_eq!((c.lag, c.max_error), (0, 0.0));
+}
+
+/// Random nibbles drive the step size past 32 bits; the host wraps it
+/// (two's complement), which only `wrapping_mul` on i32 reproduces.
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn adpcm_step_overflow_matches_the_host() {
+    let mut r = Lcg(9);
+    let mut data = vec![];
+    for _ in 0..300 {
+        data.push((r.next() % 7) as u8);
+        data.extend((16 + (r.next() % 600) as i16).to_le_bytes());
+        data.extend(((r.next() % 20000) as i16 - 10000).to_le_bytes());
+        data.extend(((r.next() % 20000) as i16 - 10000).to_le_bytes());
+        for _ in 0..63 {
+            data.push(r.next() as u8);
+        }
+    }
+    let g = Graph {
+        master_channels: 2,
+        submixes: vec![],
+        sources: vec![mono_source(
+            game_adpcm_format(),
+            data,
+            1.0,
+            Dest::Master,
+            Some(vec![1.0, 0.0]),
+        )],
+    };
+    let c = run("MS ADPCM, overflowing step sizes", &g, 60);
+    assert_eq!((c.lag, c.max_error), (0, 0.0));
+}
+
+/// XAudio2's resampler is undocumented; the brief allowed a tolerance, but
+/// 2.9's turns out to be linear interpolation that ddaudio reproduces
+/// bit for bit (frequency ratios as SetFrequencyRatio at 0x00DC6D8F sets
+/// them, up to the game's maximum of 2).
+#[test]
+#[ignore = "needs the host's XAudio2 2.9 and an audio output device"]
+fn resampling_matches_the_host() {
+    for ratio in [0.5f32, 0.75, 0.9439, 1.0595, 1.5, 2.0] {
+        let g = Graph {
+            master_channels: 2,
+            submixes: vec![],
+            sources: vec![mono_source(
+                wave(&Format::pcm16(1, RATE)),
+                pcm16_signal(1, 96000, 3),
+                ratio,
+                Dest::Master,
+                Some(vec![1.0, 1.0]),
+            )],
+        };
+        let c = run(&format!("pcm16 mono, ratio {ratio}"), &g, 40);
+        assert_eq!((c.lag, c.max_error), (0, 0.0), "ratio {ratio}");
+    }
+}
