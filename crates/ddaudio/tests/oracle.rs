@@ -1438,3 +1438,31 @@ fn reverb_dry_path_is_exact() {
     let c = run("reverb, wet/dry 0", &impulse_graph(default_reverb(0.0)), 50);
     assert_eq!((c.lag, c.max_error), (0, 0.0));
 }
+
+/// The reverb: ddaudio hosts the platform's AudioReverb (2.7 here) and must
+/// reproduce what XAudio2 2.7 does with the same effect in a mono submix,
+/// as the game's reverb submixes are (0x00DCE600: 1 channel in and out).
+#[test]
+#[ignore = "needs the host's XAudio2 2.7 and an audio output device"]
+fn reverb_matches_the_host() {
+    assert_eq!(ddaudio::reverb::Reverb::new(RATE, 1, 1).host_version(), Some(7));
+    // The SDK defaults, and a set as ReverbConvertI3DL2ToNative (0x00DC5C70)
+    // writes it: positions 6/6/27/27, rear delay 5, room size 100.
+    let i3dl2 = reverb_params(
+        100.0,
+        20,
+        30,
+        [5, 6, 6, 27, 27, 15, 15, 8, 4, 8, 6],
+        [5000.0, -10.0, -3.0, -6.0, -2.0, 1.5, 100.0, 100.0],
+    );
+    for (name, p) in [("defaults", default_reverb(100.0)), ("I3DL2-converted", i3dl2)] {
+        let c = run_on(&format!("reverb {name}, impulse"), &impulse_graph(p.clone()), 150, &[7]);
+        assert_eq!(c.lag, 0);
+        assert!(c.max_error <= 1e-6, "{}", c.max_error);
+        let mut g = impulse_graph(p);
+        g.sources[0].data = pcm16_signal(1, 48000, 41);
+        let c = run_on(&format!("reverb {name}, noise"), &g, 100, &[7]);
+        assert_eq!(c.lag, 0);
+        assert!(c.max_error <= 1e-6, "{}", c.max_error);
+    }
+}

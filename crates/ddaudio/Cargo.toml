@@ -8,7 +8,11 @@ publish.workspace = true
 
 [dependencies]
 
-[target.'cfg(windows)'.dev-dependencies]
-# The oracle (tests/oracle.rs) renders the same graphs on the host's XAudio2 2.9.
+[target.'cfg(windows)'.dependencies]
+# The platform's AudioReverb XAPO (src/reverb.rs).
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_Media_Audio_XAudio2", "Win32_System_Com", "Win32_System_LibraryLoader"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# The oracle (tests/oracle.rs) renders the same graphs on the host's
+# XAudio2 2.7 and 2.9; its COM interface macros need windows-core by name.
 windows-core = "0.62.2"

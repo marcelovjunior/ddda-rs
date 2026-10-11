@@ -293,9 +293,7 @@ impl Mixer {
                             .entry(index)
                             .or_insert_with(|| Reverb::new(rate, channels, e.channels));
                         r.set_parameters(params);
-                        let out = r.process(&samples, frames, e.enabled);
-                        samples = out;
-                        valid = true;
+                        (samples, valid) = r.process(&samples, frames, valid, e.enabled);
                     }
                 }
                 if channels != e.channels && samples.len() != (e.channels * frames) as usize {

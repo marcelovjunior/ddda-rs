@@ -2740,6 +2740,8 @@ dependencies = [
 name = "ddplay"
 version = "0.1.0"
 dependencies = [
+ "cpal",
+ "ddaudio",
  "ddgpu",
  "ddruntime",
  "wgpu",
@@ -2791,6 +2793,7 @@ version = "0.1.0"
 dependencies = [
  "d3d9cmd",
  "d3d9shader",
+ "ddaudio",
  "ddexe",
  "ddnative",
  "ddnative-base",
