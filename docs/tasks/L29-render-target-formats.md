@@ -64,7 +64,7 @@ multisample type and quality from the table at 0x01440450 when the
 texture is the multisampled kind (the antialiasing option).
 
 **Formats the renderer creates as render targets** (from the 198 calls of
-the wrappers in the 42 caller functions that resolve by address, of 47; the five named ones (a ctor, vf10, vf19, vf21, vf22) were not read; MT code → D3DFMT through 0x01440698):
+the wrappers in 42 caller functions, plus 44 calls in the named ones (ctors, vf10, vf19, vf21, vf22), which add no other format; MT code → D3DFMT through 0x01440698):
 - **A8R8G8B8** (MT 0x27, or 0x28 when sRender+0x31, the sRGB option, is
   set; same D3DFMT): G-buffer, LightMask/AmbientMask, DSFBuffer, the
   water depth map, SSAO normals and temps, mirror, distortion, heightmap,
