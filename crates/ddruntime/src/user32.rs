@@ -136,6 +136,15 @@ pub fn post(msg: Msg) {
     desk(|d| d.queue.push_back(msg));
 }
 
+pub(crate) fn input_client_point(hwnd: u32, x: i32, y: i32) -> (i32, i32) {
+    let (ox, oy) = window(hwnd).map(|w| client_origin(&w)).unwrap_or((0, 0));
+    (x.wrapping_sub(ox), y.wrapping_sub(oy))
+}
+
+pub(crate) fn input_cursor(x: i32, y: i32) {
+    desk(|d| d.cursor = (x, y));
+}
+
 /// Whether PostQuitMessage was called, with its exit code.
 pub fn quit_code() -> Option<u32> {
     desk(|d| d.quit)
@@ -521,6 +530,7 @@ pub fn send_message(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// WM_QUIT once the queue is empty after PostQuitMessage; then WM_PAINT for
 /// an invalid visible window (Windows synthesises it last). FALSE if none.
 pub fn peek_message(m: &mut dyn Mem, cpu: &mut Cpu) {
+    crate::input::pump(m, cpu);
     let (out, hwnd, min, max, flags) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let in_range = |msg: u32| (min == 0 && max == 0) || (min..=max).contains(&msg);
     let remove = flags & PM_REMOVE != 0;
@@ -548,6 +558,7 @@ pub fn peek_message(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     cpu.eax = match found {
         Some(msg) => {
+            if remove { crate::input::message_removed(msg); }
             let (cx, cy) = desk(|d| d.cursor);
             for (k, v) in [msg.hwnd, msg.message, msg.wparam, msg.lparam, crate::services::runtime_clock().as_millis() as u32, cx as u32, cy as u32].into_iter().enumerate() {
                 m.set_u32(out + 4 * k as u32, v);

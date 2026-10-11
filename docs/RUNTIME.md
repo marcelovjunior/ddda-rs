@@ -597,7 +597,9 @@ module; behaviour choices are labelled in the code.
 | D3D9 shader bytecode (SM2/SM3) decoder and disassembler: all 29,198 distinct shaders of the 76 shader packages print exactly like Microsoft's D3DDisassemble (`DDDA_ALL_SHADERS=1 cargo test -p d3d9shader`); the base for translating the game's shaders to the GPU backend | `crates/d3d9shader` | done, tested |
 | D3D9 reference execution: any shader run on the host's real D3D9 driver with chosen constants, inputs and textures (pixel shaders on 1x1 float targets; vertex shaders by capturing every output through a point and pass-through pixel shaders) | `crates/d3d9ref` | done, tested |
 | Shader translation to WGSL: literal per-instruction translation of vs_3_0/ps_3_0 with D3D9's multiplication rule (0 * anything = 0, NaN kept; zero tested on the bits); pixel shaders checked against the driver (600/600 of root/Stage100 plus Title; full sweep running); vertex shaders in progress | `crates/d3d9wgsl` | pixel: tested; vertex: started |
-| SEH (`fs:`), D3D9 resources and drawing (wgpu), audio and input (brief L16), delay imports | | not started |
+| Headless input: USER32 keys/hooks/settings/raw-device queries, DirectInput 8A mouse/keyboard profile, XInput 1.3 four-port state/rumble and host event channel (`0x00DF43E0`, `0x00DFA0C0`, `0x00E05120`) | `input.rs` | implemented, contract tested; physical devices / legacy joystick FF not implemented |
+| XAudio2 2.7 engine, source/submix/master voice ABI and AudioReverb identity (`0x00DCE0E0`, `0x00DCE600`); clocked silent graph, buffer completion/loop/stream callbacks on a guest audio thread, XAPO parameter callbacks and bounded output channel | `audio.rs` | implemented, contract tested; no audible DSP or original-game audio comparison; [census and limits](tasks/L16-input-audio-services.md#results) |
+| SEH (`fs:`), D3D9 resources and drawing (wgpu), delay imports | | not started |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry
