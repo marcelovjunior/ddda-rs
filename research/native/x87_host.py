@@ -165,3 +165,89 @@ def initial_state(control=0x037F):
     state = bytearray(108)
     struct.pack_into("<HxxHxxHxx", state, 0, control, 0, 0xFFFF)
     return bytes(state)
+
+
+# ---- recorder oracle
+
+STORES = {"fst", "fstp", "fist", "fistp", "fisttp", "fnstcw", "fnstsw", "fstsw", "fstcw", "fbstp"}
+COMPARE_FLAGS = {"fcomi", "fcompi", "fucomi", "fucompi", "fcomip", "fucomip"}
+VERSION = "host-v1"
+
+
+class Oracle:
+    """Make every x87 instruction in a Unicorn run follow the host CPU.
+
+    `on_compute` (registered after the recorder's own code hooks, so pages
+    are premapped and rejections already made) computes the host result of
+    the instruction about to run, from Unicorn's current x87 state and the
+    operand bytes. Unicorn then executes the instruction itself (memory
+    hooks still record its reads and writes); `on_flush` (registered before
+    every other code hook) replaces the x87 state and any stored operand
+    with the host's at the start of the next instruction, and `flush` does
+    the same after emu_start returns. EFLAGS from FCOMI-family compares are
+    not rewritten inside a translation block (QEMU computes flags lazily);
+    a difference rejects the case instead (`problem`).
+    """
+
+    def __init__(self, address_of):
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+        self.address_of = address_of
+        self.md = Cs(CS_ARCH_X86, CS_MODE_32)
+        self.md.detail = True
+        self.decoded = {}
+        self.pending = None
+        self.problem = None
+        self.used = False
+
+    def decode(self, uc, addr, size):
+        if addr not in self.decoded:
+            try:
+                i = next(self.md.disasm(bytes(uc.mem_read(addr, max(1, min(size, 15)))), addr))
+            except StopIteration:
+                i = None
+            self.decoded[addr] = i if i is not None and encoding(i) is not None else None
+        return self.decoded[addr]
+
+    def on_compute(self, uc, addr, size, _):
+        from unicorn.x86_const import UC_X86_REG_EIP
+        if self.problem or uc.reg_read(UC_X86_REG_EIP) != addr:
+            return
+        i = self.decode(uc, addr, size)
+        if i is None:
+            return
+        enc = encoding(i)
+        if enc is None:
+            return
+        opcode, modrm, op = enc
+        if not supported(opcode, modrm):
+            if (opcode, modrm) != (0xDF, 0xE0):  # fnstsw ax reads the corrected status
+                self.problem = f"x87 instruction outside the host oracle at {addr:#010x}: {i.mnemonic}"
+                uc.emu_stop()
+            return
+        data, target = b"", None
+        if op is not None:
+            a = self.address_of(uc, i, op)
+            if i.mnemonic in STORES:
+                target = (a, op.size)
+            else:
+                data = bytes(uc.mem_read(a, op.size))
+        state, out, flags = execute(unicorn_state(uc), opcode, modrm, data)
+        self.used = True
+        self.pending = (state, target and (target[0], out[:target[1]]),
+                        flags & 0x45 if i.mnemonic in COMPARE_FLAGS else None, addr)
+
+    def flush(self, uc):
+        if self.pending is None:
+            return
+        from unicorn.x86_const import UC_X86_REG_EFLAGS
+        state, store, flags, addr = self.pending
+        self.pending = None
+        set_unicorn_state(uc, state)
+        if store is not None:
+            uc.mem_write(store[0], store[1])
+        if flags is not None and uc.reg_read(UC_X86_REG_EFLAGS) & 0x45 != flags and not self.problem:
+            self.problem = f"x87 compare flags differ from the host at {addr:#010x}"
+            uc.emu_stop()
+
+    def on_flush(self, uc, addr, size, _):
+        self.flush(uc)

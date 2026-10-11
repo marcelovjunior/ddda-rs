@@ -500,6 +500,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
     uc.reg_write(_xc.UC_X86_REG_FPCW, 0x037f)
     uc.reg_write(_xc.UC_X86_REG_MXCSR, 0x1f80)
+    # L22: every x87 instruction follows the host CPU (x87_host.Oracle;
+    # Unicorn 2.1 sets no PE/DE/C1 bits and keeps reserved FLDCW bits).
+    # Its flush hook must run before every other code hook.
+    import x87_host
+    oracle = x87_host.Oracle(lambda uc_, i, op: effective_address(uc_, i, op))
+    uc.hook_add(UC_HOOK_CODE, oracle.on_flush)
     base, secs = image()
     pages_in = {}
 
@@ -997,6 +1003,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
     uc.hook_add(UC_HOOK_MEM_READ, check_float)
     uc.hook_add(UC_HOOK_CODE, on_code)
+    uc.hook_add(UC_HOOK_CODE, oracle.on_compute)  # after premap and the recorder's guards
     uc.mem_map(RET & ~0xFFF, 0x1000)
     regs_in = {}
     for name, r in GPR:
@@ -1022,6 +1029,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # pages are mapped before each instruction (premap), so a fault here
         # is real; resuming would lose QEMU's lazy flags: never resume
         bad.append(f"{e} at {uc.reg_read(UC_X86_REG_EIP):#010x}")
+    oracle.flush(uc)  # the last x87 instruction's host result
+    if oracle.problem:
+        bad.append(oracle.problem)
     if not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
@@ -1045,6 +1055,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.mem_write(tramp, bytes([0xD9, 0x1D]) + struct.pack("<I", cap) + bytes([0x90]))
         own_ret[0] = False  # the capture runs after the function's own ret
         uc.emu_start(tramp, tramp + 6)
+        oracle.flush(uc)
+        if oracle.problem:
+            bad.append(oracle.problem)
         if bad:
             raise Rejected("st0 capture: " + "; ".join(bad))
         st0 = struct.unpack("<I", bytes(uc.mem_read(cap, 4)))[0]
@@ -1063,5 +1076,6 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
+            **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {})}
