@@ -698,6 +698,49 @@ pub fn f_007aeed0(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+/// `bool basis_from_forward(z /* edx */, hint /* eax */, e /* esi */,
+/// MtMatrix *out, const MtVector3 *t)`, result in AL; the caller pops the
+/// two arguments. Calls 0x007AEED0 (the port above) for row 0, then reads
+/// and writes in the original's order.
+pub fn f_007af5b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (entry_esp, ebp, ebx, edi) = (cpu.esp, cpu.ebp, cpu.ebx, cpu.edi);
+    let (out, pt) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    pushed(m, cpu, 1, ebp);
+    let frame = entry_esp.wrapping_sub(4) & !7;
+    m.set_u32(frame.wrapping_sub(4), ebx);
+    m.set_u32(frame.wrapping_sub(8), edi);
+    m.set_u32(frame.wrapping_sub(12), cpu.eax); // the hint, 0x007AEED0's stack argument
+    (cpu.ebp, cpu.ebx, cpu.edi) = (entry_esp.wrapping_sub(4), pt, out);
+    cpu.eax = cpu.edx;
+    cpu.esp = frame.wrapping_sub(16);
+    m.set_u32(cpu.esp, 0x007A_F5C6);
+    f_007aeed0(m, cpu);
+    cpu.esp = cpu.esp.wrapping_add(4);
+    if cpu.eax & 0xFF != 0 {
+        let x = load_vec3(m, out);
+        let z = load_vec3(m, cpu.edx);
+        let y = vector::basis_y(z, x);
+        for (k, v) in [y.x, y.y, y.z, F32::ZERO].into_iter().enumerate() {
+            m.set_u32(out.wrapping_add(0x10 + 4 * k as u32), v.to_bits());
+        }
+        let z2 = vector::basis_z(load_vec3(m, cpu.edx));
+        for (k, v) in [z2.x, z2.y, z2.z, F32::ZERO].into_iter().enumerate() {
+            m.set_u32(out.wrapping_add(0x20 + 4 * k as u32), v.to_bits());
+        }
+        let t = load_vec3(m, pt);
+        for (k, v) in [t.x, t.y, t.z, ONE].into_iter().enumerate() {
+            m.set_u32(out.wrapping_add(0x30 + 4 * k as u32), v.to_bits());
+        }
+        cpu.xmm = [
+            scalar(t.x), scalar(t.y), scalar(t.z), scalar(z2.z),
+            [0; 4], scalar(ONE), scalar(matrix::NORMALIZE_EPSILON), scalar(z.x * x.z),
+        ];
+        cpu.eax = cpu.eax & !0xFF | 1;
+    }
+    (cpu.ebx, cpu.edi, cpu.ebp, cpu.esp) = (ebx, edi, ebp, entry_esp);
+    ret(cpu, 0);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -707,6 +750,7 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
     (0x007A_EED0, f_007aeed0, 0b1111_1111),
+    (0x007A_F5B0, f_007af5b0, 0b1111_1111),
     (0x00CF_C1D0, f_00cfc1d0, 0b1111_1111),
     (0x00CF_C350, f_00cfc350, 0b1111_1111),
     (0x00CF_C4B0, f_00cfc4b0, 0b1111_1111),

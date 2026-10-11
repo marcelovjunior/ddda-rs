@@ -78,6 +78,7 @@ PORTS = {
     0x00CFCE60: ("euler", 1),
     0x00CFCF80: ("euler", 1),
     0x007AEED0: ("normal", 1),
+    0x007AF5B0: ("basis", 2),
     0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
     0x00CFC4B0: ("fov", 6),
@@ -186,6 +187,8 @@ def run(addr, regs, xmm, obj, args, globals_=()):
         i = next(md.disasm(bytes(uc_.mem_read(a, size)), a))
         if i.mnemonic == "call":
             target = i.operands[0].imm & 0xFFFFFFFF if i.operands[0].type == 2 else None
+            if target in PORTS:  # a ported callee runs as the original; the replay runs its port
+                return
             if target not in CALLOUTS:
                 bad.append(f"call at {a:#x}")
                 uc_.emu_stop()
@@ -266,6 +269,22 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             if rnd.random() < 0.1:  # the same point twice
                 obj[VEC[1] - OBJ_WINDOW[0]:VEC[1] - OBJ_WINDOW[0] + 16] = obj[VEC[0] - OBJ_WINDOW[0]:VEC[0] - OBJ_WINDOW[0] + 16]
+        elif kind == "basis":
+            vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
+            pick = rnd.random()
+            if pick < 0.2:  # hint along z: the fallback decides
+                vecs[1][:3] = vecs[0][:3]
+            if 0.1 < pick < 0.25:  # and e along z too: failure
+                vecs[2][:3] = vecs[0][:3]
+            if 0.3 <= pick < 0.5:
+                vecs = [[floats(rnd) for _ in range(4)] for _ in range(4)]
+            for k, v in enumerate(vecs):
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            regs["edx"], regs["eax"], regs["esi"] = VEC[0], VEC[1], VEC[2]
+            args = [OBJ, VEC[3]]
+            if 0.5 <= pick < 0.65:  # z or t inside the output: the order of reads and writes shows
+                regs["edx"] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
+                args[1] = OBJ + rnd.choice([0x00, 0x10, 0x20, 0x30])
         elif kind == "normal":
             vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
             pick = rnd.random()
