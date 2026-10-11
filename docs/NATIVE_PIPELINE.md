@@ -239,17 +239,18 @@ functions per module) and `lifted.rs` (re-exports every function and the
 - `x86::Cpu` is the whole machine state: the eight general registers,
   xmm0-7, the flags and the x87 stack. Calling conventions disappear:
   arguments are wherever the original reads them (registers, or the
-  stack, which lives in `Mem` at `esp`). A function copies `Cpu` into
-  locals on entry and writes them back before it returns.
+  stack, which lives in `Mem` at `esp`). Generated functions update the
+  borrowed `Cpu` in place; they do not unpack and copy the whole state.
 - A lifted `call T` pushes the return address into `Mem` exactly as the
-  CPU does, writes the locals back, runs `super::lifted::f_T(m, cpu)`
-  and reloads the locals; a tail `jmp T` (or a conditional one) writes
-  back, runs T and returns. Because the callee sees the full state, even
+  CPU does and runs `super::lifted::f_T(m, cpu)`; a tail `jmp T` (or a
+  conditional one) runs T and returns. Because the callee sees the full state, even
   whole-program-optimised calls that pass values in odd registers stay
   exact. `Cpu::from(Entry)` / `cpu.exit()` convert to the `Entry`/`Exit`
   pair the tests and hand ports use.
-- Registers are locals; 8/16-bit registers are masked views (`al` =
-  `eax & 0xFF`). Basic blocks become `loop { match pc { ... } }`.
+- Registers are fields; 8/16-bit registers are masked views (`al` =
+  `cpu.eax & 0xFF`). Basic blocks become `loop { match pc { ... } }`.
+  A sole entry block ending in `return` with no `pc`, `continue` or `break`
+  uses a straight-line body; all other functions retain the dispatcher.
 - Switch jumps lift only in the absolute dword form `jmp [index*4 + TABLE]`
   (no base register or segment override). `switch_targets` reads TABLE through
   `harness.code`, stops at the first target outside the function, and requires
@@ -266,8 +267,8 @@ functions per module) and `lifted.rs` (re-exports every function and the
 - Flags: each flag-setting instruction stores `Flags::new(kind, a, b,
   result, bits)`; `jcc`/`setcc` call `fl.cond("be")` etc., which computes
   CF/ZF/SF/OF/PF exactly (add, sub/cmp/neg, logic/test, inc/dec keeping
-  CF, shl/shr/sar, comiss/ucomiss). Flags after `imul` are not modelled
-  (panic if used).
+  CF, shl/shr/sar, comiss/ucomiss). For 32-bit `imul`, CF/OF track signed
+  product overflow.
 - SSE scalar ops use `x86::addss(a, b)` etc. (std::arch intrinsics): the
   original's operand order, so NaN propagation matches the CPU. Packed
   add/sub/mul run the scalar op per lane.
@@ -275,6 +276,48 @@ functions per module) and `lifted.rs` (re-exports every function and the
   `fabs`, `fstp st(0)`); the stack is a `Vec<u32>` of single bits with the
   hardware signalling-NaN rule (`x87_copy`). x87 arithmetic rejects the
   function (precision control: see below).
+
+**Codegen conventions (L03).** The private `patterns/lift.json` cache
+continues to hold the local-register statement groups produced by `lift()`.
+`gen` / `rust_fn` lower those groups onto `cpu.eax`, `cpu.xmm[n]`, `cpu.fl`
+and `cpu.st`. Whole-identifier substitution leaves strings untouched, and
+removes only the exact `SAVE` / `LOAD` templates. Do not change the cache's
+call paths or call-boundary metadata for an emission-only optimization:
+`callees()` and vector-cache invalidation depend on them. Existing prepared
+caches can be regenerated directly, without re-disassembly or new vectors.
+
+The in-place state preserves instruction and memory-access order. An
+indirect call still evaluates its target before pushing the return address;
+normal calls, tail calls and platform/external handlers see the entire
+current state. Safe Rust's exclusive `&mut Cpu` prevents a `Mem` observer
+from simultaneously inspecting it. State after a panic is not a valid
+machine result; discard it (in-place emission can leave partial updates).
+
+Exact add/sub/and/or/xor templates use `Flags::alu_*` helpers, returning the
+masked result and recording the same flag operands, result and width. This
+also covers cmp/test, whose result is discarded. Operands are evaluated
+once, left to right, before the store; the store's address expression stays
+in its original position. Unrecognised templates remain literal. There is
+no flag liveness optimization: all flag writes remain, including those
+observed by a callee or after a return.
+
+Run `PY -m unittest discover -s research/native -p test_lift_codegen.py` for
+synthetic lowering and ordered-memory/full-state call regressions. The
+runtime fixture uses `rustc` and temporary files under the worktree's one
+`target` directory. Follow it with the required full prepared vector replay;
+the fixture is not a replacement for original-exe comparison. See
+[L03 results](tasks/L03-lifter-codegen-size.md#results) for measured sizes,
+build settings and limits.
+
+The workspace test profile sets `ddnative` to `debug = 1`: function/line
+information remains for backtraces, but local-variable debug metadata is
+omitted. Dev and release profiles keep their defaults. To inspect locals
+in a test debugger, override with
+`cargo test -p ddnative --config profile.test.package.ddnative.debug=2`.
+The measured default module size (400), codegen-unit setting and optimization
+level were retained; smaller modules, fewer codegen units and opt-level 1
+did not improve the subset build. Removing all debug info saved too little
+over level 1 to justify losing line information.
 
 **Sparse vectors** (`harness.run_sparse(addr, seed)`): every general
 register random, ESP in a random stack page holding the return address,
@@ -355,9 +398,10 @@ Rust (leaf form: calls reject).
 a vector depends on the original code, seed, input mode and, for external-call cases,
 the mocked-call boundary. Ordinary vectors stay valid when the lifter
 changes, but do not reuse external-call vectors when a newly callable
-function changes which callees execute versus get mocked. The cache does
-not detect that change automatically: invalidate affected external-call
-cases in the private batch before recording. Functions with no usable vector are
+function changes which callees execute versus get mocked. `vectors` now
+invalidates cases with mocked calls in a newly closed function, or a mocked
+target that has become closed. Other changes to the mocking contract still
+need explicit private-cache invalidation. Functions with no usable vector are
 dropped, then (repeatedly) every function that calls a dropped one,
 since its Rust would not compile. Never run `gen` between `scan` and
 `vectors`: the test requires a vector for every generated function.

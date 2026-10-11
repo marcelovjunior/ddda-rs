@@ -100,6 +100,46 @@ pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
 }
 
 impl Flags {
+    /// Binary lifted ALU operations. The operands are evaluated by the
+    /// caller before this helper; the destination store follows it. Width
+    /// is 8, 16 or 32, as in the literal instruction templates in lift.py.
+    /// Keep even flags that the current function does not read: a callee
+    /// (or caller) can observe the full machine state.
+    pub fn alu_add(&mut self, a: u32, b: u32, bits: u32) -> u32 {
+        let mask = u32::MAX >> (32 - bits);
+        let (a, b) = (a & mask, b & mask);
+        let r = a.wrapping_add(b) & mask;
+        *self = Self::new(ADD, a, b, r, bits);
+        r
+    }
+    pub fn alu_sub(&mut self, a: u32, b: u32, bits: u32) -> u32 {
+        let mask = u32::MAX >> (32 - bits);
+        let (a, b) = (a & mask, b & mask);
+        let r = a.wrapping_sub(b) & mask;
+        *self = Self::new(SUB, a, b, r, bits);
+        r
+    }
+    pub fn alu_and(&mut self, a: u32, b: u32, bits: u32) -> u32 {
+        let mask = u32::MAX >> (32 - bits);
+        let (a, b) = (a & mask, b & mask);
+        let r = (a & b) & mask;
+        *self = Self::new(LOGIC, a, b, r, bits);
+        r
+    }
+    pub fn alu_or(&mut self, a: u32, b: u32, bits: u32) -> u32 {
+        let mask = u32::MAX >> (32 - bits);
+        let (a, b) = (a & mask, b & mask);
+        let r = (a | b) & mask;
+        *self = Self::new(LOGIC, a, b, r, bits);
+        r
+    }
+    pub fn alu_xor(&mut self, a: u32, b: u32, bits: u32) -> u32 {
+        let mask = u32::MAX >> (32 - bits);
+        let (a, b) = (a & mask, b & mask);
+        let r = (a ^ b) & mask;
+        *self = Self::new(LOGIC, a, b, r, bits);
+        r
+    }
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }
     }
@@ -190,3 +230,39 @@ mod sse {
 }
 #[cfg(target_arch = "x86_64")]
 pub use sse::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_binary_alu_matches_literal_templates() {
+        let ops: [(u8, fn(&mut Flags, u32, u32, u32) -> u32); 5] = [
+            (ADD, Flags::alu_add), (SUB, Flags::alu_sub),
+            (LOGIC, Flags::alu_and), (LOGIC, Flags::alu_or), (LOGIC, Flags::alu_xor),
+        ];
+        for bits in [8, 16, 32] {
+            let mask = if bits == 32 { u32::MAX } else { (1 << bits) - 1 };
+            // Exhaustive byte operands, plus high bits and signed/width
+            // boundaries for every width. No executable-derived data.
+            let mut values: Vec<u32> = (0..256).collect();
+            values.extend([mask, mask >> 1, (mask >> 1) + 1, mask.wrapping_add(1),
+                           0x7fffffff, 0x80000000, u32::MAX]);
+            for &input_a in &values {
+                for &input_b in &values {
+                    let (a, b) = (input_a & mask, input_b & mask);
+                    for (op, &(kind, helper)) in ops.iter().enumerate() {
+                        let r = match op {
+                            0 => a.wrapping_add(b), 1 => a.wrapping_sub(b),
+                            2 => a & b, 3 => a | b, 4 => a ^ b, _ => unreachable!(),
+                        } & mask;
+                        let mut fl = Flags { cf_in: true, ..Flags::default() };
+                        assert_eq!(helper(&mut fl, input_a, input_b, bits), r);
+                        assert_eq!((fl.kind, fl.a, fl.b, fl.r, fl.bits, fl.cf_in),
+                                   (kind, a, b, r, bits, false));
+                    }
+                }
+            }
+        }
+    }
+}

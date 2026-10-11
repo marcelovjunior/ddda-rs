@@ -9,3 +9,9 @@ publish = false
 
 [workspace.dependencies]
 miniz_oxide = "0.8"
+
+# The lifted test compiles tens of thousands of machine-level functions.
+# Keep backtrace line tables, without debug metadata for every local.
+# See docs/tasks/L03-lifter-codegen-size.md for the measured tradeoff.
+[profile.test.package.ddnative]
+debug = 1
