@@ -9,6 +9,7 @@
 //! - [`types`]: `Vec3` (MtVector3), `Mat44` (MtMatrix), with the
 //!   original's layouts.
 //! - [`random`]: `Random` (MtRandom, xorshift128).
+//! - [`vector`]: out-of-line vector helpers.
 //! - [`matrix`]: matrix builders.
 //! - [`angle`]: angle helpers.
 //! - [`euler`]: matrix to Euler angles (six rotation orders).
@@ -22,6 +23,7 @@ pub mod matrix;
 pub mod random;
 pub mod scalar;
 pub mod types;
+pub mod vector;
 
 pub use scalar::F32;
 pub use types::{Mat44, Vec3};

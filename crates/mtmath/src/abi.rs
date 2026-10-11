@@ -28,6 +28,7 @@ use crate::matrix::{self, ONE};
 use crate::random::Random;
 use crate::scalar::F32;
 use crate::types::{Mat44, Plane, Vec3};
+use crate::vector;
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu};
 
@@ -648,6 +649,55 @@ pub fn f_00cfc1d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 8);
 }
 
+/// `bool unit_normal(a /* eax */, b /* stack */, d /* edx */, e /* esi */,
+/// out /* edi */)`, result in AL (the rest of EAX keeps `a`'s pointer);
+/// the caller pops `b`. Leaves `b`'s pointer in ECX; spills the
+/// fallback's squared y to its frame.
+pub fn f_007aeed0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (entry_esp, ebp) = (cpu.esp, cpu.ebp);
+    let a = load_vec3(m, cpu.eax);
+    cpu.ecx = arg(m, cpu, 0);
+    let b = load_vec3(m, cpu.ecx);
+    pushed(m, cpu, 1, ebp);
+    let (pd, pe) = (cpu.edx, cpu.esi);
+    let t = vector::unit_normal(a, b, || (load_vec3(m, pd), load_vec3(m, pe)));
+    let eps = matrix::NORMALIZE_EPSILON;
+    let main_sq = vector::squared_length_xyz(t.main);
+    cpu.xmm[7] = scalar(main_sq);
+    cpu.xmm[4] = scalar(eps);
+    let chosen = t.fallback.unwrap_or(t.main);
+    if let Some(f) = t.fallback {
+        let frame = (entry_esp.wrapping_sub(4) & !7).wrapping_sub(8);
+        spill(m, frame + 4, f.y * f.y);
+    }
+    match t.result {
+        Some(n) => {
+            for (k, v) in [n.x, n.y, n.z, F32::ZERO].into_iter().enumerate() {
+                m.set_u32(cpu.edi.wrapping_add(4 * k as u32), v.to_bits());
+            }
+            cpu.xmm[0] = [0; 4];
+            cpu.xmm[1] = scalar(n.y);
+            cpu.xmm[2] = scalar(n.x);
+            cpu.xmm[3] = scalar(chosen.x);
+            cpu.xmm[5] = scalar(n.z);
+            cpu.xmm[6] = scalar(vector::squared_length_xyz(chosen));
+            cpu.eax = cpu.eax & !0xFF | 1;
+        }
+        None => {
+            let f = chosen;
+            cpu.xmm[0] = scalar(vector::squared_length_xyz(f));
+            cpu.xmm[1] = scalar(f.y);
+            cpu.xmm[2] = scalar(f.z * f.z);
+            cpu.xmm[3] = scalar(f.x);
+            cpu.xmm[5] = scalar(f.z);
+            cpu.xmm[6] = scalar(f.x * f.x);
+            cpu.eax &= !0xFF;
+        }
+    }
+    (cpu.ebp, cpu.esp) = (ebp, entry_esp);
+    ret(cpu, 0);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -656,6 +706,7 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D870, f_007ad870, 0b0001_1111),
     (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
+    (0x007A_EED0, f_007aeed0, 0b1111_1111),
     (0x00CF_C1D0, f_00cfc1d0, 0b1111_1111),
     (0x00CF_C350, f_00cfc350, 0b1111_1111),
     (0x00CF_C4B0, f_00cfc4b0, 0b1111_1111),

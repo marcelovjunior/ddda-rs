@@ -77,6 +77,7 @@ PORTS = {
     0x00CFCD40: ("euler", 1),
     0x00CFCE60: ("euler", 1),
     0x00CFCF80: ("euler", 1),
+    0x007AEED0: ("normal", 1),
     0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
     0x00CFC4B0: ("fov", 6),
@@ -265,6 +266,22 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             if rnd.random() < 0.1:  # the same point twice
                 obj[VEC[1] - OBJ_WINDOW[0]:VEC[1] - OBJ_WINDOW[0] + 16] = obj[VEC[0] - OBJ_WINDOW[0]:VEC[0] - OBJ_WINDOW[0] + 16]
+        elif kind == "normal":
+            vecs = [[f2b(rnd.uniform(-5, 5)) for _ in range(4)] for _ in range(4)]
+            pick = rnd.random()
+            if pick < 0.25:  # a and b parallel: the fallback pair decides
+                k = rnd.choice([1.0, -2.0, 0.0, 1e-3])
+                vecs[1][:3] = [f2b(struct.unpack("<f", struct.pack("<I", v))[0] * k) for v in vecs[0][:3]]
+            if 0.15 < pick < 0.35:  # the fallback pair parallel too
+                vecs[3][:3] = vecs[2][:3]
+            if 0.35 <= pick < 0.6:
+                vecs = [[floats(rnd) for _ in range(4)] for _ in range(4)]
+            if 0.6 <= pick < 0.7:  # tiny vectors: cross products below the thresholds
+                vecs = [[f2b(rnd.uniform(-1e-3, 1e-3)) for _ in range(4)] for _ in range(4)]
+            for k, v in enumerate(vecs):
+                struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
+            regs["eax"], regs["edx"], regs["esi"], regs["edi"] = VEC[0], VEC[2], VEC[3], OBJ
+            args = [VEC[1]]
         elif kind == "from_euler":
             # the translation goes through the x87: quiet NaNs only (Unicorn
             # does not quiet a signalling NaN on fld; the CPU does, see
