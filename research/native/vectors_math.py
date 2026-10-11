@@ -54,7 +54,7 @@ BELOW, ABOVE = 0x200, 0x40  # the stack window around ESP (callees' frames inclu
 # callee runs in Unicorn; the case records the machine at its entry and at
 # its return (registers, all xmm lanes, the stack window), and the replay
 # checks the entry and restores the return state (crates/mtmath/tests).
-CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55}  # CRT atan2 (doubles), sinf, cosf
+CALLOUTS = {0x012F1109, 0x012F0906, 0x012F0A55, 0x012F0D4C}  # CRT atan2 (doubles), sinf, cosf, asinf
 
 # The ported functions: address -> (inputs kind, stack argument count)
 PORTS = {
@@ -71,7 +71,26 @@ PORTS = {
     0x007AD9D0: ("yaw", 0),
     0x007AD7A0: ("yaw", 0),
     0x007AD8E0: ("rotate", 2),
+    0x00CFC9E0: ("euler", 1),
+    0x00CFCB00: ("euler", 1),
+    0x00CFCC20: ("euler", 1),
+    0x00CFCD40: ("euler", 1),
+    0x00CFCE60: ("euler", 1),
+    0x00CFCF80: ("euler", 1),
 }
+MATRIX = h.SCRATCH + 0x200  # the input matrix of the Euler conversions
+PIVOTS = {0x00CFC9E0: 2, 0x00CFCB00: 1, 0x00CFCC20: 6, 0x00CFCD40: 4, 0x00CFCE60: 8, 0x00CFCF80: 9}
+
+
+def rotation(rnd):
+    """A random rotation matrix (product of rotations about x, y, z)."""
+    import math
+    def rx(a): return [[1, 0, 0], [0, math.cos(a), math.sin(a)], [0, -math.sin(a), math.cos(a)]]
+    def ry(a): return [[math.cos(a), 0, -math.sin(a)], [0, 1, 0], [math.sin(a), 0, math.cos(a)]]
+    def rz(a): return [[math.cos(a), math.sin(a), 0], [-math.sin(a), math.cos(a), 0], [0, 0, 1]]
+    def mul(a, b): return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    m = mul(mul(rx(rnd.uniform(-4, 4)), ry(rnd.uniform(-4, 4))), rz(rnd.uniform(-4, 4)))
+    return [m[0] + [0], m[1] + [0], m[2] + [0], [rnd.uniform(-9, 9) for _ in range(3)] + [1]]
 ROTATE_BASE = 0x018CFE80  # global vector read by 0x007AD8E0 (poked, recorded as a window)
 VEC = [h.SCRATCH + 0x20, h.SCRATCH + 0x40, h.SCRATCH + 0x60, h.SCRATCH + 0x80]  # input vectors
 
@@ -241,6 +260,18 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             if rnd.random() < 0.1:  # the same point twice
                 obj[VEC[1] - OBJ_WINDOW[0]:VEC[1] - OBJ_WINDOW[0] + 16] = obj[VEC[0] - OBJ_WINDOW[0]:VEC[0] - OBJ_WINDOW[0] + 16]
+        elif kind == "euler":
+            pick = rnd.random()
+            if pick < 0.5:
+                words = [f2b(v) for row in rotation(rnd) for v in row]
+            else:
+                words = [floats(rnd) if rnd.random() < 0.3 else f2b(rnd.uniform(-1.5, 1.5)) for _ in range(16)]
+            if 0.3 < pick < 0.6:  # at or beyond a pole
+                words[PIVOTS[addr]] = rnd.choice([0x3F800000, 0xBF800000, 0x3F800001, 0xBF800001,
+                                                  0x3F7FFFFF, 0xBF7FFFFF, 0x40000000, 0xC0000000])
+            struct.pack_into("<16I", obj, MATRIX - OBJ_WINDOW[0], *words)
+            regs["ecx"] = MATRIX
+            args = [OBJ]
         elif kind in ("look_at", "reflect"):
             vecs = [[floats(rnd) for _ in range(4)] for _ in range(3)]
             pick = rnd.random()

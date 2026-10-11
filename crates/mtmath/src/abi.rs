@@ -23,6 +23,7 @@
 //! adapter does not reproduce after the call before writing it.
 
 use crate::angle;
+use crate::euler;
 use crate::matrix::{self, ONE};
 use crate::random::Random;
 use crate::scalar::F32;
@@ -393,6 +394,142 @@ pub fn f_007ad8e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+/// The CRT's float arcsine (x in xmm0, result in xmm0), not ported.
+const CRT_ASINF: u32 = 0x012F_0D4C;
+const SIGN: u32 = 0x8000_0000;
+
+/// `cvtps2pd` of a value that was loaded with `movss` (upper lanes zero)
+/// and, if `negated`, flipped with `xorps` against four sign bits (upper
+/// lanes -0.0): the double in lanes 0..1, the widened lane 1 above.
+fn widened(v: F32, negated: bool) -> [u32; 4] {
+    let mut r = double_lanes(v.0 as f64);
+    if negated {
+        r[3] = SIGN; // (-0.0f32) as f64
+    }
+    r
+}
+
+/// The return addresses of each conversion's CRT calls: main branch
+/// (first atan2, asin, last atan2), low pole, high pole.
+const EULER_CALLS: [[u32; 5]; 6] = [
+    [0x00CF_CA31, 0x00CF_CA4B, 0x00CF_CA75, 0x00CF_CAA1, 0x00CF_CAC8],
+    [0x00CF_CB4A, 0x00CF_CB6B, 0x00CF_CB8B, 0x00CF_CBB7, 0x00CF_CBEC],
+    [0x00CF_CC6A, 0x00CF_CC8C, 0x00CF_CCAC, 0x00CF_CCD7, 0x00CF_CD0C],
+    [0x00CF_CD90, 0x00CF_CDAB, 0x00CF_CDD6, 0x00CF_CE01, 0x00CF_CE29],
+    [0x00CF_CEA9, 0x00CF_CECB, 0x00CF_CEEC, 0x00CF_CF17, 0x00CF_CF4D],
+    [0x00CF_CFD1, 0x00CF_CFEC, 0x00CF_D016, 0x00CF_D041, 0x00CF_D068],
+];
+
+/// The machine side of a conversion: elements from guest memory, CRT
+/// calls through `x86::call_ext` with the registers the original sets up.
+struct EulerMachine<'a> {
+    m: &'a mut dyn Mem,
+    cpu: &'a mut Cpu,
+    matrix: u32,
+    order: usize,
+    branch: Option<euler::EulerBranch>,
+    calls: usize,
+}
+
+impl EulerMachine<'_> {
+    /// The return address of the next CRT call: the branch is known from
+    /// the first call (a pole branch makes exactly one).
+    fn return_to(&mut self) -> u32 {
+        let o = &euler::ORDERS[self.order];
+        if self.calls == 0 {
+            let p = euler::EulerInput::elem(self, o.pivot);
+            self.branch = Some(if !(ONE > p) {
+                euler::EulerBranch::High
+            } else if !(p > F32(-1.0)) {
+                euler::EulerBranch::Low
+            } else {
+                euler::EulerBranch::Main
+            });
+        }
+        let k = match self.branch {
+            Some(euler::EulerBranch::Low) => 3,
+            Some(euler::EulerBranch::High) => 4,
+            _ => self.calls,
+        };
+        self.calls += 1;
+        EULER_CALLS[self.order][k]
+    }
+}
+
+impl euler::EulerInput for EulerMachine<'_> {
+    fn elem(&mut self, i: usize) -> F32 {
+        F32::from_bits(self.m.u32(self.matrix.wrapping_add(4 * i as u32)))
+    }
+    fn atan2(&mut self, term: &euler::Atan2, y: F32, x: F32) -> f64 {
+        let back = self.return_to();
+        if term.negate_x {
+            // 0x00CFCF2A negates x in xmm2 and widens it from there
+            self.cpu.xmm[2] = [x.to_bits(), SIGN, SIGN, SIGN];
+        }
+        self.cpu.xmm[0] = widened(y, term.negate_y);
+        self.cpu.xmm[1] = widened(x, term.negate_x);
+        call_out(self.m, self.cpu, CRT_ATAN2, back);
+        f64::from_bits(self.cpu.xmm[0][0] as u64 | (self.cpu.xmm[0][1] as u64) << 32)
+    }
+    fn asin(&mut self, v: F32) -> F32 {
+        let back = self.return_to();
+        let negated = euler::ORDERS[self.order].negate_pivot;
+        self.cpu.xmm[0] = if negated { [v.to_bits(), SIGN, SIGN, SIGN] } else { scalar(v) };
+        call_out(self.m, self.cpu, CRT_ASINF, back);
+        F32::from_bits(self.cpu.xmm[0][0])
+    }
+}
+
+/// thiscall `MtVector3 *toEuler(MtVector3 *out)` on a matrix, `ret 4`.
+/// Pushes ESI and EDI, overwrites its argument slot with the pivot
+/// element, returns `out` in EAX.
+fn to_euler(m: &mut dyn Mem, cpu: &mut Cpu, order: usize) {
+    let (entry_esp, esi, edi) = (cpu.esp, cpu.esi, cpu.edi);
+    let out_ptr = arg(m, cpu, 0);
+    let o = euler::ORDERS[order];
+    pushed(m, cpu, 1, esi);
+    pushed(m, cpu, 2, edi);
+    m.set_u32(out_ptr.wrapping_add(0xC), 0);
+    let pivot = m.u32(cpu.ecx.wrapping_add(4 * o.pivot as u32));
+    m.set_u32(entry_esp.wrapping_add(4), pivot);
+    (cpu.esi, cpu.edi, cpu.esp) = (out_ptr, cpu.ecx, entry_esp.wrapping_sub(8));
+    cpu.xmm[1] = scalar(ONE);
+    let matrix = cpu.ecx;
+    let mut machine = EulerMachine { m: &mut *m, cpu: &mut *cpu, matrix, order, branch: None, calls: 0 };
+    let (out, branch) = euler::to_euler(&o, &mut machine);
+    for (slot, v) in out.iter().take(3).enumerate() {
+        m.set_u32(out_ptr.wrapping_add(4 * slot as u32), v.to_bits());
+    }
+    if branch == euler::EulerBranch::Main {
+        // the last angle: cvtsd2ss into the CRT's xmm0, then xorps
+        let x = &mut cpu.xmm[0];
+        *x = [out[o.last.slot].to_bits(), x[1] ^ SIGN, x[2] ^ SIGN, x[3] ^ SIGN];
+    } else {
+        cpu.xmm[0] = [0; 4];
+    }
+    (cpu.eax, cpu.esi, cpu.edi, cpu.esp) = (out_ptr, esi, edi, entry_esp);
+    ret(cpu, 4);
+}
+
+pub fn f_00cfc9e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 0);
+}
+pub fn f_00cfcb00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 1);
+}
+pub fn f_00cfcc20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 2);
+}
+pub fn f_00cfcd40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 3);
+}
+pub fn f_00cfce60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 4);
+}
+pub fn f_00cfcf80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    to_euler(m, cpu, 5);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -405,6 +542,12 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x00CF_C810, f_00cfc810, 0b0000_0001),
     (0x00CF_C8B0, f_00cfc8b0, 0b0000_0001),
     (0x00CF_C940, f_00cfc940, 0b0000_0001),
+    (0x00CF_C9E0, f_00cfc9e0, 0b1111_1111),
+    (0x00CF_CB00, f_00cfcb00, 0b1111_1111),
+    (0x00CF_CC20, f_00cfcc20, 0b1111_1111),
+    (0x00CF_CD40, f_00cfcd40, 0b1111_1111),
+    (0x00CF_CE60, f_00cfce60, 0b1111_1111),
+    (0x00CF_CF80, f_00cfcf80, 0b1111_1111),
     (0x00CF_D5E0, f_00cfd5e0, 0b1111_1111),
     (0x00CF_D890, f_00cfd890, 0b1111_1111),
     (0x00CF_DB10, f_00cfdb10, 0b1111_1111),
