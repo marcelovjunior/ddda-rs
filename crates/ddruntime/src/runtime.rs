@@ -41,6 +41,8 @@ impl<T> GuestCell<T> {
 
 #[derive(Default)]
 pub struct Runtime {
+    pub(crate) input: GuestCell<crate::input::Input>,
+    pub(crate) audio: GuestCell<crate::audio::Audio>,
     pub(crate) lock: crate::threads::GuestLock,
     pub(crate) kernel: GuestCell<crate::threads::Kernel>,
     /// The address space and dispatcher new guest threads run on.
