@@ -93,6 +93,16 @@ impl Oracle {
         for k in 1..4u32 {
             com!(d, SET_RENDER_TARGET, (u32, Obj), k, std::ptr::null_mut::<c_void>());
         }
+        // every texture first: a format the driver refuses fails before
+        // any state of this call reaches the device
+        let mut textures: HashMap<u32, Obj> = HashMap::new();
+        for b in draws.iter().flat_map(|d| &d.textures) {
+            if let std::collections::hash_map::Entry::Vacant(e) = textures.entry(b.resource) {
+                let t = self.texture_from(b, uploads)?;
+                created.push(t);
+                e.insert(t);
+            }
+        }
         check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;
         if let Some(c) = clear {
             if let Some(t) = &c.depth {
@@ -105,7 +115,6 @@ impl Oracle {
             Upload::Buffer { resource, bytes } => Some((*resource, bytes)),
             _ => None,
         }).collect();
-        let mut textures: HashMap<u32, Obj> = HashMap::new();
         let mut queries: Vec<Obj> = Vec::new();
         for _ in spans {
             let mut q: Obj = std::ptr::null_mut();
@@ -151,16 +160,18 @@ impl Oracle {
         Ok((self.read_frame(rt, read, created)?, counts))
     }
 
-    /// What an occlusion query's GetData returns (HRESULTs) before any
-    /// Issue, between D3DISSUE_BEGIN and D3DISSUE_END, and after an END
-    /// with no draw (with the count).
-    pub fn occlusion_states(&mut self) -> Result<[i32; 4], String> {
+    /// What an occlusion query's GetData returns before any Issue (HRESULT
+    /// and the value left in a buffer holding 0xDEAD), between
+    /// D3DISSUE_BEGIN and D3DISSUE_END, and after an END with no draw
+    /// (HRESULT and count).
+    pub fn occlusion_states(&mut self) -> Result<[i32; 5], String> {
         unsafe {
             let d = self.device;
             let mut q: Obj = std::ptr::null_mut();
             check(com!(d, CREATE_QUERY, (u32, *mut Obj), QUERYTYPE_OCCLUSION, &mut q), "CreateQuery")?;
             let mut n = 0xDEADu32;
             let before = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+            let left = n as i32;
             com!(q, QUERY_ISSUE, (u32), ISSUE_BEGIN);
             let building = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
             com!(q, QUERY_ISSUE, (u32), ISSUE_END);
@@ -172,7 +183,7 @@ impl Oracle {
                 }
             }
             release(q);
-            Ok([before, building, after, n as i32])
+            Ok([before, left, building, after, n as i32])
         }
     }
 
