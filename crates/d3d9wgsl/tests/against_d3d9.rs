@@ -310,7 +310,201 @@ impl Rng {
     }
 }
 
+impl Gpu {
+    /// Run a translated vertex shader (translated with position capture) on
+    /// one point; the value at each output location (outputs_vs order, then
+    /// the captured position).
+    fn run_vertex(&self, wgsl: &str, iface: &d3d9wgsl::Interface, run: &d3d9ref::VertexRun) -> Result<Vec<[f32; 4]>, String> {
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let vs = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("vs"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+        let locations = iface.outputs_vs.len() + 1;
+        let uniform = wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let layout0 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uniform] });
+        let layout1 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        let mut entries2 = Vec::new();
+        for &(n, kind) in &iface.samplers {
+            let view_dimension = match kind {
+                d3d9wgsl::TextureKind::Flat => wgpu::TextureViewDimension::D2,
+                d3d9wgsl::TextureKind::Cube => wgpu::TextureViewDimension::Cube,
+                d3d9wgsl::TextureKind::Volume => wgpu::TextureViewDimension::D3,
+            };
+            entries2.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 * n,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension, multisampled: false },
+                count: None,
+            });
+            entries2.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 * n + 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        let layout2 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &entries2 });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&layout0), Some(&layout1), Some(&layout2)],
+            immediate_size: 0,
+        });
+        let attributes: Vec<wgpu::VertexAttribute> = (0..iface.inputs.len())
+            .map(|k| wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16 * k as u64, shader_location: k as u32 })
+            .collect();
+        let stride = 16 * iface.inputs.len().max(1) as u64;
+        let mut consts: Vec<u8> = Vec::new();
+        for k in 0..256 {
+            consts.extend(run.constants.get(k).copied().unwrap_or([0.0; 4]).iter().flat_map(|f| f.to_le_bytes()));
+        }
+        for k in 0..16 {
+            consts.extend(run.ints.get(k).copied().unwrap_or([0; 4]).iter().flat_map(|f| f.to_le_bytes()));
+        }
+        for k in 0..16 {
+            let b = run.bools.get(k).copied().unwrap_or(false) as u32;
+            consts.extend([b, 0, 0, 0].iter().flat_map(|f| f.to_le_bytes()));
+        }
+        let cbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: consts.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&cbuf, 0, &consts);
+        let mut vertex: Vec<u8> = Vec::new();
+        for k in 0..iface.inputs.len().max(1) {
+            vertex.extend(run.attributes.get(k).copied().unwrap_or([0.0; 4]).iter().flat_map(|f| f.to_le_bytes()));
+        }
+        let vbuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: vertex.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&vbuf, 0, &vertex);
+        let group0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout0,
+            entries: &[wgpu::BindGroupEntry { binding: 2, resource: cbuf.as_entire_binding() }],
+        });
+        let group1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout1, entries: &[] });
+        let views: Vec<(u32, wgpu::TextureView)> = iface.samplers.iter()
+            .map(|&(n, _)| (n, self.texture(run.textures[n as usize].as_ref().expect("texture for every sampler"))))
+            .collect();
+        let mut e2 = Vec::new();
+        for (n, v) in &views {
+            e2.push(wgpu::BindGroupEntry { binding: 2 * n, resource: wgpu::BindingResource::TextureView(v) });
+            e2.push(wgpu::BindGroupEntry { binding: 2 * n + 1, resource: wgpu::BindingResource::Sampler(&self.sampler) });
+        }
+        let group2 = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout2, entries: &e2 });
+        let size = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+        let mut values = Vec::new();
+        // two Rgba32Float targets per pass: the default limit is 32 bytes per sample
+        for first in (0..locations).step_by(2) {
+            let group: Vec<usize> = (first..locations.min(first + 2)).collect();
+            let mut fs = String::from("struct FIn {\n");
+            for &l in &group {
+                fs.push_str(&format!("  @location({l}) x{l}: vec4<f32>,\n"));
+            }
+            fs.push_str("}\nstruct FOut {\n");
+            for (k, _) in group.iter().enumerate() {
+                fs.push_str(&format!("  @location({k}) o{k}: vec4<f32>,\n"));
+            }
+            let fields: Vec<String> = group.iter().map(|l| format!("i.x{l}")).collect();
+            fs.push_str(&format!("}}\n@fragment fn main(i: FIn) -> FOut {{ return FOut({}); }}\n", fields.join(", ")));
+            let fsm = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fs"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
+            let targets: Vec<Option<wgpu::ColorTargetState>> = group.iter().map(|_| Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba32Float,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })).collect();
+            let buffers = [wgpu::VertexBufferLayout { array_stride: stride, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attributes }];
+            let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &vs, entry_point: Some("main"), compilation_options: Default::default(), buffers: &buffers },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::PointList, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState { module: &fsm, entry_point: Some("main"), compilation_options: Default::default(), targets: &targets }),
+                multiview_mask: None,
+                cache: None,
+            });
+            let rts: Vec<wgpu::Texture> = group.iter().map(|_| self.device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })).collect();
+            let rt_views: Vec<wgpu::TextureView> = rts.iter().map(|t| t.create_view(&Default::default())).collect();
+            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 256 * rts.len() as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            {
+                let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = rt_views.iter().map(|view| Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })).collect();
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &attachments,
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group0, &[]);
+                pass.set_bind_group(1, &group1, &[]);
+                pass.set_bind_group(2, &group2, &[]);
+                pass.set_vertex_buffer(0, vbuf.slice(..));
+                pass.draw(0..1, 0..1);
+            }
+            for (k, t) in rts.iter().enumerate() {
+                enc.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 256 * k as u64, bytes_per_row: Some(256), rows_per_image: Some(1) } },
+                    size,
+                );
+            }
+            self.queue.submit([enc.finish()]);
+            readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("{e}"))?;
+            let data = readback.slice(..).get_mapped_range();
+            for k in 0..group.len() {
+                let f = |c: usize| f32::from_le_bytes(data[256 * k + 4 * c..256 * k + 4 * c + 4].try_into().unwrap());
+                values.push([f(0), f(1), f(2), f(3)]);
+            }
+        }
+        if let Some(e) = block_on(scope.pop()) {
+            return Err(format!("{e}"));
+        }
+        Ok(values)
+    }
+}
+
+fn vertex_shaders(name: &str) -> Vec<Vec<u32>> {
+    shaders_with(name, 0xFFFE_0300)
+}
+
 fn pixel_shaders(name: &str) -> Vec<Vec<u32>> {
+    shaders_with(name, 0xFFFF_0300)
+}
+
+fn shaders_with(name: &str, version: u32) -> Vec<Vec<u32>> {
     let path = std::path::PathBuf::from(r"E:\SteamLibrary\steamapps\common\DDDA\nativePC\sa\DX9").join(format!("{name}.arc"));
     let Ok((archive, mut file)) = mtarc::Archive::open(path) else { return vec![] };
     let wanted = mtarc::type_hash("rShaderPackage");
@@ -319,7 +513,7 @@ fn pixel_shaders(name: &str) -> Vec<Vec<u32>> {
     let mut out = Vec::new();
     let mut k = 0;
     while k < tokens.len() {
-        if tokens[k] == 0xFFFF_0300 {
+        if tokens[k] == version {
             if let Ok(s) = d3d9shader::parse(&tokens[k..]) {
                 if s.instructions.iter().any(|i| i.opcode != d3d9shader::op::COMMENT) {
                     out.push(tokens[k..k + s.tokens].to_vec());
@@ -338,6 +532,12 @@ fn pixel_shaders(name: &str) -> Vec<Vec<u32>> {
 /// temp destination as oC0: for locating where a translation first
 /// differs. None if `k` does not write a temp or flow control comes first.
 fn prefix(tokens: &[u32], k: usize) -> Option<(Vec<u32>, String, u8)> {
+    prefix_to(tokens, k, 0x800F_0800)
+}
+
+/// As [`prefix`], writing the result to the output register `dst` (a
+/// destination token).
+fn prefix_to(tokens: &[u32], k: usize, dst: u32) -> Option<(Vec<u32>, String, u8)> {
     use d3d9shader::op;
     let s = d3d9shader::parse(tokens).ok()?;
     let lines = d3d9shader::disasm::disassemble(&s);
@@ -363,7 +563,7 @@ fn prefix(tokens: &[u32], k: usize) -> Option<(Vec<u32>, String, u8)> {
                 return None;
             }
             let mut v = tokens[..at].to_vec();
-            v.extend_from_slice(&[0x0200_0001, 0x800F_0800, 0x80E4_0000 | d.index, 0x0000_FFFF]);
+            v.extend_from_slice(&[0x0200_0001, dst, 0x80E4_0000 | d.index, 0x0000_FFFF]);
             return Some((v, lines[line].trim().to_string(), d.mask_or_swizzle));
         }
         n += 1;
@@ -461,6 +661,116 @@ fn translated_pixel_shaders_compute_what_d3d9_computes() {
         }
     }
     eprintln!("{compared} compared, {} wrong, {} not translated", wrong.len(), untranslated.len());
+    for u in untranslated.iter().take(3) {
+        eprintln!("not translated: {}", &u[..u.len().min(3000)]);
+    }
+    for w in wrong.iter().filter(|w| !w.is_empty()).take(3) {
+        eprintln!("wrong: {w}");
+    }
+    assert!(compared > 0, "nothing compared");
+    assert!(untranslated.is_empty() && wrong.is_empty());
+}
+
+#[test]
+fn translated_vertex_shaders_compute_what_d3d9_computes() {
+    let (Some(mut oracle), Some(gpu)) = (Oracle::new(), Gpu::new()) else {
+        eprintln!("skipped: no D3D9 device or no wgpu adapter with FLOAT32_FILTERABLE");
+        return;
+    };
+    let packages = std::env::var("DDDA_SHADER_PACKAGES").unwrap_or_else(|_| "Title".into());
+    let limit: usize = std::env::var("DDDA_SHADER_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+    let mut seen = std::collections::HashSet::new();
+    let (mut compared, mut skipped, mut untranslated, mut wrong) = (0usize, 0usize, Vec::new(), Vec::new());
+    let mut rng = Rng(0x1357_9BDF);
+    'outer: for name in packages.split(',') {
+        for vs in vertex_shaders(name) {
+            if !seen.insert(vs.clone()) {
+                continue;
+            }
+            if compared + untranslated.len() >= limit {
+                break 'outer;
+            }
+            let shader = d3d9shader::parse(&vs).unwrap();
+            let t = match d3d9wgsl::translate_with(&shader, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]) }) {
+                Ok(t) => t,
+                Err(e) => {
+                    untranslated.push(format!("{name}: {e}"));
+                    continue;
+                }
+            };
+            let mut run = d3d9ref::VertexRun {
+                constants: (0..256).map(|_| rng.vec4()).collect(),
+                ints: (0..16).map(|_| [(rng.next() % 5) as i32, (rng.next() % 3) as i32, 1, 0]).collect(),
+                bools: (0..16).map(|_| rng.next() & 1 == 1).collect(),
+                attributes: t.interface.inputs.iter().map(|_| rng.vec4()).collect(),
+                textures: vec![],
+            };
+            for &(n, kind) in &t.interface.samplers {
+                let kind = match kind {
+                    d3d9wgsl::TextureKind::Flat => TextureKind::Flat,
+                    d3d9wgsl::TextureKind::Cube => TextureKind::Cube,
+                    d3d9wgsl::TextureKind::Volume => TextureKind::Volume,
+                };
+                let count = match kind { TextureKind::Flat => 16, TextureKind::Cube => 96, TextureKind::Volume => 64 };
+                run.textures.resize(n as usize + 1, None);
+                run.textures[n as usize] = Some(Texture { kind, size: 4, texels: (0..count).map(|_| rng.vec4()).collect() });
+            }
+            let theirs = match oracle.run_vertex(&vs, &run) {
+                Ok(v) => v,
+                Err(e) if e.contains("texcoord14") => {
+                    skipped += 1;
+                    continue;
+                }
+                Err(e) => panic!("{name}: D3D9: {e}"),
+            };
+            let ours = match gpu.run_vertex(&t.wgsl, &t.interface, &run) {
+                Ok(v) => v,
+                Err(e) => {
+                    untranslated.push(format!("{name}: WGSL rejected: {e}\n{}", t.wgsl));
+                    continue;
+                }
+            };
+            compared += 1;
+            let mut bad = Vec::new();
+            for o in &theirs {
+                let Some(value) = o.value else { continue };
+                let location = if o.usage == 0 && o.index == 0 {
+                    t.interface.outputs_vs.len()
+                } else {
+                    t.interface.outputs_vs.iter().position(|&(_, _, r, _)| r == o.register).expect("output in interface")
+                };
+                let mine = ours[location];
+                if !(0..4).all(|c| o.mask & (1 << c) == 0 || close(mine[c], value[c])) {
+                    bad.push(format!("usage {} index {} (o{}): ours {mine:?} / D3D9 {value:?}", o.usage, o.index, o.register));
+                }
+            }
+            if !bad.is_empty() {
+                if wrong.len() < 5 {
+                    // the first instruction whose result differs, read through
+                    // the position output (both sides capture it)
+                    let mut first = String::from("(not located)");
+                    let pos = t.interface.position.unwrap();
+                    for k in 0..vs.len() {
+                        let Some((cut, text, mask)) = prefix_to(&vs, k, 0xE00F_0000 | pos) else { continue };
+                        let cs = d3d9shader::parse(&cut).unwrap();
+                        let Ok(ct) = d3d9wgsl::translate_with(&cs, d3d9wgsl::Options { capture_position: Some([0.0, 0.0, 0.0, 1.0]) }) else { continue };
+                        let (Ok(a), Ok(b)) = (gpu.run_vertex(&ct.wgsl, &ct.interface, &run), oracle.run_vertex(&cut, &run)) else { continue };
+                        let mine = a[ct.interface.outputs_vs.len()];
+                        let Some(theirs) = b.iter().find(|o| o.usage == 0 && o.index == 0).and_then(|o| o.value) else { continue };
+                        if !(0..4).all(|c| mask & (1 << c) == 0 || close(mine[c], theirs[c])) {
+                            first = format!("instruction {k} `{text}`: ours {mine:?} / D3D9 {theirs:?}");
+                            break;
+                        }
+                    }
+                    let d = d3d9shader::disasm::disassemble(&shader).join("\n");
+                    wrong.push(format!("{name}: {}\nfirst difference: {first}\n{d}", bad.join("; ")));
+                } else {
+                    wrong.push(String::new());
+                }
+            }
+        }
+    }
+    eprintln!("{compared} vertex shaders compared, {} wrong, {} not translated, {skipped} skipped (texcoord14/15 in use)", wrong.len(), untranslated.len());
     for u in untranslated.iter().take(3) {
         eprintln!("not translated: {}", &u[..u.len().min(3000)]);
     }

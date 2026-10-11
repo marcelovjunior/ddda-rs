@@ -1,4 +1,4 @@
-//! Direct3D 9 shader model 3 pixel shaders translated to WGSL for the
+//! Direct3D 9 shader model 3 (vs_3_0, ps_3_0) shaders translated to WGSL for the
 //! runtime's GPU backend (docs/RUNTIME.md, "Graphics").
 //!
 //! The translation is literal: every D3D9 register is a WGSL variable,
@@ -6,6 +6,16 @@
 //! for it (Microsoft Learn, "Asm Shader Reference"). It is checked by
 //! running the game's shaders both ways: on the host's D3D9 driver
 //! (crates/d3d9ref) and translated on wgpu (tests/against_d3d9.rs).
+//!
+//! Interface of a translated vertex shader:
+//! - `@group(0) @binding(2)`: the constants, as below with 256 float
+//!   registers (`VertexConstants`).
+//! - `@group(2) @binding(2n)` / `@binding(2n + 1)`: vertex texture fetch.
+//! - inputs: the k-th declared input at `@location(k)`.
+//! - outputs: the position output as `@builtin(position)` (D3D9 clip
+//!   space; the half-pixel offset is the backend's job), every other
+//!   declared output at `@location(m)`, m counting the declarations other
+//!   than position in order ([`Interface::outputs_vs`]).
 //!
 //! Interface of a translated pixel shader:
 //! - `@group(0) @binding(0)`: the constants, `struct Constants { c:
@@ -22,6 +32,21 @@
 //! shows it, and DXVK emulates the same). It applies to mul, mad, the dot
 //! products, the matrix macros, nrm, lrp and pow (exp2(y * log2|x|)).
 //!
+//! Relative constant reads outside the register file return 0 (as the
+//! reference driver does; WGSL would clamp the index).
+//!
+//! Checked so far (tests/against_d3d9.rs, random inputs): 600 of 600 pixel
+//! shaders of root/Stage100 and all of Title match; 295 of the first 300
+//! vertex shaders of root/Stage100 and all of Title match. The five
+//! remaining vertex differences are of two kinds, both driven by random
+//! inputs rather than by a translation error the bisection could find:
+//! (1) rounding cascades: a cancellation leaves D3D9 with a tiny residue
+//! (1e-8) where wgpu computes 0 (fused vs separate multiply-add in the GPU
+//! compilers), which a later rsq/normalise amplifies, and sincos results
+//! that differ around 1e-5; (2) shaders whose loops and a0 indices come
+//! from the random constants (counts up to 255, indices outside the bone
+//! palettes), which need structured inputs like the CPU-side recorder's.
+//!
 //! Texture reads use explicit level 0 for now (exact for single-level
 //! textures); derivative-based level selection comes with the backend.
 use d3d9shader::{op, reg, Instruction, Param, Shader, Stage};
@@ -30,14 +55,14 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    NotPixelShader3,
+    NotShaderModel3,
     Unsupported(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::NotPixelShader3 => write!(f, "only ps_3_0 is translated"),
+            Error::NotShaderModel3 => write!(f, "only vs_3_0 and ps_3_0 are translated"),
             Error::Unsupported(s) => write!(f, "unsupported: {s}"),
         }
     }
@@ -62,6 +87,20 @@ pub struct Interface {
     /// Colour outputs written (oC#).
     pub outputs: Vec<u32>,
     pub writes_depth: bool,
+    /// Vertex shaders: outputs other than position in location order:
+    /// (usage, usage index, register, write mask of the declaration).
+    pub outputs_vs: Vec<(u32, u32, u32, u8)>,
+    /// Vertex shaders: the register of the position output.
+    pub position: Option<u32>,
+}
+
+/// Options for testing: a vertex shader's position output can also be
+/// captured at the location after the others, with the rasterised
+/// position replaced by a fixed value (the oracle reads every output that
+/// way).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    pub capture_position: Option<[f32; 4]>,
 }
 
 pub struct Translation {
@@ -84,11 +123,16 @@ struct Ctx<'a> {
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
 
-/// Translate a ps_3_0 shader.
+/// Translate a vs_3_0 or ps_3_0 shader.
 pub fn translate(shader: &Shader) -> Result<Translation, Error> {
-    if shader.stage != Stage::Pixel || shader.major != 3 {
-        return Err(Error::NotPixelShader3);
+    translate_with(shader, Options::default())
+}
+
+pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, Error> {
+    if shader.major != 3 {
+        return Err(Error::NotShaderModel3);
     }
+    let vertex = shader.stage == Stage::Vertex;
     let mut cx = Ctx {
         shader,
         defs: BTreeMap::new(),
@@ -121,6 +165,8 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
                 let t = ins.decl.unwrap_or(0);
                 match d.kind {
                     reg::INPUT => iface.inputs.push((t & 0x1F, (t >> 16) & 0xF, d.index)),
+                    reg::OUTPUT if t & 0x1F == 0 && (t >> 16) & 0xF == 0 => iface.position = Some(d.index),
+                    reg::OUTPUT => iface.outputs_vs.push((t & 0x1F, (t >> 16) & 0xF, d.index, d.mask_or_swizzle)),
                     reg::SAMPLER => iface.samplers.push((d.index, match (t >> 27) & 0xF {
                         3 => TextureKind::Cube,
                         4 => TextureKind::Volume,
@@ -168,8 +214,14 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
     }
 
     let mut w = String::new();
-    writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16> }}").unwrap();
-    writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
+    let floats = if vertex { 256 } else { 224 };
+    if vertex {
+        writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16> }}").unwrap();
+        writeln!(w, "@group(0) @binding(2) var<uniform> k: VertexConstants;").unwrap();
+    } else {
+        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16> }}").unwrap();
+        writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
+    }
     // D3D9 multiplication: 0 * anything = 0
     // (zero tested on the bits: GPU compilers may fold float compares as if
     // there were no NaNs, and NaN * x must stay NaN)
@@ -183,8 +235,9 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
             TextureKind::Cube => "texture_cube<f32>",
             TextureKind::Volume => "texture_3d<f32>",
         };
-        writeln!(w, "@group(1) @binding({}) var t{n}: {t};", 2 * n).unwrap();
-        writeln!(w, "@group(1) @binding({}) var s{n}: sampler;", 2 * n + 1).unwrap();
+        let group = if vertex { 2 } else { 1 };
+        writeln!(w, "@group({group}) @binding({}) var t{n}: {t};", 2 * n).unwrap();
+        writeln!(w, "@group({group}) @binding({}) var s{n}: sampler;", 2 * n + 1).unwrap();
     }
     // registers: module-scope so subroutines share them
     for n in 0..32 {
@@ -196,13 +249,18 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
     for n in 0..4 {
         writeln!(w, "var<private> oC{n}: vec4<f32>;").unwrap();
     }
+    for n in 0..12 {
+        writeln!(w, "var<private> o{n}: vec4<f32>;").unwrap();
+    }
+    writeln!(w, "var<private> a0: vec4<i32>;").unwrap();
     writeln!(w, "var<private> oDepth: vec4<f32>;").unwrap();
     writeln!(w, "var<private> p0: vec4<bool>;").unwrap();
     writeln!(w, "var<private> aL: i32;").unwrap();
     writeln!(w, "var<private> vPos: vec4<f32>;").unwrap();
     writeln!(w, "var<private> vFace: vec4<f32>;").unwrap();
     if cx.relative_constants {
-        writeln!(w, "var<private> cc: array<vec4<f32>, 224>;").unwrap();
+        writeln!(w, "var<private> cc: array<vec4<f32>, {floats}>;").unwrap();
+        writeln!(w, "fn rc(i: i32) -> vec4<f32> {{ if (i < 0 || i >= {floats}) {{ return vec4<f32>(0.0); }} return cc[i]; }}").unwrap();
     }
     // subroutines
     for (label, body) in &subs {
@@ -212,6 +270,9 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
             cx.instruction(ins)?;
         }
         writeln!(w, "fn l{label}() {{\n{}}}", cx.out).unwrap();
+    }
+    if vertex {
+        return finish_vertex(w, cx, &main, iface, options);
     }
     // entry point
     writeln!(w, "struct In {{").unwrap();
@@ -257,6 +318,57 @@ pub fn translate(shader: &Shader) -> Result<Translation, Error> {
         fields.push("oDepth.x".into());
     }
     writeln!(w, "{});\n}}", fields.join(", ")).unwrap();
+    Ok(Translation { wgsl: w, interface: iface })
+}
+
+fn finish_vertex(mut w: String, mut cx: Ctx, main: &[&Instruction], iface: Interface, options: Options) -> Result<Translation, Error> {
+    let position = iface.position.ok_or_else(|| Error::Unsupported("a vertex shader without a position output".into()))?;
+    // (WGSL has no empty structs: a shader without inputs takes none)
+    if !iface.inputs.is_empty() {
+        writeln!(w, "struct In {{").unwrap();
+        for (k, &(_, _, r)) in iface.inputs.iter().enumerate() {
+            writeln!(w, "  @location({k}) v{r}: vec4<f32>,").unwrap();
+        }
+        writeln!(w, "}}").unwrap();
+    }
+    writeln!(w, "struct Out {{").unwrap();
+    writeln!(w, "  @builtin(position) position: vec4<f32>,").unwrap();
+    for (m, &(_, _, r, _)) in iface.outputs_vs.iter().enumerate() {
+        writeln!(w, "  @location({m}) o{r}: vec4<f32>,").unwrap();
+    }
+    if options.capture_position.is_some() {
+        writeln!(w, "  @location({}) captured: vec4<f32>,", iface.outputs_vs.len()).unwrap();
+    }
+    writeln!(w, "}}").unwrap();
+    cx.out.clear();
+    cx.indent = 1;
+    for ins in main {
+        cx.instruction(ins)?;
+    }
+    if iface.inputs.is_empty() {
+        writeln!(w, "@vertex\nfn main() -> Out {{").unwrap();
+    } else {
+        writeln!(w, "@vertex\nfn main(input: In) -> Out {{").unwrap();
+    }
+    for &(_, _, r) in &iface.inputs {
+        writeln!(w, "  v{r} = input.v{r};").unwrap();
+    }
+    if cx.relative_constants {
+        writeln!(w, "  cc = k.c;").unwrap();
+        for (n, v) in &cx.defs {
+            writeln!(w, "  cc[{n}] = {};", vec4_literal(v)).unwrap();
+        }
+    }
+    w.push_str(&cx.out);
+    let mut fields = vec![match options.capture_position {
+        Some(p) => vec4_literal(&p),
+        None => format!("o{position}"),
+    }];
+    fields.extend(iface.outputs_vs.iter().map(|&(_, _, r, _)| format!("o{r}")));
+    if options.capture_position.is_some() {
+        fields.push(format!("o{position}"));
+    }
+    writeln!(w, "  return Out({});\n}}", fields.join(", ")).unwrap();
     Ok(Translation { wgsl: w, interface: iface })
 }
 
@@ -307,7 +419,8 @@ impl Ctx<'_> {
                 None => format!("v{n}"),
             },
             reg::CONST => match &p.relative {
-                Some(r) => format!("cc[i32({n}) + {}]", self.address(r)?),
+                // out of range reads 0 (WGSL would clamp the index)
+                Some(r) => format!("rc(i32({n}) + {})", self.address(r)?),
                 None => match self.defs.get(&n) {
                     Some(v) => vec4_literal(v),
                     None => format!("k.c[{n}]"),
@@ -319,6 +432,7 @@ impl Ctx<'_> {
             },
             reg::MISCTYPE => if n == 0 { "vPos".into() } else { "vFace".into() },
             reg::LOOP => "vec4<f32>(f32(aL))".into(),
+            reg::ADDR if self.shader.stage == Stage::Vertex => "vec4<f32>(a0)".into(),
             reg::COLOROUT => format!("oC{n}"),
             reg::DEPTHOUT => "oDepth".into(),
             k => return Err(Error::Unsupported(format!("source register type {k}"))),
@@ -329,6 +443,7 @@ impl Ctx<'_> {
     fn address(&self, r: &Param) -> Result<String, Error> {
         match r.kind {
             reg::LOOP => Ok("aL".into()),
+            reg::ADDR => Ok(format!("a0.{}", COMPONENTS[(r.mask_or_swizzle & 3) as usize])),
             k => Err(Error::Unsupported(format!("relative addressing through register type {k}"))),
         }
     }
@@ -367,6 +482,8 @@ impl Ctx<'_> {
             reg::COLOROUT => format!("oC{}", d.index),
             reg::DEPTHOUT => "oDepth".into(),
             reg::PREDICATE => "p0".into(),
+            reg::OUTPUT if d.relative.is_none() => format!("o{}", d.index),
+            reg::ADDR => "a0".into(),
             k => return Err(Error::Unsupported(format!("destination register type {k}"))),
         })
     }
@@ -386,7 +503,12 @@ impl Ctx<'_> {
             if d.mask_or_swizzle & (1 << k) == 0 {
                 continue;
             }
-            let assign = format!("{name}.{c} = {t}.{c};");
+            let assign = if name == "a0" {
+                // mova rounds to the nearest integer
+                format!("a0.{c} = i32(floor({t}.{c} + 0.5));")
+            } else {
+                format!("{name}.{c} = {t}.{c};")
+            };
             match pred {
                 Some((sw, not)) => {
                     let pc = COMPONENTS[((sw >> (2 * k)) & 3) as usize];
@@ -492,6 +614,15 @@ impl Ctx<'_> {
                 let x = self.scalar(&ins.src[0])?;
                 format!("vec4<f32>(cos({x}), sin({x}), 0.0, 0.0)")
             }
+            op::MOVA => src(0)?,
+            op::SGN => format!("sign({})", src(0)?),
+            op::EXPP => v4(format!("exp2({})", self.scalar(&ins.src[0])?)),
+            op::LOGP => v4(format!("log2(abs({}))", self.scalar(&ins.src[0])?)),
+            op::LIT => {
+                let a = src(0)?;
+                format!("vec4<f32>(1.0, max(({a}).x, 0.0), select(0.0, exp2(m9(vec4<f32>(clamp(({a}).w, -127.9961, 127.9961)), vec4<f32>(log2(({a}).y))).x), ({a}).x > 0.0 && ({a}).y > 0.0), 1.0)")
+            }
+            op::DST => format!("vec4<f32>(1.0, m9({}, {}).y, ({}).z, ({}).w)", src(0)?, src(1)?, src(0)?, src(1)?),
             op::DSX => format!("dpdx({})", src(0)?),
             op::DSY => format!("dpdy({})", src(0)?),
             op::M4X4 | op::M4X3 | op::M3X4 | op::M3X3 | op::M3X2 => {

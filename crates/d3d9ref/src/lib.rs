@@ -99,6 +99,79 @@ pub fn colour_outputs(s: &d3d9shader::Shader) -> Vec<u32> {
     v
 }
 
+/// The inputs of one vertex-shader execution.
+#[derive(Clone, Debug, Default)]
+pub struct VertexRun {
+    /// c0..c255
+    pub constants: Vec<[f32; 4]>,
+    pub ints: Vec<[i32; 4]>,
+    pub bools: Vec<bool>,
+    /// The value of each declared input, in declaration order.
+    pub attributes: Vec<[f32; 4]>,
+    /// Vertex textures by sampler index.
+    pub textures: Vec<Option<Texture>>,
+}
+
+/// A declared vertex-shader output and the value it received (None for
+/// outputs the rasteriser cannot pass on: point size).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VertexOutput {
+    pub usage: u32,
+    pub index: u32,
+    pub register: u32,
+    /// The declaration's write mask: only these components are defined.
+    pub mask: u8,
+    pub value: Option<[f32; 4]>,
+}
+
+/// A vertex shader's declared inputs and outputs, in declaration order.
+pub fn vertex_interface(s: &d3d9shader::Shader) -> (Vec<Input>, Vec<VertexOutput>) {
+    let (mut inputs, mut outputs) = (Vec::new(), Vec::new());
+    for i in s.instructions.iter().filter(|i| i.opcode == op::DCL) {
+        let (Some(d), Some(t)) = (i.dst.as_ref(), i.decl) else { continue };
+        let (usage, index) = (t & 0x1F, (t >> 16) & 0xF);
+        match d.kind {
+            reg::INPUT => inputs.push(Input { usage, index, register: d.index }),
+            reg::OUTPUT => outputs.push(VertexOutput { usage, index, register: d.index, mask: d.mask_or_swizzle, value: None }),
+            _ => {}
+        }
+    }
+    (inputs, outputs)
+}
+
+/// The rewrite described at [`Oracle::run_vertex`].
+fn capture_position(vs: &[u32], s: &d3d9shader::Shader, inputs: &[Input], outputs: &[VertexOutput]) -> Result<Vec<u32>, String> {
+    if outputs.iter().any(|o| o.usage == 5 && o.index >= 14) || inputs.iter().any(|i| i.usage == 5 && i.index == 15) {
+        return Err("the shader uses texcoord14/15, which the capture needs".into());
+    }
+    let free_out = (0..12).find(|r| !outputs.iter().any(|o| o.register == *r)).ok_or("no free output register")?;
+    let free_in = (0..16).find(|r| !inputs.iter().any(|i| i.register == *r)).ok_or("no free input register")?;
+    let mut tokens = vs.to_vec();
+    // redeclare the position output: its dcl usage token becomes texcoord14
+    let mut at = 1;
+    for ins in &s.instructions {
+        let t = tokens[at];
+        let len = if ins.opcode == op::COMMENT { ((t >> 16) & 0x7FFF) as usize } else { ((t >> 24) & 0xF) as usize };
+        if ins.opcode == op::DCL {
+            if let (Some(d), Some(u)) = (ins.dst.as_ref(), ins.decl) {
+                if d.kind == reg::OUTPUT && u & 0x1F == 0 && (u >> 16) & 0xF == 0 {
+                    tokens[at + 1] = 0x8000_0000 | 5 | (14 << 16);
+                }
+            }
+        }
+        at += 1 + len;
+    }
+    let end = tokens.len() - 1;
+    assert_eq!(tokens[end], 0x0000_FFFF);
+    tokens.truncate(end);
+    tokens.extend_from_slice(&[0x0200_0001, 0xE00F_0000 | free_out, 0x90E4_0000 | free_in, 0x0000_FFFF]);
+    let mut out = vec![tokens[0]];
+    out.extend_from_slice(&[0x0200_001F, 0x8000_0000, 0xE00F_0000 | free_out]); // dcl_position o_free
+    out.extend_from_slice(&[0x0200_001F, 0x8000_0000 | 5 | (15 << 16), 0x900F_0000 | free_in]); // dcl_texcoord15 v_free
+    out.extend_from_slice(&tokens[1..]);
+    Ok(out)
+}
+
 /// The vs_3_0 pass-through for `inputs`: position from v0, output k+1 =
 /// constant c_k for the k-th pixel-shader input, with its usage.
 pub fn pass_through(inputs: &[Input]) -> Vec<u32> {
@@ -176,6 +249,8 @@ const SET_VERTEX_DECLARATION: usize = 87;
 const CREATE_VERTEX_SHADER: usize = 91;
 const SET_VERTEX_SHADER: usize = 92;
 const SET_VERTEX_SHADER_CONSTANT_F: usize = 94;
+const SET_VERTEX_SHADER_CONSTANT_I: usize = 96;
+const SET_VERTEX_SHADER_CONSTANT_B: usize = 98;
 const CREATE_PIXEL_SHADER: usize = 106;
 const SET_PIXEL_SHADER: usize = 107;
 const SET_PIXEL_SHADER_CONSTANT_F: usize = 109;
@@ -346,6 +421,116 @@ impl Oracle {
             values.push(read_texel(self.readback[k])?);
         }
         Ok(values)
+    }
+
+    /// Run vertex shader `vs` once on a single vertex with `run`'s inputs;
+    /// the value of every output it declares (position included).
+    ///
+    /// D3D9 outputs can only be observed through the rasteriser, so the
+    /// shader is rewritten: its position output is redeclared as texcoord14,
+    /// a new position output receives (0, 0, 0, 1) from an extra input
+    /// (texcoord15), and one point is drawn on the 1x1 targets; generated
+    /// pixel shaders copy four outputs at a time to the targets. A point's
+    /// attributes are not interpolated, so the values arrive exactly.
+    pub fn run_vertex(&mut self, vs: &[u32], run: &VertexRun) -> Result<Vec<VertexOutput>, String> {
+        let shader = d3d9shader::parse(vs).map_err(|e| e.to_string())?;
+        let (inputs, outputs) = vertex_interface(&shader);
+        let rewritten = capture_position(vs, &shader, &inputs, &outputs)?;
+        unsafe {
+            let mut created: Vec<Obj> = Vec::new();
+            let r = self.draw_vertex(&rewritten, &shader, &inputs, &outputs, run, &mut created);
+            for o in created {
+                release(o);
+            }
+            r
+        }
+    }
+
+    unsafe fn draw_vertex(&mut self, vs: &[u32], shader: &d3d9shader::Shader, inputs: &[Input], outputs: &[VertexOutput],
+                          run: &VertexRun, created: &mut Vec<Obj>) -> Result<Vec<VertexOutput>, String> {
+        let d = self.device;
+        let mut vso: Obj = std::ptr::null_mut();
+        check(com!(d, CREATE_VERTEX_SHADER, (*const u32, *mut Obj), vs.as_ptr(), &mut vso), "CreateVertexShader")?;
+        created.push(vso);
+        // declaration: the shader's inputs, then the extra texcoord15
+        let mut elements: Vec<u16> = Vec::new();
+        for (k, i) in inputs.iter().enumerate() {
+            elements.extend_from_slice(&[0, 16 * k as u16, 3, (i.usage | (i.index << 8)) as u16]);
+        }
+        elements.extend_from_slice(&[0, 16 * inputs.len() as u16, 3, 5 | (15 << 8)]);
+        elements.extend_from_slice(&[0x00FF, 0, 17, 0]);
+        let mut decl: Obj = std::ptr::null_mut();
+        check(com!(d, CREATE_VERTEX_DECLARATION, (*const u16, *mut Obj), elements.as_ptr(), &mut decl), "CreateVertexDeclaration")?;
+        created.push(decl);
+        let mut vertex: Vec<f32> = Vec::new();
+        for k in 0..inputs.len() {
+            vertex.extend_from_slice(&run.attributes.get(k).copied().unwrap_or([0.0; 4]));
+        }
+        vertex.extend_from_slice(&[0.0, 0.0, 0.0, 1.0]);
+        for (state, value) in [(22u32, 1u32), (7, 0), (27, 0), (15, 0), (194, 0), (168, 0xF), (190, 0xF), (191, 0xF), (192, 0xF), (174, 0)] {
+            com!(d, SET_RENDER_STATE, (u32, u32), state, value);
+        }
+        com!(d, SET_VERTEX_DECLARATION, (Obj), decl);
+        com!(d, SET_VERTEX_SHADER, (Obj), vso);
+        let mut cf: Vec<f32> = run.constants.iter().flatten().copied().collect();
+        cf.resize(256 * 4, 0.0);
+        com!(d, SET_VERTEX_SHADER_CONSTANT_F, (u32, *const f32, u32), 0, cf.as_ptr(), 256);
+        let mut ci: Vec<i32> = run.ints.iter().flatten().copied().collect();
+        ci.resize(16 * 4, 0);
+        com!(d, SET_VERTEX_SHADER_CONSTANT_I, (u32, *const i32, u32), 0, ci.as_ptr(), 16);
+        let mut cb: Vec<i32> = run.bools.iter().map(|&b| b as i32).collect();
+        cb.resize(16, 0);
+        com!(d, SET_VERTEX_SHADER_CONSTANT_B, (u32, *const i32, u32), 0, cb.as_ptr(), 16);
+        for (index, kind) in samplers(shader) {
+            let tex = match run.textures.get(index as usize).cloned().flatten() {
+                Some(t) if t.kind == kind => {
+                    let o = self.texture(&t)?;
+                    created.push(o);
+                    o
+                }
+                Some(t) => return Err(format!("sampler s{index} is {kind:?}, the run gives {:?}", t.kind)),
+                None => std::ptr::null_mut(),
+            };
+            // vertex samplers are D3DVERTEXTEXTURESAMPLER0 (257) + n
+            com!(d, SET_TEXTURE, (u32, Obj), 257 + index, tex);
+            for (state, value) in [(5u32, 1u32), (6, 1), (7, 0), (1, 1), (2, 1), (3, 1), (11, 0)] {
+                com!(d, SET_SAMPLER_STATE, (u32, u32, u32), 257 + index, state, value);
+            }
+        }
+        // the observable outputs: everything but psize, with position as texcoord14
+        let observed: Vec<(usize, u32, u32)> = outputs.iter().enumerate()
+            .filter(|(_, o)| o.usage != 4)
+            .map(|(k, o)| if o.usage == 0 && o.index == 0 { (k, 5, 14) } else { (k, o.usage, o.index) })
+            .collect();
+        let mut result = outputs.to_vec();
+        for group in observed.chunks(4) {
+            let mut ps = vec![0xFFFF_0300];
+            for (k, &(_, usage, index)) in group.iter().enumerate() {
+                ps.extend_from_slice(&[0x0200_001F, 0x8000_0000 | usage | (index << 16), 0x900F_0000 | k as u32]);
+            }
+            for k in 0..group.len() as u32 {
+                ps.extend_from_slice(&[0x0200_0001, 0x800F_0800 | k, 0x90E4_0000 | k]);
+            }
+            ps.push(0x0000_FFFF);
+            let mut pso: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_PIXEL_SHADER, (*const u32, *mut Obj), ps.as_ptr(), &mut pso), "CreatePixelShader")?;
+            created.push(pso);
+            for k in 0..4u32 {
+                let t = if (k as usize) < group.len() { self.targets[k as usize] } else { std::ptr::null_mut() };
+                com!(d, SET_RENDER_TARGET, (u32, Obj), k, t);
+            }
+            com!(d, SET_PIXEL_SHADER, (Obj), pso);
+            check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;
+            check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), 1, 0, 1.0, 0), "Clear")?;
+            let hr = com!(d, DRAW_PRIMITIVE_UP, (u32, u32, *const f32, u32), 1, 1, vertex.as_ptr(), 16 * (inputs.len() as u32 + 1));
+            com!(d, END_SCENE, ());
+            check(hr, "DrawPrimitiveUP")?;
+            for (k, &(o, _, _)) in group.iter().enumerate() {
+                check(com!(d, GET_RENDER_TARGET_DATA, (Obj, Obj), self.targets[k], self.readback[k]), "GetRenderTargetData")?;
+                result[o].value = Some(read_texel(self.readback[k])?);
+            }
+        }
+        Ok(result)
     }
 
     unsafe fn texture(&mut self, t: &Texture) -> Result<Obj, String> {
