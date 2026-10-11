@@ -43,6 +43,19 @@ impl F32 {
     }
 }
 
+/// An `fld dword` / `fstp dword` pair: the value is kept, except that a
+/// signalling NaN becomes quiet (the x87 load raises the masked invalid
+/// exception and sets the quiet bit). Checked against the CPU by
+/// `crates/ddnative/tests/units.rs` (`x87_copy_matches_the_cpu`).
+pub fn x87_copy(v: f32) -> f32 {
+    let bits = v.to_bits();
+    if v.is_nan() && bits & 0x0040_0000 == 0 {
+        f32::from_bits(bits | 0x0040_0000)
+    } else {
+        v
+    }
+}
+
 impl From<f32> for F32 {
     fn from(v: f32) -> F32 {
         F32(v)

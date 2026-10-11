@@ -587,6 +587,67 @@ pub fn f_00cfc620(m: &mut dyn Mem, cpu: &mut Cpu) {
     perspective_fov(m, cpu, 2);
 }
 
+/// thiscall `MtMatrix *fromEuler(const MtVector3 *angles, const
+/// MtVector3 *translation)`, `ret 8`: a 16-aligned 0x38-byte frame plus
+/// pushes of ESI and EDI; spills the angles, three sines and two cosines;
+/// six CRT calls; the translation through the x87.
+pub fn f_00cfc1d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (entry_esp, ebp, esi, edi, this) = (cpu.esp, cpu.ebp, cpu.esi, cpu.edi, cpu.ecx);
+    let (pa, pt) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let angles = load_vec3(m, pa);
+    let f = aligned_frame(cpu, 0x38);
+    let local = |off: u32| f.wrapping_sub(8).wrapping_add(off);
+    pushed(m, cpu, 1, ebp);
+    m.set_u32(f.wrapping_sub(4), esi);
+    m.set_u32(f.wrapping_sub(8), edi);
+    (cpu.ebp, cpu.esp, cpu.esi, cpu.edi) = (entry_esp.wrapping_sub(4), f.wrapping_sub(8), this, pa);
+    for (off, v) in [(0x14, angles.x), (0x18, angles.y), (0x1C, angles.z)] {
+        spill(m, local(off), v);
+    }
+    // return addresses and spill slots of the six calls, in order
+    const CALLS: [(u32, u32); 6] = [(0x00CF_C1EF, 0x20), (0x00CF_C205, 0x24), (0x00CF_C21B, 0x28),
+                                    (0x00CF_C22C, 0x30), (0x00CF_C23D, 0x34), (0x00CF_C24E, 0)];
+    let mut k = 0;
+    let mat = matrix::from_euler(angles, Vec3::default(), |which, a| {
+        let target = if which == matrix::Trig::Sin { CRT_SINF } else { CRT_COSF };
+        cpu.xmm[0] = scalar(a);
+        call_out(m, cpu, target, CALLS[k].0);
+        let v = F32::from_bits(cpu.xmm[0][0]);
+        if CALLS[k].1 != 0 {
+            spill(m, local(CALLS[k].1), v);
+        }
+        k += 1;
+        v
+    });
+    // the rotation part; the translation goes through the x87 as in the
+    // original (fld/fstp: exact x87 state, the same bytes as x87_copy)
+    for i in 0..12 {
+        m.set_u32(this.wrapping_add(4 * i as u32), mat.at(i).to_bits());
+    }
+    for k in 0..3u32 {
+        cpu.st.memory::<0x00d9, 4, false>(m, pt.wrapping_add(4 * k));
+        cpu.st.memory::<0x18d9, 4, true>(m, this.wrapping_add(0x30 + 4 * k));
+    }
+    m.set_u32(this.wrapping_add(0x3C), ONE.to_bits());
+    let r = |i: usize| F32::from_bits(m.u32(local(0x20 + 4 * i as u32)));
+    let (sx, sz) = (r(0), r(2));
+    let cx = F32::from_bits(m.u32(local(0x30)));
+    let cy = F32::from_bits(m.u32(local(0x34)));
+    let upper = cpu.xmm[0]; // the last cosf's xmm0, whose upper lanes xmm1 keeps
+    cpu.xmm = [
+        scalar(ONE),
+        [mat.at(8).to_bits(), upper[1], upper[2], upper[3]],
+        scalar(mat.at(9)),
+        scalar(cx * cy),
+        scalar(sx),
+        scalar(sz),
+        scalar(mat.at(5)),
+        scalar(sx * sz),
+    ];
+    (cpu.eax, cpu.esi, cpu.edi, cpu.ebp, cpu.esp) = (pt, esi, edi, ebp, entry_esp);
+    ret(cpu, 8);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; the others keep their
 /// entry values, see the module comment).
@@ -595,6 +656,7 @@ pub const PORTS: &[(u32, ddnative_base::x86::LiftFn, u8)] = &[
     (0x007A_D870, f_007ad870, 0b0001_1111),
     (0x007A_D8E0, f_007ad8e0, 0b1111_1111),
     (0x007A_D9D0, f_007ad9d0, 0b1111_1111),
+    (0x00CF_C1D0, f_00cfc1d0, 0b1111_1111),
     (0x00CF_C350, f_00cfc350, 0b1111_1111),
     (0x00CF_C4B0, f_00cfc4b0, 0b1111_1111),
     (0x00CF_C620, f_00cfc620, 0b1111_1111),

@@ -273,3 +273,33 @@ pub fn perspective_fov_lh(base: &Mat44, near: F32, far: F32, fovy: F32, aspect: 
     m.m[3][3] = O;
     m
 }
+
+/// Which CRT routine a builder calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trig {
+    /// sinf (0x012F0906)
+    Sin,
+    /// cosf (0x012F0A55)
+    Cos,
+}
+
+/// A rotation from Euler angles (radians about x, y and z; the matrix is
+/// `Rz * Ry * Rx` in row-vector form, i.e. x is applied first) with a
+/// translation. The six sines and cosines come from `trig`, called in the
+/// original's order: sin x, sin y, sin z, cos x, cos y, cos z. The
+/// translation is copied through the x87 (`fld`/`fstp`), which quiets a
+/// signalling NaN.
+// Translated from 0x00CFC1D0 (DDDA.exe 2017-12-13 Steam), MtMatrix from Euler angles.
+pub fn from_euler(angles: Vec3, translation: Vec3, mut trig: impl FnMut(Trig, F32) -> F32) -> Mat44 {
+    let (sx, sy, sz) = (trig(Trig::Sin, angles.x), trig(Trig::Sin, angles.y), trig(Trig::Sin, angles.z));
+    let (cx, cy, cz) = (trig(Trig::Cos, angles.x), trig(Trig::Cos, angles.y), trig(Trig::Cos, angles.z));
+    let copy = |v: F32| F32(crate::scalar::x87_copy(v.0));
+    Mat44 {
+        m: [
+            [cz * cy, cy * sz, -sy, O],
+            [cz * sy * sx - cx * sz, sz * sy * sx + cx * cz, cy * sx, O],
+            [cz * sy * cx + sx * sz, sz * sy * cx - cz * sx, cx * cy, O],
+            [copy(translation.x), copy(translation.y), copy(translation.z), ONE],
+        ],
+    }
+}

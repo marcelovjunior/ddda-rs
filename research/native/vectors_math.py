@@ -77,6 +77,7 @@ PORTS = {
     0x00CFCD40: ("euler", 1),
     0x00CFCE60: ("euler", 1),
     0x00CFCF80: ("euler", 1),
+    0x00CFC1D0: ("from_euler", 2),
     0x00CFC350: ("fov", 4),
     0x00CFC4B0: ("fov", 6),
     0x00CFC620: ("fov", 4),
@@ -264,6 +265,16 @@ def edge_cases(addr, kind, nargs, n, seed):
                 struct.pack_into("<4I", obj, VEC[k] - OBJ_WINDOW[0], *v)
             if rnd.random() < 0.1:  # the same point twice
                 obj[VEC[1] - OBJ_WINDOW[0]:VEC[1] - OBJ_WINDOW[0] + 16] = obj[VEC[0] - OBJ_WINDOW[0]:VEC[0] - OBJ_WINDOW[0] + 16]
+        elif kind == "from_euler":
+            # the translation goes through the x87: quiet NaNs only (Unicorn
+            # does not quiet a signalling NaN on fld; the CPU does, see
+            # ddnative's x87_copy hardware test)
+            quiet = lambda b: b | 0x400000 if is_nan(b) else b
+            angles = [floats(rnd) if rnd.random() < 0.3 else f2b(rnd.uniform(-7, 7)) for _ in range(4)]
+            trans = [quiet(floats(rnd)) for _ in range(4)]
+            struct.pack_into("<4I", obj, VEC[0] - OBJ_WINDOW[0], *angles)
+            struct.pack_into("<4I", obj, VEC[1] - OBJ_WINDOW[0], *trans)
+            args = [VEC[0], VEC[1]]
         elif kind == "euler":
             pick = rnd.random()
             if pick < 0.5:
