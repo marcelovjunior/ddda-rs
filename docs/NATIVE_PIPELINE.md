@@ -507,6 +507,13 @@ call handlers remain thread-local. A missing lifted target panics; it
 never falls back to an external mock. Cached patterns and vectors keep
 their previous call boundaries, so splitting needs no new recordings.
 
+**Unicorn's code-hook size is not always an instruction length.** The
+`size` passed to a `UC_HOOK_CODE` callback is sometimes a huge sentinel
+value. Decoding with it read about 4 GB in one call: that, not a leak, is
+what took vector workers to 3-4 GB and made Claude Code stop jobs for low
+memory. Every decode in `harness.py` reads at most 15 bytes and stays on the
+mapped page (`ins_len`).
+
 **Vector runs and memory.** Each Unicorn instance gets a 32 MB translation
 buffer (`harness.TCG_BUFFER`; the 1 GB default let workers reach 4 GB).
 `lift.py vectors` collects garbage after each function, replaces a worker
