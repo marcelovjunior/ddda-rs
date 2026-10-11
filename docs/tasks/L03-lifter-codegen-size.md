@@ -56,4 +56,108 @@ As in L01 (docs/tasks/L01-lifter-switch-tables.md, "Rules"):
 
 ## Results
 
-(Codex fills this in.)
+Implemented emission-only changes from the assigned `6369a7e` base (the
+assignment superseded the older base above): in-place `Cpu` fields instead
+of unpack/save/reload sequences; exact binary-ALU helpers retaining every
+flag write; straight-line emission for 10,114 single-entry blocks without
+dispatcher control flow; and module-level lint allowances. Cached arms,
+call boundaries, supported instructions and function selection are unchanged.
+No scan or shared-data copy was performed.
+
+### Measurements
+
+Windows x86_64 MSVC, rustc 1.99.0 (`b940084d7`, LLVM 23.1.1),
+`CARGO_BUILD_JOBS=4`, one worktree-local target directory. Each clean trial
+used `cargo clean -p ddnative`, then
+`cargo test -p ddnative --test lifted --no-run --timings`. The touched trial
+changed only `lifted_000.rs`'s timestamp and repeated that command. Timings
+exclude generation and vector execution. These are shared-machine wall
+times, not isolated benchmarks; other head compiler jobs were active during
+both full builds. The baseline library alone took 1,038.12 seconds.
+
+The full set has exactly 25,609 functions in 65 modules and 76,533 cases.
+The prepared pattern/vector SHA-256 hashes were restored and checked before
+the final build (`28ff2966...84d9`, `20503b18...fb38`).
+
+| Full set | Before | After |
+|---|---:|---:|
+| All generated Rust under `src/generated`, bytes | 109,938,038 | 79,550,162 |
+| Lifted modules and lookup only, bytes | 109,870,358 | 79,482,482 |
+| Generated lifted test, bytes | 307,944 | 307,944 |
+| Clean lifted-test build, seconds | 1,040.73 | 275.91 |
+| Touched-module build, seconds | 113.96 | 63.24 |
+
+Source size falls 27.6%; clean and touched builds take 73.5% and 44.5% less wall time.
+Cargo's library timing changes from 368.08 to 204.13 seconds frontend,
+and from 670.04 to 69.58 seconds code generation.
+
+Iteration used the first 3,000 functions by address plus transitive callees:
+3,174 functions / 9,476 cases. Every row below is a clean package build.
+
+| Subset variant | Lifted Rust bytes | Build seconds |
+|---|---:|---:|
+| Original emitter, default profile | 13,475,309 | 41.38 |
+| In-place Cpu, module lint allowances | 11,133,126 | 29.58 |
+| Plus binary-ALU helpers | 9,452,804 | 23.59 |
+| Plus straight-line bodies | 9,293,464 | 22.23 |
+| Plus test debug = 1 (selected) | 9,293,464 | 20.06 |
+| Test debug = 0 | 9,293,464 | 19.64 |
+| Debug = 1, codegen-units = 64 | 9,293,464 | 22.97 |
+| Debug = 1, 100 functions/module | 9,304,192 | 21.35 |
+| Debug = 1, opt-level = 1 | 9,293,464 | 29.30 |
+
+The workspace sets only `profile.test.package.ddnative.debug = 1`.
+It retains backtrace line information; test local-variable debug metadata
+is omitted. Dev/release profiles, 400-function modules, default codegen
+units and opt-level remain unchanged. Debug = 0 saved just 0.42 seconds over
+level 1 in this trial. A repeat selected-profile build during subset replay
+took 19.08 seconds. No flag liveness assumptions or inline/cold hints were
+added. See `docs/NATIVE_PIPELINE.md` for codegen and debugger conventions.
+
+### Verification and baseline findings
+
+- 17 Python regressions pass, including synthetic switch/boundary tests and
+  compiled old/new emitter comparison of complete CPU state, call snapshots
+  and ordered memory events. No executable-derived fixtures are committed.
+- `cargo test -p ddnative --lib` passes both tests, including exhaustive
+  byte operands and width/sign boundary tests of all five ALU helpers.
+- The 9,476-case subset passes with the private boundary-corrected fixtures
+  described below (2.64 seconds test execution).
+- **Required full prepared-vector replay still fails:** both the unchanged
+  baseline and final emitter fail the same 23 functions, with no newly
+  failing functions. Test execution is 28.81 seconds before / 24.63 seconds
+  after. The full private diagnostic set fails the same four functions
+  listed below (22.76 seconds). The requested all-green full gate is blocked
+  by these existing findings, not waived or reported as passing.
+
+The unchanged baseline already **fails 23 functions** on the prepared
+76,533 cases. This was established before modifying any Rust source.
+The list and logs are private under `E:/ddda-re/notes/native-L03`
+(`baseline-failed.json`, `baseline-vectors.log`). No functions or failing
+cases were dropped to obtain a passing result.
+
+A private recorder diagnostic identifies two existing call-contract
+mismatches: indirect calls to a closed function execute in `run_sparse`
+although the lifter emits `call_ext`; recursive calls bypass mocking via
+the recorder's in-range early return. For example, `0x004CC180` indirectly
+calls closed getter `0x008A9900`, and `0x005A7030` calls itself. The diagnostic
+processes call entries before the in-range return and applies the
+closed/platform exemption only to direct branches. Repository `harness.py`
+is unchanged; the general fix, including indirect platform-hook ordering,
+is for the head to review.
+
+Using two workers, that private diagnostic replaces exactly 63 cases across
+the 23 functions, preserving all 25,609 functions and the 76,533-case total.
+Both emitters were replayed on the 36-function / 102-case dependency closure.
+It clears 19 failures; the same four still fail with both emitters and fresh
+recordings: `0x00C1D790`, `0x00D4E940`, `0x00D9EF20`, `0x00FB9A10`.
+The first pair of logs is `diagnostic-baseline.log` / `diagnostic-current.log`;
+the private recorder source is `diagnose-recorder.py` and
+`diagnostic-run-sparse.py`. These are diagnostic results, not a passing full
+original-exe check. The head was notified through the board; the codegen
+change preserves the baseline semantics rather than masking these failures.
+
+Private `*-timing.html`, `*.json` measurement summaries and logs record the
+trials. Generated Rust, generated tests, raw vectors and private diagnostics
+are excluded from the commits. Implementation and conventions are in
+`00c18a5`; this results/milestone update is a separate documentation commit.

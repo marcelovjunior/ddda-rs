@@ -560,3 +560,25 @@ opening (codex-31), route perf (codex-29).
   invalidation when the callable set changes.
 - **One next action:** build structured original-exe fixtures for the 15
   unverified functions listed in `E:/ddda-re/notes/native-L01/unverified-new.json`.
+
+## Batch 2026-10-11 (L03: native lifter codegen size)
+
+- **Implemented:** in-place Cpu state, exact binary-ALU helpers, conservative
+  straight-line bodies, and limited debug info for ddnative tests. Cached
+  instruction semantics and the 25,609-function selection remain unchanged.
+  Generated Rust falls 109.94 -> 79.55 MB; clean lifted-test build falls
+  1,040.73 -> 275.91 seconds and touched-module rebuild 113.96 -> 63.24 seconds
+  with four Cargo jobs. See [L03 results](tasks/L03-lifter-codegen-size.md#results).
+- **Tested:** 17 Python regressions and both Rust library tests pass.
+  A 9,476-case subset passes with private call-boundary-corrected fixtures.
+  Full replay of the unchanged prepared 76,533 cases fails the same 23
+  functions before and after codegen changes; no newly failing functions.
+  Generated code, tests and private data are excluded from source commits.
+- **Blockers / limits:** the required all-green full replay is not achieved.
+  A private recorder diagnostic clears 19 existing failures (indirect calls
+  to closed targets and recursive calls were not mocked as the lifter
+  expects). Four still fail with either emitter and fresh recordings:
+  `0x00C1D790`, `0x00D4E940`, `0x00D9EF20`, `0x00FB9A10`. This is sampled
+  vector comparison, with external callees mocked, not gameplay comparison.
+- **One next action:** the head should resolve the recorder call contract
+  and the four remaining baseline mismatches, then rerun the full replay.
