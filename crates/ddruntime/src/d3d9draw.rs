@@ -13,7 +13,7 @@
 use crate::d3d9::{D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{objects, with_device, Kind};
 use crate::d3d9res::Image;
-pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
+pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -30,6 +30,12 @@ pub struct Recorder {
     pub fills: Vec<FillCall>,
     /// keep only counts after this many draws (long headless runs)
     pub limit: usize,
+    /// the gamma ramp last given (None: identity)
+    pub gamma: Option<Box<GammaRamp>>,
+    /// objects the runtime freed, in order
+    pub released: Vec<u32>,
+    /// occlusion queries begun and ended, in order
+    pub queries: Vec<(u32, bool)>,
 }
 
 impl GraphicsBackend for Recorder {
@@ -58,6 +64,24 @@ impl GraphicsBackend for Recorder {
     /// A recorder draws nothing, so it has nothing to read back.
     fn read_back(&mut self, _target: &Target) -> Option<Vec<u8>> {
         None
+    }
+    fn query_begin(&mut self, query: u32) {
+        self.queries.push((query, true));
+    }
+    fn query_end(&mut self, query: u32) {
+        self.queries.push((query, false));
+    }
+    /// Nothing is drawn, so no samples are counted.
+    fn query_result(&mut self, _query: u32) -> Option<u64> {
+        None
+    }
+    fn gamma(&mut self, ramp: Option<&GammaRamp>) {
+        self.gamma = ramp.map(|r| Box::new(*r));
+    }
+    fn release(&mut self, resource: u32) {
+        if self.limit == 0 || self.released.len() < self.limit {
+            self.released.push(resource);
+        }
     }
 }
 

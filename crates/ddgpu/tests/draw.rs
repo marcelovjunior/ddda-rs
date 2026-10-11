@@ -324,3 +324,199 @@ fn copies_fills_and_read_back() {
     assert!(b.chunks_exact(4).all(|px| px == [0, 0, 255, 255]), "the top-left 2x2 of the source is all red");
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
 }
+
+fn depth_target() -> Target {
+    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0 }
+}
+
+/// The full-screen triangle at depth `z`.
+fn triangle_at(z: f32) -> Vec<u8> {
+    let v: [[f32; 6]; 3] = [[-1.0, -1.0, z, 1.0, 0.0, 1.0], [-1.0, 3.0, z, 1.0, 0.0, -1.0], [3.0, -1.0, z, 1.0, 2.0, 1.0]];
+    v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// A constant-colour draw at depth `z` against the depth target (ZFUNC
+/// LESS, depth writes on), with `states` on top.
+fn depth_draw(z: f32, alpha: f32, states: &[(u32, u32)]) -> DrawCall {
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 0.5f32.to_bits(), 0, alpha.to_bits()];
+    let mut d = draw(ps_constant(), c, vec![]);
+    d.vertices = Vertices::Inline { bytes: triangle_at(z), stride: 24 };
+    d.depth = Some(depth_target());
+    let mut all: Vec<(u32, u32)> = vec![(7, 1), (14, 1), (23, 2)];
+    all.extend_from_slice(states);
+    for (k, v) in all {
+        d.render_states.retain(|s| s.0 != k);
+        d.render_states.push((k, v));
+    }
+    d.render_states.sort();
+    d
+}
+
+#[test]
+fn occlusion_query_states_on_the_d3d9_driver() {
+    let Some(mut d3d9) = d3d9ref::Oracle::new() else {
+        eprintln!("skipped: no D3D9 device");
+        return;
+    };
+    let [before, building, after, count] = d3d9.occlusion_states().expect("D3D9 queries");
+    eprintln!("GetData before Issue {before:#x}, between BEGIN and END {building:#x}, after END {after:#x} (count {count})");
+    // the runtime's answers (crates/ddruntime/src/d3d9copy.rs) follow these
+    assert_eq!((after, count), (0, 0), "an ended query with no draws counts 0");
+}
+
+/// Issue occlusion queries around `draws` like the oracle does: query k
+/// begins before draw spans[k].start and ends after draw spans[k].end - 1.
+fn counted(gpu: &mut ddgpu::WgpuBackend, draws: &[DrawCall], spans: &[std::ops::Range<usize>]) -> Vec<u32> {
+    let ids: Vec<u32> = (0..spans.len() as u32).map(|k| 0x900 + k).collect();
+    let issue = |gpu: &mut ddgpu::WgpuBackend, at: usize, end: bool| {
+        for (k, s) in spans.iter().enumerate() {
+            if end && s.end == at && s.start != at {
+                gpu.query_end(ids[k]);
+            } else if !end && s.start == at {
+                gpu.query_begin(ids[k]);
+                if s.end == at {
+                    gpu.query_end(ids[k]);
+                }
+            }
+        }
+    };
+    for (k, d) in draws.iter().enumerate() {
+        issue(gpu, k, false);
+        gpu.draw(d);
+        issue(gpu, k + 1, true);
+    }
+    issue(gpu, draws.len(), false);
+    ids.iter().map(|&q| gpu.query_result(q).expect("count") as u32).collect()
+}
+
+#[test]
+fn occlusion_counts_match_the_d3d9_driver() {
+    let (Some(mut d3d9), Some(mut gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let clear = ClearCall { flags: 1 | 2 | 4, z: 0.5, depth: Some(depth_target()), ..blue_clear() };
+    let mut draws = vec![
+        depth_draw(0.25, 1.0, &[]),                             // in front of the cleared depth
+        depth_draw(0.75, 1.0, &[]),                             // behind
+        depth_draw(0.75, 1.0, &[(7, 0)]),                       // depth test off
+        depth_draw(0.1, 0.25, &[(15, 1), (25, 7), (24, 128)]),  // alpha test GREATEREQUAL 128 kills it
+        depth_draw(0.1, 1.0, &[(22, 2)]),                       // culled (CULL_CW)
+        depth_draw(0.2, 1.0, &[(14, 0), (174, 1)]),             // scissor (below)
+    ];
+    draws[5].scissor = [0, 0, 2, 4];
+    // one query at a time, as the game issues them (FUN_011481B0 /
+    // FUN_011481F0); overlapping queries are not counted independently by
+    // the driver (a query spanning all six draws while the others ran
+    // counted only the last draw), so they are not compared
+    let spans = vec![0..1, 1..2, 2..3, 3..4, 4..5, 5..6, 6..6];
+    let (_, theirs) = d3d9.render_counted(&[], Some(&clear), &draws, &back_buffer(), &spans).expect("D3D9 render");
+    gpu.clear(&clear);
+    let ours = counted(&mut gpu, &draws, &spans);
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    eprintln!("occlusion counts: D3D9 {theirs:?}, wgpu {ours:?}");
+    assert_eq!(ours, theirs, "occlusion counts (wgpu / D3D9)");
+}
+
+/// vs_3_0: o0 = v0 + v1 (v1: texcoord1, the per-instance offset; one
+/// input register per instruction, so through r0)
+fn vs_offset() -> Vec<u32> {
+    vec![
+        0xFFFE_0300,
+        0x0200_001F, 0x8000_0000, 0x900F_0000, // dcl_position v0
+        0x0200_001F, 0x8001_0005, 0x900F_0001, // dcl_texcoord1 v1
+        0x0200_001F, 0x8000_0000, 0xE00F_0000, // dcl_position o0
+        0x0200_0001, 0x800F_0000, 0x90E4_0001, // mov r0, v1
+        0x0300_0002, 0xE00F_0000, 0x90E4_0000, 0x80E4_0000, // add o0, v0, r0
+        0x0000_FFFF,
+    ]
+}
+
+fn floats(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// Instanced draws (SetStreamSourceFreq, as the game's draw commands 2 and
+/// 3 make them): three instances of a one-pixel triangle offset per
+/// instance, indexed with a base vertex, and non-indexed (which D3D9 draws
+/// once) from vertex 3 and from vertex 0.
+#[test]
+fn instanced_draws_match_the_d3d9_driver() {
+    let (Some(mut d3d9), Some(_)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    // a triangle covering pixel (0, 0); buffer 0x400 has three unused
+    // vertices before it
+    let triangle = floats(&[-1.0, 1.0, 0.0, 1.0, -0.4, 1.0, 0.0, 1.0, -1.0, 0.4, 0.0, 1.0]);
+    let mut geometry = floats(&[9.0, 9.0, 0.0, 1.0].repeat(3));
+    geometry.extend_from_slice(&triangle);
+    // per instance: clip-space offsets of 2 pixels right, 0, 3 right and 1 down
+    let offsets = floats(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.5, -0.5, 0.0, 0.0]);
+    let indices: Vec<u8> = [0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+    let uploads = vec![
+        Upload::Buffer { resource: 0x400, bytes: geometry },
+        Upload::Buffer { resource: 0x401, bytes: offsets },
+        Upload::Buffer { resource: 0x402, bytes: indices },
+        Upload::Buffer { resource: 0x403, bytes: triangle },
+    ];
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 1f32.to_bits(), 0, 1f32.to_bits()];
+    for (indexed, start) in [(false, 0), (true, 3), (false, 3)] {
+        let mut d = draw(ps_constant(), c.clone(), vec![]);
+        d.vertex_shader = Some(vs_offset());
+        d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [1, 0, 0, 0, 3, 0, 5, 1]];
+        let geometry = if start == 0 { 0x403 } else { 0x400 };
+        d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)]);
+        if indexed {
+            d.indices = Indices::Buffer(0x402, 101);
+            d.base_vertex = start as i32;
+        } else {
+            d.start = start;
+        }
+        let theirs = d3d9.render(&uploads, Some(&blue_clear()), std::slice::from_ref(&d), &back_buffer()).expect("D3D9 render").rgba;
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        for u in &uploads {
+            gpu.upload(u.clone());
+        }
+        gpu.clear(&blue_clear());
+        gpu.draw(&d);
+        gpu.present(&back_buffer());
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        let ours = gpu.last_frame.unwrap().rgba;
+        let lit = |f: &[u8]| f.chunks_exact(4).enumerate().filter(|(_, p)| p[2] == 0).map(|(k, _)| k).collect::<Vec<_>>();
+        eprintln!("indexed {indexed} from {start}: D3D9 lit pixels {:?}, ours {:?}", lit(&theirs), lit(&ours));
+        assert_eq!(ours, theirs, "instanced draw, indexed {indexed}, from {start}");
+    }
+}
+
+#[test]
+fn a_gamma_ramp_maps_presented_frames() {
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else { return };
+    gpu.clear(&ClearCall { colour: 0xFF10_8040, ..blue_clear() });
+    let mut ramp = [[0u16; 256]; 3];
+    for channel in ramp.iter_mut() {
+        for (v, e) in channel.iter_mut().enumerate() {
+            *e = ((255 - v) as u16) << 8 | 0xFF;
+        }
+    }
+    gpu.gamma(Some(&ramp));
+    gpu.present(&back_buffer());
+    assert_eq!(&gpu.last_frame.as_ref().unwrap().rgba[0..4], &[0xEF, 0x7F, 0xBF, 0xFF], "inverted");
+    gpu.gamma(None);
+    gpu.present(&back_buffer());
+    assert_eq!(&gpu.last_frame.as_ref().unwrap().rgba[0..4], &[0x10, 0x80, 0x40, 0xFF], "identity");
+}
+
+#[test]
+fn a_released_surface_address_can_be_reused() {
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else { return };
+    gpu.clear(&blue_clear());
+    gpu.release(0x100);
+    let bigger = Target { width: 8, height: 2, ..back_buffer() };
+    gpu.clear(&ClearCall { targets: [Some(bigger.clone()), None, None, None], ..blue_clear() });
+    gpu.present(&bigger);
+    let f = gpu.last_frame.unwrap();
+    assert_eq!((f.width, f.height), (8, 2));
+}
