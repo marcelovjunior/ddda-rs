@@ -34,8 +34,19 @@ class RemainingTests(unittest.TestCase):
                    {'remap':bytes((0,1,2,0))}, {'targets':(0x400001,0x401010)},
                    {'remap':bytes((0,1))}):
             code,sections=self.switch(**kw)
-            with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True),patch.object(lift,'function_entries',return_value=frozenset({0x400000})),self.assertRaises(lift.Unsupported):
-                lift.lift(0x400000,len(code),ext=True)
+            with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True),patch.object(lift,'function_entries',return_value=frozenset({0x400000})):
+                with self.assertRaises(lift.Unsupported):
+                    lift.lift(0x400000,len(code))
+                # L22 ext open tables: an unproven remap uses table-only
+                # discovery (unknown runtime targets leave the body); bad
+                # targets or remap bytes still reject.
+                if 'code' in kw or kw.get('remap')==bytes((0,1)):
+                    lift.lift(0x400000,len(code),ext=True)
+                    self.assertEqual(lift.cached_body(0x400000,len(code),True)[1][0x40000c],[0x401000,0x401010])
+                else:
+                    with self.assertRaises(lift.Unsupported):
+                        lift.lift(0x400000,len(code),ext=True)
+            lift._BODY_CACHE.clear()
 
     def program(self,text,record=False):
         code=bytes.fromhex(text);sections=[(0x400000,code.ljust(4096,b'\xcc'))]

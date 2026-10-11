@@ -46,6 +46,11 @@ class Unsupported(Exception):
     pass
 
 
+class RuntimeTargets(list):
+    """Every known start as a possible destination of a runtime jump (ext):
+    not a proof of reachability, so x87 depth does not propagate along it."""
+
+
 SAVE = ("*cpu = Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
         "xmm: [xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7], fl, st, df: cpu.df };")
 LOAD = ("Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
@@ -187,9 +192,26 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
                                                  accept=accept, discover=True,
                                                  bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
                     except Unsupported as error:
-                        if (not ext or mn != "jmp" or i.operands[0].size != 4
-                                or str(error) != "indirect jump (not an absolute switch table)"):
+                        if not ext or mn != "jmp" or i.operands[0].size != 4:
                             raise
+                        if str(error) != "indirect jump (not an absolute switch table)":
+                            # L22: an absolute table the strict rules cannot
+                            # bound. Ext code reads the slot at run time and
+                            # leaves the body for any unknown target, so the
+                            # discovered set decides coverage, not soundness.
+                            targets = open_table(history, len(history) - 1, read,
+                                                 accept=lambda t: ((addr <= t < upper or t in found) and
+                                                                   (t == addr or t not in entries) and is_code(t)),
+                                                 bounded_accept=is_code)
+                            if not targets:
+                                # No valid forward slot (e.g. a negative index
+                                # below T): a runtime jump over known starts.
+                                switches[pc] = None
+                                break
+                            switches[pc] = targets
+                            for target in targets:
+                                heapq.heappush(todo, target)
+                            break
                         # No speculative decode through a runtime pointer.
                         # Known instruction starts remain local destinations;
                         # every other target crosses the external boundary.
@@ -204,7 +226,7 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
     ins = sorted(found.values(), key=lambda i: i.address)
     for pc, targets in switches.items():
         if targets is None:
-            switches[pc] = sorted(found)
+            switches[pc] = RuntimeTargets(sorted(found))
     ranges = []
     for i in ins:
         if ranges and ranges[-1][1] == i.address:
@@ -353,13 +375,92 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 # reachable starts, walked with their own static depths;
                 # its value is not a proof of the depth there. The recorder
                 # rejects any run whose x87 access meets an empty slot.
-                if not runtime_jump(i):
-                    for target in (switches or {}).get(i.address, []):
+                targets = (switches or {}).get(i.address, [])
+                if not runtime_jump(i) and not isinstance(targets, RuntimeTargets):
+                    for target in targets:
                         todo.append((at[target], depth))
                 if mn == "jmp":
                     break
             k = at.get(i.address + i.size, len(ins))
     return exits, sorted(push_sites)
+
+
+def table_bound(ins, k, index):
+    """Slots a dword table indexed by `index` at ins[k] can select, when the
+    linear path proves it: an adjacent `cmp index, imm` (or `mov R, imm;
+    cmp index, R`) with ja/jae, or an `and index, imm` with no later write
+    to the index register. None if unproven."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM
+    j = k - 1
+    if j >= 1 and ins[j].mnemonic in ("ja", "jae"):
+        cmp = ins[j - 1]
+        if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2 and cmp.operands[0].type == X86_OP_REG
+                and cmp.operands[0].reg == index and cmp.operands[0].size == 4):
+            limit = None
+            if cmp.operands[1].type == X86_OP_IMM:
+                limit = cmp.operands[1].imm & 0xffffffff
+            elif cmp.operands[1].type == X86_OP_REG and j >= 2:
+                mov = ins[j - 2]
+                if (mov.mnemonic == "mov" and mov.operands[0].type == X86_OP_REG
+                        and mov.operands[0].reg == cmp.operands[1].reg and mov.operands[1].type == X86_OP_IMM):
+                    limit = mov.operands[1].imm & 0xffffffff
+            if limit is not None and limit + (ins[j].mnemonic == "ja") <= 4096:
+                return limit + (ins[j].mnemonic == "ja")
+    name = ins[k].reg_name(index)
+    for i in reversed(ins[max(0, k - 32):k]):
+        if (i.mnemonic == "and" and i.operands[0].type == X86_OP_REG and i.operands[0].reg == index
+                and i.operands[1].type == X86_OP_IMM and 0 <= i.operands[1].imm < 4096):
+            return i.operands[1].imm + 1
+        try:
+            written = {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001  (no access detail: not proven)
+            return None
+        if written & {name, name[1:], name[1:] + "l", name[1] + "h"} or i.mnemonic in ("call", "ret"):
+            return None
+    return None
+
+
+def open_table(ins, k, read, accept, bounded_accept):
+    """Ext only: targets of an absolute dword table (`jmp [index*4 + T]`,
+    optionally after `movzx index, byte [src + R]`) that the strict rules
+    cannot bound. With a proven bound (table_bound; for a byte remap, the
+    largest remap byte under the source's bound) every valid slot in range
+    is a case and invalid slots are skipped; otherwise slots are read until
+    the first one `accept` refuses (the table-only rule). Slot values stay
+    runtime reads in the generated code."""
+    from capstone.x86 import X86_OP_REG, X86_OP_MEM
+    op = ins[k].operands[0]
+    if op.type != X86_OP_MEM or op.mem.segment or op.mem.base or not op.mem.index or op.mem.scale != 4:
+        return []
+    table, bound = op.mem.disp & 0xffffffff, None
+    prev = ins[k - 1] if k else None
+    if (prev is not None and prev.mnemonic == "movzx" and prev.operands[0].type == X86_OP_REG
+            and prev.operands[0].reg == op.mem.index and prev.operands[1].type == X86_OP_MEM
+            and prev.operands[1].size == 1 and prev.operands[1].mem.base and not prev.operands[1].mem.index
+            and not prev.operands[1].mem.segment):
+        source = table_bound(ins, k - 1, prev.operands[1].mem.base)
+        if source is not None:
+            try:
+                remap = read(prev.operands[1].mem.disp & 0xffffffff, source)
+            except KeyError:
+                remap = b""
+            bound = max(remap) + 1 if len(remap) == source and source else None
+    else:
+        bound = table_bound(ins, k, op.mem.index)
+    targets = []
+    for n in range(bound if bound is not None else 4096):
+        try:
+            data = read(table + 4 * n, 4)
+        except KeyError:
+            break
+        if len(data) != 4:
+            break
+        target, = struct.unpack("<I", data)
+        if (bounded_accept if bound is not None else accept)(target):
+            targets.append(target)
+        elif bound is None:
+            break
+    return sorted(set(targets))
 
 
 def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded_accept=None):
