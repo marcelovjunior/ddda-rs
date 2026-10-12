@@ -774,13 +774,16 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 if was_root:
                     outgoing = 0
             elif guarded and mn in ('movq','movss','movsd','movaps','movups','movdqa','movdqu',
-                                    'pxor','xorps','xorpd','fld','fldz','fld1','fstp','fst','fild','fistp',
+                                    'pxor','xorps','xorpd','shufps','shufpd','fxch',
+                                    'fld','fldz','fld1','fstp','fst','fild','fistp',
                                     'addss','subss','mulss','divss','sqrtss','minss','maxss',
                                     'addps','subps','mulps','divps','sqrtps','minps','maxps',
                                     'addsd','subsd','mulsd','divsd','sqrtsd','minsd','maxsd'):
                 # Only exact bitwise-zero vectors supply known store bytes.
                 # All other scalar/SIMD results remain opaque; no FP arithmetic
                 # or flags are inferred here.
+                # Register shuffles and x87 exchanges preserve integer control
+                # flow; their numeric outputs remain unknown.
                 zero_result = False
                 if len(op) == 2 and all(o.type == X86_OP_REG for o in op):
                     dst,src = (i.reg_name(o.reg) for o in op)
