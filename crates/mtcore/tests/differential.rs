@@ -210,7 +210,9 @@ fn windows(v: &Value) -> BTreeMap<u32, u8> {
 /// run their ports, as the runtime's dispatcher does): at the stub's entry
 /// (return address pushed) every general register and all xmm lanes must
 /// be as the original had them; the stub's return state (registers, xmm,
-/// stack window) is then restored.
+/// stack window) is then restored. The stack window must be the
+/// original's at the call too: the restore would hide a wrong push or
+/// spill before it.
 fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
     let calls = Rc::new(RefCell::new(
         c["calls"]
@@ -235,6 +237,9 @@ fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
         assert_eq!(cpu_regs(cpu), regs(&ev["in"]["regs"]), "registers at the call");
         let xmm: [[u32; 4]; 8] = std::array::from_fn(|k| std::array::from_fn(|l| u(&ev["in"]["xmm"][k][l])));
         assert_eq!(cpu.xmm, xmm, "xmm at the call");
+        let entry_stack: Vec<u8> = hex_bytes(ev["in"]["stack"].as_str().unwrap()).collect();
+        let stack_now: Vec<u8> = (0..entry_stack.len() as u32).map(|k| m.u8(base + k)).collect();
+        assert!(stack_now == entry_stack, "stack window at the call to {target:#x}");
         let o = &ev["out"];
         [
             cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi,
