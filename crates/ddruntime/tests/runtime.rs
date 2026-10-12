@@ -1917,3 +1917,56 @@ fn string_from_guid2_formats_as_windows_measured() {
     assert_eq!(call_service(system::string_from_guid2, &mut m, &[g, out, 38]).eax, 0);
     assert_eq!(m.u16(out), 0xEEEE, "nothing written");
 }
+
+#[test]
+fn the_window_creation_ime_calls_answer_as_windows_measured() {
+    use ddruntime::imm;
+    let (mut m, _r) = desktop();
+    let (wc, name, form) = (0x0030_0000, 0x0030_0100, 0x0030_0200);
+    for (k, u) in "MT\0".encode_utf16().enumerate() {
+        m.set_u16(name + 2 * k as u32, u);
+    }
+    m.set_u32(wc, 0x30);
+    m.set_u32(wc + 8, 0x0050_0000);
+    m.set_u32(wc + 40, name);
+    call_service(user32::register_class_ex_w, &mut m, &[wc]);
+    let hwnd = call_service(user32::create_window_ex_w, &mut m, &[0, name, 0, 0x00CA_0000, 32, 32, 1286, 749, 0, 0, 0x0040_0000, 0]).eax;
+    messages();
+    // 0x01106C80's sequence, before ShowWindow: no messages reach the window
+    let ime = call_service(imm::imm_get_default_ime_wnd, &mut m, &[hwnd]).eax;
+    let w = user32::window(ime).expect("the default IME window is a window");
+    assert_eq!((w.class.as_str(), w.style, w.parent, w.visible), ("IME", 0x8C00_0000, hwnd, false));
+    assert_eq!(call_service(imm::imm_get_default_ime_wnd, &mut m, &[hwnd]).eax, ime, "one per thread");
+    let himc = call_service(imm::imm_get_context, &mut m, &[hwnd]).eax;
+    assert_ne!(himc, 0);
+    assert_eq!(call_service(imm::imm_get_context, &mut m, &[hwnd]).eax, himc, "the same context");
+    for (k, v) in [1u32, 0, 0, 1, 1, 0, 0].into_iter().enumerate() {
+        m.set_u32(form + 4 * k as u32, v);
+    }
+    set_last_error(&mut m, 0x77);
+    let cpu = call_service(imm::imm_set_composition_window, &mut m, &[himc, form]);
+    assert_eq!((cpu.eax, cpu.esp, last_error(&mut m)), (1, 0x0011_0000, 0));
+    for (k, v) in [0u32, 0x80, 0, 0, 0, 0x437, 1, 0x437].into_iter().enumerate() {
+        m.set_u32(form + 4 * k as u32, v);
+    }
+    assert_eq!(call_service(imm::imm_set_candidate_window, &mut m, &[himc, form]).eax, 1);
+    assert_eq!(call_service(imm::imm_set_open_status, &mut m, &[himc, 0]).eax, 1);
+    assert_eq!(call_service(imm::imm_get_open_status, &mut m, &[himc]).eax, 0);
+    set_last_error(&mut m, 0x77);
+    assert_eq!((call_service(imm::imm_release_context, &mut m, &[hwnd, himc]).eax, last_error(&mut m)), (1, 0x77));
+    assert_eq!(messages(), Vec::<u32>::new(), "nothing is sent before the window has the focus");
+    // errors
+    assert_eq!(call_service(imm::imm_set_composition_window, &mut m, &[0, form]).eax, 0);
+    assert_eq!(last_error(&mut m), 6);
+    assert_eq!(call_service(imm::imm_get_context, &mut m, &[0x1234]).eax, 0);
+    assert_eq!(last_error(&mut m), 1400);
+    assert_eq!(call_service(imm::imm_get_default_ime_wnd, &mut m, &[0x1234]).eax, 0);
+    assert_eq!(last_error(&mut m), 1400);
+    // once shown (active, focused), the window is notified
+    call_service(user32::show_window, &mut m, &[hwnd, 1]);
+    messages();
+    WNDPROC_LOG.with(|l| l.borrow_mut().clear());
+    call_service(imm::imm_set_candidate_window, &mut m, &[himc, form]);
+    assert_eq!(WNDPROC_LOG.with(|l| l.borrow_mut().drain(..).collect::<Vec<_>>()), [(hwnd, 0x282, 9)], "IMN_SETCANDIDATEPOS");
+    x86::set_ext_calls(None);
+}

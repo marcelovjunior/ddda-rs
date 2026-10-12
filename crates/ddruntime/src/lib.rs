@@ -23,6 +23,7 @@ pub mod d3d9state;
 pub mod dispatch;
 pub mod files;
 pub mod image;
+pub mod imm;
 pub mod interfaces;
 pub mod memory;
 pub mod profile;
