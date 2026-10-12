@@ -206,8 +206,7 @@ the modes, each mode once).
   - `cargo metadata` resolves the workspace with the new crate
     (Cargo.lock updated).
 - **Unverified, waiting for the merge train:**
-  - none of the new Rust is compiled yet (hostdisplay, the ddruntime
-    changes, tests/options.rs);
+  - the ddruntime changes and tests/options.rs are not compiled yet;
   - the round-trip test has not run.
   - The test's start-up path (the CRT steps plus `__cinit` via
     `Session::call`) is the same one `Session::start` uses. The test
