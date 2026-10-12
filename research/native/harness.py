@@ -1033,6 +1033,23 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     root_frame = [True]
     entering = [False]  # a call was just made: the next instruction is the callee's entry
     terminal_call = [None]  # return PC of a root call at a noreturn site (terminal runs)
+    padded_call = [False]   # that call is followed by int3 padding, not a known noreturn callee
+
+    def padded_return(addr, size, _cache={}):
+        """The straight-line code at a call's return address reaches an
+        int3 stop (noreturn_sites) within 8 instructions, with no branch,
+        return or call before it."""
+        pc = addr + size
+        for _ in range(8):
+            if pc in noreturn_sites:
+                return code(pc, 1) == b"\xcc"
+            if not is_own(pc):
+                return False
+            i = next(nmd.disasm(code(pc, 15), pc, count=1), None)
+            if i is None or i.mnemonic.startswith(("j", "ret", "call", "loop", "int")):
+                return False
+            pc += i.size
+        return False
     stopped = [False]       # a terminal call ended the case
     frame_contracts = {a: c if isinstance(c, str) else (c[0], c[1], tuple(tuple(t) for t in c[2]))
                        for a, c in (frame_contracts or {}).items()}
@@ -1119,7 +1136,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # body is the code under test (e.g. `__exit` 0x012EDC4B returns
         # syntactically; its callee does the exit) and runs like any root.
         if (terminal_call[0] is not None and frames and frames[-1][0] == terminal_call[0]
-                and addr in noreturn_targets and addr not in lifted):
+                and (addr in noreturn_targets or padded_call[0]) and addr not in lifted):
             stopped[0] = True
             calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
             uc_.emu_stop()
@@ -1148,6 +1165,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 except (KeyError, StopIteration):
                     rets[addr] = False
             own_ret[0] = rets[addr]
+            if (terminal and end is not None and padded_return(addr, size)
+                    and next(nmd.disasm(code(addr, 15), addr)).mnemonic == "call"):
+                # L45: a call whose return path runs straight into int3 (a
+                # decode_body stop, possibly after a dead `pop esi`) does
+                # not return by the compiler's own evidence, whatever its
+                # callee (`__invoke_watson`, `ExitProcess` through the IAT):
+                # a mocked callee ends the case like a known noreturn entry.
+                terminal_call[0] = addr + size
+                padded_call[0] = True
             if addr in noreturn_sites:
                 if terminal and end is not None:
                     terminal_call[0] = addr + size

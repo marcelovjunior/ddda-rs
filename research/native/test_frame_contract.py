@@ -159,6 +159,22 @@ class FrameContractTests(unittest.TestCase):
         self.assertEqual(c['regs_out']['esp'],esp)
         self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
 
+    def test_terminal_at_a_call_whose_return_path_is_int3_padding(self):
+        # push 1; call 0x400100 (not a known noreturn entry); pop esi; int3
+        code=bytes.fromhex('6a01e8f90000005ecc')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda **kw:h.run_sparse(0x400000,9,body=body,end=0x400000+len(code),noreturn_sites={0x400008},**kw)
+            c=run(terminal=True)
+            self.assertEqual(c['calls'],[dict(target=0x400100,regs=c['regs_out'],terminal=True)])
+            # a branch between the call and the int3 is no evidence: the mock returns
+            code=bytes.fromhex('6a01e8f9000000 7401 cc c3'.replace(' ',''))
+            body,(p3,p4)=self.image(code)
+            with p3,p4:
+                with self.assertRaises(h.Rejected):
+                    h.run_sparse(0x400000,9,body=body,end=0x400000+len(code),noreturn_sites={0x400009},
+                                 terminal=True,zero_inputs=True)
+
 
     # alloca-like: push ecx; lea ecx,[esp+4]; sub ecx,eax; mov eax,ecx; pop ecx;
     # xchg esp,eax; mov eax,[eax]; mov [esp],eax; ret  (exit = entry ESP + 4 - EAX)
