@@ -915,6 +915,7 @@ fn host_input_without_a_window_handle_goes_to_the_focused_window() {
     let point = DATA + 0xb00;
     assert_eq!(api(&mut m, user32::get_cursor_pos, &[point]), 1);
     assert_eq!((m.u32(point), m.u32(point + 4)), (45, 78), "the cursor on the screen");
+}
 
 // --- audible output (brief L19) ----------------------------------------
 

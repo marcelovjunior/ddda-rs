@@ -572,6 +572,7 @@ fn game_writes_save(s: &mut ddruntime::session::Session, sandbox: &Path, version
     std::fs::read(steam::app_dir(sandbox, account).join("remote/DDDA.sav")).unwrap()
 }
 
+#[cfg(feature = "game")]
 #[test]
 fn a_save_the_game_writes_through_steam_cloud_is_what_ddsave_reads() {
     let Some(exe) = installed_exe() else { eprintln!("skipped: no installed DDDA.exe"); return };
