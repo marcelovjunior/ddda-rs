@@ -188,3 +188,69 @@ de8880d, 0421471, plus this Results commit. Private data: native-L17's
 `structured-*-adopted.json`, `structured-promoted.json`, `L28/`. Merge
 note: `research/native/lift.py` has a four-line `frame_contracts` plumbing
 in `vectors()`, next to claude-6's L22 lines (claude-6 informed).
+
+### Batch 2 (recorded on native-L17; replay is the head's train)
+
+Recorder changes (general rules, each with synthetic tests):
+
+1. **Mock cleanup.** `static_pop` searches up to the lifter's body limit
+   (20,000 instructions) instead of 512. 0x0040AB20 ends in `ret 4` after
+   640 instructions, and the old zero fallback left its argument on the
+   stack. `IMPORT_CLEANUP` gives 45 imports their documented x86 cleanup
+   (Microsoft Learn signatures; steam_api is cdecl), replacing L15's
+   three-entry list. Traces behind this: 0x004083A0 returned 4 bytes low
+   after `push eax; call 0x0040AB20`; 0x0130A5C0's QueryPerformanceCounter
+   mock popped its local frame along with its argument; 0x01106C80's IMM32
+   thunks fell back to zero cleanup.
+2. **Constant model sizes.** A memset/memcpy size pushed as an immediate
+   and not overwritten counts against a separate 4 MB per-run budget.
+   Example: `sSave::ctor` clears 0x80000 bytes.
+3. **Noreturn roots.** The noreturn-target guard exempts the root entry
+   (`__exit` returns syntactically).
+4. **Terminal fixtures (terminal-v1).** Head-approved. They touch lift.py's
+   generated test template; see NATIVE_PIPELINE.md. claude-6 merged them
+   into L22 and adds MXCSR to the Terminal payload there.
+5. `record --retry REGEX` and `record/adopt --terminal`.
+
+| Pass | Added functions |
+|---|---:|
+| retry outside-image/overwritten-return/misaligned: random | 46 |
+| same, objects-mockzero-v1 / mockzero-v1 / zero | 2 / 1 / 1 |
+| terminal: random (zero, mockzero-v1: 0) | 5 |
+| **Total** | **55** |
+
+| Measure | Batch 1 | Batch 2 |
+|---|---:|---:|
+| Selected lifted entries | 59,029 | 59,084 |
+| Cases | 175,719 | 175,883 |
+| Liftable candidates without a fixture | 378 | 323 |
+
+Audit (`L28/audit_b2.py`, against the head's snapshot native-L28b1): no
+record changed, 55 are new.
+
+By claude-7's L38 queue: 9 title path (the IME setup 0x01106C80, 0x01106BB0,
+the clock helper 0x0130A5C0, the Steam callbacks 0x004083A0,
+`sSoundExt::vf06` 0x004AD440, 0x00DFA0C0, 0x00E04A90, and the terminal cases
+0x00D0CB00 and `__amsg_exit`); 18 gameplay (`uPlayer::ctor` 0x00B55900,
+`uNpc::ctor` 0x00BAB3A0, `uCmc::ctor` 0x00B53220, `uPlayerBase::vf23`,
+`uCharacterBase::vf80`, `uModel::vf21`, `uGUICompound::vf05`,
+`sPrimitive::vf16`, `_abort` (terminal) and 9 FUN_); 28 elsewhere.
+
+**Unverified:** all 55, plus the template change. Terminal cases replay
+only with this branch's lift.py template (or L22's merge of it). Data note:
+claude-6's native-L22c also starts from L28b1. The two pairs add disjoint
+functions as far as I know (L22 adds lift-rejection fixes, this branch adds
+recorder-failure fixes), so adopting both means appending each one's new
+records and cases to L28b1.
+
+**Remaining 323 candidates.** NaN/Inf and two-NaN inputs wait for L22's
+oracle merge, then a `--retry`. Runaway: the constant-loop work is
+claude-6's; stack-slot counters and value-tracked starts are open. The rest
+of the outside-image class needs per-trace diagnosis (indirect calls
+through random data, internal entries).
+
+**Adoption (head):** branch `task/L28-crt` commits after 0c9e87b
+(afe22df, 3bf9559, the train-1 merge, this Results commit); private data:
+native-L17's `patterns/lift.json`, `vectors/lift.json`,
+`patterns/lift_novector.json`, `patterns/lift_novector_keys.json`,
+`structured_quarantine.json`, `quarantine_evidence.json`.
