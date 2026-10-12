@@ -8,9 +8,6 @@ publish.workspace = true
 
 [dependencies]
 ddnative-base = { path = "../../ddnative-base" }
-mtmath = { path = "../../mtmath" }
-mtcore = { path = "../../mtcore" }
-mtframe = { path = "../../mtframe" }
 
 [lib]
 test = false

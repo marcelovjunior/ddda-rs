@@ -1,5 +1,6 @@
-"""The gen() wiring of the readable ports (L24 mtmath, L33 mtcore;
-docs/MATH.md, docs/CORE.md)."""
+"""The readable ports' tables (L24 mtmath, L33 mtcore; docs/MATH.md,
+docs/CORE.md). Since L60 they are registered overrides (crates/ddports),
+not wired into the shards; gen checks that each has a lifted body."""
 import os
 import sys
 import tempfile
@@ -18,23 +19,6 @@ def write_ports(root, crate, rows):
 
 
 class WiringTests(unittest.TestCase):
-    def test_ports_shadow_their_lifted_bodies_and_keep_them(self):
-        selected = [{"addr": a} for a in (0x00D00010, 0x00D00690, 0x00D006C0, 0x00D01B60)]
-        ported = {0x00D006C0: "mtmath", 0x00D00690: "mtmath", 0x00D01B60: "mtcore"}
-        text = lift.wired_lines(selected, ported, chunk=2)
-        self.assertEqual(text, "pub use mtmath::abi::f_00d00690;\n"
-                               "pub use mtmath::abi::f_00d006c0;\n"
-                               "pub use mtcore::abi::f_00d01b60;\n"
-                               "/// The lifted bodies of the functions the readable ports replace.\n"
-                               "pub mod replaced {\n"
-                               "    pub use super::lifted_000::f_00d00690;\n"
-                               "    pub use super::lifted_001::f_00d006c0;\n"
-                               "    pub use super::lifted_001::f_00d01b60;\n"
-                               "}\n")
-
-    def test_a_shard_without_ports_is_unchanged(self):
-        self.assertEqual(lift.wired_lines([{"addr": 0x00401000}], {0x00D00690: "mtmath"}, chunk=400), "")
-
     def test_ports_come_from_the_ports_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_ports(tmp, "mtmath", "    (0x00D0_0690, f_00d00690, 0b1111_1111),\n"

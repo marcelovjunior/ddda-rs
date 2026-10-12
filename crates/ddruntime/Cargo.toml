@@ -10,6 +10,7 @@ publish.workspace = true
 unicorn-engine = { version = "=2.0.1", optional = true }
 ddnative-base = { path = "../ddnative-base" }
 ddnative = { path = "../ddnative", optional = true }
+ddports = { path = "../ddports", optional = true }
 ddexe = { path = "../ddexe" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9cmd = { path = "../d3d9cmd" }
@@ -22,7 +23,7 @@ hostdisplay = { path = "../hostdisplay" }
 # runtime builds and tests its services alone: a session still loads the exe
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
-game = ["dep:ddnative"]
+game = ["dep:ddnative", "dep:ddports"]
 # `emu`: the diagnostic emulator fallback for untranslated functions
 # (src/emu.rs, L51; also needs DDRUNTIME_EMU_FALLBACK=1 at run time).
 # Builds Unicorn's C sources, so CMake must be on PATH (VS Build Tools has it).

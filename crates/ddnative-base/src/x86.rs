@@ -172,22 +172,13 @@ pub fn set_preempt_hook(hook: fn()) {
     let _ = PREEMPT_HOOK.set(hook);
 }
 
+/// The preemption point: the runtime's hook decides (its own rate limit,
+/// the clock, the lock), so tuning it rebuilds only the runtime (L60).
 #[cold]
 #[inline(never)]
 fn preempt_point() {
-    thread_local! {
-        static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    }
-    // the hook reads the clock: once per 1,024 lifted calls is plenty
-    let due = CALLS.with(|c| {
-        let n = c.get().wrapping_add(1);
-        c.set(n);
-        n % 1024 == 0
-    });
-    if due {
-        if let Some(hook) = PREEMPT_HOOK.get() {
-            hook();
-        }
+    if let Some(hook) = PREEMPT_HOOK.get() {
+        hook();
     }
 }
 
@@ -219,10 +210,92 @@ pub fn lifted_target(target: u32) -> LiftFn {
     })
 }
 
-/// The lifted function at `target`, from the program's lookup (no cache).
+/// The lifted function at `target`, from the program's lookup (no cache):
+/// an override registered for it first (L60).
 pub fn lifted_target_uncached(target: u32) -> LiftFn {
+    RESOLVING.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(f) = override_of(target) {
+        return f;
+    }
     let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
     lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"))
+}
+
+// --- overrides (L60) ---------------------------------------------------------
+//
+// A readable port or a mod replaces the lifted function at an address
+// without recompiling the shards: it registers (address, function) once at
+// startup, before any lifted target is resolved. Every call reaches it:
+// cross-shard calls resolve through lifted_target, in-shard calls and
+// platform-model calls through call_local's bit test, the runtime's
+// indirect dispatch through the facade's all().
+
+/// The first and last address an override may have (the image's code).
+const OVERRIDE_BASE: u32 = 0x0040_0000;
+const OVERRIDE_LIMIT: u32 = 0x0200_0000;
+/// One bit per 16 bytes of code: an override sets its address's bit. A
+/// clear bit is the whole cost of a call that is not overridden; a set bit
+/// (an override, or another function in the same 16 bytes) takes the cold
+/// path, which looks the address up.
+static OVERRIDE_BITS: [std::sync::atomic::AtomicU32; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize];
+static OVERRIDES: std::sync::OnceLock<Box<[(u32, LiftFn)]>> = std::sync::OnceLock::new();
+/// Set once a lifted target was resolved (and may be cached): overrides
+/// must be registered before.
+static RESOLVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Register the overrides, once, before the lifted program runs. A second
+/// registration, an address registered twice or outside the image's code,
+/// or a registration after a target was resolved panics.
+pub fn set_overrides(list: &[(u32, LiftFn)]) {
+    assert!(!RESOLVING.load(std::sync::atomic::Ordering::Relaxed),
+            "register overrides before any lifted target is resolved");
+    let mut v: Vec<(u32, LiftFn)> = list.to_vec();
+    v.sort_unstable_by_key(|e| e.0);
+    for w in v.windows(2) {
+        assert!(w[0].0 != w[1].0, "two overrides for {:#010x}", w[0].0);
+    }
+    for &(a, _) in &v {
+        assert!((OVERRIDE_BASE..OVERRIDE_LIMIT).contains(&a), "override outside the image's code: {a:#010x}");
+        let bit = (a - OVERRIDE_BASE) >> 4;
+        OVERRIDE_BITS[(bit >> 5) as usize].fetch_or(1 << (bit & 31), std::sync::atomic::Ordering::Relaxed);
+    }
+    assert!(OVERRIDES.set(v.into_boxed_slice()).is_ok(), "overrides are already registered");
+}
+
+/// The override registered for `target`, if any.
+pub fn override_of(target: u32) -> Option<LiftFn> {
+    let v = OVERRIDES.get()?;
+    v.binary_search_by_key(&target, |e| e.0).ok().map(|k| v[k].1)
+}
+
+/// Every registered override (address order).
+pub fn overrides() -> &'static [(u32, LiftFn)] {
+    OVERRIDES.get().map(|v| &v[..]).unwrap_or(&[])
+}
+
+/// Whether a call to `target` may be overridden (its 16 bytes hold one).
+#[inline(always)]
+pub fn may_be_overridden(target: u32) -> bool {
+    let bit = target.wrapping_sub(OVERRIDE_BASE) >> 4;
+    (bit as usize >> 5) < OVERRIDE_BITS.len()
+        && OVERRIDE_BITS[bit as usize >> 5].load(std::sync::atomic::Ordering::Relaxed) & (1 << (bit & 31)) != 0
+}
+
+/// A direct call from a shard to `f`, the lifted function (or platform
+/// model) at `target`, unless an override is registered there.
+#[inline(always)]
+pub fn call_local(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: LiftFn) {
+    if may_be_overridden(target) {
+        return call_overridden(m, cpu, target, f);
+    }
+    f(m, cpu)
+}
+
+#[cold]
+#[inline(never)]
+fn call_overridden(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: LiftFn) {
+    override_of(target).unwrap_or(f)(m, cpu)
 }
 
 thread_local! {

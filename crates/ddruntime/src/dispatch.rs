@@ -113,6 +113,9 @@ impl Registry {
     pub fn with_lifted_program() -> Self {
         #[allow(unused_mut)]
         let mut r = Self::new();
+        // the readable ports and mods over their lifted bodies (L60)
+        #[cfg(feature = "game")]
+        ddports::ensure();
         #[cfg(feature = "game")]
         r.set_instruction_lookup(ddnative::generated::lifted::instruction);
         #[cfg(feature = "game")]

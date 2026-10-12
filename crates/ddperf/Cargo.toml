@@ -10,5 +10,6 @@ publish.workspace = true
 ddnative-base = { path = "../ddnative-base" }
 ddnative = { path = "../ddnative" }
 ddruntime = { path = "../ddruntime" }
+ddports = { path = "../ddports" }
 serde = "1"
 serde_json = "1"

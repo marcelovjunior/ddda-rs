@@ -357,7 +357,17 @@ impl Drop for ServiceScope {
 /// The guest MXCSR is live in the host register inside lifted code, so it
 /// is kept across the switch.
 pub(crate) fn preempt() {
-    if ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) || IN_SERVICE.with(Cell::get) > 0 {
+    thread_local! {
+        static CALLS: Cell<u32> = const { Cell::new(0) };
+    }
+    // the check below reads the clock: once per 1,024 lifted calls is
+    // plenty (the rate lives here, not in the shards' ddnative-base, L60)
+    let due = CALLS.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n % 1024 == 0
+    });
+    if !due || ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) || IN_SERVICE.with(Cell::get) > 0 {
         return;
     }
     let rt = runtime::current();

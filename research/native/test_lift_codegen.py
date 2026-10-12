@@ -32,6 +32,20 @@ class CodegenTests(unittest.TestCase):
         self.assertNotIn('std::mem::take', legacy_rust)
         self.assertNotIn('*cpu =', legacy_rust)
 
+    def test_l60_calls_go_through_overridable_dispatch(self):
+        # in-shard: call_local (a bit test); cross-shard: call_lifted; a
+        # platform model: call_local at the model's address
+        import harness as h
+        model, name = next(iter(sorted(h.PLATFORM.items())))
+        same, other = 0x00400010, 0x00400000 + (1 << lift.SHARD_SHIFT)
+        arm = (f'0x400000 => {{ super::lifted::f_{same:08x}(m, cpu); super::lifted::f_{other:08x}(m, cpu); '
+               f'crate::platform::{name}(m, cpu); return; }}')
+        rust = lift.shard_fn(dict(addr=0x400000, name='synthetic', arms=[arm]))
+        self.assertIn(f'x86::call_local(m, cpu, 0x{same:08X}, super::lifted::f_{same:08x}))(m, cpu)', rust)
+        self.assertIn(f'x86::call_lifted(m, cpu, 0x{other:08X}))(m, cpu)', rust)
+        self.assertIn(f'x86::call_local(m, cpu, 0x{model:08X}, crate::platform::{name})', rust)
+        self.assertNotIn(f'super::lifted::f_{same:08x}(m, cpu)', rust)
+
     def test_inc_dec_carry_cf_lazily(self):
         # L46: the cached template reads CF; after DIV it is undefined
         arm = ("{ let a = eax & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; let cf = fl.cf(); "
