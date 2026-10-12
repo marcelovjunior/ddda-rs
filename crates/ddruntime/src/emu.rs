@@ -89,7 +89,7 @@ fn counts() -> &'static Mutex<HashMap<u32, u64>> {
     C.get_or_init(Default::default)
 }
 
-fn note(target: u32) {
+fn note(target: u32, caller: u32) {
     let first = {
         let mut c = counts().lock().unwrap_or_else(|e| e.into_inner());
         let n = c.entry(target).or_insert(0);
@@ -97,7 +97,7 @@ fn note(target: u32) {
         *n == 1
     };
     if first {
-        let line = format!("emulated {target:#010x}\n");
+        let line = format!("emulated {target:#010x} from {caller:#010x}\n");
         match std::env::var("DDRUNTIME_EMU_LOG") {
             Ok(path) => {
                 if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -305,7 +305,7 @@ fn fail(msg: String) -> ! {
 /// pushed, as for any call) in the emulator, with call-outs to `registry`.
 /// Panics with a report if the emulated code faults.
 pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
-    note(target);
+    note(target, m.u32(cpu.esp));
     let Some(table) = m.page_table() else { fail(format!("emulated {target:#010x}: this memory has no page table")) };
     let mut uc = POOL.with(|p| p.borrow_mut().pop()).unwrap_or_else(new_instance);
     if uc.get_data().pages != table.as_ptr() as usize {
