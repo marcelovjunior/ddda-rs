@@ -376,7 +376,7 @@ def table_goals(f):
             if isinstance(targets, lift.TableTargets) and targets.proven for t in targets}
 
 
-def refresh(root, strategies, seeds, seconds):
+def refresh(root, strategies, seeds, seconds, only=None):
     """Re-lift the ext records whose body the current lifter decodes
     differently (verification_gaps: stale body, e.g. table code past the
     extent) and replace them and their cases in place. Cases are recorded
@@ -391,7 +391,8 @@ def refresh(root, strategies, seeds, seconds):
     frames = frame_contracts(selected)
     noreturn = lift.noreturn_entries()
     gaps = lift.verification_gaps(selected)
-    stale = [f for f in selected if any(r.startswith('stale body') for r in gaps.get(f['addr'], []))]
+    stale = [f for f in selected if any(r.startswith('stale body') for r in gaps.get(f['addr'], []))
+             and (only is None or f['addr'] in only)]
     report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
     position = {f['addr']: k for k, f in enumerate(selected)}
     for f in [f for f in stale if f.get('ext')]:
@@ -462,6 +463,7 @@ def prune_no_vectors(root, have):
 if __name__ == '__main__':
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('command',choices=['prepare','record','adopt','promote','refresh'])
+    ap.add_argument('--addresses',help='refresh: only these stale records (comma-separated hex)')
     ap.add_argument('--strategies',default='small-v1,objects-v1,image-v1,zero,random',
                     help='refresh: comma-separated strategies tried after the previous distribution')
     ap.add_argument('--strategy',default='random',choices=('random','zero',*h.INPUT_STRATEGIES))
@@ -478,5 +480,6 @@ if __name__ == '__main__':
     if args.command=='prepare':prepare(root)
     elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal)
     elif args.command=='promote':promote(root,args.seeds,args.seconds)
-    elif args.command=='refresh':refresh(root,args.strategies.split(','),args.seeds,args.seconds)
+    elif args.command=='refresh':refresh(root,args.strategies.split(','),args.seeds,args.seconds,
+                                         {int(a,16) for a in args.addresses.split(',')} if args.addresses else None)
     else:adopt(root,args.strategy,args.terminal)
