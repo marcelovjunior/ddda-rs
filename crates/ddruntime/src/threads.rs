@@ -173,10 +173,12 @@ impl GuestLock {
     fn acquire_locked<'a>(&'a self, mut s: std::sync::MutexGuard<'a, LockState>, depth: u32) {
         let me = current_tid();
         s.waiting += 1;
+        signal_preempt(&s);
         while s.held || s.suspended.get(&me).copied().unwrap_or(0) > 0 {
             s = self.cv.wait(s).unwrap_or_else(|e| e.into_inner());
         }
         s.waiting -= 1;
+        signal_preempt(&s);
         s.held = true;
         s.holder = me;
         s.depth = depth;
@@ -316,6 +318,33 @@ pub(crate) fn yield_now() {
     }
     rt.lock.acquire_locked(s, depth);
     adopt_context(&rt);
+}
+
+/// Lifted calls become preemption points while a runnable guest thread
+/// waits for the lock (suspended threads wait too, but cannot take it).
+fn signal_preempt(s: &LockState) {
+    let runnable = s.waiting as usize > s.suspended.values().filter(|n| **n > 0).count();
+    ddnative_base::x86::PREEMPT.store(runnable, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The preemption hook of lifted calls (ddnative_base::x86::set_preempt_hook):
+/// in serial mode, the lock holder yields when its time slice is used up.
+/// The guest MXCSR is live in the host register inside lifted code, so it
+/// is kept across the switch.
+pub(crate) fn preempt() {
+    if ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let rt = runtime::current();
+    {
+        let s = rt.lock.lock();
+        if !(s.held && s.holder == current_tid()) {
+            return;
+        }
+    }
+    let mxcsr = ddnative_base::x86::stmxcsr();
+    maybe_yield();
+    ddnative_base::x86::ldmxcsr(mxcsr);
 }
 
 /// At an API call: yield if the time slice is used up.

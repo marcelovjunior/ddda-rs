@@ -219,6 +219,8 @@ impl Registry {
     pub fn install(self: &Arc<Self>) {
         // CPUID/RDTSC in lifted code answer from the recorded machine.
         ddnative_base::platform::set_machine(Some(std::rc::Rc::new(crate::machine::Recorded::new())));
+        // lifted calls are preemption points in serial mode (crate::threads)
+        x86::set_preempt_hook(crate::threads::preempt);
         let me = Arc::clone(self);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
             if let Err(u) = me.call(m, cpu, target) {
