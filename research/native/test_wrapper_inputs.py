@@ -159,6 +159,24 @@ class WrapperTests(unittest.TestCase):
                      '8b01 83ec20 85c0 7405 83c410 ffe0 83c420 c3'):
             self.assertEqual(sites(code), set())
 
+    def test_scalar_one_mock_can_complete_a_wait_loop(self):
+        # CALL; CMP EAX,1; JNE back to CALL; RET.
+        caller = bytes.fromhex('e8fb000000 83f801 75f6 c3')
+        data = caller + b'\xcc'*(256-len(caller)) + b'\xc3'
+        body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(caller, 0x400000)]
+        with patch.object(h, 'image', return_value=(0x400000, [(0x400000,data)])), \
+             patch.object(h, 'code', side_effect=lambda a,n: data[a-0x400000:a-0x400000+n]):
+            with self.assertRaisesRegex(h.Rejected, 'runaway'):
+                h.run_sparse(0x400000, 1, body=body, end=0x400000+len(caller),
+                             input_strategy='tail-frame-v1', max_insn=100)
+            result = h.run_sparse(0x400000, 1, body=body, end=0x400000+len(caller),
+                                  input_strategy='one-call-v1', max_insn=100)
+        self.assertEqual(len(result['calls']), 1)
+        self.assertEqual(result['calls'][0]['out']['eax'], 1)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+        for name in ('ecx', 'edx'):
+            self.assertEqual(result['calls'][0]['out'][name], 0)
+
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
         suffix = '5f 5e 5d 5b 8be5 5d c3'
