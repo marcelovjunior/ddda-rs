@@ -12,11 +12,15 @@
 //! - [`smain`]: `sMain`'s timing fields.
 //! - [`effect`]: the effect manager's frame counter and the time inputs
 //!   that read it.
+//! - [`chain`]: long chains (`uChain`), the step split into substeps.
+//! - [`fpu`]: the x87 operations the ports run on the guest's x87.
 //! - [`lunge`]: em5501's rush-bite lunge.
 //! - [`abi`]: the ports behind the lifted calling convention; the lifted
 //!   program calls these instead of the lifted bodies.
 
 pub mod abi;
+pub mod chain;
 pub mod effect;
+pub mod fpu;
 pub mod lunge;
 pub mod smain;

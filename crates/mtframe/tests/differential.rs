@@ -65,7 +65,7 @@ macro_rules! forwarded {
         }
     };
 }
-forwarded!(0x00A0_0BF0, 0x00FB_5E90, 0x0105_70F0);
+forwarded!(0x00A0_0BF0, 0x00F0_1390, 0x00FB_5E90, 0x0105_70F0, 0x0112_59E0);
 
 const REGS: [&str; 8] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
 
@@ -145,7 +145,7 @@ fn replay_lift_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 
 /// The lifted program's vectors for each ported address, under the lifted
 /// test's contract (registers, xmm0, written bytes, x87 result).
-// verifies 0x00A36DF0 0x00E6C260 0x00FB64D0 0x011E48E0
+// verifies 0x00A36DF0 0x00E6C260 0x00F0C160 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_replay_the_lifted_vectors() {
     let Some(cases) = vectors("frame_lift") else { return };
@@ -256,9 +256,10 @@ fn xmm_of(v: &Value) -> [[u32; 4]; 8] {
 
 /// Replays the stub and fake calls an edge case recorded (calls to ported
 /// functions run their ports, as the runtime's dispatcher does): at the
-/// callee's entry (return address pushed) every general register and all
-/// xmm lanes must be as the original had them; the callee's return state
-/// (registers, xmm, stack window, a float left in st0) is then restored.
+/// callee's entry (return address pushed) every general register, all xmm
+/// lanes and the stack window must be as the original had them; the
+/// callee's return state (registers, xmm, stack window, a float left in
+/// st0) is then restored.
 fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
     let calls = Rc::new(RefCell::new(
         c["calls"]
@@ -290,6 +291,9 @@ fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
         assert_eq!(target, u(&ev["target"]), "call target");
         assert_eq!(cpu_regs(cpu), regs(&ev["in"]["regs"]), "registers at the call to {target:#x}");
         assert_eq!(cpu.xmm, xmm_of(&ev["in"]["xmm"]), "xmm at the call to {target:#x}");
+        let entry_stack: Vec<u8> = hex_bytes(ev["in"]["stack"].as_str().unwrap()).collect();
+        let stack_now: Vec<u8> = (0..entry_stack.len() as u32).map(|k| m.u8(stack + k)).collect();
+        assert!(stack_now == entry_stack, "stack window at the call to {target:#x}");
         let o = &ev["out"];
         [
             cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi,
@@ -315,7 +319,7 @@ fn set_fpcw(cpu: &mut Cpu, cw: u16) {
 /// Edge cases recorded from the original: built objects, every general
 /// register and xmm lane, and every byte of the object, stack, heap and
 /// global windows.
-// verifies 0x00A36DF0 0x00E6C260 0x00FB64D0 0x011E48E0
+// verifies 0x00A36DF0 0x00E6C260 0x00F0C160 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
     let Some(cases) = vectors("frame_edge") else { return };

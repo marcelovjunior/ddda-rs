@@ -13,10 +13,13 @@
 //! out; `x86::call_lifted` for other lifted bodies (which live in the
 //! shards this crate cannot depend on).
 
+use crate::chain::{self, Products};
 use crate::effect::{self, Effects};
 use crate::lunge::{self, Step};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu, LiftFn};
+use ddnative_base::x87::X87;
+use mtmath::scalar::F32;
 use mtcore::machine::{arg, call_out, pop, push, ret};
 use std::cell::RefCell;
 
@@ -194,11 +197,119 @@ pub fn f_00a36df0(m: &mut dyn Mem, cpu: &mut Cpu) {
     leave(m, cpu, 0);
 }
 
+/// The chain's calls, made on the machine as the original makes them.
+struct ChainMachine<'a> {
+    cpu: &'a mut Cpu,
+    chain: u32,
+    /// esp after the prologue (the spills are above it)
+    frame: u32,
+}
+
+impl ChainMachine<'_> {
+    fn spill(&self, m: &mut dyn Mem, offset: u32, v: F32) {
+        m.set_u32(self.frame.wrapping_add(offset), v.to_bits());
+    }
+    fn call_virtual(&mut self, m: &mut dyn Mem, slot: u32, return_to: u32) {
+        let cpu = &mut *self.cpu;
+        cpu.edx = m.u32(self.chain);
+        cpu.eax = m.u32(cpu.edx.wrapping_add(slot));
+        cpu.ecx = self.chain;
+        let target = cpu.eax;
+        call_out(m, cpu, target, return_to);
+    }
+}
+
+fn lane0(v: F32) -> [u32; 4] {
+    [v.to_bits(), 0, 0, 0]
+}
+
+impl chain::Calls for ChainMachine<'_> {
+    fn ready(&mut self, m: &mut dyn Mem) -> bool {
+        call_out(m, self.cpu, 0x00F0_BDC0, 0x00F0_C17B);
+        self.cpu.eax & 0xFF != 0
+    }
+    fn animate(&mut self, m: &mut dyn Mem) {
+        self.cpu.ecx = self.chain;
+        call_body(m, self.cpu, 0x0112_59E0, 0x00F0_C18A);
+    }
+    fn oriented(&mut self, m: &mut dyn Mem, q: [F32; 4], p: &Products, rows: &[[F32; 3]; 3]) {
+        // the original spills z and four products, and leaves these in
+        // the registers
+        self.spill(m, 0x28, q[2]);
+        self.spill(m, 0x1C, p.wx);
+        self.spill(m, 0x14, p.wy);
+        self.spill(m, 0x10, p.wz);
+        self.spill(m, 0x18, p.xx);
+        let cpu = &mut *self.cpu;
+        cpu.eax = m.u32(self.chain.wrapping_add(chain::JOINT));
+        cpu.xmm[0] = [0; 4];
+        cpu.xmm[1] = lane0(F32::ONE);
+        cpu.xmm[2] = lane0(rows[2][2]);
+        cpu.xmm[3] = lane0(rows[1][0]);
+        cpu.xmm[4] = lane0(rows[2][0]);
+        cpu.xmm[5] = lane0(p.yy + p.xx);
+        cpu.xmm[6] = lane0(rows[2][1]);
+        cpu.xmm[7] = lane0(rows[1][2]);
+    }
+    fn settle(&mut self, m: &mut dyn Mem, steps: u32) {
+        let cpu = &mut *self.cpu;
+        cpu.eax = steps;
+        push(m, cpu, steps);
+        cpu.ecx = self.chain;
+        call_out(m, cpu, 0x00F0_BEB0, 0x00F0_C392);
+    }
+    fn fpu(&mut self) -> &mut X87 {
+        &mut self.cpu.st
+    }
+    fn stepped(&mut self, m: &mut dyn Mem, step: F32, time: F32, count: u32) {
+        self.spill(m, 0x1C, time);
+        let cpu = &mut *self.cpu;
+        cpu.eax = count;
+        cpu.xmm[0] = lane0(time);
+        cpu.xmm[1] = lane0(step);
+    }
+    fn prepare(&mut self, m: &mut dyn Mem) {
+        self.cpu.ecx = self.chain;
+        call_out(m, self.cpu, 0x00F0_7270, 0x00F0_C3EC);
+    }
+    fn virtual_5c(&mut self, m: &mut dyn Mem) {
+        self.call_virtual(m, 0x5C, 0x00F0_C3F5);
+    }
+    fn virtual_58(&mut self, m: &mut dyn Mem) {
+        self.call_virtual(m, 0x58, 0x00F0_C3FE);
+    }
+    fn solve(&mut self, m: &mut dyn Mem) {
+        self.cpu.ecx = self.chain;
+        call_body(m, self.cpu, 0x00F0_1390, 0x00F0_C405);
+    }
+    fn followed(&mut self, joint: u32, position: [F32; 3]) {
+        let cpu = &mut *self.cpu;
+        cpu.eax = joint;
+        cpu.xmm[0] = [0; 4];
+        cpu.xmm[1] = lane0(position[1]);
+        cpu.xmm[2] = lane0(position[2]);
+    }
+}
+
+/// uChain::vf09 (`this` in ecx).
+pub fn f_00f0c160(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let this = cpu.ecx;
+    enter_aligned(m, cpu, 16, 0x2C);
+    let esi = cpu.esi;
+    push(m, cpu, esi);
+    cpu.esi = this;
+    let frame = cpu.esp;
+    chain::update(m, this, &mut ChainMachine { cpu: &mut *cpu, chain: this, frame });
+    cpu.esi = pop(m, cpu);
+    leave(m, cpu, 0);
+}
+
 /// The ports the lifted program calls instead of the lifted bodies, with
 /// the mask of xmm registers each reproduces exactly (all of them).
 pub const PORTS: &[(u32, LiftFn, u8)] = &[
     (0x00A3_6DF0, f_00a36df0, 0b1111_1111),
     (0x00E6_C260, f_00e6c260, 0b1111_1111),
+    (0x00F0_C160, f_00f0c160, 0b1111_1111),
     (0x00FB_64D0, f_00fb64d0, 0b1111_1111),
     (0x011E_48E0, f_011e48e0, 0b1111_1111),
 ];

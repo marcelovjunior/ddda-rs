@@ -23,9 +23,9 @@ Callees:
 - the platform models (memset, memcpy, the node pool) run as in
   harness.run_sparse; ported callees run as the original (the replay runs
   their ports).
-Each stub and fake call is recorded with the machine at the callee's entry
-and at its return (and the float it leaves in st0); the Rust test replays
-it.
+Each stub and fake call is recorded with the machine and the stack window
+at the callee's entry and at its return (and the float it leaves in st0);
+the Rust test checks the entry state and replays the return.
 
 Unicorn applies the x87 NaN rule where SSE hardware returns the first
 operand's NaN, quieted (Intel SDM vol. 1, 4.8.3.5): as in vectors_math.py,
@@ -70,6 +70,7 @@ PORTS = {
     0x011E48E0: ("element_time", 58),
     0x00E6C260: ("emitter_time", 75),
     0x00A36DF0: ("lunge", 346),
+    0x00F0C160: ("chain", 744),
 }
 # ports of other crates run as the original when called (their ports run in the replay)
 FOREIGN_PORTS = {0x00402530, 0x004025C0, 0x00402620, 0x00CF5E20}
@@ -117,6 +118,7 @@ class Scratch:
         self.code = bytearray([0xCC] * STUBS_LEN)
         self.st_returns = {}  # stub address -> the float bits it leaves in st0
         self.fakes = {}       # exe address -> (argument bytes popped, eax or None)
+        self.fpcw = 0x037F    # the x87 control word the case runs with
 
     def window(self, base, length):
         """An extra window (inside the SCRATCH mapping, above the main one)."""
@@ -233,6 +235,10 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
     def machine():
         return {"regs": {n: uc.reg_read(r) for n, r in zip(GPR, UC_GPR)}, "xmm": [read_xmm(r) for r in UC_XMM]}
 
+    def at_entry():
+        """The machine at a callee's entry, with the stack window."""
+        return {**machine(), "stack": bytes(uc.mem_read(*stack_window)).hex()}
+
     calls, inside, ported, bad, heap_top = [], [], [], [], [HEAP_BASE]
     fixups, fixed = [], [0]
 
@@ -275,13 +281,13 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
             return
         if STUBS <= a < STUBS + STUBS_LEN:
             back = struct.unpack("<I", uc_.mem_read(esp, 4))[0]
-            calls.append({"target": a, "in": machine()})
+            calls.append({"target": a, "in": at_entry()})
             inside.append((back, esp, a))
             return
         if a in sc.fakes:
             pop, eax = sc.fakes[a]
             back = struct.unpack("<I", uc_.mem_read(esp, 4))[0]
-            calls.append({"target": a, "in": machine()})
+            calls.append({"target": a, "in": at_entry()})
             uc_.reg_write(xc.UC_X86_REG_EAX, rnd.getrandbits(32) if eax is None else eax)
             uc_.reg_write(xc.UC_X86_REG_ECX, rnd.getrandbits(32))
             uc_.reg_write(xc.UC_X86_REG_EDX, rnd.getrandbits(32))
@@ -432,6 +438,39 @@ def build(kind, rnd):
             sc.u32(enemy + off, floats(rnd))
         sc.fake(0x00A00BF0, 4)
         sc.fake(0x010570F0, 0, eax=rnd.choice([0, 1, 0x100, 0xFFFFFF00, rnd.getrandbits(32)]))
+    elif kind == "chain":
+        chain = sc.alloc(0x1B0, 16)
+        regs["ecx"] = chain
+        vt = sc.alloc(0x60)
+        sc.u32(vt + 0x58, sc.ret_stub(0))
+        sc.u32(vt + 0x5C, sc.ret_stub(0))
+        sc.u32(chain, vt)
+        joint = sc.alloc(0x100, 16)
+        sc.u32(chain + 0x30, joint)
+        sc.u8(chain + 0x55, 0 if rnd.random() < 0.9 else rnd.choice([1, 0x80]))
+        if rnd.random() < 0.6:  # a unit quaternion
+            q = [rnd.gauss(0, 1) for _ in range(4)]
+            n = sum(c * c for c in q) ** 0.5
+            for k in range(4):
+                sc.u32(joint + 0x50 + 4 * k, f2b(q[k] / n))
+        else:
+            for k in range(4):
+                sc.u32(joint + 0x50 + 4 * k, floats(rnd))
+        for off in (0xE0, 0xE4, 0xE8):
+            sc.u32(joint + off, floats(rnd))
+            sc.u32(chain + off, floats(rnd))
+        sc.u32(chain + 0x14, rnd.choice([0x3F800000, 0x3F000000, 0x40000000, 0x40000001, 0x40200000,
+                                         0x3E800000, 0, floats(rnd)]))
+        sc.u32(chain + 0xCC, rnd.choice([0x3F800000, floats(rnd)]))
+        sc.u32(chain + 0x88, rnd.choice([0, 1, 2, 3, 4, 8, 7, 0x7FFFFFFF, 0x80000000, 0x80000001,
+                                         0xFFFFFFFF, rnd.getrandbits(32)]))
+        sc.u32(chain + 0xD8, rnd.choice([0, 0, 0, 1, 3, rnd.getrandbits(32)]))
+        sc.fake(0x00F0BDC0, 0, eax=rnd.choice([1, 0x101, 0, 0x100, rnd.getrandbits(32)]))
+        sc.fake(0x011259E0, 0)
+        sc.fake(0x00F0BEB0, 4)
+        sc.fake(0x00F07270, 0)
+        sc.fake(0x00F01390, 0)
+        sc.fpcw = rnd.choice([0x037F, 0x037F, 0x027F, 0x007F, 0x077F, 0x0B7F, 0x0F7F])
     return regs, sc, args, g
 
 
@@ -443,7 +482,7 @@ def edge_cases(addr, kind, size, n, seed):
         regs, sc, args, g = build(kind, rnd)
         xmm = [[rnd.getrandbits(32) for _ in range(4)] for _ in range(8)]
         try:
-            cases.append(run(addr, size, regs, xmm, sc, args, g))
+            cases.append(run(addr, size, regs, xmm, sc, args, g, sc.fpcw))
         except Dropped as e:
             why[str(e)[:40]] = why.get(str(e)[:40], 0) + 1
             continue
