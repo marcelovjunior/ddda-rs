@@ -2489,6 +2489,7 @@ name = "ddlift-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2496,6 +2497,7 @@ name = "ddlift-01"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2503,6 +2505,7 @@ name = "ddlift-02"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2510,6 +2513,7 @@ name = "ddlift-03"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2517,6 +2521,7 @@ name = "ddlift-04"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2524,6 +2529,7 @@ name = "ddlift-05"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2531,6 +2537,7 @@ name = "ddlift-06"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2538,6 +2545,7 @@ name = "ddlift-07"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2545,6 +2553,7 @@ name = "ddlift-08"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2552,6 +2561,7 @@ name = "ddlift-09"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2559,6 +2569,7 @@ name = "ddlift-10"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2566,6 +2577,7 @@ name = "ddlift-11"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2573,6 +2585,7 @@ name = "ddlift-12"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2580,6 +2593,7 @@ name = "ddlift-13"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2587,6 +2601,7 @@ name = "ddlift-14"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2594,6 +2609,7 @@ name = "ddlift-15"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2643,6 +2659,7 @@ dependencies = [
  "ddlift-14",
  "ddlift-15",
  "ddnative-base",
+ "mtmath",
  "serde_json",
 ]
 
@@ -4184,6 +4201,25 @@ version = "0.1.0"
 [[package]]
 name = "mtlot"
 version = "0.1.0"
+
+[[package]]
+name = "mtmath"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
+]
+
+[[package]]
+name = "mtmath-bench"
+version = "0.1.0"
+dependencies = [
+ "ddlift-07",
+ "ddlift-12",
+ "ddlift-13",
+ "ddnative-base",
+ "mtmath",
+]
 
 [[package]]
 name = "mtmod"
