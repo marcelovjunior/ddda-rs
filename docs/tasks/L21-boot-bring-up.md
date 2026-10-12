@@ -218,3 +218,29 @@ measured and modelled as well (d1a8d82).
    - IMM32: `imm.rs` (2cad691) was removed in favour of claude-10's L43,
      which answers all 11 IMM32 imports. My measurements, including
      WM_IME_NOTIFY once the window has the focus, went to claude-10.
+
+Static check of the risks in claude-7's TITLE_PATH.md section 3 (while
+train 2 builds):
+- Archive loading:
+  - MtFile::vf05 opens a file synchronously (mode 0x11, plain ReadFile)
+    or overlapped (mode 0x12, ReadFileEx at the OVERLAPPED offset plus
+    SleepEx(INFINITE, TRUE), MtFile::vf07/vf08).
+  - In mode 0x12 it calls GetDiskFreeSpaceA on the file's own full path
+    and goes synchronous only if that succeeds. Windows fails it
+    (ERROR_DIRECTORY, measured), so the original keeps the overlapped
+    path. The runtime answered TRUE, a behaviour difference (cause 3).
+    Fixed in 8460216.
+  - The overlapped path's services (ReadFileEx completions queued to the
+    thread, run at its alertable SleepEx) were already tested.
+- Loader threads: 0x00DB95B0 and 0x00DB9C80 wait with
+  WaitForMultipleObjects(bWaitAll = TRUE, INFINITE). The runtime's wait
+  takes all objects in one step, only when all are signalled, and consumes
+  auto-reset events then. That is correct.
+- Render handshake: 0x00DAED10 polls the render thread's event with
+  WaitForSingleObject(h, 0) in its frame limiter and waits INFINITE
+  otherwise; waits hand the guest lock over, so the worker runs. It checks
+  Present for D3DERR_DEVICELOST. TestCooperativeLevel answers "never
+  lost" (d3d9dev, claude-5), so 0x00DAF7C0's sleep path is not taken.
+- Second-instance check: 0x00DF3AC0's CreateMutexA + GetLastError() ==
+  ERROR_ALREADY_EXISTS. `create_named` sets the last error to 0 for a new
+  object, so no stale 183 can trigger the "already running" exit.
