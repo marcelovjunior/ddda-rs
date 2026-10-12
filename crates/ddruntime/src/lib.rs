@@ -25,6 +25,7 @@ pub mod dispatch;
 #[cfg(feature = "emu")]
 pub mod emu;
 pub mod executor;
+pub mod crtfast;
 pub mod fastmem;
 pub mod files;
 pub mod image;

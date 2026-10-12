@@ -57,6 +57,10 @@ impl Session {
         // guest memory only: no guest lock in parallel mode (L65)
         registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::LockFree(crate::fastmem::memcpy));
         registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::LockFree(crate::fastmem::memset));
+        // the CRT's string routines, ported (L67; guest memory only)
+        for &(addr, f) in crate::crtfast::SERVICES {
+            registry.replace(addr, crate::dispatch::Binding::LockFree(f));
+        }
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
         let install = std::path::Path::new(exe_path).parent().ok_or("exe has no directory")?;
