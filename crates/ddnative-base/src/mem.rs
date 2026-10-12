@@ -22,6 +22,13 @@ pub trait Mem {
             self.set_u8(addr.wrapping_add(i as u32), b);
         }
     }
+    /// `out.len()` bytes from `addr` (wrapping), exactly as reading each
+    /// byte with [`u8`](Self::u8) would; implementations may copy in bulk.
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) {
+        for (k, b) in out.iter_mut().enumerate() {
+            *b = self.u8(addr.wrapping_add(k as u32));
+        }
+    }
     /// A fresh block of `size` bytes (the platform allocator models in
     /// crate::platform call this instead of the game's allocators).
     fn alloc(&mut self, size: u32) -> u32 {
