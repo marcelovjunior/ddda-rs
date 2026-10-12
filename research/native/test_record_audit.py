@@ -42,6 +42,16 @@ class RecordAuditTests(unittest.TestCase):
         del after['functions']['3']; del after['cases']['3']
         self.assertEqual(compare(before, after)['missing'], ['0x00000003'])
 
+    def test_explicit_refresh_allows_only_stale_callers_of_existing_closed_target(self):
+        before=self.fixture();before['functions']['1']['ext']=False
+        after=copy.deepcopy(before);after['cases']['2']=['fresh'];after['mocked']={}
+        self.assertFalse(compare(before,after)['ok'])
+        self.assertTrue(compare(before,after,[1])['ok'])
+        self.assertFalse(compare(before,before,[1])['ok'])
+        after['cases']['3']=['unrelated']
+        self.assertFalse(compare(before,after,[1])['ok'])
+        with self.assertRaises(ValueError):compare(before,after,[3])
+
     def test_fingerprint_checks_pair_and_preserves_case_multiplicity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

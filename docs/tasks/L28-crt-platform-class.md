@@ -449,3 +449,112 @@ a newly proven reachability closure). Private evidence is in
   0x004080A0 calls inventory symbol `__invoke_watson` (0x012EDDD5) at
   0x004080C5, then reaches INT3 at 0x004080CB. Neither name is covered by
   the current four-symbol `noreturn_entries` set. Sent to the lifter lane.
+
+### L28c: boot partition and imported alloca boundary (2026-10-12)
+
+**Batch ready: boot blocker 0x00DAFED0 has eight accepted fixtures;
+0x00F6A380 is refreshed. 59,534 entries / 177,196 cases, both changes
+audited separately. 39 light tests pass; Rust replay awaits the train.**
+
+Merged main into task/L28b-crt at **3d8ac913**, retaining both sides of the
+milestone-note conflict. Harness and structured-input changes merged
+automatically; all 33 preceding light tests passed. This batch uses only
+**native-L28c**, initially **59,533 selected records / 177,188 cases**.
+native-L17 stays frozen; native-train3 is untouched. INVENTORY_EXTRA points
+to native-L28c/extra_functions.tsv; the shared inventory database is opened
+read-only (no private database was supplied with this data set).
+
+**Boot blocker 0x00DAFED0:** random, zero, small-v1 and objects-v1 each
+rejected as `runaway` in the original recorder, with its ordinary 20,000
+instruction limit. Read-only disassembly/decompilation establishes:
+
+- First and last are entry-stack arguments +8/+12 (loads at 0x00DAFEE2
+  and 0x00DAFEDD); +4 is the output iterator-pair pointer.
+- The distance is converted to a midpoint and multiplied by **0x5C** at
+  0x00DAFF06. Median selection calls 0x00DAFD10 at 0x00DAFF12.
+- Comparisons use two unsigned words at record offsets **0x50/0x54**
+  and a float at **0x58** (e.g. 0x00DAFF30..0x00DAFF4C).
+
+Independent random pointers/counts do not describe this bounded range;
+zeroing both pointers still does not supply the nonempty median-selection
+precondition. The general `record-range-v1` strategy takes a private JSON
+layout describing stride, first/last/result stack or register bindings,
+and finite float/unsigned-key fields. No function-address dispatch is
+used. It fixes all initial bytes before execution, keeps image reads and
+guest writes unchanged, and records the layout for exact re-recording.
+Its seeded cases include ascending, descending, equal and mixed keys,
+3/5/8/17/33 records, and page-crossing records. No budget or rejection
+check is relaxed.
+
+The baseline audit also finds exactly one imported stale caller:
+**0x00F6A380** still mocks already-closed **0x012F2280**. The generic
+`refresh-closed` operation re-lifts/re-records only such callers, preserving
+the current lifter's x87-entry and instruction-budget metadata. A failed
+caller refresh writes neither selected file. This repairs an imported
+boundary mismatch without re-promoting or demoting unrelated entries.
+
+**Original-code checks:** all four old distributions rejected. The bounded
+range produced **8/8 accepted trials** without increasing the instruction
+budget. Every trial also passed independent checks on its recorded writes:
+returned bounds are inside the input range and record-aligned; the output
+records are a permutation of the inputs; and the less/equal/greater
+partitions satisfy the lexicographic two-uint/float comparator. Counts
+3/5/8/17/33 and equal-key cases are exercised. These are original-code
+recording checks, not a claim that Rust replay has passed.
+
+The harness owner agreed to the five input-only hooks in board #9531;
+the source patch was then applied. **39 light tests pass** (19 structured
+inputs, 13 frame contracts, 2 range-generator tests, 5 audit tests). The
+refresh tests also check failure before pair writes and removal of stale
+optional x87/budget metadata when the current lifter no longer emits it.
+
+The first refresh job was terminated before reporting a result. Its hash
+audit confirmed all 59,533 entries and 177,188 cases unchanged. The retry
+repaired only 0x00F6A380; `L28c/refresh-audit.json` confirms **59,532 old
+records/case multisets unchanged**, no removals, no unrelated changes,
+and no remaining mocks of 0x012F2280. Counts stayed 59,533 / 177,188.
+
+**Final pair:** **59,534 records / 177,196 cases** (+1 / +8); missing
+prepared candidates **229 → 228**, with **20 lift rejections / 3
+quarantines** unchanged. `L28c/partition-audit.json` compares against the
+post-refresh hash manifest and proves **all 59,533 pre-existing records
+and case multisets unchanged** during adoption. Its only addition is
+0x00DAFED0. Together with the preceding refresh audit, exactly one original
+entry changed (0x00F6A380) and exactly one was added. No snapshots were
+taken; the manifests contain hashes/addresses only.
+
+**Private evidence:** `L28c/diagnose.log`, `partition-trial.json`,
+`partition-check.log`, `refresh-audit.json`, `partition-audit.json` and
+`partition-layout.json` under native-L28c. The eight trial cases were
+recorded through heavy.py using the exact proposed hook in an isolated
+process while waiting for the shared-file owner. After agreement the
+same hook was applied to source and light-tested normally. Adoption and
+hashing execute no guest code; that light step ran directly with 16 GB
+free after cancelling its unnecessary queued heavy wrapper.
+
+**Reproduction for a missing candidate:** set LIFT_DATA to
+`E:/ddda-re/notes/native-L28c` and INVENTORY_EXTRA to its
+`extra_functions.tsv`, then run through heavy.py as codex:
+
+```
+python research/native/structured_inputs.py record --strategy record-range-v1 --layout E:/ddda-re/notes/native-L28c/L28c/partition-layout.json --address 0x00DAFED0 --seeds 8 --seconds 20
+python research/native/structured_inputs.py adopt --strategy record-range-v1
+```
+
+Use the research Python interpreter specified above. The private layout is
+`stride=92`, `first={stack:8}`, `last={stack:12}`, `result={stack:4}`,
+`uint_offsets=[80,84]`, `float_offsets=[88]`. `--address` is an optional
+candidate filter, not an address-specific implementation rule. Successful
+existing functions are not re-recorded by `record`. `refresh-closed`
+repairs imported stale closed-call boundaries; its audit requires explicit
+`--refresh-closed 0x012F2280` authorization of that exact target.
+
+**Adoption:** native-L28c is frozen for head's snapshot/merge. Take its
+selected pair and updated `patterns/lift_novector.json` /
+`patterns/lift_novector_keys.json`; quarantine metadata is unchanged. No
+full Rust replay was run here. The next action is integration replay and
+resuming the real boot, then prioritizing the next executed title-path
+failure. Image-table/stack-slot loop budgets and the terminal-call cleanup
+diagnosis above remain open; coordinate with L45 before changing extents
+or terminal evidence. Both L45's `refresh`/`table_goals` and this branch's
+separate `refresh-closed` command must be retained when merging.

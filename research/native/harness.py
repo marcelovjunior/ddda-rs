@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'zero-call-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -732,7 +732,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False):
+               terminal=False, input_layout=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -772,6 +772,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     for non-image pages, registers and mocked returns. It is mutually
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
+    `record-range-v1` requires `input_layout`: evidence-supplied record stride,
+    first/last/result bindings, and finite key fields. The layout is recorded
+    with the case; its stack arguments are part of the initial memory image.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
 
     `terminal` (terminal-v1) accepts a root call at a noreturn site into a
@@ -817,6 +820,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
+    if (input_strategy == 'record-range-v1') != (input_layout is not None):
+        raise ValueError('record-range-v1 requires a layout; other strategies do not use one')
+    if input_layout is not None:
+        from record_inputs import RecordRangeInputs
+        inputs = RecordRangeInputs(input_layout, seed)
     mock_zero = input_strategy in MOCKZERO
     deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -1441,6 +1449,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     stack_page = regs_in["esp"] & ~0xFFF
     page = bytearray(pages_in[stack_page])
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
+    if input_strategy == 'record-range-v1':
+        for offset, value in inputs.stack.items():
+            struct.pack_into('<I', page, regs_in['esp'] - stack_page + offset, value)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
     # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`
@@ -1537,5 +1548,6 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             **({"nan_guard_retired": sorted(retired)} if retired else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
+            **({"input_layout": input_layout} if input_layout is not None else {}),
             **({"stack_contract": stack_contract} if stack_contract else {}),
             **({"terminal": True} if stopped[0] else {})}

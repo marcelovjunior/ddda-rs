@@ -1,5 +1,23 @@
 # Milestones
 
+### L28c boot-blocker fixtures (2026-10-12, pending integration replay)
+
+- `0x00DAFED0` now records **8/8** bounded record-range inputs, including
+  ascending, descending, equal and mixed finite keys. Original recorded
+  writes pass bounds, permutation and partition checks; no execution
+  budget or recorder guard was relaxed. The reusable layout strategy
+  seeds related first/last/output arguments before execution.
+- Refreshed `0x00F6A380`, the sole imported caller still mocking closed
+  `__alloca_probe` (`0x012F2280`). Private native-L28c:
+  **59,533 → 59,534 entries**, **177,188 → 177,196 cases**; missing
+  candidate fixtures **229 → 228**. Separate hash audits prove the refresh
+  changed only that caller and the partition addition changed no old
+  records. **39 light tests pass**; Rust replay is the head's train.
+- **Next action:** integrate this frozen pair and resume the real boot;
+  use its next executed missing function to prioritize the remaining
+  title-path queue. Evidence and merge notes are in
+  [L28 Results](tasks/L28-crt-platform-class.md).
+
 ### L28b recorder batch (2026-10-12, pending integration replay)
 
 - The opt-in `zero-call-v1` input strategy supplies a call from an aligned

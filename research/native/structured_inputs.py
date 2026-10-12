@@ -99,6 +99,7 @@ def init_worker(closed, noreturn, frames=None):
 def trial(args):
     f, strategy, seeds, seconds = args[:4]
     terminal = len(args) > 4 and args[4]
+    layout = args[5] if len(args) > 5 else None
     start = time.monotonic()
     cases, attempts = [], []
     key = lift.vector_key(f)
@@ -111,6 +112,8 @@ def trial(args):
         kw = dict(zero_inputs=True) if strategy == 'zero' else {}
         if strategy not in ('random', 'zero'):
             kw['input_strategy'] = strategy
+        if layout is not None:
+            kw['input_layout'] = layout
         try:
             result = h.run_sparse(f['addr'], seed, end=f['addr']+f['size'], lifted=_CLOSED,
                                   body=f['body'], x87_push=f.get('x87_push',[]),
@@ -126,10 +129,11 @@ def trial(args):
         finally:
             gc.collect()
     return dict(addr=f['addr'],body_key=key,strategy=strategy,requested_seeds=seeds,
-                seconds=seconds,attempts=attempts,cases=cases)
+                seconds=seconds,attempts=attempts,cases=cases,
+                **({'input_layout':layout} if layout is not None else {}))
 
 
-def done_keys(prior, seeds, seconds, retry=None):
+def done_keys(prior, seeds, seconds, retry=None, layout=None):
     """Logged (addr, body_key) trials to skip on resume. `retry` (a regex):
     after a recorder change, failed trials with a matching reason run again;
     their earlier records stay in the log."""
@@ -137,6 +141,7 @@ def done_keys(prior, seeds, seconds, retry=None):
     stale = re.compile(retry) if retry else None
     return {(r['addr'],r['body_key']) for r in prior
             if r.get('requested_seeds')==seeds and r.get('seconds')==seconds
+            and r.get('input_layout') == layout
             and not (stale and not r['cases'] and any(stale.search(a['reason']) for a in r['attempts']))}
 
 
@@ -145,7 +150,12 @@ def trial_log(root, strategy, terminal=False):
     return root/f"structured-{strategy}{'-terminal' if terminal else ''}.jsonl"
 
 
-def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False):
+def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False, layout=None, addresses=None):
+    if (strategy == 'record-range-v1') != (layout is not None):
+        raise ValueError('record-range-v1 requires a layout; other strategies do not use one')
+    if layout is not None:
+        from record_inputs import RecordRangeInputs
+        RecordRangeInputs(layout, 1)  # reject malformed layouts before opening a trial log
     selected = read(root/'patterns/lift.json')
     check_boundary(root, selected)
     have = {f['addr'] for f in selected}
@@ -153,11 +163,12 @@ def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False):
     candidates = read(root/'patterns/structured_candidates.json')
     path = trial_log(root, strategy, terminal)
     prior = records(path) if path.exists() else []
-    done = done_keys(prior, seeds, seconds, retry)
+    done = done_keys(prior, seeds, seconds, retry, layout)
     # Omit assembly strings from worker arguments; workers need only the
     # existing body and call boundary, not another copy of generated Rust.
     todo = [{k:v for k,v in f.items() if k!='arms'} for f in candidates
-            if f['addr'] not in have and f['addr'] not in quarantine and (f['addr'],lift.vector_key(f)) not in done]
+            if f['addr'] not in have and f['addr'] not in quarantine and (f['addr'],lift.vector_key(f)) not in done
+            and (addresses is None or f['addr'] in addresses)]
     if limit is not None:
         todo = todo[:limit]
     closed = [f['addr'] for f in selected if not f.get('ext')]
@@ -169,7 +180,7 @@ def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False):
                 stream.seek(0,2);stream.write(b'\n')
     with path.open('a') as stream, Pool(int(os.environ.get('LIFT_WORKERS','6')),init_worker,
             (closed,lift.noreturn_entries(),frame_contracts(selected)),maxtasksperchild=8) as pool:
-        for n,result in enumerate(pool.imap_unordered(trial,((f,strategy,seeds,seconds,terminal) for f in todo),chunksize=1),1):
+        for n,result in enumerate(pool.imap_unordered(trial,((f,strategy,seeds,seconds,terminal,layout) for f in todo),chunksize=1),1):
             stream.write(json.dumps(result)+'\n');stream.flush()
             if n%250==0:
                 print(n,'completed',flush=True)
@@ -221,6 +232,11 @@ def _inputs(cases):
     strategy = strategies.pop() if len(strategies) == 1 else 'random'
     if strategy == 'zero':
         return dict(zero_inputs=True)
+    if strategy == 'record-range-v1':
+        layouts = {json.dumps(c.get('input_layout'),sort_keys=True) for c in cases}
+        if len(layouts) != 1 or None in [c.get('input_layout') for c in cases]:
+            raise ValueError('inconsistent recorded range layouts')
+        return dict(input_strategy=strategy,input_layout=json.loads(layouts.pop()))
     return {} if strategy == 'random' else dict(input_strategy=strategy)
 
 
@@ -251,11 +267,52 @@ def _rerecord(f, closed, frames, noreturn, kw, seeds, seconds):
                      original_entry=f.get('original_entry', False)) if f.get('ext') else dict(size=f['size']))
         try:
             r = h.run_sparse(a, seed, body=f['body'], noreturn_sites=f.get('noreturn_sites', []),
-                             noreturn_targets=noreturn, frame_contracts=frames, max_seconds=seconds, **mode, **kw)
+                             noreturn_targets=noreturn, frame_contracts=frames, max_seconds=seconds,
+                             x87_entry=f.get('x87_entry',0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET, **mode, **kw)
         except h.Rejected:
             continue
+        finally:
+            gc.collect()
         new.append(dict(addr=a, seed=seed, body_key=key, **r))
     return new
+
+
+def refresh_closed(root, seeds=3, seconds=20):
+    """Repair imported cases that still mock an already closed selected body.
+
+    No boundary or unrelated case changes. If any affected caller cannot
+    re-record, fail before writing either selected file.
+    """
+    selected = read(root/'patterns/lift.json')
+    cases = read(root/'vectors/lift.json')
+    closed = lift.seed_closed_contracts(selected)
+    old = {}
+    for c in cases:
+        old.setdefault(c['addr'], []).append(c)
+    affected = {c['addr'] for c in cases if any(e['target'] in closed for e in c.get('calls', []))}
+    frames, noreturn = frame_contracts(selected), lift.noreturn_entries()
+    replacements = {}
+    for f in selected:
+        a = f['addr']
+        if a not in affected:
+            continue
+        try:
+            arms = lift.lift(a, f['size'], closed, ext=bool(f.get('ext')))
+            prior = {k:v for k,v in f.items() if k not in ('x87_entry','insn_budget')}
+            g = dict(prior, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                     **lift.BODY_INFO[a])
+        finally:
+            lift.release_body(a, f['size'])
+        fresh = _rerecord_any(g, closed, frames, noreturn, _inputs(old[a]), seeds, seconds)
+        if not fresh or any(e['target'] in closed for c in fresh for e in c.get('calls', [])):
+            raise ValueError(f'closed-boundary refresh failed for {a:#010x}; selected pair untouched')
+        replacements[a] = (g, fresh)
+    if replacements:
+        write(root/'patterns/lift.json', [replacements[f['addr']][0] if f['addr'] in replacements else f for f in selected])
+        cases = [c for c in cases if c['addr'] not in replacements] + [c for _, fresh in replacements.values() for c in fresh]
+        write(root/'vectors/lift.json', cases)
+    print(f'refreshed {len(replacements)} stale closed callers: {[hex(a) for a in sorted(replacements)]}; '
+          f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
 
 
 def promote(root, seeds=3, seconds=20):
@@ -377,11 +434,13 @@ def prune_no_vectors(root, have):
 
 if __name__ == '__main__':
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command',choices=['prepare','record','adopt','promote'])
+    ap.add_argument('command',choices=['prepare','record','adopt','promote','refresh-closed'])
     ap.add_argument('--strategy',default='random',choices=('random','zero',*h.INPUT_STRATEGIES))
     ap.add_argument('--seeds',type=int,default=3)
     ap.add_argument('--seconds',type=float,default=20)
     ap.add_argument('--limit',type=int)
+    ap.add_argument('--layout',type=Path,help='JSON record-range layout with evidence-derived bindings/stride/fields')
+    ap.add_argument('--address',type=lambda s:int(s,0),action='append',help='record only these candidate addresses (repeatable)')
     ap.add_argument('--retry',help='regex: re-run functions whose logged attempts failed with a matching reason')
     ap.add_argument('--terminal',action='store_true',help='accept terminal-v1 cases (end at a root noreturn call)')
     args=ap.parse_args();root=Path(lift.N)
@@ -390,6 +449,8 @@ if __name__ == '__main__':
     if args.seeds < 1 or args.seconds <= 0 or (args.limit is not None and args.limit < 0):
         ap.error('positive seeds/seconds and nonnegative limit required')
     if args.command=='prepare':prepare(root)
-    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal)
+    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal,
+                                      read(args.layout) if args.layout else None,args.address)
+    elif args.command=='refresh-closed':refresh_closed(root,args.seeds,args.seconds)
     elif args.command=='promote':promote(root,args.seeds,args.seconds)
     else:adopt(root,args.strategy,args.terminal)
