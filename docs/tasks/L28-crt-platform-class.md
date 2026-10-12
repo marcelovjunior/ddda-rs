@@ -35,6 +35,21 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Bounded setup replay (2026-10-12)
+
+Guarded input strategies now re-prove a producer on accumulated setup
+state, using exact prior writes and checked aliases. They keep the original
+input distribution and all accepted-case comparisons; image-only proofs
+remain disabled on constructed state. Tests cover long bounded producers
+and legacy random producers in sequences. **147 light tests pass.**
+
+0x004915A0 now returns in the three-producer recipe, with the same proved
+208,066-instruction budget, but prior state changes its reads, writes and
+MXCSR observation. The exact comparison rejects this recipe; no fixture
+is adopted. `L28c/reproof-audit.json` confirms all baseline records unchanged
+and only the already-reported boot stop 16 addition. **Next:** investigate
+the conflicting setup inputs or an independent producer ordering.
+
 ### Boot stop 16: 0x00DC8270 (2026-10-12, pending replay)
 
 **3/3 normal returns, adopted: +1 function / +3 cases.** The existing

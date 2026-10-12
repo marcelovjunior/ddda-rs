@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c bounded producer replay (2026-10-12)
+
+- Guarded constructors re-prove their budgets on accumulated setup state.
+  **147 light tests pass**; no further additions or changed records.
+- Destination producer 0x004915A0 returns, but changed observations reject
+  the sequence. **Next action:** establish independent producer ordering.
+
 ### L28c boot stop 16 (2026-10-12, pending replay)
 
 - **0x00DC8270 records 3/3** on checked 0x00DD5ED0 constructor state.

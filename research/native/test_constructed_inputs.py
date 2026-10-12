@@ -70,6 +70,29 @@ class ConstructedTests(unittest.TestCase):
         self.assertEqual(len(recipe['setups']),2)
         self.assertEqual(recipe['rule'],'constructed-chain-v1')
 
+    def test_sequence_retains_legacy_random_distribution(self):
+        self.fixture('c3','c3')
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',**self.run_body(f,seed))
+            phases.append((f,accepted,'test'))
+        c.construct_chain(phases,{},self.run_body)
+
+    def test_sequence_reproves_bounded_producer_on_prior_state(self):
+        self.fixture('c7050000002003000000 c3', 'b9401f0000 31c0 40 49 75fc c3')
+        phases=[]
+        for address,seed,strategy in ((0x400000,1,'zero-call-v1'),
+                                      (0x400100,2,'guarded-bounded-v1')):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',
+                          **self.run_body(f,seed,input_strategy=strategy))
+            phases.append((f,accepted,'test'))
+        self.assertEqual(phases[1][1]['regs_out']['eax'],8000)
+        self.assertIn('image_budget',phases[1][1])
+        state,_=c.construct_chain(phases,{},self.run_body)
+        self.assertEqual(state['writes'][0x20000000],3)
+
     def test_sequence_orders_overwrites_but_rejects_changed_read_dependencies(self):
         self.fixture('c7050000002003000000 c3','c7050000002004000000 c3')
         state,_=self.chain()
