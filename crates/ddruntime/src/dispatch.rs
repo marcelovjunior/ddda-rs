@@ -256,7 +256,38 @@ mod trace {
         let name = r.names.get(&target)?;
         let word = |k: u32| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(cpu.esp.wrapping_add(4 * k)))).ok();
         let w = |k| word(k).map_or("-".to_string(), |v| format!("{v:#x}"));
-        Some(format!("{} {} ret={} args={} {} {} {}", crate::threads::current_tid(), name, w(0), w(1), w(2), w(3), w(4)))
+        let mut line = format!("{} {} ret={} args={} {} {} {}", crate::threads::current_tid(), name, w(0), w(1), w(2), w(3), w(4));
+        for k in 1..=4 {
+            if let Some(s) = word(k).and_then(|p| text_at(m, p)) {
+                line += &format!(" a{k}={s:?}");
+            }
+        }
+        Some(line)
+    }
+
+    /// The text an argument points to, if it looks like a string: at least
+    /// three printable ASCII characters, as bytes or as UTF-16 (up to 260).
+    fn text_at(m: &dyn Mem, p: u32) -> Option<String> {
+        if p < 0x10000 {
+            return None;
+        }
+        let byte = |a: u32| m.probe(a, 1, false).ok().map(|_| m.u8(a));
+        let printable = |b: u8| (0x20..0x7F).contains(&b);
+        let wide = byte(p.wrapping_add(1)) == Some(0);
+        let step = if wide { 2 } else { 1 };
+        let mut s = String::new();
+        for k in 0..260u32 {
+            let a = p.wrapping_add(k * step);
+            let b = byte(a)?;
+            if wide && byte(a.wrapping_add(1))? != 0 {
+                break;
+            }
+            if !printable(b) {
+                break;
+            }
+            s.push(b as char);
+        }
+        (s.len() >= 3).then_some(s)
     }
 
     pub(super) fn finish(line: String, cpu: &Cpu) {
