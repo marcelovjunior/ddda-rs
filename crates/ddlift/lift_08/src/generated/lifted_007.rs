@@ -3,6 +3,20 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x008DF620 (DDDA.exe 2017-12-13 Steam), cEm0100ActDwnAtTrampleE::vf08.
+pub fn f_008df620(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x8DF620;
+    loop {
+        match pc {
+            0x8DF620 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x44)); { let r = cpu.fl.alu_and((m.fast_u8(pt, cpu.eax.wrapping_add(0x206C)) as u32), 0x2u32, 8); } pc = if cpu.fl.cond("e") { 0x8DF636 } else { 0x8DF62C }; continue; }
+            0x8DF62C => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2E34), 0x0u32); pc = 0x8DF636; continue; }
+            0x8DF636 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x74)); { let r = cpu.fl.alu_and(m.fast_u32(pt, cpu.eax.wrapping_add(0x2ECC)), 0xFFFFFEFFu32, 32); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2ECC), r); } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x008DF650 (DDDA.exe 2017-12-13 Steam), cEm0100ActDwnAtTramplePl::vf15.
 pub fn f_008df650(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -5355,10 +5369,4 @@ pub fn f_008ee730(m: &mut dyn Mem, cpu: &mut Cpu) {
             _ => unreachable!(),
         }
     }
-}
-
-// Translated from 0x008EE7A0 (DDDA.exe 2017-12-13 Steam), cEm0200LeaderAssult::getDTI.
-pub fn f_008ee7a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = 0x19982E0u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
