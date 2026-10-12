@@ -566,9 +566,11 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
         """The instruction whose flags `branch` tests: the last flag writer
         on the straight line before it (L48: flag-neutral moves such as
         `movss` stores may sit between `cmp` and `ja`), provided nothing in
-        between enters the line or writes `key`."""
+        between enters the line or writes `key`. L49: 24 instructions (ten
+        stores between them at 0x0097ABE0); the walk is a straight line, so
+        the count only limits its cost."""
         at = branch.address
-        for _ in range(6):
+        for _ in range(24):
             if at != branch.address and sources.get(at):
                 return None
             i = by_end.get(at)
@@ -590,11 +592,15 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
         return None
 
     def copy_of(setter, key, op):
-        """L49: register `key` holds the value of the compared register `op`
-        at `setter`: `mov key, op` (or `mov op, key`) on the straight line
-        before it, neither written in between (0x00FA01FD `mov eax, esi;
-        cmp esi, 6; ja`). Eight instructions at most, no other entry."""
-        if key[0] != "reg" or op.type != X86_OP_REG or op.size != 4 or op.reg == key[1]:
+        """L49: `key` holds the value of the compared register `op` at
+        `setter`: a `mov` between them (either direction; for a memory slot
+        the load or the store of `op`) on the straight line before it, with
+        neither written nor the slot's base changed or aliased in between
+        (0x00FA01FD `mov eax, esi; cmp esi, 6; ja`; 0x00CC0FC2 `mov eax,
+        [esp + 0x10]; ...; cmp eax, 3; ja`). Conditional jumps out of the
+        line do not change the values on it; eight instructions at most,
+        no other entry."""
+        if op.type != X86_OP_REG or op.size != 4 or (key[0] == "reg" and op.reg == key[1]):
             return False
         names = _aliases(setter.reg_name(key[1])) | _aliases(setter.reg_name(op.reg))
         at = setter.address
@@ -602,14 +608,18 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
             if sources.get(at):
                 return False
             i = by_end.get(at)
-            if i is None or i.mnemonic.startswith(("j", "ret", "call", "loop", "int")):
+            if (i is None or i.mnemonic == "jmp"
+                    or i.mnemonic.startswith(("ret", "call", "loop", "int", "rep"))):
                 return False
             ops = i.operands
-            if (i.mnemonic == "mov" and len(ops) == 2 and all(o.type == X86_OP_REG and o.size == 4 for o in ops)
-                    and {ops[0].reg, ops[1].reg} == {key[1], op.reg}):
-                return True
+            if i.mnemonic == "mov" and len(ops) == 2 and ops[0].size == 4 and ops[1].size == 4:
+                if key[0] == "reg" and all(o.type == X86_OP_REG for o in ops) and {ops[0].reg, ops[1].reg} == {key[1], op.reg}:
+                    return True
+                if key[0] == "mem" and any(o.type == X86_OP_REG and o.reg == op.reg for o in ops) \
+                        and any(slot_of(i, o) == key for o in ops):
+                    return True
             written = _writes(i)
-            if written is None or written & names:
+            if written is None or written & names or (key[0] == "mem" and stores_may_alias(i, key)):
                 return False
             at = i.address
         return False
@@ -617,7 +627,19 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
     def edge_range(branch, taken, key):
         """The bound a predecessor branch proves for `key` on the edge."""
         setter = flag_setter(branch, key)
-        if setter is None or setter.mnemonic not in ("cmp", "sub"):
+        if setter is None:
+            return None
+        # L49: on the equal edge (je taken, jne not) ZF was set by a result
+        # of 0 written to `key` (0x007113F2 `add edx, [ecx + 0x60]; jne`) or
+        # by `test key, key`; `cmp key, imm` there gives key == imm (below)
+        if (branch.mnemonic, taken) in (("je", True), ("jne", False)):
+            ops = setter.operands
+            if (setter.mnemonic in ("add", "sub", "and", "or", "xor", "inc", "dec", "neg")
+                    and matches(setter, ops[0], key)):
+                return {0}
+            if setter.mnemonic == "test" and len(ops) == 2 and all(matches(setter, o, key) for o in ops):
+                return {0}
+        if setter.mnemonic not in ("cmp", "sub"):
             return None
         if not matches(setter, setter.operands[0], key) and not (
                 setter.mnemonic == "cmp" and copy_of(setter, key, setter.operands[0])):
@@ -633,6 +655,8 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                 return None
         else:
             return None
+        if setter.mnemonic == "cmp" and (branch.mnemonic, taken) in (("je", True), ("jne", False)):
+            return {imm} if imm < 4096 else None
         if setter.mnemonic == "cmp":
             bound = {("jb", True): imm - 1, ("jbe", True): imm,
                      ("ja", False): imm, ("jae", False): imm - 1}.get((branch.mnemonic, taken))

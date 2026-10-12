@@ -119,6 +119,29 @@ class EdgeBoundTests(unittest.TestCase):
         code = bytes.fromhex("89f0" "46" "83fe03" "7707" "ff248500200000") + b"\xc3" * 6
         self.assertIsNone(self.slots(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)}, 0x1008))
 
+    def test_l49_compare_of_a_register_loaded_from_the_slot(self):
+        # mov eax,[esp+4]; test ecx,ecx; jz out; cmp eax,2; ja out; mov ecx,[esp+4];
+        # jmp [ecx*4+0x2000] (0x00CC0FC2: the conditional exit keeps eax = the slot)
+        code = bytes.fromhex("8b442404" "85c9" "7410" "83f802" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        tables = {0x2000: dwords(0x1019, 0x101A, 0x101B, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1011), [0, 1, 2])
+        # a store to the slot after the load: eax no longer equals it
+        code = bytes.fromhex("8b442404" "894c2404" "83f802" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        self.assertIsNone(self.slots(code, tables, 0x1011))
+
+    def test_l49_zero_and_equal_edges(self):
+        # add edx,ecx; jne other; jmp [edx*4+0x2000]; other: mov edx,1; jmp back
+        # (0x007113F2: the fall-through of jne has the result edx = 0)
+        code = bytes.fromhex("01ca" "7507" "ff249500200000" "ba01000000" "ebf2") + b"\xc3" * 3
+        tables = {0x2000: dwords(0x1012, 0x1013, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1004), [0, 1])
+        # je instead: its fall-through has edx != 0, nothing bounds it
+        code = bytes.fromhex("01ca" "7407" "ff249500200000" "ba01000000" "ebf2") + b"\xc3" * 3
+        self.assertIsNone(self.slots(code, tables, 0x1004))
+        # cmp edx,2; je taken: edx = 2 (and 1 from the other path)
+        code = bytes.fromhex("83fa02" "7407" "ba01000000" "eb00" "ff249500200000") + b"\xc3" * 3
+        self.assertEqual(self.slots(code, {0x2000: dwords(0, 0x1013, 0x1014, 0)}, 0x100C), [1, 2])
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
