@@ -635,6 +635,7 @@ fn read_file_ex_completes_at_the_next_alertable_sleep() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[cfg(feature = "game")]
 #[test]
 fn the_crt_start_up_bridge_runs_the_heap_initialisation() {
     // Session::start translates 0x012EF8A7; each step reports where it stops.

@@ -24,15 +24,7 @@ pub mod player_action;
 pub mod species;
 pub mod unit;
 
-/// An `fld dword` / `fstp dword` pair: the value is kept, except that a
-/// signalling NaN becomes quiet (the x87 load raises the masked invalid
-/// exception and sets the quiet bit).
-pub fn x87_copy(v: f32) -> f32 {
-    let bits = v.to_bits();
-    if v.is_nan() && bits & 0x0040_0000 == 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        v
-    }
-}
+/// An `fld dword` / `fstp dword` pair (now in `mtmath::scalar`, which the
+/// lifted shards can reach; tested against the CPU in tests/units.rs).
+pub use mtmath::scalar::x87_copy;
 

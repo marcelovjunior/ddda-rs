@@ -92,7 +92,7 @@ fn clear_then_a_constant_colour_triangle() {
     };
     gpu.clear(&ClearCall {
         rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0,
-        targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0],
+        targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false,
     });
     gpu.present(&back_buffer());
     let f = gpu.last_frame.clone().expect("frame");
@@ -153,7 +153,7 @@ fn compare(uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall]) -> (Vec<u8
 }
 
 fn blue_clear() -> ClearCall {
-    ClearCall { rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0, targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0] }
+    ClearCall { rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0, targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false }
 }
 
 #[test]
