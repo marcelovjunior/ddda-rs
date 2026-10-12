@@ -551,3 +551,41 @@ claude-6 (15):
       (the disassembly) shows no undefined read. The fault comes from the
       lifted body's flag model (e.g. after DIV / INC, after the comparator
       call, or a branch join). Cause 2 (lifter). Owner: claude-6.
+11. Scratch preview (not committed): task/L21-boot + task/L46-x87-state
+    (c61bbf35, INC/DEC leave an undefined CF undefined), generated from
+    native-L28c. Runtime game tests 46/46. The boot passes `_qsort`.
+    - L27b's per-instruction steps are opt-in since 24c4f5c4
+      (LIFT_INSTRUCTIONS=1). Before the head's b84b3e44, a gen without
+      steps stopped every lifted call: `Registry::call` sent every bound
+      target into the step executor, which knows only steps and services,
+      so `__heap_init` stopped with MissingInstruction 0x012FE354. The run
+      used a local one-line fallback; main now has the real fix.
+    - Stop: untranslated 0x00E0FB9C, reached by a jump, so there is no
+      return address (ecx 0x653343D0, esp 0x7EFFB348, eax 0xA8A). The
+      record for 0x00E0FB80 (`this` in ecx, one stack argument, `ret 4`;
+      it searches the array at [this+0x28], count [this+0x34], for
+      arg & ~0xFFF) lifted only its 28-byte head. `jne 0x00E0FB9C` leaves
+      for the chunk that Ghidra splits off as a function of its own.
+      native-L28c's verification gaps list it as "stale body: 73
+      instructions from 0x00E0FB9C not lifted". Cause 2 (lifter). Owner:
+      claude-6 (L46's frame-tail records). Fixed in native-L46 (84
+      instructions, the chunk local).
+    - Its six direct callers are all virtual (vf10 0x00F94480, 0x00FA8FE0,
+      0x010082D0, 0x0117D310; vf09 0x0112E4D0; 0x0117D1D0), so the static
+      look-ahead, which follows vtables only from its known roots, did not
+      reach it.
+    - The look-ahead (`research/runtime/title_lookahead.py`; LIFT_DATA
+      selects the data set) now also lists the "verified" functions whose
+      record still has a verification gap. On native-L28c with two hops:
+      30 of 82.
+      - 16 stale bodies, all in the CRT: the two `memcpy` variants
+        0x012EDE40/0x012EFEA0 (`__VEC_memcpy` tails, claude-6), plus
+        `__initptd`, `___updatetmbcinfo`, `__write`, `___lock_fhandle`,
+        `_fclose`, `__read`, `__close`, `_raise`,
+        `__IsNonwritableInCurrentImage`, `___DestructExceptionObject`,
+        `__getstream`, `__alloc_osfhnd`, `__sopen_helper` and 0x01302F75.
+        These are 5 to 8 instructions each, mostly error paths.
+      - 13 unproven jump tables (0x0044CAC0, 0x004593E0, 0x004298B0,
+        0x004606A0, 0x004B72B0, 0x00789010, 0x00797BA0, 0x00BC1A00,
+        0x00FA0130, 0x00441FB0, 0x0044D1F0, 0x004594A0, 0x0047A2A0).
+      - One "tail call into its own inlined code" (0x00786CA0).
