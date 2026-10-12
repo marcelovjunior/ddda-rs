@@ -1524,7 +1524,7 @@ fn file_roots(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::
 fn profile_files_read_and_write_as_windows_does() {
     let mut m = guest();
     let (root, _install, sandbox) = file_roots("profile");
-    let docs = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    let docs = sandbox.join(r"csidl-0x001c\CAPCOM\DRAGONS DOGMA DARK ARISEN");
     std::fs::create_dir_all(&docs).unwrap();
     let ini = docs.join("p.ini");
     std::fs::write(&ini, b"[Display]\r\nWidth = 1280 \r\n  Name=\"quoted\"  \r\nSingle='q'\r\nEmpty=\r\nNoEq\r\n;comment=1\r\n[ other ]\r\nk=v\r\nk=second\r\n[Display]\r\nLater=x\r\n").unwrap();
@@ -1704,7 +1704,7 @@ fn delete_move_copy_and_truncate_never_touch_the_install() {
     assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, outs[0], outs[1], outs[2], outs[3]], 20).0, 1);
     assert_eq!(outs.map(|p| m.u32(p)), files::VOLUME);
     // SHCreateDirectoryExW in the home
-    let home = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    let home = sandbox.join(r"csidl-0x001c\CAPCOM\DRAGONS DOGMA DARK ARISEN");
     let shc = |m: &mut GuestMemory, p: &str| {
         put_w(m, a, p);
         let cpu = call_service(files::sh_create_directory_ex_w, m, &[0, a, 0]);

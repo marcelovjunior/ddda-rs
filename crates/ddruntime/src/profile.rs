@@ -2,7 +2,7 @@
 //! WritePrivateProfileStringW over crate::files (the install read-only,
 //! writes to the overlay or the home).
 //!
-//! The game's settings live in `<Documents>\CAPCOM\DRAGONS DOGMA DARK
+//! The game's settings live in `<LocalAppData>\CAPCOM\DRAGONS DOGMA DARK
 //! ARISEN\config.ini` (MtRegistry's constructor 0x00CFFF00, which keeps the
 //! path at +4). Its reader 0x00D00010 (GetPrivateProfileStringW at
 //! 0x00D000CB, default L"", nSize 0x200) and writer 0x00CFFD20
