@@ -157,9 +157,15 @@ the key order this sequence predicts, with the menu's keys first.
   AdjustWindowRect (0x00DF1200). The back buffer is the client area.
 - ddplay: `d3d9dev::presentation()` gives the game's back-buffer size,
   windowed/full screen, refresh rate and vsync interval. It must be read
-  on the guest thread. Following it in ddplay's window is proposed to
-  claude-9 (board #9321), whose L25 branch rewrites ddplay's main.rs and
-  present.rs. **Not done yet.**
+  on the guest thread. ddplay follows it on branch `task/L34b-window`
+  (from train/1, as the head asked, b4f221b):
+  - `present::Sink::following` reads it at each Present and reports
+    changes;
+  - windowed: the window takes the back buffer's size;
+  - full screen: the monitor's video mode with that size and refresh rate
+    (exclusive), borderless when there is none;
+  - VSYNC=OFF (IMMEDIATE) or ON sets the surface's present mode, unless
+    `--no-vsync` overrides it.
 
 ### 3. Round trip
 
@@ -199,6 +205,11 @@ the modes, each mode once).
 - **Verified on the branch:**
   - `cargo test -p hostdisplay`: 2 passed, including the host query on
     this machine;
+  - `cargo check -p ddruntime --no-default-features --tests` (no lifted
+    program, L36) passes with the L34 changes; tests/options.rs also
+    type-checks with its `game` gate lifted for the check;
+  - `cargo check -p ddplay` (task/L34b-window, against ddruntime without
+    the lifted program) passes;
   - the census (unicorn emulation, cross-checked against Ghidra's
     decompilation for every site);
   - the display probe (ran on this host);
@@ -206,8 +217,8 @@ the modes, each mode once).
   - `cargo metadata` resolves the workspace with the new crate
     (Cargo.lock updated).
 - **Unverified, waiting for the merge train:**
-  - the ddruntime changes and tests/options.rs are not compiled yet;
-  - the round-trip test has not run.
+  - the round-trip test has not run (it needs the lifted program);
+  - ddplay's follow-up has not run live.
   - The test's start-up path (the CRT steps plus `__cinit` via
     `Session::call`) is the same one `Session::start` uses. The test
     assumes the MtString allocator needs nothing that WinMain sets up.
@@ -217,6 +228,5 @@ the modes, each mode once).
   - `tests/d3d9_device.rs:133` (claude-5 agreed, #9330) now Resets full
     screen at the host's desktop mode (419fd70).
 - **Not done:**
-  - ddplay following the game's mode (waiting on L25);
   - the 0x018D0158 flag's writer;
   - per-option effects compared live with the original.
