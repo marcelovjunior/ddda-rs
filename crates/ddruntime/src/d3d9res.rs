@@ -286,8 +286,17 @@ fn create_surface(m: &mut dyn Mem, cpu: &mut Cpu, usage: u32, rtype_usage: u32) 
     // CreateRenderTarget / CreateDepthStencilSurface:
     // (this, w, h, format, multisample, quality, lockable | discard, surface**, shared)
     let a: Vec<u32> = (0..9).map(|k| arg(m, cpu, k)).collect();
+    // a multisampled surface needs the type offered for the format and a
+    // quality below its level count (CheckDeviceMultiSampleType, the same
+    // answers windowed and full-screen in the recorded profile); a
+    // multisampled render target cannot be lockable (Microsoft Learn,
+    // IDirect3DDevice9::CreateRenderTarget)
+    let multisample_ok = a[4] == 0 || {
+        let (hr, levels) = crate::d3d9::profile().multisample(a[3], 1, a[4]);
+        hr == 0 && a[5] < levels && !(usage == USAGE_RENDERTARGET && a[6] != 0)
+    };
     cpu.eax = match Image::new(a[3], a[1], a[2], 1) {
-        Some(image) if a[1] > 0 && a[2] > 0 && supported(rtype_usage, RTYPE_SURFACE, a[3]) => {
+        Some(image) if a[1] > 0 && a[2] > 0 && multisample_ok && supported(rtype_usage, RTYPE_SURFACE, a[3]) => {
             // a render target is lockable only when created lockable
             let usage = if usage == USAGE_RENDERTARGET && a[6] == 0 { usage | NOT_LOCKABLE } else { usage };
             let desc = SurfaceDesc { format: a[3], usage, pool: POOL_DEFAULT, multisample: a[4], quality: a[5], width: a[1], height: a[2] };

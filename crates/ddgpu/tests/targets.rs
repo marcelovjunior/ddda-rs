@@ -26,11 +26,11 @@ fn ps(outputs: u32) -> Vec<u32> {
 }
 
 fn target(surface: u32, format: u32) -> Target {
-    Target { surface, format, width: 4, height: 4, texture: None, level: 0 }
+    Target { surface, format, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 fn depth_target() -> Target {
-    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0 }
+    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// A triangle over the whole 4x4 target at depth `z` (float4 positions).
