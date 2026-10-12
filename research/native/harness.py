@@ -1370,6 +1370,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             i = own[pc]
             branch[0] = i if i.mnemonic == "call" or i.mnemonic.startswith("j") else None
             if i.mnemonic == "call":  # its arguments: what was pushed since the previous call
+                if budget_guard is not None:
+                    budget_guard.call(i.address)
                 pending_call[0] = (i.address+i.size, uc_.reg_read(UC_X86_REG_ESP), pushed[0])
                 pushed[2], pushed[0] = pushed[0], 0
             prologue = (i.mnemonic == "push" and i.operands[0].type == 1) or                 (i.mnemonic == "mov" and i.op_str == "ebp, esp") or                 (i.mnemonic in ("sub", "and") and i.op_str.startswith("esp, "))
@@ -1450,6 +1452,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
                "pop": pop}
+        if budget_guard is not None and not budget_guard.mock(i.address,pop):
+            bad.append('image budget: indirect mock cleanup differs from proof')
+            uc_.emu_stop()
+            return
         if zero_values:
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         if inputs:
@@ -1558,7 +1564,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
                                 ceiling=2_000_000-max_insn, deadline=deadline,
                                 max_bytes=MAX_PAGES*4096,guarded=guarded,
-                                decode=proof_decode,closed=lifted,models=PLATFORM,pop_for=static_pop)
+                                decode=proof_decode,closed=lifted,models=PLATFORM,pop_for=static_pop,
+                                initial_direction=(-1 if uc.reg_read(UC_X86_REG_EFLAGS) & 0x400 else 1) if guarded else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance
@@ -1578,6 +1585,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     machine.flush(uc)
     if machine.problem:
         bad.append(machine.problem)
+    if budget_guard is not None and not budget_guard.calls_match():
+        bad.append('image budget: indirect call did not use the proven mock contract')
     # Caller-frame helpers (frame_exit) are checked against their exact
     # derived exit ESP; every other function keeps the ordinary range.
     # A terminal case ends at the noreturn callee's entry, not at a return.

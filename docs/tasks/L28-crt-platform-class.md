@@ -823,3 +823,63 @@ the owner's terminal/x87 changes. Recording ran serially through heavy.py
 as codex, at most six workers; free memory stayed above 16 GB during this
 batch. No Rust replay (head's integration train), snapshots, shared-data
 writes, native-L17/native-train3 changes, generated-code commits or pushes.
+
+### L28c checked indirect contracts (source checked; recording queued)
+
+The head's isolated cleanup-test correction **7034548d** is cherry-picked
+as **5016233c**. The exact test is
+`RemainingTests.test_interleaved_local_allocation_is_not_a_mock_argument`
+in `test_lift_remaining.py` (originally introduced by L12, currently in
+claude-6's file scope). It now asserts the balanced callee-four/caller-four
+case and still rejects caller cleanup of twelve. All 13 tests in that
+module pass; the previously documented failing expectation is resolved.
+
+The next guarded-bound extension treats a root indirect call as a
+**candidate** zero-return mock contract, only after a completed call has
+established an argument boundary. The original run must report a matching
+mock event and cleanup for **every visit** to that site. A real closed,
+platform, or internal dispatch produces no matching mock event and rejects
+the certificate. Unknown nested indirect calls, unknown argument space,
+or differing cleanup at repeated visits still refuse the proof. This
+establishes a candidate **100,122-instruction** bound for 0x00478600,
+whose indirect call is at **0x00478854**; it is not yet an accepted fixture.
+
+For **0x00DD5ED0**, writes at **0x00DD603E/0x00DD6041** put zero into
+the same fields read at **0x00DD6063** and the next test. Tracking bytes
+at offsets from an unchanged unknown base register proves these reads
+without assigning a concrete object pointer. Different unknown bases may
+alias and invalidate previous facts; concrete writes also invalidate them.
+Changing the base register invalidates its identity; overlapping or opaque
+writes replace the affected bytes with unknowns. This gives a candidate
+**82,369-instruction** bound. Unknown output stores retain their existing
+runtime non-aliasing guard against concrete proof reads/code/return bytes.
+
+Negative tests exposed a Capstone metadata hazard: a MOVUPS memory
+destination can be labelled read-only. The opaque SIMD handler now treats
+every memory-destination MOVQ/MOVSS/MOVSD/MOVAPS/MOVUPS/MOVDQA/MOVDQU as
+a write, independently of that metadata. An actual Unicorn test rejects
+a SIMD store aliasing proof-protected code. **All 33 previously accepted
+guarded cases are queued for re-recording and comparison in a separate
+trial log; accepted records will not be replaced.** This strengthens a
+proof assumption check; it does not change the executed instructions.
+
+The analysis also supports known-carry ADC/SBB and bounded, sequential
+REP MOVS (including overlap), using the original recorder's initial DF.
+Unknown counts/direction/carry remain unknown. These advance diagnosis
+at **0x012F2287** (0x00491340's stack helper) and **0x0075A262**
+(0x00493AA0's copy), but do not yet produce fixtures for those callers.
+
+The queued recording job includes 0x00478600, 0x00DD5ED0 and the short
+0x00DC7D00 candidate, then the old guarded-case recheck. Follow-up trials
+will re-lift only missing direct-route and one-hop candidates against the
+merged owner source; accepted records and the three L46 x87 helpers are
+excluded. **No new accepted data yet:** 59,559 records / 177,271 cases.
+The hash-only baseline is `L28c/after-guarded-hashes.json`. Recording waits
+in heavy.py behind the train/boot jobs; no slot bypass or full Rust replay.
+
+**99 light tests pass**: image bounds 22, frame contracts 20, structured
+inputs 19, function tails 13, remaining forms 13, record inputs 2, record
+audit 5, existing lifter budgets 5. New negatives cover closed dispatch
+instead of a mock, incorrect mock cleanup, missing argument boundaries,
+alias/base/overlap invalidation and the SIMD-store hook. No known failing
+test remains in these suites.

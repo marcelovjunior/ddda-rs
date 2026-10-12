@@ -1,5 +1,17 @@
 # Milestones
 
+### L28c guarded-contract follow-up (2026-10-12, original runs queued)
+
+- The head's cleanup-test correction is integrated as **5016233c**;
+  its module now passes 13/13. Checked indirect mock contracts and exact
+  same-base store/read facts establish candidate bounds for 0x00478600
+  and 0x00DD5ED0, pending original recordings.
+- A negative test caught misleading Capstone SIMD-store metadata. The
+  guard now explicitly handles memory destinations; a recheck of the
+  previous 33 guarded cases is queued without replacing accepted records.
+- **Next action:** obtain the heavy slot, record, compare and append/audit.
+  Data remains **59,559 / 177,271**, open; L46 helpers remain untouched.
+
 ### L28c constructor/title fixtures (2026-10-12, pending replay)
 
 - A guarded finite-trace strategy records eleven more constructor/title
