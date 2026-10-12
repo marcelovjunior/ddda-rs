@@ -196,7 +196,29 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'zero-call-v1', 'record-range-v1',
+                    'slot-sweep-v1', *RETURN_STRATEGIES)
+# Strategies that take an evidence-derived input_layout (record_inputs.py,
+# L48 slot_sweep_layout).
+LAYOUT_STRATEGIES = ('record-range-v1', 'slot-sweep-v1')
+
+
+def slot_sweep_layout(layout):
+    """Validate a slot-sweep-v1 layout (L48): `index` binds the table index
+    input at entry to one register or one stack offset (as record-range-v1's
+    bindings), `value` is the slot to select. Everything else is small-v1."""
+    if not isinstance(layout, dict) or set(layout) != {'index', 'value'}:
+        raise ValueError('slot-sweep-v1 needs exactly an index binding and a value')
+    binding, value = layout['index'], layout['value']
+    if not isinstance(binding, dict) or len(binding) != 1:
+        raise ValueError('slot-sweep-v1 index binds one stack offset or register')
+    kind, where = next(iter(binding.items()))
+    if not ((kind == 'stack' and type(where) is int and 4 <= where <= 128 and where % 4 == 0)
+            or (kind == 'register' and where in ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp'))):
+        raise ValueError('invalid slot-sweep-v1 index binding')
+    if type(value) is not int or not 0 <= value < 4096:
+        raise ValueError('slot-sweep-v1 value must be a slot index 0..4095')
+    return kind, where, value
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -842,11 +864,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
-    if (input_strategy == 'record-range-v1') != (input_layout is not None):
-        raise ValueError('record-range-v1 requires a layout; other strategies do not use one')
-    if input_layout is not None:
+    if (input_strategy in LAYOUT_STRATEGIES) != (input_layout is not None):
+        raise ValueError(f'{input_strategy} and input_layout go together (LAYOUT_STRATEGIES)')
+    sweep = None
+    if input_strategy == 'record-range-v1':
         from record_inputs import RecordRangeInputs
         inputs = RecordRangeInputs(input_layout, seed)
+    elif input_strategy == 'slot-sweep-v1':
+        sweep = slot_sweep_layout(input_layout)
+        inputs = SparseInputs('small-v1')
     mock_zero = input_strategy in MOCKZERO
     deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -1536,6 +1562,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
             if call_stack:
                 v -= 4
+        if sweep is not None and sweep[0] == 'register' and sweep[1] == name:
+            v = sweep[2]  # slot-sweep-v1: the table index input selects slot `value`
         regs_in[name] = v
         uc.reg_write(r, v)
     # the return address at [esp]; the rest of the stack page is random
@@ -1546,6 +1574,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     if input_strategy == 'record-range-v1':
         for offset, value in inputs.stack.items():
             struct.pack_into('<I', page, regs_in['esp'] - stack_page + offset, value)
+    if sweep is not None and sweep[0] == 'stack':
+        struct.pack_into('<I', page, regs_in['esp'] - stack_page + sweep[1], sweep[2])
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
     # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`

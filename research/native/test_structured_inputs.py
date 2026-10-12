@@ -20,6 +20,8 @@ class InputTests(unittest.TestCase):
     def record(self, code, strategy=None, seed=19, **kwargs):
         if strategy == 'record-range-v1':
             kwargs.setdefault('input_layout',self.RANGE_LAYOUT)
+        elif strategy == 'slot-sweep-v1':  # L48: a register index binding over small-v1
+            kwargs.setdefault('input_layout',dict(index={'register':'eax'},value=1))
         image=code.ljust(0x1000,b'\xcc')
         body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(code,0x400000)]
         with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])), \
