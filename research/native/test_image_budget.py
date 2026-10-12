@@ -11,6 +11,27 @@ class ImageBudgetTests(unittest.TestCase):
     # Load an image-backed trip count, then increment EAX that many times.
     CODE = bytes.fromhex('8b0d00204000 31c0 40 49 75fc c3')
 
+    def test_integer_loop_bound_survives_opaque_numeric_reordering(self):
+        code = bytes.fromhex('d9e8 d9ee b903000000 d9c9 0fc6c100 49 75f7 ddd8 ddd8 c3')
+        ins, read, pages = self.fixture(code)
+        proof = image_bound(ins, read, 0xf008000, guarded=True)
+        self.assertEqual(proof['instructions'], 18)
+        with patch.object(h, 'image', return_value=(0x400000, list(pages.items()))), \
+             patch.object(h, 'code', side_effect=read):
+            result = h.run_sparse(0x400000, 7, input_strategy='guarded-values-v1',
+                                 max_insn=3, body=[i.address for i in ins], end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['ecx'], 0)
+        self.assertEqual(result['x87_depth'], 0)
+        self.assertEqual(result['image_budget']['instructions'], 18)
+
+    def test_shuffle_does_not_preserve_a_zero_vector_fact(self):
+        for shuffle in ('0fc6c100', '660fc6c100'):
+            # A shuffle can select the unknown source register. Its stored
+            # value must not inherit the earlier PXOR destination's zero fact.
+            code = bytes.fromhex('b900204000 660fefc0 '+shuffle+' f30f1101 833900 7401 c3 c3')
+            ins, read, _ = self.fixture(code)
+            self.assertIsNone(image_bound(ins, read, 0xf008000, guarded=True))
+
     def test_materialized_loop_condition_proves_original_finite_trace(self):
         code=bytes.fromhex('b903000000 31d2 31c0 49 0f95c0 01c2 85c0 75f4 c3')
         ins,read,pages=self.fixture(code)
