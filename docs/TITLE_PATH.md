@@ -374,7 +374,6 @@ in cutscenes. `uMovie` uses `timeGetTime` (bound).
   call, taken or not).
 - The archive ids, online at the title, `aTitle+0x38` and the save
   branch are answered in section 5 (L35b). Still not traced:
-  - the loader of the `sa\DX9\*.arc` shader archives;
   - which title choice issues which storage command.
 - The broad closure's other 65 non-verified functions (outside the
   likely path) were not given lifter reasons.
@@ -414,8 +413,13 @@ through a DTI lookup (no constructor reference; `aInitialize` is created
 by `sBbsRpgMain`'s constructor at 0x0041D0C2). So `aBbsRpg` belongs after
 the title.
 
-**Not located:** the loader of the per-area shader archives
-`sa\DX9\*.arc`. "DX9" is not a path literal in the exe.
+**The shader archives** (located in L38, GAMEPLAY_PATH.md 1.3):
+- `sShader2`'s constructor loads `sa\DX9\root.arc` and the
+  `sc\DX9\root` shader package synchronously through `0x00E0E470`
+  (not lifted yet).
+- Every area waits in its slot 5 (`0x00533750` → `0x00DA63F0`) for
+  `sa\DX9\<area name>.arc`. `aTitle` waits for `Title.arc`;
+  `aInitialize` has none.
 
 ### 5.2 Online at the title: idle
 
