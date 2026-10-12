@@ -3,6 +3,21 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00DEED30 (DDDA.exe 2017-12-13 Steam), Global::FUN_00deed30.
+pub fn f_00deed30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0xDEED30;
+    loop {
+        match pc {
+            0xDEED30 => { { let r = cpu.fl.alu_sub((m.fast_u8(pt, cpu.ecx.wrapping_add(0x1C)) as u32), 0x0u32, 8); } pc = if cpu.fl.cond("ne") { 0xDEED3F } else { 0xDEED36 }; continue; }
+            0xDEED36 => { { let r = cpu.fl.alu_sub((m.fast_u8(pt, 0u32.wrapping_add(0x18D0BB0)) as u32), 0x0u32, 8); } pc = if cpu.fl.cond("e") { 0xDEED49 } else { 0xDEED3F }; continue; }
+            0xDEED3F => { { let r = cpu.fl.alu_add(cpu.ecx, 0x4u32, 32); cpu.ecx = r; } { let v = cpu.ecx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } { let t = m.fast_u32(pt, 0u32.wrapping_add(0x139D160)); cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0xDEED49);  x86::call_ext(m, cpu, t);  } pc = 0xDEED49; continue; }
+            0xDEED49 => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x00DEED50 (DDDA.exe 2017-12-13 Steam), Global::FUN_00deed50.
 pub fn f_00deed50(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
