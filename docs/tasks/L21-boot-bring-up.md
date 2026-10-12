@@ -271,3 +271,80 @@ TIB test checks the shared block.
      0x012F8BF6. That is exactly the end of `__aulldvrm` (0x013054F0 +
      0x95): code past Ghidra's function end, L45's class. Sent to claude-6
      as a lead.
+
+### Look-ahead from WinMain to the title (static, main 45c07138 + train 2)
+
+Method: the direct-call closure in the shared inventory
+(`E:/ddda-re/notes/inventory/inventory.sqlite`, read-only) from the title
+path's roots, following each route only through verified functions and
+recording the first unverified one. Roots: WinMain, app init 0x00DF3AC0,
+the window procedure, the main loop 0x00DF0D20, `sBbsRpgMain`'s
+constructor and frame (vf06), `sRender`'s constructor, `aInitialize` and
+`aTitle` slots 5-8 and the first title state, and the eight guest thread
+entries of TITLE_PATH.md section 1.7. Reasons come from
+`patterns/lift_novector.json` (no fixture), the rejection and mismatch
+lists and the quarantine files.
+
+Not covered: calls through vtables and function pointers (most of the
+game's dispatch), so this is a lower bound. The real boot will show more.
+
+Imports: 139 are reached on these routes, and all have a runtime service
+now. The last one, `CreateProcessA` (the self-restart helper 0x011797F0),
+stops with a report naming the command line (commit after 61443074).
+`UnhandledExceptionFilter` (`___report_gsfailure`) is L27's seh service.
+
+42 unverified functions, by owner. Depth is call levels below the root.
+"Not in the lift set" means status documented or translated with no
+recorded rejection, so the lifter owner must say why.
+
+Codex (lifts, no fixture): 30
+
+| Reached from | Depth | Function | Name | Bytes | Called from | Note |
+|---|---:|---|---|---:|---|---|
+| aTitle state 1 | 3 | 0x004918D0 | FUN_004918d0 | 1596 | 0x004960E0 |  |
+| aTitle vf6 | 2 | 0x004755E0 | FUN_004755e0 | 132 | 0x0043C580 |  |
+| aTitle vf6 | 2 | 0x0048AC80 | FUN_0048ac80 | 1973 | 0x004965A0 |  |
+| aTitle vf6 | 2 | 0x00494D80 | FUN_00494d80 | 976 | 0x004965A0 |  |
+| aTitle vf6 | 6 | 0x0081C330 | FUN_0081c330 | 806 | 0x0081BA40 |  |
+| main loop | 2 | 0x00DAE760 | FUN_00dae760 | 595 | 0x00DAF7C0 |  |
+| render worker | 1 | 0x00DAA4B0 | FUN_00daa4b0 | 142 | 0x00DAC090 |  |
+| sBbsRpgMain ctor | 1 | 0x00475400 | ctor | 400 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 1 | 0x00478600 | ctor | 649 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 1 | 0x0049F990 | ctor | 1255 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 2 | 0x00480240 | ctor | 222 | 0x004821A0 |  |
+| sBbsRpgMain ctor | 2 | 0x0075BAD0 | FUN_0075bad0 | 909 | 0x00437BE0 |  |
+| sBbsRpgMain ctor | 2 | 0x00DB8B90 | FUN_00db8b90 | 73 | 0x0044F500 |  |
+| sBbsRpgMain ctor | 2 | 0x00DD5ED0 | FUN_00dd5ed0 | 1575 | 0x004AC8A0 |  |
+| sBbsRpgMain ctor | 3 | 0x00419100 | FUN_00419100 | 50 | 0x00417AF0 |  |
+| sBbsRpgMain ctor | 3 | 0x00480950 | FUN_00480950 | 565 | 0x00482760 |  |
+| sBbsRpgMain ctor | 4 | 0x00490E80 | ctor | 412 | 0x00495FF0 |  |
+| sBbsRpgMain ctor | 4 | 0x004915A0 | ctor | 746 | 0x00495FF0 |  |
+| sBbsRpgMain ctor | 5 | 0x01104470 | ctor | 267 | 0x01105240 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01128EE0 | FUN_01128ee0 | 95 | 0x00DA9CD0 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01128F40 | FUN_01128f40 | 33 | 0x00DAED10 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01129310 | FUN_01129310 | 95 | 0x00DA9CD0 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01129370 | FUN_01129370 | 33 | 0x00DAED10 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x00491340 | FUN_00491340 | 263 | 0x00498C20 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x00493AA0 | FUN_00493aa0 | 3327 | 0x004964C0 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x004A06B0 | FUN_004a06b0 | 481 | 0x004964C0 |  |
+| sRender ctor | 2 | 0x00DA9EC0 | FUN_00da9ec0 | 1509 | 0x00DB1480 |  |
+| sRender ctor | 2 | 0x01129030 | FUN_01129030 | 253 | 0x01129130 |  |
+| sRender ctor | 2 | 0x01129460 | FUN_01129460 | 226 | 0x01129550 |  |
+| sRender ctor | 4 | 0x00DAFED0 | FUN_00dafed0 | 883 | 0x00DB0410 |  |
+
+claude-6 (not in the lift set; triage): 12
+
+| Reached from | Depth | Function | Name | Bytes | Called from | Note |
+|---|---:|---|---|---:|---|---|
+| WinMain | 3 | 0x012ED9DD | ___crtExitProcess | 23 | 0x012EDAF5 | (status documented) |
+| aTitle state 1 | 3 | 0x0040DDC0 | FUN_0040ddc0 | 212 | 0x0040DB40 | (status documented) |
+| aTitle state 1 | 4 | 0x012E1A60 | FUN_012e1a60 | 47 | 0x0040DC50 | (status documented) |
+| sBbsRpgMain ctor | 1 | 0x004AB440 | FUN_004ab440 | 285 | 0x0041B400 | (status documented) |
+| sBbsRpgMain ctor | 1 | 0x00DFECF0 | FUN_00dfecf0 | 23652 | 0x0041B400 | (status documented) |
+| sBbsRpgMain ctor | 2 | 0x00E0E470 | FUN_00e0e470 | 292 | 0x00E121D0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x00F9FBA0 | FUN_00f9fba0 | 288 | 0x00FA15E0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x012E1A13 | FUN_012e1a13 | 47 | 0x004201A0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x012F9D82 | FUN_012f9d82 | 253 | 0x012EFEA0 | (status documented) |
+| sBbsRpgMain ctor | 5 | 0x012F1C9D | FUN_012f1c9d | 453 | 0x012F1C40 | (status documented) |
+| sBbsRpgMain::vf06 (frame) | 6 | 0x00448500 | FUN_00448500 | 1936 | 0x00448DA0 | (status translated) |
+| sRender ctor | 3 | 0x004080A0 | FUN_004080a0 | 42 | 0x00DB0DE0 | (status documented) |
