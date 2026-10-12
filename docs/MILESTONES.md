@@ -1044,8 +1044,13 @@ opening (codex-31), route perf (codex-29).
     - debug info: full 84 s, line tables 76 s, none 71 s; typeck plus
       borrowck take ~37 s regardless;
     - opt-level 1: 492 s, of which crate-local ThinLTO is 339 s;
-    - release at opt-level 3: 661 s; 528 s with LTO off;
+    - release at opt-level 3: 661 s; 528 s with LTO off; opt-level 2
+      without LTO 549 s; opt-level 1 without LTO 408 s. Release settings
+      stay as they are until a ddperf replay shows what each costs at run
+      time;
     - peak RSS ~3 GB per shard compiler.
+  - Third-party crates are optimised in dev/test builds (aa8e6a3e):
+    d3d9wgsl's driver comparison went from 745 s to 52 s.
     heavy.py now gives a slot that runs alone with 20 GB free five cargo
     jobs, and runs every job in a Windows Job Object (orphaned rustc/cargo
     die with it; the idle watchdog uses the job's CPU accounting).
@@ -1061,3 +1066,38 @@ opening (codex-31), route perf (codex-29).
   Codex's L28b recorder batches.
 - **One next action:** claude-2 reruns the boot on main (`__fpmath`, the
   sine-table initializers and `__aulldvrm` are fixed by train 2's data).
+
+## Batch 2026-10-12 (train 3: 99.6%; parallel guest threads; boot into WinMain)
+
+- **Train 3 landed on main e3d0fdd6. Gate: 59,248 of 59,500 verified
+  (99.6%, 99.0% of code bytes).** It contains:
+  - L42: parallel guest threads, atomic page table, service lock;
+  - L41: the whole-frame oracle;
+  - L28-crt (claude-3's last code) and the L25 results;
+  - Codex's L28b batch (data only; its recorder code rides train 4).
+  Every suite is green: ddruntime (L42's parallel tests included), the
+  light crates, ddgpu, and the ddplay build.
+- **Per-address data merges.** `E:/ddda-re/tools/merge_lift_data3.py`
+  merges a private set into the shared data per address, against the
+  set's base (record and cases as one unit; a conflict stops the merge).
+  Agents may now re-record existing functions (promotions).
+- **Build:** aa8e6a3e's optimised third-party crates also caught the
+  ddlift shards, because they are not workspace members. 12db9dcb pins
+  them to opt-level 0. With that, train 3's cold gate build took ~8
+  minutes, and the light suites 3 minutes instead of 17.
+- **Boot (claude-2):** the real boot runs the whole CRT start-up
+  (`__cinit`, all 5,662 initialisers) and enters WinMain. It stops at
+  0x00DAFED0, an introsort partition with no fixture (Codex). claude-2's
+  static look-ahead to the title is in the L21 Results:
+  - 42 functions on direct-call routes;
+  - 51 one hop away through vtables or pointers;
+  - 45 two hops away.
+  They are routed to Codex (no fixture) and claude-6 (not lifted).
+- **L45 (claude-6), in progress:**
+  - a general edge-bound rule for table jumps;
+  - gen no longer counts a function as verified when it has an unbound
+    direct target, an unproven table or a stale body (~51 functions,
+    reasons in `patterns/verification_gaps.json`);
+  - boot triage next.
+- **One next action:** Codex's 0x00DAFED0 fixture, then claude-2 reruns
+  the boot.

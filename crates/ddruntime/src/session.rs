@@ -89,7 +89,10 @@ impl Session {
         // L22: the guest MXCSR is live while guest code runs; Rust resumes
         // under the host default (also after a panic).
         ddnative_base::x86::ldmxcsr(cpu.mxcsr.0);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registry.call(mem, &mut cpu, target)));
+        // in parallel mode the guest code runs without the guest lock
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::threads::without_lock(|| registry.call(mem, &mut cpu, target))
+        }));
         cpu.mxcsr = ddnative_base::x86::Mxcsr(ddnative_base::x86::stmxcsr());
         ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
         match r {

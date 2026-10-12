@@ -121,7 +121,7 @@ fn a_textured_triangle_samples_the_uploaded_level() {
     states[3] = 1;
     states[5] = 1; // point
     states[6] = 1;
-    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, usage: 0, states };
     gpu.draw(&draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]));
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
     gpu.present(&back_buffer());
@@ -174,7 +174,7 @@ fn frames_match_the_d3d9_driver() {
     for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
         states[k] = v;
     }
-    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, usage: 0, states };
     let (ours, theirs) = compare(&[upload], &blue_clear(), &[draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding])]);
     assert_eq!(ours, theirs, "textured");
     // alpha blending over the clear colour: SRCALPHA / INVSRCALPHA
@@ -239,7 +239,7 @@ fn random_states_and_formats_match_the_d3d9_driver() {
         for (k, v) in [(1, address), (2, address), (3, address), (5, filter), (6, filter)] {
             states[k] = v;
         }
-        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, states };
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, usage: 0, states };
         let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
         // random fixed-function state
         let blend = rng.next() % 2;
@@ -304,7 +304,7 @@ fn copies_fills_and_read_back() {
     for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
         states[k] = v;
     }
-    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, usage: 0, states };
     gpu.draw(&draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]));
     let other = Target { surface: 0x101, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 };
     // a same-size copy is exact
@@ -634,7 +634,7 @@ fn render_states_match_the_d3d9_driver() {
                 st[10] = 1;
             }
         }
-        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, states: st };
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, usage: 0, states: st };
         // the draw
         let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
         let z = if group == 3 { rng.pick(&[0.2f32, 0.5, 0.8]) } else { 0.5 };
@@ -864,7 +864,7 @@ fn explore_d3d9_semantics() {
         for maxmip in [0u32, 1, 2] {
             for bias in [0f32, -1.0, 1.0] {
                 let st = [0u32, 1, 1, 1, 0, 1, 1, mip, bias.to_bits(), maxmip, 1, 0, 0, 0];
-                let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 4, height: 4, depth: 1, levels: 3, states: st };
+                let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 4, height: 4, depth: 1, levels: 3, usage: 0, states: st };
                 let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
                 eprintln!("mipfilter {mip} maxmiplevel {maxmip} bias {bias}: {:?}", both(&mut d3d9, &uploads, &blue_clear(), &[d]));
             }
@@ -888,7 +888,7 @@ fn explore_d3d9_semantics() {
     for func in [3u32, 6] {
         let up = Upload::Image { resource: 0x300, index: 0, format: 21, width: 1, height: 1, depth: 1, pitch: 4, slice: 4, bytes: vec![0, 0, 255, 48] };
         let st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
-        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 1, height: 1, depth: 1, levels: 1, states: st };
+        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 21, width: 1, height: 1, depth: 1, levels: 1, usage: 0, states: st };
         let mut d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
         d.render_states.retain(|s| ![15, 25, 24].contains(&s.0));
         d.render_states.extend([(15, 1), (25, func), (24, 48)]);
@@ -904,7 +904,7 @@ fn explore_d3d9_semantics() {
             Upload::Image { resource: 0x300, index: k as u32, format: 31, width: size, height: size, depth: 1, pitch, slice: pitch * size, bytes }
         }).collect();
         let st = [0u32, 1, 1, 1, 0, 1, min, mip, 0.5f32.to_bits(), 0, maxaniso, 0, 0, 0];
-        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 31, width: 4, height: 4, depth: 1, levels: 3, states: st };
+        let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format: 31, width: 4, height: 4, depth: 1, levels: 3, usage: 0, states: st };
         let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
         eprintln!("A2B10G10R10 min {min} maxaniso {maxaniso} mip {mip}: {:?}", both(&mut d3d9, &uploads, &blue_clear(), &[d]));
     }
@@ -934,7 +934,7 @@ fn explore_d3d9_semantics() {
                 Upload::Image { resource: 0x300, index: k as u32, format, width: size, height: size, depth: 1, pitch: 4 * size, slice: 4 * size * size, bytes: texel.to_le_bytes().repeat((size * size) as usize) }
             }).collect();
             let st = [0u32, 1, 1, 1, 0, 2, 2, 2, bias.to_bits(), 0, 1, 0, 0, 0];
-            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, states: st };
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 3, usage: 0, states: st };
             let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
             let r = both(&mut d3d9, &uploads, &blue_clear(), &[d]).unwrap();
             eprintln!("mip linear format {format} bias {bias}: D3D9 {:?} wgpu {:?}", r.0, r.1);
@@ -952,7 +952,7 @@ fn explore_d3d9_semantics() {
         for (mag, min, maxmip, mip) in [(1u32, 2u32, 0u32, 0u32), (2, 2, 0, 0), (1, 2, 2, 0), (1, 1, 0, 0)] {
             let up = Upload::Image { resource: 0x300, index: 0, format, width: 4, height: 4, depth: 1, pitch: 4 * texel.len() as u32, slice: 16 * texel.len() as u32, bytes: texel.repeat(16) };
             let st = [0u32, 4, 4, 1, 0xFFFF_FFFF, mag, min, mip, 0, maxmip, 1, 0, 0, 0];
-            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, states: st };
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, usage: 0, states: st };
             let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
             let theirs = d3d9.render(std::slice::from_ref(&up), Some(&blue_clear()), std::slice::from_ref(&d), &back_buffer()).unwrap().rgba;
             let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
@@ -972,7 +972,7 @@ fn explore_d3d9_semantics() {
         for srgb in [0u32, 1] {
             let up = Upload::Image { resource: 0x300, index: 0, format, width: 1, height: 1, depth: 1, pitch: texel.len() as u32, slice: texel.len() as u32, bytes: texel.clone() };
             let st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, srgb, 0, 0];
-            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 1, height: 1, depth: 1, levels: 1, states: st };
+            let b = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 1, height: 1, depth: 1, levels: 1, usage: 0, states: st };
             let d = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![b]);
             eprintln!("format {format} srgb {srgb}: {:?}", both(&mut d3d9, &[up], &blue_clear(), &[d]));
         }

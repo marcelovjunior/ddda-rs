@@ -267,6 +267,12 @@ as verified when its vectors never take that path. The CRT memcpy
 variant 0x012EDE40 is one (found by `tests/options.rs`); brief L45 fixes
 the rule and the count.
 
+After train 3 (2026-10-12, main e3d0fdd6): Codex's L28b batch (aligned
+call-stack inputs, `__alloca_probe` promoted, 31 functions added and 24
+re-recorded) merged per address with `merge_lift_data3.py`: 59,533
+entries with 177,188 cases. **59,248 of 59,500 verified (99.6%, 99.0% of
+code bytes).**
+
 The L15 table above and its notes below are
 kept for history.
 
