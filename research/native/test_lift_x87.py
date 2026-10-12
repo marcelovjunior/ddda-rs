@@ -32,6 +32,27 @@ class X87Tests(unittest.TestCase):
         self.assertEqual(lift.X87_PUSH_SITES[0x400000], [0x400005])
         self.assertIn("call_ext", " ".join(arms))
 
+    def test_entry_contract_walks_through_a_closed_x87_callee(self):
+        # call 0x400100 (closed, pushes one value, like __fload_withFB);
+        # faddp st(1); fstp dword [0x2000]; ret -> the caller supplies one value
+        code = bytes.fromhex("e8fb000000" "dec1" "d91d00200000" "c3")
+        with patch.object(harness, "code", side_effect=lambda a, n: code[a-0x400000:a-0x400000+n]), \
+                patch.dict(lift.X87_NET, {0x400100: 1}), patch.dict(lift.X87_NEED, {0x400100: 0}):
+            lift.lift(0x400000, len(code), callable=frozenset({0x400100}), ext=True)
+            self.assertEqual(lift.BODY_INFO[0x400000].get("x87_entry"), 1)
+            # a mocked callee is not walked through: the read is unproven
+            with self.assertRaises(lift.Unsupported):
+                lift.lift(0x400000, len(code), ext=True)
+            # the entry deficit covers a callee's own need; at a fixed depth a
+            # callee needing more than the caller holds is rejected
+            with patch.dict(lift.X87_NEED, {0x400100: 1}):
+                lift.lift(0x400000, len(code), callable=frozenset({0x400100}), ext=True)
+                self.assertEqual(lift.BODY_INFO[0x400000].get("x87_entry"), 1)
+                ins = lift.decode_body(0x400000, len(code), frozenset({0x400000}), frozenset(),
+                                       ext=True)[0]
+                with self.assertRaisesRegex(lift.Unsupported, "callee 0x400100 needs 1"):
+                    lift.x87_depth_check(ins, 0x400000, None, frozenset({0x400100}), True, entry=0)
+
     def test_stack_requirements_and_control(self):
         for code in ("d8c1c3", "d9c0c3", "d9e8ded9c3", "d9e8d9c9c3"):
             data = bytes.fromhex(code)
