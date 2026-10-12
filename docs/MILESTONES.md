@@ -1,5 +1,13 @@
 # Milestones
 
+L27b first batch (2026-10-12): opt-in instruction transaction and flat
+continuation executor are light-checked (94 runtime tests, including nine
+new fault/restart tests). Windows x86 confirms split-page write atomicity
+and nonlocal guarded-AV handling. Production lifted code is not routed
+through this executor yet; emitter and service-boundary integration remain
+open. Next action: agree the producer ABI with the lifter/Cpu owners and
+wire generated instruction entries; see [L27b Results](tasks/L27b-seh-faults.md#results).
+
 L27 runtime SEH batch (2026-10-11): read-only census identifies 42 EH4
 registrations / 48 scope records, seven C++ FuncInfo thunks and five throw
 sites. Per-thread TEBs, software exception search/nesting and target-frame
