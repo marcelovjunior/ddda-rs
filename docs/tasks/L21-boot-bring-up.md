@@ -252,3 +252,22 @@ block per thread: `seh::initialize_teb`, used by `Session::new`, guest
 threads and SEH dispatch alike. e754622's `threads::init_teb`/`teb_of` are
 gone; the FS:[0] evidence moved into `seh::initialize_teb`'s comment. The
 TIB test checks the shared block.
+7. main 45c07138 (train 2: L22 and claude-3's L28 adopted; the generated
+   code is committed, no private data). Real boot: the whole CRT start-up
+   passes, `__cinit` with all 5,662 initializers, and WinMain runs. Stop:
+   untranslated 0x00DAFED0, called from just before 0x00DB045C.
+   - 0x00DAFED0 is the partition step of an introsort (median of three via
+     0x00DAFD10, records compared on two uint keys and a float). Its caller
+     0x00DB0410 sorts 0x5C-byte records. The path is 0x00DB0DE0 ←
+     0x00DB1480 ← `sRender`'s constructor 0x00DB1A50 (PIX options, then the
+     device set-up).
+   - Cause 2: it lifts but has no accepted fixture
+     (`patterns/lift_novector.json`). Reported to the head for the recorder
+     owners.
+   - Runtime game tests 44/44. The exe exits cleanly now that its output
+     goes to files.
+   - Frontier probe, less faithful now since it skips `_FPinit`: WinMain
+     stops at 0x01305585, reached by a computed call from just before
+     0x012F8BF6. That is exactly the end of `__aulldvrm` (0x013054F0 +
+     0x95): code past Ghidra's function end, L45's class. Sent to claude-6
+     as a lead.
