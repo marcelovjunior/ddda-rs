@@ -17,6 +17,9 @@
 //! its [KEYBOARDMOUSE] section, which the input object writes). The items'
 //! reader 0x00DF39E0 and the typed readers then read it back, and an
 //! imported copy of a player's config.ini is honoured.
+//!
+//! Needs the lifted program (ddruntime's `game` feature, the default since L36).
+#![cfg(feature = "game")]
 use ddnative_base::mem::Mem;
 use ddruntime::memory::{READ, WRITE};
 use ddruntime::session::{Outcome, Session};
