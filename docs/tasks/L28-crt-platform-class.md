@@ -823,3 +823,141 @@ the owner's terminal/x87 changes. Recording ran serially through heavy.py
 as codex, at most six workers; free memory stayed above 16 GB during this
 batch. No Rust replay (head's integration train), snapshots, shared-data
 writes, native-L17/native-train3 changes, generated-code commits or pushes.
+
+### L28c checked indirect contracts (source checked; recording queued)
+
+The head's isolated cleanup-test correction **7034548d** is cherry-picked
+as **5016233c**. The exact test is
+`RemainingTests.test_interleaved_local_allocation_is_not_a_mock_argument`
+in `test_lift_remaining.py` (originally introduced by L12, currently in
+claude-6's file scope). It now asserts the balanced callee-four/caller-four
+case and still rejects caller cleanup of twelve. All 13 tests in that
+module pass; the previously documented failing expectation is resolved.
+
+The next guarded-bound extension treats a root indirect call as a
+**candidate** zero-return mock contract, only after a completed call has
+established an argument boundary. The original run must report a matching
+mock event and cleanup for **every visit** to that site. A real closed,
+platform, or internal dispatch produces no matching mock event and rejects
+the certificate. Unknown nested indirect calls, unknown argument space,
+or differing cleanup at repeated visits still refuse the proof. This
+establishes a candidate **100,122-instruction** bound for 0x00478600,
+whose indirect call is at **0x00478854**; it is not yet an accepted fixture.
+
+For **0x00DD5ED0**, writes at **0x00DD603E/0x00DD6041** put zero into
+the same fields read at **0x00DD6063** and the next test. Tracking bytes
+at offsets from an unchanged unknown base register proves these reads
+without assigning a concrete object pointer. Different unknown bases may
+alias and invalidate previous facts; concrete writes also invalidate them.
+Changing the base register invalidates its identity; overlapping or opaque
+writes replace the affected bytes with unknowns. This gives a candidate
+**82,369-instruction** bound. Unknown output stores retain their existing
+runtime non-aliasing guard against concrete proof reads/code/return bytes.
+
+Negative tests exposed a Capstone metadata hazard: a MOVUPS memory
+destination can be labelled read-only. The opaque SIMD handler now treats
+every memory-destination MOVQ/MOVSS/MOVSD/MOVAPS/MOVUPS/MOVDQA/MOVDQU as
+a write, independently of that metadata. An actual Unicorn test rejects
+a SIMD store aliasing proof-protected code. **All 33 previously accepted
+guarded cases are queued for re-recording and comparison in a separate
+trial log; accepted records will not be replaced.** This strengthens a
+proof assumption check; it does not change the executed instructions.
+
+The analysis also supports known-carry ADC/SBB and bounded, sequential
+REP MOVS (including overlap), using the original recorder's initial DF.
+Unknown counts/direction/carry remain unknown. These advance diagnosis
+at **0x012F2287** (0x00491340's stack helper) and **0x0075A262**
+(0x00493AA0's copy), but do not yet produce fixtures for those callers.
+
+The queued recording job includes 0x00478600, 0x00DD5ED0 and the short
+0x00DC7D00 candidate, then the old guarded-case recheck. Follow-up trials
+will re-lift only missing direct-route and one-hop candidates against the
+merged owner source; accepted records and the three L46 x87 helpers are
+excluded. **No new accepted data yet:** 59,559 records / 177,271 cases.
+The hash-only baseline is `L28c/after-guarded-hashes.json`. Recording waits
+in heavy.py behind the train/boot jobs; no slot bypass or full Rust replay.
+
+**99 light tests pass**: image bounds 22, frame contracts 20, structured
+inputs 19, function tails 13, remaining forms 13, record inputs 2, record
+audit 5, existing lifter budgets 5. New negatives cover closed dispatch
+instead of a mock, incorrect mock cleanup, missing argument boundaries,
+alias/base/overlap invalidation and the SIMD-store hook. No known failing
+test remains in these suites.
+
+### L28c register-object batch (2026-10-12)
+
+**0x00478600 now records 3/3.** Private native-L28c advances **59,559 →
+59,560 selected records / 177,271 → 177,274 cases**. The append audit
+`L28c/register-objects-audit.json` proves all **59,559 previous records
+and case multisets unchanged**: no promotions, caller changes, removals,
+stale mock boundaries or unrelated changes. Missing prepared candidates
+fall **203 → 202**. The data remains open for the head's preview/adoption.
+
+The constructor takes its object in **ESI**, copied to ECX at
+**0x00478606**, and writes the vtable through ESI at **0x0047860D**.
+Zero-call inputs put that object at address zero. The mock at
+**0x00478837** also returns EAX zero; the vtable loads at
+**0x00478842/0x00478844** therefore read the constructor's own object,
+and the indirect call at **0x00478854** takes the wrong input-induced
+route. This is a fixture alias, not evidence that the game takes that path.
+
+The new opt-in **guarded-objects-v1** policy uses the existing
+zero-objects-v1 register-pointer palette for all entry GPRs except ESP.
+It keeps zero-call-v1's zero-filled non-image pages, aligned caller stack,
+and zero GPR/SSE mock returns. No object layout or game address is special
+cased, and no memory is repaired during execution. The abstract bound
+still starts with unknown entry GPRs; its alias/call obligations must pass
+in the original run. Each accepted case uses the **100,122-instruction**
+bound / **120,122** total limit, returns its input ESI in EAX, and records
+the indirect mock's **12-byte** cleanup. The earlier guarded-bounded-v1
+distribution is unchanged. Evidence: `structured-guarded-objects-v1.jsonl`
+and `L28c/this-record.log` (the private filename predates the policy rename).
+
+Two conservative proof refinements accompany it. An indirect target that
+is already known from registers or tracked object bytes and belongs to
+the closed/model boundary follows that real callee; it is not treated as
+a proposed mock. A concrete load returning a wholly unknown value creates
+no inferred constant, so it does not add a constant-read alias obligation.
+Known loads, code, and return bytes remain protected. Tests cover known
+register/memory indirect targets and an actually closed dispatch where
+the proposed target was unknown (which still rejects).
+
+**Previous guarded fixtures were rechecked after the SIMD-store fix:**
+all **33/33** original cases succeeded, and every case is identical to its
+accepted version, including proof metadata (`L28c/guard-recheck-comparison.json`).
+No accepted record was replaced. All recording runs were serial heavy.py
+jobs with at most six workers; memory stayed above the six-GB stop threshold.
+
+**Queue coverage:** re-lifted only missing candidates against the merged
+lifter, then retried the **nine direct-route** and **30 remaining one-hop**
+entries under guarded-bounded-v1, zero-call-v1 and image-v1. None added a
+fixture. Guarded-objects-v1 then tried 0x00478600 first, the other eight
+direct-route entries, and those 30 one-hop entries; only 0x00478600 recorded.
+Each strategy requested three seeds, normally with 12 seconds per function;
+the focused constructor trials had 90 seconds. Exact attempts remain in
+the strategy logs and `L28c/remaining-record.log`. No quarantines were
+overridden. There are now eight direct-route and 30 one-hop residuals.
+
+**Remaining constructors / ownership:** 0x00DD5ED0's proposed mock at
+**0x00DD5F99** is not the actual dispatch: 128 visits produce zero mock
+events, so the certificate correctly rejects. Tracking its vtable across
+the intervening closed call needs further evidence; a bound alone is not
+a fixture. 0x0075BAD0 retains the unknown condition at **0x0075BCA8**.
+Per head board **#9617**, **0x00DB8B90 / 0x004080A0** belong to claude-6,
+as do **0x01300660 / 0x01300675 / 0x013006A5**; no further trials or edits
+will target them. The earlier failed DB8B90 trials were already complete
+when that message was read and changed no accepted data. The short 0x00DC7D00 trial still
+exceeds the 256-page guard; that guard was not widened.
+
+**102 light tests pass**: image bounds 25, frame contracts 20, structured
+inputs 19, tails 13, remaining forms 13, record inputs 2, audit 5, lifter
+budgets 5. No full Rust replay; that remains with the integration train.
+Source checkpoint **925ecca8** and the head-test cherry-pick **5016233c**
+precede this result; the register-object implementation/result is
+**d810fb19**. After the recording workers exited, merged main **b7c4ba86**
+(including requested **863f6817**) as **d386e757**, without conflicts.
+The owner's terminal/padding rules and main's opt-in instruction-step
+generation remain intact. No generated code was authored by this batch;
+the merge retains main's already committed generated files.
+The same **102 light tests pass after the merge**. The worktree is ready
+for review; recording jobs have exited and accepted data remains open.

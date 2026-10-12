@@ -1042,7 +1042,7 @@ pub fn f_013929a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x13929A0 => { cpu.eax = 0x18456E0u32; cpu.ecx = 0x5u32; cpu.ebx = cpu.ebx; pc = 0x13929B0; continue; }
-            0x13929B0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; let cf = cpu.fl.cf(); cpu.fl = Flags::new(x86::DEC, a, 1, r, 32); cpu.fl.cf_in = cf; cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13929B0 } else { 0x13929BC }; continue; }
+            0x13929B0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13929B0 } else { 0x13929BC }; continue; }
             0x13929BC => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
@@ -1680,7 +1680,7 @@ pub fn f_01393040(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x1393040 => { cpu.eax = 0x1849CF0u32; cpu.ecx = 0x5u32; cpu.ebx = cpu.ebx; pc = 0x1393050; continue; }
-            0x1393050 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; let cf = cpu.fl.cf(); cpu.fl = Flags::new(x86::DEC, a, 1, r, 32); cpu.fl.cf_in = cf; cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x1393050 } else { 0x139305C }; continue; }
+            0x1393050 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x1393050 } else { 0x139305C }; continue; }
             0x139305C => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
@@ -2288,7 +2288,7 @@ pub fn f_01393690(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x1393690 => { cpu.eax = 0x184EC00u32; cpu.ecx = 0x6u32; cpu.ebx = cpu.ebx; pc = 0x13936A0; continue; }
-            0x13936A0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; let cf = cpu.fl.cf(); cpu.fl = Flags::new(x86::DEC, a, 1, r, 32); cpu.fl.cf_in = cf; cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13936A0 } else { 0x13936AC }; continue; }
+            0x13936A0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); cpu.eax = r; } { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13936A0 } else { 0x13936AC }; continue; }
             0x13936AC => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }

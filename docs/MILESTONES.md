@@ -1,5 +1,31 @@
 # Milestones
 
+### L28c register-object fixture (2026-10-12, pending replay)
+
+- **0x00478600 records 3/3** after separating entry register objects from
+  zero-return mocks. Its object is passed in ESI; the general input policy
+  reuses the existing pointer palette and keeps all bound/alias/call guards.
+- Private native-L28c: **59,559 → 59,560 records / 177,271 → 177,274
+  cases**. All old records are unchanged. The strengthened SIMD-store
+  guard also re-records all **33 old guarded cases identically**.
+  **102 light tests pass**; the cleanup expectation is resolved.
+- Retried the direct-route and remaining one-hop queue; eight direct and
+  30 one-hop entries remain. Main is merged at **d386e757**.
+  **Next action:** head replay/preview;
+  DB8B90/4080A0 and the three L46 x87 helpers stay with claude-6.
+
+### L28c guarded-contract follow-up (2026-10-12, original runs queued)
+
+- The head's cleanup-test correction is integrated as **5016233c**;
+  its module now passes 13/13. Checked indirect mock contracts and exact
+  same-base store/read facts establish candidate bounds for 0x00478600
+  and 0x00DD5ED0, pending original recordings.
+- A negative test caught misleading Capstone SIMD-store metadata. The
+  guard now explicitly handles memory destinations; a recheck of the
+  previous 33 guarded cases is queued without replacing accepted records.
+- **Next action:** obtain the heavy slot, record, compare and append/audit.
+  Data remains **59,559 / 177,271**, open; L46 helpers remain untouched.
+
 ### L28c constructor/title fixtures (2026-10-12, pending replay)
 
 - A guarded finite-trace strategy records eleven more constructor/title
