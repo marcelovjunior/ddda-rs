@@ -29,6 +29,21 @@ These rules hold for every brief in `docs/tasks/` that points here.
   (the slot caps `CARGO_BUILD_JOBS` at 3). The slot waits, runs the command, releases
   itself and passes the exit code through. `heavy.py status` shows the
   holders. Batch your edits so heavy builds are rare.
+- **Batched verification (the merge train), since 2026-10-11 23:00.** Do
+  not run the full `ddnative` build or required-vector replay for each
+  step. Builds are the bottleneck: each worktree recompiles every ddlift
+  shard. Instead:
+  - On your branch, check only what is cheap: light crates' tests,
+    `cargo check` where it is enough, Python unit tests, and recording on
+    your own data set (lifter agents).
+  - Commit, and tell the head when a coherent batch is ready: the commits,
+    the private data to adopt, and what is unverified.
+  - The head merges several ready branches (about five) into one
+    integration build and runs one gen + `native_gate.sh` + runtime tests
+    for all of them. Green: they land on main together. Red: the head
+    bisects by branch and sends the failing one back with the log.
+  - main stays verified. Branches may be ahead of verification, and that
+    is expected.
 - **Memory guard.** Below 1.5 GB of free RAM, a guard kills the largest
   cargo/rustc/python process. A build that dies without an error message
   died for that reason: rerun it in the slot.
