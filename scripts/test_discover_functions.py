@@ -127,6 +127,23 @@ class DiscoveryTests(unittest.TestCase):
                                                                              instruction=0x1100))])
         self.assertEqual([(r['address'], r['sources']) for r in rows], [('0x00001400', 'callback_table,runtime')])
 
+    def test_l58_record_table_with_a_stride(self):
+        # {size, getter, handler} records at 0x3300 (0x01441CF0's shape):
+        # [8, 0x1200, 0x1100], [4, 0x1300, 0x1100], then data
+        p = FakeImage(); m = d.decoder()
+        p.put(0x1100, b'\xc3')
+        for a in (0x1200, 0x1300):
+            p.put(a - 8, b'\xcc' * 8); p.put(a, b'\x31\xc0\xc3')
+        for k, v in enumerate((8, 0x1200, 0x1100, 4, 0x1300, 0x1100, 0x77777)):
+            p.word_at(0x3300 + 4 * k, v)
+        found = lambda: {v: (ev['table'], ev['stride'], ev['records']) for v, ev in d.record_tables(p, m, {0x1100})}
+        self.assertEqual(found(), {})  # nothing refers to the records
+        p.word_at(0x5000, 0x3300)
+        self.assertEqual(found(), {0x1200: (0x3300, 12, 2), 0x1300: (0x3300, 12, 2)})
+        # without an integer field it is a plain pointer run (callback_tables)
+        p.word_at(0x3300, 0); p.word_at(0x330C, 0)
+        self.assertEqual(found(), {})
+
     def test_msvc_requires_matching_hierarchy(self):
         p = FakeImage();m=d.decoder();p.put(0x1200,b'\xc3')
         for a,v in [(0x3100,0x3200),(0x3104,0x1200),(0x320C,0x3500),(0x3210,0x3300),
