@@ -1,7 +1,7 @@
 //! The MT Framework math library of DDDA.exe as readable Rust (docs/MATH.md).
 //!
 //! Each function cites the address it translates and is verified against
-//! the original by differential tests (`crates/ddnative/tests/math.rs`):
+//! the original by differential tests (`crates/mtmath/tests/differential.rs`):
 //! the lifted program's own vectors plus edge-case vectors (NaN, infinity,
 //! signed zero) recorded from the original. Results are bit for bit the
 //! original's; `scalar::F32` explains how.
