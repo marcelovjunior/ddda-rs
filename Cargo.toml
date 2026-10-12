@@ -407,6 +407,9 @@ incremental = false
 # shards at opt-level 0: ~17 s per shard with the parallel front end
 # (RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z threads=8", its own target dir) against
 # ~206 s at opt-level 1 (2026-10-12, ddlift-05). Everything else as `play`.
+# The shards holding the hot functions of the boot/title (sampling profiles,
+# scripts/sample_profile.py: 05 06 25 26 27 28 31) stay at opt-level 1: at
+# opt-level 0 the game's loading crawled (logos after minutes).
 [profile.play-fast]
 inherits = "play"
 
@@ -431,11 +434,11 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-05]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-06]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-07]
@@ -511,19 +514,19 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-25]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-26]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-27]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-28]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-29]
@@ -535,5 +538,5 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-31]
-opt-level = 0
+opt-level = 1
 incremental = false
