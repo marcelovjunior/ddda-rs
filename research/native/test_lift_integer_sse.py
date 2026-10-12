@@ -16,11 +16,17 @@ class IntegerSseTests(unittest.TestCase):
                      'b8ffffffffbaffffffffb901000000f7f1c3',  # quotient overflow
                      'b803000000b902000000f7e17400c3',  # mul; jz (undefined)
                      'b803000000b902000000f7e19fc3',  # mul; lahf (undefined)
-                     '31c90fbcc1c3'):  # bsf zero: destination undefined
+                     '31c90fbcc1c3',  # bsf zero: destination undefined
+                     'b803000000b90200000031d2f7f1427200c3'):  # div; inc; jb (CF still undefined)
             data=bytes.fromhex(code)
             with patch.object(h,'image',return_value=(0x400000,[(0x400000,data.ljust(4096,b'\x90'))])):
                 with self.assertRaises(h.Rejected):
                     h.run_sparse(0x400000,17,zero_inputs=True,size=len(data))
+        # L49: INC/DEC carry the undefined CF over without reading it
+        for code in ('b803000000b90200000031d2f7f142c3', 'b803000000b90200000031d2f7f14ac3'):
+            data=bytes.fromhex(code)
+            with patch.object(h,'image',return_value=(0x400000,[(0x400000,data.ljust(4096,b'\x90'))])):
+                h.run_sparse(0x400000,17,zero_inputs=True,size=len(data))
 
     def test_emitted_integer_and_sse(self):
         programs=[]

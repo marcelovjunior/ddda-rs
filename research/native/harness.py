@@ -1132,7 +1132,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             return None  # Capstone's detail union contains x87 status flags here
         mapping = (("CF",1),("PF",4),("AF",0x10),("ZF",0x40),("SF",0x80),("OF",0x800))
         reads = sum(bit for name,bit in mapping if i.eflags & getattr(xc,"X86_EFLAGS_TEST_"+name))
-        if i.mnemonic in ("adc","sbb","inc","dec"):
+        # INC/DEC carry CF over without reading it (Intel SDM; Flags::inc_dec,
+        # L46): its validity carries over too, and a later reader is checked.
+        # L49: `div; inc edx` (0x00C9B3D9 and three more) never observes it.
+        if i.mnemonic in ("adc","sbb"):
             reads |= 1
         if i.mnemonic == "lahf":
             reads |= 0xd5  # Capstone describes these as PRIOR, not TEST
