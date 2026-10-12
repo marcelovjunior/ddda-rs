@@ -2730,6 +2730,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddperf"
+version = "0.1.0"
+dependencies = [
+ "ddnative",
+ "ddnative-base",
+ "ddruntime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ddplay"
 version = "0.1.0"
 dependencies = [
