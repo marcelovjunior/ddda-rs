@@ -353,7 +353,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     });
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;

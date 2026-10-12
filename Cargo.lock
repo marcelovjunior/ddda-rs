@@ -2299,6 +2299,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d3dxref"
+version = "0.1.0"
+dependencies = [
+ "d3d9shader",
+ "mtarc",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
