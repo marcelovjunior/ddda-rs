@@ -36,6 +36,21 @@ class DiscoveryTests(unittest.TestCase):
         p.put(0x1000, b'\xcc')
         self.assertFalse(d.code_entry(p, m, 0x1000))
 
+    def test_address_taken_entry_needs_a_function_boundary(self):
+        # L45: immediates naming code mid-instruction are constants, not entries
+        p = FakeImage(); m = d.decoder()
+        cases = {
+            0x1100: (b'\x90\x90\x31\xc0\xcc\xcc\xcc\xcc', True),   # int3 padding
+            0x1200: (b'\x90\x90\x90\x90\x90\x31\xc0\xc3', True),   # after ret
+            0x1300: (struct.pack('<II', 0x12F0, 0x12E8), True),     # after a jump table
+            0x1400: (bytes((0, 1, 1, 1, 1, 1, 0, 0)), True),       # after a byte index table
+            0x1500: (b'\x90\x90\x90\x90\xb0\x0b\x83\xc0', False),  # inside `add eax, 4`
+            0x1600: (b'\x61\x6f\x72\x00\x65\x64\x70\x8b', False),  # ASCII data then code
+        }
+        for a, (before, want) in cases.items():
+            p.put(a - 8, before); p.put(a, b'\x04\x50\xc3')
+            self.assertEqual(d.function_boundary(p, m, a), want, hex(a))
+
     def test_mt_registration_bss_and_table_anchor(self):
         p = FakeImage(); m = d.decoder()
         # One-argument registration form exists as well as six-argument form.

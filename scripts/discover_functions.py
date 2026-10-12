@@ -72,6 +72,30 @@ def code_entry(pe, md, a):
     return False
 
 
+def function_boundary(pe, md, a):
+    """Whether `a` starts where a function can: after padding (int3/nop),
+    after an instruction that does not fall through (ret, jmp, int3)
+    ending exactly at `a`, or right after the previous function's case
+    table (two code pointers within 64 KB, or eight switch-index bytes
+    below 0x40, as 0x0040D330 and 0x00648AF0 follow their neighbours'
+    tables). An immediate that only looks like code (0x00520003 inside an
+    `add eax, 4`, the packed ids 0x00620000/0x00740000 and ASCII such as
+    0x00706465 stored by 0x00444C20) starts mid-instruction (L45 triage)."""
+    if not pe.executable(a - 8, 8):
+        return False
+    before = pe.read(a - 8, 8)
+    if before[-1] in (0xCC, 0x90):
+        return True
+    for k in range(1, 16):
+        i = next(md.disasm(pe.read(a - k, 15), a - k, count=1), None)
+        if i is not None and i.address + i.size == a and i.mnemonic in ('ret', 'retn', 'jmp', 'int3'):
+            return True
+    pointers = struct.unpack('<II', before)
+    if all(pe.executable(p) and abs(p - a) < 0x10000 for p in pointers):
+        return True
+    return all(b < 0x40 for b in before)
+
+
 def initializers(pe, md):
     # DDDA 2017-12-13 Steam: table arguments and loop bounds at
     # 0x012EDA8A/8F/94 and 0x012EDAAB/B0, indirect call 0x012EDAC2.
@@ -235,7 +259,8 @@ def discover(pe, known, lifted, extents=()):
             # 0x012F98B8, or the FLS callback pushed at 0x012F9940
             if (i and i.mnemonic in ('push', 'mov') and i.operands[-1].type == 2 and i.operands[-1].size == 4):
                 v = i.operands[-1].imm & 0xffffffff
-                if pe.executable(v) and v not in known and not inside(extents, v):
+                if (pe.executable(v) and v not in known and not inside(extents, v)
+                        and function_boundary(pe, md, v)):
                     candidates.append((v, dict(source='address_taken', function=f['addr'], instruction=pc)))
             if i and i.mnemonic == 'call' and i.operands[0].type == 2:
                 if i.operands[0].imm == i.address+i.size:
