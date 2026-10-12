@@ -581,13 +581,18 @@ pub fn co_task_mem_free(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- USER32: a headless desktop ---------------------------------------------
 // Until the presentation layer exists, windows are records the runtime
-// keeps; metrics are those of Windows 10 at 96 DPI on a 1920x1080 display.
+// keeps; metrics are those of Windows 10 at 96 DPI; the screen is the
+// adapter's current display mode (crate::d3d9::current_mode: the host's
+// desktop, or the game's full-screen mode).
 
 const WS_THICKFRAME: u32 = 0x0004_0000;
 const WS_CAPTION: u32 = 0x00C0_0000;
 const WS_BORDER: u32 = 0x0080_0000;
-pub const SCREEN_W: u32 = 1920;
-pub const SCREEN_H: u32 = 1080;
+/// The screen's size in pixels.
+pub fn screen() -> (u32, u32) {
+    let m = crate::d3d9::current_mode();
+    (m.width, m.height)
+}
 
 /// AdjustWindowRect(RECT*, style, menu): grows the client rectangle by the
 /// frame (3 px fixed, 4 px sizing frame), the caption (23 px) and a menu
@@ -627,10 +632,14 @@ pub fn system_parameters_info_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// GetSystemMetrics(index): the screen size; 0 for anything else.
 pub fn get_system_metrics(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (w, h) = match arg(m, cpu, 0) {
+        0 | 1 | 16 | 17 | 78 | 79 => screen(),
+        _ => (0, 0),
+    };
     cpu.eax = match arg(m, cpu, 0) {
-        0 | 16 | 78 => SCREEN_W,                 // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
-        1 | 79 => SCREEN_H,                      // SM_CYSCREEN, SM_CYVIRTUALSCREEN
-        17 => SCREEN_H - 23,                      // SM_CYFULLSCREEN (minus caption)
+        0 | 16 | 78 => w,                         // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
+        1 | 79 => h,                              // SM_CYSCREEN, SM_CYVIRTUALSCREEN
+        17 => h - 23,                             // SM_CYFULLSCREEN (minus caption)
         4 => 23,                                  // SM_CYCAPTION
         5 | 6 => 1,                               // SM_CXBORDER, SM_CYBORDER
         7 | 8 => 3,                               // SM_CXFIXEDFRAME, SM_CYFIXEDFRAME

@@ -13,6 +13,7 @@ ddexe = { path = "../ddexe" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9cmd = { path = "../d3d9cmd" }
 ddaudio = { path = "../ddaudio" }
+hostdisplay = { path = "../hostdisplay" }
 
 [features]
 # `game`: the lifted program (ddnative and its ddlift shards). Without it the

@@ -292,7 +292,8 @@ fn direct3d_create9_and_a_com_call_through_its_vtable() {
     let mode = 0x7EFF_0000; // a scratch spot on the session stack
     let ddruntime::session::Outcome::Returned(cpu) = s.call(get_mode, 0, &[d3d, 0, mode]) else { panic!("GetAdapterDisplayMode") };
     assert_eq!(cpu.eax, 0, "D3D_OK");
-    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [1920, 1080, 60, 22]);
+    let d = ddruntime::d3d9::display().desktop; // the host's desktop (L34)
+    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [d.width, d.height, d.refresh, 22]);
     assert_eq!(cpu.esp, ddruntime::session::STACK_TOP - 0x100, "stdcall: this + 2 arguments popped");
 }
 
