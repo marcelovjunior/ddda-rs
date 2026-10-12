@@ -1,5 +1,33 @@
 # Milestones
 
+### L28c bounded callee cleanup batch (2026-10-12, pending replay)
+
+- **+9/+27**, all targeted dispatchers 3/3; this round **+16/+48**.
+  Private **59,662 / 177,580**, all baseline **59,646 / 177,532** unchanged.
+- Source **9a345bd2**, **186 light tests pass**, clean combined audit.
+  RESIDUALS has **65 rows, 16 pending replay**; main train 13 merged.
+- **Next action:** remaining fixed-frame input hints and shared CRT tails;
+  18 dispatch, seven bound, six individual recorder blockers remain.
+
+
+### L28c aligned-frame dispatch batch (2026-10-12, pending replay)
+
+- **+7 functions / +21 cases**, all 3/3; private **59,653 / 177,553**.
+  Six use matching aligned-frame saves, one the existing wrapper strategy.
+- **182 tests pass**; all **59,646 / 177,532** baseline records/cases unchanged.
+  Main train 13 merged; RESIDUALS has **65 rows, seven awaiting replay**.
+- **Next action:** checked callee-body cleanup inputs for nine dispatch rows.
+
+
+### L28c post-train-13 census (2026-10-12)
+
+- Main da9e8e4b merged; **59,375 / 59,440 verified**, **65 residuals**
+  (47 recorder, 18 lifter/gap). All 44 prior pending rows now credited.
+- Aligned-frame mock-input strategy **7443b1f7**, **182 light tests pass**.
+  Six recording trials queued; private data has no new additions yet.
+- **Next action:** finish the serial frame trials and audit their results.
+
+
 ### L28c smaller input classes (2026-10-12, pending replay)
 
 - **+6/+18**, all three return-address and three memory-extent rows;

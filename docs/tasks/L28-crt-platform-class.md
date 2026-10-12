@@ -35,6 +35,91 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
+
+**All nine targeted dispatchers record 3/3:** 685B40, 83FFF0, B952C0,
+B955C0, B97220, BA31D0, BA4160, BA5540, 11251F0. Source **9a345bd2** adds
+body-call-v1, an opt-in mock-input strategy. The private layout supplies
+already-verified callee bodies; every control-flow edge must remain inside
+the body, indirect tables need finite register bounds across joins, and all
+RET immediates must agree. Bounds are rechecked after all switch edges are
+known. Missing instructions, unknown jumps, incomplete tables, exceptional
+exits and differing returns retain the existing fallback. The actual mock
+pop and the input layout are recorded; no global ABI/return/memory check
+was relaxed. This is an input hint, not proof of every callee effect.
+
+The four source callees are 686AD0 (pop4), 840180 (pop4), B94DC0 (pop28),
+and 1121450 (pop44), all verified in inventory. 1078190 remains refused
+because its jump target is unknown. Traces explain the NPC failures: old
+mock cleanup left outgoing arguments in front of the return address.
+Evidence: `dispatch-body-cleanup-layout.json`, `dispatch-body-cleanup.log`.
+
+**186 light tests pass**, including a synthetic original caller with
+joining switch paths and negative control-flow cases. Private totals are
+**59,662 functions / 177,580 cases**. This round is **+16/+48**, all 3/3;
+`dispatch-body-cleanup-audit.json` confirms all **59,646 functions /
+177,532 cases unchanged**, no stale mocks, promotions, missing records or
+unexpected edits. All recording jobs exited; frozen base untouched. Main
+train 13 merged before handoff; full Rust replay remains the head's task.
+
+RESIDUALS has **65 inventory rows, 16 pending replay**. Remaining recorder
+work is **18 dispatch/return, seven instruction-bound, one continuation
+frame and five individual recipes**. 493AA0 stays set aside. **Next:** the
+fixed local-frame prefixes (4644D0, 691AE0/691E50) and the CRT shared-tail
+boundary findings sent to claude-6; boot requests first. The static findings
+are not silently credited or reassigned without the owner's confirmation.
+
+
+### Aligned-frame dispatch batch: +7/+21 (2026-10-12, pending replay)
+
+**Six aligned-frame matches record 3/3:** 608AE0, 618880, 64DD20, 663040,
+6F8730 and 6F8C00, using frame-call-v1 (7443b1f7). Diagnostic traces confirm
+the old input heuristic consumed the second EBP save as an argument,
+misplacing the saved frame pointer. The new opt-in rule requires matching
+restores at every return; no return/stack guard changed. **6076F0** also
+records 3/3 with the existing wrapper-call-v1 (it had previously only
+received the finite-proof class strategy).
+
+Private **59,653 functions / 177,553 cases**, **+7/+21** from this round's
+baseline. `dispatch-round2-audit.json`: all **59,646 / 177,532** prior
+records/cases unchanged; no stale mocks, promotions, removals or unexpected
+edits. **182 light tests pass**. Main train 13 merged; Rust replay pending.
+All recording jobs exited. Logs: `dispatch-trace-round2.log`,
+`dispatch-round2-wrapper.log`. RESIDUALS has **65 rows, seven pending replay**.
+
+The continuation helper 12EFA1E is classified separately: it restores ESP
+from a saved exception frame and jumps to a continuation. Remaining generic
+dispatch/return rows: **27**. Static cleanup prototype resolves complete
+bodies for 686AD0 (pop4), 840180 (pop4), B94DC0 (pop28), and 1121450 (pop44)
+using the lifter's register-bound analysis across control-flow joins; it
+refuses 1078190's unknown jump. The first four serve nine remaining rows.
+**Next:** a tested opt-in cleanup-input strategy using those bounded callee
+bodies, while preserving unknown-target fallback. Boot stops first.
+
+
+### Train 13 census and next frame strategy (2026-10-12)
+
+Main **da9e8e4b** merged: all 44 prior pending rows are credited by train 13.
+Inventory reports **59,375 / 59,440 verified**, **65 residuals**: 47 recorder
+and 18 lifter/gap rows. RESIDUALS is reconciled to that exact address set.
+
+**frame-call-v1** (7443b1f7) recognizes the second EBP save after stack
+alignment only with matching reverse-order restores at every return. It
+selects mock arguments; all previous policies and return guards remain
+unchanged. **182 light tests pass**, including original synthetic execution,
+return-address and nonvolatile-register preservation, and negative matches.
+Six static matches are queued for serial recording: 608AE0, 618880, 64DD20,
+663040, 6F8730, 6F8C00. Baseline: `dispatch-round2-before.json`,
+**59,646 functions / 177,532 cases**. No new fixture is claimed yet.
+
+Further static findings are sent to claude-6 (#9792/#9794/#9795): three CRT
+rows branch to an omitted shared tail at 130070B; ten dispatcher rows call
+five recorded callees whose sole body RET immediate is nonzero while the
+current cleanup scan falls back to zero. Those are hypotheses for the next
+checked strategy, not proof of a complete ABI. **Next:** finish aligned-frame
+recording and audit, with boot fixture requests first.
+
+
 ### Smaller input classes: +6/+18 (2026-10-12, pending replay)
 
 The existing general wrapper-call-v1 records **all three return-address

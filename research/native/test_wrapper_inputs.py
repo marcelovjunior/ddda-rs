@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves
 
 
 class WrapperTests(unittest.TestCase):
@@ -59,6 +59,31 @@ class WrapperTests(unittest.TestCase):
                                '8b01 83ec20 85c0 7400 89442404')
         self.assertEqual(result['calls'][0]['out']['pop'],8)
         self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+4)
+
+    def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
+        prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
+        suffix = '5f 5e 5d 5b 8be5 5d c3'
+        with self.assertRaises(h.Rejected):
+            self.run_caller(suffix, 'wrapper-call-v1', prefix)
+        result = self.run_caller(suffix, 'frame-call-v1', prefix)
+        self.assertEqual(result['calls'][0]['out']['pop'], 8)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+        for register in ('ebp', 'ebx', 'esi', 'edi'):
+            self.assertEqual(result['regs_out'][register], result['regs_in'][register])
+
+    def test_aligned_frame_requires_matching_save_and_restore_order(self):
+        def sites(code):
+            data = bytes.fromhex(code)
+            body = [i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(data,0)]
+            return aligned_frame_saves(0, body, lambda a,n:data[a:a+n])
+        prefix = '55 8bec 83e4f8 53 55 56 57 85c0 7400 '
+        suffix = '5f 5e 5d 5b 8be5 5d c3'
+        self.assertEqual(sites(prefix+suffix), {7})
+        for code in (prefix+suffix+' c3', prefix+suffix.replace('5d 5b','5b 5d'),
+                     prefix+suffix.replace('8be5','8be3'),
+                     prefix.replace('83e4f8','83e4f9')+suffix,
+                     prefix.replace('53 55','8beb 53 55')+suffix):
+            self.assertEqual(sites(code), set())
 
 
 if __name__ == '__main__':
