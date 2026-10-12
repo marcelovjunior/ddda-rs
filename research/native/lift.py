@@ -62,6 +62,8 @@ class TableTargets(list):
 
 # Per decoded entry: {table jump pc: proven complete} (L45 verification gate).
 TABLE_PROOF = {}
+# Per decoded entry: {table jump pc: slot-sweep evidence} for unproven tables (L48 table_ends).
+TABLE_ENDS = {}
 
 
 class RuntimeTargets(list):
@@ -393,6 +395,7 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
           heapq.heappush(todo, target)
     ins = sorted(found.values(), key=lambda i: i.address)
     TABLE_PROOF[addr] = {pc: t.proven for pc, t in switches.items() if isinstance(t, TableTargets)}
+    TABLE_ENDS[addr] = table_ends(found, switches, read, is_code, addr)
     for pc, targets in switches.items():
         if targets is None:
             switches[pc] = RuntimeTargets(sorted(found))
@@ -703,6 +706,89 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
     if negate:
         values = {-v for v in values}
     return sorted(values)
+
+
+def sweep_binding(found, entry, pc):
+    """The entry input a table jump's index comes from unchanged (L48), as a
+    slot-sweep-v1 binding: {'register': name} if no instruction on the
+    straight line from the entry writes it, {'stack': offset} if the index
+    is loaded once from an argument (`mov R, [esp + d]` after counted
+    pushes, or `[ebp + d]` after `push ebp; mov ebp, esp`). None when the
+    line branches, calls, moves ESP otherwise or computes the index."""
+    from capstone.x86 import X86_OP_REG, X86_OP_MEM
+    jump = found[pc]
+    index = jump.operands[0].mem.index
+    names = _aliases(jump.reg_name(index))
+    if names & {"esp", "ebp"}:
+        return None
+    binding, pushed, frame = {"register": jump.reg_name(index)}, 0, None
+    at = entry
+    for _ in range(64):
+        if at == pc:
+            return binding
+        i = found.get(at)
+        if i is None or i.mnemonic.startswith(("j", "ret", "call", "loop", "int")):
+            return None
+        written = _writes(i)
+        if written is None:
+            return None
+        ops = i.operands
+        if i.mnemonic == "push":
+            pushed += 4
+        elif i.mnemonic == "pop":
+            pushed -= 4
+        elif (i.mnemonic == "mov" and len(ops) == 2 and ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) == "ebp"
+              and ops[1].type == X86_OP_REG and i.reg_name(ops[1].reg) == "esp"):
+            frame = pushed  # ebp = entry esp - pushed
+        elif "esp" in written:
+            return None
+        if written & names:
+            m = ops[1] if len(ops) == 2 else None
+            if (i.mnemonic != "mov" or binding.get("register") is None or m is None or m.type != X86_OP_MEM
+                    or m.mem.index or m.mem.segment):
+                return None
+            base = i.reg_name(m.mem.base)
+            offset = (m.mem.disp - pushed if base == "esp" else
+                      m.mem.disp - frame if base == "ebp" and frame is not None else None)
+            if offset is None or not 4 <= offset <= 128 or offset % 4:
+                return None
+            binding = {"stack": offset}
+        at = i.address + i.size
+    return None
+
+
+def table_ends(found, switches, read, is_code, entry):
+    """For each table jump whose slots are not proven (TableTargets.proven
+    false), the slot-sweep evidence (L48): the leading run of slots from
+    slot 0 that select code of this body, the dword that ends it (not code,
+    or code outside the function: another table or data), the entry input
+    the index comes from. A slot past the end makes the original jump into
+    non-code, so there is no defined behaviour for the lifted code to
+    match; the vectors must take every slot of the run."""
+    out = {}
+    for pc, targets in switches.items():
+        if not isinstance(targets, TableTargets) or targets.proven:
+            continue
+        binding = sweep_binding(found, entry, pc)
+        if binding is None:
+            continue
+        table = found[pc].operands[0].mem.disp & 0xffffffff
+        slots, end = [], None
+        for k in range(4096):
+            try:
+                value, = struct.unpack("<I", read((table + 4 * k) & 0xffffffff, 4))
+            except KeyError:
+                break
+            if value not in found:
+                # the run ends at a dword that is not code, or that points
+                # outside this body (another function's table or data)
+                end = {"value": value, "kind": "not code" if not is_code(value) else "outside the function"}
+                break
+            slots.append(value)
+        if end is None or not slots or not set(targets) <= set(slots):
+            continue
+        out[pc] = {"table": table, "slots": len(slots), "end": end, "index": binding}
+    return out
 
 
 def edge_bounded_tables(found, switches, addr, entries, read, is_code):
@@ -1418,7 +1504,9 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=Fal
     budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
-                       **({"insn_budget": budget} if budget else {})}
+                       **({"insn_budget": budget} if budget else {}),
+                       **({"table_sweep": sweep} if (sweep := {f"0x{pc:08X}": v for pc, v in
+                                                              TABLE_ENDS.pop(addr, {}).items()}) else {})}
     if not ext and not step:
         # the net effect: depth at the rets relative to the entry contract
         X87_NET[addr] = exits.pop() - entry if len(exits) == 1 else (0 if not exits else None)
@@ -2859,7 +2947,12 @@ def verification_gaps(lifted):
             try:
                 ins = decode_body(f["addr"], f["size"], ext=bool(f.get("ext")))[0]
                 proof = TABLE_PROOF.pop(f["addr"], {})
-                reasons += [f"unproven table at 0x{pc:08X}" for pc, ok in sorted(proof.items()) if not ok]
+                # L48: an unproven table counts when its end is evidenced and
+                # the vectors took every slot (structured_inputs.py sweep)
+                sweep, covered = f.get("table_sweep") or {}, f.get("slot_coverage") or {}
+                reasons += [f"unproven table at 0x{pc:08X}" for pc, ok in sorted(proof.items())
+                            if not ok and not (f"0x{pc:08X}" in sweep and covered.get(f"0x{pc:08X}")
+                                               == list(range(sweep[f"0x{pc:08X}"]["slots"])))]
                 # a record lifted before its tables were proven (or its
                 # frame tails inlined) lacks that code (0x012EDE40 before L45)
                 missing = {i.address for i in ins} - set(f.get("body") or [i.address for i in ins])

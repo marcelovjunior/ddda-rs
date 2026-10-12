@@ -13,6 +13,7 @@ from multiprocessing import Pool
 from pathlib import Path
 import os
 import sqlite3
+import struct
 import time
 
 import harness as h
@@ -525,6 +526,81 @@ def refresh(root, strategies, seeds, seconds, only=None):
           f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
 
 
+def sweep(root, seconds, only=None):
+    """Cases per table slot for unproven tables (L48, slot-sweep-v1).
+
+    For each ext record whose table jump the lifter cannot bound but whose
+    end is evidenced (lift.table_ends: the run of slots selecting this
+    body's code ends at non-code or at code outside the function), record
+    one case per slot with the index input set to the slot (other inputs
+    small-v1). A case is kept only if the slot's target ran. The record
+    gains `table_sweep` (the evidence) and `slot_coverage` (the slots the
+    cases took); the gate counts the table once every slot is covered.
+    Records whose current decode differs from their body are skipped
+    (refresh them first); no other record or case changes."""
+    selected = read(root/'patterns/lift.json'); cases = read(root/'vectors/lift.json')
+    closed = lift.seed_closed_contracts(selected)
+    frames = frame_contracts(selected)
+    noreturn = lift.noreturn_entries()
+    gaps = lift.verification_gaps(selected)
+    report = {}
+    for k, f in enumerate(selected):
+        a = f['addr']
+        if (only and a not in only) or not f.get('ext') or not any(
+                r.startswith('unproven table') for r in gaps.get(a, [])):
+            continue
+        try:
+            lift.lift(a, f['size'], closed, ext=True)
+            info = dict(lift.BODY_INFO[a])
+        except lift.Unsupported as e:
+            report[a] = dict(error=f'lift: {e}')
+            continue
+        finally:
+            lift.release_body(a, f['size'])
+        if info['body'] != f['body'] or not info.get('table_sweep'):
+            report[a] = dict(skipped='stale body' if info['body'] != f['body'] else 'no end evidence or index input')
+            continue
+        key, new, coverage, start = lift.vector_key(f), [], {}, time.monotonic()
+        for jump, evidence in info['table_sweep'].items():
+            covered = []
+            for slot in range(evidence['slots']):
+                target = struct.unpack('<I', h.code(evidence['table'] + 4 * slot, 4))[0]
+                layout = dict(index=evidence['index'], value=slot)
+                for attempt in range(1, 9):
+                    if time.monotonic() - start > seconds:
+                        break
+                    seen = set()
+                    seed = (a << 8) ^ (0x80 + attempt)
+                    try:
+                        r = h.run_sparse(a, seed, end=a+f['size'], lifted=frozenset(closed), body=f['body'],
+                                         x87_push=f.get('x87_push', []), noreturn_sites=f.get('noreturn_sites', []),
+                                         noreturn_targets=noreturn, original_entry=f.get('original_entry', False),
+                                         x87_entry=f.get('x87_entry', 0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
+                                         frame_contracts=frames, max_seconds=max(1, seconds - (time.monotonic() - start)),
+                                         input_strategy='slot-sweep-v1', input_layout=layout, visited=seen)
+                    except h.Rejected:
+                        continue
+                    except Exception:  # noqa: BLE001  (emulator errors: no case)
+                        continue
+                    finally:
+                        gc.collect()
+                    if target in seen:
+                        new.append(dict(addr=a, seed=seed, body_key=key, **r))
+                        covered.append(slot)
+                        break
+            coverage[jump] = covered
+        report[a] = dict(cases=len(new), coverage={j: f'{len(c)}/{info["table_sweep"][j]["slots"]}'
+                                                   for j, c in coverage.items()})
+        if new:
+            selected[k] = dict(f, table_sweep=info['table_sweep'], slot_coverage=coverage)
+            cases.extend(new)
+    write(root/'patterns/lift.json', selected); write(root/'vectors/lift.json', cases)
+    write(root/'sweep.json', {f'0x{a:08X}': r for a, r in report.items()})
+    for a, r in report.items():
+        print(f'0x{a:08X}: {r}', flush=True)
+    print(f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
+
+
 def prune_no_vectors(root, have):
     """Successful adoptions must not remain in the historical failure list."""
     path=root/'patterns/lift_novector.json'
@@ -537,7 +613,7 @@ def prune_no_vectors(root, have):
 
 if __name__ == '__main__':
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command',choices=['prepare','record','adopt','promote','refresh','refresh-closed'])
+    ap.add_argument('command',choices=['prepare','record','adopt','promote','refresh','refresh-closed','sweep'])
     ap.add_argument('--addresses',help='refresh: only these stale records (comma-separated hex)')
     ap.add_argument('--strategies',default='small-v1,objects-v1,image-v1,zero,random',
                     help='refresh: comma-separated strategies tried after the previous distribution')
@@ -559,6 +635,7 @@ if __name__ == '__main__':
                                       read(args.layout) if args.layout else None,args.address)
     elif args.command=='refresh-closed':refresh_closed(root,args.seeds,args.seconds)
     elif args.command=='promote':promote(root,args.seeds,args.seconds,args.address)
+    elif args.command=='sweep':sweep(root,args.seconds,{int(a,16) for a in args.addresses.split(',')} if args.addresses else None)
     elif args.command=='refresh':refresh(root,args.strategies.split(','),args.seeds,args.seconds,
                                          {int(a,16) for a in args.addresses.split(',')} if args.addresses else None)
     else:adopt(root,args.strategy,args.terminal)

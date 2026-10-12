@@ -214,6 +214,61 @@ class Eh4ScopeTests(unittest.TestCase):
         self.assertEqual(body, {0x1000, 0x1005, 0x100A, 0x100E})
 
 
+class SlotSweepTests(unittest.TestCase):
+    # mov ecx,[esp+4]; jmp [ecx*4+0x401000]; ret x3 (slots 0..2), then int3 padding
+    CODE = bytes.fromhex("8b4c2404" "ff248d00104000") + b"\xc3" * 3
+
+    def image(self):
+        data = self.CODE.ljust(0x1000, b"\xcc") + dwords(0x40000B, 0x40000C, 0x40000D, 0xCCCCCCCC)
+        read = lambda a, n: data[a - 0x400000:a - 0x400000 + n]
+        return data, read, lambda a, n=1: 0x400000 <= a and a + n <= 0x400000 + len(self.CODE)
+
+    def test_end_evidence_and_index_binding(self):
+        _, read, is_code = self.image()
+        lift.decode_body(0x400000, len(self.CODE), frozenset({0x400000}), frozenset(), read, is_code, ext=True)
+        ends = lift.TABLE_ENDS.pop(0x400000)
+        self.assertEqual(ends, {0x400004: {"table": 0x401000, "slots": 3, "index": {"stack": 4},
+                                           "end": {"value": 0xCCCCCCCC, "kind": "not code"}}})
+        self.assertEqual(lift.TABLE_PROOF.pop(0x400000), {0x400004: False})
+
+    def test_strategy_sets_the_index_input(self):
+        data, read, is_code = self.image()
+        body = [0x400000, 0x400004, 0x40000B, 0x40000C, 0x40000D]
+        with patch.object(h, "image", return_value=(0x400000, [(0x400000, data)])), \
+                patch.object(h, "code", side_effect=read), patch.object(h, "executable", side_effect=is_code):
+            for slot in range(3):
+                seen = set()
+                c = h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                                 input_layout=dict(index={"stack": 4}, value=slot), visited=seen)
+                self.assertIn(0x40000B + slot, seen)
+                self.assertEqual(c["input_strategy"], "slot-sweep-v1")
+            seen = set()
+            h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                         input_layout=dict(index={"register": "ecx"}, value=2), visited=seen)
+            with self.assertRaises(ValueError):
+                h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                             input_layout=dict(index={"stack": 2}, value=0))
+
+    def test_gate_counts_a_fully_swept_table(self):
+        _, read, is_code = self.image()
+        arm = "0x400004 => { { let t = m.u32(ecx); if matches!(t, 0x40000B) { pc = t; continue; } } }"
+        record = dict(addr=0x400000, size=len(self.CODE), ext=True, arms=[arm],
+                      body=[0x400000, 0x400004, 0x40000B, 0x40000C, 0x40000D],
+                      table_sweep={"0x00400004": {"table": 0x401000, "slots": 3, "index": {"stack": 4},
+                                                  "end": {"value": 0xCCCCCCCC, "kind": "not code"}}})
+        decode = lift.decode_body
+        with patch.object(lift, "decode_body", lambda a, s, *x, ext=False: decode(
+                    a, s, frozenset({0x400000}), frozenset(), read, is_code, ext=ext)), \
+                patch.object(lift, "function_entries", lambda: frozenset({0x400000})), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()), \
+                patch.object(h, "code", read), patch.object(h, "executable", is_code), \
+                patch.object(h, "import_pops", lambda: ({}, {})):
+            partial = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 2]})])
+            full = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 1, 2]})])
+        self.assertEqual(partial, {0x400000: ["unproven table at 0x00400004"]})
+        self.assertEqual(full, {})
+
+
 class VerificationGapTests(unittest.TestCase):
     def test_named_targets_include_lifted_callees_and_ext_constants(self):
         arm = ("{ super::lifted::f_012f71e0(m, cpu); } "
