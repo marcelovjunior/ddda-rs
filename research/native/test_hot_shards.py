@@ -70,7 +70,8 @@ class HotShardsTests(unittest.TestCase):
             function = dict(addr=caller, name="synthetic", arms=[f"0x{caller:X} => {{ {calls} return; }}"])
             emitted = lift.shard_fn(function, layout.owner)
             for target in addresses:
-                direct = f"super::lifted::f_{target:08x}("
+                # Local function references also cover L60 call_local wrappers.
+                direct = f"super::lifted::f_{target:08x}"
                 dispatched = f"x86::call_lifted(m, cpu, 0x{target:08X})"
                 self.assertEqual(direct in emitted, layout.owner(caller) == layout.owner(target))
                 self.assertEqual(dispatched in emitted, layout.owner(caller) != layout.owner(target))
