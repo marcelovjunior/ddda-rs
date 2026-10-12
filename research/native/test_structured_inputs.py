@@ -60,6 +60,36 @@ class InputTests(unittest.TestCase):
         self.assertEqual(image.pop('input_strategy'),'image-v1')
         self.assertEqual(image,ordinary)
 
+    def test_mockzero_keeps_random_memory_and_zeroes_mock_returns(self):
+        code=bytes.fromhex('a1000240008b11c3').ljust(0x200,b'\xcc')+struct.pack('<I',0x12345678)
+        ordinary=self.record(code)
+        zero=self.record(code,'mockzero-v1')
+        self.assertEqual(zero.pop('input_strategy'),'mockzero-v1')
+        self.assertEqual(zero,ordinary)
+        # wait: call mocked 0x400100; test eax,eax; jnz wait; mov eax,[ecx]; ret
+        wait=bytes.fromhex('e8fb00000085c075f78b01c3')
+        c=self.record(wait,'mockzero-v1',end=0x40000c)
+        self.assertEqual(len(c['calls']),1)
+        self.assertEqual({k:c['calls'][0]['out'][k] for k in ('eax','ecx','edx','xmm0')},
+                         dict(eax=0,ecx=0,edx=0,xmm0=[0]*4))
+        with self.assertRaisesRegex(h.Rejected,'runaway'):
+            self.record(wait,end=0x40000c,max_insn=2000)
+        # call mocked float 0x400100; fstp dword [ecx]; ret
+        c=self.record(bytes.fromhex('e8fb000000d919c3'),'mockzero-v1',end=0x400008,x87_push={0x400005})
+        self.assertEqual(c['calls'][0]['out']['st_push'],0)
+        # The mock also returned ECX = 0, so the zero float lands at address 0.
+        self.assertIn([0,'00000000'],c['writes'])
+        # Page variants: the page strategy's inputs, zero mocked returns.
+        for name,pages in (('small-mockzero-v1','small-v1'),('objects-mockzero-v1','objects-v1')):
+            self.assertEqual(h.MOCKZERO[name],pages)
+            zero=self.record(code,name)
+            base=self.record(code,pages)
+            self.assertEqual((zero.pop('input_strategy'),base.pop('input_strategy')),(name,pages))
+            self.assertEqual(zero,base)
+            c=self.record(wait,name,end=0x40000c)
+            self.assertEqual({k:c['calls'][0]['out'][k] for k in ('eax','ecx','edx','xmm0')},
+                             dict(eax=0,ecx=0,edx=0,xmm0=[0]*4))
+
     def test_original_model_entry_is_distinct_and_callees_still_use_models(self):
         a=0x00CF73F0
         for text,expected in [('b878563412c3',0x12345678),
