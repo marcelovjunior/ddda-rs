@@ -1,5 +1,16 @@
 # Milestones
 
+### L66 build-speed support (2026-10-12, integration pending)
+
+- Seven hot-layout/package Python tests and one Rust accessor equivalence
+  test pass. Timing receipts and optional play-profile native gate added.
+- Private input snapshot audited unchanged; production generator/accessors
+  not changed yet. No speedup or runtime comparison claimed.
+- Blockers: L60 owns the overlapping generator routing; baseline shard
+  measurement is running after the shared build queue.
+- Next: finish fixed-output opt1/opt0 timings and coordinate hot ownership.
+
+
 ### L28c remaining recorder review (2026-10-12)
 
 - **+0 functions / +0 cases**; audit preserves all **59,685 / 177,649**.
