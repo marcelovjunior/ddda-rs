@@ -1489,11 +1489,22 @@ impl WgpuBackend {
         let (ps_kinds, vs_kinds) = (kinds(&ps_iface), kinds(&vs_iface));
         let layout1 = self.tex_layout(false, &ps_kinds);
         let layout2 = self.tex_layout(true, &vs_kinds);
+        // An indexed strip needs its index format on the pipeline. wgpu then
+        // restarts the strip at index 0xFFFF (0xFFFFFFFF for 32-bit indices),
+        // which D3D9 does not do: such a strip would have to reference vertex
+        // 65535 through 16-bit indices to differ.
+        let strip_index = match (&d.indices, topology) {
+            (Indices::Buffer(_, f) | Indices::Inline { format: f, .. },
+             wgpu::PrimitiveTopology::LineStrip | wgpu::PrimitiveTopology::TriangleStrip) =>
+                Some(if *f == 102 { wgpu::IndexFormat::Uint32 } else { wgpu::IndexFormat::Uint16 }),
+            _ => None,
+        };
         let key = PipelineKey {
             vs: (vh, 0, false, 0),
             ps: (ph, vh, depth_bias, ones),
             buffers,
             topology,
+            strip_index,
             cull,
             polygon_mode,
             targets,
@@ -1525,7 +1536,7 @@ impl WgpuBackend {
                     label: None,
                     layout: Some(&self.pipeline_layouts[&layout_key]),
                     vertex: wgpu::VertexState { module: &vs_module, entry_point: Some("main"), compilation_options: Default::default(), buffers: &layouts },
-                    primitive: wgpu::PrimitiveState { topology, front_face: wgpu::FrontFace::Cw, cull_mode: cull, polygon_mode, ..Default::default() },
+                    primitive: wgpu::PrimitiveState { topology, strip_index_format: key.strip_index, front_face: wgpu::FrontFace::Cw, cull_mode: cull, polygon_mode, ..Default::default() },
                     depth_stencil: key.depth.clone(),
                     multisample: wgpu::MultisampleState { count: key.samples, mask: key.sample_mask as u64, alpha_to_coverage_enabled: false },
                     fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &key.targets }),
