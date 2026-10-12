@@ -133,6 +133,79 @@ def ordered_entries(entries):
 
 
 @lru_cache(maxsize=1)
+def eh4_helpers():
+    """(__SEH_prolog4 entries, __except_handler4 entries) by inventory name."""
+    with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+        rows = db.execute("SELECT address, name FROM functions").fetchall()
+    return (frozenset(a for a, n in rows if n == "__SEH_prolog4"),
+            frozenset(a for a, n in rows if n == "__except_handler4"))
+
+
+def eh4_scope_targets(found, read, is_code):
+    """Filter and handler code of the EH4 scope table a body registers
+    (L45/L27b): reached only through `_except_handler4` dispatch, never by a
+    branch, yet code of this function. A body registers a table by pushing
+    its address next to a call to `__SEH_prolog4` or a push of
+    `__except_handler4`. Records are read for the try levels the body stores
+    (`mov dword ptr [ebp-4], N`, N < 64, or `and dword ptr [ebp-4], 0`;
+    a level stored from a register reads records in order instead;
+    -2 is "no try"), each 12 bytes
+    after the 16-byte cookie header: enclosing level (-2 or below N),
+    filter (0 for __finally, else code), handler (code). Invalid records
+    give nothing."""
+    from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+    prologs, handlers = eh4_helpers()
+    ordered = sorted(found.values(), key=lambda i: i.address)
+    tables, levels = set(), set()
+    for k, i in enumerate(ordered):
+        ops = i.operands
+        if (i.mnemonic in ("mov", "and") and len(ops) == 2 and ops[0].type == X86_OP_MEM and ops[0].size == 4
+                and i.reg_name(ops[0].mem.base) == "ebp" and not ops[0].mem.index and ops[0].mem.disp == -4
+                and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 64
+                and (i.mnemonic == "mov" or ops[1].imm == 0)):
+            levels.add(ops[1].imm & 0xffffffff)  # `and [ebp-4], 0` enters level 0
+        elif (i.mnemonic == "mov" and len(ops) == 2 and ops[0].type == X86_OP_MEM and ops[0].size == 4
+                and i.reg_name(ops[0].mem.base) == "ebp" and not ops[0].mem.index and ops[0].mem.disp == -4
+                and ops[1].type != X86_OP_IMM):
+            levels.add(None)  # a level from a register (`xor esi, esi ... mov [ebp-4], esi`)
+        if i.mnemonic != "push" or not ops or ops[0].type != X86_OP_IMM:
+            continue
+        table = ops[0].imm & 0xffffffff
+        if is_code(table):
+            continue
+        near = ordered[k + 1:k + 4]
+        if any((n.mnemonic == "call" and n.operands[0].type == X86_OP_IMM
+                and (n.operands[0].imm & 0xffffffff) in prologs)
+               or (n.mnemonic == "push" and n.operands[0].type == X86_OP_IMM
+                   and (n.operands[0].imm & 0xffffffff) in handlers) for n in near):
+            tables.add(table)
+    def record(table, level):
+        try:
+            enclosing, filter_, handler = struct.unpack("<III", read(table + 16 + 12 * level, 12))
+        except (KeyError, struct.error):
+            return None
+        if not (enclosing == 0xFFFFFFFE or enclosing < level):
+            return None
+        if not is_code(handler) or (filter_ and not is_code(filter_)):
+            return None
+        return {handler, filter_} - {0}
+
+    targets = set()
+    for table in tables:
+        for level in sorted(l for l in levels if l is not None):
+            targets |= record(table, level) or set()
+        if None in levels:
+            # levels set from registers: the records in order up to the
+            # first invalid one (the next table's cookie header is invalid)
+            for level in range(64):
+                found_record = record(table, level)
+                if found_record is None:
+                    break
+                targets |= found_record
+    return targets
+
+
+@lru_cache(maxsize=1)
 def noreturn_entries():
     # These inventory symbols name CRT routines with a non-returning contract.
     # Addresses come from the player's inventory, not a copied address table.
@@ -287,6 +360,7 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
       # block (`cmp R, imm; jb L` ... `L: neg R; jmp [R*4 + T]`) gain the
       # proven slots, which may lie past Ghidra's end of the function.
       added = edge_bounded_tables(found, switches, addr, entries, read, is_code)
+      added |= {t for t in eh4_scope_targets(found, read, is_code) if t not in found and t not in entries}
       if not added:
           # every edge-proven table is complete even when nothing new was added
           for pc in found:
@@ -2539,7 +2613,7 @@ def wired_lines(selected, ported, chunk):
 
 TABLE_DISPATCH = re.compile(r"pc = m\.u32\(|let t = m\.u32\([^;]*\); if matches!")
 EXT_CONSTANT = re.compile(r"x86::call_ext\(m, cpu, 0x([0-9A-F]+)\)")
-LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
+LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
 
 
 def verification_gaps(lifted):
@@ -2549,9 +2623,11 @@ def verification_gaps(lifted):
     time), a table jump the current lifter cannot prove complete
     (TABLE_PROOF: other slots may reach code the vectors never ran), or a
     stale body. Only records whose arms dispatch through a table or name
-    a frame tail (frame_tail: now local code) are re-decoded."""
+    a frame tail (frame_tail: now local code) or registering an EH4 scope
+    table (eh4_scope_targets) are re-decoded."""
     import harness as h
     entries, noreturn = function_entries(), noreturn_entries()
+    prologs, handlers = eh4_helpers()  # EH4 registrations own their scope code
     bound = entries | set(h.import_pops()[1]) | set(h.PLATFORM)
     gaps = {}
     for f in lifted:
@@ -2561,7 +2637,9 @@ def verification_gaps(lifted):
         named = constants | {int(t, 16) for arm in f["arms"] for t in LIFTED_CALLEE.findall(arm)}
         if (any(TABLE_DISPATCH.search(arm) for arm in f["arms"])
                 or any(t in entries and t != f["addr"] and frame_tail(t, entries, noreturn, h.code, h.executable)
-                       for t in named)):
+                       for t in named)
+                or named & prologs
+                or any(f"0x{x:X}" in arm for x in handlers for arm in f["arms"])):
             try:
                 ins = decode_body(f["addr"], f["size"], ext=bool(f.get("ext")))[0]
                 proof = TABLE_PROOF.pop(f["addr"], {})

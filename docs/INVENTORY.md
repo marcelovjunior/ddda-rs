@@ -257,6 +257,16 @@ non-code admissions, two x87-consuming mocked callees, one x87 value across
 mocked calls) and three own-return quarantines
 ([L22 Results](tasks/L22-lift-rejections.md#results)).
 
+After L45 (2026-10-12, task/L45-function-tails; **expected, pending the
+train-4 replay**): `gen` declares a function verified only without a
+verification gap (unbound direct target, unproven table, stale body).
+44 previously verified functions keep unproven tables
+(`patterns/verification_gaps.json`). On the train-2 base this gives
+**59,173 of 59,500**; on train 3 it gives train 3's count − 44 + 12 boot
+additions. The function-boundary rule removes 58 non-code supplementary
+admissions (6 of them lifted) on the next inventory rebuild
+([L45 Results](tasks/L45-function-tails.md#results)).
+
 The L15 table above and its notes below are
 kept for history.
 
