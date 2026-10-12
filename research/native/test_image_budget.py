@@ -64,6 +64,26 @@ class ImageBudgetTests(unittest.TestCase):
             ins,read,_=self.fixture(bytes.fromhex(code))
             self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
 
+    def test_exact_register_policy_proves_input_count_and_matches_original(self):
+        code=bytes.fromhex('89c1 83e103 83c104 31d2 42 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            args=dict(body=[i.address for i in ins],end=0x400000+len(code))
+            with self.assertRaisesRegex(h.Rejected,'runaway'):
+                h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,**args)
+            original=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=100,**args)
+            case=h.run_sparse(0x400000,7,input_strategy='guarded-values-v1',max_insn=3,**args)
+        self.assertNotIn('image_budget',original)
+        self.assertIn('image_budget',case)
+        self.assertEqual(case['regs_out']['edx'],(case['regs_in']['eax']&3)+4)
+        for field in ('regs_in','regs_out','reads','writes','calls'):
+            self.assertEqual(case[field],original[field])
+
+    def test_exact_register_policy_still_requires_return_address_preserved(self):
+        with self.assertRaisesRegex(h.Rejected,'execution outside the image at 0x00000000'):
+            self.guarded_record(bytes.fromhex('c7042400000000 c3'),'guarded-values-v1')
+
     def test_generated_input_pages_can_prove_a_standalone_bounded_loop(self):
         code=bytes.fromhex('803d0000002000 750a b904000000 31c0 40 49 75fc c3')
         ins,read,pages=self.fixture(code)

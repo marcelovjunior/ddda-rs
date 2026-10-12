@@ -79,8 +79,9 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     enforced by the same WriteGuard. Initial object bytes remain unknown,
     except `initial_writes`: exact bytes written by a checked original setup.
     These receive the same overlap and unknown-writer guards as trace stores.
-    `entry_values` supplies only explicit checked-setup register bindings;
-    each must match its entry witness, and ESP cannot be rebound.
+    `entry_values` supplies explicit checked-setup register bindings or an
+    opt-in recorder's exact initial GPR values. Each must match its entry
+    witness, and ESP cannot be rebound.
     Bounded affine expressions preserve relationships between unknown entry
     values through 32-bit copies, sums/differences, LEA and saved words. Only
     cancellation of every symbolic term creates an integer fact. Arithmetic

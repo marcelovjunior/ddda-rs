@@ -146,7 +146,7 @@ def main():
     p.add_argument('--bind', action='append', default=[], metavar='ECX=[PHASE.]regs_in.ecx',
                    help='bind register or stack+OFFSET from last setup, or a zero-based setup phase')
     p.add_argument('--seconds', type=float, default=20)
-    p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1','guarded-state-v1'), default='zero-call-v1')
+    p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1','guarded-state-v1','guarded-values-v1'), default='zero-call-v1')
     args = p.parse_args()
     bindings = {k.lower(): v.split('.') for k, v in (b.split('=') for b in args.bind)}
     root = Path(lift.N)
