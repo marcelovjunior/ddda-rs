@@ -370,8 +370,8 @@ fn a_window_gets_windows_creation_show_and_paint_messages_in_order() {
     assert_eq!(messages(), [0x81, 0x01], "WM_NCCREATE, WM_CREATE");
 
     assert_eq!(call_service(user32::show_window, &mut m, &[hwnd, 1]).eax, 0, "was hidden");
-    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x07, 0x47, 0x05, 0x03],
-               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
+    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x281, 0x282, 0x07, 0x47, 0x05, 0x03],
+               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, IME_SETCONTEXT, IME_NOTIFY (L43), SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
     call_service(user32::update_window, &mut m, &[hwnd]);
     assert_eq!(messages(), [0x0F], "WM_PAINT");
     call_service(user32::update_window, &mut m, &[hwnd]);
