@@ -35,6 +35,35 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Constructed finite-work input: 0x00491340 (2026-10-12)
+
+**Recorded and adopted 3/3 normal returns.** The verified original constructor
+0x00490E80 returns the object in EAX; binding that value to method ECX supplies
+the four arrays initialized by calls at 0x00491002. The method reads their
+counts at 0x00491369. Setup replay must still match every accepted observation.
+The opt-in bound now admits only bytes actually written by that setup, with
+the existing alias guards; arbitrary captured page contents stay unknown.
+Known method writes replace those facts. Stack-allocation helpers may move
+their return address only when RET still reads the exact saved call PC.
+Register XCHG preserves values and pointer identities without changing flags.
+
+Native-L28c grows **59,581 -> 59,582 functions / 177,337 -> 177,340 cases**.
+`L28c/recipes-first-audit.json` proves all previous records/case multisets
+unchanged. Base remains read-only native-train3-orig. Reproduce via heavy.py:
+`constructed_inputs.py 0x00491340 0x00490E80 --bind ecx=regs_out.eax
+--strategy guarded-stores-v1 --seconds 45` (single command).
+
+Fifteen finite-work residuals also received three plain guarded-store trials
+each; all 45 hit the instruction limit. Manager producers were identified
+from original singleton stores: 0x00437BE0 writes 0x018FA4BC at 0x004384CF;
+0x004980F0 writes 0x018FA4F8 at 0x00498169; 0x004821A0 writes 0x018FA4F0
+at 0x00482210. Setup trials for 0x00493AA0, 0x00494D80, 0x00495150 and
+0x0050A110 still hit the limit. The two string helpers 0x00606090/0x00606130
+still leave the image. None of these 18 attempts was adopted. Logs:
+`L28c/recipes-bounds.log`, `recipes-managers.log`, and the structured logs.
+Next: caller argument inference for frameless virtual-tail wrappers, then
+continue bounded manager/record recipes. Full Rust replay belongs to head.
+
 ### Boot stop 14: 0x00DD5ED0 (2026-10-12, pending train replay)
 
 **Records 3/3 normal-return cases and is adopted.** `guarded-stores-v1`

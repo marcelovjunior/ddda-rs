@@ -1,5 +1,16 @@
 # Milestones
 
+### L28c constructed array fixture (2026-10-12, pending replay)
+
+- Original constructor 0x00490E80 supplies the four arrays for 0x00491340;
+  the latter records **3/3** after checked setup replay. Guarded proofs can
+  use setup-written bytes and trace stack-allocation helpers' moved returns.
+- Private native-L28c: **59,581 -> 59,582 / 177,337 -> 177,340 cases**.
+  Audit proves every old record/case unchanged. Manager trials retain their
+  budget/cleanup blockers; no full Rust build or replay here.
+- **Next action:** frameless virtual-wrapper mock input strategy, then the
+  remaining manager and record recipes; details in L28 Results.
+
 ### L28c boot stop 14 fixture (2026-10-12, pending replay)
 
 - **0x00DD5ED0 records 3/3**. The opt-in store-fact rule preserves its own

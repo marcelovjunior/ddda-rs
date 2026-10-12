@@ -1615,7 +1615,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if initial_state is None and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
+    if (initial_state is None or input_strategy == 'guarded-stores-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1648,7 +1648,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 # Unknown writes still cannot alias these read facts.
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
                                               if input_strategy in ('guarded-stack-v1','guarded-stores-v1') else None),
-                                entry_pointers=regs_in if input_strategy == 'guarded-stores-v1' else None)
+                                entry_pointers=regs_in if input_strategy == 'guarded-stores-v1' else None,
+                                initial_writes=({a:v for a,v in initial_state.get('writes',{}).items()
+                                                 if not regs_in['esp'] <= a < regs_in['esp']+4}
+                                                if initial_state is not None else None))
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance
@@ -1702,7 +1705,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             raise Rejected('constructed input: setup did not return')
         if any(executable(a) for a in written):
             raise Rejected('constructed input: setup writes executable memory')
-        captured = dict(pages={p: bytes(uc.mem_read(p, 4096)) for p in pages_in}, heap=heap[0])
+        captured = dict(pages={p: bytes(uc.mem_read(p, 4096)) for p in pages_in}, heap=heap[0],
+                        writes={a:uc.mem_read(a,1)[0] for a in written})
     regs_out = {name: uc.reg_read(r) for name, r in GPR}
     xmm0 = uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFF
     # x87 values left on the stack: depth from TOP; read st0 as a single
