@@ -172,7 +172,11 @@ generation-checked host handles for textures/files/voices. Never put Rust
 references, Bevy entities or native handles into guest vtables/fields.
 This preserves layouts such as `sApp+0x2558` and the sMain vtable set by
 `0x0041B420`, without pretending a typed hand port is automatically ABI
-compatible.
+compatible. Verified readable ports that replace lifted bodies
+(crates/mtmath, docs/MATH.md) use the lifted ABI themselves and are bound
+through the generated lifted program, so the dispatcher needs no special
+case; ports that call unported code go through x86::call_ext like the
+lifted bodies.
 
 `Cpu` currently includes GPRs, XMMs, flags, DF and full x87 state, but no
 explicit EIP, guest MXCSR or segment/TLS base. x87 state is preserved by
