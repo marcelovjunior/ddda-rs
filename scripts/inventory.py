@@ -34,6 +34,10 @@ def connect():
     return sqlite3.connect(DB)
 
 
+# Crates of readable ports wired over lifted bodies (docs/MATH.md, docs/CORE.md).
+READABLE_CRATES = ("mtmath", "mtcore")
+
+
 def native_declarations(repo=REPO):
     """Whole ports and declared tests, including generated lift crates.
 
@@ -46,12 +50,16 @@ def native_declarations(repo=REPO):
              if not p.name.startswith("lifted_")]
     paths += list(repo.glob("crates/ddlift/lift_*/src/generated/**/*.rs"))
     # readable ports that replace lifted bodies (L24, docs/MATH.md)
-    paths += list(repo.glob("crates/mtmath/src/**/*.rs"))
+    for crate in READABLE_CRATES:
+        paths += list(repo.glob(f"crates/{crate}/src/**/*.rs"))
     for path in paths:
         for line in path.read_text(encoding="utf-8").splitlines():
             if "Translated from" in line:
                 ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
-    for path in [*repo.glob("crates/ddnative/tests/*.rs"), *repo.glob("crates/mtmath/tests/*.rs")]:
+    tests = list(repo.glob("crates/ddnative/tests/*.rs"))
+    for crate in READABLE_CRATES:
+        tests += list(repo.glob(f"crates/{crate}/tests/*.rs"))
+    for path in tests:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("// verifies"):
                 tested.update(int(m.group(1), 16) for m in ADDR.finditer(line))

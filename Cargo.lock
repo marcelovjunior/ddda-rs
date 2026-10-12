@@ -2505,6 +2505,7 @@ name = "ddlift-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2513,6 +2514,7 @@ name = "ddlift-01"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2521,6 +2523,7 @@ name = "ddlift-02"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2529,6 +2532,7 @@ name = "ddlift-03"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2537,6 +2541,7 @@ name = "ddlift-04"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2545,6 +2550,7 @@ name = "ddlift-05"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2553,6 +2559,7 @@ name = "ddlift-06"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2561,6 +2568,7 @@ name = "ddlift-07"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2569,6 +2577,7 @@ name = "ddlift-08"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2577,6 +2586,7 @@ name = "ddlift-09"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2585,6 +2595,7 @@ name = "ddlift-10"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2593,6 +2604,7 @@ name = "ddlift-11"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2601,6 +2613,7 @@ name = "ddlift-12"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2609,6 +2622,7 @@ name = "ddlift-13"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2617,6 +2631,7 @@ name = "ddlift-14"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -2625,6 +2640,7 @@ name = "ddlift-15"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
  "mtmath",
 ]
 
@@ -4177,6 +4193,14 @@ dependencies = [
  "ddvfs",
  "mtarc",
  "mtxfs",
+]
+
+[[package]]
+name = "mtcore"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
 ]
 
 [[package]]
