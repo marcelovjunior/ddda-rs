@@ -107,7 +107,10 @@ The scripts and lists are private (`C:\ddda-targets\L35`).
    - **CPU feature detection** `0x00DBD170`: CPUID (0x00DBD140) and a
      `pushfd` probe (0x00DBD110);
    - QPC (0x0130A5A0) and its frequency (**0x0130A5C0**);
-   - **0x00D0CB00**.
+   - if the CPU detection did not set the SSE2 flag (`+0x700E & 8`):
+     **0x00D0CB00("ERR02 : Could not use SSE2 instructions.")**, a fatal
+     error reporter that ends in `_exit(1)`. So the runtime's CPUID
+     answer must report SSE2.
 2. The engine singletons, through their creators. Among them:
    - `sRender` (0x00DB1A50 via 0x004889A0): the render thread
      `0x00DAC090` (where the device is created is not traced here);
@@ -232,8 +235,9 @@ lift run's input. Lifting them and recording vectors is a pipeline job
 
 1. **Window:** `0x01106C80` (IME setup; the **first** lifter stop after
    the CRT).
-1b. **`sMain`'s base constructor:** 0x00D0CB00 and 0x0130A5C0, beside
-   the CPUID rejections below.
+1b. **`sMain`'s base constructor:** 0x0130A5C0, beside the CPUID
+   rejections below. (0x00D0CB00, also called there, is the fatal-error
+   reporter: reached only when SSE2 is missing.)
 2. **`sBbsRpgMain` ctor:**
    - 0x004083A0 (Steam callbacks) and 0x00DFA0C0;
    - 0x00419100 (archive manager);
@@ -352,7 +356,8 @@ in cutscenes. `uMovie` uses `timeGetTime` (bound).
   or unreadable save takes the "no save" branch (not traced).
 - **The online protocol** may request a connection from the title (2.2);
   if so, WS2_32 is needed.
-- **CPU detection:**
+- **CPU detection:** without SSE2 in the CPUID answer the game stops
+  with "ERR02 : Could not use SSE2 instructions." (0x00DBE810).
   - the CPUID/`pushfd` answers must agree with the registry's recorded
     CPU (L22's rule);
   - they decide code paths (SSE use) for the rest of the run.
