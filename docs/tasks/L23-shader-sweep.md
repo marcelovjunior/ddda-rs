@@ -51,7 +51,7 @@ A shader counts in the first package (sorted) that holds it.
 
 | | Distinct | Bit-exact | Within tolerance | Differing | Untranslated | Rejected |
 |---|---|---|---|---|---|---|
-| Pixel | 27,070 | 26,403 | 665 (worst 332 ULP) | 0 | 0 | 2 (harness, see below) |
+| Pixel | 27,070 | 26,405 | 665 (worst 332 ULP) | 0 | 0 | 0 |
 | Vertex | 2,128 | 2,083 | 45 (worst 92 ULP) | 0 | 0 | 0 |
 
 - *Bit-exact*: every defined output component is equal as a float in
@@ -64,7 +64,7 @@ A shader counts in the first package (sorted) that holds it.
   Rgba32Float targets exceeded wgpu's default colour-attachment limit
   (32 bytes per sample) in the test device, not in the translation.
   The harness now takes the adapter's limit (866c3d9).
-  Their rerun is pending: D3D9 refuses a device while a full-screen game holds the display, and the head paused the agents.
+  Rerun with that limit (sweep of root alone): both run and are bit-exact.
 - No vertex shader was skipped for using texcoord14/15 (which the oracle's
   output capture needs).
 
@@ -149,7 +149,7 @@ rejected and oracle-skipped shaders):
 | Stage803 | 10 / 10 / 0 (0) | 0 / 0 / 0 (0) | 0 |
 | Stage804 | 0 / 0 / 0 (0) | 0 / 0 / 0 (0) | 0 |
 | Title | 2 / 2 / 0 (0) | 2 / 2 / 0 (0) | 0 |
-| root | 1661 / 1642 / 17 (21) | 905 / 868 / 37 (92) | 2 |
+| root | 1661 / 1644 / 17 (21) | 905 / 868 / 37 (92) | 0 |
 
 Reproduce (writes one report per package; resumable):
 `DDDA_SHADER_SWEEP=<dir> cargo test -p d3d9wgsl --release --test against_d3d9 sweep -- --nocapture`
@@ -217,7 +217,7 @@ that instruction's inputs in context, and runs it alone on both sides:
 - "driver rewrite";
 - "wgpu rewrite".
 
-On Stage405 all 11 inexact shaders are "driver rewrite" (the factoring above, 1-13 ULP at the first differing instruction). The run over all 710 is pending (paused, as above).
+On Stage405 all 11 inexact shaders are "driver rewrite" (the factoring above, 1-13 ULP at the first differing instruction). The attribution of all 710 was started but paused by the head (the player was gaming) before it wrote results; it reruns with the command above.
 
 Neither rewrite is a D3D9 rule. Imitating NVIDIA's optimiser would tie the
 translation to one vendor's compiler, so the translation stays literal.
@@ -233,7 +233,7 @@ ULP counts come from cancellation after a 1-2 ULP rewrite.
   locations, with an unwritten input, and the alpha test.
 - `every_translation_makes_a_backend_pipeline`: each shader becomes a wgpu
   pipeline the way ddgpu builds it, so wgpu's inter-stage interface checks
-  and the driver's pipeline compilation run. 14,314 of the first 14,314 were built with 0 failures before the pause; the rest is pending.
+  and the driver's pipeline compilation run. All 29,198 build with 0 failures (two runs, the second resumed at Stage501 with DDDA_SHADER_FROM).
 - The sweep itself created every default translation's pipeline: 0 WGSL
   rejections.
 
@@ -250,7 +250,7 @@ ULP counts come from cancellation after a 1-2 ULP rewrite.
 
 ### Not done, limits
 
-- Rerun of root's two shaders, the attribution over all 710 and the rest of the pipeline pass: waiting for the head's resume.
+- The attribution over all 710 inexact shaders (paused; Stage405's 11 are done, all driver rewrites).
 - Coverage limits of the sweep:
   - Random constants only: loop counts are 0-4 and a0 indices are random.
   - Textures are 4x4, single level and point-sampled. Filtering and mips
