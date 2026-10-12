@@ -35,6 +35,115 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Earlier-phase method bindings (2026-10-12)
+
+`constructed_inputs.py --bind edi=0.regs_out.eax` selects an earlier
+checked producer output by zero-based phase index. Two-part bindings still
+select the last producer. Bindings are saved for the method only; subsequent
+producers retain their accepted entry distributions. Invalid phase indexes
+reject. **148 light tests pass**, including binding provenance and sequence
+replay. `L28c/phase-binding-audit.json` remains clean.
+
+Destination-first 0x004915A0 -> 0x00437BE0 -> 0x0047DF20 also records
+**0/3** for 0x00493AA0. A diagnostic confirms the first producer matches
+its accepted case, then the save-manager replay changes reads, writes,
+volatile outputs and calls. The opposite order changes destination reads,
+writes and MXCSR. Both sequences reject; no comparison was relaxed and no
+existing record was replaced. **Next:** identify shared input dependencies
+and an independently accepted setup distribution, or advance the next
+boot-priority manager recipe. Fifteen original recipes remain unfinished.
+
+**Batch handoff:** boot stop 16 is the sole addition (+1/+3), native-L28c
+**59,592 / 177,370**. All 59,591 baseline records / 177,367 cases are
+unchanged. Main merged before handoff; full Rust replay remains with head.
+
+### Bounded setup replay (2026-10-12)
+
+Guarded input strategies now re-prove a producer on accumulated setup
+state, using exact prior writes and checked aliases. They keep the original
+input distribution and all accepted-case comparisons; image-only proofs
+remain disabled on constructed state. Tests cover long bounded producers
+and legacy random producers in sequences. **147 light tests pass.**
+
+0x004915A0 now returns in the three-producer recipe, with the same proved
+208,066-instruction budget, but prior state changes its reads, writes and
+MXCSR observation. The exact comparison rejects this recipe; no fixture
+is adopted. `L28c/reproof-audit.json` confirms all baseline records unchanged
+and only the already-reported boot stop 16 addition. **Next:** investigate
+the conflicting setup inputs or an independent producer ordering.
+
+### Boot stop 16: 0x00DC8270 (2026-10-12, pending replay)
+
+**3/3 normal returns, adopted: +1 function / +3 cases.** The existing
+checked-constructor strategy replays accepted 0x00DD5ED0, then binds
+ECX to its input ECX. With guarded-stores-v1, exact constructor writes
+resolve the reset branches and virtual calls. Its proof counts **49,933
+instructions**, giving a **69,933** recorder limit; no guessed budget.
+All three cases retain eight recorded calls. Ordinary inputs still exceed
+the default limit; the constructor supplies the required object state.
+
+**145 light tests pass.** `L28c/boot16-audit.json` proves every prior
+**59,591 record / 177,367 case unchanged**, no stale mocks or promotions.
+Private native-L28c now holds **59,592 / 177,370**. Source dd2b67bd;
+main merged before handoff. No Rust build; head must replay the addition.
+**Next:** resume the 0x00493AA0 output-constructor recipe, unless another
+boot stop arrives.
+
+### Explicit checked bindings (2026-10-12)
+
+Checked producer return values can be explicit method-register proof inputs;
+other entry registers remain unknown. Mismatched bindings and ESP bindings
+reject. Stack allocation helper tests use plain compiler terminology and
+check that the return address is preserved when the callee adjusts ESP.
+**145 light tests pass; 59,591 records / 177,367 cases unchanged**,
+`L28c/bindings-audit.json`. The three-producer 0x00493AA0 recipe still
+records 0/3. **Next:** priority boot stop 16, 0x00DC8270, with checked
+0x00DD5ED0 constructor state and a proof-derived instruction budget.
+
+### Affine input relationships (2026-10-12)
+
+The guarded-store proof tracks linear expressions modulo 2^32 through full
+register copies, LEA, add/sub, saved stack words and alias-checked stores.
+Only complete cancellation produces a known value. Independent entry
+registers remain independent even if their concrete pointer witnesses match.
+Partial writes and overlapping stores discard expressions; unknown writers
+must pass the existing runtime alias guard. Unknown arithmetic operands do
+not produce carry facts from a known result.
+
+**143 light tests pass; accepted data unchanged**, `affine-audit.json`.
+The checked manager recipe now passes 0x00493C29, then stops after 7,634
+instructions at 0x00484B8E, which tests its output pointer for null. That
+pointer derives from the method's still-unbound EDI. No recorded case yet.
+The original caller 0x004964C0 passes `ESI+0xC570` to 0x00493AA0;
+constructor 0x00495FF0 builds that same member with 0x004915A0 at
+0x0049600B. The latter returns its object in EAX at 0x00491890.
+**Next:** bind the destination to that checked producer's return and admit
+only explicit setup-register bindings as proof input facts.
+
+### Checked setup sequences (2026-10-12)
+
+Main 4d7f291d merged as **afbc5c96**, preserving both recorder policies and
+main's slot-sweep strategy. `constructed_inputs.py --also-setup ADDRESS`
+now runs additional accepted original producers on accumulated state. Every
+phase must match all observations in its accepted case; changed read/call
+dependencies reject. Untouched earlier pages/writes survive, later writes
+take precedence, and register distributions and heap reservations stay intact.
+No arbitrary merging of independently generated object snapshots is used.
+
+**140 light tests pass.** Three new tests cover disjoint state, overwrites,
+changed-read refusal, register-distribution protection and retained heap
+reservations. The original 0x00437BE0 -> 0x0047DF20 sequence validates for
+all three accepted seeds. 0x00493AA0 still records **0/3**; accepted data
+stays **59,591 / 177,367**, with a clean `L28c/chain-audit.json`.
+
+The proof now passes 0x00493B86 and stops at 0x00493C29 after 7,052
+instructions. At 0x00493BF9/FE, ECX is `-0xC0E0 - EDI`; EBX is
+`EDI + 0xC0E0` at 0x00493C04, so their addition at 0x00493C24 cancels
+the input pointer. The abstract proof currently loses this relationship.
+Evidence: `chain-493aa0.log`, `chain-proof-diagnose.log`. **Next:** a
+general bounded affine-cancellation proof, with unknown flags preserved;
+no branch-value assumptions from concrete random register addresses.
+
 ### Fixed-frame inputs and final checkpoint (2026-10-12)
 
 **0x0081C330 records 3/3 and is adopted.** Its prefix at 0x0081C333 reserves

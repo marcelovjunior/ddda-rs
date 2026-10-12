@@ -39,7 +39,7 @@ def validate_state(state):
             raise ValueError('setup-written byte differs from captured state')
 
 
-def construct(setup, accepted, bindings, run, key):
+def construct(setup, accepted, bindings, run, key, initial_state=None):
     """`run(f, seed, **inputs)` must use the selected recording boundary."""
     import structured_inputs as s
     if accepted['addr'] != setup['addr'] or accepted.get('body_key') != key:
@@ -59,12 +59,24 @@ def construct(setup, accepted, bindings, run, key):
             raise ValueError('cannot identify legacy setup seed')
         seed = matches[0]
     state = {}
-    actual = run(setup, seed, capture_state=state, **s._inputs([accepted]))
+    if initial_state is not None:
+        validate_state(initial_state)
+        if initial_state['registers']:
+            raise ValueError('setup sequence must retain each accepted register distribution')
+    actual = run(setup, seed, capture_state=state,
+                 **({'initial_state': initial_state} if initial_state is not None else {}),
+                 **s._inputs([accepted]))
     expected = {k: v for k, v in accepted.items() if k not in ('addr', 'seed', 'body_key')}
     # Older accepted cases predate added x87/MXCSR observations. Compare every
     # field they actually recorded, including complete calls, reads and writes.
     if digest({k: actual.get(k) for k in expected}) != digest(expected):
         raise h.Rejected('constructed input: setup replay differs from accepted case')
+    if initial_state is not None:
+        # Capture contains only pages this phase touched; retain all earlier
+        # pages and writes. Later writes win in actual execution order.
+        state['pages'] = {**initial_state['pages'], **state['pages']}
+        state['writes'] = {**initial_state.get('writes', {}), **state.get('writes', {})}
+        state['heap'] = max(initial_state['heap'], state['heap'])
     registers = {}
     for target, source in bindings.items():
         if len(source) != 2 or source[0] not in ('regs_in', 'regs_out') or source[1] not in dict(h.GPR):
@@ -77,13 +89,49 @@ def construct(setup, accepted, bindings, run, key):
     return state, provenance
 
 
+def construct_chain(setups, bindings, run):
+    """Replay each accepted producer on preceding state; reject dependencies
+    that change any accepted observation. Two-part register sources name the
+    last producer; a leading zero-based phase index selects an earlier one.
+    Nothing is published if any phase fails.
+    """
+    if not setups:
+        raise ValueError('setup sequence must not be empty')
+    phase_bindings = [{} for _ in setups]
+    for target, source in bindings.items():
+        index = len(setups)-1
+        if len(source) == 3:
+            try:
+                index = int(source[0])
+            except (TypeError, ValueError):
+                raise ValueError('setup binding phase must be a zero-based index') from None
+            source = source[1:]
+        if not 0 <= index < len(setups):
+            raise ValueError('setup binding phase is outside the sequence')
+        phase_bindings[index][target] = source
+    state, recipes, registers = None, [], {}
+    for index, (setup, accepted, key) in enumerate(setups):
+        state, recipe = construct(setup, accepted, phase_bindings[index],
+                                  run, key, initial_state=state)
+        registers.update(state['registers'])
+        # A method binding never changes the next producer's entry registers.
+        state = {**state, 'registers': {}}
+        recipes.append(recipe)
+    state['registers'] = registers
+    validate_state(state)
+    return state, dict(rule='constructed-chain-v1', setups=recipes)
+
+
 def main():
     import lift
     import structured_inputs as s
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('method', type=lambda v: int(v, 0))
     p.add_argument('setup', type=lambda v: int(v, 0))
-    p.add_argument('--bind', action='append', default=[], metavar='ECX=regs_in.ecx')
+    p.add_argument('--also-setup', action='append', default=[], type=lambda v: int(v, 0),
+                   help='replay another checked setup on the accumulated state')
+    p.add_argument('--bind', action='append', default=[], metavar='ECX=[PHASE.]regs_in.ecx',
+                   help='bind from the last setup, or a zero-based setup phase')
     p.add_argument('--seconds', type=float, default=20)
     p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1'), default='zero-call-v1')
     args = p.parse_args()
@@ -96,9 +144,13 @@ def main():
     fs = {f['addr']: f for f in selected}
     if args.method in fs or args.method in s.quarantined(root):
         raise ValueError('method is already selected or quarantined')
-    setup = fs[args.setup]
+    setups = [fs[a] for a in [args.setup, *args.also_setup]]
     method = next(f for f in s.read(root/'patterns/structured_candidates.json') if f['addr'] == args.method)
-    accepted = [c for c in s.read(root/'vectors/lift.json') if c['addr'] == args.setup]
+    all_cases = s.read(root/'vectors/lift.json')
+    accepted = [[c for c in all_cases if c['addr'] == f['addr']] for f in setups]
+    if any(not cases for cases in accepted):
+        raise ValueError('every setup needs an accepted case')
+    del all_cases
     del selected, fs
     gc.collect()
 
@@ -111,10 +163,15 @@ def main():
                             max_seconds=args.seconds, **mode, **inputs)
 
     cases, attempts = [], []
-    for index, case in enumerate(accepted[:3], 1):
+    for index in range(1, min(3, *map(len, accepted))+1):
         seed = (args.method << 8) ^ index
         try:
-            state, recipe = construct(setup, case, bindings, run, lift.vector_key(setup))
+            if args.also_setup:
+                phases = [(f, cs[index-1], lift.vector_key(f)) for f, cs in zip(setups, accepted)]
+                state, recipe = construct_chain(phases, bindings, run)
+            else:
+                setup = setups[0]
+                state, recipe = construct(setup, accepted[0][index-1], bindings, run, lift.vector_key(setup))
             result = run(method, seed, initial_state=state, input_strategy=args.strategy)
             cases.append(dict(addr=args.method, seed=seed, body_key=lift.vector_key(method),
                               construction=recipe, **result))
