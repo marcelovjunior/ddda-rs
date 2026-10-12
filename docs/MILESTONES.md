@@ -1,5 +1,17 @@
 # Milestones
 
+### L28c boot stop 14 fixture (2026-10-12, pending replay)
+
+- **0x00DD5ED0 records 3/3**. The opt-in store-fact rule preserves its own
+  vtable and member writes across non-overlapping closed calls; the repeated
+  virtual call resolves to original 0x00DC67E0. Its proven bound is 83,137
+  instructions. Initial object contents remain unknown, and alias guards stay on.
+- Private native-L28c: **59,580 -> 59,581 functions / 177,334 -> 177,337
+  cases**. The prior movie fixture and all other accepted data are audited
+  unchanged. **119 light tests pass**; full replay is left to the head.
+- **Next action:** preview boot past this constructor, then continue the
+  remaining constructor/manager input recipes.
+
 ### L28c original setup-state fixture (2026-10-12, pending replay)
 
 - Original reset 0x00F7B170 supplies the stopped movie state required by

@@ -35,6 +35,44 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Boot stop 14: 0x00DD5ED0 (2026-10-12, pending train replay)
+
+**Records 3/3 normal-return cases and is adopted.** `guarded-stores-v1`
+proves **83,137 instructions**, with the ordinary 20,000-instruction
+allowance giving a 103,137 limit. The first aggregate 20-second trial
+recorded two seeds; the third ran separately with its own 20-second cap.
+Native-L28c grows **59,580 -> 59,581 functions / 177,334 -> 177,337 cases**.
+`L28c/stored-audit.json` compares against `stored-before-hashes.json`;
+the earlier movie batch remains unchanged too.
+
+Evidence from head/claude-2 #9660-9663, confirmed against the original
+instructions: 0x00DD5F21 writes vtable 0x0142B068 to the current object;
+0x00DC6030 initializes members after it without overwriting that word.
+The slot load at 0x00DD5F49 selects +0x2C, hence 0x00DD5F99 calls
+**0x00DC67E0**. This closed callee reads +0x6CC/+0x6D0, also initialized
+by the constructor; resolving the call alone without preserving those
+stores would still leave its branches unproven.
+
+The general rule is opt-in and has no game-address cases. It carries entry
+pointer identities through copies, LEA, saved registers and constant offsets.
+These identities are used only for exact overlap checks and loads of bytes
+already written by the traced program. Entry register values, initial object
+contents and unknown branches remain unknown. Closed callees and platform
+memsets participate in the same write tracking. Unknown writers must pass
+the existing runtime guard against every protected read, saved pointer,
+instruction byte and return address. A known overlapping store replaces the
+fact. The proof follows the real closed target rather than proposing a mock.
+
+**119 light tests pass.** Five new tests cover saved-register/closed-call
+survival, real recorder dispatch, overlapping and aliased writes, unknown
+writer guards, and refusal to treat initial registers/objects as constants.
+No full Rust replay was run. Reproduce with the normal structured recorder,
+strategy `guarded-stores-v1`, address 0x00DD5ED0; private logs/scripts are
+`L28c/stored-dd5ed0*`. No snapshot or shared-data write was made.
+**Next:** head preview/integration replay, then the remaining constructor
+and manager input recipes. Direct-route residuals are now six (including
+the reserved 0x00DB8B90); one-hop residuals are 29 after the movie batch.
+
 ### Constructor/setup inputs: current batch (2026-10-12)
 
 Main merged as **5a2d5f41**. The baseline is **59,579 functions /
