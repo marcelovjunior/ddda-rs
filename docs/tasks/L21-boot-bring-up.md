@@ -609,3 +609,139 @@ claude-6 (15):
       cleanup analysis returns zero.
     - Cause 2. Owners: claude-6 (noreturn evidence for 0x004080A0), then
       Codex (the recording).
+13. main 07c7062a (train 5: L46 and L47; stops 10 to 12 fixed). The
+    committed generated code was built as is (no gen, no LIFT_DATA).
+    Runtime game tests 46/46. The boot passes 0x00DB8B90.
+    - Stop: untranslated 0x0075BAD0, called from just before 0x00758134
+      (in 0x00758090, verified). Registers: ebx -1, esp 0x7EFFD14C,
+      ecx 0x6556DB38.
+    - 0x0075BAD0 is 909 bytes with no fixture on main. It is in the
+      look-ahead table (`sBbsRpgMain`'s constructor, depth 2).
+    - Cause 2. Owner: Codex, who has recorded it 3/3 (board #9642); the
+      adoption is pending.
+14. main 50b358f8 (train 6: Codex's 19 functions). The committed code was
+    built as is. Runtime game tests 46/46. The boot passes 0x0075BAD0.
+    - Stop: untranslated 0x00DD5ED0, called from just before 0x004AC8AB
+      (in 0x004AC8A0, verified). ecx = esi = 0x65ABD710, esp 0x7EFFD1A0.
+    - 0x00DD5ED0 (1,575 bytes, no fixture) is a constructor. Its loop
+      builds 128 sub-objects at this+0x30+k*0x6E0.
+    - Codex's recording stopped at its `call eax`, 0x00DD5F99, which
+      dispatches through the vtable that 0x00DD5F21 stores (0x0142B068).
+    - Static evidence (board #9660): the only call in between is
+      0x00DC6030 (verified). It stores from esi+4 upward and calls only
+      `_memset`, on esi+0x1A0 and above, so the vtable survives. The call
+      therefore always goes to slot 0x2C, 0x00DC67E0 (verified, 55 bytes).
+    - Cause 2. Owner: Codex.
+15. main 5525e431 (train 8: Codex recorded 0x00DD5ED0 and 0x00F7DE40).
+    The committed code was built as is. Runtime game tests 46/46. The boot
+    passes 0x00DD5ED0.
+    - Stop: untranslated 0x00DC7D00, called from just before 0x00DD1BD2
+      (in 0x00DD1B70, verified, called by 0x00DD5ED0 at 0x00DD601A).
+      Registers: ecx = esi = 0x65AF83A0, esp 0x7EFFD15C.
+    - 0x00DD1B70 builds a sound object at this+0x3AC90:
+      - vtable 0x0142B030, then 0x00DC6030, then vtable 0x0142B0D8;
+      - a 1 MiB buffer from the allocator (0x00CF5E20(0x018D0C00), its
+        vtable[0x20] with size 0x100000 and alignment 0x10), kept in
+        [this+0x6A0];
+      - then a call to 0x00DC7D00 (127 bytes, slot 14 of 0x0142B0D8).
+    - 0x00DC7D00 calls 0x00DC6030, then this->vtable[0x2C], which is the
+      verified 1-byte `ret` 0x005F35C0 here. It then clears the whole
+      buffer: `_memset([this+0x6A0], 0, 0x100000)`.
+    - That fill alone touches 256 pages, so every case trips Codex's
+      256-page recorder guard ("Page limit" in the L28 Results).
+    - Cause 2. Owner: Codex (board #9685/#9686).
+16. main b88555c9 (train 9: Codex's bounded memset as one lazy byte range,
+    0x00DC7D00 and 9 more). The committed code was built as is. Runtime
+    game tests 46/46. The boot passes 0x00DC7D00 and the rest of
+    0x00DD1B70.
+    - Stop: untranslated 0x00DC8270, called from just before 0x00DD644D
+      (in 0x00DD5ED0, ecx = this = 0x65ABD710).
+    - 0x00DC8270 (935 bytes, no fixture; "Instruction limit" in the L28
+      Results) resets the sound engine:
+      - 0x400 records of 0x40 bytes at this+0x3B340;
+      - 0x80 records of 0x34 bytes at this+0x4B340;
+      - stop 14's 128 sub-objects: 0x00DC6030, then vtable[0x2C], which
+        is 0x00DC67E0 by #9660's argument;
+      - six 0x00DC6DC0 calls.
+    - The third part repeats the work behind 0x00DD5ED0's
+      83,137-instruction proof, so the recorder's instruction limit is far
+      exceeded (an estimate from the disassembly).
+    - Cause 2. Owner: Codex (board #9722).
+17. main 3f3ca505 (train 10: Codex's 0x00DC8270). The boot no longer
+    stops: **it reaches the main loop and presents frames.** Runtime game
+    tests 46/46.
+    - **The main loop.** The boot ran for 1,500 s (killed at the limit)
+      with an out-of-process host-stack sampler,
+      `research/runtime/stack_sampler.py` (dbghelp and the debug build's
+      PDB; one host frame per lifted `f_XXXXXXXX`, so the lifted frames
+      are the guest call stack). 73 samples, 15 s apart:
+      - The main thread runs WinMain 0x004079E0 → main loop 0x00DF0D20 →
+        `sBbsRpgMain::vf06` 0x0041DD60, the frame.
+      - 47 samples are in the render step 0x00DAED10 → 0x00DAB480 →
+        DrawPrimitive → `d3d9draw::snapshot` → `flush` →
+        `GuestMemory::read_bytes`.
+      - About 15 are in the update step 0x00DAF000 (0x00FEDB80,
+        0x00FED710, 0x00FEDC00, 0x00DC4770), plus hand-offs of the guest
+        lock. The chains change between samples: frames are running.
+      - The other guest threads wait in WaitForSingleObject on their own
+        handles: two worker pools (0x0041FF00 ×5 and 0x00DBDC90 ×7),
+        0x00DBDB80, 0x00DB9F40, 0x00DAC090, 0x011A4350 and 0x0041FFE0.
+        0x00DDDFA0 sleeps; the sound thread mixes.
+    - **The frames.** `DDDA_CAPTURE` for 15 min, read with
+      `research/runtime/capture_stats.py`:
+      - 4,846 Presents, about 5.4/s in the debug build (before the
+        page-wise copy below).
+      - From frame 3 on every frame is the same: 6 Clear, 12
+        DrawPrimitive, 2 StretchRect, and two dynamic-buffer uploads
+        (2 MiB and 0.5 MiB, rotating over three pairs).
+      - No texture is uploaded and the file holds only 35 distinct blobs:
+        a static, untextured screen.
+    - **Upload cost.** `GuestMemory::read_bytes` copied byte by byte (an
+      atomic-capable load per byte, about 10 host frames each in debug).
+      It now copies page by page: one slice copy in serial mode, aligned
+      4-byte atomic loads in parallel mode (9e6ad430). A unit test checks
+      it against byte-wise reads across page boundaries, on lazy and
+      unbacked pages and at faults, in both modes.
+    - **Why the screen is static.** A service trace,
+      `DDRUNTIME_TRACE_SERVICES=<file>` (7002cee2, 9ccea188, 5969549f),
+      writes each named service call with its caller, arguments, the
+      strings they point to and the result. Calls that can block are
+      also written when they start. It shows:
+      - Guest thread 4104 is the archive loader. It opens
+        `nativePC\rom\bbs_rpg.arc` (0xAA8F5A bytes) and reads it with
+        double-buffered ReadFileEx of 0x20000 bytes and
+        SleepEx(INFINITE, TRUE). It issued 40 of the 86 reads, created
+        textures from them, and then made no further call.
+      - It was also missing from the stack dump: the thread had ended.
+        `run_thread` only recorded a guest thread's stop in
+        `kernel.faults`; it is now also printed (d922412f).
+      - The message: "guest thread 4104 stopped: call to untranslated code
+        at 0x01146420, called from before 0x000008f0".
+      - Other trace facts: the main loop polls GetFileAttributesA
+        `nativePC\sa\DX9\BbsRpg.arc` once a frame; that file really is
+        absent from the install, so "not found" is right. It also calls
+        GetAsyncKeyState 128 times a frame.
+    - **Stop (hidden in the loader thread):** 0x01146410 (16 bytes,
+      verified) is `cmp [esp+4],0; push edi; mov edi,ecx;
+      jne 0x01146420; xor al,al; pop edi; ret 4`.
+      - 0x01146420 (203 bytes, no fixture) is the rest of that body, split
+        off by Ghidra: it uses edi = this and ends with
+        `mov al,1; pop edi; ret 4`.
+      - The "caller 0x8F0" is the saved edi.
+      - The same class as stop 11. Cause 2. Owner: claude-6 (function
+        boundary), with Codex for a fixture.
+    - **Census** (`research/runtime/split_jumps.py` and the shared
+      lift.json): verified functions that jump into another function's
+      entry that their own record's body does not cover. There are 7 live
+      cases:
+      - 0x006F3230 → 0x006F3242;
+      - 0x009472C0 → 0x00947493;
+      - 0x01137DD0 → 0x01137DF3;
+      - 0x01146410 → 0x01146420;
+      - 0x012F68B0 / 0x01304A9E → 0x012F693F;
+      - 0x012F69E0 / 0x01304C6E → 0x012F6A6F;
+      - 0x01300D70 / 0x013076EE → 0x01300DFF.
+
+      Eight more are already covered on main (0x0057D24D, 0x00786D74,
+      0x00BB922B, 0x00E0FB9C, 0x012F9D82, 0x013006FE, 0x0130070B,
+      0x01300749).
