@@ -497,7 +497,7 @@ def local_alloc_sites(address, body):
     return result
 
 
-def frame_exit(address, body, limit=4096, _cache={}):
+def frame_exit(address, body, limit=4096):
     """Exit ESP of a call-free caller-frame helper, derived from its code.
 
     Ordinary functions return with ESP = entry ESP + 4 + N. Frame helpers
@@ -511,6 +511,21 @@ def frame_exit(address, body, limit=4096, _cache={}):
     indirect or outward jump, trap, unmodelled ESP write, aliasing store
     before a stack load, or disagreement. None keeps the ordinary contract.
     """
+    result = _frame_walk(address, body, limit)
+    return None if result == 'dynamic' else result
+
+
+def moves_frame(address, body, limit=4096):
+    """A call-free helper whose exit a constant-cleanup mock cannot copy:
+    a caller-frame exit (frame_exit), or ESP written from a value the walk
+    cannot resolve (`__alloca_probe` 0x012F2280: `xchg esp, eax`, exit =
+    entry ESP + 4 - entry EAX). Alignment (`and esp`) and `leave` do not
+    count."""
+    result = _frame_walk(address, body, limit)
+    return result == 'dynamic' or caller_frame(result)
+
+
+def _frame_walk(address, body, limit, _cache={}):
     if body is None:
         return None
     key = (address, frozenset(body), code)
@@ -639,7 +654,7 @@ def _frame_exit(address, body, limit):
         else:
             written = {i.reg_name(r) for r in i.regs_access()[1]}
             if 'esp' in written or 'sp' in written:
-                return None
+                return 'dynamic' if mn in ('xchg', 'mov', 'add', 'sub', 'lea') or mn.startswith('cmov') else None
             for name in names:
                 if name in written or name[1:] in written or (name[1] + 'l') in written or (name[1] + 'h') in written:
                     regs[name] = None
@@ -648,7 +663,8 @@ def _frame_exit(address, body, limit):
                     value = operand(i, ops[1], regs, stores, clobbered) if mn == 'mov' and len(ops) == 2 else None
                     stores, clobbered = store(address_of(i, o, regs), o.size, value, stores, clobbered)
         if regs['esp'] is None:
-            return None
+            # mov/lea/add/sub into ESP from an unresolved value
+            return 'dynamic' if mn in ('mov', 'lea', 'add', 'sub') and ops and ops[0].type == 1 else None
         todo.append((pc + i.size, tuple(sorted(regs.items())), stores, clobbered))
     return exits.pop() if len(exits) == 1 else None
 
@@ -725,7 +741,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     `frame_contracts` maps closed callees with a caller-frame exit
     (frame_exit, e.g. a promoted `__SEH_prolog4`) to that contract. Their
     nested frame ends at the return PC with exactly the derived ESP rather
-    than an ESP at or above the call's (the prolog returns below it).
+    than an ESP at or above the call's (the prolog returns below it). The
+    value 'return-pc' (a call-free ESP-moving helper such as
+    `__alloca_probe`) ends it at the first arrival at the return PC.
 
     `mockzero-v1` keeps the default random pages and registers but makes
     every mocked callee return zero (eax, ecx, edx, xmm0 and any st0 push;
@@ -951,7 +969,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     entering = [False]  # a call was just made: the next instruction is the callee's entry
     terminal_call = [None]  # return PC of a root call at a noreturn site (terminal runs)
     stopped = [False]       # a terminal call ended the case
-    frame_contracts = {a: (c[0], c[1], tuple(tuple(t) for t in c[2])) for a, c in (frame_contracts or {}).items()}
+    frame_contracts = {a: c if isinstance(c, str) else (c[0], c[1], tuple(tuple(t) for t in c[2]))
+                       for a, c in (frame_contracts or {}).items()}
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
     valid_flags = [0x8d5]
@@ -1018,7 +1037,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if entering[0]:
             entering[0] = False
             contract = frame_contracts.get(addr)
-            if contract is not None:
+            if contract == 'return-pc':
+                # a call-free helper with no derivable exit (it moves ESP by a
+                # value): it can reach the caller's return PC only by returning
+                frames[-1] = (frames[-1][0], 0)
+            elif contract is not None:
                 regs_now = {"esp": esp_now, "ebp": uc_.reg_read(UC_X86_REG_EBP)}
                 exit_esp = regs_now[contract[0]] + contract[1]
                 for sign, k in contract[2]:

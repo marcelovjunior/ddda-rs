@@ -160,4 +160,40 @@ class FrameContractTests(unittest.TestCase):
         self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
 
 
+    # alloca-like: push ecx; lea ecx,[esp+4]; sub ecx,eax; mov eax,ecx; pop ecx;
+    # xchg esp,eax; mov eax,[eax]; mov [esp],eax; ret  (exit = entry ESP + 4 - EAX)
+    PROBE='51 8d4c2404 2bc8 8bc1 59 94 8b00 890424 c3'.replace(' ','')
+
+    def walk(self, text):
+        body,(p1,p2)=self.image(bytes.fromhex(text))
+        with p1,p2:
+            return h.frame_exit(0x400000,body),h.moves_frame(0x400000,body)
+
+    def test_esp_moved_by_a_value_is_a_frame_helper(self):
+        self.assertEqual(self.walk(self.PROBE),(None,True))
+        self.assertEqual(self.walk(self.PROLOG)[1],True)
+        # alignment and leave are not: push ebp; mov ebp,esp; and esp,-16; leave; ret
+        self.assertEqual(self.walk('558bec83e4f0c9c3'),(None,False))
+        self.assertEqual(self.walk('558bec5dc3'),(('esp',4,()),False))
+
+    def test_return_pc_contract_ends_a_call_free_helper_frame(self):
+        # caller: push ebp; mov ebp,esp; mov eax,0x40; call P; call M (mocked);
+        # mov esp,ebp; pop ebp; ret.  P = PROBE at 0x400100 (closed)
+        caller=bytes.fromhex('558becb840000000e8f3000000e8ee0100008be55dc3')
+        image=bytearray(caller.ljust(0x1000,bytes([0xcc])))
+        probe=bytes.fromhex(self.PROBE)
+        image[0x100:0x100+len(probe)]=probe
+        image=bytes(image)
+        body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(caller,0x400000)]
+        with (patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),
+              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),
+              patch.object(h,'static_pop',return_value=0)):
+            run=lambda **kw:h.run_sparse(0x400000,7,body=body,end=0x400000+len(caller),
+                                         lifted=frozenset({0x400100}),**kw)
+            with self.assertRaises(h.Rejected):
+                run()  # the probe returns 0x40 bytes below the call's ESP
+            c=run(frame_contracts={0x400100:'return-pc'})
+        self.assertEqual([e['target'] for e in c['calls']],[0x400200])
+
+
 if __name__=='__main__':unittest.main()

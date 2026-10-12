@@ -202,6 +202,7 @@ class InputTests(unittest.TestCase):
               patch.dict(trials.lift.BODY_INFO,{a:dict(body=[a]) for a in (0x10,0x20,0x30,0x40,0x60,0x70)}),
               patch.object(h,'run_sparse',side_effect=run),
               patch.object(h,'frame_exit',side_effect=lambda a,body:('ebp',4,()) if a in (0x10,0x20) else ('esp',4,())),
+              patch.object(h,'moves_frame',return_value=False),
               contextlib.redirect_stdout(io.StringIO())):
             (root/'structured-random.jsonl').write_text('')
             with self.assertRaisesRegex(ValueError,'archive the trial logs'):

@@ -252,9 +252,10 @@ def promote(root, seeds=3, seconds=20):
     moves of the SEH helpers. Recorded cases that mocked a promoted entry
     would change meaning (replay and recorder run closed targets for real).
     An ordinary call-free entry that some case mocks therefore stays ext: a
-    mock with arbitrary returns is a faithful stand-in for it. A caller-frame
-    helper (frame_exit) is promoted even when mocked, because no mock can
-    move the caller's frame: as in any boundary refresh, the callers whose
+    mock with arbitrary returns is a faithful stand-in for it. A frame-moving
+    helper (harness.moves_frame: a caller-frame exit, or ESP moved by a
+    value as in `__alloca_probe`) is promoted even when mocked, because no
+    constant-cleanup mock can move the caller's frame: as in any boundary refresh, the callers whose
     cases mock it are re-lifted against the new closed set and re-recorded
     with their previous distribution. It is promoted only if every such
     caller records again; otherwise it stays ext (repeat until stable), so
@@ -293,6 +294,8 @@ def promote(root, seeds=3, seconds=20):
         contract = h.frame_exit(a, g['body'])
         if h.caller_frame(contract):
             g['frame_exit'] = contract
+        elif h.moves_frame(a, g['body']):
+            g['frame_exit'] = 'return-pc'
         elif a in mocked:
             continue
         new = _rerecord(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
