@@ -1,5 +1,16 @@
 # Milestones
 
+### L28c fixed-frame checkpoint (2026-10-12, pending replay)
+
+- **0x0081C330 records 3/3** after separating its fixed local frame from
+  outgoing mock arguments. **137 light tests pass**; all 24 wrapper cases
+  re-record identically.
+- Private native-L28c: **59,591 / 177,367**, +10/+30 this session. Audit
+  proves all 59,581 baseline records and 177,337 cases unchanged.
+- Fifteen recorder residuals remain unfinished, alongside two other-lane
+  entries and nine unconfirmed boundaries. **Next action:** trace the first
+  unproven read/branch after the manager setup for 0x00493AA0.
+
 ### L28c wrapper fixtures (2026-10-12, pending replay)
 
 - Frameless virtual-tail wrappers use an opt-in mock argument strategy;

@@ -35,6 +35,56 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Fixed-frame inputs and final checkpoint (2026-10-12)
+
+**0x0081C330 records 3/3 and is adopted.** Its prefix at 0x0081C333 reserves
+0x204 local bytes, released at 0x0081C64F. The old heuristic included those
+516 bytes in the mock's argument count: call 0x0081C41B popped 524 instead
+of 8, and RET read zero. The opt-in wrapper strategy now excludes one fixed
+entry allocation only when every decoded return has the matching immediate
+frame cleanup. Final frame teardown is also excluded from caller argument
+cleanup. All ordinary return/page/flag checks remain; this is still a mock
+input strategy, not an assertion of an unavailable callee's ABI.
+
+**137 light tests pass. All 24 accepted wrapper-strategy cases re-record
+identically**, including the earlier seven functions. The first private
+recheck driver lacked Windows multiprocessing's main guard; it was stopped
+and rerun as a sequential driver. It changed no accepted data. Successful
+recheck: `L28c/recipes-frame-recheck-fixed.log` and
+`recipes-wrapper-recheck.json`.
+
+Final checkpoint: **59,591 functions / 177,367 cases**, cumulative **+10/+30**.
+`L28c/recipes-final-audit.json` proves all **59,581 baseline records and
+177,337 cases unchanged**, no promotions/removals/stale mocks. Recording ran
+serially through heavy.py as codex. No Rust build/replay, shared-data write,
+base-data write or push. Data remains open; base is native-train3-orig.
+
+**Original 37-entry queue accounting:** 11 now have fixtures in this set
+(two before this session, nine added here). The separate new boot stop
+0x00DC7D00 makes ten additions this session. Remaining 26:
+
+- 0x00DB8B90 and 0x00C9B350 are owned/recorded by the lifter lane; they
+  were not imported into this private baseline or duplicated here.
+- Nine unconfirmed entry addresses remain reserved for entry validation:
+  0x00620000, 0x00620003, 0x00620004, 0x00670002, 0x00670003,
+  0x007A0003, 0x007A0004, 0x007D0005, 0x00C40000.
+- Fourteen finite-work residuals still reject: 0x00493AA0, 0x00494D80,
+  0x004A06B0, 0x0046A150, 0x0046A2D0, 0x0048AB50, 0x0048F330,
+  0x00495150, 0x00495520, 0x004A0C00, 0x0050A110, 0x00815C60,
+  0x00C9E0F0, 0x00DBA780. All received the new finite-work policy;
+  four also received evidenced manager setup, without an accepted result.
+  Construction alone has not established a sound bound for these paths.
+- 0x00D29AF0 still requires a nonempty buffer and two distinct allocation
+  results. Original instructions at 0x00D29B42/45 load the buffer/count;
+  calls at 0x00D29B4C/66 allocate 0x48 and 0x1000 bytes, and DIV at
+  0x00D29CF3 requires nonzero count. No verified setup recipe supplying
+  those inputs was established in this batch; no guessed game state added.
+
+**Next action:** trace the first unproven branch/read in the constructed
+0x00493AA0 path, then supply only an evidenced producer or general bound.
+The remaining fifteen recorder entries are explicitly unfinished; this
+checkpoint does not claim that all 37 requested recipes are implemented.
+
 ### Frameless virtual wrappers (2026-10-12)
 
 **Seven functions / 21 normal-return cases adopted:** 0x005EC920,

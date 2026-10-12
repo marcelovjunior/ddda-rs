@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations
 
 
 class WrapperTests(unittest.TestCase):
@@ -18,8 +18,8 @@ class WrapperTests(unittest.TestCase):
             data = bytes.fromhex(code)
             self.assertFalse(virtual_tail_wrapper(0, lambda a,n: data[a:a+n]))
 
-    def run_caller(self, suffix, strategy):
-        caller = bytes.fromhex('6a01 6a02')
+    def run_caller(self, suffix, strategy, prefix=''):
+        caller = bytes.fromhex(prefix+' 6a01 6a02')
         caller += b'\xe8' + struct.pack('<i', 0x400100-(0x400000+len(caller)+5))
         caller += bytes.fromhex(suffix)
         data = bytearray(b'\xcc'*4096)
@@ -42,6 +42,23 @@ class WrapperTests(unittest.TestCase):
     def test_caller_cleanup_is_not_applied_twice(self):
         result = self.run_caller('83c408 c3', 'wrapper-call-v1')
         self.assertEqual(result['calls'][0]['out']['pop'], 0)
+
+    def test_fixed_frame_requires_matching_all_return_epilogues(self):
+        def sites(code):
+            data=bytes.fromhex(code)
+            body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(data,0)]
+            return fixed_frame_allocations(0,body,lambda a,n:data[a:a+n])
+        self.assertEqual(sites('8b01 83ec20 85c0 7400 83c420 c3'),{2})
+        for code in ('8b01 83ec20 85c0 7400 83c410 c3',
+                     '8b01 83ec20 85c0 7400 83c420 c3 c3',
+                     '8b01 83ec20 83ec20 85c0 7400 83c420 c3'):
+            self.assertEqual(sites(code),set())
+
+    def test_fixed_frame_is_not_counted_as_wrapper_arguments(self):
+        result=self.run_caller('83c420 c3','wrapper-call-v1',
+                               '8b01 83ec20 85c0 7400 89442404')
+        self.assertEqual(result['calls'][0]['out']['pop'],8)
+        self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+4)
 
 
 if __name__ == '__main__':

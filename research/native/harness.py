@@ -1447,6 +1447,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     own = {}
     saved_pushes = saved_push_sites(address, body) if end is not None else set()
     local_allocations = local_alloc_sites(address, body) if end is not None else set()
+    if input_strategy == 'wrapper-call-v1' and end is not None:
+        from wrapper_inputs import fixed_frame_allocations
+        local_allocations |= fixed_frame_allocations(address,body,code)
 
     def on_ext(uc_, pc, size, _):
         if stopped[0]:
@@ -1523,6 +1526,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 writes_esp = any(cleanup.reg_name(r) == 'esp' for r in cleanup.regs_access()[1])
                 if (cleanup.mnemonic == "add"
                         and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
+                    if input_strategy == 'wrapper-call-v1':
+                        following = next(dmd.disasm(code(after+cleanup.size,15),after+cleanup.size,count=1),None)
+                        frame_sizes = {next(dmd.disasm(code(site,15),site,count=1)).operands[1].imm
+                                       for site in local_allocations}
+                        if (following is not None and following.mnemonic in ('ret','retn','repz ret')
+                                and cleanup.operands[1].imm in frame_sizes):
+                            break  # fixed local-frame teardown, not call arguments
                     pop = max(0, pop - max(0, cleanup.operands[1].imm - later))
                     if later:
                         break
