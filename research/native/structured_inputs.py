@@ -224,6 +224,22 @@ def _inputs(cases):
     return {} if strategy == 'random' else dict(input_strategy=strategy)
 
 
+FALLBACK_INPUTS = ({}, dict(zero_inputs=True), dict(input_strategy='small-v1'),
+                   dict(input_strategy='mockzero-v1'), dict(input_strategy='objects-v1'))
+
+
+def _rerecord_any(f, closed, frames, noreturn, kw, seeds, seconds):
+    """The previous distribution first, then the standard ones in order: a
+    boundary change can make the old inputs unusable (a caller of a promoted
+    `__alloca_probe` with random EAX now really allocates), and any
+    distribution gives valid fixtures."""
+    for k in [kw] + [k for k in FALLBACK_INPUTS if k != kw]:
+        new = _rerecord(f, closed, frames, noreturn, k, seeds, seconds)
+        if new:
+            return new
+    return []
+
+
 def _rerecord(f, closed, frames, noreturn, kw, seeds, seconds):
     """Fresh cases for `f` under the given closed boundary (its own mode)."""
     a, key, new, start = f['addr'], lift.vector_key(f), [], time.monotonic()
@@ -298,7 +314,7 @@ def promote(root, seeds=3, seconds=20):
             g['frame_exit'] = 'return-pc'
         elif a in mocked:
             continue
-        new = _rerecord(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
+        new = _rerecord_any(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
         if new:
             eligible[a] = (g, new)
     affected = {}
@@ -324,7 +340,7 @@ def promote(root, seeds=3, seconds=20):
                 continue
             finally:
                 lift.release_body(a, f['size'])
-            new = _rerecord(g, now, frames, noreturn, _inputs(old[a]), seeds, seconds)
+            new = _rerecord_any(g, now, frames, noreturn, _inputs(old[a]), seeds, seconds)
             if new:
                 redone[a] = (g, new)
             else:
