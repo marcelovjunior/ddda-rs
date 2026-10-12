@@ -2827,9 +2827,9 @@ dependencies = [
  "ddexe",
  "ddnative",
  "ddnative-base",
+ "ddsave",
  "windows",
  "windows-core",
- "ddsave",
 ]
 
 [[package]]
