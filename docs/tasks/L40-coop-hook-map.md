@@ -52,4 +52,57 @@ places where the original assumes one player decide how big that is.
 
 ## Results
 
-(open)
+Done by claude-7: [COOP_ON_REBUILD.md](../COOP_ON_REBUILD.md). Research
+only; nothing built or run. Evidence: Ghidra decompiles (read-only) and
+static scans of the lifted sources (method in its section 1.1).
+
+**Found [exe]:**
+- "The player" is one pointer, `sPlayerManager+0x99C`
+  (`*0x018FA4EC`). The party is four pointers `+0x99C..+0x9A8`, with the
+  index accessor `0x0047EC30`.
+- The stage set-up `0x00501020` creates the Arisen and the pawns, and
+  stores each pawn's index (`+0x5854`) and master (`+0x585C`). The
+  per-frame party upkeep is `0x0043D2B0`.
+- The Arisen's input is a per-unit path (`uPlayerBase::vf200`
+  `0x00B6AEA0`). It merges all four local pads and the keyboard, and
+  rotates the stick by the global camera (`0x00B51EE0`). Pawns fill the
+  same fields from their AI pad.
+- Pawn follow (`0x00585D00`) reads slot 0, not the master pointer.
+- Enemies request camera work through `0x004219A0` (59 callers).
+
+**Counts [scan]:**
+
+| Global | Readers |
+|---|---:|
+| `sPlayerManager` | 606 (284 read the Arisen; 7 name the last slot) |
+| `sCamera` | 380 |
+| `sQlocInput` | 131 |
+| `sMouse` | 104 |
+| `sKeyboard` | 22 |
+| `sSave` | 218 |
+| the Arisen's record `sGameSys+0xA76D0`, by fixed offset | 175 (GUI 96) |
+
+Each is broken down by system in the doc. At least 38 functions
+compare a unit with the Arisen (identity).
+
+**Decisions (proposals, recorded in the doc):**
+- Each machine sees its own Arisen in slot 0. P2 is a `uPlayer` in slot
+  3 on the host (the slot COOP_DESIGN gives P2); the host's Arisen is in
+  slot 3 on the client. So camera, HUD, menus, input and the save record
+  stay single per machine.
+- The host's simulation gets a seat-relative slot 0 through one lifter
+  rule over the 284 readers. The current unit is a thread-local set by
+  the pass walkers.
+- A remote pad goes through `vf200`. The snapshot is taken at step 54
+  (`sNetworkExt`).
+- Host-authoritative only: unit jobs, the shared `MtRandom` at
+  `0x018D017C` and the QPC timing rule out lockstep.
+- Stage 1 (two Arisen, one calm area): about 6 adapters, all cold
+  except `vf200`.
+
+**Open:**
+- the setter of `uPlayerBase+0x3348`;
+- the size of the Arisen record;
+- whether a replica's pose updates with its move suppressed;
+- whether `uPlayer` is as large as `uCmc`;
+- the per-site review of the 128 unattributed readers.
