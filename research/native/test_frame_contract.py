@@ -238,5 +238,19 @@ class FrameContractTests(unittest.TestCase):
             c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
         self.assertEqual([e['out']['pop'] for e in c['calls']],[0,4])
 
+    def test_later_argument_after_register_setup_and_branch_barrier(self):
+        # Setting up this before pushing HRESULT must not hide the saved
+        # prefix. A branch still ends the conservative straight-line scan.
+        for setup, accepted in [('8bcb',True),('eb00',False)]:
+            code=bytes.fromhex('8b01 6a55 6a11 6a22 ffd0 '+setup+' 50 e8ee000000 c3')
+            body,(p1,p2)=self.image(code)
+            with p1,p2,patch.object(h,'static_pop',return_value=8):
+                if accepted:
+                    c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+                    self.assertEqual([e['out']['pop'] for e in c['calls']],[8,8])
+                else:
+                    with self.assertRaises(h.Rejected):
+                        h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+
 
 if __name__=='__main__':unittest.main()

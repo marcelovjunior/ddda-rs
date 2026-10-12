@@ -1,5 +1,18 @@
 # Milestones
 
+### L28c next boot route recorded (2026-10-12, pending integration replay)
+
+- `0x00DA9EC0` and `0x01104470` now have three original-code fixtures
+  each. The indirect-call cleanup scan now crosses neutral register setup
+  before the later argument push; branch and ESP barriers remain. The
+  constructor's image-backed inputs avoid its byte-divisor zero at
+  `0x01104491`. **42 light tests pass** including the new barrier test.
+- Private native-L28c: **59,542 → 59,544 records / 177,220 → 177,226
+  cases**; all old records/case multisets unchanged by hash audit. All
+  four requested boot-route functions now have fixtures. The set remains
+  open for preview, with full replay deferred to the integration train.
+- **Next action:** resume boot and continue the remaining no-fixture queue.
+
 ### L28c render-call fixtures (2026-10-12, pending integration replay)
 
 - Fixed mock cleanup when a later direct callee consumes arguments pushed

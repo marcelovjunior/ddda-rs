@@ -1389,7 +1389,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                         pop = max(0, pop - (consumed - later))
                         break
                     later -= consumed
-                elif later and not writes_esp and not cleanup.mnemonic.startswith('j')                         and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
+                elif not writes_esp and not cleanup.mnemonic.startswith('j') \
+                        and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
                     pass
                 else:
                     break

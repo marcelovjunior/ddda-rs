@@ -595,3 +595,34 @@ frozen**, per head: 0x01129030 and 0x01129460 are ready for preview now;
 0x00DA9EC0 still rejects and is being traced first, then 0x01104470.
 Constructor constant-loop analysis remains open (stack counters, copied
 initializers and closed-callee cost); no speculative budget change landed.
+
+### L28c priority boot-route follow-up (2026-10-12)
+
+**0x00DA9EC0 and 0x01104470 now record 3/3 each.** The preceding batch
+already added 0x01129030 and 0x01129460, so all four requested boot-route
+functions have accepted fixtures. Private pair: **59,542 → 59,544 records,
+177,220 → 177,226 cases**. `L28c/boot-route-audit.json` compares against
+the post-render hash manifest and proves every old record/case multiset
+unchanged. Missing prepared candidates: **220 → 218**. No promotions,
+removals or unrelated changes; native-L17 and native-train3 remain untouched.
+
+For 0x00DA9EC0 the original trace reached its own return at 0x00DAA4A4,
+but ESP was four bytes too high. At 0x00DA9F2E the COM call is followed
+by `mov ecx,[esp+0x20]` (0x00DA9F30), before the HRESULT push and call
+to 0x00DA89B0. The cleanup scan previously stopped at that neutral setup
+because it had not yet seen a later push. It now crosses non-branching,
+non-ESP-writing instructions before as well as after that push. Its
+24-instruction bound and branch/call/stack barriers remain. A synthetic
+MOV case passes; replacing it with a jump still rejects, demonstrating the
+conservative barrier. **42 light tests pass** across the four test files.
+
+0x00DA9EC0 uses zero-call-v1. 0x01104470 uses image-v1: zero-based
+distributions correctly reject at the `div ecx` at 0x01104491, whose
+divisor is the byte loaded from its first argument +0x25 at 0x01104489.
+With the cleanup correction, all three image-backed trials return normally.
+No input bytes or arithmetic were repaired during execution.
+
+Evidence: `L28c/trace-da9ec0.log`, `trace-00da9ec0.json`,
+`boot-route.jsonl`, and `boot-route-audit.json`. Recording used heavy.py;
+no Rust replay. The data set stays **open, not frozen**, as explicitly
+requested by head, so claude-2 can preview these additions immediately.
