@@ -11,9 +11,13 @@
 //! This is the checked, portable backing RUNTIME.md proposes to start with;
 //! a reserved host arena can replace it later behind the same interface,
 //! once measured. The guest's threads share one address space: each holds
-//! its own [`GuestMemory`] handle ([`GuestMemory::share`]), and only the
-//! holder of the guest lock (crate::runtime) accesses it.
-use ddnative_base::mem::{zero_page, Mem, PageTable, PAGES};
+//! its own [`GuestMemory`] handle ([`GuestMemory::share`]). The table and
+//! the pages are atomic (ddnative-base's `PageTable`), so threads may
+//! access them at the same time (crate::threads' parallel mode): every
+//! guest load is an acquire load and every store a release store of the
+//! accessed bytes, which on x86-64 are plain moves and give x86's own
+//! (TSO) order for single accesses.
+use ddnative_base::mem::{load_at, store_at, Mem, PageTable, PAGES};
 use std::fmt;
 
 /// Pages and permission bits: ddnative-base's, which the lifted code's
@@ -44,25 +48,16 @@ pub struct Overlap {
     pub page: u32,
 }
 
-/// The address space: ddnative-base's page table (fixed-size tables, so a
-/// page index needs no bounds check and the tables never move).
-type Space = PageTable;
-
-struct SharedSpace(std::cell::UnsafeCell<Space>);
-
-// SAFETY: the address space is accessed only by the host thread holding the
-// guest lock (crate::runtime); the lock's hand-over orders those accesses.
-unsafe impl Sync for SharedSpace {}
-unsafe impl Send for SharedSpace {}
-
-/// A handle to a guest address space.
+/// A handle to a guest address space: ddnative-base's page table
+/// (fixed-size atomic tables, so a page index needs no bounds check and
+/// the tables never move).
 pub struct GuestMemory {
-    space: std::sync::Arc<SharedSpace>,
+    space: std::sync::Arc<PageTable>,
 }
 
 impl Default for GuestMemory {
     fn default() -> Self {
-        GuestMemory { space: std::sync::Arc::new(SharedSpace(std::cell::UnsafeCell::new(PageTable::default()))) }
+        GuestMemory { space: std::sync::Arc::new(PageTable::default()) }
     }
 }
 
@@ -76,16 +71,8 @@ impl GuestMemory {
         GuestMemory { space: self.space.clone() }
     }
 
-    fn s(&self) -> &Space {
-        // SAFETY: see SharedSpace; no handle's mutable access overlaps this
-        // one, because only the guest-lock holder runs and it borrows the
-        // space for single accesses only.
-        unsafe { &*self.space.0.get() }
-    }
-
-    fn s_mut(&mut self) -> &mut Space {
-        // SAFETY: as for `s`.
-        unsafe { &mut *self.space.0.get() }
+    fn s(&self) -> &PageTable {
+        &self.space
     }
 
     /// Map [addr, addr + len) rounded out to whole pages, zero-filled, with
@@ -96,8 +83,8 @@ impl GuestMemory {
             return Err(Overlap { page: (p as u32) * PAGE });
         }
         for p in pages {
-            self.s_mut().pages[p] = Some(zero_page());
-            self.s_mut().perms[p] = perm;
+            self.s().backed_page(p);
+            self.s().set_perm(p, perm);
         }
         Ok(())
     }
@@ -110,21 +97,21 @@ impl GuestMemory {
             return Err(Overlap { page: (p as u32) * PAGE });
         }
         for p in pages {
-            self.s_mut().perms[p] = perm | LAZY;
+            self.s().set_perm(p, perm | LAZY);
         }
         Ok(())
     }
 
     fn mapped(&self, p: usize) -> bool {
-        self.s().pages[p].is_some() || self.s().perms[p] & LAZY != 0
+        !self.s().page(p).is_null() || self.s().perm(p) & LAZY != 0
     }
 
     /// Change the permissions of mapped pages in [addr, addr + len).
     pub fn protect(&mut self, addr: u32, len: u32, perm: u8) {
         for p in page_range(addr, len) {
             assert!(self.mapped(p), "protect of unmapped page {:#010x}", p as u32 * PAGE);
-            let lazy = self.s().perms[p] & LAZY;
-            self.s_mut().perms[p] = perm | lazy;
+            let lazy = self.s().perm(p) & LAZY;
+            self.s().set_perm(p, perm | lazy);
         }
     }
 
@@ -133,12 +120,12 @@ impl GuestMemory {
     }
 
     pub fn perm(&self, addr: u32) -> u8 {
-        self.s().perms[(addr / PAGE) as usize] & (READ | WRITE)
+        self.s().perm((addr / PAGE) as usize) & (READ | WRITE)
     }
 
     /// Pages that have host memory behind them (diagnostics).
     pub fn backed_pages(&self) -> usize {
-        self.s().pages.iter().filter(|p| p.is_some()).count()
+        self.s().backed_count()
     }
 
     /// Privileged copy into mapped pages, ignoring permissions (the loader
@@ -149,7 +136,7 @@ impl GuestMemory {
             if !self.mapped((a / PAGE) as usize) {
                 return Err(Fault { addr: a, width: 1, write: true, reason: "unmapped page" });
             }
-            *self.byte_mut(a) = b;
+            self.set_byte(a, b);
         }
         Ok(())
     }
@@ -161,7 +148,7 @@ impl GuestMemory {
             let need = if write { WRITE } else { READ };
             let reason = if !self.mapped(p) {
                 "unmapped page"
-            } else if self.s().perms[p] & need == 0 {
+            } else if self.s().perm(p) & need == 0 {
                 if write { "page is not writable" } else { "page is not readable" }
             } else {
                 continue;
@@ -178,15 +165,18 @@ impl GuestMemory {
     }
 
     fn byte(&self, a: u32) -> u8 {
-        match &self.s().pages[(a / PAGE) as usize] {
-            Some(page) => page[(a % PAGE) as usize],
-            None => 0, // a lazy page not written yet
+        let page = self.s().page((a / PAGE) as usize);
+        if page.is_null() {
+            return 0; // a lazy page not written yet
         }
+        // SAFETY: a backed page holds PAGE bytes
+        unsafe { load_at(page.add((a % PAGE) as usize), 1) as u8 }
     }
 
-    fn byte_mut(&mut self, a: u32) -> &mut u8 {
-        let page = self.s_mut().pages[(a / PAGE) as usize].get_or_insert_with(zero_page);
-        &mut page[(a % PAGE) as usize]
+    fn set_byte(&self, a: u32, v: u8) {
+        let page = self.s().backed_page((a / PAGE) as usize);
+        // SAFETY: as for `byte`
+        unsafe { store_at(page.add((a % PAGE) as usize), 1, v as u32) }
     }
 
     /// A load of `width` (1, 2 or 4) bytes. Within one page that is
@@ -199,11 +189,13 @@ impl GuestMemory {
             let p = (addr / PAGE) as usize;
             let s = self.s();
             // READ is only ever set on mapped pages (map, map_lazy, protect)
-            if s.perms[p] & READ != 0 {
-                let Some(page) = s.pages[p].as_ref() else { return 0 }; // lazy: zero until written
-                let mut v = [0u8; 4];
-                v[..width as usize].copy_from_slice(&page[off..off + width as usize]);
-                return u32::from_le_bytes(v);
+            if s.perm(p) & READ != 0 {
+                let page = s.page(p);
+                if page.is_null() {
+                    return 0; // lazy: zero until written
+                }
+                // SAFETY: width bytes inside a backed page
+                return unsafe { load_at(page.add(off), width as usize) };
             }
         }
         self.load_checked(addr, width)
@@ -217,11 +209,13 @@ impl GuestMemory {
         }
         let off = addr % PAGE;
         if off + width <= PAGE {
-            // within one page: a single slice read (a lazy page reads zero)
-            let Some(page) = self.s().pages[(addr / PAGE) as usize].as_ref() else { return 0 };
-            let mut v = [0u8; 4];
-            v[..width as usize].copy_from_slice(&page[off as usize..(off + width) as usize]);
-            u32::from_le_bytes(v)
+            // within one page: one access (a lazy page reads zero)
+            let page = self.s().page((addr / PAGE) as usize);
+            if page.is_null() {
+                return 0;
+            }
+            // SAFETY: width bytes inside a backed page
+            unsafe { load_at(page.add(off as usize), width as usize) }
         } else {
             (0..width).fold(0, |v, k| v | (self.byte(addr.wrapping_add(k)) as u32) << (8 * k))
         }
@@ -233,11 +227,12 @@ impl GuestMemory {
         let off = (addr % PAGE) as usize;
         if off + width as usize <= PAGE as usize {
             let p = (addr / PAGE) as usize;
-            let s = self.s_mut();
+            let s = self.s();
             // WRITE is only ever set on mapped pages
-            if s.perms[p] & WRITE != 0 {
-                let page = s.pages[p].get_or_insert_with(zero_page);
-                page[off..off + width as usize].copy_from_slice(&v.to_le_bytes()[..width as usize]);
+            if s.perm(p) & WRITE != 0 {
+                let page = s.backed_page(p);
+                // SAFETY: width bytes inside a backed page
+                unsafe { store_at(page.add(off), width as usize, v) };
                 return;
             }
         }
@@ -251,7 +246,7 @@ impl GuestMemory {
             panic!("{f}");
         }
         for k in 0..width {
-            *self.byte_mut(addr.wrapping_add(k)) = (v >> (8 * k)) as u8;
+            self.set_byte(addr.wrapping_add(k), (v >> (8 * k)) as u8);
         }
     }
 }
@@ -295,14 +290,19 @@ impl Mem for GuestMemory {
             let (p, off) = ((a / PAGE) as usize, (a % PAGE) as usize);
             let n = (PAGE as usize - off).min(out.len() - k);
             let s = self.s();
-            if s.perms[p] & READ == 0 {
+            if s.perm(p) & READ == 0 {
                 out[k] = self.load_checked(a, 1) as u8; // faults
                 k += 1;
                 continue;
             }
-            match s.pages[p].as_ref() {
-                Some(page) => out[k..k + n].copy_from_slice(&page[off..off + n]),
-                None => out[k..k + n].fill(0),
+            let page = s.page(p);
+            if page.is_null() {
+                out[k..k + n].fill(0);
+            } else {
+                for (j, b) in out[k..k + n].iter_mut().enumerate() {
+                    // SAFETY: inside a backed page
+                    *b = unsafe { load_at(page.add(off + j), 1) as u8 };
+                }
             }
             k += n;
         }
@@ -313,7 +313,7 @@ impl Mem for GuestMemory {
     /// fast path leaves those to store), and the table lives as long as any
     /// handle to this address space and never moves.
     fn page_table(&self) -> Option<std::ptr::NonNull<PageTable>> {
-        std::ptr::NonNull::new(self.space.0.get())
+        Some(std::ptr::NonNull::from(&*self.space))
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").

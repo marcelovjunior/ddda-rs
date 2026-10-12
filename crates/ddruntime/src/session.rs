@@ -85,7 +85,10 @@ impl Session {
         cpu.esp -= 4;
         self.mem.set_u32(cpu.esp, RETURN_SENTINEL);
         let (mem, registry) = (&mut self.mem, &self.registry);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registry.call(mem, &mut cpu, target)));
+        // in parallel mode the guest code runs without the guest lock
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::threads::without_lock(|| registry.call(mem, &mut cpu, target))
+        }));
         match r {
             Ok(Ok(())) => Outcome::Returned(cpu),
             Ok(Err(u)) => Outcome::Unbound(u),

@@ -150,10 +150,8 @@ impl Registry {
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
         match self.get(target) {
             Some(b) => {
-                if let Binding::Service(_) = b {
-                    // an API call: where a guest thread's time slice may end
-                    crate::threads::maybe_yield();
-                }
+                // a service runs holding the guest lock (crate::threads)
+                let _lock = matches!(b, Binding::Service(_)).then(crate::threads::service);
                 b.function()(m, cpu);
                 Ok(())
             }
