@@ -192,7 +192,15 @@ impl Registry {
                 b.function()(m, cpu);
                 Ok(())
             }
-            None => Err(self.unbound(m, cpu, target)),
+            None => {
+                // L51: the diagnostic emulator runs untranslated exe code
+                #[cfg(feature = "emu")]
+                if crate::emu::enabled() && crate::emu::in_text(target) {
+                    crate::emu::run(self, m, cpu, target);
+                    return Ok(());
+                }
+                Err(self.unbound(m, cpu, target))
+            }
         }
     }
 
