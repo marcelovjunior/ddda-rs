@@ -29,6 +29,12 @@ These rules hold for every brief in `docs/tasks/` that points here.
   (the slot caps `CARGO_BUILD_JOBS` at 3). The slot waits, runs the command, releases
   itself and passes the exit code through. `heavy.py status` shows the
   holders. Batch your edits so heavy builds are rare.
+- **Code the lifted crates call.** Never `#[inline(always)]` in
+  `ddnative-base` (or a readable crate) on anything the generated code
+  calls: debug builds (opt-level 0) copy it into each of millions of call
+  sites. One such accessor made the shard crates four times larger and the
+  runtime examples too large to link (over 2 GB). Use `#[inline]`; release
+  builds inline it anyway.
 - **Runtime work without the game (brief L36).** `ddruntime`'s `game`
   feature (on by default) is what pulls `ddnative`. Runtime work outside
   the game entry (services, threads, files, user32, D3D9, input, audio,
