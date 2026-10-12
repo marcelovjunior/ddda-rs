@@ -1031,6 +1031,20 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 `python scripts/inventory.py summary` gives the live count.
 
+### Readable ports wired over lifted bodies (L24)
+
+The MT math library has readable, verified ports in `crates/mtmath`
+(docs/MATH.md): 29 functions, 1,497 call sites. Each has an adapter with
+the lifted ABI listed in `crates/mtmath/src/abi.rs` `PORTS`; `lift.py gen`
+writes `pub use mtmath::abi::f_X` into the shard mod.rs (an explicit
+import shadows the lifted glob), so direct calls, `call_lifted` and
+`lifted::all()` reach the port; the lifted body stays as `replaced::f_X`.
+Tests: `crates/mtmath/tests/differential.rs` (lifted vectors + edge
+vectors, `research/native/vectors_math.py`);
+`research/native/math_liveness.py` checks callers never read an
+unreproduced xmm lane. The MT core library (L33, `crates/mtcore`,
+docs/CORE.md) is wired the same way; `lift.py` reads both crates' `PORTS`.
+
 ## Exact x87 arithmetic (L05)
 
 `Cpu.st` holds an x87 FSAVE image: eight 80-bit values, tags, TOP,
