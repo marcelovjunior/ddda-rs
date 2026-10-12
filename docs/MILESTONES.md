@@ -1,5 +1,13 @@
 # Milestones
 
+### L28c exact-register serializer (2026-10-12, pending replay)
+
+- **+1/+3:** 0x00C9E0F0 records 3/3 with explicit exact-register proof
+  inputs. **163 tests pass**; private **59,603 / 177,403**.
+- Audit: all prior **59,602 functions / 177,400 cases unchanged**.
+- **Next action:** finish two checked manager chains, then refresh the
+  residual census against the completed train-11 inventory.
+
 ### L28c string/constructed fixtures (2026-10-12, pending replay)
 
 - **+3/+9:** two string helpers and a checked constructed self-copy, 3/3

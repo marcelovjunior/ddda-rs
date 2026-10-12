@@ -35,6 +35,34 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Exact-register serializer inputs (2026-10-12, pending replay)
+
+Opt-in **guarded-values-v1** supplies the bounded proof with the exact
+initial GPR values recorded for that case, excluding ESP (already governed
+by the stack contract). It retains guarded-input-v1's page/register input
+distribution, alias checks, mock matching and return checks. Other
+strategies still leave entry values unknown unless explicitly bound by a
+checked setup. The same opt-in mode accepts checked constructor state.
+Source **0e2e5260**; **163 light tests pass**, including comparison with
+ordinary synthetic original execution and rejection of a changed return.
+
+**0x00C9E0F0 records 3/3:** the explicit source pointer resolves the null
+test at 0x00D00D68. All three traces prove **24,681 instructions**, giving
+limit **44,681**. Private native-L28c is **59,603 functions / 177,403 cases**,
+**+1/+3** since the prior handoff. `L28c/exact-values-audit.json` confirms
+all prior **59,602 / 177,400 unchanged**, no stale mocks, promotions or
+unexpected edits. Frozen native-train3-orig remains untouched. No Rust build;
+head replay required. This addition follows the ten queued for train 11.
+
+Four original recipes remain, including 0x00493AA0 set aside. Two evidenced
+manager chains are queued: save manager 0x00437BE0 then record constructor
+0x00489F80 for 0x004A0C00; allocator-manager initializer 0x00740590 then
+buffer constructor 0x00D29820 for 0x00D29AF0. The initializer publishes the
+allocator pointer to 0x0187662C at 0x00740833. Every producer must still
+match all accepted observations. 0x00815C60 requires floating comparison
+facts beyond the integer/zero-vector proof; no assumptions added.
+**Next:** finish those trials, then the post-train-11 residual census.
+
 ### String and constructed-copy fixtures (2026-10-12, pending replay)
 
 **+3 functions / +9 cases, all 3/3:** 0x0048F330 and 0x00495520 use
