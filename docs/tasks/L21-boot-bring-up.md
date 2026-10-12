@@ -619,3 +619,16 @@ claude-6 (15):
       look-ahead table (`sBbsRpgMain`'s constructor, depth 2).
     - Cause 2. Owner: Codex, who has recorded it 3/3 (board #9642); the
       adoption is pending.
+14. main 50b358f8 (train 6: Codex's 19 functions). The committed code was
+    built as is. Runtime game tests 46/46. The boot passes 0x0075BAD0.
+    - Stop: untranslated 0x00DD5ED0, called from just before 0x004AC8AB
+      (in 0x004AC8A0, verified). ecx = esi = 0x65ABD710, esp 0x7EFFD1A0.
+    - 0x00DD5ED0 (1,575 bytes, no fixture) is a constructor. Its loop
+      builds 128 sub-objects at this+0x30+k*0x6E0.
+    - Codex's recording stopped at its `call eax`, 0x00DD5F99, which
+      dispatches through the vtable that 0x00DD5F21 stores (0x0142B068).
+    - Static evidence (board #9660): the only call in between is
+      0x00DC6030 (verified). It stores from esi+4 upward and calls only
+      `_memset`, on esi+0x1A0 and above, so the vtable survives. The call
+      therefore always goes to slot 0x2C, 0x00DC67E0 (verified, 55 bytes).
+    - Cause 2. Owner: Codex.
