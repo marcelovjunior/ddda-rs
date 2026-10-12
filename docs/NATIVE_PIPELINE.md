@@ -1381,6 +1381,73 @@ and 0x00648AF0 follow theirs). This drops 45 address-taken constants
 `add eax, 4`, ASCII such as 0x00706465) and ends 13 tables at the text
 after them ("xml", "pcf", UTF-16 "config" after 0x01407180).
 
+## x87 state save and restore (L46)
+
+**Hardware facts.** `research/runtime/x87_state_oracle.c` (MSVC x86, run
+by `x87_state_oracle.ps1` on the AMD Ryzen 7 5700X3D, WOW64) measured the
+108-byte 32-bit protected-mode image:
+- **Words:** CW, SW and TW, each followed by a reserved word that always
+  reads FFFFh, whatever FRSTOR loaded.
+- **FIP/FCS 23h/FOP:** from the last *non-control* x87 instruction.
+  `fnstcw`, `fnstsw`, `fnclex` and `fwait` keep them. FOP is the opcode's
+  low 3 bits and the ModRM byte (11 bits).
+- **FDP/FDS 2Bh:** from the last memory operand. Register-only instructions
+  keep them.
+- **Registers:** ST0 to ST7 in TOP order.
+- **After the save:** FNSAVE leaves the FNINIT state (CW 037Fh, SW 0, TW
+  FFFFh, pointers 0).
+- **FRSTOR:** keeps CW, SW and the registers, and recomputes the tag of
+  every non-empty register from its contents (a 2.0 tagged "zero" comes
+  back "valid").
+
+**Model.** `ddnative-base` `X87::fnsave(m, addr, fip, fop, fdp)` writes
+that image from its FSAVE-format state and resets to FNINIT.
+`X87::frstor(m, addr)` loads the image and normalizes the tags with a host
+`frstor`/`fnsave` round trip. The model has no guest pointers, so the
+emitter proves them at each FNSAVE (`fnsave_pointers`). They are those of
+the last non-control x87 instruction on the same straight line: no branch
+target, call or FRSTOR in between, a memory operand whose base and index
+registers are unchanged since, and no FS/GS segment. Otherwise the lift is
+rejected. The depth analysis (`x87_depth_check`, `x87_deficit`) empties the
+stack at FNSAVE and restores the saved depth at FRSTOR. The recorder's
+oracle (`x87_host.Oracle.state_transfer`, `save_image`, `normalized`)
+tracks the pointers dynamically and writes the same bytes. Tests:
+- Rust `x87_fnsave_frstor_match_cpu`: the guest image against the host's
+  own FNSAVE of the same state, and the E5 tag recomputation.
+- Python `test_state_image_follows_the_hardware`: the oracle's E5 bytes.
+- An emitted-versus-recorded program with `fnsave`/`frstor`.
+- Rejection cases for unprovable pointers.
+
+`fnstenv`/`fldenv` occur nowhere in the image's functions (census over
+every inventory extent), so they stay unsupported. `fnsave`/`frstor` occur
+only in 0x012F1C9D.
+
+**Frame tails, completed (L46).**
+- **Calls inside a tail:** a frame tail may contain calls.
+  `harness.frame_exit(calls=True)` steps over a direct call with its
+  proven `static_pop`, and the exit is compared signed. An underestimated
+  pop only lowers the exit, so a false tail is impossible. This finds the
+  CRT x87 tails 0x01300749 and 0x0130070B (`pop edx; ret` after error
+  reporting through calls), and four "entries" that are code inside their
+  jumper (0x0056532A, 0x0057D24D, 0x00786D74, 0x00BB922B).
+- **Emission:** L45 decoded such tails into the jumper but still emitted
+  the jump as a tail call, because `lift`'s `inside()` and the x87 depth
+  walk excluded every inventory entry. memcpy's `jmp __VEC_memcpy` went
+  through `call_ext` to code that is never lifted standalone. A jump into
+  an inlined tail now stays local (`lift.inlined_tail`). The gate reports
+  records that still leave as "tail call into its own inlined code", and
+  `refresh` re-lifts them.
+
+**x87 helpers promoted closed.** A mock leaves the x87 stack and control
+word alone, so it is no stand-in for a helper doing x87 work.
+`structured_inputs.py promote --address` names the entries to consider
+(here: callees of a function that cannot lift until they are closed). A
+helper whose arms do x87 work is promoted even when mocked. A closed body
+takes x87 inputs only on request (`lift(x87_inputs=True)`, kept by
+`seed_closed_contracts` from the record's `x87_entry`). Its need
+(`X87_NEED`) is checked at every caller, and the entry deficit of an ext
+body walks through closed callees with a known effect (L45).
+
 ## Instruction steps (L27b, L47)
 
 `gen` can also emit, per lifted function, a step function `s_X(m, cpu,

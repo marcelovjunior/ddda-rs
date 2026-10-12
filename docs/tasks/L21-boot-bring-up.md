@@ -534,3 +534,78 @@ claude-6 (15):
    - claude-6's not-lifted group on the same route is unchanged:
      0x004AB440, 0x00DFECF0, 0x00E0E470, 0x00F9FBA0, 0x012E1A13,
      0x012F9D82, 0x012F1C9D.
+10. Preview on native-L28c (59,559 records: Codex's 0x00419100 and 11
+    constructor/title functions; generated locally, restored). Runtime
+    game tests 46/46. The boot passes the archive manager and more of
+    `sBbsRpgMain`'s constructor.
+    - Stop: "read of undefined x86 flag 0x1" (CF, the lifter's PARTIAL flag
+      state) in the lifted CRT `_qsort` 0x012EEB50. Guest frames: _qsort ←
+      0x00E0F590 ← 0x00E11E30 ← `sShader2`'s constructor 0x00E121D0 ←
+      `sBbsRpgMain`'s constructor 0x0041B400 ← 0x0041B3C0 ← app init
+      0x00DF3AC0 ← WinMain. Registers at the fault: eax 0xA89, ecx 0xA8A,
+      ebx 4, esp 0x7EFFD008, ebp 0x7EFFD114, esi 0x653E9654,
+      edi 0x653E6C30.
+    - 0x00E0F590 sorts 4-byte entries with the comparator 0x00E0F520
+      (verified; CMP then SBB, well-formed). In `_qsort` and `__shortsort`
+      (0x012EEAC0) every CF read follows a CMP, so the source document
+      (the disassembly) shows no undefined read. The fault comes from the
+      lifted body's flag model (e.g. after DIV / INC, after the comparator
+      call, or a branch join). Cause 2 (lifter). Owner: claude-6.
+11. Scratch preview (not committed): task/L21-boot + task/L46-x87-state
+    (c61bbf35, INC/DEC leave an undefined CF undefined), generated from
+    native-L28c. Runtime game tests 46/46. The boot passes `_qsort`.
+    - L27b's per-instruction steps are opt-in since 24c4f5c4
+      (LIFT_INSTRUCTIONS=1). Before the head's b84b3e44, a gen without
+      steps stopped every lifted call: `Registry::call` sent every bound
+      target into the step executor, which knows only steps and services,
+      so `__heap_init` stopped with MissingInstruction 0x012FE354. The run
+      used a local one-line fallback; main now has the real fix.
+    - Stop: untranslated 0x00E0FB9C, reached by a jump, so there is no
+      return address (ecx 0x653343D0, esp 0x7EFFB348, eax 0xA8A). The
+      record for 0x00E0FB80 (`this` in ecx, one stack argument, `ret 4`;
+      it searches the array at [this+0x28], count [this+0x34], for
+      arg & ~0xFFF) lifted only its 28-byte head. `jne 0x00E0FB9C` leaves
+      for the chunk that Ghidra splits off as a function of its own.
+      native-L28c's verification gaps list it as "stale body: 73
+      instructions from 0x00E0FB9C not lifted". Cause 2 (lifter). Owner:
+      claude-6 (L46's frame-tail records). Fixed in native-L46 (84
+      instructions, the chunk local).
+    - Its six direct callers are all virtual (vf10 0x00F94480, 0x00FA8FE0,
+      0x010082D0, 0x0117D310; vf09 0x0112E4D0; 0x0117D1D0), so the static
+      look-ahead, which follows vtables only from its known roots, did not
+      reach it.
+    - The look-ahead (`research/runtime/title_lookahead.py`; LIFT_DATA
+      selects the data set) now also lists the "verified" functions whose
+      record still has a verification gap. On native-L28c with two hops:
+      30 of 82.
+      - 16 stale bodies, all in the CRT: the two `memcpy` variants
+        0x012EDE40/0x012EFEA0 (`__VEC_memcpy` tails, claude-6), plus
+        `__initptd`, `___updatetmbcinfo`, `__write`, `___lock_fhandle`,
+        `_fclose`, `__read`, `__close`, `_raise`,
+        `__IsNonwritableInCurrentImage`, `___DestructExceptionObject`,
+        `__getstream`, `__alloc_osfhnd`, `__sopen_helper` and 0x01302F75.
+        These are 5 to 8 instructions each, mostly error paths.
+      - 13 unproven jump tables (0x0044CAC0, 0x004593E0, 0x004298B0,
+        0x004606A0, 0x004B72B0, 0x00789010, 0x00797BA0, 0x00BC1A00,
+        0x00FA0130, 0x00441FB0, 0x0044D1F0, 0x004594A0, 0x0047A2A0).
+      - One "tail call into its own inlined code" (0x00786CA0).
+12. Scratch preview (not committed): main + task/L21-boot +
+    task/L46-x87-state. Generated from the head's merged preview data,
+    native-preview5 (59,572 records: main, claude-6's native-L46 and
+    Codex's native-L28c). gen writes `patterns/verification_gaps.json`
+    into LIFT_DATA, so it ran on a hard-linked copy. Runtime game tests
+    46/46. The boot passes 0x00E0FB80 on main's executor, and more of
+    `sBbsRpgMain`'s constructor.
+    - Stop: untranslated 0x00DB8B90, called from just before 0x0044F67A
+      (constructor 0x0044F500). Registers: eax = ecx = edi = 0x68000060,
+      esp 0x7EFFD19C, ebp 0x7EFFD1A8.
+    - 0x00DB8B90 is a 73-byte base constructor (vtable 0x0142A428) with
+      20+ callers, and it has no fixture (`lift_novector.json`).
+    - Codex's L28 Results give the cause. It pushes one argument for
+      0x00DB8AC0. That function's normal exit reuses the argument slot
+      and tail-jumps to LeaveCriticalSection through IAT 0x0139D164,
+      which pops four bytes. Its failure path calls 0x004080A0 (which
+      calls `__invoke_watson`, then INT3), so the recorder's static
+      cleanup analysis returns zero.
+    - Cause 2. Owners: claude-6 (noreturn evidence for 0x004080A0), then
+      Codex (the recording).
