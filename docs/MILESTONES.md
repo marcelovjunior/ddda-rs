@@ -1,5 +1,26 @@
 # Milestones
 
+### L45 function tails, gate and boot triage (2026-10-12, pending train 4)
+
+- **Evidence:** table jumps proven on every path (both memcpy variants
+  16/16, tails past Ghidra's end lifted), frame tails (`__VEC_memcpy`)
+  and EH4 scope code (all 39 L27b scope targets) decoded into their
+  functions. `gen` no longer declares functions with verification gaps:
+  44 unproven tables remain, against 59,173 of 59,500 expected verified
+  on the train-2 base. native-L45: 33 stale records refreshed in place,
+  everything else hash-identical. native-L45b (train 3): 12 boot
+  functions recorded (0x00DFECF0, `___crtExitProcess`, `_purecall`, …),
+  audit ok. The discovery boundary rule drops 58 non-code admissions.
+  L27b is merged on `task/L27b-integrate`.
+- **Checked:** 134 Python tests plus `test_steps.py`. **Not checked:**
+  `gen` and the Rust replay (train), `tests/options.rs`.
+- **Blockers:** `__VEC_memcpy` has no vector (no input reaches its size
+  range); x87 interior helpers 0x012F1C9D and 0x01304753; mock-return-1
+  loops 0x00410000 and 0x00E0D750.
+- **One next action:** train 4 merges native-L45 (train-2 base) and
+  native-L45b (train-3 base) per address, regenerates and replays; see
+  [L45 Results](tasks/L45-function-tails.md#results).
+
 ### L28b recorder batch (2026-10-12, pending integration replay)
 
 - The opt-in `zero-call-v1` input strategy supplies a call from an aligned

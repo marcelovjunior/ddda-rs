@@ -1336,6 +1336,19 @@ saved registers on the stack. Such an entry is decoded inline as the
 jumper's shared tail. Three entries qualify (0x012F9D82, 0x013006FE,
 0x00E0FB9C), jumped to by six functions.
 
+**EH4 scope code.** Filter funclets and `__except`/`__finally` bodies are
+reached only through `_except_handler4` dispatch, never by a branch, yet
+they are code of the function that registers the scope table. A body that
+pushes a table next to a call to `__SEH_prolog4` or a push of
+`__except_handler4` (both found by inventory name) gets the filter and
+handler of each try level it stores (`mov`/`and [ebp-4]`; a level from a
+register reads the records in order up to the first invalid one, which
+is the next table's cookie header) as decode roots
+(`lift.eh4_scope_targets`). This covers all 39 scope targets L27b found
+missing from the selected instruction keys, and no address outside the
+L27 census. Recorded cases raise no exceptions, so this code is lifted
+and stepped at run time, but no vector executes it.
+
 **Verification gaps.** `lift.verification_gaps` (run by `gen`) lists the
 functions that are replayed but not declared verified, with reasons in
 `patterns/verification_gaps.json`: a direct transfer to an address that is
@@ -1343,7 +1356,7 @@ not a known function, import or platform model; a table jump the current
 lifter cannot prove complete (other slots may reach code no vector ran,
 mostly input-indexed switches); a stale body (the current lifter decodes
 code the record lacks: memcpy lifted before L45). Records with table
-dispatch or naming a frame tail are re-decoded.
+dispatch, naming a frame tail or registering an EH4 table are re-decoded.
 `structured_inputs.py refresh` re-lifts stale ext records in place and
 records cases with their previous distribution and then the listed
 strategies, keeping cases until every proven table target is reached
