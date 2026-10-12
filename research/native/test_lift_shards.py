@@ -20,6 +20,10 @@ class ShardTests(unittest.TestCase):
             repo = Path(tmp)
             (repo / "Cargo.toml").write_text('[workspace]\nresolver="2"\nmembers=["crates/*", "crates/ddlift/lift_*"]\nexclude=["crates/ddlift"]\n[workspace.package]\nedition="2021"\nlicense="MIT"\npublish=false\n')
             shutil.copytree(root / "crates/ddnative-base", repo / "crates/ddnative-base")
+            # Shards depend on mtmath (L24); with no PORTS table, gen wires nothing.
+            (repo / "crates/mtmath/src").mkdir(parents=True)
+            (repo / "crates/mtmath/Cargo.toml").write_text('[package]\nname="mtmath"\nversion="0.1.0"\nedition.workspace=true\n')
+            (repo / "crates/mtmath/src/lib.rs").write_text('')
             for i in range(lift.SHARDS):
                 dest = repo / f"crates/ddlift/lift_{i:02}"
                 (dest / "src").mkdir(parents=True)

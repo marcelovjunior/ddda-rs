@@ -15,6 +15,7 @@ test = false
 
 [dependencies]
 ddnative-base = { path = "../ddnative-base" }
+mtmath = { path = "../mtmath" }
 ddlift-00 = { path = "../ddlift/lift_00" }
 ddlift-01 = { path = "../ddlift/lift_01" }
 ddlift-02 = { path = "../ddlift/lift_02" }

@@ -29,6 +29,16 @@ These rules hold for every brief in `docs/tasks/` that points here.
   (the slot caps `CARGO_BUILD_JOBS` at 3). The slot waits, runs the command, releases
   itself and passes the exit code through. `heavy.py status` shows the
   holders. Batch your edits so heavy builds are rare.
+- **Runtime work without the game (brief L36).** `ddruntime`'s `game`
+  feature (on by default) is what pulls `ddnative`. Runtime work outside
+  the game entry (services, threads, files, user32, D3D9, input, audio,
+  network, Steam, movies) builds and tests with
+  `cargo test -p ddruntime --no-default-features`. That is a light build:
+  no heavy slot, `CARGO_BUILD_JOBS=4`. Without the feature a session still
+  loads the exe and binds every service; a call into game code stops as
+  untranslated. Tests and examples that run lifted code carry
+  `#[cfg(feature = "game")]` or `required-features = ["game"]`, and run
+  in the slot as before.
 - **Batched verification (the merge train), since 2026-10-11 23:00.** Do
   not run the full `ddnative` build or required-vector replay for each
   step. Builds are the bottleneck: each worktree recompiles every ddlift
