@@ -1044,8 +1044,13 @@ opening (codex-31), route perf (codex-29).
     - debug info: full 84 s, line tables 76 s, none 71 s; typeck plus
       borrowck take ~37 s regardless;
     - opt-level 1: 492 s, of which crate-local ThinLTO is 339 s;
-    - release at opt-level 3: 661 s; 528 s with LTO off;
+    - release at opt-level 3: 661 s; 528 s with LTO off; opt-level 2
+      without LTO 549 s; opt-level 1 without LTO 408 s. Release settings
+      stay as they are until a ddperf replay shows what each costs at run
+      time;
     - peak RSS ~3 GB per shard compiler.
+  - Third-party crates are optimised in dev/test builds (aa8e6a3e):
+    d3d9wgsl's driver comparison went from 745 s to 52 s.
     heavy.py now gives a slot that runs alone with 20 GB free five cargo
     jobs, and runs every job in a Windows Job Object (orphaned rustc/cargo
     die with it; the idle watchdog uses the job's CPU accounting).
