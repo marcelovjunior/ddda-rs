@@ -1716,3 +1716,34 @@ opening (codex-31), route perf (codex-29).
   blocker and owner.
 - **One next action:** claude-6's L50 (boot stop 17, the archive loader),
   then the title screen.
+
+## Milestone 2026-10-12: the boot reaches the title stage (emulator fallback, L51)
+
+- **L51 (head):** `ddruntime` feature `emu` (off by default; enabled at run
+  time with `DDRUNTIME_EMU_FALLBACK=1`).
+  - A call into .text with nothing bound runs the original machine code in
+    Unicorn 2.0.1, on the guest's own pages mapped in place.
+  - Calls to bound functions leave the emulator and run natively. Registers,
+    EFLAGS, x87 (FNSAVE image), MXCSR, XMM and FS (a GDT descriptor at the
+    TEB) cross both ways.
+  - Instances are pooled per thread.
+  - Every emulated entry is logged with its caller (`DDRUNTIME_EMU_LOG`).
+  - It is diagnostic: shipped code stays lifted and verified.
+- **First real run (main + L51, 15 min):** no stop. Only 5 untranslated
+  entries were needed:
+  - 0x01146420 (stop 17, L50);
+  - 0x01325580, 0x01325830, 0x013271E0, 0x012F4E74 (indirect-call
+    entries missing from the inventory).
+  The service trace shows the title stage: `Title.arc`,
+  `movie\title\title_A.wmv`, the title BGM (`Tittle_DDN.sngw`,
+  `gamestart.sngw`), `root.arc`, the shader package and the system
+  textures and fonts.
+- **Release build (claude-2):** the main loop presents 60.5-60.9 frames/s,
+  the game's own MaxFPS limiter. The cold release build took ~2.6 h.
+- **Build:** L52 splits the lifted code into 32 shards (512 KiB address
+  regions; one shard: 33 s and 1.5 GB peak instead of ~75 s and 3 GB).
+  Release shards are built at opt-level 1.
+- **Next actions:**
+  - ddplay with the fallback, a screenshot of the title (claude-2);
+  - the 5 entries translated (claude-6);
+  - train 15 (L51, L52).
