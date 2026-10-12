@@ -90,7 +90,7 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, ClearCall, Vec<DrawCall>) {
     uploads.push(Upload::Buffer { resource: 0x301, bytes: [0u16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].iter().flat_map(|i| i.to_le_bytes()).collect() });
     let clear = ClearCall {
         rects: vec![], flags: 7, colour: rng.next(), z: rng.pick(&[0.4f32, 0.7, 1.0]), stencil: rng.next() % 256,
-        targets: [Some(back_buffer()), None, None, None], depth: Some(depth_target()), viewport: [0, 0, W, H, 0, 0],
+        targets: [Some(back_buffer()), None, None, None], depth: Some(depth_target()), viewport: [0, 0, W, H, 0, 0], scissor: None, srgb: false,
     };
     let mut draws = Vec::new();
     for _ in 0..4 {

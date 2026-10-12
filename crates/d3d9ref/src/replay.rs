@@ -48,7 +48,7 @@ impl Oracle {
     /// ends at once). Returns the frame and each query's sample count.
     pub fn render_counted(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target,
                           spans: &[std::ops::Range<usize>]) -> Result<(Frame, Vec<u32>), String> {
-        let (raw, counts) = self.render_all(uploads, clear, draws, std::slice::from_ref(read), spans)?;
+        let (raw, counts) = self.render_all(uploads, clear.as_slice(), draws, std::slice::from_ref(read), spans)?;
         Ok((rgba_frame(read, &raw[0])?, counts))
     }
 
@@ -58,14 +58,21 @@ impl Oracle {
     /// target 0 for the clear; the clear's other targets are bound at their
     /// indices, so a clear covers an MRT set.
     pub fn render_targets(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
-        self.render_all(uploads, clear, draws, reads, &[]).map(|(r, _)| r)
+        self.render_all(uploads, clear.as_slice(), draws, reads, &[]).map(|(r, _)| r)
     }
 
-    fn render_all(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], reads: &[Target],
+    /// [`Oracle::render_targets`] with several clears in order before the
+    /// draws.
+    pub fn render_cleared(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        let refs: Vec<&ClearCall> = clears.iter().collect();
+        self.render_all(uploads, &refs, draws, reads, &[]).map(|(r, _)| r)
+    }
+
+    fn render_all(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
                   spans: &[std::ops::Range<usize>]) -> Result<(Vec<Vec<u8>>, Vec<u32>), String> {
         unsafe {
             let mut created: Vec<Obj> = Vec::new();
-            let r = self.render_inner(uploads, clear, draws, reads, spans, &mut created);
+            let r = self.render_inner(uploads, clears, draws, reads, spans, &mut created);
             // unbind what the device holds before releasing it
             let d = self.device;
             for k in 0..16 {
@@ -85,7 +92,7 @@ impl Oracle {
         }
     }
 
-    unsafe fn render_inner(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], reads: &[Target],
+    unsafe fn render_inner(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
                            spans: &[std::ops::Range<usize>], created: &mut Vec<Obj>) -> Result<(Vec<Vec<u8>>, Vec<u32>), String> {
         let d = self.device;
         let read = reads.first().ok_or("no target to read")?;
@@ -123,7 +130,7 @@ impl Oracle {
             }
         }
         check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;
-        if let Some(c) = clear {
+        for c in clears {
             if let Some(t) = &c.depth {
                 let ds = target(t, true, created)?;
                 com!(d, SET_DEPTH_STENCIL_SURFACE, (Obj), ds);
@@ -134,7 +141,17 @@ impl Oracle {
                     com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
                 }
             }
-            check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), c.flags, c.colour, c.z, c.stencil), "Clear")?;
+            // Clear follows the viewport, SRGBWRITEENABLE and the scissor
+            // test (D3D9 behaviour): the call's own, not an earlier call's
+            com!(d, SET_RENDER_STATE, (u32, u32), 194, c.srgb as u32);
+            com!(d, SET_RENDER_STATE, (u32, u32), 174, c.scissor.is_some() as u32);
+            if let Some(r) = c.scissor {
+                com!(d, SET_SCISSOR_RECT, (*const i32), r.as_ptr());
+            }
+            com!(d, SET_VIEWPORT, (*const u32), c.viewport.as_ptr());
+            let flat: Vec<i32> = c.rects.iter().flatten().copied().collect();
+            let p = if c.rects.is_empty() { std::ptr::null() } else { flat.as_ptr() };
+            check(com!(d, CLEAR, (u32, *const i32, u32, u32, f32, u32), c.rects.len() as u32, p, c.flags, c.colour, c.z, c.stencil), "Clear")?;
         }
         let buffers: HashMap<u32, &Vec<u8>> = uploads.iter().filter_map(|u| match u {
             Upload::Buffer { resource, bytes } => Some((*resource, bytes)),
@@ -195,6 +212,51 @@ impl Oracle {
     /// and the value left in a buffer holding 0xDEAD), between
     /// D3DISSUE_BEGIN and D3DISSUE_END, and after an END with no draw
     /// (HRESULT and count).
+    /// What Clear writes with render states set: a 4x4 A8R8G8B8 target
+    /// cleared to 0, then `states` (render state, value) and the scissor
+    /// rectangle set, then cleared to `colour` (D3DCLEAR_TARGET); the raw
+    /// BGRA bytes.
+    pub fn clear_with_states(&mut self, colour: u32, states: &[(u32, u32)], scissor: [i32; 4]) -> Result<Vec<u8>, String> {
+        self.clear_probe(colour, states, scissor, [0, 0, 4, 4, 0, 1f32.to_bits()], &[])
+    }
+
+    /// [`Oracle::clear_with_states`] with a viewport (X, Y, W, H, MinZ,
+    /// MaxZ bits) and rectangles (none: Count 0).
+    pub fn clear_probe(&mut self, colour: u32, states: &[(u32, u32)], scissor: [i32; 4], viewport: [u32; 6], rects: &[[i32; 4]]) -> Result<Vec<u8>, String> {
+        unsafe {
+            let d = self.device;
+            let t = Target { surface: 0, format: 21, width: 4, height: 4, texture: None, level: 0 };
+            let mut created = Vec::new();
+            let mut rt: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_RENDER_TARGET, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj), 4, 4, 21, 0, 0, 0, &mut rt, std::ptr::null_mut()), "CreateRenderTarget")?;
+            created.push(rt);
+            com!(d, SET_RENDER_TARGET, (u32, Obj), 0, rt);
+            for (s, v) in [(194u32, 0u32), (174, 0), (168, 0xF)] {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), 1, 0, 1.0, 0), "Clear")?;
+            for &(s, v) in states {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            com!(d, SET_SCISSOR_RECT, (*const i32), scissor.as_ptr());
+            com!(d, SET_VIEWPORT, (*const u32), viewport.as_ptr());
+            let flat: Vec<i32> = rects.iter().flatten().copied().collect();
+            let p = if rects.is_empty() { std::ptr::null() } else { flat.as_ptr() };
+            check(com!(d, CLEAR, (u32, *const i32, u32, u32, f32, u32), rects.len() as u32, p, 1, colour, 1.0, 0), "Clear")?;
+            let full = [0u32, 0, 4, 4, 0, 1f32.to_bits()];
+            com!(d, SET_VIEWPORT, (*const u32), full.as_ptr());
+            for (s, v) in [(194u32, 0u32), (174, 0), (168, 0xF)] {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            let r = self.read_raw(rt, &t, &mut created);
+            com!(d, SET_RENDER_TARGET, (u32, Obj), 0, self.targets[0]);
+            for o in created {
+                release(o);
+            }
+            r
+        }
+    }
+
     pub fn occlusion_states(&mut self) -> Result<[i32; 5], String> {
         unsafe {
             let d = self.device;

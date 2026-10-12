@@ -101,6 +101,11 @@ pub struct DrawCall {
     pub depth: Option<Target>,
 }
 
+/// Clear: D3D9 clears the viewport, each rectangle of `rects` within it
+/// (none: the whole viewport), within the scissor rectangle when the
+/// scissor test is on; the colour goes through sRGB encoding when
+/// SRGBWRITEENABLE is on; colour write masks do not apply (measured on the
+/// driver, ddgpu tests/targets.rs).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClearCall {
     pub rects: Vec<[i32; 4]>,
@@ -111,6 +116,10 @@ pub struct ClearCall {
     pub targets: [Option<Target>; 4],
     pub depth: Option<Target>,
     pub viewport: [u32; 6],
+    /// the scissor rectangle when SCISSORTESTENABLE is on
+    pub scissor: Option<[i32; 4]>,
+    /// SRGBWRITEENABLE
+    pub srgb: bool,
 }
 
 /// StretchRect: a rectangle (left, top, right, bottom) of one target

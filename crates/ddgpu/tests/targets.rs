@@ -89,7 +89,7 @@ fn clear_of(targets: &[Target], colour: u32) -> ClearCall {
     for (k, x) in targets.iter().enumerate() {
         t[k] = Some(x.clone());
     }
-    ClearCall { rects: vec![], flags: 1, colour, z: 1.0, stencil: 0, targets: t, depth: None, viewport: [0, 0, 4, 4, 0, 0] }
+    ClearCall { rects: vec![], flags: 1, colour, z: 1.0, stencil: 0, targets: t, depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false }
 }
 
 /// Draw on the wgpu backend and read every target of `reads` back.
@@ -140,6 +140,22 @@ fn decode(format: u32, px: &[u8]) -> Vec<f64> {
         }
         _ => px.iter().map(|&b| b as f64).collect(),
     }
+}
+
+/// Equal, except the one known difference: a blend result beyond the
+/// half range in a 16-bit float target is +-inf on the D3D9 driver and
+/// +-65504 on the Vulkan driver's blend unit (direct writes agree).
+fn same(format: u32, blending: bool, ours: &[u8], theirs: &[u8]) -> bool {
+    if ours == theirs {
+        return true;
+    }
+    if !blending || !matches!(format, 111 | 112 | 113) || ours.len() != theirs.len() {
+        return false;
+    }
+    ours.chunks_exact(2).zip(theirs.chunks_exact(2)).all(|(a, b)| {
+        let (a, b) = (u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]));
+        a == b || (b & 0x7FFF == 0x7C00 && a == (b & 0x8000) | 0x7BFF)
+    })
 }
 
 /// The formats of the census plus the other float targets the backend maps.
@@ -200,7 +216,7 @@ fn target_formats_match_the_d3d9_driver() {
         };
         compared += 1;
         match ours(&[], &clear, &[d], &[t.clone()]) {
-            Ok(o) if o == theirs => {}
+            Ok(o) if same(format, blend != 0, &o[0], &theirs[0]) => {}
             Ok(o) => failures.push(format!("case {case} format {format}: ours {:?} D3D9 {:?}; constant {:?} clear {:#010x} states {:?}",
                                            decode(format, &o[0][..16.min(o[0].len())]), decode(format, &theirs[0][..16.min(theirs[0].len())]), c[0], clear.colour, extra)),
             Err(e) => failures.push(format!("case {case} format {format}: backend error {e}; states {extra:?}")),
@@ -291,4 +307,91 @@ fn depth_precision_matches_the_d3d9_driver() {
         eprintln!("{f}");
     }
     assert!(failures.is_empty(), "{} depth cases differ", failures.len());
+}
+
+/// What D3D9's Clear does with the scissor test, the colour write mask and
+/// sRGB writes on (run with --ignored --nocapture; prints).
+#[test]
+#[ignore]
+fn explore_clear_states() {
+    let Some(mut d3d9) = available() else { return };
+    let colour = 0xFF80_4020;
+    for (name, states, scissor) in [
+        ("plain", vec![], [0, 0, 4, 4]),
+        ("scissor 1..3", vec![(174u32, 1u32)], [1, 1, 3, 3]),
+        ("scissor rect set, test off", vec![(174, 0)], [1, 1, 3, 3]),
+        ("write mask red only", vec![(168, 1)], [0, 0, 4, 4]),
+        ("write mask 0", vec![(168, 0)], [0, 0, 4, 4]),
+        ("srgb write", vec![(194, 1)], [0, 0, 4, 4]),
+    ] {
+        let raw = d3d9.clear_with_states(colour, &states, scissor).expect("D3D9");
+        let px: Vec<[u8; 4]> = raw.chunks_exact(4).map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        eprintln!("{name}: pixel 0 {:?}, pixel 5 {:?}, pixel 15 {:?}", px[0], px[5], px[15]);
+    }
+    let one = 1f32.to_bits();
+    for (name, viewport, rects, states, scissor) in [
+        ("viewport 1,1 2x2", [1u32, 1, 2, 2, 0, one], vec![], vec![], [0, 0, 4, 4]),
+        ("rect 0,0..2,2", [0, 0, 4, 4, 0, one], vec![[0, 0, 2, 2]], vec![], [0, 0, 4, 4]),
+        ("rect 0,0..2,2 viewport 1,1 2x2", [1, 1, 2, 2, 0, one], vec![[0, 0, 2, 2]], vec![], [0, 0, 4, 4]),
+        ("viewport 1,1 2x2 scissor 0,0..2,2", [1, 1, 2, 2, 0, one], vec![], vec![(174u32, 1u32)], [0, 0, 2, 2]),
+    ] {
+        let raw = d3d9.clear_probe(colour, &states, scissor, viewport, &rects).expect("D3D9");
+        let lit: Vec<usize> = raw.chunks_exact(4).enumerate().filter(|(_, p)| p[3] != 0).map(|(k, _)| k).collect();
+        eprintln!("{name}: cleared pixels {lit:?}");
+    }
+}
+
+/// Clears of part of a target, as D3D9 does them: a full clear, then a
+/// clear with a random viewport, rectangles, scissor rectangle (test on or
+/// off), sRGB write and flags, then a probe draw whose depth and stencil
+/// tests show the depth-stencil contents; colour targets A8R8G8B8,
+/// A16B16G16R16F and R32F over D24S8.
+#[test]
+fn clears_match_the_d3d9_driver() {
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let mut rng = Rng(0x00C1_EA25);
+    let one = 1f32.to_bits();
+    let mut failures = Vec::new();
+    for case in 0..60 {
+        let format = [21u32, 113, 114][case % 3];
+        let rt = target(0x100, format);
+        let full = ClearCall { flags: 7, z: 1.0, stencil: 0, depth: Some(depth_target()), viewport: [0, 0, 4, 4, 0, one], ..clear_of(&[rt.clone()], rng.next()) };
+        let (x, y) = (rng.next() % 3, rng.next() % 3);
+        let (w, h) = (1 + rng.next() % (4 - x), 1 + rng.next() % (4 - y));
+        let rect = |rng: &mut Rng| {
+            let (l, t) = ((rng.next() % 4) as i32, (rng.next() % 4) as i32);
+            [l, t, l + 1 + (rng.next() % 3) as i32, t + 1 + (rng.next() % 3) as i32]
+        };
+        let rects: Vec<[i32; 4]> = (0..rng.next() % 3).map(|_| rect(&mut rng)).collect();
+        let partial = ClearCall {
+            flags: rng.pick(&[1u32, 2, 4, 3, 5, 6, 7]), z: rng.pick(&[0.25f32, 0.75]), stencil: rng.next() % 256,
+            rects, viewport: [x, y, w, h, 0, one], scissor: (rng.next() % 2 == 1).then(|| rect(&mut rng)),
+            srgb: format == 21 && rng.next() % 2 == 1, depth: Some(depth_target()), ..clear_of(&[rt.clone()], rng.next())
+        };
+        let mut probe = draw(&[[0.25, 0.5, 0.75, 1.0]], [Some(rt.clone()), None, None, None], 0.5,
+                             &[(7, 1), (14, 0), (23, rng.pick(&[2u32, 5])), (52, 1), (56, 3), (57, partial.stencil), (58, 0xFF), (59, 0)]);
+        probe.depth = Some(depth_target());
+        let clears = [full, partial.clone()];
+        let theirs = d3d9.render_cleared(&[], &clears, &[probe.clone()], &[rt.clone()]).expect("D3D9").remove(0);
+        let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+        for c in &clears {
+            gpu.clear(c);
+        }
+        gpu.draw(&probe);
+        let o = gpu.read_back(&rt).unwrap();
+        if !gpu.errors.is_empty() {
+            failures.push(format!("case {case}: backend error {:?}", gpu.errors));
+        } else if o != theirs {
+            let pix = |raw: &[u8]| raw.chunks_exact(raw.len() / 16).map(|p| decode(format, p)[0] as f32).collect::<Vec<_>>();
+            failures.push(format!("case {case} format {format}: ours {:?} D3D9 {:?}; clear {:?}", pix(&o), pix(&theirs),
+                                  (partial.flags, partial.viewport, &partial.rects, partial.scissor, partial.srgb)));
+        }
+    }
+    for f in failures.iter().take(20) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty(), "{} clears differ", failures.len());
 }
