@@ -773,7 +773,8 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False, input_layout=None, visited=None, initial_state=None, capture_state=None):
+               terminal=False, input_layout=None, visited=None, initial_state=None, capture_state=None,
+               capture_call=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -855,6 +856,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     original setup run (constructed_inputs). `capture_state`, an empty dict,
     receives its final pages after successful validation. Neither changes
     the fixture protocol: the method records its own reads and writes.
+    L49 caller-state-v1 (caller_state.py): `capture_call` = {"target": T}
+    receives, as "state", the pages, heap cursor, registers and ESP at the
+    first mocked call to T (ESP then holds the return address); such a
+    state, with its "esp", starts T in its caller's frame.
     """
     import random
     import time
@@ -1469,6 +1474,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             return
         esp = uc_.reg_read(UC_X86_REG_ESP)
         ev = {"target": pc, "regs": {n: uc_.reg_read(r) for n, r in GPR}}
+        if capture_call is not None and pc == capture_call.get("target") and "state" not in capture_call:
+            capture_call["state"] = dict(pages={p: bytes(uc_.mem_read(p, 4096)) for p in pages_in
+                                                if p not in (X87_TRAMP, X87_SLOT)}, heap=heap[0],
+                                         registers={n: v for n, v in ev["regs"].items() if n != "esp"}, esp=esp)
         direct = i.operands[0].type == 2  # X86_OP_IMM
         pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
         # Explicit immediate caller cleanup means these argument bytes are
@@ -1584,6 +1593,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
             if call_stack:
                 v -= 4
+            if initial_state is not None and "esp" in initial_state:
+                v = initial_state["esp"]  # caller-state-v1: the caller's frame
         elif initial_state is not None:
             v = initial_state['registers'].get(name, v)
         if sweep is not None and sweep[0] == 'register' and sweep[1] == name:

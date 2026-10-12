@@ -20,8 +20,14 @@ def digest(value):
 
 
 def validate_state(state):
-    if set(state) != {'pages', 'heap', 'registers'}:
+    # L49: a caller state (caller_state.py) also binds ESP into its frame
+    if set(state) - {'esp'} != {'pages', 'heap', 'registers'}:
         raise ValueError('invalid constructed state fields')
+    if 'esp' in state:
+        esp = state['esp']
+        if (not isinstance(esp, int) or esp % 4 or not h.STACK <= esp < h.STACK + h.STACK_SIZE - 4
+                or esp & ~0xFFF not in state['pages']):
+            raise ValueError('invalid constructed stack pointer')
     if len(state['pages']) > h.MAX_PAGES:
         raise ValueError('constructed state exceeds page cap')
     for p, data in state['pages'].items():
