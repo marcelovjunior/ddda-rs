@@ -35,6 +35,26 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Affine input relationships (2026-10-12)
+
+The guarded-store proof tracks linear expressions modulo 2^32 through full
+register copies, LEA, add/sub, saved stack words and alias-checked stores.
+Only complete cancellation produces a known value. Independent entry
+registers remain independent even if their concrete pointer witnesses match.
+Partial writes and overlapping stores discard expressions; unknown writers
+must pass the existing runtime alias guard. Unknown arithmetic operands do
+not produce carry facts from a known result.
+
+**143 light tests pass; accepted data unchanged**, `affine-audit.json`.
+The checked manager recipe now passes 0x00493C29, then stops after 7,634
+instructions at 0x00484B8E, which tests its output pointer for null. That
+pointer derives from the method's still-unbound EDI. No recorded case yet.
+The original caller 0x004964C0 passes `ESI+0xC570` to 0x00493AA0;
+constructor 0x00495FF0 builds that same member with 0x004915A0 at
+0x0049600B. The latter returns its object in EAX at 0x00491890.
+**Next:** bind the destination to that checked producer's return and admit
+only explicit setup-register bindings as proof input facts.
+
 ### Checked setup sequences (2026-10-12)
 
 Main 4d7f291d merged as **afbc5c96**, preserving both recorder policies and

@@ -11,6 +11,46 @@ class ImageBudgetTests(unittest.TestCase):
     # Load an image-backed trip count, then increment EAX that many times.
     CODE = bytes.fromhex('8b0d00204000 31c0 40 49 75fc c3')
 
+    def test_affine_cancellation_survives_stack_and_does_not_use_pointer_values(self):
+        # (-16 - EDI) + (EDI + 16), including a saved expression.
+        code=bytes.fromhex('b9f0ffffff 29f9 8d5f10 51 58 01d8 83f800 7501 c3 cc')
+        ins,read,pages=self.fixture(code)
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        self.assertIsNone(image_bound(ins,read,witnesses['esp'],guarded=True))
+        self.assertIsNotNone(image_bound(ins,read,witnesses['esp'],guarded=True,entry_pointers=witnesses))
+        # Equal witness addresses do not make independent unknowns identical.
+        different=code.replace(bytes.fromhex('8d5f10'),bytes.fromhex('8d5e10'))
+        other,read,_=self.fixture(different)
+        self.assertIsNone(image_bound(other,read,witnesses['esp'],guarded=True,entry_pointers=witnesses))
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-stores-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['eax'],0)
+        self.assertIn('image_budget',result)
+
+    def test_affine_cancellation_does_not_invent_flags_or_keep_clobbered_expressions(self):
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        for code in (
+                'b9f0ffffff 29f9 8d5f10 51 58 01d8 7201 c3 cc', # CF remains unknown
+                'b9f0ffffff 29f9 8d5f10 51 890424 58 01d8 83f800 7501 c3 cc',
+                'b9f0ffffff 29f9 b100 8d5f10 51 58 01d8 83f800 7501 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,witnesses['esp'],guarded=True,entry_pointers=witnesses))
+
+    def test_unknown_writes_must_not_alias_saved_affine_expressions(self):
+        code=bytes.fromhex('b9f0ffffff 29f9 8d5f10 51 8b5500 c70200000000 58 01d8 83f800 7501 c3 cc')
+        ins,read,_=self.fixture(code)
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        proof=image_bound(ins,read,witnesses['esp'],guarded=True,entry_pointers=witnesses)
+        self.assertIsNotNone(proof)
+        writer=next(i.address for i in ins if i.op_str=='dword ptr [edx], 0')
+        self.assertTrue(WriteGuard(proof).conflicts(writer,witnesses['esp']-4,4))
+
     def test_closed_stack_allocator_moves_but_cannot_forge_its_return(self):
         caller=bytes.fromhex('55 8bec e8f8000000 8be5 5d c3')
         # pop edx; lea eax,[esp-16]; xchg esp,eax; push edx; ret

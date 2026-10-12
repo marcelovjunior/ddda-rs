@@ -1,5 +1,13 @@
 # Milestones
 
+### L28c affine proof checkpoint (2026-10-12)
+
+- Symbolic pointer cancellation advances the manager-backed 0x00493AA0
+  proof without treating random register values as constants. **143 light
+  tests pass**; no new fixture or accepted-data change.
+- **Next action:** destination constructor 0x004915A0 and an explicit
+  checked output-register binding; the next proof stop tests that pointer.
+
 ### L28c checked producer sequences (2026-10-12)
 
 - Setup producers can run sequentially only when each replay matches its
