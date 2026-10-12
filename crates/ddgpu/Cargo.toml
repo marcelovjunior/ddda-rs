@@ -13,4 +13,5 @@ d3d9wgsl = { path = "../d3d9wgsl" }
 wgpu = "29.0.4"
 
 [dev-dependencies]
+d3d9frame = { path = "../d3d9frame" }
 d3d9ref = { path = "../d3d9ref" }

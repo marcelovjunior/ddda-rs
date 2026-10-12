@@ -89,12 +89,19 @@ pub struct Graphics(pub Box<dyn GraphicsBackend>);
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics(Box::new(Recorder { limit: 10_000, ..Default::default() }))
+        Graphics(d3d9frame::Capture::from_env(Box::new(Recorder { limit: 10_000, ..Default::default() })))
     }
 }
 
-/// Install the backend the session draws with.
+/// Install the backend the session draws with. With `DDDA_CAPTURE` set,
+/// every command it is given is also written to that file (the frame
+/// oracle's capture, docs/FRAME_ORACLE.md; `DDDA_CAPTURE_FRAMES` stops
+/// recording after that many Presents).
 pub fn set_backend(backend: Box<dyn GraphicsBackend>) {
+    // the backend replaced (the default recorder's capture included) is
+    // dropped, and its file closed, before the new capture creates it again
+    crate::runtime::with(|rt| rt.graphics.with(|g| g.0 = Box::new(Recorder::default())));
+    let backend = d3d9frame::Capture::from_env(backend);
     crate::runtime::with(|rt| rt.graphics.with(|g| g.0 = backend));
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "d3d9frame"
+version = "0.1.0"
+description = "Captured Direct3D 9 backend command streams: file format, capture backend, frame comparison"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+d3d9cmd = { path = "../d3d9cmd" }
+miniz_oxide.workspace = true
+png = "0.18.1"

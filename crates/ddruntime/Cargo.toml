@@ -12,6 +12,7 @@ ddnative = { path = "../ddnative", optional = true }
 ddexe = { path = "../ddexe" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9cmd = { path = "../d3d9cmd" }
+d3d9frame = { path = "../d3d9frame" }
 ddaudio = { path = "../ddaudio" }
 
 [features]
