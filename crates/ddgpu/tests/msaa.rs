@@ -204,3 +204,50 @@ fn explore_multisampling() {
         }
     }
 }
+
+/// The backend's own multisample paths, without the driver: a 4x draw
+/// resolves with antialiased edges, and depth-stencil StretchRect copies
+/// depth and stencil exactly (a probe on the copy lights the pixels a
+/// probe on the source lights), single-sampled and from 4x.
+#[test]
+fn the_backend_resolves_and_copies_multisampled_targets() {
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    let tri = [[-0.9f32, -0.7], [0.3, 0.95], [0.85, -0.2]];
+    let (ms, plain) = (target(0x100, 21, 4), target(0x101, 21, 0));
+    gpu.clear(&clear(&ms, None, 0xFF00_0000));
+    gpu.draw(&draw([1.0, 0.0, 0.0, 1.0], tri, 0.5, &ms, None, &[]));
+    gpu.copy(&copy(&ms, &plain, [0; 4], [0; 4]));
+    let reds: Vec<u8> = gpu.read_back(&plain).expect("resolved").chunks_exact(4).map(|p| p[2]).collect();
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    assert!(gpu.read_back(&ms).is_none(), "a multisampled target is not read back");
+    assert!(reds.contains(&255) && reds.contains(&0) && reds.iter().any(|&r| r > 0 && r < 255), "antialiased edges: {reds:?}");
+    for samples in [0u32, 4] {
+        let rt = target(0x110, 21, samples);
+        let (src, dst) = (target(0x180, 75, samples), target(0x181, 75, 0));
+        let probe_rt = target(0x111, 21, 0);
+        let mut g = ddgpu::WgpuBackend::headless().unwrap();
+        g.clear(&clear(&rt, Some(&src), 0));
+        // depth 0.25 and stencil 0x5A where the triangle covers
+        g.draw(&draw([1.0; 4], tri, 0.25, &rt, Some(&src), &[(7, 1), (14, 1), (23, 8), (52, 1), (56, 8), (55, 3), (57, 0x5A), (58, 0xFF), (59, 0xFF)]));
+        g.copy(&copy(&src, &dst, [0; 4], [0; 4]));
+        let probe = |g: &mut ddgpu::WgpuBackend, ds: &Target, func: u32| {
+            g.clear(&clear(&probe_rt, None, 0xFF00_0000));
+            g.draw(&draw([0.0, 1.0, 0.0, 1.0], [[-1.0, -1.0], [-1.0, 3.0], [3.0, -1.0]], 0.5, &probe_rt, Some(ds),
+                         &[(7, 1), (14, 0), (23, func), (52, 1), (56, 3), (57, 0x5A), (58, 0xFF), (59, 0)]));
+            g.read_back(&probe_rt).expect("probe")
+        };
+        // a single-sampled source is probed directly; a 4x source through
+        // the copy only (the probe target is single-sampled)
+        let on_copy = probe(&mut g, &dst, 5);
+        assert!(g.errors.is_empty(), "{samples}x: {:?}", g.errors);
+        let lit: Vec<usize> = on_copy.chunks_exact(4).enumerate().filter(|(_, p)| p[1] == 255).map(|(k, _)| k).collect();
+        assert!(!lit.is_empty() && lit.len() < 64, "{samples}x: the copy holds the triangle's depth and stencil: {lit:?}");
+        if samples == 0 {
+            let on_source = probe(&mut g, &src, 5);
+            assert_eq!(on_copy, on_source, "the copy equals the source");
+        }
+    }
+}

@@ -260,8 +260,6 @@ struct Rt {
     format: wgpu::TextureFormat,
     width: u32,
     height: u32,
-    /// samples per pixel (1: not multisampled)
-    samples: u32,
 }
 
 /// The wgpu sample count of a target's D3DMULTISAMPLE_TYPE. The game asks
@@ -1087,7 +1085,7 @@ impl WgpuBackend {
             if block_on(scope.pop()).is_some() {
                 return None;
             }
-            self.surfaces.insert(t.surface, Rt { texture, format, width: t.width, height: t.height, samples });
+            self.surfaces.insert(t.surface, Rt { texture, format, width: t.width, height: t.height });
         }
         let rt = self.surfaces.get(&t.surface)?;
         let view_format = if srgb { target_format(t.format, true).unwrap_or(rt.format) } else { rt.format };
