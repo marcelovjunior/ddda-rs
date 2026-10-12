@@ -271,13 +271,80 @@ def _s(v):
     return v - (1 << 32) if v >> 31 else v
 
 
-def constant_loop_budget(ins):
+NONVOLATILE = ("ebx", "esi", "edi", "ebp")
+
+
+def _writes(i):
+    try:
+        return {i.reg_name(r) for r in i.regs_access()[1]}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _aliases(r):
+    return {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
+
+
+def _call_cost(i, counter, callable, platform, depth=0):
+    """Instructions a direct call can execute in the recorder without
+    touching the loop counter, or None. A mocked callee (neither closed nor
+    a platform model) does not run: the call, the mock's return and an x87
+    return trampoline (4); it returns random eax/ecx/edx, so the counter
+    must be callee-saved. A platform model runs in Python and changes only
+    eax. A closed callee runs for real: it must be loop-free, write the
+    counter only by push/pop, its own calls must qualify (depth 3), and its
+    loops, if any, must be proven constant themselves (their cost is added)."""
+    from capstone.x86 import X86_OP_IMM
+    if i.operands[0].type != X86_OP_IMM:
+        return None  # an indirect call can reach closed code of any cost
+    t = i.operands[0].imm & 0xffffffff
+    if t in platform:
+        return 4 if counter != "eax" else None
+    if t not in callable:
+        return 4 if counter in NONVOLATILE else None
+    if depth >= 3:
+        return None
+    try:
+        body = cached_body(t, 1)[0]
+    except Unsupported:
+        return None
+    cost = 0
+    if any(b.mnemonic.startswith("j") and b.operands and b.operands[0].type == X86_OP_IMM
+           and (b.operands[0].imm & 0xffffffff) <= b.address for b in body):
+        inner = constant_loop_budget(body, callable, platform, depth=depth + 1)
+        if inner is None:
+            return None  # a loop in the callee without a proven constant bound
+        cost += inner - INSN_BUDGET
+    for b in body:
+        if b.mnemonic.startswith("j") and b.operands and b.operands[0].type != X86_OP_IMM:
+            return None
+        w = _writes(b)
+        if w is None or (w & _aliases(counter) and b.mnemonic not in ("push", "pop")):
+            return None
+        if b.mnemonic == "call":
+            c = _call_cost(b, counter, callable, platform, depth + 1)
+            if c is None:
+                return None
+            cost += c
+        cost += 1
+    return cost
+
+
+def _refuse(why, reason):
+    """constant_loop_budget's refusal, with its reason for diagnostics."""
+    if why is not None:
+        why.append(reason)
+    return None
+
+
+def constant_loop_budget(ins, callable=frozenset(), platform=frozenset(), why=None, depth=0):
     """Instruction budget for a body whose every loop has a constant trip
     count (L22). Returns None unless every back edge is proven; the recorder
     otherwise keeps INSN_BUDGET, which exists to stop input-dependent loops.
 
     A loop is a back edge (jcc/jmp to an earlier address) spanning a
-    contiguous range with no call, indirect jump or other back edge. Its
+    contiguous range with no indirect jump or other back edge, whose direct
+    calls have a bounded cost that cannot change the counter (_call_cost). Its
     counter R (a 32-bit GPR) is written once in the range, by inc/dec or
     add/sub imm, on every path to the latch (no branch into the part between
     update and latch). The latch is a jcc directly after `cmp R, imm` or
@@ -292,14 +359,8 @@ def constant_loop_budget(ins):
     for k, i in enumerate(ins):
         if i.mnemonic.startswith("j") and i.operands and i.operands[0].type == X86_OP_IMM:
             targets.setdefault(i.operands[0].imm & 0xffffffff, []).append(k)
-    def writes(i):
-        try:
-            return {i.reg_name(r) for r in i.regs_access()[1]}
-        except Exception:  # noqa: BLE001
-            return None
-    def aliases(r):
-        return {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
-    total, loops = 0, []
+    writes, aliases = _writes, _aliases
+    total, loops, cost = 0, [], {}
     for k, i in enumerate(ins):
         if not i.mnemonic.startswith("j") or not i.operands:
             continue
@@ -309,20 +370,23 @@ def constant_loop_budget(ins):
         if t > i.address:
             continue
         if t not in at:
-            return None  # a back edge leaving the decoded body
+            return _refuse(why, 'a back edge leaving the decoded body')
         loops.append((at[t], k))
     for start, latch in loops:
         body = ins[start:latch + 1]
         if any(ins[j].address + ins[j].size != ins[j + 1].address for j in range(start, latch)):
-            return None  # not contiguous
-        if any(b.mnemonic in ("call", "ret", "retn") or (b.mnemonic.startswith("j") and b.operands
+            return _refuse(why, 'not contiguous')
+        if any(b.mnemonic in ("ret", "retn") or (b.mnemonic.startswith("j") and b.operands
                and b.operands[0].type != X86_OP_IMM) for b in body):
-            return None
-        if any((s2, l2) != (start, latch) and s2 <= latch and start <= l2 for s2, l2 in loops):
-            return None  # overlapping back edges: nested or irreducible
+            return _refuse(why, 'return or indirect jump in the loop')
+        # Properly nested loops are allowed (an inner one's cost per entry is
+        # added to this one's per-trip cost below); any other overlap is not.
+        if any((s2, l2) != (start, latch) and s2 <= latch and start <= l2
+               and not (start <= s2 and l2 < latch) and not (s2 <= start and latch < l2) for s2, l2 in loops):
+            return _refuse(why, 'overlapping back edges that are not nested: irreducible')
         jcc = ins[latch]
         if jcc.mnemonic not in _JCC_TAKEN:
-            return None
+            return _refuse(why, 'latch is not a counted jcc')
         setter = ins[latch - 1]
         counter, limit = None, None
         if (setter.mnemonic == "cmp" and setter.operands[0].type == X86_OP_REG and setter.operands[0].size == 4
@@ -331,18 +395,26 @@ def constant_loop_budget(ins):
         elif setter.mnemonic in ("inc", "dec", "add", "sub") and setter.operands[0].type == X86_OP_REG:
             counter, limit = setter.reg_name(setter.operands[0].reg), 0
             if jcc.mnemonic not in ("jne", "je", "jns", "js"):
-                return None  # only ZF/SF tests are defined by the result alone
+                return _refuse(why, 'only ZF/SF tests are defined by the result alone')
         if counter not in GPR32:
-            return None
+            return _refuse(why, 'counter is not a 32-bit register')
+        per_trip = latch - start + 1
+        inner = [(s2, l2) for s2, l2 in loops if (s2, l2) != (start, latch) and start <= s2 and l2 < latch]
+        for b in body:
+            if b.mnemonic == "call":
+                c = _call_cost(b, counter, callable, platform, depth)
+                if c is None:
+                    return _refuse(why, 'a call in the loop has no bounded, counter-safe cost')
+                per_trip += c
         updates = []
         for j in range(start, latch + 1):
             w = writes(ins[j])
             if w is None:
-                return None
+                return _refuse(why, 'no register-write detail')
             if w & aliases(counter):
                 updates.append(j)
         if len(updates) != 1:
-            return None
+            return _refuse(why, 'counter not written exactly once')
         u = ins[updates[0]]
         if u.mnemonic in ("inc", "dec") and len(u.operands) == 1:
             step = 1 if u.mnemonic == "inc" else 0xffffffff
@@ -350,14 +422,14 @@ def constant_loop_budget(ins):
               and u.operands[1].type == X86_OP_IMM):
             step = (u.operands[1].imm if u.mnemonic == "add" else -u.operands[1].imm) & 0xffffffff
         else:
-            return None
+            return _refuse(why, 'counter update is not inc/dec/add/sub imm')
         if u.operands[0].size != 4 or (setter is not u and updates[0] > latch - 1):
-            return None
+            return _refuse(why, 'update after the compare or not 32-bit')
         # every path to the latch passes the update: no branch from the loop
         # lands between the update and the latch
         if any(updates[0] < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
                for s in srcs if start <= s <= latch and s != latch):
-            return None
+            return _refuse(why, 'a branch skips the update')
         # entry value on every path into the loop head
         entries = [j for j in targets.get(ins[start].address, []) if not start <= j <= latch]
         prev = start - 1
@@ -365,17 +437,17 @@ def constant_loop_budget(ins):
             entries.append(prev)
         if not entries or any(start < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
                               for s in srcs if not start <= s <= latch):
-            return None  # a jump into the middle of the loop
+            return _refuse(why, 'a jump into the middle of the loop')
         values = set()
         for e in entries:
             value, j = None, e
             while j >= 0 and value is None:
                 b = ins[j]
-                if b.mnemonic == "call":
-                    return None
+                if b.mnemonic == "call" and _call_cost(b, counter, callable, platform, depth) is None:
+                    return _refuse(why, 'a call on the entry path can change the counter')
                 w = writes(b)
                 if w is None:
-                    return None
+                    return _refuse(why, 'no register-write detail on the entry path')
                 if w & aliases(counter):
                     if b.mnemonic == "xor" and len(b.operands) == 2 and all(o.type == X86_OP_REG and b.reg_name(o.reg) == counter for o in b.operands):
                         value = 0
@@ -383,28 +455,37 @@ def constant_loop_budget(ins):
                           and b.operands[1].type == X86_OP_IMM):
                         value = b.operands[1].imm & 0xffffffff
                     else:
-                        return None
+                        return _refuse(why, 'counter start is not xor/mov imm')
                     break
                 if b.address in targets or j == 0 or ins[j - 1].address + ins[j - 1].size != b.address \
                         or ins[j - 1].mnemonic in ("jmp", "ret", "retn"):
-                    return None  # a merge point or the body start: no single straight path
+                    return _refuse(why, 'a merge point or the body start: no single straight path')
                 j -= 1
             if value is None:
-                return None
+                return _refuse(why, 'no counter start found')
             values.add(value)
         if len(values) != 1:
-            return None
+            return _refuse(why, 'entries disagree on the start')
         c, trips, taken = values.pop(), 0, _JCC_TAKEN[jcc.mnemonic]
         while True:
             trips += 1
             c = (c + step) & 0xffffffff
-            if trips * (latch - start + 1) > INSN_CEILING:
-                return None
+            if trips * per_trip > INSN_CEILING:
+                return _refuse(why, 'trip count beyond the ceiling')
             if not taken(c, limit):
                 break
-        total += trips * (latch - start + 1)
+        cost[(start, latch)] = (trips, per_trip, inner)
+    def loop_cost(key):
+        trips, per_trip, inner = cost[key]
+        # each inner loop runs completely once per outer trip
+        return trips * (per_trip + sum(loop_cost(k) for k in inner
+                                       if not any(k != j and j in inner and j[0] <= k[0] and k[1] < j[1] for j in inner)))
+    outermost = [k for k in cost if not any(k != j and j[0] <= k[0] and k[1] < j[1] for j in cost)]
+    total = sum(loop_cost(k) for k in outermost)
+    if total > INSN_CEILING:
+        return _refuse(why, 'total beyond the ceiling')
     if not loops:
-        return None
+        return _refuse(why, 'no loop')
     budget = INSN_BUDGET + total
     return budget if budget <= INSN_CEILING else None
 
@@ -793,7 +874,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
     exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
     X87_PUSH_SITES[addr] = push_sites
     # Constant-trip loops that need more than the recorder's default budget.
-    budget = constant_loop_budget(ins)
+    budget = constant_loop_budget(ins, callable, h.PLATFORM)
     budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),

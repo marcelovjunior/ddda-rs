@@ -46,6 +46,20 @@ class BudgetTests(unittest.TestCase):
         # beyond the ceiling: not granted
         self.assertIsNone(lift.constant_loop_budget(body(bytes.fromhex("31c94181f90000001072f7c3"))))
 
+    def test_calls_and_nesting(self):
+        # mov esi,0x8000; L: call mocked; dec esi; jns L; ret  -> callee-saved counter: granted
+        call_loop = lambda reg_mov, reg_dec: bytes.fromhex(reg_mov + "e8f0ff0000" + reg_dec + "79f8c3")
+        budget = lift.constant_loop_budget(body(call_loop("be00800000", "4e")))
+        self.assertEqual(budget, lift.INSN_BUDGET + 0x8001 * (3 + 4))
+        # the same with ecx (a mocked call returns a random ecx): refused
+        why = []
+        self.assertIsNone(lift.constant_loop_budget(body(call_loop("b900800000", "49")), why=why))
+        self.assertEqual(why, ["a call in the loop has no bounded, counter-safe cost"])
+        # nested: mov esi,0x100; O: mov edi,0x100; I: dec edi; jns I; dec esi; jns O; ret
+        nested = bytes.fromhex("be00010000" "bf00010000" "4f" "79fd" "4e" "79f5" "c3")
+        self.assertEqual(lift.constant_loop_budget(body(nested)),
+                         lift.INSN_BUDGET + 0x101 * (5 + 0x101 * 2))
+
     def test_recording_uses_the_budget_only_when_proven(self):
         for code, proven in ((CONSTANT, True), (INPUT_START, False)):
             sections = [(0x400000, code.ljust(4096, b"\xcc"))]
