@@ -141,4 +141,23 @@ class FrameContractTests(unittest.TestCase):
             self.assertEqual(h.static_pop(0x400000),4)
 
 
+    def test_terminal_cases_end_at_a_noreturn_call(self):
+        # push ebp; mov ebp,esp; push 1; call 0x400100 (a noreturn entry)
+        code=bytes.fromhex('558bec6a01e8f6000000')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda **kw:h.run_sparse(0x400000,9,body=body,end=0x400000+len(code),noreturn_sites={0x400005},
+                                         noreturn_targets={0x400100},**kw)
+            with self.assertRaisesRegex(h.Rejected,'noreturn call at 0x00400005'):
+                run()
+            c=run(terminal=True)
+            with self.assertRaisesRegex(h.Rejected,'noreturn target at 0x00400100'):
+                run(terminal=True,lifted={0x400100})  # a closed noreturn callee is not a terminal
+        self.assertTrue(c['terminal'])
+        esp=c['regs_in']['esp']-12
+        self.assertEqual(c['calls'],[dict(target=0x400100,regs=c['regs_out'],terminal=True)])
+        self.assertEqual(c['regs_out']['esp'],esp)
+        self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
+
+
 if __name__=='__main__':unittest.main()

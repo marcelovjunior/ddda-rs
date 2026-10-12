@@ -97,7 +97,8 @@ def init_worker(closed, noreturn, frames=None):
 
 
 def trial(args):
-    f, strategy, seeds, seconds = args
+    f, strategy, seeds, seconds = args[:4]
+    terminal = len(args) > 4 and args[4]
     start = time.monotonic()
     cases, attempts = [], []
     key = lift.vector_key(f)
@@ -115,7 +116,7 @@ def trial(args):
                                   body=f['body'], x87_push=f.get('x87_push',[]),
                                   noreturn_sites=f.get('noreturn_sites',[]), noreturn_targets=_NORETURN,
                                   original_entry=f.get('original_entry',False),
-                                  frame_contracts=_FRAMES, max_seconds=remaining, **kw)
+                                  frame_contracts=_FRAMES, terminal=terminal, max_seconds=remaining, **kw)
             cases.append(dict(addr=f['addr'],seed=seed,body_key=key,**result))
             attempts.append(dict(reason='ok',seed=seed))
         except h.Rejected as e:
@@ -139,13 +140,18 @@ def done_keys(prior, seeds, seconds, retry=None):
             and not (stale and not r['cases'] and any(stale.search(a['reason']) for a in r['attempts']))}
 
 
-def record(root, strategy, seeds, seconds, limit, retry=None):
+def trial_log(root, strategy, terminal=False):
+    """Terminal trials (terminal-v1 cases) keep their own logs and history."""
+    return root/f"structured-{strategy}{'-terminal' if terminal else ''}.jsonl"
+
+
+def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False):
     selected = read(root/'patterns/lift.json')
     check_boundary(root, selected)
     have = {f['addr'] for f in selected}
     quarantine = quarantined(root)
     candidates = read(root/'patterns/structured_candidates.json')
-    path = root/f'structured-{strategy}.jsonl'
+    path = trial_log(root, strategy, terminal)
     prior = records(path) if path.exists() else []
     done = done_keys(prior, seeds, seconds, retry)
     # Omit assembly strings from worker arguments; workers need only the
@@ -163,7 +169,7 @@ def record(root, strategy, seeds, seconds, limit, retry=None):
                 stream.seek(0,2);stream.write(b'\n')
     with path.open('a') as stream, Pool(int(os.environ.get('LIFT_WORKERS','6')),init_worker,
             (closed,lift.noreturn_entries(),frame_contracts(selected)),maxtasksperchild=8) as pool:
-        for n,result in enumerate(pool.imap_unordered(trial,((f,strategy,seeds,seconds) for f in todo),chunksize=1),1):
+        for n,result in enumerate(pool.imap_unordered(trial,((f,strategy,seeds,seconds,terminal) for f in todo),chunksize=1),1):
             stream.write(json.dumps(result)+'\n');stream.flush()
             if n%250==0:
                 print(n,'completed',flush=True)
@@ -183,19 +189,19 @@ def records(path):
     return result
 
 
-def adopt(root, strategy):
+def adopt(root, strategy, terminal=False):
     selected=read(root/'patterns/lift.json');cases=read(root/'vectors/lift.json')
     check_boundary(root, selected)
     candidates={f['addr']:f for f in read(root/'patterns/structured_candidates.json')}
     have={f['addr'] for f in selected};added=[]
     quarantine=quarantined(root)
-    for r in records(root/f'structured-{strategy}.jsonl'):
+    for r in records(trial_log(root, strategy, terminal)):
         a=r['addr'];f=candidates.get(a)
         if a not in have and a not in quarantine and f and r['body_key']==lift.vector_key(f) and r['cases']:
             selected.append(f);cases.extend(r['cases']);have.add(a);added.append(a)
     write(root/'patterns/lift.json',selected);write(root/'vectors/lift.json',cases)
     prune_no_vectors(root,have)
-    history=root/f'structured-{strategy}-adopted.json'
+    history=trial_log(root, strategy, terminal).with_name(trial_log(root, strategy, terminal).stem+'-adopted.json')
     previous=read(history) if history.exists() else []
     write(history,sorted(set(previous)|set(added)))
     print(f'{strategy}: added {len(added)}; {len(selected)} functions / {len(cases)} cases; Rust replay still required',flush=True)
@@ -358,12 +364,13 @@ if __name__ == '__main__':
     ap.add_argument('--seconds',type=float,default=20)
     ap.add_argument('--limit',type=int)
     ap.add_argument('--retry',help='regex: re-run functions whose logged attempts failed with a matching reason')
+    ap.add_argument('--terminal',action='store_true',help='accept terminal-v1 cases (end at a root noreturn call)')
     args=ap.parse_args();root=Path(lift.N)
     if not os.environ.get('LIFT_DATA') or root.resolve() == Path('E:/ddda-re/notes/native').resolve():
         ap.error('set LIFT_DATA to a private trial directory, not the shared native directory')
     if args.seeds < 1 or args.seconds <= 0 or (args.limit is not None and args.limit < 0):
         ap.error('positive seeds/seconds and nonnegative limit required')
     if args.command=='prepare':prepare(root)
-    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry)
+    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal)
     elif args.command=='promote':promote(root,args.seeds,args.seconds)
-    else:adopt(root,args.strategy)
+    else:adopt(root,args.strategy,args.terminal)

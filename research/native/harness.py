@@ -672,7 +672,8 @@ def frame_text(contract):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False, frame_contracts=None):
+               max_seconds=None, input_strategy=None, original_entry=False, frame_contracts=None,
+               terminal=False):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -713,6 +714,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
+
+    `terminal` (terminal-v1) accepts a root call at a noreturn site into a
+    mocked noreturn entry as the end of the case: the call event is recorded
+    with "terminal": true and no "out", the run stops at the callee's entry
+    (the return address pushed) and that state is the case's result. The
+    replay stops at the same call_ext and compares there. Without it such
+    runs are rejected, as before.
 
     `frame_contracts` maps closed callees with a caller-frame exit
     (frame_exit, e.g. a promoted `__SEH_prolog4`) to that contract. Their
@@ -941,6 +949,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     frames = []  # (return PC, caller ESP), distinguishing calls into shared code
     root_frame = [True]
     entering = [False]  # a call was just made: the next instruction is the callee's entry
+    terminal_call = [None]  # return PC of a root call at a noreturn site (terminal runs)
+    stopped = [False]       # a terminal call ended the case
     frame_contracts = {a: (c[0], c[1], tuple(tuple(t) for t in c[2])) for a, c in (frame_contracts or {}).items()}
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
@@ -1020,6 +1030,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # The guard is for runs that reach a noreturn function. The root's own
         # body is the code under test (e.g. `__exit` 0x012EDC4B returns
         # syntactically; its callee does the exit) and runs like any root.
+        if (terminal_call[0] is not None and frames and frames[-1][0] == terminal_call[0]
+                and addr in noreturn_targets and addr not in lifted):
+            stopped[0] = True
+            calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
+            uc_.emu_stop()
+            return
         if addr in noreturn_targets and addr != address:
             bad.append(f"noreturn target at {addr:#010x}")
             uc_.emu_stop()
@@ -1028,6 +1044,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # Unicorn has already decoded this instruction. Reading an arbitrary
         # 15-byte window can cross an unmapped next page even when the whole
         # instruction is mapped, breaking both premap and float checks.
+        if stopped[0]:
+            return
         instruction_sizes[addr] = size
         esp_now = uc_.reg_read(UC_X86_REG_ESP)
         if own_ret[0] and addr != RET:
@@ -1043,9 +1061,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     rets[addr] = False
             own_ret[0] = rets[addr]
             if addr in noreturn_sites:
-                bad.append(f"noreturn call at {addr:#010x}")
-                uc_.emu_stop()
-                return
+                if terminal and end is not None:
+                    terminal_call[0] = addr + size
+                else:
+                    bad.append(f"noreturn call at {addr:#010x}")
+                    uc_.emu_stop()
+                    return
         # The ext recorder already rejects stray returns in on_ext. Closed
         # runs must not accidentally execute seeded heap/stack bytes either.
         # The only non-image code we intentionally execute is the st0 capture.
@@ -1188,6 +1209,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     local_allocations = local_alloc_sites(address, body) if end is not None else set()
 
     def on_ext(uc_, pc, size, _):
+        if stopped[0]:
+            return
         # a call to the function's own entry (recursion) leaves it like any
         # other call: the lifted code makes it through call_ext, so mock it
         recursion = pc == address and branch[0] is not None and branch[0].mnemonic == "call"
@@ -1322,7 +1345,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         bad.append(f"{e} at {uc.reg_read(UC_X86_REG_EIP):#010x}")
     # Caller-frame helpers (frame_exit) are checked against their exact
     # derived exit ESP; every other function keeps the ordinary range.
-    contract = frame_exit(address, body) if not bad and body is not None else None
+    # A terminal case ends at the noreturn callee's entry, not at a return.
+    contract = frame_exit(address, body) if not bad and body is not None and not stopped[0] else None
     stack_contract = None
     if not bad and caller_frame(contract):
         want = regs_in[contract[0]] + contract[1]
@@ -1335,7 +1359,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if not bad and uc.reg_read(UC_X86_REG_ESP) != want & 0xFFFFFFFF:
             bad.append(f"returned with ESP not {frame_text(contract)} (caller-frame contract)")
         stack_contract = {"rule": "caller-frame-v1", "exit_esp": frame_text(contract)}
-    elif not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
+    elif not bad and not stopped[0] and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
@@ -1378,4 +1402,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
-            **({"stack_contract": stack_contract} if stack_contract else {})}
+            **({"stack_contract": stack_contract} if stack_contract else {}),
+            **({"terminal": True} if stopped[0] else {})}

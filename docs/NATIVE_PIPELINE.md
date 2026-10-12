@@ -962,6 +962,25 @@ consistent-`ret` checks and the unknown-flow zero fallback are unchanged.
 `__cdecl`, 0), replacing L15's three-entry list: every import called by a
 remaining outside-image candidate. Effects and results stay mocked.
 
+**Terminal fixtures (L28, terminal-v1).** Some bodies always reach a
+noreturn call (`_abort`, `_exit`, `__exit`, `__amsg_exit`): fatal-error
+reporters such as 0x00D0CB00 (format, callback, `_exit(1)`) or
+`___crtExitProcess`. With `run_sparse(terminal=True)` (`structured_inputs.py
+record/adopt --terminal`, separate trial logs) a root call at a noreturn
+site into a mocked noreturn entry ends the case: the call event is recorded
+with `"terminal": true` (target and all registers at the callee's entry, no
+`out`), the run stops there, and that state is the case's result (`regs_out`,
+`writes` including the pushed return address, x87). Stack-return guards do
+not apply; all other guards do. A closed noreturn callee is not a terminal.
+In the generated replay (`lift.lifted_test_source`), the handler checks the
+terminal event like any call, then unwinds with a `Terminal` payload holding
+the CPU state (`resume_unwind`, no panic hook); the test compares that state,
+memory and x87 with the case. The emitter is unchanged: a noreturn site
+already pushes the return address and calls through `call_ext`.
+`test_terminal_replay.py` replays a recorded terminal case through the real
+template and emitter in a throwaway crate on ddnative-base alone, and checks
+that a tampered case fails.
+
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
 `fill` already supplies the original executable bytes for *all* image
