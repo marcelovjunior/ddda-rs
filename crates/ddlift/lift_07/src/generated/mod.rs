@@ -18,12 +18,12 @@ pub use mtmath::abi::f_007ae860;
 pub use mtmath::abi::f_007aeed0;
 pub use mtmath::abi::f_007af450;
 pub use mtmath::abi::f_007af5b0;
-/// The lifted bodies of the functions mtmath replaces.
+/// The lifted bodies of the functions the readable ports replace.
 pub mod replaced {
-    pub use super::lifted_005::f_007ad7a0;
-    pub use super::lifted_005::f_007ad870;
-    pub use super::lifted_005::f_007ad8e0;
-    pub use super::lifted_005::f_007ad9d0;
+    pub use super::lifted_006::f_007ad7a0;
+    pub use super::lifted_006::f_007ad870;
+    pub use super::lifted_006::f_007ad8e0;
+    pub use super::lifted_006::f_007ad9d0;
     pub use super::lifted_006::f_007adc00;
     pub use super::lifted_006::f_007adca0;
     pub use super::lifted_006::f_007ae860;

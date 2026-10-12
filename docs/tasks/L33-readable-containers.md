@@ -68,3 +68,50 @@ MtString has no out-of-line function with more than 8 callers.
 | getDTI stubs (4,390), vtable-setting ctors | 1 each | trivial per-class stubs | lifted |
 
 18 functions ported; together 13,952 calling functions (the inventory's caller counts; call sites are more).
+
+### What landed
+
+- `crates/mtcore`: readable `#[repr(C)]` layouts and functions (`dti`,
+  `hash`, `object`, `array`, `property`, `allocator`), each marked with its
+  source address, and an adapter per port in `abi.rs` (`PORTS`, all eight
+  GPRs reproduced). Adapters make every call the way the lifted body does
+  (virtual calls, imports and ext callees through `x86::call_ext`, the
+  platform models directly), so no caller state is replayed and nothing had
+  to stay lifted for dead state.
+- Wiring: `research/native/lift.py` now reads the `PORTS` tables of both
+  readable crates (`PORT_CRATES`; an address in both is an error, OK'd by
+  claude-6) and writes `pub use <crate>::abi::f_X;` over the lifted body,
+  which stays as `replaced::f_X`. All 16 shards depend on mtcore;
+  regenerated shards 04, 12 and 13 (`lift.json` unchanged, no lifted body
+  file changed).
+- Shard 07's `replaced` paths moved from `lifted_005` to `lifted_006`: the
+  L24 mod.rs was generated before main's L17 adoption shifted that shard's
+  chunks, so it is stale on any base that has L17. **Integration: rerun
+  `python research/native/lift.py gen` after merging L24 and check the
+  shard mod.rs files are unchanged.**
+- docs/CORE.md for modders; inventory credits mtcore's ports and tests
+  (`READABLE_CRATES`); `scripts/native_gate.sh` runs mtcore's tests.
+
+### Verified
+
+- `cargo test -p mtcore` (debug and release) with the vectors required:
+  4 unit tests; the CRC table against the exe's (0x014075C0); 53 lifted
+  vectors over the 18 addresses (Sparse memory, every register at every
+  mocked call); 5,400 edge cases recorded from the original in Unicorn by
+  `research/native/vectors_core.py` (garbage-filled windows, every ESP
+  alignment, recorded virtual callees and imports, built DTI trees, arrays
+  with null elements, property lists and the node pool, the registry,
+  strings of many lengths). Clippy clean.
+- Teeth: flipping the name comparison's sign fails 179 of the 5,400 edge
+  cases.
+- Python: `test_math_wiring` (multi-crate wiring, the duplicate error),
+  `test_lift_shards` (synthetic shard workspace with mtmath and mtcore),
+  `scripts/test_inventory`.
+- Private data (E:/ddda-re/notes/native/vectors, not committed):
+  `core_lift.json`, `core_edge.json`, `core_tables.json`.
+
+### Pending the merge train
+
+The full ddnative replay with the ports wired in and the lifted-vs-port
+benchmark run in the integration build (merge-train rule); not run on this
+branch.
