@@ -1,5 +1,13 @@
 # Milestones
 
+### L28c post-train-14 input strategies (2026-10-12)
+
+- Main **817c036b** merged: **59,391 / 59,440 verified**, **49 residuals**
+  (31 recorder, 18 lifter/gap); previous 16 fixtures now credited.
+- Three general frame/input strategies, **192 light tests pass**; nine
+  static matches. Recording queued; no new fixtures credited yet.
+- **Next action:** serial heavy.py trials and append-only baseline audit.
+
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
 
 - **+9/+27**, all targeted dispatchers 3/3; this round **+16/+48**.

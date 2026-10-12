@@ -35,6 +35,37 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Post-train-14 frame-input strategies (2026-10-12, recording queued)
+
+Merged main **817c036b** after train 14: **59,391 / 59,440 verified**.
+RESIDUALS now has **49 rows: 31 recorder, 18 lifter/gap**, with the previous
+16 replay-pending rows credited. Six remaining dispatch blockers now name
+their observed frame shapes rather than only the final outside-image guard.
+
+Three isolated opt-in input strategies pass **192 light tests**:
+
+- **093c5223**, prefix-call-v1: register arithmetic around a fixed local
+  allocation, requiring matching ADD-ESP cleanup at every own return.
+  Static matches: 4644D0, 691AE0, 691E50, 692A40.
+- **4e20bc48**, ebp-call-v1: aligned locals with a stable EBP and matching
+  saved-register restores at every return. Ordinary operations may be
+  interleaved between pops only when they do not change the stack/frame.
+  Static matches: 7BEA60, 9D0E70, A195D0, BD45C0.
+- **496bd72e**, outgoing-call-v1: an initial outgoing area counts as call
+  arguments when every acyclic path ends in an indirect CALL immediately
+  followed by RET; no intervening ESP adjustment except 32-bit pushes.
+  Static match: B75EC0.
+
+Synthetic execution checks return addresses, ESP, mock cleanup and saved
+registers, with negative frame/cleanup/control-flow tests. Existing input
+policies and global return/memory guards are unchanged. These are mock-input
+hints; static matches are not credited as recordings or Rust comparisons.
+The first recorder job is queued through heavy.py; further runs remain
+serial. Baseline `L28c/prefix-before.json`: **59,662 functions / 177,580 cases**.
+Next: record each strategy, append successes, audit that entire baseline,
+and update this entry with measured results. No full Rust build.
+
+
 ### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
 
 **All nine targeted dispatchers record 3/3:** 685B40, 83FFF0, B952C0,
