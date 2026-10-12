@@ -225,6 +225,25 @@ pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Run `f` holding the guest lock: from inside [`unlocked`] (parallel
+/// mode) it takes the lock for `f` only; where the thread holds it already
+/// (or in the serial mode) `f` just runs. No time slice ends here.
+pub(crate) fn with_lock<R>(f: impl FnOnce() -> R) -> R {
+    let rt = runtime::current();
+    if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    enter(&rt);
+    struct Leave(Arc<Runtime>);
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            leave(&self.0);
+        }
+    }
+    let _leave = Leave(rt);
+    f()
+}
+
 /// Per-service guest-lock statistics (L64), on with `DDRUNTIME_LOCK_STATS=1`:
 /// for each service, its calls, how long it held the guest lock and how long
 /// it waited to take it (lock contention; not the time a wait function
@@ -334,8 +353,12 @@ pub fn lock_stats() -> Option<String> {
     Some(out)
 }
 
+/// Whether this host thread holds the guest lock (tests, diagnostics).
+pub fn holds_guest_lock() -> bool {
+    holds_lock()
+}
+
 /// Whether this host thread holds the guest lock.
-#[cfg(test)]
 pub(crate) fn holds_lock() -> bool {
     let rt = runtime::current();
     let s = rt.lock.lock();
@@ -415,7 +438,7 @@ fn leave(rt: &Runtime) {
 /// Run guest code from a thread that holds the lock outside any service
 /// (a session's top-level call): in parallel mode without the lock, so
 /// the other threads' services can run meanwhile.
-pub(crate) fn without_lock<R>(f: impl FnOnce() -> R) -> R {
+pub fn without_lock<R>(f: impl FnOnce() -> R) -> R {
     let rt = runtime::current();
     let release = rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) && {
         let s = rt.lock.lock();

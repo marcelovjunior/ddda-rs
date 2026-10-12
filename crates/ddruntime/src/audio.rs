@@ -181,6 +181,12 @@ pub(crate) struct Audio {
     effects: BTreeMap<u32, u32>,
     output: Option<SyncSender<AudioBlock>>,
     mixer: ddaudio::Mixer,
+    /// The guest thread mixing a pass (L65): the mixer is out of this state
+    /// meanwhile, and in parallel mode the pass runs without the guest lock.
+    rendering: Option<u32>,
+    /// Voices destroyed by the mixing thread itself during its pass (from a
+    /// guest effect), removed from the mixer when the pass ends.
+    destroyed_while_rendering: Vec<u32>,
     /// Guest XAPOs by (voice, effect index, object): the locked IXAPO, or
     /// None when it cannot run (QueryInterface failed, or its code is not
     /// lifted yet).
@@ -778,9 +784,8 @@ fn feed(mixer: &mut ddaudio::Mixer, m: &dyn Mem, voice: u32, f: &Format, data: u
     let spb = format.samples_per_block as u64;
     let (block0, block1) = (first / spb, (first + n).div_ceil(spb));
     let base = data.wrapping_add((block0 * f.align as u64) as u32);
-    let bytes: Vec<u8> = (0..((block1 - block0) * f.align as u64) as u32)
-        .map(|i| m.u8(base.wrapping_add(i)))
-        .collect();
+    let mut bytes = vec![0u8; ((block1 - block0) * f.align as u64) as usize];
+    m.read_bytes(base, &mut bytes);
     let mut frames = Vec::new();
     format.decode(&bytes, first - block0 * spb, n, &mut frames);
     mixer.feed(voice, f.channels, &frames);
@@ -850,8 +855,19 @@ fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
                     .collect(),
             })
             .collect();
+        s.rendering = Some(crate::threads::current_tid());
         (snapshot, std::mem::take(&mut s.mixer))
     });
+    // the pass ends (also by a panic out of a guest effect): DestroyVoice
+    // waits for this
+    struct Pass;
+    impl Drop for Pass {
+        fn drop(&mut self) {
+            state(|s| s.rendering = None);
+            crate::threads::signal();
+        }
+    }
+    let pass = Pass;
     let master = snapshot
         .iter()
         .find(|n| n.kind == ddaudio::Kind::Mastering)
@@ -890,8 +906,18 @@ fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
                 .collect(),
         })
         .collect();
-    let out = mixer.render(&nodes, &mut GuestEffects { m, c });
-    state(|s| s.mixer = mixer);
+    // L65: mixing is host work on the snapshot and the mixer's own buffers
+    // (the guest effects take the lock for the state they read), so in
+    // parallel mode the pass runs without the guest lock; voice changes made
+    // meanwhile apply from the next pass, as XAudio2 applies them
+    let out = crate::threads::unlocked(|| mixer.render(&nodes, &mut GuestEffects { m, c }));
+    state(|s| {
+        for v in s.destroyed_while_rendering.drain(..) {
+            mixer.remove(v);
+        }
+        s.mixer = mixer;
+    });
+    drop(pass);
     let (channels, sample_rate) = master?;
     Some(AudioBlock {
         sample_rate,
@@ -1004,11 +1030,13 @@ impl ddaudio::EffectHost for GuestEffects<'_> {
         enabled: bool,
     ) -> bool {
         let key = (voice, index, object);
-        let xapo = match state(|s| s.xapos.get(&key).copied()) {
+        // the pass may run without the guest lock (render): runtime state
+        // only under it
+        let xapo = match crate::threads::with_lock(|| state(|s| s.xapos.get(&key).copied())) {
             Some(x) => x,
             None => {
                 let x = self.lock(object, channels, frames * 100);
-                state(|s| s.xapos.insert(key, x));
+                crate::threads::with_lock(|| state(|s| s.xapos.insert(key, x)));
                 x
             }
         };
@@ -1035,7 +1063,7 @@ impl ddaudio::EffectHost for GuestEffects<'_> {
                 self.m.u32(params + 16) != 0
             }
             None => {
-                state(|s| s.xapos.insert(key, None));
+                crate::threads::with_lock(|| state(|s| s.xapos.insert(key, None)));
                 valid
             }
         };
@@ -1133,8 +1161,21 @@ fn destroy(m: &mut dyn Mem, c: &mut Cpu, this: u32) {
         callback(m, c, xapo, 9, &[]);
         callback(m, c, xapo, 2, &[]);
     }
+    // XAudio2's DestroyVoice waits until the audio thread is not processing
+    // the voice; here, until a pass in progress (without the guest lock,
+    // L65) ends. The mixing thread itself (a guest effect destroying a
+    // voice) cannot wait for its own pass: the voice leaves the mixer when
+    // the pass ends.
+    let me = crate::threads::current_tid();
+    while state(|s| s.rendering.is_some_and(|t| t != me)) {
+        crate::threads::block(None);
+    }
     let old = state(|s| {
-        s.mixer.remove(this);
+        if s.rendering.is_some() {
+            s.destroyed_while_rendering.push(this);
+        } else {
+            s.mixer.remove(this);
+        }
         let old = s.voices.remove(&this);
         for e in s.engines.values_mut() {
             e.changes.retain(|(_, id, _)| *id != this);

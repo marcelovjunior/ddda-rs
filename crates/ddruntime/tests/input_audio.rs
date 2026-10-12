@@ -12,7 +12,13 @@ use std::sync::Arc;
 const STACK: u32 = 0x10010000;
 const DATA: u32 = 0x10000;
 fn setup() -> (GuestMemory, Arc<Registry>) {
+    setup_mode(false)
+}
+/// `parallel`: guest threads in parallel mode (L42), the test thread
+/// holding the guest lock; lifted (guest-code) XAPO Process probes bound.
+fn setup_mode(parallel: bool) -> (GuestMemory, Arc<Registry>) {
     runtime::enter(Arc::new(runtime::Runtime::default()));
+    threads::set_parallel(parallel);
     // the audio workers run on a clock the tests advance: exact quanta,
     // whatever the machine's load (L44)
     audio::use_test_clock();
@@ -45,6 +51,13 @@ fn setup() -> (GuestMemory, Arc<Registry>) {
     ] {
         r.insert(a, Binding::Service(f)).unwrap();
     }
+    // guest code, not services: they run as translated code would
+    r.insert(0x10f0, Binding::Lifted(xapo_halve_probe)).unwrap();
+    r.insert(0x1100, Binding::Lifted(xapo_slow)).unwrap();
+    // the same effect as a service: it holds the guest lock while it runs,
+    // as the whole pass did before L65
+    r.insert(0x1110, Binding::Service(xapo_slow)).unwrap();
+    r.insert(0x1120, Binding::Service(noop_service)).unwrap();
     let r = Arc::new(r);
     threads::set_machine(m.share(), r.clone());
     r.install();
@@ -1154,4 +1167,160 @@ fn xaudio_runs_guest_xapos_and_skips_unlifted_ones() {
     assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
     sleep(&mut m, 15);
     assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+}
+
+// L65: guest XAPO Process as guest code (Binding::Lifted). The probe halves
+// like xapo_halve and records at DATA+0xf14 whether any call ran holding
+// the guest lock; the slow one counts passes started (DATA+0xf10) and
+// finished (DATA+0xf18), taking 30 ms each.
+fn xapo_halve_probe(m: &mut dyn Mem, c: &mut Cpu) {
+    m.set_u32(DATA + 0xf14, m.u32(DATA + 0xf14) | threads::holds_guest_lock() as u32);
+    xapo_halve(m, c);
+}
+fn xapo_slow(m: &mut dyn Mem, c: &mut Cpu) {
+    m.set_u32(DATA + 0xf10, m.u32(DATA + 0xf10) + 1);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    m.set_u32(DATA + 0xf18, m.u32(DATA + 0xf18) + 1);
+    let output = m.u32(c.esp + 20);
+    let input = m.u32(c.esp + 12);
+    m.set_u32(output + 4, m.u32(input + 4));
+    m.set_u32(output + 8, m.u32(input + 8));
+    c.esp += 28;
+}
+
+/// A mastering voice with one guest XAPO whose Process is `process`.
+fn master_with_effect(m: &mut dyn Mem, r: &Registry, e: u32, process: u32) -> u32 {
+    let object = DATA + 0xc80;
+    let vt = object + 0x40;
+    m.set_u32(object, vt);
+    for (slot, target) in [(0, 0x10b0), (1, 0x1080), (2, 0x1090), (8, 0x10c0), (9, 0x1010), (10, process)] {
+        m.set_u32(vt + 4 * slot, target);
+    }
+    m.set_u32(DATA + 0xa00, 1);
+    let chain = DATA + 0xe00;
+    m.set_u32(chain, 1);
+    m.set_u32(chain + 4, chain + 8);
+    m.set_u32(chain + 8, object);
+    m.set_u32(chain + 12, 1);
+    m.set_u32(chain + 16, 2);
+    assert_eq!(method(m, r, e, 10, &[DATA + 32, 0, 0, 0, 0, chain]), 0);
+    m.u32(DATA + 32)
+}
+
+/// L65: the pass (and the guest effects in it) runs without the guest lock
+/// in parallel mode and holds it in the serial mode; the mix is the same.
+#[test]
+fn xaudio_mixes_without_the_guest_lock_in_parallel_mode() {
+    for parallel in [false, true] {
+        let (mut m, r) = setup_mode(parallel);
+        let output = audio::output();
+        let e = engine(&mut m, &r);
+        let master = master_with_effect(&mut m, &r, e, 0x10f0);
+        let voice = source(&mut m, &r, e, 0);
+        let pcm: Vec<i16> = (0..480).map(|i| (i * 53 - 12000) as i16).collect();
+        for (i, x) in pcm.iter().enumerate() {
+            m.set_u16(DATA + 0x1000 + 2 * i as u32, *x as u16);
+        }
+        buffer(&mut m, 0x1234, 0x40);
+        assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+        assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+        advance(&mut m, 60);
+        let (left, right) = take_output(&output);
+        let want: Vec<f32> = pcm.iter().map(|x| *x as f32 / 32768.0 * 0.5).collect();
+        assert_contains(&left, &want);
+        assert_contains(&right, &want);
+        assert!(m.u32(DATA + 0xf0c) > 3, "the effect ran each pass");
+        assert_eq!(m.u32(DATA + 0xf14), !parallel as u32, "the guest lock inside the pass (parallel mode {parallel})");
+        method(&mut m, &r, voice, 18, &[]);
+        method(&mut m, &r, master, 18, &[]);
+        assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+        sleep(&mut m, 15);
+        assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+    }
+}
+
+/// L65: DestroyVoice during a pass that runs without the guest lock waits
+/// until the pass ends (XAudio2's DestroyVoice waits for the audio thread),
+/// so no effect of a destroyed voice runs after it returns.
+#[test]
+fn destroy_voice_waits_for_the_pass_in_progress() {
+    let (mut m, r) = setup_mode(true);
+    let _output = audio::output();
+    let e = engine(&mut m, &r);
+    let master = master_with_effect(&mut m, &r, e, 0x1100);
+    let voice = source(&mut m, &r, e, 0);
+    buffer(&mut m, 0x1234, 0);
+    assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+    assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+    audio::advance_test_clock(std::time::Duration::from_millis(100));
+    // wait (in guest Sleeps) until a pass is in its effect
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while m.u32(DATA + 0xf10) == m.u32(DATA + 0xf18) {
+        assert!(std::time::Instant::now() < until, "no pass started");
+        sleep(&mut m, 1);
+    }
+    let started = m.u32(DATA + 0xf10);
+    let t = std::time::Instant::now();
+    method(&mut m, &r, master, 18, &[]);
+    assert!(m.u32(DATA + 0xf18) >= started, "the pass in progress ended before DestroyVoice returned");
+    eprintln!("DestroyVoice during a pass returned after {:?}", t.elapsed());
+    method(&mut m, &r, voice, 18, &[]);
+    assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+    sleep(&mut m, 15);
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+}
+
+fn noop_service(_m: &mut dyn Mem, c: &mut Cpu) {
+    c.esp += 4;
+}
+
+/// Another thread's service calls (`threads::without_lock`: as translated
+/// code calls them) while the engine mixes passes whose guest effect takes
+/// 30 ms: their mean and longest duration (µs) and count.
+fn calls_while_mixing(process: u32) -> (f64, f64, usize) {
+    let (mut m, r) = setup_mode(true);
+    let _output = audio::output();
+    let e = engine(&mut m, &r);
+    let master = master_with_effect(&mut m, &r, e, process);
+    let voice = source(&mut m, &r, e, 0);
+    buffer(&mut m, 0x1234, 0);
+    assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+    assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+    audio::advance_test_clock(std::time::Duration::from_millis(300));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while m.u32(DATA + 0xf10) == 0 {
+        assert!(std::time::Instant::now() < until, "no pass started");
+        sleep(&mut m, 1);
+    }
+    let took = threads::without_lock(|| {
+        let mut took = vec![];
+        for _ in 0..150 {
+            let mut c = frame(&mut m, &[]);
+            let t = std::time::Instant::now();
+            r.call(&mut m, &mut c, 0x1120).unwrap();
+            took.push(t.elapsed());
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        took
+    });
+    method(&mut m, &r, voice, 18, &[]);
+    method(&mut m, &r, master, 18, &[]);
+    assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+    let us = |d: &std::time::Duration| d.as_secs_f64() * 1e6;
+    let mean = took.iter().map(us).sum::<f64>() / took.len() as f64;
+    (mean, took.iter().map(us).fold(0.0, f64::max), took.len())
+}
+
+/// L65 numbers (`-- --nocapture`): a service call by another thread while
+/// the audio thread mixes, the pass's guest effect (30 ms) holding the lock
+/// as the whole pass did before (bound as a service) and running without
+/// it as passes do now (guest code).
+#[test]
+fn other_threads_do_not_wait_for_the_mixing_pass() {
+    let before = calls_while_mixing(0x1110);
+    let after = calls_while_mixing(0x1100);
+    eprintln!("another thread's service call while the audio thread mixes (30 ms guest effect per pass):");
+    eprintln!("  pass under the lock (before): mean {:8.1} us, max {:8.1} us, {} calls", before.0, before.1, before.2);
+    eprintln!("  pass without it (after):      mean {:8.1} us, max {:8.1} us, {} calls", after.0, after.1, after.2);
+    assert!(after.0 * 4.0 < before.0, "{before:?} -> {after:?}");
 }
