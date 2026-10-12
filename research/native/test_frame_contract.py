@@ -229,6 +229,15 @@ class FrameContractTests(unittest.TestCase):
         self.assertEqual([e['out']['pop'] for e in c['calls']],[8,8])
         self.assertEqual(c['calls'][1]['regs']['esp'],c['regs_in']['esp']-12)
 
+    def test_indirect_call_can_have_no_arguments_of_its_own(self):
+        # A pre-pushed argument belongs entirely to the later ret-8 call.
+        # The intervening virtual call takes only this in ECX.
+        code=bytes.fromhex('8b01 6a55 ffd0 50 e8f4000000 c3')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=8):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[0,8])
+
     def test_later_callee_can_consume_only_intervening_pushes(self):
         # Two indirect arguments, then an unrelated stdcall argument, then
         # caller cleanup of the original arguments. Follow the balanced call.

@@ -626,3 +626,62 @@ Evidence: `L28c/trace-da9ec0.log`, `trace-00da9ec0.json`,
 `boot-route.jsonl`, and `boot-route-audit.json`. Recording used heavy.py;
 no Rust replay. The data set stays **open, not frozen**, as explicitly
 requested by head, so claude-2 can preview these additions immediately.
+
+### L28c pointer-route batch and hand-off (2026-10-12)
+
+**Final selected pair: 59,547 records / 177,235 cases.** The last batch
+adds **0x00860A60, 0x00874F90, 0x00B54BE0**, three zero-call-v1 fixtures
+each (**59,544 → 59,547 / 177,226 → 177,235**). All 59,544 previous
+records/case multisets are unchanged (`L28c/pointer-audit.json`). Across
+this entire title-route task, **13 functions / 39 cases** were added;
+`L28c/title-cumulative-audit.json` proves **all 59,534 original records
+and case multisets unchanged**, with no removals, promotions, affected
+callers, unexpected changes, or stale mocked closed targets.
+
+These three virtual wrappers use the same deferred argument shape, with
+**no stack arguments belonging to the intervening virtual call**. At
+0x00860A6B the pre-pushed value belongs to 0x0112F940, called at
+0x00860A74 after pushing the virtual result. Both returns of 0x0112F940
+(0x0112F98B / 0x0112F991) pop eight bytes. Thus the indirect call at
+0x00860A6F pops zero. A separate synthetic regression covers this limit;
+no further harness change was needed. **43 light tests pass**: 17 frame,
+19 structured-input, two range-generator, five audit. No full Rust replay.
+
+**Queue coverage:** all 32 one-hop entries after excluding the explicitly
+forbidden 0x00520003/0x00520004 were attempted. All 29 eligible two-hop
+entries were attempted; 0x00FB9A10 remains quarantined and was skipped.
+Each unsuccessful entry was tried with three seeds of zero-call-v1,
+zero-objects-v1, image-v1, and random, bounded to eight seconds per strategy.
+No additional one-hop entry recorded; the three additions above are from
+two hops. Together with the direct-title trials there are **77 tested
+residuals**, with each attempt's exact reason in
+`L28c/title-residual-evidence.json`. Missing prepared candidates:
+**228 → 215** overall; the current legacy lift_novector list contains 175
+entries. The 20 prepared lift rejections and three quarantines are unchanged.
+
+**Remaining work / routing questions:**
+
+- Constructor budgets were not guessed or increased. 0x00478600 uses a
+  stack-slot countdown; 0x00490E80 has a flag-neutral store between its
+  decrement and latch; 0x0049F990 copies a register initializer. The current
+  constant-loop analysis refuses these forms. 0x00475400 / 0x004915A0
+  also fail cost analysis at closed 0x00475180 (it saves EDI, uses it in
+  the loop at 0x004751A0, and restores it at 0x004751EE); 0x00480240
+  fails at closed 0x0047F660. 0x00DD5ED0's loop contains an indirect call
+  at 0x00DD5F99, so a universal static callee cost is unavailable. Board
+  #9540/#9542/#9552 requests coordination; **lift.py was not edited**.
+- Some remaining cleanup failures require different evidence. For example,
+  0x011590E0 calls 0x01156B00 at 0x01159141 with two pushed arguments;
+  the latter's non-switch indirect tail leaves its cleanup unresolved by
+  static_pop. Do not substitute an assumed pop or relax the own-return check.
+- Head/claude-2 received each boot-route success in board #9548/#9550/#9551.
+  The relevant implementation commits are **111bbe4e** and **92f14963**.
+  Head should replay these fixtures in the integration train and continue
+  the boot. All four priority addresses are now present. **native-L28c
+  remains open, not frozen**, as head explicitly requested; no snapshots,
+  shared-data writes, full replay, or pushes were made.
+
+Recording jobs have finished and released their heavy slot. Private audit
+manifests contain hashes only. The untouched comparison base remains
+native-train3, and native-L17 remains frozen. Source/doc/test changes are
+committed on task/L28b-crt as janne without trailers.

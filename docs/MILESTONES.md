@@ -1,5 +1,20 @@
 # Milestones
 
+### L28c title-route batch audited (2026-10-12, pending integration replay)
+
+- Final pointer-route trials add `0x00860A60`, `0x00874F90`, and
+  `0x00B54BE0`, three fixtures each, using the same delayed-callee cleanup
+  rule. Its no-stack-arguments regression passes: **43 light tests** total.
+- This batch adds **13 functions / 39 cases** overall: native-L28c
+  **59,534 → 59,547 records / 177,196 → 177,235 cases**. Cumulative hash
+  audit proves all old records and case multisets unchanged. All four
+  requested boot-route functions are recorded and reported for preview.
+- **Next action:** integration replay/boot preview; coordinate remaining
+  constructor budget proofs with the lifter owner. Trials covered all 32
+  eligible one-hop and 29 two-hop candidates; 77 tested title/pointer
+  residuals retain rejection evidence. No guard relaxed or quarantine
+  overridden. The data set remains open per head's latest instruction.
+
 ### L28c next boot route recorded (2026-10-12, pending integration replay)
 
 - `0x00DA9EC0` and `0x01104470` now have three original-code fixtures
