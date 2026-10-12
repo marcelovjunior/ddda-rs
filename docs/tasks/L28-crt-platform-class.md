@@ -685,3 +685,52 @@ Recording jobs have finished and released their heavy slot. Private audit
 manifests contain hashes only. The untouched comparison base remains
 native-train3, and native-L17 remains frozen. Source/doc/test changes are
 committed on task/L28b-crt as janne without trailers.
+
+### L28c archive registration boot stop (2026-10-12)
+
+**0x00419100 records 3/3; ready for immediate boot preview.** Private
+native-L28c: **59,547 → 59,548 selected records**, **177,235 → 177,238
+cases**. `L28c/archive-audit.json` proves all 59,547 old records/case
+multisets unchanged; only 0x00419100 is added. Missing prepared candidates:
+**215 → 214**. The data remains open, not frozen, as head requested.
+
+The function loads ten descriptor pointers through 0x0153B6BC at
+0x00419104. Each descriptor gives an entry pointer and count; the loop
+at 0x00419113 stores that entry pointer at `0x018D9288 + id*4`. The
+image contains **13,061 entries** across those tables. Its control flow
+does not depend on the caller's inputs, but its **78,453 instructions**
+exceed the ordinary 20,000 recorder budget.
+
+The opt-in **image-bounded-v1** policy keeps image-v1's input distribution.
+A separate conservative abstract interpreter starts with unknown GPRs
+(except the recorder's actual ESP) and unknown flags; reads only original
+image bytes and its own tracked stores; and must reach a balanced return
+without overwriting the root return address. Unknown conditions/addresses,
+calls, indirect flow, unsupported instructions, self-modifying writes,
+excessive proof memory or time, and paths beyond the hard instruction
+ceiling refuse the proof. Unknown stores invalidate image facts, rather
+than reloading the old bytes. No input-dependent loop obtains a bound.
+The ordinary limit remains when the proof fails. A successful long proof
+adds its exact count to the ordinary allowance, capped at two million;
+here the resulting limit is **98,453**. The proof never executes instead
+of the original: Unicorn still runs and checks every access/instruction,
+including all previous return, flag, page, and time guards. Each accepted
+case records its strategy and the derived bound for repeatability.
+
+**Verification:** six new synthetic tests check exact bounds, modified
+image counts, unknown stores and inputs, unchanged default runaway
+rejection, stack/code/ceiling/resource refusals, and an actual original-code
+recording using the opt-in policy. **49 light tests pass** across image
+budget (6), frame (17), structured-input (19), range (2) and audit (5).
+The three real archive cases also pass an independent output-map check:
+every one of the 13,061 registration slots contains its expected entry
+pointer read from the exe. Evidence is private in `L28c/archive-check.log`,
+`archive-record.log`, `archive-audit.json`, and the normal
+`structured-image-bounded-v1.jsonl` trial log. Original recording used
+heavy.py; no full Rust replay or data snapshots.
+
+The unused identity-instruction helper draft was reverted after its tests
+passed: it did not by itself establish the constructor bounds. The lifter
+owner granted the budget area in board #9567, and requested merging
+`task/L27b-integrate` (acdd978b) before changing lift.py. That merge and the
+remaining requested constructor route follow this boot-stop commit.

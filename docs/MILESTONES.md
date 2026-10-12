@@ -1,5 +1,18 @@
 # Milestones
 
+### L28c archive boot stop recorded (2026-10-12, pending replay)
+
+- `0x00419100` now records **3/3** cases. A conservative image-only
+  abstract trace proves its **78,453-instruction** return path; the opt-in
+  `image-bounded-v1` policy uses that proof plus the existing 20,000
+  allowance. Unknown/input-dependent control retains the ordinary guard.
+- Every original case registers all **13,061** entries from ten image
+  tables correctly. Private native-L28c: **59,547 → 59,548 records /
+  177,235 → 177,238 cases**. Hash audit: every old record/case unchanged.
+  **49 light tests pass**; no full Rust replay or shared-data writes.
+- **Next action:** boot preview, then the remaining constructor route;
+  merge the lifter owner's integration branch before budget-area edits.
+
 ### L28c title-route batch audited (2026-10-12, pending integration replay)
 
 - Final pointer-route trials add `0x00860A60`, `0x00874F90`, and
