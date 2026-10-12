@@ -176,3 +176,18 @@ behaviour (`research/runtime/windows/Virtual.cs`) and modelled it:
   0x80000000..0xFF000000. The exe is IMAGE_FILE_LARGE_ADDRESS_AWARE, so it
   has 4 GB on 64-bit Windows; GetSystemInfo now reports 0xFFFEFFFF.
 - New `GuestMemory::unmap` for decommits.
+
+IMM32 is on the path (found by claude-7's L35 map): 0x00DF1200 calls
+0x01106C80 right after CreateWindowExW. That calls ImmGetDefaultIMEWnd,
+ImmGetContext, ImmSetCompositionWindow (CFS_RECT), ImmSetCandidateWindow
+(CFS_EXCLUDE) and ImmReleaseContext, plus ImmSetOpenStatus(FALSE) through
+0x01106B30. Measured in a GUI process (`research/runtime/windows/Imm.cs`)
+and modelled in `imm.rs` (2cad691). On Windows, ShowWindow also sends
+WM_IME_SETCONTEXT (wParam 1, lParam 0xC000000F) and WM_IME_NOTIFY
+(IMN_OPENSTATUSWINDOW) between WM_ACTIVATE and WM_SETFOCUS. The runtime's
+ShowWindow still leaves them out, and the game's handlers show this changes
+nothing: 0x011066D0 only clears the ISC_SHOWUI bits before DefWindowProc,
+and 0x011066E0 changes state only for IMN 3/4/5. Recorded as a known
+difference with no guest-visible effect.
+`StringFromGUID2` (DirectInput enumeration callback near 0x00DF599C)
+measured and modelled as well (d1a8d82).
