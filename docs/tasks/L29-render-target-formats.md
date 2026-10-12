@@ -118,3 +118,95 @@ description, so a pass can draw into up to four targets. Which passes do
 (the G-buffer and light-accumulation names suggest the deferred passes)
 is data in the pass descriptions, not code.
 
+### 2. Oracle (`crates/d3d9ref/src/replay.rs`)
+
+- `render_targets` reads every requested target back as it is stored:
+  GetRenderTargetData into a SYSTEMMEM surface of the same format, rows
+  tightly packed. Float formats come back as their raw words, and all
+  targets of an MRT draw are read.
+- `render_cleared` replays several clears in order. A clear now applies
+  its own viewport, rectangles, scissor state and sRGB write. Before this,
+  states left by an earlier call leaked into Clear: SRGBWRITEENABLE from
+  the previous case re-encoded the clear colour.
+- `clear_with_states`/`clear_probe` measure what Clear does with states
+  set.
+- Depth: the census shows the game never samples depth (no D24S8 textures,
+  no FOURCC formats), so the oracle observes depth through depth and
+  stencil tests (probe draws). A lockable or FOURCC depth path was not
+  needed.
+
+### 3. Backend (`crates/ddgpu`), compared against the driver
+
+Tests in `crates/ddgpu/tests/targets.rs`, all against the host's D3D9
+driver (RTX 4060, 610.62) and the wgpu backend on the same machine
+(Vulkan, D24_UNORM_S8_UINT, which wgpu-hal picks when the driver offers
+it):
+
+| Test | What | Result |
+|---|---|---|
+| `target_formats_match_the_d3d9_driver` (`TARGETS_FUZZ`, default 200) | A8R8G8B8, A16B16G16R16F, A2B10G10R10, R32F, G16R16, A32B32G32R32F, R16F, G16R16F, G32R32F, A16B16G16R16. Random values in and out of [0, 1] (negative, beyond half range, denormal), blend factors, ops, separate alpha, blend factor, write masks and sRGB write; the target's bits compared | 1000 of 1000 equal, apart from the fp16 overflow below |
+| `mrt_draws_match_the_d3d9_driver` | 2-4 targets, mixed formats (the device has MRTINDEPENDENTBITDEPTHS), per-target write masks, blending | 40 of 40 equal |
+| `depth_precision_matches_the_d3d9_driver` | D24S8: a draw at z1, a second at z1 + k·2^-24 (k from -1 to 2 in quarter steps) with LESS/EQUAL/LESSEQUAL/GREATER, at five depths | 180 of 180 equal (24-bit quantisation identical) |
+| `clears_match_the_d3d9_driver` | A full clear, then a clear with a random viewport, rectangles, scissor (test on or off), sRGB write and flags; colour, depth and stencil checked with a probe draw | 60 of 60 equal |
+
+Measured and implemented:
+- **Blending into every target format.** The recorded profile answers
+  POSTPIXELSHADER_BLENDING for every render-target format, R32F and
+  A32B32G32R32F included, and the driver blends them. ddgpu blended only
+  8-bit and fp16 targets. Blending into 32-bit float targets needs wgpu's
+  FLOAT32_BLENDABLE (requested; a draw reports an error without it).
+- **G16R16 and A16B16G16R16 targets.** wgpu allows Rg16Unorm/Rgba16Unorm
+  as render attachments only with TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+  (requested). A format the adapter cannot render to is now an error,
+  where it used to panic. `WgpuBackend::optional_features()` lists what
+  hosts that create their own device should request.
+- **Clear values.** The driver stores `byte * (1/255 as f32)` in single
+  precision in float targets: one ulp above k/255 for some bytes (233
+  gives 0.91372555, not 0.91372549). For 16-bit float targets it truncates
+  that value to half: 106 gives 0.415527, round-to-nearest would give
+  0.415771. Unorm targets get k/255, rounded alike by both.
+- **BLENDFACTOR** is converted the same way (single precision), which
+  matters on 32-bit float targets.
+- **Clear regions** (`explore_clear_states`, then the comparison test):
+  Clear covers the viewport, each rectangle within it, and only the
+  scissor rectangle when the scissor test is on. It encodes the colour to
+  sRGB when SRGBWRITEENABLE is on and ignores colour write masks.
+  `ClearCall` gains `scissor` and `srgb`; the runtime fills them
+  (`crates/ddruntime/src/d3d9draw.rs`). ddgpu clears whole targets with a
+  load-op clear and partial regions with a scissored clear pipeline. The
+  game's clear command runs after the pass's viewport and raster state are
+  set (draw-command case 4 in `FUN_00DAB480`), so these rules apply to
+  it. Before this, ddgpu always cleared the whole target and reported an
+  error for rectangles.
+- **Already equal, now covered by tests:** float value storage and
+  denormals; unorm clamping; sRGB write (A8R8G8B8 only, ignored for
+  others, as the profile answers SRGBWRITE only for A8R8G8B8/X8R8G8B8);
+  per-target write masks in MRT; D24 depth precision.
+- `tests/cache.rs` (claude-9's guard for the L25 caches) now also uses a
+  second target of a varying format and partial clears; long-lived and
+  fresh backends still give the same frames.
+
+### 4. What cannot be exact
+
+- **Blend results beyond the half range in 16-bit float targets** become
+  ±inf on the D3D9 driver and ±65504 on the Vulkan driver's blend unit.
+  Seen in 3 of 400 random cases, all with blending, for example 100000 +
+  dst×100000 into G16R16F, or alpha 65504 with INVSRCALPHA. Direct writes
+  of out-of-range values agree, so this is fixed-function blending, which
+  a shader cannot reach. The fuzz accepts exactly this pair (inf against
+  the largest finite half of the same sign, with blending on) and nothing
+  else.
+- **Render-target formats the game never renders to** (L8, A8, L16,
+  R5G6B5, X1R5G5B5) have no target mapping in ddgpu; a draw into one
+  reports an error. The driver offers them as targets.
+- **Multisampled targets** (the antialiasing option: CreateRenderTarget
+  with the quality from 0x01440450, resolved with StretchRect) are not
+  modelled. ddgpu renders them single-sampled, so edges are not
+  antialiased. This is outside this brief's format scope; a later brief
+  should take it (CheckDeviceMultiSampleType answers, wgpu MSAA targets,
+  and resolve semantics against the driver).
+- **Test stability:** one run of `cargo test -p ddgpu --test draw` with
+  parallel test threads died with an access violation. It did not happen
+  again in three parallel runs or a single-threaded run. Every test
+  creates its own D3D9 device and wgpu device; the cause is not known
+  (driver, threads or memory).
