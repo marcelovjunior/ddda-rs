@@ -85,9 +85,12 @@ impl Registry {
         Self::default()
     }
 
-    /// Every lifted function of the generated program.
+    /// Every lifted function of the generated program (none without the
+    /// `game` feature: then every original address is unbound).
     pub fn with_lifted_program() -> Self {
+        #[allow(unused_mut)]
         let mut r = Self::new();
+        #[cfg(feature = "game")]
         for (addr, f) in ddnative::generated::lifted::all() {
             r.insert(addr, Binding::Lifted(f)).expect("the lifted list has one entry per address");
         }
