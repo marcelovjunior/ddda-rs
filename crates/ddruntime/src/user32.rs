@@ -197,42 +197,7 @@ fn name_arg(m: &dyn Mem, p: u32, wide: bool) -> String {
 /// SendMessage: the window procedure, synchronously (single guest thread).
 pub fn send(m: &mut dyn Mem, cpu: &mut Cpu, hwnd: u32, message: u32, wparam: u32, lparam: u32) -> u32 {
     let Some(proc_) = desk(|d| d.windows.get(&hwnd).map(|w| w.wndproc)) else { return 0 };
-    if proc_ == 0 {
-        // a system window (create_system_window): its procedure is Windows' own
-        panic!("message {message:#06x} to system window {hwnd:#x} ({:?}) is not modelled (crate::user32)", window(hwnd).map(|w| w.class));
-    }
     crate::services::call_guest(m, cpu, proc_, &[hwnd, message, wparam, lparam])
-}
-
-/// A window of a system class (no guest window procedure), created without
-/// guest messages: e.g. the default IME window (crate::imm). Hidden, at
-/// (0, 0, 0, 0), owned by `owner`.
-pub(crate) fn create_system_window(class: &str, owner: u32, style: u32) -> u32 {
-    desk(|d| {
-        let hwnd = HWND_BASE + 2 * d.next_hwnd;
-        d.next_hwnd += 1;
-        d.windows.insert(hwnd, Window {
-            class: class.to_string(),
-            title: String::new(),
-            wndproc: 0,
-            style,
-            ex_style: 0,
-            rect: [0, 0, 0, 0],
-            parent: owner,
-            instance: 0,
-            visible: false,
-            shown: false,
-            needs_paint: false,
-            props: HashMap::new(),
-            user_data: 0,
-        });
-        hwnd
-    })
-}
-
-/// The window that has the keyboard focus (0: none).
-pub(crate) fn focus() -> u32 {
-    desk(|d| d.focus)
 }
 
 fn lo_hi(lo: i32, hi: i32) -> u32 {

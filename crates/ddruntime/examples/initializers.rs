@@ -71,4 +71,8 @@ fn main() {
     for (f, n) in fl.iter().take(10) {
         println!("  {n:5} x {f}");
     }
+    // initializers may have started guest threads; the report is complete
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }

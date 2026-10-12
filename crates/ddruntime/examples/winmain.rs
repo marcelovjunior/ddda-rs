@@ -33,6 +33,11 @@ fn main() {
     for (tid, fault) in ddruntime::threads::faults() {
         println!("guest thread {tid:#x} ended with: {fault}");
     }
+    // guest threads the game started keep running on host threads; the
+    // report is complete, so end the process with them
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }
 
 fn report(step: &str, o: &Outcome) {

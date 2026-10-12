@@ -106,8 +106,6 @@ pub(crate) struct State {
     pub(crate) system: crate::system::System,
     /// Open registry keys (crate::registry).
     pub(crate) registry: crate::registry::Keys,
-    /// The input method state (crate::imm).
-    pub(crate) ime: crate::imm::Ime,
     /// Blocks GetEnvironmentStringsW handed out and not yet freed.
     pub(crate) environment_blocks: Vec<u32>,
 }
@@ -355,7 +353,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     });
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::imm::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
@@ -368,6 +366,11 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
 pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), InstallError> {
     mem.map_lazy(HEAP_BASE, HEAP_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
     for (addr, f) in SERVICES {
+        // SERVICES only stand in for original bodies the lifter cannot
+        // produce yet; once the lifted program has the original, it runs
+        if matches!(registry.get(*addr), Some(Binding::Lifted(_))) {
+            continue;
+        }
         registry.insert(*addr, Binding::Service(*f)).map_err(InstallError::Conflict)?;
     }
     Ok(())
@@ -375,8 +378,9 @@ pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), Ins
 
 /// Every service and the original address it replaces.
 pub const SERVICES: &[(u32, fn(&mut dyn Mem, &mut Cpu))] = &[
-    // until the lifter handles its SEH frame (brief L15): the recorder
-    // rejects the original body
+    // until the lifter handles its SEH frame: the recorder rejected the
+    // original body until L28 (claude-3); with that data the lifted body
+    // replaces this service (install skips it)
     (0x012E_D89C, onexit),
 ];
 
