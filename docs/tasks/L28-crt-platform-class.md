@@ -35,6 +35,28 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Earlier-phase method bindings (2026-10-12)
+
+`constructed_inputs.py --bind edi=0.regs_out.eax` selects an earlier
+checked producer output by zero-based phase index. Two-part bindings still
+select the last producer. Bindings are saved for the method only; subsequent
+producers retain their accepted entry distributions. Invalid phase indexes
+reject. **148 light tests pass**, including binding provenance and sequence
+replay. `L28c/phase-binding-audit.json` remains clean.
+
+Destination-first 0x004915A0 -> 0x00437BE0 -> 0x0047DF20 also records
+**0/3** for 0x00493AA0. A diagnostic confirms the first producer matches
+its accepted case, then the save-manager replay changes reads, writes,
+volatile outputs and calls. The opposite order changes destination reads,
+writes and MXCSR. Both sequences reject; no comparison was relaxed and no
+existing record was replaced. **Next:** identify shared input dependencies
+and an independently accepted setup distribution, or advance the next
+boot-priority manager recipe. Fifteen original recipes remain unfinished.
+
+**Batch handoff:** boot stop 16 is the sole addition (+1/+3), native-L28c
+**59,592 / 177,370**. All 59,591 baseline records / 177,367 cases are
+unchanged. Main merged before handoff; full Rust replay remains with head.
+
 ### Bounded setup replay (2026-10-12)
 
 Guarded input strategies now re-prove a producer on accumulated setup

@@ -70,6 +70,21 @@ class ConstructedTests(unittest.TestCase):
         self.assertEqual(len(recipe['setups']),2)
         self.assertEqual(recipe['rule'],'constructed-chain-v1')
 
+    def test_sequence_binds_earlier_output_without_rebinding_later_producers(self):
+        self.fixture('b811000000 c3','b822000000 c3')
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',**self.run_body(f,seed))
+            phases.append((f,accepted,'test'))
+        state,recipe=c.construct_chain(phases,{'edi':['0','regs_out','eax'],
+                                              'ecx':['regs_out','eax']},self.run_body)
+        self.assertEqual(state['registers'],{'edi':17,'ecx':34})
+        self.assertEqual(recipe['setups'][0]['bindings'],{'edi':['regs_out','eax']})
+        for phase in ('-1','2','invalid'):
+            with self.assertRaisesRegex(ValueError,'setup binding phase'):
+                c.construct_chain(phases,{'edi':[phase,'regs_out','eax']},self.run_body)
+
     def test_sequence_retains_legacy_random_distribution(self):
         self.fixture('c3','c3')
         phases=[]

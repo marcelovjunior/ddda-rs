@@ -91,17 +91,34 @@ def construct(setup, accepted, bindings, run, key, initial_state=None):
 
 def construct_chain(setups, bindings, run):
     """Replay each accepted producer on preceding state; reject dependencies
-    that change any accepted observation. Bind method registers from the last
-    producer only. Nothing is published if any phase fails.
+    that change any accepted observation. Two-part register sources name the
+    last producer; a leading zero-based phase index selects an earlier one.
+    Nothing is published if any phase fails.
     """
     if not setups:
         raise ValueError('setup sequence must not be empty')
-    state, recipes = None, []
+    phase_bindings = [{} for _ in setups]
+    for target, source in bindings.items():
+        index = len(setups)-1
+        if len(source) == 3:
+            try:
+                index = int(source[0])
+            except (TypeError, ValueError):
+                raise ValueError('setup binding phase must be a zero-based index') from None
+            source = source[1:]
+        if not 0 <= index < len(setups):
+            raise ValueError('setup binding phase is outside the sequence')
+        phase_bindings[index][target] = source
+    state, recipes, registers = None, [], {}
     for index, (setup, accepted, key) in enumerate(setups):
-        state, recipe = construct(setup, accepted,
-                                  bindings if index == len(setups)-1 else {},
+        state, recipe = construct(setup, accepted, phase_bindings[index],
                                   run, key, initial_state=state)
+        registers.update(state['registers'])
+        # A method binding never changes the next producer's entry registers.
+        state = {**state, 'registers': {}}
         recipes.append(recipe)
+    state['registers'] = registers
+    validate_state(state)
     return state, dict(rule='constructed-chain-v1', setups=recipes)
 
 
@@ -113,7 +130,8 @@ def main():
     p.add_argument('setup', type=lambda v: int(v, 0))
     p.add_argument('--also-setup', action='append', default=[], type=lambda v: int(v, 0),
                    help='replay another checked setup on the accumulated state')
-    p.add_argument('--bind', action='append', default=[], metavar='ECX=regs_in.ecx')
+    p.add_argument('--bind', action='append', default=[], metavar='ECX=[PHASE.]regs_in.ecx',
+                   help='bind from the last setup, or a zero-based setup phase')
     p.add_argument('--seconds', type=float, default=20)
     p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1'), default='zero-call-v1')
     args = p.parse_args()

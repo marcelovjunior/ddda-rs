@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c earlier producer bindings (2026-10-12)
+
+- Method inputs can select any checked setup phase without rebinding later
+  producers. **148 light tests pass**, audit unchanged beyond boot16 +1/+3.
+- Both output/manager orderings for 0x00493AA0 change accepted observations
+  and reject. **Next action:** resolve those shared input dependencies.
+
 ### L28c bounded producer replay (2026-10-12)
 
 - Guarded constructors re-prove their budgets on accumulated setup state.
