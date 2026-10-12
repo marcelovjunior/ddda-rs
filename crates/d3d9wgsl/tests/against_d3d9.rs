@@ -2166,9 +2166,12 @@ fn every_translation_makes_a_backend_pipeline() {
     let packages: Vec<String> = if std::env::var_os("DDDA_ALL_SHADERS").is_some() { all_packages() } else { vec!["Title".into()] };
     let mut seen = std::collections::HashSet::new();
     let (mut built, mut bad) = (0usize, Vec::new());
+    // DDDA_SHADER_FROM=<package>: resume there (earlier packages only count as seen)
+    let from = std::env::var("DDDA_SHADER_FROM").ok();
     for name in &packages {
+        let skip = from.as_ref().is_some_and(|f| name < f);
         for tokens in pixel_shaders(name).into_iter().chain(vertex_shaders(name)) {
-            if !seen.insert(tokens.clone()) {
+            if !seen.insert(tokens.clone()) || skip {
                 continue;
             }
             let shader = d3d9shader::parse(&tokens).unwrap();
