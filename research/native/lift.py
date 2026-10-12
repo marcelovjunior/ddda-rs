@@ -454,7 +454,8 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
 def register_bound(found, start, index, entry=None, switches=None, read=None):
     """The values 32-bit register `index` (a Capstone id) holds before the
     instruction at `start` on every path into it, by the edge_slots rules,
-    as a set; None when unproven."""
+    as a set; None when unproven. `index` may also be a key ("mem", base
+    register id, displacement): a dword memory slot."""
     from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
     import harness as h
     read = h.code if read is None else read
@@ -549,6 +550,24 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                     or any(o.type == X86_OP_MEM and b.reg_name(o.mem.base) == "esp" for o in b.operands)):
                 return None
             at = b.address
+        return None
+
+    def esp_slot(key):
+        return key[0] == "mem" and found[start].reg_name(key[1]) == "esp" and key[2] >= 0
+
+    def esp_shift(b):
+        """How much `b` moves esp (push, pop of a register, add/sub esp, imm),
+        or None for anything else."""
+        ops = b.operands
+        if b.mnemonic == "push" and len(ops) == 1 and ops[0].size == 4:
+            return -4
+        if (b.mnemonic == "pop" and len(ops) == 1 and ops[0].type == X86_OP_REG and ops[0].size == 4
+                and b.reg_name(ops[0].reg) != "esp"):
+            return 4
+        if (b.mnemonic in ("add", "sub") and len(ops) == 2 and ops[0].type == X86_OP_REG
+                and b.reg_name(ops[0].reg) == "esp" and ops[1].type == X86_OP_IMM):
+            n = ops[1].imm & 0xffffffff
+            return n if b.mnemonic == "add" else -n
         return None
 
     def slot_of(i, o):
@@ -673,10 +692,11 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                     return True
         return b.mnemonic.startswith("rep")  # string stores show es:[edi] operands
 
-    def bound(start_at, key, depth=0):
+    def bound(start_at, key, depth=0, shifts=0):
         """Values `key` holds before the instruction at `start_at` on every
-        path (see edge_slots), as a set, or None."""
-        if depth > 4:
+        path (see edge_slots), as a set, or None. `shifts` counts the moves
+        of an esp-relative slot across stack pointer changes (L49)."""
+        if depth > 4 or shifts > 32:
             return None
         values = set()
         seen, todo, steps = set(), [(start_at, False)], 0
@@ -690,7 +710,10 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
             preds = predecessors(at)
             if at == entry:
                 # an input of the function: bounded by its callers (L49)
-                rng = caller_bound(entry, found[start_at].reg_name(key[1])) if key[0] == "reg" else None
+                # (a register, or a stack argument: an esp slot at or above
+                # the return address)
+                rng = (caller_bound(entry, found[start_at].reg_name(key[1])) if key[0] == "reg" else
+                       caller_bound(entry, ("esp", key[2])) if esp_slot(key) and key[2] >= 4 else None)
                 if rng is None:
                     return None
                 if masked:
@@ -717,7 +740,28 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                     if written is None:
                         return None
                     ops = b.operands
-                    if key[0] == "mem":
+                    shift = esp_shift(b) if esp_slot(key) else None
+                    if shift is not None:
+                        # L49: an esp-relative slot across push, pop and
+                        # add/sub esp, imm; a push into the slot gives it the
+                        # pushed value (0x009C4216 `push eax` before a call)
+                        if b.mnemonic == "push" and key[2] == 0:
+                            o = ops[0]
+                            if o.type == X86_OP_IMM and (o.imm & 0xffffffff) < 4096:
+                                rng = {o.imm & 0xffffffff}
+                            elif o.type == X86_OP_REG and b.reg_name(o.reg) != "esp":
+                                rng = bound(b.address, ("reg", o.reg), depth + 1, shifts)
+                            elif slot_of(b, o):
+                                rng = bound(b.address, slot_of(b, o), depth + 1, shifts)
+                            if rng is None:
+                                return None
+                        elif key[2] + shift < 0 or (b.mnemonic == "push" and key[2] < 4):
+                            return None  # the slot was below the stack pointer
+                        else:
+                            rng = bound(b.address, ("mem", key[1], key[2] + shift), depth, shifts + 1)
+                            if rng is None:
+                                return None
+                    elif key[0] == "mem":
                         if written & base_names or stores_may_alias(b, key):
                             if (b.mnemonic == "mov" and slot_of(b, ops[0]) == key
                                     and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
@@ -749,6 +793,13 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                             rng = bound(b.address, ("reg", ops[1].reg), depth + 1)  # L48: a register copy
                             if rng is None:
                                 return None
+                        elif (b.mnemonic == "lea" and matches(b, ops[0], key) and ops[1].mem.base
+                              and not ops[1].mem.index and not ops[1].mem.segment):
+                            # L49: lea R, [R2 + d] (0x005F867A `lea eax, [edi + 2]`)
+                            inner = bound(b.address, ("reg", ops[1].mem.base), depth + 1)
+                            if inner is None:
+                                return None
+                            rng = {v + ops[1].mem.disp for v in inner}
                         elif b.mnemonic == "mov" and matches(b, ops[0], key) and slot_of(b, ops[1]):
                             rng = bound(b.address, slot_of(b, ops[1]), depth + 1)  # L48: a memory slot
                             if rng is None:
@@ -775,7 +826,7 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                 values |= rng
         return values if values and max(values) - min(values) < 4096 else None
 
-    return bound(start, ("reg", index))
+    return bound(start, index if isinstance(index, tuple) else ("reg", index))
 
 
 # L49 caller bounds: {(callee, register name): set or None}; the branch
@@ -852,6 +903,10 @@ def caller_bound(callee, reg):
     every path into it, when its callers make the bound check (0x004593E0
     switches on eax through a byte remap; its three callers each run
     `cmp eax, 0x14; ja` or copy a register so bounded before the call).
+    `reg` may also be ("esp", d): the dword at [esp + d] on entry, a stack
+    argument (0x009C4230 switches on [esp + 4]; its caller pushes eax after
+    `cmp eax, 8; ja`); at a call site it is [esp + d - 4], at a tail jump
+    [esp + d]).
     Every direct branch to the entry (branch_sites) must lie in a decoded
     body (caller_body) where the edge_slots rules bound `reg` before it; the
     union over the sites, or None. Inside that proof a caller's own input
@@ -871,7 +926,11 @@ def caller_bound(callee, reg):
             rng = None
             if body is not None:
                 found, switches, owner = body
-                rng = register_bound(found, pc, getattr(x86_const, "X86_REG_" + reg.upper()), owner, switches)
+                if isinstance(reg, tuple):
+                    key = ("mem", x86_const.X86_REG_ESP, reg[1] - (4 if found[pc].mnemonic == "call" else 0))
+                else:
+                    key = getattr(x86_const, "X86_REG_" + reg.upper())
+                rng = register_bound(found, pc, key, owner, switches)
             if rng is None:
                 values = None
                 break

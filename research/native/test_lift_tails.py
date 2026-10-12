@@ -327,6 +327,25 @@ class CallerBoundTests(unittest.TestCase):
         self.assertEqual(proof, {0x1007: True})
         self.assertTrue({0x100E, 0x100F} <= set(targets))
 
+    def test_a_stack_argument_pushed_after_a_bound(self):
+        # callee 0x1000: push esi; mov ecx,[esp+8]; pop esi; jmp [ecx*4+0x2000]
+        # caller 0x1020: cmp eax,1; ja out; push eax; mov eax,[esp+8]; call 0x1000;
+        # add esp,4; out: ret (0x009C4216)
+        callee = bytes.fromhex("56" "8b4c2408" "5e" "ff248d00200000") + b"\xc3" * 0x13
+        caller = (bytes.fromhex("83f801" "770d" "50" "8b442408" "e8") + struct.pack("<i", 0x1000 - 0x102F)
+                  + bytes.fromhex("83c404" "c3"))
+        for check, want in ((caller, True), (b"\x90" * 5 + caller[5:], False)):
+            code = callee + check + b"\xc3" * 5
+            sections = [(0x1000, code), (0x2000, dwords(0x100D, 0x100E, 0x100F))]
+            read, is_code = image_fixture(code, dict(sections[1:]))
+            with patch.object(h, "image", return_value=(0, sections)), patch.object(h, "executable", is_code), \
+                 patch.object(lift, "function_entries", return_value=frozenset({0x1000, 0x1020})), \
+                 patch.object(lift, "noreturn_entries", return_value=frozenset()), \
+                 patch.object(lift, "_BRANCHES", None), patch.dict(lift.CALLER_BOUND, clear=True):
+                lift.decode_body(0x1000, 0x20, entries=frozenset({0x1000, 0x1020}), noreturn=frozenset(),
+                                 read=read, is_code=is_code, ext=True)
+                self.assertEqual(lift.TABLE_PROOF[0x1000], {0x1006: want})
+
     def test_an_address_taken_entry_or_an_unbounded_caller_is_unproven(self):
         self.assertEqual(self.proof(extra_sections=[(0x5000, dwords(0x1000))])[0], {0x1007: False})
         # 0x1030: call 0x1000 with eax unchecked
