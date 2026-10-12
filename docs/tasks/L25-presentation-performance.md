@@ -210,3 +210,39 @@ L22, so they wait for a decision by the head):
 
 Commits: ddb4f29, f95ca1b, 1c99b8a, 3ab3378 (merge of claude-5's
 4159466), decdcd7, ec4af23, 9896b64, c811c62, and this Results commit.
+
+### Prototypes (branch `task/L25-perf-prototypes`, for a later train)
+
+Written during the build pause and not compiled yet. Each keeps results
+1:1 and is proven by the required-vector replay plus `ddperf`:
+
+- **924ce18, cached call targets.** Most direct calls in the lifted
+  shards cross shards and resolve through `x86::call_lifted` (in one
+  shard, 235 such call sites against 4 calls within the shard). A
+  4096-slot thread-local direct-mapped cache now keeps resolved targets.
+  The program's lookup never changes once installed, so entries cannot go
+  stale, and a miss resolves exactly as before. `ddperf micro` times
+  cached against searched resolution.
+- **f034c8a, inline guest-memory fast path (devirtualised `Mem`).**
+  `PageTable` moves to ddnative-base, and `Mem::page_table()` (default
+  `None`) is added, with `GuestMemory` returning its table. lift.py lowers
+  at gen time (agreed with claude-6; cached arms unchanged): each function
+  reads `let pt = m.page_table();` once, and `m.u32(a)` becomes
+  `m.fast_u32(pt, a)` (all six accessors), an inline page-table access when
+  the table allows it, else the same trait call as before. Fixtures and
+  `Sparse` return `None`, so the replay gate runs the old path.
+  `test_lift_codegen.py` gets a rustc fixture comparing both paths on the
+  same generated function, and `ddperf micro` times a read both ways.
+- **Flags: no prototype needed.** They are already lazy (kind, operands
+  and result are stored; a flag is computed when read). With the step-2
+  `#[inline]`, the constant `cond("..")` folds to the flag test, and
+  LLVM can drop a flag write that the next one overwrites with no call or
+  read in between (`cpu` is a unique `&mut`). The lifter keeps every flag
+  write, because a callee can observe the machine state; that stays as it
+  is.
+- **`call_ext`: measure first.** 354 k calls per replay pass against
+  28.4 M memory accesses. Each call costs a thread-local `Rc` clone, a
+  boxed-closure call and a hash lookup; a service call also reads the
+  clock for the 2 ms time slice (`threads::maybe_yield`). `ddperf micro`
+  measures the round trip. Only if it shows up would a per-thread
+  direct-mapped binding cache (like the call-target cache) be next.
