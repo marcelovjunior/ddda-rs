@@ -52,6 +52,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x011041E0, f_011041e0),
 (0x01104260, f_01104260),
 (0x011042B0, f_011042b0),
+(0x01104470, f_01104470),
 (0x01104580, f_01104580),
 (0x011045D0, f_011045d0),
 (0x01104610, f_01104610),
@@ -422,7 +423,10 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x01128D40, f_01128d40),
 (0x01128EA0, f_01128ea0),
 (0x01128ED0, f_01128ed0),
+(0x01128EE0, f_01128ee0),
+(0x01128F40, f_01128f40),
 (0x01128F70, f_01128f70),
+(0x01129030, f_01129030),
 (0x01129130, f_01129130),
 (0x01129160, f_01129160),
 (0x011291E0, f_011291e0),
@@ -430,7 +434,10 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x011292B0, f_011292b0),
 (0x011292E0, f_011292e0),
 (0x011292F0, f_011292f0),
+(0x01129310, f_01129310),
+(0x01129370, f_01129370),
 (0x011293A0, f_011293a0),
+(0x01129460, f_01129460),
 (0x01129550, f_01129550),
 (0x01129580, f_01129580),
 (0x01129600, f_01129600),
@@ -3040,4 +3047,10 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 ];
 pub fn lookup(addr: u32) -> Option<LiftFn> {
     FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)
+}
+use ddnative_base::execution::Step;
+pub const INSTRUCTIONS: &[(u32, Step)] = &[
+];
+pub fn instruction(ip: u32) -> Option<Step> {
+INSTRUCTIONS.binary_search_by_key(&ip, |e| e.0).ok().map(|i| INSTRUCTIONS[i].1)
 }

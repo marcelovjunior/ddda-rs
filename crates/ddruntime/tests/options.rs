@@ -149,7 +149,6 @@ fn read_string(s: &mut Session, a: &mut Scratch, section: &str, key: &str, defau
 }
 
 #[test]
-#[ignore = "stops at 0x012EE130, a jump-table tail of the CRT memcpy variant 0x012EDE40 past its Ghidra end; lifter fix in L45"]
 fn the_games_option_writers_and_readers_round_trip_through_config_ini() {
     let Some(exe) = installed_exe() else { eprintln!("skipped: no installed DDDA.exe"); return };
     let home = std::env::temp_dir().join(format!("ddruntime-options-{}", std::process::id()));

@@ -161,7 +161,10 @@ impl Registry {
     /// Run whatever is bound at `target` (return address already pushed),
     /// or report it as unbound.
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
-        if self.instructions.is_some() && (self.get(target).is_some() || self.instruction(target).is_some()) {
+        // The step executor only where gen emitted restartable instruction
+        // entries (L27b, LIFT_INSTRUCTIONS); whole-function bindings run
+        // directly below.
+        if self.instructions.is_some() && self.instruction(target).is_some() {
             crate::executor::run(self, m, cpu, target);
             return Ok(());
         }
