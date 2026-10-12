@@ -295,5 +295,7 @@ rule they were not built here. No private data to adopt.
     filter against the driver);
   - depth-stencil StretchRect.
 
-  The runtime already creates the surfaces with their multisample type
-  (`d3d9res.rs`); the backend renders them single-sampled.
+  The runtime already records each surface's multisample type and
+  quality (`d3d9res.rs` `create_surface`, SurfaceDesc). `d3d9cmd::Target`
+  does not carry them, so the backend renders these targets
+  single-sampled.
