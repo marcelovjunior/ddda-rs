@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation
 
 
 class WrapperTests(unittest.TestCase):
@@ -110,6 +110,31 @@ class WrapperTests(unittest.TestCase):
                      prefix.replace('83ec20','53 83ec20')+suffix,
                      prefix+'8beb '+suffix, prefix+'6689dd '+suffix,
                      prefix+suffix.replace('5f 5b', '5f 83c404 5b')):
+            self.assertEqual(sites(code), set())
+
+    def test_entry_outgoing_area_is_consumed_by_final_indirect_call(self):
+        data = bytes.fromhex('83ec20 31c0 89442404 6a01 6a02 ffd0 c3')
+        body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0x400000)]
+        with patch.object(h, 'image', return_value=(0x400000, [(0x400000,data)])), \
+             patch.object(h, 'code', side_effect=lambda a,n: data[a-0x400000:a-0x400000+n]):
+            with self.assertRaises(h.Rejected):
+                h.run_sparse(0x400000, 1, body=body, end=0x400000+len(data),
+                             input_strategy='ebp-call-v1')
+            result = h.run_sparse(0x400000, 1, body=body, end=0x400000+len(data),
+                                  input_strategy='outgoing-call-v1')
+        self.assertEqual(result['calls'][0]['out']['pop'], 40)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+
+    def test_entry_outgoing_area_requires_finite_final_calls_on_every_path(self):
+        def sites(code):
+            data = bytes.fromhex(code)
+            body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0)]
+            return initial_outgoing_allocation(0, body, lambda a,n:data[a:a+n])
+        self.assertEqual(sites('83ec20 85c0 7405 6a01 ffd0 c3 6a02 ffd2 c3'), {0})
+        for code in ('83ec20 85c0 74fc ffd0 c3', '83ec20 ffd0 83c420 c3',
+                     '83ec20 83c404 ffd0 c3', '83ec20 6683c404 ffd0 c3',
+                     '83ec20 666a01 ffd0 c3', '83ec20 85c0 7403 ffd0 c3 c3',
+                     '83ec20 ffe0', '83ec20 e800000000 c3'):
             self.assertEqual(sites(code), set())
 
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):

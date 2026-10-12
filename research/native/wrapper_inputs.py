@@ -247,3 +247,68 @@ def ebp_frame_allocation(entry, body, read):
                 and any(ins.reg_name(r) in ('ebp', 'bp') for r in ins.regs_access()[1])):
             return set()
     return {allocation}
+
+
+def initial_outgoing_allocation(entry, body, read):
+    """Hint for an entry allocation consumed by the final indirect call.
+
+    Every acyclic path must reach an indirect CALL immediately followed by
+    RET. Before that call, only 32-bit pushes may change ESP after the entry
+    allocation. There is no local cleanup: the mock must consume that area
+    to preserve the caller's return address. Unknown paths are refused.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    if not body or len(body) > 256:
+        return set()
+    decoded = {}
+    for pc in body:
+        ins = next(md.disasm(read(pc, 15), pc, count=1), None)
+        if ins is None:
+            return set()
+        decoded[pc] = ins
+    first = decoded.get(entry)
+    if (first is None or first.mnemonic != 'sub' or len(first.operands) != 2
+            or first.op_str.split(',')[0] != 'esp' or first.operands[1].type != 2
+            or not 0 < first.operands[1].imm <= 4096):
+        return set()
+    graph, todo = {}, [entry+first.size]
+    while todo:
+        pc = todo.pop()
+        if pc in graph:
+            continue
+        ins = decoded.get(pc)
+        if ins is None:
+            return set()
+        after = pc+ins.size
+        successors = [after]
+        if ins.mnemonic == 'call':
+            ret = decoded.get(after)
+            if (len(ins.operands) != 1 or ins.operands[0].type not in (X86_OP_REG, X86_OP_MEM)
+                    or ret is None or ret.mnemonic not in ('ret', 'retn', 'repz ret')):
+                return set()
+            successors = []
+        elif ins.mnemonic.startswith('j'):
+            if len(ins.operands) != 1 or ins.operands[0].type != 2:
+                return set()
+            successors = [ins.operands[0].imm & 0xffffffff]
+            if ins.mnemonic != 'jmp':
+                successors.append(after)
+        elif ins.mnemonic == 'push':
+            if len(ins.operands) != 1 or ins.operands[0].size != 4:
+                return set()
+        elif (ins.mnemonic in ('ret', 'retn', 'repz ret', 'retf', 'int', 'int3', 'ud2', 'hlt')
+                or ins.mnemonic.startswith('loop')
+                or any(ins.reg_name(r) in ('esp', 'sp') for r in ins.regs_access()[1])):
+            return set()
+        graph[pc] = successors
+        todo.extend(successors)
+    # Remove terminal paths first; any nodes left form or lead to a cycle.
+    remaining = dict(graph)
+    while remaining:
+        done = {pc for pc, edges in remaining.items() if all(e not in remaining for e in edges)}
+        if not done:
+            return set()
+        for pc in done:
+            del remaining[pc]
+    return {entry}
