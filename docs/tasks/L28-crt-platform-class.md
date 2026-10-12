@@ -35,6 +35,33 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Aligned-frame dispatch batch: +7/+21 (2026-10-12, pending replay)
+
+**Six aligned-frame matches record 3/3:** 608AE0, 618880, 64DD20, 663040,
+6F8730 and 6F8C00, using frame-call-v1 (7443b1f7). Diagnostic traces confirm
+the old input heuristic consumed the second EBP save as an argument,
+misplacing the saved frame pointer. The new opt-in rule requires matching
+restores at every return; no return/stack guard changed. **6076F0** also
+records 3/3 with the existing wrapper-call-v1 (it had previously only
+received the finite-proof class strategy).
+
+Private **59,653 functions / 177,553 cases**, **+7/+21** from this round's
+baseline. `dispatch-round2-audit.json`: all **59,646 / 177,532** prior
+records/cases unchanged; no stale mocks, promotions, removals or unexpected
+edits. **182 light tests pass**. Main train 13 merged; Rust replay pending.
+All recording jobs exited. Logs: `dispatch-trace-round2.log`,
+`dispatch-round2-wrapper.log`. RESIDUALS has **65 rows, seven pending replay**.
+
+The continuation helper 12EFA1E is classified separately: it restores ESP
+from a saved exception frame and jumps to a continuation. Remaining generic
+dispatch/return rows: **27**. Static cleanup prototype resolves complete
+bodies for 686AD0 (pop4), 840180 (pop4), B94DC0 (pop28), and 1121450 (pop44)
+using the lifter's register-bound analysis across control-flow joins; it
+refuses 1078190's unknown jump. The first four serve nine remaining rows.
+**Next:** a tested opt-in cleanup-input strategy using those bounded callee
+bodies, while preserving unknown-target fallback. Boot stops first.
+
+
 ### Train 13 census and next frame strategy (2026-10-12)
 
 Main **da9e8e4b** merged: all 44 prior pending rows are credited by train 13.

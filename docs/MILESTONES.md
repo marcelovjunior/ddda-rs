@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c aligned-frame dispatch batch (2026-10-12, pending replay)
+
+- **+7 functions / +21 cases**, all 3/3; private **59,653 / 177,553**.
+  Six use matching aligned-frame saves, one the existing wrapper strategy.
+- **182 tests pass**; all **59,646 / 177,532** baseline records/cases unchanged.
+  Main train 13 merged; RESIDUALS has **65 rows, seven awaiting replay**.
+- **Next action:** checked callee-body cleanup inputs for nine dispatch rows.
+
+
 ### L28c post-train-13 census (2026-10-12)
 
 - Main da9e8e4b merged; **59,375 / 59,440 verified**, **65 residuals**
