@@ -189,6 +189,11 @@ impl App {
                 let mut stats = g.window.stats.lock().unwrap();
                 if let Some(r) = stats.take(Instant::now()) {
                     self.rate = format!("{:.1} FPS, {:.2} ms/frame (longest {:.1} ms)", r.fps, r.mean_ms, r.longest_ms);
+                    // DDPLAY_RATE_LOG=1: the rate on stderr too, for timed runs
+                    static LOG: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+                    if let Some(t0) = LOG.get_or_init(|| std::env::var_os("DDPLAY_RATE_LOG").map(|_| Instant::now())) {
+                        eprintln!("ddplay rate t={:.0}s frames={} {}", t0.elapsed().as_secs_f64(), stats.frames, self.rate);
+                    }
                 } else if stats.last_present.is_none_or(|t| t.elapsed() > TITLE_INTERVAL) {
                     self.rate = "not presenting".into();
                 }
