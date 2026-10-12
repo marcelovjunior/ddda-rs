@@ -1,5 +1,17 @@
 # Milestones
 
+### L55 emulator differential validation (2026-10-12)
+
+- **7,764/7,764 recorded cases**, **2,615 verified functions**: FS 43,
+  flags/calls 592, x87 580, SSE 596, random 5,953; no mismatches or skips.
+- **16 synthetic checks pass.** Fixed selector/CPL transfer, page-spanning
+  operands, zero call tokens, lower-ESP returns, private-state placement,
+  hook ownership and hardware numeric state. Full run: **187.23 seconds**.
+- Shared pattern/vector SHA-256 audit **unchanged**; native-L28c untouched.
+  Final EFLAGS/full XMM are absent from recordings and checked synthetically.
+  Details and remaining protocol limits: [L55](tasks/L55-emu-differential.md#results).
+- **Next action:** head merges the batch and rechecks title-screen boot.
+
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
 
 - **+9/+27**, all targeted dispatchers 3/3; this round **+16/+48**.

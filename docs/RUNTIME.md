@@ -734,3 +734,24 @@ initializer side effects and exits, dynamic frame/worker frontier, guest
 exception/control-state requirements, complete renderer/audio contracts,
 and the player-ownership adaptation. No runtime behavior is claimed tested
 or compared against the running original by this design task.
+
+## Emulator differential validation (L55, 2026-10-12)
+
+The feature-gated fallback now has a recorded-case differential runner and
+synthetic state-transfer regressions. Fixes cover guest selectors/CPL 3,
+partly mapped operands spanning two pages, zero-valued call/return tokens,
+private-state placement, and Unicorn hook ownership on instance destruction.
+Diagnostic execution observes unchanged stores as well as changed bytes;
+native call-outs still run through the replay's closed/mocked bindings.
+SSE floating operations and supported x87 D9 register operations use native
+instruction helpers to match the recorder's hardware-backed numeric state.
+This preserves sticky MXCSR exceptions and processor-dependent results;
+it does not dispatch the tested root to a lifted function body.
+
+The recording format lacks final EFLAGS and full XMM outputs. Those fields,
+DF and extended x87 values are checked separately by synthetic call-out
+tests, rather than claimed as recorded coverage. **7,764 recorded cases in
+2,615 functions and 16 synthetic checks pass**, with zero sample exceptions
+and unchanged shared input hashes. The full sample's class
+counts, exceptions and reproduction commands are maintained in
+[L55 Results](tasks/L55-emu-differential.md#results).

@@ -3067,6 +3067,8 @@ dependencies = [
  "ddsave",
  "hostdisplay",
  "mtarc",
+ "serde",
+ "serde_json",
  "unicorn-engine",
  "windows",
  "windows-core",
