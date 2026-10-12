@@ -35,6 +35,23 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Boot stop 16: 0x00DC8270 (2026-10-12, pending replay)
+
+**3/3 normal returns, adopted: +1 function / +3 cases.** The existing
+checked-constructor strategy replays accepted 0x00DD5ED0, then binds
+ECX to its input ECX. With guarded-stores-v1, exact constructor writes
+resolve the reset branches and virtual calls. Its proof counts **49,933
+instructions**, giving a **69,933** recorder limit; no guessed budget.
+All three cases retain eight recorded calls. Ordinary inputs still exceed
+the default limit; the constructor supplies the required object state.
+
+**145 light tests pass.** `L28c/boot16-audit.json` proves every prior
+**59,591 record / 177,367 case unchanged**, no stale mocks or promotions.
+Private native-L28c now holds **59,592 / 177,370**. Source dd2b67bd;
+main merged before handoff. No Rust build; head must replay the addition.
+**Next:** resume the 0x00493AA0 output-constructor recipe, unless another
+boot stop arrives.
+
 ### Explicit checked bindings (2026-10-12)
 
 Checked producer return values can be explicit method-register proof inputs;

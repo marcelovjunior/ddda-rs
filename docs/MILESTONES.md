@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c boot stop 16 (2026-10-12, pending replay)
+
+- **0x00DC8270 records 3/3** on checked 0x00DD5ED0 constructor state.
+  Proof: **49,933 instructions**, limit 69,933. **145 light tests pass.**
+- Private native-L28c **59,592 / 177,370** (+1/+3); all prior records
+  unchanged. **Next action:** head replay, then remaining input recipes.
+
 ### L28c explicit setup bindings (2026-10-12)
 
 - Checked setup outputs can supply explicit method-register proof facts.
