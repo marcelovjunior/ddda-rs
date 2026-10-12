@@ -22,6 +22,9 @@ class InputTests(unittest.TestCase):
             kwargs.setdefault('initial_state',dict(pages={},heap=h.HEAP_BASE,registers={}))
         if strategy == 'record-range-v1':
             kwargs.setdefault('input_layout',self.RANGE_LAYOUT)
+        elif strategy == 'sentinel-records-v1':
+            kwargs.setdefault('input_layout',dict(stride=8, first={'register':'edx'},
+                                                  sentinel_offset=0, sentinel=0xffffffff))
         elif strategy == 'slot-sweep-v1':  # L48: a register index binding over small-v1
             kwargs.setdefault('input_layout',dict(index={'register':'eax'},value=1))
         image=code.ljust(0x1000,b'\xcc')

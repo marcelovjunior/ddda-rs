@@ -196,11 +196,11 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
-# L48 slot_sweep_layout).
-LAYOUT_STRATEGIES = ('record-range-v1', 'slot-sweep-v1')
+# sentinel_inputs.py, L48 slot_sweep_layout).
+LAYOUT_STRATEGIES = ('sentinel-records-v1', 'record-range-v1', 'slot-sweep-v1')
 
 
 def slot_sweep_layout(layout):
@@ -822,6 +822,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     `guarded-input-v1` proves against exact generated input pages without
     requiring a setup; unknown entry register values remain unknown.
+    `sentinel-records-v1` generates finite records with an evidence-supplied
+    stride, terminator and entry binding, then proves over that initial state.
     `guarded-values-v1` also supplies the exact recorded initial GPR values
     to the proof. It uses the same input distribution and alias checks.
     `guarded-state-v1` additionally admits exact initial memory as proof
@@ -900,7 +902,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # zero EAX this input exercises their zero-allocation return path.
     if input_strategy == 'guarded-state-v1' and initial_state is None:
         raise ValueError('guarded-state-v1 requires checked setup state')
-    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -910,6 +912,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     if input_strategy == 'record-range-v1':
         from record_inputs import RecordRangeInputs
         inputs = RecordRangeInputs(input_layout, seed)
+    elif input_strategy == 'sentinel-records-v1':
+        from sentinel_inputs import SentinelInputs
+        inputs = SentinelInputs(input_layout, seed)
     elif input_strategy == 'slot-sweep-v1':
         sweep = slot_sweep_layout(input_layout)
         inputs = SparseInputs('small-v1')
@@ -950,6 +955,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 buf = bytearray(0x1000)
                 buf[lo - page:hi - page] = b[lo - va:hi - va]
                 return bytes(buf)
+        if input_strategy == 'sentinel-records-v1':
+            return inputs.page(seed, page)
         if zero_values:
             return bytes(0x1000)
         if inputs:
@@ -1660,7 +1667,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     stack_page = regs_in["esp"] & ~0xFFF
     page = bytearray(pages_in[stack_page])
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
-    if input_strategy == 'record-range-v1':
+    if input_strategy in ('record-range-v1', 'sentinel-records-v1'):
         for offset, value in inputs.stack.items():
             struct.pack_into('<I', page, regs_in['esp'] - stack_page + offset, value)
     if sweep is not None and sweep[0] == 'stack':
@@ -1689,7 +1696,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if (initial_state is None or input_strategy != 'image-bounded-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') and body is not None and max_insn < 2_000_000:
+    if (initial_state is None or input_strategy != 'image-bounded-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with the selected input facts
         # and original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1712,7 +1719,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 break
             proof_body.append(decoded_proof)
         if len(proof_body) == len(body):
-            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1')
+            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
             proof_inputs = {}
             def read_initial(a, size):
                 data = bytearray()
@@ -1733,19 +1740,19 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 # Exact already-mapped input, not inferred game state.
                                 # Unknown writes still cannot alias these read facts.
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
-                                              if input_strategy in ('guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') else None),
-                                entry_pointers=regs_in if initial_state is not None or input_strategy in ('guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') else None,
+                                              if input_strategy in ('guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1') else None),
+                                entry_pointers=regs_in if initial_state is not None or input_strategy in ('guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1') else None,
                                 initial_writes=({a:v for a,v in {**initial_state.get('writes',{}),**argument_bytes}.items()
                                                  if not regs_in['esp'] <= a < regs_in['esp']+4}
                                                 if initial_state is not None else None),
                                 # Exact entry values are opt-in. Other policies retain
                                 # only explicit bindings from checked setup cases.
                                 entry_values=({k:v for k,v in regs_in.items() if k != 'esp'}
-                                              if input_strategy == 'guarded-values-v1' else
+                                              if input_strategy in ('guarded-values-v1', 'sentinel-records-v1') else
                                               initial_state['registers'] if initial_state is not None else None),
                                 initial_pages={**initial_state['pages'],stack_page:pages_in[stack_page]}
-                                              if initial_state is not None and input_strategy in ('guarded-state-v1','guarded-input-v1', 'guarded-values-v1') else None,
-                                read_initial=read_initial if input_strategy in ('guarded-state-v1','guarded-input-v1', 'guarded-values-v1') else None)
+                                              if initial_state is not None and input_strategy in ('guarded-state-v1','guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1') else None,
+                                read_initial=read_initial if input_strategy in ('guarded-state-v1','guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1') else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance
