@@ -391,7 +391,10 @@ fn a_fault_inside_an_eh4_body_resumes_at_its_except() {
         let _ = m.u32(c.esp);
         c.esp += 4;
     }
+    // the unwind calls RtlUnwind through the IAT: bind the imports as Session does
+    let imports = ddruntime::image::bind_imports(&mut m, &exe).expect("imports");
     let mut r = Registry::new();
+    ddruntime::services::bind_apis(&mut r, &imports).expect("services");
     r.set_instruction_lookup(ddnative::generated::lifted::instruction);
     for (addr, f) in ddnative::generated::lifted::all() {
         if addr != 0x012f9a20 && addr != 0x012f9a60 {
