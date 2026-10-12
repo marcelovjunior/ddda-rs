@@ -667,3 +667,81 @@ claude-6 (15):
       83,137-instruction proof, so the recorder's instruction limit is far
       exceeded (an estimate from the disassembly).
     - Cause 2. Owner: Codex (board #9722).
+17. main 3f3ca505 (train 10: Codex's 0x00DC8270). The boot no longer
+    stops: **it reaches the main loop and presents frames.** Runtime game
+    tests 46/46.
+    - **The main loop.** The boot ran for 1,500 s (killed at the limit)
+      with an out-of-process host-stack sampler,
+      `research/runtime/stack_sampler.py` (dbghelp and the debug build's
+      PDB; one host frame per lifted `f_XXXXXXXX`, so the lifted frames
+      are the guest call stack). 73 samples, 15 s apart:
+      - The main thread runs WinMain 0x004079E0 → main loop 0x00DF0D20 →
+        `sBbsRpgMain::vf06` 0x0041DD60, the frame.
+      - 47 samples are in the render step 0x00DAED10 → 0x00DAB480 →
+        DrawPrimitive → `d3d9draw::snapshot` → `flush` →
+        `GuestMemory::read_bytes`.
+      - About 15 are in the update step 0x00DAF000 (0x00FEDB80,
+        0x00FED710, 0x00FEDC00, 0x00DC4770), plus hand-offs of the guest
+        lock. The chains change between samples: frames are running.
+      - The other guest threads wait in WaitForSingleObject on their own
+        handles: two worker pools (0x0041FF00 ×5 and 0x00DBDC90 ×7),
+        0x00DBDB80, 0x00DB9F40, 0x00DAC090, 0x011A4350 and 0x0041FFE0.
+        0x00DDDFA0 sleeps; the sound thread mixes.
+    - **The frames.** `DDDA_CAPTURE` for 15 min, read with
+      `research/runtime/capture_stats.py`:
+      - 4,846 Presents, about 5.4/s in the debug build (before the
+        page-wise copy below).
+      - From frame 3 on every frame is the same: 6 Clear, 12
+        DrawPrimitive, 2 StretchRect, and two dynamic-buffer uploads
+        (2 MiB and 0.5 MiB, rotating over three pairs).
+      - No texture is uploaded and the file holds only 35 distinct blobs:
+        a static, untextured screen.
+    - **Upload cost.** `GuestMemory::read_bytes` copied byte by byte (an
+      atomic-capable load per byte, about 10 host frames each in debug).
+      It now copies page by page: one slice copy in serial mode, aligned
+      4-byte atomic loads in parallel mode (9e6ad430). A unit test checks
+      it against byte-wise reads across page boundaries, on lazy and
+      unbacked pages and at faults, in both modes.
+    - **Why the screen is static.** A service trace,
+      `DDRUNTIME_TRACE_SERVICES=<file>` (7002cee2, 9ccea188, 5969549f),
+      writes each named service call with its caller, arguments, the
+      strings they point to and the result. Calls that can block are
+      also written when they start. It shows:
+      - Guest thread 4104 is the archive loader. It opens
+        `nativePC\rom\bbs_rpg.arc` (0xAA8F5A bytes) and reads it with
+        double-buffered ReadFileEx of 0x20000 bytes and
+        SleepEx(INFINITE, TRUE). It issued 40 of the 86 reads, created
+        textures from them, and then made no further call.
+      - It was also missing from the stack dump: the thread had ended.
+        `run_thread` only recorded a guest thread's stop in
+        `kernel.faults`; it is now also printed (d922412f).
+      - The message: "guest thread 4104 stopped: call to untranslated code
+        at 0x01146420, called from before 0x000008f0".
+      - Other trace facts: the main loop polls GetFileAttributesA
+        `nativePC\sa\DX9\BbsRpg.arc` once a frame; that file really is
+        absent from the install, so "not found" is right. It also calls
+        GetAsyncKeyState 128 times a frame.
+    - **Stop (hidden in the loader thread):** 0x01146410 (16 bytes,
+      verified) is `cmp [esp+4],0; push edi; mov edi,ecx;
+      jne 0x01146420; xor al,al; pop edi; ret 4`.
+      - 0x01146420 (203 bytes, no fixture) is the rest of that body, split
+        off by Ghidra: it uses edi = this and ends with
+        `mov al,1; pop edi; ret 4`.
+      - The "caller 0x8F0" is the saved edi.
+      - The same class as stop 11. Cause 2. Owner: claude-6 (function
+        boundary), with Codex for a fixture.
+    - **Census** (`research/runtime/split_jumps.py` and the shared
+      lift.json): verified functions that jump into another function's
+      entry that their own record's body does not cover. There are 7 live
+      cases:
+      - 0x006F3230 → 0x006F3242;
+      - 0x009472C0 → 0x00947493;
+      - 0x01137DD0 → 0x01137DF3;
+      - 0x01146410 → 0x01146420;
+      - 0x012F68B0 / 0x01304A9E → 0x012F693F;
+      - 0x012F69E0 / 0x01304C6E → 0x012F6A6F;
+      - 0x01300D70 / 0x013076EE → 0x01300DFF.
+
+      Eight more are already covered on main (0x0057D24D, 0x00786D74,
+      0x00BB922B, 0x00E0FB9C, 0x012F9D82, 0x013006FE, 0x0130070B,
+      0x01300749).
