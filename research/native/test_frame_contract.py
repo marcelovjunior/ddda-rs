@@ -132,4 +132,13 @@ class FrameContractTests(unittest.TestCase):
             self.memset_run('6800000800 c7042400000800 6a00 6800000030 e8e8000000 83c40c c3')
 
 
+    def test_cleanup_search_uses_the_decode_limit(self):
+        # 600 x `inc eax` then `ret 4`: past the old 512-instruction bound
+        code=bytes([0x40])*600+bytes.fromhex('c20400')
+        body,(p1,p2)=self.image(code)
+        with p1,p2:
+            self.assertEqual(h.static_pop(0x400000,limit=512),0)
+            self.assertEqual(h.static_pop(0x400000),4)
+
+
 if __name__=='__main__':unittest.main()

@@ -949,6 +949,19 @@ exempt (`__exit` 0x012EDC4B is in the noreturn set by name but returns
 syntactically). `structured_inputs.py record --retry REGEX` re-runs logged
 failures whose reason matches after such a recorder change.
 
+**Mock cleanup (L28).** Two refinements of the mock ABI after tracing the
+outside-image class. `static_pop` now searches up to the lifter's own body
+limit (`STATIC_POP_LIMIT` = 20,000 instructions, `lift.decode_body`'s)
+instead of 512: 0x0040AB20 ends in `ret 4` after 640 instructions, and the
+old bound's zero fallback left its argument on the caller's stack (36 of
+176 outside-image candidates call such a target). The overlap and
+consistent-`ret` checks and the unknown-flow zero fallback are unchanged.
+`IMPORT_CLEANUP` gives 45 imports their documented x86 callee cleanup
+(Microsoft Learn signatures: WINAPI/STDAPI/WSAAPI/SEC_ENTRY are `__stdcall`,
+4 bytes per parameter, 8 per 64-bit one; the steam_api C exports are
+`__cdecl`, 0), replacing L15's three-entry list: every import called by a
+remaining outside-image candidate. Effects and results stay mocked.
+
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
 `fill` already supplies the original executable bytes for *all* image

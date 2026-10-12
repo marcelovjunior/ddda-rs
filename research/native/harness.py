@@ -199,23 +199,74 @@ RETURN_STRATEGIES = tuple(MOCKZERO)
 INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', *RETURN_STRATEGIES)
 
 
-def import_pops(_cache={}):
-    """Named x86 WINAPI cleanup; resolve slots/initial targets from the PE.
+# Callee cleanup (bytes) of imported functions, from their documented x86
+# signatures on Microsoft Learn (and the Steamworks headers): WINAPI, STDAPI,
+# WSAAPI and SEC_ENTRY are __stdcall, so the callee pops 4 bytes per
+# parameter and 8 per 64-bit one; the steam_api C exports are __cdecl (0).
+# Only the mock's stack cleanup comes from here; effects and results stay
+# mocked and recorded. Names are DLL!export (lowercase DLL) or DLL!ordinal:N.
+IMPORT_CLEANUP = {
+    # KERNEL32
+    'kernel32.dll!EncodePointer': 4, 'kernel32.dll!DecodePointer': 4,          # (PVOID)
+    'kernel32.dll!EnterCriticalSection': 4, 'kernel32.dll!LeaveCriticalSection': 4,  # (LPCRITICAL_SECTION)
+    'kernel32.dll!InterlockedIncrement': 4, 'kernel32.dll!InterlockedDecrement': 4,  # (LONG volatile *)
+    'kernel32.dll!Sleep': 4,                                                     # (DWORD)
+    'kernel32.dll!GetLastError': 0,                                              # (void)
+    'kernel32.dll!LoadLibraryW': 4,                                              # (LPCWSTR)
+    'kernel32.dll!GetProcAddress': 8,                                            # (HMODULE, LPCSTR)
+    'kernel32.dll!QueryPerformanceCounter': 4, 'kernel32.dll!QueryPerformanceFrequency': 4,  # (LARGE_INTEGER *)
+    'kernel32.dll!MultiByteToWideChar': 24,                                      # (UINT, DWORD, LPCCH, int, LPWSTR, int)
+    'kernel32.dll!VerSetConditionMask': 16,                                      # (ULONGLONG, DWORD, BYTE)
+    'kernel32.dll!VerifyVersionInfoA': 16,                                       # (LPOSVERSIONINFOEXA, DWORD, DWORDLONG)
+    'kernel32.dll!RtlUnwind': 16,                                                # (PVOID, PVOID, PEXCEPTION_RECORD, PVOID)
+    # USER32
+    'user32.dll!ScreenToClient': 8,                                              # (HWND, LPPOINT)
+    'user32.dll!GetCursorPos': 4, 'user32.dll!ClipCursor': 4,                    # (LPPOINT) / (const RECT *)
+    'user32.dll!ShowCursor': 4,                                                  # (BOOL)
+    'user32.dll!SystemParametersInfoA': 16,                                      # (UINT, UINT, PVOID, UINT)
+    # IMM32
+    'imm32.dll!ImmGetContext': 4, 'imm32.dll!ImmGetDefaultIMEWnd': 4,            # (HWND)
+    'imm32.dll!ImmReleaseContext': 8,                                            # (HWND, HIMC)
+    'imm32.dll!ImmGetOpenStatus': 4,                                             # (HIMC)
+    'imm32.dll!ImmSetCompositionWindow': 8, 'imm32.dll!ImmSetCandidateWindow': 8,  # (HIMC, LP...FORM)
+    'imm32.dll!ImmGetCompositionStringW': 16,                                    # (HIMC, DWORD, LPVOID, DWORD)
+    'imm32.dll!ImmGetCandidateListW': 16,                                        # (HIMC, DWORD, LPCANDIDATELIST, DWORD)
+    'imm32.dll!ImmGetCandidateListCountA': 8,                                    # (HIMC, LPDWORD)
+    # Secur32 (SEC_ENTRY)
+    'secur32.dll!FreeContextBuffer': 4, 'secur32.dll!DeleteSecurityContext': 4,  # (PVOID) / (PCtxtHandle)
+    'secur32.dll!InitializeSecurityContextA': 48,                                # 12 parameters
+    # AVIFIL32 / MSVFW32 (STDAPI / VFWAPI)
+    'avifil32.dll!AVIFileInit': 0,                                               # (void)
+    'avifil32.dll!AVIFileOpenA': 16,                                             # (PAVIFILE *, LPCSTR, UINT, LPCLSID)
+    'avifil32.dll!AVIFileCreateStreamA': 12,                                     # (PAVIFILE, PAVISTREAM *, AVISTREAMINFOA *)
+    'avifil32.dll!AVIMakeCompressedStream': 16,                                  # (PAVISTREAM *, PAVISTREAM, AVICOMPRESSOPTIONS *, CLSID *)
+    'avifil32.dll!AVIStreamSetFormat': 16,                                       # (PAVISTREAM, LONG, LPVOID, LONG)
+    'msvfw32.dll!ICCompressorChoose': 24,                                        # (HWND, UINT, LPVOID, LPVOID, PCOMPVARS, LPSTR)
+    # DINPUT8
+    'dinput8.dll!DirectInput8Create': 20,                                        # (HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN)
+    # WS2_32 by ordinal (WSAAPI): 10 ioctlsocket, 18 select, 151 __WSAFDIsSet
+    'ws2_32.dll!ordinal:10': 12, 'ws2_32.dll!ordinal:18': 20, 'ws2_32.dll!ordinal:151': 8,
+    # steam_api (S_API ... __cdecl): the caller cleans up
+    'steam_api.dll!SteamAPI_RegisterCallback': 0, 'steam_api.dll!SteamAPI_UnregisterCallback': 0,
+}
 
-    Sources: Microsoft Learn EncodePointer/DecodePointer (Winbase.h),
-    LeaveCriticalSection (synchapi.h): each has one pointer argument.
-    See NATIVE_PIPELINE.md for links. No import behavior is emulated here.
-    """
+
+def import_pops(_cache={}):
+    """Documented x86 cleanup per IAT slot (IMPORT_CLEANUP); resolve slots
+    and their initial targets from the PE. No import behavior is emulated."""
     if EXE not in _cache:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
         from measure import PE
         pe = PE(EXE)
-        names = {'kernel32.dll!'+n for n in ('EncodePointer','DecodePointer','LeaveCriticalSection')}
-        slots = {a:4 for a,n in pe.imports().items()
-                 if n.split('!')[0].lower()+'!'+n.split('!')[1] in names}
-        _cache[EXE] = slots, {pe.word(a):v for a,v in slots.items()}
+        slots = {}
+        for a, n in pe.imports().items():
+            dll, _, name = n.partition('!')
+            key = dll.lower() + '!' + name
+            if key in IMPORT_CLEANUP:
+                slots[a] = IMPORT_CLEANUP[key]
+        _cache[EXE] = slots, {pe.word(a): v for a, v in slots.items()}
     return _cache[EXE]
 
 
@@ -269,14 +320,18 @@ class SparseInputs:
         return struct.unpack('<I',struct.pack('<f',value))[0]
 
 
-def static_pop(target, _cache={}):
+STATIC_POP_LIMIT = 20000  # lift.decode_body's instruction limit
+
+
+def static_pop(target, _cache={}, limit=None):
     """Bounded reachable ret cleanup, following direct tails, never neighbours.
 
     Proven bounded switches are followed; unknown indirect or inconsistent
     exits retain the zero-pop fallback.
     The cache includes the reader so synthetic images cannot contaminate it.
     """
-    key = (target, code, image)
+    limit = STATIC_POP_LIMIT if limit is None else limit
+    key = (target, code, image, limit)
     if key not in _cache:
         from capstone import Cs, CS_ARCH_X86, CS_MODE_32
         md = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -287,7 +342,7 @@ def static_pop(target, _cache={}):
             pc = todo.pop()
             history = []
             while pc not in seen:
-                if len(seen) >= 512:
+                if len(seen) >= limit:
                     unknown = True
                     break
                 seen.add(pc)
