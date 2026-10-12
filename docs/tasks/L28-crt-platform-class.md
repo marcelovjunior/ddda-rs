@@ -254,3 +254,67 @@ through random data, internal entries).
 native-L17's `patterns/lift.json`, `vectors/lift.json`,
 `patterns/lift_novector.json`, `patterns/lift_novector_keys.json`,
 `structured_quarantine.json`, `quarantine_evidence.json`.
+
+### State at hand-off (2026-10-12, wrap-up requested by the head)
+
+**Batch 3, recording in progress (run 4).** These commits came after
+batch 2: f43e7ff/7000f4b/307287b/fcaadc4 plus the alloca-probe work:
+
+- `moves_frame` classifies ESP moved by a value (`__alloca_probe`) as an
+  unmockable frame helper, closed with `frame_exit: 'return-pc'` (nested
+  frame ends at the first return-PC arrival).
+- `local_alloc_sites` recognizes entry allocations through branches.
+- promote's re-recording falls back across the standard input distributions.
+- An indirect call's merged deferred caller cleanup is subtracted from its
+  mock pop.
+
+Run 4 (`L17BC/l28c.sh`, log `L28/run4.log`) archived the batch 2 trial logs
+to `L28/trials-b2/`. It then promoted 0x00DB9C30 (call-free, unmocked). It
+kept `__alloca_probe` ext: under that run's code only
+`__alloca_probe_16`/`_8` failed to re-record, and the distribution fallback
+committed afterwards fixes that (checked by a diagnostic: the other 21
+mocking callers re-record). It is recording the full protocol; at the time
+of writing native-L17 holds 59,089 entries / 175,898 cases. The local-alloc
+and merged-cleanup changes landed while run 4's workers were running, so its
+later passes mix recorder versions. That is harmless for validity: a mock
+pop only ever leads to rejection, never a false pass. It does make
+per-rule attribution for run 4 unreliable. The head adopts native-L17 after
+run 4 ends; audit it with `L28/audit_b2.py`, pointed at native-L28b2 as the
+base.
+
+**Not yet recorded (run 5, ready).** It promotes `__alloca_probe` (29
+remaining candidates call an alloca probe) with the fallback. It also
+re-records everything under the merged-cleanup rule, which by trace makes
+the sShader2 loader 0x00E0E470 record (3/3 seeds, 8 mocked calls).
+Commands:
+
+```
+# after run 4 has finished (no other job of mine writing native-L17):
+E:/ddda-re/tools/pyenv/Scripts/python.exe E:/ddda-re/tools/heavy.py <who> -- \
+  "C:/Program Files/Git/bin/bash.exe" E:/ddda-re/notes/native-L17/L17BC/l28d.sh \
+  > E:/ddda-re/notes/native-L17/L28/run5.log 2>&1
+```
+
+`l28d.sh` archives the trial logs to `L28/trials-run4/`, then runs
+`structured_inputs.py promote`, `prepare`, and record+adopt for: the 9
+strategies at 3 seeds / 20 s; the 3 zero-return strategies at 12 seeds /
+60 s; random/zero/mockzero-v1 with `--terminal`. All use
+`LIFT_DATA=INVENTORY_DB-dir=E:/ddda-re/notes/native-L17` and 6 workers.
+Then hand the pair to the train; no local Rust replay (batched rule).
+
+**Remaining candidate classes** (323 before run 4; about 318 now):
+- Outside-image (about 160): mock-ABI residue that needs per-trace work.
+  Seen in samples: mid-function supplementary entries (0x004E4145),
+  indirect targets through random data, callee cleanups static_pop can't
+  prove.
+- NaN/Inf and two-NaN inputs (about 80): retry with
+  `record --retry 'NaN'` once L22's hardware oracle is on main.
+- Runaway (about 73): constant-trip loops with calls or stack-slot
+  counters. claude-6 covers 8; stack-slot counters and value-tracked starts
+  are open.
+- Noreturn calls on non-root paths, and a residue of terminal-ineligible
+  noreturn paths.
+- Small classes: undefined flags, unmasked x87, page limit, CPU exceptions.
+
+The lift rejections (STMXCSR/LDMXCSR, x87 forms, RCR and others) are
+claude-6's (L22).
