@@ -35,6 +35,30 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Checked setup sequences (2026-10-12)
+
+Main 4d7f291d merged as **afbc5c96**, preserving both recorder policies and
+main's slot-sweep strategy. `constructed_inputs.py --also-setup ADDRESS`
+now runs additional accepted original producers on accumulated state. Every
+phase must match all observations in its accepted case; changed read/call
+dependencies reject. Untouched earlier pages/writes survive, later writes
+take precedence, and register distributions and heap reservations stay intact.
+No arbitrary merging of independently generated object snapshots is used.
+
+**140 light tests pass.** Three new tests cover disjoint state, overwrites,
+changed-read refusal, register-distribution protection and retained heap
+reservations. The original 0x00437BE0 -> 0x0047DF20 sequence validates for
+all three accepted seeds. 0x00493AA0 still records **0/3**; accepted data
+stays **59,591 / 177,367**, with a clean `L28c/chain-audit.json`.
+
+The proof now passes 0x00493B86 and stops at 0x00493C29 after 7,052
+instructions. At 0x00493BF9/FE, ECX is `-0xC0E0 - EDI`; EBX is
+`EDI + 0xC0E0` at 0x00493C04, so their addition at 0x00493C24 cancels
+the input pointer. The abstract proof currently loses this relationship.
+Evidence: `chain-493aa0.log`, `chain-proof-diagnose.log`. **Next:** a
+general bounded affine-cancellation proof, with unknown flags preserved;
+no branch-value assumptions from concrete random register addresses.
+
 ### Fixed-frame inputs and final checkpoint (2026-10-12)
 
 **0x0081C330 records 3/3 and is adopted.** Its prefix at 0x0081C333 reserves

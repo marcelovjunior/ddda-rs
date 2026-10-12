@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c checked producer sequences (2026-10-12)
+
+- Setup producers can run sequentially only when each replay matches its
+  accepted case; prior state and overlapping writes retain execution order.
+  **140 light tests pass**, accepted data unchanged at **59,591 / 177,367**.
+- Save/player manager setup passes three seeds; 0x00493AA0 remains 0/3.
+  Its proof now reaches pointer cancellation at 0x00493C24.
+- **Next action:** prove that affine cancellation without making unknown
+  input registers or their flags concrete; boot stops retain priority.
+
 ### L28c fixed-frame checkpoint (2026-10-12, pending replay)
 
 - **0x0081C330 records 3/3** after separating its fixed local frame from

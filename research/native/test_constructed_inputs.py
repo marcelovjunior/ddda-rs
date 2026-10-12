@@ -51,6 +51,43 @@ class ConstructedTests(unittest.TestCase):
         self.assertNotIn('image_budget', result)
         self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
 
+    def chain(self):
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',
+                          **self.run_body(f,seed,input_strategy='zero-call-v1'))
+            phases.append((f,accepted,'test'))
+        return c.construct_chain(phases,{},self.run_body)
+
+    def test_sequence_retains_disjoint_pages_and_written_facts(self):
+        self.fixture('c7050000002003000000 c3','c7050010002004000000 c3')
+        state,recipe=self.chain()
+        self.assertEqual(state['pages'][0x20000000][:4],struct.pack('<I',3))
+        self.assertEqual(state['pages'][0x20001000][:4],struct.pack('<I',4))
+        self.assertEqual(state['writes'][0x20000000],3)
+        self.assertEqual(state['writes'][0x20001000],4)
+        self.assertEqual(len(recipe['setups']),2)
+        self.assertEqual(recipe['rule'],'constructed-chain-v1')
+
+    def test_sequence_orders_overwrites_but_rejects_changed_read_dependencies(self):
+        self.fixture('c7050000002003000000 c3','c7050000002004000000 c3')
+        state,_=self.chain()
+        self.assertEqual(state['writes'][0x20000000],4)
+        self.assertEqual(state['pages'][0x20000000][:4],struct.pack('<I',4))
+        self.fixture('c7050000002003000000 c3','a100000020 40 a304000020 c3')
+        with self.assertRaisesRegex(h.Rejected,'replay differs'):
+            self.chain()
+
+    def test_sequence_rejects_register_rebinding_and_keeps_heap_reservations(self):
+        self.fixture('c3','c3')
+        state,_,accepted=self.build()
+        with self.assertRaisesRegex(ValueError,'accepted register distribution'):
+            c.construct(dict(addr=0x400000),accepted,{},self.run_body,'test',initial_state=state)
+        state={**state,'registers':{},'heap':h.HEAP_BASE+32}
+        actual,_=c.construct(dict(addr=0x400000),accepted,{},self.run_body,'test',initial_state=state)
+        self.assertEqual(actual['heap'],h.HEAP_BASE+32)
+
     def test_capture_is_observational_and_replay_mismatch_refuses(self):
         self.fixture('c7410409000000 c3', 'c3')
         state, _, case = self.build()
