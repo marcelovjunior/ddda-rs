@@ -481,10 +481,13 @@ def refresh(root, strategies, seeds, seconds, only=None):
         for strategy in [_inputs(old) if old else {}] + [
                 dict(zero_inputs=True) if s == 'zero' else ({} if s == 'random' else dict(input_strategy=s))
                 for s in strategies]:
+            found = len(new)
             for index in range(1, 256):
                 remaining = seconds - (time.monotonic() - start)
                 if remaining <= 0 or (len(new) >= seeds and goals <= reached):
                     break
+                if index > seeds * 8 and len(new) == found:
+                    break  # this distribution gives nothing: leave the time to the next
                 seen = set()
                 seed = (a << 8) ^ index
                 try:
