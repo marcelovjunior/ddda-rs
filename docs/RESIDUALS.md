@@ -45,25 +45,25 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x006F3242 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x006F3230; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x006F8730 | Recorder: replay pending | 3/3 private frame-call-v1 cases; second EBP save excluded from mock arguments after matching every return epilogue. Head replay pending. | codex (recorder) |
 | 0x006F8C00 | Recorder: replay pending | 3/3 private frame-call-v1 cases; second EBP save excluded from mock arguments after matching every return epilogue. Head replay pending. | codex (recorder) |
-| 0x007126C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
+| 0x007126C0 | Recorder: dispatch/return | Own body ends POP EDI; ADD ESP,0x18; JMP EAX, with no RET. Fixed-return frame input rules do not cover this tail epilogue. | codex (recorder) |
 | 0x00736370 | Inventory admission | L22 identifies an address-taken ASCII tag, not code; resolve inventory admission (current decode rejects BOUND). | claude-6 (lifter) |
-| 0x007BEA60 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
+| 0x007BEA60 | Recorder: dispatch/return | Aligned EBP frame allocates locals after ordinary loads and restores ESP from EBP; fixed ADD-ESP return matcher does not cover this frame. | codex (recorder) |
 | 0x00815C60 | Recorder: floating comparison | Checked 0x00811780 constructor reaches COMISS at 0x00816522; exact floating-point facts needed for a finite trace. | codex (recorder) |
 | 0x0083FFF0 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00947493 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x009472C0; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x009897C0 | Lifter/oracle: x87 state | x87 stack fault before fild at 0x009899d0 | claude-6 (lifter/oracle) |
 | 0x009921E0 | Verification gap | unproven table at 0x00992713 | claude-6 (gap) |
-| 0x009D0E70 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00A195D0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
+| 0x009D0E70 | Recorder: dispatch/return | Aligned EBP frame allocates locals after ordinary loads and restores ESP from EBP; fixed ADD-ESP return matcher does not cover this frame. | codex (recorder) |
+| 0x00A195D0 | Recorder: dispatch/return | Aligned EBP frame allocates 0x328 local bytes after ordinary loads and restores ESP from EBP; current mock input leaves the image. | codex (recorder) |
 | 0x00A2F3B0 | Verification gap | unproven table at 0x00A2F4A5 | claude-6 (gap) |
-| 0x00B75EC0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
+| 0x00B75EC0 | Recorder: dispatch/return | Entry reserves 0x20 bytes for eight float arguments, then pushes nine arguments and calls indirectly before RET. Legacy prologue counting omits the initial outgoing area. | codex (recorder) |
 | 0x00B952C0 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00B955C0 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00B97220 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00BA31D0 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00BA4160 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
 | 0x00BA5540 | Recorder: replay pending | 3/3 private body-call-v1 cases; mock cleanup from complete supplied callee bodies with bounded switch edges and uniform return immediates. Head replay pending. | codex (recorder) |
-| 0x00BD45C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
+| 0x00BD45C0 | Recorder: dispatch/return | Aligned EBP frame allocates 0x8C local bytes after ordinary loads; all three returns restore ESP from EBP. Fixed-return frame matcher does not cover it. | codex (recorder) |
 | 0x00C1D790 | Quarantine: return contract | Prior own-return fixture rejected; resolve and revalidate the function/return contract before recording. | claude-6 (lifter) |
 | 0x00CED240 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00CEEBC0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
