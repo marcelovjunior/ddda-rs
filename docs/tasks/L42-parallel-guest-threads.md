@@ -221,8 +221,7 @@ fast write 1.2–1.7 → 1.3–2.2 ns.
 Static initializers (real lifted code, debug build): not measured. The
 run was queued in the heavy slot and cancelled when the session was wound
 down (2026-10-12). The script is in the private notes
-(`E:\ddda-re
-otes\L42\measure_init.sh`: base vs serial vs parallel, three
+(`E:/ddda-re/notes/L42/measure_init.sh`: base vs serial vs parallel, three
 runs each).
 
 ### State at hand-off (2026-10-12)
