@@ -40,10 +40,22 @@ fn memory() -> GuestMemory {
 
 fn address(rng: &mut Rng) -> u32 {
     match rng.next() % 8 {
-        0 => 0xFFFF_F000 + (PAGE - 4) + rng.next() % 8, // around the wrap
+        0 => 0xFFFF_FFFCu32.wrapping_add(rng.next() % 8), // around the wrap
         1 => 0x10000 + (rng.next() % 7 + 1) * PAGE - 1 - rng.next() % 4, // page ends
         _ => 0x10000 + rng.next() % (8 * PAGE),
     }
+}
+
+/// Silence the expected guest faults; anything else (a failed assertion)
+/// still prints.
+fn quiet_faults() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.payload().downcast_ref::<String>().map(String::as_str).unwrap_or("");
+        if !msg.starts_with("guest ") {
+            default(info);
+        }
+    }));
 }
 
 fn outcome<T: std::fmt::Debug>(f: impl FnOnce() -> T) -> String {
@@ -55,7 +67,7 @@ fn outcome<T: std::fmt::Debug>(f: impl FnOnce() -> T) -> String {
 
 #[test]
 fn loads_and_stores_match_the_checked_accesses() {
-    std::panic::set_hook(Box::new(|_| {}));
+    quiet_faults();
     let (mut fast, mut checked) = (memory(), memory());
     let mut rng = Rng(0x1234_5678);
     for _ in 0..200_000 {
@@ -100,7 +112,7 @@ fn loads_and_stores_match_the_checked_accesses() {
 
 #[test]
 fn read_bytes_reads_like_each_byte() {
-    std::panic::set_hook(Box::new(|_| {}));
+    quiet_faults();
     let m = memory();
     let mut rng = Rng(0xBEEF_0001);
     for _ in 0..20_000 {
