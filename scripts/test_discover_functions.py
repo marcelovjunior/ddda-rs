@@ -66,6 +66,10 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])               # cut at data
         self.assertEqual(r[0][1]['rtti'], 'none')
         self.assertEqual(r[0][1]['stores'], [0x1400])
+        # A secondary vptr store (object + 4) anchors as well; the MT rule's
+        # `stores` stay offset 0.
+        r = list(d.vtables(p, m, set(), known={0x1310}, stores={}, vptr_stores={0x3100: {0x1404}}))
+        self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])
         # A store into .data is not a read-only table.
         p.word_at(0x5100, 0x1300)
         self.assertEqual(list(d.vtables(p, m, set(), known={0x1300}, stores={0x5100: {0x1400}})), [])

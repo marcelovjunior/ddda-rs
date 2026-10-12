@@ -179,3 +179,54 @@ class NanTest(unittest.TestCase):
         data = struct.pack("<4I", 0x7FC00001, 0x7F800002, 1, 2) + struct.pack("<4I", 0x7FC00003, 0x7FC00004, 0x7FC00005, 3)
         emulated, native = self.run_both(bytes.fromhex("0f10010f1049100f58c10f114120"), data)
         self.assertEqual(emulated[32:48], native[32:48])
+
+
+class NanEvidenceTest(NanTest):
+    """L22 evidence for retiring the recorder's NaN guards: with the oracle
+    the recording equals a native run; Unicorn alone does not (why the
+    guards existed)."""
+
+    def unicorn_alone(self, body, data):
+        uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.mem_map(0x1000, 0x2000)
+        uc.mem_write(0x1000, body)
+        uc.mem_write(0x2000, data)
+        uc.reg_write(xc.UC_X86_REG_ECX, 0x2000)
+        uc.reg_write(xc.UC_X86_REG_MXCSR, 0x1F80)
+        uc.reg_write(xc.UC_X86_REG_FPTAG, 0xFFFF)
+        uc.reg_write(xc.UC_X86_REG_FPCW, 0x037F)
+        uc.emu_start(0x1000, 0x1000 + len(body))
+        return bytes(uc.mem_read(0x2000, 0x40))
+
+    X87_ADD = bytes.fromhex("d901d84104d95908")              # fld [ecx]; fadd [ecx+4]; fstp [ecx+8]
+    SSE_ADD = bytes.fromhex("f30f1001f30f584104f30f114108")  # movss xmm0,[ecx]; addss xmm0,[ecx+4]; movss [ecx+8],xmm0
+    ONE = 0x3F800000
+
+    def result(self, out):
+        return int.from_bytes(out[8:12], "little")
+
+    def test_qnan_payload_propagates(self):
+        for body in (self.X87_ADD, self.SSE_ADD):
+            data = struct.pack("<II", 0x7FC12345, self.ONE)
+            emulated, native = self.run_both(body, data)
+            self.assertEqual(self.result(emulated), self.result(native))
+            self.assertEqual(self.result(native), 0x7FC12345)
+
+    def test_two_nan_operand_order(self):
+        a, b = 0x7FC00001, 0x7FC00010
+        for body, rule in ((self.X87_ADD, lambda a, b: max(a, b)),   # x87: larger significand
+                           (self.SSE_ADD, lambda a, b: a)):          # SSE: first source operand
+            for x, y in ((a, b), (b, a)):
+                emulated, native = self.run_both(body, struct.pack("<II", x, y))
+                self.assertEqual(self.result(emulated), self.result(native))
+                self.assertEqual(self.result(native), rule(x, y))
+
+    def test_unicorn_alone_differs_where_the_guards_were(self):
+        # SSE with two NaNs: the CPU keeps the first operand, Unicorn the larger
+        data = struct.pack("<II", 0x7FC00001, 0x7FC00010)
+        self.assertNotEqual(self.result(self.unicorn_alone(self.SSE_ADD, data)),
+                            self.result(self.run_both(self.SSE_ADD, data)[1]))
+        # x87 signalling-NaN load: the CPU quiets it, Unicorn does not
+        body = bytes.fromhex("d901d95904")
+        data = struct.pack("<I", 0x7F800001)
+        self.assertNotEqual(self.unicorn_alone(body, data)[4:8], self.run_both(body, data)[1][4:8])

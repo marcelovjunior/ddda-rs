@@ -362,8 +362,11 @@ class Oracle:
         out_xmm, out_gpr, flags, out_mxcsr = sse_native(i, xmm, gpr, data, mxcsr)
         self.used = self.mxcsr_touched = True
         self.cpu_dependent |= i.mnemonic in APPROXIMATIONS
-        self.pending = ("sse", [(r, v) for r, v, old in zip(_XMMS, out_xmm, xmm) if v != old]
-                        + [(r, v) for r, v, old in zip(_GPRS, out_gpr, gpr) if v != old],
+        # Every register the host ran with, unconditionally: Unicorn's own
+        # result may differ even where the host's equals the old value (a
+        # two-NaN ADDSS keeps the first operand; Unicorn picks the larger).
+        self.pending = ("sse", list(zip(_XMMS, out_xmm))
+                        + [(r, v) for k, (r, v) in enumerate(zip(_GPRS, out_gpr)) if k != 4],
                         out_mxcsr, flags & 0x45 if i.mnemonic in SSE_COMPARE_FLAGS else None, i.address)
 
     def flush(self, uc):

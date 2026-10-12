@@ -783,8 +783,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # existed because Unicorn does not quiet a signalling NaN on x87 loads
         # and picks the x87 NaN for SSE; the x87 and SSE host oracles now
         # replace every such result with the hardware's (x87_host.Oracle).
+        # The old test still runs and tags the case, so its effect is counted.
+        if decoded[eip] in FLOAT_LOADS and size in (4, 8, 10):
+            bits = int.from_bytes(bytes(uc_.mem_read(addr, size)), "little")
+            if (((bits >> 23) & 0xFF) == 0xFF if size == 4 else
+                    ((bits >> 52) & 0x7FF) == 0x7FF if size == 8 else
+                    ((bits >> 64) & 0x7FFF) == 0x7FFF):
+                retired.add("nan-input")
 
     count, bad = [0], []
+    retired = set()  # retired NaN guards this case would have tripped
 
     # SSE ops with two NaN operands: the CPU returns the first operand's NaN,
     # Unicorn (QEMU) applies the x87 rule (larger payload). Such a case
@@ -1009,7 +1017,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 return
         # L22: SSE operations with two NaN operands take the host's result
         # through the SSE oracle (all of SSE_BINARY is oracle-covered), so
-        # `two_nans` no longer rejects them.
+        # `two_nans` no longer rejects them; it tags the case instead.
+        if two_nans(uc_, addr):
+            retired.add("two-nan")
         count[0] += 1
         if deadline is not None and count[0] % 256 == 1 and time.monotonic() >= deadline:
             bad.append("function time budget")
@@ -1307,6 +1317,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             **({"mxcsr": uc.reg_read(_xc.UC_X86_REG_MXCSR)} if oracle.mxcsr_touched else {}),
             **({"st_in": st_in} if st_in else {}),
             **machine.result(uc),
+            **({"nan_guard_retired": sorted(retired)} if retired else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
             **({"stack_contract": stack_contract} if stack_contract else {})}
