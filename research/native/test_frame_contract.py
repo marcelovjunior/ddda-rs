@@ -114,4 +114,22 @@ class FrameContractTests(unittest.TestCase):
                              noreturn_targets={0x400000,0x400100})
 
 
+    def memset_run(self, text):
+        code=bytes.fromhex(text.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.dict(h.PLATFORM,{0x400100:'memset'}),patch.object(h,'static_pop',return_value=0):
+            return h.run_sparse(0x400000,5,body=body,end=0x400000+len(code),input_strategy='small-v1')
+
+    def test_constant_model_sizes_get_their_own_budget(self):
+        # push 0x80000; push 0; push 0x30000000; call memset; add esp,12; ret
+        c=self.memset_run('6800000800 6a00 6800000030 e8ef000000 83c40c c3')
+        self.assertIn([0x30000000,'00'*0x80000],c['writes'])
+        # the same size from a register is an input: the ordinary 64 KB guard
+        with self.assertRaisesRegex(h.Rejected,'memset of 0x80000'):
+            self.memset_run('b800000800 50 6a00 6800000030 e8ee000000 83c40c c3')
+        # a constant slot overwritten (even with the same value) is no longer proven
+        with self.assertRaisesRegex(h.Rejected,'memset of 0x80000'):
+            self.memset_run('6800000800 c7042400000800 6a00 6800000030 e8e8000000 83c40c c3')
+
+
 if __name__=='__main__':unittest.main()

@@ -157,6 +157,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
 MODEL_BYTES = 1 << 20  # run_sparse rejects runs whose memset/memcpy calls touch more in total
+CONST_MODEL_BYTES = 4 << 20  # per-run budget for memset/memcpy sizes pushed as immediates
 TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 TEB_BASE, GDT_BASE = 0x7FFDE000, 0x7FFDC000
@@ -737,6 +738,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return True
 
     reads, written = {}, set()
+    # Stack dwords written by `push imm32` and not overwritten since: a model
+    # size argument found here is a constant of the code, not a random input.
+    const_slots, pending_push = {}, [None]
+
+    def forget_constants(addr, size):
+        for slot in [a for a in const_slots if a < addr + size and addr < a + 4]:
+            del const_slots[slot]
 
     def note(uc_, access, addr, size, value, _):
         for p in {addr & ~0xFFF, (addr + size - 1) & ~0xFFF}:
@@ -749,6 +757,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     reads[addr + k] = cur[k]
         else:
             written.update(range(addr, addr + size))
+            push = pending_push[0]
+            forget_constants(addr, size)
+            if push is not None and (addr, size) == (push[0], 4):
+                const_slots[addr] = push[1]
+            pending_push[0] = None
 
     decoded = {}
     instruction_sizes = {}
@@ -987,6 +1000,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
+        pending_push[0] = None
+        i = integer_ops.get(addr)
+        if (i is not None and i.mnemonic == "push" and i.operands[0].type == 2 and i.operands[0].size == 4
+                and uc_.reg_read(UC_X86_REG_EIP) == addr):
+            pending_push[0] = ((esp_now - 4) & 0xFFFFFFFF, i.operands[0].imm & 0xFFFFFFFF)
         if addr in integer_ops and not model_entry(addr) and uc_.reg_read(UC_X86_REG_EIP) == addr:
             reason = check_integer_flags(uc_, integer_ops[addr])
             if reason:
@@ -1036,6 +1054,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     heap = [HEAP_BASE]
     model_bytes = [0]  # bytes memset/memcpy touched in this run
+    const_bytes = [0]  # of those, with sizes pushed as immediates
 
     def ensure(a, n):
         for p in range(a & ~0xFFF, ((a + n - 1) & ~0xFFF) + 1, 0x1000):
@@ -1051,6 +1070,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return cur
 
     def mwrite(a, data):
+        forget_constants(a, len(data))
         ensure(a, len(data))
         uc.mem_write(a, data)
         written.update(range(a, a + len(data)))
@@ -1077,8 +1097,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             eax = alloc(uc_.reg_read(UC_X86_REG_ECX))
         elif name in ("memset", "memcpy"):
             dst, x, n = arg(0), arg(1), arg(2)
-            model_bytes[0] += n
-            if n > 0x10000 or model_bytes[0] > MODEL_BYTES:
+            # A size pushed as an immediate (sSave::ctor clears 0x80000 bytes)
+            # is the same on every input: it gets its own, larger budget.
+            constant = const_slots.get((esp + 12) & 0xFFFFFFFF) == n
+            if constant:
+                const_bytes[0] += n
+            else:
+                model_bytes[0] += n
+            if (const_bytes[0] > CONST_MODEL_BYTES if constant
+                    else n > 0x10000 or model_bytes[0] > MODEL_BYTES):
                 # one huge copy, or a loop of them: every byte becomes a
                 # Python dict/set entry (a worker once reached 3.7 GB)
                 bad.append(f"{name} of {n:#x} bytes ({model_bytes[0]:#x} in this run)")

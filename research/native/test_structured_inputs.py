@@ -127,6 +127,14 @@ class InputTests(unittest.TestCase):
         with self.assertRaisesRegex(h.Rejected,'function time budget'):
             self.record(bytes.fromhex('ebfe'),'small-v1',max_seconds=0)
 
+    def test_retry_reruns_only_matching_failures(self):
+        rec=lambda a,reason,cases=():dict(addr=a,body_key='k',requested_seeds=3,seconds=20,
+                                         attempts=[dict(reason=reason)],cases=list(cases))
+        prior=[rec(1,'memset of 0x80000 bytes (0x80000 in this run)'),rec(2,'runaway'),rec(3,'ok',[{}]),
+               dict(rec(4,'memset of 0x60000 bytes'),requested_seeds=12)]
+        self.assertEqual(trials.done_keys(prior,3,20),{(1,'k'),(2,'k'),(3,'k')})
+        self.assertEqual(trials.done_keys(prior,3,20,'memset|memcpy'),{(2,'k'),(3,'k')})
+
     def test_trial_preserves_failure_reason_and_seed(self):
         f=dict(addr=0x400000,size=1,body=[0x400000],calls=[],ext=True)
         with patch.object(h,'run_sparse',side_effect=h.Rejected('runaway')):

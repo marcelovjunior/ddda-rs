@@ -936,6 +936,19 @@ ESP, because the prolog returns below the call's ESP and the ordinary
 `ESP >= call ESP` test would leave the caller marked nested. Promotion
 changes the closed boundary: archive the trial logs and `prepare` again.
 
+**Constant model sizes and noreturn roots (L28).** The memset/memcpy model
+guard (64 KB per call, 1 MB per run) exists because random sizes would make
+every byte a recorder dict entry. A size argument whose stack slot was
+written by a `push imm32` and not overwritten since (tracked per write,
+including the models' own writes) is a constant of the code, the same on
+every input: such calls count against a separate 4 MB per-run budget
+(`CONST_MODEL_BYTES`), e.g. `sSave::ctor` 0x004980F0 clears 0x80000 bytes.
+Sizes from registers or memory keep the ordinary guard. The noreturn-target
+guard rejects runs that reach a noreturn entry; the root's own entry is
+exempt (`__exit` 0x012EDC4B is in the noreturn set by name but returns
+syntactically). `structured_inputs.py record --retry REGEX` re-runs logged
+failures whose reason matches after such a recorder change.
+
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
 `fill` already supplies the original executable bytes for *all* image

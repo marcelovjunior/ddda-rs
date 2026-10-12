@@ -128,7 +128,18 @@ def trial(args):
                 seconds=seconds,attempts=attempts,cases=cases)
 
 
-def record(root, strategy, seeds, seconds, limit):
+def done_keys(prior, seeds, seconds, retry=None):
+    """Logged (addr, body_key) trials to skip on resume. `retry` (a regex):
+    after a recorder change, failed trials with a matching reason run again;
+    their earlier records stay in the log."""
+    import re
+    stale = re.compile(retry) if retry else None
+    return {(r['addr'],r['body_key']) for r in prior
+            if r.get('requested_seeds')==seeds and r.get('seconds')==seconds
+            and not (stale and not r['cases'] and any(stale.search(a['reason']) for a in r['attempts']))}
+
+
+def record(root, strategy, seeds, seconds, limit, retry=None):
     selected = read(root/'patterns/lift.json')
     check_boundary(root, selected)
     have = {f['addr'] for f in selected}
@@ -136,8 +147,7 @@ def record(root, strategy, seeds, seconds, limit):
     candidates = read(root/'patterns/structured_candidates.json')
     path = root/f'structured-{strategy}.jsonl'
     prior = records(path) if path.exists() else []
-    done = {(r['addr'],r['body_key']) for r in prior
-            if r.get('requested_seeds')==seeds and r.get('seconds')==seconds}
+    done = done_keys(prior, seeds, seconds, retry)
     # Omit assembly strings from worker arguments; workers need only the
     # existing body and call boundary, not another copy of generated Rust.
     todo = [{k:v for k,v in f.items() if k!='arms'} for f in candidates
@@ -347,12 +357,13 @@ if __name__ == '__main__':
     ap.add_argument('--seeds',type=int,default=3)
     ap.add_argument('--seconds',type=float,default=20)
     ap.add_argument('--limit',type=int)
+    ap.add_argument('--retry',help='regex: re-run functions whose logged attempts failed with a matching reason')
     args=ap.parse_args();root=Path(lift.N)
     if not os.environ.get('LIFT_DATA') or root.resolve() == Path('E:/ddda-re/notes/native').resolve():
         ap.error('set LIFT_DATA to a private trial directory, not the shared native directory')
     if args.seeds < 1 or args.seconds <= 0 or (args.limit is not None and args.limit < 0):
         ap.error('positive seeds/seconds and nonnegative limit required')
     if args.command=='prepare':prepare(root)
-    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit)
+    elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry)
     elif args.command=='promote':promote(root,args.seeds,args.seconds)
     else:adopt(root,args.strategy)
