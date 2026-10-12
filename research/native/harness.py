@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'bulk-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # L48 slot_sweep_layout).
@@ -852,6 +852,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     `visited`, a set, receives the address of every executed instruction
     (coverage for case selection, L45); it changes nothing in the run.
 
+    `bulk-call-v1` uses zero-filled register objects and lazy constant-size
+    platform memset effects. Every output byte is still serialized. Later
+    accessed pages count against MAX_PAGES; model byte budgets are unchanged.
+    Setup capture of lazy fills is deliberately unsupported.
+
     `initial_state` supplies pages and register bindings from a checked
     original setup run (constructed_inputs). `capture_state`, an empty dict,
     receives its final pages after successful validation. Neither changes
@@ -876,7 +881,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -912,6 +917,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     uc.hook_add(UC_HOOK_CODE, machine.on_code)
     base, secs = image()
     pages_in = {}
+    from bulk_inputs import BulkFills
+    bulk_fills = BulkFills()
 
     def fill(page):
         """Image pages hold the exe; any other page seeded random bytes."""
@@ -947,7 +954,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 pass
             if p not in pages_in:
                 content = fill(p)
-                uc_.mem_write(p, content)
+                uc_.mem_write(p, bulk_fills.overlay(p, content))
                 pages_in[p] = content
         return True
 
@@ -978,7 +985,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if access == 16:  # UC_MEM_READ: record bytes read before any write
             cur = bytes(uc_.mem_read(addr, size))
             for k in range(size):
-                if addr + k not in written and addr + k not in reads:
+                if addr + k not in written and addr + k not in reads and not bulk_fills.contains(addr+k):
                     reads[addr + k] = cur[k]
         else:
             written.update(range(addr, addr + size))
@@ -1350,7 +1357,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         ensure(a, n)
         cur = bytes(uc.mem_read(a, n))
         for k in range(n):
-            if a + k not in written and a + k not in reads:
+            if a + k not in written and a + k not in reads and not bulk_fills.contains(a+k):
                 reads[a + k] = cur[k]
         return cur
 
@@ -1400,7 +1407,23 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 bad.append(f"{name} of {n:#x} bytes ({model_bytes[0]:#x} in this run)")
                 uc_.emu_stop()
                 return
-            mwrite(dst, bytes([x & 0xFF]) * n if name == "memset" else mread(x, n))
+            if input_strategy == 'bulk-call-v1' and name == 'memset' and constant:
+                # Exact bounded effect, not 256+ unrelated page discoveries.
+                # Existing byte budgets and alias checks still govern it.
+                if capture_state is not None:
+                    raise Rejected('bulk fill setup capture is not supported')
+                if dst+n > 1 << 32:
+                    raise Rejected('bulk fill wraps address space')
+                if not budget_write_ok(dst,n):
+                    return
+                forget_constants(dst,n)
+                bulk_fills.add(dst,n,x)
+                for page in pages_in:
+                    lo,hi = max(page,dst),min(page+4096,dst+n)
+                    if lo < hi:
+                        uc_.mem_write(lo,bytes([x & 255])*(hi-lo))
+            else:
+                mwrite(dst, bytes([x & 0xFF]) * n if name == "memset" else mread(x, n))
             eax = dst
         ret = struct.unpack("<I", mread(esp, 4))[0]
         uc_.reg_write(UC_X86_REG_EAX, eax)
@@ -1574,7 +1597,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
+        if input_strategy in ('bulk-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)
@@ -1741,10 +1764,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 cur = [a, [d[a]]]
                 out.append(cur)
         return [[a, bytes(b).hex()] for a, b in out]
-    final = {a: uc.mem_read(a, 1)[0] for a in written}
+    final_writes = bulk_fills.output(written,pages_in,uc.mem_read)
     if captured is not None:
         capture_state.update(captured)
-    return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
+    return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": final_writes,
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
             **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),

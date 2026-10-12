@@ -35,6 +35,35 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Boot stop 15: lazy bulk fills (2026-10-12)
+
+**0x00DC7D00 records 3/3 normal returns** with `bulk-call-v1`. Its original
+literal-size memset writes 0x100000 bytes: eagerly mapping those 256 pages
+leaves no space for the caller/object/code under the ordinary page guard.
+The new general strategy retains a constant-size platform memset as a lazy
+fill range. Subsequent accesses materialize original pages overlaid with
+the fill and still count against the unchanged page cap. Already mapped
+pages update immediately. Overlapping fills and later ordinary writes retain
+execution order; reads after a fill are not misreported as initial inputs.
+Output uses the **existing exact byte-range schema**, including every byte
+of the 1 MiB fill. No compressed-value assumption or Rust replay change.
+Existing constant-size and dynamic model-byte guards remain; dynamic sizes
+stay eager. Setup capture with lazy fills refuses explicitly.
+
+Head/claude-2 #9685/#9686 identify the real boot object as constructed by
+0x00DD1B70, with vtable 0x0142B0D8 and slot +0x2C = 0x005F35C0. The new
+cases use ordinary zero-filled object inputs and the existing mock boundary;
+they do **not** claim to replay that boot object graph. Original method byte
+effects and normal return are recorded; integrated Rust replay remains head's.
+
+Private native-L28c is **59,583 functions / 177,343 cases**, cumulative
+**+2/+6** from `recipes-next-before.json`. `recipes-bulk-audit.json` proves
+all baseline records/case multisets unchanged. New tests cover large fills,
+post-fill reads/writes, eager equality, overlap, address wrapping, byte/page
+guards and unsupported setup capture. Reproduce through heavy.py with
+`structured_inputs.py record --strategy bulk-call-v1 --address 0x00DC7D00`.
+Next: head boot preview, then frameless wrapper and manager input recipes.
+
 ### Constructed finite-work input: 0x00491340 (2026-10-12)
 
 **Recorded and adopted 3/3 normal returns.** The verified original constructor

@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c boot stop 15 bulk fill (2026-10-12, pending replay)
+
+- **0x00DC7D00 records 3/3.** Constant-size modeled memset effects can stay
+  lazy until accessed, retaining exact final byte ranges for existing replay.
+  Ordinary page and bulk-byte guards remain; no Rust format change.
+- Private native-L28c: **59,583 functions / 177,343 cases**, +2/+6 including
+  the constructed array fixture. All baseline records/cases remain unchanged.
+- **Next action:** head replay/boot preview, then wrapper/manager fixtures.
+
 ### L28c constructed array fixture (2026-10-12, pending replay)
 
 - Original constructor 0x00490E80 supplies the four arrays for 0x00491340;
