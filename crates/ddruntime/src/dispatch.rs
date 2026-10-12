@@ -225,6 +225,9 @@ impl Registry {
 /// path, each call of a named service (an import, e.g.
 /// `KERNEL32.dll!ReadFile`) is written as one line: guest thread, name,
 /// return address, the first four stack arguments, eax after the call.
+/// A call that can block (a wait, a sleep, EnterCriticalSection,
+/// GetMessage) is also written, and flushed, when it starts, ending in
+/// "...": a thread blocked for good shows its last call.
 /// `DDRUNTIME_TRACE_SERVICES_MAX` caps the lines (default 2,000,000); the
 /// file is flushed every 1,000 lines, so a killed run keeps nearly all.
 /// Unset, it costs one initialized check per service call.
@@ -262,6 +265,9 @@ mod trace {
                 line += &format!(" a{k}={s:?}");
             }
         }
+        if ["Wait", "Sleep", "EnterCriticalSection", "GetMessage"].iter().any(|w| name.contains(w)) {
+            write(&format!("{line} ..."), true);
+        }
         Some(line)
     }
 
@@ -278,27 +284,28 @@ mod trace {
         let mut s = String::new();
         for k in 0..260u32 {
             let a = p.wrapping_add(k * step);
-            let b = byte(a)?;
-            if wide && byte(a.wrapping_add(1))? != 0 {
-                break;
+            match (byte(a), wide) {
+                (Some(b), false) if printable(b) => s.push(b as char),
+                (Some(b), true) if printable(b) && byte(a.wrapping_add(1)) == Some(0) => s.push(b as char),
+                _ => break,
             }
-            if !printable(b) {
-                break;
-            }
-            s.push(b as char);
         }
         (s.len() >= 3).then_some(s)
     }
 
     pub(super) fn finish(line: String, cpu: &Cpu) {
+        write(&format!("{line} -> {:#x}", cpu.eax), false);
+    }
+
+    fn write(line: &str, flush: bool) {
         let Some(t) = file() else { return };
         let mut t = t.lock().unwrap_or_else(|e| e.into_inner());
         if t.lines >= t.max {
             return;
         }
         t.lines += 1;
-        let _ = writeln!(t.out, "{line} -> {:#x}", cpu.eax);
-        if t.lines % 1000 == 0 || t.lines == t.max {
+        let _ = writeln!(t.out, "{line}");
+        if flush || t.lines % 1000 == 0 || t.lines == t.max {
             let _ = t.out.flush();
         }
     }
