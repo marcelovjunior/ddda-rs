@@ -2676,9 +2676,26 @@ def verification_gaps(lifted):
     return gaps
 
 
+def resumable(lifted):
+    """Entries whose bodies execution can enter mid-body (L47): the L27b
+    executor resumes there at a single instruction, so they need step
+    functions; every other function runs as its whole-function lift. These
+    are the bodies that register an EH4 scope table (they own its filter,
+    __finally and __except code, which _except_handler4 calls or resumes
+    to: L45 eh4_scope_targets decodes it into them), found from the arms
+    by the helpers' inventory names."""
+    prologs, handlers = eh4_helpers()
+    names = {f"f_{a:08x}" for a in prologs} | {f"0x{a:X}" for a in prologs | handlers}
+    return {f["addr"] for f in lifted if any(n in arm for arm in f["arms"] for n in names)}
+
+
 def gen(chunk=400, instructions=None):
+    """`instructions`: 'scoped' (default: steps for `resumable` bodies),
+    'all' (LIFT_INSTRUCTIONS=1) or 'none' (LIFT_INSTRUCTIONS=0)."""
     if instructions is None:
-        instructions = os.environ.get('LIFT_INSTRUCTIONS') == '1'
+        instructions = {'1': 'all', '0': 'none'}.get(os.environ.get('LIFT_INSTRUCTIONS'), 'scoped')
+    elif instructions is True or instructions is False:
+        instructions = 'all' if instructions else 'none'
     from pathlib import Path
     lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
     addresses = {f["addr"] for f in lifted}
@@ -2689,6 +2706,8 @@ def gen(chunk=400, instructions=None):
         if missing:
             raise ValueError(f"0x{f['addr']:08X}: missing lifted callees {sorted(missing)}")
     out_dir = os.path.join(R, "crates/ddnative/src/generated")
+    steps = addresses if instructions == 'all' else set() if instructions == 'none' else resumable(lifted)
+    print(len(steps), "functions with instruction steps", f"({instructions})", flush=True)
     ported = wired_ports()
     if set(ported) - addresses:
         raise ValueError(f"ports without a lifted body: {sorted(hex(a) for a in set(ported) - addresses)}")
@@ -2705,9 +2724,10 @@ def gen(chunk=400, instructions=None):
                      "#![allow(warnings, clippy::all)]",
                      "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
             lines += [shard_fn(f) for f in selected[k:k + chunk]]
-            if instructions:
+            stepped = [f for f in selected[k:k + chunk] if f['addr'] in steps]
+            if stepped:
                 lines.append('use ddnative_base::execution::Flow;')
-                for f in selected[k:k + chunk]:
+                for f in stepped:
                     source, ips = step_source(f, addresses)
                     lines.append(source)
                     for ip in ips:

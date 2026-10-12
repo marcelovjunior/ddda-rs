@@ -209,6 +209,14 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
                         return Some(next);
                     }
                 }
+            } else if let Some(Binding::Lifted(f)) = registry.get(ip) {
+                // L47: steps exist only where execution can resume mid-body
+                // (lift.resumable); any other function entered here runs as
+                // its whole-function lift and returns like a call. Faults
+                // inside it are not restartable instructions.
+                let target = m.u32(slot);
+                f(m, cpu);
+                Flow::Return(target)
             } else {
                 std::panic::panic_any(Stop::MissingInstruction { ip });
             };
