@@ -85,3 +85,68 @@ def fixed_frame_allocations(entry, body, read):
             return set()
         pc += ins.size
     return set()
+
+
+def aligned_frame_saves(entry, body, read):
+    """Mock-input hint for saving the frame pointer after stack alignment.
+
+    The first EBP push saves the caller's register; the second preserves
+    the new frame pointer while EBP is used as a local register. Require
+    matching reverse-order pops at every return, then MOV ESP,EBP; POP EBP.
+    This selects mock arguments only; recording still checks the real return.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    decoded = {}
+    for pc in body or ():
+        ins = next(md.disasm(read(pc, 15), pc, count=1), None)
+        if ins is None:
+            return set()
+        decoded[pc] = ins
+    pc = entry
+    for mnemonic, operands in (('push', 'ebp'), ('mov', 'ebp, esp')):
+        ins = decoded.get(pc)
+        if ins is None or (ins.mnemonic, ins.op_str) != (mnemonic, operands):
+            return set()
+        pc += ins.size
+    ins = decoded.get(pc)
+    if (ins is None or ins.mnemonic != 'and' or len(ins.operands) != 2
+            or ins.op_str.split(',')[0] != 'esp' or ins.operands[1].type != 2
+            or (ins.operands[1].imm & 0xffffffff) not in (0xfffffff8, 0xfffffff0, 0xffffffe0)):
+        return set()
+    pc += ins.size
+    saves, allocation = [], False
+    for _ in range(32):
+        ins = decoded.get(pc)
+        if ins is None:
+            return set()
+        if ins.mnemonic == 'call' or ins.mnemonic.startswith('j'):
+            break
+        if ins.mnemonic == 'push':
+            name = ins.op_str
+            if name not in ('ebx', 'ebp', 'esi', 'edi') or name in [r for _, r in saves]:
+                break
+            saves.append((pc, name))
+        elif ins.mnemonic == 'sub' and ins.op_str.split(',')[0] == 'esp':
+            if allocation or saves or ins.operands[1].type != 2 or not 0 < ins.operands[1].imm <= 4096:
+                return set()
+            allocation = True
+        elif any(ins.reg_name(r) in ('esp', 'sp', 'ebp', 'bp') for r in ins.regs_access()[1]):
+            break
+        pc += ins.size
+    else:
+        return set()
+    if 'ebp' not in [r for _, r in saves]:
+        return set()
+    previous = {i.address+i.size: i for i in decoded.values()}
+    returns = [i for i in decoded.values() if i.mnemonic in ('ret', 'retn', 'repz ret')]
+    if not returns:
+        return set()
+    for ins in returns:
+        expected = [('pop', 'ebp'), ('mov', 'esp, ebp')]
+        expected += [('pop', name) for _, name in saves]
+        for pair in expected:
+            ins = previous.get(ins.address)
+            if ins is None or (ins.mnemonic, ins.op_str) != pair:
+                return set()
+    return {pc for pc, name in saves if name == 'ebp'}

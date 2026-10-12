@@ -25,6 +25,8 @@ class InputTests(unittest.TestCase):
         elif strategy == 'sentinel-records-v1':
             kwargs.setdefault('input_layout',dict(stride=8, first={'register':'edx'},
                                                   sentinel_offset=0, sentinel=0xffffffff))
+        elif strategy == 'body-call-v1':
+            kwargs.setdefault('input_layout',dict(bodies={'0x400000':[0x400000]}))
         elif strategy == 'slot-sweep-v1':  # L48: a register index binding over small-v1
             kwargs.setdefault('input_layout',dict(index={'register':'eax'},value=1))
         image=code.ljust(0x1000,b'\xcc')
