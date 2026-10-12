@@ -21,6 +21,7 @@ pub const IMAGE_BASE: u32 = 0x0040_0000;
 
 const ERROR_PROC_NOT_FOUND: u32 = 127;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const HEAP_ZERO_MEMORY: u32 = 0x8;
 
 type Api = fn(&mut dyn Mem, &mut Cpu);
@@ -432,21 +433,54 @@ pub fn get_proc_address(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     ret(m, cpu, 8);
 }
-/// GetModuleFileNameA/W(module, buffer, size): the exe's path, truncated
-/// and terminated as documented; returns the characters copied.
+/// GetModuleFileNameA/W(module, buffer, size) (Microsoft Learn
+/// "GetModuleFileNameA function (libloaderapi.h)"): for the exe (NULL or
+/// its image base) its path with a NUL; returns the characters copied and
+/// sets the last error to 0. If the path does not fit, the first size - 1
+/// characters and a NUL are written, the result is size and the last error
+/// ERROR_INSUFFICIENT_BUFFER (size 0 writes nothing and returns 0); a
+/// handle that is no module fails with ERROR_MOD_NOT_FOUND (all measured,
+/// research/runtime/windows/ModuleName.cs). The DLLs' paths are not
+/// modelled (stop). The CRT's `__setargv` reads argv[0] here.
 fn module_file_name(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
-    let (buf, size) = (arg(m, cpu, 1), arg(m, cpu, 2));
+    let (h, buf, size) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
+    if h != 0 && h != IMAGE_BASE {
+        if module_name(h).is_some() {
+            panic!("GetModuleFileName of module {h:#x} ({:?}) is not modelled (crate::win32)", module_name(h));
+        }
+        set_error(126); // ERROR_MOD_NOT_FOUND
+        cpu.eax = 0;
+        return ret(m, cpu, 12);
+    }
     let path = exe_path();
-    let units: Vec<u16> = if wide { path.encode_utf16().collect() } else { path.bytes().map(u16::from).collect() };
-    let n = units.len().min(size.saturating_sub(1) as usize);
-    for (k, &u) in units[..n].iter().chain([0u16].iter()).enumerate() {
+    // the A form: code page 1252, '?' for what it cannot hold
+    let units: Vec<u16> = if wide {
+        path.encode_utf16().collect()
+    } else {
+        path.encode_utf16().map(|u| crate::text::encode_1252(u, true).unwrap_or(b'?') as u16).collect()
+    };
+    let put = |m: &mut dyn Mem, k: usize, u: u16| {
         if wide {
             m.set_u16(buf.wrapping_add(2 * k as u32), u);
         } else {
             m.set_u8(buf.wrapping_add(k as u32), u as u8);
         }
-    }
-    cpu.eax = n as u32;
+    };
+    cpu.eax = if (units.len() as u32) < size {
+        for (k, &u) in units.iter().chain([0u16].iter()).enumerate() {
+            put(m, k, u);
+        }
+        set_error(0);
+        units.len() as u32
+    } else {
+        if size > 0 {
+            for (k, &u) in units[..size as usize - 1].iter().chain([0u16].iter()).enumerate() {
+                put(m, k, u);
+            }
+        }
+        set_error(ERROR_INSUFFICIENT_BUFFER);
+        size
+    };
     ret(m, cpu, 12);
 }
 pub fn get_module_file_name_a(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -466,21 +500,66 @@ pub fn get_oemcp(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = 437;
     ret(m, cpu, 0);
 }
+/// The code pages answered, as Windows 11 (en-US) answers GetCPInfo and
+/// IsValidCodePage for them (measured, research/runtime/windows/CpInfo.cs):
+/// (code page, IsValidCodePage, CPINFO MaxCharSize, lead-byte ranges).
+/// GetCPInfo also takes the symbolic pages CP_ACP 0 and CP_THREAD_ACP 3
+/// (1252 here), CP_OEMCP 1 (437) and CP_MACCP 2 (10000, single-byte), which
+/// IsValidCodePage rejects. Every page's DefaultChar is '?'.
+const CODE_PAGES: &[(u32, bool, u32, &[(u8, u8)])] = &[
+    (0, false, 1, &[]),
+    (1, false, 1, &[]),
+    (2, false, 1, &[]),
+    (3, false, 1, &[]),
+    (437, true, 1, &[]),
+    (850, true, 1, &[]),
+    (932, true, 2, &[(0x81, 0x9F), (0xE0, 0xFC)]),
+    (1252, true, 1, &[]),
+    (65000, true, 5, &[]),
+    (65001, true, 4, &[]),
+];
+/// Code pages Windows does not have (measured: GetCPInfo fails with
+/// ERROR_INVALID_PARAMETER, IsValidCodePage answers FALSE).
+const NO_CODE_PAGES: &[u32] = &[42, 12345, 0xFFFF];
+
+fn code_page_entry(api: &str, cp: u32) -> Option<&'static (u32, bool, u32, &'static [(u8, u8)])> {
+    match CODE_PAGES.iter().find(|e| e.0 == cp) {
+        Some(e) => Some(e),
+        None if NO_CODE_PAGES.contains(&cp) => None,
+        None => panic!("{api}({cp}): code page {cp} is not modelled (crate::win32 CODE_PAGES)"),
+    }
+}
+
+/// IsValidCodePage(codepage): TRUE for an installed code page; FALSE for
+/// the symbolic CP_* values and unknown pages (measured). The CRT's
+/// `__setmbcp_nolock` asks it for the ANSI code page.
 pub fn is_valid_code_page(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = matches!(arg(m, cpu, 0), 437 | 1252 | 65001) as u32;
+    let cp = arg(m, cpu, 0);
+    cpu.eax = code_page_entry("IsValidCodePage", cp).is_some_and(|e| e.1) as u32;
     ret(m, cpu, 4);
 }
-/// GetCPInfo(codepage, CPINFO*): single-byte code pages, default char '?'.
+/// GetCPInfo(codepage, CPINFO*): CPINFO is MaxCharSize (DWORD), DefaultChar
+/// [2], LeadByte[12] (pairs of first/last lead byte, zero-terminated), 18
+/// bytes; FALSE with ERROR_INVALID_PARAMETER for an unknown page, the
+/// CPINFO untouched (measured). Callers: the CRT's `__setmbcp_nolock`,
+/// `setSBUpLow` 0x012FABB0, `__crtCompareStringA_stat`.
 pub fn get_cp_info(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (cp, p) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    cpu.eax = if matches!(cp, 437 | 1252) {
-        zero(m, p, 18);
-        m.set_u32(p, 1); // MaxCharSize
-        m.set_u8(p + 4, b'?'); // DefaultChar
-        1
-    } else {
-        set_error(ERROR_INVALID_PARAMETER);
-        0
+    cpu.eax = match code_page_entry("GetCPInfo", cp) {
+        Some(&(_, _, max, leads)) => {
+            zero(m, p, 18);
+            m.set_u32(p, max);
+            m.set_u8(p + 4, b'?');
+            for (k, &(lo, hi)) in leads.iter().enumerate() {
+                m.set_u8(p + 6 + 2 * k as u32, lo);
+                m.set_u8(p + 7 + 2 * k as u32, hi);
+            }
+            1
+        }
+        None => {
+            set_error(ERROR_INVALID_PARAMETER);
+            0
+        }
     };
     ret(m, cpu, 8);
 }

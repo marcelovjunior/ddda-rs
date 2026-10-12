@@ -100,4 +100,59 @@ slot (`CARGO_TARGET_DIR=C:/ddda-targets/L21`). Each entry gives the step
    helpers, the stdio/lowio layer and about 60 unnamed functions in
    0x012E0EA0..0x0132A390. Only memset/memcpy have platform models.
    Reported to the head with this list: lifting them is native-workflow
-   work (head / claude-6), not a runtime service.
+   work, not a runtime service. Owner: claude-3 (L28, on the native-L17
+   data); claude-6 takes any lift rejections among them.
+
+Look-ahead: the initializer census (`examples/initializers`, which runs
+every static initializer without the CRT start-up first) completes 5,655
+of 5,662. Untranslated targets:
+- `__setmbcp` (above).
+- 0x00CFC150, which builds a 4,096-entry x87 `fsin` sine table at
+  0x018CBE20 and fills 0x4000 bytes at 0x018C7E20.
+- 0x0137E490, the C++ initializer that runs the same work (call at
+  0x0137E515).
+
+The last two lift in L22 but had no fixture: their constant loop exceeds
+the recorder's 20,000-instruction cap. The head decided that claude-6 adds
+a recorder budget for loops with a statically proven constant bound (L22).
+The census's one fault, C initializer 0x012F4FCE (`__initstdio`), is an
+artifact: it calls `__calloc_crt` (0x012F8177) before the census has run
+`__heap_init`.
+
+Runtime services checked ahead of the CRT steps `__setargv`, `_setenvp`
+and `__cinit`, against host measurements
+(`research/runtime/windows/CpInfo.cs`, `ModuleName.cs`):
+- GetCPInfo / IsValidCodePage: Windows accepts CP_ACP/OEMCP/MACCP/
+  THREAD_ACP (0..3), 850, 932 (lead bytes 81..9F, E0..FC), UTF-7 (max 5)
+  and UTF-8 (max 4) in GetCPInfo. The runtime accepted only 437 and 1252.
+  Now a measured table; unmeasured pages stop.
+- GetModuleFileNameA/W (`__setargv`'s argv[0]): when the path does not
+  fit, Windows writes size - 1 characters and a NUL, returns size and sets
+  ERROR_INSUFFICIENT_BUFFER. On success it sets the last error to 0. A
+  non-module handle gives ERROR_MOD_NOT_FOUND. The runtime returned
+  size - 1 and wrote the A form as UTF-8. Fixed.
+
+Imports still without a service (static census: 276 imports, 67 unbound,
+2026-10-11), with what reaches them:
+- WMVCore `WMCreate*`: movies, Codex (L18). D3DX `D3DXGetShaderConstantTableEx`,
+  `D3DXGetShaderOutputSemantics`, `D3DXSaveTextureToFileInMemory`: claude-5
+  (L20).
+- IMM32 (11 functions): only the IME manager at 0x01106680..0x01106D60
+  and 0x01147CC0. The window procedure 0x00DF1550 calls it for
+  WM_IME_STARTCOMPOSITION..WM_IME_COMPOSITION (0x10D..0x10F) and
+  0x281..0x286. The headless desktop sends no IME messages, so this code
+  is off the boot path.
+- WS2_32 (19 functions) and `wsprintfA`: the socket factory 0x00D8B690
+  (callers 0x00CEF430, 0x00D9BFF0) and 0x00DA3300/0x00DA3650. Probably the
+  online client. If the boot reaches them, they get Windows' offline
+  answers.
+- SSPI (`AcquireCredentialsHandleA` ...), AVIFile/VFW (video capture),
+  clipboard, `CreateProcessA` (the restart helper), `StringFromGUID2`
+  (input device naming, 0x00DF599C), `RtlUnwind` and
+  `UnhandledExceptionFilter` (exception dispatch, not modelled).
+
+WinMain 0x004079E0's path: WMVCORE presence check, SteamAPI_Init,
+`sApp::ctor`, then 0x00DF3AC0 (GetCurrentDirectoryA, a named mutex
+CreateMutexA + ERROR_ALREADY_EXISTS check, window class and window
+0x00DF31F0/0x00DF1200, LoadAcceleratorsA, the main object from the DTI),
+then the main loop 0x00DF0D20. The services on this path exist.

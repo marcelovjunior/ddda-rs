@@ -1791,3 +1791,53 @@ fn every_guest_thread_gets_a_thread_information_block() {
     assert!(threads::faults().is_empty(), "{:?}", threads::faults());
     x86::set_ext_calls(None);
 }
+
+#[test]
+fn code_page_queries_answer_as_windows_measured() {
+    let mut m = guest();
+    let info = 0x0030_0000;
+    for (cp, ok, valid, max, leads) in [
+        (0u32, true, false, 1u32, vec![]), (1, true, false, 1, vec![]), (2, true, false, 1, vec![]), (3, true, false, 1, vec![]),
+        (437, true, true, 1, vec![]), (1252, true, true, 1, vec![]), (932, true, true, 2, vec![0x81u8, 0x9F, 0xE0, 0xFC]),
+        (65000, true, true, 5, vec![]), (65001, true, true, 4, vec![]), (42, false, false, 0, vec![]), (12345, false, false, 0, vec![]),
+    ] {
+        fill(&mut m, info, 20, 0xEE);
+        let cpu = call_service(win32::get_cp_info, &mut m, &[cp, info]);
+        assert_eq!((cpu.eax, cpu.esp), (ok as u32, 0x0011_0000), "GetCPInfo({cp})");
+        if ok {
+            let mut want = vec![0u8; 18];
+            want[..4].copy_from_slice(&max.to_le_bytes());
+            want[4] = b'?';
+            want[6..6 + leads.len()].copy_from_slice(&leads);
+            assert_eq!(m.read(info, 20).unwrap(), [want, vec![0xEE, 0xEE]].concat(), "GetCPInfo({cp})");
+        } else {
+            assert_eq!((last_error(&mut m), m.u8(info)), (87, 0xEE), "GetCPInfo({cp})");
+        }
+        assert_eq!(call_service(win32::is_valid_code_page, &mut m, &[cp]).eax, valid as u32, "IsValidCodePage({cp})");
+    }
+    assert!(stops(win32::get_cp_info, &mut m, &[1250, info]).contains("not modelled"));
+}
+
+#[test]
+fn module_file_names_truncate_as_windows_does() {
+    let mut m = guest();
+    services::set_exe_path(r"E:\Games\DDDA\DDDA.exe");
+    let buf = 0x0030_0000;
+    for (wide, f) in [(false, win32::get_module_file_name_a as fn(&mut dyn Mem, &mut Cpu)), (true, win32::get_module_file_name_w)] {
+        let text = |m: &GuestMemory, n: u32| -> Vec<u16> { (0..n).map(|k| if wide { m.u16(buf + 2 * k) } else { m.u8(buf + k) as u16 }).collect() };
+        fill(&mut m, buf, 100, 0xEE);
+        set_last_error(&mut m, 0x77);
+        let cpu = call_service(f, &mut m, &[0, buf, 260]);
+        assert_eq!((cpu.eax, cpu.esp, last_error(&mut m)), (22, 0x0011_0000, 0), "wide {wide}");
+        assert_eq!(text(&m, 23), "E:\\Games\\DDDA\\DDDA.exe\0".encode_utf16().collect::<Vec<_>>());
+        fill(&mut m, buf, 100, 0xEE);
+        assert_eq!(call_service(f, &mut m, &[win32::IMAGE_BASE, buf, 5]).eax, 5, "truncated: nSize");
+        assert_eq!(last_error(&mut m), 122);
+        assert_eq!(text(&m, 5), [b'E' as u16, b':' as u16, b'\\' as u16, b'G' as u16, 0]);
+        fill(&mut m, buf, 100, 0xEE);
+        assert_eq!(call_service(f, &mut m, &[0, buf, 0]).eax, 0);
+        assert_eq!((last_error(&mut m), m.u8(buf)), (122, 0xEE));
+        assert_eq!(call_service(f, &mut m, &[0x1234_0000, buf, 260]).eax, 0);
+        assert_eq!(last_error(&mut m), 126, "not a module");
+    }
+}
