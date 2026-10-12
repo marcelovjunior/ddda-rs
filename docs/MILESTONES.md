@@ -2,12 +2,12 @@
 
 ### L28c frame and scalar input batches (2026-10-12, pending replay)
 
-- **+14 functions / +42 cases**, all 3/3; private **59,676 / 177,622**.
-  Every per-batch audit preserves all **59,662 / 177,580** baseline records.
-- **201 light tests pass**; main train 14 merged. RESIDUALS has **49 rows**,
-  **14 pending replay**, ownership 31 recorder / 18 lifter or gap.
-- **Next action:** finish queued checked-state recipes and the tested paired
-  EBP-save input rule, then audit and hand off the complete private set.
+- **+16 functions / +48 cases**, all 3/3; private **59,678 / 177,628**.
+  Every audit preserves all **59,662 / 177,580** baseline records/cases.
+- Latest main **1ed8c4aa** merged; **202 light tests pass**. All recorders
+  exited. RESIDUALS: **49 rows, 16 pending**, 34 recorder / 15 lifter or gap.
+- **Next action:** prepare shared CRT tails with the owner-confirmed L50
+  rule; remaining bound/caller-state trials still hit the instruction limit.
 
 
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
