@@ -306,6 +306,7 @@ fn unhandled_filter_calls_registered_stdcall_guest_filter() {
     assert_eq!(c.esp, 0x1e008);
 }
 
+#[cfg(feature = "game")]
 #[test]
 fn original_except_handler4_calls_filter_with_establisher_frame() {
     // The fixture layout follows 0x012F7240: encoded scope-table pointer

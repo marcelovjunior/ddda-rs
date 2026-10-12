@@ -240,6 +240,8 @@ fn the_games_network_imports_all_bind() {
         return;
     };
     let mut m = GuestMemory::new();
+    // the import table lives in the image: map it first, as Session::new does
+    ddruntime::image::load(&mut m, &exe).expect("image");
     let imports = ddruntime::image::bind_imports(&mut m, &exe).expect("imports");
     let network: Vec<_> = imports
         .into_iter()
