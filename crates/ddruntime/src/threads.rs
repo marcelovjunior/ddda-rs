@@ -187,6 +187,18 @@ impl GuestLock {
     }
 }
 
+/// Whether this host thread holds the guest lock.
+pub(crate) fn holds_lock() -> bool {
+    let rt = runtime::current();
+    let s = rt.lock.lock();
+    s.held && s.holder == current_tid()
+}
+
+/// Whether this thread is running a service (crate::dispatch).
+pub(crate) fn in_service() -> bool {
+    IN_SERVICE.with(Cell::get) > 0
+}
+
 /// Holds the guest lock for one service call (parallel mode); in the
 /// serial mode the caller already holds it, and only the time slice is
 /// checked.

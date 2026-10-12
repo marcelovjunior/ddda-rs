@@ -176,23 +176,7 @@ impl Registry {
         }
         match self.get(target) {
             Some(Binding::Service(f)) => {
-                // L22: a service is Rust: it runs under the host default
-                // MXCSR and the guest's (live while lifted code runs) waits
-                // in cpu.mxcsr, so neither sees nor changes the other's
-                // rounding or sticky flags.
-                cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
-                x86::ldmxcsr(x86::MXCSR_DEFAULT);
-                // a service runs holding the guest lock in parallel mode
-                // (crate::threads); an API call is also where a guest
-                // thread's time slice may end
-                let _lock = crate::threads::service();
-                let traced = trace::start(self, m, cpu, target);
-                let _scope = crate::threads::ServiceScope::enter();
-                f(m, cpu);
-                if let Some(line) = traced {
-                    trace::finish(line, cpu);
-                }
-                x86::ldmxcsr(cpu.mxcsr.0);
+                self.run_service(f, m, cpu, target);
                 Ok(())
             }
             Some(b) => {
@@ -209,6 +193,28 @@ impl Registry {
                 Err(self.unbound(m, cpu, target))
             }
         }
+    }
+
+    /// Run the service bound at `target` (its return address pushed), the
+    /// one way every caller runs a service: [`Registry::call`] and the step
+    /// executor (crate::executor) alike.
+    pub(crate) fn run_service(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        // L22: a service is Rust: it runs under the host default MXCSR and
+        // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
+        // neither sees nor changes the other's rounding or sticky flags.
+        cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
+        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        // a service runs holding the guest lock in parallel mode
+        // (crate::threads); an API call is also where a guest thread's time
+        // slice may end
+        let _lock = crate::threads::service();
+        let traced = trace::start(self, m, cpu, target);
+        let _scope = crate::threads::ServiceScope::enter();
+        f(m, cpu);
+        if let Some(line) = traced {
+            trace::finish(line, cpu);
+        }
+        x86::ldmxcsr(cpu.mxcsr.0);
     }
 
     fn unbound(&self, m: &dyn Mem, cpu: &Cpu, target: u32) -> Unbound {
