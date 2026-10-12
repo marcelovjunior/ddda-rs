@@ -1238,3 +1238,35 @@ opening (codex-31), route perf (codex-29).
   - boot triage next.
 - **One next action:** Codex's 0x00DAFED0 fixture, then claude-2 reruns
   the boot.
+
+## Batch 2026-10-12 (train 4: honest verification; boot past sRender)
+
+- **Train 4 landed on main 863f6817: 59,229 of 59,440 verified (99.6%).**
+  It contains:
+  - claude-6's L45 rules: tails past Ghidra's end, frame tails, and
+    verification gaps, so 44 functions with unproven tables are no longer
+    credited, and 60 non-code admissions left the denominator;
+  - L27b (SEH faults inside lifted code);
+  - the boot triage records;
+  - claude-2's services (CreateProcessA, wsprintfA) and look-ahead tables;
+  - Codex's recorder rules and batches. The boot functions 0x00DAFED0,
+    0x00DA9EC0, 0x00419100 and the sBbsRpgMain-ctor route are recorded.
+  `tests/options.rs` passes un-ignored.
+- **Incident:** L27b emitted a per-instruction step function for every
+  lifted function. The shards tripled (lift_12: 21 → 61 MB), one rustc
+  reached 11 GB, and the machine ran out of RAM (Claude Code stopped the
+  head's background jobs: Ghidra server, status server, memory guard).
+  Fixes:
+  - steps only with LIFT_INSTRUCTIONS=1 (24c4f5c4);
+  - the executor runs whole-function bindings (b84b3e44, diagnosed by
+    claude-2);
+  - heavy.py caps each slot job at 16 GB of committed memory (a Job
+    Object limit), so a runaway compiler fails instead of the machine;
+  - L47 (claude-6) scopes steps to the 44 bodies that register EH4 scopes.
+- **Boot (preview on Codex's data with L46):** the boot gets past:
+  - sRender's set-up;
+  - the archive-manager tables;
+  - `_qsort` in the sShader2 constructor (L46: an undefined CF after DIV
+    must stay undefined through INC).
+- **One next action:** train 5 (L46 x87 state and frame-tail fix, L47
+  scoped steps, Codex's next batches), then claude-2's next boot stop.

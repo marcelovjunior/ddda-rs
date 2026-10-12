@@ -283,6 +283,15 @@ additions. The function-boundary rule removes 58 non-code supplementary
 admissions (6 of them lifted) on the next inventory rebuild
 ([L45 Results](tasks/L45-function-tails.md#results)).
 
+After train 4 (2026-10-12, main 863f6817): L45's rules (edge-proven
+table slots, frame tails, verification gaps), L27b, the boot triage and
+Codex's next batches; 59,571 entries with 177,344 cases. The boundary
+rule removed 60 non-code supplementary entries (59,440 non-thunks).
+**59,229 of 59,440 verified (99.6%)**. 44 functions with a verification
+gap (`patterns/verification_gaps.json`, mostly unproven tables) are no
+longer credited. Known overcount of at most 6: memcpy-family records
+that still tail-call the inlined frame tail 0x012F9D82 (fixed in L46).
+
 The L15 table above and its notes below are
 kept for history.
 
