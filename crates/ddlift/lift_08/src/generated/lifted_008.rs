@@ -3,6 +3,12 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x008EE850 (DDDA.exe 2017-12-13 Steam), cEm0200Help::getDTI.
+pub fn f_008ee850(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x1998100u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x008EE860 (DDDA.exe 2017-12-13 Steam), cEm0200Help::dtor_deleting.
 pub fn f_008ee860(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

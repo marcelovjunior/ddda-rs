@@ -54,7 +54,7 @@ class WriteGuard:
 def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
                 closed=frozenset(), models=None, pop_for=None, initial_direction=None,
-                caller_stack=None, entry_pointers=None):
+                caller_stack=None, entry_pointers=None, initial_writes=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -75,7 +75,9 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     MOV/LEA, save/restore and constant offsets preserve pointer identities;
     dereferences through them can read only trace-written bytes. Unknown
     writes must not alias these reads (including saved pointer slots), as
-    enforced by the same WriteGuard. No initial object bytes become facts.
+    enforced by the same WriteGuard. Initial object bytes remain unknown,
+    except `initial_writes`: exact bytes written by a checked original setup.
+    These receive the same overlap and unknown-writer guards as trace stores.
     """
     # Only the bounded caller-argument window is an input fact. The saved
     # return address and uninitialized callee locals are deliberately absent.
@@ -92,6 +94,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         raise ValueError('entry pointers require guarded 32-bit register witnesses')
     pointers = dict(entry_pointers or {})
     pointer_slots = {}
+    if initial_writes is not None and (entry_pointers is None or len(initial_writes) > max_bytes
+            or any(type(a) is not int or not 0 <= a <= MASK or type(v) is not int or not 0 <= v <= 255
+                   for a,v in initial_writes.items())):
+        raise ValueError('setup writes require guarded pointer witnesses and bounded bytes')
+    prior = dict(initial_writes or {})
     if not instructions:
         return None
     ins = {i.address: i for i in instructions}
@@ -163,8 +170,8 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         return value & MASK
 
     def stored_load(a, size):
-        # Unlike load(), this cannot fall back to initial image/stack bytes.
-        if a is None or any((a+k)&MASK not in stores for k in range(size)):
+        # Only this trace's stores or checked setup writes supply object facts.
+        if a is None or any((a+k)&MASK not in stores and (a+k)&MASK not in prior for k in range(size)):
             return None
         return load(a, size)
 
@@ -201,6 +208,8 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             p = (a+k) & MASK
             if p in stores:
                 v = stores[p]
+            elif p in prior:
+                v = prior[p]
             elif 0 <= p-(stack+4) < len(caller_stack):
                 v = caller_stack[p-(stack+4)]
             else:
@@ -292,15 +301,19 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     code_bytes.update(range(pc,pc+i.size))
             if i is None:
                 return None
+            if any(a in prior for a in range(i.address,i.address+i.size)):
+                return None  # setup may not change the instructions being proved
             mn, op = i.mnemonic, i.operands
             before_esp, was_root = regs['esp'], not frames
             pc += i.size
             if mn in ('ret', 'retn'):
                 if frames:
                     ret, saved = frames.pop()
-                    if regs['esp'] != saved or load(saved,4) != ret:
+                    # Stack-allocation helpers move the return address. The
+                    # actual RET operand must still be the saved call PC.
+                    if regs['esp'] is None or load(regs['esp'],4) != ret:
                         return None
-                    regs['esp'] = (saved+4+(op[0].imm if op else 0)) & MASK
+                    regs['esp'] = (regs['esp']+4+(op[0].imm if op else 0)) & MASK
                     pc = ret
                     if not frames:
                         outgoing = 0
@@ -364,6 +377,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 put(i, op[0], value, pointer_value)
             elif mn == 'mov':
                 put(i, op[0], get(i, op[1]), pointer(i,op[1]))
+            elif guarded and mn == 'xchg' and all(o.type == X86_OP_REG and o.size == 4 for o in op):
+                a,b = (get(i,o) for o in op)
+                pa,pb = (pointer(i,o) for o in op)
+                put(i,op[0],b,pb)
+                put(i,op[1],a,pa)
             elif guarded and mn in ('movzx','movsx'):
                 value = get(i,op[1])
                 if value is not None and mn == 'movsx' and value & (1 << (op[1].size*8-1)):
