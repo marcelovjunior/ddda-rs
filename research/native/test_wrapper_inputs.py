@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation, null_leaf_cleanup, exception_frame_pushes
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation, null_leaf_cleanup, exception_frame_pushes, borrowed_frame_pushes
 
 
 class WrapperTests(unittest.TestCase):
@@ -225,6 +225,44 @@ class WrapperTests(unittest.TestCase):
                      prefix+suffix.replace('64890d00000000','64890d04000000'),
                      prefix.replace('64a100000000','65a100000000')+suffix):
             self.assertEqual(sites(code), set())
+
+    def borrowed_caller(self):
+        caller = bytearray(bytes.fromhex('55 8bec 83ec04 53 51 8b4508 55 6a00 8be9'))
+        def call():
+            caller.extend(b'\xe8'+struct.pack('<i',0x400100-(0x400000+len(caller)+5)))
+        call()
+        caller.extend(bytes.fromhex('56 57 31c0 ffd0 5f 5e 5d 55 8be9 6a01'))
+        call()
+        caller.extend(bytes.fromhex('5d 59 5b c9 c3'))
+        return bytes(caller)
+
+    def test_borrowed_frame_saves_preserve_return_and_registers(self):
+        caller = self.borrowed_caller()
+        data = caller+b'\xcc'*(256-len(caller))+bytes.fromhex('c20400')
+        body = [i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(caller,0x400000)]
+        with patch.object(h,'image',return_value=(0x400000,[(0x400000,data)])), \
+             patch.object(h,'code',side_effect=lambda a,n:data[a-0x400000:a-0x400000+n]):
+            with self.assertRaises(h.Rejected):
+                h.run_sparse(0x400000,1,body=body,end=0x400000+len(caller),input_strategy='tail-frame-v1')
+            result = h.run_sparse(0x400000,1,body=body,end=0x400000+len(caller),input_strategy='borrowed-frame-v1')
+        self.assertEqual([c['out']['pop'] for c in result['calls']], [4,0,4])
+        self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+4)
+        for name in ('ebp','ebx','esi','edi'):
+            self.assertEqual(result['regs_out'][name],result['regs_in'][name])
+
+    def test_borrowed_frame_rejects_unmatched_saves_and_argument_cleanup(self):
+        def sites(caller, pop=4):
+            ds=list(Cs(CS_ARCH_X86,CS_MODE_32).disasm(caller,0))
+            saved={i.address for i in ds if i.mnemonic=='push' and i.op_str in ('esi','edi')}
+            return borrowed_frame_pushes(0,[i.address for i in ds],lambda a,n:caller[a:a+n],lambda a:pop,saved)
+        caller=self.borrowed_caller()
+        self.assertEqual(len(sites(caller)),2)
+        self.assertEqual(sites(caller,8),set())
+        for bad in (caller.replace(bytes.fromhex('5d 59 5b c9'),bytes.fromhex('90 59 5b c9')),
+                    caller.replace(bytes.fromhex('5f 5e 5d'),bytes.fromhex('5d 5e 5d')),
+                    caller.replace(bytes.fromhex('55 6a00'),bytes.fromhex('55 83c404 6a00')),
+                    caller.replace(bytes.fromhex('c9 c3'),bytes.fromhex('90 c3'))):
+            self.assertEqual(sites(bad),set())
 
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '

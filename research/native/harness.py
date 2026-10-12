@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # sentinel_inputs.py, body_cleanup.py, L48 slot_sweep_layout).
@@ -887,6 +887,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     the actual generated memory selects the checked EAX=0/RET path.
     `exception-frame-v1` excludes inline exception-frame pushes when the
     entry FS link and every return unlink have matching stack layouts.
+    `borrowed-frame-v1` also tracks paired EBP saves while a function
+    temporarily uses another frame, requiring restoration before LEAVE.
     `body-call-v1` adds a mock cleanup hint from supplied callee bodies only
     when their control flow is complete and all return immediates agree.
     Unknown edges retain the existing fallback; the layout is recorded.
@@ -921,7 +923,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # zero EAX this input exercises their zero-allocation return path.
     if input_strategy == 'guarded-state-v1' and initial_state is None:
         raise ValueError('guarded-state-v1 requires checked setup state')
-    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -1495,17 +1497,17 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     own = {}
     saved_pushes = saved_push_sites(address, body) if end is not None else set()
     local_allocations = local_alloc_sites(address, body) if end is not None else set()
-    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1') and end is not None:
+    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and end is not None:
         from wrapper_inputs import fixed_frame_allocations
         local_allocations |= fixed_frame_allocations(address,body,code,
-            arithmetic_prefix=input_strategy in ('prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1'),
-            tail_exits=input_strategy in ('tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1'))
+            arithmetic_prefix=input_strategy in ('prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1'),
+            tail_exits=input_strategy in ('tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1'))
 
-    if input_strategy in ('frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1') and end is not None:
+    if input_strategy in ('frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and end is not None:
         from wrapper_inputs import aligned_frame_saves
         saved_pushes |= aligned_frame_saves(address, body, code)
 
-    if input_strategy in ('ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1') and end is not None:
+    if input_strategy in ('ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1') and end is not None:
         from wrapper_inputs import ebp_frame_allocation
         local_allocations |= ebp_frame_allocation(address, body, code)
 
@@ -1513,8 +1515,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         from wrapper_inputs import exception_frame_pushes
         saved_pushes |= exception_frame_pushes(address, body, code)
 
+    if input_strategy == 'borrowed-frame-v1' and end is not None:
+        from wrapper_inputs import borrowed_frame_pushes
+        saved_pushes |= borrowed_frame_pushes(address, body, code, static_pop, saved_pushes)
+
     outgoing_allocations = set()
-    if input_strategy in ('outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1') and end is not None:
+    if input_strategy in ('outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1') and end is not None:
         from wrapper_inputs import initial_outgoing_allocation
         outgoing_allocations = initial_outgoing_allocation(address, body, code)
 
@@ -1572,7 +1578,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                          registers={n: v for n, v in ev["regs"].items() if n != "esp"}, esp=esp)
         direct = i.operands[0].type == 2  # X86_OP_IMM
         wrapper = False
-        if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1') and direct and i.mnemonic == 'call':
+        if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and direct and i.mnemonic == 'call':
             from wrapper_inputs import virtual_tail_wrapper
             wrapper = virtual_tail_wrapper(pc,code)
         pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
@@ -1608,7 +1614,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 writes_esp = any(cleanup.reg_name(r) == 'esp' for r in cleanup.regs_access()[1])
                 if (cleanup.mnemonic == "add"
                         and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
-                    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1'):
+                    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1'):
                         following = next(dmd.disasm(code(after+cleanup.size,15),after+cleanup.size,count=1),None)
                         frame_sizes = {next(dmd.disasm(code(site,15),site,count=1)).operands[1].imm
                                        for site in local_allocations}
@@ -1701,7 +1707,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'body-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') and name != 'esp':
+        if input_strategy in ('bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)

@@ -441,3 +441,112 @@ def exception_frame_pushes(entry, body, read):
         if restore_reg not in ('eax','ecx','edx') or reg(unlink,unlink.operands[1]) != restore_reg:
             return set()
     return {i.address for i in (a,b,d,e,k)}
+
+
+def borrowed_frame_pushes(entry, body, read, cleanup, saved):
+    """Mock-input hint for paired EBP saves around a temporary frame.
+
+    Walk all acyclic paths in an ordinary EBP/LEAVE frame. Track nested
+    frame saves, known register saves and arguments; direct calls may only
+    consume arguments, and indirect calls must have no pending arguments.
+    Require each EBP save to be popped before the final LEAVE. Calls retain
+    the recorder's existing cleanup and nonvolatile-register assumptions.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    if not body or len(body) > 512:
+        return set()
+    decoded = {}
+    for pc in body:
+        ins = next(md.disasm(read(pc,15),pc,count=1),None)
+        if ins is None:
+            return set()
+        decoded[pc] = ins
+    pc = entry
+    for pair in (('push','ebp'),('mov','ebp, esp')):
+        ins = decoded.get(pc)
+        if ins is None or (ins.mnemonic,ins.op_str) != pair:
+            return set()
+        pc += ins.size
+    previous = {i.address+i.size:i for i in decoded.values()}
+    todo, graph, paired, returns = [(pc,())], {}, set(), 0
+    while todo:
+        state = todo.pop()
+        if state in graph:
+            continue
+        if len(graph) >= 4096:
+            return set()
+        pc, stack = state
+        ins = decoded.get(pc)
+        if ins is None:
+            return set()
+        stack = list(stack)
+        after = pc+ins.size
+        edges = [after]
+        if ins.mnemonic == 'push':
+            op = ins.operands[0]
+            name = ins.reg_name(op.reg) if op.type == X86_OP_REG else None
+            if op.size != 4:
+                return set()
+            if stack or name == 'ebp':
+                kind = 'frame' if name == 'ebp' else 'save' if pc in saved else 'argument'
+                stack.append((kind,pc,name))
+                if len(stack) > 32:
+                    return set()
+        elif ins.mnemonic == 'pop':
+            op = ins.operands[0]
+            name = ins.reg_name(op.reg) if op.type == X86_OP_REG else None
+            if op.size != 4 or name in (None,'esp'):
+                return set()
+            if stack:
+                kind,site,source = stack.pop()
+                if kind in ('frame','save') and name != source:
+                    return set()
+                if name == 'ebp' and kind != 'frame':
+                    return set()
+                if kind == 'frame':
+                    paired.add(site)
+            elif name == 'ebp':
+                return set()
+        elif ins.mnemonic == 'call' and stack:
+            if ins.operands[0].type == 2:
+                pop = cleanup(ins.operands[0].imm & 0xffffffff)
+                if type(pop) is not int or pop < 0 or pop % 4 or pop//4 > len(stack):
+                    return set()
+                for _ in range(pop//4):
+                    if stack.pop()[0] != 'argument':
+                        return set()
+            elif any(kind == 'argument' for kind,_,_ in stack):
+                return set()
+        elif ins.mnemonic == 'leave':
+            ret = decoded.get(after)
+            if stack or ret is None or ret.mnemonic != 'ret':
+                return set()
+        elif ins.mnemonic == 'ret':
+            prior = previous.get(pc)
+            if stack or prior is None or prior.mnemonic != 'leave':
+                return set()
+            edges = []
+            returns += 1
+        elif ins.mnemonic.startswith('j'):
+            if ins.operands[0].type != 2:
+                return set()
+            edges = [ins.operands[0].imm & 0xffffffff]
+            if ins.mnemonic != 'jmp':
+                edges.append(after)
+        elif (ins.mnemonic in ('retf','int','int3','ud2','hlt')
+                or ins.mnemonic.startswith('loop')
+                or (stack and any(ins.reg_name(r) in ('esp','sp') for r in ins.regs_access()[1]))
+                or (not stack and any(ins.reg_name(r) in ('ebp','bp') for r in ins.regs_access()[1]))):
+            return set()
+        following = [(target,tuple(stack)) for target in edges]
+        graph[state] = following
+        todo.extend(following)
+    remaining = dict(graph)
+    while remaining:
+        done = {state for state, edges in remaining.items() if all(e not in remaining for e in edges)}
+        if not done:
+            return set()
+        for state in done:
+            del remaining[state]
+    return paired if returns else set()
