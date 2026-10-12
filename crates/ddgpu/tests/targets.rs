@@ -395,3 +395,126 @@ fn clears_match_the_d3d9_driver() {
     }
     assert!(failures.is_empty(), "{} clears differ", failures.len());
 }
+
+/// vs_3_0: o0 = v0, o1 (texcoord) = v1
+fn vs_textured() -> Vec<u32> {
+    vec![
+        0xFFFE_0300,
+        0x0200_001F, 0x8000_0000, 0x900F_0000, // dcl_position v0
+        0x0200_001F, 0x8000_0005, 0x900F_0001, // dcl_texcoord v1
+        0x0200_001F, 0x8000_0000, 0xE00F_0000, // dcl_position o0
+        0x0200_001F, 0x8000_0005, 0xE00F_0001, // dcl_texcoord o1
+        0x0200_0001, 0xE00F_0000, 0x90E4_0000, // mov o0, v0
+        0x0200_0001, 0xE00F_0001, 0x90E4_0001, // mov o1, v1
+        0x0000_FFFF,
+    ]
+}
+
+/// ps_3_0: oC0 = texld(v0.xy, s0)
+fn ps_sample() -> Vec<u32> {
+    vec![
+        0xFFFF_0300,
+        0x0200_001F, 0x8000_0005, 0x9003_0000, // dcl_texcoord v0.xy
+        0x0200_001F, 0x9000_0000, 0xA00F_0800, // dcl_2d s0
+        0x0300_0042, 0x800F_0000, 0x90E4_0000, 0xA0E4_0800, // texld r0, v0, s0
+        0x0200_0001, 0x800F_0800, 0x80E4_0000, // mov oC0, r0
+        0x0000_FFFF,
+    ]
+}
+
+/// A draw over the whole 4x4 `out` sampling `binding` (texcoords spanning
+/// [0, 1) over the target).
+fn sample_draw(binding: d3d9cmd::TextureBinding, out: Target, extra: &[(u32, u32)]) -> DrawCall {
+    let v: [[f32; 6]; 3] = [[-1.0, -1.0, 0.5, 1.0, 0.0, 1.0], [-1.0, 3.0, 0.5, 1.0, 0.0, -1.0], [3.0, -1.0, 0.5, 1.0, 2.0, 1.0]];
+    let mut d = draw(&[], [Some(out), None, None, None], 0.5, extra);
+    d.vertices = Vertices::Inline { bytes: v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect(), stride: 24 };
+    d.vertex_shader = Some(vs_textured());
+    d.pixel_shader = Some(ps_sample());
+    d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]];
+    d.textures = vec![binding];
+    d
+}
+
+/// A render-target texture of every target format, cleared and drawn into
+/// (the whole level, then its left half through a viewport) before it is
+/// ever bound, then sampled with point or linear filtering into an
+/// A32B32G32R32F target; 8-bit levels also written and read through sRGB.
+/// The level and the sampled values compared with the driver as bits
+/// (D3D9 samples the channels a format lacks as 1).
+#[test]
+fn render_to_texture_matches_the_d3d9_driver() {
+    use d3d9cmd::{TargetTexture, TexKind, TextureBinding, USAGE_RENDERTARGET};
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let formats = [21u32, 22, 113, 31, 114, 34, 116, 111, 112, 115, 36];
+    let mut rng = Rng(0x7A26_0041);
+    let out = target(0x100, 116);
+    let mut failures = Vec::new();
+    let mut refused = std::collections::BTreeSet::new();
+    let mut compared = 0;
+    for case in 0..4 * formats.len() {
+        let format = formats[case % formats.len()];
+        let variant = case / formats.len();
+        let tex = TargetTexture { resource: 0x300, kind: TexKind::Flat, width: 4, height: 4, depth: 1, levels: 1, usage: USAGE_RENDERTARGET };
+        let level = Target { surface: 0x301, format, width: 4, height: 4, texture: Some(tex), level: 0, samples: 0, quality: 0 };
+        let eight_bit = matches!(format, 21 | 22);
+        let (srgb_write, srgb_read) = (eight_bit && variant & 2 != 0, eight_bit && variant & 1 != 0);
+        let mut value = || [rng.value(), rng.value(), rng.value(), rng.value()];
+        let (c1, c2) = (value(), value());
+        let level_clear = clear_of(&[level.clone()], rng.next());
+        let fill = draw(&[c1], [Some(level.clone()), None, None, None], 0.5, &[(194, srgb_write as u32)]);
+        let mut half = draw(&[c2], [Some(level.clone()), None, None, None], 0.5, &[(194, srgb_write as u32)]);
+        half.viewport = [0, 0, 2, 4, 0f32.to_bits(), 1f32.to_bits()];
+        // ADDRESSU/V/W clamp, MAG/MINFILTER point or linear, SRGBTEXTURE
+        let filter = 1 + (variant as u32 & 1);
+        let st = [0u32, 3, 3, 3, 0, filter, filter, 0, 0, 0, 1, srgb_read as u32, 0, 0];
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, usage: USAGE_RENDERTARGET, states: st };
+        let sample = sample_draw(binding, out.clone(), &[]);
+        let clears = [clear_of(&[out.clone()], 0), level_clear];
+        let draws = [fill, half, sample];
+        let reads = [out.clone(), level.clone()];
+        let theirs = match d3d9.render_cleared(&[], &clears, &draws, &reads) {
+            Ok(r) => r,
+            Err(e) if e.contains("render target") || e.contains("CreateOffscreenPlainSurface") => {
+                refused.insert(format);
+                continue;
+            }
+            Err(e) => panic!("D3D9: {e}"),
+        };
+        compared += 1;
+        let mut gpu = ddgpu::WgpuBackend::headless().expect("adapter");
+        for c in &clears {
+            gpu.clear(c);
+        }
+        for d in &draws {
+            gpu.draw(d);
+        }
+        let mine: Vec<Option<Vec<u8>>> = reads.iter().map(|t| gpu.read_back(t)).collect();
+        if !gpu.errors.is_empty() {
+            failures.push(format!("case {case} format {format}: backend errors {:?}", gpu.errors));
+            continue;
+        }
+        let (Some(o_out), Some(o_level)) = (&mine[0], &mine[1]) else {
+            failures.push(format!("case {case} format {format}: no read-back"));
+            continue;
+        };
+        // the X byte of X8R8G8B8 is unused: the driver reads it back as 0
+        // whatever was drawn (and samples it as 1, compared below)
+        let x_unused = |v: &[u8]| -> Vec<u8> { if format == 22 { v.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect() } else { v.to_vec() } };
+        if !same(format, false, &x_unused(o_level), &x_unused(&theirs[1])) {
+            failures.push(format!("case {case} format {format} srgb write {srgb_write}: level ours {:?} D3D9 {:?}",
+                                  decode(format, &o_level[..16.min(o_level.len())]), decode(format, &theirs[1][..16.min(theirs[1].len())])));
+        } else if o_out != &theirs[0] {
+            let k = o_out.chunks_exact(16).zip(theirs[0].chunks_exact(16)).position(|(a, b)| a != b).unwrap_or(0);
+            failures.push(format!("case {case} format {format} filter {filter} srgb read {srgb_read}: pixel {k} sampled ours {:?} D3D9 {:?}",
+                                  decode(116, &o_out[16 * k..16 * k + 16]), decode(116, &theirs[0][16 * k..16 * k + 16])));
+        }
+    }
+    eprintln!("{} of {compared} compared cases differ; formats the driver refuses as render-target textures: {refused:?}", failures.len());
+    for f in failures.iter().take(40) {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty());
+}

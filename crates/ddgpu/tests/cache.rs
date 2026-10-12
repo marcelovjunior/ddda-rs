@@ -158,7 +158,7 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, Vec<ClearCall>, Vec<DrawCall>, Target) 
             vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
             ps_constants: c,
             textures: if textured {
-                vec![TextureBinding { sampler: 0, resource: 0x200 + tex, kind: TexKind::Flat, format: formats[tex as usize], width: 4, height: 4, depth: 1, levels: 1, states: st }]
+                vec![TextureBinding { sampler: 0, resource: 0x200 + tex, kind: TexKind::Flat, format: formats[tex as usize], width: 4, height: 4, depth: 1, levels: 1, usage: 0, states: st }]
             } else {
                 vec![]
             },

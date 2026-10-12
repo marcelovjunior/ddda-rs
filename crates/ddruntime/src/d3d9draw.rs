@@ -13,7 +13,7 @@
 use crate::d3d9::{D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{objects, with_device, Kind};
 use crate::d3d9res::Image;
-pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
+pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TargetTexture, TextureBinding, Upload, Vertices};
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -185,13 +185,19 @@ pub(crate) fn target(surface: u32) -> Option<Target> {
             Some(Kind::Surface { desc, owner, .. }) => (desc.clone(), *owner),
             _ => return None,
         };
-        let level = match o.live.get(&owner).map(|x| &x.kind) {
-            Some(Kind::Texture { data, .. }) => data.surfaces.iter().position(|&s| s == surface).unwrap_or(0) as u32,
-            _ => 0,
+        let (level, texture) = match o.live.get(&owner).map(|x| &x.kind) {
+            Some(Kind::Texture { data, .. }) => (
+                data.surfaces.iter().position(|&s| s == surface).unwrap_or(0) as u32,
+                Some(TargetTexture {
+                    resource: owner, kind: data.kind, width: data.width, height: data.height, depth: data.depth,
+                    levels: data.levels, usage: data.usage,
+                }),
+            ),
+            _ => (0, None),
         };
         Some(Target {
             surface, format: desc.format, width: desc.width, height: desc.height,
-            texture: (owner != 0).then_some(owner), level,
+            texture, level,
             samples: desc.multisample, quality: desc.quality,
         })
     })
@@ -201,7 +207,7 @@ fn texture_binding(sampler: u32, resource: u32, states: [u32; 14]) -> Option<Tex
     objects(|o| match o.live.get(&resource).map(|x| &x.kind) {
         Some(Kind::Texture { data, .. }) => Some(TextureBinding {
             sampler, resource, kind: data.kind, format: data.format, width: data.width, height: data.height,
-            depth: data.depth, levels: data.levels, states,
+            depth: data.depth, levels: data.levels, usage: data.usage, states,
         }),
         _ => None,
     })
