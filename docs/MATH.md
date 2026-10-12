@@ -107,22 +107,14 @@ When reading or changing a port, keep the operand order: `inv * d.x` and
 
 Every port has an adapter in `crates/mtmath/src/abi.rs` with a lifted
 function's signature (`fn(&mut dyn Mem, &mut Cpu)`, return address at
-`[esp]`), listed in its `PORTS` table. `research/native/lift.py gen` reads
-that table and, in the shard that holds the address, writes
-
-```rust
-pub use mtmath::abi::f_00d00690;          // shadows the lifted body's glob import
-pub mod replaced { pub use super::lifted_000::f_00d00690; }   // the lifted body, kept
-```
-
-into `generated/mod.rs`. In Rust an explicit import shadows a glob
-import, so the shard's own calls (`super::lifted::f_X`), its `FUNCTIONS`
-table and `lookup()` all resolve to the port. Cross-shard calls go through
-`x86::call_lifted`, which uses `lookup()`, and the runtime's dispatcher
-(`ddruntime::dispatch::Registry::with_lifted_program`) binds
-`lifted::all()`, which is built from `FUNCTIONS`. Nothing else changes:
-lifted bodies, vectors and the recorder are untouched, and `replaced::f_X`
-keeps each lifted body for comparison.
+`[esp]`), listed in its `PORTS` table. Since L60 the ports are overrides
+registered by address at startup (`crates/ddports`, docs/NATIVE_PIPELINE.md,
+"Overrides"), not imports in the shards: in-shard calls (`x86::call_local`),
+cross-shard calls (`x86::call_lifted`) and the runtime's dispatcher
+(`lifted::all()`) reach the port; `lifted::bodies()` and `ddlift_NN::f_X`
+keep the lifted body for comparison. No shard depends on mtmath, so editing
+a port does not recompile a shard. Lifted bodies, vectors and the recorder
+are untouched.
 
 An adapter leaves the machine as the original's `ret` does, as far as the
 lifted contract observes it: all eight general registers (including the

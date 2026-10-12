@@ -1,7 +1,7 @@
 //! Lifted body against readable port, per call (docs/MATH.md, "Performance").
 //!
 //! Each wired function runs three ways on the same inputs:
-//! - `lifted`: the lifted body (`ddlift_NN::replaced::f_X`) over guest memory;
+//! - `lifted`: the lifted body (`ddlift_NN::f_X`, L60: no port is wired into a shard) over guest memory;
 //! - `adapter`: the port behind the lifted ABI (`mtmath::abi::f_X`), which
 //!   is what the lifted program now calls;
 //! - `readable`: the readable function on Rust values, no guest memory.
@@ -77,35 +77,35 @@ fn main() {
     let v = |k: u32| Vec3::new(F32(1.5 + k as f32), F32(-2.0 * k as f32), F32(3.25));
     let mut rng = Random { x: 1, y: 2, z: 3, w: 4 };
     let cases = vec![
-        Case { name: "MtRandom::next 0x00D00690", lifted: ddlift_13::replaced::f_00d00690,
+        Case { name: "MtRandom::next 0x00D00690", lifted: ddlift_13::f_00d00690,
                adapter: abi::f_00d00690, args: vec![], xmm: [0; 2],
                readable: Box::new(move || { black_box(rng.next()); }) },
-        Case { name: "MtRandom::seed 0x00D006C0", lifted: ddlift_13::replaced::f_00d006c0,
+        Case { name: "MtRandom::seed 0x00D006C0", lifted: ddlift_13::f_00d006c0,
                adapter: abi::f_00d006c0, args: vec![12345], xmm: [0; 2],
                readable: Box::new(|| { black_box(Random::default().seed(black_box(12345))); }) },
-        Case { name: "angle_difference 0x007AD870", lifted: ddlift_07::replaced::f_007ad870,
+        Case { name: "angle_difference 0x007AD870", lifted: ddlift_07::f_007ad870,
                adapter: abi::f_007ad870, args: vec![], xmm: [(-2.5f32).to_bits(), 2.75f32.to_bits()],
                readable: Box::new(|| { black_box(angle::angle_difference(black_box(F32(-2.5)), F32(2.75))); }) },
-        Case { name: "unit_normal 0x007AEED0", lifted: ddlift_07::replaced::f_007aeed0,
+        Case { name: "unit_normal 0x007AEED0", lifted: ddlift_07::f_007aeed0,
                adapter: abi::f_007aeed0, args: vec![VEC + 0x10], xmm: [0; 2],
                readable: Box::new(move || {
                    black_box(mtmath::vector::unit_normal(black_box(v(0)), v(2), || (v(1), v(2))));
                }) },
-        Case { name: "basis_from_forward 0x007AF5B0", lifted: ddlift_07::replaced::f_007af5b0,
+        Case { name: "basis_from_forward 0x007AF5B0", lifted: ddlift_07::f_007af5b0,
                adapter: abi::f_007af5b0, args: vec![OBJ + 0x40, VEC + 0x30], xmm: [0; 2],
                readable: Box::new(move || {
                    black_box(mtmath::vector::basis_from_forward(black_box(v(0)), v(2), v(1), v(3)));
                }) },
-        Case { name: "orthoRH 0x00CFC8B0", lifted: ddlift_12::replaced::f_00cfc8b0,
+        Case { name: "orthoRH 0x00CFC8B0", lifted: ddlift_12::f_00cfc8b0,
                adapter: abi::f_00cfc8b0, args: [1280.0f32, 720.0, 0.1, 1000.0].map(f32::to_bits).to_vec(), xmm: [0; 2],
                readable: Box::new(|| { black_box(matrix::ortho_rh(black_box(F32(1280.0)), F32(720.0), F32(0.1), F32(1000.0))); }) },
-        Case { name: "lookAtRH 0x00CFD5E0", lifted: ddlift_12::replaced::f_00cfd5e0,
+        Case { name: "lookAtRH 0x00CFD5E0", lifted: ddlift_12::f_00cfd5e0,
                adapter: abi::f_00cfd5e0, args: vec![VEC, VEC + 0x10, VEC + 0x20], xmm: [0; 2],
                readable: Box::new(move || { black_box(matrix::look_at_rh(black_box(v(0)), v(1), v(2))); }) },
-        Case { name: "lookAtLH 0x00CFD890", lifted: ddlift_12::replaced::f_00cfd890,
+        Case { name: "lookAtLH 0x00CFD890", lifted: ddlift_12::f_00cfd890,
                adapter: abi::f_00cfd890, args: vec![VEC, VEC + 0x10, VEC + 0x20], xmm: [0; 2],
                readable: Box::new(move || { black_box(matrix::look_at_lh(black_box(v(0)), v(1), v(2))); }) },
-        Case { name: "reflect 0x00CFDB10", lifted: ddlift_12::replaced::f_00cfdb10,
+        Case { name: "reflect 0x00CFDB10", lifted: ddlift_12::f_00cfdb10,
                adapter: abi::f_00cfdb10, args: vec![VEC + 0x30], xmm: [0; 2],
                readable: Box::new(|| {
                    let p = mtmath::types::Plane { a: F32(0.3), b: F32(0.4), c: F32(0.5), d: F32(2.0) };
