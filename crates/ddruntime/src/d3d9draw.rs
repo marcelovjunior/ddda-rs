@@ -256,7 +256,8 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
     // what the draw reads, flushed first
     let mut reads: Vec<u32> = state.textures.values().copied().collect();
     reads.extend(state.streams.iter().map(|s| s.0).filter(|&b| b != 0));
-    if state.indices != 0 {
+    // the device's index buffer only for a draw that uses it (indexed, not UP)
+    if state.indices != 0 && indices.is_none() {
         reads.push(state.indices);
     }
     reads.extend(rts.iter().copied().filter(|&s| s != 0));
@@ -306,12 +307,16 @@ fn in_scene(dev: u32) -> bool {
 
 // --- device methods --------------------------------------------------------------
 
-/// DrawPrimitive(this, type, start vertex, primitive count).
+/// DrawPrimitive(this, type, start vertex, primitive count): nonindexed
+/// primitives (Microsoft Learn, IDirect3DDevice9::DrawPrimitive), so the
+/// device's index buffer, if one is set, is neither read nor drawn with
+/// (L21: the game sets indices and then draws triangle strips with it; a
+/// draw carrying them reached wgpu as an indexed strip and failed).
 pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, ty, start, count) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
-            let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, None);
+            let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, Some(Indices::None));
             backend(|b| b.draw(&d));
             D3D_OK
         }

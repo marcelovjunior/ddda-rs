@@ -883,6 +883,24 @@ fn a_draw_reaches_the_backend_with_its_uploads_and_complete_state() {
     assert_eq!(draw.textures.len(), 1);
     assert_eq!((draw.textures[0].sampler, draw.textures[0].resource, draw.textures[0].format), (0, tex, 21));
     assert_eq!(draw.targets[0].as_ref().map(|t| (t.width, t.height)), Some((1280, 720)));
+    // L21: with an index buffer set, DrawPrimitive still draws nonindexed
+    // and does not upload it; DrawIndexedPrimitive draws with it
+    assert_eq!(com(&mut s, dev, 27, &[6, 0x8, 101, 1, out, 0]), 0);
+    let ib = s.mem.u32(out);
+    com(&mut s, ib, 11, &[0, 0, out, 0]);
+    let p = s.mem.u32(out);
+    for (k, i) in [0u16, 1, 2].iter().enumerate() {
+        s.mem.set_u16(p + 2 * k as u32, *i);
+    }
+    com(&mut s, ib, 12, &[]);
+    com(&mut s, dev, 104, &[ib]);
+    let ib_uploads = || recorded(|r| r.uploads.iter().filter(|u| matches!(u, Upload::Buffer { resource, .. } if *resource == ib)).count()).unwrap();
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    assert_eq!(recorded(|r| r.draws.last().cloned()).unwrap().unwrap().indices, Indices::None);
+    assert_eq!(ib_uploads(), 0, "DrawPrimitive does not read the index buffer");
+    assert_eq!(com(&mut s, dev, 82, &[4, 0, 0, 3, 0, 1]), 0);
+    assert_eq!(recorded(|r| r.draws.last().cloned()).unwrap().unwrap().indices, Indices::Buffer(ib, 101));
+    assert_eq!(ib_uploads(), 1);
     // a second draw uploads nothing new (nothing is dirty)
     let before = recorded(|r| r.uploads.len()).unwrap();
     com(&mut s, dev, 81, &[4, 0, 1]);
