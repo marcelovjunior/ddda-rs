@@ -244,3 +244,11 @@ train 2 builds):
 - Second-instance check: 0x00DF3AC0's CreateMutexA + GetLastError() ==
   ERROR_ALREADY_EXISTS. `create_named` sets the last error to 0 for a new
   object, so no stale 183 can trigger the "already running" exit.
+
+Merged `train/2` (f7ae7dd). Codex's L27 had added its own per-thread TEB
+(`seh::initialize_teb` at 0x7E000000 + 0x1000 per thread), with the same
+NT_TIB fields as e754622's block at 0x7FB00000. They are unified into one
+block per thread: `seh::initialize_teb`, used by `Session::new`, guest
+threads and SEH dispatch alike. e754622's `threads::init_teb`/`teb_of` are
+gone; the FS:[0] evidence moved into `seh::initialize_teb`'s comment. The
+TIB test checks the shared block.
