@@ -180,7 +180,11 @@ impl Registry {
                 // (crate::threads); an API call is also where a guest
                 // thread's time slice may end
                 let _lock = crate::threads::service();
+                let traced = trace::start(self, m, cpu, target);
                 f(m, cpu);
+                if let Some(line) = traced {
+                    trace::finish(line, cpu);
+                }
                 x86::ldmxcsr(cpu.mxcsr.0);
                 Ok(())
             }
@@ -213,5 +217,58 @@ impl Registry {
                 std::panic::panic_any(u);
             }
         })));
+    }
+}
+
+/// A service-call trace for diagnosing runs that do not stop (L21: the
+/// boot's steady state). With `DDRUNTIME_TRACE_SERVICES` set to a file
+/// path, each call of a named service (an import, e.g.
+/// `KERNEL32.dll!ReadFile`) is written as one line: guest thread, name,
+/// return address, the first four stack arguments, eax after the call.
+/// `DDRUNTIME_TRACE_SERVICES_MAX` caps the lines (default 2,000,000); the
+/// file is flushed every 1,000 lines, so a killed run keeps nearly all.
+/// Unset, it costs one initialized check per service call.
+mod trace {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+
+    struct Trace {
+        out: std::io::BufWriter<std::fs::File>,
+        lines: u64,
+        max: u64,
+    }
+
+    fn file() -> Option<&'static Mutex<Trace>> {
+        static T: OnceLock<Option<Mutex<Trace>>> = OnceLock::new();
+        T.get_or_init(|| {
+            let path = std::env::var_os("DDRUNTIME_TRACE_SERVICES")?;
+            let max = std::env::var("DDRUNTIME_TRACE_SERVICES_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000);
+            let f = std::fs::File::create(&path).unwrap_or_else(|e| panic!("DDRUNTIME_TRACE_SERVICES {}: {e}", path.to_string_lossy()));
+            Some(Mutex::new(Trace { out: std::io::BufWriter::new(f), lines: 0, max }))
+        })
+        .as_ref()
+    }
+
+    /// The line's start, if this call is traced.
+    pub(super) fn start(r: &Registry, m: &dyn Mem, cpu: &Cpu, target: u32) -> Option<String> {
+        file()?;
+        let name = r.names.get(&target)?;
+        let word = |k: u32| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(cpu.esp.wrapping_add(4 * k)))).ok();
+        let w = |k| word(k).map_or("-".to_string(), |v| format!("{v:#x}"));
+        Some(format!("{} {} ret={} args={} {} {} {}", crate::threads::current_tid(), name, w(0), w(1), w(2), w(3), w(4)))
+    }
+
+    pub(super) fn finish(line: String, cpu: &Cpu) {
+        let Some(t) = file() else { return };
+        let mut t = t.lock().unwrap_or_else(|e| e.into_inner());
+        if t.lines >= t.max {
+            return;
+        }
+        t.lines += 1;
+        let _ = writeln!(t.out, "{line} -> {:#x}", cpu.eax);
+        if t.lines % 1000 == 0 || t.lines == t.max {
+            let _ = t.out.flush();
+        }
     }
 }
