@@ -296,6 +296,10 @@ After train 5 (2026-10-12, main 84cf1194): **59,231 of 59,440 verified
 (99.6%)**, with 46 gaps not credited. L46 fixed the train-4 overcount
 (the memcpy-family records jump to their inlined tails locally).
 
+After train 6 (2026-10-12, main 50b358f8): Codex's guarded-stack and
+register-object fixtures add 19 functions. **59,250 of 59,440 verified
+(99.7%)**; 59,593 entries with 177,409 cases.
+
 The L15 table above and its notes below are
 kept for history.
 

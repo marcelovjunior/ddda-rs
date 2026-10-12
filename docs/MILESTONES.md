@@ -1362,3 +1362,13 @@ opening (codex-31), route perf (codex-29).
 - **One next action:** claude-2's boot run on main (past stop 12); L48
   (claude-6) re-credits the gaps (edge bounds through memory slots,
   byte-remap tables, per-slot cases for input-indexed switches).
+
+## Batch 2026-10-12 (train 6: 99.7%)
+
+- **Train 6 landed on main 50b358f8: 59,250 of 59,440 verified (99.7%).**
+  Codex's recorder now has guarded-stack and register-object inputs (19
+  functions, boot stop 13's 0x0075BAD0 among them). Every suite is green.
+- Codex classified all 211 non-verified functions (L28 Results). Next is
+  a constructed-object input strategy: run the verified constructor first,
+  then the method. claude-6 is on L48 (re-credit the 46 gaps).
+- **One next action:** claude-2's boot run past stop 13.

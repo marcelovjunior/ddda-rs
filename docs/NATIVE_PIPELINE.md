@@ -1479,6 +1479,39 @@ the vectors. The merged files go into the shared set (a backup is kept),
 then `gen` and the gate. When the shared data moves, the head tells every
 agent with a private set.
 
+## Unproven tables recredited (L48)
+
+**More bounds.** `edge_slots` now proves a *key*, either a register or a
+memory slot `[base + d]`, on every path:
+- **Memory slots:** a slot is bounded by `cmp dword [base + d], imm`
+  edges or set by `mov dword [base + d], imm`. `mov R, [base + d]` hands
+  the proof from R to the slot, and any write to `base`, any call or any
+  store that may alias the slot ends it.
+- **Byte remaps:** `movzx R, byte [R2 + T]` takes T's bytes over R2's
+  proven values.
+- **Copies and constants:** `mov R, R2` continues on R2; `lea R, [R2 + d]`
+  and `and R, R2` use R2's constant.
+- **Flag-neutral gap:** the flags a branch tests come from the last flag
+  writer on its straight line, so a `movss` store may sit between `cmp`
+  and `ja`.
+
+**Input-indexed tables (slot sweep).** Where the index is an input,
+`lift.table_ends` records per table:
+- the run of slots from 0 that select this body's code;
+- the dword that ends the run (not code, or code outside the function:
+  another table or data);
+- the entry input carrying the index (`sweep_binding`: a register
+  untouched since the entry, or an argument at `[esp + d]`/`[ebp + d]` on
+  the straight line from the entry).
+
+Records carry this as `table_sweep`. The input strategy `slot-sweep-v1`
+(a `record-range-v1`-style `input_layout`: `index` binding plus `value`)
+sets that input to a slot over small-v1 inputs. `structured_inputs.py
+sweep` keeps one case per slot whose target ran and stores the record's
+`slot_coverage`. `verification_gaps` counts the table once every slot is
+covered. An index past the end makes the original jump into non-code, so
+there is no defined behaviour for the lifted code to match.
+
 ## Debugging a failing lifted function
 
 For a function that cannot yet produce a vector, use

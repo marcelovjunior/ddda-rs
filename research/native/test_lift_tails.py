@@ -77,6 +77,39 @@ class EdgeBoundTests(unittest.TestCase):
         body(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)})
         self.assertEqual(lift.TABLE_PROOF[0x1000], {0x1008: False})
 
+    def slots(self, code, tables, jump):
+        read, is_code = image_fixture(code, tables)
+        ins, switches, _, _ = lift.decode_body(0x1000, len(code), entries=frozenset({0x1000}), noreturn=frozenset(),
+                                               read=read, is_code=is_code, ext=True)
+        found = {i.address: i for i in ins}
+        return lift.edge_slots(found, jump, 0x1000, switches, read)
+
+    def test_l48_memory_slot_bound(self):
+        # cmp dword [esp+4],2; movss [esp+0x10],xmm0; ja default; mov ecx,[esp+4];
+        # jmp [ecx*4+0x2000]; ret x5 -- the flag-neutral store sits between
+        code = bytes.fromhex("837c240402" "f30f11442410" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        tables = {0x2000: dwords(0x1019, 0x101A, 0x101B, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1011), [0, 1, 2])
+        # a store to the slot after the compare ends the proof
+        code = bytes.fromhex("837c240402" "770f" "89442404" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        self.assertIsNone(self.slots(code, {0x2000: dwords(0x1016, 0x1017, 0x1018, 0)}, 0x100F))
+
+    def test_l48_byte_remap_behind_a_register_bound(self):
+        # mov ecx,3; cmp eax,ecx; ja default; movzx eax,byte [eax+0x3000];
+        # jmp [eax*4+0x2000] -- only the bytes T[0..3] = 1,0,1,0 are slots
+        code = bytes.fromhex("b903000000" "39c8" "770e" "0fb68000300000" "ff248500200000") + b"\xc3" * 4
+        tables = {0x2000: dwords(0x1018, 0x1019, 0x101A, 0), 0x3000: bytes((1, 0, 1, 0, 2))}
+        self.assertEqual(self.slots(code, tables, 0x1010), [0, 1])
+
+    def test_l48_lea_constant_and_and_with_a_constant_register(self):
+        # mov edx,3; lea ecx,[edx+1]; cmp eax,ecx; ja default; jmp [eax*4+0x2000]
+        code = bytes.fromhex("ba03000000" "8d4a01" "39c8" "7707" "ff248500200000") + b"\xc3" * 6
+        tables = {0x2000: dwords(*range(0x1018, 0x101D), 0)}
+        self.assertEqual(self.slots(code, tables, 0x100C), [0, 1, 2, 3, 4])
+        # mov ecx,1; and eax,ecx; jmp [eax*4+0x2000]
+        code = bytes.fromhex("b901000000" "21c8" "ff248500200000") + b"\xc3" * 2
+        self.assertEqual(self.slots(code, {0x2000: dwords(0x100E, 0x100F, 0)}, 0x1007), [0, 1])
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
@@ -179,6 +212,61 @@ class Eh4ScopeTests(unittest.TestCase):
         self.assertNotIn(0x1041, body)
         body = self.scope(bytes.fromhex("8365fc00"), [(0xFFFFFFFE, 0, 0x5000)])
         self.assertEqual(body, {0x1000, 0x1005, 0x100A, 0x100E})
+
+
+class SlotSweepTests(unittest.TestCase):
+    # mov ecx,[esp+4]; jmp [ecx*4+0x401000]; ret x3 (slots 0..2), then int3 padding
+    CODE = bytes.fromhex("8b4c2404" "ff248d00104000") + b"\xc3" * 3
+
+    def image(self):
+        data = self.CODE.ljust(0x1000, b"\xcc") + dwords(0x40000B, 0x40000C, 0x40000D, 0xCCCCCCCC)
+        read = lambda a, n: data[a - 0x400000:a - 0x400000 + n]
+        return data, read, lambda a, n=1: 0x400000 <= a and a + n <= 0x400000 + len(self.CODE)
+
+    def test_end_evidence_and_index_binding(self):
+        _, read, is_code = self.image()
+        lift.decode_body(0x400000, len(self.CODE), frozenset({0x400000}), frozenset(), read, is_code, ext=True)
+        ends = lift.TABLE_ENDS.pop(0x400000)
+        self.assertEqual(ends, {0x400004: {"table": 0x401000, "slots": 3, "index": {"stack": 4},
+                                           "end": {"value": 0xCCCCCCCC, "kind": "not code"}}})
+        self.assertEqual(lift.TABLE_PROOF.pop(0x400000), {0x400004: False})
+
+    def test_strategy_sets_the_index_input(self):
+        data, read, is_code = self.image()
+        body = [0x400000, 0x400004, 0x40000B, 0x40000C, 0x40000D]
+        with patch.object(h, "image", return_value=(0x400000, [(0x400000, data)])), \
+                patch.object(h, "code", side_effect=read), patch.object(h, "executable", side_effect=is_code):
+            for slot in range(3):
+                seen = set()
+                c = h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                                 input_layout=dict(index={"stack": 4}, value=slot), visited=seen)
+                self.assertIn(0x40000B + slot, seen)
+                self.assertEqual(c["input_strategy"], "slot-sweep-v1")
+            seen = set()
+            h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                         input_layout=dict(index={"register": "ecx"}, value=2), visited=seen)
+            with self.assertRaises(ValueError):
+                h.run_sparse(0x400000, 7, end=0x40000E, body=body, input_strategy="slot-sweep-v1",
+                             input_layout=dict(index={"stack": 2}, value=0))
+
+    def test_gate_counts_a_fully_swept_table(self):
+        _, read, is_code = self.image()
+        arm = "0x400004 => { { let t = m.u32(ecx); if matches!(t, 0x40000B) { pc = t; continue; } } }"
+        record = dict(addr=0x400000, size=len(self.CODE), ext=True, arms=[arm],
+                      body=[0x400000, 0x400004, 0x40000B, 0x40000C, 0x40000D],
+                      table_sweep={"0x00400004": {"table": 0x401000, "slots": 3, "index": {"stack": 4},
+                                                  "end": {"value": 0xCCCCCCCC, "kind": "not code"}}})
+        decode = lift.decode_body
+        with patch.object(lift, "decode_body", lambda a, s, *x, ext=False: decode(
+                    a, s, frozenset({0x400000}), frozenset(), read, is_code, ext=ext)), \
+                patch.object(lift, "function_entries", lambda: frozenset({0x400000})), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()), \
+                patch.object(h, "code", read), patch.object(h, "executable", is_code), \
+                patch.object(h, "import_pops", lambda: ({}, {})):
+            partial = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 2]})])
+            full = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 1, 2]})])
+        self.assertEqual(partial, {0x400000: ["unproven table at 0x00400004"]})
+        self.assertEqual(full, {})
 
 
 class VerificationGapTests(unittest.TestCase):
