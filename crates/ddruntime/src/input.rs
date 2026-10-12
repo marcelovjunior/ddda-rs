@@ -47,6 +47,10 @@ pub struct Pad {
     pub right_x: i16,
     pub right_y: i16,
 }
+/// A host window that does not know the guest's window handles sends
+/// `hwnd: 0`: while a guest window has the focus, the event goes to it and a
+/// mouse event's x/y are client coordinates of that window; otherwise the
+/// device state still changes and the messages go to the thread queue.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// None disconnects this port. Changes increment its packet counter.
@@ -202,7 +206,20 @@ pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
             });
             pos.and_then(|i| s.pending.remove(i))
         });
-        let Some(e) = event else { break };
+        let Some(mut e) = event else { break };
+        match &mut e {
+            Event::Key { hwnd, .. } | Event::Character { hwnd, .. } if *hwnd == 0 => {
+                if let Some((focus, _)) = user32::input_target() {
+                    *hwnd = focus;
+                }
+            }
+            Event::Mouse { hwnd, x, y, .. } if *hwnd == 0 => {
+                if let Some((focus, (ox, oy))) = user32::input_target() {
+                    (*hwnd, *x, *y) = (focus, x.wrapping_add(ox), y.wrapping_add(oy));
+                }
+            }
+            _ => {}
+        }
         let changed_kind = match &e {
             Event::Key { .. } => 2,
             Event::Mouse { .. } => 1,

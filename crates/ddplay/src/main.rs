@@ -11,8 +11,11 @@
 //!     cargo run -p ddplay -- [path\to\DDDA.exe]
 //!
 //! Bring-up version: frames are read back and re-uploaded (simple and
-//! robust); sharing one device comes when performance matters. Input is
-//! not forwarded yet (brief L16).
+//! robust); sharing one device comes when performance matters. Keyboard,
+//! mouse and the host's XInput pads reach the game through the runtime's
+//! input seam (`input.rs`).
+mod input;
+
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -21,6 +24,8 @@ use winit::window::{Window, WindowId};
 
 enum GameEvent {
     Frame(ddgpu::Frame),
+    /// The session's host input, connected on the guest thread.
+    Input(ddruntime::input::HostInput),
     Status(String),
 }
 
@@ -53,6 +58,9 @@ struct App {
     gpu: Option<Gpu>,
     frames: u64,
     started: bool,
+    input: Option<input::Input>,
+    /// The last frame's size: the game's back buffer, its window's client area.
+    client: (u32, u32),
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -142,6 +150,7 @@ impl App {
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
                 ddruntime::session::install_fault_hook();
+                let _ = proxy.send_event(GameEvent::Input(ddruntime::input::connect()));
                 match ddgpu::WgpuBackend::headless() {
                     Some(mut backend) => {
                         backend.read_frames = false;
@@ -191,6 +200,7 @@ impl App {
             size,
         );
         self.frames += 1;
+        self.client = (f.width, f.height);
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -259,6 +269,7 @@ impl ApplicationHandler<GameEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: GameEvent) {
         match event {
             GameEvent::Frame(f) => self.show(f),
+            GameEvent::Input(host) => self.input = Some(input::Input::new(host)),
             GameEvent::Status(s) => {
                 if let Some(w) = &self.window {
                     w.set_title(&format!("Dragon's Dogma: Dark Arisen (rebuilt) - {s} - {} frames", self.frames));
@@ -268,6 +279,10 @@ impl ApplicationHandler<GameEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let (Some(input), Some(w)) = (self.input.as_mut(), &self.window) {
+            let size = w.inner_size();
+            input.window_event(&event, (size.width, size.height), self.client);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -281,11 +296,17 @@ impl ApplicationHandler<GameEvent> for App {
             _ => {}
         }
     }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        if let Some(input) = self.input.as_mut() {
+            input.device_event(&event);
+        }
+    }
 }
 
 fn main() {
     let exe = std::env::args().nth(1).unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
     let event_loop = EventLoop::<GameEvent>::with_user_event().build().expect("an event loop");
-    let mut app = App { exe, proxy: event_loop.create_proxy(), window: None, gpu: None, frames: 0, started: false };
+    let mut app = App { exe, proxy: event_loop.create_proxy(), window: None, gpu: None, frames: 0, started: false, input: None, client: (1, 1) };
     event_loop.run_app(&mut app).expect("the event loop");
 }

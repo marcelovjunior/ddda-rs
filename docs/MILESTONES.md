@@ -911,6 +911,26 @@ opening (codex-31), route perf (codex-29).
   for exact addresses, evidence and regeneration steps. No shared writes,
   generated-code commits, native gate, runtime edits or push.
 
+
+### L18: runtime movie boundary (2026-10-11)
+
+- **Implemented:** WMVCore delay exports and guest reader/media/header/sample
+  interfaces. Host Windows WMVCore decodes through a guest IStream callback
+  bridge; no host filename or pointer is substituted for the guest stream.
+- **Evidence:** `0x00F7B250` selects YV12 and 48 kHz PCM; `0x00F7C200`
+  consumes timed samples; `0x00F7B530` splits Y,V,U planes. Complete census
+  and test results: [L18 Results](tasks/L18-movies.md#results).
+- **Tested:** 39 runtime tests pass; all six installed WMVs decode through
+  guest-dispatched fixture streams, original delay thunks and the lifted
+  format selector. Y-plane variation, timestamps, sizes, interleaved reads
+  and four movies' 48 kHz / six-channel PCM checked. No live-original
+  pixel/audio comparison or complete uMovie session yet.
+- **Blockers:** original stream AddRef/Release/Seek at `0x00F7B650`,
+  `0x00F7B660`, `0x00F7B7D0` are absent from the base resolver. Capture
+  encoding (`0x00F95320`) is separate and remains explicitly unsupported.
+- **One next action:** add the three stream bodies through the native
+  workflow, then exercise original uMovie playback in a running session.
+
 ### L16: headless runtime input and audio services (2026-10-11)
 
 - **Implemented:** 17 import bindings; DirectInput8A/system mouse/keyboard,
@@ -939,3 +959,4 @@ opening (codex-31), route perf (codex-29).
 - **One next action:** head integrates the services into the startup trace and
   captures the next dynamic input/audio boundary before wiring host devices
   or claiming audible parity.
+
