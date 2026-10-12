@@ -20,7 +20,7 @@ def digest(value):
 
 
 def validate_state(state):
-    if set(state) != {'pages', 'heap', 'registers'}:
+    if set(state)-{'writes'} != {'pages', 'heap', 'registers'}:
         raise ValueError('invalid constructed state fields')
     if len(state['pages']) > h.MAX_PAGES:
         raise ValueError('constructed state exceeds page cap')
@@ -32,6 +32,11 @@ def validate_state(state):
     for name, value in state['registers'].items():
         if name not in dict(h.GPR) or name == 'esp' or not isinstance(value, int) or not 0 <= value <= 0xffffffff:
             raise ValueError('invalid constructed register binding')
+    for a,v in state.get('writes',{}).items():
+        if type(a) is not int or not 0 <= a <= 0xffffffff or type(v) is not int or not 0 <= v <= 255:
+            raise ValueError('invalid setup-written byte')
+        if state['pages'].get(a & ~4095, b'')[a & 4095:(a & 4095)+1] != bytes([v]):
+            raise ValueError('setup-written byte differs from captured state')
 
 
 def construct(setup, accepted, bindings, run, key):
@@ -80,6 +85,7 @@ def main():
     p.add_argument('setup', type=lambda v: int(v, 0))
     p.add_argument('--bind', action='append', default=[], metavar='ECX=regs_in.ecx')
     p.add_argument('--seconds', type=float, default=20)
+    p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1'), default='zero-call-v1')
     args = p.parse_args()
     bindings = {k.lower(): v.split('.') for k, v in (b.split('=') for b in args.bind)}
     root = Path(lift.N)
@@ -109,7 +115,7 @@ def main():
         seed = (args.method << 8) ^ index
         try:
             state, recipe = construct(setup, case, bindings, run, lift.vector_key(setup))
-            result = run(method, seed, initial_state=state, input_strategy='zero-call-v1')
+            result = run(method, seed, initial_state=state, input_strategy=args.strategy)
             cases.append(dict(addr=args.method, seed=seed, body_key=lift.vector_key(method),
                               construction=recipe, **result))
             reason = 'ok'

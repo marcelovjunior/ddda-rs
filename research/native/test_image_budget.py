@@ -11,6 +11,20 @@ class ImageBudgetTests(unittest.TestCase):
     # Load an image-backed trip count, then increment EAX that many times.
     CODE = bytes.fromhex('8b0d00204000 31c0 40 49 75fc c3')
 
+    def test_closed_stack_allocator_moves_but_cannot_forge_its_return(self):
+        caller=bytes.fromhex('55 8bec e8f8000000 8be5 5d c3')
+        # pop edx; lea eax,[esp-16]; xchg esp,eax; push edx; ret
+        helper=bytes.fromhex('5a 8d4424f0 94 52 c3')
+        md=Cs(CS_ARCH_X86,CS_MODE_32);md.detail=True
+        ins,read,pages=self.fixture(caller)
+        decoded={i.address:i for i in md.disasm(helper,0x400100)}
+        c=image_bound(ins,read,0xf008000,guarded=True,decode=decoded.get,closed={0x400100})
+        self.assertIsNotNone(c)
+        # Exchange leaves the flags intact; return must use the exact saved PC.
+        broken=bytes.fromhex('5a 8d4424f0 94 6a00 c3')
+        decoded={i.address:i for i in md.disasm(broken,0x400100)}
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True,decode=decoded.get,closed={0x400100}))
+
     def written_vtable(self, helper='56 8bf1 c7460807000000 5e c3'):
         # The constructor stores a vtable and a zero member. A closed helper
         # saves/restores this and writes elsewhere, then a virtual closed

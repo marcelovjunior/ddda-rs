@@ -66,6 +66,34 @@ class ConstructedTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checked setup recipe'):
             s._inputs([dict(construction={'rule': 'constructed-v1'})])
 
+    def test_checked_setup_writes_can_bound_a_method_loop(self):
+        # Setup stores a count; method reads it through its bound object.
+        self.fixture('c74104401f0000 c3', '8b5104 31c0 40 4a 75fc c3')
+        state, _, case = self.build()
+        address = case['regs_in']['ecx'] + 4
+        self.assertEqual(bytes(state['writes'][address+k] for k in range(4)),
+                         struct.pack('<I', 8000))
+        result = self.run_body(dict(addr=0x400100), 2, initial_state=state,
+                               input_strategy='guarded-stores-v1')
+        self.assertEqual(result['regs_out']['eax'], 8000)
+        self.assertGreater(result['image_budget']['instructions'], 20000)
+        # Captured but unwritten bytes are not proof facts.
+        with self.assertRaisesRegex(h.Rejected, 'runaway'):
+            self.run_body(dict(addr=0x400100), 2,
+                          initial_state={**state, 'writes': {}},
+                          input_strategy='guarded-stores-v1')
+        with self.assertRaisesRegex(ValueError, 'differs from captured'):
+            c.validate_state({**state, 'writes': {address: 1}})
+
+    def test_method_overwrite_invalidates_setup_count(self):
+        self.fixture('c74104401f0000 c3',
+                     'c7410402000000 8b5104 31c0 40 4a 75fc c3')
+        state, _, _ = self.build()
+        result = self.run_body(dict(addr=0x400100), 2, initial_state=state,
+                               input_strategy='guarded-stores-v1', max_insn=5)
+        self.assertEqual(result['regs_out']['eax'], 2)
+        self.assertEqual(result['image_budget']['instructions'], 10)
+
     def test_constructed_input_does_not_relax_instruction_or_return_guards(self):
         self.fixture('c3', 'ebfe')
         state, _, _ = self.build()

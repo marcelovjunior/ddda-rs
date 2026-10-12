@@ -1,5 +1,46 @@
 # Milestones
 
+### L28c fixed-frame checkpoint (2026-10-12, pending replay)
+
+- **0x0081C330 records 3/3** after separating its fixed local frame from
+  outgoing mock arguments. **137 light tests pass**; all 24 wrapper cases
+  re-record identically.
+- Private native-L28c: **59,591 / 177,367**, +10/+30 this session. Audit
+  proves all 59,581 baseline records and 177,337 cases unchanged.
+- Fifteen recorder residuals remain unfinished, alongside two other-lane
+  entries and nine unconfirmed boundaries. The 0x00493AA0 proof needs both
+  save/player manager state; either producer alone still rejects.
+  **Next action:** checked composition of those manager setup states.
+
+### L28c wrapper fixtures (2026-10-12, pending replay)
+
+- Frameless virtual-tail wrappers use an opt-in mock argument strategy;
+  **7 functions / 21 cases** record normally, including the string helpers.
+- Private native-L28c: **59,590 / 177,364**, cumulative +9/+27; baseline
+  records unchanged. **135 light tests pass**; full replay belongs to head.
+- **Next action:** the separate 0x0081C330 stack-frame rejection, then
+  remaining finite-work recipes. Details in L28 Results.
+
+### L28c boot stop 15 bulk fill (2026-10-12, pending replay)
+
+- **0x00DC7D00 records 3/3.** Constant-size modeled memset effects can stay
+  lazy until accessed, retaining exact final byte ranges for existing replay.
+  Ordinary page and bulk-byte guards remain; no Rust format change.
+- Private native-L28c: **59,583 functions / 177,343 cases**, +2/+6 including
+  the constructed array fixture. All baseline records/cases remain unchanged.
+- **Next action:** head replay/boot preview, then wrapper/manager fixtures.
+
+### L28c constructed array fixture (2026-10-12, pending replay)
+
+- Original constructor 0x00490E80 supplies the four arrays for 0x00491340;
+  the latter records **3/3** after checked setup replay. Guarded proofs can
+  use setup-written bytes and trace stack-allocation helpers' moved returns.
+- Private native-L28c: **59,581 -> 59,582 / 177,337 -> 177,340 cases**.
+  Audit proves every old record/case unchanged. Manager trials retain their
+  budget/cleanup blockers; no full Rust build or replay here.
+- **Next action:** frameless virtual-wrapper mock input strategy, then the
+  remaining manager and record recipes; details in L28 Results.
+
 ### L28c boot stop 14 fixture (2026-10-12, pending replay)
 
 - **0x00DD5ED0 records 3/3**. The opt-in store-fact rule preserves its own
@@ -1372,3 +1413,21 @@ opening (codex-31), route perf (codex-29).
   a constructed-object input strategy: run the verified constructor first,
   then the method. claude-6 is on L48 (re-credit the 46 gaps).
 - **One next action:** claude-2's boot run past stop 13.
+
+## Batch 2026-10-12 (trains 7-8: 59,282 verified)
+
+- **Train 7 (2c93b524):** L48 (claude-6) re-credits 30 of the 46 gaps:
+  - memory-slot bounds, byte-remap tables and register or constant
+    bounds prove 14 tables;
+  - 16 input-indexed switches are slot-swept: every discovered slot has a
+    case, with the table's end evidenced (the `slot-sweep-v1` strategy).
+  16 gaps remain.
+- **Train 8 (5525e431):** Codex records boot stop 14 (0x00DD5ED0: a
+  vtable the constructor writes itself, resolved statically, from
+  claude-2's evidence) and 0x00F7DE40.
+- **59,282 of 59,440 verified (99.7%).**
+- Codex moved to a fresh session (the old one, ~7M tokens, kept tripping
+  the provider's content filter on x86 trace work).
+- **One next action:** claude-2's boot past stop 14. Meanwhile claude-6
+  works on L49 (lifter-side residuals) and Codex on input recipes for the
+  37 residuals.

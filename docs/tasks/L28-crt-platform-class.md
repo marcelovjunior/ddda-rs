@@ -35,6 +35,147 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Fixed-frame inputs and final checkpoint (2026-10-12)
+
+**0x0081C330 records 3/3 and is adopted.** Its prefix at 0x0081C333 reserves
+0x204 local bytes, released at 0x0081C64F. The old heuristic included those
+516 bytes in the mock's argument count: call 0x0081C41B popped 524 instead
+of 8, and RET read zero. The opt-in wrapper strategy now excludes one fixed
+entry allocation only when every decoded return has the matching immediate
+frame cleanup. Final frame teardown is also excluded from caller argument
+cleanup. All ordinary return/page/flag checks remain; this is still a mock
+input strategy, not an assertion of an unavailable callee's ABI.
+
+**137 light tests pass. All 24 accepted wrapper-strategy cases re-record
+identically**, including the earlier seven functions. The first private
+recheck driver lacked Windows multiprocessing's main guard; it was stopped
+and rerun as a sequential driver. It changed no accepted data. Successful
+recheck: `L28c/recipes-frame-recheck-fixed.log` and
+`recipes-wrapper-recheck.json`.
+
+Final checkpoint: **59,591 functions / 177,367 cases**, cumulative **+10/+30**.
+`L28c/recipes-final-audit.json` proves all **59,581 baseline records and
+177,337 cases unchanged**, no promotions/removals/stale mocks. Recording ran
+serially through heavy.py as codex. No Rust build/replay, shared-data write,
+base-data write or push. Data remains open; base is native-train3-orig.
+
+**Original 37-entry queue accounting:** 11 now have fixtures in this set
+(two before this session, nine added here). The separate new boot stop
+0x00DC7D00 makes ten additions this session. Remaining 26:
+
+- 0x00DB8B90 and 0x00C9B350 are owned/recorded by the lifter lane; they
+  were not imported into this private baseline or duplicated here.
+- Nine unconfirmed entry addresses remain reserved for entry validation:
+  0x00620000, 0x00620003, 0x00620004, 0x00670002, 0x00670003,
+  0x007A0003, 0x007A0004, 0x007D0005, 0x00C40000.
+- Fourteen finite-work residuals still reject: 0x00493AA0, 0x00494D80,
+  0x004A06B0, 0x0046A150, 0x0046A2D0, 0x0048AB50, 0x0048F330,
+  0x00495150, 0x00495520, 0x004A0C00, 0x0050A110, 0x00815C60,
+  0x00C9E0F0, 0x00DBA780. All received the new finite-work policy;
+  four also received evidenced manager setup, without an accepted result.
+  Construction alone has not established a sound bound for these paths.
+- 0x00D29AF0 still requires a nonempty buffer and two distinct allocation
+  results. Original instructions at 0x00D29B42/45 load the buffer/count;
+  calls at 0x00D29B4C/66 allocate 0x48 and 0x1000 bytes, and DIV at
+  0x00D29CF3 requires nonzero count. No verified setup recipe supplying
+  those inputs was established in this batch; no guessed game state added.
+
+**Follow-up diagnosis:** the save-manager-backed 0x00493AA0 proof stops
+after 7,038 instructions at 0x00493B86: it tests the value loaded through
+player manager 0x018FA4EC + 0x99C (loads at 0x00493B75/7B). This is a second
+manager, not state initialized by the supplied save-manager setup. Original
+producer 0x0047DF20 writes that singleton at 0x0047E0DE. Substituting this
+producer alone also yields three instruction-limit rejections, with no new
+accepted cases. Logs: `recipes-proof-diagnose.log`, `recipes-player-manager.log`.
+No broader bound was granted for the unknown branch.
+
+**Next action:** establish a checked composition of the required manager
+producers for 0x00493AA0, with explicit overlap and setup-read dependencies.
+The remaining fifteen recorder entries are explicitly unfinished; this
+checkpoint does not claim that all 37 requested recipes are implemented.
+
+### Frameless virtual wrappers (2026-10-12)
+
+**Seven functions / 21 normal-return cases adopted:** 0x005EC920,
+0x00606090, 0x00606130, 0x006066E0, 0x006335A0, 0x00633EF0,
+0x011590E0. `wrapper-call-v1` recognizes a bounded sequence of 32-bit
+loads into volatile registers ending in a jump through a loaded register.
+Stores, stack/frame operations, calls, branches and segmented loads refuse.
+Such a wrapper leaves the caller arguments untouched, so its mock uses the
+existing indirect-call argument heuristic, including delayed caller cleanup.
+This is an explicit **mock input contract**, not recovered callee behavior.
+Actual closed/platform dispatch is unchanged; older strategies are unchanged.
+Sources: wrappers 0x010FEE50, 0x0106B1C0 and 0x01156B00. Tests use synthetic
+wrappers, rejection forms and caller-versus-callee cleanup cases.
+
+Private native-L28c is **59,590 functions / 177,364 cases**; cumulative
+**+9/+27** this session. `L28c/recipes-wrapper-audit.json` compares against
+the same baseline. **135 light tests pass**, no Rust replay. The eight-entry
+trial also retried 0x0081C330: all three cases still return outside the image.
+Its failure stays rejected and is being traced separately.
+
+L49 owns C9B350 (now recorded there after its flag-liveness correction) and
+the x87 caller-state follow-up; no duplicate records or x87 hook changes here.
+Next: diagnose 0x0081C330's stack frame and remaining finite-work inputs.
+
+### Boot stop 15: lazy bulk fills (2026-10-12)
+
+**0x00DC7D00 records 3/3 normal returns** with `bulk-call-v1`. Its original
+literal-size memset writes 0x100000 bytes: eagerly mapping those 256 pages
+leaves no space for the caller/object/code under the ordinary page guard.
+The new general strategy retains a constant-size platform memset as a lazy
+fill range. Subsequent accesses materialize original pages overlaid with
+the fill and still count against the unchanged page cap. Already mapped
+pages update immediately. Overlapping fills and later ordinary writes retain
+execution order; reads after a fill are not misreported as initial inputs.
+Output uses the **existing exact byte-range schema**, including every byte
+of the 1 MiB fill. No compressed-value assumption or Rust replay change.
+Existing constant-size and dynamic model-byte guards remain; dynamic sizes
+stay eager. Setup capture with lazy fills refuses explicitly.
+
+Head/claude-2 #9685/#9686 identify the real boot object as constructed by
+0x00DD1B70, with vtable 0x0142B0D8 and slot +0x2C = 0x005F35C0. The new
+cases use ordinary zero-filled object inputs and the existing mock boundary;
+they do **not** claim to replay that boot object graph. Original method byte
+effects and normal return are recorded; integrated Rust replay remains head's.
+
+Private native-L28c is **59,583 functions / 177,343 cases**, cumulative
+**+2/+6** from `recipes-next-before.json`. `recipes-bulk-audit.json` proves
+all baseline records/case multisets unchanged. New tests cover large fills,
+post-fill reads/writes, eager equality, overlap, address wrapping, byte/page
+guards and unsupported setup capture. Reproduce through heavy.py with
+`structured_inputs.py record --strategy bulk-call-v1 --address 0x00DC7D00`.
+Next: head boot preview, then frameless wrapper and manager input recipes.
+
+### Constructed finite-work input: 0x00491340 (2026-10-12)
+
+**Recorded and adopted 3/3 normal returns.** The verified original constructor
+0x00490E80 returns the object in EAX; binding that value to method ECX supplies
+the four arrays initialized by calls at 0x00491002. The method reads their
+counts at 0x00491369. Setup replay must still match every accepted observation.
+The opt-in bound now admits only bytes actually written by that setup, with
+the existing alias guards; arbitrary captured page contents stay unknown.
+Known method writes replace those facts. Stack-allocation helpers may move
+their return address only when RET still reads the exact saved call PC.
+Register XCHG preserves values and pointer identities without changing flags.
+
+Native-L28c grows **59,581 -> 59,582 functions / 177,337 -> 177,340 cases**.
+`L28c/recipes-first-audit.json` proves all previous records/case multisets
+unchanged. Base remains read-only native-train3-orig. Reproduce via heavy.py:
+`constructed_inputs.py 0x00491340 0x00490E80 --bind ecx=regs_out.eax
+--strategy guarded-stores-v1 --seconds 45` (single command).
+
+Fifteen finite-work residuals also received three plain guarded-store trials
+each; all 45 hit the instruction limit. Manager producers were identified
+from original singleton stores: 0x00437BE0 writes 0x018FA4BC at 0x004384CF;
+0x004980F0 writes 0x018FA4F8 at 0x00498169; 0x004821A0 writes 0x018FA4F0
+at 0x00482210. Setup trials for 0x00493AA0, 0x00494D80, 0x00495150 and
+0x0050A110 still hit the limit. The two string helpers 0x00606090/0x00606130
+still leave the image. None of these 18 attempts was adopted. Logs:
+`L28c/recipes-bounds.log`, `recipes-managers.log`, and the structured logs.
+Next: caller argument inference for frameless virtual-tail wrappers, then
+continue bounded manager/record recipes. Full Rust replay belongs to head.
+
 ### Boot stop 14: 0x00DD5ED0 (2026-10-12, pending train replay)
 
 **Records 3/3 normal-return cases and is adopted.** `guarded-stores-v1`
