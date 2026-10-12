@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'bulk-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # L48 slot_sweep_layout).
@@ -857,6 +857,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     accessed pages count against MAX_PAGES; model byte budgets are unchanged.
     Setup capture of lazy fills is deliberately unsupported.
 
+    `wrapper-call-v1` applies the existing indirect-call argument heuristic
+    to mocked direct calls whose bodies are frameless virtual tail wrappers.
+    It leaves all older input distributions and mock contracts unchanged.
+
     `initial_state` supplies pages and register bindings from a checked
     original setup run (constructed_inputs). `capture_state`, an empty dict,
     receives its final pages after successful validation. Neither changes
@@ -881,7 +885,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -1491,14 +1495,20 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         esp = uc_.reg_read(UC_X86_REG_ESP)
         ev = {"target": pc, "regs": {n: uc_.reg_read(r) for n, r in GPR}}
         direct = i.operands[0].type == 2  # X86_OP_IMM
+        wrapper = False
+        if input_strategy == 'wrapper-call-v1' and direct and i.mnemonic == 'call':
+            from wrapper_inputs import virtual_tail_wrapper
+            wrapper = virtual_tail_wrapper(pc,code)
         pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
+        if wrapper:
+            pop = pushed[2]
         # Explicit immediate caller cleanup means these argument bytes are
         # not callee-popped. This is still a mock ABI inference, not execution
         # of the unavailable callee. Preserve its value in the recorded event.
         known_pop = import_pops()[1].get(pc)
         if known_pop is not None:
             pop = known_pop
-        elif not direct and i.mnemonic == "call":
+        elif (not direct or wrapper) and i.mnemonic == "call":
             # Caller cleanup of this call's arguments: right after it, or (L28)
             # merged into a later `add esp` past pushes and direct calls known
             # to leave their arguments (0x00E0E495: push ebx; push edi; call
@@ -1597,7 +1607,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('bulk-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
+        if input_strategy in ('bulk-call-v1','wrapper-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)

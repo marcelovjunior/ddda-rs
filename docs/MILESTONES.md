@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c wrapper fixtures (2026-10-12, pending replay)
+
+- Frameless virtual-tail wrappers use an opt-in mock argument strategy;
+  **7 functions / 21 cases** record normally, including the string helpers.
+- Private native-L28c: **59,590 / 177,364**, cumulative +9/+27; baseline
+  records unchanged. **135 light tests pass**; full replay belongs to head.
+- **Next action:** the separate 0x0081C330 stack-frame rejection, then
+  remaining finite-work recipes. Details in L28 Results.
+
 ### L28c boot stop 15 bulk fill (2026-10-12, pending replay)
 
 - **0x00DC7D00 records 3/3.** Constant-size modeled memset effects can stay

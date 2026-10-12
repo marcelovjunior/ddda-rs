@@ -35,6 +35,30 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Frameless virtual wrappers (2026-10-12)
+
+**Seven functions / 21 normal-return cases adopted:** 0x005EC920,
+0x00606090, 0x00606130, 0x006066E0, 0x006335A0, 0x00633EF0,
+0x011590E0. `wrapper-call-v1` recognizes a bounded sequence of 32-bit
+loads into volatile registers ending in a jump through a loaded register.
+Stores, stack/frame operations, calls, branches and segmented loads refuse.
+Such a wrapper leaves the caller arguments untouched, so its mock uses the
+existing indirect-call argument heuristic, including delayed caller cleanup.
+This is an explicit **mock input contract**, not recovered callee behavior.
+Actual closed/platform dispatch is unchanged; older strategies are unchanged.
+Sources: wrappers 0x010FEE50, 0x0106B1C0 and 0x01156B00. Tests use synthetic
+wrappers, rejection forms and caller-versus-callee cleanup cases.
+
+Private native-L28c is **59,590 functions / 177,364 cases**; cumulative
+**+9/+27** this session. `L28c/recipes-wrapper-audit.json` compares against
+the same baseline. **135 light tests pass**, no Rust replay. The eight-entry
+trial also retried 0x0081C330: all three cases still return outside the image.
+Its failure stays rejected and is being traced separately.
+
+L49 owns C9B350 (now recorded there after its flag-liveness correction) and
+the x87 caller-state follow-up; no duplicate records or x87 hook changes here.
+Next: diagnose 0x0081C330's stack frame and remaining finite-work inputs.
+
 ### Boot stop 15: lazy bulk fills (2026-10-12)
 
 **0x00DC7D00 records 3/3 normal returns** with `bulk-call-v1`. Its original
