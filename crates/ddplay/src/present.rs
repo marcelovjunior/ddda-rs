@@ -12,7 +12,7 @@
 //! blank.
 use ddgpu::present::Blitter;
 use ddgpu::{PresentSink, Presented};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -79,6 +79,8 @@ struct Surface {
     view_format: wgpu::TextureFormat,
     blitter: Blitter,
     last: Option<Last>,
+    /// the present modes the surface offers
+    modes: Vec<wgpu::PresentMode>,
 }
 
 /// The surface, shared by the guest thread (Present) and the window thread.
@@ -88,6 +90,8 @@ pub struct Window {
     queue: wgpu::Queue,
     /// a size the surface has to take: width << 32 | height, 0 = none
     resize: AtomicU64,
+    /// a vsync choice the surface has to take: 1 on, 2 off, 0 none
+    vsync: AtomicU8,
     pub stats: Mutex<Stats>,
 }
 
@@ -115,10 +119,11 @@ impl Window {
         surface.configure(&device, &config);
         let blitter = Blitter::new(&device);
         Ok(Arc::new(Window {
-            surface: Mutex::new(Surface { surface, config, view_format, blitter, last: None }),
+            surface: Mutex::new(Surface { surface, config, view_format, blitter, last: None, modes: caps.present_modes.clone() }),
             device,
             queue,
             resize: AtomicU64::new(0),
+            vsync: AtomicU8::new(0),
             stats: Mutex::new(Stats::default()),
         }))
     }
@@ -130,6 +135,11 @@ impl Window {
     /// The window was resized: the next present (or repaint) applies it.
     pub fn resized(&self, width: u32, height: u32) {
         self.resize.store(((width as u64) << 32) | height as u64 | if width == 0 && height == 0 { 1 << 63 } else { 0 }, Ordering::Release);
+    }
+
+    /// Present with vsync (FIFO) or without it from the next present on.
+    pub fn set_vsync(&self, on: bool) {
+        self.vsync.store(if on { 1 } else { 2 }, Ordering::Release);
     }
 
     /// Repaint the last frame from the window thread, unless the guest
@@ -149,9 +159,14 @@ impl Window {
 
     fn show(&self, s: &mut Surface, frame: &Presented) {
         let r = self.resize.swap(0, Ordering::AcqRel);
-        if r != 0 {
-            s.config.width = (r >> 32) as u32 & 0x7FFF_FFFF;
-            s.config.height = r as u32;
+        let v = self.vsync.swap(0, Ordering::AcqRel);
+        let mode = if v != 0 { present_mode(&s.modes, v == 1) } else { s.config.present_mode };
+        if r != 0 || mode != s.config.present_mode {
+            if r != 0 {
+                s.config.width = (r >> 32) as u32 & 0x7FFF_FFFF;
+                s.config.height = r as u32;
+            }
+            s.config.present_mode = mode;
             if s.config.width > 0 && s.config.height > 0 {
                 s.surface.configure(&self.device, &s.config);
             }
@@ -184,12 +199,40 @@ fn present_mode(modes: &[wgpu::PresentMode], vsync: bool) -> wgpu::PresentMode {
     order.iter().copied().find(|m| modes.contains(m)).unwrap_or(Fifo)
 }
 
-/// The backend's sink: shows each Present in the window.
-pub struct Sink(pub Arc<Window>);
+/// The backend's sink: shows each Present in the window, and tells the
+/// window when the game's presentation (its back buffer size, windowed or
+/// full screen, refresh rate, vsync) changes (brief L34).
+pub struct Sink {
+    pub window: Arc<Window>,
+    /// Called on the guest thread with each new presentation.
+    follow: Option<Box<dyn FnMut(ddruntime::d3d9dev::Presentation) + Send>>,
+    last: Option<ddruntime::d3d9dev::Presentation>,
+}
+
+impl Sink {
+    pub fn new(window: Arc<Window>) -> Sink {
+        Sink { window, follow: None, last: None }
+    }
+
+    /// A sink that also reports the game's presentation to `follow`.
+    pub fn following(window: Arc<Window>, follow: impl FnMut(ddruntime::d3d9dev::Presentation) + Send + 'static) -> Sink {
+        Sink { window, follow: Some(Box::new(follow)), last: None }
+    }
+}
 
 impl PresentSink for Sink {
     fn present(&mut self, frame: &Presented) {
-        let w = &self.0;
+        if let Some(follow) = self.follow.as_mut() {
+            // the session's state is this (guest) thread's
+            let p = ddruntime::d3d9dev::presentation();
+            if p != self.last {
+                self.last = p;
+                if let Some(p) = p {
+                    follow(p);
+                }
+            }
+        }
+        let w = &self.window;
         {
             let mut s = w.surface.lock().unwrap();
             w.show(&mut s, frame);
@@ -215,9 +258,9 @@ pub fn test_pattern(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::Ada
     use ddruntime::d3d9draw::{ClearCall, FillCall, GraphicsBackend, Target};
     let mut gpu = ddgpu::WgpuBackend::new(device, queue, adapter);
     gpu.read_frames = false;
-    gpu.present_sink = Some(Box::new(Sink(window)));
+    gpu.present_sink = Some(Box::new(Sink::new(window)));
     let (w, h) = (1280u32, 720u32);
-    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0 };
+    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0, samples: 0, quality: 0 };
     for k in 0u32.. {
         gpu.clear(&ClearCall {
             rects: vec![], flags: 1, colour: 0xFF10_1828, z: 1.0, stencil: 0,

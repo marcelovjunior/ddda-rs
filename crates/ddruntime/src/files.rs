@@ -8,8 +8,9 @@
 //!   first, so the guest sees its own writes.
 //! - The **home** (the rest of the sandbox): the guest's known folders
 //!   (crate::services::sh_get_folder_path_w), e.g. the game's settings file
-//!   `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini` (MtRegistry
-//!   0x00CFFF00). Read and written in place.
+//!   `<Local AppData>\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`
+//!   (MtRegistry 0x00CFFF00: CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE,
+//!   0x801C; crate::profile::config_path). Read and written in place.
 //!
 //! Guest paths are resolved against the guest's current directory (the
 //! install, as when Steam launches the game). An absolute path must lie in
@@ -32,6 +33,7 @@ const ERROR_NO_MORE_FILES: u32 = 18;
 const ERROR_HANDLE_EOF: u32 = 38;
 const ERROR_FILE_EXISTS: u32 = 80;
 const ERROR_BAD_PATHNAME: u32 = 161;
+const ERROR_DIRECTORY: u32 = 267;
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
@@ -76,6 +78,9 @@ pub fn set_roots(install: &Path, sandbox: &Path) {
         f.home = sandbox.to_path_buf();
         f.cwd = PathBuf::new();
     });
+    // a player's settings asked for at start (DDRUNTIME_IMPORT_CONFIG) land
+    // in this sandbox
+    crate::profile::import_from_env(sandbox);
 }
 
 fn set_error(e: u32) {
@@ -710,32 +715,57 @@ pub const VOLUME: [u32; 4] = [8, 512, 16_192_600, 122_092_543];
 /// GetDiskFreeSpaceA(lpRootPathName, lpSectorsPerCluster,
 /// lpBytesPerSector, lpNumberOfFreeClusters, lpTotalNumberOfClusters)
 /// (Microsoft Learn "GetDiskFreeSpaceA function (fileapi.h)"): fills the
-/// non-NULL out-parameters from [`VOLUME`]; TRUE. The root may be NULL
-/// (the current directory's volume), a drive ("X:" or "X:\") or any
-/// directory on it (Windows 11 accepts all of these, measured); only the
-/// install's and the sandbox's drives are modelled, other paths stop. The
-/// caller MtFile::vf05 (at 0x00D0D109) opens a file synchronously instead
-/// of overlapped when more than 0x800 clusters are free.
+/// non-NULL out-parameters from [`VOLUME`]; TRUE. The path may be NULL (the
+/// current directory's volume), a drive ("X:" or "X:\") or any directory
+/// on it. A path naming a file fails with ERROR_DIRECTORY (267) and a
+/// missing one with ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND, the
+/// out-parameters untouched (all measured, research/runtime/windows/
+/// Disk.cs, DiskFile.cs). Paths are resolved in the guest's view (install,
+/// overlay, home); other drives and directories outside the roots stop.
+///
+/// The caller MtFile::vf05 (at 0x00D0D109), asked to open a file
+/// overlapped (mode 0x12), passes the file's own full path (built by
+/// 0x00D4EB30) and switches to a synchronous open (0x11) only if this
+/// succeeds with more than 0x800 free clusters. With a file path it fails,
+/// so the original keeps the overlapped ReadFileEx/SleepEx reads.
 pub fn get_disk_free_space_a(m: &mut dyn Mem, cpu: &mut Cpu) {
     let root = arg(m, cpu, 0);
-    if root != 0 {
+    let r = if root == 0 {
+        Ok(())
+    } else {
         let path = guest_str_a(m, root);
         let drive = |p: &str| p.get(..2).filter(|d| d.ends_with(':')).map(str::to_ascii_uppercase);
-        let known = with_files(|f| {
-            let wanted = drive(&path);
-            wanted.is_some() && [&f.install, &f.home].iter().any(|r| drive(&r.to_string_lossy()) == wanted)
-        });
-        if !known {
-            panic!("GetDiskFreeSpaceA({path:?}) is not modelled: not on the install's or the sandbox's drive (crate::files)");
+        with_files(|f| {
+            let on_our_drive = drive(&path).is_some() && [&f.install, &f.home].iter().any(|r| drive(&r.to_string_lossy()) == drive(&path));
+            if !on_our_drive {
+                panic!("GetDiskFreeSpaceA({path:?}) is not modelled: not on the install's or the sandbox's drive (crate::files)");
+            }
+            if path.len() <= 3 {
+                return Ok(()); // the drive itself
+            }
+            match place_in(f, &path) {
+                Some(pl) if pl.read.is_dir() => Ok(()),
+                Some(pl) if pl.read.exists() => Err(ERROR_DIRECTORY),
+                Some(pl) => Err(missing_error(&pl.read)),
+                None => panic!("GetDiskFreeSpaceA({path:?}) outside the install and the sandbox is not modelled (crate::files)"),
+            }
+        })
+    };
+    cpu.eax = match r {
+        Ok(()) => {
+            for k in 0..4 {
+                let p = arg(m, cpu, 1 + k);
+                if p != 0 {
+                    m.set_u32(p, VOLUME[k as usize]);
+                }
+            }
+            1
         }
-    }
-    for k in 0..4 {
-        let p = arg(m, cpu, 1 + k);
-        if p != 0 {
-            m.set_u32(p, VOLUME[k as usize]);
+        Err(e) => {
+            set_error(e);
+            0
         }
-    }
-    cpu.eax = 1;
+    };
     ret(m, cpu, 20);
 }
 
@@ -747,7 +777,8 @@ pub fn get_disk_free_space_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// empty path), ERROR_PATH_NOT_FOUND (a parent is a file),
 /// ERROR_ACCESS_DENIED (outside the roots); `..` is resolved first (all
 /// measured on Windows 11). Caller: MtRegistry's constructor 0x00CFFF00
-/// (at 0x00CFFF82), for `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN`.
+/// (at 0x00CFFF82), for `<LocalAppData>\CAPCOM\DRAGONS DOGMA DARK ARISEN`
+/// (SHGetFolderPathW CSIDL 0x801C: CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE).
 pub fn sh_create_directory_ex_w(m: &mut dyn Mem, cpu: &mut Cpu) {
     let path = guest_str_w(m, arg(m, cpu, 1));
     let absolute = path.as_bytes().get(1) == Some(&b':') || path.starts_with("\\\\");

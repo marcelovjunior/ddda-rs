@@ -13,59 +13,68 @@ publish = false
 [workspace.dependencies]
 miniz_oxide = "0.8"
 
+# Third-party crates (naga, wgpu, miniz_oxide, ...) optimised in dev and
+# test builds: the workspace's own code keeps opt-level 0 and its debug
+# info. d3d9wgsl's driver comparison went from 745 s to 52 s (one-time
+# dependency build: 134 s).
+[profile.dev.package."*"]
+opt-level = 2
+
 # The lifted test compiles tens of thousands of machine-level functions.
 # Keep backtrace line tables, without debug metadata for every local.
+# Set on dev, which test inherits, so `cargo build` and `cargo test` share
+# one build of the shards (on test alone, each built all 16 separately).
 # See docs/tasks/L03-lifter-codegen-size.md for the measured tradeoff.
-[profile.test.package.ddnative]
+[profile.dev.package.ddnative]
 debug = 1
 
-[profile.test.package.ddlift-00]
+[profile.dev.package.ddlift-00]
 debug = 1
 
-[profile.test.package.ddlift-01]
+[profile.dev.package.ddlift-01]
 debug = 1
 
-[profile.test.package.ddlift-02]
+[profile.dev.package.ddlift-02]
 debug = 1
 
-[profile.test.package.ddlift-03]
+[profile.dev.package.ddlift-03]
 debug = 1
 
-[profile.test.package.ddlift-04]
+[profile.dev.package.ddlift-04]
 debug = 1
 
-[profile.test.package.ddlift-05]
+[profile.dev.package.ddlift-05]
 debug = 1
 
-[profile.test.package.ddlift-06]
+[profile.dev.package.ddlift-06]
 debug = 1
 
-[profile.test.package.ddlift-07]
+[profile.dev.package.ddlift-07]
 debug = 1
 
-[profile.test.package.ddlift-08]
+[profile.dev.package.ddlift-08]
 debug = 1
 
-[profile.test.package.ddlift-09]
+[profile.dev.package.ddlift-09]
 debug = 1
 
-[profile.test.package.ddlift-10]
+[profile.dev.package.ddlift-10]
 debug = 1
 
-[profile.test.package.ddlift-11]
+[profile.dev.package.ddlift-11]
 debug = 1
 
-[profile.test.package.ddlift-12]
+[profile.dev.package.ddlift-12]
 debug = 1
 
-[profile.test.package.ddlift-13]
+[profile.dev.package.ddlift-13]
 debug = 1
 
-[profile.test.package.ddlift-14]
+[profile.dev.package.ddlift-14]
 debug = 1
 
-[profile.test.package.ddlift-15]
+[profile.dev.package.ddlift-15]
 debug = 1
 
-[profile.test.package.ddnative-base]
+[profile.dev.package.ddnative-base]
 debug = 1

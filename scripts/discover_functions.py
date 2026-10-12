@@ -119,7 +119,7 @@ def mt_registrations(pe, md, roots):
     return out
 
 
-def vtables(pe, md, roots, known=frozenset(), stores=None):
+def vtables(pe, md, roots, known=frozenset(), stores=None, vptr_stores=None):
     regs = mt_registrations(pe, md, roots)
     stubs = {}
     for s in pe.sections:
@@ -152,6 +152,28 @@ def vtables(pe, md, roots, known=frozenset(), stores=None):
             tables[slot+4] = dict(rtti='MSVC', descriptor=value, name=name)
         except (ValueError, struct.error):
             continue
+    # L22: a table without RTTI (e.g. a COM interface such as the movie
+    # player's IStream at 0x01436E78, stored by its constructor at
+    # 0x00F7C4AB). Anchor: an object-vtable store of a read-only address at
+    # any 4-aligned offset (primary, secondary or member vptr, `vptr_stores`), and
+    # corroboration: at least one slot of the run is already a known
+    # function. The run is cut as below and at any other stored table.
+    vptr_stores = stores if vptr_stores is None else vptr_stores
+    for start in sorted(vptr_stores or ()):
+        section = pe.section(start, 4)
+        if start in tables or not section or section['name'] != '.rdata':
+            continue
+        run = []
+        for k in range(600):
+            slot = start+4*k
+            if (k and (slot in tables or slot in vptr_stores)) or not pe.section(slot, 4) or pe.section(slot, 4)['name'] != '.rdata':
+                break
+            a = pe.word(slot)
+            if not pe.executable(a) or not code_entry(pe, md, a):
+                break
+            run.append(a)
+        if any(a in known for a in run):
+            tables[start] = dict(rtti='none', stores=sorted(vptr_stores[start]))
     starts = sorted(tables)
     for idx, start in enumerate(starts):
         end = starts[idx+1] if idx+1 < len(starts) else 0xffffffff
@@ -188,6 +210,7 @@ def discover(pe, known, lifted, extents=()):
     init = list(initializers(pe, md))
     candidates = list(init)
     stores = collections.defaultdict(set)
+    vptr_stores = collections.defaultdict(set)
     for f in lifted:
         for pc in f.get('body', []):
             if not pe.executable(pc):
@@ -196,8 +219,16 @@ def discover(pe, known, lifted, extents=()):
             if (i and i.mnemonic == 'mov' and len(i.operands) == 2 and
                     i.operands[0].type == 3 and i.operands[0].size == 4 and
                     i.operands[0].mem.base and not i.operands[0].mem.index and
-                    i.operands[0].mem.disp == 0 and i.operands[1].type == 2):
-                stores[i.operands[1].imm & 0xffffffff].add(pc)
+                    i.operands[1].type == 2):
+                disp = i.operands[0].mem.disp
+                if disp == 0:
+                    stores[i.operands[1].imm & 0xffffffff].add(pc)
+                # L22: secondary vptrs (COM interfaces of multiply inherited
+                # objects, e.g. the XAPO table 0x0142AFE8 at [esi+4] by
+                # 0x00DD50EC) and vptrs of embedded member objects (0x0142AFA0
+                # at [edi+0x4DD78] by 0x00DD619B) anchor RTTI-less tables only.
+                if disp >= 0 and disp % 4 == 0:
+                    vptr_stores[i.operands[1].imm & 0xffffffff].add(pc)
             # address-taken code: an immediate (push imm32 / mov ..., imm32)
             # naming an executable address outside every known function, e.g.
             # the CRT's FlsAlloc stand-in 0x012F953C stored by __mtinit at
@@ -211,7 +242,7 @@ def discover(pe, known, lifted, extents=()):
                     continue  # call/pop position acquisition, not a function
                 candidates.append((i.operands[0].imm & 0xffffffff,
                                    dict(source='call', caller=f['addr'], instruction=pc)))
-    candidates += list(vtables(pe, md, {a for a, _ in init}, known, stores))
+    candidates += list(vtables(pe, md, {a for a, _ in init}, known, stores, vptr_stores))
     for a, ev in candidates:
         if a in known:
             continue

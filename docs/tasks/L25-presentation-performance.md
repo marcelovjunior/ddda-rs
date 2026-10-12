@@ -210,3 +210,51 @@ L22, so they wait for a decision by the head):
 
 Commits: ddb4f29, f95ca1b, 1c99b8a, 3ab3378 (merge of claude-5's
 4159466), decdcd7, ec4af23, 9896b64, c811c62, and this Results commit.
+
+### Prototypes (branch `task/L25-perf-prototypes`, for a later train)
+
+Written during the build pause and not compiled yet. Each keeps results
+1:1 and is proven by the required-vector replay plus `ddperf`:
+
+- **924ce18, cached call targets.** Most direct calls in the lifted
+  shards cross shards and resolve through `x86::call_lifted` (in one
+  shard, 235 such call sites against 4 calls within the shard). A
+  4096-slot thread-local direct-mapped cache now keeps resolved targets.
+  The program's lookup never changes once installed, so entries cannot go
+  stale, and a miss resolves exactly as before. `ddperf micro` times
+  cached against searched resolution.
+- **f034c8a, inline guest-memory fast path (devirtualised `Mem`).**
+  `PageTable` moves to ddnative-base, and `Mem::page_table()` (default
+  `None`) is added, with `GuestMemory` returning its table. lift.py lowers
+  at gen time (agreed with claude-6; cached arms unchanged): each function
+  reads `let pt = m.page_table();` once, and `m.u32(a)` becomes
+  `m.fast_u32(pt, a)` (all six accessors), an inline page-table access when
+  the table allows it, else the same trait call as before. Fixtures and
+  `Sparse` return `None`, so the replay gate runs the old path.
+  `test_lift_codegen.py` gets a rustc fixture comparing both paths on the
+  same generated function, and `ddperf micro` times a read both ways.
+- **Flags: no prototype needed.** They are already lazy (kind, operands
+  and result are stored; a flag is computed when read). With the step-2
+  `#[inline]`, the constant `cond("..")` folds to the flag test, and
+  LLVM can drop a flag write that the next one overwrites with no call or
+  read in between (`cpu` is a unique `&mut`). The lifter keeps every flag
+  write, because a callee can observe the machine state; that stays as it
+  is.
+- **Measured without the lifted program** (light release build,
+  `cargo run --release -p ddruntime --no-default-features --example
+  perf_micro`, 4 runs, tight loops within one mapped page): guest u32
+  read 1.6-1.8 ns through `dyn Mem`, 1.5-2.1 ns through a direct call,
+  0.58-0.63 ns through the inline fast path; u32 write 2.7-2.9 ns against
+  0.76-1.06 ns. A direct call costs about as much as the virtual one, so
+  the gain comes from inlining. Estimate for one replay pass (11.6 M
+  reads, 16.8 M writes): about 45 ms saved of 357 ms (12%). This is an
+  upper bound from tight loops; the replay itself will tell.
+  `call_ext` round trip through the Registry to a returning service:
+  12.9-15.7 ns, so the replay's 354 k calls cost about 5 ms (1.5%) and
+  are not worth a prototype. In a real session a service call also
+  reads the clock for the time slice.
+- **`call_ext`: measured, left as it is.** Each call costs a
+  thread-local `Rc` clone, a boxed-closure call and a hash lookup, and a
+  service call also reads the time-slice clock (`threads::maybe_yield`).
+  At 13-16 ns a round trip, this is about 1.5% of a replay pass (above), so
+  a binding cache is not worth it now.

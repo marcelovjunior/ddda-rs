@@ -10,6 +10,7 @@
 //! installed game with Microsoft's disassembler. The translator to the
 //! runtime's GPU backend builds on this.
 
+pub mod ctab;
 pub mod disasm;
 
 use std::fmt;

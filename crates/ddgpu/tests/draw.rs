@@ -37,7 +37,7 @@ fn ps_texture() -> Vec<u32> {
 }
 
 fn back_buffer() -> Target {
-    Target { surface: 0x100, format: 21, width: 4, height: 4, texture: None, level: 0 }
+    Target { surface: 0x100, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// position float4 at 0, texcoord float2 at 16 (stream 0)
@@ -306,7 +306,7 @@ fn copies_fills_and_read_back() {
     }
     let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, states };
     gpu.draw(&draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]));
-    let other = Target { surface: 0x101, format: 21, width: 4, height: 4, texture: None, level: 0 };
+    let other = Target { surface: 0x101, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 };
     // a same-size copy is exact
     gpu.copy(&CopyCall { src: back_buffer(), src_rect: [0; 4], dst: other.clone(), dst_rect: [0; 4], filter: 1 });
     let a = gpu.read_back(&back_buffer()).unwrap();
@@ -326,7 +326,7 @@ fn copies_fills_and_read_back() {
 }
 
 fn depth_target() -> Target {
-    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0 }
+    Target { surface: 0x180, format: 75, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// The full-screen triangle at depth `z`.

@@ -10,6 +10,11 @@ mod lifted_006; pub use lifted_006::*;
 mod lifted_007; pub use lifted_007::*;
 mod lifted_008; pub use lifted_008::*;
 mod lifted_009; pub use lifted_009::*;
+pub use mtframe::abi::f_00a36df0;
+/// The lifted bodies of the functions the readable ports replace.
+pub mod replaced {
+    pub use super::lifted_002::f_00a36df0;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A000E0, f_00a000e0),
@@ -1442,6 +1447,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A4E970, f_00a4e970),
 (0x00A4EB00, f_00a4eb00),
 (0x00A4EE50, f_00a4ee50),
+(0x00A4EEE0, f_00a4eee0),
 (0x00A4F050, f_00a4f050),
 (0x00A4F0B0, f_00a4f0b0),
 (0x00A4F140, f_00a4f140),
@@ -1594,6 +1600,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A5FF00, f_00a5ff00),
 (0x00A60100, f_00a60100),
 (0x00A60180, f_00a60180),
+(0x00A60210, f_00a60210),
 (0x00A60550, f_00a60550),
 (0x00A60970, f_00a60970),
 (0x00A60A00, f_00a60a00),
@@ -1603,6 +1610,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A62150, f_00a62150),
 (0x00A62230, f_00a62230),
 (0x00A628A0, f_00a628a0),
+(0x00A62930, f_00a62930),
 (0x00A631A0, f_00a631a0),
 (0x00A63C30, f_00a63c30),
 (0x00A63C90, f_00a63c90),
@@ -1618,6 +1626,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A64B50, f_00a64b50),
 (0x00A650B0, f_00a650b0),
 (0x00A65170, f_00a65170),
+(0x00A65200, f_00a65200),
 (0x00A65600, f_00a65600),
 (0x00A65B50, f_00a65b50),
 (0x00A65CC0, f_00a65cc0),
@@ -1648,6 +1657,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A695F0, f_00a695f0),
 (0x00A69660, f_00a69660),
 (0x00A696C0, f_00a696c0),
+(0x00A69750, f_00a69750),
 (0x00A69980, f_00a69980),
 (0x00A69BF0, f_00a69bf0),
 (0x00A69C40, f_00a69c40),
@@ -1683,6 +1693,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A6BD80, f_00a6bd80),
 (0x00A6BE00, f_00a6be00),
 (0x00A6BE70, f_00a6be70),
+(0x00A6BF00, f_00a6bf00),
 (0x00A6C130, f_00a6c130),
 (0x00A6C1F0, f_00a6c1f0),
 (0x00A6C280, f_00a6c280),
@@ -1692,6 +1703,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A6CB80, f_00a6cb80),
 (0x00A6D000, f_00a6d000),
 (0x00A6D3F0, f_00a6d3f0),
+(0x00A6D600, f_00a6d600),
 (0x00A6DC40, f_00a6dc40),
 (0x00A6DCD0, f_00a6dcd0),
 (0x00A6DFE0, f_00a6dfe0),
@@ -1724,6 +1736,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A73540, f_00a73540),
 (0x00A738B0, f_00a738b0),
 (0x00A738F0, f_00a738f0),
+(0x00A73980, f_00a73980),
 (0x00A73BC0, f_00a73bc0),
 (0x00A74180, f_00a74180),
 (0x00A741E0, f_00a741e0),
@@ -2058,6 +2071,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A8F2E0, f_00a8f2e0),
 (0x00A8F380, f_00a8f380),
 (0x00A8F3C0, f_00a8f3c0),
+(0x00A8F400, f_00a8f400),
 (0x00A8F470, f_00a8f470),
 (0x00A8F4E0, f_00a8f4e0),
 (0x00A8F580, f_00a8f580),
@@ -2256,6 +2270,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00A9B600, f_00a9b600),
 (0x00A9B670, f_00a9b670),
 (0x00A9B680, f_00a9b680),
+(0x00A9B6C0, f_00a9b6c0),
 (0x00A9B740, f_00a9b740),
 (0x00A9B7B0, f_00a9b7b0),
 (0x00A9B7C0, f_00a9b7c0),
@@ -3654,6 +3669,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00ACC3E0, f_00acc3e0),
 (0x00ACC4A0, f_00acc4a0),
 (0x00ACC4D0, f_00acc4d0),
+(0x00ACC6D0, f_00acc6d0),
 (0x00ACC740, f_00acc740),
 (0x00ACC790, f_00acc790),
 (0x00ACC7B0, f_00acc7b0),
@@ -3664,6 +3680,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00ACCDD0, f_00accdd0),
 (0x00ACD220, f_00acd220),
 (0x00ACD240, f_00acd240),
+(0x00ACD2C0, f_00acd2c0),
 (0x00ACD5F0, f_00acd5f0),
 (0x00ACD650, f_00acd650),
 (0x00ACD7D0, f_00acd7d0),

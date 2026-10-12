@@ -34,8 +34,19 @@ class RemainingTests(unittest.TestCase):
                    {'remap':bytes((0,1,2,0))}, {'targets':(0x400001,0x401010)},
                    {'remap':bytes((0,1))}):
             code,sections=self.switch(**kw)
-            with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True),patch.object(lift,'function_entries',return_value=frozenset({0x400000})),self.assertRaises(lift.Unsupported):
-                lift.lift(0x400000,len(code),ext=True)
+            with patch.object(h,'image',return_value=(0x400000,sections)),patch.object(h,'executable',return_value=True),patch.object(lift,'function_entries',return_value=frozenset({0x400000})):
+                with self.assertRaises(lift.Unsupported):
+                    lift.lift(0x400000,len(code))
+                # L22 ext open tables: an unproven remap uses table-only
+                # discovery (unknown runtime targets leave the body); bad
+                # targets or remap bytes still reject.
+                if 'code' in kw or kw.get('remap')==bytes((0,1)):
+                    lift.lift(0x400000,len(code),ext=True)
+                    self.assertEqual(lift.cached_body(0x400000,len(code),True)[1][0x40000c],[0x401000,0x401010])
+                else:
+                    with self.assertRaises(lift.Unsupported):
+                        lift.lift(0x400000,len(code),ext=True)
+            lift._BODY_CACHE.clear()
 
     def program(self,text,record=False):
         code=bytes.fromhex(text);sections=[(0x400000,code.ljust(4096,b'\xcc'))]
@@ -59,9 +70,19 @@ class RemainingTests(unittest.TestCase):
         self.assertEqual(push,[]);self.assertEqual(c['x87_depth'],0)
         self.assertNotIn('st_push',c['calls'][0]['out'])
 
-    def test_two_missing_values_and_entry_arguments_reject(self):
-        for code in ('e8fb000000ded9c3','d9e0c3'):
-            with self.assertRaises(lift.Unsupported):self.program(code)
+    def test_two_missing_values_reject(self):
+        with self.assertRaises(lift.Unsupported):self.program('e8fb000000ded9c3')
+
+    def test_entry_arguments_are_an_explicit_contract(self):
+        # L22: x87 values read before any call are the caller's (MSVC float
+        # intrinsics); a read after a call stays the mock's or rejects.
+        _,push,info=self.program('d9e0c3')
+        self.assertEqual(info['x87_entry'],1);self.assertEqual(push,[])
+        _,_,info=self.program('d9e0dec9c3')
+        self.assertEqual(info['x87_entry'],2)
+        _,push,info=self.program('d9e0e8f7000000ded9c3')  # caller value + one mocked return
+        self.assertEqual((info['x87_entry'],push),(1,[0x400007]))
+        with self.assertRaises(lift.Unsupported):self.program('d9e0e8f7000000ded9ded9c3')
 
     def test_intervening_call_owns_the_return(self):
         _,push,_=self.program('e8fb000000e8f6000000d91d00200000c3')
@@ -78,9 +99,48 @@ class RemainingTests(unittest.TestCase):
             with self.assertRaisesRegex(h.Rejected,'noreturn'):
                 self.program(trap,True)
 
-    def test_platform_state_is_not_invented(self):
-        for code in ('0fa2c3','0f31c3','9cc3'):
-            with self.assertRaisesRegex(lift.Unsupported,'platform-dependent'):self.program(code)
+    def test_mxcsr_moves_and_compare_retargeting(self):
+        # stmxcsr [esp-4]; ret
+        arms,_,c=self.program('0fae5c24fcc3',True)
+        self.assertIn('m.set_u32(esp.wrapping_add(0xFFFFFFFC), x86::stmxcsr());',' '.join(arms))
+        self.assertIn([c['regs_in']['esp']-4,'801f0000'],c['writes'])
+        # mov dword [esp-4],0; ldmxcsr [esp-4]; ret: unmasked exceptions reject
+        arms,_,_=self.program('c74424fc000000000fae5424fcc3')
+        self.assertIn('x86::ldmxcsr(m.u32(',' '.join(arms))
+        with self.assertRaisesRegex(h.Rejected,'unmasked'):self.program('c74424fc000000000fae5424fcc3',True)
+        # cached arms: comiss xmm0,xmm1 then ucomisd xmm0,xmm1
+        code=bytes.fromhex('0f2fc1660f2ec1c3')
+        arm='            0x400000 => { fl = x86::comiss(xmm0[0], xmm1[0]); fl = x86::comisd(xmm0, xmm1); }'
+        out=lift.exact_compares(arm,read=lambda a,n:code[a-0x400000:a-0x400000+n])
+        self.assertIn('x86::comiss_hw::<true>(xmm0[0], xmm1[0])',out)
+        self.assertIn('x86::comisd_hw::<false>(xmm0, xmm1)',out)
+        # a straight-line body reaches cpu_arm without its arm prefix
+        with patch.object(h,'code',lambda a,n:code[a-0x400000:a-0x400000+n]):
+            src=lift.rust_fn(0x400000,'t',['            0x400000 => { fl = x86::comiss(xmm0[0], xmm1[0]); return; }'])
+        self.assertIn('x86::comiss_hw::<true>(cpu.xmm[0][0], cpu.xmm[1][0])',src)
+        self.assertNotIn('loop {',src)
+
+    def test_xlatb_reads_ebx_plus_al(self):
+        arms,_,c=self.program('d7c3',True)
+        self.assertIn('m.u8(ebx.wrapping_add(eax & 0xFF))',' '.join(arms))
+        self.assertEqual(c['regs_out']['eax'] & ~0xFF, c['regs_in']['eax'] & ~0xFF)
+        with self.assertRaises(lift.Unsupported):self.program('64d7c3')  # fs: override
+
+    def test_platform_state_has_explicit_contracts(self):
+        # L22: CPUID/RDTSC answers are recorded machine events, segment
+        # reads record the selectors, POPFD follows CPL3 or rejects.
+        import machine_events
+        arms,_,c=self.program('0fa2c3',True)
+        self.assertIn('crate::platform::cpuid(cpu);',' '.join(arms))
+        self.assertEqual(c['machine'],[['cpuid',0,0,*machine_events.host_cpuid(0,0)]])
+        arms,_,c=self.program('0f31c3',True)
+        self.assertEqual([e[0] for e in c['machine']],['rdtsc'])
+        arms,_,c=self.program('9c9dc3',True)
+        self.assertIn('x86::pushfd_image(cpu)',' '.join(arms));self.assertIn('x86::popfd(cpu, v)',' '.join(arms))
+        _,_,c=self.program('668cd0c3',True)
+        self.assertEqual(set(c['segments']),{'es','cs','ss','ds','fs','gs'})
+        with self.assertRaisesRegex(h.Rejected,'popfd'):self.program('68000100009dc3',True)  # sets TF
+        with self.assertRaisesRegex(lift.Unsupported,'push segment'):self.program('1ec3')
 
     def test_interleaved_local_allocation_is_not_a_mock_argument(self):
         _,_,c=self.program('8b018b501083ec0889f1ffd231c083c408c3',True)

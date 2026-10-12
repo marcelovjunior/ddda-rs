@@ -80,7 +80,7 @@ pub(crate) struct State {
     /// (the CRT runs them in reverse at exit).
     exit_list: Vec<u32>,
     /// The guest's unhandled-exception filter (SetUnhandledExceptionFilter).
-    exception_filter: u32,
+    pub(crate) exception_filter: u32,
     /// GetLastError / SetLastError.
     pub(crate) last_error: u32,
     /// TLS slots (TlsAlloc): None = free.
@@ -88,8 +88,8 @@ pub(crate) struct State {
     /// How often each TLS index was allocated (a thread's saved value
     /// belongs to one allocation; crate::threads).
     pub(crate) tls_epoch: Vec<u32>,
-    /// Next VirtualAlloc address (page-granular bump in the virtual region).
-    pub(crate) virtual_next: u32,
+    /// VirtualAlloc's reservations (crate::win32).
+    pub(crate) virtual_space: crate::win32::VirtualSpace,
     /// Strings the runtime hands the guest once (command line, environment).
     pub(crate) strings: HashMap<&'static str, u32>,
     /// Path of the exe the runtime loaded (GetModuleFileName, command line).
@@ -149,7 +149,12 @@ pub fn call_guest(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, args: &[u32]) -> 
     }
     cpu.esp = cpu.esp.wrapping_sub(4);
     m.set_u32(cpu.esp, CALLBACK_RETURN);
+    // L22: guest code runs with the guest MXCSR live (saved in cpu.mxcsr
+    // when the calling service was entered); back in Rust, the default.
+    ddnative_base::x86::ldmxcsr(cpu.mxcsr.0);
     ddnative_base::x86::call_ext(m, cpu, target);
+    cpu.mxcsr = ddnative_base::x86::Mxcsr(ddnative_base::x86::stmxcsr());
+    ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
     assert_eq!(cpu.esp, esp, "guest callback {target:#010x} did not return with stdcall cleanup of {} argument(s)", args.len());
     assert_eq!((cpu.ebx, cpu.ebp, cpu.esi, cpu.edi), (ebx, ebp, esi, edi), "guest callback {target:#010x} clobbered a callee-saved register");
     cpu.eax
@@ -280,8 +285,8 @@ pub fn is_processor_feature_present(m: &mut dyn Mem, cpu: &mut Cpu) {
 }
 
 /// KERNEL32 `SetUnhandledExceptionFilter(filter)` (stdcall): records the
-/// filter, returns the previous one (none before). The runtime does not
-/// raise guest exceptions yet, so the filter is never called.
+/// filter, returns the previous one (none before). `seh` invokes it from
+/// UnhandledExceptionFilter, as the CRT's top-level filter expects.
 pub fn set_unhandled_exception_filter(m: &mut dyn Mem, cpu: &mut Cpu) {
     let filter = arg(m, cpu, 0);
     cpu.eax = with_state(|s| std::mem::replace(&mut s.exception_filter, filter));
@@ -353,7 +358,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     });
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).chain(crate::net::APIS).chain(crate::seh::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
@@ -365,8 +370,12 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
 /// Map the heap region and bind every service at its address.
 pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), InstallError> {
     mem.map_lazy(HEAP_BASE, HEAP_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
-    mem.map_lazy(crate::win32::VIRTUAL_BASE, crate::win32::VIRTUAL_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
     for (addr, f) in SERVICES {
+        // SERVICES only stand in for original bodies the lifter cannot
+        // produce yet; once the lifted program has the original, it runs
+        if matches!(registry.get(*addr), Some(Binding::Lifted(_))) {
+            continue;
+        }
         registry.insert(*addr, Binding::Service(*f)).map_err(InstallError::Conflict)?;
     }
     Ok(())
@@ -374,8 +383,9 @@ pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), Ins
 
 /// Every service and the original address it replaces.
 pub const SERVICES: &[(u32, fn(&mut dyn Mem, &mut Cpu))] = &[
-    // until the lifter handles its SEH frame (brief L15): the recorder
-    // rejects the original body
+    // until the lifter handles its SEH frame: the recorder rejected the
+    // original body until L28 (claude-3); with that data the lifted body
+    // replaces this service (install skips it)
     (0x012E_D89C, onexit),
 ];
 

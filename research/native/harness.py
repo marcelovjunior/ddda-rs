@@ -731,7 +731,7 @@ def frame_text(contract):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False, frame_contracts=None,
+               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
                terminal=False):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
@@ -828,6 +828,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     uc.reg_write(_xc.UC_X86_REG_FPTAG, 0xffff)
     uc.reg_write(_xc.UC_X86_REG_FPCW, 0x037f)
     uc.reg_write(_xc.UC_X86_REG_MXCSR, 0x1f80)
+    # L22: every x87 instruction follows the host CPU (x87_host.Oracle;
+    # Unicorn 2.1 sets no PE/DE/C1 bits and keeps reserved FLDCW bits).
+    # Its flush hook must run before every other code hook.
+    import x87_host
+    oracle = x87_host.Oracle(lambda uc_, i, op: effective_address(uc_, i, op))
+    uc.hook_add(UC_HOOK_CODE, oracle.on_flush)
+    # L22: CPUID/RDTSC answers, selector reads and CPL3 POPFD (machine_events).
+    import machine_events
+    machine = machine_events.Machine(uc)
+    uc.hook_add(UC_HOOK_CODE, machine.on_code)
     base, secs = image()
     pages_in = {}
 
@@ -917,17 +927,20 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 bad.append("unmasked x87 exceptions unsupported")
                 uc_.emu_stop()
                 return
+        # L22: NaN/Inf float inputs are no longer rejected. The rejection
+        # existed because Unicorn does not quiet a signalling NaN on x87 loads
+        # and picks the x87 NaN for SSE; the x87 and SSE host oracles now
+        # replace every such result with the hardware's (x87_host.Oracle).
+        # The old test still runs and tags the case, so its effect is counted.
         if decoded[eip] in FLOAT_LOADS and size in (4, 8, 10):
-            raw = bytes(uc_.mem_read(addr, size))
-            bits = int.from_bytes(raw, "little")
-            nan = (((bits >> 23) & 0xFF) == 0xFF if size == 4 else
-                   ((bits >> 52) & 0x7FF) == 0x7FF if size == 8 else
-                   ((bits >> 64) & 0x7FFF) == 0x7FFF)
-            if nan:
-                bad.append("NaN/Inf float input")
-                uc_.emu_stop()
+            bits = int.from_bytes(bytes(uc_.mem_read(addr, size)), "little")
+            if (((bits >> 23) & 0xFF) == 0xFF if size == 4 else
+                    ((bits >> 52) & 0x7FF) == 0x7FF if size == 8 else
+                    ((bits >> 64) & 0x7FFF) == 0x7FFF):
+                retired.add("nan-input")
 
     count, bad = [0], []
+    retired = set()  # retired NaN guards this case would have tripped
 
     # SSE ops with two NaN operands: the CPU returns the first operand's NaN,
     # Unicorn (QEMU) applies the x87 rule (larger payload). Such a case
@@ -1056,7 +1069,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             valid_flags[0] = 0x40
         elif mn in ("bt","bts","btr","btc"):
             valid_flags[0] = (valid_flags[0]&0x40)|1
-        elif mn in ("rol","ror","shld","shrd"):
+        elif mn in ("rol","ror","rcl","rcr","shld","shrd"):
             op=i.operands[-1]
             n=(op.imm if op.type==2 else uc_.reg_read(_xc.UC_X86_REG_CL))&31
             if n:
@@ -1188,10 +1201,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 bad.append(f"x87 stack fault before {i.mnemonic} at {addr:#010x}")
                 uc_.emu_stop()
                 return
+        # L22: SSE operations with two NaN operands take the host's result
+        # through the SSE oracle (all of SSE_BINARY is oracle-covered), so
+        # `two_nans` no longer rejects them; it tags the case instead.
         if two_nans(uc_, addr):
-            bad.append(f"two NaN operands at {addr:#010x}")
-            uc_.emu_stop()
-            return
+            retired.add("two-nan")
         count[0] += 1
         if deadline is not None and count[0] % 256 == 1 and time.monotonic() >= deadline:
             bad.append("function time budget")
@@ -1407,6 +1421,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     uc.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, note)
     uc.hook_add(UC_HOOK_MEM_READ, check_float)
     uc.hook_add(UC_HOOK_CODE, on_code)
+    uc.hook_add(UC_HOOK_CODE, oracle.on_compute)  # after premap and the recorder's guards
     uc.mem_map(RET & ~0xFFF, 0x1000)
     regs_in = {}
     for name, r in GPR:
@@ -1428,12 +1443,32 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
+    # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`
+    # values on the x87 stack. Random finite doubles (drawn only for such
+    # bodies, so other fixtures keep their streams), loaded by the host's
+    # fld m64; recorded st0 first as 80-bit (mantissa, exponent).
+    st_in = []
+    if x87_entry:
+        state = x87_host.initial_state()
+        for _ in range(x87_entry):
+            value = 0.0 if zero_inputs else rnd.uniform(-1000, 1000)
+            if inputs:
+                value = struct.unpack("<f", struct.pack("<I", inputs.float_bits(rnd)))[0]
+            state, _, _ = x87_host.execute(state, 0xDD, 0x00, struct.pack("<d", value))
+        x87_host.set_unicorn_state(uc, state)
+        st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     try:
         uc.emu_start(address, RET)
     except UcError as e:
         # pages are mapped before each instruction (premap), so a fault here
         # is real; resuming would lose QEMU's lazy flags: never resume
         bad.append(f"{e} at {uc.reg_read(UC_X86_REG_EIP):#010x}")
+    oracle.flush(uc)  # the last x87 instruction's host result
+    if oracle.problem:
+        bad.append(oracle.problem)
+    machine.flush(uc)
+    if machine.problem:
+        bad.append(machine.problem)
     # Caller-frame helpers (frame_exit) are checked against their exact
     # derived exit ESP; every other function keeps the ordinary range.
     # A terminal case ends at the noreturn callee's entry, not at a return.
@@ -1473,6 +1508,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.mem_write(tramp, bytes([0xD9, 0x1D]) + struct.pack("<I", cap) + bytes([0x90]))
         own_ret[0] = False  # the capture runs after the function's own ret
         uc.emu_start(tramp, tramp + 6)
+        oracle.flush(uc)
+        if oracle.problem:
+            bad.append(oracle.problem)
         if bad:
             raise Rejected("st0 capture: " + "; ".join(bad))
         st0 = struct.unpack("<I", bytes(uc.mem_read(cap, 4)))[0]
@@ -1491,6 +1529,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,
+            **({"x87_oracle": x87_host.VERSION} if oracle.used else {}),
+            **({"cpu_dependent": machine_events.host_brand()} if oracle.cpu_dependent else {}),
+            **({"mxcsr": uc.reg_read(_xc.UC_X86_REG_MXCSR)} if oracle.mxcsr_touched else {}),
+            **({"st_in": st_in} if st_in else {}),
+            **machine.result(uc),
+            **({"nan_guard_retired": sorted(retired)} if retired else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
             **({"stack_contract": stack_contract} if stack_contract else {}),
