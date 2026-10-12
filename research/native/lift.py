@@ -1240,7 +1240,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     return TableTargets(targets, bound is not None)
 
 
-def lift(addr, size, callable=frozenset(), ext=False, step=False):
+def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
     With `ext`, any other call or outward jump (direct, indirect, imports)
@@ -1286,7 +1286,9 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
     # Step mode (L27b) runs the actual callees and the live x87 stack, so
     # neither the entry contract nor the recorder's x87 return pushes nor
     # the recorder's instruction budget apply there.
-    entry = (x87_deficit(ins, addr, 0, 8, callable) or 0) if ext and not step else 0
+    # A closed body takes x87 inputs only when asked (x87_inputs: a promoted
+    # x87 helper such as 0x01300660, L46); its X87_NEED is checked at every call.
+    entry = (x87_deficit(ins, addr, 0, 8, callable) or 0) if (ext or x87_inputs) and not step else 0
     # The selected list already passed scan's stack analysis. Runtime calls
     # execute actual callees, not the recorder's synthetic x87 return pushes.
     exits, push_sites = (set(), []) if step else x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
@@ -2215,7 +2217,7 @@ def seed_closed_contracts(selected):
             a, size = f['addr'], f['size']
             try:
                 if any('st.' in arm for arm in f['arms']) or any(X87_NET[x] for x in f.get('calls', [])):
-                    lift(a, size, closed)
+                    lift(a, size, closed, x87_inputs=bool(f.get('x87_entry')))
                 else:
                     X87_NET[a] = 0
             finally:

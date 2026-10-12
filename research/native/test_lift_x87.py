@@ -82,6 +82,15 @@ class X87Tests(unittest.TestCase):
                     self.assertRaises(lift.Unsupported):
                 lift.lift(0x400000, len(data))
 
+    def test_closed_x87_inputs_only_when_asked(self):
+        # L46: fld st(0); ret takes one value. Closed by default it rejects
+        # (below); x87_inputs (a promoted helper) keeps the contract instead.
+        data = bytes.fromhex("d9c0c3")
+        with patch.object(harness, "code", side_effect=lambda a, n: data[a-0x400000:a-0x400000+n]):
+            lift.lift(0x400000, len(data), x87_inputs=True)
+        self.assertEqual((lift.X87_NEED[0x400000], lift.X87_NET[0x400000]), (1, 1))
+        self.assertEqual(lift.BODY_INFO[0x400000]["x87_entry"], 1)
+
     def test_stack_requirements_and_control(self):
         for code in ("d8c1c3", "d9c0c3", "d9e8ded9c3", "d9e8d9c9c3"):
             data = bytes.fromhex(code)
