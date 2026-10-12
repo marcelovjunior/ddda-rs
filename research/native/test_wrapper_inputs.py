@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation
 
 
 class WrapperTests(unittest.TestCase):
@@ -81,6 +81,36 @@ class WrapperTests(unittest.TestCase):
             self.assertEqual(sites(prefix), set())
         self.assertEqual(sites('83ec20 83c001', '83c410 c3'), set())
         self.assertEqual(sites('83ec20 83c001', '83c420 c3 c3'), set())
+
+    def test_ebp_local_frame_preserves_return_and_saved_registers(self):
+        prefix = '55 8bec 83e4f0 8b01 83ec20 53 57 '
+        suffix = '5f 5b 8be5 5d c3'
+        old = self.run_caller(suffix, 'prefix-call-v1', prefix)
+        self.assertEqual(old['calls'][0]['out']['pop'], 40)
+        result = self.run_caller(suffix, 'ebp-call-v1', prefix)
+        self.assertEqual(result['calls'][0]['out']['pop'], 8)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+        for register in ('ebp', 'ebx', 'esi', 'edi'):
+            self.assertEqual(result['regs_out'][register], result['regs_in'][register])
+
+    def test_ebp_local_frame_requires_stable_frame_and_matching_restores(self):
+        def sites(code):
+            data = bytes.fromhex(code)
+            body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0)]
+            return ebp_frame_allocation(0, body, lambda a,n:data[a:a+n])
+        prefix = '55 8bec 83e4f0 8b01 83ec20 53 57 85c0 7400 '
+        suffix = '5f 5b 8be5 5d c3'
+        self.assertEqual(sites(prefix+suffix), {8})
+        self.assertEqual(sites(prefix+suffix.replace('5f 5b', '5f f30f11460c 5b')), {8})
+        self.assertEqual(sites(prefix.replace('53 57 ', '')+suffix.replace('5f 5b ', '')), {8})
+        for code in (prefix+suffix+' c3', prefix+suffix.replace('5f 5b','5b 5f'),
+                     prefix+suffix.replace('8be5','8be3'),
+                     prefix.replace('83e4f0','83e4f9')+suffix,
+                     prefix.replace('83ec20','83ec20 83ec20')+suffix,
+                     prefix.replace('83ec20','53 83ec20')+suffix,
+                     prefix+'8beb '+suffix, prefix+'6689dd '+suffix,
+                     prefix+suffix.replace('5f 5b', '5f 83c404 5b')):
+            self.assertEqual(sites(code), set())
 
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '

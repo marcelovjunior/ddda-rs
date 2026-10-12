@@ -158,3 +158,92 @@ def aligned_frame_saves(entry, body, read):
             if ins is None or (ins.mnemonic, ins.op_str) != pair:
                 return set()
     return {pc for pc, name in saves if name == 'ebp'}
+
+
+def ebp_frame_allocation(entry, body, read):
+    """Input hint for locals released by MOV ESP,EBP after stack alignment.
+
+    Require a stable EBP, one allocation before any pushes/calls/branches,
+    and the same reverse-order register restores at every own return.
+    As with fixed frames, actual recording guards still check the return.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    decoded = {}
+    for pc in body or ():
+        ins = next(md.disasm(read(pc, 15), pc, count=1), None)
+        if ins is None:
+            return set()
+        decoded[pc] = ins
+    pc = entry
+    for pair in (('push', 'ebp'), ('mov', 'ebp, esp')):
+        ins = decoded.get(pc)
+        if ins is None or (ins.mnemonic, ins.op_str) != pair:
+            return set()
+        pc += ins.size
+    frame_set = ins.address
+    ins = decoded.get(pc)
+    if (ins is None or ins.mnemonic != 'and' or len(ins.operands) != 2
+            or ins.op_str.split(',')[0] != 'esp' or ins.operands[1].type != 2
+            or (ins.operands[1].imm & 0xffffffff) not in (0xfffffff8, 0xfffffff0, 0xffffffe0)):
+        return set()
+    pc += ins.size
+    allocation, saves = None, []
+    for _ in range(32):
+        ins = decoded.get(pc)
+        if ins is None:
+            return set()
+        if ins.mnemonic == 'call' or ins.mnemonic.startswith('j'):
+            break
+        if ins.mnemonic == 'sub' and ins.op_str.split(',')[0] == 'esp':
+            if (allocation is not None or saves or ins.operands[1].type != 2
+                    or not 0 < ins.operands[1].imm <= 4096):
+                return set()
+            allocation = pc
+        elif ins.mnemonic == 'push':
+            if allocation is None:
+                return set()
+            if ins.op_str not in ('ebx', 'esi', 'edi') or ins.op_str in saves:
+                break
+            saves.append(ins.op_str)
+        elif any(ins.reg_name(r) in ('esp', 'sp', 'ebp', 'bp') for r in ins.regs_access()[1]):
+            return set()
+        pc += ins.size
+    else:
+        return set()
+    if allocation is None:
+        return set()
+    previous = {i.address+i.size: i for i in decoded.values()}
+    returns = [i for i in decoded.values() if i.mnemonic in ('ret', 'retn', 'repz ret')]
+    if not returns:
+        return set()
+    restores = set()
+    for ins in returns:
+        expected = [('pop', 'ebp'), ('mov', 'esp, ebp')]
+        expected += [('pop', name) for name in saves]
+        for index, pair in enumerate(expected):
+            ins = previous.get(ins.address)
+            # A compiler may schedule ordinary operations between saved
+            # register pops. They must neither change ESP/EBP nor branch.
+            for _ in range(8):
+                if ins is None:
+                    return set()
+                if (ins.mnemonic, ins.op_str) == pair:
+                    break
+                if (index < 2 or ins.mnemonic not in (
+                        'mov', 'movss', 'movsd', 'movaps', 'movups', 'movzx', 'movsx',
+                        'lea', 'add', 'sub', 'xor', 'or', 'and', 'test', 'cmp',
+                        'addss', 'subss', 'mulss', 'divss', 'xorps', 'pxor')
+                        or any(ins.reg_name(r) in ('esp', 'sp', 'ebp', 'bp')
+                               for r in ins.regs_access()[1])):
+                    return set()
+                ins = previous.get(ins.address)
+            else:
+                return set()
+            if pair == ('pop', 'ebp'):
+                restores.add(ins.address)
+    for ins in decoded.values():
+        if (ins.address != frame_set and ins.address not in restores
+                and any(ins.reg_name(r) in ('ebp', 'bp') for r in ins.regs_access()[1])):
+            return set()
+    return {allocation}
