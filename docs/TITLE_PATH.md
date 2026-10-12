@@ -107,7 +107,10 @@ The scripts and lists are private (`C:\ddda-targets\L35`).
    - **CPU feature detection** `0x00DBD170`: CPUID (0x00DBD140) and a
      `pushfd` probe (0x00DBD110);
    - QPC (0x0130A5A0) and its frequency (**0x0130A5C0**);
-   - **0x00D0CB00**.
+   - if the CPU detection did not set the SSE2 flag (`+0x700E & 8`):
+     **0x00D0CB00("ERR02 : Could not use SSE2 instructions.")**, a fatal
+     error reporter that ends in `_exit(1)`. So the runtime's CPUID
+     answer must report SSE2.
 2. The engine singletons, through their creators. Among them:
    - `sRender` (0x00DB1A50 via 0x004889A0): the render thread
      `0x00DAC090` (where the device is created is not traced here);
@@ -175,7 +178,9 @@ not functions in Ghidra but are verified supplementary entries.
    releases the archive request.
 
 **Files:** `rom\Initialize.arc` (468 KB), `rom\gui\GUIuGUICapcomLogo.arc`,
-and the shader packages through `sShader2` (`sa\DX9\*.arc`).
+and the shader packages through `sShader2` (`sa\DX9\*.arc`). The
+archive ids are resolved in 5.1: 4 is `rom\Initialize`, 2 is
+`rom\title`.
 
 ### 1.6 `aTitle` (vtable 0x0156F7A8)
 
@@ -189,9 +194,9 @@ Slots 5-8: 0x00531290, 0x00531400, 0x005317B0, 0x00533360.
 **The first state, 0x00531800:**
 - creates **`uGUITitle`** on unit line 0x1A;
 - calls 0x00531760, and an `*0x018FA518` call (vf+0x14);
-- **unless `+0x38` is set** (*inferred*: set when returning from the
-  game), creates **`uMovieExt`**, the title movie from the table at
-  0x01875610: `movie\title\title_A` / `title_B` (`.wmv`).
+- creates **`uMovieExt`**, the title movie from the table at
+  0x01875610: `movie\title\title_A` / `title_B` (`.wmv`). `+0x38`
+  holds the movie unit, so it is created whenever none exists (5.3).
 
 **Files:**
 - `rom\title.arc` (13.5 MB);
@@ -232,8 +237,9 @@ lift run's input. Lifting them and recording vectors is a pipeline job
 
 1. **Window:** `0x01106C80` (IME setup; the **first** lifter stop after
    the CRT).
-1b. **`sMain`'s base constructor:** 0x00D0CB00 and 0x0130A5C0, beside
-   the CPUID rejections below.
+1b. **`sMain`'s base constructor:** 0x0130A5C0, beside the CPUID
+   rejections below. (0x00D0CB00, also called there, is the fatal-error
+   reporter: reached only when SSE2 is missing.)
 2. **`sBbsRpgMain` ctor:**
    - 0x004083A0 (Steam callbacks) and 0x00DFA0C0;
    - 0x00419100 (archive manager);
@@ -292,7 +298,7 @@ lift run's input. Lifting them and recording vectors is a pipeline job
 | IMM32 `ImmGetCompositionStringW` and the rest | only with IME messages | 0x01106BB0 |
 | `CreateProcessA` | shutdown only | 0x00DF1140 → 0x01179A70 → 0x011797F0 |
 | `UnhandledExceptionFilter` | CRT fault reporting only | 0x012EDCAC, 0x012FF13C |
-| WS2_32 (`socket`, `setsockopt`, `ioctlsocket`, `gethostbyname`, `WSAGetLastError`) | **conditional**: the online protocol (`sCaProto::vf06` 0x00CEEA80 → 0x00CEF210) stays idle until a connect request; whether the title requests one is *not traced* | 0x00DA2100, 0x00DA1BD0, 0x00D8B8F0 |
+| WS2_32 (`socket`, `setsockopt`, `ioctlsocket`, `gethostbyname`, `WSAGetLastError`) | **conditional**: the online protocol (`sCaProto::vf06` 0x00CEEA80 → 0x00CEF210) stays idle until a connect request, and `sNetworkExt` until an online session exists (5.2): not expected before the title | 0x00DA2100, 0x00DA1BD0, 0x00D8B8F0 |
 | AVIFil32, MSVFW32 | only while capturing video (`sCapture`) | 0x00F94890, 0x00F97440 |
 | SSPI, clipboard, `wsprintfA`, `StringFromGUID2` | not reached on the likely path | |
 
@@ -350,9 +356,10 @@ in cutscenes. `uMovie` uses `timeGetTime` (bound).
   silently.
 - **Save data:** `sStorageExt` loads the save during start-up. A missing
   or unreadable save takes the "no save" branch (not traced).
-- **The online protocol** may request a connection from the title (2.2);
-  if so, WS2_32 is needed.
-- **CPU detection:**
+- **Online:** both protocol units idle until a session exists (5.2).
+  If a run shows otherwise, WS2_32 is needed.
+- **CPU detection:** without SSE2 in the CPUID answer the game stops
+  with "ERR02 : Could not use SSE2 instructions." (0x00DBE810).
   - the CPUID/`pushfd` answers must agree with the registry's recorded
     CPU (L22's rule);
   - they decide code paths (SSE use) for the rest of the run.
@@ -365,10 +372,109 @@ in cutscenes. `uMovie` uses `timeGetTime` (bound).
   order; branch conditions are marked where traced. The likely-path
   closure over-approximates within those roots (it follows every direct
   call, taken or not).
-- **Not traced:**
-  - which archive names groups 2 and 4 resolve to;
-  - whether the title starts the online protocol;
-  - `+0x38` of `aTitle`;
-  - the save-load branch.
+- The archive ids, online at the title, `aTitle+0x38` and the save
+  branch are answered in section 5 (L35b). Still not traced:
+  - the loader of the `sa\DX9\*.arc` shader archives;
+  - which title choice issues which storage command.
 - The broad closure's other 65 non-verified functions (outside the
   likely path) were not given lifter reasons.
+
+## 5. The open items (L35b)
+
+### 5.1 Archives and files, in load order
+
+**How archives are named.**
+- `0x00419100` (from the archive manager's start-up 0x004179C0 →
+  0x00417AF0) registers ten static tables. They sit at 0x0153B6BC: 13,061
+  `(id, path)` records, indexed by id at `0x018D9288`.
+- A request (0x00418550 allocates one of 256 slots) collects ids
+  (0x00418810) and is started by 0x00418610.
+- `sArchiveManager::vf06` → 0x004181C0 loads each id's path as an
+  `rArchive` through `sResource` (`*0x018D0AA0` vf+0x30). The request's
+  state 10 means loaded.
+- **GUI units add their own archives.** After a GUI unit is created,
+  0x005F32C0 walks its class and base classes through the table at
+  0x0151FF60..0x01520140 (60 `(id, class DTI)` pairs). Id 0x848A means
+  none.
+
+**The title path, in order:**
+
+| When | What | Files |
+|---|---|---|
+| `sBbsRpgMain` ctor → `sShader2` ctor 0x00E121D0 | `rShader2` resource, loaded synchronously; failure is fatal ("Shader compile failed.") | `nativePC\usershader\BbsShaderPackage.mfx` |
+| app setup (1.2) | `config.ini` under LocalAppData | |
+| `aInitialize` slot 5 (0x004FC270) | request: id **4** `rom\Initialize`, plus `uGUICapcomLogo`'s id 33777 | `rom\Initialize.arc`, `rom\gui\GUIuGUICapcomLogo.arc` |
+| after it reaches state 10: 0x00438960 | request: id **2** `rom\title`, plus the GUIs it creates: `uGUIProgress` (none), `uGUINoticeBoard2` 33770, `uGUIOption` 33771, `uGUIOptionSave` 33772, `uGUIInitOption` 33763, `uGUIInGameManual` 33760 | `rom\title.arc`, `rom\gui\GUIuGUINoticeBoard2.arc`, `GUIuGUIOption.arc`, `GUIuGUIOptionSave.arc`, `GUIuGUIInitOption.arc`, `GUIuGUIInGameManual.arc` |
+| `aTitle` slot 5 (0x00531290) and first state 0x00531800 | a request with `uGUITitle`'s id 33796; the movie | `rom\gui\GUIuGUITitle.arc`, `movie\title\title_A.wmv` / `title_B.wmv` |
+
+**Other ids.** Id 1 is `rom\bbs_rpg`, id 3 `rom\game_main`, id 24146
+`rom\bbsrpg_core`. `aBbsRpg` requests `bbsrpg_core`, `bbs_rpg` and
+`system\TexDetail\TexDetail` (0x004FA5C0). `aBbsRpg` is created only
+through a DTI lookup (no constructor reference; `aInitialize` is created
+by `sBbsRpgMain`'s constructor at 0x0041D0C2). So `aBbsRpg` belongs after
+the title.
+
+**Not located:** the loader of the per-area shader archives
+`sa\DX9\*.arc`. "DX9" is not a path literal in the exe.
+
+### 5.2 Online at the title: idle
+
+`sNetworkExt::vf06` (0x00467F50) and `sCaProto::vf06` (0x00CEEA80) run
+every frame, but neither connects by itself.
+
+**`sNetworkExt`.**
+- Its state machine `0x004689C0` (state at `+0x549`) has no state 0
+  case: it waits.
+- Only `0x0046B9E0` starts it, called from `0x0046DCA0`.
+  `sNetworkExt::vf06` calls that only while an online session object
+  exists (`+0x500 != 0`).
+- State 4 then requests `tgs\dd_title_data00.ltd`. `0x004709D0` reads
+  it as a **local** file (`"%s\\tgs\\%s"` under the resource root;
+  present in the install), not from the network.
+
+**`sCaProto`.** It waits for a connect request (1.6, 2.2).
+
+So no WS2_32 call is expected before or on the title screen. This is
+static evidence: no writer of the session object was found on the path.
+Confirm on a run.
+
+### 5.3 `aTitle+0x38`
+
+It is the title movie unit itself:
+- `aTitle`'s first state creates the `uMovieExt` when the field is 0;
+- it stores the unit there and adds it to unit line 0 (0x00DB58B0);
+- it calls 0x00F7A830(1) and 0x00F7A840(0).
+
+When the title is left, it releases the unit and clears the field. So
+**the title always plays its movie on entry.** Section 1.6's "unless set"
+case was this pointer.
+
+### 5.4 The save: read after the first title screen
+
+The save is not read on the way to the title's first frame.
+
+1. The first state (0x00531800) waits until `uGUITitle+0x1C8` is 1 (the
+   player's choice). Then it:
+   - releases the title GUI;
+   - calls `0x004B34F0` and the `sSave` resets (0x00496D90 with
+     `sSave+0x40`, 0x00497900, 0x00498CF0, 0x00498D70);
+   - releases the movie;
+   - moves on through `0x00533320`.
+2. Later title states issue the storage commands:
+   - `0x00532110`, installed at 0x00531ED5, writes `sStorageExt+0x648`;
+   - `0x00531EF0` calls `0x004B7900`.
+3. `sStorageExt::vf06` (0x004B7870) dispatches those codes to the state
+   machine `0x004B8280` (state at `+0x649` / `+0x64A`).
+4. Its read state 3 in `0x004B7CA0` calls `ISteamRemoteStorage` vtable
+   slot 1 with (name `+0x4C8`, buffer `+0x568`, size `+0x824`), the
+   `FileRead` of `DDDA.sav`. A short read sets the error at `+0x62C`.
+5. `0x004B7390` (from 0x004B7DE0) calls slot 0, then slot 1 with a
+   temporary buffer. *Inferred:* a write-and-verify.
+6. The parse that follows (0x004999C0 → 0x00496410 / 0x00495FF0) builds
+   the `cSAVE_DATA_*` and `sSave::player*` records.
+
+Many of those functions are among the lift-now set of 2.1 (save system).
+
+The method slots follow the `steam_api.dll` interface version the game
+ships with; claude-10 (L26) has its details. Which title choice issues
+which command (Continue, New Game, the option save) is *not traced*.
