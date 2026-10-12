@@ -172,7 +172,7 @@ fn calls_of(c: &Value, stack_base: u32) -> VecDeque<Call> {
 }
 
 /// sRecognition::vf06's model against the original.
-// verifies 0x00487B00
+// models 0x00487B00 (not wired: not an inventory declaration)
 #[test]
 fn recognition_model_matches_the_original() {
     let Some(cases) = read("frame_models").and_then(|v| v.as_array().cloned()) else { return };
@@ -233,7 +233,7 @@ fn recognition_model_matches_the_original() {
 
 /// The cloth step schedule against the original's instructions
 /// 0x00F20847..0x00F208FC: the fields written and the step count (eax).
-// verifies 0x00F20847
+// models 0x00F20847..0x00F208FC (not wired: not an inventory declaration)
 #[test]
 fn cloth_schedule_model_matches_the_original() {
     let Some(cases) = read("frame_models").and_then(|v| v.as_array().cloned()) else { return };
