@@ -269,6 +269,34 @@ class SlotSweepTests(unittest.TestCase):
         self.assertEqual(full, {})
 
 
+class FragmentTests(unittest.TestCase):
+    def test_case_labels_and_frame_tails_inside_lifted_bodies(self):
+        # 0x1000: push ebp; push edi; jmp 0x1010; 0x1010: pop edi; pop ebp; ret
+        # -- the entry 0x1010 is a frame tail inside 0x1000's body: a fragment
+        # even though its jumper counts as a caller
+        code = bytearray(b"\xcc" * 0x20)
+        code[0x00:0x04] = bytes.fromhex("5557eb0c")
+        code[0x10:0x13] = bytes.fromhex("5f5dc3")
+        read, is_code = image_fixture(bytes(code), {})
+        entries = frozenset({0x1000, 0x1010})
+        owner = dict(addr=0x1000, body=[0x1000, 0x1001, 0x1002, 0x1010, 0x1011, 0x1012])
+        decode = lift.decode_body
+        with patch.object(h, "code", read), patch.object(h, "executable", is_code), \
+                patch.object(lift, "function_entries", lambda: entries), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()), \
+                patch.object(lift, "decode_body", lambda a, s, *x, ext=False: decode(
+                    a, s, entries, frozenset(), read, is_code, ext=ext)):
+            got = lift.fragments([owner], callers={0x1010: 1})
+            self.assertEqual(got, {0x1010: {"owners": [0x1000], "evidence": "frame tail"}})
+            # an entry with callers that is no frame tail is not a fragment
+            code[0x10:0x13] = bytes.fromhex("90c3cc")
+            read2, _ = image_fixture(bytes(code), {})
+            with patch.object(h, "code", read2):
+                lift._FRAME_TAILS.clear()
+                self.assertEqual(lift.fragments([dict(owner, body=[0x1000, 0x1001, 0x1002, 0x1010, 0x1011])],
+                                                callers={0x1010: 1}), {})
+
+
 class VerificationGapTests(unittest.TestCase):
     def test_named_targets_include_lifted_callees_and_ext_constants(self):
         arm = ("{ super::lifted::f_012f71e0(m, cpu); } "

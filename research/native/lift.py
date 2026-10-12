@@ -2916,6 +2916,45 @@ EXT_CONSTANT = re.compile(r"x86::call_ext\(m, cpu, 0x([0-9A-F]+)\)")
 LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
 
 
+def fragments(lifted, callers=None):
+    """{entry: {owners, evidence}} for inventory entries that are not
+    functions but code of lifted bodies (L49): switch case labels and frame
+    tails Ghidra made entries of. An entry qualifies when its whole decoded
+    body lies inside the bodies of the lifted functions that contain its
+    first instruction (its owners) and it is either a frame tail (it pops
+    its jumper's frame, so no call can enter it) or has no recorded callers
+    at all. Its code is replayed as part of the owners, so the inventory
+    credits it when every owner is verified. An entry that is itself a
+    verified lifted function is not a fragment."""
+    import harness as h
+    if callers is None:
+        with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+            callers = dict(db.execute("SELECT address, callers FROM functions"))
+    entries, noreturn = function_entries(), noreturn_entries()
+    owners = {}
+    for f in lifted:
+        for pc in f.get("body") or ():
+            if pc in entries and pc != f["addr"]:
+                owners.setdefault(pc, set()).add(f["addr"])
+    by_addr = {f["addr"]: f for f in lifted}
+    out = {}
+    for entry, own in sorted(owners.items()):
+        tail = frame_tail(entry, entries, noreturn, h.code, h.executable)
+        if not tail and callers.get(entry):
+            continue
+        try:
+            ins = decode_body(entry, 1, ext=True)[0]
+        except Unsupported:
+            continue
+        finally:
+            TABLE_PROOF.pop(entry, None)
+            TABLE_ENDS.pop(entry, None)
+        covered = set().union(*(set(by_addr[o]["body"]) for o in own))
+        if {i.address for i in ins} <= covered:
+            out[entry] = {"owners": sorted(own), "evidence": "frame tail" if tail else "no callers"}
+    return out
+
+
 def verification_gaps(lifted):
     """{entry: [reasons]} of the lifted functions that must not count as
     verified (L45): a direct transfer to an address that is not a known
@@ -3088,6 +3127,11 @@ def gen(chunk=400, instructions=None):
     gaps = verification_gaps(lifted)
     Path(N, "patterns/verification_gaps.json").write_text(json.dumps(
         {f"0x{a:08X}": reasons for a, reasons in sorted(gaps.items())}, indent=1))
+    # entries that are code of lifted bodies, not functions (L49): the
+    # inventory credits them through their owners
+    Path(N, "patterns/fragments.json").write_text(json.dumps(
+        {f"0x{a:08X}": dict(v, owners=[f"0x{o:08X}" for o in v["owners"]])
+         for a, v in sorted(fragments(lifted).items())}, indent=1))
     addrs = [f"0x{f['addr']:08X}" for f in lifted if f["addr"] not in gaps]
     decl = "\n".join("// verifies " + " ".join(addrs[i:i + 16]) for i in range(0, len(addrs), 16))
     test = lifted_test_source(decl)
