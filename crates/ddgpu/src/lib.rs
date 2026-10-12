@@ -23,7 +23,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 mod cache;
+mod pipelines;
 pub mod present;
+pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
 use std::future::Future;
 
@@ -364,6 +366,9 @@ pub struct WgpuBackend {
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     tex_groups: HashMap<TexGroupKey, wgpu::BindGroup>,
     target_views: HashMap<TargetKey, Option<(wgpu::TextureView, wgpu::TextureFormat)>>,
+    /// the draws' pipelines are created through this cache, kept on disk
+    /// ([`enable_pipeline_cache`](Self::enable_pipeline_cache))
+    pipeline_cache: Option<std::sync::Arc<pipelines::Persistent>>,
 }
 
 /// Where a host shows presented frames without reading them back: called
@@ -410,6 +415,8 @@ impl WgpuBackend {
             // render attachments of formats beyond WebGPU's baseline
             // (G16R16 and A16B16G16R16 as Rg16Unorm/Rgba16Unorm targets)
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            // a pipeline cache kept between runs (Vulkan; L71)
+            | wgpu::Features::PIPELINE_CACHE
     }
 
     /// A backend on the default adapter without a window.
@@ -490,7 +497,18 @@ impl WgpuBackend {
             pipelines: HashMap::new(),
             tex_groups: HashMap::new(),
             target_views: HashMap::new(),
+            pipeline_cache: None,
         }
+    }
+
+    /// Create the draws' pipelines through a pipeline cache kept in `dir`
+    /// (loaded now, saved while pipelines are created and by
+    /// [`save_pipeline_caches`]): later runs skip most of the driver's
+    /// shader compilation. Whether the device has one (Vulkan, with
+    /// `Features::PIPELINE_CACHE`). The pipelines are the same either way.
+    pub fn enable_pipeline_cache(&mut self, dir: &std::path::Path) -> bool {
+        self.pipeline_cache = pipelines::Persistent::open(&self.device, &self.adapter, dir);
+        self.pipeline_cache.is_some()
     }
 
     /// Submit the recorded draws, after writing the ring bytes they use.
@@ -1237,14 +1255,17 @@ impl WgpuBackend {
         if let Some((m, i)) = self.modules.get(&key) {
             return Ok((m.clone(), i.clone()));
         }
+        let started = std::time::Instant::now();
         let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
         let t = d3d9wgsl::translate_with(&shader, options).map_err(|e| e.to_string())?;
+        pipelines::translated(started);
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(t.wgsl.into()) });
         if let Some(e) = block_on(scope.pop()) {
             return Err(format!("{e}"));
         }
         self.modules.insert(key, (module.clone(), t.interface.clone()));
+        pipelines::module_created(started);
         Ok((module, t.interface))
     }
 
@@ -1514,8 +1535,12 @@ impl WgpuBackend {
             sample_mask: if samples > 1 { state(162) } else { !0 },
         };
         let pipeline = match self.pipelines.get(&key) {
-            Some(p) => p.clone(),
+            Some(p) => {
+                pipelines::pipeline_reused();
+                p.clone()
+            }
             None => {
+                let started = std::time::Instant::now();
                 let layout_key = (ps_kinds.clone(), vs_kinds.clone());
                 if !self.pipeline_layouts.contains_key(&layout_key) {
                     let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1541,11 +1566,15 @@ impl WgpuBackend {
                     multisample: wgpu::MultisampleState { count: key.samples, mask: key.sample_mask as u64, alpha_to_coverage_enabled: false },
                     fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &key.targets }),
                     multiview_mask: None,
-                    cache: None,
+                    cache: self.pipeline_cache.as_ref().map(|p| &p.cache),
                 });
                 if let Some(e) = block_on(scope.pop()) {
                     return Err(format!("pipeline: {e}"));
                 }
+                if let Some(p) = &self.pipeline_cache {
+                    p.created();
+                }
+                pipelines::pipeline_created(started);
                 self.pipelines.insert(key, pipeline.clone());
                 pipeline
             }
@@ -2196,6 +2225,9 @@ impl GraphicsBackend for WgpuBackend {
 
     fn present(&mut self, back_buffer: &Target) {
         self.flush();
+        if let Some(p) = &self.pipeline_cache {
+            p.save_if_due();
+        }
         if self.read_frames || self.on_present.is_some() {
             self.last_frame = self.read_surface(back_buffer.surface);
             // a full-screen gamma ramp maps each 8-bit channel through its
