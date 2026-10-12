@@ -304,6 +304,28 @@ impl Mem for GuestMemory {
     fn set_u32(&mut self, addr: u32, v: u32) {
         self.store(addr, 4, v)
     }
+    /// Page by page: one permission test and one copy per page; a page
+    /// that is not readable faults like the byte-wise reads would (at the
+    /// first byte of that page the read touches).
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) {
+        let mut k = 0usize;
+        while k < out.len() {
+            let a = addr.wrapping_add(k as u32);
+            let (p, off) = ((a / PAGE) as usize, (a % PAGE) as usize);
+            let n = (PAGE as usize - off).min(out.len() - k);
+            let s = self.s();
+            if s.perms[p] & READ == 0 {
+                out[k] = self.load_checked(a, 1) as u8; // faults
+                k += 1;
+                continue;
+            }
+            match s.pages[p].as_ref() {
+                Some(page) => out[k..k + n].copy_from_slice(&page[off..off + n]),
+                None => out[k..k + n].fill(0),
+            }
+            k += n;
+        }
+    }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").
 }

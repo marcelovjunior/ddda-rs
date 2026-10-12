@@ -13,6 +13,11 @@
 //! calls, and every byte the original wrote). Only the lifted function's
 //! own run is timed; seeding memory and checking are not.
 //!
+//! `micro` times single operations behind those paths: a `call_ext`
+//! round trip through the runtime's Registry to a service that only
+//! returns, and a guest memory read through `&dyn Mem` against the same
+//! read called directly (what devirtualising `Mem` could save).
+//!
 //! `--count` reports how often the guest touches memory (by width, and
 //! accesses that cross a page) and calls `call_ext`, through a counting
 //! `Mem` wrapper and a counting `call_ext` handler. Counting changes the
@@ -409,6 +414,54 @@ fn run_replay(path: &str, limit: usize, passes: usize, counting: bool) {
     }
 }
 
+// --- micro: single operations ------------------------------------------------------
+
+/// `ret`: what the cheapest service does.
+fn just_return(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let _ = m.u32(cpu.esp);
+    cpu.esp = cpu.esp.wrapping_add(4);
+}
+
+#[inline(never)]
+fn read_dyn(m: &dyn Mem, base: u32, n: u32) -> u32 {
+    (0..n).fold(0u32, |acc, k| acc.wrapping_add(m.u32(base.wrapping_add((k & 0x3FF) * 4))))
+}
+
+#[inline(never)]
+fn read_direct(m: &GuestMemory, base: u32, n: u32) -> u32 {
+    (0..n).fold(0u32, |acc, k| acc.wrapping_add(Mem::u32(m, base.wrapping_add((k & 0x3FF) * 4))))
+}
+
+fn run_micro() {
+    use ddruntime::dispatch::{Binding, Registry};
+    const N: u32 = 10_000_000;
+    let mut mem = GuestMemory::new();
+    mem.map(0x1000_0000, 0x10_0000, READ | WRITE).unwrap();
+    let mut registry = Registry::new();
+    registry.insert(0x0100_0000, Binding::Service(just_return)).unwrap();
+    let registry = std::sync::Arc::new(registry);
+    registry.install();
+    let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
+    let t = Instant::now();
+    for _ in 0..N {
+        cpu.esp -= 4;
+        mem.set_u32(cpu.esp, 0x1234_5678);
+        x86::call_ext(&mut mem, &mut cpu, 0x0100_0000);
+    }
+    let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
+    println!("call_ext -> Registry -> service (push return address, ret): {ns:.2} ns per call");
+    x86::set_ext_calls(None);
+    for (name, f) in [("dyn Mem", 0), ("direct", 1)] {
+        let t = Instant::now();
+        let mut sum = 0u32;
+        for _ in 0..10 {
+            sum = sum.wrapping_add(if f == 0 { read_dyn(&mem, 0x1000_0000, N) } else { read_direct(&mem, 0x1000_0000, N) });
+        }
+        let ns = t.elapsed().as_secs_f64() * 1e9 / (10 * N) as f64;
+        println!("guest u32 read through {name}: {ns:.2} ns ({sum:#x})");
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
@@ -420,6 +473,7 @@ fn main() {
                 .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
             run_init(&exe, counting);
         }
+        Some("micro") => run_micro(),
         Some("replay") => {
             let dir = std::env::var("LIFT_DATA").unwrap_or_else(|_| "E:/ddda-re/notes/native".into());
             let path = value("--vectors").unwrap_or(format!("{dir}/vectors/lift.json"));
@@ -427,6 +481,6 @@ fn main() {
             let passes = value("--passes").map(|v| v.parse().unwrap()).unwrap_or(5);
             run_replay(&path, limit, passes, counting);
         }
-        _ => eprintln!("usage: ddperf init [exe] [--count] | ddperf replay [--limit N] [--passes P] [--count] [--vectors FILE]"),
+        _ => eprintln!("usage: ddperf init [exe] [--count] | ddperf micro | ddperf replay [--limit N] [--passes P] [--count] [--vectors FILE]"),
     }
 }
