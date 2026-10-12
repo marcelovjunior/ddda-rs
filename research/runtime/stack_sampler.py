@@ -117,7 +117,7 @@ def stack(proc, tid, depth=4000):
     return pcs
 
 
-LIFTED = re.compile(r'(?:^|::)f_([0-9a-f]{8})$')
+LIFTED = re.compile(r'f_([0-9a-f]{8})$')  # legacy (::f_) and v0 (…10f_) manglings
 
 
 def summarize(proc, pcs):
@@ -130,7 +130,7 @@ def summarize(proc, pcs):
         if m:
             if not guest or guest[-1] != m.group(1):  # facade + shard wrappers
                 guest.append(m.group(1))
-        elif not guest and service is None and 'ddruntime::' in s and '::dispatch::' not in s:
+        elif not guest and service is None and 'ddruntime' in s and 'dispatch' not in s:
             service = s
     return guest, service, syms[0] if syms else '?'
 
