@@ -38,7 +38,10 @@ def capture(caller, accepted, target, run, key):
         raise ValueError('caller case does not mock the target')
     seed = case_seed(caller, accepted)
     box = {'target': target}
-    actual = run(caller, seed, capture_call=box, **s._inputs([accepted]))
+    try:
+        actual = run(caller, seed, capture_call=box, **s._inputs([accepted]))
+    except h.Rejected as error:
+        raise h.Rejected(f'caller replay: {error}') from error
     expected = {k: v for k, v in accepted.items() if k not in ('addr', 'seed', 'body_key')}
     if digest({k: actual.get(k) for k in expected}) != digest(expected):
         raise h.Rejected('caller state: caller replay differs from accepted case')

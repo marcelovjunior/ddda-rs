@@ -64,6 +64,16 @@ class CallerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stack pointer"):
                 c.validate_state(dict(state, esp=esp))
 
+    def test_caller_rejection_identifies_the_phase_and_preserves_the_reason(self):
+        case = self.accepted()
+        with self.assertRaisesRegex(h.Rejected, '^caller replay: runaway$'):
+            cs.capture(dict(addr=0x400000), case, 0x400100,
+                       lambda *args, **kwargs: self.reject_run(), 'test')
+
+    @staticmethod
+    def reject_run():
+        raise h.Rejected('runaway')
+
     def test_legacy_caller_seed_is_identified_then_replayed_exactly(self):
         caller=dict(addr=0x400000)
         seed=(caller['addr'] << 8)^3
