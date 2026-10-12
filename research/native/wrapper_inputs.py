@@ -39,7 +39,7 @@ def virtual_tail_wrapper(target, read):
     return False
 
 
-def fixed_frame_allocations(entry, body, read):
+def fixed_frame_allocations(entry, body, read, *, arithmetic_prefix=False):
     """Opt-in mock-input heuristic for a fixed frame with matching epilogues.
 
     Unlike the legacy straight-line heuristic this permits writes to locals.
@@ -67,6 +67,14 @@ def fixed_frame_allocations(entry, body, read):
         cleanup.add(prior.operands[1].imm)
     if len(cleanup) != 1:
         return set()
+    allowed = {'push', 'mov', 'lea', 'test', 'cmp'}
+    if arithmetic_prefix:
+        # Explicit register computations may precede or follow the allocation.
+        # Stack writes and implicit stack operations remain excluded below.
+        allowed |= {'add', 'sub', 'and', 'or', 'xor', 'shl', 'shr', 'sar',
+                    'movss', 'movsd', 'movaps', 'movups', 'movd', 'movq',
+                    'addss', 'subss', 'mulss', 'divss', 'xorps', 'pxor',
+                    'movzx', 'movsx', 'cvtsi2ss', 'cvtsi2sd'}
     pc = entry
     found = set()
     for _ in range(32):
@@ -79,8 +87,8 @@ def fixed_frame_allocations(entry, body, read):
             if found or ins.operands[1].type != 2 or ins.operands[1].imm not in cleanup:
                 return set()
             found.add(pc)
-        elif (ins.mnemonic not in ('push','mov','lea','test','cmp')
-              or (ins.mnemonic != 'push' and any(ins.reg_name(r)=='esp' for r in ins.regs_access()[1]))
+        elif (ins.mnemonic not in allowed
+              or (ins.mnemonic != 'push' and any(ins.reg_name(r) in (('esp', 'sp') if arithmetic_prefix else ('esp',)) for r in ins.regs_access()[1]))
               or any(o.type == X86_OP_MEM and o.access & 2 for o in ins.operands)):
             return set()
         pc += ins.size

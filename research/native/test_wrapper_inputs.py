@@ -60,6 +60,28 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(result['calls'][0]['out']['pop'],8)
         self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+4)
 
+    def test_arithmetic_prefix_keeps_local_frame_out_of_mock_arguments(self):
+        prefix = '8b01 83ec20 53 83c001 85c0 7400 89442404 '
+        suffix = '5b 83c420 c3'
+        with self.assertRaises(h.Rejected):
+            self.run_caller(suffix, 'frame-call-v1', prefix)
+        result = self.run_caller(suffix, 'prefix-call-v1', prefix)
+        self.assertEqual(result['calls'][0]['out']['pop'], 8)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+
+    def test_arithmetic_prefix_requires_matching_frame_and_no_other_stack_writes(self):
+        def sites(prefix, suffix='83c420 c3'):
+            data = bytes.fromhex(prefix+' 85c0 7400 '+suffix)
+            body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0)]
+            return fixed_frame_allocations(0, body, lambda a,n:data[a:a+n],
+                                           arithmetic_prefix=True)
+        self.assertEqual(sites('83c001 83ec20 f30f10c1 f30f2ac8 0fb7c8'), {3})
+        for prefix in ('83ec20 83c401', '83ec20 6683c401',
+                       '83ec20 83ec20', '83ec20 8901', '83ec20 58'):
+            self.assertEqual(sites(prefix), set())
+        self.assertEqual(sites('83ec20 83c001', '83c410 c3'), set())
+        self.assertEqual(sites('83ec20 83c001', '83c420 c3 c3'), set())
+
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
         suffix = '5f 5e 5d 5b 8be5 5d c3'
