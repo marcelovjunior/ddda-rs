@@ -209,6 +209,13 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
                         return Some(next);
                     }
                 }
+            } else if let Some(Binding::Lifted(f)) = registry.get(ip) {
+                // a whole-function body without instruction entries (gen
+                // without LIFT_INSTRUCTIONS): it runs to its own ret like a
+                // service; a fault inside it cannot resume mid-body
+                let target = m.u32(slot);
+                f(m, cpu);
+                Flow::Return(target)
             } else {
                 std::panic::panic_any(Stop::MissingInstruction { ip });
             };
