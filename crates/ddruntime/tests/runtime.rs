@@ -645,9 +645,11 @@ fn the_crt_start_up_bridge_runs_the_heap_initialisation() {
     let path = exe.path.to_string_lossy().to_string();
     let mut s = ddruntime::session::Session::new(&path).expect("session");
     ddruntime::session::install_fault_hook();
-    let started = s.start();
+    // the whole CRT start-up, but not WinMain (the game itself)
+    let started = s.start_through("__wincmdln");
     let _ = std::panic::take_hook();
-    assert_ne!(started.step, "__heap_init", "{}", started.outcome);
+    assert_eq!(started.step, "__wincmdln", "{}", started.outcome);
+    assert!(matches!(started.outcome, ddruntime::session::Outcome::Returned(_)), "{}", started.outcome);
 }
 
 #[test]
