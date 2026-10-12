@@ -1304,7 +1304,69 @@ recordings keep those cases.
 x87 values that cross calls to unlifted functions (0x012F1C9D) have no
 proof of ownership. Address-taken and vtable admissions whose "address" is
 an ASCII tag or packed constant (e.g. 0x534658 "XFS", 0x707270 "prp") are
-not code.
+not code; L45's function-boundary rule (below) no longer admits them.
+
+## Function tails and verification gaps (L45)
+
+**Edge-bounded tables.** Ghidra ends a function where its own analysis
+stops; code that a table jump reaches past that end was treated as an
+external tail call (`call to untranslated code at 0x012ee130` inside the
+CRT memcpy 0x012EDE40). `lift.edge_slots` proves which slots a dword table
+jump `jmp [R*4 + T]` can select by walking back from the jump over every
+path: each path must meet, before any other write to R, an `and R, imm`,
+`mov R, imm`, `xor R, R`, or an edge bound (the taken `jb`/`jbe` or the
+fall-through `ja`/`jae` after `cmp R, imm`, the taken `jb` after
+`sub R, imm` for the underflow tables). The compared bound may be a
+register that holds one constant on every path (`mov edx, 3; cmp eax, edx;
+ja default`); `neg R` before the jump negates the range, `and R, x`
+passes the earlier bound through, and table-jump edges are predecessors.
+Reaching the entry, a volatile register across a call, an unknown write or
+512 steps leaves the table unproven. Proven slots that are not code are
+skipped. `decode_body` decodes the proven targets and repeats until no
+table adds code, so tails past the extent become part of the function
+(both memcpy variants: 16 of 16 tables proven). `TableTargets.proven` and
+`TABLE_PROOF` record the result per table jump.
+
+**Frame tails.** A direct jump to an inventory entry is a tail call,
+except when that entry pops its jumper's frame: `lift.frame_tail` derives
+the entry's exit (`harness.frame_exit`) and finds it above what its `ret`
+pops. `__VEC_memcpy` 0x012F9D82 ends `pop eax; pop esi; pop edi; pop ebp;
+ret` (exit ESP + 16), entered by `jmp` from both memcpy variants with their
+saved registers on the stack. Such an entry is decoded inline as the
+jumper's shared tail. Three entries qualify (0x012F9D82, 0x013006FE,
+0x00E0FB9C), jumped to by six functions.
+
+**Verification gaps.** `lift.verification_gaps` (run by `gen`) lists the
+functions that are replayed but not declared verified, with reasons in
+`patterns/verification_gaps.json`: a direct transfer to an address that is
+not a known function, import or platform model; a table jump the current
+lifter cannot prove complete (other slots may reach code no vector ran,
+mostly input-indexed switches); a stale body (the current lifter decodes
+code the record lacks: memcpy lifted before L45). Records with table
+dispatch or naming a frame tail are re-decoded.
+`structured_inputs.py refresh` re-lifts stale ext records in place and
+records cases with their previous distribution and then the listed
+strategies, keeping cases until every proven table target is reached
+(`run_sparse(visited=)`); every other record and case stays byte-identical
+and in order.
+
+**Terminal cases from the compiler's evidence.** Terminal mode (L28) ended
+a case only at a call into a named noreturn entry. A root call whose
+straight-line return path runs into `int3` padding (possibly after a dead
+`pop esi`) does not return either, whatever its callee (`__invoke_watson`,
+`ExitProcess` through the IAT, `_CxxThrowException`), and a root tail jump
+into a noreturn entry (`_purecall` 0x012EE1A1: `jmp _abort`) ends the case
+the same way. The replay already unwinds on any terminal event.
+
+**Function boundaries for discovered entries.** `discover_functions.py`
+admits an address-taken immediate or an unknown vtable slot target only
+where a function can start: after int3/nop padding, after a `ret`/`jmp`/
+`int3` ending exactly there, or after the previous function's case table
+(two nearby code pointers, or switch-index bytes below 0x40, as 0x0040D330
+and 0x00648AF0 follow theirs). This drops 45 address-taken constants
+(0x00444C20's packed ids 0x00620000/0x00740000, 0x00520003 inside an
+`add eax, 4`, ASCII such as 0x00706465) and ends 13 tables at the text
+after them ("xml", "pcf", UTF-16 "config" after 0x01407180).
 
 ## Debugging a failing lifted function
 

@@ -65,6 +65,18 @@ class EdgeBoundTests(unittest.TestCase):
         self.assertEqual(sorted(switches[0x1009]), [0x1011, 0x1012, 0x1013, 0x1014])
         self.assertTrue(switches[0x1009].proven)
 
+    def test_register_bound_from_push_imm_pop(self):
+        # push 3; sar eax,4; pop edx; cmp eax,edx; ja default; jmp [eax*4+0x2000]; ret x5
+        code = bytes.fromhex("6a03" "c1f804" "5a" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
+        tables = {0x2000: dwords(0x1012, 0x1013, 0x1014, 0x1015, 0)}
+        _, switches, _, _ = body(code, tables)
+        self.assertEqual(sorted(switches[0x100A]), [0x1012, 0x1013, 0x1014, 0x1015])
+        self.assertTrue(switches[0x100A].proven)
+        # the pop takes a register's push instead: no constant
+        code = bytes.fromhex("6a03" "50" "5a" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
+        body(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)})
+        self.assertEqual(lift.TABLE_PROOF[0x1000], {0x1008: False})
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5

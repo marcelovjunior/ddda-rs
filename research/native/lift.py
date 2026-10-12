@@ -386,9 +386,35 @@ def edge_slots(found, pc, entry=None, switches=None):
                     values.add(ops[1].imm & 0xffffffff)
                 elif b.mnemonic == "xor" and len(ops) == 2 and all(o.type == X86_OP_REG and o.reg == reg for o in ops):
                     values.add(0)
+                elif b.mnemonic == "pop" and ops[0].type == X86_OP_REG and ops[0].reg == reg:
+                    pushed = pushed_constant(b)
+                    if pushed is None:
+                        return None
+                    values.add(pushed)
                 else:
                     return None
         return values.pop() if len(values) == 1 else None
+
+    def pushed_constant(pop):
+        """`push imm ... pop reg` (printf's `push 7; sar eax, 4; pop ecx`):
+        the value a pop takes from a push of an immediate on the straight
+        line before it, with no other entry and no stack use between."""
+        at = pop.address
+        for _ in range(8):
+            if sources.get(at):
+                return None
+            b = by_end.get(at)
+            if b is None:
+                return None
+            if b.mnemonic == "push":
+                return b.operands[0].imm & 0xffffffff if b.operands[0].type == X86_OP_IMM else None
+            written = _writes(b)
+            if (written is None or "esp" in written or b.mnemonic in ("pop", "call", "pushfd", "popfd")
+                    or b.mnemonic.startswith(("j", "ret"))
+                    or any(o.type == X86_OP_MEM and b.reg_name(o.mem.base) == "esp" for o in b.operands)):
+                return None
+            at = b.address
+        return None
 
     def edge_range(branch, taken):
         """The bound a predecessor branch proves on the edge, or None. The
