@@ -12,4 +12,5 @@ d3d9shader = { path = "../d3d9shader" }
 [dev-dependencies]
 d3d9ref = { path = "../d3d9ref" }
 mtarc = { path = "../mtarc" }
+naga = { version = "29.0.4", features = ["wgsl-in"] }
 wgpu = "29.0.4"
