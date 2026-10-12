@@ -650,3 +650,20 @@ claude-6 (15):
     - That fill alone touches 256 pages, so every case trips Codex's
       256-page recorder guard ("Page limit" in the L28 Results).
     - Cause 2. Owner: Codex (board #9685/#9686).
+16. main b88555c9 (train 9: Codex's bounded memset as one lazy byte range,
+    0x00DC7D00 and 9 more). The committed code was built as is. Runtime
+    game tests 46/46. The boot passes 0x00DC7D00 and the rest of
+    0x00DD1B70.
+    - Stop: untranslated 0x00DC8270, called from just before 0x00DD644D
+      (in 0x00DD5ED0, ecx = this = 0x65ABD710).
+    - 0x00DC8270 (935 bytes, no fixture; "Instruction limit" in the L28
+      Results) resets the sound engine:
+      - 0x400 records of 0x40 bytes at this+0x3B340;
+      - 0x80 records of 0x34 bytes at this+0x4B340;
+      - stop 14's 128 sub-objects: 0x00DC6030, then vtable[0x2C], which
+        is 0x00DC67E0 by #9660's argument;
+      - six 0x00DC6DC0 calls.
+    - The third part repeats the work behind 0x00DD5ED0's
+      83,137-instruction proof, so the recorder's instruction limit is far
+      exceeded (an estimate from the disassembly).
+    - Cause 2. Owner: Codex (board #9722).
