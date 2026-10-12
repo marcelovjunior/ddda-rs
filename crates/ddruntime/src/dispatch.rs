@@ -131,6 +131,12 @@ impl Registry {
         Ok(())
     }
 
+    /// Bind `addr` to `b`, replacing what was there (the runtime's own
+    /// services over platform models, e.g. fastmem's memcpy).
+    pub fn replace(&mut self, addr: u32, b: Binding) {
+        self.bindings.insert(addr, b);
+    }
+
     /// Names for diagnostics (e.g. from the RTTI class names or the inventory).
     pub fn name(&mut self, addr: u32, name: impl Into<String>) {
         self.names.insert(addr, name.into());

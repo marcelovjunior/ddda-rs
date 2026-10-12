@@ -16,8 +16,10 @@ pub const STACK_TOP: u32 = 0x7F00_0000;
 /// whatever the dispatcher has at their address: the game's allocators
 /// must be the original bodies (they share state with the allocator
 /// object at 0x018D0AA0 that other code calls directly). memset and memcpy
-/// stay models: they are exact and have no hidden state.
-pub const REDIRECTED_MODELS: [u32; 3] = [0x00CF_73F0, 0x00DE_0B80, 0x00DE_0B90];
+/// go to the runtime's page-wise services (fastmem, L61): the models copy
+/// byte by byte.
+pub const REDIRECTED_MODELS: [u32; 5] =
+    [0x00CF_73F0, 0x00DE_0B80, 0x00DE_0B90, crate::fastmem::MEMSET, crate::fastmem::MEMCPY];
 pub const STACK_SIZE: u32 = 0x0010_0000;
 /// The return address a driver pushes for a top-level call: never executed
 /// (a lifted `ret` returns to the Rust caller), only kept on the stack.
@@ -52,6 +54,8 @@ impl Session {
         mem.map_lazy(STACK_TOP - STACK_SIZE, STACK_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
         crate::seh::initialize_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP - STACK_SIZE, STACK_TOP);
         let mut registry = Registry::with_lifted_program();
+        registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::Service(crate::fastmem::memcpy));
+        registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::Service(crate::fastmem::memset));
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
         let install = std::path::Path::new(exe_path).parent().ok_or("exe has no directory")?;
