@@ -3,13 +3,51 @@ import struct
 import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
-from image_budget import image_bound, WriteGuard
+from image_budget import image_bound, WriteGuard, condition_value
 import harness as h
 
 
 class ImageBudgetTests(unittest.TestCase):
     # Load an image-backed trip count, then increment EAX that many times.
     CODE = bytes.fromhex('8b0d00204000 31c0 40 49 75fc c3')
+
+    def test_materialized_loop_condition_proves_original_finite_trace(self):
+        code=bytes.fromhex('b903000000 31d2 31c0 49 0f95c0 01c2 85c0 75f4 c3')
+        ins,read,pages=self.fixture(code)
+        proof=image_bound(ins,read,0xf008000,guarded=True)
+        self.assertEqual(proof['instructions'],21)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-values-v1',
+                max_insn=3,body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['edx'],2)
+        self.assertEqual(result['image_budget']['instructions'],21)
+
+    def test_condition_bytes_preserve_flags_and_unknown_inputs(self):
+        code=bytes.fromhex('31c0 0f94c1 0f95c2 7401 cc c3')
+        ins,read,_=self.fixture(code)
+        self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        result=self.guarded_record(code,'guarded-values-v1')
+        self.assertEqual(result['regs_out']['ecx']&255,1)
+        self.assertEqual(result['regs_out']['edx']&255,0)
+        ins,read,_=self.fixture(bytes.fromhex('0f95c0 84c0 7401 c3 c3'))
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+        for condition in ('e','ne','b','ae','be','a','s','ns','o','no','l','ge','le','g','p','np'):
+            self.assertIsNone(condition_value(condition,{}))
+
+    def test_negation_width_and_defined_condition_bytes_match_original(self):
+        for size,neg in ((1,'f6d8'),(2,'66f7d8'),(4,'f7d8')):
+            bits=size*8
+            for value in (0,1,1 << (bits-1),(1 << bits)-1):
+                # SETO CL, SETB DL, SETE BL: all three observe NEG's flags.
+                code=b'\xb8'+struct.pack('<I',value)+bytes.fromhex(neg+' 0f90c1 0f92c2 0f94c3 c3')
+                ins,read,_=self.fixture(code)
+                self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+                result=self.guarded_record(code,'guarded-values-v1')['regs_out']
+                self.assertEqual(result['eax'],(-value)&((1 << bits)-1))
+                self.assertEqual(result['ecx']&255,int(value == 1 << (bits-1)))
+                self.assertEqual(result['edx']&255,int(value != 0))
+                self.assertEqual(result['ebx']&255,int(value == 0))
 
     def test_affine_cancellation_survives_stack_and_does_not_use_pointer_values(self):
         # (-16 - EDI) + (EDI + 16), including a saved expression.
@@ -63,6 +101,26 @@ class ImageBudgetTests(unittest.TestCase):
         for code in ('99 85d2 7501 c3 cc', '0facd001 7401 c3 cc'):
             ins,read,_=self.fixture(bytes.fromhex(code))
             self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_exact_register_policy_proves_input_count_and_matches_original(self):
+        code=bytes.fromhex('89c1 83e103 83c104 31d2 42 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            args=dict(body=[i.address for i in ins],end=0x400000+len(code))
+            with self.assertRaisesRegex(h.Rejected,'runaway'):
+                h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,**args)
+            original=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=100,**args)
+            case=h.run_sparse(0x400000,7,input_strategy='guarded-values-v1',max_insn=3,**args)
+        self.assertNotIn('image_budget',original)
+        self.assertIn('image_budget',case)
+        self.assertEqual(case['regs_out']['edx'],(case['regs_in']['eax']&3)+4)
+        for field in ('regs_in','regs_out','reads','writes','calls'):
+            self.assertEqual(case[field],original[field])
+
+    def test_exact_register_policy_still_requires_return_address_preserved(self):
+        with self.assertRaisesRegex(h.Rejected,'execution outside the image at 0x00000000'):
+            self.guarded_record(bytes.fromhex('c7042400000000 c3'),'guarded-values-v1')
 
     def test_generated_input_pages_can_prove_a_standalone_bounded_loop(self):
         code=bytes.fromhex('803d0000002000 750a b904000000 31c0 40 49 75fc c3')

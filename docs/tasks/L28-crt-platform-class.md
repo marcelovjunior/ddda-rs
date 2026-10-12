@@ -35,6 +35,204 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Smaller input classes: +6/+18 (2026-10-12, pending replay)
+
+The existing general wrapper-call-v1 records **all three return-address
+rows** (6692F0, 669F40, 71C0F0) and **all three memory-extent rows**
+(66B9E0, 6E0EB0, 70F3C0), each 3/3. Neither guard was changed. The seventh
+row, 685B40 (previously processor flags), leaves the image at generated
+object pointers with both wrapper-call-v1 and guarded-values-v1. Its
+RESIDUALS class is now dispatch/return; valid caller state is still needed.
+Evidence: `L28c/class-small.log`.
+
+Private totals **59,646 functions / 177,532 cases**. This round adds
+**43 functions / 129 cases**: 26 wrapper-call, 14 finite-proof and three
+sentinel-record functions. `L28c/class-small-audit.json` confirms every
+baseline **59,603 function / 177,403 case unchanged**, zero stale mocks,
+promotions, missing records or unexpected changes. Frozen base untouched.
+All recorder workers exited. **180 light tests pass**; no source changes
+since that test run. Rust replay is pending the head's integration train.
+
+RESIDUALS still has **109 inventory rows**, now **44 pending replay**
+(including prior C9E0F0); remaining recorder blockers are **35 dispatch,
+seven instruction-bound, and one each setup mismatch, object/manager,
+stale-body input, floating comparison and allocator state**. Main train 12
+merged before handoff. The 104-row starting queue shrank as main credited
+other work and L50 took boundary ownership; no residual is silently dropped.
+
+**Next action:** derive valid caller/object state for the remaining dispatch
+class, with L50's boot boundary fixture requests first. 493AA0 remains set
+aside. Source commits this round: 78db90cc (condition/negation proofs),
+331fd9fb (checked legacy caller seeds), 691fcd39 (sentinel inputs).
+
+
+### Sentinel records and longer finite proofs: +6/+18 (2026-10-12)
+
+**Six functions record 3/3:** 524A10, 524BE0, 5293E0 now complete with
+180 seconds of wall time. Their general proofs count **597,397, 597,397,
+616,732** instructions respectively, plus the unchanged 20,000 allowance;
+the global ceiling remains unchanged. 7F2020, 8282E0 and B7FF30 record
+with **sentinel-records-v1** (691fcd39), an immutable generated array with
+observed stride, entry binding and terminating field. First three seeds
+supply 1/3/8 records, then the -1 terminator. These three fit the ordinary
+instruction limit; no budget increase was necessary. Synthetic tests also
+exercise the finite proof over these generated records.
+
+Private **59,640 functions / 177,514 cases**, cumulative **+37/+111**.
+`L28c/class-sentinel-audit.json`: all **59,603 / 177,403** baseline records
+and cases unchanged; no stale mocks, promotions, removals or other edits.
+**180 light tests pass**. Main train 12 merged; Rust replay remains the
+head's integration task. RESIDUALS retains 109 rows, **38 awaiting replay**
+(including the prior C9E0F0), with seven instruction-bound rows remaining.
+Evidence: `class-bound-longer.log`, `class-sentinel.log`.
+
+**Next:** finish the seven smaller return-address, memory-extent and
+processor-flag trials, then valid caller/object state for the remaining
+34 dispatch rows. Stop 17 remains claude-6's boundary task; no new boot
+request is pending. 493AA0 stays set aside.
+
+
+### Instruction-bound class: +11/+33 (2026-10-12, pending replay)
+
+**11 of 27 class members record 3/3**, using guarded-values-v1 and the
+general finite-trace proof (78db90cc). The successful addresses and their
+individual proof counts/limits are in RESIDUALS. Counts range from
+**26,008 to 97,086** instructions; each retains the existing 20,000
+overhead allowance. No per-address budget or raised ceiling was used.
+
+Private **59,634 / 177,496**, cumulative class batch **+31/+93**.
+`L28c/class-bound-audit.json` confirms all baseline **59,603 functions /
+177,403 cases unchanged**, no stale mocks or other edits. Main train 12
+merged. **177 light tests pass** after adding reusable legacy seed
+identification to caller-state (331fd9fb); complete caller replay checks
+remain mandatory. Nine dispatch targets with accepted callers were tried
+under caller-state; none recorded. The stale 565308 -> 56532A caller was
+excluded pending its refresh. Evidence: `class-dispatch-caller-state.log`.
+
+The remaining bound-class observations split naturally: three now reach
+outside-image execution (6076F0, 608AE0, 618880), three need sentinel-ended
+input records (7F2020, 8282E0, B7FF30), and ten still need finite input/proof
+facts or more recording wall time. RESIDUALS reflects those distinctions.
+Three wall-time retries (524A10, 524BE0, 5293E0) use 180 seconds for three
+cases but keep the unchanged proof/instruction ceiling. **Next:** complete
+those retries, then general bounded sentinel-record inputs; boot stops first.
+
+### Dispatch/return class: +20/+60 (2026-10-12, pending replay)
+
+The largest class was tested first. After train-12 credits, **56** historical
+dispatch/return rows remained; exact-register inputs recorded **0/56**.
+Six cross-entry fragments were then reserved for claude-6's L50 boundary
+work. **wrapper-call-v1 records 20 of the other 50, all 3/3**. It applies
+the existing general frameless-wrapper mock cleanup and fixed-local-frame
+accounting rules; no game-address rule or relaxed return check was added.
+
+Private native-L28c is **59,623 functions / 177,463 cases**, **+20/+60**
+from `L28c/classes-before.json`. `L28c/class-dispatch-audit.json` confirms
+all **59,603 prior functions / 177,403 cases unchanged**; no promotions,
+stale mocks, removals or unexpected edits. Evidence logs:
+`class-dispatch-values.log`, `class-dispatch-wrappers.log`.
+Frozen native-train3-orig remains untouched. Head Rust replay required.
+
+Main **d20706b7 (train 12)** merged; **175 light tests pass**, including
+the merged caller-state and flag-guard changes. RESIDUALS was reconciled
+to **109 non-verified / 59,440**, **59,331 verified**, and marks the 20
+new rows plus 0x00C9E0F0 as private cases pending replay. Primary ownership
+is **91 recorder / 18 claude-6**, with seven cross-entry rows assigned to
+L50 before their fixtures. BA4160 and the stale-body refresh inputs for
+565308/786D69 return to the recorder lane per board #9773; 786D69 is not
+an admitted inventory row. Stop 17 (1146410 -> 1146420) remains L50's
+boundary task, with Codex fixture support offered on #9777.
+
+The finite-condition proof source is **78db90cc**. **27** remaining
+instruction-bound rows are now recording serially with guarded-values-v1,
+SETcc/NEG facts and the unchanged proof ceiling. **Next:** audit those
+results, then caller-state inputs for the remaining dispatch class.
+
+### Recorder classes: finite condition values (2026-10-12)
+
+Starting from the census, dispatch/return is the largest recorder class
+(62 rows), then instruction bounds (29). Neither class had received the
+new guarded-values-v1 strategy as a whole; dispatch trials are queued
+first. Queues exclude functions now credited by the latest inventory and
+the explicitly set-aside 0x00493AA0. Baseline hashes:
+`L28c/classes-before.json`, **59,603 functions / 177,403 cases**.
+
+Static inspection identifies SETNE in 0x00416740/0x00618880 and NEG,
+SETO/SETB in 0x01146420. The guarded proof now materializes known condition
+bytes without changing flags; absent flags produce unknown values.
+NEG tracks its width-correct result and defined CF/OF/ZF/SF. No parity
+facts are invented. **166 light tests pass**, including a finite loop
+controlled through SETNE and original execution at zero, one, signed
+minimum and unsigned maximum for 8/16/32-bit negation. No original-game
+additions yet in this class batch. No guard or instruction ceiling changed.
+**Next:** complete dispatch trials, then wrapper cleanup and bound classes.
+
+### Final recipes and post-train-11 census (2026-10-12)
+
+The two manager chains finished **0/3 each** with their checked producer
+observations preserved. For 0x004A0C00, 0x00437BE0 then 0x00489F80 still
+stops the proof at 0x004027E9 after **92** instructions: the linked-object
+field remains unknown. For 0x00D29AF0, 0x00740590 then 0x00D29820 retains
+the **20-byte** input count, but the allocator call at 0x00D29B4C still
+has **EAX=0** after **21** instructions. The manager's accepted mocked
+boundary does not supply a usable allocator. No checks were relaxed.
+Private evidence: `L28c/final-manager-recipes.log` and
+`L28c/final-manager-proofs.log`. All workers exited.
+
+This follow-up adds only **0x00C9E0F0, +1/+3**, audited above. Four of the
+original 15 remain: 0x00493AA0 (set aside), 0x004A0C00 (linked-object
+facts), 0x00815C60 (floating comparison proof), 0x00D29AF0 (allocator
+state). **163 Python tests pass**; head Rust replay is still required for
+the new serializer. Frozen base unchanged; native-L28c remains open.
+Handoff SHA-256: patterns/lift.json
+`b5be3edbdb505dae9c977e2e76f148f314ef6eab2e09a49b990c931bccbe56d1`;
+vectors/lift.json
+`2f638c8adeaf5f0eda39f14788cb2799a3470da49b7399b306246274c7943613`.
+
+[RESIDUALS.md](../RESIDUALS.md) is the requested single-table census:
+**137 non-verified / 59,440** non-thunk inventory functions after train 11,
+**59,303 verified**. Membership exactly matches scripts/inventory.py's
+database query, with no duplicate/missing rows; each has class, blocker and
+owner. **104 recorder; 33 claude-6** (15 gap, 10 lifter, eight x87 oracle).
+The gaps file has 16 entries, but 0x00786D69 is not admitted to inventory
+and is outside this denominator. 0x00C9E0F0 stays listed as replay pending.
+Private source hashes/rows: `L28c/residual-census-train11.json`.
+
+The four undefined-flag entries all execute DIV/IDIV followed immediately
+by INC/DEC (0x005524B0, 0x00604A80, 0x00BA4160, 0x00C9B350). Their
+specific instruction sites are in the table; CF-preservation/liveness
+review was sent to claude-6 on the board. No flag guard was changed here.
+**Main a6fb8349 merged before handoff. Next:** head replay of the new
+serializer, then assign remaining work from the census, boot stops first.
+
+### Exact-register serializer inputs (2026-10-12, pending replay)
+
+Opt-in **guarded-values-v1** supplies the bounded proof with the exact
+initial GPR values recorded for that case, excluding ESP (already governed
+by the stack contract). It retains guarded-input-v1's page/register input
+distribution, alias checks, mock matching and return checks. Other
+strategies still leave entry values unknown unless explicitly bound by a
+checked setup. The same opt-in mode accepts checked constructor state.
+Source **0e2e5260**; **163 light tests pass**, including comparison with
+ordinary synthetic original execution and rejection of a changed return.
+
+**0x00C9E0F0 records 3/3:** the explicit source pointer resolves the null
+test at 0x00D00D68. All three traces prove **24,681 instructions**, giving
+limit **44,681**. Private native-L28c is **59,603 functions / 177,403 cases**,
+**+1/+3** since the prior handoff. `L28c/exact-values-audit.json` confirms
+all prior **59,602 / 177,400 unchanged**, no stale mocks, promotions or
+unexpected edits. Frozen native-train3-orig remains untouched. No Rust build;
+head replay required. This addition follows the ten queued for train 11.
+
+Four original recipes remain, including 0x00493AA0 set aside. Two evidenced
+manager chains are queued: save manager 0x00437BE0 then record constructor
+0x00489F80 for 0x004A0C00; allocator-manager initializer 0x00740590 then
+buffer constructor 0x00D29820 for 0x00D29AF0. The initializer publishes the
+allocator pointer to 0x0187662C at 0x00740833. Every producer must still
+match all accepted observations. 0x00815C60 requires floating comparison
+facts beyond the integer/zero-vector proof; no assumptions added.
+**Next:** finish those trials, then the post-train-11 residual census.
+
 ### String and constructed-copy fixtures (2026-10-12, pending replay)
 
 **+3 functions / +9 cases, all 3/3:** 0x0048F330 and 0x00495520 use

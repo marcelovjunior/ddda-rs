@@ -1,5 +1,72 @@
 # Milestones
 
+### L28c smaller input classes (2026-10-12, pending replay)
+
+- **+6/+18**, all three return-address and three memory-extent rows;
+  cumulative **+43 functions / +129 cases**, private **59,646 / 177,532**.
+- **180 tests pass**; audit preserves all **59,603 / 177,403** prior records
+  and cases. RESIDUALS has **44 pending replay**; Rust verification pending.
+- **Next action:** valid caller/object state for 35 dispatch rows; boot
+  boundary fixture requests first. Seven instruction-bound rows remain.
+
+
+### L28c sentinel and finite-proof batch (2026-10-12, pending replay)
+
+- **+6/+18**, all 3/3: three longer finite proofs and three generated
+  sentinel-array inputs. Cumulative **+37/+111**; private **59,640 / 177,514**.
+- **180 light tests pass**; baseline **59,603 / 177,403** unchanged, audit
+  clean. Main merged; RESIDUALS marks **38 awaiting replay**.
+- **Next action:** finish seven smaller input-class trials; valid caller
+  state remains the main blocker for 34 dispatch rows. Boot stops first.
+
+
+### L28c instruction-bound class batch (2026-10-12, pending replay)
+
+- **+11/+33**, all 3/3, from finite generated-state traces. Cumulative
+  **+31/+93**, private **59,634 / 177,496**; prior records unchanged.
+- **177 light tests pass**. RESIDUALS marks 32 rows awaiting replay and
+  distinguishes sentinel-input loops from remaining proof/dispatch blockers.
+- **Next action:** retry three measured wall-time limits without changing
+  the instruction ceiling; supply bounded sentinel records for three loops.
+
+### L28c dispatch/return class batch (2026-10-12, pending replay)
+
+- **+20 functions / +60 cases**, all 3/3, with the general wrapper-call
+  strategy. Private **59,623 / 177,463**; all **59,603 / 177,403** prior
+  records/cases unchanged (`class-dispatch-audit.json`).
+- Main train 12 merged; **175 light tests pass**. RESIDUALS now contains
+  **109 inventory residuals**, including **21 awaiting private-case replay**.
+- **Next action:** finish the 27 instruction-bound trials, then checked
+  caller-state inputs for remaining dispatch/return failures. Boot stops first.
+
+### L28c residual-class proofs (2026-10-12)
+
+- SETcc condition bytes and width-correct NEG extend finite-trace proofs;
+  **166 light tests pass**, including synthetic original execution.
+- Largest class dispatch/return trials are queued first; instruction-bound
+  rows follow. Accepted data remains **59,603 / 177,403**.
+- **Next action:** finish serial class trials, audit additions, update the
+  residual map against the completed train-12 inventory.
+
+### Post-train-11 residual map (2026-10-12)
+
+- [RESIDUALS.md](RESIDUALS.md) lists all **137 / 59,440** non-verified
+  inventory functions after train 11 (**59,303 verified**), one row each:
+  class, blocker, owner. **104 recorder; 33 lifter/gap/oracle**.
+- New serializer fixture remains pending replay: **+1/+3**, 163 Python
+  tests, unchanged prior-data audit. Both remaining manager chains record
+  0/3; 0x00493AA0 stays aside. Main a6fb8349 merged.
+- **Next action:** head replay of 0x00C9E0F0; then use the census to assign
+  the next blocker, with boot stops first.
+
+### L28c exact-register serializer (2026-10-12, pending replay)
+
+- **+1/+3:** 0x00C9E0F0 records 3/3 with explicit exact-register proof
+  inputs. **163 tests pass**; private **59,603 / 177,403**.
+- Audit: all prior **59,602 functions / 177,400 cases unchanged**.
+- **Next action:** finish two checked manager chains, then refresh the
+  residual census against the completed train-11 inventory.
+
 ### L28c string/constructed fixtures (2026-10-12, pending replay)
 
 - **+3/+9:** two string helpers and a checked constructed self-copy, 3/3

@@ -15,6 +15,30 @@ MASK = 0xffffffff
 REGS = ('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp')
 
 
+def condition_value(condition, flags):
+    """Known x86 condition value; absent flag facts never imply false."""
+    try:
+        if condition in ('e','ne'):
+            return flags['zf'] == (condition == 'e')
+        if condition in ('b','ae'):
+            return flags['cf'] == (condition == 'b')
+        if condition in ('be','a'):
+            return (flags['cf'] or flags['zf']) == (condition == 'be')
+        if condition in ('s','ns'):
+            return flags['sf'] == (condition == 's')
+        if condition in ('o','no'):
+            return flags['of'] == (condition == 'o')
+        if condition in ('l','ge'):
+            return (flags['sf'] != flags['of']) == (condition == 'l')
+        if condition in ('le','g'):
+            return (flags['zf'] or flags['sf'] != flags['of']) == (condition == 'le')
+        if condition in ('p','np'):
+            return flags['pf'] == (condition == 'p')
+    except KeyError:
+        pass
+    return None
+
+
 class WriteGuard:
     """Enforce every non-aliasing obligation of a guarded trace at runtime."""
     def __init__(self, certificate):
@@ -79,8 +103,9 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     enforced by the same WriteGuard. Initial object bytes remain unknown,
     except `initial_writes`: exact bytes written by a checked original setup.
     These receive the same overlap and unknown-writer guards as trace stores.
-    `entry_values` supplies only explicit checked-setup register bindings;
-    each must match its entry witness, and ESP cannot be rebound.
+    `entry_values` supplies explicit checked-setup register bindings or an
+    opt-in recorder's exact initial GPR values. Each must match its entry
+    witness, and ESP cannot be rebound.
     Bounded affine expressions preserve relationships between unknown entry
     values through 32-bit copies, sums/differences, LEA and saved words. Only
     cancellation of every symbolic term creates an integer fact. Arithmetic
@@ -509,6 +534,18 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 value = get(i,op[0])
                 put(i,op[0],None if value is None else ~value)
                 # NOT leaves every arithmetic flag unchanged.
+            elif guarded and mn == 'neg' and op[0].size in (1,2,4):
+                value = get(i,op[0])
+                bits = op[0].size*8
+                result = None if value is None else -value & ((1 << bits)-1)
+                flags = {} if result is None else dict(zf=result == 0,
+                    sf=bool(result & (1 << (bits-1))),cf=value != 0,
+                    of=value == (1 << (bits-1)))
+                put(i,op[0],result)
+            elif guarded and mn.startswith('set') and len(op) == 1 and op[0].size == 1:
+                value = condition_value(mn[3:],flags)
+                put(i,op[0],None if value is None else int(value))
+                # SETcc materializes a condition without changing its flags.
             elif mn in ('xor', 'or', 'and', 'add', 'sub', 'inc', 'dec', 'cmp', 'test') or (guarded and mn in ('adc','sbb')):
                 a = get(i, op[0])
                 b = get(i, op[1]) if len(op) > 1 else 1
