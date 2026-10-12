@@ -425,11 +425,11 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
       store that may alias the slot end the proof;
     - L48: `movzx R, byte [R2 + T]` (a byte remap) bounds R2 and takes the
       table's bytes T[v] for every proven v.
-    Reaching the function entry, an unknown write or 512 steps per walk
-    gives None. The union over all paths is returned, sorted."""
-    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
-    import harness as h
-    read = h.code if read is None else read
+    - L49: a register that is an input of the function (the walk reaches
+      the entry) is bounded by every call site (caller_bound).
+    Reaching the function entry otherwise, an unknown write or 512 steps
+    per walk gives None. The union over all paths is returned, sorted."""
+    from capstone.x86 import X86_OP_REG, X86_OP_MEM
     jump = found[pc]
     if jump.mnemonic != "jmp" or not jump.operands:
         return None
@@ -438,6 +438,27 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
             or op.mem.base or not op.mem.index or op.mem.scale != 4):
         return None
     index = op.mem.index
+    start, negate = pc, False
+    prev = next((i for i in found.values() if i.address + i.size == pc), None)
+    if (prev is not None and prev.mnemonic == "neg" and prev.operands[0].type == X86_OP_REG
+            and prev.operands[0].reg == index and prev.operands[0].size == 4):
+        start, negate = prev.address, True
+    values = register_bound(found, start, index, entry, switches, read)
+    if values is None:
+        return None
+    if negate:
+        values = {-v for v in values}
+    return sorted(values)
+
+
+def register_bound(found, start, index, entry=None, switches=None, read=None):
+    """The values 32-bit register `index` (a Capstone id) holds before the
+    instruction at `start` on every path into it, by the edge_slots rules,
+    as a set; None when unproven. `index` may also be a key ("mem", base
+    register id, displacement): a dword memory slot."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    import harness as h
+    read = h.code if read is None else read
     by_end = {i.address + i.size: i for i in found.values()}
     sources = {}
     for i in found.values():
@@ -448,11 +469,6 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
         if targets is not None and not isinstance(targets, RuntimeTargets) and jpc in found:
             for t in set(targets):
                 sources.setdefault(t, []).append(found[jpc])
-    start, negate = pc, False
-    prev = by_end.get(pc)
-    if (prev is not None and prev.mnemonic == "neg" and prev.operands[0].type == X86_OP_REG
-            and prev.operands[0].reg == index and prev.operands[0].size == 4):
-        start, negate = prev.address, True
 
     def predecessors(at):
         preds = [(b, True) for b in sources.get(at, [])]
@@ -536,6 +552,24 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
             at = b.address
         return None
 
+    def esp_slot(key):
+        return key[0] == "mem" and found[start].reg_name(key[1]) == "esp" and key[2] >= 0
+
+    def esp_shift(b):
+        """How much `b` moves esp (push, pop of a register, add/sub esp, imm),
+        or None for anything else."""
+        ops = b.operands
+        if b.mnemonic == "push" and len(ops) == 1 and ops[0].size == 4:
+            return -4
+        if (b.mnemonic == "pop" and len(ops) == 1 and ops[0].type == X86_OP_REG and ops[0].size == 4
+                and b.reg_name(ops[0].reg) != "esp"):
+            return 4
+        if (b.mnemonic in ("add", "sub") and len(ops) == 2 and ops[0].type == X86_OP_REG
+                and b.reg_name(ops[0].reg) == "esp" and ops[1].type == X86_OP_IMM):
+            n = ops[1].imm & 0xffffffff
+            return n if b.mnemonic == "add" else -n
+        return None
+
     def slot_of(i, o):
         """('mem', base, disp) of a plain dword memory operand, or None."""
         if o.type != X86_OP_MEM or o.size != 4 or o.mem.index or o.mem.segment or not o.mem.base:
@@ -551,9 +585,11 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
         """The instruction whose flags `branch` tests: the last flag writer
         on the straight line before it (L48: flag-neutral moves such as
         `movss` stores may sit between `cmp` and `ja`), provided nothing in
-        between enters the line or writes `key`."""
+        between enters the line or writes `key`. L49: 24 instructions (ten
+        stores between them at 0x0097ABE0); the walk is a straight line, so
+        the count only limits its cost."""
         at = branch.address
-        for _ in range(6):
+        for _ in range(24):
             if at != branch.address and sources.get(at):
                 return None
             i = by_end.get(at)
@@ -574,10 +610,58 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
             at = i.address
         return None
 
+    def copy_of(setter, key, op):
+        """L49: `key` holds the value of the compared register `op` at
+        `setter`: a `mov` between them (either direction; for a memory slot
+        the load or the store of `op`) on the straight line before it, with
+        neither written nor the slot's base changed or aliased in between
+        (0x00FA01FD `mov eax, esi; cmp esi, 6; ja`; 0x00CC0FC2 `mov eax,
+        [esp + 0x10]; ...; cmp eax, 3; ja`). Conditional jumps out of the
+        line do not change the values on it; eight instructions at most,
+        no other entry."""
+        if op.type != X86_OP_REG or op.size != 4 or (key[0] == "reg" and op.reg == key[1]):
+            return False
+        names = _aliases(setter.reg_name(key[1])) | _aliases(setter.reg_name(op.reg))
+        at = setter.address
+        for _ in range(8):
+            if sources.get(at):
+                return False
+            i = by_end.get(at)
+            if (i is None or i.mnemonic == "jmp"
+                    or i.mnemonic.startswith(("ret", "call", "loop", "int", "rep"))):
+                return False
+            ops = i.operands
+            if i.mnemonic == "mov" and len(ops) == 2 and ops[0].size == 4 and ops[1].size == 4:
+                if key[0] == "reg" and all(o.type == X86_OP_REG for o in ops) and {ops[0].reg, ops[1].reg} == {key[1], op.reg}:
+                    return True
+                if key[0] == "mem" and any(o.type == X86_OP_REG and o.reg == op.reg for o in ops) \
+                        and any(slot_of(i, o) == key for o in ops):
+                    return True
+            written = _writes(i)
+            if written is None or written & names or (key[0] == "mem" and stores_may_alias(i, key)):
+                return False
+            at = i.address
+        return False
+
     def edge_range(branch, taken, key):
         """The bound a predecessor branch proves for `key` on the edge."""
         setter = flag_setter(branch, key)
-        if setter is None or setter.mnemonic not in ("cmp", "sub") or not matches(setter, setter.operands[0], key):
+        if setter is None:
+            return None
+        # L49: on the equal edge (je taken, jne not) ZF was set by a result
+        # of 0 written to `key` (0x007113F2 `add edx, [ecx + 0x60]; jne`) or
+        # by `test key, key`; `cmp key, imm` there gives key == imm (below)
+        if (branch.mnemonic, taken) in (("je", True), ("jne", False)):
+            ops = setter.operands
+            if (setter.mnemonic in ("add", "sub", "and", "or", "xor", "inc", "dec", "neg")
+                    and matches(setter, ops[0], key)):
+                return {0}
+            if setter.mnemonic == "test" and len(ops) == 2 and all(matches(setter, o, key) for o in ops):
+                return {0}
+        if setter.mnemonic not in ("cmp", "sub"):
+            return None
+        if not matches(setter, setter.operands[0], key) and not (
+                setter.mnemonic == "cmp" and copy_of(setter, key, setter.operands[0])):
             return None
         if setter.mnemonic == "sub" and key[0] != "reg":
             return None
@@ -590,6 +674,8 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
                 return None
         else:
             return None
+        if setter.mnemonic == "cmp" and (branch.mnemonic, taken) in (("je", True), ("jne", False)):
+            return {imm} if imm < 4096 else None
         if setter.mnemonic == "cmp":
             bound = {("jb", True): imm - 1, ("jbe", True): imm,
                      ("ja", False): imm, ("jae", False): imm - 1}.get((branch.mnemonic, taken))
@@ -606,10 +692,11 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
                     return True
         return b.mnemonic.startswith("rep")  # string stores show es:[edi] operands
 
-    def bound(start_at, key, depth=0):
+    def bound(start_at, key, depth=0, shifts=0):
         """Values `key` holds before the instruction at `start_at` on every
-        path (see edge_slots), as a set, or None."""
-        if depth > 4:
+        path (see edge_slots), as a set, or None. `shifts` counts the moves
+        of an esp-relative slot across stack pointer changes (L49)."""
+        if depth > 4 or shifts > 32:
             return None
         values = set()
         seen, todo, steps = set(), [(start_at, False)], 0
@@ -620,10 +707,21 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
             if (at, masked) in seen:
                 continue
             seen.add((at, masked))
-            if at == entry:
-                return None  # an input of the function
             preds = predecessors(at)
-            if not preds:
+            if at == entry:
+                # an input of the function: bounded by its callers (L49)
+                # (a register, or a stack argument: an esp slot at or above
+                # the return address)
+                rng = (caller_bound(entry, found[start_at].reg_name(key[1])) if key[0] == "reg" else
+                       caller_bound(entry, ("esp", key[2])) if esp_slot(key) and key[2] >= 4 else None)
+                if rng is None:
+                    return None
+                if masked:
+                    if any(v < 0 for v in rng):
+                        return None
+                    rng = set(range(0, max(rng) + 1))
+                values |= rng  # the entry's own predecessors in the body follow
+            elif not preds:
                 return None
             for b, taken in preds:
                 steps += 1
@@ -642,7 +740,28 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
                     if written is None:
                         return None
                     ops = b.operands
-                    if key[0] == "mem":
+                    shift = esp_shift(b) if esp_slot(key) else None
+                    if shift is not None:
+                        # L49: an esp-relative slot across push, pop and
+                        # add/sub esp, imm; a push into the slot gives it the
+                        # pushed value (0x009C4216 `push eax` before a call)
+                        if b.mnemonic == "push" and key[2] == 0:
+                            o = ops[0]
+                            if o.type == X86_OP_IMM and (o.imm & 0xffffffff) < 4096:
+                                rng = {o.imm & 0xffffffff}
+                            elif o.type == X86_OP_REG and b.reg_name(o.reg) != "esp":
+                                rng = bound(b.address, ("reg", o.reg), depth + 1, shifts)
+                            elif slot_of(b, o):
+                                rng = bound(b.address, slot_of(b, o), depth + 1, shifts)
+                            if rng is None:
+                                return None
+                        elif key[2] + shift < 0 or (b.mnemonic == "push" and key[2] < 4):
+                            return None  # the slot was below the stack pointer
+                        else:
+                            rng = bound(b.address, ("mem", key[1], key[2] + shift), depth, shifts + 1)
+                            if rng is None:
+                                return None
+                    elif key[0] == "mem":
                         if written & base_names or stores_may_alias(b, key):
                             if (b.mnemonic == "mov" and slot_of(b, ops[0]) == key
                                     and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
@@ -674,6 +793,13 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
                             rng = bound(b.address, ("reg", ops[1].reg), depth + 1)  # L48: a register copy
                             if rng is None:
                                 return None
+                        elif (b.mnemonic == "lea" and matches(b, ops[0], key) and ops[1].mem.base
+                              and not ops[1].mem.index and not ops[1].mem.segment):
+                            # L49: lea R, [R2 + d] (0x005F867A `lea eax, [edi + 2]`)
+                            inner = bound(b.address, ("reg", ops[1].mem.base), depth + 1)
+                            if inner is None:
+                                return None
+                            rng = {v + ops[1].mem.disp for v in inner}
                         elif b.mnemonic == "mov" and matches(b, ops[0], key) and slot_of(b, ops[1]):
                             rng = bound(b.address, slot_of(b, ops[1]), depth + 1)  # L48: a memory slot
                             if rng is None:
@@ -700,12 +826,119 @@ def edge_slots(found, pc, entry=None, switches=None, read=None):
                 values |= rng
         return values if values and max(values) - min(values) < 4096 else None
 
-    values = bound(start, ("reg", index))
-    if values is None:
+    return bound(start, index if isinstance(index, tuple) else ("reg", index))
+
+
+# L49 caller bounds: {(callee, register name): set or None}; the branch
+# index of the executable sections; whether a caller bound is being proven
+CALLER_BOUND = {}
+_BRANCHES = None
+_IN_CALLERS = [False]
+
+
+def branch_sites(target):
+    """Instructions that branch directly to `target` (call, jmp or jcc with a
+    rel32 or rel8 displacement, anywhere in the executable sections), or
+    None when the address also appears as a dword anywhere in the image (a
+    table, vtable slot, pushed or stored pointer: an indirect branch could
+    reach it with any register values). Byte patterns that are not
+    instructions only add sites that no decoded body holds."""
+    global _BRANCHES
+    import harness as h
+    _, sections = h.image()
+    word = struct.pack("<I", target)
+    if any(word in data for _, data in sections):
         return None
-    if negate:
-        values = {-v for v in values}
-    return sorted(values)
+    if _BRANCHES is None:
+        _BRANCHES = {}
+        for va, data in sections:
+            if not h.executable(va):
+                continue
+            for opcode, width in ((b"\xe8", 5), (b"\xe9", 5), *((bytes((0x0F, c)), 6) for c in range(0x80, 0x90))):
+                at = data.find(opcode)
+                while at >= 0:
+                    if at + width <= len(data):
+                        rel, = struct.unpack_from("<i", data, at + width - 4)
+                        _BRANCHES.setdefault((va + at + width + rel) & 0xffffffff, []).append(va + at)
+                    at = data.find(opcode, at + 1)
+    sites = set(_BRANCHES.get(target, ()))
+    for va, data in sections:  # short jumps reach 128 bytes either way
+        if h.executable(va) and va <= target < va + len(data):
+            for at in range(max(0, target - va - 129), min(len(data) - 1, target - va + 127)):
+                if (data[at] == 0xEB or 0x70 <= data[at] <= 0x7F) and va + at + 2 + struct.unpack_from("<b", data, at + 1)[0] == target:
+                    sites.add(va + at)
+    return sorted(sites)
+
+
+def caller_body(pc, target):
+    """(found, switches, entry) of the nearest function entry at or below
+    `pc` (four at most) whose decoded body holds `pc` as a branch to
+    `target`; None otherwise. TABLE_PROOF and TABLE_ENDS are left as they
+    were (gen keeps them per lifted function)."""
+    import bisect
+    ordered = ordered_entries(frozenset(function_entries()))
+    k = bisect.bisect_right(ordered, pc)
+    for owner in reversed(ordered[max(0, k - 4):k]):
+        saved = TABLE_PROOF.get(owner), TABLE_ENDS.get(owner)
+        try:
+            ins, switches, _, _ = decode_body(owner, 1, ext=True)
+        except (Unsupported, KeyError):
+            continue
+        finally:
+            for table, value in zip((TABLE_PROOF, TABLE_ENDS), saved):
+                if value is None:
+                    table.pop(owner, None)
+                else:
+                    table[owner] = value
+        found = {i.address: i for i in ins}
+        i = found.get(pc)
+        if (i is not None and (i.mnemonic == "call" or i.mnemonic.startswith("j")) and i.operands
+                and i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) == target):
+            return found, switches, owner
+    return None
+
+
+def caller_bound(callee, reg):
+    """L49: the values 32-bit register `reg` holds on entry to `callee` on
+    every path into it, when its callers make the bound check (0x004593E0
+    switches on eax through a byte remap; its three callers each run
+    `cmp eax, 0x14; ja` or copy a register so bounded before the call).
+    `reg` may also be ("esp", d): the dword at [esp + d] on entry, a stack
+    argument (0x009C4230 switches on [esp + 4]; its caller pushes eax after
+    `cmp eax, 8; ja`); at a call site it is [esp + d - 4], at a tail jump
+    [esp + d]).
+    Every direct branch to the entry (branch_sites) must lie in a decoded
+    body (caller_body) where the edge_slots rules bound `reg` before it; the
+    union over the sites, or None. Inside that proof a caller's own input
+    stays unbounded, so the result depends only on the callers' bodies, not
+    on the order in which functions are lifted."""
+    from capstone import x86_const
+    key = (callee, reg)
+    if key in CALLER_BOUND:
+        return CALLER_BOUND[key]
+    if _IN_CALLERS[0]:
+        return None
+    _IN_CALLERS[0] = True
+    try:
+        sites, values = branch_sites(callee), set()
+        for pc in sites or ():
+            body = caller_body(pc, callee)
+            rng = None
+            if body is not None:
+                found, switches, owner = body
+                if isinstance(reg, tuple):
+                    key = ("mem", x86_const.X86_REG_ESP, reg[1] - (4 if found[pc].mnemonic == "call" else 0))
+                else:
+                    key = getattr(x86_const, "X86_REG_" + reg.upper())
+                rng = register_bound(found, pc, key, owner, switches)
+            if rng is None:
+                values = None
+                break
+            values |= rng
+    finally:
+        _IN_CALLERS[0] = False
+    CALLER_BOUND[key] = values if sites and values else None
+    return CALLER_BOUND[key]
 
 
 def sweep_binding(found, entry, pc):
@@ -2916,6 +3149,45 @@ EXT_CONSTANT = re.compile(r"x86::call_ext\(m, cpu, 0x([0-9A-F]+)\)")
 LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
 
 
+def fragments(lifted, callers=None):
+    """{entry: {owners, evidence}} for inventory entries that are not
+    functions but code of lifted bodies (L49): switch case labels and frame
+    tails Ghidra made entries of. An entry qualifies when its whole decoded
+    body lies inside the bodies of the lifted functions that contain its
+    first instruction (its owners) and it is either a frame tail (it pops
+    its jumper's frame, so no call can enter it) or has no recorded callers
+    at all. Its code is replayed as part of the owners, so the inventory
+    credits it when every owner is verified. An entry that is itself a
+    verified lifted function is not a fragment."""
+    import harness as h
+    if callers is None:
+        with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+            callers = dict(db.execute("SELECT address, callers FROM functions"))
+    entries, noreturn = function_entries(), noreturn_entries()
+    owners = {}
+    for f in lifted:
+        for pc in f.get("body") or ():
+            if pc in entries and pc != f["addr"]:
+                owners.setdefault(pc, set()).add(f["addr"])
+    by_addr = {f["addr"]: f for f in lifted}
+    out = {}
+    for entry, own in sorted(owners.items()):
+        tail = frame_tail(entry, entries, noreturn, h.code, h.executable)
+        if not tail and callers.get(entry):
+            continue
+        try:
+            ins = decode_body(entry, 1, ext=True)[0]
+        except Unsupported:
+            continue
+        finally:
+            TABLE_PROOF.pop(entry, None)
+            TABLE_ENDS.pop(entry, None)
+        covered = set().union(*(set(by_addr[o]["body"]) for o in own))
+        if {i.address for i in ins} <= covered:
+            out[entry] = {"owners": sorted(own), "evidence": "frame tail" if tail else "no callers"}
+    return out
+
+
 def verification_gaps(lifted):
     """{entry: [reasons]} of the lifted functions that must not count as
     verified (L45): a direct transfer to an address that is not a known
@@ -3088,6 +3360,11 @@ def gen(chunk=400, instructions=None):
     gaps = verification_gaps(lifted)
     Path(N, "patterns/verification_gaps.json").write_text(json.dumps(
         {f"0x{a:08X}": reasons for a, reasons in sorted(gaps.items())}, indent=1))
+    # entries that are code of lifted bodies, not functions (L49): the
+    # inventory credits them through their owners
+    Path(N, "patterns/fragments.json").write_text(json.dumps(
+        {f"0x{a:08X}": dict(v, owners=[f"0x{o:08X}" for o in v["owners"]])
+         for a, v in sorted(fragments(lifted).items())}, indent=1))
     addrs = [f"0x{f['addr']:08X}" for f in lifted if f["addr"] not in gaps]
     decl = "\n".join("// verifies " + " ".join(addrs[i:i + 16]) for i in range(0, len(addrs), 16))
     test = lifted_test_source(decl)
