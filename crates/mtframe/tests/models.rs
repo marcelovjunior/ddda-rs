@@ -230,3 +230,42 @@ fn recognition_model_matches_the_original() {
         failures[..failures.len().min(20)].join("\n")
     );
 }
+
+/// The cloth step schedule against the original's instructions
+/// 0x00F20847..0x00F208FC: the fields written and the step count (eax).
+// verifies 0x00F20847
+#[test]
+fn cloth_schedule_model_matches_the_original() {
+    let Some(cases) = read("frame_models").and_then(|v| v.as_array().cloned()) else { return };
+    let mut failures = Vec::new();
+    let mut n = 0;
+    for (k, c) in cases.iter().enumerate() {
+        if u(&c["addr"]) != 0x00F2_0847 {
+            continue;
+        }
+        n += 1;
+        let mut m = Windows(windows(&c["mem_in"]));
+        let body = u(&c["regs_in"]["esi"]);
+        let steps = mtframe::cloth::schedule(&mut m, body);
+        let stack = |a: &u32| (0x0F00_0000..0x1000_0000).contains(a);
+        let want = windows(&c["mem_out"]);
+        let diff: Vec<String> = want
+            .iter()
+            .filter(|(a, _)| !stack(a))
+            .filter(|(a, v)| m.0.get(a) != Some(v))
+            .take(6)
+            .map(|(a, v)| format!("[{a:#x}] {:x?} want {v:#04x}", m.0.get(a)))
+            .collect();
+        let eax = u(&c["regs_out"]["eax"]);
+        if steps != eax || !diff.is_empty() {
+            failures.push(format!("case {k}: steps {steps} want {eax}; {}", diff.join(", ")));
+        }
+    }
+    assert!(n > 0, "recordings of 0x00F20847");
+    assert!(
+        failures.is_empty(),
+        "{} of {n} cases differ:\n{}",
+        failures.len(),
+        failures[..failures.len().min(20)].join("\n")
+    );
+}

@@ -76,7 +76,9 @@ PORTS = {
 # unwired observable-equivalent models (crates/mtframe/tests/models.rs)
 MODELS_ = {
     0x00487B00: ("recognition", 0x8D0),  # the inventory size (0x8B0) stops before the epilogue
+    0x00F20847: ("cloth_schedule", 0xB5),  # a range inside uSimSoftBody::vf11, to its branch
 }
+STOPS = {0x00F20847: (0x00F208FC, 0x00F222F6)}
 # ports of other crates run as the original when called (their ports run in the replay)
 FOREIGN_PORTS = {0x00402530, 0x004025C0, 0x00402620, 0x00CF5E20}
 MODELS = {0x00CF73F0: "pool40_alloc", 0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
@@ -209,7 +211,7 @@ class Scratch:
         self.fakes[addr] = (pop, eax)
 
 
-def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
+def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F, stops=()):
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.ctl_set_tcg_buffer_size(h.TCG_BUFFER)
     base, secs = h.image()
@@ -340,6 +342,9 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
             back = struct.unpack("<I", uc_.mem_read(esp, 4))[0]
             ported.append((back, esp))
             return
+        if a in stops:  # the end of a recorded code range
+            uc_.emu_stop()
+            return
         if not (addr <= a < addr + size):
             bad.append(f"ran into {a:#x}")
             uc_.emu_stop()
@@ -361,13 +366,14 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
         raise Dropped(f"{e} at {uc.reg_read(xc.UC_X86_REG_EIP):#x}")
     if bad:
         raise Dropped(bad[0])
-    if uc.reg_read(xc.UC_X86_REG_EIP) != h.RET or inside:
+    if (uc.reg_read(xc.UC_X86_REG_EIP) not in (h.RET, *stops)) or inside:
         raise Dropped("did not return")
     windows = [*[(wa, len(wb)) for wa, wb in sc.windows.items()], stack_window, (HEAP_BASE, HEAP_LEN),
                *[(ga, len(gb)) for ga, gb in globals_]]
     ins = [*[bytes(wb) for wb in sc.windows.values()], bytes(stack), heap, *[gb for _, gb in globals_]]
     return {
         "addr": addr,
+        "stopped_at": uc.reg_read(xc.UC_X86_REG_EIP),
         "fpcw": fpcw,
         "regs_in": regs, "xmm_in": xmm,
         "mem_in": [[w[0], b.hex()] for w, b in zip(windows, ins)],
@@ -641,6 +647,15 @@ def build(kind, rnd):
         sc.fake(0x005A02F0, 0, eax=rnd.choice([1, 1, 0, 0x100, 0xFFFFFF01]))
         sc.fake(0x008BC6E0, 0, eax=rnd.choice([species, 0]))
         sc.fake(0x00488440, 0, eax=rnd.choice([1, 0, 0xFFFFFF00, 0x101]))
+    elif kind == "cloth_schedule":
+        body = far_object(sc, rnd, FAR, [(0xC0, 0x10), (0x150, 0xC), (0x9AC, 4)])
+        regs["esi"] = body
+        rates = [60, 120, 144, 240, 165, 100, 75, 30, 50]
+        sc.u32(main + 0x38, rnd.choice([0x41F00000, 0x41F00000, floats(rnd)]))
+        sc.u32(main + 0x70, f2b(30 / rnd.choice(rates)) if rnd.random() < 0.7 else floats(rnd))
+        sc.u32(body + 0xC0, rnd.choice([0x3C888889, 0x3BDA740E, f2b(1 / 60), floats(rnd)]))
+        sc.u32(body + 0x150, rnd.choice([0, f2b(rnd.uniform(0, 1 / 60)), f2b(rnd.uniform(0, 0.05)), floats(rnd)]))
+        sc.u32(body + 0xC4, quiet(rnd))
     return regs, sc, args, g
 
 
@@ -652,7 +667,7 @@ def edge_cases(addr, kind, size, n, seed):
         regs, sc, args, g = build(kind, rnd)
         xmm = [[rnd.getrandbits(32) for _ in range(4)] for _ in range(8)]
         try:
-            cases.append(run(addr, size, regs, xmm, sc, args, g, sc.fpcw))
+            cases.append(run(addr, size, regs, xmm, sc, args, g, sc.fpcw, STOPS.get(addr, ())))
         except Dropped as e:
             why[str(e)[:40]] = why.get(str(e)[:40], 0) + 1
             continue

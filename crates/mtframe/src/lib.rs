@@ -10,6 +10,8 @@
 //! the fields the code uses are named, with their offsets.
 //!
 //! - [`smain`]: `sMain`'s timing fields.
+//! - [`cloth`]: the cloth step schedule, an observable-equivalent model,
+//!   not wired.
 //! - [`effect`]: the effect manager's frame counter and the time inputs
 //!   that read it.
 //! - [`chain`]: long chains (`uChain`), the step split into substeps.
@@ -23,6 +25,7 @@
 
 pub mod abi;
 pub mod chain;
+pub mod cloth;
 pub mod effect;
 pub mod fpu;
 pub mod integrate;
