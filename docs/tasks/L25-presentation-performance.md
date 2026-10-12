@@ -253,9 +253,8 @@ Written during the build pause and not compiled yet. Each keeps results
   12.9-15.7 ns, so the replay's 354 k calls cost about 5 ms (1.5%) and
   are not worth a prototype. In a real session a service call also
   reads the clock for the time slice.
-- **`call_ext`: measure first.** 354 k calls per replay pass against
-  28.4 M memory accesses. Each call costs a thread-local `Rc` clone, a
-  boxed-closure call and a hash lookup; a service call also reads the
-  clock for the 2 ms time slice (`threads::maybe_yield`). `ddperf micro`
-  measures the round trip. Only if it shows up would a per-thread
-  direct-mapped binding cache (like the call-target cache) be next.
+- **`call_ext`: measured, left as it is.** Each call costs a
+  thread-local `Rc` clone, a boxed-closure call and a hash lookup, and a
+  service call also reads the time-slice clock (`threads::maybe_yield`).
+  At 13-16 ns a round trip, this is about 1.5% of a replay pass (above), so
+  a binding cache is not worth it now.
