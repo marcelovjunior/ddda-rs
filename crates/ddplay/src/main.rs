@@ -3,55 +3,58 @@
 //!
 //! The game runs on its own guest thread exactly as the runtime runs it
 //! headless (`Session::start`: the CRT start-up, then WinMain), with the
-//! wgpu backend (`ddgpu`) drawing its Direct3D 9 commands. Every frame the
-//! game presents is handed to the window thread, which shows it scaled to
-//! the window. The window title shows where the game is (running, or the
-//! report of where it stopped).
+//! wgpu backend (`ddgpu`) drawing its Direct3D 9 commands. The backend and
+//! the window surface share one wgpu device: every Present draws the back
+//! buffer straight into the surface (src/present.rs), with no read-back.
+//! The window title shows where the game is (running, or the report of
+//! where it stopped) and the frame rate and frame times.
 //!
-//!     cargo run -p ddplay -- [path\to\DDDA.exe]
+//!     cargo run --release -p ddplay -- [path\to\DDDA.exe] [--no-vsync]
 //!
-//! Bring-up version: frames are read back and re-uploaded (simple and
-//! robust); sharing one device comes when performance matters. Input is
-//! not forwarded yet (brief L16).
+//! `--no-vsync` presents immediately (or mailbox, whatever the surface
+//! has) instead of waiting for the display's refresh. F11 or Alt+Enter
+//! toggles borderless fullscreen. `--test-pattern` runs a moving pattern
+//! through the backend instead of the game (a presentation diagnostic).
+//! Input is not forwarded yet (brief L16).
+mod present;
+
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
-use winit::window::{Window, WindowId};
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::window::{Fullscreen, Window, WindowId};
 
 enum GameEvent {
-    Frame(ddgpu::Frame),
     Status(String),
 }
 
-const BLIT: &str = "
-@group(0) @binding(0) var frame: texture_2d<f32>;
-@group(0) @binding(1) var smp: sampler;
-struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
-@vertex fn vs(@builtin(vertex_index) i: u32) -> V {
-  let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
-  return V(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), uv);
-}
-@fragment fn fs(v: V) -> @location(0) vec4<f32> { return textureSample(frame, smp, v.uv); }
-";
+/// How often the title's frame statistics update.
+const TITLE_INTERVAL: Duration = Duration::from_millis(500);
+/// The game not presenting for this long counts as idle: the window
+/// repaints the last frame itself (resizes, exposes).
+const IDLE: Duration = Duration::from_millis(250);
 
+/// The device the game's backend draws with, shared with the surface.
 struct Gpu {
-    surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    pipeline: wgpu::RenderPipeline,
-    layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    frame: Option<(wgpu::Texture, u32, u32)>,
+    adapter: wgpu::AdapterInfo,
+    window: Arc<present::Window>,
 }
 
 struct App {
     exe: String,
+    vsync: bool,
+    test_pattern: bool,
     proxy: EventLoopProxy<GameEvent>,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
-    frames: u64,
+    status: String,
+    rate: String,
+    next_title: Instant,
+    modifiers: ModifiersState,
     started: bool,
 }
 
@@ -74,53 +77,32 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 }
 
 impl App {
-    fn create_gpu(window: Arc<Window>) -> Gpu {
+    /// One device for the window surface and the game's backend: an adapter
+    /// that can present to the window and has the backend's features.
+    fn create_gpu(window: Arc<Window>, vsync: bool) -> Result<Gpu, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(window.clone()).expect("a surface for the window");
+        let surface = instance.create_surface(window.clone()).map_err(|e| format!("a surface for the window: {e}"))?;
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
+            power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
-        })).expect("an adapter");
-        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a device");
+        })).map_err(|e| format!("an adapter: {e}"))?;
+        let needed = ddgpu::WgpuBackend::required_features();
+        if !adapter.features().contains(needed) {
+            return Err(format!("the adapter lacks {:?}", needed - adapter.features()));
+        }
+        // the optional features WgpuBackend::headless() asks for where the
+        // adapter has them (draws needing a missing one report an error);
+        // the same set as headless(), until ddgpu exports it (L29:
+        // WgpuBackend::optional_features())
+        let optional = wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::POLYGON_MODE_POINT;
+        let features = needed | (adapter.features() & optional);
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: features, ..Default::default() }))
+            .map_err(|e| format!("a device: {e}"))?;
         let size = window.inner_size();
-        let config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("surface configuration");
-        surface.configure(&device, &config);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT.into()) });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-            ],
-        });
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blit"),
-            layout: Some(&pl),
-            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        Gpu { surface, device, queue, config, pipeline, layout, sampler, frame: None }
+        let shown = present::Window::new(surface, &adapter, device.clone(), queue.clone(), size.width, size.height, vsync)?;
+        Ok(Gpu { device, queue, adapter: adapter.get_info(), window: shown })
     }
 
     /// Start the game on its guest thread (once).
@@ -130,6 +112,15 @@ impl App {
         }
         self.started = true;
         let (exe, proxy) = (self.exe.clone(), self.proxy.clone());
+        let gpu = self.gpu.as_ref().map(|g| (g.device.clone(), g.queue.clone(), g.adapter.clone(), g.window.clone()));
+        if self.test_pattern {
+            if let Some((device, queue, adapter, window)) = gpu {
+                self.status = "test pattern (not the game)".into();
+                std::thread::Builder::new().name("test pattern".into())
+                    .spawn(move || present::test_pattern(device, queue, adapter, window)).expect("a thread");
+            }
+            return;
+        }
         std::thread::Builder::new()
             .name("guest main thread".into())
             .stack_size(256 << 20)
@@ -142,16 +133,14 @@ impl App {
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
                 ddruntime::session::install_fault_hook();
-                match ddgpu::WgpuBackend::headless() {
-                    Some(mut backend) => {
+                match gpu {
+                    Some((device, queue, adapter, window)) => {
+                        let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
                         backend.read_frames = false;
-                        let frames = proxy.clone();
-                        backend.on_present = Some(Box::new(move |f| {
-                            let _ = frames.send_event(GameEvent::Frame(f.clone()));
-                        }));
+                        backend.present_sink = Some(Box::new(present::Sink(window)));
                         ddruntime::d3d9draw::set_backend(Box::new(backend));
                     }
-                    None => status("no GPU adapter for the game's backend; running headless".into()),
+                    None => status("no GPU device for the game's backend; running headless".into()),
                 }
                 status("running".into());
                 let started = session.start();
@@ -167,78 +156,31 @@ impl App {
             .expect("the guest main thread");
     }
 
-    fn show(&mut self, f: ddgpu::Frame) {
-        let Some(gpu) = self.gpu.as_mut() else { return };
-        let size = wgpu::Extent3d { width: f.width, height: f.height, depth_or_array_layers: 1 };
-        if gpu.frame.as_ref().is_none_or(|(_, w, h)| (*w, *h) != (f.width, f.height)) {
-            let t = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("game frame"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            gpu.frame = Some((t, f.width, f.height));
-        }
-        let (tex, _, _) = gpu.frame.as_ref().unwrap();
-        gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &f.rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * f.width), rows_per_image: Some(f.height) },
-            size,
-        );
-        self.frames += 1;
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+    fn update_title(&mut self) {
+        let Some(w) = &self.window else { return };
+        let (frames, mode) = match &self.gpu {
+            Some(g) => {
+                let mut stats = g.window.stats.lock().unwrap();
+                if let Some(r) = stats.take(Instant::now()) {
+                    self.rate = format!("{:.1} FPS, {:.2} ms/frame (longest {:.1} ms)", r.fps, r.mean_ms, r.longest_ms);
+                } else if stats.last_present.is_none_or(|t| t.elapsed() > TITLE_INTERVAL) {
+                    self.rate = "not presenting".into();
+                }
+                (stats.frames, match g.window.present_mode() {
+                    wgpu::PresentMode::Fifo | wgpu::PresentMode::FifoRelaxed => "vsync",
+                    wgpu::PresentMode::Mailbox => "no vsync (mailbox)",
+                    _ => "no vsync",
+                })
+            }
+            None => (0, "no GPU"),
+        };
+        w.set_title(&format!("Dragon's Dogma: Dark Arisen (rebuilt) - {} - {} - {mode} - {frames} frames", self.status, self.rate));
     }
 
-    fn redraw(&mut self) {
-        let Some(gpu) = self.gpu.as_mut() else { return };
-        let out = match gpu.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                gpu.surface.configure(&gpu.device, &gpu.config);
-                return;
-            }
-            _ => return,
-        };
-        let view = out.texture.create_view(&Default::default());
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            if let Some((tex, _, _)) = &gpu.frame {
-                let tv = tex.create_view(&Default::default());
-                let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &gpu.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tv) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&gpu.sampler) },
-                    ],
-                });
-                pass.set_pipeline(&gpu.pipeline);
-                pass.set_bind_group(0, &group, &[]);
-                pass.draw(0..3, 0..1);
-            }
+    fn toggle_fullscreen(&self) {
+        if let Some(w) = &self.window {
+            w.set_fullscreen(if w.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) });
         }
-        gpu.queue.submit([enc.finish()]);
-        out.present();
     }
 }
 
@@ -251,18 +193,22 @@ impl ApplicationHandler<GameEvent> for App {
             .with_title("Dragon's Dogma: Dark Arisen (rebuilt) - starting")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("a window"));
-        self.gpu = Some(App::create_gpu(window.clone()));
+        match App::create_gpu(window.clone(), self.vsync) {
+            Ok(g) => self.gpu = Some(g),
+            Err(e) => {
+                eprintln!("no GPU for the window: {e}");
+                self.status = format!("no GPU: {e}");
+            }
+        }
         self.window = Some(window);
         self.start_game();
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: GameEvent) {
         match event {
-            GameEvent::Frame(f) => self.show(f),
             GameEvent::Status(s) => {
-                if let Some(w) = &self.window {
-                    w.set_title(&format!("Dragon's Dogma: Dark Arisen (rebuilt) - {s} - {} frames", self.frames));
-                }
+                self.status = s;
+                self.update_title();
             }
         }
     }
@@ -271,21 +217,56 @@ impl ApplicationHandler<GameEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.config.width = size.width.max(1);
-                    gpu.config.height = size.height.max(1);
-                    gpu.surface.configure(&gpu.device, &gpu.config);
+                if let Some(g) = &self.gpu {
+                    g.window.resized(size.width, size.height);
+                    g.window.repaint_if_idle(IDLE);
                 }
             }
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => {
+                if let Some(g) = &self.gpu {
+                    g.window.repaint_if_idle(IDLE);
+                }
+            }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed && !event.repeat => {
+                let alt_enter = self.modifiers.alt_key() && event.logical_key == Key::Named(NamedKey::Enter);
+                if alt_enter || event.logical_key == Key::Named(NamedKey::F11) {
+                    self.toggle_fullscreen();
+                }
+            }
             _ => {}
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        if now >= self.next_title {
+            self.update_title();
+            self.next_title = now + TITLE_INTERVAL;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_title));
     }
 }
 
 fn main() {
-    let exe = std::env::args().nth(1).unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let vsync = !args.iter().any(|a| a == "--no-vsync");
+    let test_pattern = args.iter().any(|a| a == "--test-pattern");
+    let exe = args.iter().find(|a| !a.starts_with("--")).cloned()
+        .unwrap_or_else(|| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
     let event_loop = EventLoop::<GameEvent>::with_user_event().build().expect("an event loop");
-    let mut app = App { exe, proxy: event_loop.create_proxy(), window: None, gpu: None, frames: 0, started: false };
+    let mut app = App {
+        exe,
+        vsync,
+        test_pattern,
+        proxy: event_loop.create_proxy(),
+        window: None,
+        gpu: None,
+        status: "starting".into(),
+        rate: String::new(),
+        next_title: Instant::now(),
+        modifiers: ModifiersState::empty(),
+        started: false,
+    };
     event_loop.run_app(&mut app).expect("the event loop");
 }
