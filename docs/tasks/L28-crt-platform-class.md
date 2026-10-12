@@ -35,6 +35,88 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Constructor/setup inputs: current batch (2026-10-12)
+
+Main merged as **5a2d5f41**. The baseline is **59,579 functions /
+177,331 cases** in native-L28c; native-train3-orig remains read-only.
+Completed instruction traces are private `L28c/state-traces.jsonl`, with
+disassembly/callers in `state-disassembly.txt`. The table below describes
+the observed input requirement, not a claim that a guessed constructor
+will fix it. `Possible` means the producer/recipe still needs confirmation.
+
+| Residual | Input/state needed; observed blocker | Constructor/setup coverage |
+|---|---|---|
+| 0x00491340 | Object with four arrays starting at +0x4548; makes 256 temporary records through 0x00786DD0. Trace reaches the instruction limit in that constructor. | Not the immediate blocker: needs a sound bound for the fixed work. |
+| 0x00493AA0 | Manager at 0x018FA4BC and writable output in EDI; reads manager +0xB8760 onward. Long copies exhaust the limit. | Possible manager setup; still needs bounded-copy proof. |
+| 0x00494D80 | Manager at 0x018FA4F8, including flags +0x20E719/+0x21AFDA. Trace exhausts the limit in the copy at 0x00475224. | Possible manager setup; not yet a demonstrated fix. |
+| 0x004A06B0 | EAX object and stack source record; calls 0x0048AC80 and copies records. Limit reached in 0x00489785. | Possible record constructor; copy bound remains. |
+| 0x0081C330 | ESI object containing a pointer/count at +0xC/+0x10 and 0xD0-byte elements. Empty input gets to the epilogue but returns to zero. | Possible object graph; first resolve call/stack cleanup. |
+| 0x00DD5ED0 | Constructor itself builds 128 elements, calling 0x00DC6030. The guarded proof predicts a mock at 0x00DD5F99 but execution enters closed code instead. | No: constructor already executes; keep the failed contract guard. |
+| 0x00DB8B90 | Reserved boot-stop work of claude-6. | Not retried here. |
+| 0x0046A150 | Iterates image table 0x01523978 and bit sets; trace at 0x0046A245 has advancing counters, not a stationary wait. | No object producer established; finite-work proof needed. |
+| 0x0046A2D0 | Same image-table family, nested index loops; limit at 0x0046A3D9. | No object producer established; finite-work proof needed. |
+| 0x0048AB50 | Two stack record pointers; copies 0x1BD pairs, then larger records through 0x004899EE. | A record constructor can supply contents, but the measured blocker is the copy budget. |
+| 0x0048F330 | Two stack record pointers, including nested strings; trace in 0x0077AC19/0x007674B0. | Possible source-record setup; fixed nested work also needs a bound. |
+| 0x00495150 | Stack record and manager at 0x018FA4F0; uses +0x36058/+0x3687C. Limit in byte-copy loop 0x00474C20. | Possible manager/record setup; bound not established. |
+| 0x00495520 | Two stack record pointers, including repeated float records. Limit in 0x004FDA6A onward. | Possible record setup; copy bound remains. |
+| 0x004A0C00 | EAX object with a vtable and manager at 0x018FA4BC. Limit in nested copy 0x004896D0. | Possible object/manager setup; copy bound remains. |
+| 0x0050A110 | Manager at 0x018FA4BC, fields +0x1C/+0xB8760/+0xB8764 and associated records. Limit at 0x004A7D22. | Possible manager constructor; recipe unconfirmed. |
+| 0x005EC920 | EAX object's +0x104 entry array and ECX index, plus 0x018FA4BC manager. Four arguments to virtual wrapper 0x010FEE50 remain on the stack; ret reads 0x015583E0. | Object graph alone does not fix mocked cleanup. |
+| 0x00606090 | NUL-terminated string in ESI, stack destination object/vtable, manager at 0x018FA4BC. Four arguments to 0x010FEE50 at 0x006060CB are not popped. | Object graph alone does not fix mocked cleanup. |
+| 0x00606130 | Same manager/string family; four wrapper arguments at 0x0060617B are not popped. | Same cleanup blocker. |
+| 0x006066E0 | EAX object's +0x104 entries, ECX and stack indexes, nested +0xE8 array. Two arguments to wrapper 0x0106B1C0 remain before ret4. | Possible graph, but cleanup first. |
+| 0x006335A0 | ESI object's +0x104 table, entries +0x18/+0x20/+0x30 and their +0x60 flags; four-argument 0x010FEE50 wrappers. | Possible graph, but cleanup first. |
+| 0x00633EF0 | ECX object with +0x104 children, EAX argument and stack argument; path reaches ret4 at 0x00634083 with bad stack. | Possible graph; exact cleanup culprit still unconfirmed. |
+| 0x00620000, 0x00620003, 0x00620004 | Old supplementary entries; first two exit to zero, third exhausts the limit. Their validity as function entries is unconfirmed. | Do not invent objects to rescue an unconfirmed entry. |
+| 0x00670002, 0x00670003 | Same supplementary-entry issue; both leave the image at zero. | Entry validation belongs to lifter lane. |
+| 0x007A0003, 0x007A0004 | Same supplementary-entry issue; both leave the image at zero. | Entry validation belongs to lifter lane. |
+| 0x007D0005, 0x00C40000 | Same supplementary-entry issue; both leave the image at zero. | Entry validation belongs to lifter lane. |
+| 0x00815C60 | EDI object with fields +0x1224/+0x1254/+0x1244 and record arrays. Limit while searching 0x74 elements at 0x0081A510. | Possible initialized array; search/call bound still required. |
+| 0x00C9B350 | ECX data and ESI destination; `idiv` at 0x00C9B3D9 followed by `inc edx` at 0x00C9B3DB triggers the undefined-flags guard. | Not an object-input fix on this path; flag-liveness question for lifter lane. |
+| 0x00C9E0F0 | EAX source object plus stack output buffer, serialization helpers 0x00D009F0/0x00D01020. Limit in repeated ten-word groups at 0x00C9E167. | Possible valid source counts/buffer; producer unconfirmed. |
+| 0x00D29AF0 | ECX object: byte buffer at +4 and nonzero byte count at +8 (loaded at 0x00D29B42/45). The count divides at 0x00D29CF3. Also needs two distinct allocation results for +0x31C/+0x320. | Possible constructor with nonempty buffer; zero-call mocks also alias the two allocations, so construction alone is not sufficient. |
+| 0x00DBA780 | Destructor scans 16,384 slots at object +0x40D8, then manager 0x018D0AA0 and other arrays. | Constructor may supply ownership state, but all-zero slots still require a large finite scan. |
+| 0x00F7DE40 | Movie state at this+0x2C must reach 9 (checks at 0x00F7DE49/59). Constructor 0x00F7BA50 writes 0 at 0x00F7BAA5; reset 0x00F7B170 writes 9 at 0x00F7B244. | Reset-first is the evidenced recipe; constructor alone cannot release this wait. |
+| 0x011590E0 | Object +4 vtable and manager 0x018D0CC4, with +0x21C/+0x214 children. Two arguments to wrapper 0x01156B00 remain at the epilogue. | Possible graph, but mocked cleanup first. |
+
+The general `constructed_inputs.py` strategy re-executes an accepted original
+setup case and requires its entire recorded result to match before transferring
+pages/register bindings to a new method run. No game fields are assigned by the
+strategy. Constructor/reset external calls retain their accepted mock boundary;
+this is fixture state, not proof of a fully initialized game runtime.
+The method records ordinary reads/writes, so it needs no generated Rust change.
+Setup identity, seed, case hash and register bindings are retained as provenance.
+Generic refresh refuses these cases rather than silently losing their setup.
+Image-byte budget proofs are disabled for transferred state, and allocation
+after an allocating setup is rejected until the replay supports an initial
+heap cursor. Existing return, page, flag and instruction guards remain enabled.
+
+**Recorded:** 0x00F7DE40 returns normally in **3/3** cases after the verified
+0x00F7B170 reset. Each setup reproduces every field of its accepted case;
+legacy random seeds are identified from the first GPR draw and checked by
+that full recorded-result comparison. No accepted setup case is rewritten.
+Native-L28c is now **59,580 functions / 177,334 cases** (+1/+3).
+`L28c/constructed-audit.json` proves **all 59,579 old functions and their
+177,331 cases unchanged**, with no promotions, removals or stale mocks.
+Six synthetic tests cover state transfer, unchanged capture output, legacy
+seed identification, mismatches, guards, executable writes and heap reuse.
+The combined light suite has **114 tests**; full Rust replay remains for the
+head's integration train. No snapshot was made; data stays open.
+
+Reproduction (set LIFT_DATA/INVENTORY_EXTRA to native-L28c; use the research
+Python and heavy.py as `codex`):
+`research/native/constructed_inputs.py 0x00F7DE40 0x00F7B170 --bind ecx=regs_in.ecx`.
+The command logs to `structured-constructed-v1.jsonl` without adoption;
+`structured_inputs.adopt(Path(LIFT_DATA), 'constructed-v1')` performs the
+normal append-only adoption. It refuses to record an already selected method.
+The hash baseline is `L28c/state-before-hashes.json`; compare with
+`research/native/audit_records.py compare --root ... --manifest ... --report ...`.
+
+**Next:** head priority #9661/#9663 is boot stop 14, 0x00DD5ED0. Its own
+vtable store at 0x00DD5F21 survives 0x00DC6030 and resolves the indirect
+call at 0x00DD5F99 to 0x00DC67E0. Implement a general alias-checked rule,
+record this constructor first, then return to the remaining input recipes.
+
 (draft; numbers after the pause lifts)
 
 **Census (native-L17, after L17's recording).** The 116 rows are not

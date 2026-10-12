@@ -228,6 +228,8 @@ def direct_targets(arms):
 
 def _inputs(cases):
     """run_sparse keywords reproducing the input distribution of `cases`."""
+    if any(c.get('construction') for c in cases):
+        raise ValueError('constructed cases require their checked setup recipe; use constructed_inputs')
     strategies = {c.get('input_strategy') or ('zero' if c.get('zero_inputs') else 'random') for c in cases}
     strategy = strategies.pop() if len(strategies) == 1 else 'random'
     if strategy == 'zero':

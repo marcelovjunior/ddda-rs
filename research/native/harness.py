@@ -751,7 +751,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False, input_layout=None, visited=None):
+               terminal=False, input_layout=None, visited=None, initial_state=None, capture_state=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -823,11 +823,21 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     `visited`, a set, receives the address of every executed instruction
     (coverage for case selection, L45); it changes nothing in the run.
+
+    `initial_state` supplies pages and register bindings from a checked
+    original setup run (constructed_inputs). `capture_state`, an empty dict,
+    receives its final pages after successful validation. Neither changes
+    the fixture protocol: the method records its own reads and writes.
     """
     import random
     import time
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
+    if initial_state is not None:
+        from constructed_inputs import validate_state
+        validate_state(initial_state)
+    if capture_state is not None and capture_state:
+        raise ValueError('capture_state must be empty')
     if input_strategy is not None and zero_inputs:
         raise ValueError('input_strategy and zero_inputs are mutually exclusive')
     # Image pages have always held original bytes. This explicit strategy
@@ -873,6 +883,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     def fill(page):
         """Image pages hold the exe; any other page seeded random bytes."""
+        if initial_state is not None and page in initial_state['pages']:
+            return initial_state['pages'][page]
         for va, b in secs:
             if va & ~0xFFF <= page < va + len(b):
                 lo = max(page, va)
@@ -1319,6 +1331,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         written.update(range(a, a + len(data)))
 
     def alloc(size):
+        if initial_state is not None and initial_state['heap'] != HEAP_BASE:
+            raise Rejected('constructed input: allocation after setup needs heap-cursor replay support')
         a = heap[0]
         heap[0] = ((a + max(size, 1) + 15) & ~15) & 0xFFFFFFFF
         return a
@@ -1536,6 +1550,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
             if call_stack:
                 v -= 4
+        elif initial_state is not None:
+            v = initial_state['registers'].get(name, v)
         regs_in[name] = v
         uc.reg_write(r, v)
     # the return address at [esp]; the rest of the stack page is random
@@ -1563,7 +1579,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1') and body is not None and max_insn < 2_000_000:
+    if initial_state is None and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1641,6 +1657,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
     if bad:
         raise Rejected("; ".join(bad))
+    # Capture before the diagnostic st0 store. Publish only after all later
+    # checks pass; failed/terminal setup runs never produce usable state.
+    captured = None
+    if capture_state is not None:
+        if stopped[0]:
+            raise Rejected('constructed input: setup did not return')
+        if any(executable(a) for a in written):
+            raise Rejected('constructed input: setup writes executable memory')
+        captured = dict(pages={p: bytes(uc.mem_read(p, 4096)) for p in pages_in}, heap=heap[0])
     regs_out = {name: uc.reg_read(r) for name, r in GPR}
     xmm0 = uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFF
     # x87 values left on the stack: depth from TOP; read st0 as a single
@@ -1676,6 +1701,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 out.append(cur)
         return [[a, bytes(b).hex()] for a, b in out]
     final = {a: uc.mem_read(a, 1)[0] for a in written}
+    if captured is not None:
+        capture_state.update(captured)
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,

@@ -1,5 +1,19 @@
 # Milestones
 
+### L28c original setup-state fixture (2026-10-12, pending replay)
+
+- Original reset 0x00F7B170 supplies the stopped movie state required by
+  0x00F7DE40; the latter now records 3/3 normal-return cases. The general
+  constructor/setup strategy checks the producer against its accepted case
+  before transferring memory. It never assigns game-specific field values.
+- Private native-L28c grows **59,579 -> 59,580 functions / 177,331 ->
+  177,334 cases**. The audit proves all old records/cases unchanged.
+  Six new synthetic tests cover the transfer and refusal paths; full Rust
+  replay belongs to the integration train. Results describe all 37 queued
+  entries' input requirements and distinguish state from cleanup/budget faults.
+- **Next action:** boot stop 14, 0x00DD5ED0: preserve an alias-checked vtable
+  fact across closed calls to resolve its repeated indirect call exactly.
+
 ### L28c inventory fixture batch (2026-10-12, pending replay)
 
 - Nineteen more inventory functions record three normal-return cases each.
