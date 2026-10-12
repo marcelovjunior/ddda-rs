@@ -1939,3 +1939,12 @@ fn string_from_guid2_formats_as_windows_measured() {
     assert_eq!(call_service(system::string_from_guid2, &mut m, &[g, out, 38]).eax, 0);
     assert_eq!(m.u16(out), 0xEEEE, "nothing written");
 }
+
+#[test]
+fn create_process_stops_with_the_restart_command_line() {
+    let mut m = guest();
+    let cmd = 0x0030_0000;
+    put_str(&mut m, cmd, r#""E:\Games\DDDA\DDDA.exe" -restart"#);
+    let msg = stops(system::create_process_a, &mut m, &[0, cmd, 0, 0, 0, 0, 0, 0, 0x0030_0100, 0x0030_0200]);
+    assert!(msg.contains("restart itself") && msg.contains("-restart") && msg.contains("from 0x00405678"), "{msg}");
+}
