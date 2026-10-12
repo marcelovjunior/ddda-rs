@@ -64,6 +64,17 @@ class ImageBudgetTests(unittest.TestCase):
             ins,read,_=self.fixture(bytes.fromhex(code))
             self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
 
+    def test_generated_input_pages_can_prove_a_standalone_bounded_loop(self):
+        code=bytes.fromhex('803d0000002000 750a b904000000 31c0 40 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['eax'],4)
+        self.assertIn('image_budget',result)
+        self.assertIn([0x20000000,'00'],result['reads'])
+
     def test_signed_branches_use_overflow_not_only_the_result_sign(self):
         for code in (
                 'b8ffffff7f 83c001 7d01 cc c3',

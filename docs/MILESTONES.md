@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c standalone input proofs (2026-10-12)
+
+- Exact-input proof now also supports standalone recorder distributions.
+  **155 tests pass**; original-game trials are pending the heavy slot.
+- Fourteen residuals are queued for serial trials; 0x00493AA0 stays aside.
+  **Next action:** finish the waiting boot-route trial, then that list.
+
 ### L28c checked stack arguments (2026-10-12)
 
 - Setup outputs can bind method stack arguments while preserving the return

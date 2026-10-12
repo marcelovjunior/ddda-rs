@@ -35,6 +35,22 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Standalone exact-input proof (2026-10-12)
+
+`guarded-input-v1` makes the same bounded initial-page proof available
+without a constructor. It uses the recorder's existing input distribution
+and exact page generator; initial register values remain abstractly unknown.
+Checked state remains required for `guarded-state-v1`. **155 light tests
+pass**, including an original synthetic loop whose budget depends on its
+recorded generated input byte. No original-game addition is claimed yet.
+
+A serial trial list is prepared for the remaining 14 functions, direct boot
+route first; **0x00493AA0 is excluded**, as requested. The first signed-loop
+0x00494D80 constructor retry is still waiting behind head-train in heavy.py.
+Private accepted data remains **59,592 / 177,370**, unchanged from the
+train-10 baseline. **Next:** finish that run, then the standalone trials;
+boot-stop messages always take priority.
+
 ### Checked stack-argument bindings (2026-10-12)
 
 `--bind stack+4=1.regs_in.edi` binds a method stack argument to a checked
