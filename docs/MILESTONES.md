@@ -10,7 +10,8 @@
   guard also re-records all **33 old guarded cases identically**.
   **102 light tests pass**; the cleanup expectation is resolved.
 - Retried the direct-route and remaining one-hop queue; eight direct and
-  30 one-hop entries remain. **Next action:** merge main, head replay/preview;
+  30 one-hop entries remain. Main is merged at **d386e757**.
+  **Next action:** head replay/preview;
   DB8B90/4080A0 and the three L46 x87 helpers stay with claude-6.
 
 ### L28c guarded-contract follow-up (2026-10-12, original runs queued)

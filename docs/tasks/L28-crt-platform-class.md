@@ -953,5 +953,11 @@ exceeds the 256-page guard; that guard was not widened.
 inputs 19, tails 13, remaining forms 13, record inputs 2, audit 5, lifter
 budgets 5. No full Rust replay; that remains with the integration train.
 Source checkpoint **925ecca8** and the head-test cherry-pick **5016233c**
-precede this result. Main **863f6817** is to be merged after the recording
-workers exit, per the head's request, preserving the terminal/padding rules.
+precede this result; the register-object implementation/result is
+**d810fb19**. After the recording workers exited, merged main **b7c4ba86**
+(including requested **863f6817**) as **d386e757**, without conflicts.
+The owner's terminal/padding rules and main's opt-in instruction-step
+generation remain intact. No generated code was authored by this batch;
+the merge retains main's already committed generated files.
+The same **102 light tests pass after the merge**. The worktree is ready
+for review; recording jobs have exited and accepted data remains open.
