@@ -1381,6 +1381,37 @@ and 0x00648AF0 follow theirs). This drops 45 address-taken constants
 `add eax, 4`, ASCII such as 0x00706465) and ends 13 tables at the text
 after them ("xml", "pcf", UTF-16 "config" after 0x01407180).
 
+## Instruction steps (L27b, L47)
+
+`gen` can also emit, per lifted function, a step function `s_X(m, cpu,
+ip)` with one instruction per arm and an `INSTRUCTIONS` table of every
+instruction address. The runtime's step executor (`ddruntime/src/executor.rs`)
+uses them to resume inside a body after an SEH dispatch. They are off
+unless `LIFT_INSTRUCTIONS=1`. Emitted for every function, they tripled the
+shards, and one rustc reached 11 GB (train 4). L47 scopes them to the
+bodies that register an EH4 scope table (`lift.resumable`). The executor
+is entered only where a step exists; a lifted binding without steps runs
+whole, to its own `ret`, and a fault inside it cannot resume mid-body.
+
+## Merging private data sets (trains)
+
+Agents record into private copies of the shared data
+(`E:/ddda-re/notes/native-<task>`), each started from a frozen base. The
+head merges them into the shared set per address, against each set's
+base:
+
+    python E:/ddda-re/tools/merge_lift_data3.py OUT CURRENT BASE SET [--keep-current A,..] [--take-set A,..]
+
+One address is one unit (its record and all its cases):
+- the set's version is taken where the shared data still has the base's;
+- the shared version stays where the set did not change it;
+- a real divergence is a conflict, and nothing is written.
+So promotions and refreshes (re-recorded existing functions) merge like
+additions. A hand-off names its base and the hashes of `lift.json` and
+the vectors. The merged files go into the shared set (a backup is kept),
+then `gen` and the gate. When the shared data moves, the head tells every
+agent with a private set.
+
 ## Debugging a failing lifted function
 
 For a function that cannot yet produce a vector, use
@@ -1457,13 +1488,12 @@ exception dispatch itself remains a runtime responsibility.
 
 ## What to do next
 
-1. Lifter coverage (Codex briefs `docs/tasks/L0*.md`): remaining indirect
-   jumps, x87 input contracts and usable fixtures for newly supported
-   integer/SSE functions. L07 handles recursive body discovery; L08 adds
-   carry/borrow, divide/multiply, string operations and SSE families.
-2. The Phase 1 runtime: the memory model, a production `call_ext`
-   dispatcher, platform services (file/archive I/O, D3D9 to wgpu, audio,
-   input). Lifted code only becomes a game through it.
-3. Hand ports stay for the functions where a typed, readable API matters;
-   they keep their own differential tests (table above).
-4. Keep INVENTORY.md and the numbers in this file current with each batch.
+Current state: docs/MILESTONES.md (the latest batch), docs/INVENTORY.md
+(the numbers). As of train 4 (2026-10-12): 59,229 of 59,440 verified. What
+remains:
+1. Recorder failures (no fixture) and lift rejections on the boot's
+   route first (docs/tasks/L21-boot-bring-up.md, the look-ahead tables).
+2. The 44 verification gaps (`patterns/verification_gaps.json`, mostly
+   input-indexed switches that need a table proof or a case per slot).
+3. The boot itself (L21): WinMain to the title, one stop at a time.
+4. Keep INVENTORY.md and the numbers in this file current with each train.
