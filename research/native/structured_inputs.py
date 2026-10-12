@@ -456,7 +456,8 @@ def refresh(root, strategies, seeds, seconds, only=None):
     frames = frame_contracts(selected)
     noreturn = lift.noreturn_entries()
     gaps = lift.verification_gaps(selected)
-    stale = [f for f in selected if any(r.startswith('stale body') for r in gaps.get(f['addr'], []))
+    stale = [f for f in selected if any(r.startswith(('stale body', 'tail call into its own inlined code'))
+                                        for r in gaps.get(f['addr'], []))
              and (only is None or f['addr'] in only)]
     report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
     position = {f['addr']: k for k, f in enumerate(selected)}

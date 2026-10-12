@@ -255,6 +255,14 @@ def frame_tail(target, entries, noreturn, read, is_code):
     return _FRAME_TAILS[key]
 
 
+def inlined_tail(t):
+    """Whether entry `t`, met in a decoded body, is a frame tail decode_body
+    inlined (L46: the emitter and the x87 walk must then treat a jump to it
+    as local, or memcpy's `jmp __VEC_memcpy` leaves for untranslated code)."""
+    import harness as h
+    return frame_tail(t, function_entries(), noreturn_entries(), h.code, h.executable)
+
+
 class _patched_code:
     """harness.frame_exit reads harness.code; decode with the same reader."""
     def __init__(self, h, read):
@@ -1014,7 +1022,7 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 break
             if mn.startswith("j"):
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
-                if t in at and (t == addr or t not in function_entries()):
+                if t in at and (t == addr or t not in function_entries() or inlined_tail(t)):
                     todo.append((at[t], depth, saved))
                 # A runtime jump's local destinations are all statically
                 # reachable starts, walked with their own static depths;
@@ -1256,7 +1264,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=Fal
     ins, switches, stops, ranges = cached_body(addr, size, ext)
     starts = {i.address for i in ins}
     entries = function_entries()
-    inside = lambda t: t in starts and (t == addr or t not in entries)
+    # a jump into an inlined frame tail (decode_body, L45) stays local
+    inside = lambda t: t in starts and (t == addr or t not in entries or inlined_tail(t))
     leaders = {addr}
     for k, i in enumerate(ins):
         if k and ins[k-1].address + ins[k-1].size != i.address:
@@ -2721,6 +2730,10 @@ def verification_gaps(lifted):
         unbound = sorted(constants - bound)
         reasons = [f"unbound target 0x{t:08X}" for t in unbound]
         named = constants | {int(t, 16) for arm in f["arms"] for t in LIFTED_CALLEE.findall(arm)}
+        # L46: arms that still leave for a frame tail the body itself holds
+        # (a record emitted before jumps into inlined tails stayed local)
+        reasons += [f"tail call into its own inlined code 0x{t:08X}" for t in sorted(named)
+                    if t in set(f.get("body") or ()) and t != f["addr"] and inlined_tail(t)]
         if (any(TABLE_DISPATCH.search(arm) for arm in f["arms"])
                 or any(t in entries and t != f["addr"] and frame_tail(t, entries, noreturn, h.code, h.executable)
                        for t in named)
