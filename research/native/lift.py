@@ -2880,12 +2880,13 @@ def vectors(per=3):
     print(len(cases), "cases over", len(keep), "functions;", len(failed), "without a usable vector (dropped)")
 
 
-SHARDS = 16
+SHARDS = 32
+SHARD_SHIFT = 19  # 512 KiB address regions: .text's 16 MiB spread over 32 shards
 
 
 def shard(addr):
     """Fixed 1 MiB address bands, modulo 16; independent of the selected set."""
-    return (addr >> 20) % SHARDS
+    return (addr >> SHARD_SHIFT) % SHARDS
 
 
 def write_changed(path, text):
@@ -3330,7 +3331,7 @@ def gen(chunk=400, instructions=None):
         old.unlink()
     lookup = "//! Generated facade: initialization, legacy entry points and lookup.\n"
     lookup += "use crate::mem::Mem;\nuse crate::x86::{self, Cpu, LiftFn};\n"
-    lookup += "fn lookup(addr: u32) -> Option<LiftFn> { match (addr >> 20) % 16 {\n"
+    lookup += f"fn lookup(addr: u32) -> Option<LiftFn> {{ match (addr >> {SHARD_SHIFT}) % {SHARDS} {{\n"
     lookup += "".join(f"{i} => ddlift_{i:02}::lookup(addr),\n" for i in range(SHARDS))
     lookup += "_ => unreachable!(), } }\n"
     # Bodies can cross address-shard boundaries, or share an epilogue.
