@@ -374,7 +374,6 @@ in cutscenes. `uMovie` uses `timeGetTime` (bound).
   call, taken or not).
 - The archive ids, online at the title, `aTitle+0x38` and the save
   branch are answered in section 5 (L35b). Still not traced:
-  - the loader of the `sa\DX9\*.arc` shader archives;
   - which title choice issues which storage command.
 - The broad closure's other 65 non-verified functions (outside the
   likely path) were not given lifter reasons.
@@ -414,8 +413,13 @@ through a DTI lookup (no constructor reference; `aInitialize` is created
 by `sBbsRpgMain`'s constructor at 0x0041D0C2). So `aBbsRpg` belongs after
 the title.
 
-**Not located:** the loader of the per-area shader archives
-`sa\DX9\*.arc`. "DX9" is not a path literal in the exe.
+**The shader archives** (located in L38, GAMEPLAY_PATH.md 1.3):
+- `sShader2`'s constructor loads `sa\DX9\root.arc` and the
+  `sc\DX9\root` shader package synchronously through `0x00E0E470`
+  (not lifted yet).
+- Every area waits in its slot 5 (`0x00533750` → `0x00DA63F0`) for
+  `sa\DX9\<area name>.arc`. `aTitle` waits for `Title.arc`;
+  `aInitialize` has none.
 
 ### 5.2 Online at the title: idle
 
@@ -475,6 +479,38 @@ The save is not read on the way to the title's first frame.
 
 Many of those functions are among the lift-now set of 2.1 (save system).
 
-The method slots follow the `steam_api.dll` interface version the game
-ships with; claude-10 (L26) has its details. Which title choice issues
+claude-10 confirmed the slots and added these details (L26,
+`docs/tasks/L26-steam-saves.md#results` on `task/L26-steam-saves`):
+
+- **The file.** There is one file, `DDDA.sav` (string 0x01564F1C), with
+  a buffer of 0x80000 bytes (`[0x018FA4F8]+0x21B0E4`). The save titles
+  are `DD_SAVEDATA_00` / `01`.
+- **The check, 0x004B72B0.** This is the first step of request kinds
+  2/7/0xF, 3/0xB/0x12, 4, 5 and 6/0xA/0x13.
+  - `FileExists("DDDA.sav")` false → 2.
+  - Otherwise it calls `GetFileSize`, then `FileRead`, then
+    `IsCloudEnabledForAccount` and `IsCloudEnabledForApp`.
+  - It returns 1 if it read bytes or both cloud flags are on, else 6.
+- **The load.** `0x004B7CA0` state 3 is `FileRead`, and it needs the
+  full size.
+- **The save.** `0x004B7390` is `FileWrite`, then a read-back compare.
+- **The owner check.** `0x0040F880` rejects a save whose `mSteamID` is
+  not `GetSteamID` (result 5).
+- **No save.** `FileExists` is false, so the result is 2, and the
+  "present" flags (`+0x9E4`, `+0x9E5`, `+0xA5D`) are cleared.
+- **Online files.** `0x00DA2C20`/`3210`/`3950`/`3AE0` are `MtNetObject`'s
+  own online files. They are gated on `BLoggedOn` (0x00D2A390), so they
+  are not part of an offline boot.
+- **What the title touches before a choice.** The title's first state
+  touches `sStorage` (`*0x018FA518`, `sStorageExt` vtable 0x01564F94)
+  only to set `+0xA60..+0xA6C` and call slot 5 `sStorageExt::vf05`
+  (0x004B78D0). That slot resets `+0xA5C`, `+0x87B..` and `+0x880..`;
+  it does no file I/O.
+- **The first request.** The later title state `0x00532110` issues
+  request kind **9** (`+0x648 = 9`, `+0x649 = 0`, `+0xA44`/`+0xA48 =
+  -1`).
+
+The runtime's `ISteamRemoteStorage` (L26) keeps the files under
+`<sandbox>\steam\userdata\<account>\367500\remote`; a fresh sandbox
+has no `DDDA.sav`. Which title choice issues
 which command (Continue, New Game, the option save) is *not traced*.

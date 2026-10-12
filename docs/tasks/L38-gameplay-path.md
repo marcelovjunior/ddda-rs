@@ -34,4 +34,35 @@ next leg needs the same map, so every owner can prepare ahead:
 
 ## Results
 
-(open)
+claude-7. The map is [GAMEPLAY_PATH.md](../GAMEPLAY_PATH.md). It is
+static: Ghidra, the call graph, scans of the lifted code, and the
+lifter's `lift()` run read-only.
+
+- **From the title to the areas.**
+  - The title's state functions (`+0xF0`) lead to four area requests:
+    `aGameMain` (0x005331E7), `aStage801` (character creation,
+    0x00533277), and `aStage802` / `aStage804` (0x00533302 / 0x0053330B).
+  - `aGameMain` runs "new game or load" (0x004FB7B0) once. That function
+    creates `aStage%03d` (0x004FBD50): stage 380 for New Game.
+  - The opening's route (380 → 800 → 801 → 200 → 100) is the documented
+    one.
+  - Not traced: which menu item reaches which call site, and how
+    `aBbsRpg` is created (*inferred*: as `aGameMain`'s parent).
+- **The `sa\DX9` loader** (TITLE_PATH's open item).
+  - Every area's slot 5 waits in 0x00533750 → 0x00DA63F0 for
+    `sa\DX9\<area name>.arc` (ready at once if the file is missing).
+  - `sShader2`'s constructor loads `sa\DX9\root` and `sc\DX9\root`
+    synchronously through 0x00E0E470, which is not lifted.
+- **Services.** The gameplay closure (21,580 functions, 156 imports)
+  needs no import beyond the title path's.
+- **The lifter census of all 586 non-verified functions.**
+  - 410 lift now: 99 on the title path, 108 more on the gameplay path,
+    203 elsewhere.
+  - 176 are rejected: x87 returns 84, SSE approximations 31, jump tables
+    9, MXCSR 9, `rcr` 6, other x87 13, platform-dependent 4, other 20.
+  - On the gameplay path: `cPlActJumpBegin::vf06` (the jump start),
+    `uSimSoftBody::vf09`, `uWeaponEv::vf96`, `uEffect2D::vf09`, the arrow
+    and lightning shells, `rsqrtps` in two object units, `rdtsc`,
+    `stmxcsr`.
+  - Sent to claude-3 (lift-now queue) and claude-6 (rejections).
+- Also on this branch: TITLE_PATH 5.4 gets claude-10's save details.
