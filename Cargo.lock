@@ -2847,12 +2847,14 @@ version = "0.1.0"
 dependencies = [
  "d3d9cmd",
  "d3d9shader",
+ "d3dxref",
  "ddaudio",
  "ddexe",
  "ddnative",
  "ddnative-base",
  "ddsave",
  "hostdisplay",
+ "mtarc",
  "windows",
  "windows-core",
 ]
