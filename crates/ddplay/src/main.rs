@@ -11,8 +11,11 @@
 //!
 //!     cargo run --release -p ddplay -- [path\to\DDDA.exe] [--no-vsync]
 //!
-//! `--no-vsync` presents immediately (or mailbox, whatever the surface
-//! has) instead of waiting for the display's refresh. F11 or Alt+Enter
+//! The window follows the game's own display choice (docs/OPTIONS.md,
+//! brief L34): windowed at its back buffer's size, or full screen in the
+//! monitor's video mode of that size and refresh rate, with vsync as its
+//! VSYNC option asks. `--no-vsync` presents immediately (or mailbox,
+//! whatever the surface has) whatever the game asks. F11 or Alt+Enter
 //! toggles borderless fullscreen. `--test-pattern` runs a moving pattern
 //! through the backend instead of the game (a presentation diagnostic).
 //! Keyboard, mouse and the host's XInput pads reach the game through the
@@ -34,7 +37,13 @@ enum GameEvent {
     /// The session's host input, connected on the guest thread.
     Input(ddruntime::input::HostInput),
     Status(String),
+    /// The game's presentation changed (read on the guest thread at Present).
+    Mode(ddruntime::d3d9dev::Presentation),
 }
+
+/// D3DPRESENT_INTERVAL_IMMEDIATE: the game's VSYNC=OFF (0x00DB1480, the
+/// table at 0x01429878); DEFAULT (0) and ONE (1) wait for the refresh.
+const INTERVAL_IMMEDIATE: u32 = 0x8000_0000;
 
 /// How often the title's frame statistics update.
 const TITLE_INTERVAL: Duration = Duration::from_millis(500);
@@ -118,7 +127,7 @@ impl App {
             return;
         }
         self.started = true;
-        let (exe, proxy) = (self.exe.clone(), self.proxy.clone());
+        let (exe, proxy, vsync) = (self.exe.clone(), self.proxy.clone(), self.vsync);
         let gpu = self.gpu.as_ref().map(|g| (g.device.clone(), g.queue.clone(), g.adapter.clone(), g.window.clone()));
         if self.test_pattern {
             if let Some((device, queue, adapter, window)) = gpu {
@@ -146,7 +155,15 @@ impl App {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
                         backend.read_frames = false;
-                        backend.present_sink = Some(Box::new(present::Sink(window)));
+                        // the window follows the game's presentation; vsync too,
+                        // unless --no-vsync overrides it
+                        let (shown, modes) = (window.clone(), proxy.clone());
+                        backend.present_sink = Some(Box::new(present::Sink::following(window, move |p| {
+                            if vsync {
+                                shown.set_vsync(p.interval != INTERVAL_IMMEDIATE);
+                            }
+                            let _ = modes.send_event(GameEvent::Mode(p));
+                        })));
                         ddruntime::d3d9draw::set_backend(Box::new(backend));
                     }
                     None => status("no GPU device for the game's backend; running headless".into()),
@@ -186,6 +203,30 @@ impl App {
         w.set_title(&format!("Dragon's Dogma: Dark Arisen (rebuilt) - {} - {} - {mode} - {frames} frames", self.status, self.rate));
     }
 
+    /// Take the game's presentation: windowed at its back buffer's size, or
+    /// full screen in the monitor's video mode with that size and refresh
+    /// rate (the highest rate when the game asks for the default, 0);
+    /// borderless when the monitor has no such mode.
+    fn follow(&self, p: ddruntime::d3d9dev::Presentation) {
+        let Some(w) = &self.window else { return };
+        let size = winit::dpi::PhysicalSize::new(p.width, p.height);
+        if p.windowed {
+            w.set_fullscreen(None);
+            let _ = w.request_inner_size(size);
+            return;
+        }
+        let mode = w.current_monitor().and_then(|m| {
+            m.video_modes()
+                .filter(|v| v.size() == size && v.bit_depth() == 32)
+                .filter(|v| p.refresh == 0 || (v.refresh_rate_millihertz() + 500) / 1000 == p.refresh)
+                .max_by_key(|v| v.refresh_rate_millihertz())
+        });
+        w.set_fullscreen(Some(match mode {
+            Some(v) => Fullscreen::Exclusive(v),
+            None => Fullscreen::Borderless(None),
+        }));
+    }
+
     fn toggle_fullscreen(&self) {
         if let Some(w) = &self.window {
             w.set_fullscreen(if w.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) });
@@ -220,6 +261,7 @@ impl ApplicationHandler<GameEvent> for App {
                 self.status = s;
                 self.update_title();
             }
+            GameEvent::Mode(p) => self.follow(p),
         }
     }
 
