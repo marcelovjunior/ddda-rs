@@ -308,6 +308,7 @@ fn unhandled_filter_calls_registered_stdcall_guest_filter() {
 
 #[cfg(feature = "game")]
 #[test]
+#[cfg(feature = "game")]
 fn original_except_handler4_calls_filter_with_establisher_frame() {
     // The fixture layout follows 0x012F7240: encoded scope-table pointer
     // at frame+8, try level +12, EBP=frame+16, exception pointers at EBP-20.

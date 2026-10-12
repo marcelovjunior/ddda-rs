@@ -14,8 +14,10 @@ demand, every byte read and written recorded).
     python lift.py relift       # after a codegen change: re-translate the current list
     python lift.py one ADDR     # print the Rust for one function
 
-Run scan/vectors/one with E:/ddda-re/tools/pyenv/Scripts/python.exe;
-gen needs only the system Python. docs/NATIVE_PIPELINE.md, "The lifter".
+Run with E:/ddda-re/tools/pyenv/Scripts/python.exe. Production gen also
+decodes the original image for restartable instruction entries (L27b);
+gen(instructions=False) is only for synthetic legacy-IR generator tests.
+docs/NATIVE_PIPELINE.md, "The lifter".
 """
 import json
 import os
@@ -1131,11 +1133,13 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     return TableTargets(targets, bound is not None)
 
 
-def lift(addr, size, callable=frozenset(), ext=False):
+def lift(addr, size, callable=frozenset(), ext=False, step=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
     With `ext`, any other call or outward jump (direct, indirect, imports)
-    goes through x86::call_ext, which the vectors replay."""
+    goes through x86::call_ext, which the vectors replay. `step` instead
+    emits one restartable instruction per arm and explicit guest successors;
+    no callees or services run inside an instruction transaction."""
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
@@ -1162,22 +1166,30 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
+    if step:
+        leaders = starts
     # x87 entry contract (ext only, never callable): the minimal number of
     # values the caller must have left on the x87 stack (MSVC's float
     # intrinsics such as _ftol2 and _CIsin take their argument in st0). The
     # recorder seeds that many random finite values; the replay loads them.
     # Only reads before any call or return count, so a value is never
     # attributed to the caller when a callee could have returned it.
-    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext else 0
-    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
-    X87_PUSH_SITES[addr] = push_sites
+    # Step mode (L27b) runs the actual callees and the live x87 stack, so
+    # neither the entry contract nor the recorder's x87 return pushes nor
+    # the recorder's instruction budget apply there.
+    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext and not step else 0
+    # The selected list already passed scan's stack analysis. Runtime calls
+    # execute actual callees, not the recorder's synthetic x87 return pushes.
+    exits, push_sites = (set(), []) if step else x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
+    if not step:
+        X87_PUSH_SITES[addr] = push_sites
     # Constant-trip loops that need more than the recorder's default budget.
-    budget = constant_loop_budget(ins, callable, h.PLATFORM)
+    budget = None if step else constant_loop_budget(ins, callable, h.PLATFORM)
     budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
                        **({"insn_budget": budget} if budget else {})}
-    if not ext:
+    if not ext and not step:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
     def reg(name):
@@ -1283,9 +1295,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
 
     lines = []
     blocks = sorted(leaders)
+    positions = {i.address: k for k, i in enumerate(ins)}
     for b in blocks:
         body = []
-        k = next(j for j, i in enumerate(ins) if i.address == b)
+        k = positions[b]
         terminated = False
         while k < len(ins):
             i = ins[k]
@@ -1297,7 +1310,24 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 break
             bits = ops[0].size * 8 if ops else 32
             mask = "u32::MAX" if bits == 32 else f"0x{(1 << bits) - 1:X}"
-            if mn in ("sbb", "adc"):
+            if step and mn in ("call", "jmp", "ret", "retn", "repz ret"):
+                if mn in ("ret", "retn", "repz ret"):
+                    extra = ops[0].imm if ops else 0
+                    body.append(f"let t = m.u32(esp); esp = esp.wrapping_add(4 + {extra}); return Flow::Return(t);")
+                else:
+                    body.append(f"let t = {load(i, ops[0])};")
+                    if mn == "call":
+                        body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{i.address + i.size:X});")
+                    body.append(f"return Flow::{'Next' if mn == 'call' else 'Jump'}(t);")
+                terminated = True
+                break
+            elif step and mn.startswith("j"):
+                if nxt is None:
+                    raise Unsupported("falls off the end (conditional jump last)")
+                body.append(f'return if fl.cond("{mn[1:]}") {{ Flow::Jump(0x{ops[0].imm:X}) }} else {{ Flow::Next(0x{nxt:X}) }};')
+                terminated = True
+                break
+            elif mn in ("sbb", "adc"):
                 body.append(f"{{ let (a, b) = ({load(i, ops[0])}, {load(i, ops[1])}); "
                             f"let r = fl.alu_carry(a, b, {bits}, {str(mn == 'sbb').lower()}); {store(i, ops[0], 'r')} }}")
             elif mn in ("mul", "imul") and len(ops) == 1:
@@ -1310,7 +1340,9 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("div", "idiv"):
                 if bits not in (8, 16, 32):
                     raise Unsupported("divide width")
-                body.append(f"{{ let d = {load(i, ops[0])}; let (q, r) = x86::divide(eax, {'eax >> 8' if bits == 8 else 'edx'}, d, {bits}, {str(mn == 'idiv').lower()}).expect(\"x86 divide error\");")
+                helper = 'ddnative_base::execution::divide' if step else 'x86::divide'
+                checked = '' if step else '.expect("x86 divide error")'
+                body.append(f"{{ let d = {load(i, ops[0])}; let (q, r) = {helper}(eax, {'eax >> 8' if bits == 8 else 'edx'}, d, {bits}, {str(mn == 'idiv').lower()}){checked};")
                 body.append(set_reg("ax", "q | (r << 8)") if bits == 8 else
                             set_reg("ax" if bits == 16 else "eax", "q") + set_reg("dx" if bits == 16 else "edx", "r"))
                 body.append("fl = Flags::partial(0, 0); }")
@@ -1392,9 +1424,20 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 if fs:
                     body.append('{ let source_base = cpu.fs_base;')
                 helper, segment = ('string_from', ', source_base') if fs else ('string', '')
-                body.append(f"x86::{helper}(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()}{segment});")
+                repeat = mn.startswith('rep ')
+                if step and repeat:
+                    body.append('if ecx != 0 {')
+                body.append(f"x86::{helper}(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(repeat and not step).lower()}{segment});")
+                if step and repeat:
+                    body.append('ecx = ecx.wrapping_sub(1); }')
                 if fs:
                     body.append('}')
+                if step and repeat:
+                    if nxt is None:
+                        raise Unsupported('falls off the end (REP last)')
+                    body.append(f'return Flow::Next(if ecx != 0 {{ 0x{i.address:X} }} else {{ 0x{nxt:X} }});')
+                    terminated = True
+                    break
             elif mn.startswith("prefetch"):
                 pass  # an architectural hint, not a demand memory read
             elif mn == "sfence":
@@ -1719,6 +1762,12 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 pass  # masked x87 exceptions: wait has no effect
             else:
                 raise Unsupported(f"{mn} {i.op_str}")
+            if step:
+                if nxt is None:
+                    raise Unsupported("falls off the end")
+                body.append(f"return Flow::Next(0x{nxt:X});")
+                terminated = True
+                break
             k += 1
         if not terminated:
             if k >= len(ins):
@@ -1757,13 +1806,16 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
-def cpu_arm(arm, start=None):
+def cpu_arm(arm, start=None, fast=True):
     """Lower cached local-register IR onto the shared Cpu in place.
 
     SAVE/LOAD delimit calls in patterns/lift.json; removing them is valid
     because every preceding assignment already updated the same Cpu. Keep
     the cache representation (and thus scan/callee discovery) unchanged.
-    Substitute whole identifiers, leaving Rust strings untouched.
+    Substitute whole identifiers, leaving Rust strings untouched. `fast`
+    lowers memory accesses to the page-table fast path (whole functions);
+    step functions keep the plain Mem calls, so a transactional Mem sees
+    every access of a restartable instruction.
     """
     arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
@@ -1772,7 +1824,7 @@ def cpu_arm(arm, start=None):
     fields.update({r: f"cpu.xmm[{i}]" for i, r in enumerate(XMM)})
     arm = re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
                  lambda m: fields.get(m[0], m[0]), arm)
-    return fast_memory(arm)
+    return fast_memory(arm) if fast else arm
 
 
 # The six Mem accessors the templates emit, lowered to the inline fast path
@@ -1861,6 +1913,31 @@ def rust_fn(addr, name, arms):
         "        }",
         "    }",
         "}", ""])
+
+
+def rust_step(addr, name, arms):
+    """One instruction per arm, no host guest-call stack or hidden PC."""
+    return "\n".join([
+        f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
+        f"pub fn s_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu, ip: u32) -> Flow {{",
+        "    match ip {", *(cpu_arm(a, fast=False) for a in arms),
+        '        _ => panic!("invalid instruction entry {ip:#x}"),', "    }", "}", ""])
+
+
+def step_source(f, addresses):
+    """Decode original bytes; cached whole-function arms are not checkpoints.
+
+    Released per function to avoid retaining the full Capstone body graph.
+    A generation failure is fatal, never a silent fast-function fallback.
+    """
+    try:
+        arms = lift(f['addr'], f['size'], addresses, f.get('ext', False), step=True)
+        ips = list(BODY_INFO[f['addr']]['body'])
+        return rust_step(f['addr'], f['name'], arms), ips
+    except Unsupported as e:
+        raise Unsupported(f"instruction generation at 0x{f['addr']:08X}: {e}") from e
+    finally:
+        release_body(f['addr'], f['size'])
 
 
 def scan(limit=None):
@@ -2501,7 +2578,7 @@ def verification_gaps(lifted):
     return gaps
 
 
-def gen(chunk=400):
+def gen(chunk=400, instructions=True):
     from pathlib import Path
     lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
     addresses = {f["addr"] for f in lifted}
@@ -2520,6 +2597,7 @@ def gen(chunk=400):
         selected = [f for f in lifted if shard(f["addr"]) == index]
         folder = os.path.join(R, f"crates/ddlift/lift_{index:02}/src")
         names = []
+        instruction_owners = {}
         for k in range(0, len(selected), chunk):
             name = f"lifted_{k // chunk:03}"
             names.append(name)
@@ -2527,6 +2605,13 @@ def gen(chunk=400):
                      "#![allow(warnings, clippy::all)]",
                      "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
             lines += [shard_fn(f) for f in selected[k:k + chunk]]
+            if instructions:
+                lines.append('use ddnative_base::execution::Flow;')
+                for f in selected[k:k + chunk]:
+                    source, ips = step_source(f, addresses)
+                    lines.append(source)
+                    for ip in ips:
+                        instruction_owners.setdefault(ip, f['addr'])
             write_changed(os.path.join(folder, "generated", name + ".rs"), "\n".join(lines))
         mods += names
         index_text = "//! Generated by research/native/lift.py: do not edit.\n"
@@ -2543,6 +2628,11 @@ def gen(chunk=400):
         index_text += "".join(f"(0x{f['addr']:08X}, f_{f['addr']:08x}),\n" for f in selected)
         index_text += "];\npub fn lookup(addr: u32) -> Option<LiftFn> {\n"
         index_text += "    FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)\n}\n"
+        index_text += "use ddnative_base::execution::Step;\n"
+        index_text += "pub const INSTRUCTIONS: &[(u32, Step)] = &[\n"
+        index_text += "".join(f"(0x{ip:08X}, s_{owner:08x}),\n" for ip, owner in sorted(instruction_owners.items()))
+        index_text += "];\npub fn instruction(ip: u32) -> Option<Step> {\n"
+        index_text += "INSTRUCTIONS.binary_search_by_key(&ip, |e| e.0).ok().map(|i| INSTRUCTIONS[i].1)\n}\n"
         write_changed(os.path.join(folder, "generated", "mod.rs"), index_text)
         # Remove obsolete generated modules, never unrelated source files.
         for old in Path(folder, "generated").glob("lifted_*.rs"):
@@ -2562,6 +2652,11 @@ def gen(chunk=400):
     lookup += "fn lookup(addr: u32) -> Option<LiftFn> { match (addr >> 20) % 16 {\n"
     lookup += "".join(f"{i} => ddlift_{i:02}::lookup(addr),\n" for i in range(SHARDS))
     lookup += "_ => unreachable!(), } }\n"
+    # Bodies can cross address-shard boundaries, or share an epilogue.
+    # Exact instruction keys (not ranges) avoid accepting mid-instruction IPs.
+    lookup += "pub fn instruction(ip: u32) -> Option<ddnative_base::execution::Step> {\n"
+    lookup += "".join(f"if let Some(s) = ddlift_{i:02}::instruction(ip) {{ return Some(s); }}\n" for i in range(SHARDS))
+    lookup += "None }\n"
     lookup += "pub fn init() { x86::set_lifted_lookup(lookup); }\n"
     # Preserve public f_ADDRESS entry points, including callers that do not
     # use all()/dispatch_table(). Raw shard entry points require init().

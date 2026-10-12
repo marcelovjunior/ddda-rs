@@ -18,6 +18,15 @@
 - **One next action:** integrate and replay the boundary-changing pair;
   refresh any other lane's cases that still mock 0x012F2280.
 
+L27b continuation batch (2026-10-12): production instruction emission and
+Registry/Session routing now deliver transactional AV/#DE and transfer across
+service callbacks. Light checks pass: 94 runtime + 7 base + 52 lifter tests;
+12 emitted execution fixtures include original `0x01303CB9`/`0x013070E5`
+after RtlUnwind. Windows oracle passes. Blocker to claiming all real __except
+paths: 39 of 58 census filter/body addresses are absent from the selected
+instruction keys. Next action: train 3 regeneration/replay and lifter-lane
+scope coverage; see [L27b Results](tasks/L27b-seh-faults.md#results).
+
 L27 runtime SEH batch (2026-10-11): read-only census identifies 42 EH4
 registrations / 48 scope records, seven C++ FuncInfo thunks and five throw
 sites. Per-thread TEBs, software exception search/nesting and target-frame

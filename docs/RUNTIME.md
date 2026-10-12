@@ -187,9 +187,12 @@ state or reject them. D3D creation uses flags `0x46` or `0x26`
 (`0x00DB192A`, `0x00DB194B`, call `0x00DB1960`), including FPU_PRESERVE;
 it does not justify forcing every game thread to a guessed precision mode.
 L27 adds bounded SEH search, nested dispatch and target-frame unwind.
-Instruction-fault delivery and arbitrary continuation still block: the lifter
-has no instruction checkpoint or continuation entry. See the evidenced
-scope census and remaining executor contract in [L27](tasks/L27-seh-dispatch.md).
+L27b adds a separate per-instruction generated path with transactional Cpu/
+memory checkpoints, explicit successors and exact interior instruction keys.
+Registry/Session uses it for AV/#DE delivery and nonlocal service-callback
+transfers. Light emitted fixtures and the Windows oracle pass; full game
+regeneration/replay remains a train obligation. The selected-list audit still
+misses 39 census filter/body entries; see [L27b Results](tasks/L27b-seh-faults.md#results).
 
 ## 2. Dispatcher and the measured boot frontier
 
@@ -622,7 +625,8 @@ module; behaviour choices are labelled in the code.
 | Audible audio: the XAudio2 2.7 mixer (PCM/float/MS ADPCM decode, linear SRC, volumes, channel volumes, matrices with 2.7's default matrices and 48-frame ramps, submix stages, the platform's AudioReverb XAPO, the game's own XAPOs through IXAPO), fed by `audio.rs`'s clock; output to the default device in `ddplay` (`cpal`, WASAPI shared) | `crates/ddaudio`, `audio.rs`, `crates/ddplay/src/sink.rs` | mixer and wiring done, tested; `ddplay` sink written, build pending; compared against the real XAudio2 2.7 and 2.9 (`ddaudio` oracle): bit-exact or float rounding; voice filters not implemented (unused by the game); the game's XAPOs pass through until `0x00DCF3F0`, `0x00DCCD30`, `0x00DD5030` are lifted; [results](tasks/L19-audio-output.md#results) |
 | WMVCore synchronous movie reader, output media props, header attributes and sample buffers (`0x00F7DEB0`, `0x00F7CA40`, `0x00F7C200`); YV12/PCM via system WMVCore and dispatched guest IStream callbacks | `movies.rs`, `movies/windows.rs` | contract tested; six installed movies decoded through a fixture guest stream and lifted format selector; original stream still needs three native entries, capture encoding remains unbound; [L18 census and limits](tasks/L18-movies.md#results) |
 | Network services offline (brief L32): WS2_32 (18 ordinals) as in a process where no module called WSAStartup (every socket call WSANOTINITIALISED, nothing written; `ntohs`, `__WSAFDIsSet`, `WSAGetLastError` exact), measured with `research/runtime/windows/NetProbe.cs`; Secur32 (SSPI, 9 imports) stops with a report (runs only on a connected socket); WININET `InternetGetConnectedState` offline (`system.rs`) | `net.rs` | done, contract tests written (verification in the integration build); the faithful "initialised, no network" state is not measured; [census](tasks/L32-network-services.md#results) |
-| SEH dispatch (brief L27): software raises, guest chain search/nesting, target-frame unwind, unhandled filter, per-thread TEB | `seh.rs`, Windows x86 oracle, 14 passing SEH regressions | partial; instruction faults and nonlocal/interior continuation await executor support; see [Results](tasks/L27-seh-dispatch.md#results) |
+| SEH dispatch (brief L27): software raises, guest chain search/nesting, target-frame unwind, unhandled filter, per-thread TEB | `seh.rs`, Windows x86 oracle, 14 passing SEH regressions | software dispatch light-checked; instruction/continuation integration in L27b below; scope coverage remains partial; see [Results](tasks/L27-seh-dispatch.md#results) |
+| Instruction fault/continuation (L27b): production step emitter/resolver, transactional AV/#DE, Session routing and nonlocal service/callback transfer | `lift.py`, base `execution.rs`, runtime `executor.rs`; 12 emitted execution fixtures including original EH4 transfer, 94 runtime tests, Windows oracle | implemented/light-checked; train regeneration/replay pending; 39 census scope/filter keys remain absent from selected data; see [Results](tasks/L27b-seh-faults.md#results) |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry

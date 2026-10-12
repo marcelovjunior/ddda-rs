@@ -257,6 +257,10 @@ impl ContextMem<'_> {
     }
 }
 impl Mem for ContextMem<'_> {
+    fn probe(&self, addr: u32, width: u32, write: bool) -> Result<(), u32> {
+        if !write { self.check_read(addr, width); }
+        self.inner.probe(addr, width, write)
+    }
     fn u8(&self, a: u32) -> u8 {
         self.check_read(a, 1);
         self.inner.u8(a)
@@ -476,10 +480,7 @@ fn raise_at_api(m: &mut dyn Mem, cpu: &mut Cpu, e: Exception, argument_bytes: u3
     let expected_esp = continuation.esp;
     match dispatch(m, &mut continuation, &e, e.address) {
         Ok(ip) if ip == e.address && continuation.esp == expected_esp => *cpu = continuation,
-        Ok(ip) => std::panic::panic_any(Stop::UnsupportedResume {
-            address: ip,
-            esp: continuation.esp,
-        }),
+        Ok(ip) => crate::executor::resume(continuation, ip),
         Err(e) => std::panic::panic_any(e),
     }
 }
@@ -581,10 +582,7 @@ pub fn rtl_unwind(m: &mut dyn Mem, cpu: &mut Cpu) {
         }
         let ip = read_context(m, cp, &mut context)?;
         if ip != return_ip || context.esp != cpu.esp + 20 {
-            return Err(Stop::UnsupportedResume {
-                address: ip,
-                esp: context.esp,
-            });
+            crate::executor::resume(context, ip);
         }
         *cpu = context;
         Ok(())
