@@ -102,4 +102,16 @@ class FrameContractTests(unittest.TestCase):
         self.assertNotIn('stack_contract',c)
 
 
+    def test_noreturn_guard_exempts_only_the_root_entry(self):
+        # push ebp; mov ebp,esp; call 0x400100; pop ebp; ret
+        code=bytes.fromhex('558bece8f8000000 5dc3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda targets:h.run_sparse(0x400000,3,body=body,end=0x400000+len(code),noreturn_targets=targets)
+            self.assertEqual([e['target'] for e in run({0x400000})['calls']],[0x400100])
+            with self.assertRaisesRegex(h.Rejected,'noreturn target at 0x00400100'):
+                h.run_sparse(0x400000,3,body=body,end=0x400000+len(code),lifted={0x400100},
+                             noreturn_targets={0x400000,0x400100})
+
+
 if __name__=='__main__':unittest.main()

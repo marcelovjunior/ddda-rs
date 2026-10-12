@@ -949,7 +949,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         while frames and addr == frames[-1][0] and esp_now >= frames[-1][1]:
             frames.pop()
         root_frame[0] = not frames
-        if addr in noreturn_targets:
+        # The guard is for runs that reach a noreturn function. The root's own
+        # body is the code under test (e.g. `__exit` 0x012EDC4B returns
+        # syntactically; its callee does the exit) and runs like any root.
+        if addr in noreturn_targets and addr != address:
             bad.append(f"noreturn target at {addr:#010x}")
             uc_.emu_stop()
 
