@@ -218,7 +218,33 @@ since every service call there takes the lock. Micro (`perf_micro`, release, noi
 inline fast read 0.7–0.85 → 1.5–1.7 ns, trait read 1.6–2.0 → 2.9–3.6 ns,
 fast write 1.2–1.7 → 1.3–2.2 ns.
 
-Static initializers (real lifted code, debug build): pending, see below.
+Static initializers (real lifted code, debug build): not measured. The
+run was queued in the heavy slot and cancelled when the session was wound
+down (2026-10-12). The script is in the private notes
+(`E:\ddda-re
+otes\L42\measure_init.sh`: base vs serial vs parallel, three
+runs each).
+
+### State at hand-off (2026-10-12)
+
+- Committed on `task/L42-parallel-threads`; head's plan: train 3, after
+  L25 (train 2), L21 and L27 settle.
+- **Required before train 3 (head):** the serial mode must cost about
+  nothing; today it is about 9% slower on the access-only job workload.
+  Not started. Plan:
+  - choose the access path once instead of per access: a flag read at
+    function entry next to `pt` (claude-9's lowering already reads
+    `m.page_table()` once per function), or two `Mem`/accessor variants
+    selected at session start, so serial-mode code is the pre-L42 plain
+    path with no atomic loads of perms/pages and no per-access flag;
+  - measure serial against pre-L42 with ddperf's replay and init
+    workloads, and the static initializers (script above).
+- Merge notes, also sent to the owners:
+  - codex's L27 TEB set-up in `run_thread` must run inside
+    `threads::enter`/`leave` in parallel mode;
+  - L27b's `dispatch.rs`/`mem.rs` edits must keep the service guard in
+    `Registry::call` and the atomic `PageTable` (board #9480);
+  - L21's VirtualFree release must use `PageTable::unback` (board #9476).
 
 ### Left open
 
