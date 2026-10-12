@@ -35,6 +35,20 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Checked mocked tail proofs (2026-10-12)
+
+A bounded root trace can end at a direct external mock tail only with its
+return address preserved and a checked static cleanup. The certificate
+records the tail site; execution must report that same mock and cleanup.
+Closed/model targets, unknown cleanup and outstanding stack words do not
+use this rule. **158 tests pass**, including original synthetic tail
+execution and missing/mismatched mock events. Original-game trial pending.
+
+The queued sibling diagnostic was canceled (own waiting process only)
+after static inspection established its next missing operation: signed
+32-bit division at 0x0046A352. **Next:** division proof semantics, then
+serial 0x0046A2D0 and 0x00DBA780 trials when the boot slot is free.
+
 ### Multiplication and rotates (2026-10-12, pending replay)
 
 General proof support covers one-/two-/three-operand 32-bit multiplication,

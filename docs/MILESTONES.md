@@ -1,5 +1,11 @@
 # Milestones
 
+### L28c mocked tail proof (2026-10-12)
+
+- Direct mock tails retain return-address and exact runtime mock checks.
+  **158 tests pass**; original destructor recording is pending.
+- **Next action:** signed division proof, then sibling/destructor trials.
+
 ### L28c multiply/rotate fixtures (2026-10-12, pending replay)
 
 - **+2/+6:** 0x00494D80 and 0x0046A150 record 3/3. **157 tests pass.**

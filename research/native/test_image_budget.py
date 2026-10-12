@@ -105,6 +105,31 @@ class ImageBudgetTests(unittest.TestCase):
             ins,read,_=self.fixture(bytes.fromhex(code))
             self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
 
+    def test_proved_root_tail_requires_the_exact_runtime_mock_contract(self):
+        caller=bytearray(bytes.fromhex('b904000000 31c0 40 49 75fc'))
+        tail=0x400000+len(caller)
+        caller+=b'\xe9'+struct.pack('<i',0x400100-tail-5)
+        ins,read,pages=self.fixture(bytes(caller))
+        proof=image_bound(ins,read,0xf008000,guarded=True,pop_for=lambda _:4)
+        self.assertIsNotNone(proof)
+        self.assertEqual(proof['mock_calls'],{tail:4})
+        guard=WriteGuard(proof);guard.call(tail)
+        self.assertFalse(guard.calls_match())
+        self.assertFalse(guard.mock(tail,0))
+        self.assertTrue(guard.mock(tail,4));self.assertTrue(guard.calls_match())
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True,
+                                      pop_for=lambda _:4,closed={0x400100}))
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read),patch.object(h,'static_pop',return_value=4):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(caller))
+        self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+8)
+        self.assertEqual(len(result['calls']),1)
+        self.assertIn('image_budget',result)
+        # A tail with an outstanding saved word cannot consume the root return.
+        bad,read,_=self.fixture(bytes.fromhex('50 e9fa000000'))
+        self.assertIsNone(image_bound(bad,read,0xf008000,guarded=True,pop_for=lambda _:4))
+
     def test_signed_branches_use_overflow_not_only_the_result_sign(self):
         for code in (
                 'b8ffffff7f 83c001 7d01 cc c3',

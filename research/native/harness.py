@@ -1475,9 +1475,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 own[pc] = next(dmd.disasm(code(pc, 15), pc))  # the function's own code: from the image
             i = own[pc]
             branch[0] = i if i.mnemonic == "call" or i.mnemonic.startswith("j") else None
+            if budget_guard is not None and i.mnemonic in ('call','jmp'):
+                budget_guard.call(i.address)
             if i.mnemonic == "call":  # its arguments: what was pushed since the previous call
-                if budget_guard is not None:
-                    budget_guard.call(i.address)
                 pending_call[0] = (i.address+i.size, uc_.reg_read(UC_X86_REG_ESP), pushed[0])
                 pushed[2], pushed[0] = pushed[0], 0
             prologue = (i.mnemonic == "push" and i.operands[0].type == 1) or                 (i.mnemonic == "mov" and i.op_str == "ebp, esp") or                 (i.mnemonic in ("sub", "and") and i.op_str.startswith("esp, "))

@@ -372,6 +372,17 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         else:
             raise ValueError('destination')
 
+    def finish(extra=0):
+        if regs['esp'] != stack or any(stack+k in stores for k in range(4)):
+            return None
+        if code_bytes.intersection(stores) or count+overhead+extra > ceiling:
+            return None
+        if guarded:
+            return dict(instructions=count+overhead+extra,
+                        protected=sorted(protected | code_bytes | set(range(stack,stack+4))),
+                        unknown_writes=sorted(unknown_writes),mock_calls=mock_calls)
+        return count+extra
+
     try:
         for count in range(1, ceiling+1):
             if count+overhead > ceiling:
@@ -407,15 +418,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         outgoing = 0
                     continue
                 # A saved root return address must not have been overwritten.
-                if regs['esp'] != stack or any(stack+k in stores for k in range(4)):
-                    return None
-                if code_bytes.intersection(stores):
-                    return None  # includes code discovered in closed callees
-                if guarded:
-                    return dict(instructions=count+overhead,
-                                protected=sorted(protected | code_bytes | set(range(stack,stack+4))),
-                                unknown_writes=sorted(unknown_writes), mock_calls=mock_calls)
-                return count
+                return finish()
             if mn == 'nop':
                 continue
             if guarded and mn in ('cld','std'):
@@ -623,7 +626,15 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 if taken:
                     target = op[0].imm & MASK
                     if guarded and not frames and target not in root_addresses:
-                        return None  # a root tail is a different mock boundary
+                        if mn != 'jmp' or target in closed or target in models or pop_for is None:
+                            return None
+                        pop = pop_for(target)
+                        if type(pop) is not int or not 0 <= pop <= 0x400 or pop % 4:
+                            return None
+                        # A root tail uses its existing return address. Execution
+                        # must perform this exact external mock and stack cleanup.
+                        mock_calls[i.address] = pop
+                        return finish(4)
                     pc = target
             elif guarded and mn == 'call':
                 direct = op[0].type == X86_OP_IMM
