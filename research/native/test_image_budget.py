@@ -75,6 +75,36 @@ class ImageBudgetTests(unittest.TestCase):
         self.assertIn('image_budget',result)
         self.assertIn([0x20000000,'00'],result['reads'])
 
+    def test_signed_products_and_rotates_use_only_defined_flags(self):
+        for code in (
+                'b8ffffff7f 6bc002 7201 cc c3',
+                'b8feffffff 6bc003 83f8fa 7401 cc c3',
+                'b8ffffffff b9ffffffff 0fafc1 83f801 7401 cc c3',
+                '31c9 b801000080 d1c0 7201 cc c3',
+                '31c9 b801000000 d1c8 7201 cc c3',
+                '31c9 c1c020 7401 cc c3', # masked zero leaves flags intact
+                '31c9 c1c002 7401 cc c3'): # nonzero rotate preserves ZF
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                '31c0 6bc002 7401 cc c3', # IMUL leaves ZF undefined
+                '6bc002 7201 cc c3', # unknown product: unknown CF
+                '31c9 c1c002 7c01 cc c3'): # multi-bit rotate: unknown OF
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_one_operand_multiply_tracks_both_halves_and_defined_flags(self):
+        for code in (
+                'b8ffffffff b902000000 f7e1 83fa01 7506 83f8fe 7501 c3 cc',
+                'b8ffffffff b902000000 f7e9 83faff 7506 83f8fe 7501 c3 cc',
+                'b8ffffffff b902000000 f7e1 7201 cc c3',
+                'b8feffffff b903000000 f7e9 7301 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in ('31c0 31c9 f7e1 7401 cc c3','b902000000 f7e1 7201 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
     def test_signed_branches_use_overflow_not_only_the_result_sign(self):
         for code in (
                 'b8ffffff7f 83c001 7d01 cc c3',

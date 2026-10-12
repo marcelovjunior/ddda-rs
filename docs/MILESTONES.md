@@ -1,5 +1,11 @@
 # Milestones
 
+### L28c multiply/rotate fixtures (2026-10-12, pending replay)
+
+- **+2/+6:** 0x00494D80 and 0x0046A150 record 3/3. **157 tests pass.**
+- Cumulative **+5/+15**, native-L28c **59,597 / 177,385**; all baseline
+  records unchanged. **Next action:** 0x0046A2D0 proof and destructor tail.
+
 ### L28c exact-input fixtures (2026-10-12, pending replay)
 
 - **+3/+9**: 0x004A06B0, 0x00495150, 0x0050A110 record 3/3 each.

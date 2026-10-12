@@ -532,6 +532,48 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     if base_pointer is not None and b is not None and mn in ('add','sub','inc','dec'):
                         adjusted = (base_pointer+(b if mn in ('add','inc') else -b)) & MASK
                     put(i, op[0], result, adjusted, affine_value)
+            elif guarded and mn in ('mul','imul') and len(op) == 1 and op[0].size == 4:
+                a,b = regs['eax'],get(i,op[0])
+                product,overflow = None,None
+                if a is not None and b is not None:
+                    if mn == 'imul':
+                        a = a-(1 << 32) if a & 0x80000000 else a
+                        b = b-(1 << 32) if b & 0x80000000 else b
+                    product = a*b
+                    overflow = (not -(1 << 31) <= product < (1 << 31) if mn == 'imul'
+                                else product > MASK)
+                for name,shift in (('eax',0),('edx',32)):
+                    regs[name] = None if product is None else (product >> shift) & MASK
+                    revisions[name] += 1
+                    pointers[name] = affine_regs[name] = None
+                flags = {} if overflow is None else dict(cf=overflow,of=overflow)
+            elif guarded and mn == 'imul' and len(op) in (2,3) and op[0].size == 4:
+                a,b = (get(i,op[0]),get(i,op[1])) if len(op)==2 else (get(i,op[1]),get(i,op[2]))
+                result, overflow = None, None
+                if a is not None and b is not None:
+                    signed_a = a-(1 << 32) if a & 0x80000000 else a
+                    signed_b = b-(1 << 32) if b & 0x80000000 else b
+                    product = signed_a*signed_b
+                    result = product & MASK
+                    overflow = not -(1 << 31) <= product < (1 << 31)
+                put(i,op[0],result)
+                # IMUL defines only CF/OF; a known product does not define ZF/SF.
+                flags = {} if overflow is None else dict(cf=overflow,of=overflow)
+            elif guarded and mn in ('rol','ror') and op[0].size == 4:
+                a,n = get(i,op[0]),get(i,op[1])
+                n = None if n is None else n & 31
+                if n == 0:
+                    continue
+                result = None
+                flags.pop('cf',None);flags.pop('of',None)
+                if a is not None and n is not None:
+                    result = (((a << n) | (a >> (32-n))) if mn == 'rol'
+                              else ((a >> n) | (a << (32-n)))) & MASK
+                    flags['cf'] = bool(result & (1 if mn == 'rol' else 0x80000000))
+                    if n == 1:
+                        flags['of'] = (bool(result & 0x80000000) != flags['cf'] if mn == 'rol'
+                                       else bool(result & 0x80000000) != bool(result & 0x40000000))
+                put(i,op[0],result)  # ZF/SF remain unchanged by a rotate.
             elif guarded and mn == 'cdq':
                 value = regs['eax']
                 regs['edx'] = None if value is None else MASK if value & 0x80000000 else 0

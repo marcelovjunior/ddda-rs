@@ -35,6 +35,24 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Multiplication and rotates (2026-10-12, pending replay)
+
+General proof support covers one-/two-/three-operand 32-bit multiplication,
+including EDX:EAX products, and 32-bit rotates with masked counts. Only
+CF/OF are known after multiplication; rotates preserve ZF/SF and leave OF
+unknown for multi-bit counts. **157 light tests pass.**
+
+**+2 functions / +6 cases**, all 3/3: 0x00494D80 proves **76,963**
+instructions (limit 96,963), and 0x0046A150 proves **83,097** (limit 103,097).
+Cumulative session **+5/+15**, native-L28c **59,597 / 177,385**.
+`full-multiply-adopt-audit.json` confirms all 59,592 baseline records /
+177,370 cases unchanged. Ten original recipes remain, including the
+set-aside 0x00493AA0. No Rust build; head replay required.
+
+0x0046A2D0 still records 0/3; its next diagnostic is queued behind
+claude-2's boot run. **Next:** that proof stop and the final mocked tail
+boundary of 0x00DBA780, with runtime call-contract checks retained.
+
 ### Exact-input recording batch (2026-10-12, pending train replay)
 
 **+3 functions / +9 normal-return cases**, all 3/3 under guarded-input-v1:
