@@ -53,7 +53,7 @@ threads start; it is off by default, and the serial mode is the exact
 model as before. In parallel mode translated code of different guest
 threads runs at the same time, while every service stays serialised
 under the guest lock. On a synthetic job workload with 7 workers it is
-4.2x faster than serial. The branch builds on claude-9's L25 page-table
+5.3x faster than serial. The branch builds on claude-9's L25 page-table
 prototype (`task/L25-perf-prototypes`, train 2), as agreed with them.
 
 ### 1. Analysis
@@ -132,6 +132,9 @@ against one core today.
   inside such a callback runs serialised, as before. Waits, sleeps and
   yields hand the lock over exactly as in the serial mode, keeping the
   nesting depth.
+- **Per-thread state** (last error, TLS) is swapped only when a thread
+  takes the lock from another thread, not at every hand-over, in both
+  modes.
 - **Threads**: in parallel mode a guest thread starts and runs
   translated code without the lock, and takes it to record its exit or
   fault. `Session::call` runs guest code without the lock
@@ -199,15 +202,19 @@ with other agents (16 host threads):
 
 | | ms/frame |
 |---|---:|
-| base (before L42), serial | 10.4–12.0 (mean of 8 runs 11.3) |
-| L42, serial | 11.2–13.0 (mean 12.1) |
-| L42, parallel | 2.8–2.9 |
+| base (before L42), serial | 9.35–9.59 |
+| L42, serial | 10.18–10.65 |
+| L42, parallel | 1.81–2.10 |
 
-Parallel is 4.2x faster than serial. The serial mode pays about 8% on
-this access-only workload (the permission and page loads are atomic now,
-which LLVM cannot merge, plus a flag test per access). Two fixes brought
-it down from 38%: inlining the page lookup on stores, and plain copies
-until a parallel runtime exists. Micro (`perf_micro`, release, noisy):
+(Interleaved runs of the final code, release.) Parallel is 5.3x faster
+than serial. The serial mode pays about 9% on this access-only workload:
+the permission and page loads are atomic now, which LLVM cannot merge,
+plus a flag test per access. Three fixes brought it down from 38%:
+inlining the page lookup on stores, plain copies until a parallel
+runtime exists, and swapping the per-thread state (last error, TLS) only
+when a different thread takes the lock instead of at every hand-over.
+That last fix also took parallel mode from 2.8 to 1.9 ms per frame,
+since every service call there takes the lock. Micro (`perf_micro`, release, noisy):
 inline fast read 0.7–0.85 → 1.5–1.7 ns, trait read 1.6–2.0 → 2.9–3.6 ns,
 fast write 1.2–1.7 → 1.3–2.2 ns.
 
