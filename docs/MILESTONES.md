@@ -1,5 +1,17 @@
 # Milestones
 
+### L28c shared continuation inputs (2026-10-12, pending replay)
+
+- **+7 functions / +21 cases**, all 3/3; private **59,685 / 177,649**.
+  Audit preserves every **59,678 / 177,628** baseline record/case.
+- Train 15 merged; owner boundary rule integrated as **2d1a4f80**.
+  **205 light tests**, then **76 focused tests** for checked-caller bounds.
+- D29AF0 caller replays pass, but ordinary and proof-enabled target trials
+  still reach the limit. RESIDUALS: **49 rows, 23 pending, 11 unfinished
+  recorder rows**. No generation or Rust build; head replay required.
+- **Next action:** remaining finite-bound inputs, boot requests first;
+  coordinate the two inherited-frame entries with the lifter owner.
+
 ### L28c frame and scalar input batches (2026-10-12, pending replay)
 
 - **+16 functions / +48 cases**, all 3/3; private **59,678 / 177,628**.

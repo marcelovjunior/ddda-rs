@@ -35,6 +35,47 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Shared continuation inputs: +7/+21 (2026-10-12, pending replay)
+
+Train 15 main **79c22a5b** merged as **0dd0c196**; generated output was
+not regenerated. Per owner confirmation #9844, integrated the unchanged
+L50 boundary rule **ff91ed8f** as **2d1a4f80**. It includes the actual
+shared frame restoration in six CRT bodies and both continuations in
+0x005652E0 (11 -> 33 instructions).
+
+Existing **zero-call-v1** records **3/3** for **005652E0, 012F693F,
+012F6948, 012F6A6F, 012F6A78, 01300DFF, 01329888**. The inferred
+one-value x87 entry contracts of 012F6948, 012F6A78 and 01329888 are
+supplied by the existing finite x87 input generator. No return or CPU
+check changed. Private totals: **59,685 functions / 177,649 cases**.
+`L28c/shared-tail-audit.json` preserves every baseline **59,678 / 177,628**;
+no changed records, promotions, removals or stale mocks. Frozen comparison
+base remains **native-train3-orig**; additions remain in **native-L28c**.
+
+**General checked-caller input improvement:** **295beb39** identifies
+caller-replay rejections separately from target rejections. **f413a2b7**
+adds `caller_state.py --bounded`: the caller still replays every accepted
+observation exactly, then guarded-state-v1 may establish a finite target
+bound from captured state. The original limit remains when no proof fits.
+A synthetic 12,000-trip loop rejects at the ordinary limit and returns
+with the proved bound while reading the caller's saved local.
+
+For **D29AF0**, nine exact caller replays from six callers pass; all nine
+target runs reach the instruction limit. Three bounded-state target trials
+also reach that limit: no finite bound or replacement fixture was adopted.
+This resolves the earlier ambiguity about which phase failed.
+
+**Validation:** 205 light tests after the merge/boundary integration;
+76 focused caller/setup/bound tests after the new opt-in. All recording
+runs went serially through heavy.py; all workers exited. No Rust build or
+replay: head integration remains required. RESIDUALS has **49 rows, 23
+pending replay**, leaving **11 unfinished recorder rows**. 493AA0 stays
+set aside. Owner disposition of standalone 565308/56532A, now decoded
+inside 5652E0, was requested in board #9849; existing 565308 records remain
+unchanged. **Next action:** remaining finite-bound inputs, with boot
+requests first; resolve the continuation rows with the lifter owner.
+
+
 ### Frame and scalar inputs: +16/+48 (2026-10-12, pending replay)
 
 Latest main **1ed8c4aa** merged before handoff (train 14 still credits
