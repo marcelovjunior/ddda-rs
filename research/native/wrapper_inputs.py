@@ -39,13 +39,14 @@ def virtual_tail_wrapper(target, read):
     return False
 
 
-def fixed_frame_allocations(entry, body, read, *, arithmetic_prefix=False):
+def fixed_frame_allocations(entry, body, read, *, arithmetic_prefix=False, tail_exits=False):
     """Opt-in mock-input heuristic for a fixed frame with matching epilogues.
 
     Unlike the legacy straight-line heuristic this permits writes to locals.
     Every decoded return must immediately follow the same ADD ESP,N; only
     one entry-prefix SUB ESP,N is considered. Actual return/stack guards
-    still validate every recording.
+    still validate every recording. tail_exits additionally checks external
+    unconditional jumps and refuses conditional transfers outside the body.
     """
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     md.detail = True
@@ -58,7 +59,14 @@ def fixed_frame_allocations(entry, body, read, *, arithmetic_prefix=False):
     previous = {i.address+i.size:i for i in decoded.values()}
     cleanup = set()
     for ins in decoded.values():
-        if ins.mnemonic not in ('ret','retn','repz ret'):
+        is_exit = ins.mnemonic in ('ret','retn','repz ret')
+        if tail_exits and ins.mnemonic.startswith('j'):
+            target = ins.operands[0]
+            outside = target.type != 2 or (target.imm & 0xffffffff) not in decoded
+            if outside and ins.mnemonic != 'jmp':
+                return set()
+            is_exit |= outside
+        if not is_exit:
             continue
         prior = previous.get(ins.address)
         if (prior is None or prior.mnemonic != 'add' or len(prior.operands) != 2

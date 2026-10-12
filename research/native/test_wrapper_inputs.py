@@ -137,6 +137,28 @@ class WrapperTests(unittest.TestCase):
                      '83ec20 ffe0', '83ec20 e800000000 c3'):
             self.assertEqual(sites(code), set())
 
+    def test_fixed_frame_can_restore_before_a_tail_call(self):
+        prefix = '8b01 83ec20 53 '
+        suffix = '5b 83c420 ffe0'
+        with self.assertRaises(h.Rejected):
+            self.run_caller(suffix, 'outgoing-call-v1', prefix)
+        result = self.run_caller(suffix, 'tail-frame-v1', prefix)
+        self.assertEqual([c['out']['pop'] for c in result['calls']], [8, 0])
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+        self.assertEqual(result['regs_out']['ebx'], result['regs_in']['ebx'])
+
+    def test_tail_frame_requires_matching_cleanup_at_all_exits(self):
+        def sites(code):
+            data = bytes.fromhex(code)
+            body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0)]
+            return fixed_frame_allocations(0, body, lambda a,n:data[a:a+n],
+                                           arithmetic_prefix=True, tail_exits=True)
+        self.assertEqual(sites('8b01 83ec20 85c0 7405 83c420 ffe0 83c420 c3'), {2})
+        for code in ('8b01 83ec20 85c0 7405 83c420 ffe0 c3',
+                     '8b01 83ec20 85c0 747f 83c420 ffe0',
+                     '8b01 83ec20 85c0 7405 83c410 ffe0 83c420 c3'):
+            self.assertEqual(sites(code), set())
+
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
         suffix = '5f 5e 5d 5b 8be5 5d c3'
