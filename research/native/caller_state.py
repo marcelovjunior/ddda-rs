@@ -54,6 +54,14 @@ def capture(caller, accepted, target, run, key):
     return state, provenance
 
 
+def record_from_caller(caller, accepted, helper, seed, run, key, bounded=False):
+    """Keep the caller replay exact; optionally prove a target instruction bound."""
+    state, recipe = capture(caller, accepted, helper['addr'], run, key)
+    inputs = {'input_strategy': 'guarded-state-v1'} if bounded else {}
+    result = run(helper, seed, initial_state=state, **inputs)
+    return dict(construction=recipe, **result)
+
+
 def main():
     import lift
     import structured_inputs as s
@@ -61,6 +69,8 @@ def main():
     p.add_argument('target', type=lambda v: int(v, 0), nargs='+')
     p.add_argument('--seeds', type=int, default=3)
     p.add_argument('--seconds', type=float, default=20)
+    p.add_argument('--bounded', action='store_true',
+                   help='prove a finite target bound from checked caller state; retain the ordinary limit if unproven')
     p.add_argument('--adopt', action='store_true', help='adopt the successful trials (structured_inputs.adopt)')
     args = p.parse_args()
     root = Path(lift.N)
@@ -102,9 +112,9 @@ def main():
         for index, case in enumerate(order[:args.seeds], 1):
             seed = (target << 8) ^ index
             try:
-                state, recipe = capture(fs[case['addr']], case, target, run, lift.vector_key(fs[case['addr']]))
-                result = run(helper, seed, initial_state=state)
-                found.append(dict(addr=target, seed=seed, body_key=lift.vector_key(helper), construction=recipe, **result))
+                result = record_from_caller(fs[case['addr']], case, helper, seed, run,
+                                            lift.vector_key(fs[case['addr']]), bounded=args.bounded)
+                found.append(dict(addr=target, seed=seed, body_key=lift.vector_key(helper), **result))
                 reason = 'ok'
             except (h.Rejected, ValueError) as e:
                 reason = str(e)
