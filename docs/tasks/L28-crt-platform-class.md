@@ -76,14 +76,42 @@ needs exception-dispatch state (a runtime task, L15/L17).
 
 **Rule: promotion of verified call-free callees.**
 `structured_inputs.py promote` re-lifts a selected ext entry as a closed
-callee when (a) its arms make no call at all, (b) no recorded case mocks it,
-and (c) some unverified candidate calls it directly. Its own cases are
-re-recorded in closed mode with its previous input distribution. Because
-the recorder and the replay both run closed targets for real (the replay's
-dispatch table and `run_sparse`'s `lifted` set), no existing case changes
-meaning; only the promoted entries' own records and cases are replaced.
-Callers then run the original `__SEH_prolog4`/`__SEH_epilog4` (verified
-under L17's caller-frame contract) inside their own fixtures.
+callee when its arms make no call at all and some unverified candidate
+calls it directly. Its own cases are re-recorded in closed mode with its
+previous input distribution. The recorder (`run_sparse`'s `lifted` set) and
+the replay (dispatch table) both run closed targets for real, so a case that
+mocked a promoted entry would change meaning. Hence:
 
-PENDING: promote, fresh prepare, the L17 pass protocol, replay, counts,
-what verifies, the noreturn/unwind remainder, adoption.
+- An ordinary call-free entry that some recorded case mocks stays ext: a
+  mock with arbitrary returns is a faithful stand-in for it.
+- A caller-frame helper (derived `frame_exit`, L17) is promoted even when
+  mocked, because no mock can move the caller's frame. The callers whose
+  cases mock it are re-lifted against the new closed set and re-recorded
+  with their previous distribution. The helper is promoted only if every
+  one of them records again; otherwise it stays ext (iterate to a fixpoint),
+  so no verified function is lost.
+
+Promoted helpers store `frame_exit`, and `run_sparse(frame_contracts=)` ends
+their nested frame at the return PC with exactly that ESP. The prolog
+returns below the call's ESP, and the ordinary `ESP >= call ESP` test would
+leave the caller marked nested, which breaks mocking and the own-return
+check. A synthetic regression test shows the caller rejected without the
+contract and recorded with it.
+
+Two corrections during the run. (1) The first draft also required "no
+recorded case mocks it". That excluded the SEH helpers themselves: 21 cases
+of 8 verified functions (0x012EDAF5, 0x012F914F, 0x012F933B, 0x012F95B6,
+0x012F96FD, 0x012FAD40, 0x01302F75, 0x01304FEE) mock both helpers. That run
+promoted 11 unmocked call-free entries, 0x01306F7F among them. (2) Dropping
+that gate entirely made 378 widely mocked targets (102,442 recorded calls)
+eligible and started re-recording most of the program. I stopped it before
+it wrote anything and restricted the mocked case to caller-frame helpers.
+
+**Verification process.** Under the batched-verification rule
+(AGENT-RULES.md, 2026-10-11) this branch records on its own data set and
+runs the Python tests. The full gen + required-vector replay is the head's
+integration train.
+
+PENDING: promote, fresh prepare, the L17 pass protocol (3 seeds x 9
+strategies, then 12 seeds x 3 zero-return strategies), counts, what records,
+the noreturn/unwind remainder, adoption.
