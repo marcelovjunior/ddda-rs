@@ -1,5 +1,20 @@
 # Milestones
 
+### L28c constructor/title fixtures (2026-10-12, pending replay)
+
+- A guarded finite-trace strategy records eleven more constructor/title
+  functions, three cases each. It traces closed callees and enforces
+  unknown-write non-aliasing assumptions during original execution.
+  Ordinary instruction limits and unknown-control refusals remain.
+- Private native-L28c: **59,548 → 59,559 records / 177,238 → 177,271
+  cases**; all old records/cases unchanged. **79 light tests pass**.
+  One older cleanup-test expectation awaits its file owner's correction;
+  the valid split cleanup and actual imbalance have a passing regression.
+- Four requested constructors retain evidenced blockers (two indirect
+  calls, one unknown condition, one unresolved terminal-path cleanup).
+  **Next action:** head replay/boot preview and claude-6's cleanup evidence;
+  details and exact residual addresses are in L28 Results. Data stays open.
+
 ### L28c archive boot stop recorded (2026-10-12, pending replay)
 
 - `0x00419100` now records **3/3** cases. A conservative image-only

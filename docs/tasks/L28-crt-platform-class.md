@@ -734,3 +734,92 @@ passed: it did not by itself establish the constructor bounds. The lifter
 owner granted the budget area in board #9567, and requested merging
 `task/L27b-integrate` (acdd978b) before changing lift.py. That merge and the
 remaining requested constructor route follow this boot-stop commit.
+
+### L28c constructor and title bounds (2026-10-12)
+
+**Eleven more functions record 3/3 each:** private native-L28c moves
+**59,548 → 59,559 records / 177,238 → 177,271 cases** after the archive
+commit ab1c2dbe. All **59,548 previous records and case multisets are
+unchanged**, with no removals, promotions, stale mock boundaries, or
+unrelated changes (`L28c/guarded-cumulative-audit.json`). The first six
+also have their own audit (`L28c/constructors-audit.json`). Including
+the archive function, this continuation adds **12 functions / 36 cases**.
+The data set remains **open, not frozen**, for the head's boot preview.
+
+| Address | Guarded instruction bound | Route |
+|---|---:|---|
+| 0x00475400 | 91,980 | requested constructor |
+| 0x0049F990 | 25,242 | requested constructor |
+| 0x00480240 | 45,500 | requested constructor |
+| 0x00490E80 | 32,140 | requested constructor |
+| 0x004915A0 | 208,066 | requested constructor |
+| 0x00480950 | 45,329 | requested constructor |
+| 0x004755E0 | 51,233 | remaining title queue |
+| 0x00478050 | 29,125 | remaining pointer queue |
+| 0x0048AC80 | 31,691 | remaining title queue |
+| 0x0048CC00 | 42,582 | remaining pointer queue |
+| 0x004918D0 | 174,153 | remaining title queue |
+
+The opt-in **guarded-bounded-v1** distribution uses zero-call-v1 inputs
+and zero-return mocks. Its abstract trace starts with unknown GPRs except
+the actual entry ESP. It follows direct closed calls, including exact
+stack saves/restores, and the recorder's existing direct mock cleanup and
+platform models. Known memory writes update abstract memory; unknown
+values never become constants. An unknown-address output store may be
+ignored only with a **runtime non-aliasing obligation**: it must not touch
+any concrete byte read by the proof, any executed code byte, or the root
+return address. Both Unicorn memory-write hooks and platform-model
+`mwrite` enforce that guard; a violation rejects the original run. Bounds
+include conservative mock/trampoline overhead and the ordinary 20,000
+allowance, within the existing two-million ceiling. Unknown branches,
+unknown indirect targets, unsupported effects, unbalanced returns, and
+proof resource limits still refuse an enlarged budget. Original execution,
+not the abstract interpreter, produces every accepted fixture.
+
+The four requested constructors still without cases are evidenced:
+
+- **0x00478600:** proof stops at unknown `call edx`, **0x00478854**.
+- **0x00DD5ED0:** proof stops at unknown `call eax`, **0x00DD5F99**.
+  The vtable store/reload through an unknown object pointer is not yet
+  tracked symbolically; no callee contract is assumed.
+- **0x0075BAD0:** after tracing its known table branch and bounded REP
+  store, the condition at **0x0075BCA8** remains unknown.
+- **0x00DB8B90:** its return at **0x00DB8BD8** is four bytes off because
+  0x00DB8AC0's cleanup is unresolved. Its normal tail at **0x00DB8B65**
+  reaches LeaveCriticalSection through IAT **0x0139D164** (pop four);
+  its failure path at **0x00DB8B7F** calls 0x004080A0 before INT3.
+  Noreturn evidence for that failure path belongs to claude-6's lane;
+  board #9586 reports the dependency. No pop was guessed.
+
+After the first six adoptions, a static census of all **70** remaining
+eligible title/pointer candidates found precisely the five additional
+bounds above. They all recorded; **65** remain without a fixture in that
+queue. This is not a new successful strategy for unknown control flow.
+Private evidence: `L28c/constructor-proof-evidence.json`,
+`remaining_proofs.py`, `queue-proof-evidence.json`, the two recording logs,
+and `structured-guarded-bounded-v1.jsonl`. Missing prepared candidates
+fall **214 → 203**; rejected/quarantined entries were not admitted.
+
+**Light checks:** 79 tests pass: image bounds 15, frame contracts 20,
+function tails 13, structured inputs 19, record inputs 2, record audit 5,
+existing lifter budgets 5. The budget tests cover actual Unicorn alias
+rejection (including platform writes), closed callee save/restore, unknown
+conditions, REP/count/DF constraints, known interior jumps, and unchanged
+default runaway rejection. No lift.py change was needed.
+
+One pre-existing expectation exposed by the owner merge is still awaiting
+its owner's update: `test_lift_remaining.py` passes 12/13, but its old
+negative `sub esp,8; indirect call; xor eax,eax; add esp,4; ret` now has
+the valid split cleanup (callee four plus caller four). The earlier
+cleanup scanner stopped at XOR and incorrectly popped eight. A new
+owned frame regression proves pop zero/caller eight, pop four/caller four,
+and rejection of the genuinely imbalanced caller twelve. Board #9583
+requests permission to update the other owner's test; that file is
+unchanged. This outstanding test is explicitly **not** reported green.
+
+Merged the lifter owner's acdd978b and 9c412273 through **4104d570** and
+**e76ab8bb**, preserving both refresh commands, input_layout/visited, and
+the owner's terminal/x87 changes. Recording ran serially through heavy.py
+as codex, at most six workers; free memory stayed above 16 GB during this
+batch. No Rust replay (head's integration train), snapshots, shared-data
+writes, native-L17/native-train3 changes, generated-code commits or pushes.
