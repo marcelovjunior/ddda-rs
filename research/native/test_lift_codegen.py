@@ -157,6 +157,84 @@ class CodegenTests(unittest.TestCase):
                 result = subprocess.run(command, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_memory_fast_path_matches_the_trait(self):
+        # Lowered accessors (m.fast_u32(pt, ..)) with a page table give the
+        # same state and memory as through the trait (pt None): accesses
+        # within a page, page-crossing ones, unbacked pages, stack pushes
+        # and a store whose value is a load (two-phase borrow).
+        self.assertEqual(lift.fast_memory('m.set_u32(a, m.u32(b)); let s = "m.u8(";'),
+                         'm.fast_set_u32(pt, a, m.fast_u32(pt, b)); let s = "m.u8(";')
+        arms = [f'''0x1000 => {{
+            m.set_u32(0xFFE, eax); m.set_u16(0x2FFF, ecx as u16); m.set_u8(0x3000, 7);
+            eax = m.u32(0xFFC) ^ m.u32(0x1FFE) ^ (m.u16(0x2FFF) as u32) ^ (m.u8(0x3000) as u32);
+            {{ let v = m.u32(esp); esp = esp.wrapping_sub(4); m.set_u32(esp, v ^ 0x55); }}
+            m.set_u32(0x4000, m.u32(0xFFE)); edx = m.u32(0x5000);
+            {lift.SAVE} return;
+        }}''']
+        generated = lift.rust_fn(0x1000, 'synthetic', arms)
+        self.assertIn('let pt = m.page_table();', generated)
+        self.assertNotIn('m.u32(', generated)
+        root = Path(__file__).resolve().parents[2]
+        source = f'''#![allow(warnings)]
+            #[path = "{(root / 'crates/ddnative-base/src/mem.rs').as_posix()}"] mod mem;
+            #[path = "{(root / 'crates/ddnative-base/src/x86.rs').as_posix()}"] mod x86;
+            #[path = "{(root / 'crates/ddnative-base/src/x87.rs').as_posix()}"] mod x87;
+            use mem::Mem; use x86::{{Cpu, Flags}};
+            mod generated {{ use super::*; {generated} }}
+        ''' + r'''
+            struct Paged { t: Box<std::cell::UnsafeCell<mem::PageTable>>, fast: bool, calls: std::cell::Cell<u32> }
+            impl Paged {
+                fn new(fast: bool) -> Paged {
+                    let mut t = mem::PageTable::default();
+                    t.perms.fill(mem::READ | mem::WRITE);
+                    Paged { t: Box::new(std::cell::UnsafeCell::new(t)), fast, calls: std::cell::Cell::new(0) }
+                }
+                fn page(&self, p: usize) -> Vec<u8> {
+                    unsafe { (*self.t.get()).pages[p].as_ref().map(|b| b.to_vec()).unwrap_or_default() }
+                }
+            }
+            impl Mem for Paged {
+                fn u8(&self, a: u32) -> u8 {
+                    self.calls.set(self.calls.get() + 1);
+                    unsafe { (*self.t.get()).pages[(a >> 12) as usize].as_ref().map_or(0, |p| p[(a & 0xFFF) as usize]) }
+                }
+                fn set_u8(&mut self, a: u32, v: u8) {
+                    self.calls.set(self.calls.get() + 1);
+                    unsafe { (*self.t.get()).pages[(a >> 12) as usize].get_or_insert_with(mem::zero_page)[(a & 0xFFF) as usize] = v; }
+                }
+                fn page_table(&self) -> Option<std::ptr::NonNull<mem::PageTable>> {
+                    if self.fast { std::ptr::NonNull::new(self.t.get()) } else { None }
+                }
+            }
+            #[test] fn fast_and_trait_paths_agree() {
+                for value in [0u32, 1, 0x7fffffff, 0x80000000, 0xffffffff] {
+                    let mut results = Vec::new();
+                    let mut calls = Vec::new();
+                    for fast in [false, true] {
+                        let mut m = Paged::new(fast);
+                        m.set_u32(64, value ^ 0x1234);
+                        m.set_u32(0x1FFC, value.rotate_left(7));
+                        let mut c = Cpu::default();
+                        c.eax = value; c.ecx = !value; c.esp = 64;
+                        m.calls.set(0);
+                        generated::f_00001000(&mut m, &mut c);
+                        calls.push(m.calls.get());
+                        results.push((format!("{:?}", c), (0..6).map(|p| m.page(p)).collect::<Vec<_>>()));
+                    }
+                    assert_eq!(results[0], results[1]);
+                    assert!(calls[1] < calls[0], "the fast path made {} trait calls, the trait path {}", calls[1], calls[0]);
+                }
+            }
+        '''
+        target = root / 'target'
+        target.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='codegen-test-', dir=target) as tmp:
+            src = Path(tmp) / 'fixture.rs'
+            exe = Path(tmp) / 'fixture.exe'
+            src.write_text(source)
+            for command in (['rustc', '--edition=2021', '-O', '--test', str(src), '-o', str(exe)], [str(exe)]):
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == '__main__':
     unittest.main()
