@@ -409,7 +409,8 @@ incremental = false
 # ~206 s at opt-level 1 (2026-10-12, ddlift-05). Everything else as `play`.
 # The shards holding the hot functions of the boot/title (sampling profiles,
 # scripts/sample_profile.py: 05 06 25 26 27 28 31 for loading and the movie,
-# 00 01 02 04 10 30 for the title scene) stay at opt-level 1: at
+# 00 01 02 04 10 30 for the title scene, 15 19 for the Load Game loader
+# threads) stay at opt-level 1: at
 # opt-level 0 the game's loading crawled (logos after minutes).
 [profile.play-fast]
 inherits = "play"
@@ -475,7 +476,7 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-15]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-16]
@@ -491,7 +492,7 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-19]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-20]
