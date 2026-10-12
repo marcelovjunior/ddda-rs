@@ -1586,6 +1586,23 @@ exception dispatch itself remains a runtime responsibility.
    hardware semantics to match an emulator discrepancy. Re-record cases
    when fixing the recorder or changing a recorded call boundary.
 
+## Finding what the boot still needs: the emulator fallback (L51)
+
+Instead of running the boot until it stops at one untranslated function,
+build with the emulator and let it run on:
+
+    PATH="$PATH:/c/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+    cargo build -p ddplay --features emu          # or ddruntime's winmain example
+    DDRUNTIME_EMU_FALLBACK=1 DDRUNTIME_EMU_LOG=emulated.log target/.../ddplay.exe
+
+Every untranslated function the run reaches executes as original machine
+code in Unicorn (`ddruntime/src/emu.rs`), and `emulated.log` lists each
+entry once with its caller. That list is the translation work for the
+route: entries missing from the inventory (Ghidra never made functions for
+them, e.g. function-pointer tables) go to discovery, the rest to the
+recorder or the lifter. The fallback is diagnostic only: a train never
+counts emulated code, and shipped builds have the feature off.
+
 ## What to do next
 
 Current state: docs/MILESTONES.md (the latest batch), docs/INVENTORY.md
