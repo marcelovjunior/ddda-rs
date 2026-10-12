@@ -359,6 +359,62 @@ fn original_except_handler4_calls_filter_with_establisher_frame() {
     assert_eq!(c.eax, 0x55aa);
 }
 
+#[cfg(feature = "game")]
+#[test]
+fn a_fault_inside_an_eh4_body_resumes_at_its_except() {
+    // L47: __IsNonwritableInCurrentImage 0x012F9AB0 guards its image checks
+    // with __try/__except(GetExceptionCode() == STATUS_ACCESS_VIOLATION).
+    // Its callees answer as services here: _ValidateImageBase 0x012F9A20
+    // TRUE, _FindPESection 0x012F9A60 an unmapped section header, so the
+    // body's own `mov eax, [eax+0x24]` (0x012F9B17) faults inside the try.
+    // The instruction steps (lift.resumable) restart nothing, dispatch to
+    // _except_handler4, run the filter at 0x012F9B3B and resume at the
+    // __except 0x012F9B4E, which returns FALSE. A whole-function lift has
+    // no instruction to fault at, so it cannot take this path.
+    use ddruntime::dispatch::{Binding, Registry};
+    let path = std::env::var("DDDA_EXE")
+        .unwrap_or_else(|_| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
+    let Ok(exe) = ddexe::ExeFile::open(&path) else {
+        eprintln!("skipped: no DDDA.exe at {path}");
+        return;
+    };
+    let _reset = Reset;
+    let (mut m, mut c) = fixture();
+    ddruntime::image::load(&mut m, &exe).expect("image");
+    fn valid_image(m: &mut dyn Mem, c: &mut Cpu) {
+        c.eax = 1;
+        let _ = m.u32(c.esp);
+        c.esp += 4;
+    }
+    fn unmapped_section(m: &mut dyn Mem, c: &mut Cpu) {
+        c.eax = 0x0bad_0000;
+        let _ = m.u32(c.esp);
+        c.esp += 4;
+    }
+    let mut r = Registry::new();
+    r.set_instruction_lookup(ddnative::generated::lifted::instruction);
+    for (addr, f) in ddnative::generated::lifted::all() {
+        if addr != 0x012f9a20 && addr != 0x012f9a60 {
+            r.insert(addr, Binding::Lifted(f)).unwrap();
+        }
+    }
+    r.insert(0x012f9a20, Binding::Service(valid_image)).unwrap();
+    r.insert(0x012f9a60, Binding::Service(unmapped_section)).unwrap();
+    assert!(ddnative::generated::lifted::instruction(0x012f9b17).is_some(), "the EH4 body has instruction steps");
+    let registry = Rc::new(r);
+    let handler = registry.clone();
+    x86::set_ext_calls(Some(Box::new(move |m, c, target| handler.call(m, c, target).unwrap())));
+    let (esp, ebx, esi, edi) = (c.esp, c.ebx, c.esi, c.edi);
+    c.esp -= 8;
+    m.set_u32(c.esp + 4, 0x0040_1000); // pTarget
+    m.set_u32(c.esp, 0x0dea_d000); // return token
+    registry.call(&mut m, &mut c, 0x012f9ab0).unwrap();
+    assert_eq!(c.eax, 0, "the __except returned FALSE");
+    assert_eq!(c.esp, esp - 4, "cdecl: the caller pops pTarget");
+    assert_eq!((c.ebx, c.esi, c.edi), (ebx, esi, edi));
+    assert_eq!(m.u32(c.fs_base), 0x1f000, "the EH4 frame is unlinked again");
+}
+
 #[test]
 fn software_raises_continue_at_known_api_boundary() {
     let _reset = Reset;
