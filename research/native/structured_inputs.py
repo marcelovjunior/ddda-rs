@@ -199,15 +199,50 @@ def direct_targets(arms):
             | {int(t, 16) for t in re.findall(r'call_ext\(m, cpu, 0x([0-9A-F]+)\)', text)})
 
 
+def _inputs(cases):
+    """run_sparse keywords reproducing the input distribution of `cases`."""
+    strategies = {c.get('input_strategy') or ('zero' if c.get('zero_inputs') else 'random') for c in cases}
+    strategy = strategies.pop() if len(strategies) == 1 else 'random'
+    if strategy == 'zero':
+        return dict(zero_inputs=True)
+    return {} if strategy == 'random' else dict(input_strategy=strategy)
+
+
+def _rerecord(f, closed, frames, noreturn, kw, seeds, seconds):
+    """Fresh cases for `f` under the given closed boundary (its own mode)."""
+    a, key, new, start = f['addr'], lift.vector_key(f), [], time.monotonic()
+    for index in range(1, seeds * 8 + 1):
+        if len(new) == seeds or time.monotonic() - start > seconds:
+            break
+        seed = (a << 8) ^ index
+        mode = (dict(end=a+f['size'], lifted=frozenset(closed), x87_push=f.get('x87_push', []),
+                     original_entry=f.get('original_entry', False)) if f.get('ext') else dict(size=f['size']))
+        try:
+            r = h.run_sparse(a, seed, body=f['body'], noreturn_sites=f.get('noreturn_sites', []),
+                             noreturn_targets=noreturn, frame_contracts=frames, max_seconds=seconds, **mode, **kw)
+        except h.Rejected:
+            continue
+        new.append(dict(addr=a, seed=seed, body_key=key, **r))
+    return new
+
+
 def promote(root, seeds=3, seconds=20):
     """Promote verified call-free ext entries that unverified candidates call.
 
     An entry qualifies when its arms make no call at all (no closed callee,
-    no call_ext), no recorded case mocks it (so no existing case changes
-    meaning: replay and recorder both run closed targets for real), and some
-    candidate calls it directly. It is re-lifted closed and its own cases are
-    re-recorded in closed mode with its previous input distribution. Callers
-    then execute the original body, e.g. the frame moves of the SEH helpers.
+    no call_ext) and some candidate calls it directly. It is re-lifted closed
+    and its own cases are re-recorded in closed mode with its previous input
+    distribution. Callers then execute the original body, e.g. the frame
+    moves of the SEH helpers. Recorded cases that mocked a promoted entry
+    would change meaning (replay and recorder run closed targets for real).
+    An ordinary call-free entry that some case mocks therefore stays ext: a
+    mock with arbitrary returns is a faithful stand-in for it. A caller-frame
+    helper (frame_exit) is promoted even when mocked, because no mock can
+    move the caller's frame: as in any boundary refresh, the callers whose
+    cases mock it are re-lifted against the new closed set and re-recorded
+    with their previous distribution. It is promoted only if every such
+    caller records again; otherwise it stays ext (repeat until stable), so
+    no verified function is lost.
     The closed boundary changes: prepare again in fresh trial logs.
     """
     selected = read(root/'patterns/lift.json'); cases = read(root/'vectors/lift.json')
@@ -215,17 +250,18 @@ def promote(root, seeds=3, seconds=20):
     if any(root.glob('structured-*.jsonl')):
         raise ValueError('archive the trial logs first: promotion changes the closed boundary')
     closed = lift.seed_closed_contracts(selected)
-    mocked = {e['target'] for c in cases for e in (c.get('calls') or [])}
     wanted = set().union(*(direct_targets(f['arms']) for f in candidates)) if candidates else set()
-    old = {}
+    old, index = {}, {f['addr']: k for k, f in enumerate(selected)}
     for c in cases:
         old.setdefault(c['addr'], []).append(c)
     quarantine = quarantined(root)
     noreturn = lift.noreturn_entries()
-    promoted = {}
-    for k, f in enumerate(selected):
+    base_frames = frame_contracts(selected)
+    mocked = {e['target'] for c in cases for e in (c.get('calls') or [])}
+    eligible = {}
+    for f in selected:
         a = f['addr']
-        if (not f.get('ext') or f.get('original_entry') or a in h.PLATFORM or a in mocked or a in quarantine
+        if (not f.get('ext') or f.get('original_entry') or a in h.PLATFORM or a in quarantine
                 or a not in wanted or f.get('calls') or any('call_ext' in arm for arm in f['arms'])):
             continue
         try:
@@ -241,32 +277,56 @@ def promote(root, seeds=3, seconds=20):
         contract = h.frame_exit(a, g['body'])
         if h.caller_frame(contract):
             g['frame_exit'] = contract
-        strategies = {c.get('input_strategy') or ('zero' if c.get('zero_inputs') else 'random') for c in old.get(a, [])}
-        strategy = strategies.pop() if len(strategies) == 1 else 'random'
-        kw = dict(zero_inputs=True) if strategy == 'zero' else {}
-        if strategy not in ('random', 'zero'):
-            kw['input_strategy'] = strategy
-        key, new, start = lift.vector_key(g), [], time.monotonic()
-        for index in range(1, seeds * 8 + 1):
-            if len(new) == seeds or time.monotonic() - start > seconds:
-                break
-            seed = (a << 8) ^ index
-            try:
-                r = h.run_sparse(a, seed, size=g['size'], body=g['body'],
-                                 noreturn_sites=g.get('noreturn_sites', []), noreturn_targets=noreturn,
-                                 max_seconds=seconds, **kw)
-            except h.Rejected:
-                continue
-            new.append(dict(addr=a, seed=seed, body_key=key, **r))
+        elif a in mocked:
+            continue
+        new = _rerecord(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
         if new:
-            selected[k] = g
-            promoted[a] = new
-    cases = [c for c in cases if c['addr'] not in promoted] + [c for a in promoted for c in promoted[a]]
+            eligible[a] = (g, new)
+    affected = {}
+    for c in cases:
+        hit = {e['target'] for e in (c.get('calls') or [])} & eligible.keys()
+        if hit:
+            affected.setdefault(c['addr'], set()).update(hit)
+    chosen = set(eligible)
+    while True:
+        now = closed | chosen
+        frames = {**base_frames, **{a: eligible[a][0]['frame_exit'] for a in chosen if 'frame_exit' in eligible[a][0]}}
+        redone, failed = {}, set()
+        for a, targets in affected.items():
+            if not targets & chosen:
+                continue
+            f = selected[index[a]]
+            try:
+                arms = lift.lift(a, f['size'], now, ext=True)
+                g = dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                         **lift.BODY_INFO[a])
+            except lift.Unsupported:
+                failed.add(a)
+                continue
+            finally:
+                lift.release_body(a, f['size'])
+            new = _rerecord(g, now, frames, noreturn, _inputs(old[a]), seeds, seconds)
+            if new:
+                redone[a] = (g, new)
+            else:
+                failed.add(a)
+        if not failed:
+            break
+        chosen -= set().union(*(affected[a] for a in failed))
+    replaced = {**{a: eligible[a] for a in chosen}, **redone}
+    for a, (g, _) in replaced.items():
+        selected[index[a]] = g
+    cases = [c for c in cases if c['addr'] not in replaced] + [c for a in replaced for c in replaced[a][1]]
     write(root/'patterns/lift.json', selected); write(root/'vectors/lift.json', cases)
     history = root/'structured-promoted.json'
-    previous = read(history) if history.exists() else []
-    write(history, sorted(set(previous) | set(promoted)))
-    print(f'promoted {len(promoted)} closed: {[hex(a) for a in sorted(promoted)]}; '
+    previous = read(history) if history.exists() else dict(promoted=[], rerecorded=[])
+    if isinstance(previous, list):
+        previous = dict(promoted=previous, rerecorded=[])
+    write(history, dict(promoted=sorted(set(previous['promoted']) | chosen),
+                        rerecorded=sorted(set(previous['rerecorded']) | set(redone)),
+                        kept_ext=sorted(set(previous.get('kept_ext', [])) | (set(eligible) - chosen))))
+    print(f'promoted {len(chosen)} closed: {[hex(a) for a in sorted(chosen)]}; re-recorded callers '
+          f'{[hex(a) for a in sorted(redone)]}; kept ext {[hex(a) for a in sorted(set(eligible) - chosen)]}; '
           f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
 
 

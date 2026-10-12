@@ -916,11 +916,19 @@ mocked callees are lifted in ext mode, so a caller of `__SEH_prolog4`
 recorded the prolog as a mock: the frame never moved and the caller's `ret`
 popped its scope table (`__setmbcp` 0x012FB049 "returned to 0x0161EBE0"
 under every strategy). `structured_inputs.py promote` re-lifts a selected
-ext entry as a closed callee when its arms make no call at all, no recorded
-case mocks it, and an unverified candidate calls it directly. Its own cases
-are re-recorded in closed mode with the same input distribution; no other
-record or case changes meaning, since the recorder (`lifted`) and the replay
-(dispatch table) both run closed targets for real. A promoted entry with a
+ext entry as a closed callee when its arms make no call at all and an
+unverified candidate calls it directly. Its own cases are re-recorded in
+closed mode with the same input distribution. The recorder (`lifted`) and
+the replay (dispatch table) both run closed targets for real, so a case
+that mocked a promoted entry would change meaning. An ordinary call-free
+entry that some case mocks therefore stays ext (a mock with arbitrary
+returns is a faithful stand-in). A caller-frame helper is promoted even when
+mocked, since no mock can move the frame: the callers whose cases mock it
+are re-lifted against the new closed set and re-recorded with their previous
+distribution, and the helper is promoted only if every one of them records
+again (otherwise it stays ext), so no verified function is lost. Without
+that restriction 378 widely mocked targets (over 100,000 recorded calls)
+would have forced re-recording most of the program. A promoted entry with a
 caller-frame exit stores it as `frame_exit`; `run_sparse(frame_contracts=)`
 (passed by `structured_inputs.py`, `trace_recorder.py` and `lift.py vectors`)
 ends that callee's nested frame at its return PC with exactly the derived

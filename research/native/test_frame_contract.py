@@ -89,7 +89,9 @@ class FrameContractTests(unittest.TestCase):
         md=Cs(CS_ARCH_X86,CS_MODE_32)
         body=[i.address for i in md.disasm(caller,0x400000)]
         pbody=[i.address for i in md.disasm(prolog,0x400100)]
-        with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),              patch.object(h,'static_pop',return_value=0):
+        with (patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),
+              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),
+              patch.object(h,'static_pop',return_value=0)):
             contract=h.frame_exit(0x400100,pbody)
             run=lambda **kw:h.run_sparse(0x400000,7,body=body,end=0x400000+len(caller),
                                          lifted=frozenset({0x400100}),input_strategy='small-v1',**kw)
