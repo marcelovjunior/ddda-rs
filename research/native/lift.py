@@ -361,6 +361,136 @@ def jumper_state(ins, entry):
     return None
 
 
+_FRAME_CLEAN = {}
+
+
+def frame_clean(t, hops=0):
+    """L50: the bytes the callee at `t` pops with its `ret` when every
+    memory write it makes, through its direct callees as well (three deep),
+    lies at or below its own return address and argument bytes: esp- or
+    ebp-relative at a tracked stack depth (push, pop, add/sub esp, imm,
+    `mov ebp, esp`, leave). Such a callee cannot write a slot of its
+    caller's frame above its arguments, nor memory anywhere else; None
+    otherwise (another base, a string store, an indirect call or jump, a
+    stack move it cannot follow). 0x0098FC80, called between the bound and
+    the load of 0x009921E0's `[esp + 0x18]`, writes only its own locals."""
+    if t in _FRAME_CLEAN:
+        return _FRAME_CLEAN[t]
+    _FRAME_CLEAN[t] = None  # a cycle proves nothing
+    saved = TABLE_PROOF.get(t), TABLE_ENDS.get(t)
+    result = None
+    try:
+        ins, switches = decode_body(t, 1, ext=True)[:2]
+        result = _frame_clean_walk(ins, t, hops, switches)
+    except (Unsupported, KeyError):
+        pass
+    finally:
+        for table, value in zip((TABLE_PROOF, TABLE_ENDS), saved):
+            if value is None:
+                table.pop(t, None)
+            else:
+                table[t] = value
+    _FRAME_CLEAN[t] = result
+    return result
+
+
+def _frame_clean_walk(ins, entry, hops, switches=None):
+    """frame_clean's walk: state (pc, depth below the entry ESP, ebp offset
+    from the entry ESP or None). A table jump is followed to its targets
+    when the table is proven complete."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    at = {i.address: i for i in ins}
+    todo, seen, pops, highest = [(entry, 0, None)], set(), set(), 0
+    while todo:
+        state = todo.pop()
+        pc, depth, ebp = state
+        if state in seen:
+            continue
+        if pc not in at or len(seen) > 20000:
+            return None
+        seen.add(state)
+        i, mn = at[pc], at[pc].mnemonic
+        ops = i.operands
+        if mn.split()[0] in ("rep", "repe", "repne", "repz", "repnz") or mn in (
+                "stosb", "stosw", "stosd", "movsb", "movsw", "movsd", "cmpsb", "cmpsw", "cmpsd",
+                "scasb", "scasw", "scasd", "lodsb", "lodsw", "lodsd"):
+            # string operations (`movss` is not one; nor is SSE `movsd`
+            # with operands, which the memory check below covers)
+            if not (mn == "movsd" and ops and len(ops) == 2):
+                return None
+        # a memory write is the first operand (Capstone also flags the source
+        # of `movss xmm0, [m]`); xchg, xadd and cmpxchg may write either
+        for o in (ops if mn in ("xchg", "xadd", "cmpxchg") else ops[:1]):
+            if o.type == X86_OP_MEM and o.access & 2:
+                base = i.reg_name(o.mem.base) if o.mem.base else None
+                if o.mem.index or o.mem.segment:
+                    return None
+                if base == "esp":
+                    offset = _s(o.mem.disp) - depth
+                elif base == "ebp" and ebp is not None:
+                    offset = ebp + _s(o.mem.disp)
+                else:
+                    return None
+                highest = max(highest, offset + o.size)
+        try:
+            writes = {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001
+            return None
+        nxt = pc + i.size
+        if mn in ("ret", "retn"):
+            pops.add(ops[0].imm if ops else 0)
+            continue
+        if mn in ("int3", "ud2", "hlt"):
+            continue
+        if mn == "call":
+            if not ops or ops[0].type != X86_OP_IMM or hops >= 3:
+                return None
+            callee_pop = frame_clean(ops[0].imm & 0xffffffff, hops + 1)
+            if callee_pop is None:
+                return None
+            todo.append((nxt, depth - callee_pop, ebp))
+            continue
+        if mn == "push":
+            depth += ops[0].size
+        elif mn == "pop":
+            if ops[0].type != X86_OP_REG:
+                return None
+            depth -= ops[0].size
+            if i.reg_name(ops[0].reg) == "ebp":
+                ebp = None
+        elif mn in ("add", "sub") and ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) == "esp":
+            if ops[1].type != X86_OP_IMM:
+                return None
+            depth += _s(ops[1].imm) if mn == "sub" else -_s(ops[1].imm)
+        elif mn == "mov" and i.op_str == "ebp, esp":
+            ebp = -depth
+        elif mn == "leave":
+            if ebp is None:
+                return None
+            depth, ebp = -ebp - 4, None
+        elif "esp" in writes or "sp" in writes:
+            return None  # a stack move it cannot follow
+        elif "ebp" in writes or "bp" in writes:
+            ebp = None
+        if mn == "jmp" and ops and ops[0].type != X86_OP_IMM:
+            targets = (switches or {}).get(pc)
+            if not isinstance(targets, TableTargets) or not targets.proven:
+                return None  # a runtime jump or an unproven table
+            todo.extend((t, depth, ebp) for t in set(targets))
+            continue
+        if mn.startswith("j"):
+            if not ops or ops[0].type != X86_OP_IMM or (ops[0].imm & 0xffffffff) not in at:
+                return None  # a tail call
+            todo.append(((ops[0].imm & 0xffffffff), depth, ebp))
+            if mn == "jmp":
+                continue
+        todo.append((nxt, depth, ebp))
+    if len(pops) != 1:
+        return None
+    pop = pops.pop()
+    return pop if highest <= 4 + pop else None
+
+
 def inlined_tail(t):
     """Whether entry `t`, met in a decoded body, is a frame tail decode_body
     inlined (L46: the emitter and the x87 walk must then treat a jump to it
@@ -832,11 +962,27 @@ def register_bound(found, start, index, entry=None, switches=None, read=None):
                 if b.mnemonic.startswith("j") and b.mnemonic != "jmp":
                     rng = edge_range(b, taken, key)
                 if rng is None:
-                    if b.mnemonic == "call":
-                        if key[0] == "mem" or reg_names & {"eax", "ecx", "edx"}:
+                    if b.mnemonic == "call" and key[0] == "mem":
+                        # L50: a callee whose writes stay in its own frame
+                        # (frame_clean) leaves the slot alone; an esp slot
+                        # moves by its pop, a callee-saved base is kept
+                        t = b.operands[0].imm & 0xffffffff if b.operands[0].type == X86_OP_IMM else None
+                        pop = frame_clean(t) if t is not None else None
+                        base = found[start_at].reg_name(key[1])
+                        if pop is None or base not in ("esp",) + CALLEE_SAVED:
+                            return None  # a callee may clobber it
+                        if base != "esp":
+                            todo.append((b.address, masked))
+                            continue
+                        rng = bound(b.address, ("mem", key[1], key[2] + pop), depth, shifts + 1)
+                        if rng is None:
+                            return None
+                    elif b.mnemonic == "call":
+                        if reg_names & {"eax", "ecx", "edx"}:
                             return None  # a callee may clobber it
                         todo.append((b.address, masked))
                         continue
+                if rng is None:
                     written = _writes(b)
                     if written is None:
                         return None
@@ -1427,6 +1573,7 @@ def mock_leaves(t, callable=frozenset()):
     float, which no mock inside it pushes. 0x013048CD loads
     its argument and leaves 1, so the deficit walk passes it (0x0130470B
     loads two arguments that way before `call 0x01300497`, which takes 2)."""
+    callable = frozenset(callable)
     key = (t, callable)
     if key in _MOCK_LEAVES:
         return _MOCK_LEAVES[key]
@@ -1461,6 +1608,7 @@ def mock_pops(t, callable=frozenset(), hops=0):
     0x012F4E6A `mov edx, imm; jmp 0x01304690`) takes that entry's values.
     0 when its code cannot be decoded. TABLE_PROOF and TABLE_ENDS are left
     as they were."""
+    callable = frozenset(callable)
     key = (t, callable)
     if key in _MOCK_POPS:
         return _MOCK_POPS[key]

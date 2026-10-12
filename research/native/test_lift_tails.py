@@ -142,6 +142,22 @@ class EdgeBoundTests(unittest.TestCase):
         code = bytes.fromhex("83fa02" "7407" "ba01000000" "eb00" "ff249500200000") + b"\xc3" * 3
         self.assertEqual(self.slots(code, {0x2000: dwords(0, 0x1013, 0x1014, 0)}, 0x100C), [1, 2])
 
+    def test_l50_slot_across_a_call_that_writes_only_its_own_frame(self):
+        # cmp dword [esp+4],2; ja out; push eax; call 0x1020; mov ecx,[esp+4];
+        # jmp [ecx*4+0x2000]; ret x3; out: ret
+        caller = (bytes.fromhex("837c240402" "7714" "50" "e813000000" "8b4c2404" "ff248d00200000")
+                  + b"\xc3" * 4).ljust(0x20, b"\xc3")
+        tables = {0x2000: dwords(0x1018, 0x1019, 0x101A, 0)}
+        for callee, want in ((bytes.fromhex("83ec08" "890424" "83c408" "c20400"), [0, 1, 2]),
+                             (bytes.fromhex("8901" "c20400"), None)):  # writes through ecx
+            code = caller + callee
+            read, is_code = image_fixture(code, tables)
+            with patch.object(h, "code", side_effect=read), patch.object(h, "executable", is_code), \
+                 patch.object(lift, "function_entries", return_value=frozenset({0x1000, 0x1020})), \
+                 patch.object(lift, "noreturn_entries", return_value=frozenset()), \
+                 patch.dict(lift._FRAME_CLEAN, clear=True):
+                self.assertEqual(self.slots(code, tables, 0x1011), want)
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5

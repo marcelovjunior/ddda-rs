@@ -463,6 +463,22 @@ def refresh(root, strategies, seeds, seconds, only=None):
     stale = [f for f in selected if any(r.startswith(('stale body', 'tail call into its own inlined code'))
                                         for r in gaps.get(f['addr'], []))
              and (only is None or f['addr'] in only)]
+    # L50: a named ext record whose recording contract the current lifter
+    # changes (vector_key: e.g. the x87 values its mocks pop) is stale too
+    named = {f['addr'] for f in stale}
+    for f in selected:
+        if only is None or f['addr'] not in only or f['addr'] in named or not f.get('ext'):
+            continue
+        try:
+            lift.lift(f['addr'], f['size'], closed, ext=True)
+            g = lift.drop_absent(dict(f, x87_push=lift.X87_PUSH_SITES.get(f['addr'], []), **lift.BODY_INFO[f['addr']]),
+                                 f['addr'])
+            if lift.vector_key(g) != lift.vector_key(f):
+                stale.append(f)
+        except lift.Unsupported:
+            stale.append(f)  # reported below as a lift error
+        finally:
+            lift.release_body(f['addr'], f['size'])
     report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
     position = {f['addr']: k for k, f in enumerate(selected)}
     for f in [f for f in stale if f.get('ext')]:
