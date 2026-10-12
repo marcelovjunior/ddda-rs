@@ -540,7 +540,7 @@ def local_alloc_sites(address, body):
     return result
 
 
-def frame_exit(address, body, limit=4096):
+def frame_exit(address, body, limit=4096, calls=False):
     """Exit ESP of a call-free caller-frame helper, derived from its code.
 
     Ordinary functions return with ESP = entry ESP + 4 + N. Frame helpers
@@ -553,8 +553,11 @@ def frame_exit(address, body, limit=4096):
     Returns that value for every `ret` (all must agree), or None: any call,
     indirect or outward jump, trap, unmodelled ESP write, aliasing store
     before a stack load, or disagreement. None keeps the ordinary contract.
+    With `calls` (L46, lift.frame_tail only) a direct call is stepped over:
+    the callee pops its proven static_pop (an underestimate only lowers the
+    exit) and clobbers eax/ecx/edx and stack memory.
     """
-    result = _frame_walk(address, body, limit)
+    result = _frame_walk(address, body, limit, calls)
     return None if result == 'dynamic' else result
 
 
@@ -568,17 +571,17 @@ def moves_frame(address, body, limit=4096):
     return result == 'dynamic' or caller_frame(result)
 
 
-def _frame_walk(address, body, limit, _cache={}):
+def _frame_walk(address, body, limit, calls=False, _cache={}):
     if body is None:
         return None
-    key = (address, frozenset(body), code)
+    key = (address, frozenset(body), code, calls)
     if key not in _cache:
         _cache.clear()  # one function per recorder run; bound the memory
-        _cache[key] = _frame_exit(address, key[1], limit)
+        _cache[key] = _frame_exit(address, key[1], limit, calls)
     return _cache[key]
 
 
-def _frame_exit(address, body, limit):
+def _frame_exit(address, body, limit, calls=False):
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     md.detail = True
@@ -669,6 +672,14 @@ def _frame_exit(address, body, limit):
             todo.append((target, tuple(sorted(regs.items())), stores, clobbered))
             if mn != 'jmp':
                 todo.append((pc + i.size, tuple(sorted(regs.items())), stores, clobbered))
+            continue
+        if (calls and mn == 'call' and ops[0].type == 2 and regs['esp'] is not None
+                and (ops[0].imm & 0xffffffff) not in body):
+            regs['esp'] = add(regs['esp'], (None, static_pop(ops[0].imm & 0xffffffff), ()))
+            if regs['esp'] is None:
+                return None
+            regs.update(eax=None, ecx=None, edx=None)
+            todo.append((pc + i.size, tuple(sorted(regs.items())), stores, True))
             continue
         if mn in ('call', 'int3', 'ud2', 'hlt', 'leave', 'pushal', 'popal', 'pushfd', 'popfd'):
             return None

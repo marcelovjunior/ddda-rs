@@ -242,11 +242,13 @@ def frame_tail(target, entries, noreturn, read, is_code):
             ins = decode_body(target, 1, entries, noreturn, read, is_code, ext=True)[0]
             TABLE_PROOF.pop(target, None)
             rets = {(i.operands[0].imm if i.operands else 0) for i in ins if i.mnemonic in ("ret", "retn")}
-            if len(rets) == 1 and not any(i.mnemonic == "call" for i in ins):
+            if len(rets) == 1:
+                # calls are stepped over with their proven pops (L46: the CRT
+                # x87 tail 0x01300749 reports errors through calls)
                 with _patched_code(h, read):
-                    exit_ = h.frame_exit(target, {i.address for i in ins})
+                    exit_ = h.frame_exit(target, {i.address for i in ins}, calls=True)
                 result = (exit_ is not None and exit_[0] == "esp" and not exit_[2]
-                          and exit_[1] > 4 + rets.pop())
+                          and _s(exit_[1]) > 4 + rets.pop())  # signed: an underestimated callee pop is negative
         except Unsupported:
             result = False
         _FRAME_TAILS[key] = result
