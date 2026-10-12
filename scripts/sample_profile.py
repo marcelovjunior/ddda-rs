@@ -158,6 +158,29 @@ def stack(hproc, hthread, depth):
     return pcs or [rip]
 
 
+def pretty(name):
+    """Readable path of a Rust v0 symbol (`_R...`): its identifiers joined
+    by `::` (crate hashes and generic arguments dropped). Others unchanged."""
+    if not name.startswith("_R"):
+        return name
+    out, k = [], 2
+    while k < len(name):
+        if name[k].isdigit():
+            j = k
+            while j < len(name) and name[j].isdigit():
+                j += 1
+            n = int(name[k:j])
+            if name[j:j + 1] == "_":
+                j += 1
+            ident = name[j:j + n]
+            if n and len(ident) == n and (ident[0].isalpha() or ident[0] == "_"):
+                out.append(ident)
+                k = j + n
+                continue
+        k += 1
+    return "::".join(out[-4:]) or name
+
+
 WAITS = ("NtWait", "ZwWait", "NtDelayExecution", "NtRemoveIoCompletion", "NtUserMsgWaitForMultipleObjects",
          "NtUserGetMessage", "NtAlertThreadByThreadId", "NtWaitForAlertByThreadId", "ZwRemoveIoCompletion",
          "NtSignalAndWaitForSingleObject", "NtUserWaitMessage")
@@ -171,13 +194,14 @@ def main():
     ap.add_argument("--hz", type=float, default=500, help="sampling rounds per second (all threads per round)")
     ap.add_argument("--depth", type=int, default=64)
     ap.add_argument("--top", type=int, default=25)
+    ap.add_argument("--symbols", help="directories with the PDBs (the exe names only its PDB's file name)")
     a = ap.parse_args()
     pid = a.pid or find_pid(a.name)
     hproc = k32.OpenProcess(PROCESS_ACCESS, False, pid)
     if not hproc:
         sys.exit(f"OpenProcess({pid}) failed: {ctypes.get_last_error()}")
     dbg.SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS)
-    if not dbg.SymInitializeW(hproc, None, True):
+    if not dbg.SymInitializeW(hproc, a.symbols, True):
         sys.exit(f"SymInitialize failed: {ctypes.get_last_error()}")
 
     handles, names, cpu0, last, active = {}, {}, {}, {}, set()
@@ -220,9 +244,12 @@ def main():
         if pc not in sym_cache:
             info.SizeOfStruct, info.MaxNameLen = 88, 1024
             disp = ctypes.c_uint64()
-            sym_cache[pc] = info.Name if dbg.SymFromAddrW(hproc, pc, ctypes.byref(disp), ctypes.byref(info)) else f"?{pc:#x}"
+            sym_cache[pc] = pretty(info.Name) if dbg.SymFromAddrW(hproc, pc, ctypes.byref(disp), ctypes.byref(info)) else f"?{pc:#x}"
         return sym_cache[pc]
 
+    probe = sorted({pc for st in samples.values() for s in st for pc in s})
+    named = sum(not sym(pc).startswith("?") for pc in probe)
+    print(f"symbols: {named} of {len(probe)} distinct addresses named")
     print(f"pid {pid}: {rounds} rounds in {wall:.1f} s ({rounds / wall:.0f}/s), {len(samples)} threads")
     order = sorted(samples, key=lambda t: -cpu.get(t, 0))
     for tid in order:

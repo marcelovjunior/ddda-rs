@@ -30,19 +30,79 @@ const INIT: [u8; 108] = {
     state[9] = 0xff;
     state
 };
-/// No X87 is live on this thread (ids start at 1; 0 is "not assigned").
-const NONE: u64 = u64::MAX;
+/// No X87 is live on this thread (ids start at 1).
+const NONE: u64 = 0;
+/// An X87 that was never live has no id yet.
+const UNASSIGNED: u64 = u64::MAX;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
-    /// The id of the X87 whose state is in this thread's FPU.
+    /// The id of the X87 whose state is in this thread's FPU (where the
+    /// TEB slot below is unavailable).
     static LIVE: Cell<u64> = const { Cell::new(NONE) };
     /// States displaced from this thread's FPU, by X87 id.
     static SPILLED: RefCell<HashMap<u64, [u8; 108]>> = RefCell::new(HashMap::new());
     /// This thread's own control word, restored by [`park`].
     static HOST_CW: Cell<Option<u16>> = const { Cell::new(None) };
     static TOKEN: u64 = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The live id lives in a Windows TLS slot read straight from the TEB
+/// (TlsSlots at gs:[0x1480], 64 slots): one instruction on the per-x87
+/// instruction path. `thread_local!` costs a call there at opt-level 1
+/// (L62 profile: 14% of the sound decoder thread).
+static SLOT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[inline(always)]
+fn live() -> u64 {
+    let slot = SLOT.load(Ordering::Relaxed);
+    if slot >= 64 {
+        return LIVE.with(Cell::get);
+    }
+    let v: u64;
+    // SAFETY: TEB TlsSlots[slot] of the current thread, a slot this
+    // process allocated (TlsAlloc); new threads start with 0 there.
+    unsafe { std::arch::asm!("mov {v}, qword ptr gs:[{off}]", v = out(reg) v, off = in(reg) 0x1480 + 8 * slot as u64,
+                             options(nostack, readonly, preserves_flags)) }
+    v
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn set_live(v: u64) {
+    let mut slot = SLOT.load(Ordering::Relaxed);
+    if slot == u32::MAX {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn TlsAlloc() -> u32;
+        }
+        // SAFETY: plain Win32 call; one slot for the process, never freed
+        let new = unsafe { TlsAlloc() };
+        let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
+        slot = match SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => new,
+            Err(won) => won,
+        };
+    }
+    if slot >= 64 {
+        LIVE.with(|l| l.set(v));
+        return;
+    }
+    // SAFETY: as in live()
+    unsafe { std::arch::asm!("mov qword ptr gs:[{off}], {v}", v = in(reg) v, off = in(reg) 0x1480 + 8 * slot as u64,
+                             options(nostack, preserves_flags)) }
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[inline(always)]
+fn live() -> u64 {
+    LIVE.with(Cell::get)
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn set_live(v: u64) {
+    LIVE.with(|l| l.set(v))
 }
 
 fn token() -> u64 {
@@ -52,7 +112,7 @@ fn token() -> u64 {
 pub struct X87 {
     /// The state while `home` is 0; otherwise stale.
     state: [u8; 108],
-    /// Identity in the live/spilled tables (0: never live).
+    /// Identity in the live/spilled tables (UNASSIGNED: never live).
     id: u64,
     /// The host thread whose FPU or spill table holds the state (0: none).
     home: u64,
@@ -60,13 +120,13 @@ pub struct X87 {
 
 impl Default for X87 {
     fn default() -> Self {
-        Self { state: INIT, id: 0, home: 0 }
+        Self { state: INIT, id: UNASSIGNED, home: 0 }
     }
 }
 
 impl Clone for X87 {
     fn clone(&self) -> Self {
-        Self { state: self.image(), id: 0, home: 0 }
+        Self { state: self.image(), id: UNASSIGNED, home: 0 }
     }
 }
 
@@ -81,7 +141,7 @@ impl std::fmt::Debug for X87 {
 /// thread's own control word). The owner reloads it on its next
 /// instruction.
 pub fn park() {
-    let live = LIVE.with(Cell::get);
+    let live = live();
     if live == NONE {
         return;
     }
@@ -89,7 +149,7 @@ pub fn park() {
     fnsave_host(&mut image);
     image[12..28].fill(0);
     SPILLED.with(|s| s.borrow_mut().insert(live, image));
-    LIVE.with(|l| l.set(NONE));
+    set_live(NONE);
     if let Some(cw) = HOST_CW.with(Cell::get) {
         fldcw_host(cw);
     }
@@ -155,7 +215,7 @@ impl X87 {
             return self.state;
         }
         assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
-        let mut image = if LIVE.with(Cell::get) == self.id {
+        let mut image = if live() == self.id {
             let mut image = [0u8; 108];
             fnsave_host(&mut image);
             frstor_host(&image);
@@ -171,8 +231,8 @@ impl X87 {
     fn set_image(&mut self, image: [u8; 108]) {
         if self.home != 0 {
             assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
-            if LIVE.with(Cell::get) == self.id {
-                LIVE.with(|l| l.set(NONE));
+            if live() == self.id {
+                set_live(NONE);
             } else {
                 SPILLED.with(|s| s.borrow_mut().remove(&self.id));
             }
@@ -186,7 +246,7 @@ impl X87 {
     #[inline(never)]
     fn acquire(&mut self) {
         let me = token();
-        if self.id == 0 {
+        if self.id == UNASSIGNED {
             self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         }
         let image = if self.home == 0 {
@@ -202,7 +262,7 @@ impl X87 {
         }
         park();
         frstor_host(&image);
-        LIVE.with(|l| l.set(self.id));
+        set_live(self.id);
         self.home = me;
     }
 
@@ -242,7 +302,7 @@ impl X87 {
         if OP == 0x28d9 {
             assert_eq!(data[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
         }
-        if LIVE.with(Cell::get) != self.id {
+        if live() != self.id {
             self.acquire();
         }
         let flags: u64;
@@ -335,26 +395,29 @@ impl X87 {
         &mut self, m: &mut dyn crate::mem::Mem, addr: u32,
     ) {
         assert!(SIZE <= 10);
+        // the page-table fast path, as the lifted code's own accesses (the
+        // trait methods were 30% of the sound decoder thread, L62 profile)
+        let pt = m.page_table();
         let mut data = [0; 10];
         if !WRITE {
             let mut k = 0;
             while k + 4 <= SIZE {
-                data[k..k + 4].copy_from_slice(&m.u32(addr.wrapping_add(k as u32)).to_le_bytes());
+                data[k..k + 4].copy_from_slice(&m.fast_u32(pt, addr.wrapping_add(k as u32)).to_le_bytes());
                 k += 4;
             }
             if k < SIZE {
-                data[k..k + 2].copy_from_slice(&m.u16(addr.wrapping_add(k as u32)).to_le_bytes());
+                data[k..k + 2].copy_from_slice(&m.fast_u16(pt, addr.wrapping_add(k as u32)).to_le_bytes());
             }
         }
         self.exec::<OP>(&mut data);
         if WRITE {
             let mut k = 0;
             while k + 4 <= SIZE {
-                m.set_u32(addr.wrapping_add(k as u32), u32::from_le_bytes(data[k..k + 4].try_into().unwrap()));
+                m.fast_set_u32(pt, addr.wrapping_add(k as u32), u32::from_le_bytes(data[k..k + 4].try_into().unwrap()));
                 k += 4;
             }
             if k < SIZE {
-                m.set_u16(addr.wrapping_add(k as u32), u16::from_le_bytes([data[k], data[k + 1]]));
+                m.fast_set_u16(pt, addr.wrapping_add(k as u32), u16::from_le_bytes([data[k], data[k + 1]]));
             }
         }
     }
