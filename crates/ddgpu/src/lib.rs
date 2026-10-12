@@ -1550,6 +1550,41 @@ impl WgpuBackend {
                 pipeline
             }
         };
+        // A texture sampled by a draw that also renders into it: D3D9 leaves
+        // this to the driver (the samples read what was there before the
+        // draw); wgpu forbids one texture as both binding and attachment in
+        // a pass. The draw samples a copy made just before it, recorded on
+        // the same encoder (L59).
+        let attached: std::collections::HashSet<u32> = d.targets.iter().chain(std::iter::once(&d.depth)).flatten()
+            .filter_map(|t| t.texture.map(|x| x.resource)).collect();
+        let mut snapshots: HashMap<u32, wgpu::Texture> = HashMap::new();
+        for b in &d.textures {
+            if attached.contains(&b.resource) && !snapshots.contains_key(&b.resource) {
+                let Some(tx) = self.texture_for(b) else { continue };
+                let src = tx.texture.clone();
+                let copy = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("feedback snapshot"),
+                    size: src.size(),
+                    mip_level_count: src.mip_level_count(),
+                    sample_count: 1,
+                    dimension: src.dimension(),
+                    format: src.format(),
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[src.format().add_srgb_suffix(), src.format().remove_srgb_suffix()],
+                });
+                let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
+                for level in 0..src.mip_level_count() {
+                    let size = src.size().mip_level_size(level, src.dimension());
+                    enc.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo { texture: &src, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        wgpu::TexelCopyTextureInfo { texture: &copy, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        size,
+                    );
+                }
+                *self.open.borrow_mut() = Some(enc);
+                snapshots.insert(b.resource, copy);
+            }
+        }
         // texture bind groups, by what they bind
         let mut groups = Vec::new();
         for (kinds, layout, base, vs) in [(&ps_kinds, &layout1, 0u32, false), (&vs_kinds, &layout2, 257u32, true)] {
@@ -1561,7 +1596,8 @@ impl WgpuBackend {
                 }
             }
             let gkey = (vs, gkey);
-            if let Some(g) = self.tex_groups.get(&gkey) {
+            let feedback = gkey.1.iter().any(|e| snapshots.contains_key(&e.2));
+            if let Some(g) = self.tex_groups.get(&gkey).filter(|_| !feedback) {
                 groups.push(g.clone());
                 continue;
             }
@@ -1575,7 +1611,8 @@ impl WgpuBackend {
                 };
                 let tx = self.texture_for(b).ok_or_else(|| format!("texture format {:#x} is not supported", b.format))?;
                 let format = if srgb_read { tx.gpu_format.add_srgb_suffix() } else { tx.gpu_format };
-                let view = tx.texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(view_dimension), format: Some(format), ..Default::default() });
+                let texture = snapshots.get(&b.resource).unwrap_or(&tx.texture);
+                let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(view_dimension), format: Some(format), ..Default::default() });
                 views.push((n, view, self.sampler(&states)?));
             }
             let mut entries = Vec::new();
@@ -1584,7 +1621,9 @@ impl WgpuBackend {
                 entries.push(wgpu::BindGroupEntry { binding: 2 * n + 1, resource: wgpu::BindingResource::Sampler(s) });
             }
             let g = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries });
-            self.tex_groups.insert(gkey, g.clone());
+            if !feedback {
+                self.tex_groups.insert(gkey, g.clone()); // a snapshot is for this draw only
+            }
             groups.push(g);
         }
         // uniforms: half-pixel offset from the viewport; alpha test from the states

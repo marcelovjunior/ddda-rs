@@ -578,3 +578,36 @@ fn cube_render_targets_match_the_d3d9_driver() {
     }
     assert!(failures.is_empty());
 }
+
+#[test]
+fn a_draw_sampling_its_own_target_matches_the_d3d9_driver() {
+    // L59: the game's menu draws into a texture it also samples. wgpu
+    // forbids that in one pass; ddgpu samples a copy made before the draw.
+    use d3d9cmd::{TargetTexture, TexKind, TextureBinding, USAGE_RENDERTARGET};
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let format = 21u32; // A8R8G8B8
+    let tex = TargetTexture { resource: 0x300, kind: TexKind::Flat, width: 4, height: 4, depth: 1, levels: 1, usage: USAGE_RENDERTARGET };
+    let level = Target { surface: 0x301, format, width: 4, height: 4, texture: Some(tex), level: 0, samples: 0, quality: 0 };
+    let fill = draw(&[[0.25, 0.5, 0.75, 1.0]], [Some(level.clone()), None, None, None], 0.5, &[]);
+    // point filtering, clamp: each pixel samples its own texel
+    let st = [0u32, 3, 3, 3, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
+    let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Flat, format, width: 4, height: 4, depth: 1, levels: 1, usage: USAGE_RENDERTARGET, states: st };
+    let feedback = sample_draw(binding, level.clone(), &[]);
+    let clears = [clear_of(&[level.clone()], 0xFF10_2030)];
+    let draws = [fill, feedback];
+    let reads = [level.clone()];
+    let theirs = d3d9.render_cleared(&[], &clears, &draws, &reads).expect("D3D9");
+    let mut gpu = ddgpu::WgpuBackend::headless().expect("adapter");
+    for c in &clears {
+        gpu.clear(c);
+    }
+    for d in &draws {
+        gpu.draw(d);
+    }
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    let mine = gpu.read_back(&level).expect("read back");
+    assert_eq!(mine, theirs[0]);
+}
