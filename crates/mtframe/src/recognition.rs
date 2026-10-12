@@ -185,7 +185,10 @@ pub fn update(m: &mut dyn Mem, this: u32, found: u32, calls: &mut impl Calls) {
         }
         let t = F32::from_bits(main.delta_time_bits(m)) + f(m, at(TIMER));
         m.set_u32(at(TIMER), t.to_bits());
-        !(f(m, at(INTERVAL)).0 > t.0)
+        // `comiss interval, t`/`ja` leaves: NaN passes the gate
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let due = !(f(m, at(INTERVAL)).0 > t.0);
+        due
     };
     if !gate(m) {
         // the empty local array's destructor: no calls

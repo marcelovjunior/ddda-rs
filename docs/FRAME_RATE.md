@@ -340,3 +340,58 @@ system is moved to fixed substeps.
   - what `uCnsChain`'s job computes;
   - the 71 step-reading candidates of section 5, line by line;
   - integer frame counters outside the constant candidates.
+
+## 8. Readable ports and models (L39)
+
+`crates/mtframe` is the 1:1 baseline that the opt-in high-frame-rate mode
+will change, one small diff per system. Brief and results:
+[tasks/L39-readable-frame-systems.md](tasks/L39-readable-frame-systems.md).
+Nothing below is implemented: the default stays the original.
+
+Each function is in one of three states:
+
+- **Strict port, wired.** `lift.py gen` puts it over the lifted body, as
+  for mtmath and mtcore (docs/MATH.md, docs/CORE.md). It reproduces every
+  register, xmm lane, x87 state and written byte, and the machine state at
+  every call (stack window included). It is verified against the lifted
+  vectors and edge cases recorded from the original
+  (`crates/mtframe/tests/differential.rs`, `research/native/vectors_frame.py`).
+- **Observable-equivalent model, not wired; the high-frame-rate mode's
+  baseline.** The lifted body stays: a strict port would have to replay
+  dead state (scratch registers carried across loops into later callouts,
+  as with L24's blend). The model is verified against recordings of the
+  original on its observable behaviour (`crates/mtframe/tests/models.rs`):
+  - every byte of memory outside the original's own stack frame;
+  - the order, targets and arguments of its calls;
+  - the use of their results.
+
+  It does not reproduce register values nobody reads. The mode deviates
+  on purpose, so a model is the right base for it.
+- **Lifted.** No readable version.
+
+| System | Function | State | What the mode changes |
+|---|---|---|---|
+| Clock | `sMain::vf06` 0x00DBFA90 | lifted (dead state: the x87 stack carries mFps and the counter frequency across ftol, `__allmul`/`__aulldiv` and Sleep) | nothing in the code: raising `mMaxFps` (+0x3C) is a data change |
+| Enemy recognition | `sRecognition::vf06` 0x00487B00 | model `recognition::update` | the timers add this frame's step: 0x00488298 `movss xmm0, [eax+0x70]` / 0x0048829D `divss xmm0, [eax+0x38]` (drawn) and 0x004882BD / 0x004882C2 (hidden). The mode adds the elapsed interval instead: the timer value at the gate (0x00487B51 `addss xmm0, [ebp+0x20]`, the base frames since the last run) / `mFps`. In the model: phase 5's `step` becomes `t / fps`, with `t` the gate's sum. At 30 fps and interval 1, `t` = `mDeltaTime` and the result is unchanged |
+| Cloth | `uSimSoftBody::vf11` 0x00F20640 | lifted; its step schedule (0x00F20847..0x00F208FC) is the model `cloth::schedule` | the remainder: 0x00F208D9 `xorps xmm1, xmm1` / 0x00F208DC `movss [esi+0x150], xmm1` drop it. The mode keeps it (`acc −= n × step`, which the loop at 0x00F208B0 has already done), so the step `if steps != 0 { acc = 0 }` goes. Optionally cap n. The 0.05 s clamp (0x00F2085E) stays |
+| Frozen, Petrify | integration 0x0084CCC0 | strict port `integrate::update` | the factors per frame: Frozen at 0x0084CD0D / 0x0084CD15 (`mulss` by max(0, 1 − `+0x2864`)), Petrify at 0x0084CD53 / 0x0084CD5B (by `+0x27B0`). The mode uses `k^step` with the unit step (`+0x14`, base frames): in the port, `brake(m, c, k)` takes `k.powf(step)`. At step 1 (30 fps) it is the same |
+| Explicit Euler | integration 0x0084CCC0 | strict port | optional: run `integrate::update` in fixed substeps of a reference rate (section 6) |
+| em5501 lunge | `cEm5501ActAtckRushBite::vf06` 0x00A36DF0 | strict port `lunge::update` | the per-frame displacement: 0x00A36ED3 / 0x00A36EDC / 0x00A36EE5 `addss` the velocity to the position. The mode scales it by the enemy's unit step (`enemy+0x14`): in the port, `position[k] = p + velocity[k] × step`. The stored velocity (+0x74D0) stays per base frame |
+| Effect noise, mode 4 | `sEffect::vf06` 0x00FB64D0 (counter), readers 0x011E48E0, 0x00E6C260 (+21) | strict ports `effect::update`, `element_time`, `emitter_time` | the counter: 0x00FB64DC `inc dword [esi+0x74]`. The mode advances it by whole base frames of game time: it keeps the fraction aside (a field of the mode's own, since sEffect has none) and adds floor(fraction + `mDeltaTime`) per frame, or ×2 for a 60 Hz reference. The readers stay |
+| Long chains | `uChain::vf09` 0x00F0C160 | strict port `chain::update` | the split: 0x00F0C3C5 `mulss` (time = scale × step) and 0x00F0C3DE `fdivr` (substep = time / `+0x88`). The mode keeps the substep at the reference rate's and varies the count with the step. The solver (0x00F01390, lifted) reads the count from `+0x88`, so the mode sets a per-frame count there and restores it afterwards; whether the solver reads it elsewhere is not traced |
+
+**Verified on this branch** (`cargo test -p mtframe`, release, vectors required):
+- 2,400 edge cases, 400 per strict port, including the x87 precision
+  control for the chain's substep and quiet and signalling NaN inputs where
+  SSE meets them.
+- The lifted vectors that stay inside the port. Three vectors of
+  `sEffect::vf06` enter another lifted body; the integration build's
+  replay checks them.
+- The two models against 400 recordings each. Cases where the original
+  crashes are dropped: null records, and loops beyond the emulator's
+  instruction budget.
+- Mutation checks for every port and model fail between 19 and 400 cases
+  each.
+
+**Pending the merge train:** the full ddnative replay with the ports
+wired, and the benchmark.

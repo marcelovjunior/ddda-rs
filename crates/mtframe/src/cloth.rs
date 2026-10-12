@@ -61,8 +61,11 @@ pub fn schedule(m: &mut dyn Mem, body: u32) -> u32 {
             acc = acc - step;
             m.set_u32(at(STEPS), n);
             m.set_u32(at(ACCUMULATOR), acc.to_bits());
-            // `comiss acc, [step]`/`jae` (re-read; NaN stops)
-            if !(acc.0 >= f(m, at(STEP)).0) {
+            // `comiss acc, [step]`/`jae` (re-read; NaN stops): the negation
+            // is the unordered case
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            let stop = !(acc.0 >= f(m, at(STEP)).0);
+            if stop {
                 break;
             }
         }
