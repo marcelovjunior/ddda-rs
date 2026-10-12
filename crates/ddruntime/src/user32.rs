@@ -829,7 +829,8 @@ pub fn get_cursor_pos(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetCursorPos(x, y) -> TRUE (clamped to the screen).
 pub fn set_cursor_pos(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (x, y) = (arg(m, cpu, 0) as i32, arg(m, cpu, 1) as i32);
-    desk(|d| d.cursor = (x.clamp(0, crate::win32::SCREEN_W as i32 - 1), y.clamp(0, crate::win32::SCREEN_H as i32 - 1)));
+    let (w, h) = crate::win32::screen();
+    desk(|d| d.cursor = (x.clamp(0, w as i32 - 1), y.clamp(0, h as i32 - 1)));
     cpu.eax = 1;
     ret(m, cpu, 8);
 }

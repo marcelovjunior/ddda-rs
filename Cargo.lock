@@ -2852,6 +2852,7 @@ dependencies = [
  "ddnative",
  "ddnative-base",
  "ddsave",
+ "hostdisplay",
  "windows",
  "windows-core",
 ]
@@ -3684,6 +3685,13 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hostdisplay"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "icu_collections"

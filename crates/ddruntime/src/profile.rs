@@ -2,9 +2,13 @@
 //! WritePrivateProfileStringW over crate::files (the install read-only,
 //! writes to the overlay or the home).
 //!
-//! The game's settings live in `<Documents>\CAPCOM\DRAGONS DOGMA DARK
-//! ARISEN\config.ini` (MtRegistry's constructor 0x00CFFF00, which keeps the
-//! path at +4). Its reader 0x00D00010 (GetPrivateProfileStringW at
+//! The game's settings live in `<Local AppData>\CAPCOM\DRAGONS DOGMA DARK
+//! ARISEN\config.ini` (MtRegistry's constructor 0x00CFFF00 asks
+//! SHGetFolderPathW for CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE, 0x801C, and
+//! keeps the path at +4; its byte +0x210 is set when the file did not
+//! exist). The game's options and how it writes them are in
+//! docs/OPTIONS.md; [`import_config`] copies a player's file into the
+//! sandbox. Its reader 0x00D00010 (GetPrivateProfileStringW at
 //! 0x00D000CB, default L"", nSize 0x200) and writer 0x00CFFD20
 //! (WritePrivateProfileStringW at 0x00CFFE09) convert section, key and
 //! value from and to code page 1252.
@@ -34,6 +38,7 @@
 //! A file name without a path (Windows searches the Windows directory) or
 //! a UTF-16BE file is not modelled (stop).
 use crate::services::{arg, ret, with_state};
+use std::path::{Path, PathBuf};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 
@@ -365,3 +370,49 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "GetPrivateProfileStringW", get_private_profile_string_w),
     ("KERNEL32.dll", "WritePrivateProfileStringW", write_private_profile_string_w),
 ];
+
+// --- the player's settings ------------------------------------------------------
+
+/// Where the game's config.ini is in a sandbox: the folder
+/// crate::services::sh_get_folder_path_w gives for CSIDL_LOCAL_APPDATA
+/// (0x1C), then the path MtRegistry's constructor (0x00CFFF00) appends.
+pub fn config_path(home: &Path) -> PathBuf {
+    home.join("csidl-0x001c").join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini")
+}
+
+/// The player's own config.ini on this machine, where the original game
+/// keeps it (`%LOCALAPPDATA%\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`).
+pub fn player_config() -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("CAPCOM").join("DRAGONS DOGMA DARK ARISEN").join("config.ini");
+    p.is_file().then_some(p)
+}
+
+/// Copy a player's config.ini into the sandbox, byte for byte, so the
+/// rebuilt game starts with the player's options. `source` is only read.
+/// A sandbox that already has a config.ini keeps it (the rebuilt game's
+/// own changes are never overwritten) unless `replace`. Returns whether it
+/// copied.
+pub fn import_config(source: &Path, home: &Path, replace: bool) -> Result<bool, String> {
+    let to = config_path(home);
+    if to.exists() && !replace {
+        return Ok(false);
+    }
+    let bytes = std::fs::read(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| format!("{}: {e}", to.display()))?;
+    std::fs::write(&to, bytes).map_err(|e| format!("{}: {e}", to.display()))?;
+    Ok(true)
+}
+
+/// `DDRUNTIME_IMPORT_CONFIG` at session start: a config.ini to import, or
+/// `player` for the player's own ([`player_config`]); the sandbox keeps a
+/// config.ini it already has.
+pub fn import_from_env(home: &Path) {
+    let Some(v) = std::env::var_os("DDRUNTIME_IMPORT_CONFIG") else { return };
+    let source = if v == "player" { player_config() } else { Some(PathBuf::from(v)) };
+    match source.map(|s| import_config(&s, home, false)) {
+        Some(Ok(true)) => eprintln!("profile: imported config.ini into {}", config_path(home).display()),
+        Some(Ok(false)) => eprintln!("profile: the sandbox keeps its config.ini ({})", config_path(home).display()),
+        Some(Err(e)) => eprintln!("profile: config.ini import failed: {e}"),
+        None => eprintln!("profile: no player config.ini under %LOCALAPPDATA%"),
+    }
+}

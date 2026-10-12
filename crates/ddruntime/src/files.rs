@@ -8,8 +8,9 @@
 //!   first, so the guest sees its own writes.
 //! - The **home** (the rest of the sandbox): the guest's known folders
 //!   (crate::services::sh_get_folder_path_w), e.g. the game's settings file
-//!   `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini` (MtRegistry
-//!   0x00CFFF00). Read and written in place.
+//!   `<Local AppData>\CAPCOM\DRAGONS DOGMA DARK ARISEN\config.ini`
+//!   (MtRegistry 0x00CFFF00: CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE,
+//!   0x801C; crate::profile::config_path). Read and written in place.
 //!
 //! Guest paths are resolved against the guest's current directory (the
 //! install, as when Steam launches the game). An absolute path must lie in
@@ -76,6 +77,9 @@ pub fn set_roots(install: &Path, sandbox: &Path) {
         f.home = sandbox.to_path_buf();
         f.cwd = PathBuf::new();
     });
+    // a player's settings asked for at start (DDRUNTIME_IMPORT_CONFIG) land
+    // in this sandbox
+    crate::profile::import_from_env(sandbox);
 }
 
 fn set_error(e: u32) {
@@ -747,7 +751,7 @@ pub fn get_disk_free_space_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// empty path), ERROR_PATH_NOT_FOUND (a parent is a file),
 /// ERROR_ACCESS_DENIED (outside the roots); `..` is resolved first (all
 /// measured on Windows 11). Caller: MtRegistry's constructor 0x00CFFF00
-/// (at 0x00CFFF82), for `<Documents>\CAPCOM\DRAGONS DOGMA DARK ARISEN`.
+/// (at 0x00CFFF82), for `<Local AppData>\CAPCOM\DRAGONS DOGMA DARK ARISEN`.
 pub fn sh_create_directory_ex_w(m: &mut dyn Mem, cpu: &mut Cpu) {
     let path = guest_str_w(m, arg(m, cpu, 1));
     let absolute = path.as_bytes().get(1) == Some(&b':') || path.starts_with("\\\\");
