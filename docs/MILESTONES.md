@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c dispatch/return class batch (2026-10-12, pending replay)
+
+- **+20 functions / +60 cases**, all 3/3, with the general wrapper-call
+  strategy. Private **59,623 / 177,463**; all **59,603 / 177,403** prior
+  records/cases unchanged (`class-dispatch-audit.json`).
+- Main train 12 merged; **175 light tests pass**. RESIDUALS now contains
+  **109 inventory residuals**, including **21 awaiting private-case replay**.
+- **Next action:** finish the 27 instruction-bound trials, then checked
+  caller-state inputs for remaining dispatch/return failures. Boot stops first.
+
 ### L28c residual-class proofs (2026-10-12)
 
 - SETcc condition bytes and width-correct NEG extend finite-trace proofs;

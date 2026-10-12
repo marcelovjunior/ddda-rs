@@ -35,6 +35,37 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Dispatch/return class: +20/+60 (2026-10-12, pending replay)
+
+The largest class was tested first. After train-12 credits, **56** historical
+dispatch/return rows remained; exact-register inputs recorded **0/56**.
+Six cross-entry fragments were then reserved for claude-6's L50 boundary
+work. **wrapper-call-v1 records 20 of the other 50, all 3/3**. It applies
+the existing general frameless-wrapper mock cleanup and fixed-local-frame
+accounting rules; no game-address rule or relaxed return check was added.
+
+Private native-L28c is **59,623 functions / 177,463 cases**, **+20/+60**
+from `L28c/classes-before.json`. `L28c/class-dispatch-audit.json` confirms
+all **59,603 prior functions / 177,403 cases unchanged**; no promotions,
+stale mocks, removals or unexpected edits. Evidence logs:
+`class-dispatch-values.log`, `class-dispatch-wrappers.log`.
+Frozen native-train3-orig remains untouched. Head Rust replay required.
+
+Main **d20706b7 (train 12)** merged; **175 light tests pass**, including
+the merged caller-state and flag-guard changes. RESIDUALS was reconciled
+to **109 non-verified / 59,440**, **59,331 verified**, and marks the 20
+new rows plus 0x00C9E0F0 as private cases pending replay. Primary ownership
+is **91 recorder / 18 claude-6**, with seven cross-entry rows assigned to
+L50 before their fixtures. BA4160 and the stale-body refresh inputs for
+565308/786D69 return to the recorder lane per board #9773; 786D69 is not
+an admitted inventory row. Stop 17 (1146410 -> 1146420) remains L50's
+boundary task, with Codex fixture support offered on #9777.
+
+The finite-condition proof source is **78db90cc**. **27** remaining
+instruction-bound rows are now recording serially with guarded-values-v1,
+SETcc/NEG facts and the unchanged proof ceiling. **Next:** audit those
+results, then caller-state inputs for the remaining dispatch class.
+
 ### Recorder classes: finite condition values (2026-10-12)
 
 Starting from the census, dispatch/return is the largest recorder class
