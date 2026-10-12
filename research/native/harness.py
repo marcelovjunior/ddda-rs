@@ -448,9 +448,12 @@ def local_alloc_sites(address, body):
     """Conservative mock-ABI hint for interleaved entry-frame allocations.
 
     A matching add-ESP immediately before an own return must exist. Require
-    a straight-line entry prefix and no stores or further ESP adjustment
-    between the allocation and first call: initialized outgoing argument
-    space must not be mistaken for local storage. This is not an ABI proof.
+    the allocation in the straight-line entry prefix and no stores or further
+    ESP adjustment between the allocation and the first call on every path
+    (L28: paths through branches are followed, bounded; saved-register pops
+    and the matching cleanup right before a return end a path harmlessly):
+    initialized outgoing argument space must not be mistaken for local
+    storage. This is not an ABI proof.
     """
     if body is None:
         return set()
@@ -473,6 +476,42 @@ def local_alloc_sites(address, body):
         after = instruction(pc + i.size) if i else None
         if after and after.mnemonic in ('ret', 'retn', 'repz ret'):
             cleanup.add(i.operands[1].imm)
+    def store_or_adjust(i):
+        adjustment = i.mnemonic != 'push' and any(i.reg_name(r) == 'esp' for r in i.regs_access()[1])
+        return adjustment or any(o.type == 3 and o.access & 2 for o in i.operands)
+
+    def paths_clean(start, size):
+        # every path from the branch at `start` reaches a call or a return
+        # with no store and no ESP adjustment other than pops/final cleanup
+        todo, seen = [start], set()
+        while todo:
+            pc = todo.pop()
+            if pc in seen:
+                continue
+            seen.add(pc)
+            i = instruction(pc)
+            if i is None or len(seen) > 512:
+                return False
+            mn = i.mnemonic
+            if mn == 'call' or mn in ('ret', 'retn', 'repz ret', 'int3', 'ud2'):
+                continue
+            if mn.startswith('j'):
+                if i.operands[0].type != 2:
+                    return False
+                todo.append(i.operands[0].imm & 0xffffffff)
+                if mn != 'jmp':
+                    todo.append(pc + i.size)
+                continue
+            after = instruction(pc + i.size)
+            final = (mn == 'add' and len(i.operands) == 2 and i.operands[0].type == 1
+                     and i.reg_name(i.operands[0].reg) == 'esp' and i.operands[1].type == 2)
+            if final and i.operands[1].imm == size and after is not None and after.mnemonic in ('ret', 'retn', 'repz ret'):
+                continue
+            if mn != 'pop' and store_or_adjust(i):
+                return False
+            todo.append(pc + i.size)
+        return True
+
     result, pc, pending = set(), address, None
     while pc in body:
         i = instruction(pc)
@@ -481,6 +520,10 @@ def local_alloc_sites(address, body):
         mn = i.mnemonic
         if mn == 'call':
             if pending is not None:
+                result.add(pending)
+            break
+        if mn.startswith('j') and pending is not None:
+            if paths_clean(pc, instruction(pending).operands[1].imm):
                 result.add(pending)
             break
         if mn.startswith('j') or mn in ('ret','retn','repz ret','int3','ud2'):

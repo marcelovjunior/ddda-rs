@@ -196,4 +196,18 @@ class FrameContractTests(unittest.TestCase):
         self.assertEqual([e['target'] for e in c['calls']],[0x400200])
 
 
+    def sites(self, text):
+        body,(p1,p2)=self.image(bytes.fromhex(text.replace(' ','')))
+        with p1,p2:
+            return h.local_alloc_sites(0x400000,set(body))
+
+    def test_local_allocation_through_branches(self):
+        # sub esp,8; test ecx,ecx; jz early; call f; add esp,8; ret; early: add esp,8; ret
+        self.assertEqual(self.sites('83ec08 85c9 7409 e8f2000000 83c408 c3 83c408 c3'),{0x400000})
+        # early path with a saved-register pop before the cleanup is fine too
+        self.assertEqual(self.sites('83ec08 56 85c9 740a e8f1000000 5e 83c408 c3 5e 83c408 c3'),{0x400000})
+        # a store on one path before its call means outgoing arguments, not locals
+        self.assertEqual(self.sites('83ec08 85c9 7409 e8f2000000 83c408 c3 c7042400000000 e8e5000000 83c408 c3'),set())
+
+
 if __name__=='__main__':unittest.main()
