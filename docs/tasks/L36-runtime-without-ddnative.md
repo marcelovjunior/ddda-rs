@@ -73,9 +73,19 @@ unchanged.
 
 ### Measurements
 
-(pending: heavy work is paused. Once resumed: cold and warm
-`cargo test -p ddruntime --no-default-features` against the default, in a
-fresh target dir, in the heavy slot.)
+In the heavy slot (2026-10-12): fresh target dirs, `CARGO_INCREMENTAL=0`,
+`CARGO_BUILD_JOBS=3`, the same machine with other agents' jobs running.
+Warm means one runtime source file (`services.rs`) touched, then a
+rebuild.
+
+| Build (`cargo test -p ddruntime --no-run`) | Cold | Warm | Target dir |
+|---|---:|---:|---:|
+| default (`game`: ddnative and the 16 ddlift shards) | 499 s | 23 s | 4.4 GB |
+| `--no-default-features` | 16 s | 7 s | 249 MB |
+
+That is 31x faster cold, 3.3x faster warm, and 18x less disk. Then
+`cargo test -p ddruntime --no-default-features` passed every test: 6 test
+binaries, 59 tests, 0 failed.
 
 ### For other branches on merge
 
