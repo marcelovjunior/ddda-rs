@@ -87,7 +87,8 @@ sources, with no build and no live measurement.
   1. **sRecognition** (0x00487B00): seen/unseen timers advance by one
      frame's time per check interval. Enemies are recognised after
      2 s × fps/30 and forgotten after 10 s × fps/30 (8 s / 40 s at
-     120 fps).
+     120 fps). The list feeds the pawn AI's situation check
+     (`cAICheckSituationCmc::vf11`) and `sPlayerManager`.
   2. **Cloth** (`uSimSoftBody::vf11` 0x00F20640): fixed 1/60-s steps, but
      the accumulator's remainder is dropped. Cloth runs at
      `F / ceil(F/60)` steps/s: 48 at 144 fps (80 %), 50 at 100, 37.5 at
@@ -114,7 +115,6 @@ sources, with no build and no live measurement.
   - the long-chain (`uCnsChain`/`uChain`) step;
   - FRAME.md's 150-frame AI-sense timer;
   - network timers;
-  - the remaining `cCamImp` lerps;
-  - who consumes sRecognition's flag.
+  - the remaining `cCamImp` lerps.
 - 687 functions that load 30, 60, 1/30 or 1/60 are listed as candidates
   (mostly unit conversions); only samples were classified.

@@ -146,9 +146,15 @@ interval:
 - The original already showed this at its usual 46-96 fps
   (3-6 s / 15-32 s).
 
-*Not traced:* what consumes the recognised flag (+0x8 of each entry):
-pawn knowledge, battle state or HUD. FRAME.md step 34 places it before
-the units.
+**Who reads it.** The recognised list (`*0x018FA4F4`) is read by:
+- the pawn AI's situation check (`cAICheckSituationCmc::vf11`,
+  0x00584780);
+- two functions of `sPlayerManager` (`*0x018FA4EC`) called from its vf06:
+  0x004112E0 and 0x00411520 (timers by `mDeltaTime` with 300 / 700
+  thresholds; their meaning is not traced).
+
+So at high rates pawns would notice enemies, and stop treating them as
+present, several times later than at 30 fps.
 
 ### 4.2 Cloth (`uSimSoftBody`, 0x00F20640)
 
@@ -284,5 +290,4 @@ system is moved to fixed substeps.
   - the long-chain step;
   - network timers;
   - the remaining `cCamImp` lerps;
-  - the 150-frame AI-sense timer;
-  - what consumes sRecognition's flag.
+  - the 150-frame AI-sense timer.
