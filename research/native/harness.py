@@ -1378,9 +1378,17 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 elif cleanup.mnemonic == 'push':
                     later += 4
                 elif (later and cleanup.mnemonic == 'call' and cleanup.operands[0].type == 2
-                      and (cleanup.operands[0].imm & 0xffffffff) not in noreturn_targets
-                      and static_pop(cleanup.operands[0].imm & 0xffffffff) == 0):
-                    pass  # a callee that leaves its arguments to us
+                      and (cleanup.operands[0].imm & 0xffffffff) not in noreturn_targets):
+                    consumed = static_pop(cleanup.operands[0].imm & 0xffffffff)
+                    if consumed > later:
+                        # Arguments for this later callee can precede the
+                        # indirect call's own arguments (e.g. a diagnostic
+                        # string, then COM arguments, then HRESULT). Its
+                        # ret N consumes the saved prefix as well as the
+                        # intervening pushes. Keep that prefix on the stack.
+                        pop = max(0, pop - (consumed - later))
+                        break
+                    later -= consumed
                 elif later and not writes_esp and not cleanup.mnemonic.startswith('j')                         and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
                     pass
                 else:

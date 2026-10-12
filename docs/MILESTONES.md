@@ -1,5 +1,19 @@
 # Milestones
 
+### L28c render-call fixtures (2026-10-12, pending integration replay)
+
+- Fixed mock cleanup when a later direct callee consumes arguments pushed
+  before an indirect call. At `0x01128F55`, the saved diagnostic string
+  belongs to `0x00DA89B0` (`ret 8`), not the COM call. The general rule has
+  two synthetic regression tests; all **41** relevant light tests pass.
+- Eight render functions now record, including boot-route `0x01129030`
+  and `0x01129460`: **59,534 → 59,542 records / 177,196 → 177,220 cases**.
+  Hash audit proves every old record/case multiset unchanged. Private
+  native-L28c remains open for head's requested boot preview and additions.
+- **Next action:** trace remaining boot stop `0x00DA9EC0`, then
+  `0x01104470`; constructor loop budgets remain unresolved. No Rust replay
+  here; the head verifies the integration train.
+
 ### L28c boot-blocker fixtures (2026-10-12, pending integration replay)
 
 - `0x00DAFED0` now records **8/8** bounded record-range inputs, including

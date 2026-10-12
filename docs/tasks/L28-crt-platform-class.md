@@ -558,3 +558,40 @@ failure. Image-table/stack-slot loop budgets and the terminal-call cleanup
 diagnosis above remain open; coordinate with L45 before changing extents
 or terminal evidence. Both L45's `refresh`/`table_goals` and this branch's
 separate `refresh-closed` command must be retained when merging.
+
+### L28c render cleanup batch (2026-10-12, boot preview ready)
+
+**59,534 → 59,542 selected records; 177,196 → 177,220 cases.** Eight
+additions, three original-code fixtures each: **0x00DAA4B0, 0x00DAE760,
+0x01128EE0, 0x01128F40, 0x01129030, 0x01129310, 0x01129370,
+0x01129460**. All 59,534 old records and case multisets are hash-identical
+(`native-L28c/L28c/title-cleanup-audit.json`); no removals, promotions or
+stale mocked targets. Missing prepared candidates: **228 → 220**.
+
+The recorder's indirect-call cleanup overcounted arguments when a later
+stdcall/thiscall consumes an argument pushed before the indirect call.
+Concrete evidence: 0x01128F4F pushes the diagnostic string, 0x01128F54
+pushes the COM receiver, and 0x01128F55 calls Unlock. 0x01128F57 then
+pushes HRESULT and 0x01128F5A calls 0x00DA89B0, whose return at
+0x00DA8C15 is `ret 8`. Unlock consumes four bytes, leaving the string for
+the later call. The analogous Lock sequence is 0x01128F19..0x01128F31.
+The general forward cleanup scan now accounts for the later direct
+callee's static pop, reserving its pre-pushed prefix. No address-specific
+case, changed input distribution, or relaxed execution guard is involved.
+
+**41 light tests pass:** 15 frame-contract (two new regressions), 19
+structured-input, two range-generator and five audit tests. The new tests
+cover the saved prefix and a subsequent callee consuming only intervening
+pushes before explicit caller cleanup. Original recording ran through
+heavy.py; seven additions use zero-call-v1, 0x00DAE760 uses zero-objects-v1.
+Rust replay remains for the head's integration train.
+
+Before this change all 29 remaining direct-title candidates rejected with
+three seeds in each of zero-call-v1, zero-objects-v1, small-mockzero-v1 and
+image-v1. Private evidence: `L28c/title-diagnosis.jsonl` and
+`L28c/title-cleanup.jsonl`. The broader one-hop trial was stopped on head's
+new priority order, preserving its completed rows. **native-L28c is not
+frozen**, per head: 0x01129030 and 0x01129460 are ready for preview now;
+0x00DA9EC0 still rejects and is being traced first, then 0x01104470.
+Constructor constant-loop analysis remains open (stack counters, copied
+initializers and closed-callee cost); no speculative budget change landed.

@@ -219,5 +219,24 @@ class FrameContractTests(unittest.TestCase):
             c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
         self.assertEqual([e['out']['pop'] for e in c['calls']],[4,0])
 
+    def test_later_callee_consumes_arguments_pushed_before_indirect_call(self):
+        # Saved string; two indirect arguments; call eax; push HRESULT;
+        # call stdcall(ret 8). The indirect callee must pop 8, not 12.
+        code=bytes.fromhex('8b01 6a55 6a11 6a22 ffd0 50 e8f0000000 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=8):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[8,8])
+        self.assertEqual(c['calls'][1]['regs']['esp'],c['regs_in']['esp']-12)
+
+    def test_later_callee_can_consume_only_intervening_pushes(self):
+        # Two indirect arguments, then an unrelated stdcall argument, then
+        # caller cleanup of the original arguments. Follow the balanced call.
+        code=bytes.fromhex('8b01 6a11 6a22 ffd0 50 e8f1000000 83c408 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=4):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[0,4])
+
 
 if __name__=='__main__':unittest.main()
