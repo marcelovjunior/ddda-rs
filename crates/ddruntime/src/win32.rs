@@ -7,9 +7,6 @@ use crate::services::{arg, ret, with_state, zero};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 
-/// VirtualAlloc's region: page-granular blocks from a lazily backed range.
-pub const VIRTUAL_BASE: u32 = 0x6000_0000;
-pub const VIRTUAL_SIZE: u32 = 0x1800_0000;
 
 /// Handle values the runtime gives out (any value the guest only passes
 /// back is fine; these are distinct from pointers the guest might hold).
@@ -21,6 +18,7 @@ pub const IMAGE_BASE: u32 = 0x0040_0000;
 
 const ERROR_PROC_NOT_FOUND: u32 = 127;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const HEAP_ZERO_MEMORY: u32 = 0x8;
 
@@ -113,7 +111,10 @@ pub fn get_system_info(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u16(p, 0); // PROCESSOR_ARCHITECTURE_INTEL
     m.set_u32(p + 4, 0x1000); // dwPageSize
     m.set_u32(p + 8, 0x0001_0000); // lpMinimumApplicationAddress
-    m.set_u32(p + 12, 0x7FFE_FFFF); // lpMaximumApplicationAddress
+    // lpMaximumApplicationAddress: DDDA.exe is large-address-aware, so on
+    // 64-bit Windows its user space is 4 GB (Microsoft Learn, "Memory Limits
+    // for Windows and Windows Server Releases"); VIRTUAL_RANGES uses it.
+    m.set_u32(p + 12, 0xFFFE_FFFF);
     m.set_u32(p + 16, 1); // dwActiveProcessorMask
     m.set_u32(p + 20, 1); // dwNumberOfProcessors
     m.set_u32(p + 24, 586); // dwProcessorType PROCESSOR_INTEL_PENTIUM
@@ -287,29 +288,200 @@ pub fn heap_re_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 16);
 }
 
-/// VirtualAlloc(address, size, type, protect): a fresh page-aligned block
-/// (address hints are ignored: the guest gets memory where the runtime has
-/// it). Reserve and commit are not distinguished: the region reads as zero.
-pub fn virtual_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let size = arg(m, cpu, 1);
-    let pages = size.div_ceil(0x1000).max(1) * 0x1000;
-    cpu.eax = with_state(|s| {
-        if s.virtual_next == 0 {
-            s.virtual_next = VIRTUAL_BASE;
-        }
-        let b = s.virtual_next;
-        match b.checked_add(pages) {
-            Some(e) if e <= VIRTUAL_BASE + VIRTUAL_SIZE => {
-                s.virtual_next = e;
-                b
+// --- virtual memory: reservations and commits ------------------------------
+
+const MEM_COMMIT: u32 = 0x1000;
+const MEM_RESERVE: u32 = 0x2000;
+const MEM_DECOMMIT: u32 = 0x4000;
+const MEM_RELEASE: u32 = 0x8000;
+const ERROR_INVALID_ADDRESS: u32 = 487;
+/// The allocation granularity (GetSystemInfo's dwAllocationGranularity).
+const GRANULARITY: u32 = 0x1_0000;
+
+/// The address ranges VirtualAlloc places regions in, searched bottom-up
+/// (as Windows does without MEM_TOP_DOWN): below the thread stacks, and,
+/// because DDDA.exe is large-address-aware (IMAGE_FILE_LARGE_ADDRESS_AWARE
+/// in its PE header) and gets 4 GB of user space on 64-bit Windows, above
+/// 2 GB. The rest of the space holds the runtime's own regions (image,
+/// heap, stacks, thread blocks, tokens). Exact placement differs from a
+/// real process (whose space also holds the system DLLs); the guest only
+/// sees that regions are 64 KB-aligned and do not overlap.
+pub const VIRTUAL_RANGES: [(u32, u32); 2] = [(0x6000_0000, 0x7800_0000), (0x8000_0000, 0xFF00_0000)];
+
+/// Reserved regions: base -> size (page-rounded).
+#[derive(Default)]
+pub struct VirtualSpace {
+    regions: std::collections::BTreeMap<u32, u32>,
+}
+
+impl VirtualSpace {
+    /// The region holding [addr, addr + len), if one holds all of it.
+    fn region_of(&self, addr: u32, len: u32) -> Option<(u32, u32)> {
+        let (&b, &n) = self.regions.range(..=addr).next_back()?;
+        (addr as u64 + len as u64 <= b as u64 + n as u64).then_some((b, n))
+    }
+
+    /// The first region overlapping [base, base + len).
+    fn overlapping(&self, base: u32, len: u32) -> Option<(u32, u32)> {
+        let end = base as u64 + len as u64;
+        self.regions.iter().map(|(&b, &n)| (b, n)).find(|&(b, n)| (b as u64) < end && (base as u64) < b as u64 + n as u64)
+    }
+
+    fn overlaps(&self, base: u32, len: u32) -> bool {
+        self.overlapping(base, len).is_some()
+    }
+
+    /// The lowest free 64 KB-aligned place for `len` bytes.
+    fn find(&self, len: u32) -> Option<u32> {
+        for (lo, hi) in VIRTUAL_RANGES {
+            let mut at = lo as u64;
+            while at + len as u64 <= hi as u64 {
+                match self.overlapping(at as u32, len) {
+                    None => return Some(at as u32),
+                    Some((b, n)) => at = (b as u64 + n as u64).next_multiple_of(GRANULARITY as u64),
+                }
             }
-            _ => 0,
         }
+        None
+    }
+}
+
+fn with_space<R>(f: impl FnOnce(&mut crate::memory::GuestMemory) -> R) -> R {
+    crate::runtime::with(|rt| rt.machine.with(|mm| {
+        let machine = mm.as_mut().expect("VirtualAlloc outside a session (no guest machine)");
+        f(&mut machine.memory)
+    }))
+}
+
+/// Commit the pages of [addr, addr + len) that are not committed yet (new
+/// pages read as zero; committed ones keep their contents).
+fn commit(addr: u32, len: u32, perm: u8) {
+    with_space(|mem| {
+        let mut p = addr & !0xFFF;
+        while (p as u64) < addr as u64 + len as u64 {
+            if !mem.is_mapped(p) {
+                mem.map_lazy(p, 0x1000, perm).expect("an uncommitted page of a reservation");
+            }
+            p += 0x1000;
+        }
+    });
+}
+
+/// VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) (Microsoft
+/// Learn "VirtualAlloc function (memoryapi.h)"), with the answers measured on
+/// Windows 11 (research/runtime/windows/Virtual.cs):
+/// - MEM_RESERVE reserves the pages spanning [lpAddress, lpAddress + dwSize)
+///   from a 64 KB-aligned base (lpAddress rounded down; NULL: the lowest
+///   free place, see [`VIRTUAL_RANGES`]); reserved pages are not accessible.
+/// - MEM_COMMIT commits pages of an existing reservation (lpAddress rounded
+///   down to its page; already committed pages keep their contents) and
+///   returns that page address; with lpAddress NULL it reserves and commits
+///   a new region. MEM_RESERVE | MEM_COMMIT does both.
+/// - NULL with ERROR_INVALID_ADDRESS (487) for a range that is in use
+///   (reserving) or not inside one reservation (committing), with
+///   ERROR_INVALID_PARAMETER (87) for dwSize 0, no MEM_COMMIT/MEM_RESERVE,
+///   flProtect 0. NULL with ERROR_NOT_ENOUGH_MEMORY when no place is left.
+///   Success leaves the last error alone.
+/// Modelled protections: PAGE_READONLY, PAGE_READWRITE; the other flags
+/// (MEM_RESET, MEM_TOP_DOWN, write watch, large pages, execute and guard
+/// pages) stop the session. Callers: MtVirtualAllocator 0x00D11B60/vf11/vf12
+/// (reserve 512 MB), its page commits 0x00D10E90, 0x00CF5530 (commit).
+pub fn virtual_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (addr, size, kind, prot) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
+    let r = (|| -> Result<u32, u32> {
+        if size == 0 || kind & (MEM_COMMIT | MEM_RESERVE) == 0 || prot == 0 {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+        if kind & !(MEM_COMMIT | MEM_RESERVE) != 0 {
+            panic!("VirtualAlloc flAllocationType {kind:#x} is not modelled (crate::win32)");
+        }
+        let perm = match prot {
+            0x02 => crate::memory::READ,
+            0x04 => crate::memory::READ | crate::memory::WRITE,
+            _ => panic!("VirtualAlloc flProtect {prot:#x} is not modelled (crate::win32)"),
+        };
+        if kind & MEM_RESERVE != 0 || addr == 0 {
+            let (base, len) = if addr == 0 {
+                let len = size.div_ceil(0x1000) * 0x1000;
+                let base = with_state(|s| s.virtual_space.find(len)).ok_or(ERROR_NOT_ENOUGH_MEMORY)?;
+                (base, len)
+            } else {
+                let base = addr & !(GRANULARITY - 1);
+                let end = (addr as u64 + size as u64).div_ceil(0x1000) * 0x1000;
+                let len = u32::try_from(end - base as u64).map_err(|_| ERROR_INVALID_ADDRESS)?;
+                let inside = VIRTUAL_RANGES.iter().any(|&(lo, hi)| base >= lo && end <= hi as u64);
+                if !inside || with_state(|s| s.virtual_space.overlaps(base, len)) {
+                    return Err(ERROR_INVALID_ADDRESS);
+                }
+                (base, len)
+            };
+            with_state(|s| s.virtual_space.regions.insert(base, len));
+            if kind & MEM_COMMIT != 0 {
+                commit(base, len, perm);
+            }
+            return Ok(base);
+        }
+        // MEM_COMMIT inside a reservation
+        let page = addr & !0xFFF;
+        let len = ((addr as u64 + size as u64).div_ceil(0x1000) * 0x1000 - page as u64) as u32;
+        with_state(|s| s.virtual_space.region_of(page, len)).ok_or(ERROR_INVALID_ADDRESS)?;
+        commit(page, len, perm);
+        Ok(page)
+    })();
+    cpu.eax = r.unwrap_or_else(|e| {
+        set_error(e);
+        0
     });
     ret(m, cpu, 16);
 }
+
+/// VirtualFree(lpAddress, dwSize, dwFreeType) (Microsoft Learn "VirtualFree
+/// function (memoryapi.h)"), measured on Windows 11 (Virtual.cs):
+/// MEM_DECOMMIT decommits the pages spanning [lpAddress, lpAddress + dwSize)
+/// of one reservation (dwSize 0 at the region's base: all of it; decommitting
+/// decommitted pages succeeds); MEM_RELEASE (dwSize 0, lpAddress a region's
+/// base) frees the whole region. FALSE with ERROR_INVALID_PARAMETER (87) for
+/// another dwFreeType (both or neither) or MEM_RELEASE with a size,
+/// ERROR_INVALID_ADDRESS (487) for an address that is no region (base).
+/// Success leaves the last error alone. Callers: 0x00CF5560/0x00CF5580,
+/// MtVirtualAllocator's destructor and page release 0x00D10F60.
 pub fn virtual_free(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 1;
+    let (addr, size, kind) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
+    let r = (|| -> Result<(), u32> {
+        match kind {
+            MEM_RELEASE => {
+                if size != 0 {
+                    return Err(ERROR_INVALID_PARAMETER);
+                }
+                let len = with_state(|s| s.virtual_space.regions.remove(&addr)).ok_or(ERROR_INVALID_ADDRESS)?;
+                with_space(|mem| mem.unmap(addr, len));
+                Ok(())
+            }
+            MEM_DECOMMIT => {
+                let (page, len) = if size == 0 {
+                    let len = with_state(|s| s.virtual_space.regions.get(&addr).copied());
+                    match len {
+                        Some(n) => (addr, n),
+                        None => panic!("VirtualFree(MEM_DECOMMIT, size 0) of {addr:#x}, not a region base, is not modelled (crate::win32)"),
+                    }
+                } else {
+                    let page = addr & !0xFFF;
+                    (page, ((addr as u64 + size as u64).div_ceil(0x1000) * 0x1000 - page as u64) as u32)
+                };
+                with_state(|s| s.virtual_space.region_of(page, len)).ok_or(ERROR_INVALID_ADDRESS)?;
+                with_space(|mem| mem.unmap(page, len));
+                Ok(())
+            }
+            _ => Err(ERROR_INVALID_PARAMETER),
+        }
+    })();
+    cpu.eax = match r {
+        Ok(()) => 1,
+        Err(e) => {
+            set_error(e);
+            0
+        }
+    };
     ret(m, cpu, 12);
 }
 

@@ -88,8 +88,8 @@ pub(crate) struct State {
     /// How often each TLS index was allocated (a thread's saved value
     /// belongs to one allocation; crate::threads).
     pub(crate) tls_epoch: Vec<u32>,
-    /// Next VirtualAlloc address (page-granular bump in the virtual region).
-    pub(crate) virtual_next: u32,
+    /// VirtualAlloc's reservations (crate::win32).
+    pub(crate) virtual_space: crate::win32::VirtualSpace,
     /// Strings the runtime hands the guest once (command line, environment).
     pub(crate) strings: HashMap<&'static str, u32>,
     /// Path of the exe the runtime loaded (GetModuleFileName, command line).
@@ -365,7 +365,6 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
 /// Map the heap region and bind every service at its address.
 pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), InstallError> {
     mem.map_lazy(HEAP_BASE, HEAP_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
-    mem.map_lazy(crate::win32::VIRTUAL_BASE, crate::win32::VIRTUAL_SIZE, READ | WRITE).map_err(InstallError::Overlap)?;
     for (addr, f) in SERVICES {
         registry.insert(*addr, Binding::Service(*f)).map_err(InstallError::Conflict)?;
     }

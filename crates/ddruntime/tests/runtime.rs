@@ -1841,3 +1841,62 @@ fn module_file_names_truncate_as_windows_does() {
         assert_eq!(last_error(&mut m), 126, "not a module");
     }
 }
+
+#[test]
+fn virtual_memory_reserves_commits_and_frees_as_windows_measured() {
+    let mut m = guest();
+    let r = Rc::new(Registry::new());
+    threads::set_machine(m.share(), r);
+    let va = |m: &mut GuestMemory, a: u32, n: u32, t: u32, p: u32| {
+        set_last_error(m, 0x77);
+        let cpu = call_service(win32::virtual_alloc, m, &[a, n, t, p]);
+        assert_eq!(cpu.esp, 0x0011_0000, "16 bytes");
+        (cpu.eax, last_error(m))
+    };
+    let vf = |m: &mut GuestMemory, a: u32, n: u32, t: u32| {
+        set_last_error(m, 0x77);
+        let cpu = call_service(win32::virtual_free, m, &[a, n, t]);
+        assert_eq!(cpu.esp, 0x0011_0000, "12 bytes");
+        (cpu.eax, last_error(m))
+    };
+    // the MtVirtualAllocator's 512 MB reservation: 64 KB-aligned, not accessible
+    let (base, err) = va(&mut m, 0, 0x2000_0000, 0x2000, 4);
+    assert_eq!(err, 0x77, "success leaves the last error");
+    assert!(base != 0 && base % 0x1_0000 == 0);
+    assert!(!m.is_mapped(base), "reserved pages fault");
+    // commits inside it return the page address and read as zero
+    assert_eq!(va(&mut m, base + 0x1_0000, 0x3_0000, 0x1000, 4), (base + 0x1_0000, 0x77));
+    assert!(m.is_mapped(base + 0x1_0000) && m.is_mapped(base + 0x3_F000) && !m.is_mapped(base + 0x4_0000));
+    assert_eq!(m.u32(base + 0x1_0000), 0);
+    m.set_u32(base + 0x1_0000, 0x1234);
+    assert_eq!(va(&mut m, base + 0x1_2345, 0x10, 0x1000, 4).0, base + 0x1_2000, "rounded down to the page");
+    assert_eq!(va(&mut m, base + 0x4_1FF0, 0x20, 0x1000, 4).0, base + 0x4_1000, "two pages");
+    assert!(m.is_mapped(base + 0x4_2000));
+    assert_eq!(va(&mut m, base + 0x1_0000, 0x1000, 0x1000, 4).0, base + 0x1_0000, "recommit");
+    assert_eq!(m.u32(base + 0x1_0000), 0x1234, "a recommitted page keeps its contents");
+    // errors
+    for (a, n, t, p, e) in [(base + 0x2000_0000, 0x1000, 0x1000, 4, 487), (base + 0x1FFF_F000, 0x2000, 0x1000, 4, 487),
+                            (base + 0x10_0000, 0x1_0000, 0x2000, 4, 487), (base + 0x10_0000, 0x1_0000, 0x3000, 4, 487),
+                            (0, 0, 0x2000, 4, 87), (0, 0x1000, 0, 4, 87), (0, 0x1000, 0x2000, 0, 87), (base + 0x20_0000, 0x1000, 0x1000, 0, 87)] {
+        assert_eq!(va(&mut m, a, n, t, p), (0, e), "VirtualAlloc({a:#x}, {n:#x}, {t:#x}, {p:#x})");
+    }
+    // commit with NULL: a new committed region elsewhere
+    let (c, _) = va(&mut m, 0, 0x5000, 0x1000, 4);
+    assert!(c % 0x1_0000 == 0 && !(base..base + 0x2000_0000).contains(&c) && m.is_mapped(c + 0x4000));
+    // decommit, release
+    assert_eq!(vf(&mut m, base + 0x1_0000, 0x1_0000, 0x4000), (1, 0x77));
+    assert!(!m.is_mapped(base + 0x1_0000) && !m.is_mapped(base + 0x1_F000) && m.is_mapped(base + 0x2_0000));
+    assert_eq!(vf(&mut m, base + 0x4_0010, 0x10, 0x4000).0, 1);
+    assert_eq!(vf(&mut m, base + 0x1_0000, 0x1000, 0x4000).0, 1, "decommitting decommitted pages succeeds");
+    for (a, n, t, e) in [(base, 0x1000, 0x8000, 87), (base + 0x1_0000, 0, 0x8000, 487), (base, 0, 0xC000, 87), (base, 0, 0, 87), (0, 0, 0x8000, 487)] {
+        assert_eq!(vf(&mut m, a, n, t), (0, e), "VirtualFree({a:#x}, {n:#x}, {t:#x})");
+    }
+    assert_eq!(vf(&mut m, base, 0, 0x4000).0, 1, "decommit all");
+    assert!(!m.is_mapped(base + 0x2_0000) && !m.is_mapped(base + 0x4_1000));
+    assert_eq!(vf(&mut m, base, 0, 0x8000), (1, 0x77));
+    assert_eq!(vf(&mut m, base, 0, 0x8000), (0, 487), "released");
+    assert_eq!(vf(&mut m, c, 0, 0x8000).0, 1);
+    assert!(!m.is_mapped(c));
+    // the freed space is reused bottom-up
+    assert_eq!(va(&mut m, 0, 0x2000_0000, 0x2000, 4).0, base);
+}

@@ -156,3 +156,23 @@ WinMain 0x004079E0's path: WMVCORE presence check, SteamAPI_Init,
 CreateMutexA + ERROR_ALREADY_EXISTS check, window class and window
 0x00DF31F0/0x00DF1200, LoadAcceleratorsA, the main object from the DTI),
 then the main loop 0x00DF0D20. The services on this path exist.
+
+Ahead of WinMain's allocator set-up (0x00740590 creates the "Temp",
+"System", "Unit", "Effect", "GUI", "Array/String", "Collision" and
+"Physics" heaps, about 244 MB), Ghidra shows `MtVirtualAllocator::vf05`
+(and vf11/vf12) calling `VirtualAlloc(NULL, 0x20000000, MEM_RESERVE,
+PAGE_READWRITE)`. 0x00D10E90 then commits 64 KB pieces at addresses
+inside that reservation, and 0x00D10F60 and the destructor decommit and
+release them. The runtime's VirtualAlloc ignored the address, did not
+distinguish reserve from commit, and had 384 MB. Measured Windows'
+behaviour (`research/runtime/windows/Virtual.cs`) and modelled it:
+- MEM_RESERVE gives a 64 KB-aligned region whose pages fault until
+  committed.
+- MEM_COMMIT works on pages inside a reservation: rounded down, zeroed,
+  and already committed pages keep their contents.
+- MEM_DECOMMIT and MEM_RELEASE work as measured, as do the errors (487
+  ERROR_INVALID_ADDRESS, 87 ERROR_INVALID_PARAMETER).
+- Regions are placed bottom-up in 0x60000000..0x78000000 and
+  0x80000000..0xFF000000. The exe is IMAGE_FILE_LARGE_ADDRESS_AWARE, so it
+  has 4 GB on 64-bit Windows; GetSystemInfo now reports 0xFFFEFFFF.
+- New `GuestMemory::unmap` for decommits.

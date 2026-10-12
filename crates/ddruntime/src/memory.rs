@@ -133,6 +133,15 @@ impl GuestMemory {
         }
     }
 
+    /// Unmap the pages of [addr, addr + len) that are mapped, dropping their
+    /// contents (VirtualFree's decommit: the pages fault again).
+    pub fn unmap(&mut self, addr: u32, len: u32) {
+        for p in page_range(addr, len) {
+            self.s_mut().pages[p] = None;
+            self.s_mut().perms[p] = 0;
+        }
+    }
+
     pub fn is_mapped(&self, addr: u32) -> bool {
         self.mapped((addr / PAGE) as usize)
     }
