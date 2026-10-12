@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from hot_shards import Layout, read_hot_list, configure_packages, route_calls, shared_instruction_routes
+from hot_shards import Layout, read_hot_list, configure_packages, shared_instruction_routes
 
 
 class HotShardsTests(unittest.TestCase):
@@ -62,11 +62,13 @@ class HotShardsTests(unittest.TestCase):
             self.assertIn('mod generated', (root / 'crates/ddlift/lift_hot_00/src/lib.rs').read_text())
 
     def test_calls_cross_each_hot_cold_boundary(self):
+        import lift
         addresses = [0x400000, 0x400010, 0x400020, 0x400030]
         layout = Layout(addresses, addresses[:3], capacity=2)
         calls = " ".join(f"super::lifted::f_{a:08x}(m, cpu);" for a in addresses)
         for caller in addresses:
-            emitted = route_calls(calls, caller, layout)
+            function = dict(addr=caller, name="synthetic", arms=[f"0x{caller:X} => {{ {calls} return; }}"])
+            emitted = lift.shard_fn(function, layout.owner)
             for target in addresses:
                 direct = f"super::lifted::f_{target:08x}("
                 dispatched = f"x86::call_lifted(m, cpu, 0x{target:08X})"

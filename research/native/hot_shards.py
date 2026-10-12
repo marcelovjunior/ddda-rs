@@ -93,17 +93,6 @@ def configure_packages(root, layout, write_changed):
     return sorted(set(existing) - set(layout.hot_shards))
 
 
-def route_calls(source, caller, layout):
-    """Keep direct calls only when both functions are in the same package."""
-    import re
-    def target(match):
-        address = int(match[1], 16)
-        if layout.owner(address) == layout.owner(caller):
-            return match[0]
-        return f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x{address:08X}))("
-    return re.sub(r"super::lifted::f_([0-9a-f]{8})\(", target, source)
-
-
 def shared_instruction_routes(owners, layout):
     """Preserve the original facade's shared-instruction selection order.
 
