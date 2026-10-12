@@ -240,6 +240,19 @@ Written during the build pause and not compiled yet. Each keeps results
   read in between (`cpu` is a unique `&mut`). The lifter keeps every flag
   write, because a callee can observe the machine state; that stays as it
   is.
+- **Measured without the lifted program** (light release build,
+  `cargo run --release -p ddruntime --no-default-features --example
+  perf_micro`, 4 runs, tight loops within one mapped page): guest u32
+  read 1.6-1.8 ns through `dyn Mem`, 1.5-2.1 ns through a direct call,
+  0.58-0.63 ns through the inline fast path; u32 write 2.7-2.9 ns against
+  0.76-1.06 ns. A direct call costs about as much as the virtual one, so
+  the gain comes from inlining. Estimate for one replay pass (11.6 M
+  reads, 16.8 M writes): about 45 ms saved of 357 ms (12%). This is an
+  upper bound from tight loops; the replay itself will tell.
+  `call_ext` round trip through the Registry to a returning service:
+  12.9-15.7 ns, so the replay's 354 k calls cost about 5 ms (1.5%) and
+  are not worth a prototype. In a real session a service call also
+  reads the clock for the time slice.
 - **`call_ext`: measure first.** 354 k calls per replay pass against
   28.4 M memory accesses. Each call costs a thread-local `Rc` clone, a
   boxed-closure call and a hash lookup; a service call also reads the
