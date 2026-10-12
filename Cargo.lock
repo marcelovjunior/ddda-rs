@@ -2524,9 +2524,6 @@ name = "ddlift-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2534,9 +2531,6 @@ name = "ddlift-01"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2544,9 +2538,6 @@ name = "ddlift-02"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2554,9 +2545,6 @@ name = "ddlift-03"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2564,9 +2552,6 @@ name = "ddlift-04"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2574,9 +2559,6 @@ name = "ddlift-05"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2584,9 +2566,6 @@ name = "ddlift-06"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2594,9 +2573,6 @@ name = "ddlift-07"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2604,9 +2580,6 @@ name = "ddlift-08"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2614,9 +2587,6 @@ name = "ddlift-09"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2624,9 +2594,6 @@ name = "ddlift-10"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2634,9 +2601,6 @@ name = "ddlift-11"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2644,9 +2608,6 @@ name = "ddlift-12"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2654,9 +2615,6 @@ name = "ddlift-13"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2664,9 +2622,6 @@ name = "ddlift-14"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2674,9 +2629,6 @@ name = "ddlift-15"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2684,9 +2636,6 @@ name = "ddlift-16"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2694,9 +2643,6 @@ name = "ddlift-17"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2704,9 +2650,6 @@ name = "ddlift-18"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2714,9 +2657,6 @@ name = "ddlift-19"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2724,9 +2664,6 @@ name = "ddlift-20"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2734,9 +2671,6 @@ name = "ddlift-21"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2744,9 +2678,6 @@ name = "ddlift-22"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2754,9 +2685,6 @@ name = "ddlift-23"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2764,9 +2692,6 @@ name = "ddlift-24"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2774,9 +2699,6 @@ name = "ddlift-25"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2784,9 +2706,6 @@ name = "ddlift-26"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2794,9 +2713,6 @@ name = "ddlift-27"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2804,9 +2720,6 @@ name = "ddlift-28"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2814,9 +2727,6 @@ name = "ddlift-29"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2824,9 +2734,6 @@ name = "ddlift-30"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2834,9 +2741,6 @@ name = "ddlift-31"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
@@ -2995,6 +2899,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative",
  "ddnative-base",
+ "ddports",
  "ddruntime",
  "serde",
  "serde_json",
@@ -3011,6 +2916,16 @@ dependencies = [
  "wgpu",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "ddports"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "mtcore",
+ "mtframe",
+ "mtmath",
 ]
 
 [[package]]
@@ -3064,6 +2979,7 @@ dependencies = [
  "ddexe",
  "ddnative",
  "ddnative-base",
+ "ddports",
  "ddsave",
  "hostdisplay",
  "mtarc",
