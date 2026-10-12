@@ -35,6 +35,31 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Instruction-bound class: +11/+33 (2026-10-12, pending replay)
+
+**11 of 27 class members record 3/3**, using guarded-values-v1 and the
+general finite-trace proof (78db90cc). The successful addresses and their
+individual proof counts/limits are in RESIDUALS. Counts range from
+**26,008 to 97,086** instructions; each retains the existing 20,000
+overhead allowance. No per-address budget or raised ceiling was used.
+
+Private **59,634 / 177,496**, cumulative class batch **+31/+93**.
+`L28c/class-bound-audit.json` confirms all baseline **59,603 functions /
+177,403 cases unchanged**, no stale mocks or other edits. Main train 12
+merged. **177 light tests pass** after adding reusable legacy seed
+identification to caller-state (331fd9fb); complete caller replay checks
+remain mandatory. Nine dispatch targets with accepted callers were tried
+under caller-state; none recorded. The stale 565308 -> 56532A caller was
+excluded pending its refresh. Evidence: `class-dispatch-caller-state.log`.
+
+The remaining bound-class observations split naturally: three now reach
+outside-image execution (6076F0, 608AE0, 618880), three need sentinel-ended
+input records (7F2020, 8282E0, B7FF30), and ten still need finite input/proof
+facts or more recording wall time. RESIDUALS reflects those distinctions.
+Three wall-time retries (524A10, 524BE0, 5293E0) use 180 seconds for three
+cases but keep the unchanged proof/instruction ceiling. **Next:** complete
+those retries, then general bounded sentinel-record inputs; boot stops first.
+
 ### Dispatch/return class: +20/+60 (2026-10-12, pending replay)
 
 The largest class was tested first. After train-12 credits, **56** historical

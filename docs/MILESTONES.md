@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c instruction-bound class batch (2026-10-12, pending replay)
+
+- **+11/+33**, all 3/3, from finite generated-state traces. Cumulative
+  **+31/+93**, private **59,634 / 177,496**; prior records unchanged.
+- **177 light tests pass**. RESIDUALS marks 32 rows awaiting replay and
+  distinguishes sentinel-input loops from remaining proof/dispatch blockers.
+- **Next action:** retry three measured wall-time limits without changing
+  the instruction ceiling; supply bounded sentinel records for three loops.
+
 ### L28c dispatch/return class batch (2026-10-12, pending replay)
 
 - **+20 functions / +60 cases**, all 3/3, with the general wrapper-call
