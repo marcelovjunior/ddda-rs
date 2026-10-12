@@ -1847,3 +1847,25 @@ opening (codex-31), route perf (codex-29).
   - `scripts/sample_profile.py`, a sampling profiler for the running
     game: per thread, its leaf functions and the nearest lifted game
     function.
+
+## Milestone 2026-10-12 (~19:50): into the game world
+
+- `play-fast` ddplay (task/fps-int: L61-L70 and L62b; 13 of 32 shards at
+  opt-level 1, the rest at opt-level 0), parallel mode, unattended with
+  `DDPLAY_AUTOKEYS="85:enter,95:enter"`. The run goes from launch through:
+  - the logos (~58 FPS);
+  - the title movie (~24 FPS);
+  - PRESS ANY BUTTON;
+  - the Auto-Save notice (60 FPS);
+  - the save check;
+  - the main menu (~12 FPS);
+  - Load Game, picked by the second Enter;
+  - the loading screen;
+  - **gameplay**, in about three minutes (the user watched it).
+- Loading runs at 0.2-1 FPS. The profile (E:/ddda-re/notes/profile_loadgame.txt)
+  shows:
+  - the main thread is two-thirds inside the GPU driver's shader and
+    pipeline compiler (L71, claude-2);
+  - the two loader threads run shards 15 and 19, still at opt-level 0.
+- Build: a full `play-fast` build takes ~6 min cold; a runtime-only relink
+  takes ~20 s; the optimised `play` build takes ~25 min.
