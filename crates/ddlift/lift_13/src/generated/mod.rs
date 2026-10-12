@@ -7,6 +7,13 @@ mod lifted_003; pub use lifted_003::*;
 mod lifted_004; pub use lifted_004::*;
 mod lifted_005; pub use lifted_005::*;
 mod lifted_006; pub use lifted_006::*;
+pub use mtmath::abi::f_00d00690;
+pub use mtmath::abi::f_00d006c0;
+/// The lifted bodies of the functions mtmath replaces.
+pub mod replaced {
+    pub use super::lifted_000::f_00d00690;
+    pub use super::lifted_000::f_00d006c0;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D00010, f_00d00010),

@@ -13,6 +13,43 @@ mod lifted_009; pub use lifted_009::*;
 mod lifted_010; pub use lifted_010::*;
 mod lifted_011; pub use lifted_011::*;
 mod lifted_012; pub use lifted_012::*;
+pub use mtmath::abi::f_00cfc1d0;
+pub use mtmath::abi::f_00cfc350;
+pub use mtmath::abi::f_00cfc4b0;
+pub use mtmath::abi::f_00cfc620;
+pub use mtmath::abi::f_00cfc770;
+pub use mtmath::abi::f_00cfc810;
+pub use mtmath::abi::f_00cfc8b0;
+pub use mtmath::abi::f_00cfc940;
+pub use mtmath::abi::f_00cfc9e0;
+pub use mtmath::abi::f_00cfcb00;
+pub use mtmath::abi::f_00cfcc20;
+pub use mtmath::abi::f_00cfcd40;
+pub use mtmath::abi::f_00cfce60;
+pub use mtmath::abi::f_00cfcf80;
+pub use mtmath::abi::f_00cfd5e0;
+pub use mtmath::abi::f_00cfd890;
+pub use mtmath::abi::f_00cfdb10;
+/// The lifted bodies of the functions mtmath replaces.
+pub mod replaced {
+    pub use super::lifted_011::f_00cfc1d0;
+    pub use super::lifted_011::f_00cfc350;
+    pub use super::lifted_011::f_00cfc4b0;
+    pub use super::lifted_011::f_00cfc620;
+    pub use super::lifted_011::f_00cfc770;
+    pub use super::lifted_011::f_00cfc810;
+    pub use super::lifted_011::f_00cfc8b0;
+    pub use super::lifted_011::f_00cfc940;
+    pub use super::lifted_011::f_00cfc9e0;
+    pub use super::lifted_011::f_00cfcb00;
+    pub use super::lifted_011::f_00cfcc20;
+    pub use super::lifted_011::f_00cfcd40;
+    pub use super::lifted_011::f_00cfce60;
+    pub use super::lifted_011::f_00cfcf80;
+    pub use super::lifted_011::f_00cfd5e0;
+    pub use super::lifted_011::f_00cfd890;
+    pub use super::lifted_011::f_00cfdb10;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00C000E0, f_00c000e0),
