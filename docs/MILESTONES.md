@@ -1,5 +1,16 @@
 # Milestones
 
+### Post-train-11 residual map (2026-10-12)
+
+- [RESIDUALS.md](RESIDUALS.md) lists all **137 / 59,440** non-verified
+  inventory functions after train 11 (**59,303 verified**), one row each:
+  class, blocker, owner. **104 recorder; 33 lifter/gap/oracle**.
+- New serializer fixture remains pending replay: **+1/+3**, 163 Python
+  tests, unchanged prior-data audit. Both remaining manager chains record
+  0/3; 0x00493AA0 stays aside. Main a6fb8349 merged.
+- **Next action:** head replay of 0x00C9E0F0; then use the census to assign
+  the next blocker, with boot stops first.
+
 ### L28c exact-register serializer (2026-10-12, pending replay)
 
 - **+1/+3:** 0x00C9E0F0 records 3/3 with explicit exact-register proof

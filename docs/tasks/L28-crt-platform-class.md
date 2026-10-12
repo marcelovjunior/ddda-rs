@@ -35,6 +35,44 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Final recipes and post-train-11 census (2026-10-12)
+
+The two manager chains finished **0/3 each** with their checked producer
+observations preserved. For 0x004A0C00, 0x00437BE0 then 0x00489F80 still
+stops the proof at 0x004027E9 after **92** instructions: the linked-object
+field remains unknown. For 0x00D29AF0, 0x00740590 then 0x00D29820 retains
+the **20-byte** input count, but the allocator call at 0x00D29B4C still
+has **EAX=0** after **21** instructions. The manager's accepted mocked
+boundary does not supply a usable allocator. No checks were relaxed.
+Private evidence: `L28c/final-manager-recipes.log` and
+`L28c/final-manager-proofs.log`. All workers exited.
+
+This follow-up adds only **0x00C9E0F0, +1/+3**, audited above. Four of the
+original 15 remain: 0x00493AA0 (set aside), 0x004A0C00 (linked-object
+facts), 0x00815C60 (floating comparison proof), 0x00D29AF0 (allocator
+state). **163 Python tests pass**; head Rust replay is still required for
+the new serializer. Frozen base unchanged; native-L28c remains open.
+Handoff SHA-256: patterns/lift.json
+`b5be3edbdb505dae9c977e2e76f148f314ef6eab2e09a49b990c931bccbe56d1`;
+vectors/lift.json
+`2f638c8adeaf5f0eda39f14788cb2799a3470da49b7399b306246274c7943613`.
+
+[RESIDUALS.md](../RESIDUALS.md) is the requested single-table census:
+**137 non-verified / 59,440** non-thunk inventory functions after train 11,
+**59,303 verified**. Membership exactly matches scripts/inventory.py's
+database query, with no duplicate/missing rows; each has class, blocker and
+owner. **104 recorder; 33 claude-6** (15 gap, 10 lifter, eight x87 oracle).
+The gaps file has 16 entries, but 0x00786D69 is not admitted to inventory
+and is outside this denominator. 0x00C9E0F0 stays listed as replay pending.
+Private source hashes/rows: `L28c/residual-census-train11.json`.
+
+The four undefined-flag entries all execute DIV/IDIV followed immediately
+by INC/DEC (0x005524B0, 0x00604A80, 0x00BA4160, 0x00C9B350). Their
+specific instruction sites are in the table; CF-preservation/liveness
+review was sent to claude-6 on the board. No flag guard was changed here.
+**Main a6fb8349 merged before handoff. Next:** head replay of the new
+serializer, then assign remaining work from the census, boot stops first.
+
 ### Exact-register serializer inputs (2026-10-12, pending replay)
 
 Opt-in **guarded-values-v1** supplies the bounded proof with the exact
