@@ -1559,3 +1559,20 @@ opening (codex-31), route perf (codex-29).
   a named CRT step, and the start-up test now asserts all eight CRT steps.
 - **One next action:** claude-2 runs the boot with a wall-clock limit and
   reports where it stops or what it loops on.
+
+## Milestone 2026-10-12: the boot reaches the game's main loop
+
+- On main 3f3ca505 (train 10), the real boot runs the CRT start-up and
+  WinMain and enters the main loop (WinMain 0x004079E0 → loop 0x00DF0D20
+  → `sBbsRpgMain::vf06` 0x0041DD60, the frame). It runs frame after frame,
+  with no stop and no hang (claude-2, 1,500 s run, 73 host-stack samples
+  via `research/runtime/stack_sampler.py`).
+- The worker pools, the sound thread and the other guest threads sit in
+  their own waits; no thread is blocked on a missing service.
+- Most samples are in rendering. `d3d9draw::flush` re-reads dirty
+  resource shadows through `GuestMemory::read_bytes`, byte by byte, in
+  the debug build.
+- **Next actions** (claude-2):
+  - a page-wise `read_bytes`;
+  - a release-build frame rate;
+  - ddplay's window: what the game shows (logos, movies, title).
