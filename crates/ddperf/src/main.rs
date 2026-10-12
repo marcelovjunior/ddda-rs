@@ -213,6 +213,7 @@ struct Call {
     edx: u32,
     xmm0: [u32; 4],
     pop: u32,
+    st_pop: u64,
     st_push: Option<u32>,
 }
 
@@ -266,6 +267,7 @@ fn case_of(c: &serde_json::Value) -> Case {
                 edx: u(&o["edx"]),
                 xmm0: [0, 1, 2, 3].map(|k| u(&o["xmm0"][k])),
                 pop: u(&o["pop"]),
+                st_pop: o.get("st_pop").and_then(|v| v.as_u64()).unwrap_or(0),
                 st_push: o.get("st_push").and_then(|v| v.as_u64()).map(|v| v as u32),
             }
         }).collect()).unwrap_or_default(),
@@ -317,6 +319,9 @@ fn replay_handler(calls: Rc<RefCell<VecDeque<Call>>>, table: Rc<HashMap<u32, Lif
         cpu.edx = ev.edx;
         cpu.xmm[0] = ev.xmm0;
         cpu.esp = cpu.esp.wrapping_add(4 + ev.pop);
+        for _ in 0..ev.st_pop {
+            cpu.st.pop(); // the x87 values the mocked callee takes (L50)
+        }
         if let Some(v) = ev.st_push {
             cpu.st.push(v);
         }

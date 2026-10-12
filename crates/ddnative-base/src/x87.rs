@@ -152,6 +152,12 @@ impl X87 {
 
     /// Load the float returned by an external-call vector, without rounding
     /// any other stack values. Kept as push for the existing replay contract.
+    /// FSTP ST(0): drop the top value (a mocked callee takes it, L50).
+    pub fn pop(&mut self) {
+        let mut data = [0; 10];
+        self.exec::<0xd8dd>(&mut data); // fstp st(0)
+    }
+
     pub fn push(&mut self, bits: u32) {
         let mut data = [0; 10];
         data[..4].copy_from_slice(&bits.to_le_bytes());
