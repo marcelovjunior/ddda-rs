@@ -35,6 +35,228 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### String and constructed-copy fixtures (2026-10-12, pending replay)
+
+**+3 functions / +9 cases, all 3/3:** 0x0048F330 and 0x00495520 use
+guarded-input-v1 with exact narrow-register/zero-vector facts; their proofs
+cover 59,359 and 532,884 instructions. 0x0048AB50 replays its accepted
+0x00489F80 constructor exactly, then binds both stack arguments to that
+constructed object (a self-copy); its proof covers 38,189 instructions.
+Each execution limit is its proved count plus the existing 20,000 margin.
+
+Cumulative **+10 functions / +30 cases** from the 15-recipe queue;
+native-L28c **59,602 / 177,400**. `L28c/string-constructed-audit.json`
+confirms all **59,592 baseline functions / 177,370 cases unchanged**,
+with no promotions, removals, unexpected edits or stale mocks. A Windows
+file-sharing error delayed the constructed vector rename: the pending
+file was checked to contain the identical prior cases plus precisely the
+three new cases before completing the rename and adoption bookkeeping.
+The subsequent full audit passed. Frozen base native-train3-orig untouched.
+
+**161 light tests pass** for the source through 1d22d152; no subsequent
+source edits. Main merged through 35b516ed before handoff. No Rust build;
+head integration replay remains required.
+
+**Five recipes remain:**
+
+- 0x00493AA0 stays aside as requested. Manager-first changes destination
+  reads/writes/MXCSR; destination-first changes manager reads/writes,
+  ECX/EDX outputs and calls. Neither order matches the accepted setup.
+- 0x004A0C00: constructor 0x00489F80, EAX bound to its input EAX,
+  records 0/3. The proof stops at conditional branch 0x004027E9 after
+  92 instructions; further callee/manager state is unresolved.
+- 0x00815C60: constructor 0x00811780, EDI bound to its input EAX,
+  records 0/3. The proof reaches COMISS at 0x00816522 after 9,319
+  instructions; floating-point comparison facts remain unresolved.
+- 0x00C9E0F0: narrow-register/zero-vector retry still records 0/3
+  (runaway). A valid serializer source/count recipe remains outstanding.
+- 0x00D29AF0: constructor 0x00D29820 supplies its nonempty default buffer;
+  ECX bound to its input ECX still records 0/3 (runaway). The proof retains
+  the 20-byte buffer count but stops after 21 instructions at allocator
+  dispatch 0x00D29B4C (CALL EAX, EAX=0); allocator-manager state remains
+  unresolved. The constructor alone does not establish that dispatch.
+
+Private logs: `narrow-vector-recipes.log`, `remaining-constructed-recipes.log`,
+`constructed-815c60-proof.log`, `remaining-constructed-proof.log` under L28c.
+**Next action:** prioritize any new boot stop; otherwise resolve the first
+unknown branch in 0x004A0C00 using checked caller/manager state.
+
+### Division/tail fixtures (2026-10-12, pending replay)
+
+**+2/+6, all 3/3:** 0x0046A2D0 proves **151,141** instructions (limit
+171,141); 0x00DBA780 proves **102,484** (limit 122,484), including its
+checked final external mock tail. Cumulative session **+7/+21**,
+native-L28c **59,599 / 177,391**. `division-tail-audit.json` confirms
+all 59,592 baseline records / 177,370 cases unchanged; no stale mocks,
+promotions or unexpected changes. **161 tests pass.** Main merged through
+35b516ed (boot main-loop milestone); no Rust build. Eight original recipes
+remain, including set-aside 0x00493AA0. **Next:** checked 0x00815C60
+constructor input, then narrow-register/zero-vector string retries.
+
+### Narrow register and zero-vector facts (2026-10-12)
+
+The proof retains known byte/word register lanes without inventing unknown
+high bits. Full and implicit register writes clear narrower facts. Exact
+bitwise-zero vectors can supply zero store bytes; other floating/vector
+values remain unknown, and calls or overwrites discard vector facts.
+**161 light tests pass**, including original synthetic SSE/store/byte-test
+execution and explicit/implicit clobbers. Recording remains queued behind
+claude-2; accepted data is still the audited **59,597 / 177,385**.
+
+This addresses the string-copy stop at 0x007674D5: PXOR/MOVQ zeroes the
+source bytes, then MOV DL/TEST DL needs only the known byte lane. Planned
+retries: 0x0048F330, 0x00495520 and serializer 0x00C9E0F0.
+For 0x00815C60, constructor 0x00811780 takes its object in EAX, initializes
++4/+8/+0xC/+0x10 at 0x0081191F onward and flags at +0x4654. Caller
+0x00812820 passes the same object in EDI to 0x00815C60 at 0x008128D5.
+**Next:** checked producer 0x00811780 with EDI bound to its input EAX;
+then the string retries, after the pending division/tail trials.
+
+### Checked division proof (2026-10-12)
+
+32-bit DIV/IDIV proofs require known inputs, nonzero divisor and a fitting
+quotient. Signed division truncates toward zero with a same-sign remainder;
+all arithmetic flags become unknown. **159 light tests pass**, covering
+both signs, both quotient-overflow cases, zero divisor and undefined flags.
+0x0046A2D0 and 0x00DBA780 trials are queued serially in heavy.py behind
+claude-2's boot run. No new data since the audited +5/+15 checkpoint.
+**Next:** run those trials; inspect narrow-register/zero-vector facts for
+the two remaining string-copy recipes while recording waits.
+
+### Checked mocked tail proofs (2026-10-12)
+
+A bounded root trace can end at a direct external mock tail only with its
+return address preserved and a checked static cleanup. The certificate
+records the tail site; execution must report that same mock and cleanup.
+Closed/model targets, unknown cleanup and outstanding stack words do not
+use this rule. **158 tests pass**, including original synthetic tail
+execution and missing/mismatched mock events. Original-game trial pending.
+
+The queued sibling diagnostic was canceled (own waiting process only)
+after static inspection established its next missing operation: signed
+32-bit division at 0x0046A352. **Next:** division proof semantics, then
+serial 0x0046A2D0 and 0x00DBA780 trials when the boot slot is free.
+
+### Multiplication and rotates (2026-10-12, pending replay)
+
+General proof support covers one-/two-/three-operand 32-bit multiplication,
+including EDX:EAX products, and 32-bit rotates with masked counts. Only
+CF/OF are known after multiplication; rotates preserve ZF/SF and leave OF
+unknown for multi-bit counts. **157 light tests pass.**
+
+**+2 functions / +6 cases**, all 3/3: 0x00494D80 proves **76,963**
+instructions (limit 96,963), and 0x0046A150 proves **83,097** (limit 103,097).
+Cumulative session **+5/+15**, native-L28c **59,597 / 177,385**.
+`full-multiply-adopt-audit.json` confirms all 59,592 baseline records /
+177,370 cases unchanged. Ten original recipes remain, including the
+set-aside 0x00493AA0. No Rust build; head replay required.
+
+0x0046A2D0 still records 0/3; its next diagnostic is queued behind
+claude-2's boot run. **Next:** that proof stop and the final mocked tail
+boundary of 0x00DBA780, with runtime call-contract checks retained.
+
+### Exact-input recording batch (2026-10-12, pending train replay)
+
+**+3 functions / +9 normal-return cases**, all 3/3 under guarded-input-v1:
+
+| Function | Proved instructions | Recorder limit |
+|---|---:|---:|
+| 0x004A06B0 | 37,740 | 57,740 |
+| 0x00495150 | 308,534 | 328,534 |
+| 0x0050A110 | 23,595 | 43,595 |
+
+0x00495150 needed 120 seconds of wall time to finish three cases; its
+instruction limit remains proof-derived. Adoption selected the complete
+three-case trial for each new body without editing earlier trial history.
+`L28c/standalone-adopt-audit.json`: **all 59,592 records / 177,370 cases
+unchanged**, zero promotions, stale mocks or unexpected edits. Native-L28c
+now **59,595 / 177,379**. **155 tests pass**; no Rust build or replay.
+Main train 10 merged before handoff. Sources: 6850c602, 3449543b,
+542f9d42, c000069d. Twelve original recipes remain, including 0x00493AA0
+set aside per head.
+
+Remaining proof stops are recorded in `standalone-proof-stops.log`.
+0x00494D80 reaches IMUL at 0x00495010 (69,678 instructions); 0x0046A150
+and 0x0046A2D0 stop on ROL. 0x00DBA780 reaches a root tail to 0x00DC5C00
+after 102,460 instructions. Other cases still need call/state facts;
+0x00D29AF0 still raises its original CPU exception with this input.
+**Next:** general multiplication/rotate proof semantics, boot route first.
+
+### Standalone exact-input proof (2026-10-12)
+
+`guarded-input-v1` makes the same bounded initial-page proof available
+without a constructor. It uses the recorder's existing input distribution
+and exact page generator; initial register values remain abstractly unknown.
+Checked state remains required for `guarded-state-v1`. **155 light tests
+pass**, including an original synthetic loop whose budget depends on its
+recorded generated input byte. No original-game addition is claimed yet.
+
+A serial trial list is prepared for the remaining 14 functions, direct boot
+route first; **0x00493AA0 is excluded**, as requested. The first signed-loop
+0x00494D80 constructor retry is still waiting behind head-train in heavy.py.
+Private accepted data remains **59,592 / 177,370**, unchanged from the
+train-10 baseline. **Next:** finish that run, then the standalone trials;
+boot-stop messages always take priority.
+
+### Checked stack-argument bindings (2026-10-12)
+
+`--bind stack+4=1.regs_in.edi` binds a method stack argument to a checked
+producer register, optionally selecting a setup phase. Only aligned offsets
+4..128 are allowed; the return address cannot be rebound. Bindings replace
+stale captured stack bytes in both execution and proof inputs. Later setup
+phases retain their original entry distributions. **154 light tests pass**;
+no recording ran while waiting for head's heavy slot.
+
+Prepared recipe: destination 0x00489F80, source manager 0x0049F990;
+0x004A06B0 gets EAX from phase 0 input EAX and stack+4 from phase 1 input
+EDI. Both producers already have three accepted cases. Pending actual
+sequence replay; this is not a recorded or validated combined recipe yet.
+A second evidenced producer is 0x00DBB690 for destructor 0x00DBA780:
+factory 0x00488B10 calls it on ECX at 0x00488B42, and wrapper 0x00488B70
+calls the destructor on the same ECX object at 0x00488B79.
+**Next:** queued 0x00494D80 retry, then these two constructor recipes.
+
+### Integer proof operations (2026-10-12)
+
+The bounded interpreter now models CDQ, 32-bit SHLD/SHRD, and signed
+branches with overflow-aware arithmetic flags. Unknown operands do not
+produce signed comparison facts; zero-count shifts and CDQ preserve flags.
+**153 light tests pass; records unchanged**, `integer-state-audit.json`.
+0x00494D80 advances past CDQ to the signed loop at 0x00495032 (69,674
+instructions). The retry with signed-branch support is queued behind head's
+train in heavy.py; no guessed budget or weakened check. **Next:** finish
+that retry, then the evidenced 0x004A06B0 source/destination recipe.
+
+0x004A06B0 evidence: caller 0x004964C0 passes destination `ESI+0xE65A0`
+and source singleton 0x018FA504 at 0x00496574-0x00496581. Parent constructor
+0x00495FF0 builds that destination using 0x00489F80 at 0x00496022.
+0x0049F990 publishes the source singleton from EDI at 0x0049FD4F.
+This recipe requires general checked setup-output bindings to stack arguments.
+
+### Exact setup/input pages (2026-10-12)
+
+Opt-in `guarded-state-v1` requires checked setup state. Its proof reads
+captured pages and lazily generated pages from the recorder's same immutable
+input generator, capped at 256 pages. Known stores replace those values;
+unknown writers must pass existing protected-read alias checks. Changed
+instruction bytes refuse a proof. Entry registers remain unknown unless
+explicitly bound. **151 light tests pass**, including lazy-page equality,
+overwrite invalidation, alias checks and changed-code rejection.
+
+0x00494D80 with checked 0x004980F0 remains **0/3**, but proof advances
+from the flag test at 0x00494D90 (7 instructions) to **0x00494EA5, CDQ,
+69,197 instructions**. The flag's page was untouched by the constructor;
+its method input comes from the normal deterministic page generator.
+`L28c/manager-state-audit.json` confirms **59,592 / 177,370 unchanged**.
+**Next:** general CDQ/double-shift proof semantics, then repeat this recipe.
+
+**0x00493AA0 set aside per head:** manager-first changes destination
+producer 0x004915A0 reads, writes and MXCSR. Destination-first reproduces
+0x004915A0, then changes save-manager 0x00437BE0 reads, writes, ECX/EDX
+outputs and recorded calls. Neither sequence passed exact replay; no
+accepted record was changed. Evidence: `bound-output-compare.log` and
+`output-first-compare.log`. No general composition rule was established.
+
 ### Earlier-phase method bindings (2026-10-12)
 
 `constructed_inputs.py --bind edi=0.regs_out.eax` selects an earlier
