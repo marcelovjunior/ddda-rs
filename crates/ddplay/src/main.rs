@@ -109,10 +109,9 @@ impl App {
         }
         // the optional features WgpuBackend::headless() asks for where the
         // adapter has them (draws needing a missing one report an error);
-        // the same set as headless(), until ddgpu exports it (L29:
-        // WgpuBackend::optional_features())
-        let optional = wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-            | wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::POLYGON_MODE_POINT;
+        // L71: ddgpu's own list (this copy had missed FLOAT32_BLENDABLE and
+        // TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES), with PIPELINE_CACHE
+        let optional = ddgpu::WgpuBackend::optional_features();
         let features = needed | (adapter.features() & optional);
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: features, ..Default::default() }))
             .map_err(|e| format!("a device: {e}"))?;
@@ -155,6 +154,24 @@ impl App {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
                         backend.read_frames = false;
+                        // L71: the driver's pipeline compilation kept between
+                        // runs, in DDPLAY_PIPELINE_CACHE (a directory; 0: off),
+                        // by default %LOCALAPPDATA%\ddda-rs\pipelines
+                        let cache_dir = match std::env::var_os("DDPLAY_PIPELINE_CACHE") {
+                            Some(v) if v == "0" => None,
+                            Some(v) => Some(std::path::PathBuf::from(v)),
+                            None => ddgpu::default_cache_dir(),
+                        };
+                        if let Some(dir) = cache_dir {
+                            if !backend.enable_pipeline_cache(&dir) {
+                                eprintln!("no pipeline cache (the device has none)");
+                            }
+                        }
+                        // DDPLAY_PIPELINE_STATS=<s>: shader modules and
+                        // pipelines created so far, every <s> seconds
+                        if let Some(s) = std::env::var("DDPLAY_PIPELINE_STATS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|&s| s > 0) {
+                            ddgpu::report_pipeline_stats_every(std::time::Duration::from_secs(s));
+                        }
                         // the window follows the game's presentation; vsync too,
                         // unless --no-vsync overrides it
                         let (shown, modes) = (window.clone(), proxy.clone());
@@ -180,6 +197,10 @@ impl App {
                 if let Some(stats) = ddruntime::threads::lock_stats() {
                     eprint!("{stats}");
                 }
+                if std::env::var_os("DDPLAY_PIPELINE_STATS").is_some() {
+                    eprintln!("pipelines: {}", ddgpu::pipeline_stats());
+                }
+                ddgpu::save_pipeline_caches();
                 status(format!("stopped in {}", started.step));
             })
             .expect("the guest main thread");
@@ -282,6 +303,11 @@ impl ApplicationHandler<GameEvent> for App {
                 if let Some(stats) = ddruntime::threads::lock_stats() {
                     eprint!("{stats}");
                 }
+                if std::env::var_os("DDPLAY_PIPELINE_STATS").is_some() {
+                    eprintln!("pipelines: {}", ddgpu::pipeline_stats());
+                }
+                // the backend is not dropped at exit (L71)
+                ddgpu::save_pipeline_caches();
                 event_loop.exit()
             }
             WindowEvent::Resized(size) => {
