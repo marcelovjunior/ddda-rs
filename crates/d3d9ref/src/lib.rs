@@ -272,6 +272,8 @@ pub struct Oracle {
     declaration: Obj,
     targets: Vec<Obj>,
     readback: Vec<Obj>,
+    /// StretchRect copies for the next replay (render_copied)
+    copies: Vec<d3d9cmd::CopyCall>,
 }
 
 impl Oracle {
@@ -322,7 +324,7 @@ impl Oracle {
             let elements: [u16; 8] = [0, 0, 3, 0, 0x00FF, 0, 17, 0];
             let mut declaration: Obj = std::ptr::null_mut();
             com!(device, CREATE_VERTEX_DECLARATION, (*const u16, *mut Obj), elements.as_ptr(), &mut declaration);
-            let mut o = Oracle { d3d, device, hwnd, declaration, targets: vec![], readback: vec![] };
+            let mut o = Oracle { d3d, device, hwnd, declaration, targets: vec![], readback: vec![], copies: vec![] };
             for _ in 0..4 {
                 let (mut rt, mut rb): (Obj, Obj) = (std::ptr::null_mut(), std::ptr::null_mut());
                 com!(o.device, CREATE_RENDER_TARGET, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj),

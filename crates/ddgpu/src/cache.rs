@@ -78,6 +78,10 @@ pub(crate) struct PipelineKey {
     pub polygon_mode: wgpu::PolygonMode,
     pub targets: Vec<Option<wgpu::ColorTargetState>>,
     pub depth: Option<wgpu::DepthStencilState>,
+    /// samples per pixel of the attachments (multisampled targets, L31)
+    pub samples: u32,
+    /// D3DRS_MULTISAMPLEMASK for multisampled attachments
+    pub sample_mask: u32,
 }
 
 /// A texture bind group: the stage and, per sampler, its number, view

@@ -189,6 +189,7 @@ pub(crate) fn target(surface: u32) -> Option<Target> {
         Some(Target {
             surface, format: desc.format, width: desc.width, height: desc.height,
             texture: (owner != 0).then_some(owner), level,
+            samples: desc.multisample, quality: desc.quality,
         })
     })
 }
