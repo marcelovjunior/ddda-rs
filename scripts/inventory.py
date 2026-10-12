@@ -183,7 +183,7 @@ def next_up(n=25):
 
 
 GAP = re.compile(r"not yet|unsupported|stand-?in|placeholder|not traced|untraced|not modell?ed|"
-                 r"unimplemented|OPEN|TODO|approximat|guess", re.I)
+                 r"unimplemented|\bOPEN\b|TODO|approximat|guess", re.I)
 CRT = re.compile(r"^(_|__|FUN_012[EF]|operator|std::|Catch|Unwind)")
 
 

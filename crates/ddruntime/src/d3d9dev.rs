@@ -21,6 +21,10 @@ use ddnative_base::x86::Cpu;
 use std::collections::HashMap;
 
 pub const D3DERR_NOTFOUND: u32 = 0x8876_0866;
+pub const D3DERR_DEVICELOST: u32 = 0x8876_0868;
+pub const D3DERR_DEVICENOTRESET: u32 = 0x8876_0869;
+/// D3DCAPS2_FULLSCREENGAMMA (d3d9caps.h)
+const CAPS2_FULLSCREENGAMMA: u32 = 0x0002_0000;
 const D3DFMT_UNKNOWN: u32 = 0;
 const D3DRTYPE_SURFACE: u32 = 1;
 const D3DUSAGE_RENDERTARGET: u32 = 0x1;
@@ -52,14 +56,24 @@ pub enum Kind {
     Shader { device: u32, tokens: Vec<u32> },
     /// IDirect3DVertexDeclaration9: the elements (8 bytes each, END excluded)
     Declaration { device: u32, elements: Vec<[u8; 8]> },
-    SwapChain { device: u32, pp: PresentParameters, back_buffers: Vec<u32>, presents: u64 },
+    /// `gamma`: the ramp SetGammaRamp gave this chain (None: identity)
+    SwapChain { device: u32, pp: PresentParameters, back_buffers: Vec<u32>, presents: u64, gamma: Option<Box<d3d9cmd::GammaRamp>> },
     /// `owner`: the texture whose reference count this level surface
     /// shares (0 for standalone surfaces and back buffers)
     Surface { device: u32, desc: SurfaceDesc, container: u32, owner: u32, image: crate::d3d9res::Image },
     Texture { device: u32, data: Box<crate::d3d9res::TextureData> },
     Buffer { device: u32, data: Box<crate::d3d9res::BufferData> },
-    /// IDirect3DQuery9: D3DQUERYTYPE, whether issued, the sampled value
-    Query { device: u32, ty: u32, issued: bool, value: u64 },
+    /// IDirect3DQuery9: D3DQUERYTYPE, how far it is issued, the sampled value
+    Query { device: u32, ty: u32, state: QueryState, value: u64 },
+}
+
+/// Where a query is: never issued, between D3DISSUE_BEGIN and
+/// D3DISSUE_END (occlusion), or ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryState {
+    Created,
+    Building,
+    Ended,
 }
 
 #[derive(Debug)]
@@ -111,13 +125,27 @@ pub(crate) fn release_of(object: u32) -> u32 {
         if x.refs == 0 { (0, o.live.remove(&object)) } else { (x.refs, None) }
     });
     if let Some(x) = gone {
+        // the backend forgets what it keeps for the address
+        if matches!(x.kind, Kind::Surface { .. } | Kind::Texture { .. } | Kind::Buffer { .. } | Kind::Query { .. }) {
+            crate::d3d9draw::backend(|b| b.release(object));
+        }
         let held: Vec<u32> = match x.kind {
             Kind::Device(d) => {
                 let d = *d;
-                d.swap_chains.into_iter().chain([d.depth_stencil]).chain(d.render_targets).chain(d.state.held())
+                d.swap_chains.into_iter().take(1).chain([d.depth_stencil, d.auto_depth]).chain(d.render_targets).chain(d.state.held())
                     .filter(|&p| p != 0).collect()
             }
-            Kind::SwapChain { back_buffers, .. } => back_buffers,
+            Kind::SwapChain { device, back_buffers, .. } => {
+                // an additional swap chain is not counted by its device
+                objects(|o| {
+                    if let Some(Object { kind: Kind::Device(d), .. }) = o.live.get_mut(&device) {
+                        if d.swap_chains.first() != Some(&object) {
+                            d.swap_chains.retain(|&c| c != object);
+                        }
+                    }
+                });
+                back_buffers
+            }
             Kind::Surface { image, .. } => {
                 image.free();
                 vec![]
@@ -221,7 +249,7 @@ fn complete(mut pp: PresentParameters, focus: u32) -> Option<PresentParameters> 
 }
 
 fn new_swap_chain(m: &mut dyn Mem, device: u32, pp: PresentParameters) -> u32 {
-    let chain = new_object(m, "IDirect3DSwapChain9", Kind::SwapChain { device, pp, back_buffers: vec![], presents: 0 });
+    let chain = new_object(m, "IDirect3DSwapChain9", Kind::SwapChain { device, pp, back_buffers: vec![], presents: 0, gamma: None });
     let buffers: Vec<u32> = (0..pp[3]).map(|_| {
         let desc = SurfaceDesc { format: pp[2], usage: D3DUSAGE_RENDERTARGET, pool: D3DPOOL_DEFAULT, multisample: pp[4], quality: pp[5], width: pp[0], height: pp[1] };
         surface(m, device, desc, chain)
@@ -257,23 +285,11 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             let state = crate::d3d9state::DeviceState::new(pp[9] != 0, pp[0], pp[1]);
             let device = new_object(m, "IDirect3DDevice9", Kind::Device(Box::new(DeviceData {
                 creation: [adapter, devtype, focus, flags], swap_chains: vec![], depth_stencil: 0, render_targets: [0; 4], state,
+                auto_depth: 0, not_reset: false,
             })));
             let chain = new_swap_chain(m, device, pp);
-            let back = objects(|o| match &o.live[&chain].kind { Kind::SwapChain { back_buffers, .. } => back_buffers[0], _ => unreachable!() });
-            add_ref_to(back); // render target 0 holds the first back buffer
-            let depth = if pp[9] != 0 {
-                let desc = SurfaceDesc { format: pp[10], usage: D3DUSAGE_DEPTHSTENCIL, pool: D3DPOOL_DEFAULT, multisample: pp[4], quality: pp[5], width: pp[0], height: pp[1] };
-                surface(m, device, desc, device)
-            } else {
-                0
-            };
-            objects(|o| {
-                if let Some(Object { kind: Kind::Device(d), .. }) = o.live.get_mut(&device) {
-                    d.swap_chains.push(chain);
-                    d.depth_stencil = depth;
-                    d.render_targets[0] = back;
-                }
-            });
+            with_device(device, |d| d.swap_chains.push(chain));
+            bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
             D3D_OK
         }
@@ -283,13 +299,41 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- IDirect3DDevice9 ------------------------------------------------------------
 
+/// The implicit swap chain's first back buffer as render target 0 and a
+/// new automatic depth-stencil surface (if the parameters ask for one) as
+/// the depth-stencil: at creation and after Reset.
+fn bind_implicit(m: &mut dyn Mem, device: u32, chain: u32, pp: PresentParameters) {
+    let back = back_buffer_of(chain, 0).expect("a back buffer");
+    add_ref_to(back); // render target 0 holds the first back buffer
+    let depth = if pp[9] != 0 {
+        let desc = SurfaceDesc { format: pp[10], usage: D3DUSAGE_DEPTHSTENCIL, pool: D3DPOOL_DEFAULT, multisample: pp[4], quality: pp[5], width: pp[0], height: pp[1] };
+        let s = surface(m, device, desc, device);
+        add_ref_to(s); // the device owns it, and it is bound
+        s
+    } else {
+        0
+    };
+    with_device(device, |d| {
+        d.depth_stencil = depth;
+        d.auto_depth = depth;
+        d.render_targets[0] = back;
+    });
+}
+
 /// A device's own record.
 pub struct DeviceData {
     pub creation: [u32; 4],
+    /// the implicit swap chain first (the device holds a reference), then
+    /// additional ones (held by the application only)
     pub swap_chains: Vec<u32>,
     pub depth_stencil: u32,
     pub render_targets: [u32; 4],
     pub state: crate::d3d9state::DeviceState,
+    /// the automatic depth-stencil surface, which the device owns (it
+    /// lives on when another depth-stencil surface is set)
+    pub auto_depth: u32,
+    /// a Reset failed: the device waits for a successful one
+    pub not_reset: bool,
 }
 
 impl std::fmt::Debug for DeviceData {
@@ -305,9 +349,10 @@ pub(crate) fn with_device<R>(device: u32, f: impl FnOnce(&mut DeviceData) -> R) 
     })
 }
 
-/// TestCooperativeLevel(this): the device is never lost on the headless desktop.
+/// TestCooperativeLevel(this): the device is never lost on the headless
+/// desktop; after a failed Reset it waits for another (D3DERR_DEVICENOTRESET).
 fn test_cooperative_level(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = D3D_OK;
+    cpu.eax = if with_device(arg(m, cpu, 0), |d| d.not_reset) { D3DERR_DEVICENOTRESET } else { D3D_OK };
     ret(m, cpu, 4);
 }
 /// GetAvailableTextureMem(this): the recorded driver's answer.
@@ -364,7 +409,7 @@ fn create_additional_swap_chain(m: &mut dyn Mem, cpu: &mut Cpu) {
             write_pp(m, pp_ptr, &pp);
             let chain = new_swap_chain(m, device, pp);
             with_device(device, |d| d.swap_chains.push(chain));
-            hand_out(m, out, chain); // the device keeps its own reference
+            m.set_u32(out, chain); // the caller's is the only reference
             D3D_OK
         }
         None => D3DERR_INVALIDCALL,
@@ -469,18 +514,42 @@ fn query_interface(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 fn with_chain<R>(chain: u32, f: impl FnOnce(u32, &mut PresentParameters, &mut Vec<u32>, &mut u64) -> R) -> R {
     objects(|o| match o.live.get_mut(&chain) {
-        Some(Object { kind: Kind::SwapChain { device, pp, back_buffers, presents }, .. }) => f(*device, pp, back_buffers, presents),
+        Some(Object { kind: Kind::SwapChain { device, pp, back_buffers, presents, .. }, .. }) => f(*device, pp, back_buffers, presents),
         _ => panic!("{chain:#x} is not a live IDirect3DSwapChain9"),
     })
 }
-/// Present(this, src, dst, window, dirty, flags): a frame (headless).
-fn chain_present(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let chain = arg(m, cpu, 0);
+/// Show a swap chain's first back buffer through its gamma ramp: the ramp
+/// applies to a full-screen chain only, the device's caps having
+/// D3DCAPS2_FULLSCREENGAMMA and not a windowed gamma (D3D9 SetGammaRamp:
+/// an unsupported mode ignores the ramp). D3DERR_DEVICELOST while the
+/// device waits for a Reset.
+fn present_chain(m: &mut dyn Mem, chain: u32) -> u32 {
+    let device = with_chain(chain, |d, _, _, _| d);
+    if with_device(device, |d| d.not_reset) {
+        return D3DERR_DEVICELOST;
+    }
     with_chain(chain, |_, _, _, n| *n += 1);
+    let ramp = objects(|o| match o.live.get(&chain).map(|x| &x.kind) {
+        Some(Kind::SwapChain { pp, gamma, .. }) if pp[8] == 0 && caps2() & CAPS2_FULLSCREENGAMMA != 0 => gamma.clone(),
+        _ => None,
+    });
+    draw::backend(|b| b.gamma(ramp.as_deref()));
     if let Some(back) = back_buffer_of(chain, 0) {
         draw::present_back_buffer(m, back);
     }
-    cpu.eax = D3D_OK;
+    D3D_OK
+}
+
+/// D3DCAPS9::Caps2 of the recorded device.
+fn caps2() -> u32 {
+    let c = &profile().device_caps;
+    u32::from_le_bytes([c[12], c[13], c[14], c[15]])
+}
+
+/// Present(this, src, dst, window, dirty, flags): a frame (headless).
+fn chain_present(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let chain = arg(m, cpu, 0);
+    cpu.eax = present_chain(m, chain);
     ret(m, cpu, 24);
 }
 /// GetBackBuffer(this, index, type, IDirect3DSurface9**).
@@ -518,12 +587,110 @@ fn chain_get_present_parameters(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// IDirect3DDevice9::Present(this, src, dst, window, dirty): the implicit chain's.
 fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     let chain = with_device(arg(m, cpu, 0), |d| d.swap_chains[0]);
-    with_chain(chain, |_, _, _, n| *n += 1);
-    if let Some(back) = back_buffer_of(chain, 0) {
-        draw::present_back_buffer(m, back);
-    }
-    cpu.eax = D3D_OK;
+    cpu.eax = present_chain(m, chain);
     ret(m, cpu, 20);
+}
+
+/// SetGammaRamp(this, swap chain, flags, D3DGAMMARAMP*): returns nothing.
+/// The ramp is kept with the chain and shown with its frames when the
+/// chain is full-screen (see present_chain). D3DSGR_CALIBRATE is ignored:
+/// the device has no D3DCAPS2_CANCALIBRATEGAMMA. An unknown chain is
+/// ignored. Called by 0x00DA6D00 (the brightness option).
+fn set_gamma_ramp(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (dev, index, p) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 3));
+    let mut ramp: d3d9cmd::GammaRamp = [[0; 256]; 3];
+    for (c, channel) in ramp.iter_mut().enumerate() {
+        for (k, e) in channel.iter_mut().enumerate() {
+            *e = m.u16(p + 2 * (256 * c + k) as u32);
+        }
+    }
+    if let Some(chain) = with_device(dev, |d| d.swap_chains.get(index as usize).copied()) {
+        objects(|o| {
+            if let Some(Object { kind: Kind::SwapChain { gamma, .. }, .. }) = o.live.get_mut(&chain) {
+                *gamma = Some(Box::new(ramp));
+            }
+        });
+    }
+    ret(m, cpu, 16);
+}
+
+/// Whether `object` (of `device`) keeps Reset from succeeding: D3D9 fails a
+/// Reset while D3DPOOL_DEFAULT resources other than the implicit ones are
+/// alive (Microsoft Learn: IDirect3DDevice9::Reset; Wine d3d9
+/// reset_enum_callback, after the device state is unbound). The implicit
+/// swap chain, its back buffers and the automatic depth-stencil surface
+/// block only while the application holds a reference to them.
+fn blocks_reset(o: &Objects, device: u32, object: u32, chain0: u32, auto_depth: u32) -> bool {
+    let Some(x) = o.live.get(&object) else { return false };
+    match &x.kind {
+        Kind::SwapChain { device: d, .. } if *d == device => object != chain0 || x.refs > 1,
+        Kind::Surface { device: d, desc, container, owner, .. } if *d == device && *owner == 0 && desc.pool == D3DPOOL_DEFAULT => {
+            let implicit = *container == chain0 || object == auto_depth;
+            !implicit || x.refs > 1
+        }
+        Kind::Texture { device: d, data } if *d == device => data.pool == D3DPOOL_DEFAULT,
+        Kind::Buffer { device: d, data } if *d == device => data.pool == D3DPOOL_DEFAULT,
+        _ => false,
+    }
+}
+
+/// Reset(this, D3DPRESENT_PARAMETERS*): invalid parameters fail without
+/// touching the device. Otherwise the device state goes back to a fresh
+/// device's (every binding released, Wine's state_unbind_resources); if
+/// D3DPOOL_DEFAULT resources are still alive the call fails and the device
+/// waits for another Reset (TestCooperativeLevel answers
+/// D3DERR_DEVICENOTRESET); else the implicit swap chain's back buffers and
+/// automatic depth-stencil surface are rebuilt from the completed
+/// parameters (written back, as CreateDevice does). Reached from
+/// 0x00DAF7C0 (display mode changes).
+fn reset(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (dev, pp_ptr) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let focus = with_device(dev, |d| d.creation[2]);
+    cpu.eax = match complete(read_pp(m, pp_ptr), focus) {
+        None => D3DERR_INVALIDCALL,
+        Some(pp) => {
+            // unbind everything (a fresh state holds nothing)
+            let held: Vec<u32> = with_device(dev, |d| {
+                let mut h = d.state.held();
+                h.extend(std::mem::take(&mut d.render_targets));
+                h.push(std::mem::take(&mut d.depth_stencil));
+                d.state = crate::d3d9state::DeviceState::new(false, 0, 0);
+                h.retain(|&p| p != 0);
+                h
+            });
+            for h in held {
+                release_of(h);
+            }
+            let (chain0, auto_depth) = with_device(dev, |d| (d.swap_chains[0], d.auto_depth));
+            let blocked = objects(|o| o.live.keys().any(|&k| blocks_reset(o, dev, k, chain0, auto_depth)));
+            if blocked {
+                with_device(dev, |d| d.not_reset = true);
+                D3DERR_INVALIDCALL
+            } else {
+                write_pp(m, pp_ptr, &pp);
+                // the old implicit surfaces go (the chain and the device held the last references)
+                let old = with_chain(chain0, |_, old_pp, backs, _| {
+                    *old_pp = pp;
+                    std::mem::take(backs)
+                });
+                for b in old.into_iter().chain([auto_depth]).filter(|&b| b != 0) {
+                    release_of(b);
+                }
+                let backs: Vec<u32> = (0..pp[3]).map(|_| {
+                    let desc = SurfaceDesc { format: pp[2], usage: D3DUSAGE_RENDERTARGET, pool: D3DPOOL_DEFAULT, multisample: pp[4], quality: pp[5], width: pp[0], height: pp[1] };
+                    surface(m, dev, desc, chain0)
+                }).collect();
+                with_chain(chain0, |_, _, b, _| *b = backs);
+                with_device(dev, |d| {
+                    d.state = crate::d3d9state::DeviceState::new(pp[9] != 0, pp[0], pp[1]);
+                    d.not_reset = false;
+                });
+                bind_implicit(m, dev, chain0, pp);
+                D3D_OK
+            }
+        }
+    };
+    ret(m, cpu, 8);
 }
 
 /// Frames presented on a swap chain (tests, diagnostics).
@@ -578,7 +745,7 @@ pub const INTERFACES: &[Spec] = &[
             (4, get_available_texture_mem), (5, evict_managed_resources), (6, get_direct3d),
             (7, get_device_caps), (8, get_display_mode), (9, get_creation_parameters),
             (13, create_additional_swap_chain), (14, get_swap_chain), (15, get_number_of_swap_chains),
-            (17, present), (18, get_back_buffer), (23, res::create_texture), (24, res::create_volume_texture),
+            (16, reset), (17, present), (18, get_back_buffer), (21, set_gamma_ramp), (23, res::create_texture), (24, res::create_volume_texture),
             (25, res::create_cube_texture), (26, res::create_vertex_buffer), (27, res::create_index_buffer),
             (28, res::create_render_target), (29, res::create_depth_stencil_surface),
             (30, cp::update_surface), (31, cp::update_texture), (32, cp::get_render_target_data),

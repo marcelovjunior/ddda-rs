@@ -141,6 +141,14 @@ pub(crate) fn input_client_point(hwnd: u32, x: i32, y: i32) -> (i32, i32) {
     (x.wrapping_sub(ox), y.wrapping_sub(oy))
 }
 
+/// Where host input without a guest window handle goes: the focused window
+/// (Windows routes keyboard input there) and its client area's screen
+/// origin. None while no window has the focus.
+pub(crate) fn input_target() -> Option<(u32, (i32, i32))> {
+    let focus = desk(|d| d.focus);
+    window(focus).map(|w| (focus, client_origin(&w)))
+}
+
 pub(crate) fn input_cursor(x: i32, y: i32) {
     desk(|d| d.cursor = (x, y));
 }

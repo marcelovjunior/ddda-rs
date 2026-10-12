@@ -62,6 +62,7 @@ impl Session {
         crate::steam::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         crate::input::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         crate::audio::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
+        crate::movies::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
         mem.map_lazy(crate::threads::STACKS_BASE, crate::threads::STACKS_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;

@@ -37,3 +37,4 @@ pub mod text;
 pub mod threads;
 pub mod user32;
 pub mod win32;
+pub mod movies;
