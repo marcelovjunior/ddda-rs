@@ -1,5 +1,11 @@
 # Milestones
 
+### L28c checked division (2026-10-12)
+
+- Division proof checks zero/overflow and preserves undefined-flag limits.
+  **159 tests pass**; two original-game trials await the boot heavy slot.
+- **Next action:** finish sibling/destructor recording, then string inputs.
+
 ### L28c mocked tail proof (2026-10-12)
 
 - Direct mock tails retain return-address and exact runtime mock checks.

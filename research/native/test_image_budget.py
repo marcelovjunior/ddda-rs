@@ -130,6 +130,22 @@ class ImageBudgetTests(unittest.TestCase):
         bad,read,_=self.fixture(bytes.fromhex('50 e9fa000000'))
         self.assertIsNone(image_bound(bad,read,0xf008000,guarded=True,pop_for=lambda _:4))
 
+    def test_division_truncates_toward_zero_and_refuses_faults_or_flag_facts(self):
+        for code in (
+                'b8f9ffffff 99 b903000000 f7f9 83f8fe 7506 83faff 7501 c3 cc',
+                'b807000000 99 b9fdffffff f7f9 83f8fe 7506 83fa01 7501 c3 cc',
+                'b807000000 31d2 b903000000 f7f1 83f802 7506 83fa01 7501 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                '31c9 f7f1 c3', # zero divisor
+                'f7f9 c3', # unknown inputs
+                'b800000080 99 b9ffffffff f7f9 c3', # signed quotient overflow
+                '31c0 ba01000000 b901000000 f7f1 c3', # unsigned quotient overflow
+                '31c0 31d2 b901000000 f7f1 7401 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
     def test_signed_branches_use_overflow_not_only_the_result_sign(self):
         for code in (
                 'b8ffffff7f 83c001 7d01 cc c3',

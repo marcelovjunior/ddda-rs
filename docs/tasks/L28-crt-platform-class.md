@@ -35,6 +35,17 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Checked division proof (2026-10-12)
+
+32-bit DIV/IDIV proofs require known inputs, nonzero divisor and a fitting
+quotient. Signed division truncates toward zero with a same-sign remainder;
+all arithmetic flags become unknown. **159 light tests pass**, covering
+both signs, both quotient-overflow cases, zero divisor and undefined flags.
+0x0046A2D0 and 0x00DBA780 trials are queued serially in heavy.py behind
+claude-2's boot run. No new data since the audited +5/+15 checkpoint.
+**Next:** run those trials; inspect narrow-register/zero-vector facts for
+the two remaining string-copy recipes while recording waits.
+
 ### Checked mocked tail proofs (2026-10-12)
 
 A bounded root trace can end at a direct external mock tail only with its

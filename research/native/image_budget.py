@@ -535,6 +535,26 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     if base_pointer is not None and b is not None and mn in ('add','sub','inc','dec'):
                         adjusted = (base_pointer+(b if mn in ('add','inc') else -b)) & MASK
                     put(i, op[0], result, adjusted, affine_value)
+            elif guarded and mn in ('div','idiv') and op[0].size == 4:
+                low,high,divisor = regs['eax'],regs['edx'],get(i,op[0])
+                if low is None or high is None or divisor in (None,0):
+                    return None
+                dividend = (high << 32) | low
+                if mn == 'idiv':
+                    if high & 0x80000000: dividend -= 1 << 64
+                    if divisor & 0x80000000: divisor -= 1 << 32
+                    quotient = abs(dividend)//abs(divisor)
+                    if (dividend < 0) != (divisor < 0): quotient = -quotient
+                    if not -(1 << 31) <= quotient < (1 << 31): return None
+                else:
+                    quotient = dividend//divisor
+                    if quotient > MASK: return None
+                remainder = dividend-quotient*divisor
+                for name,value in (('eax',quotient),('edx',remainder)):
+                    regs[name] = value & MASK
+                    revisions[name] += 1
+                    pointers[name] = affine_regs[name] = None
+                flags = {}  # Neither division form defines arithmetic flags.
             elif guarded and mn in ('mul','imul') and len(op) == 1 and op[0].size == 4:
                 a,b = regs['eax'],get(i,op[0])
                 product,overflow = None,None
