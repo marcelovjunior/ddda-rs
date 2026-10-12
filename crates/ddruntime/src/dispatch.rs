@@ -181,6 +181,7 @@ impl Registry {
                 // thread's time slice may end
                 let _lock = crate::threads::service();
                 let traced = trace::start(self, m, cpu, target);
+                let _scope = crate::threads::ServiceScope::enter();
                 f(m, cpu);
                 if let Some(line) = traced {
                     trace::finish(line, cpu);
