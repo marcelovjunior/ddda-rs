@@ -3,7 +3,7 @@
 //! on a real IDirect3DDevice9, the target read back. The reference for the
 //! wgpu backend (crates/ddgpu tests compare frames pixel by pixel).
 use super::*;
-use d3d9cmd::{ClearCall, DrawCall, Indices, Target, TexKind as Kind, Upload, Vertices};
+use d3d9cmd::{ClearCall, CopyCall, DrawCall, Indices, Target, TexKind as Kind, Upload, Vertices};
 use std::collections::HashMap;
 
 const CREATE_VERTEX_BUFFER: usize = 26;
@@ -18,6 +18,7 @@ const DRAW_INDEXED_PRIMITIVE_UP: usize = 84;
 const SET_STREAM_SOURCE: usize = 100;
 const SET_STREAM_SOURCE_FREQ: usize = 102;
 const SET_INDICES: usize = 104;
+const STRETCH_RECT: usize = 34;
 const CREATE_QUERY: usize = 118;
 // IDirect3DQuery9 slots
 const QUERY_ISSUE: usize = 6;
@@ -64,8 +65,27 @@ impl Oracle {
     /// [`Oracle::render_targets`] with several clears in order before the
     /// draws.
     pub fn render_cleared(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        self.render_copied(uploads, clears, draws, &[], reads)
+    }
+
+    /// [`Oracle::render_cleared`] followed by StretchRect `copies` (after
+    /// EndScene, as depth-stencil copies require), then the reads. The
+    /// copies' surfaces are the targets named by surface number (created
+    /// with their format, size and multisample type).
+    pub fn render_copied(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], copies: &[CopyCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        let placed: Vec<(usize, CopyCall)> = copies.iter().map(|c| (draws.len(), c.clone())).collect();
+        self.render_placed(uploads, clears, draws, &placed, reads)
+    }
+
+    /// [`Oracle::render_copied`] with each copy placed after the given
+    /// number of draws (0: before the first draw). Every copy runs outside
+    /// the scene (EndScene, StretchRect, BeginScene).
+    pub fn render_placed(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], copies: &[(usize, CopyCall)], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
         let refs: Vec<&ClearCall> = clears.iter().collect();
-        self.render_all(uploads, &refs, draws, reads, &[]).map(|(r, _)| r)
+        self.copies = copies.to_vec();
+        let r = self.render_all(uploads, &refs, draws, reads, &[]).map(|(r, _)| r);
+        self.copies.clear();
+        r
     }
 
     fn render_all(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
@@ -95,7 +115,8 @@ impl Oracle {
     unsafe fn render_inner(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
                            spans: &[std::ops::Range<usize>], created: &mut Vec<Obj>) -> Result<(Vec<Vec<u8>>, Vec<u32>), String> {
         let d = self.device;
-        let read = reads.first().ok_or("no target to read")?;
+        // render target 0: the first read, else the first clear's target
+        let read = reads.first().or_else(|| clears.first().and_then(|c| c.targets[0].as_ref())).ok_or("no render target")?;
         // targets by surface
         let targets: std::cell::RefCell<HashMap<u32, Obj>> = Default::default();
         let target = |t: &Target, depth: bool, created: &mut Vec<Obj>| -> Result<Obj, String> {
@@ -105,10 +126,10 @@ impl Oracle {
             let mut s: Obj = std::ptr::null_mut();
             if depth {
                 check(com!(d, CREATE_DEPTH_STENCIL_SURFACE, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj),
-                           t.width, t.height, t.format, 0, 0, 0, &mut s, std::ptr::null_mut()), "CreateDepthStencilSurface")?;
+                           t.width, t.height, t.format, t.samples, t.quality, 0, &mut s, std::ptr::null_mut()), "CreateDepthStencilSurface")?;
             } else {
                 check(com!(d, CREATE_RENDER_TARGET, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj),
-                           t.width, t.height, t.format, 0, 0, 0, &mut s, std::ptr::null_mut()), "CreateRenderTarget")?;
+                           t.width, t.height, t.format, t.samples, t.quality, 0, &mut s, std::ptr::null_mut()), "CreateRenderTarget")?;
             }
             created.push(s);
             targets.borrow_mut().insert(t.surface, s);
@@ -135,10 +156,18 @@ impl Oracle {
                 let ds = target(t, true, created)?;
                 com!(d, SET_DEPTH_STENCIL_SURFACE, (Obj), ds);
             }
-            for (k, t) in c.targets.iter().enumerate().skip(1) {
-                if let Some(t) = t {
-                    let s = target(t, false, created)?;
-                    com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
+            // the clear's own targets (render target 0 included), the
+            // others unbound
+            for (k, t) in c.targets.iter().enumerate() {
+                match t {
+                    Some(t) => {
+                        let s = target(t, false, created)?;
+                        com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
+                    }
+                    None if k > 0 => {
+                        com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, std::ptr::null_mut::<c_void>());
+                    }
+                    None => {}
                 }
             }
             // Clear follows the viewport, SRGBWRITEENABLE and the scissor
@@ -176,6 +205,22 @@ impl Oracle {
                 }
             }
         };
+        let copies = std::mem::take(&mut self.copies);
+        let run_copies = |at: usize, created: &mut Vec<Obj>| -> Result<(), String> {
+            for (_, c) in copies.iter().filter(|(k, _)| *k == at) {
+                let depth = |f: u32| matches!(f, 70..=83);
+                let (src, dst) = (target(&c.src, depth(c.src.format), created)?, target(&c.dst, depth(c.dst.format), created)?);
+                let rect = |r: [i32; 4]| if r == [0; 4] { None } else { Some(r) };
+                let (sr, dr) = (rect(c.src_rect), rect(c.dst_rect));
+                let p = |r: &Option<[i32; 4]>| r.as_ref().map_or(std::ptr::null(), |r| r.as_ptr());
+                com!(d, END_SCENE, ());
+                let hr = com!(d, STRETCH_RECT, (Obj, *const i32, Obj, *const i32, u32), src, p(&sr), dst, p(&dr), c.filter);
+                com!(d, BEGIN_SCENE, ());
+                check(hr, "StretchRect")?;
+            }
+            Ok(())
+        };
+        run_copies(0, created)?;
         for (k, draw) in draws.iter().enumerate() {
             issue(k, false);
             let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
@@ -184,6 +229,7 @@ impl Oracle {
                 return Err(e);
             }
             issue(k + 1, true);
+            run_copies(k + 1, created)?;
         }
         issue(draws.len(), false);
         com!(d, END_SCENE, ());
@@ -225,7 +271,7 @@ impl Oracle {
     pub fn clear_probe(&mut self, colour: u32, states: &[(u32, u32)], scissor: [i32; 4], viewport: [u32; 6], rects: &[[i32; 4]]) -> Result<Vec<u8>, String> {
         unsafe {
             let d = self.device;
-            let t = Target { surface: 0, format: 21, width: 4, height: 4, texture: None, level: 0 };
+            let t = Target { surface: 0, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 };
             let mut created = Vec::new();
             let mut rt: Obj = std::ptr::null_mut();
             check(com!(d, CREATE_RENDER_TARGET, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj), 4, 4, 21, 0, 0, 0, &mut rt, std::ptr::null_mut()), "CreateRenderTarget")?;
