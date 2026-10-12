@@ -35,6 +35,25 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Recorder classes: finite condition values (2026-10-12)
+
+Starting from the census, dispatch/return is the largest recorder class
+(62 rows), then instruction bounds (29). Neither class had received the
+new guarded-values-v1 strategy as a whole; dispatch trials are queued
+first. Queues exclude functions now credited by the latest inventory and
+the explicitly set-aside 0x00493AA0. Baseline hashes:
+`L28c/classes-before.json`, **59,603 functions / 177,403 cases**.
+
+Static inspection identifies SETNE in 0x00416740/0x00618880 and NEG,
+SETO/SETB in 0x01146420. The guarded proof now materializes known condition
+bytes without changing flags; absent flags produce unknown values.
+NEG tracks its width-correct result and defined CF/OF/ZF/SF. No parity
+facts are invented. **166 light tests pass**, including a finite loop
+controlled through SETNE and original execution at zero, one, signed
+minimum and unsigned maximum for 8/16/32-bit negation. No original-game
+additions yet in this class batch. No guard or instruction ceiling changed.
+**Next:** complete dispatch trials, then wrapper cleanup and bound classes.
+
 ### Final recipes and post-train-11 census (2026-10-12)
 
 The two manager chains finished **0/3 each** with their checked producer

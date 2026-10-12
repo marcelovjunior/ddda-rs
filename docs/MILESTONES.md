@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c residual-class proofs (2026-10-12)
+
+- SETcc condition bytes and width-correct NEG extend finite-trace proofs;
+  **166 light tests pass**, including synthetic original execution.
+- Largest class dispatch/return trials are queued first; instruction-bound
+  rows follow. Accepted data remains **59,603 / 177,403**.
+- **Next action:** finish serial class trials, audit additions, update the
+  residual map against the completed train-12 inventory.
+
 ### Post-train-11 residual map (2026-10-12)
 
 - [RESIDUALS.md](RESIDUALS.md) lists all **137 / 59,440** non-verified
