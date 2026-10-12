@@ -377,8 +377,16 @@ likely next stops, the two-hop ones are candidates, and a third hop would
 add little. "Reached through" gives the verified function the route last
 passed and how it got there. 0x00520003/0x00520004 are odd-aligned
 supplementary entries met only as immediates: probably not real call
-targets, worth a check before queueing. No new import or service gap
-appears on these routes.
+targets, worth a check before queueing.
+
+Imports on the two-hop routes: 194, all with a service except
+`wsprintfA` (0x00DA3300 and 0x00DA3650, format `"%S"`). `ntohs` and
+`WSAGetLastError` are bound by ordinal in `net.rs`. `wsprintfA` is now a
+service for literals, `%%` and `%S`, measured on Windows 11
+(`research/runtime/windows/Wsprintf.cs`): `%S` converts each unit as
+WideCharToMultiByte(1252, 0) does, and the 1024-character limit drops an
+argument that does not end below it, which ends the output. Other
+conversions stop.
 
 One pointer/vtable hop (likely on the path): 51
 
