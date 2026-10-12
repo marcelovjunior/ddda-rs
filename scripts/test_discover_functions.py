@@ -125,7 +125,7 @@ class DiscoveryTests(unittest.TestCase):
         with patch.object(d, 'initializers', return_value=[]):
             rows, _ = d.discover(p, {0x1100}, [], runtime=[(0x1400, dict(source='runtime', caller=0x1100,
                                                                              instruction=0x1100))])
-        self.assertEqual([(r['address'], r['sources']) for r in rows], [('0x00001400', 'runtime')])
+        self.assertEqual([(r['address'], r['sources']) for r in rows], [('0x00001400', 'callback_table,runtime')])
 
     def test_msvc_requires_matching_hierarchy(self):
         p = FakeImage();m=d.decoder();p.put(0x1200,b'\xc3')
