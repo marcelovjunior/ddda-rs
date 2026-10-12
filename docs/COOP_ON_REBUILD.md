@@ -181,8 +181,9 @@ wight, zombie, `uEm7000`/`7001`, `uEm5400`.
   analog values at `+0x17B0 + 0x2E8·pad`).
 - **The Arisen merges every local device** (`uPlayerBase::vf200`
   `0x00B6AEA0`; slot 200 inside phase 90 of pass A, FRAME.md):
-  1. Eight analog values, ids 0xD5..0xDC, are read through the object at
-     `uPlayerBase+0x3348` (vf `+0x3C`) into `+0x331C..+0x3338`.
+  1. Eight tuning values, ids 0xD5..0xDC, are copied from the shared
+     parameter table `m_pl000_00` (`uPlayerBase+0x3348`, vf `+0x3C`)
+     into `+0x331C..+0x3338`. These are parameters, not input (6.1).
   2. `0x00B51EE0` takes the stick from the first of the four pads past
      its dead zone, or from the keyboard keys listed at
      `sQlocInput+0x1400`. It rotates the stick by **the global camera**
@@ -194,8 +195,8 @@ wight, zombie, `uEm7000`/`7001`, `uEm5400`.
   per-unit command fields are the natural injection point for a remote
   player.
 
-*Not found:* who sets `uPlayerBase+0x3348`. The ctor `0x00B574D0` zeroes
-it as part of a `cAdjustParam` at `+0x3344`.
+The pad itself (the object at `uPlayerBase+0x32B4`) and how a remote
+player drives it: 7.1.
 
 ### 2.2 Camera [exe]
 
@@ -231,10 +232,10 @@ The GUI is entirely "the one local player".
 ### 2.4 The Arisen's data and the save [exe, doc]
 
 `sGameSys` (`*0x018FA4BC`) holds the party's records:
-- **the Arisen's** at `+0xA76D0`: level `+0x700`, name `+0x70C`
-  (ORACLE.md). 0x7F0 bytes up to the first pawn record, size
-  *inferred*.
-- **the three pawns'** at `+0xA7EC0 + 0x1660i`.
+- **the Arisen's** at `+0xA76D0`: a `cPlayerInfo`, 0x7F0 bytes
+  (6.2);
+- **the three pawns'** at `+0xA7EC0 + 0x1660i`: `cCmcInfo`, which
+  derives from `cPlayerInfo`.
 
 Each character unit points to its record at `uPlayerBase+0x3DEC`
 (ORACLE.md).
@@ -310,8 +311,8 @@ Only the host's *simulation* needs a seat-aware view of slot 0.
 |---|---|---|---:|---|
 | 1 | Party creation (`0x00501020`, `0x0043D2B0`) makes pawns in slots 1-3 | **Parameterise by seat:** an adapter after `0x00501020` creates P2's `uPlayer` in slot 3 (on the client: the host's Arisen); both pawn loops skip slot 3 in co-op | 2 + 1 new | cold (stage start, hire) |
 | 2 | Slot 3 is assumed to be a `uCmc` (`+0x5854`, `+0x585C`, pawn vfuncs) | **Audit:** the pawn-slot readers and the accessor's callers; guard the pawn-only ones by vtable (e.g. the order broadcast `0x00B768E0`) | 41 + 13 to review, ~10 to change *(estimate)* | mostly cold; the 7 enemy party walks are hot but use `uCharacterBase` fields only *(to check)* |
-| 3 | P2's data (`uPlayerBase+0x3DEC` → `sGameSys+0xA76D0`) | **Second instance:** a P2 record in host guest memory (the client's own Arisen record, sent at join), pointed to by P2's `+0x3DEC` | 1 new | cold |
-| 4 | Input: the Arisen reads every local device and the global camera (`0x00B6AEA0`, `0x00B51EE0`) | **Host-side wrapper:** for a remote seat, `vf200` fills `+0x331C..+0x3338` and the pad state at `+0x32B4` from that seat's network pad, like `uCmc::vf200` does from the AI pad. The stick is rotated by the client's camera (sent with the pad) | 1 wrapped (`0x00B6AEA0`), 1 parameterised (`0x00B51EE0`) | hot (per Arisen per frame), cheap |
+| 3 | P2's data (`uPlayerBase+0x3DEC` → `sGameSys+0xA76D0`) | **Second instance:** a P2 `cPlayerInfo` (0x7F0 bytes) in host guest memory, filled from the client's own record at join. A wrapper on the record binder `0x00B5A820` points a remote seat's unit at it (6.2) | 1 wrapped + 1 new | cold |
+| 4 | Input: the Arisen reads every local device and the global camera (`0x00B6AEA0`, `0x00B51EE0`) | **Host-side wrapper:** a remote seat's Arisen uses the pad's virtual path, the one pawns use: its pad flag `+0x60` is cleared, and its 36 input bytes are written from the network before `vf200`. The client's own pad code has already rotated the stick by the client's camera (7.1) | 1 wrapped (`0x00B6AEA0`); `0x00B51EE0` and `0x00B52880` unchanged | hot (per Arisen per frame), cheap |
 | 5 | Simulation reads of slot 0 (enemies, AI, NPCs, objects, shells: about 240 of the 284, outside the GUI and camera) | **Seat-relative slot 0.** The lifter rewrites the static loads of `[0x018FA4EC]+0x99C` into a runtime call that returns: the unit itself, if the current unit is an Arisen; the owner's Arisen, for a pawn (`+0x585C`); else the nearest living Arisen to the current unit. The current unit is a thread-local set where passes A/B/C call a unit (`0x00DB7350`, `0x00DB6890`, `0x00DB67B0`, jobs `0x00DBE560`). Outside a unit (managers, GUI): the local seat | 284 rewritten by rule; 3-4 pass walkers wrapped | hot; one TLS read and two distances per load |
 | 6 | Identity tests ("is this unit the player?") | **Review per site:** replace `x == slot0` with "x is an Arisen" where the site means any player (damage reactions, pickups, talk) | ≥ 38 *(lower bound)* | mixed |
 | 7 | Camera-work requests from the simulation (`0x004219A0`) | **Host-side wrapper:** a request whose target is a remote seat's Arisen is sent to that client as a camera event | 1 wrapped | cold (grabs, throws) |
@@ -382,10 +383,10 @@ host's state:
   - quest and scenario flags;
   - spawns and despawns, with a unit id map.
 
-**Open, to measure:** whether a replica's pose updates when its own
-move is suppressed (by its Move flag 0x400, per unit, not by the group
-mask, so that the client's camera and HUD keep running). If the pose
-is evaluated inside the move, the replica runs a reduced move instead.
+**Settled in L40b (7.3):** the pose is evaluated inside the move
+(phases 92 and 93 of slot 8). A replica therefore runs a reduced move:
+the motion advance and the commit, with the host's state, and no AI,
+actions, integration or hit volumes.
 
 ### 4.4 RUNTIME.md's caution
 
@@ -423,7 +424,8 @@ character.**
   side for this stage.
 - Acceptance: each player walks, runs and jumps, and the other sees it
   within two frames. The one-seat gate is unchanged with co-op off.
-- About 6 adapters and wrappers, all cold except `vf200`.
+- 7 guest functions wrapped plus two runtime hooks and the
+  transport; the list and the message formats are in 7.6 and 7.5.
 
 **Stage 2: the shared world.**
 - All characters replicated; pawns and enemies run on the host only.
@@ -442,14 +444,367 @@ character.**
 - Shared game over (COOP_DESIGN).
 - P2's chunks written to the client's save (#13).
 
-## 6. Not established
+## 6. The open items of L40, closed (L40b)
 
-- The setter of `uPlayerBase+0x3348` (the input object).
-- Whether pawn AI reads its master `+0x585C` anywhere. Follow reads slot
-  0 directly.
-- The size and full layout of the Arisen record at `sGameSys+0xA76D0`.
-- Whether a replica's pose updates with its move suppressed (4.3).
-- The 128 unattributed `sPlayerManager` readers and the 151
-  unclassified slot-0 uses: both need the per-site review of stage 2.
-- Whether `uPlayer` is at least as large as `uCmc`. That matters for
-  the reads of `+0x5854` / `+0x585C` through slot 3 (#2).
+### 6.1 `uPlayerBase+0x3348` is a parameter table, not input [exe]
+
+`+0x3344` is an array of ten parameter slots, 8 bytes each
+(`cAdjustParam`-style: a vtable and an `rAdjustParam` pointer). They are
+set by `0x00B5B950`, called from the unit's init (`uPlayerBase::vf05`
+`0x00B58F50`). It copies the ten `rAdjustParam` pointers that
+`sPlayerManager`'s loader `0x0047E2B0` keeps at `sPlayerManager+0x970..
++0x994`, with reference counts (`0x00DE0B80` / `0x00DE0B90`):
+- `param\pl\other\m_pl000_00`, the general player table, into
+  `+0x3348`;
+- the nine per-weapon tables (`m_pl000_Sword`, `_Shield`, `_GSword`,
+  `_Unarm`, `_Dagger`, `_Bow`, `_Wand`, `_BowL`, `_ShieldMG`; string
+  table `0x0163E660`) into `+0x3350..`.
+
+`0x00B5B9A0` maps a weapon category to a slot. vf `+0x3C(id)` returns
+the float with that id. 257 lifted functions read `+0x3348` (e.g. id
+0xB9 in `0x005AA900`, 0xD3 in `cEm0600ActPlayerMove::vf08`).
+
+For co-op the tables are shared and read-only, so P2 binds the same
+ones through the same init.
+
+### 6.2 The records and the sizes [exe, DTI]
+
+**How a character finds its record.** `0x00B5A820` sets
+`uPlayerBase+0x3DEC` from the character's kind byte `+0x206D`:
+
+| `+0x206D` bit | Record |
+|---|---|
+| 0x2 (the Arisen) | `sGameSys+0xA76D0` |
+| 0x4 (a party pawn) | `sGameSys+0xA7EC0 + 0x1660 × uCmc+0x5854` |
+| 0x8 | the unit's own `+0x5870` |
+
+It also clears the record's `+0x354`. Its 6 callers:
+- the party code: `0x00501020`, `0x0043D2B0`, `0x0047EAE0`;
+- the uPlayer ctor `0x00B55900`, `uPlayerBase::vf05` `0x00B58F50`, and
+  `0x00BABB00` (in the `uNpc` code, beside its ctor `0x00BAB3A0`).
+
+**The record types** (MtDTI reflection, `dti-props`):
+- **`cPlayerInfo`** (parent `cBaseInfo`), **0x7F0 bytes**. That is
+  exactly the gap from `+0xA76D0` to the first pawn record. Fields:
+  - look and equipment ids (`mJob +0x10`, weapons, armour, colours);
+  - skills;
+  - `mHpMax +0x2A0`, `mHpMaxWhite +0x2A4`, `mStamina +0x2A8`;
+  - `mExp +0x2C4`, `mGold +0x348`, `OnlinePoint +0x34C`,
+    `mIsCmcLost +0x354`;
+  - conditions (`mCStatus*` from `+0x35C`).
+
+  `mHp` is reflected by getter only. *Inferred* at `+0x29C`:
+  `0x0043D2B0` reads that float for a pawn.
+- **`cCmcInfo`** derives from `cPlayerInfo`, **0x1660 bytes**. It adds:
+  - `mStatus +0x7F0`, `mPawnType +0x7F4`;
+  - the knowledge `mStudyFlag +0x7F8` / `mLocalStudyFlag +0xFB4`;
+  - `mInfo[]` inclinations from `+0x14BC`.
+
+**The vitals live in the record, not in the unit.** P2's HP and stamina
+are therefore in P2's `cPlayerInfo` (proposal #3).
+
+**Unit sizes** (DTI registry, the allocation in each `newInstance`):
+
+| Class | Size | Parent |
+|---|---:|---|
+| `uCharacterBase` | 0x2F90 | `uObjModel` (0x2530) |
+| `uPlayerBase` | 0x5850 | `uCharacterBase` |
+| `uCmc` | 0x58E0 | `uPlayerBase` (adds `mCmcId`, **`mpPlayer +0x585C`**, `mTargetPos +0x5860`) |
+| `uPlayer` | 0x5A10 | `uPlayerBase` |
+| `uNpc` | 0x7170 | `uPlayerBase` |
+
+So a `uPlayer` is larger than a `uCmc`. Reading the pawn fields
+`+0x5854..+0x58DF` through slot 3 stays inside P2's object but reads
+`uPlayer`'s own fields there. The audit of #2 stands: it is a
+correctness issue, not a memory one.
+
+**P2 passes every kind test as an Arisen.** The uPlayer ctor gives
+bit 0x2, which about 939 functions test (`+0x206D`, any class, an upper
+bound) [scan]. That is right for co-op: damage reactions, pick-ups and
+so on treat P2 as an Arisen. The one exception is the record binding:
+with bit 0x2, `0x00B5A820` would point P2 at P1's record. Proposal #3
+becomes a wrapper on `0x00B5A820`: for a remote seat's unit, the
+record is that seat's `cPlayerInfo`. That is 1 function, cold.
+
+### 6.3 The 128 unattributed `sPlayerManager` readers [scan]
+
+They have no labelled caller within 4 levels. Attributed now by their
+labelled address neighbours (within 0x4000 bytes; MSVC lays out a
+source file's functions together) or by the address blocks already
+known:
+
+| Group | Functions | Where | Co-op rule |
+|---|---:|---|---|
+| stage modes (`aStageNNN`, `aGameMain` code) | 22 | 0x004F..0x0053 | host only, seat 0 (placement, stage start) |
+| stage event code | 22 | `0x00504B40..0x00516E00`: event modes `0x0050BE20`/`0x0050C7A0`/`0x0050DCD0`, group-bit writers `0x00514A90`/`0x00516460`, busy test `0x00516E00` (EVENTS.md) | #10 |
+| pawn AI think conditions | 13 | `0x00589C10..0x0058FC10`, beside the follow conditions of PAWN_AI.md | #5 (owner's Arisen), hot |
+| AI (`sAI*`, `cThinkFSM`) | 15 | | #5 |
+| quests and scenario arguments | 15 | `cScenarioArg_*` and quest code | host only, seat 0; review for "the player is near" tests |
+| GUI | 13 | | local seat |
+| `uInn` | 7 | | #12 (personal) |
+| other | 18 | links, shops, sound, items, enemies, managers | review |
+| none nearby | 3 | `0x00442580`, `0x00648510`, `0x00648AF0` | review |
+
+So about half are stage, event and quest code: cold, run on the host,
+where slot 0 meaning P1 is correct. About a fifth are AI and pawn AI:
+hot, covered by the seat-relative rule.
+
+### 6.4 Still open
+
+- Whether pawn AI reads its master `mpPlayer` (`+0x585C`) anywhere.
+  Follow reads slot 0 directly.
+- Whether the replica path of 7.3 reproduces the pose bit for bit
+  (a test, not a reading).
+- The 151 unclassified slot-0 uses (1.4): the per-site review of
+  stage 2.
+- Where the effect provider's motion links are evaluated (EFFECTS.md's
+  next step). It decides whether motion-linked effects come out of a
+  replica by themselves (7.4).
+
+## 7. Stage 1 replication design (L40b, *Proposal* on [exe] facts)
+
+Stage 1: two Arisen in one area. The host simulates; the client sees
+both and moves its own. This section is concrete enough to implement.
+The facts it rests on are marked as before. Byte counts are raw, before
+any compression.
+
+### 7.1 Input upload: the pawn's virtual-pad path [exe]
+
+Every character has a pad object at `uPlayerBase+0x32B4` (0x90 bytes,
+up to the parameter slots at `+0x3344`). Its owner is at `+8`. Two
+paths fill it:
+
+| Pad field | Local path (`+0x60` = 1, the Arisen) | Virtual path (`+0x60` ≠ 1, pawns) |
+|---|---|---|
+| `+0x0C..+0x2B` sticks out (`+0x10` the stick's world angle, `+0x14`/`+0x18` the stick) | `0x00B51EE0` reads the 4 pads, the keyboard and the mouse, and rotates by `sCamera+0x34` | `0x00B51EE0` copies `+0x40..+0x5F` → `+0x0C..+0x2B`, then clears `+0x40..+0x54` |
+| `+0x30` held, `+0x2C` pressed, `+0x34` released, `+0x38` last held | `0x00B52880` from the key table (`0x00B52A00` ×3) | `0x00B52880`: held = `+0x3C`, edges against `+0x38` |
+| `+0x3C` buttons in, `+0x40..+0x5F` sticks in | unused | written by `uCmc::vf200` from the AI pad (`cAICtrl+0x40`, bytes `+0x10..+0x33`) |
+
+Both paths apply the same gate. For an Arisen (kind bit 0x2), the
+sticks and buttons are zeroed while the game is in a menu or event
+(the `sGameSys+0xB883C/+0xB8848/+0xB8850` flags, or the area's
+`+0x3834` object).
+
+**Proposal:**
+- **Client:**
+  - its own Arisen's pad runs the local path, as in the original
+    (7.3 step 1). That is the client's own devices, rotated by its own
+    camera;
+  - after `0x00B52880` it sends the 32 bytes of sticks out
+    (`+0x0C..+0x2B`) and the held word (`+0x30`).
+- **Host:**
+  - P2's pad has `+0x60 = 0`, set once at spawn;
+  - each frame before pass A, the host writes the received sticks to
+    `+0x40..+0x5F` and the held word to `+0x3C`;
+  - `vf200`, `0x00B51EE0` and `0x00B52880` then run unchanged: the
+    original's own code derives the edges and applies the gate.
+
+So the wrapper of proposal #4 is a write of 36 bytes before
+`uPlayerBase::vf200`. No camera has to be sent. Both worlds use the
+same axes; only the floating origin differs (7.2).
+
+**Message (client → host):**
+- header 8 bytes: seat, client frame;
+- 36 bytes per frame;
+- each packet repeats the last 3 frames against UDP loss.
+
+That is 116 bytes per packet; at 30 Hz, about 3.5 KB/s up.
+
+*To verify by test:* the local path writes `+0x3C` for the next frame,
+so the held word may lag one frame there.
+
+### 7.2 Per-character state (host → client) [exe, DTI]
+
+| Field | Where | Bytes |
+|---|---|---:|
+| net id | assigned by the host at creation (7.5) | 2 |
+| position | `uCoord.mPos` `+0x40` (vector3, cm), **plus `sWorldOffset` `mWorldAbsoluteOffset`** (the positions are in a floating-origin frame; ACCEPTANCE.md, ORACLE.md) | 12 |
+| rotation | `uCoord.mQuat` `+0x50` | 16 (8 quantised) |
+| animation step | `+0x2EEC`: the final step `uCharacterBase::vf92` computed this frame (status and slow factors included) | 4 |
+| motion layers | `uModel::mMotion` `+0x380`, 0x140 each, count `+0x374`. Per active layer: `mMotionNo +0x04`, `mState +0x06`, `mAttr +0x0C`, `mInterFrame +0x40`, `mInterCount +0x44`, `mBlend +0x48`, `mFrame +0x4C`, `mSpeed +0x5C` | 28 × layers |
+| kind and status | `+0x206C..+0x206F` (kind bytes), `+0x26A0` (status bits read by phase 92 and `vf200`) | 8 |
+| vitals (party) | the record: `mHp` (+0x29C, *inferred*), `mHpMaxWhite +0x2A4`, `mStamina +0x2A8`, `mCStatusNum +0x35C` | 16 |
+| action | the current action of the action manager `+0x2DB8` (FRAME.md 5.2). *Not traced:* the offset of its id | 2 |
+
+The frozen blend pose (`uModel+0xDD0`) is **not** sent. The replica
+freezes its own current pose on a motion change, as the host does. With
+an identical history the two are identical (7.3).
+
+**Per character**, with 2 active layers (*assumed; to measure*): about
+120 bytes.
+
+**A typical scene.** The field at night, from FRAME.md section 4:
+- line 10: the Arisen and 3 pawns. In co-op that is 2 Arisen and
+  2 pawns;
+- line 15: 5 enemies and 3 NPCs.
+
+| Scene | Characters | Per frame | At 30 Hz |
+|---|---:|---:|---:|
+| stage 1 (the two Arisen) | 2 | ~0.25 KB | ~7 KB/s |
+| stage 2, the field scene | 12 | ~1.5 KB | ~45 KB/s (~0.36 Mbit/s) |
+
+Both fit LAN with room to spare, before deltas.
+
+**Not sent per frame:**
+- the attached units: `uWeaponPl` (16 in the census, on lines 11/16)
+  and soft bodies (cloth, hair). They follow the owner's joints and
+  simulate locally. *To verify:* the weapon's sheathed or drawn state
+  should follow from the owner's action;
+- the 97 swinging plants `uFmSwingBase` (local);
+- the HUD (local, from the replicated vitals and its own seat);
+- the camera (local).
+
+### 7.3 The replica's move on the client [exe]
+
+A character that the client does not simulate is a **replica**. For a
+replica, the class's move slots are bound to adapters. The adapters
+check a runtime "is replica" table and otherwise call the original, so
+co-op off changes nothing. The slots involved:
+- `uPlayer::vf08` `0x00B55F20`, `uCmc::vf08` `0x00B53650`; in stage 2
+  also `uEnemy::vf08` `0x00AA94D0` and `uNpc::vf08` `0x00BAF4F0`;
+- slots 9 and 10 (`uPlayer` `0x00B56390`/`0x00B56340`, `uCmc`
+  `0x00B54050`/`0x00B53FC0`, `uCharacterBase` `0x0084C720`/`0x0084C6A0`)
+  return at once for a replica.
+
+**The replica's slot 8, in order:**
+1. **Only the client's own Arisen:** run its pad,
+   `0x00B51EE0(+0x32B4)` and `0x00B52880(+0x32B4)`, where `vf200`
+   would run them. Send the result (7.1).
+2. Set the motion layers to the snapshot's state as of the **start** of
+   the host's frame. Set `cUnit.mDeltaTime` (`+0x14`) to the host's
+   animation step `+0x2EEC`.
+3. **Motion advance:** `uObjModel::vf92` `0x00886210` → `0x010629F0`.
+   That is the pose freeze on a change `0x01061DD0`, the root motion
+   `0x0105B740`, and the frame and blend advance `0x01060730`
+   (FRAME.md 5.2, ANIMATION.md).
+4. Overwrite `mPos` and `mQuat` with the snapshot's end-of-frame
+   values. This discards the root motion just added, so the host stays
+   authoritative.
+5. **Commit:** `uObjModel::vf93` `0x00886280`: the world matrix
+   `uCoord::vf20` `0x00DEABC0`, the joint pose `0x01058A70`,
+   constraints. The replica's step mask `+0x2398` has **bit 4 cleared**,
+   so collision activation `0x0076B470` does not run and the replica
+   never creates hit volumes. The mask's other bits (0x40, 0x80, 0x100,
+   0x200, 0x400, 0x800, 0x1000, 0x2000) select further sub-steps of
+   `vf93` and `vf92`; *to review* one by one.
+
+**Not run on a replica:**
+- phase 90: status, AI think, stamina, level-up;
+- phase 91: actions and integration;
+- the tail of `uCharacterBase::vf92`: motion-flag camera work
+  `0x004219A0`, shake `0x00CADE50`, the attached sub-units
+  `0x0081F280`, `0x0080B450`. Stage 2 adds them back after review
+  (7.4);
+- pass B (sensors), pass C (push-out, hit volumes);
+- the hit pass (step 33) and the character push-out (step 38).
+
+The replica must not appear in the latter two. *To check:* whether the
+replica's collision objects are registered at all once bit 4 stays
+clear.
+
+**Why the pose should match bit for bit** (*inferred; the test of
+6.4*):
+- Steps 3 and 5 are per-unit computations. Same code, same install data
+  and the same inputs (layer state, step, transform) give the same
+  result.
+- On a motion change the freeze copies the replica's previous pose. By
+  induction that equals the host's, as long as no snapshot was missed.
+- After a loss the blend source differs only until the blend ends
+  (`mInterFrame`: up to 8 frames for player locomotion, ANIMATION.md),
+  then the pose converges again.
+
+The test: one host, one client, the same recorded input, compare the
+joint matrices of both Arisen per frame.
+
+### 7.4 Effects and sounds
+
+- **Motion-driven:** the motion flags (`+0x494`, previous `+0x4A4`)
+  feed camera work, shakes and the sub-units in the tail of
+  `uCharacterBase::vf92`. The effect provider's motion links
+  (`rEffectProvider`: 144,146 links, EFFECTS.md) tie effects to motion
+  frames.
+  - If the evaluator runs from the motion state (where is not traced,
+    6.4), a replica that runs the tail reproduces these effects and
+    sounds locally, in step with its pose.
+  - Stage 1 leaves the tail out.
+- **Action-driven** (phase 91, host only): spells, arrows and other
+  shells (`uShl*`, line 18). Proposal for stage 2:
+  - shells become replicated units (spawn event with class and owner,
+    then transforms);
+  - one-shot effects spawned by actions are sent as events from a
+    wrapper on the effect request. *To find:* the entry point.
+- **Hit results** (step 33: damage, sparks, reactions) are host events.
+- **Camera work** for a remote seat's Arisen is a camera event to that
+  client (proposal #7).
+
+### 7.5 Transport, and why not `sNetworkExt` [doc: L32]
+
+L32's census (`task/L32-network` `fee078b`) shows what the guest has:
+
+- **One socket class** (vtable `0x01428BD8`, factory `0x00D8B690`):
+  - TCP or UDP, non-blocking;
+  - `SO_BROADCAST` on UDP;
+  - `sendto` at `0x00DA23F3`, `recvfrom` at `0x00DA2912`.
+- **Its users:**
+  - `sDDCaProto`: Capcom's TLS login, `dune.dragonsdogma.com:12501`;
+  - `sNetwork` sessions (`0x011562C0` via `0x00D8B5F0`), only in
+    network states 3/4 (online and logged on to Steam);
+  - `sNetworkExt`'s storage tasks (`cNetStorage*`), which require an
+    online session (`sNetwork+0x220`).
+- **No LAN discovery, and no game-state protocol.** The messages are
+  the online services' (pawn sharing, rewards).
+- The runtime keeps Winsock "not initialised", as measured (L32).
+
+**Decision (*Proposal*):**
+- Nothing at the message level is worth reusing. The socket class is a
+  thin wrapper of WS2_32. Driving it would need a live Winsock in the
+  guest plus new guest-side code, and nothing in it is specific to
+  game state.
+- The co-op transport is therefore host-side Rust in the runtime
+  process, outside the guest. Input injection (7.1), snapshot capture
+  and apply (7.2-7.3) are runtime adapters that read and write guest
+  memory at the frame's sync points.
+- `sNetworkExt::vf06` stays at step 54 and stays offline, as L32
+  implements it. The snapshot hook runs right after it (4.2).
+
+**Messages:**
+
+| Message | Direction | Content |
+|---|---|---|
+| Join | client → host | profile, the client's `cPlayerInfo` (0x7F0 bytes) and edit data |
+| Area | host → client | stage index (stage loader `0x004FFBA0`), spawn point, the seat table |
+| Input | client → host | 7.1, unreliable, ×3 redundancy |
+| Snapshot | host → client | host frame, `sWorldOffset`, per character 7.2, unreliable |
+| Events | host → client, reliable | spawn and despawn (class, net id, owner), event start and end, camera work, effect spawns (stage 2) |
+
+**Net ids:** units are created on worker threads in no fixed order, so
+the host assigns an id at creation. In stage 2 that means wrapping the
+creators named in FRAME.md 3:
+- `0x00421FE0` characters;
+- `0x00433E00` enemies;
+- `0x0049DA10` objects;
+- `0x004BA540` by DTI.
+
+Stage 1 needs only two fixed ids: seat 0's and seat 1's Arisen.
+
+### 7.6 Stage 1 change list
+
+| Side | Function | Change | Hot/cold |
+|---|---|---|---|
+| both | `0x00501020` (stage set-up) | after it: create the other seat's `uPlayer` in slot 3; its pawn loop skips slot 3 in co-op | cold |
+| host | `0x0043D2B0` (party upkeep) | skip slot 3 in co-op | per frame, trivial |
+| both | `0x00B5A820` (record binder) | the remote seat's unit → its own `cPlayerInfo` | cold |
+| host | `0x00B6AEA0` (`uPlayerBase::vf200`) | P2: write the 36 received bytes into the pad first | hot, cheap |
+| client | `0x00B55F20` / `0x00B56390` / `0x00B56340` (`uPlayer` slots 8/9/10) | the replica move of 7.3 | hot, cheaper than the original move |
+| host | after step 54 | capture the snapshot of both Arisen | runtime |
+| client | after step 54 | apply the snapshot (the start-of-frame layer state for the next move; end-of-frame transforms) | runtime |
+| both | transport | 7.5 | runtime |
+
+**In total:** 7 guest functions wrapped, two runtime hooks and the
+transport.
+
+**Acceptance:**
+- each player walks, runs and jumps;
+- the other machine shows both Arisen within two frames, with
+  bit-identical joint matrices in steady state (the 7.3 test);
+- the one-seat gate is unchanged with co-op off.

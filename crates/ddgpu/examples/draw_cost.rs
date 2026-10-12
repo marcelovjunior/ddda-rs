@@ -42,7 +42,7 @@ fn main() {
     let mut gpu = ddgpu::WgpuBackend::headless().expect("a GPU adapter");
     gpu.read_frames = false;
     let (w, h) = (1280u32, 720u32);
-    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0 };
+    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0, samples: 0, quality: 0 };
     // 64 small triangles' worth of vertices: position float4, texcoord float2
     let mut vb = Vec::new();
     for k in 0..64 {

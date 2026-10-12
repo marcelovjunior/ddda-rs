@@ -50,6 +50,7 @@ impl Session {
         let mut mem = GuestMemory::new();
         crate::image::load(&mut mem, &exe).map_err(|e| e.to_string())?;
         mem.map_lazy(STACK_TOP - STACK_SIZE, STACK_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
+        crate::seh::initialize_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP - STACK_SIZE, STACK_TOP);
         let mut registry = Registry::with_lifted_program();
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
@@ -66,7 +67,6 @@ impl Session {
         crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
         mem.map_lazy(crate::threads::STACKS_BASE, crate::threads::STACKS_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
-        crate::threads::init_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP, STACK_TOP - STACK_SIZE);
         let registry = Arc::new(registry);
         crate::threads::set_machine(mem.share(), registry.clone());
         registry.install();
@@ -78,9 +78,7 @@ impl Session {
     /// right to left (stdcall/cdecl; `ecx` for thiscall), on a fresh frame
     /// of the session stack.
     pub fn call(&mut self, target: u32, ecx: u32, args: &[u32]) -> Outcome {
-        // the main thread's (top-level calls run on it)
-        let fs_base = crate::threads::teb_of(crate::services::MAIN_THREAD_ID);
-        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, fs_base, ..Cpu::default() };
+        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, fs_base: crate::seh::TEB_BASE, ..Cpu::default() };
         for &a in args.iter().rev() {
             cpu.esp -= 4;
             self.mem.set_u32(cpu.esp, a);
@@ -99,6 +97,7 @@ impl Session {
                     Outcome::Exit(*code)
                 } else {
                     let msg = e.downcast_ref::<String>().cloned()
+                        .or_else(|| e.downcast_ref::<crate::seh::Stop>().map(ToString::to_string))
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "panic".into());
                     let regs = [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi];

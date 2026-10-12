@@ -55,6 +55,10 @@ pub struct Target {
     /// for a texture's surface: its index among the texture's level
     /// surfaces (face * levels + level)
     pub level: u32,
+    /// D3DMULTISAMPLE_TYPE (0: none; 2..16 samples; 1: non-maskable)
+    pub samples: u32,
+    /// the multisample quality level
+    pub quality: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

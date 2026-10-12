@@ -13,15 +13,12 @@
 //! once measured. The guest's threads share one address space: each holds
 //! its own [`GuestMemory`] handle ([`GuestMemory::share`]), and only the
 //! holder of the guest lock (crate::runtime) accesses it.
-use ddnative_base::mem::Mem;
+use ddnative_base::mem::{zero_page, Mem, PageTable, PAGES};
 use std::fmt;
 
-pub const PAGE: u32 = 0x1000;
-const PAGES: usize = 1 << 20;
-
-/// Page permission bits.
-pub const READ: u8 = 1;
-pub const WRITE: u8 = 2;
+/// Pages and permission bits: ddnative-base's, which the lifted code's
+/// inline fast path reads (Mem::page_table).
+pub use ddnative_base::mem::{PAGE, READ, WRITE};
 /// Reserved but not yet backed: reads as zero, gets a buffer on first write.
 const LAZY: u8 = 4;
 
@@ -47,19 +44,9 @@ pub struct Overlap {
     pub page: u32,
 }
 
-/// One page of guest memory.
-type Page = Box<[u8; PAGE as usize]>;
-
-fn zero_page() -> Page {
-    vec![0u8; PAGE as usize].into_boxed_slice().try_into().expect("a page")
-}
-
-/// Fixed-size tables: a page index (`addr / PAGE`, below 2^20) needs no
-/// bounds check, and a page is one thin pointer.
-struct Space {
-    pages: Box<[Option<Page>; PAGES]>,
-    perms: Box<[u8; PAGES]>,
-}
+/// The address space: ddnative-base's page table (fixed-size tables, so a
+/// page index needs no bounds check and the tables never move).
+type Space = PageTable;
 
 struct SharedSpace(std::cell::UnsafeCell<Space>);
 
@@ -75,13 +62,7 @@ pub struct GuestMemory {
 
 impl Default for GuestMemory {
     fn default() -> Self {
-        let pages: Box<[Option<Page>]> = (0..PAGES).map(|_| None).collect();
-        let perms: Box<[u8]> = vec![0; PAGES].into_boxed_slice();
-        let space = Space {
-            pages: pages.try_into().unwrap_or_else(|_| unreachable!()),
-            perms: perms.try_into().unwrap_or_else(|_| unreachable!()),
-        };
-        GuestMemory { space: std::sync::Arc::new(SharedSpace(std::cell::UnsafeCell::new(space))) }
+        GuestMemory { space: std::sync::Arc::new(SharedSpace(std::cell::UnsafeCell::new(PageTable::default()))) }
     }
 }
 
@@ -334,6 +315,14 @@ impl Mem for GuestMemory {
             }
             k += n;
         }
+    }
+    /// The table itself: an access it allows (backed page, permission set)
+    /// is exactly what load/store do; READ and WRITE are only ever set on
+    /// mapped pages, lazy pages stay unbacked until their first write (the
+    /// fast path leaves those to store), and the table lives as long as any
+    /// handle to this address space and never moves.
+    fn page_table(&self) -> Option<std::ptr::NonNull<PageTable>> {
+        std::ptr::NonNull::new(self.space.0.get())
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").

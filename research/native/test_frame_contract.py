@@ -78,4 +78,86 @@ class FrameContractTests(unittest.TestCase):
             self.record('595a8be55d52c3')
 
 
+    def test_closed_frame_helper_keeps_the_caller_as_root(self):
+        # caller: push ebp; mov ebp,esp; push 8; call P; call M (mocked);
+        # mov esp,ebp; pop ebp; ret. P = PROLOG at 0x400100 (closed).
+        caller=bytes.fromhex('558bec6a08e8f6000000e8f10100008be55dc3')
+        image=bytearray(caller.ljust(0x1000,bytes([0xcc])))
+        prolog=bytes.fromhex(self.PROLOG)
+        image[0x100:0x100+len(prolog)]=prolog
+        image=bytes(image)
+        md=Cs(CS_ARCH_X86,CS_MODE_32)
+        body=[i.address for i in md.disasm(caller,0x400000)]
+        pbody=[i.address for i in md.disasm(prolog,0x400100)]
+        with (patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),
+              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),
+              patch.object(h,'static_pop',return_value=0)):
+            contract=h.frame_exit(0x400100,pbody)
+            run=lambda **kw:h.run_sparse(0x400000,7,body=body,end=0x400000+len(caller),
+                                         lifted=frozenset({0x400100}),input_strategy='small-v1',**kw)
+            with self.assertRaises(h.Rejected):
+                run()  # the prolog returns below the call's ESP: the caller looks nested
+            c=run(frame_contracts={0x400100:list(contract)})
+        self.assertEqual([e['target'] for e in c['calls']],[0x400200])
+        self.assertNotIn('stack_contract',c)
+
+
+    def test_noreturn_guard_exempts_only_the_root_entry(self):
+        # push ebp; mov ebp,esp; call 0x400100; pop ebp; ret
+        code=bytes.fromhex('558bece8f8000000 5dc3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda targets:h.run_sparse(0x400000,3,body=body,end=0x400000+len(code),noreturn_targets=targets)
+            self.assertEqual([e['target'] for e in run({0x400000})['calls']],[0x400100])
+            with self.assertRaisesRegex(h.Rejected,'noreturn target at 0x00400100'):
+                h.run_sparse(0x400000,3,body=body,end=0x400000+len(code),lifted={0x400100},
+                             noreturn_targets={0x400000,0x400100})
+
+
+    def memset_run(self, text):
+        code=bytes.fromhex(text.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.dict(h.PLATFORM,{0x400100:'memset'}),patch.object(h,'static_pop',return_value=0):
+            return h.run_sparse(0x400000,5,body=body,end=0x400000+len(code),input_strategy='small-v1')
+
+    def test_constant_model_sizes_get_their_own_budget(self):
+        # push 0x80000; push 0; push 0x30000000; call memset; add esp,12; ret
+        c=self.memset_run('6800000800 6a00 6800000030 e8ef000000 83c40c c3')
+        self.assertIn([0x30000000,'00'*0x80000],c['writes'])
+        # the same size from a register is an input: the ordinary 64 KB guard
+        with self.assertRaisesRegex(h.Rejected,'memset of 0x80000'):
+            self.memset_run('b800000800 50 6a00 6800000030 e8ee000000 83c40c c3')
+        # a constant slot overwritten (even with the same value) is no longer proven
+        with self.assertRaisesRegex(h.Rejected,'memset of 0x80000'):
+            self.memset_run('6800000800 c7042400000800 6a00 6800000030 e8e8000000 83c40c c3')
+
+
+    def test_cleanup_search_uses_the_decode_limit(self):
+        # 600 x `inc eax` then `ret 4`: past the old 512-instruction bound
+        code=bytes([0x40])*600+bytes.fromhex('c20400')
+        body,(p1,p2)=self.image(code)
+        with p1,p2:
+            self.assertEqual(h.static_pop(0x400000,limit=512),0)
+            self.assertEqual(h.static_pop(0x400000),4)
+
+
+    def test_terminal_cases_end_at_a_noreturn_call(self):
+        # push ebp; mov ebp,esp; push 1; call 0x400100 (a noreturn entry)
+        code=bytes.fromhex('558bec6a01e8f6000000')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda **kw:h.run_sparse(0x400000,9,body=body,end=0x400000+len(code),noreturn_sites={0x400005},
+                                         noreturn_targets={0x400100},**kw)
+            with self.assertRaisesRegex(h.Rejected,'noreturn call at 0x00400005'):
+                run()
+            c=run(terminal=True)
+            with self.assertRaisesRegex(h.Rejected,'noreturn target at 0x00400100'):
+                run(terminal=True,lifted={0x400100})  # a closed noreturn callee is not a terminal
+        self.assertTrue(c['terminal'])
+        esp=c['regs_in']['esp']-12
+        self.assertEqual(c['calls'],[dict(target=0x400100,regs=c['regs_out'],terminal=True)])
+        self.assertEqual(c['regs_out']['esp'],esp)
+        self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
+
+
 if __name__=='__main__':unittest.main()

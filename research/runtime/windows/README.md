@@ -38,7 +38,31 @@ Start-Process -Wait <out>\unmanifested.exe -ArgumentList <out>\unmanifested.txt
 DDDA.exe's, has no `supportedOS` entries: Windows then reports version 6.2
 (build 9200) to it, which is what the game sees.
 
+`NetProbe.cs` (brief L32) is the Winsock probe. It must run as a 32-bit
+console program in a fresh process (part A needs a process in which no
+module has called WSAStartup); it never sends a packet off the machine:
+
+```powershell
+$p = New-Object System.CodeDom.Compiler.CompilerParameters
+$p.GenerateExecutable = $true; $p.OutputAssembly = '<out>
+etprobe.exe'; $p.CompilerOptions = '/platform:x86'
+Add-Type -Path NetProbe.cs -CompilerParameters $p      # 64-bit PowerShell then fails to load it: harmless
+& <out>
+etprobe.exe <out>
+et.txt
+```
+
 `Vectors.cs` writes `utf8_decode.txt`, `wc_encode.txt` and `sortkeys.txt`
 (about 68,000 cases). Point `DDRUNTIME_WINDOWS_VECTORS` at that directory
 and `cargo test -p ddruntime --test runtime conversions_and_sort_keys`
 compares the runtime against all of them.
+
+`Imm.cs` (brief L43) must run in a 32-bit process, as the game is one:
+
+```powershell
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Add-Type -Path Imm.cs; [Imm]::Run('<out>\imm.txt')"
+```
+
+It makes a window like the game's and calls every IMM32 function the game
+imports with the game's arguments, then again with a NULL context.
+`crates/ddruntime/tests/imm32.rs` holds its answers.

@@ -7,7 +7,7 @@ use ddgpu::{PresentSink, Presented, WgpuBackend};
 use std::sync::{Arc, Mutex};
 
 fn back_buffer() -> Target {
-    Target { surface: 0x100, format: 21, width: 4, height: 4, texture: None, level: 0 }
+    Target { surface: 0x100, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// Read an RGBA8 texture back (rows top to bottom).

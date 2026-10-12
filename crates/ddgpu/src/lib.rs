@@ -262,6 +262,19 @@ struct Rt {
     height: u32,
 }
 
+/// The wgpu sample count of a target's D3DMULTISAMPLE_TYPE. The game asks
+/// for 2, 4 or 8 samples at quality 0 (the table at 0x01440450 through
+/// 0x011487C0, gated by the recorded driver's answers); NVIDIA's CSAA
+/// qualities and D3DMULTISAMPLE_NONMASKABLE have no wgpu equivalent.
+pub fn sample_count(t: &Target) -> Result<u32, String> {
+    match (t.samples, t.quality) {
+        (0, _) => Ok(1),
+        (n @ (2 | 4 | 8 | 16), 0) => Ok(n),
+        (1, q) => Err(format!("D3DMULTISAMPLE_NONMASKABLE (quality {q}) is not implemented")),
+        (n, q) => Err(format!("{n} samples at quality {q} (coverage sampling) is not implemented")),
+    }
+}
+
 /// A presented frame, read back (headless sessions and tests).
 #[derive(Clone, Debug)]
 pub struct Frame {
@@ -284,7 +297,7 @@ pub struct WgpuBackend {
     /// translated shaders by (shader hash, linked vertex shader hash, depth bias)
     modules: HashMap<(u64, u64, bool), (wgpu::ShaderModule, d3d9wgsl::Interface)>,
     samplers: HashMap<[u32; 14], wgpu::Sampler>,
-    blits: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    blits: HashMap<(wgpu::TextureFormat, u32), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// clears of part of a target, by (colour formats per slot, depth
     /// format, depth written, stencil written)
     clears: HashMap<ClearKey, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
@@ -682,7 +695,7 @@ impl WgpuBackend {
         if let Some(p) = self.clears.get(key) {
             return p.clone();
         }
-        let (colours, depth, write_depth, write_stencil) = key;
+        let (colours, depth, write_depth, write_stencil, samples) = key;
         let mut wgsl = String::from("struct P { c: array<vec4<f32>, 4>, z: vec4<f32> }\n@group(0) @binding(0) var<uniform> p: P;\n");
         wgsl.push_str("@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n  let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n  return vec4<f32>(c * vec2<f32>(4.0, -4.0) + vec2<f32>(-1.0, 1.0), p.z.x, 1.0);\n}\n");
         let slots: Vec<usize> = colours.iter().enumerate().filter(|(_, f)| f.is_some()).map(|(k, _)| k).collect();
@@ -719,7 +732,7 @@ impl WgpuBackend {
                 },
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: *samples, ..Default::default() },
             fragment: (!slots.is_empty()).then(|| wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &targets }),
             multiview_mask: None,
             cache: None,
@@ -739,7 +752,8 @@ impl WgpuBackend {
         let depth = if c.flags & 6 != 0 { c.depth.as_ref().and_then(|t| self.target_view(t, false)) } else { None };
         let write_stencil = c.flags & 4 != 0 && depth.as_ref().is_some_and(|(_, f)| f.has_stencil_aspect());
         let max_out = colour_views.iter().rposition(|v| v.is_some()).map(|p| p + 1).unwrap_or(0);
-        let key: ClearKey = (colour_views[..max_out].iter().map(|v| v.as_ref().map(|(_, f)| *f)).collect(), depth.as_ref().map(|(_, f)| *f), c.flags & 2 != 0, write_stencil);
+        let samples = c.targets.iter().flatten().chain(c.depth.iter()).next().map(sample_count).transpose().unwrap_or(None).unwrap_or(1);
+        let key: ClearKey = (colour_views[..max_out].iter().map(|v| v.as_ref().map(|(_, f)| *f)).collect(), depth.as_ref().map(|(_, f)| *f), c.flags & 2 != 0, write_stencil, samples);
         let (pipeline, layout) = self.clear_pipeline(&key);
         let mut p: Vec<u8> = Vec::new();
         for k in 0..4 {
@@ -783,8 +797,176 @@ impl WgpuBackend {
         self.queue.submit([enc.finish()]);
     }
 
-    fn blit_pipeline(&mut self, format: wgpu::TextureFormat) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
-        if let Some(p) = self.blits.get(&format) {
+    /// A multisampled colour texture resolved into a new single-sampled one
+    /// (a render pass that loads, stores and resolves; the multisampled
+    /// contents stay).
+    fn resolve_texture(&mut self, src: &wgpu::Texture, format: wgpu::TextureFormat, w: u32, h: u32) -> Result<wgpu::Texture, String> {
+        if format.is_depth_stencil_format() {
+            return Err("resolving a multisampled depth-stencil surface is not implemented".into());
+        }
+        let dst = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("resolve"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[format.add_srgb_suffix()],
+        });
+        // the D3D9 driver resolves 8-bit targets gamma-correctly: the
+        // samples averaged as linear light and encoded back to sRGB
+        // (measured: a quarter-covered white pixel resolves to 137, the sRGB
+        // encoding of 0.25; L31 tests/msaa.rs). Resolving through sRGB views
+        // does that; float targets resolve linearly, as the driver does
+        let gamma = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm);
+        let view_format = Some(if gamma { format.add_srgb_suffix() } else { format });
+        let sview = src.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
+        let dview = dst.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &sview, depth_slice: None, resolve_target: Some(&dview),
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+        }
+        self.queue.submit([enc.finish()]);
+        Ok(dst)
+    }
+
+    /// StretchRect between depth-stencil surfaces: the source's depth
+    /// written as frag_depth (stencil cleared to 0 in the same pass), then
+    /// one pass per stencil bit setting the bits the source has (wgpu has
+    /// no stencil export). Between equal sample counts every sample is
+    /// copied; to one sample, the sample `depth_copy_sample` names.
+    fn copy_depth(&mut self, src: &Target, dst: &Target) -> Result<(), String> {
+        if !(is_depth_format(src.format) && is_depth_format(dst.format)) {
+            return Err("between a depth-stencil and a colour surface".into());
+        }
+        if (src.width, src.height) != (dst.width, dst.height) || src.format != dst.format {
+            return Err("surfaces of different sizes or formats".into());
+        }
+        let (stex, _, _, sformat, _, _) = self.target_texture(src).ok_or("unknown source")?;
+        let (dtex, _, _, dformat, _, _) = self.target_texture(dst).ok_or("unknown destination")?;
+        let (ssamples, dsamples) = (stex.sample_count(), dtex.sample_count());
+        let stencil = sformat.has_stencil_aspect() && dformat.has_stencil_aspect();
+        let ms = ssamples > 1;
+        let depth_ty = if ms { "texture_depth_multisampled_2d" } else { "texture_depth_2d" };
+        let stencil_ty = if ms { "texture_multisampled_2d<u32>" } else { "texture_2d<u32>" };
+        // equal sample counts copy sample by sample (per-sample shading);
+        // to one sample, the driver's sample for the count
+        let level = if !ms {
+            "0".to_string()
+        } else if dsamples == ssamples {
+            "i32(si)".to_string()
+        } else if dsamples == 1 {
+            format!("{}", depth_copy_sample(ssamples).ok_or_else(|| format!("from {ssamples} samples"))?)
+        } else {
+            return Err(format!("from {ssamples} to {dsamples} samples"));
+        };
+        let si = if ms && dsamples == ssamples { ", @builtin(sample_index) si: u32" } else { "" };
+        let wgsl = format!(
+            "@group(0) @binding(0) var d: {depth_ty};\n@group(0) @binding(1) var st: {stencil_ty};\n\
+             struct P {{ bit: vec4<u32> }}\n@group(0) @binding(2) var<uniform> p: P;\n\
+             @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {{\n\
+               let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n\
+               return vec4<f32>(c * vec2<f32>(4.0, -4.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);\n}}\n\
+             @fragment fn depth_fs(@builtin(position) pos: vec4<f32>{si}) -> @builtin(frag_depth) f32 {{\n\
+               return textureLoad(d, vec2<i32>(pos.xy), {level});\n}}\n\
+             @fragment fn stencil_fs(@builtin(position) pos: vec4<f32>{si}) {{\n\
+               let v = textureLoad(st, vec2<i32>(pos.xy), {level}).r;\n\
+               if ((v & p.bit.x) == 0u) {{ discard; }}\n}}\n");
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("depth copy"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: ms }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Uint, view_dimension: wgpu::TextureViewDimension::D2, multisampled: ms }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let face = |op| wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: op, depth_fail_op: op, pass_op: op };
+        let pipeline = |entry: &str, write_depth: bool, write_mask: u32| self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("depth copy"),
+            layout: Some(&pl),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: dformat,
+                depth_write_enabled: Some(write_depth),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: if stencil {
+                    wgpu::StencilState { front: face(wgpu::StencilOperation::Replace), back: face(wgpu::StencilOperation::Replace), read_mask: 0xFF, write_mask }
+                } else {
+                    wgpu::StencilState::default()
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: dsamples, ..Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some(entry), compilation_options: Default::default(), targets: &[] }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let depth_pipe = pipeline("depth_fs", true, 0xFF);
+        let bit_pipes: Vec<wgpu::RenderPipeline> = if stencil { (0..8).map(|b| pipeline("stencil_fs", false, 1 << b)).collect() } else { vec![] };
+        let dview = stex.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::DepthOnly, ..Default::default() });
+        let sview = if sformat.has_stencil_aspect() {
+            stex.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::StencilOnly, ..Default::default() })
+        } else {
+            return Err("a depth format without stencil is not implemented".into());
+        };
+        let groups: Vec<wgpu::BindGroup> = (0..9u32).map(|k| {
+            let bit: u32 = if k == 0 { 0 } else { 1 << (k - 1) };
+            let mut bytes = Vec::new();
+            for v in [bit, 0, 0, 0] {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            self.queue.write_buffer(&buf, 0, &bytes);
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&dview) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&sview) },
+                    wgpu::BindGroupEntry { binding: 2, resource: buf.as_entire_binding() },
+                ],
+            })
+        }).collect();
+        let target = dtex.create_view(&Default::default());
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("depth copy"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: dformat.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                }),
+                timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+            pass.set_pipeline(&depth_pipe);
+            pass.set_bind_group(0, &groups[0], &[]);
+            pass.set_stencil_reference(0);
+            pass.draw(0..3, 0..1);
+            pass.set_stencil_reference(0xFF);
+            for (b, p) in bit_pipes.iter().enumerate() {
+                pass.set_pipeline(p);
+                pass.set_bind_group(0, &groups[b + 1], &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit([enc.finish()]);
+        Ok(())
+    }
+
+    fn blit_pipeline(&mut self, format: wgpu::TextureFormat, samples: u32) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        if let Some(p) = self.blits.get(&(format, samples)) {
             return p.clone();
         }
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT.into()) });
@@ -803,12 +985,12 @@ impl WgpuBackend {
             vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
             fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             multiview_mask: None,
             cache: None,
         });
-        self.blits.insert(format, (pipeline.clone(), layout.clone()));
+        self.blits.insert((format, samples), (pipeline.clone(), layout.clone()));
         (pipeline, layout)
     }
 
@@ -817,7 +999,7 @@ impl WgpuBackend {
     #[allow(clippy::too_many_arguments)]
     fn blit(&mut self, dst: &Target, rect: [i32; 4], src: Option<(&wgpu::TextureView, [f32; 4], bool)>, colour: [f32; 4]) -> Result<(), String> {
         let (dtex, level, layer, format, w, h) = self.target_texture(dst).ok_or("unknown destination")?;
-        let (pipeline, layout) = self.blit_pipeline(format);
+        let (pipeline, layout) = self.blit_pipeline(format, sample_count(dst)?);
         let view = dtex.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: level, mip_level_count: Some(1),
             base_array_layer: layer, array_layer_count: Some(1), ..Default::default()
@@ -899,16 +1081,24 @@ impl WgpuBackend {
                 wgpu::TextureFormat::Rgba8Unorm => vec![wgpu::TextureFormat::Rgba8UnormSrgb],
                 _ => vec![],
             };
-            // a format the adapter cannot render to is refused (None)
+            // a format the adapter cannot render to (or not at this sample
+            // count) is refused (None); multisampled textures cannot be
+            // copied in WebGPU, they are resolved (StretchRect)
+            let samples = sample_count(t).ok()?;
+            let usage = if samples > 1 {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING
+            };
             let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count: samples,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage,
                 view_formats: &srgb_view,
             });
             if block_on(scope.pop()).is_some() {
@@ -1117,6 +1307,17 @@ impl WgpuBackend {
             Some(t) if z_on || state(52) != 0 => self.cached_target_view(t, false),
             _ => None,
         };
+        // every attachment has the same sample count (D3D9 requires the
+        // render targets and the depth-stencil to share a multisample type)
+        let used: Vec<&Target> = d.targets.iter().zip(&colour).filter_map(|(t, c)| c.as_ref().and(t.as_ref()))
+            .chain(d.depth.as_ref().filter(|_| depth.is_some())).collect();
+        let samples = match used.first() {
+            Some(t) => sample_count(t)?,
+            None => 1,
+        };
+        if used.iter().any(|t| sample_count(t).ok() != Some(samples)) {
+            return Err("the render targets and the depth-stencil surface have different multisample types".into());
+        }
         // pipeline state
         // D3D9 ignores the factors of MIN/MAX blending; wgpu wants them One
         let component = |src: u32, dst: u32, op: u32| {
@@ -1235,6 +1436,9 @@ impl WgpuBackend {
             polygon_mode,
             targets,
             depth: depth_state,
+            samples,
+            // D3DRS_MULTISAMPLEMASK: the samples a draw may write
+            sample_mask: if samples > 1 { state(162) } else { !0 },
         };
         let pipeline = match self.pipelines.get(&key) {
             Some(p) => p.clone(),
@@ -1261,7 +1465,7 @@ impl WgpuBackend {
                     vertex: wgpu::VertexState { module: &vs_module, entry_point: Some("main"), compilation_options: Default::default(), buffers: &layouts },
                     primitive: wgpu::PrimitiveState { topology, front_face: wgpu::FrontFace::Cw, cull_mode: cull, polygon_mode, ..Default::default() },
                     depth_stencil: key.depth.clone(),
-                    multisample: wgpu::MultisampleState::default(),
+                    multisample: wgpu::MultisampleState { count: key.samples, mask: key.sample_mask as u64, alpha_to_coverage_enabled: false },
                     fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &key.targets }),
                     multiview_mask: None,
                     cache: None,
@@ -1611,9 +1815,29 @@ fn half_toward_zero(v: f32) -> f64 {
     f32::from_bits(b & !((1u32 << drop) - 1)) as f64
 }
 
+/// The sample a depth-stencil StretchRect from a multisampled source to a
+/// single-sampled destination copies, by sample count: measured on the
+/// D3D9 driver (L31 tests/msaa.rs depth_stencil_copies_match_the_d3d9_driver;
+/// in the standard sample positions, which the driver's multisampled draws
+/// match, these are the bottom-most samples).
+fn depth_copy_sample(samples: u32) -> Option<u32> {
+    match samples {
+        2 => Some(0),
+        4 => Some(3),
+        8 => Some(6),
+        _ => None,
+    }
+}
+
+/// D3DFMT depth-stencil formats (D16_LOCKABLE..D24FS8) and the vendor
+/// depth FOURCCs the backend maps.
+fn is_depth_format(f: u32) -> bool {
+    matches!(f, 70..=83) || f == fourcc(b"INTZ") || f == fourcc(b"DF24") || f == fourcc(b"DF16")
+}
+
 /// A partial clear's pipeline key: colour formats per slot, depth format,
-/// depth written, stencil written.
-type ClearKey = (Vec<Option<wgpu::TextureFormat>>, Option<wgpu::TextureFormat>, bool, bool);
+/// depth written, stencil written, sample count.
+type ClearKey = (Vec<Option<wgpu::TextureFormat>>, Option<wgpu::TextureFormat>, bool, bool, u32);
 
 /// The rectangles (left, top, right, bottom) a Clear covers in a target of
 /// `size`: the viewport, each of `rects` within it (none: the viewport),
@@ -1639,17 +1863,38 @@ fn rect_or_full(r: [i32; 4], w: u32, h: u32) -> [i32; 4] {
 impl GraphicsBackend for WgpuBackend {
     fn copy(&mut self, c: &CopyCall) {
         self.flush();
-        let Some((stex, slevel, slayer, sformat, sw, sh)) = self.target_texture(&c.src) else {
+        // depth-stencil to depth-stencil (D3D9: whole surfaces, outside a
+        // scene): drawn, since WebGPU cannot copy depth-stencil textures
+        if is_depth_format(c.src.format) || is_depth_format(c.dst.format) {
+            if let Err(e) = self.copy_depth(&c.src, &c.dst) {
+                self.errors.push(format!("StretchRect (depth-stencil): {e}"));
+            }
+            return;
+        }
+        let Some((mut stex, slevel, slayer, sformat, sw, sh)) = self.target_texture(&c.src) else {
             self.errors.push("StretchRect from an unknown surface".into());
             return;
         };
+        // a multisampled source is resolved (the samples of each pixel
+        // averaged by the GPU's resolve) into a single-sampled texture of
+        // its size, which is then copied like any other source
+        if stex.sample_count() > 1 {
+            match self.resolve_texture(&stex, sformat, sw, sh) {
+                Ok(t) => stex = t,
+                Err(e) => {
+                    self.errors.push(format!("StretchRect: {e}"));
+                    return;
+                }
+            }
+        }
         let Some((dtex, dlevel, dlayer, dformat, dw, dh)) = self.target_texture(&c.dst) else {
             self.errors.push("StretchRect to an unknown surface".into());
             return;
         };
         let (sr, dr) = (rect_or_full(c.src_rect, sw, sh), rect_or_full(c.dst_rect, dw, dh));
         let same_size = sr[2] - sr[0] == dr[2] - dr[0] && sr[3] - sr[1] == dr[3] - dr[1];
-        if same_size && sformat == dformat && sr[0] >= 0 && sr[1] >= 0 && dr[0] >= 0 && dr[1] >= 0 {
+        // (a multisampled destination is drawn into: WebGPU copies need one sample)
+        if same_size && sformat == dformat && dtex.sample_count() == 1 && sr[0] >= 0 && sr[1] >= 0 && dr[0] >= 0 && dr[1] >= 0 {
             let mut enc = self.device.create_command_encoder(&Default::default());
             enc.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo { texture: &stex, mip_level: slevel, origin: wgpu::Origin3d { x: sr[0] as u32, y: sr[1] as u32, z: slayer }, aspect: wgpu::TextureAspect::All },
@@ -1680,6 +1925,11 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn read_back(&mut self, t: &Target) -> Option<Vec<u8>> {
+        // D3D9 cannot read a multisampled target back (GetRenderTargetData
+        // fails; it is resolved with StretchRect first)
+        if t.samples != 0 {
+            return None;
+        }
         self.flush();
         let (tex, level, layer, format, w, h) = self.target_texture(t)?;
         let bpp = format.block_copy_size(None)?;

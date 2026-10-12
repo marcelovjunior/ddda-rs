@@ -1023,8 +1023,22 @@ def cpu_arm(arm):
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
     fields.update({r: f"cpu.xmm[{i}]" for i, r in enumerate(XMM)})
-    return re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
-                  lambda m: fields.get(m[0], m[0]), arm)
+    arm = re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
+                 lambda m: fields.get(m[0], m[0]), arm)
+    return fast_memory(arm)
+
+
+# The six Mem accessors the templates emit, lowered to the inline fast path
+# on `dyn Mem` (ddnative-base mem.rs): `pt` is the page table read once at
+# function entry (rust_fn); with None (fixtures, Sparse) each one makes the
+# same trait call as before.
+MEM_ACCESS = re.compile(r'"(?:\\.|[^"\\])*"|\bm\.(u8|u16|u32|set_u8|set_u16|set_u32)\(')
+
+
+def fast_memory(arm):
+    """Lower `m.u32(a)` to `m.fast_u32(pt, a)` (all six accessors), leaving
+    Rust strings untouched. Gen-time only: cached arms keep `m.u32`."""
+    return MEM_ACCESS.sub(lambda m: f"m.fast_{m[1]}(pt, " if m[1] else m[0], arm)
 
 
 def straight_line(addr, arms):
@@ -1044,6 +1058,8 @@ def rust_fn(addr, name, arms):
     header = [
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",
+        # the page table behind m (a Copy pointer, valid for the whole call)
+        "    let pt = m.page_table();",
     ]
     traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
@@ -1246,6 +1262,7 @@ if __name__ == "__main__":
 
 
 _CLOSED = frozenset()
+_FRAMES = {}
 
 
 def vector_key(f):
@@ -1259,9 +1276,9 @@ def vector_key(f):
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
-def _init_worker(closed):
-    global _CLOSED
-    _CLOSED = frozenset(closed)
+def _init_worker(closed, frames=None):
+    global _CLOSED, _FRAMES
+    _CLOSED, _FRAMES = frozenset(closed), dict(frames or {})
 
 
 def _vectors_for(args):
@@ -1278,6 +1295,8 @@ def _vectors_for(args):
         inputs['original_entry'] = True
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
+    if _FRAMES:
+        inputs['frame_contracts'] = _FRAMES  # caller-frame exits of closed callees
     out, got, seed = [], 0, 0
     # a time budget per function: loops over random counts of random
     # pointers can take minutes per seed and never give a vector
@@ -1358,7 +1377,8 @@ def vectors(per=3):
     log = open(prog, "a")
     # a worker is replaced after 8 functions: some functions leave hundreds of
     # MB of Unicorn state behind that gc does not free (workers reached 3 GB)
-    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,),
+    frames = {f["addr"]: f["frame_exit"] for f in lifted if not f.get("ext") and f.get("frame_exit")}
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed, frames),
               maxtasksperchild=8) as pool:
         for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=1)):
             cases += out
@@ -1411,110 +1431,9 @@ def shard_fn(f):
     return CALLEE.sub(target, rust_fn(f["addr"], f["name"], f["arms"]))
 
 
-def wired_ports():
-    """Addresses in the PORTS table of crates/mtmath/src/abi.rs: verified
-    readable ports that replace their lifted bodies (L24, docs/MATH.md)."""
-    path = os.path.join(R, "crates/mtmath/src/abi.rs")
-    if not os.path.exists(path):
-        return set()
-    text = open(path, encoding="utf-8").read()
-    return {int(a, 16) for a in re.findall(r"\(0x[0-9A-Fa-f_]+, f_([0-9a-f]{8}), 0b[01_]+\)", text)}
-
-
-def wired_lines(selected, ported, chunk):
-    """The mod.rs lines that put the mtmath ports over a shard's lifted
-    bodies (explicit imports shadow the lifted_NNN globs) and keep each
-    lifted body as replaced::f_X."""
-    mine = [(f["addr"], f"lifted_{k // chunk:03}") for k, f in enumerate(selected) if f["addr"] in ported]
-    text = "".join(f"pub use mtmath::abi::f_{a:08x};\n" for a, _ in mine)
-    if mine:
-        text += "/// The lifted bodies of the functions mtmath replaces.\npub mod replaced {\n"
-        text += "".join(f"    pub use super::{m}::f_{a:08x};\n" for a, m in mine)
-        text += "}\n"
-    return text
-
-
-def gen(chunk=400):
-    from pathlib import Path
-    lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
-    addresses = {f["addr"] for f in lifted}
-    if len(addresses) != len(lifted):
-        raise ValueError("duplicate lifted address")
-    for f in lifted:
-        missing = set(callees(f["arms"])) - addresses
-        if missing:
-            raise ValueError(f"0x{f['addr']:08X}: missing lifted callees {sorted(missing)}")
-    out_dir = os.path.join(R, "crates/ddnative/src/generated")
-    ported = wired_ports()
-    if ported - addresses:
-        raise ValueError(f"mtmath ports without a lifted body: {sorted(hex(a) for a in ported - addresses)}")
-    mods = []
-    for index in range(SHARDS):
-        selected = [f for f in lifted if shard(f["addr"]) == index]
-        folder = os.path.join(R, f"crates/ddlift/lift_{index:02}/src")
-        names = []
-        for k in range(0, len(selected), chunk):
-            name = f"lifted_{k // chunk:03}"
-            names.append(name)
-            lines = ["//! Generated by research/native/lift.py: do not edit.",
-                     "#![allow(warnings, clippy::all)]",
-                     "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
-            lines += [shard_fn(f) for f in selected[k:k + chunk]]
-            write_changed(os.path.join(folder, "generated", name + ".rs"), "\n".join(lines))
-        mods += names
-        index_text = "//! Generated by research/native/lift.py: do not edit.\n"
-        index_text += "use crate::x86::LiftFn;\n"
-        index_text += "".join(f"mod {name}; pub use {name}::*;\n" for name in names)
-        # Verified readable ports (crates/mtmath, L24) replace their lifted
-        # bodies: an explicit import shadows the glob above, so intra-shard
-        # calls, FUNCTIONS and lookup() all reach the port. The lifted body
-        # stays reachable as replaced::f_X (benchmarks, tests).
-        index_text += wired_lines(selected, ported, chunk)
-        # Cached intra-shard calls retain their original super::lifted path.
-        index_text += "mod lifted { pub use super::*; }\n"
-        index_text += "pub const FUNCTIONS: &[(u32, LiftFn)] = &[\n"
-        index_text += "".join(f"(0x{f['addr']:08X}, f_{f['addr']:08x}),\n" for f in selected)
-        index_text += "];\npub fn lookup(addr: u32) -> Option<LiftFn> {\n"
-        index_text += "    FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)\n}\n"
-        write_changed(os.path.join(folder, "generated", "mod.rs"), index_text)
-        # Remove obsolete generated modules, never unrelated source files.
-        for old in Path(folder, "generated").glob("lifted_*.rs"):
-            if old.stem not in names:
-                old.unlink()
-    mod_path = os.path.join(out_dir, "mod.rs")
-    mod = Path(mod_path).read_text().splitlines()
-    mod = [l for l in mod if not l.startswith("pub mod lifted_")]
-    if "pub mod lifted;" not in mod:
-        mod.append("pub mod lifted;")
-    write_changed(mod_path, "\n".join(mod) + "\n")
-    # Old monolithic files are not compiled or scanned by the inventory.
-    for old in Path(out_dir).glob("lifted_*.rs"):
-        old.unlink()
-    lookup = "//! Generated facade: initialization, legacy entry points and lookup.\n"
-    lookup += "use crate::mem::Mem;\nuse crate::x86::{self, Cpu, LiftFn};\n"
-    lookup += "fn lookup(addr: u32) -> Option<LiftFn> { match (addr >> 20) % 16 {\n"
-    lookup += "".join(f"{i} => ddlift_{i:02}::lookup(addr),\n" for i in range(SHARDS))
-    lookup += "_ => unreachable!(), } }\n"
-    lookup += "pub fn init() { x86::set_lifted_lookup(lookup); }\n"
-    # Preserve public f_ADDRESS entry points, including callers that do not
-    # use all()/dispatch_table(). Raw shard entry points require init().
-    for f in lifted:
-        name = f"f_{f['addr']:08x}"
-        lookup += f"pub fn {name}(m: &mut dyn Mem, cpu: &mut Cpu) {{ init(); ddlift_{shard(f['addr']):02}::{name}(m, cpu); }}\n"
-    lookup += "pub fn all() -> Vec<(u32, LiftFn)> { init(); let mut v = Vec::new();\n"
-    lookup += "".join(f"v.extend_from_slice(ddlift_{i:02}::FUNCTIONS);\n" for i in range(SHARDS))
-    lookup += "v.sort_unstable_by_key(|e| e.0); v }\n"
-    lookup += "/// External-call functions stay mocked at indirect boundaries.\n"
-    lookup += "pub const EXT: &[u32] = &[" + ", ".join(f"0x{f['addr']:08X}" for f in lifted if f.get("ext")) + "];\n"
-    lookup += "pub fn dispatch_table() -> std::collections::HashMap<u32, LiftFn> {\n"
-    lookup += "let ext: std::collections::HashSet<u32> = EXT.iter().copied().collect();\n"
-    lookup += "let mut t: std::collections::HashMap<u32, LiftFn> = all().into_iter().filter(|(a, _)| !ext.contains(a)).collect();\n"
-    lookup += "for &(a, _, f) in crate::platform::MODELS { t.insert(a, f); } t }\n"
-    write_changed(os.path.join(out_dir, "lifted.rs"), lookup)
-    # the test declares every address it verifies, 16 per line
-    addrs = [f"0x{f['addr']:08X}" for f in lifted]
-    decl = "\n".join("// verifies " + " ".join(addrs[i:i + 16]) for i in range(0, len(addrs), 16))
-    test = f'''//! Generated by research/native/lift.py: do not edit.
+def lifted_test_source(decl):
+    """crates/ddnative/tests/lifted.rs: the required-vector replay test."""
+    return f'''//! Generated by research/native/lift.py: do not edit.
 use ddnative::generated::lifted;
 use ddnative::mem::Sparse;
 use ddnative::mem::Mem;
@@ -1538,6 +1457,10 @@ fn u(v: &Value) -> u32 {{ v.as_u64().unwrap() as u32 }}
 
 type Dispatch = std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)>;
 
+/// State at a terminal call (harness.run_sparse terminal-v1): the case ends
+/// at a noreturn callee's entry.
+struct Terminal {{ exit: x86::Exit, control: u32, depth: u32, ext: Option<(u64, u16)> }}
+
 /// Replays the calls to untranslated code a vector recorded: checks the
 /// target and every register at the call, then returns what the mock did.
 fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::ExtCall> {{
@@ -1552,6 +1475,11 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
         let r = &ev["regs"];
         assert_eq!([cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi],
                    ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&r[k])), "registers at the call");
+        if ev.get("terminal").and_then(|v| v.as_bool()) == Some(true) {{
+            // the original never returns from here: end the case (no panic hook)
+            std::panic::resume_unwind(Box::new(Terminal {{ exit: cpu.exit(), control: cpu.st.control() as u32,
+                depth: cpu.st.depth(), ext: cpu.st.top_extended() }}));
+        }}
         let ret = m.u32(cpu.esp);
         let _ = ret;
         let o = &ev["out"];
@@ -1604,6 +1532,16 @@ fn every_lifted_function_matches_the_original() {{
             }}
             cpu.exit()
         }}));
+        // a terminal case ends at its recorded noreturn call, with that state
+        let result = match result {{
+            Err(e) if c.get("terminal").is_some() && e.is::<Terminal>() => {{
+                let t = e.downcast::<Terminal>().unwrap();
+                let x87 = c.get("x87_control").is_none() || (t.control == u(&c["x87_control"]) && t.depth == u(&c["x87_depth"])
+                    && t.ext == c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16)));
+                if x87 {{ Ok(t.exit) }} else {{ Err(Box::new("terminal x87 state") as Box<dyn std::any::Any + Send>) }}
+            }}
+            r => r,
+        }};
         let all_calls_made = calls.borrow().is_empty();
         let ok = match result {{
             Err(e) => {{
@@ -1645,6 +1583,122 @@ fn every_lifted_function_matches_the_original() {{
     assert_eq!(seen.len(), all.len(), "every lifted function has vectors");
 }}
 '''
+# Crates whose abi.rs PORTS table lists verified readable ports that replace
+# their lifted bodies (docs/MATH.md, docs/CORE.md, docs/FRAME_RATE.md).
+PORT_CRATES = ("mtmath", "mtcore", "mtframe")
+
+
+def wired_ports():
+    """{address: crate} for every address in a PORT_CRATES PORTS table."""
+    ported = {}
+    for crate in PORT_CRATES:
+        path = os.path.join(R, f"crates/{crate}/src/abi.rs")
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for a in re.findall(r"\(0x[0-9A-Fa-f_]+, f_([0-9a-f]{8}), 0b[01_]+\)", text):
+            addr = int(a, 16)
+            if addr in ported:
+                raise ValueError(f"0x{addr:08X} is ported by both {ported[addr]} and {crate}")
+            ported[addr] = crate
+    return ported
+
+
+def wired_lines(selected, ported, chunk):
+    """The mod.rs lines that put the readable ports over a shard's lifted
+    bodies (explicit imports shadow the lifted_NNN globs) and keep each
+    lifted body as replaced::f_X."""
+    mine = [(f["addr"], f"lifted_{k // chunk:03}") for k, f in enumerate(selected) if f["addr"] in ported]
+    text = "".join(f"pub use {ported[a]}::abi::f_{a:08x};\n" for a, _ in mine)
+    if mine:
+        text += "/// The lifted bodies of the functions the readable ports replace.\npub mod replaced {\n"
+        text += "".join(f"    pub use super::{m}::f_{a:08x};\n" for a, m in mine)
+        text += "}\n"
+    return text
+
+
+def gen(chunk=400):
+    from pathlib import Path
+    lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
+    addresses = {f["addr"] for f in lifted}
+    if len(addresses) != len(lifted):
+        raise ValueError("duplicate lifted address")
+    for f in lifted:
+        missing = set(callees(f["arms"])) - addresses
+        if missing:
+            raise ValueError(f"0x{f['addr']:08X}: missing lifted callees {sorted(missing)}")
+    out_dir = os.path.join(R, "crates/ddnative/src/generated")
+    ported = wired_ports()
+    if set(ported) - addresses:
+        raise ValueError(f"ports without a lifted body: {sorted(hex(a) for a in set(ported) - addresses)}")
+    mods = []
+    for index in range(SHARDS):
+        selected = [f for f in lifted if shard(f["addr"]) == index]
+        folder = os.path.join(R, f"crates/ddlift/lift_{index:02}/src")
+        names = []
+        for k in range(0, len(selected), chunk):
+            name = f"lifted_{k // chunk:03}"
+            names.append(name)
+            lines = ["//! Generated by research/native/lift.py: do not edit.",
+                     "#![allow(warnings, clippy::all)]",
+                     "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
+            lines += [shard_fn(f) for f in selected[k:k + chunk]]
+            write_changed(os.path.join(folder, "generated", name + ".rs"), "\n".join(lines))
+        mods += names
+        index_text = "//! Generated by research/native/lift.py: do not edit.\n"
+        index_text += "use crate::x86::LiftFn;\n"
+        index_text += "".join(f"mod {name}; pub use {name}::*;\n" for name in names)
+        # Verified readable ports (crates/mtmath, mtcore, mtframe) replace their lifted
+        # bodies: an explicit import shadows the glob above, so intra-shard
+        # calls, FUNCTIONS and lookup() all reach the port. The lifted body
+        # stays reachable as replaced::f_X (benchmarks, tests).
+        index_text += wired_lines(selected, ported, chunk)
+        # Cached intra-shard calls retain their original super::lifted path.
+        index_text += "mod lifted { pub use super::*; }\n"
+        index_text += "pub const FUNCTIONS: &[(u32, LiftFn)] = &[\n"
+        index_text += "".join(f"(0x{f['addr']:08X}, f_{f['addr']:08x}),\n" for f in selected)
+        index_text += "];\npub fn lookup(addr: u32) -> Option<LiftFn> {\n"
+        index_text += "    FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)\n}\n"
+        write_changed(os.path.join(folder, "generated", "mod.rs"), index_text)
+        # Remove obsolete generated modules, never unrelated source files.
+        for old in Path(folder, "generated").glob("lifted_*.rs"):
+            if old.stem not in names:
+                old.unlink()
+    mod_path = os.path.join(out_dir, "mod.rs")
+    mod = Path(mod_path).read_text().splitlines()
+    mod = [l for l in mod if not l.startswith("pub mod lifted_")]
+    if "pub mod lifted;" not in mod:
+        mod.append("pub mod lifted;")
+    write_changed(mod_path, "\n".join(mod) + "\n")
+    # Old monolithic files are not compiled or scanned by the inventory.
+    for old in Path(out_dir).glob("lifted_*.rs"):
+        old.unlink()
+    lookup = "//! Generated facade: initialization, legacy entry points and lookup.\n"
+    lookup += "use crate::mem::Mem;\nuse crate::x86::{self, Cpu, LiftFn};\n"
+    lookup += "fn lookup(addr: u32) -> Option<LiftFn> { match (addr >> 20) % 16 {\n"
+    lookup += "".join(f"{i} => ddlift_{i:02}::lookup(addr),\n" for i in range(SHARDS))
+    lookup += "_ => unreachable!(), } }\n"
+    lookup += "pub fn init() { x86::set_lifted_lookup(lookup); }\n"
+    # Preserve public f_ADDRESS entry points, including callers that do not
+    # use all()/dispatch_table(). Raw shard entry points require init().
+    for f in lifted:
+        name = f"f_{f['addr']:08x}"
+        lookup += f"pub fn {name}(m: &mut dyn Mem, cpu: &mut Cpu) {{ init(); ddlift_{shard(f['addr']):02}::{name}(m, cpu); }}\n"
+    lookup += "pub fn all() -> Vec<(u32, LiftFn)> { init(); let mut v = Vec::new();\n"
+    lookup += "".join(f"v.extend_from_slice(ddlift_{i:02}::FUNCTIONS);\n" for i in range(SHARDS))
+    lookup += "v.sort_unstable_by_key(|e| e.0); v }\n"
+    lookup += "/// External-call functions stay mocked at indirect boundaries.\n"
+    lookup += "pub const EXT: &[u32] = &[" + ", ".join(f"0x{f['addr']:08X}" for f in lifted if f.get("ext")) + "];\n"
+    lookup += "pub fn dispatch_table() -> std::collections::HashMap<u32, LiftFn> {\n"
+    lookup += "let ext: std::collections::HashSet<u32> = EXT.iter().copied().collect();\n"
+    lookup += "let mut t: std::collections::HashMap<u32, LiftFn> = all().into_iter().filter(|(a, _)| !ext.contains(a)).collect();\n"
+    lookup += "for &(a, _, f) in crate::platform::MODELS { t.insert(a, f); } t }\n"
+    write_changed(os.path.join(out_dir, "lifted.rs"), lookup)
+    # the test declares every address it verifies, 16 per line
+    addrs = [f"0x{f['addr']:08X}" for f in lifted]
+    decl = "\n".join("// verifies " + " ".join(addrs[i:i + 16]) for i in range(0, len(addrs), 16))
+    test = lifted_test_source(decl)
     write_changed(os.path.join(R, "crates/ddnative/tests/lifted.rs"), test)
     print(len(lifted), "functions generated in", len(mods), "modules across", SHARDS, "crates")
 

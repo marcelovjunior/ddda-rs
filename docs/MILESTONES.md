@@ -1,5 +1,16 @@
 # Milestones
 
+L27 runtime SEH batch (2026-10-11): read-only census identifies 42 EH4
+registrations / 48 scope records, seven C++ FuncInfo thunks and five throw
+sites. Per-thread TEBs, software exception search/nesting and target-frame
+unwind are implemented; Windows x86 oracle confirms layout, handler order,
+nested flags, modified divide context and unwind behavior. All 70 runtime
+tests pass (14 SEH regressions, including the original `_except_handler4`;
+three existing install-dependent tests ignored). Blocker: generated instruction EIP and
+nonlocal continuation are absent, so hardware-fault delivery and original
+__except transfers remain incomplete. Next action: route the executor
+contract in [L27 Results](tasks/L27-seh-dispatch.md#results) to the lifter lane.
+
 **Current focus (2026-10-09): the opening slice.** M5 is now a vertical
 slice from the new game to the Encampment, played in co-op; see
 [OPENING_SLICE.md](OPENING_SLICE.md). Other systems advance only where the

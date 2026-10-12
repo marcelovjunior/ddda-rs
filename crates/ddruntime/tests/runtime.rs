@@ -292,7 +292,8 @@ fn direct3d_create9_and_a_com_call_through_its_vtable() {
     let mode = 0x7EFF_0000; // a scratch spot on the session stack
     let ddruntime::session::Outcome::Returned(cpu) = s.call(get_mode, 0, &[d3d, 0, mode]) else { panic!("GetAdapterDisplayMode") };
     assert_eq!(cpu.eax, 0, "D3D_OK");
-    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [1920, 1080, 60, 22]);
+    let d = ddruntime::d3d9::display().desktop; // the host's desktop (L34)
+    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [d.width, d.height, d.refresh, 22]);
     assert_eq!(cpu.esp, ddruntime::session::STACK_TOP - 0x100, "stdcall: this + 2 arguments popped");
 }
 
@@ -369,8 +370,8 @@ fn a_window_gets_windows_creation_show_and_paint_messages_in_order() {
     assert_eq!(messages(), [0x81, 0x01], "WM_NCCREATE, WM_CREATE");
 
     assert_eq!(call_service(user32::show_window, &mut m, &[hwnd, 1]).eax, 0, "was hidden");
-    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x07, 0x47, 0x05, 0x03],
-               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
+    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x281, 0x282, 0x07, 0x47, 0x05, 0x03],
+               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, IME_SETCONTEXT, IME_NOTIFY (L43), SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
     call_service(user32::update_window, &mut m, &[hwnd]);
     assert_eq!(messages(), [0x0F], "WM_PAINT");
     call_service(user32::update_window, &mut m, &[hwnd]);
@@ -1415,15 +1416,25 @@ fn version_checks_answer_as_windows_does_for_an_exe_without_supported_os() {
 #[test]
 fn debug_break_and_raise_exception_stop_with_a_report() {
     let mut m = guest();
-    let msg = stops(system::debug_break, &mut m, &[]);
-    assert!(msg.contains("DebugBreak called from 0x00405678"), "{msg}");
+    ddruntime::runtime::enter(std::sync::Arc::new(ddruntime::runtime::Runtime::default()));
+    let fs = ddruntime::seh::initialize_teb(&mut m, services::MAIN_THREAD_ID, 0x0010_0000, 0x0011_0000);
+    let stop = |m: &mut GuestMemory, f: fn(&mut dyn Mem, &mut Cpu), args: &[u32]| {
+        let mut cpu = Cpu { esp: 0x0011_0000, fs_base: fs, ..Cpu::default() };
+        for &a in args.iter().rev() { cpu.esp -= 4; m.set_u32(cpu.esp, a); }
+        cpu.esp -= 4; m.set_u32(cpu.esp, 0x0040_5678);
+        let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(m, &mut cpu))).expect_err("unhandled exception must stop");
+        e.downcast::<ddruntime::seh::Stop>().expect("structured SEH report")
+    };
+    assert_eq!(*stop(&mut m, system::debug_break, &[]), ddruntime::seh::Stop::Unhandled {
+        code: 0x8000_0003, address: 0x0040_5678, flags: 0, parameters: vec![],
+    });
     let args = 0x0030_0000;
     for (k, v) in [0x1993_0520u32, 0x0012_3456, 0x0140_0000].into_iter().enumerate() {
         m.set_u32(args + 4 * k as u32, v);
     }
-    let msg = stops(system::raise_exception, &mut m, &[0xE06D_7363, 1, 3, args]);
-    assert!(msg.contains("code 0xe06d7363 (a C++ exception, msc), flags 0x1, arguments [0x19930520, 0x123456, 0x1400000]"), "{msg}");
-    assert!(msg.contains("from 0x00405678"), "{msg}");
+    assert_eq!(*stop(&mut m, system::raise_exception, &[0xE06D_7363, 1, 3, args]), ddruntime::seh::Stop::Unhandled {
+        code: 0xE06D_7363, address: 0x0040_5678, flags: 1, parameters: vec![0x1993_0520, 0x0012_3456, 0x0140_0000],
+    });
 }
 
 #[test]
@@ -1785,8 +1796,8 @@ fn every_guest_thread_gets_a_thread_information_block() {
     r.install();
     threads::set_machine(m.share(), r.clone());
     // the main thread's block, as Session::new sets it up
-    let main = threads::init_teb(&mut m, services::MAIN_THREAD_ID, 0x7F00_0000, 0x7EF0_0000);
-    assert_eq!(main, threads::TEBS_BASE);
+    let main = ddruntime::seh::initialize_teb(&mut m, services::MAIN_THREAD_ID, 0x7EF0_0000, 0x7F00_0000);
+    assert_eq!(main, ddruntime::seh::TEB_BASE);
     assert_eq!([m.u32(main), m.u32(main + 4), m.u32(main + 8), m.u32(main + 0x18)], [0xFFFF_FFFF, 0x7F00_0000, 0x7EF0_0000, main]);
     let mut cpu = Cpu { esp: 0x0011_0000, ..Cpu::default() };
     let tid_out = 0x0030_0200;
@@ -1794,7 +1805,8 @@ fn every_guest_thread_gets_a_thread_information_block() {
     assert_eq!(call_from_guest(&mut m, &mut cpu, threads::wait_for_single_object, &[h, threads::INFINITE]), threads::WAIT_OBJECT_0);
     let tid = m.u32(tid_out);
     let got: Vec<u32> = (0..6).map(|k| m.u32(0x0030_0400 + 4 * k)).collect();
-    let teb = threads::teb_of(tid);
+    let teb = got[0];
+    assert_eq!(teb, ddruntime::seh::TEB_BASE + 0x1000 * ((tid - services::MAIN_THREAD_ID) / 4), "its own page");
     assert_ne!(teb, main);
     assert_eq!(&got[..5], &[teb, 0xFFFF_FFFF, got[2], got[2] - 0x0010_0000, teb], "FS: ExceptionList end marker, 1 MB stack, Self");
     assert!(got[5] < got[2] && got[5] > got[3], "the thread runs on the stack its block describes");

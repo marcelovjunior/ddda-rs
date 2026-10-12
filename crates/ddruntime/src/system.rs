@@ -49,10 +49,6 @@ fn set_error(e: u32) {
     with_state(|s| s.last_error = e);
 }
 
-fn caller(m: &dyn Mem, cpu: &Cpu) -> u32 {
-    m.u32(cpu.esp)
-}
-
 // --- time ---------------------------------------------------------------
 
 /// The runtime's time zone: Coordinated Universal Time, fixed, so the
@@ -611,37 +607,18 @@ pub fn verify_version_info_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- debugging and exceptions ----------------------------------------------
 
-/// KERNEL32 `DebugBreak()`: raises a breakpoint exception, which the
-/// runtime does not dispatch (no SEH yet, docs/RUNTIME.md): the session
-/// stops with a report naming the caller. The game's only call is the
+/// KERNEL32 `DebugBreak()`: dispatch a breakpoint at the software API
+/// boundary (see `seh` for continuation limitations). The game's call is the
 /// reference-count check in 0x00DB9740 (a count below 1).
 pub fn debug_break(m: &mut dyn Mem, cpu: &mut Cpu) {
-    panic!("DebugBreak called from {:#010x}: a breakpoint exception (0x80000003); exception dispatch is not modelled",
-           caller(m, cpu));
+    crate::seh::debug_break(m, cpu);
 }
 
-/// KERNEL32 `RaiseException(dwExceptionCode, dwExceptionFlags,
-/// nNumberOfArguments, lpArguments)`: the runtime does not dispatch
-/// exceptions yet, so the session stops with a report naming the code,
-/// flags, arguments and caller. Callers: `__CxxThrowException@8`
-/// 0x012F530B (C++ throw, 0xE06D7363), `__raise_exc_ex`, the delay-load
-/// helper (0xC06D007E/0xC06D007F).
+/// KERNEL32 RaiseException: the software exception boundary is dispatched
+/// through the guest SEH chain. See `seh` for continuation limitations.
 pub fn raise_exception(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let (code, flags, n, args) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
-    // EXCEPTION_MAXIMUM_PARAMETERS is 15
-    let values: Vec<String> = if args == 0 { Vec::new() } else {
-        (0..n.min(15)).map(|k| format!("{:#x}", m.u32(args + 4 * k))).collect()
-    };
-    let what = match code {
-        0xE06D_7363 => " (a C++ exception, msc)",
-        0xC06D_007E => " (delay load: module not found)",
-        0xC06D_007F => " (delay load: procedure not found)",
-        _ => "",
-    };
-    panic!("RaiseException(code {code:#010x}{what}, flags {flags:#x}, arguments [{}]) called from {:#010x}; exception dispatch is not modelled",
-           values.join(", "), caller(m, cpu));
+    crate::seh::raise_exception(m, cpu);
 }
-
 // --- PSAPI and WININET --------------------------------------------------------
 
 /// PSAPI `GetModuleFileNameExA(hProcess, hModule, lpFilename, nSize)`

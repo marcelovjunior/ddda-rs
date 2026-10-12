@@ -11,8 +11,9 @@ cd "$(dirname "$0")/.."
 # incremental cache inside a shard only costs disk (it once grew to 20 GB).
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p ddnative
-# readable ports wired over lifted bodies (crates/mtmath, docs/MATH.md)
-CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p mtmath
+# readable ports wired over lifted bodies (crates/mtmath and crates/mtcore,
+# docs/MATH.md, docs/CORE.md)
+CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p mtmath -p mtcore -p mtframe
 out=$(python scripts/inventory.py build)
 echo "$out"
 if echo "$out" | grep -q "ported without a declared test"; then
