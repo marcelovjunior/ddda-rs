@@ -13,9 +13,10 @@
 //! point the guest can observe is a service call. A loop that spins
 //! without calling any service would keep the lock; none is known yet.
 //!
-//! Per-thread runtime state (the last error, TLS values) is swapped in
-//! when a thread takes the lock and saved when it gives it up, so the
-//! services that use it are unchanged.
+//! Per-thread runtime state (the last error, TLS values) is swapped when a
+//! thread takes the lock after another thread had it (the state stays with
+//! its owner while nobody else runs), so the services that use it are
+//! unchanged.
 //!
 //! Parallel mode (brief L42, `DDRUNTIME_PARALLEL=1`, off by default):
 //! translated code runs without the guest lock, so guest threads execute
@@ -83,6 +84,8 @@ struct LockState {
     holder: u32,
     /// Nested service entries of the holder (parallel mode; 1 otherwise).
     depth: u32,
+    /// The thread whose per-thread state (last error, TLS) is loaded.
+    state_owner: u32,
     /// Threads ready to take the lock.
     waiting: u32,
     /// Incremented on every acquisition (a yielding thread waits for another).
@@ -111,7 +114,13 @@ impl Default for GuestLock {
             ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         GuestLock {
-            state: Mutex::new(LockState { held: true, holder: current_tid(), depth: 1, ..LockState::default() }),
+            state: Mutex::new(LockState {
+                held: true,
+                holder: current_tid(),
+                depth: 1,
+                state_owner: current_tid(),
+                ..LockState::default()
+            }),
             cv: Condvar::new(),
             parallel: std::sync::atomic::AtomicBool::new(parallel),
         }
@@ -213,7 +222,7 @@ fn enter(rt: &Runtime) {
         return;
     }
     rt.lock.acquire_locked(s, 1);
-    load_context(rt);
+    adopt_context(rt);
 }
 
 /// Undo one [`enter`]; the outermost gives the lock up.
@@ -224,9 +233,6 @@ fn leave(rt: &Runtime) {
         s.depth -= 1;
         return;
     }
-    drop(s);
-    save_context(rt);
-    let mut s = rt.lock.lock();
     s.depth = 0;
     rt.lock.release_locked(&mut s);
 }
@@ -243,7 +249,6 @@ pub(crate) fn without_lock<R>(f: impl FnOnce() -> R) -> R {
     if !release {
         return f();
     }
-    save_context(&rt);
     let depth = {
         let mut s = rt.lock.lock();
         let d = s.depth;
@@ -255,7 +260,7 @@ pub(crate) fn without_lock<R>(f: impl FnOnce() -> R) -> R {
         fn drop(&mut self) {
             let s = self.0.lock.lock();
             self.0.lock.acquire_locked(s, self.1);
-            load_context(&self.0);
+            adopt_context(&self.0);
         }
     }
     let _again = Reacquire(rt.clone(), depth);
@@ -274,7 +279,6 @@ pub(crate) fn signal() {
 /// other guest threads meanwhile. The caller rechecks its condition.
 pub(crate) fn block(deadline: Option<Instant>) {
     let rt = runtime::current();
-    save_context(&rt);
     let mut s = rt.lock.lock();
     let seen = s.signals;
     let depth = s.depth;
@@ -292,7 +296,7 @@ pub(crate) fn block(deadline: Option<Instant>) {
         }
     }
     rt.lock.acquire_locked(s, depth);
-    load_context(&rt);
+    adopt_context(&rt);
 }
 
 /// Let another ready thread run first (Sleep(0), SwitchToThread, the end
@@ -304,9 +308,6 @@ pub(crate) fn yield_now() {
         SLICE_START.with(|t| t.set(Some(Instant::now())));
         return;
     }
-    drop(s);
-    save_context(&rt);
-    s = rt.lock.lock();
     let seen = s.acquisitions;
     let depth = s.depth;
     rt.lock.release_locked(&mut s);
@@ -314,7 +315,7 @@ pub(crate) fn yield_now() {
         s = rt.lock.cv.wait(s).unwrap_or_else(|e| e.into_inner());
     }
     rt.lock.acquire_locked(s, depth);
-    load_context(&rt);
+    adopt_context(&rt);
 }
 
 /// At an API call: yield if the time slice is used up.
@@ -328,7 +329,6 @@ pub(crate) fn maybe_yield() {
 /// Sleep for `duration` without the lock.
 fn sleep_unlocked(duration: Duration) {
     let rt = runtime::current();
-    save_context(&rt);
     let depth = {
         let mut s = rt.lock.lock();
         let d = s.depth;
@@ -338,7 +338,7 @@ fn sleep_unlocked(duration: Duration) {
     std::thread::sleep(duration);
     let s = rt.lock.lock();
     rt.lock.acquire_locked(s, depth);
-    load_context(&rt);
+    adopt_context(&rt);
 }
 
 // --- per-thread context -------------------------------------------------------
@@ -350,8 +350,18 @@ struct Context {
     tls: Vec<(u32, Option<u32>)>,
 }
 
-fn save_context(rt: &Runtime) {
-    let tid = current_tid();
+/// Load this thread's per-thread state if another thread's is loaded
+/// (the caller has just taken the lock).
+fn adopt_context(rt: &Runtime) {
+    let me = current_tid();
+    let previous = std::mem::replace(&mut rt.lock.lock().state_owner, me);
+    if previous != me {
+        save_context(rt, previous);
+        load_context(rt);
+    }
+}
+
+fn save_context(rt: &Runtime, tid: u32) {
     let ctx = rt.state.with(|s| Context {
         last_error: s.last_error,
         tls: s.tls.iter().enumerate().map(|(i, v)| (s.tls_epoch.get(i).copied().unwrap_or(0), *v)).collect(),
@@ -787,7 +797,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     if !parallel {
         let s = rt.lock.lock();
         rt.lock.acquire_locked(s, 1);
-        load_context(&rt);
+        adopt_context(&rt);
     } else {
         // wait while created suspended (the serial mode waits in acquire)
         enter(&rt);
