@@ -257,6 +257,16 @@ non-code admissions, two x87-consuming mocked callees, one x87 value across
 mocked calls) and three own-return quarantines
 ([L22 Results](tasks/L22-lift-rejections.md#results)).
 
+After train 2 (2026-10-12, main 1be373e7; replayed by the gate): the
+shared data merges L28 batches 1-2 (claude-3) and L22c (claude-6) into
+59,502 lifted entries with 177,102 cases. The gate gives **59,217 of
+59,500 verified (99.5%, 98.2% of code bytes)**. That is five more than
+L22's estimate, because L28 batch 2's records joined it. Known hole: a
+function whose lifted body jumps to code past Ghidra's end of it counts
+as verified when its vectors never take that path. The CRT memcpy
+variant 0x012EDE40 is one (found by `tests/options.rs`); brief L45 fixes
+the rule and the count.
+
 The L15 table above and its notes below are
 kept for history.
 

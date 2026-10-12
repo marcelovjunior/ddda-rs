@@ -1016,3 +1016,48 @@ opening (codex-31), route perf (codex-29).
     services (L43, L37).
 - **One next action:** run train 2 (L28 + L22 data adoption, L31, L33, L34,
   L37, the L25 prototypes, L32), then rerun the boot.
+
+## Batch 2026-10-12 (train 2: 99.5% verified; build fixes)
+
+- **Train 2 landed on main 1be373e7.** It contains:
+  - L28 batches 1-2 (CRT start-up rows, claude-3) and L22 (lifter
+    rejections: MXCSR, SSE oracle, x87 forms, budget and switch rules,
+    RTTI-less vtables; claude-6). Their data was merged with
+    `merge_lift_data.py` (59,502 entries / 177,102 cases). **Gate: 59,217
+    of 59,500 verified (99.5%, 98.2% of code bytes).**
+  - L21 (boot, TIB/TEB unification), L27 (SEH dispatch), L31 (MSAA), L32
+    (network), L33 (readable mtcore), L34/L34b (options, window), L37
+    (D3DX), L39 (readable frame systems), L43 (IMM32), L44 (deflake), and
+    the L25 prototypes (call-target cache, inline memory fast path).
+  - Suites: ddruntime (all but one), `--no-default-features`, the light
+    crates and ddgpu all green; ddplay builds.
+- **Build fixes** (cba09f1e):
+  - The L25 fast-path accessors were `#[inline(always)]`. At opt-level 0
+    that copied the page-table check into every lifted memory access: the
+    shard rlibs grew 4x, to ~280 MB, and the runtime examples went past the
+    2 GB image limit (LNK1248). They are plain `#[inline]` now (a shard is
+    50 MB), with a rule in AGENT-RULES.
+  - The shards' debug=1 overrides moved from the test profile to dev, so
+    `cargo build` and `cargo test` share one build. After the gate, the
+    ddruntime tests and ddplay took under a minute to build.
+  - Measured on one 22 MB shard (`-Z time-passes`, one job):
+    - debug info: full 84 s, line tables 76 s, none 71 s; typeck plus
+      borrowck take ~37 s regardless;
+    - opt-level 1: 492 s, of which crate-local ThinLTO is 339 s;
+    - release at opt-level 3: 661 s; 528 s with LTO off;
+    - peak RSS ~3 GB per shard compiler.
+    heavy.py now gives a slot that runs alone with 20 GB free five cargo
+    jobs, and runs every job in a Windows Job Object (orphaned rustc/cargo
+    die with it; the idle watchdog uses the job's CPU accounting).
+- **Found by the train:** `tests/options.rs` (L34, first run) stops at
+  0x012EE130. That is a jump-table tail of the CRT memcpy variant
+  0x012EDE40, past Ghidra's end of the function. The lifted body treats it
+  as external, yet the function counts as verified because its vectors
+  never reach it. The test is ignored with that reason; brief L45
+  (claude-6) fixes the rule and the verification hole.
+- **Train 3** (worktree `E:\ddda-rs-wt\train3`, assembled): L28-crt, L41
+  (frame oracle), L25-results, L42 (parallel guest threads; conflicts with
+  train 2 resolved by the head). Waiting for L27b (claude-6, after L45) and
+  Codex's L28b recorder batches.
+- **One next action:** claude-2 reruns the boot on main (`__fpmath`, the
+  sine-table initializers and `__aulldvrm` are fixed by train 2's data).
