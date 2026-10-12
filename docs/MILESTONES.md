@@ -1,5 +1,31 @@
 # Milestones
 
+### L28c boot stop 14 fixture (2026-10-12, pending replay)
+
+- **0x00DD5ED0 records 3/3**. The opt-in store-fact rule preserves its own
+  vtable and member writes across non-overlapping closed calls; the repeated
+  virtual call resolves to original 0x00DC67E0. Its proven bound is 83,137
+  instructions. Initial object contents remain unknown, and alias guards stay on.
+- Private native-L28c: **59,580 -> 59,581 functions / 177,334 -> 177,337
+  cases**. The prior movie fixture and all other accepted data are audited
+  unchanged. **119 light tests pass**; full replay is left to the head.
+- **Next action:** preview boot past this constructor, then continue the
+  remaining constructor/manager input recipes.
+
+### L28c original setup-state fixture (2026-10-12, pending replay)
+
+- Original reset 0x00F7B170 supplies the stopped movie state required by
+  0x00F7DE40; the latter now records 3/3 normal-return cases. The general
+  constructor/setup strategy checks the producer against its accepted case
+  before transferring memory. It never assigns game-specific field values.
+- Private native-L28c grows **59,579 -> 59,580 functions / 177,331 ->
+  177,334 cases**. The audit proves all old records/cases unchanged.
+  Six new synthetic tests cover the transfer and refusal paths; full Rust
+  replay belongs to the integration train. Results describe all 37 queued
+  entries' input requirements and distinguish state from cleanup/budget faults.
+- **Next action:** boot stop 14, 0x00DD5ED0: preserve an alias-checked vtable
+  fact across closed calls to resolve its repeated indirect call exactly.
+
 ### L28c inventory fixture batch (2026-10-12, pending replay)
 
 - Nineteen more inventory functions record three normal-return cases each.
@@ -1346,3 +1372,21 @@ opening (codex-31), route perf (codex-29).
   a constructed-object input strategy: run the verified constructor first,
   then the method. claude-6 is on L48 (re-credit the 46 gaps).
 - **One next action:** claude-2's boot run past stop 13.
+
+## Batch 2026-10-12 (trains 7-8: 59,282 verified)
+
+- **Train 7 (2c93b524):** L48 (claude-6) re-credits 30 of the 46 gaps:
+  - memory-slot bounds, byte-remap tables and register or constant
+    bounds prove 14 tables;
+  - 16 input-indexed switches are slot-swept: every discovered slot has a
+    case, with the table's end evidenced (the `slot-sweep-v1` strategy).
+  16 gaps remain.
+- **Train 8 (5525e431):** Codex records boot stop 14 (0x00DD5ED0: a
+  vtable the constructor writes itself, resolved statically, from
+  claude-2's evidence) and 0x00F7DE40.
+- **59,282 of 59,440 verified (99.7%).**
+- Codex moved to a fresh session (the old one, ~7M tokens, kept tripping
+  the provider's content filter on x86 trace work).
+- **One next action:** claude-2's boot past stop 14. Meanwhile claude-6
+  works on L49 (lifter-side residuals) and Codex on input recipes for the
+  37 residuals.

@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'zero-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # L48 slot_sweep_layout).
@@ -773,7 +773,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False, input_layout=None, visited=None):
+               terminal=False, input_layout=None, visited=None, initial_state=None, capture_state=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -818,6 +818,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     with the case; its stack arguments are part of the initial memory image.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
 
+    `guarded-stores-v1` also tracks exact entry pointer identities for alias
+    checks in the bound proof. Unknown-base loads can use only bytes written
+    by the traced code, not initial object memory. This lets a constructor's
+    vtable and initialized members survive non-overlapping closed calls.
+
     `terminal` (terminal-v1) accepts a root call at a noreturn site into a
     mocked noreturn entry as the end of the case: the call event is recorded
     with "terminal": true and no "out", the run stops at the callee's entry
@@ -845,11 +850,21 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     `visited`, a set, receives the address of every executed instruction
     (coverage for case selection, L45); it changes nothing in the run.
+
+    `initial_state` supplies pages and register bindings from a checked
+    original setup run (constructed_inputs). `capture_state`, an empty dict,
+    receives its final pages after successful validation. Neither changes
+    the fixture protocol: the method records its own reads and writes.
     """
     import random
     import time
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
+    if initial_state is not None:
+        from constructed_inputs import validate_state
+        validate_state(initial_state)
+    if capture_state is not None and capture_state:
+        raise ValueError('capture_state must be empty')
     if input_strategy is not None and zero_inputs:
         raise ValueError('input_strategy and zero_inputs are mutually exclusive')
     # Image pages have always held original bytes. This explicit strategy
@@ -860,7 +875,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1')
+    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -899,6 +914,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     def fill(page):
         """Image pages hold the exe; any other page seeded random bytes."""
+        if initial_state is not None and page in initial_state['pages']:
+            return initial_state['pages'][page]
         for va, b in secs:
             if va & ~0xFFF <= page < va + len(b):
                 lo = max(page, va)
@@ -1348,6 +1365,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         written.update(range(a, a + len(data)))
 
     def alloc(size):
+        if initial_state is not None and initial_state['heap'] != HEAP_BASE:
+            raise Rejected('constructed input: allocation after setup needs heap-cursor replay support')
         a = heap[0]
         heap[0] = ((a + max(size, 1) + 15) & ~15) & 0xFFFFFFFF
         return a
@@ -1557,7 +1576,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('guarded-objects-v1','guarded-stack-v1') and name != 'esp':
+        if input_strategy in ('guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)
@@ -1565,6 +1584,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
             if call_stack:
                 v -= 4
+        elif initial_state is not None:
+            v = initial_state['registers'].get(name, v)
         if sweep is not None and sweep[0] == 'register' and sweep[1] == name:
             v = sweep[2]  # slot-sweep-v1: the table index input selects slot `value`
         regs_in[name] = v
@@ -1596,7 +1617,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1') and body is not None and max_insn < 2_000_000:
+    if initial_state is None and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1619,7 +1640,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 break
             proof_body.append(decoded_proof)
         if len(proof_body) == len(body):
-            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1')
+            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
             certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
                                 ceiling=2_000_000-max_insn, deadline=deadline,
                                 max_bytes=MAX_PAGES*4096,guarded=guarded,
@@ -1628,7 +1649,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 # Exact already-mapped input, not inferred game state.
                                 # Unknown writes still cannot alias these read facts.
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
-                                              if input_strategy == 'guarded-stack-v1' else None))
+                                              if input_strategy in ('guarded-stack-v1','guarded-stores-v1') else None),
+                                entry_pointers=regs_in if input_strategy == 'guarded-stores-v1' else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance
@@ -1674,6 +1696,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
     if bad:
         raise Rejected("; ".join(bad))
+    # Capture before the diagnostic st0 store. Publish only after all later
+    # checks pass; failed/terminal setup runs never produce usable state.
+    captured = None
+    if capture_state is not None:
+        if stopped[0]:
+            raise Rejected('constructed input: setup did not return')
+        if any(executable(a) for a in written):
+            raise Rejected('constructed input: setup writes executable memory')
+        captured = dict(pages={p: bytes(uc.mem_read(p, 4096)) for p in pages_in}, heap=heap[0])
     regs_out = {name: uc.reg_read(r) for name, r in GPR}
     xmm0 = uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFF
     # x87 values left on the stack: depth from TOP; read st0 as a single
@@ -1709,6 +1740,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 out.append(cur)
         return [[a, bytes(b).hex()] for a, b in out]
     final = {a: uc.mem_read(a, 1)[0] for a in written}
+    if captured is not None:
+        capture_state.update(captured)
     return {"regs_in": regs_in, "reads": runs(reads), "regs_out": regs_out, "writes": runs(final),
             "xmm0_out": xmm0, "st0_out": st0, "x87_depth": depth,
             "st0_ext": st0_ext, "x87_control": x87_control,

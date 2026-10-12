@@ -300,6 +300,11 @@ After train 6 (2026-10-12, main 50b358f8): Codex's guarded-stack and
 register-object fixtures add 19 functions. **59,250 of 59,440 verified
 (99.7%)**; 59,593 entries with 177,409 cases.
 
+After trains 7-8 (2026-10-12, main 5525e431): L48 proves 14 jump tables
+by general rules and slot-sweeps 16 input-indexed switches to full
+coverage (30 re-credited, 16 gaps left); Codex records boot stop 14.
+**59,282 of 59,440 verified (99.7%)**; 59,595 entries with 177,683 cases.
+
 The L15 table above and its notes below are
 kept for history.
 

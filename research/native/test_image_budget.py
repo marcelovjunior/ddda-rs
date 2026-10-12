@@ -11,6 +11,79 @@ class ImageBudgetTests(unittest.TestCase):
     # Load an image-backed trip count, then increment EAX that many times.
     CODE = bytes.fromhex('8b0d00204000 31c0 40 49 75fc c3')
 
+    def written_vtable(self, helper='56 8bf1 c7460807000000 5e c3'):
+        # The constructor stores a vtable and a zero member. A closed helper
+        # saves/restores this and writes elsewhere, then a virtual closed
+        # method tests that member. No initial object byte is an input fact.
+        caller=bytearray(bytes.fromhex('56 8bf1 c70600204000 c7460400000000 8bce'))
+        caller+=b'\xe8'+struct.pack('<i',0x400100-(0x400000+len(caller)+5))
+        caller+=bytes.fromhex('8b16 8b02 8bce ffd0 5e c3')
+        helper=bytes.fromhex(helper)
+        target=bytes.fromhex('8b4104 85c0 7501 c3 cc')
+        md=Cs(CS_ARCH_X86,CS_MODE_32);md.detail=True
+        instructions=list(md.disasm(caller,0x400000))
+        decoded={i.address:i for a,b in ((0x400100,helper),(0x400200,target)) for i in md.disasm(b,a)}
+        _,read,pages=self.fixture(bytes(caller),count=0x400200)
+        page=bytearray(pages[0x400000]);page[256:256+len(helper)]=helper;page[512:512+len(target)]=target
+        pages[0x400000]=bytes(page)
+        witnesses={r:0x20000000+4096*k for k,r in enumerate(('eax','ebx','ecx','edx','esi','edi','ebp','esp'))}
+        witnesses['esp']=0xf008000
+        kw=dict(guarded=True,decode=decoded.get,closed={0x400100,0x400200},pop_for=lambda _:0)
+        return instructions,read,pages,witnesses,kw
+
+    def test_written_vtable_survives_nonoverlapping_closed_calls(self):
+        ins,read,_,p,kw=self.written_vtable()
+        old=image_bound(ins,read,p['esp'],**kw)
+        self.assertTrue(old is None or old['mock_calls'])
+        c=image_bound(ins,read,p['esp'],entry_pointers=p,**kw)
+        self.assertIsNotNone(c)
+        self.assertEqual(c['mock_calls'],{})
+        self.assertTrue(set(range(p['ecx'],p['ecx']+8)) <= set(c['protected']))
+        self.assertTrue(set(range(0x402000,0x402004)) <= set(c['protected']))
+
+    def test_written_vtable_policy_runs_the_closed_method_in_the_recorder(self):
+        ins,read,pages,_,kw=self.written_vtable()
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+                patch.object(h,'code',side_effect=read), \
+                patch.object(h,'executable',side_effect=lambda a: 0x400000 <= a < 0x401000):
+            c=h.run_sparse(0x400000,7,input_strategy='guarded-stores-v1',max_insn=10,
+                           body=[i.address for i in ins],end=ins[-1].address+ins[-1].size,
+                           lifted=kw['closed'])
+        self.assertEqual(c['regs_out']['eax'],0)
+        self.assertEqual(c['calls'],[])
+        self.assertGreater(c['image_budget']['instructions'],10)
+
+    def test_overlapping_writes_do_not_keep_a_stale_vtable(self):
+        for helper in ('56 8bf1 8906 5e c3', '56 8bf1 c6460100 5e c3', 'c70700000000 c3'):
+            ins,read,_,p,kw=self.written_vtable(helper)
+            p['edi']=p['ecx']  # different entry registers can alias
+            c=image_bound(ins,read,p['esp'],entry_pointers=p,**kw)
+            self.assertTrue(c is None or c['mock_calls'])
+        # The target's branch must not retain a zero member overwritten by
+        # the helper with an unknown value.
+        ins,read,_,p,kw=self.written_vtable('56 8bf1 894604 5e c3')
+        self.assertIsNone(image_bound(ins,read,p['esp'],entry_pointers=p,**kw))
+
+    def test_unresolved_writer_must_not_alias_store_derived_reads_or_saved_pointers(self):
+        ins,read,_,p,kw=self.written_vtable('56 8bf1 8b7e10 c70700000000 5e c3')
+        c=image_bound(ins,read,p['esp'],entry_pointers=p,**kw)
+        self.assertIsNotNone(c)
+        writer=0x400106
+        self.assertIn(writer,c['unknown_writes'])
+        guard=WriteGuard(c)
+        self.assertTrue(guard.conflicts(writer,p['ecx'],4))
+        # caller saves ESI, CALL saves its return, helper saves ESI:
+        self.assertTrue(guard.conflicts(writer,p['esp']-12,4))
+        self.assertFalse(guard.conflicts(writer,0x30000000,4))
+
+    def test_witnesses_are_not_initial_register_or_object_values(self):
+        ins,read,_,p,kw=self.written_vtable()
+        for code in ('85c97401c3cc', '8b0185c07401c3cc'):
+            other,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(other,read,p['esp'],entry_pointers=p,guarded=True))
+        with self.assertRaises(ValueError):
+            image_bound(ins,read,p['esp'],entry_pointers=p)
+
     def fixture(self, code=CODE, count=6000):
         md = Cs(CS_ARCH_X86, CS_MODE_32)
         md.detail = True
