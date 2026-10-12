@@ -962,7 +962,7 @@ the merge retains main's already committed generated files.
 The same **102 light tests pass after the merge**. The worktree is ready
 for review; recording jobs have exited and accepted data remains open.
 
-### L28c train-4 residual census (2026-10-12, in progress)
+### L28c train-4 residual census and fixtures (2026-10-12)
 
 The read-only inventory has **211 non-verified non-thunks**: 91 documented,
 53 untouched, 57 translated and ten platform. Cross-checking the private
@@ -1029,3 +1029,76 @@ policy refusal and a runtime alias write. **105 light tests pass**.
 The owner's unchanged `static_pop` padding fix **a1f09162** was integrated
 as **13446abb** before these new-policy trials. No edits to his slot-sweep
 layout handling, decoder, frame-tail, EH4 or step-emission code.
+
+**Caller-route checkpoint:** 0x0075BAD0 is now adopted. All three original
+cases return normally and carry a **46,591-instruction** certificate with
+**66,591** total allowance. `L28c/train4-stack-audit.json` proves the
+accepted pair grew to **59,574 / 177,316** (+14/+42 from this batch's
+baseline), with every old record and case unchanged. The five initially
+unprepared inventory entries were subsequently checked against the
+current lifter: all lift unchanged, and all record three normal-return
+cases under zero-call-v1. They are queued for the final append, rather
+than being left incorrectly classified as lift rejections.
+
+**Residual inventory addresses by observed guard.** These are representative
+blocking classes across the attempted distributions, not claims of a unique
+root cause or proof that a function cannot record. A function can trip several
+guards; `L28c/train4-recorder-evidence.json` retains every observed reason.
+The 44 verification gaps, owner boot stop, four cached lift rejections and
+three quarantined entries above are excluded.
+
+| Observed class | Count | Addresses |
+|---|---:|---|
+| Instruction limit | 45 | 0x00410000, 0x00416740, 0x0046A150, 0x0046A2D0, 0x00475DD0, 0x00476D60, 0x00480BA0, 0x0048F330, 0x00491340, 0x00493AA0, 0x00494D80, 0x00495150, 0x00495520, 0x004A06B0, 0x004A0C00, 0x004A0E20, 0x004EE3E0, 0x004EE720, 0x004F5200, 0x004F53B0, 0x0050A110, 0x00524A10, 0x00524BE0, 0x00528550, 0x005293E0, 0x006076F0, 0x00608AE0, 0x00618880, 0x00689960, 0x007F2020, 0x00811A90, 0x00815C60, 0x008282E0, 0x00B7FF30, 0x00C9BAA0, 0x00C9E0F0, 0x00DA46C0, 0x00DBA780, 0x00DC8270, 0x00E0D750, 0x00F7DE40, 0x01146420, 0x012A5B30, 0x012F9D82, 0x01314A90 |
+| Outside-image execution | 67 | 0x004644D0, 0x00561239, 0x005652E0, 0x0056532A, 0x0057D24D, 0x005F3450, 0x00606090, 0x00606130, 0x00606670, 0x006066E0, 0x006197E0, 0x0061BC10, 0x0062E3A0, 0x006335A0, 0x00633A70, 0x00633B70, 0x00646A30, 0x0064DD20, 0x00663040, 0x00677930, 0x00685030, 0x0068A9F0, 0x00691AE0, 0x00691E50, 0x00692A40, 0x006A1770, 0x006EDFE0, 0x006F1590, 0x006F2350, 0x006F3242, 0x006F8730, 0x006F8C00, 0x00705E00, 0x0070B210, 0x007126C0, 0x00712AC0, 0x00786D74, 0x007BEA60, 0x0083FFF0, 0x00947493, 0x009D0E70, 0x00A195D0, 0x00B5A6BF, 0x00B75EC0, 0x00B952C0, 0x00B955C0, 0x00B97220, 0x00BA31D0, 0x00BA5540, 0x00BD45C0, 0x00CED240, 0x00CED280, 0x00CEEBC0, 0x00D97031, 0x00E0FB9C, 0x011251F0, 0x01137DF3, 0x011590E0, 0x011591C0, 0x012EFA1E, 0x012F693F, 0x012F6948, 0x012F6A6F, 0x012F6A78, 0x012FF0F0, 0x01300DFF, 0x01329888 |
+| POPF(D) state guard | 4 | 0x0048AB50, 0x00685B40, 0x0081C330, 0x00BB922B |
+| Undefined integer flags | 4 | 0x005524B0, 0x00604A80, 0x00BA4160, 0x00C9B350 |
+| Overwritten return address | 4 | 0x005EC920, 0x006692F0, 0x00669F40, 0x0071C0F0 |
+| Page limit | 5 | 0x00633EF0, 0x0066B9E0, 0x006E0EB0, 0x0070F3C0, 0x00DC7D00 |
+| x87 control/stack state | 8 | 0x009897C0, 0x01300600, 0x01300617, 0x013006FE, 0x0130070B, 0x01300749, 0x0130474C, 0x01304753 |
+| CPU exception | 1 | 0x00D29AF0 |
+| Unmatched proposed indirect mock | 1 | 0x00DD5ED0 |
+
+
+**Final batch ready:** all recording workers have exited. Adopted the five
+prepared-entry successes (0x0047B950, 0x0047B9C0, 0x00736730, 0x012EDC70,
+0x012FE5C9). Final private totals are **59,579 records / 177,331 cases**:
+**+19 functions / +57 cases**, all normal returns. The audit
+`L28c/train4-final-audit.json` is green: **all 59,560 pre-batch records and
+177,274 cases unchanged**, zero promotions, removals, unexpected edits or
+stale mocks. No accepted function was re-recorded or replaced.
+
+**Coverage and remaining work:** the 153 recorder candidates plus five
+newly prepared inventory entries yielded 19 functions; **139** still have
+no fixture, grouped above. The direct-route queue goes **8 -> 7**:
+0x00491340, 0x00493AA0, 0x00494D80, 0x004A06B0, 0x0081C330,
+0x00DD5ED0, plus owner-reserved 0x00DB8B90. All **30 one-hop candidates**
+re-lift and were tried under zero-call-v1, image-v1, small-v1,
+guarded-objects-v1 and guarded-stack-v1 with terminal acceptance; none
+recorded. 0x00520003/0x00520004 were never tried. The nine one-hop entries
+outside this non-thunk census remain candidate entries, not newly asserted
+valid function boundaries. The guarded-stack pass also tried all other
+remaining recorder candidates; 0x0075BAD0 was its only addition. After
+integrating the owner cleanup rule, the other six eligible direct-route
+functions were retried again with zero-call-v1 and guarded-stack-v1.
+
+**Open evidence:** 0x00DD5ED0 still reaches a real dispatch where the
+certificate proposed a mock (0x00DD5F99); it needs exact callee/object
+facts, not a relaxed mock guard. The other direct failures still require
+caller-state or bounded-flow evidence. A guard firing is recorded as such,
+not treated as proof of a bug in the executable. Claude-6's boot functions,
+three x87 helpers, 44 verification gaps and the four cached lift rejections
+remain outside this batch. The prior cleanup-test expectation is resolved;
+there is no outstanding failing Python test.
+
+**Verification and handoff:** **105 light tests pass** (27 image-bound,
+21 frame-contract, 19 structured-input, 13 tail, 13 remaining-form, two
+record-input, five audit and five budget tests). Full Rust replay was not
+run; the head's integration train must verify these fixtures. Recording
+used heavy.py as codex, serially, with at most six workers. Free memory
+never fell below six GB; the monitors watched only this agent's
+own recording trees and never needed to stop them. No snapshots, shared-data writes, generated-code
+commits or pushes. Comparison base remains **native-train3-orig**; the
+append-only **native-L28c** set is ready for the head to snapshot and
+remains open until instructed otherwise. Source commits: **13446abb**
+(owner a1f09162) and **22549c3b**; first audited checkpoint: **b7d3bbc3**.
