@@ -99,3 +99,14 @@ These rules hold for every brief in `docs/tasks/` that points here.
   `docs/RUNTIME.md`/`docs/INVENTORY.md` rows you changed. Then end your run
   with a short summary for the head: commits, what was verified and how,
   and what is left.
+
+## Game runs and builds (2026-10-12)
+
+- Only the head runs the game (ddplay, winmain, any exe that opens the game
+  window). Agents that need FPS or behaviour numbers post a request on the
+  board (the exe path, what to compare against, which phases); the head
+  runs it with every build paused (E:/ddda-re/tools/pause.py) and posts the
+  numbers back.
+- Every build that compiles the ddlift shards goes through heavy.py with
+  HEAVY_BIG=1. heavy.py runs one such build at a time, and none while a
+  run is paused for.
