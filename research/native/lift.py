@@ -88,6 +88,10 @@ X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdi
 # exception flags. All execute on the host x87 like the forms above.
 X87_SUPPORTED = (X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw",
                                                   "fptan", "fnclex"})
+# FNSAVE/FSAVE store the whole x87 state and empty the stack; FRSTOR loads it
+# back (L46: Intel SDM vol. 1 8.1.10, measured by research/runtime/x87_state_oracle.c).
+X87_SAVE = {"fnsave", "fsave"}
+X87_RESTORE = {"frstor"}
 X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
@@ -887,15 +891,21 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
     is walked through like an x87 instruction (L45): its values cannot
     come from a mock."""
     at = {i.address: i for i in ins}
-    todo = [(start, depth, 0)]
+    todo = [(start, depth, 0, None)]
     seen, required = set(), 0
     while todo:
-        pc, current, added = todo.pop()
-        if pc not in at or (pc, current, added) in seen:
+        pc, current, added, saved = todo.pop()
+        if pc not in at or (pc, current, added, saved) in seen:
             continue
-        seen.add((pc, current, added))
+        seen.add((pc, current, added, saved))
         i = at[pc]
         mn = i.mnemonic
+        if mn in X87_SAVE:
+            saved, current = current, 0
+        elif mn in X87_RESTORE:
+            if saved is None:
+                return None
+            current, saved = saved, None
         closed = (mn == "call" and i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) in callable
                   and X87_NET.get(i.operands[0].imm & 0xffffffff) is not None)
         if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt") and not closed:
@@ -904,6 +914,8 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
             t = i.operands[0].imm & 0xffffffff if closed else None
             needed, delta = (X87_NEED.get(t, 0), X87_NET[t]) if closed else x87_effect(i)
             missing = max(0, needed - current)
+            if missing and saved is not None:
+                return None  # after FNSAVE the caller's values are in memory, not on the stack
             added += missing
             if added > limit:
                 return None
@@ -911,15 +923,15 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
             current += missing + delta
             if current > 8:
                 return None
-        elif mn.startswith('f') and mn not in X87_CONTROL:
+        elif mn.startswith('f') and mn not in X87_CONTROL | X87_SAVE | X87_RESTORE:
             return None
         if mn.startswith('j'):
             if i.operands[0].type != 2:
                 continue
-            todo.append((i.operands[0].imm & 0xffffffff, current, added))
+            todo.append((i.operands[0].imm & 0xffffffff, current, added, saved))
             if mn == 'jmp':
                 continue
-        todo.append((pc + i.size, current, added))
+        todo.append((pc + i.size, current, added, saved))
     return required
 
 
@@ -945,7 +957,9 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     Returns (set of depths at the function's rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
-    seen, todo = {}, [(at[addr], entry)]
+    # a path state is (index, depth, saved): `saved` is the depth an
+    # FNSAVE emptied the stack from, which the matching FRSTOR restores (L46)
+    seen, todo = {}, [(at[addr], entry, None)]
     exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
@@ -953,17 +967,23 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     while todo or pending:
         if not todo:
             k = pending.pop(0)
-            if ins[k].address not in seen:
-                todo.append((k, 0))
+            if not any(key[0] == ins[k].address for key in seen):
+                todo.append((k, 0, None))
             continue
-        k, depth = todo.pop()
+        k, depth, saved = todo.pop()
         while k < len(ins):
             i = ins[k]
-            if seen.get(i.address, 99) <= depth:
+            if seen.get((i.address, saved), 99) <= depth:
                 break  # already walked with this depth or less
-            seen[i.address] = depth
+            seen[(i.address, saved)] = depth
             mn = i.mnemonic
-            if mn in X87_SUPPORTED and mn not in X87_CONTROL:
+            if mn in X87_SAVE:
+                saved, depth = depth, 0
+            elif mn in X87_RESTORE:
+                if saved is None:
+                    raise Unsupported(f"x87-frstor without an fnsave on the path at {i.address:#x}")
+                depth, saved = saved, None
+            elif mn in X87_SUPPORTED and mn not in X87_CONTROL:
                 needed, delta = x87_effect(i)
                 if depth < needed:
                     raise Unsupported(f"x87-return (needs {needed} values at {i.address:#x}, has {depth})")
@@ -993,7 +1013,7 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
             if mn.startswith("j"):
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
                 if t in at and (t == addr or t not in function_entries()):
-                    todo.append((at[t], depth))
+                    todo.append((at[t], depth, saved))
                 # A runtime jump's local destinations are all statically
                 # reachable starts, walked with their own static depths;
                 # its value is not a proof of the depth there. The recorder
@@ -1001,7 +1021,7 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 targets = (switches or {}).get(i.address, [])
                 if not runtime_jump(i) and not isinstance(targets, RuntimeTargets):
                     for target in targets:
-                        todo.append((at[target], depth))
+                        todo.append((at[target], depth, saved))
                 if mn == "jmp":
                     break
             k = at.get(i.address + i.size, len(ins))
@@ -1253,6 +1273,7 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
+    flow_leaders = set(leaders)  # block starts of the control flow (step mode splits every instruction)
     if step:
         leaders = starts
     # x87 entry contract (ext only, never callable): the minimal number of
@@ -1383,6 +1404,41 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
 
     def sx(v, bits):
         return f"(({v}) as i{bits} as i32 as u32)" if bits in (8, 16) else v
+
+    def fnsave_pointers(k):
+        """FIP, FOP and the FDP expression an FNSAVE at ins[k] stores (L46):
+        those of the last non-control x87 instruction, which must lie on the
+        same straight line (no branch target, call or FRSTOR in between) and
+        have a memory operand whose registers are unchanged since. The
+        hardware rules (x87_state_oracle.c): control instructions keep FIP;
+        FDP is the last memory operand; FOP is the opcode's low 3 bits and
+        ModRM."""
+        written = set()
+        for j in range(k, 0, -1):
+            p, cur = ins[j - 1], ins[j]
+            if p.address + p.size != cur.address or cur.address in flow_leaders:
+                break
+            if p.mnemonic == "call" or p.mnemonic.startswith(("j", "ret")) or p.mnemonic in X87_RESTORE | {"fninit", "finit"}:
+                break
+            if p.mnemonic.startswith("f") and p.mnemonic not in X87_CONTROL | X87_SAVE:
+                mem = next((o for o in p.operands if o.type == X86_OP_MEM), None)
+                if mem is None or (mem.mem.segment and p.reg_name(mem.mem.segment) in ("fs", "gs")):
+                    break
+                used = set()
+                for r in (mem.mem.base, mem.mem.index):
+                    if r:
+                        used |= _aliases(p.reg_name(r))
+                if used & written:
+                    break
+                raw = bytes(p.bytes)
+                while raw and raw[0] in (0x26, 0x2e, 0x36, 0x3e, 0x9b):
+                    raw = raw[1:]
+                return p.address, ((raw[0] & 7) << 8) | raw[1], mem_addr(p, mem)
+            w = _writes(p)
+            if w is None:
+                break
+            written |= w
+        raise Unsupported(f"x87-fnsave pointers not proven at {ins[k].address:#x}")
 
     lines = []
     blocks = sorted(leaders)
@@ -1821,6 +1877,15 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                 body.append(store(i, ops[0], f"x86::cvttss2si({s})"))
             elif mn == "cvtsi2ss":
                 body.append(f"{xmm(i, ops[0])}[0] = x86::cvtsi2ss({load(i, ops[1])});")
+            elif mn in X87_SAVE | X87_RESTORE:
+                mem = next((o for o in ops if o.type == X86_OP_MEM), None)
+                if mem is None or mem.size not in (0, 108) and mem.size != 4:
+                    raise Unsupported(f"x87-state operand {mn} {i.op_str}")
+                if mn in X87_RESTORE:
+                    body.append(f"st.frstor(m, {mem_addr(i, mem)});")
+                else:
+                    fip, fop, fdp = fnsave_pointers(k)
+                    body.append(f"st.fnsave(m, {mem_addr(i, mem)}, 0x{fip:X}, 0x{fop:X}, {fdp});")
             # Hardware x87 over saved 80-bit state. Keep original opcode and
             # register operands; memory ModRM becomes [rax] in the helper.
             elif mn in X87_SUPPORTED:

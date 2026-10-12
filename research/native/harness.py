@@ -1231,7 +1231,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             pushes = i.mnemonic in {"fld", "fild", "fld1", "fldz", "fldpi", "fldl2e", "fldl2t", "fldlg2", "fldln2"}
             slots = [int(i.reg_name(o.reg)[3:-1]) for o in i.operands
                      if o.type == 1 and i.reg_name(o.reg).startswith("st(")]
-            control = i.mnemonic in {"fnstcw", "fldcw", "fnstsw", "fstsw", "fnclex", "fninit"}
+            # state save/restore reads no stack register (L46)
+            control = i.mnemonic in {"fnstcw", "fldcw", "fnstsw", "fstsw", "fnclex", "fninit",
+                                     "fnsave", "fsave", "frstor", "fnstenv", "fldenv"}
             if not pushes and not control:
                 slots.append(0)
             if i.mnemonic in {"fcompp", "fucompp"}:

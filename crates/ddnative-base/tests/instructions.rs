@@ -449,6 +449,49 @@ fn added_x87_forms_match_cpu() {
 }
 
 #[test]
+fn x87_fnsave_frstor_match_cpu() {
+    // L46: the guest FNSAVE image against the host's own FNSAVE of the same
+    // state (control/status/tag words, reserved words, registers), the
+    // FNINIT state it leaves, and FRSTOR's tag recomputation. The WOW64
+    // selectors and pointer rules come from research/runtime/x87_state_oracle.c.
+    use ddnative_base::mem::Image;
+    use ddnative_base::x87::X87;
+    let mut m = Image { base: 0x1000, bytes: vec![0; 0x200] };
+    m.bytes[0x100..0x108].copy_from_slice(&2.5f64.to_le_bytes());
+    let mut st = X87::default();
+    st.register::<0xe8d9>(); // fld1
+    st.register::<0xebd9>(); // fldpi
+    st.memory::<0x00dd, 8, false>(&mut m, 0x1100); // fld m64
+    st.fnsave(&mut m, 0x1000, 0x012F_1DA8, 0x55c, 0x0019_FF08);
+    let mut native = [0u8; 108];
+    let mut host = [0u8; 108];
+    let value = 2.5f64;
+    unsafe {
+        asm!("fnsave [{h}]", "fninit", "fld1", "fldpi", "fld qword ptr [{v}]", "fnsave [{n}]", "frstor [{h}]",
+             h = in(reg) host.as_mut_ptr(), n = in(reg) native.as_mut_ptr(), v = in(reg) &value);
+    }
+    let guest = &m.bytes[..108];
+    assert_eq!(guest[..12], native[..12], "control, status, tag and reserved words");
+    assert_eq!(guest[28..], native[28..], "registers");
+    assert_eq!(guest[12..28], [0xa8, 0x1d, 0x2f, 0x01, 0x23, 0x00, 0x5c, 0x05,
+                               0x08, 0xff, 0x19, 0x00, 0x2b, 0x00, 0xff, 0xff]);
+    assert_eq!((st.control(), st.status(), st.depth()), (0x037f, 0, 0), "FNINIT state");
+    // FRSTOR keeps empty tags and recomputes the others (2.0 tagged "zero")
+    let mut crafted = [0u8; 108];
+    crafted[0..2].copy_from_slice(&0x027fu16.to_le_bytes());
+    crafted[4..6].copy_from_slice(&0x3000u16.to_le_bytes()); // top 6
+    crafted[8..10].copy_from_slice(&0x4fffu16.to_le_bytes()); // phys6 valid, phys7 zero
+    crafted[28 + 7..28 + 10].copy_from_slice(&[0x80, 0xff, 0x3f]); // st0 = 1.0
+    crafted[38 + 7..38 + 10].copy_from_slice(&[0x80, 0x00, 0x40]); // st1 = 2.0
+    m.bytes[..108].copy_from_slice(&crafted);
+    st.frstor(&m, 0x1000);
+    assert_eq!((st.control(), st.depth()), (0x027f, 2));
+    st.fnsave(&mut m, 0x1000, 0, 0, 0);
+    assert_eq!(m.bytes[8..10], 0x0fffu16.to_le_bytes(), "tags recomputed as on the hardware (E5)");
+    assert_eq!(m.bytes[28..48], crafted[28..48]);
+}
+
+#[test]
 fn pushfd_popfd_follow_cpl3() {
     // L22: measured in a 32-bit Windows process (research/native/probe_machine.rs):
     // IF and bit 1 read as set; POPFD changes the arithmetic flags, DF, NT, AC, ID only.

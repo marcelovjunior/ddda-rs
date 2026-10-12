@@ -53,6 +53,35 @@ class X87Tests(unittest.TestCase):
                 with self.assertRaisesRegex(lift.Unsupported, "callee 0x400100 needs 1"):
                     lift.x87_depth_check(ins, 0x400000, None, frozenset({0x400100}), True, entry=0)
 
+    def test_state_image_follows_the_hardware(self):
+        # L46 E5 (x87_state_oracle.c): FRSTOR keeps empty tags and recomputes
+        # the others (2.0 tagged "zero" becomes valid); FNSAVE writes FFFFh
+        # reserved words and the WOW64 selectors with the tracked pointers.
+        import x87_host
+        crafted = bytearray(108)
+        struct.pack_into("<HHHHHH", crafted, 0, 0x027f, 0x55aa, 0x3000, 0x33cc, 0x4fff, 0x2211)
+        crafted[28 + 7:28 + 10] = bytes((0x80, 0xff, 0x3f))
+        crafted[38 + 7:38 + 10] = bytes((0x80, 0x00, 0x40))
+        state = x87_host.normalized(bytes(crafted))
+        self.assertEqual(struct.unpack_from("<H", state, 8)[0], 0x0fff)
+        self.assertEqual(state[28:48], bytes(crafted[28:48]))
+        image = x87_host.save_image(state, (0x12345678, 0x23, 0x7dd, 0xdeadbeef))
+        self.assertEqual(image[:28].hex(), "7f02ffff0030ffffff0fffff78563412" "2300dd07efbeadde2b00ffff")
+        self.assertEqual(x87_host.save_image(x87_host.initial_state(), None)[:28].hex(),
+                         "7f03ffff0000ffffffffffff" + "00" * 14 + "ffff")
+
+    def test_fnsave_needs_proven_pointers(self):
+        # L46: fld1 (no memory operand); fnsave [0x3000]: FDP is not proven
+        for code in ("d9e8dd3500300000c3",
+                     # fld m32; branch target between it and fnsave
+                     "d905001040007400dd3500300000c3",
+                     # frstor with no fnsave on the path
+                     "dd2500300000c3"):
+            data = bytes.fromhex(code)
+            with patch.object(harness, "code", side_effect=lambda a, n: data[a-0x400000:a-0x400000+n]), \
+                    self.assertRaises(lift.Unsupported):
+                lift.lift(0x400000, len(data))
+
     def test_stack_requirements_and_control(self):
         for code in ("d8c1c3", "d9c0c3", "d9e8ded9c3", "d9e8d9c9c3"):
             data = bytes.fromhex(code)
@@ -80,7 +109,9 @@ class X87Tests(unittest.TestCase):
                      load + "dc0500104000" + store + "c3",  # fadd m64
                      load + "da0508104000" + store + "c3",  # fiadd m32
                      load + "c3", integer + "c3", load + integer + "c3",  # extended returns
-                     load + "9b" + store + "c3"]  # waiting forms with masked exceptions
+                     load + "9b" + store + "c3",  # waiting forms with masked exceptions
+                     # L46: fstp m64; wait; fnsave [0x3000]; frstor [0x3000]; fstp m64
+                     load + integer + store + "9b" + "dd3500300000" + "dd2500300000" + "dd1d08200000" + "c3"]
         root = Path(__file__).resolve().parents[2]
         source = "#![allow(warnings)]\n" + "".join(
             f'#[path="{(root / f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n'
