@@ -176,6 +176,93 @@ def initial_state(control=0x037F):
 CPU_DEPENDENT = {"fsin", "fcos", "fsincos", "fptan", "fpatan", "fyl2x", "fyl2xp1", "f2xm1"}
 APPROXIMATIONS = {"rcpps": "0f53c1", "rsqrtps": "0f52c1", "rcpss": "f30f53c1", "rsqrtss": "f30f52c1"}
 
+# SSE instructions that can set MXCSR exception flags (Intel SDM vol. 1,
+# 11.5): floating arithmetic, conversions and comparisons. Moves, logic,
+# shuffles and integer operations do not.
+_SSE_ARITH = {"add", "sub", "mul", "div", "min", "max", "sqrt"}
+SSE_COMPARE_FLAGS = {"comiss", "ucomiss", "comisd", "ucomisd"}
+
+
+def sse_flagging(i):
+    """Whether Capstone instruction `i` is one of those SSE instructions.
+    CMPSD names both the SSE2 compare and the string compare: only the
+    form with an xmm operand counts."""
+    mn = i.mnemonic
+    xmm = any(o.type == 1 and i.reg_name(o.reg).startswith("xmm") for o in i.operands)
+    if mn in SSE_COMPARE_FLAGS or (mn.startswith("cvt") and "pi" not in mn):
+        return True
+    if mn[-2:] in ("ss", "ps", "sd", "pd") and mn[:-2] in _SSE_ARITH:
+        return True
+    return mn.startswith("cmp") and mn[-2:] in ("ss", "ps", "sd", "pd") and xmm
+
+
+_LEGACY_PREFIXES = {0x66, 0xF2, 0xF3, 0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x67, 0xF0}
+_SSE_STUBS = {}
+
+
+def _sse_stub(i):
+    """x86-64 code running instruction `i` re-encoded: mandatory prefixes
+    kept, a memory operand replaced by [r11] (REX.B, mod 00, rm 011), the
+    register operands unchanged (xmm0-7, eax-edi need no REX)."""
+    raw = bytes(i.bytes)
+    k = 0
+    while raw[k] in _LEGACY_PREFIXES:
+        k += 1
+    keep = bytes(b for b in raw[:k] if b in (0x66, 0xF2, 0xF3))
+    m = i.modrm_offset
+    if not m or m <= k:
+        raise ValueError(f"no ModRM in {i.mnemonic} {i.op_str}")
+    opcode, modrm = raw[k:m], raw[m]
+    imm = raw[i.imm_offset:i.imm_offset + i.imm_size] if i.imm_size else b""
+    if modrm >> 6 == 3:
+        insn = keep + opcode + bytes([modrm]) + imm
+    else:
+        insn = keep + bytes([0x41]) + opcode + bytes([(modrm & 0x38) | 0x03]) + imm
+    if insn not in _SSE_STUBS:
+        reg = lambda op, k: bytes([0x41, op, 0x82 | (k << 3)]) + (0x80 + 4 * k).to_bytes(4, "little")
+        code = bytearray(bytes.fromhex("53565755" "4989ca" "4d8d9ac0000000"
+                                       "410fae9a00010000" "410fae9204010000"))
+        for x in range(8):
+            code += bytes([0x41, 0x0F, 0x10, 0x42 | (x << 3), 16 * x])
+        for g in (0, 1, 2, 3, 5, 6, 7):
+            code += reg(0x8B, g)
+        code += insn
+        code += bytes.fromhex("9c" "418f82a0000000")
+        for g in (0, 1, 2, 3, 5, 6, 7):
+            code += reg(0x89, g)
+        for x in range(8):
+            code += bytes([0x41, 0x0F, 0x11, 0x42 | (x << 3), 16 * x])
+        code += bytes.fromhex("410fae9a04010000" "410fae9200010000" "5d5f5e5b" "c3")
+        _SSE_STUBS[insn] = bytes(code)
+    return _SSE_STUBS[insn]
+
+
+def sse_native(i, xmm, gpr, data, mxcsr):
+    """Run SSE instruction `i` on the host with xmm0-7, eax..edi (esp is
+    never an operand here), the memory operand bytes and the guest MXCSR.
+    Returns (xmm list, gpr list, rflags, mxcsr)."""
+    buf = bytearray(0x110)
+    for k, v in enumerate(xmm):
+        buf[16 * k:16 * k + 16] = v.to_bytes(16, "little")
+    for k, v in enumerate(gpr):
+        if k != 4:
+            buf[0x80 + 4 * k:0x84 + 4 * k] = (v & 0xFFFFFFFF).to_bytes(4, "little")
+    buf[0xC0:0xC0 + len(data)] = data
+    buf[0x104:0x108] = mxcsr.to_bytes(4, "little")
+    out = native(_sse_stub(i), buf)
+    return ([int.from_bytes(out[16 * k:16 * k + 16], "little") for k in range(8)],
+            [gpr[k] if k == 4 else int.from_bytes(out[0x80 + 4 * k:0x84 + 4 * k], "little") for k in range(8)],
+            int.from_bytes(out[0xA0:0xA8], "little"), int.from_bytes(out[0x104:0x108], "little"))
+
+
+def _regs():
+    from unicorn import x86_const as xc
+    return ([getattr(xc, f"UC_X86_REG_XMM{k}") for k in range(8)],
+            [getattr(xc, "UC_X86_REG_" + n) for n in ("EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI")])
+
+
+_XMMS, _GPRS = _regs()
+
 STORES = {"fst", "fstp", "fist", "fistp", "fisttp", "fnstcw", "fnstsw", "fstsw", "fstcw", "fbstp"}
 COMPARE_FLAGS = {"fcomi", "fcompi", "fucomi", "fucompi", "fcomip", "fucomip"}
 VERSION = "host-v1"
@@ -206,6 +293,7 @@ class Oracle:
         self.problem = None
         self.used = False
         self.cpu_dependent = False
+        self.mxcsr_touched = False  # an SSE oracle step or LDMXCSR ran: record the final MXCSR
 
     def decode(self, uc, addr, size):
         if addr not in self.decoded:
@@ -213,8 +301,8 @@ class Oracle:
                 i = next(self.md.disasm(bytes(uc.mem_read(addr, max(1, min(size, 15)))), addr))
             except StopIteration:
                 i = None
-            self.decoded[addr] = i if i is not None and (encoding(i) is not None
-                                                         or i.mnemonic in APPROXIMATIONS) else None
+            self.decoded[addr] = i if i is not None and (encoding(i) is not None or i.mnemonic in APPROXIMATIONS
+                                                         or sse_flagging(i) or i.mnemonic == "ldmxcsr") else None
         return self.decoded[addr]
 
     def on_compute(self, uc, addr, size, _):
@@ -224,8 +312,15 @@ class Oracle:
         i = self.decode(uc, addr, size)
         if i is None:
             return
-        if i.mnemonic in APPROXIMATIONS:
-            self.approximation(uc, i)
+        if i.mnemonic in APPROXIMATIONS or sse_flagging(i):
+            self.sse(uc, i)
+            return
+        if i.mnemonic == "ldmxcsr":
+            self.mxcsr_touched = True
+            value = int.from_bytes(uc.mem_read(self.address_of(uc, i, i.operands[0]), 4), "little")
+            if value & 0x1F80 != 0x1F80 or value >> 16:
+                self.problem = f"ldmxcsr {value:#x} at {addr:#010x}: unmasked SSE exceptions or reserved bits"
+                uc.emu_stop()
             return
         self.cpu_dependent |= i.mnemonic in CPU_DEPENDENT
         enc = encoding(i)
@@ -249,29 +344,41 @@ class Oracle:
         self.pending = (state, target and (target[0], out[:target[1]]),
                         flags & 0x45 if i.mnemonic in COMPARE_FLAGS else None, addr)
 
-    def approximation(self, uc, i):
-        """RCPPS/RSQRTPS/RCPSS/RSQRTSS: the host's result for the same
-        operands (Unicorn's differs: probe_approx.py)."""
+    def sse(self, uc, i):
+        """A flag-setting SSE instruction (or an approximation): run the
+        original instruction natively under the guest MXCSR (sse_native)
+        and take the host's destination, GPR result and MXCSR. Unicorn 2.1
+        sets no MXCSR exception flags (probe_x87.py, MXCSR case)."""
         from unicorn import x86_const as xc
-        reg = lambda o: getattr(xc, "UC_X86_REG_" + i.reg_name(o.reg).upper())
-        dst, src = i.operands
-        dest = uc.reg_read(reg(dst)).to_bytes(16, "little")
-        if src.type == X86_OP_MEM:
-            source = bytes(uc.mem_read(self.address_of(uc, i, src), src.size)).ljust(16, b"\0")
-        else:
-            source = uc.reg_read(reg(src)).to_bytes(16, "little")
-        code = bytes.fromhex("0f1001" "0f104910" + APPROXIMATIONS[i.mnemonic] + "0f1101" "c3")
-        out = native(code, dest + source)[:16]
-        self.used = self.cpu_dependent = True
-        self.pending = ("xmm", reg(dst), int.from_bytes(out, "little"), i.address)
+        mxcsr = uc.reg_read(xc.UC_X86_REG_MXCSR)
+        if mxcsr & 0x1F80 != 0x1F80 or mxcsr >> 16:
+            self.problem = f"MXCSR {mxcsr:#x} at {i.address:#010x}: unmasked SSE exceptions or reserved bits"
+            uc.emu_stop()
+            return
+        xmm = [uc.reg_read(getattr(xc, f"UC_X86_REG_XMM{k}")) for k in range(8)]
+        gpr = [uc.reg_read(r) for r in _GPRS]
+        mem = next((o for o in i.operands if o.type == X86_OP_MEM), None)
+        data = bytes(uc.mem_read(self.address_of(uc, i, mem), mem.size)) if mem is not None else b""
+        out_xmm, out_gpr, flags, out_mxcsr = sse_native(i, xmm, gpr, data, mxcsr)
+        self.used = self.mxcsr_touched = True
+        self.cpu_dependent |= i.mnemonic in APPROXIMATIONS
+        self.pending = ("sse", [(r, v) for r, v, old in zip(_XMMS, out_xmm, xmm) if v != old]
+                        + [(r, v) for r, v, old in zip(_GPRS, out_gpr, gpr) if v != old],
+                        out_mxcsr, flags & 0x45 if i.mnemonic in SSE_COMPARE_FLAGS else None, i.address)
 
     def flush(self, uc):
         if self.pending is None:
             return
-        if self.pending[0] == "xmm":
-            _, register, value, _ = self.pending
+        if self.pending[0] == "sse":
+            from unicorn.x86_const import UC_X86_REG_EFLAGS, UC_X86_REG_MXCSR
+            _, writes, mxcsr, flags, addr = self.pending
             self.pending = None
-            uc.reg_write(register, value)
+            for register, value in writes:
+                uc.reg_write(register, value)
+            uc.reg_write(UC_X86_REG_MXCSR, mxcsr)
+            if flags is not None and uc.reg_read(UC_X86_REG_EFLAGS) & 0x45 != flags and not self.problem:
+                self.problem = f"SSE compare flags differ from the host at {addr:#010x}"
+                uc.emu_stop()
             return
         from unicorn.x86_const import UC_X86_REG_EFLAGS
         state, store, flags, addr = self.pending

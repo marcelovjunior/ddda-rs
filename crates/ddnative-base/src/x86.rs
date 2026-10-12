@@ -77,6 +77,11 @@ pub struct Cpu {
     /// EFLAGS bits outside `fl` and `df` that POPFD can change at CPL3:
     /// NT, AC and ID (L22; IF and reserved bit 1 read as set).
     pub sys_flags: u32,
+    /// The guest's MXCSR while control is outside lifted code (L22). Lifted
+    /// code runs with it live in the host MXCSR (crate::sse2), so the SSE
+    /// instructions round and set sticky flags exactly as on hardware; the
+    /// runtime saves it here at service boundaries and loads it on entry.
+    pub mxcsr: Mxcsr,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
 }
@@ -87,6 +92,7 @@ impl From<Entry> for Cpu {
         xmm[0][0] = r.xmm0;
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
               xmm, fl: Flags::default(), df: false, fs_base: 0, seg: Segments::default(), sys_flags: 0,
+              mxcsr: Mxcsr::default(),
               st: Default::default() }
     }
 }
@@ -95,6 +101,17 @@ impl Cpu {
     pub fn exit(&self) -> Exit {
         Exit { eax: self.eax, ecx: self.ecx, edx: self.edx, ebx: self.ebx, esp: self.esp, ebp: self.ebp,
                esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.top_f32() }
+    }
+}
+
+/// A guest MXCSR value; the power-on and Windows thread default is 0x1F80
+/// (all exceptions masked, round to nearest; Intel SDM vol. 1, 10.2.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mxcsr(pub u32);
+
+impl Default for Mxcsr {
+    fn default() -> Self {
+        Mxcsr(crate::x86::MXCSR_DEFAULT)
     }
 }
 
@@ -295,23 +312,56 @@ pub fn comiss(a: u32, b: u32) -> Flags {
 
 #[cfg(target_arch = "x86_64")]
 mod sse {
-    use std::arch::x86_64::*;
+    //! Scalar SSE as the original instructions in non-pure asm (L22): they
+    //! run under the guest MXCSR live in the host register (crate::sse2), so
+    //! rounding and the sticky flags are the hardware's, and the compiler
+    //! can neither fold nor drop them (an intrinsic may be).
+    use std::arch::asm;
+    macro_rules! binary {
+        ($($op:ident),*) => {$(
+            /// `op a, b` with a as the destination: the original's operand order.
+            #[inline]
+            pub fn $op(a: u32, b: u32) -> u32 {
+                let r: u32;
+                unsafe {
+                    asm!("movd {x}, {a:e}", "movd {y}, {b:e}", concat!(stringify!($op), " {x}, {y}"), "movd {r:e}, {x}",
+                         a = in(reg) a, b = in(reg) b, r = lateout(reg) r, x = out(xmm_reg) _, y = out(xmm_reg) _,
+                         options(nostack, preserves_flags));
+                }
+                r
+            }
+        )*};
+    }
+    binary!(addss, subss, mulss, divss, minss, maxss);
     #[inline]
-    fn set(v: u32) -> __m128 { unsafe { _mm_castsi128_ps(_mm_cvtsi32_si128(v as i32)) } }
-    #[inline]
-    fn get(v: __m128) -> u32 { unsafe { _mm_cvtsi128_si32(_mm_castps_si128(v)) as u32 } }
-    /// `op a, b` with a as the destination: the original's operand order.
-    pub fn addss(a: u32, b: u32) -> u32 { unsafe { get(_mm_add_ss(set(a), set(b))) } }
-    pub fn subss(a: u32, b: u32) -> u32 { unsafe { get(_mm_sub_ss(set(a), set(b))) } }
-    pub fn mulss(a: u32, b: u32) -> u32 { unsafe { get(_mm_mul_ss(set(a), set(b))) } }
-    pub fn divss(a: u32, b: u32) -> u32 { unsafe { get(_mm_div_ss(set(a), set(b))) } }
-    pub fn minss(a: u32, b: u32) -> u32 { unsafe { get(_mm_min_ss(set(a), set(b))) } }
-    pub fn maxss(a: u32, b: u32) -> u32 { unsafe { get(_mm_max_ss(set(a), set(b))) } }
-    pub fn sqrtss(b: u32) -> u32 { unsafe { get(_mm_sqrt_ss(set(b))) } }
+    pub fn sqrtss(b: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("movd {x}, {b:e}", "sqrtss {x}, {x}", "movd {r:e}, {x}",
+                 b = in(reg) b, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
     /// cvttss2si (truncation; out of range gives 0x80000000).
-    pub fn cvttss2si(a: u32) -> u32 { unsafe { _mm_cvttss_si32(set(a)) as u32 } }
-    /// cvtsi2ss with the current (round-to-nearest) mode.
-    pub fn cvtsi2ss(v: u32) -> u32 { unsafe { get(_mm_cvtsi32_ss(_mm_setzero_ps(), v as i32)) } }
+    #[inline]
+    pub fn cvttss2si(a: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("movd {x}, {a:e}", "cvttss2si {r:e}, {x}",
+                 a = in(reg) a, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
+    /// cvtsi2ss under the live MXCSR rounding mode.
+    #[inline]
+    pub fn cvtsi2ss(v: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("xorps {x}, {x}", "cvtsi2ss {x}, {v:e}", "movd {r:e}, {x}",
+                 v = in(reg) v, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
 }
 #[cfg(target_arch = "x86_64")]
 pub use sse::*;

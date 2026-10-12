@@ -948,6 +948,11 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     raise Unsupported("xlatb address/segment override")
                 # AL = [EBX + zero-extended AL] (Intel SDM, XLAT)
                 body.append(set_reg("al", "(m.u8(ebx.wrapping_add(eax & 0xFF)) as u32)"))
+            elif mn in ("stmxcsr", "ldmxcsr"):
+                # The guest MXCSR is live in the host register while lifted
+                # code runs (sse2.rs); these move it exactly.
+                a = mem_addr(i, ops[0])
+                body.append(f"m.set_u32({a}, x86::stmxcsr());" if mn == "stmxcsr" else f"x86::ldmxcsr(m.u32({a}));")
             elif mn == "pause":
                 body.append("std::hint::spin_loop();")  # a spin-wait hint: no architectural effect
             elif mn in ("pslldq", "psrldq") and len(ops) == 2 and ops[1].type == X86_OP_IMM:
@@ -1211,7 +1216,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("comisd", "ucomisd"):
                 # Capstone 5 labels this memory operand m128, but COMISD
                 # and UCOMISD consume only a scalar m64 (Intel SDM).
-                body.append(f"fl = x86::comisd({vector(i, ops[0])}, {vector(i, ops[1], 8)});")
+                body.append(f"fl = x86::comisd_hw::<{str(mn == 'comisd').lower()}>({vector(i, ops[0])}, {vector(i, ops[1], 8)});")
             elif mn in ("divps", "minps", "maxps", "sqrtps", "addpd", "subpd", "mulpd", "divpd", "minpd", "maxpd", "sqrtpd",
                         "addsd", "subsd", "mulsd", "divsd", "minsd", "maxsd", "sqrtsd", "cvtps2pd", "cvtpd2ps", "cvtss2sd", "cvtsd2ss",
                         "cvtdq2ps", "cvttps2dq", "cvtps2dq", "cvtdq2pd", "cvttpd2dq", "cvtpd2dq", "unpcklps", "unpckhps", "unpcklpd", "unpckhpd",
@@ -1297,7 +1302,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("comiss", "ucomiss"):
                 d = xmm(i, ops[0])
                 s = f"{xmm(i, ops[1])}[0]" if ops[1].type == X86_OP_REG else f"m.u32({mem_addr(i, ops[1])})"
-                body.append(f"fl = x86::comiss({d}[0], {s});")
+                body.append(f"fl = x86::comiss_hw::<{str(mn == 'comiss').lower()}>({d}[0], {s});")
             elif mn == "cvttss2si":
                 s = f"{xmm(i, ops[1])}[0]" if ops[1].type == X86_OP_REG else f"m.u32({mem_addr(i, ops[1])})"
                 body.append(store(i, ops[0], f"x86::cvttss2si({s})"))
@@ -1381,7 +1386,7 @@ def cpu_arm(arm):
     the cache representation (and thus scan/callee discovery) unchanged.
     Substitute whole identifiers, leaving Rust strings untouched.
     """
-    arm = compact_alu(arm).replace(SAVE, "").replace(LOAD, "")
+    arm = compact_alu(exact_compares(arm)).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
@@ -1401,6 +1406,40 @@ def straight_line(addr, arms):
     if not body.endswith("return;") or re.search(r"\b(?:pc|continue|break)\b", body):
         return None
     return body
+
+
+def exact_compares(arm, read=None):
+    """L22: cached arms emitted COMISS/UCOMISS as x86::comiss and COMISD/
+    UCOMISD as x86::comisd (emulated compares that set no MXCSR flags, or
+    the wrong ones). Retarget each call, in order, to the hardware helper
+    of the original instruction at the same position in the block."""
+    if "x86::comiss(" not in arm and "x86::comisd(" not in arm:
+        return arm
+    import harness as h
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    read = read or h.code
+    pc = int(re.match(r"\s*0x([0-9A-Fa-f]+) =>", arm)[1], 16)
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    wanted = arm.count("x86::comiss(") + arm.count("x86::comisd(")
+    found = []
+    for _ in range(4096):
+        if len(found) == wanted:
+            break
+        i = next(md.disasm(read(pc, 15), pc, count=1))
+        if i.mnemonic in ("comiss", "ucomiss", "comisd", "ucomisd"):
+            found.append(i.mnemonic)
+        pc += i.size
+    if len(found) != wanted:
+        raise ValueError(f"compare retargeting: {wanted} calls, {len(found)} instructions")
+    out, k = [], 0
+    for part in re.split(r"(x86::comis[sd]\()", arm):
+        if part in ("x86::comiss(", "x86::comisd("):
+            mn = found[k]; k += 1
+            if part[-2] != mn[-1]:
+                raise ValueError(f"compare retargeting: {part} at a {mn}")
+            part = f"x86::comis{mn[-1]}_hw::<{str(not mn.startswith('u')).lower()}>("
+        out.append(part)
+    return "".join(out)
 
 
 def rust_fn(addr, name, arms):
@@ -1961,6 +2000,7 @@ fn every_lifted_function_matches_the_original() {{
         let machine = Rc::new(Recorded(RefCell::new(c.get("machine").and_then(|v| v.as_array()).cloned()
             .unwrap_or_default().into_iter().collect())));
         ddnative::platform::set_machine(Some(machine.clone()));
+        x86::ldmxcsr(x86::MXCSR_DEFAULT); // the recorder's initial MXCSR, live while lifted code runs
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
@@ -1976,6 +2016,9 @@ fn every_lifted_function_matches_the_original() {{
                 cpu.st.exec::<0x28db>(&mut data); // fld m80real
             }}
             f(&mut m, &mut cpu);
+            if let Some(v) = c.get("mxcsr") {{
+                assert_eq!(x86::stmxcsr(), u(v), "MXCSR");
+            }}
             if c.get("x87_control").is_some() {{
                 assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
                 assert_eq!(cpu.st.depth(), u(&c["x87_depth"]), "x87 depth");
@@ -1984,6 +2027,7 @@ fn every_lifted_function_matches_the_original() {{
             }}
             cpu.exit()
         }}));
+        x86::ldmxcsr(x86::MXCSR_DEFAULT);
         let all_calls_made = calls.borrow().is_empty() && machine.0.borrow().is_empty();
         let ok = match result {{
             Err(e) => {{

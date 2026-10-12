@@ -99,6 +99,22 @@ class RemainingTests(unittest.TestCase):
             with self.assertRaisesRegex(h.Rejected,'noreturn'):
                 self.program(trap,True)
 
+    def test_mxcsr_moves_and_compare_retargeting(self):
+        # stmxcsr [esp-4]; ret
+        arms,_,c=self.program('0fae5c24fcc3',True)
+        self.assertIn('m.set_u32(esp.wrapping_add(0xFFFFFFFC), x86::stmxcsr());',' '.join(arms))
+        self.assertIn([c['regs_in']['esp']-4,'801f0000'],c['writes'])
+        # mov dword [esp-4],0; ldmxcsr [esp-4]; ret: unmasked exceptions reject
+        arms,_,_=self.program('c74424fc000000000fae5424fcc3')
+        self.assertIn('x86::ldmxcsr(m.u32(',' '.join(arms))
+        with self.assertRaisesRegex(h.Rejected,'unmasked'):self.program('c74424fc000000000fae5424fcc3',True)
+        # cached arms: comiss xmm0,xmm1 then ucomisd xmm0,xmm1
+        code=bytes.fromhex('0f2fc1660f2ec1c3')
+        arm='            0x400000 => { fl = x86::comiss(xmm0[0], xmm1[0]); fl = x86::comisd(xmm0, xmm1); }'
+        out=lift.exact_compares(arm,read=lambda a,n:code[a-0x400000:a-0x400000+n])
+        self.assertIn('x86::comiss_hw::<true>(xmm0[0], xmm1[0])',out)
+        self.assertIn('x86::comisd_hw::<false>(xmm0, xmm1)',out)
+
     def test_xlatb_reads_ebx_plus_al(self):
         arms,_,c=self.program('d7c3',True)
         self.assertIn('m.u8(ebx.wrapping_add(eax & 0xFF))',' '.join(arms))

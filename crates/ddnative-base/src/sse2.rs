@@ -1,6 +1,11 @@
 //! Legacy SSE/SSE2, Intel SDM volume 2. Inline assembly fixes operand order
-//! even for commutative operations with distinct NaN payloads. These helpers
-//! use the recorder's masked, round-to-nearest MXCSR and restore host MXCSR.
+//! even for commutative operations with distinct NaN payloads.
+//!
+//! L22: lifted code runs with the guest's MXCSR live in the host MXCSR
+//! (Cpu::mxcsr holds it outside lifted code), so these helpers execute under
+//! it: rounding, FTZ/DAZ and the sticky exception flags are the hardware's.
+//! The asm blocks are not `pure`, so a flag-setting operation is never
+//! dropped or reordered against STMXCSR/LDMXCSR.
 use std::arch::{asm, x86_64::__m128i};
 
 /// Intel SDM SFENCE: order prior stores before subsequent stores.
@@ -41,12 +46,9 @@ macro_rules! binary {
         pub fn $op(a:[u32;4],b:[u32;4])->[u32;4] {
             let mut a:__m128i=unsafe{std::mem::transmute(a)};
             let b:__m128i=unsafe{std::mem::transmute(b)};
-            let mut old=0u32;let default=0x1f80u32;
             unsafe {
-                asm!("stmxcsr [{old}]", "ldmxcsr [{default}]",
-                     concat!(stringify!($op), " {a}, {b}"), "ldmxcsr [{old}]",
+                asm!(concat!(stringify!($op), " {a}, {b}"),
                      a=inout(xmm_reg) a,b=in(xmm_reg) b,
-                     old=in(reg) &mut old,default=in(reg) &default,
                      options(nostack,preserves_flags));
                 std::mem::transmute(a)
             }
@@ -86,12 +88,9 @@ macro_rules! immediate {
         pub fn $name<const IMM:u8>(a:[u32;4],b:[u32;4])->[u32;4] {
             let mut a:__m128i=unsafe{std::mem::transmute(a)};
             let b:__m128i=unsafe{std::mem::transmute(b)};
-            let mut old=0u32;let default=0x1f80u32;
             unsafe {
-                asm!("stmxcsr [{old}]","ldmxcsr [{default}]",
-                     concat!($op," {a}, {b}, {imm}"),"ldmxcsr [{old}]",
+                asm!(concat!($op," {a}, {b}, {imm}"),
                      a=inout(xmm_reg) a,b=in(xmm_reg) b,imm=const IMM,
-                     old=in(reg) &mut old,default=in(reg) &default,
                      options(nostack,preserves_flags));
                 std::mem::transmute(a)
             }
@@ -106,11 +105,9 @@ macro_rules! to_int {
     ($($op:ident),* $(,)?) => {$(
         pub fn $op(b:[u32;4])->u32 {
             let b:__m128i=unsafe{std::mem::transmute(b)};
-            let mut old=0u32;let default=0x1f80u32;let result:u32;
-            unsafe {asm!("stmxcsr [{old}]","ldmxcsr [{default}]",
-                         concat!(stringify!($op)," {result:e}, {b}"),"ldmxcsr [{old}]",
+            let result:u32;
+            unsafe {asm!(concat!(stringify!($op)," {result:e}, {b}"),
                          result=out(reg) result,b=in(xmm_reg) b,
-                         old=in(reg) &mut old,default=in(reg) &default,
                          options(nostack,preserves_flags));}result
         }
     )*};
@@ -123,4 +120,64 @@ pub fn cvtsi2sd(a: [u32; 4], b: u32) -> [u32; 4] {
         asm!("cvtsi2sd {a}, {b:e}",a=inout(xmm_reg) a,b=in(reg) b,options(nostack,preserves_flags));
         std::mem::transmute(a)
     }
+}
+
+/// MXCSR of a Windows thread at start (and the recorder's fixture value).
+pub const MXCSR_DEFAULT: u32 = 0x1F80;
+
+/// STMXCSR: the live MXCSR (the guest's while lifted code runs).
+pub fn stmxcsr() -> u32 {
+    let mut v = 0u32;
+    unsafe { asm!("stmxcsr [{p}]", p = in(reg) &mut v, options(nostack, preserves_flags)); }
+    v
+}
+
+/// LDMXCSR. Reserved bits would fault (#GP) and unmasked exceptions would
+/// trap the host: both are unsupported, as the recorder rejects them.
+pub fn ldmxcsr(v: u32) {
+    assert_eq!(v >> 16, 0, "LDMXCSR with reserved bits {v:#x}");
+    assert_eq!(v & 0x1F80, 0x1F80, "LDMXCSR with unmasked SSE exceptions {v:#x}");
+    unsafe { asm!("ldmxcsr [{p}]", p = in(reg) &v, options(nostack, preserves_flags)); }
+}
+
+fn compare_flags(rflags: u64) -> super::Flags {
+    // ZF PF CF: 111 unordered, 000 greater, 001 less, 100 equal
+    let r = match (rflags & 0x40 != 0, rflags & 4 != 0, rflags & 1 != 0) {
+        (true, true, true) => 3,
+        (false, false, true) => 2,
+        (true, false, false) => 0,
+        _ => 1,
+    };
+    super::Flags::new(super::COMISS, 0, 0, r, 32)
+}
+
+/// COMISS (ORDERED) / UCOMISS on the host, under the live MXCSR: the
+/// comparison and the exception flags (IE for any NaN or only an SNaN, DE)
+/// are the hardware's.
+pub fn comiss_hw<const ORDERED: bool>(a: u32, b: u32) -> super::Flags {
+    let rflags: u64;
+    unsafe {
+        if ORDERED {
+            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "comiss {x}, {y}", "pushfq", "pop {f}",
+                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _, f = out(reg) rflags);
+        } else {
+            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "ucomiss {x}, {y}", "pushfq", "pop {f}",
+                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _, f = out(reg) rflags);
+        }
+    }
+    compare_flags(rflags)
+}
+
+/// COMISD (ORDERED) / UCOMISD on the host (low 64 bits of each operand).
+pub fn comisd_hw<const ORDERED: bool>(a: [u32; 4], b: [u32; 4]) -> super::Flags {
+    let (x, y): (__m128i, __m128i) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
+    let rflags: u64;
+    unsafe {
+        if ORDERED {
+            asm!("comisd {x}, {y}", "pushfq", "pop {f}", x = in(xmm_reg) x, y = in(xmm_reg) y, f = out(reg) rflags);
+        } else {
+            asm!("ucomisd {x}, {y}", "pushfq", "pop {f}", x = in(xmm_reg) x, y = in(xmm_reg) y, f = out(reg) rflags);
+        }
+    }
+    compare_flags(rflags)
 }

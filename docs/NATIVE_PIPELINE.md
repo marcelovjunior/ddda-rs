@@ -1145,12 +1145,42 @@ initializer 0x00CFC150 (4096 x fsin, then a 0x4000-byte fill) and the C++
 initializer 0x0137E490 (0x2000 x 40-byte records), both on the `__cinit`
 path. `research/native/test_lift_budget.py` has the synthetic cases.
 
-**Still rejected.** STMXCSR/LDMXCSR: a guest MXCSR needs the sticky
-exception flags of every SSE instruction (hardware sets PE where Unicorn
-and the current helpers do not). Callees that consume x87 arguments
-(0x012F4E6A, `_ftol2`) under the push-only mock contract overflow the static
-depth. Address-taken and vtable admissions whose "address" is an ASCII tag
-or packed constant (e.g. 0x534658 "XFS", 0x707270 "prp") are not code.
+**Guest MXCSR.** While lifted code runs, the guest's MXCSR is live in the
+host thread's MXCSR: the SSE helpers (`sse2.rs`, non-pure asm) and the
+scalar ones execute the original instructions under it, so rounding,
+FTZ/DAZ, masks and the sticky exception flags are the hardware's.
+STMXCSR/LDMXCSR move it (`x86::stmxcsr`/`ldmxcsr`; reserved bits and
+unmasked exceptions are rejected, as the recorder rejects them).
+`Cpu::mxcsr` (default 0x1F80) holds it outside lifted code: ddruntime's
+`Registry::call` runs every service under 0x1F80 and saves/reloads the
+guest value around it; `services::call_guest` (window procedures, thread
+starts, I/O and audio/movie callbacks) and `Session::call` load it before
+entering guest code and restore the default after (also after a panic).
+ddruntime runs one host thread per guest thread, so no switch swaps it.
+COMISS/UCOMISS/COMISD/UCOMISD use hardware compares (`comiss_hw`/
+`comisd_hw::<ORDERED>`); `gen` retargets the emulated compares of cached
+bodies from the original instruction (`lift.exact_compares`), so no record
+changes. The recorder's SSE oracle runs every flag-setting SSE instruction
+(arithmetic, conversions, comparisons, approximations) natively under the
+guest MXCSR, re-encoded with Capstone's ModRM/immediate offsets so a memory
+operand becomes `[r11]`; destination, GPR result and MXCSR are the host's,
+compare EFLAGS are checked. Unicorn 2.1.4 sets no MXCSR flags (0x1F80
+where the CPU has 0x1FA0). New cases record the final `mxcsr`; the replay
+starts each case under 0x1F80 and compares it.
+
+**NaN guards retired.** The rejection of NaN/Inf float inputs and of SSE
+operations with two NaN operands existed because Unicorn does not quiet a
+signalling NaN on x87 loads and picks the x87 NaN for SSE. Every such
+instruction now takes the hardware result through the oracles
+(`test_x87_oracle.py`: signalling-NaN load, two-NaN ADDPS), so new
+recordings keep those cases.
+
+**Still rejected.** Callees that consume x87 arguments (0x012F4E6A,
+`_ftol2`) under the push-only mock contract overflow the static depth, and
+x87 values that cross calls to unlifted functions (0x012F1C9D) have no
+proof of ownership. Address-taken and vtable admissions whose "address" is
+an ASCII tag or packed constant (e.g. 0x534658 "XFS", 0x707270 "prp") are
+not code.
 
 ## Debugging a failing lifted function
 

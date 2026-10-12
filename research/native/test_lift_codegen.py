@@ -86,10 +86,10 @@ class CodegenTests(unittest.TestCase):
         reference = '''fn f_00001000(m: &mut dyn Mem, cpu: &mut Cpu) {
             let Cpu { mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi,
                 xmm: [mut xmm0, mut xmm1, mut xmm2, mut xmm3, mut xmm4, mut xmm5, mut xmm6, mut xmm7],
-                mut fl, mut st, mut fs_base, mut seg, mut sys_flags, .. } = std::mem::take(cpu);
+                mut fl, mut st, mut fs_base, mut seg, mut sys_flags, mut mxcsr, .. } = std::mem::take(cpu);
             let pc = 0x1000; loop { match pc { ARMS _ => unreachable!() } }
-        }'''.replace('ARMS', '\n'.join(arms).replace(lift.SAVE, lift.SAVE.replace('df: cpu.df', 'df: cpu.df, fs_base, seg, sys_flags'))
-                    .replace(lift.LOAD, lift.LOAD.replace('df: _', 'df: _, fs_base, seg, sys_flags')))
+        }'''.replace('ARMS', '\n'.join(arms).replace(lift.SAVE, lift.SAVE.replace('df: cpu.df', 'df: cpu.df, fs_base, seg, sys_flags, mxcsr'))
+                    .replace(lift.LOAD, lift.LOAD.replace('df: _', 'df: _, fs_base, seg, sys_flags, mxcsr')))
         generated = lift.rust_fn(0x1000, 'synthetic', arms)
         root = Path(__file__).resolve().parents[2]
         source = f'''#![allow(warnings)]

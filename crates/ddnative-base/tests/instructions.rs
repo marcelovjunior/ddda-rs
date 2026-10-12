@@ -260,8 +260,10 @@ fn sse_lanes_nan_order_rounding_and_host_state() {
     unsafe {
         asm!("stmxcsr [{after}]","ldmxcsr [{old}]",after=in(reg)&mut after,old=in(reg)&old,options(nostack));
     }
-    assert_eq!(r, [2; 4]);
-    assert_eq!(after, changed);
+    // L22: helpers run under the live (guest) MXCSR: round down, and the
+    // inexact conversion sets PE.
+    assert_eq!(r, [1; 4]);
+    assert_eq!(after, changed | 0x20);
     let r = cvtss2sd([11, 22, 33, 44], [1.5f32.to_bits(), 55, 66, 77]);
     assert_eq!(&r[2..], &[33, 44]);
     assert_eq!(r[0] as u64 | ((r[1] as u64) << 32), 1.5f64.to_bits());
@@ -499,4 +501,57 @@ fn approximations_are_the_host_instructions() {
         assert_eq!(rcpss(b, a), host(_mm_rcp_ss(_mm_move_ss(bv, av))));
         assert_eq!(rsqrtss(a, b), host(_mm_rsqrt_ss(_mm_move_ss(av, bv))));
     }
+}
+
+#[test]
+fn guest_mxcsr_is_live_in_the_helpers() {
+    // L22: rounding control and sticky flags follow the live MXCSR.
+    let one_third = |round: u32| {
+        ldmxcsr(MXCSR_DEFAULT | round << 13);
+        let r = divps([0x3f80_0000; 4], [0x4040_0000; 4])[0]; // 1/3
+        let flags = stmxcsr() & 0x3f;
+        ldmxcsr(MXCSR_DEFAULT);
+        (r, flags)
+    };
+    // the scalar helpers follow it as well
+    ldmxcsr(MXCSR_DEFAULT | 1 << 13);
+    assert_eq!(divss(0x3f80_0000, 0x4040_0000), 0x3eaa_aaaa);
+    assert_eq!(cvtsi2ss(16_777_217), 0x4b80_0000); // rounds down to 2^24
+    assert_eq!(stmxcsr() & 0x3f, 0x20);
+    ldmxcsr(MXCSR_DEFAULT);
+    assert_eq!(divss(0x3f80_0000, 0x4040_0000), 0x3eaa_aaab);
+    let (nearest, pe) = one_third(0);
+    let (down, _) = one_third(1);
+    assert_eq!(nearest, 0x3eaa_aaab);
+    assert_eq!(down, 0x3eaa_aaaa);
+    assert_eq!(pe, 0x20, "precision flag");
+    ldmxcsr(MXCSR_DEFAULT);
+    let _ = divsd([0, 0x3ff0_0000, 0, 0], [0; 4]); // 1.0 / 0.0
+    assert_eq!(stmxcsr() & 0x3f, 0x04, "zero-divide flag");
+    ldmxcsr(MXCSR_DEFAULT);
+    assert_eq!(stmxcsr(), MXCSR_DEFAULT);
+    assert_eq!(Cpu::default().mxcsr, Mxcsr(0x1F80));
+}
+
+#[test]
+fn hardware_compares_set_flags_like_the_cpu() {
+    let qnan = 0x7fc0_0000u32;
+    ldmxcsr(MXCSR_DEFAULT);
+    let f = comiss_hw::<false>(qnan, 0x3f80_0000);
+    assert_eq!(stmxcsr() & 1, 0, "ucomiss: no IE for a quiet NaN");
+    assert!(f.zf() && f.pf() && f.cf());
+    let f = comiss_hw::<true>(qnan, 0x3f80_0000);
+    assert_eq!(stmxcsr() & 1, 1, "comiss: IE for any NaN");
+    assert!(f.zf() && f.pf() && f.cf());
+    ldmxcsr(MXCSR_DEFAULT);
+    assert!(comiss_hw::<true>(0x3f80_0000, 0x4000_0000).cf()); // 1 < 2
+    assert!(!comiss_hw::<true>(0x4000_0000, 0x3f80_0000).cf());
+    assert!(comisd_hw::<false>([0, 0x3ff0_0000, 0, 0], [0, 0x3ff0_0000, 0, 0]).zf());
+    assert_eq!(stmxcsr(), MXCSR_DEFAULT);
+}
+
+#[test]
+#[should_panic(expected = "unmasked")]
+fn ldmxcsr_rejects_unmasked_exceptions() {
+    ldmxcsr(0x1F00);
 }

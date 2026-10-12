@@ -124,11 +124,20 @@ impl Registry {
     /// or report it as unbound.
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
         match self.get(target) {
+            Some(Binding::Service(f)) => {
+                // L22: a service is Rust: it runs under the host default
+                // MXCSR and the guest's (live while lifted code runs) waits
+                // in cpu.mxcsr, so neither sees nor changes the other's
+                // rounding or sticky flags.
+                cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
+                x86::ldmxcsr(x86::MXCSR_DEFAULT);
+                // an API call: where a guest thread's time slice may end
+                crate::threads::maybe_yield();
+                f(m, cpu);
+                x86::ldmxcsr(cpu.mxcsr.0);
+                Ok(())
+            }
             Some(b) => {
-                if let Binding::Service(_) = b {
-                    // an API call: where a guest thread's time slice may end
-                    crate::threads::maybe_yield();
-                }
                 b.function()(m, cpu);
                 Ok(())
             }
