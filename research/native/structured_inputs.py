@@ -224,6 +224,22 @@ def _inputs(cases):
     return {} if strategy == 'random' else dict(input_strategy=strategy)
 
 
+FALLBACK_INPUTS = ({}, dict(zero_inputs=True), dict(input_strategy='zero-call-v1'), dict(input_strategy='small-v1'),
+                   dict(input_strategy='mockzero-v1'), dict(input_strategy='objects-v1'))
+
+
+def _rerecord_any(f, closed, frames, noreturn, kw, seeds, seconds):
+    """The previous distribution first, then the standard ones in order: a
+    boundary change can make the old inputs unusable (a caller of a promoted
+    `__alloca_probe` with random EAX now really allocates), and any
+    distribution gives valid fixtures."""
+    for k in [kw] + [k for k in FALLBACK_INPUTS if k != kw]:
+        new = _rerecord(f, closed, frames, noreturn, k, seeds, seconds)
+        if new:
+            return new
+    return []
+
+
 def _rerecord(f, closed, frames, noreturn, kw, seeds, seconds):
     """Fresh cases for `f` under the given closed boundary (its own mode)."""
     a, key, new, start = f['addr'], lift.vector_key(f), [], time.monotonic()
@@ -252,9 +268,10 @@ def promote(root, seeds=3, seconds=20):
     moves of the SEH helpers. Recorded cases that mocked a promoted entry
     would change meaning (replay and recorder run closed targets for real).
     An ordinary call-free entry that some case mocks therefore stays ext: a
-    mock with arbitrary returns is a faithful stand-in for it. A caller-frame
-    helper (frame_exit) is promoted even when mocked, because no mock can
-    move the caller's frame: as in any boundary refresh, the callers whose
+    mock with arbitrary returns is a faithful stand-in for it. A frame-moving
+    helper (harness.moves_frame: a caller-frame exit, or ESP moved by a
+    value as in `__alloca_probe`) is promoted even when mocked, because no
+    constant-cleanup mock can move the caller's frame: as in any boundary refresh, the callers whose
     cases mock it are re-lifted against the new closed set and re-recorded
     with their previous distribution. It is promoted only if every such
     caller records again; otherwise it stays ext (repeat until stable), so
@@ -293,9 +310,11 @@ def promote(root, seeds=3, seconds=20):
         contract = h.frame_exit(a, g['body'])
         if h.caller_frame(contract):
             g['frame_exit'] = contract
+        elif h.moves_frame(a, g['body']):
+            g['frame_exit'] = 'return-pc'
         elif a in mocked:
             continue
-        new = _rerecord(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
+        new = _rerecord_any(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
         if new:
             eligible[a] = (g, new)
     affected = {}
@@ -321,7 +340,7 @@ def promote(root, seeds=3, seconds=20):
                 continue
             finally:
                 lift.release_body(a, f['size'])
-            new = _rerecord(g, now, frames, noreturn, _inputs(old[a]), seeds, seconds)
+            new = _rerecord_any(g, now, frames, noreturn, _inputs(old[a]), seeds, seconds)
             if new:
                 redone[a] = (g, new)
             else:

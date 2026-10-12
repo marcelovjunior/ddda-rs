@@ -254,3 +254,198 @@ through random data, internal entries).
 native-L17's `patterns/lift.json`, `vectors/lift.json`,
 `patterns/lift_novector.json`, `patterns/lift_novector_keys.json`,
 `structured_quarantine.json`, `quarantine_evidence.json`.
+
+### State at hand-off (2026-10-12, wrap-up requested by the head)
+
+**Batch 3, recording in progress (run 4).** These commits came after
+batch 2: f43e7ff/7000f4b/307287b/fcaadc4 plus the alloca-probe work:
+
+- `moves_frame` classifies ESP moved by a value (`__alloca_probe`) as an
+  unmockable frame helper, closed with `frame_exit: 'return-pc'` (nested
+  frame ends at the first return-PC arrival).
+- `local_alloc_sites` recognizes entry allocations through branches.
+- promote's re-recording falls back across the standard input distributions.
+- An indirect call's merged deferred caller cleanup is subtracted from its
+  mock pop.
+
+Run 4 (`L17BC/l28c.sh`, log `L28/run4.log`) archived the batch 2 trial logs
+to `L28/trials-b2/`. It then promoted 0x00DB9C30 (call-free, unmocked). It
+kept `__alloca_probe` ext: under that run's code only
+`__alloca_probe_16`/`_8` failed to re-record, and the distribution fallback
+committed afterwards fixes that (checked by a diagnostic: the other 21
+mocking callers re-record). It is recording the full protocol; at the time
+of writing native-L17 holds 59,089 entries / 175,898 cases. The local-alloc
+and merged-cleanup changes landed while run 4's workers were running, so its
+later passes mix recorder versions. That is harmless for validity: a mock
+pop only ever leads to rejection, never a false pass. It does make
+per-rule attribution for run 4 unreliable. The head adopts native-L17 after
+run 4 ends; audit it with `L28/audit_b2.py`, pointed at native-L28b2 as the
+base.
+
+**Not yet recorded (run 5, ready).** It promotes `__alloca_probe` (29
+remaining candidates call an alloca probe) with the fallback. It also
+re-records everything under the merged-cleanup rule, which by trace makes
+the sShader2 loader 0x00E0E470 record (3/3 seeds, 8 mocked calls).
+Commands:
+
+```
+# after run 4 has finished (no other job of mine writing native-L17):
+E:/ddda-re/tools/pyenv/Scripts/python.exe E:/ddda-re/tools/heavy.py <who> -- \
+  "C:/Program Files/Git/bin/bash.exe" E:/ddda-re/notes/native-L17/L17BC/l28d.sh \
+  > E:/ddda-re/notes/native-L17/L28/run5.log 2>&1
+```
+
+`l28d.sh` archives the trial logs to `L28/trials-run4/`, then runs
+`structured_inputs.py promote`, `prepare`, and record+adopt for: the 9
+strategies at 3 seeds / 20 s; the 3 zero-return strategies at 12 seeds /
+60 s; random/zero/mockzero-v1 with `--terminal`. It sets `LIFT_DATA`,
+`INVENTORY_DB` and `INVENTORY_EXTRA` to native-L17's copies and 6 workers.
+Then hand the pair to the train; no local Rust replay (batched rule).
+
+**Remaining candidate classes** (323 before run 4; about 318 now):
+- Outside-image (about 160): mock-ABI residue that needs per-trace work.
+  Seen in samples: mid-function supplementary entries (0x004E4145),
+  indirect targets through random data, callee cleanups static_pop can't
+  prove.
+- NaN/Inf and two-NaN inputs (about 80): retry with
+  `record --retry 'NaN'` once L22's hardware oracle is on main.
+- Runaway (about 73): constant-trip loops with calls or stack-slot
+  counters. claude-6 covers 8; stack-slot counters and value-tracked starts
+  are open.
+- Noreturn calls on non-root paths, and a residue of terminal-ineligible
+  noreturn paths.
+- Small classes: undefined flags, unmasked x87, page limit, CPU exceptions.
+
+The lift rejections (STMXCSR/LDMXCSR, x87 forms, RCR and others) are
+claude-6's (L22).
+
+### L28b takeover: run 4 audit and run 5 (2026-10-12)
+
+**Batch ready (codex, task/L28b-crt): +25 functions / +70 cases in run 6,
+59,115 entries total; alloca promotion and its 23 caller refreshes audited.
+33 light tests pass; Rust replay belongs to the integration train.**
+
+Run 4 printed `run4 done` before this work touched native-L17. Its final
+pair contains **59,090 selected entries / 175,899 cases**, leaving **317**
+prepared candidates without fixtures. The inherited `L28/audit_b2.py`,
+pointed at the head's native-L28b2 snapshot, reports **6 additions / 16 new
+cases**, no removals and no unexpected edits; the only existing entry
+changed is the promoted 0x00DB9C30.
+
+The six additions are 0x007F2120 (random), 0x007DF790
+(objects-mockzero-v1), and 0x004AB440, 0x00E0E470, 0x00E0E5A0,
+0x00E111A0 (small-mockzero-v1). In particular **the shader loader
+0x00E0E470 already recorded in run 4**. Run 5 preserves accepted entries;
+promotion refreshes the helper and its previously mocking callers, and
+the strategy passes retry the remaining candidates. It does not refresh
+every accepted record.
+
+Run 5 uses the supplied `L17BC/l28d.sh` with only its working-directory
+line changed to this L28b worktree. It runs through `heavy.py codex`, with
+native-L17's LIFT_DATA, INVENTORY_DB and INVENTORY_EXTRA and six workers.
+Recorder source stays fixed throughout the run. No private data snapshot
+was made. `research/native/audit_records.py` records hashes and addresses
+only, then checks the complete selected pair: existing record hashes and
+case multisets must match, except newly closed helpers and callers whose
+old cases mocked them. Those callers must receive new cases, and no case
+may still mock a newly closed helper. Missing entries also fail the audit.
+
+Run 5 finished at 02:32:03: **59,090 entries / 175,899 cases**, zero
+additions and zero promotions. `L28/run5-audit.json` reports **all 59,090
+existing entries unchanged**, including their case multisets. No removals,
+unexpected edits or stale mock cases. All prescribed strategy passes ran.
+
+**Why the fallback still failed.** The existing recorder always initializes
+ESP to a multiple of 16. The alignment wrappers 0x012F4E90 and 0x012F4EA6
+compute alignment from `ESP + 4 - EAX`. Even zero EAX therefore allocates
+four bytes, and their exit ESP equals entry ESP; the ordinary stack guard
+rejects it. Merely switching among the existing input distributions cannot
+exercise their zero-allocation path.
+
+The new opt-in `zero-call-v1` uses the zero-input distribution with entry
+ESP four bytes below an aligned caller stack (ESP modulo 16 = 12).
+It adds no address special case or stack-contract exemption, preserves all
+existing distributions and checks, and is included in promotion fallback.
+Synthetic 8-/16-byte alignment tests reproduce the old rejection and the
+new valid return; the promotion test proves this distribution is tried for
+an affected caller. The existing rejection test still forbids promotion
+when a caller cannot re-record. **33 light tests pass** (16 structured-input,
+13 frame-contract, 4 audit).
+
+Run 6 (`L28/run6.sh`, `L28/run6.log`) starts with an assertion against each
+original alignment wrapper, then promotes, prepares, and records/adopts
+random, zero, zero-call-v1 and small-mockzero-v1 (three seeds, 20 seconds).
+It moves old trial logs aside; no selected-data snapshots are taken. Since
+run 5 preserved the entire pair, the run-5 hash manifest is also the exact
+run-6 baseline. Both original wrappers rejected under the old zero strategy
+and returned with ESP increased by four under zero-call-v1, **3/3 seeds
+each**. Promotion then closed **0x012F2280**, re-recorded all **23** existing
+mocking callers and kept every selected entry (59,090 / 175,901 cases at
+that point). Run 6 finished at 02:49:42:
+
+| Measure | Before run 5 | After run 6 |
+|---|---:|---:|
+| Selected entries | 59,090 | 59,115 |
+| Recorded cases | 175,899 | 175,969 |
+| Liftable candidates without a fixture | 317 | 292 |
+| Lift rejections (this branch, before L22 integration) | 157 | 157 |
+
+Random added 17 functions / 44 cases; zero added 8 / 24. Promotion added
+two cases while refreshing the existing helper/callers. The new aligned
+strategy enabled promotion; it added no functions directly in its own
+pass. Seven new entries occur in TITLE_PATH.md: **0x004403A0, 0x00448500,
+0x0044E6F0, 0x004709D0, 0x004A3260, 0x00F9FBA0, 0x00FEE130**.
+
+**Preservation proved:** `L28/run6-audit.json` reports **59,066 unchanged
+old records and case multisets**. Exactly 24 existing entries changed:
+the promoted 0x012F2280 and its 23 previously mocking callers. No entries
+were removed, no unrelated entries changed, and no cases still mock the
+promoted helper. The report lists every added and refreshed address.
+
+**Adoption / verification:** native-L17 is frozen after run 6 for the head
+to snapshot and adopt. Use its `patterns/lift.json`, `vectors/lift.json`,
+`patterns/lift_novector.json`, `patterns/lift_novector_keys.json`, plus the
+unchanged quarantine metadata. This is a boundary-changing pair, not just
+25 append-only additions: when combining another lane's data, re-record
+any imported case still mocking 0x012F2280. No Rust build or replay was
+run here, per batched verification; all 25 additions and the refreshed
+24 entries await the integration train. The original-wrapper assertions
+and the 33 light tests passed. No shared native/inventory data was written,
+and no snapshots were taken by this agent.
+
+The audit can be repeated without modifying the pair:
+
+```
+E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/audit_records.py compare --root E:/ddda-re/notes/native-L17 --manifest E:/ddda-re/notes/native-L17/L28/run5-before-hashes.json --report E:/ddda-re/notes/native-L17/L28/run6-audit.json
+```
+
+**One next action:** integration replay of this pair; then resolve the
+image-table/stack-slot bounded loops below with the lifter lane. NaN and
+instruction rejections still wait for L22 integration. The outside-image
+terminal-call cleanup finding remains a diagnosis, not a shipped fix.
+
+**Title-path follow-up evidence (not fixes).** Of the 317 run-4 residuals,
+62 addresses occur in TITLE_PATH.md (this is a document intersection, not
+a newly proven reachability closure). Private evidence is in
+`L28/run4-title-residue.json` and `L28/title-loop-evidence.json`.
+
+- Archive registration 0x00419100 reads ten descriptors via 0x0153B6BC.
+  Their image-backed counts total 13,061 records. Its six-instruction
+  inner loop at 0x00419113 already requires 78,366 instructions, above
+  the default 20,000 budget. Random inputs cannot remove this loop.
+- `sObjCollision::ctor` initializes a stack-slot counter to 799 at
+  0x0047862B and decrements it at 0x004786B5 (800 iterations).
+  `sNpcManager::ctor` also has a stack-slot counter initialized at
+  0x0047549A and decremented at 0x00475540. These require bounded-loop
+  analysis beyond the register-counter forms in the L22 lane; sent to
+  head and claude-6 on the board.
+- 0x00DB8B90 pushes one argument for 0x00DB8AC0. The latter's normal
+  exit 0x00DB8B65 tail-jumps to LeaveCriticalSection through 0x0139D164
+  (four-byte cleanup), but its other path calls 0x004080A0 at 0x00DB8B7F
+  then reaches INT3 at 0x00DB8B84. The recorder's static cleanup analysis
+  returns zero because of that trap path. This is a candidate diagnosis,
+  not a proved recording fix: terminal-path classification needs evidence
+  before changing the conservative fallback. The next link is concrete:
+  0x004080A0 calls inventory symbol `__invoke_watson` (0x012EDDD5) at
+  0x004080C5, then reaches INT3 at 0x004080CB. Neither name is covered by
+  the current four-symbol `noreturn_entries` set. Sent to the lifter lane.

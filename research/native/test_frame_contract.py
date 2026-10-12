@@ -160,4 +160,64 @@ class FrameContractTests(unittest.TestCase):
         self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
 
 
+    # alloca-like: push ecx; lea ecx,[esp+4]; sub ecx,eax; mov eax,ecx; pop ecx;
+    # xchg esp,eax; mov eax,[eax]; mov [esp],eax; ret  (exit = entry ESP + 4 - EAX)
+    PROBE='51 8d4c2404 2bc8 8bc1 59 94 8b00 890424 c3'.replace(' ','')
+
+    def walk(self, text):
+        body,(p1,p2)=self.image(bytes.fromhex(text))
+        with p1,p2:
+            return h.frame_exit(0x400000,body),h.moves_frame(0x400000,body)
+
+    def test_esp_moved_by_a_value_is_a_frame_helper(self):
+        self.assertEqual(self.walk(self.PROBE),(None,True))
+        self.assertEqual(self.walk(self.PROLOG)[1],True)
+        # alignment and leave are not: push ebp; mov ebp,esp; and esp,-16; leave; ret
+        self.assertEqual(self.walk('558bec83e4f0c9c3'),(None,False))
+        self.assertEqual(self.walk('558bec5dc3'),(('esp',4,()),False))
+
+    def test_return_pc_contract_ends_a_call_free_helper_frame(self):
+        # caller: push ebp; mov ebp,esp; mov eax,0x40; call P; call M (mocked);
+        # mov esp,ebp; pop ebp; ret.  P = PROBE at 0x400100 (closed)
+        caller=bytes.fromhex('558becb840000000e8f3000000e8ee0100008be55dc3')
+        image=bytearray(caller.ljust(0x1000,bytes([0xcc])))
+        probe=bytes.fromhex(self.PROBE)
+        image[0x100:0x100+len(probe)]=probe
+        image=bytes(image)
+        body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(caller,0x400000)]
+        with (patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),
+              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),
+              patch.object(h,'static_pop',return_value=0)):
+            run=lambda **kw:h.run_sparse(0x400000,7,body=body,end=0x400000+len(caller),
+                                         lifted=frozenset({0x400100}),**kw)
+            with self.assertRaises(h.Rejected):
+                run()  # the probe returns 0x40 bytes below the call's ESP
+            c=run(frame_contracts={0x400100:'return-pc'})
+        self.assertEqual([e['target'] for e in c['calls']],[0x400200])
+
+
+    def sites(self, text):
+        body,(p1,p2)=self.image(bytes.fromhex(text.replace(' ','')))
+        with p1,p2:
+            return h.local_alloc_sites(0x400000,set(body))
+
+    def test_local_allocation_through_branches(self):
+        # sub esp,8; test ecx,ecx; jz early; call f; add esp,8; ret; early: add esp,8; ret
+        self.assertEqual(self.sites('83ec08 85c9 7409 e8f2000000 83c408 c3 83c408 c3'),{0x400000})
+        # early path with a saved-register pop before the cleanup is fine too
+        self.assertEqual(self.sites('83ec08 56 85c9 740a e8f1000000 5e 83c408 c3 5e 83c408 c3'),{0x400000})
+        # a store on one path before its call means outgoing arguments, not locals
+        self.assertEqual(self.sites('83ec08 85c9 7409 e8f2000000 83c408 c3 c7042400000000 e8e5000000 83c408 c3'),set())
+
+
+    def test_merged_caller_cleanup_after_an_indirect_call(self):
+        # mov eax,[ecx]; push ebx; push edi; call eax; push eax; push 1; push ecx;
+        # call cdecl; add esp,0x10; ret  -> the indirect callee pops 4, not 8
+        code=bytes.fromhex('8b01 53 57 ffd0 50 6a01 51 e8f1000000 83c410 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[4,0])
+
+
 if __name__=='__main__':unittest.main()
