@@ -110,6 +110,12 @@ X87_NEED = {}
 # taken to return a float in st0 (filled by lift(); stored in lift.json as
 # "x87_push" for the recorder and the replay).
 X87_PUSH_SITES = {}
+# L50: per function, {return address: n} of mocked call sites whose callee
+# takes n x87 values (its entry contract, mock_pops): the mock pops them, as
+# the callee does, before any returns_float push ("x87_pop" in lift.json).
+X87_POP_SITES = {}
+_MOCK_POPS = {}
+_MOCK_LEAVES = {}
 BODY_INFO = {}
 _BODY_CACHE = {}
 
@@ -1403,14 +1409,90 @@ def constant_loop_budget(ins, callable=frozenset(), platform=frozenset(), why=No
     return budget if budget <= INSN_CEILING else None
 
 
-def returns_float(ins, k, depth=0):
+def returns_float(ins, k, depth=0, callable=frozenset()):
     """Prove a one-value deficit downstream of this mocked call.
 
     Track supported x87 work and direct branches, stopping at another call,
     an unknown jump, trap or return. Never supply entry-stack arguments or
     guess across intervening callees. One mock can return only one value.
     """
-    return x87_deficit(ins, ins[k].address + ins[k].size, depth, 1) == 1
+    return x87_deficit(ins, ins[k].address + ins[k].size, depth, 1, callable) == 1
+
+
+def mock_leaves(t, callable=frozenset()):
+    """L50: the x87 values the callee at `t` leaves on the stack when it
+    returns, proven from its code: the one depth at the rets of a body
+    without calls (x87_depth_check from its entry contract), or None. A
+    callee's own mocks cannot prove it: 0x00D53F30 returns its callee's
+    float, which no mock inside it pushes. 0x013048CD loads
+    its argument and leaves 1, so the deficit walk passes it (0x0130470B
+    loads two arguments that way before `call 0x01300497`, which takes 2)."""
+    key = (t, callable)
+    if key in _MOCK_LEAVES:
+        return _MOCK_LEAVES[key]
+    _MOCK_LEAVES[key] = None  # a cycle proves nothing
+    saved = TABLE_PROOF.get(t), TABLE_ENDS.get(t), X87_POP_SITES.get(t), X87_PUSH_SITES.get(t)
+    result = None
+    try:
+        ins, switches, stops, _ = decode_body(t, 1, ext=True)
+        # only a body without calls: a callee's own mocks would decide what
+        # it leaves (a float it returns from its callee is pushed by no mock)
+        if not any(i.mnemonic == "call" for i in ins):
+            exits, _ = x87_depth_check(ins, t, None, callable, True, switches, stops, mock_pops(t, callable))
+            result = exits.pop() if len(exits) == 1 else None
+    except (Unsupported, KeyError):
+        pass
+    finally:
+        for table, value in zip((TABLE_PROOF, TABLE_ENDS, X87_POP_SITES, X87_PUSH_SITES), saved):
+            if value is None:
+                table.pop(t, None)
+            else:
+                table[t] = value
+    _MOCK_LEAVES[key] = result
+    return result
+
+
+def mock_pops(t, callable=frozenset(), hops=0):
+    """L50: the x87 values the callee at `t` takes, which a mock of it pops
+    as the callee does: its entry contract, x87_deficit over its own
+    decoded body (the values it reads below its entry depth before any
+    call, unknown jump or return; `_ftol2` 0x012F05C0 takes 1). An entry
+    that only moves registers and jumps to another entry (the _CI stubs,
+    0x012F4E6A `mov edx, imm; jmp 0x01304690`) takes that entry's values.
+    0 when its code cannot be decoded. TABLE_PROOF and TABLE_ENDS are left
+    as they were."""
+    key = (t, callable)
+    if key in _MOCK_POPS:
+        return _MOCK_POPS[key]
+    _MOCK_POPS[key] = 0  # a cycle of stubs takes nothing
+    saved = TABLE_PROOF.get(t), TABLE_ENDS.get(t)
+    try:
+        ins = decode_body(t, 1, ext=True)[0]
+    except (Unsupported, KeyError):
+        return 0
+    finally:
+        for table, value in zip((TABLE_PROOF, TABLE_ENDS), saved):
+            if value is None:
+                table.pop(t, None)
+            else:
+                table[t] = value
+    n = x87_deficit(ins, t, 0, 8, callable) or 0
+    if not n and hops < 3:
+        at = {i.address: i for i in ins}
+        pc = t
+        for _ in range(8):
+            i = at.get(pc)
+            if i is None or i.mnemonic.startswith(("f", "call", "ret")) or (i.mnemonic.startswith("j") and i.mnemonic != "jmp"):
+                break
+            if i.mnemonic == "jmp":
+                if i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) in function_entries():
+                    n = mock_pops(i.operands[0].imm & 0xffffffff, callable, hops + 1)
+                break
+            if i.mnemonic != "mov":
+                break
+            pc += i.size
+    _MOCK_POPS[key] = n
+    return n
 
 
 def x87_deficit(ins, start, depth, limit, callable=frozenset()):
@@ -1419,7 +1501,10 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
     on overflow or an unsupported x87 instruction. A direct call to a
     closed callee in `callable` with a known contract (X87_NEED, X87_NET)
     is walked through like an x87 instruction (L45): its values cannot
-    come from a mock."""
+    come from a mock. L50: a direct call to a mocked callee reads the
+    values it takes (mock_pops) and ends the path, as a return does
+    (0x01315878 `call 0x012F0350; add esp, 8; call _ftol2`); one that
+    takes none and leaves a proven number (mock_leaves) is walked past."""
     at = {i.address: i for i in ins}
     todo = [(start, depth, 0, None)]
     seen, required = set(), 0
@@ -1438,6 +1523,27 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
             current, saved = saved, None
         closed = (mn == "call" and i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) in callable
                   and X87_NET.get(i.operands[0].imm & 0xffffffff) is not None)
+        if mn == "call" and not closed and i.operands[0].type == 2:
+            t = i.operands[0].imm & 0xffffffff
+            takes = mock_pops(t, callable)
+            missing = max(0, takes - current)
+            if missing and saved is not None:
+                return None
+            added += missing
+            if added > limit:
+                return None
+            required = max(required, added)
+            # a callee that takes nothing and leaves a proven number of
+            # values only produces them: the walk goes on past it to their
+            # reader; one that takes values reads them, which ends the path
+            leaves = None if takes else mock_leaves(t, callable)
+            if leaves is None:
+                continue
+            current += leaves
+            if current > 8:
+                return None
+            todo.append((pc + i.size, current, added, saved))
+            continue
         if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt") and not closed:
             continue
         if closed or (mn in X87_SUPPORTED and mn not in X87_CONTROL):
@@ -1481,16 +1587,19 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     """Every x87 read or pop must find a value on the stack: walk the
     control flow from depth `entry` (values the caller left on the x87
     stack; 0 except for an ext entry contract). A direct call to a closed lifted function adds
-    its net effect (X87_NET); a mocked call adds 1 where its result is
-    consumed (returns_float: the recorder's mock and the replay push a
-    value there) and 0 elsewhere. Anything else read at depth 0 rejects.
-    Returns (set of depths at the function's rets, push sites)."""
+    its net effect (X87_NET); a mocked call first pops the values its
+    callee takes (mock_pops, L50: recorded in X87_POP_SITES[addr]), then
+    adds 1 where its result is consumed (returns_float: the recorder's
+    mock and the replay push a value there) and 0 elsewhere. Anything else
+    read at depth 0 rejects. Returns (set of depths at the function's
+    rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
     # a path state is (index, depth, saved): `saved` is the depth an
     # FNSAVE emptied the stack from, which the matching FRSTOR restores (L46)
     seen, todo = {}, [(at[addr], entry, None)]
-    exits, push_sites = set(), set()
+    exits, push_sites, pop_sites = set(), set(), {}
+    X87_POP_SITES[addr] = pop_sites
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
     pending = list(range(len(ins)))
@@ -1503,9 +1612,12 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
         k, depth, saved = todo.pop()
         while k < len(ins):
             i = ins[k]
-            if seen.get((i.address, saved), 99) <= depth:
-                break  # already walked with this depth or less
-            seen[(i.address, saved)] = depth
+            # L50: every depth reaching an instruction is walked (at most
+            # nine), so a loop that grows the stack meets the overflow check
+            # (0x009897C0 grew one value per pass through a mocked _CIfmod)
+            if depth in seen.setdefault((i.address, saved), set()):
+                break
+            seen[(i.address, saved)].add(depth)
             mn = i.mnemonic
             if mn in X87_SAVE:
                 saved, depth = depth, 0
@@ -1532,9 +1644,16 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                     if depth < X87_NEED.get(t, 0):
                         raise Unsupported(f"x87-return (callee {t:#x} needs {X87_NEED[t]} values, has {depth})")
                     depth += net
-                elif ext and returns_float(ins, k, depth):
-                    depth += 1
-                    push_sites.add(ins[k + 1].address)
+                elif ext:
+                    pops = mock_pops(t, callable) if direct else 0
+                    if pops:
+                        if depth < pops:
+                            raise Unsupported(f"x87-return (mocked callee {t:#x} takes {pops} values, has {depth})")
+                        depth -= pops
+                        pop_sites[ins[k + 1].address] = pops
+                    if returns_float(ins, k, depth, callable):
+                        depth += 1
+                        push_sites.add(ins[k + 1].address)
             if i.address in stops:
                 break
             if mn in ("ret", "retn", "repz ret"):
@@ -1832,6 +1951,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=Fal
     budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
+                       **({"x87_pop": sorted([r, n] for r, n in X87_POP_SITES.get(addr, {}).items())}
+                          if X87_POP_SITES.get(addr) and not step else {}),
                        **({"insn_budget": budget} if budget else {}),
                        **({"table_sweep": sweep} if (sweep := {f"0x{pc:08X}": v for pc, v in
                                                               TABLE_ENDS.pop(addr, {}).items()}) else {})}
@@ -2729,6 +2850,7 @@ def relift():
             f["arms"] = lift(f["addr"], f["size"], closed, ext=bool(f.get("ext")))
             f["x87_push"] = X87_PUSH_SITES.get(f["addr"], [])
             f["calls"] = callees(f["arms"])
+            f.pop("x87_pop", None)  # BODY_INFO holds it only when there are pop sites
             f.update(BODY_INFO[f["addr"]])
             keep.append(f)
         except Unsupported as e:  # a stricter lifter: the function no longer qualifies
@@ -2828,12 +2950,22 @@ _CLOSED = frozenset()
 _FRAMES = {}
 
 
+def drop_absent(g, a):
+    """A re-lifted record `g` of `a` without the optional fields its new
+    BODY_INFO no longer holds (L50: an "x87_pop" from an earlier lift)."""
+    if "x87_pop" not in BODY_INFO.get(a, {}):
+        g.pop("x87_pop", None)
+    return g
+
+
 def vector_key(f):
     """Versioned recorder boundary; old caches need an explicit migration."""
     if "body" not in f:
         return None
     import hashlib
     fields = [f.get(k) for k in ("body", "noreturn_sites", "calls", "ext", "x87_push")]
+    if f.get('x87_pop'):
+        fields.append(f"x87-pop-v1:{json.dumps(f['x87_pop'], separators=(',', ':'))}")
     if f.get('original_entry'):
         fields.append('original-entry-v1')
     if f.get('x87_entry'):
@@ -2864,6 +2996,8 @@ def _vectors_for(args):
         inputs['x87_entry'] = args[9]
     if len(args) > 10 and args[10]:
         inputs['max_insn'] = args[10]
+    if len(args) > 11 and args[11]:
+        inputs['x87_pop'] = args[11]
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     if _FRAMES:
@@ -2941,7 +3075,7 @@ def vectors(per=3):
     nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0), f.get('insn_budget'))
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0), f.get('insn_budget'), f.get('x87_pop'))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
@@ -3059,6 +3193,9 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
         cpu.edx = u(&o["edx"]);
         for k in 0..4 {{ cpu.xmm[0][k] = u(&o["xmm0"][k]); }}
         cpu.esp = cpu.esp.wrapping_add(4 + u(&o["pop"]));
+        for _ in 0..o.get("st_pop").and_then(|v| v.as_u64()).unwrap_or(0) {{
+            cpu.st.pop(); // the x87 values the mocked callee takes (L50)
+        }}
         if let Some(v) = o.get("st_push").and_then(|v| v.as_u64()) {{
             cpu.st.push(v as u32); // the mocked callee returned this float in st0
         }}

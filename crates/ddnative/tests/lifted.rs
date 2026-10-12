@@ -53,6 +53,9 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
         cpu.edx = u(&o["edx"]);
         for k in 0..4 { cpu.xmm[0][k] = u(&o["xmm0"][k]); }
         cpu.esp = cpu.esp.wrapping_add(4 + u(&o["pop"]));
+        for _ in 0..o.get("st_pop").and_then(|v| v.as_u64()).unwrap_or(0) {
+            cpu.st.pop(); // the x87 values the mocked callee takes (L50)
+        }
         if let Some(v) = o.get("st_push").and_then(|v| v.as_u64()) {
             cpu.st.push(v as u32); // the mocked callee returned this float in st0
         }
