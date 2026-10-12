@@ -673,7 +673,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False):
+               terminal=False, visited=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -737,6 +737,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     registers, for such loops that also walk a count read from memory; each
     is identical to its page strategy up to the first mocked call. These are
     test inputs, not callee models.
+
+    `visited`, a set, receives the address of every executed instruction
+    (coverage for case selection, L45); it changes nothing in the run.
     """
     import random
     import time
@@ -1319,6 +1322,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.hook_add(UC_HOOK_CODE, on_frame)
     if end is not None:
         uc.hook_add(UC_HOOK_CODE, on_ext)
+    if visited is not None:
+        uc.hook_add(UC_HOOK_CODE, lambda uc_, pc, size, _: visited.add(pc))
     if x87_push:
         # fixed code on its own page (Unicorn caches translated code per
         # page): fld dword [X87_SLOT]; jmp dword [X87_SLOT + 4]

@@ -346,6 +346,90 @@ def promote(root, seeds=3, seconds=20):
           f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
 
 
+def table_goals(f):
+    """The proven table targets of `f`'s current body: every one is a case
+    path the vectors must reach (L45 coverage goal)."""
+    try:
+        _, switches, _, _ = lift.decode_body(f['addr'], f['size'], ext=bool(f.get('ext')))
+    finally:
+        lift.TABLE_PROOF.pop(f['addr'], None)
+    return {t for targets in switches.values()
+            if isinstance(targets, lift.TableTargets) and targets.proven for t in targets}
+
+
+def refresh(root, strategies, seeds, seconds):
+    """Re-lift the ext records whose body the current lifter decodes
+    differently (verification_gaps: stale body, e.g. table code past the
+    extent) and replace them and their cases in place. Cases are recorded
+    with the previous input distribution, then each strategy in turn,
+    keeping `seeds` cases plus every case that reaches a proven table
+    target no kept case reached, until all are reached or the time is up.
+    Closed stale records are only reported: their callers run them for
+    real, so a change needs a boundary refresh (promote). Every other
+    record and case is left byte-identical and in order."""
+    selected = read(root/'patterns/lift.json'); cases = read(root/'vectors/lift.json')
+    closed = lift.seed_closed_contracts(selected)
+    frames = frame_contracts(selected)
+    noreturn = lift.noreturn_entries()
+    gaps = lift.verification_gaps(selected)
+    stale = [f for f in selected if any(r.startswith('stale body') for r in gaps.get(f['addr'], []))]
+    report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
+    position = {f['addr']: k for k, f in enumerate(selected)}
+    for f in [f for f in stale if f.get('ext')]:
+        a = f['addr']
+        old = [c for c in cases if c['addr'] == a]
+        try:
+            arms = lift.lift(a, f['size'], closed, ext=True)
+            g = dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                     **lift.BODY_INFO[a])
+        except lift.Unsupported as e:
+            report['functions'][a] = dict(error=f'lift: {e}')
+            continue
+        finally:
+            lift.release_body(a, f['size'])
+        goals, reached, new, start = table_goals(g), set(), [], time.monotonic()
+        key = lift.vector_key(g)
+        for strategy in [_inputs(old) if old else {}] + [
+                dict(zero_inputs=True) if s == 'zero' else ({} if s == 'random' else dict(input_strategy=s))
+                for s in strategies]:
+            for index in range(1, 256):
+                remaining = seconds - (time.monotonic() - start)
+                if remaining <= 0 or (len(new) >= seeds and goals <= reached):
+                    break
+                seen = set()
+                seed = (a << 8) ^ index
+                try:
+                    r = h.run_sparse(a, seed, end=a+g['size'], lifted=frozenset(closed), body=g['body'],
+                                     x87_push=g.get('x87_push', []), noreturn_sites=g.get('noreturn_sites', []),
+                                     noreturn_targets=noreturn, original_entry=g.get('original_entry', False),
+                                     x87_entry=g.get('x87_entry', 0),
+                                     max_insn=g.get('insn_budget') or lift.INSN_BUDGET,
+                                     frame_contracts=frames, max_seconds=remaining, visited=seen, **strategy)
+                except h.Rejected:
+                    continue
+                except Exception:  # noqa: BLE001  (emulator errors: no case)
+                    continue
+                finally:
+                    gc.collect()
+                if len(new) < seeds or (goals & seen) - reached:
+                    new.append(dict(addr=a, seed=seed, body_key=key, **r))
+                    reached |= goals & seen
+        report['functions'][a] = dict(cases=len(new), old_cases=len(old), goals=len(goals),
+                                      reached=len(goals & reached),
+                                      unreached=[f'0x{t:08X}' for t in sorted(goals - reached)])
+        if not new:
+            continue  # keep the old record: it stays a verification gap
+        selected[position[a]] = g
+        at = next(k for k, c in enumerate(cases) if c['addr'] == a) if old else len(cases)
+        cases = [c for c in cases[:at] if c['addr'] != a] + new + [c for c in cases[at:] if c['addr'] != a]
+    write(root/'patterns/lift.json', selected); write(root/'vectors/lift.json', cases)
+    write(root/'refresh.json', report)
+    for a, r in report['functions'].items():
+        print(f'0x{a:08X}: {r}', flush=True)
+    print(f'closed stale (not refreshed): {[hex(a) for a in report["closed_stale"]]}; '
+          f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
+
+
 def prune_no_vectors(root, have):
     """Successful adoptions must not remain in the historical failure list."""
     path=root/'patterns/lift_novector.json'
@@ -358,7 +442,9 @@ def prune_no_vectors(root, have):
 
 if __name__ == '__main__':
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command',choices=['prepare','record','adopt','promote'])
+    ap.add_argument('command',choices=['prepare','record','adopt','promote','refresh'])
+    ap.add_argument('--strategies',default='small-v1,objects-v1,image-v1,zero,random',
+                    help='refresh: comma-separated strategies tried after the previous distribution')
     ap.add_argument('--strategy',default='random',choices=('random','zero',*h.INPUT_STRATEGIES))
     ap.add_argument('--seeds',type=int,default=3)
     ap.add_argument('--seconds',type=float,default=20)
@@ -373,4 +459,5 @@ if __name__ == '__main__':
     if args.command=='prepare':prepare(root)
     elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal)
     elif args.command=='promote':promote(root,args.seeds,args.seconds)
+    elif args.command=='refresh':refresh(root,args.strategies.split(','),args.seeds,args.seconds)
     else:adopt(root,args.strategy,args.terminal)
