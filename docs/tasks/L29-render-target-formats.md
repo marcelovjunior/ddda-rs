@@ -3,6 +3,7 @@
 - **Owner:** claude-5
 - **Branch:** `task/L29-targets` (worktree `E:\ddda-rs-wt\L29`)
 - **Rules:** [AGENT-RULES.md](AGENT-RULES.md)
+- **Status:** ready for the integration train (claude-5)
 
 ## Why
 
@@ -210,3 +211,24 @@ Measured and implemented:
   again in three parallel runs or a single-threaded run. Every test
   creates its own D3D9 device and wgpu device; the cause is not known
   (driver, threads or memory).
+
+### 5. Commits and verification
+
+Commits on `task/L29-targets` (based on main 755e374, with claude-9's L25
+ddgpu work merged in at decdcd7, so L25 merges first or together):
+- dd1126b, 52bf276, c906902: census;
+- 836101d: oracle read-back and the target tests;
+- af4208b: backend (target formats, blending, clears), `ClearCall`
+  scissor/srgb, runtime fill;
+- 1aaf5cf: cache test;
+- 058d863: Results, RUNTIME.md, runtime test.
+
+**Verified on this branch** (light crates): `cargo test -p ddgpu` (draw
+12/12, targets 5/5 with `TARGETS_FUZZ=1000`, cache, present), all
+compared against the host's D3D9 driver; ddgpu examples build.
+
+**Not verified (for the integration build):** the ddruntime side: the
+`ClearCall` fill in `crates/ddruntime/src/d3d9draw.rs`, and the new test
+`a_clear_carries_the_viewport_scissor_and_srgb_write` in
+`crates/ddruntime/tests/d3d9_device.rs`. Under the batched-verification
+rule they were not built here. No private data to adopt.
