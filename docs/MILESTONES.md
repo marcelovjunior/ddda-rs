@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c post-train-13 census (2026-10-12)
+
+- Main da9e8e4b merged; **59,375 / 59,440 verified**, **65 residuals**
+  (47 recorder, 18 lifter/gap). All 44 prior pending rows now credited.
+- Aligned-frame mock-input strategy **7443b1f7**, **182 light tests pass**.
+  Six recording trials queued; private data has no new additions yet.
+- **Next action:** finish the serial frame trials and audit their results.
+
+
 ### L28c smaller input classes (2026-10-12, pending replay)
 
 - **+6/+18**, all three return-address and three memory-extent rows;

@@ -35,6 +35,29 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Train 13 census and next frame strategy (2026-10-12)
+
+Main **da9e8e4b** merged: all 44 prior pending rows are credited by train 13.
+Inventory reports **59,375 / 59,440 verified**, **65 residuals**: 47 recorder
+and 18 lifter/gap rows. RESIDUALS is reconciled to that exact address set.
+
+**frame-call-v1** (7443b1f7) recognizes the second EBP save after stack
+alignment only with matching reverse-order restores at every return. It
+selects mock arguments; all previous policies and return guards remain
+unchanged. **182 light tests pass**, including original synthetic execution,
+return-address and nonvolatile-register preservation, and negative matches.
+Six static matches are queued for serial recording: 608AE0, 618880, 64DD20,
+663040, 6F8730, 6F8C00. Baseline: `dispatch-round2-before.json`,
+**59,646 functions / 177,532 cases**. No new fixture is claimed yet.
+
+Further static findings are sent to claude-6 (#9792/#9794/#9795): three CRT
+rows branch to an omitted shared tail at 130070B; ten dispatcher rows call
+five recorded callees whose sole body RET immediate is nonzero while the
+current cleanup scan falls back to zero. Those are hypotheses for the next
+checked strategy, not proof of a complete ABI. **Next:** finish aligned-frame
+recording and audit, with boot fixture requests first.
+
+
 ### Smaller input classes: +6/+18 (2026-10-12, pending replay)
 
 The existing general wrapper-call-v1 records **all three return-address

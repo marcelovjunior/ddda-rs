@@ -1,7 +1,7 @@
 # Residual functions
 
-Inventory snapshot: **train 12, main `d20706b7`**, 59,331 / 59,440
-non-thunk functions verified; **109 remain (0.183%)**.
+Inventory snapshot: **train 13, main `da9e8e4b`**, 59,375 / 59,440
+non-thunk functions verified; **65 remain (0.109%)**.
 
 One row per non-verified inventory address, sorted by address. Supplementary
 entries count only when admitted to inventory; thunks are excluded. Private
@@ -10,84 +10,45 @@ describe attempted inputs, not a unique cause or invalid game code.
 
 Sources: `scripts/inventory.py summary` and read-only query
 `SELECT address,status FROM functions WHERE NOT thunk AND status != 'verified'`;
-`native/patterns/verification_gaps.json`; train-12 native gate;
+`native/patterns/verification_gaps.json`; train-13 native gate;
 [L28 Results](tasks/L28-crt-platform-class.md#results),
 [L49 Results](tasks/L49.md#results), and the
 [L21 cross-entry census](tasks/L21-boot-bring-up.md).
-Private row evidence: `native-L28c/L28c/residual-census-train12.json`.
+Private row evidence: `native-L28c/L28c/residual-census-train13.json`.
 0x00786D69 is a stale-body input task assigned to Codex but is not an admitted
 inventory address; it remains outside this denominator.
 
-Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/oracle)**, **91 codex (recorder)**.
-**44 rows have private cases awaiting replay.** Boot stops take priority;
+Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/oracle)**, **47 codex (recorder)**.
+**0 rows have private cases awaiting replay.** Boot stops take priority;
 0x00493AA0 remains set aside.
 
 | Address | Class | Blocker | Owner |
 |---|---|---|---|
 | 0x00410000 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
-| 0x00416740 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 39,449 instructions, limit 59,449. Head replay pending. | codex (recorder) |
 | 0x004644D0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00475DD0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 64,266 instructions, limit 84,266. Head replay pending. | codex (recorder) |
-| 0x00476D60 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 37,541 instructions, limit 57,541. Head replay pending. | codex (recorder) |
-| 0x00480BA0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 97,086 instructions, limit 117,086. Head replay pending. | codex (recorder) |
 | 0x00493AA0 | Recorder: setup mismatch | Set aside: manager-first changes destination reads/writes/MXCSR; destination-first changes manager reads/writes/calls and ECX/EDX. Neither setup order passes exact replay. | codex (recorder) |
 | 0x004A0C00 | Recorder: object/manager state | Checked 0x00437BE0 + 0x00489F80 setup still stops at branch 0x004027E9 after 92 instructions; linked-object input/proof facts unresolved. | codex (recorder) |
-| 0x004A0E20 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 26,008 instructions, limit 46,008. Head replay pending. | codex (recorder) |
-| 0x004EE3E0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 63,226 instructions, limit 83,226. Head replay pending. | codex (recorder) |
 | 0x004EE720 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
-| 0x004F5200 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 48,022 instructions, limit 68,022. Head replay pending. | codex (recorder) |
-| 0x004F53B0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 48,003 instructions, limit 68,003. Head replay pending. | codex (recorder) |
-| 0x00524A10 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 597,397 instructions, limit 617,397. Head replay pending. | codex (recorder) |
-| 0x00524BE0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 597,397 instructions, limit 617,397. Head replay pending. | codex (recorder) |
-| 0x00528550 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 37,829 instructions, limit 57,829. Head replay pending. | codex (recorder) |
-| 0x005293E0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 616,732 instructions, limit 636,732. Head replay pending. | codex (recorder) |
 | 0x005652E0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00565308 | Recorder: stale-body inputs | Stale body omits 13 instructions from 0x0056532A; refreshed-body recording leaves the image. Resolve inputs before refreshing accepted cases. | codex (recorder) |
 | 0x0056532A | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x005F3450 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00606670 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x006076F0 | Recorder: dispatch/return | Exact-register proof retry reaches execution outside the image at 0x00000000; input/cleanup contract unresolved. | codex (recorder) |
 | 0x00608AE0 | Recorder: dispatch/return | Exact-register proof retry reaches execution outside the image at 0x00000000; input/cleanup contract unresolved. | codex (recorder) |
 | 0x00618880 | Recorder: dispatch/return | Exact-register proof retry reaches execution outside the image at 0x00000000; input/cleanup contract unresolved. | codex (recorder) |
-| 0x006197E0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0061BC10 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0062E3A0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00633A70 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00633B70 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00646A30 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x0064DD20 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00663040 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x006692F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00669F40 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0066B9E0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00677930 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00685030 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00685B40 | Recorder: dispatch/return | wrapper-call-v1 and guarded-values-v1 now reach execution outside the image at generated object pointers; valid caller/cleanup state unresolved. | codex (recorder) |
 | 0x00689960 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
-| 0x0068A9F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00691AE0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00691E50 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00692A40 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x006A1770 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x006E0EB0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x006EDFE0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x006F1590 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x006F2350 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x006F3242 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x006F3230; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x006F8730 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x006F8C00 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00705E00 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0070B210 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0070F3C0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x007126C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00712AC0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0071C0F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00736370 | Inventory admission | L22 identifies an address-taken ASCII tag, not code; resolve inventory admission (current decode rejects BOUND). | claude-6 (lifter) |
 | 0x007BEA60 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x007F2020 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
-| 0x00811A90 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 68,475 instructions, limit 88,475. Head replay pending. | codex (recorder) |
 | 0x00815C60 | Recorder: floating comparison | Checked 0x00811780 constructor reaches COMISS at 0x00816522; exact floating-point facts needed for a finite trace. | codex (recorder) |
-| 0x008282E0 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
 | 0x0083FFF0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00947493 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x009472C0; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x009897C0 | Lifter/oracle: x87 state | x87 stack fault before fild at 0x009899d0 | claude-6 (lifter/oracle) |
@@ -96,7 +57,6 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x00A195D0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00A2F3B0 | Verification gap | unproven table at 0x00A2F4A5 | claude-6 (gap) |
 | 0x00B75EC0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00B7FF30 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
 | 0x00B952C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00B955C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00B97220 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
@@ -105,10 +65,7 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x00BA5540 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00BD45C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00C1D790 | Quarantine: return contract | Prior own-return fixture rejected; resolve and revalidate the function/return contract before recording. | claude-6 (lifter) |
-| 0x00C9BAA0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 75,896 instructions, limit 95,896. Head replay pending. | codex (recorder) |
-| 0x00C9E0F0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 24,681 instructions, limit 44,681. Head replay pending. | codex (recorder) |
 | 0x00CED240 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00CED280 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00CEEBC0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00D29AF0 | Recorder: allocator state | Checked 0x00740590 + 0x00D29820 setup supplies 20-byte input but allocator dispatch 0x00D29B4C still has EAX=0; real allocator state unresolved. | codex (recorder) |
 | 0x00D9EF20 | Quarantine: return contract | Prior own-return fixture rejected; resolve and revalidate the function/return contract before recording. | claude-6 (lifter) |
@@ -119,7 +76,6 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x011251F0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x01137DF3 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x01137DD0; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x01146420 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x01146410; boundary fix first, then Codex fixture. | claude-6 (lifter) |
-| 0x011591C0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x012A5B30 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
 | 0x012E7CE0 | Verification gap | unproven table at 0x012E7D24; unproven table at 0x012E7E06 | claude-6 (gap) |
 | 0x012EFA1E | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
