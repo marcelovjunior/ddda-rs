@@ -361,3 +361,27 @@ class InputTests(unittest.TestCase):
                     self.assertEqual(trials.read(root/'patterns/lift.json'),functions)
 
 if __name__=='__main__':unittest.main()
+
+
+class PrepareTests(unittest.TestCase):
+    def test_a_tail_of_its_jumpers_is_never_a_candidate(self):
+        # L58 (head #9879): an entry the lifter decodes into its jumpers
+        # (frame_tail) gets no standalone record
+        import sqlite3
+        import lift
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'patterns').mkdir()
+            (root/'patterns/lift.json').write_text('[]')
+            db = root/'inventory.sqlite'
+            with contextlib.closing(sqlite3.connect(db)) as conn:
+                conn.execute('CREATE TABLE functions(address INTEGER, namespace TEXT, name TEXT, size INTEGER, status TEXT)')
+                conn.executemany('INSERT INTO functions VALUES (?,?,?,?,?)',
+                                 [(0x1000, 'G', 'tail', 4, 'untouched'), (0x2000, 'G', 'fn', 4, 'untouched')])
+                conn.commit()
+            with patch.object(lift, 'DB', str(db)), patch.object(lift, 'lift', return_value=['return;']), \
+                 patch.object(lift, 'inlined_tail', side_effect=lambda a: a == 0x1000), \
+                 patch.object(lift, 'release_body'), patch.dict(lift.BODY_INFO, {0x2000: dict(body=[0x2000])}), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                trials.prepare(root)
+            self.assertEqual([c['addr'] for c in json.loads((root/'patterns/structured_candidates.json').read_text())], [0x2000])
+            self.assertIn(str(0x1000), json.loads((root/'patterns/structured_rejections.json').read_text()))
