@@ -23,28 +23,90 @@ not new measurements made by this task.
 
 ## Results
 
-### Support batch (2026-10-12, integration pending)
+### Hot/cold layout (2026-10-12)
 
-- Seven Python tests pass for deterministic hot/cold ownership, package
-  profiles, cross-package routing, unchanged writes and default restoration.
-- One Rust accessor equivalence regression passes on the unchanged base:
-  aligned/unaligned, page crossings, wrapping addresses, permission and lazy
-  fallback, and both atomic modes.
-- `scripts/build_speed.py` records command, compiler, environment, source
-  hashes, exit status and elapsed time. `NATIVE_PROFILE=play` selects the
-  exact play artifacts for the existing native gate; default checks remain
-  unchanged. Bash syntax check passes; the full gate has not run yet.
-- Shared lift patterns/vectors copied into private `E:/ddda-re/notes/L66/native`;
-  SHA-256, sizes and mtimes unchanged. Inventory uses a private SQLite backup.
-- Generator integration is drafted and passes synthetic generation checks,
-  but is not applied: claude-6 owns `lift.py` and is changing local-call
-  override dispatch in L60. Coordination requested on the board. The draft
-  accepts an ownership function so those checks can remain intact.
-- Single-shard baseline: fixed checked-in `ddlift-05`, 36,300 lines. First
-  attempt exited 1 without a compiler diagnostic; retry is in progress with
-  direct log capture and explicit compiler stack size. No measured speedup,
-  full-build result or runtime comparison is claimed yet.
-- Private logs, receipts and unapplied drafts: `E:/ddda-re/notes/L66`.
+- `lift.py gen --hot-functions FILE` accepts hexadecimal addresses, one per
+  line, with `#` comments. Unknown functions fail before output changes.
+  No list preserves the 32 address packages and play opt1. An explicit
+  list (including an empty list) selects cold opt0; sorted hot functions
+  occupy dedicated opt1 packages, at most 2,000 functions per package.
+- Cross-package calls keep `call_lifted`. Shared instruction addresses
+  retain their original owner precedence even when hot functions move.
+  Package metadata, facade, step lookup and retired hot packages are
+  regenerated together; unchanged writes preserve mtimes.
+- Current generated corpus: 59,734 functions, 167 modules, 33 packages.
+  The provisional 83-function list comes from the two profile text reports
+  supplied by head (43 loading owners, 62 movie owners, union 83). It is
+  private at `E:/ddda-re/notes/L66/profile-text-hot.txt`. These truncated
+  reports are not a complete title/gameplay profile.
+- 20 focused Python tests pass (nine hot-layout, seven codegen, four math
+  wiring), plus one real Rust synthetic hot/cold call-graph test. The
+  unchanged base passes the new accessor equivalence regression.
+- `NATIVE_PROFILE=play scripts/native_gate.sh` passes in **106.88 s** with
+  required vectors. The lift corpus contains **178,130 cases / 59,734
+  functions**; readable-port tests also pass. Compiler inputs unchanged
+  during the gate. All ten shared input files retain SHA-256, size and
+  mtime; private copies retain their content. No shared recordings changed.
 
-Next: finish the baseline, measure the same shard at opt0 with parallel
-front end, then integrate hot ownership after L60 coordination.
+### Measurements
+
+All receipts/logs are private under `E:/ddda-re/notes/L66`. Builds use
+`CARGO_INCREMENTAL=0`, target `C:/ddda-targets/L66`, and the heavy scheduler.
+The parallel front end works on installed stable rustc 1.99.0 with
+`RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z threads=8"`; it is an explicit experimental
+build setting, not a workspace-wide compiler requirement.
+
+| Workload | Before | After | Conditions |
+| --- | ---: | ---: | --- |
+| Fixed ddlift-05, 36,300 lines | 254.89 s | 21.49 s | opt1/default front end to opt0/eight threads; identical source |
+| Fixed ddlift-05, opt1 | 254.89 s | 162.86 s | eight-thread front end only |
+| Full play + emu | ~25 min (head observation) | 636.08 s (10m36s) | fresh target, 32 cold + one hot package, eight-thread front end, four Cargo jobs |
+| Sampled hot replay | baseline pending | 230 cases x 200 passes, 1.616 ms/pass | zero differing functions; concurrent machine load, preliminary timing |
+
+The observed full build is about 58% shorter than the supplied approximate
+baseline. A matched local full-build/runtime comparison is still pending;
+these numbers do not yet prove the main-loop FPS criterion.
+
+### Lean emission and ownership
+
+- Head board assignment #9952 transfers `mem.rs` accessors and `x86.rs`
+  Flags to head; Codex retains generator layout/emission. `x87.rs` is
+  untouched. Head also relayed the user's revised tradeoff: about 20% FPS
+  loss is acceptable for about 50% shorter builds.
+- Direct flag predicates were measured on fixed ddlift-05 cold opt0:
+  18.31 s original versus 23.31 s candidate. The first receipt's aggregate
+  audit changed only because Cargo.lock added the hot package; shard
+  source was fixed. No demonstrated compile gain, so the candidate is
+  not retained. Its five lexical/alias tests passed privately.
+- Two aligned-access/cold-fallback prototypes passed the accessor test but
+  increased opt1 compile time: 162.86 s baseline versus 189.06 / 188.82 s.
+  They were reverted. Some additional runs overlapped an untracked foreign
+  build and are excluded from conclusions. Production base semantics are
+  unchanged; head owns further helper work.
+- L60's local-call change is not merged here. The generator accepts an
+  owner callback so its call-site checks can be retained during integration.
+
+### Reproduction
+
+Use a private copy of the lift patterns/vectors and a private inventory:
+
+```powershell
+$env:LIFT_DATA = 'E:/ddda-re/notes/L66/native'
+$env:INVENTORY_DB = 'E:/ddda-re/notes/L66/inventory.sqlite'
+$env:CARGO_TARGET_DIR = 'C:/ddda-targets/L66'
+$env:CARGO_INCREMENTAL = '0'
+$env:CARGO_BUILD_JOBS = '4'
+$env:RUSTC_BOOTSTRAP = '1'
+$env:RUSTFLAGS = '-Z threads=8'
+$env:RUST_MIN_STACK = '268435456'
+$env:HEAVY_BIG = '1'
+# Run each command sequentially through the heavy scheduler:
+python E:/ddda-re/tools/heavy.py codex -- python research/native/lift.py gen --hot-functions E:/ddda-re/notes/L66/profile-text-hot.txt
+python E:/ddda-re/tools/heavy.py codex -- cargo build --profile play -p ddplay --features emu
+$env:NATIVE_PROFILE = 'play'
+python E:/ddda-re/tools/heavy.py codex -- bash scripts/native_gate.sh
+```
+
+Next: obtain the complete sampled function list and compare hot replay and
+main-loop timing against the all-optimized baseline. Support commit:
+`881a977a`; generated-layout integration commit follows.

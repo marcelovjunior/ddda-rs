@@ -1,15 +1,17 @@
 # Milestones
 
-### L66 build-speed support (2026-10-12, integration pending)
+### L66 hot/cold build (2026-10-12)
 
-- Seven hot-layout/package Python tests and one Rust accessor equivalence
-  test pass. Timing receipts and optional play-profile native gate added.
-- Private input snapshot audited unchanged; production generator/accessors
-  not changed yet. No speedup or runtime comparison claimed.
-- Blockers: L60 owns the overlapping generator routing; baseline shard
-  measurement is running after the shared build queue.
-- Next: finish fixed-output opt1/opt0 timings and coordinate hot ownership.
-
+- Optional function-level hot packages implemented; 20 focused Python tests,
+  one real hot/cold Rust graph test and the native play-profile gate pass.
+  Required lift corpus: 178,130 cases / 59,734 functions. Input audit clean.
+- Fixed shard: 254.89 s opt1 to 21.49 s opt0/eight-thread front end.
+  Full play + emu: 636.08 s (fresh target), versus head's approximate 25 min.
+  Provisional profile list has 83 functions; 230 hot replay cases match.
+- No compile improvement from predicate/accessor experiments; not retained.
+  Head owns base helpers. Full sampled list and runtime baseline are pending.
+- Next: matched hot replay/main-loop comparison. See
+  `docs/tasks/L66-build-speed.md` for conditions and limits.
 
 ### L28c remaining recorder review (2026-10-12)
 

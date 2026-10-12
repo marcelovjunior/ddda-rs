@@ -3,24 +3,6 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
-// Translated from 0x00FFFDE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00FFFDE0.
-pub fn f_00fffde0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0xE8)); { let a = cpu.eax & u32::MAX; let n = 0xAu32 & 31; if n != 0 { let r = (a >> n) & u32::MAX; cpu.fl = Flags::new(x86::SHR, a, n, r, 32); cpu.eax = r; } } { let r = cpu.fl.alu_and(cpu.eax, 0x3u32, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00FFFDF0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00FFFDF0.
-pub fn f_00fffdf0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = (((m.fast_u16(pt, cpu.ecx.wrapping_add(0xEC)) as u32)) as i16 as i32 as u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00FFFE00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00FFFE00.
-pub fn f_00fffe00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = (((m.fast_u16(pt, cpu.ecx.wrapping_add(0xEE)) as u32)) as i16 as i32 as u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
 // Translated from 0x00FFFE10 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00FFFE10.
 pub fn f_00fffe10(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

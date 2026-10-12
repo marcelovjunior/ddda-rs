@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from hot_shards import Layout, read_hot_list, configure_packages, route_calls
+from hot_shards import Layout, read_hot_list, configure_packages, route_calls, shared_instruction_routes
 
 
 class HotShardsTests(unittest.TestCase):
@@ -72,6 +72,65 @@ class HotShardsTests(unittest.TestCase):
                 dispatched = f"x86::call_lifted(m, cpu, 0x{target:08X})"
                 self.assertEqual(direct in emitted, layout.owner(caller) == layout.owner(target))
                 self.assertEqual(dispatched in emitted, layout.owner(caller) != layout.owner(target))
+
+    def test_shared_instruction_keeps_old_address_band_precedence(self):
+        low, high = 0x400000, 0x1000000  # old bands 08 and 00
+        owners = {0x400001: {low, high}, 0x400002: {low}}
+        self.assertEqual(shared_instruction_routes(owners, Layout([low, high])), [])
+        for hot in [{high}, {low, high}]:
+            layout = Layout([low, high], hot)
+            self.assertEqual(shared_instruction_routes(owners, layout), [(0x400001, 'hot_00', high)])
+        layout = Layout([low, high], {low})
+        self.assertEqual(shared_instruction_routes(owners, layout), [(0x400001, '00', high)])
+
+    def test_generator_routes_steps_calls_and_restores_default(self):
+        import json
+        import shutil
+        from unittest.mock import patch
+        import lift
+        source = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = ['Cargo.toml', 'crates/ddnative/Cargo.toml']
+            metadata += [f'crates/ddlift/lift_{i:02}/{name}' for i in range(lift.SHARDS)
+                         for name in ['Cargo.toml', 'src/lib.rs']]
+            for name in metadata:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source / name, target)
+            (root / 'crates/ddnative/src/generated').mkdir(parents=True)
+            (root / 'crates/ddnative/src/generated/mod.rs').write_text('pub mod lifted;\n')
+            (root / 'patterns').mkdir()
+            functions = [dict(addr=a, name='synthetic', arms=[f'0x{a:X} => {{ {body} return; }}'])
+                         for a, body in [(0x400000, 'super::lifted::f_00400010(m, cpu);'),
+                                         (0x400010, 'super::lifted::f_01000000(m, cpu);'),
+                                         (0x1000000, 'eax += 1;')]]
+            (root / 'patterns/lift.json').write_text(json.dumps(functions))
+            def step(function, addresses):
+                address = function['addr']
+                return (f'pub fn s_{address:08x}(_: &mut dyn Mem, _: &mut Cpu, _: u32) -> Flow {{ Flow::Next(0x{address:X}) }}',
+                        [address, 0x400001])
+            with patch.object(lift, 'R', str(root)), patch.object(lift, 'N', str(root)), \
+                 patch.object(lift, 'wired_ports', return_value={}), \
+                 patch.object(lift, 'verification_gaps', return_value={}), \
+                 patch.object(lift, 'fragments', return_value={}), \
+                 patch.object(lift, 'step_source', side_effect=step):
+                lift.gen(instructions='all')
+                original = {p: p.read_text() for p in root.rglob('*.rs')}
+                lift.gen(instructions='all', hot_functions={0x400000, 0x1000000})
+                facade = (root / 'crates/ddnative/src/generated/lifted.rs').read_text()
+                self.assertIn('0x00400001 => return Some(ddlift_hot_00::s_01000000)', facade)
+                self.assertIn('ddlift_hot_00::f_00400000', facade)
+                hot = (root / 'crates/ddlift/lift_hot_00/src/generated/lifted_000.rs').read_text()
+                cold = (root / 'crates/ddlift/lift_08/src/generated/lifted_000.rs').read_text()
+                self.assertIn('x86::call_lifted(m, cpu, 0x00400010)', hot)
+                self.assertIn('x86::call_lifted(m, cpu, 0x01000000)', cold)
+                stamps = {p: p.stat().st_mtime_ns for p in root.rglob('*.rs')}
+                lift.gen(instructions='all', hot_functions={0x400000, 0x1000000})
+                self.assertEqual(stamps, {p: p.stat().st_mtime_ns for p in root.rglob('*.rs')})
+                lift.gen(instructions='all')
+                self.assertEqual(original, {p: p.read_text() for p in original})
+                self.assertFalse((root / 'crates/ddlift/lift_hot_00/src/generated/lifted_000.rs').exists())
 
     def test_unknown_hot_address_rejected(self):
         with self.assertRaisesRegex(ValueError, "no lifted body"):

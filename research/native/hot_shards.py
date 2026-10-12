@@ -102,3 +102,20 @@ def route_calls(source, caller, layout):
             return match[0]
         return f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x{address:08X}))("
     return re.sub(r"super::lifted::f_([0-9a-f]{8})\(", target, source)
+
+
+def shared_instruction_routes(owners, layout):
+    """Preserve the original facade's shared-instruction selection order.
+
+    The old facade searched address shards 00..31; within each shard the
+    lowest function address won. Hot partitioning must not change that
+    choice, including when two old address bands join one hot package.
+    """
+    if not layout.hot_shards:
+        return []
+    routes = []
+    for ip, candidates in sorted(owners.items()):
+        if len(candidates) > 1:
+            owner = min(candidates, key=lambda a: ((a >> SHARD_SHIFT) % COLD_SHARDS, a))
+            routes.append((ip, layout.owner(owner), owner))
+    return routes
