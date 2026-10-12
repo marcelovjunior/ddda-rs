@@ -92,6 +92,11 @@ X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", 
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
 X87_NET = {}
+# Values a closed lifted function needs on the x87 stack at entry; a
+# caller's depth at the call must cover it (L45). Closed functions are lifted
+# with no x87 inputs today, so it is 0; the check keeps callers honest if
+# closed entry contracts (CRT math helpers such as 0x01300660) are added.
+X87_NEED = {}
 # Per function, the return addresses of mocked call sites whose callee is
 # taken to return a float in st0 (filled by lift(); stored in lift.json as
 # "x87_push" for the recorder and the replay).
@@ -874,10 +879,13 @@ def returns_float(ins, k, depth=0):
     return x87_deficit(ins, ins[k].address + ins[k].size, depth, 1) == 1
 
 
-def x87_deficit(ins, start, depth, limit):
+def x87_deficit(ins, start, depth, limit, callable=frozenset()):
     """Values missing below `depth` on the x87 paths from `start` up to the
     next call, unknown jump, trap or return; None if more than `limit`,
-    on overflow or an unsupported x87 instruction."""
+    on overflow or an unsupported x87 instruction. A direct call to a
+    closed callee in `callable` with a known contract (X87_NEED, X87_NET)
+    is walked through like an x87 instruction (L45): its values cannot
+    come from a mock."""
     at = {i.address: i for i in ins}
     todo = [(start, depth, 0)]
     seen, required = set(), 0
@@ -888,10 +896,13 @@ def x87_deficit(ins, start, depth, limit):
         seen.add((pc, current, added))
         i = at[pc]
         mn = i.mnemonic
-        if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt"):
+        closed = (mn == "call" and i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) in callable
+                  and X87_NET.get(i.operands[0].imm & 0xffffffff) is not None)
+        if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt") and not closed:
             continue
-        if mn in X87_SUPPORTED and mn not in X87_CONTROL:
-            needed, delta = x87_effect(i)
+        if closed or (mn in X87_SUPPORTED and mn not in X87_CONTROL):
+            t = i.operands[0].imm & 0xffffffff if closed else None
+            needed, delta = (X87_NEED.get(t, 0), X87_NET[t]) if closed else x87_effect(i)
             missing = max(0, needed - current)
             added += missing
             if added > limit:
@@ -968,6 +979,8 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                     net = X87_NET.get(t, 0)
                     if net is None:
                         raise Unsupported(f"x87-callee (inconsistent x87 effect of {t:#x})")
+                    if depth < X87_NEED.get(t, 0):
+                        raise Unsupported(f"x87-return (callee {t:#x} needs {X87_NEED[t]} values, has {depth})")
                     depth += net
                 elif ext and returns_float(ins, k, depth):
                     depth += 1
@@ -1247,14 +1260,17 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
     # intrinsics such as _ftol2 and _CIsin take their argument in st0). The
     # recorder seeds that many random finite values; the replay loads them.
     # Only reads before any call or return count, so a value is never
-    # attributed to the caller when a callee could have returned it.
+    # attributed to the caller when a callee could have returned it; a
+    # closed callee with a known effect is walked through (L45).
     # Step mode (L27b) runs the actual callees and the live x87 stack, so
     # neither the entry contract nor the recorder's x87 return pushes nor
     # the recorder's instruction budget apply there.
-    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext and not step else 0
+    entry = (x87_deficit(ins, addr, 0, 8, callable) or 0) if ext and not step else 0
     # The selected list already passed scan's stack analysis. Runtime calls
     # execute actual callees, not the recorder's synthetic x87 return pushes.
     exits, push_sites = (set(), []) if step else x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
+    if not ext and not step:
+        X87_NEED[addr] = entry  # 0: closed functions take no x87 inputs
     if not step:
         X87_PUSH_SITES[addr] = push_sites
     # Constant-trip loops that need more than the recorder's default budget.
@@ -1264,7 +1280,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
                        **({"insn_budget": budget} if budget else {})}
     if not ext and not step:
-        X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
+        # the net effect: depth at the rets relative to the entry contract
+        X87_NET[addr] = exits.pop() - entry if len(exits) == 1 else (0 if not exits else None)
 
     def reg(name):
         """Read a register as a u32 expression."""
