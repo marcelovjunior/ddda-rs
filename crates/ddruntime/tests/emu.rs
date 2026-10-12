@@ -88,3 +88,76 @@ fn repeated_calls_reuse_one_emulator() {
         assert_eq!(cpu.eax, n + 1);
     }
 }
+
+#[test]
+fn a_hot_emulated_loop_runs_fast() {
+    // 3 million iterations of a 2-instruction loop: the per-block hook must
+    // stay cheap (L56: the audio decoder's emulated loops starved the game)
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    // mov ecx, 3000000; l: dec ecx; jnz l; mov eax, 7; ret
+    let code = [0xB9, 0xC0, 0xC6, 0x2D, 0x00, 0x49, 0x75, 0xFD, 0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3];
+    for (k, b) in code.iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b);
+    }
+    let registry = Registry::new();
+    let mut cpu = Cpu { esp: STACK - 0x100, ..Cpu::default() };
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, RETURN);
+    let t0 = std::time::Instant::now();
+    registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+    let took = t0.elapsed();
+    assert_eq!((cpu.eax, cpu.ecx), (7, 0));
+    eprintln!("3M-iteration loop: {took:?}");
+}
+
+#[test]
+fn many_short_emulated_calls_are_cheap() {
+    // a decoder calls short untranslated functions per packet: the cost of
+    // entering the emulator must stay small (L56)
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    for (k, b) in [0x8B, 0x44, 0x24, 0x04, 0x40, 0xC3].iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b); // mov eax, [esp+4]; inc eax; ret
+    }
+    let registry = Registry::new();
+    let t0 = std::time::Instant::now();
+    for n in 0..100_000u32 {
+        let mut cpu = Cpu { esp: STACK - 0x100, ..Cpu::default() };
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, n);
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, RETURN);
+        registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+        assert_eq!(cpu.eax, n + 1);
+    }
+    eprintln!("100k short calls: {:?}", t0.elapsed());
+}
+
+#[test]
+fn x87_and_sse_state_cross_the_emulator() {
+    // fld1; fldpi; faddp st1 (st0 = 1 + pi); addps xmm0, xmm0; ret
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    for (k, b) in [0xD9, 0xE8, 0xD9, 0xEB, 0xDE, 0xC1, 0x0F, 0x58, 0xC0, 0xC3].iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b);
+    }
+    let registry = Registry::new();
+    let mut cpu = Cpu { esp: STACK - 0x100, ..Cpu::default() };
+    cpu.xmm[0] = [1.5f32.to_bits(), 2.0f32.to_bits(), (-3.0f32).to_bits(), 0];
+    cpu.xmm[3] = [7, 8, 9, 10];
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, RETURN);
+    registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+    assert_eq!(cpu.xmm[0], [3.0f32.to_bits(), 4.0f32.to_bits(), (-6.0f32).to_bits(), 0], "addps");
+    assert_eq!(cpu.xmm[3], [7, 8, 9, 10], "untouched XMM survives");
+    assert_eq!(cpu.st.depth(), 1, "one value left on the x87 stack");
+    let top = f32::from_bits(cpu.st.top_f32().expect("st0"));
+    assert!((top - (1.0 + std::f32::consts::PI)).abs() < 1e-6, "st0 = 1 + pi, got {top}");
+}

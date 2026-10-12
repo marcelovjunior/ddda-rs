@@ -33,7 +33,6 @@ const TEXT: std::ops::Range<u32> = 0x0040_1000..0x0139_CDFB;
 /// where Windows never maps user memory.
 const STUBS: u32 = 0xFFFF_0000;
 const STUB_IN: u32 = STUBS;
-const STUB_OUT: u32 = STUBS + 0x100;
 const SCRATCH: u32 = STUBS + 0x1000;
 const FPU_IMAGE: u32 = SCRATCH; // 108 bytes (FNSAVE m108)
 const MXCSR_SLOT: u32 = SCRATCH + 0x80;
@@ -129,7 +128,19 @@ struct Data {
     resume: u32,
     exit: Option<Exit>,
     fault: Option<String>,
+    /// The scratch page (FPU image, MXCSR, XMM, jump slot, GDT), host
+    /// memory mapped into the emulator: written directly, since mem_write
+    /// makes Unicorn invalidate translated code for the range (L56)
+    scratch: Box<[u8; 0x1000]>,
+    /// The FS base loaded last: reloading FS flushes the emulator's TLB
+    fs: Option<u32>,
 }
+
+fn scratch_write(uc: &mut Emu, addr: u32, bytes: &[u8]) {
+    let at = (addr - SCRATCH) as usize;
+    uc.get_data_mut().scratch[at..at + bytes.len()].copy_from_slice(bytes);
+}
+
 
 type Emu = Unicorn<'static, Data>;
 
@@ -147,18 +158,21 @@ fn registry<'r>(ptr: usize) -> &'r Registry {
 }
 
 fn new_instance() -> Emu {
-    let data = Data { registry: 0, pages: 0, mapped: HashMap::new(), ret: 0, entry_esp: 0, resume: 0, exit: None, fault: None };
+    let data = Data { registry: 0, pages: 0, mapped: HashMap::new(), ret: 0, entry_esp: 0, resume: 0, exit: None, fault: None,
+                      scratch: Box::new([0; 0x1000]), fs: None };
     let mut uc = Unicorn::new_with_data(Arch::X86, Mode::MODE_32, data).expect("unicorn");
-    uc.mem_map(STUBS as u64, 0x2000, Permission::ALL).expect("stub pages");
-    let (stub_in, stub_out) = stubs();
+    uc.mem_map(STUBS as u64, 0x1000, Permission::ALL).expect("stub page");
+    let scratch = uc.get_data_mut().scratch.as_mut_ptr();
+    // SAFETY: the box lives as long as the instance and never moves
+    unsafe { uc.mem_map_ptr(SCRATCH as u64, 0x1000, Permission::READ | Permission::WRITE, scratch as *mut _) }.expect("scratch page");
+    let stub_in = stub_in();
     uc.mem_write(STUB_IN as u64, &stub_in).unwrap();
-    uc.mem_write(STUB_OUT as u64, &stub_out).unwrap();
     // GDTR (uc_x86_mmr: selector u16, base u64, limit u32, flags u32)
     let mut mmr = [0u8; 24];
     mmr[8..16].copy_from_slice(&(GDT as u64).to_le_bytes());
     mmr[16..20].copy_from_slice(&(4 * 8 - 1u32).to_le_bytes());
-    uc.mem_write((GDT + 8) as u64, &descriptor(0, 0x9A)).unwrap();
-    uc.mem_write((GDT + 16) as u64, &data_descriptor(0)).unwrap();
+    scratch_write(&mut uc, GDT + 8, &descriptor(0, 0x9A));
+    scratch_write(&mut uc, GDT + 16, &data_descriptor(0));
     uc.reg_write_long(RegisterX86::GDTR, &mmr).unwrap();
     for seg in [RegisterX86::SS, RegisterX86::DS, RegisterX86::ES, RegisterX86::GS] {
         uc.reg_write(seg, DATA_SELECTOR).unwrap();
@@ -212,11 +226,13 @@ fn new_instance() -> Emu {
         if a >= STUBS {
             return;
         }
-        let esp = uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32;
+        // runs for every executed block: the cheap tests first, and ESP only
+        // read at the caller's return address (L56: a hot emulated loop spent
+        // its time here)
         let d = uc.get_data();
-        let exit = if a == d.ret && esp > d.entry_esp {
+        let exit = if a == d.ret && uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32 > d.entry_esp {
             Exit::Returned // ret or ret n
-        } else if a != d.resume && registry(uc.get_data().registry).get(a).is_some() {
+        } else if a != d.resume && registry(d.registry).get(a).is_some() {
             Exit::Bound(a)
         } else {
             return;
@@ -261,7 +277,7 @@ impl Mem for Image {
     }
 }
 
-fn stubs() -> (Vec<u8>, Vec<u8>) {
+fn stub_in() -> Vec<u8> {
     let abs = |a: u32| a.to_le_bytes();
     let mut stub_in = Vec::new();
     stub_in.extend([0xDD, 0x25]); // frstor [FPU_IMAGE]
@@ -274,17 +290,14 @@ fn stubs() -> (Vec<u8>, Vec<u8>) {
     }
     stub_in.extend([0xFF, 0x25]); // jmp dword [JUMP_SLOT]
     stub_in.extend(abs(JUMP_SLOT));
-    let mut stub_out = Vec::new();
-    stub_out.extend([0xDD, 0x35]); // fnsave [FPU_IMAGE]
-    stub_out.extend(abs(FPU_IMAGE));
-    stub_out.extend([0x0F, 0xAE, 0x1D]); // stmxcsr [MXCSR_SLOT]
-    stub_out.extend(abs(MXCSR_SLOT));
-    for k in 0..8u32 {
-        stub_out.extend([0x0F, 0x11, (0x05 | (k << 3)) as u8]); // movups [slot], xmmK
-        stub_out.extend(abs(XMM_SLOTS + 16 * k));
-    }
-    (stub_in, stub_out)
+    stub_in
+
 }
+
+const ST: [RegisterX86; 8] = [RegisterX86::ST0, RegisterX86::ST1, RegisterX86::ST2, RegisterX86::ST3,
+                              RegisterX86::ST4, RegisterX86::ST5, RegisterX86::ST6, RegisterX86::ST7];
+const XMM: [RegisterX86; 8] = [RegisterX86::XMM0, RegisterX86::XMM1, RegisterX86::XMM2, RegisterX86::XMM3,
+                               RegisterX86::XMM4, RegisterX86::XMM5, RegisterX86::XMM6, RegisterX86::XMM7];
 
 const GPRS: [(RegisterX86, fn(&mut Cpu) -> &mut u32); 8] = [
     (RegisterX86::EAX, |c| &mut c.eax),
@@ -325,7 +338,6 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         d.resume = target;
         d.fault = None;
     }
-    let stub_out_end = STUB_OUT + stubs().1.len() as u32;
     loop {
         revalidate(&mut uc);
         // state in: registers, flags, FS, x87, MXCSR (live in the host while
@@ -336,18 +348,21 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         let (flags, _) = cpu.fl.snapshot();
         let eflags = (flags & 0x8D5) | ((cpu.df as u32) << 10) | 0x202 | (cpu.sys_flags & 0x24_4000);
         uc.reg_write(RegisterX86::EFLAGS, eflags as u64).unwrap();
-        uc.mem_write((GDT + 3 * 8) as u64, &data_descriptor(cpu.fs_base)).unwrap();
-        uc.reg_write(RegisterX86::FS, FS_SELECTOR).unwrap();
+        if uc.get_data().fs != Some(cpu.fs_base) {
+            scratch_write(&mut uc, GDT + 3 * 8, &data_descriptor(cpu.fs_base));
+            uc.reg_write(RegisterX86::FS, FS_SELECTOR).unwrap();
+            uc.get_data_mut().fs = Some(cpu.fs_base);
+        }
         let mut image = Image([0; 108]);
         cpu.st.clone().fnsave(&mut image, 0, 0, 0, 0);
-        uc.mem_write(FPU_IMAGE as u64, &image.0).unwrap();
-        uc.mem_write(MXCSR_SLOT as u64, &x86::stmxcsr().to_le_bytes()).unwrap();
+        scratch_write(&mut uc, FPU_IMAGE, &image.0);
+        scratch_write(&mut uc, MXCSR_SLOT, &x86::stmxcsr().to_le_bytes());
         for k in 0..8 {
             let bytes: Vec<u8> = cpu.xmm[k].iter().flat_map(|w| w.to_le_bytes()).collect();
-            uc.mem_write((XMM_SLOTS + 16 * k as u32) as u64, &bytes).unwrap();
+            scratch_write(&mut uc, XMM_SLOTS + 16 * k as u32, &bytes);
         }
         let resume = uc.get_data().resume;
-        uc.mem_write(JUMP_SLOT as u64, &resume.to_le_bytes()).unwrap();
+        scratch_write(&mut uc, JUMP_SLOT, &resume.to_le_bytes());
         uc.get_data_mut().exit = None;
         let result = uc.emu_start(STUB_IN as u64, 0, 0, 0);
         let exit = uc.get_data().exit;
@@ -362,21 +377,26 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
             *f(cpu) = uc.reg_read(r).unwrap() as u32;
         }
         let eflags = uc.reg_read(RegisterX86::EFLAGS).unwrap() as u32;
-        let esp = cpu.esp;
-        uc.emu_start(STUB_OUT as u64, stub_out_end as u64, 0, 0).expect("state out");
-        cpu.esp = esp;
         x86::popfd(cpu, eflags & !0x100);
-        let mut image = Image([0; 108]);
-        uc.mem_read(FPU_IMAGE as u64, &mut image.0).unwrap();
+        // x87, MXCSR and XMM straight from the registers (L56): a second
+        // emulation of a state stub cost ~30 us per call. The FNSAVE image:
+        // control, status (with TOP), the tag word per physical register,
+        // then ST0..ST7 in stack order, as Unicorn's ST registers are.
+        let mut image = Image([0xFF; 108]);
+        let word = |r| uc.reg_read(r).unwrap() as u16;
+        image.0[0..2].copy_from_slice(&word(RegisterX86::FPCW).to_le_bytes());
+        image.0[4..6].copy_from_slice(&word(RegisterX86::FPSW).to_le_bytes());
+        image.0[8..10].copy_from_slice(&word(RegisterX86::FPTAG).to_le_bytes());
+        for (k, r) in ST.iter().enumerate() {
+            let v = uc.reg_read_long(*r).unwrap();
+            image.0[28 + 10 * k..38 + 10 * k].copy_from_slice(&v[..10]);
+        }
         cpu.st.frstor(&image, 0);
-        let mut mxcsr = [0u8; 4];
-        uc.mem_read(MXCSR_SLOT as u64, &mut mxcsr).unwrap();
-        x86::ldmxcsr(u32::from_le_bytes(mxcsr));
-        for k in 0..8 {
-            let mut bytes = [0u8; 16];
-            uc.mem_read((XMM_SLOTS + 16 * k as u32) as u64, &mut bytes).unwrap();
+        x86::ldmxcsr(uc.reg_read(RegisterX86::MXCSR).unwrap() as u32);
+        for (k, r) in XMM.iter().enumerate() {
+            let v = uc.reg_read_long(*r).unwrap();
             for w in 0..4 {
-                cpu.xmm[k][w] = u32::from_le_bytes(bytes[4 * w..4 * w + 4].try_into().unwrap());
+                cpu.xmm[k][w] = u32::from_le_bytes(v[4 * w..4 * w + 4].try_into().unwrap());
             }
         }
 
