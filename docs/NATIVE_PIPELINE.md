@@ -1111,19 +1111,54 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 `python scripts/inventory.py summary` gives the live count.
 
-### Readable ports wired over lifted bodies (L24)
+### Overrides: readable ports and mods (L60)
 
-The MT math library has readable, verified ports in `crates/mtmath`
-(docs/MATH.md): 29 functions, 1,497 call sites. Each has an adapter with
-the lifted ABI listed in `crates/mtmath/src/abi.rs` `PORTS`; `lift.py gen`
-writes `pub use mtmath::abi::f_X` into the shard mod.rs (an explicit
-import shadows the lifted glob), so direct calls, `call_lifted` and
-`lifted::all()` reach the port; the lifted body stays as `replaced::f_X`.
-Tests: `crates/mtmath/tests/differential.rs` (lifted vectors + edge
-vectors, `research/native/vectors_math.py`);
+A readable port or a mod replaces the lifted function at an address
+without recompiling a shard. The shards depend only on `ddnative-base`;
+every call between lifted functions goes through overridable dispatch:
+
+| call | generated as | cost when not overridden |
+|---|---|---|
+| to another shard | `x86::call_lifted(m, cpu, ADDR)` | the per-thread resolved-target cache (unchanged) |
+| within the shard | `x86::call_local(m, cpu, ADDR, f_X)` | one bit test (a predictable branch), then the direct call |
+| to a platform model | `x86::call_local(m, cpu, ADDR, platform::X)` | the same |
+| indirect, through the runtime | `Registry` from `lifted::all()` | none (resolved when the registry is built) |
+
+`x86::set_overrides(&[(address, fn)])` registers the overrides once,
+before any lifted target is resolved. It sets one bit per 16 bytes of
+code; `call_local` takes the cold path only where a bit is set,
+`lifted_target` (the resolver behind `call_lifted`) consults the
+overrides first, and the facade's `lifted::all()` lists an override in
+place of the body (`lifted::bodies()` lists the bodies themselves).
+
+`crates/ddports` registers the readable ports, each crate's `abi::PORTS`
+(mtmath, docs/MATH.md; mtcore, docs/CORE.md; mtframe, docs/FRAME_RATE.md),
+and any mods: `ddports::set_mods(vec![(0x00AB_CDEF, my_fn)])` before the
+session starts; `ddports::ensure()` (called by the runtime's
+`Registry::with_lifted_program` and by ddperf) installs them. A mod at a
+ported address replaces the port.
+
+**The mod workflow.** Write the function with the lifted ABI
+(`fn(&mut dyn Mem, &mut Cpu)`, starting at the original's entry with the
+return address at `[esp]` and ending with its `ret`; `mtcore::machine`
+has the helpers), register it, and rebuild `ddplay`: only the changed
+crate, `ddports`, the runtime and the binary recompile. For a verified
+port, add the adapter to its crate's `PORTS`; its differential test
+(`crates/mtmath/tests/differential.rs` and the others) replays it
+against the lifted vectors, and `lift.py gen` checks that it has a body.
 `research/native/math_liveness.py` checks callers never read an
-unreproduced xmm lane. The MT core library (L33, `crates/mtcore`,
-docs/CORE.md) is wired the same way; `lift.py` reads both crates' `PORTS`.
+unreproduced xmm lane.
+
+**Runtime policy lives outside the shards.** Editing `ddnative-base`
+recompiles every shard, so it holds only mechanism; the policy is
+installed at run time:
+- the lifted program's resolver (`set_lifted_lookup`) and the overrides;
+- the preemption point: `call_lifted` calls the runtime's hook while
+  `x86::PREEMPT` is set, and the hook keeps its own rate
+  (`ddruntime::threads::preempt`, once per 1,024 calls);
+- the platform models: called through `call_local` at their addresses,
+  so a runtime service registered there replaces a model; the per-thread
+  `platform::redirect` to `call_ext` works as before.
 
 ## Exact x87 arithmetic (L05)
 
