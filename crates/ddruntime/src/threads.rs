@@ -327,12 +327,37 @@ fn signal_preempt(s: &LockState) {
     ddnative_base::x86::PREEMPT.store(runnable, std::sync::atomic::Ordering::Relaxed);
 }
 
+thread_local! {
+    /// Services running on this thread (dispatch.rs): lifted code a service
+    /// calls back into (an IStream read inside the movie service, a WndProc)
+    /// runs while the service may hold runtime state borrowed, so it is no
+    /// preemption point (L57c: a yield there borrowed that state again and
+    /// panicked, and the dying thread left the guest lock held).
+    static IN_SERVICE: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Marks this thread as running a service until dropped.
+pub(crate) struct ServiceScope;
+
+impl ServiceScope {
+    pub(crate) fn enter() -> Self {
+        IN_SERVICE.with(|n| n.set(n.get() + 1));
+        ServiceScope
+    }
+}
+
+impl Drop for ServiceScope {
+    fn drop(&mut self) {
+        IN_SERVICE.with(|n| n.set(n.get() - 1));
+    }
+}
+
 /// The preemption hook of lifted calls (ddnative_base::x86::set_preempt_hook):
 /// in serial mode, the lock holder yields when its time slice is used up.
 /// The guest MXCSR is live in the host register inside lifted code, so it
 /// is kept across the switch.
 pub(crate) fn preempt() {
-    if ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) {
+    if ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) || IN_SERVICE.with(Cell::get) > 0 {
         return;
     }
     let rt = runtime::current();
