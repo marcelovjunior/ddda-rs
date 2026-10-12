@@ -191,3 +191,30 @@ and 0x011066E0 changes state only for IMN 3/4/5. Recorded as a known
 difference with no guest-visible effect.
 `StringFromGUID2` (DirectInput enumeration callback near 0x00DF599C)
 measured and modelled as well (d1a8d82).
+
+4. Generated from native-L17 with claude-3's L28 group (`__setmbcp`, the
+   stdio/lowio layer, `__onexit` and others; SEH helpers as closed
+   callees). `Session::new` failed with a binding conflict: L28 lifts
+   `__onexit` 0x012ED89C, where the runtime still bound its stand-in
+   service. Cause: runtime (cause 1). Fix (4a95a52): `services::install`
+   skips a SERVICES stand-in when the lifted program has the original body.
+   All 45 runtime tests pass.
+5. Real boot: `__heap_init` through `_setenvp` pass. Step `__cinit`. Stop:
+   untranslated 0x012F032F (`__fpmath`), called from just before
+   0x012EDA84 (`_FPinit`). Cause 2 (an MXCSR/x87 CRT function). Owner:
+   claude-6 (L22, train 2). `__control87`, `___set_fpsr_sse2` and
+   `__clrfp` follow on that path.
+6. Frontier probe (`winmain --frontier`):
+   - Every CRT step returns.
+   - 5,660 of 5,662 initializers complete; 0x0137E490 and 0x0137E510 →
+     0x00CFC150 (the sine table) wait for claude-6's constant-loop budget
+     (train 2).
+   - WinMain stops at untranslated 0x013054F0 (`__aulldvrm`, the CRT's
+     64-bit unsigned divide), called from CRT formatting code just before
+     0x012F8DAB. Owner: the platform-CRT group (claude-3, L28).
+   - The run printed its report but never exited: the game's guest threads
+     kept the host process alive. Fix (4a95a52): the examples end the
+     process after the report, and runs use `timeout -k` on the program.
+   - IMM32: `imm.rs` (2cad691) was removed in favour of claude-10's L43,
+     which answers all 11 IMM32 imports. My measurements, including
+     WM_IME_NOTIFY once the window has the focus, went to claude-10.
