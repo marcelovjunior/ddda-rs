@@ -36,6 +36,21 @@ class DiscoveryTests(unittest.TestCase):
         p.put(0x1000, b'\xcc')
         self.assertFalse(d.code_entry(p, m, 0x1000))
 
+    def test_address_taken_entry_needs_a_function_boundary(self):
+        # L45: immediates naming code mid-instruction are constants, not entries
+        p = FakeImage(); m = d.decoder()
+        cases = {
+            0x1100: (b'\x90\x90\x31\xc0\xcc\xcc\xcc\xcc', True),   # int3 padding
+            0x1200: (b'\x90\x90\x90\x90\x90\x31\xc0\xc3', True),   # after ret
+            0x1300: (struct.pack('<II', 0x12F0, 0x12E8), True),     # after a jump table
+            0x1400: (bytes((0, 1, 1, 1, 1, 1, 0, 0)), True),       # after a byte index table
+            0x1500: (b'\x90\x90\x90\x90\xb0\x0b\x83\xc0', False),  # inside `add eax, 4`
+            0x1600: (b'\x61\x6f\x72\x00\x65\x64\x70\x8b', False),  # ASCII data then code
+        }
+        for a, (before, want) in cases.items():
+            p.put(a - 8, before); p.put(a, b'\x04\x50\xc3')
+            self.assertEqual(d.function_boundary(p, m, a), want, hex(a))
+
     def test_mt_registration_bss_and_table_anchor(self):
         p = FakeImage(); m = d.decoder()
         # One-argument registration form exists as well as six-argument form.
@@ -64,6 +79,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(list(d.vtables(p, m, set(), stores={0x3100: {0x1400}})), [])  # no known slot
         r = list(d.vtables(p, m, set(), known={0x1310}, stores={0x3100: {0x1400}}))
         self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])               # cut at data
+        # L45: a slot naming code mid-instruction (text after the table) ends it
+        p.put(0x1328, b'\x90\x90\x90\x90\xb0\x0b\x83\xc0\x04\x50\xc3')
+        p.word_at(0x3100+4*3, 0x1330)
+        r = list(d.vtables(p, m, set(), known={0x1310}, stores={0x3100: {0x1400}}))
+        self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])
+        p.word_at(0x3100+4*3, 0x5000)
         self.assertEqual(r[0][1]['rtti'], 'none')
         self.assertEqual(r[0][1]['stores'], [0x1400])
         # A secondary vptr store (object + 4) anchors as well; the MT rule's

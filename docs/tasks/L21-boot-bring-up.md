@@ -252,3 +252,285 @@ block per thread: `seh::initialize_teb`, used by `Session::new`, guest
 threads and SEH dispatch alike. e754622's `threads::init_teb`/`teb_of` are
 gone; the FS:[0] evidence moved into `seh::initialize_teb`'s comment. The
 TIB test checks the shared block.
+7. main 45c07138 (train 2: L22 and claude-3's L28 adopted; the generated
+   code is committed, no private data). Real boot: the whole CRT start-up
+   passes, `__cinit` with all 5,662 initializers, and WinMain runs. Stop:
+   untranslated 0x00DAFED0, called from just before 0x00DB045C.
+   - 0x00DAFED0 is the partition step of an introsort (median of three via
+     0x00DAFD10, records compared on two uint keys and a float). Its caller
+     0x00DB0410 sorts 0x5C-byte records. The path is 0x00DB0DE0 ←
+     0x00DB1480 ← `sRender`'s constructor 0x00DB1A50 (PIX options, then the
+     device set-up).
+   - Cause 2: it lifts but has no accepted fixture
+     (`patterns/lift_novector.json`). Reported to the head for the recorder
+     owners.
+   - Runtime game tests 44/44. The exe exits cleanly now that its output
+     goes to files.
+   - Frontier probe, less faithful now since it skips `_FPinit`: WinMain
+     stops at 0x01305585, reached by a computed call from just before
+     0x012F8BF6. That is exactly the end of `__aulldvrm` (0x013054F0 +
+     0x95): code past Ghidra's function end, L45's class. Sent to claude-6
+     as a lead.
+
+### Look-ahead from WinMain to the title (static, main 45c07138 + train 2)
+
+Method: the direct-call closure in the shared inventory
+(`E:/ddda-re/notes/inventory/inventory.sqlite`, read-only) from the title
+path's roots, following each route only through verified functions and
+recording the first unverified one. Roots: WinMain, app init 0x00DF3AC0,
+the window procedure, the main loop 0x00DF0D20, `sBbsRpgMain`'s
+constructor and frame (vf06), `sRender`'s constructor, `aInitialize` and
+`aTitle` slots 5-8 and the first title state, and the eight guest thread
+entries of TITLE_PATH.md section 1.7. Reasons come from
+`patterns/lift_novector.json` (no fixture), the rejection and mismatch
+lists and the quarantine files.
+
+Not covered: calls through vtables and function pointers (most of the
+game's dispatch), so this is a lower bound. The real boot will show more.
+
+Imports: 139 are reached on these routes, and all have a runtime service
+now. The last one, `CreateProcessA` (the self-restart helper 0x011797F0),
+stops with a report naming the command line (e42d7b9f).
+`UnhandledExceptionFilter` (`___report_gsfailure`) is L27's seh service.
+
+42 unverified functions, by owner. Depth is call levels below the root.
+"Not in the lift set" means status documented or translated with no
+recorded rejection, so the lifter owner must say why.
+
+Codex (lifts, no fixture): 30
+
+| Reached from | Depth | Function | Name | Bytes | Called from | Note |
+|---|---:|---|---|---:|---|---|
+| aTitle state 1 | 3 | 0x004918D0 | FUN_004918d0 | 1596 | 0x004960E0 |  |
+| aTitle vf6 | 2 | 0x004755E0 | FUN_004755e0 | 132 | 0x0043C580 |  |
+| aTitle vf6 | 2 | 0x0048AC80 | FUN_0048ac80 | 1973 | 0x004965A0 |  |
+| aTitle vf6 | 2 | 0x00494D80 | FUN_00494d80 | 976 | 0x004965A0 |  |
+| aTitle vf6 | 6 | 0x0081C330 | FUN_0081c330 | 806 | 0x0081BA40 |  |
+| main loop | 2 | 0x00DAE760 | FUN_00dae760 | 595 | 0x00DAF7C0 |  |
+| render worker | 1 | 0x00DAA4B0 | FUN_00daa4b0 | 142 | 0x00DAC090 |  |
+| sBbsRpgMain ctor | 1 | 0x00475400 | ctor | 400 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 1 | 0x00478600 | ctor | 649 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 1 | 0x0049F990 | ctor | 1255 | 0x0041B400 |  |
+| sBbsRpgMain ctor | 2 | 0x00480240 | ctor | 222 | 0x004821A0 |  |
+| sBbsRpgMain ctor | 2 | 0x0075BAD0 | FUN_0075bad0 | 909 | 0x00437BE0 |  |
+| sBbsRpgMain ctor | 2 | 0x00DB8B90 | FUN_00db8b90 | 73 | 0x0044F500 |  |
+| sBbsRpgMain ctor | 2 | 0x00DD5ED0 | FUN_00dd5ed0 | 1575 | 0x004AC8A0 |  |
+| sBbsRpgMain ctor | 3 | 0x00419100 | FUN_00419100 | 50 | 0x00417AF0 |  |
+| sBbsRpgMain ctor | 3 | 0x00480950 | FUN_00480950 | 565 | 0x00482760 |  |
+| sBbsRpgMain ctor | 4 | 0x00490E80 | ctor | 412 | 0x00495FF0 |  |
+| sBbsRpgMain ctor | 4 | 0x004915A0 | ctor | 746 | 0x00495FF0 |  |
+| sBbsRpgMain ctor | 5 | 0x01104470 | ctor | 267 | 0x01105240 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01128EE0 | FUN_01128ee0 | 95 | 0x00DA9CD0 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01128F40 | FUN_01128f40 | 33 | 0x00DAED10 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01129310 | FUN_01129310 | 95 | 0x00DA9CD0 |  |
+| sBbsRpgMain::vf06 (frame) | 2 | 0x01129370 | FUN_01129370 | 33 | 0x00DAED10 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x00491340 | FUN_00491340 | 263 | 0x00498C20 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x00493AA0 | FUN_00493aa0 | 3327 | 0x004964C0 |  |
+| sBbsRpgMain::vf06 (frame) | 4 | 0x004A06B0 | FUN_004a06b0 | 481 | 0x004964C0 |  |
+| sRender ctor | 2 | 0x00DA9EC0 | FUN_00da9ec0 | 1509 | 0x00DB1480 |  |
+| sRender ctor | 2 | 0x01129030 | FUN_01129030 | 253 | 0x01129130 |  |
+| sRender ctor | 2 | 0x01129460 | FUN_01129460 | 226 | 0x01129550 |  |
+| sRender ctor | 4 | 0x00DAFED0 | FUN_00dafed0 | 883 | 0x00DB0410 |  |
+
+claude-6 (not in the lift set; triage): 12
+
+| Reached from | Depth | Function | Name | Bytes | Called from | Note |
+|---|---:|---|---|---:|---|---|
+| WinMain | 3 | 0x012ED9DD | ___crtExitProcess | 23 | 0x012EDAF5 | (status documented) |
+| aTitle state 1 | 3 | 0x0040DDC0 | FUN_0040ddc0 | 212 | 0x0040DB40 | (status documented) |
+| aTitle state 1 | 4 | 0x012E1A60 | FUN_012e1a60 | 47 | 0x0040DC50 | (status documented) |
+| sBbsRpgMain ctor | 1 | 0x004AB440 | FUN_004ab440 | 285 | 0x0041B400 | (status documented) |
+| sBbsRpgMain ctor | 1 | 0x00DFECF0 | FUN_00dfecf0 | 23652 | 0x0041B400 | (status documented) |
+| sBbsRpgMain ctor | 2 | 0x00E0E470 | FUN_00e0e470 | 292 | 0x00E121D0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x00F9FBA0 | FUN_00f9fba0 | 288 | 0x00FA15E0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x012E1A13 | FUN_012e1a13 | 47 | 0x004201A0 | (status documented) |
+| sBbsRpgMain ctor | 3 | 0x012F9D82 | FUN_012f9d82 | 253 | 0x012EFEA0 | (status documented) |
+| sBbsRpgMain ctor | 5 | 0x012F1C9D | FUN_012f1c9d | 453 | 0x012F1C40 | (status documented) |
+| sBbsRpgMain::vf06 (frame) | 6 | 0x00448500 | FUN_00448500 | 1936 | 0x00448DA0 | (status translated) |
+| sRender ctor | 3 | 0x004080A0 | FUN_004080a0 | 42 | 0x00DB0DE0 | (status documented) |
+
+### Look-ahead along vtable and pointer routes
+
+The direct-call closure misses virtual and pointer dispatch, so it was
+extended (same inventory, read-only, plus the installed exe's bytes):
+- A function on the path reaches every inventory function whose address
+  it holds as an immediate or absolute displacement (thread starts,
+  callbacks, comparators).
+- It also reaches every slot of each vtable it refers to: a `.rdata`
+  address followed by consecutive words that are inventory functions in
+  `.text`, DTI.md's length rule.
+- `aInitialize`'s (0x0156CD80) and `aTitle`'s (0x0156F7A8) vtable slots
+  are seeds.
+- Each extra pointer or vtable step is one "hop"; routes still stop at
+  their first unverified function.
+
+| Hops allowed | Functions reached | Unverified (Codex / claude-6) |
+|---:|---:|---|
+| 0 | 1,673 | 42 (30 / 12): the tables above |
+| 1 | 7,711 | 93 (64 / 29) |
+| 2 | 14,304 | 138 (94 / 44) |
+
+At two hops the closure already covers about a quarter of the program
+(and half of all 283 unverified functions): every vtable a constructor
+installs counts as fully used. So the one-hop additions below are the
+likely next stops, the two-hop ones are candidates, and a third hop would
+add little. "Reached through" gives the verified function the route last
+passed and how it got there. 0x00520003/0x00520004 are odd-aligned
+supplementary entries met only as immediates: probably not real call
+targets, worth a check before queueing.
+
+Imports on the two-hop routes: 194, all with a service except
+`wsprintfA` (0x00DA3300 and 0x00DA3650, format `"%S"`). `ntohs` and
+`WSAGetLastError` are bound by ordinal in `net.rs`. `wsprintfA` is now a
+service for literals, `%%` and `%S`, measured on Windows 11
+(`research/runtime/windows/Wsprintf.cs`): `%S` converts each unit as
+WideCharToMultiByte(1252, 0) does, and the 1024-character limit drops an
+argument that does not end below it, which ends the output. Other
+conversions stop.
+
+One pointer/vtable hop (likely on the path): 51
+
+Codex (34):
+
+| Function | Name | Bytes | Reached through | Note |
+|---|---|---:|---|---|
+| 0x0046A150 | FUN_0046a150 | 366 | 0x00469F80, call |  |
+| 0x0046A2D0 | FUN_0046a2d0 | 609 | 0x00469C90, call |  |
+| 0x00478050 | FUN_00478050 | 180 | 0x00501020, call |  |
+| 0x0048AB50 | FUN_0048ab50 | 294 | 0x00496410, call |  |
+| 0x0048CC00 | FUN_0048cc00 | 332 | 0x004918A0, call |  |
+| 0x0048F330 | FUN_0048f330 | 713 | 0x00496410, call |  |
+| 0x00495150 | FUN_00495150 | 964 | 0x00499060, call |  |
+| 0x00495520 | FUN_00495520 | 2706 | 0x00496410, call |  |
+| 0x004A0C00 | FUN_004a0c00 | 531 | 0x00499060, call |  |
+| 0x0050A110 | FUN_0050a110 | 2612 | 0x00504B40, call |  |
+| 0x00520003 | entry_00520003 | 219 | 0x00444C20, pointer |  |
+| 0x00520004 | entry_00520004 | 218 | 0x00444C20, pointer |  |
+| 0x005EC920 | FUN_005ec920 | 76 | 0x005EF790, call |  |
+| 0x00606090 | FUN_00606090 | 98 | 0x006BB0C0, call |  |
+| 0x00606130 | FUN_00606130 | 123 | 0x005F0830, call |  |
+| 0x006066E0 | FUN_006066e0 | 62 | 0x006A4E20, call |  |
+| 0x00620000 | entry_00620000 | 53 | 0x00444C20, pointer |  |
+| 0x00620003 | entry_00620003 | 170 | 0x00444C20, pointer |  |
+| 0x00620004 | entry_00620004 | 169 | 0x00444C20, pointer |  |
+| 0x006335A0 | FUN_006335a0 | 104 | 0x006344F0, call |  |
+| 0x00633EF0 | FUN_00633ef0 | 406 | 0x00413C80, call |  |
+| 0x00670002 | entry_00670002 | 9 | 0x00444C20, pointer |  |
+| 0x00670003 | entry_00670003 | 8 | 0x00444C20, pointer |  |
+| 0x007A0003 | entry_007A0003 | 371 | 0x00444C20, pointer |  |
+| 0x007A0004 | entry_007A0004 | 370 | 0x00444C20, pointer |  |
+| 0x007D0005 | entry_007D0005 | 103 | 0x00444C20, pointer |  |
+| 0x00815C60 | FUN_00815c60 | 18178 | 0x00812820, call |  |
+| 0x00C40000 | entry_00C40000 | 342 | 0x00444C20, pointer |  |
+| 0x00C9B350 | FUN_00c9b350 | 1859 | 0x0046B690, call |  |
+| 0x00C9E0F0 | FUN_00c9e0f0 | 259 | 0x00C9DDF0, call |  |
+| 0x00D29AF0 | FUN_00d29af0 | 1282 | 0x00C9EE90, call |  |
+| 0x00DBA780 | FUN_00dba780 | 426 | 0x00488B70, call |  |
+| 0x00F7DE40 | FUN_00f7de40 | 108 | 0x00F7E1D0, call |  |
+| 0x011590E0 | FUN_011590e0 | 110 | 0x01159260, call |  |
+
+claude-6 (17):
+
+| Function | Name | Bytes | Reached through | Note |
+|---|---|---:|---|---|
+| 0x00408100 | entry_00408100 | 16 | 0x00DB0DE0, vtable 0x01559568 slot 2 | not in the lift set (status untouch |
+| 0x004403A0 | FUN_004403a0 | 2691 | 0x0043CEB0, call | not in the lift set (status documen |
+| 0x004709D0 | FUN_004709d0 | 288 | 0x004704E0, call | not in the lift set (status documen |
+| 0x004734E0 | FUN_004734e0 | 418 | 0x00471D30, call | not in the lift set (status documen |
+| 0x0047DC60 | FUN_0047dc60 | 394 | 0x0047D610, call | not in the lift set (status untouch |
+| 0x004A2D30 | FUN_004a2d30 | 1313 | 0x004A21B0, call | not in the lift set (status untouch |
+| 0x004E0004 | entry_004E0004 | 41 | 0x00444C20, pointer | not in the lift set (status documen |
+| 0x004E0017 | entry_004E0017 | 22 | 0x004861E0, pointer | not in the lift set (status untouch |
+| 0x00740000 | entry_00740000 | 1 | 0x00444C20, pointer | not in the lift set (status documen |
+| 0x00740003 | entry_00740003 | 1 | 0x00444C20, pointer | not in the lift set (status untouch |
+| 0x00740004 | entry_00740004 | 1 | 0x00444C20, pointer | not in the lift set (status untouch |
+| 0x007D0003 | entry_007D0003 | 105 | 0x00444C20, pointer | not in the lift set (status untouch |
+| 0x00D0C590 | FUN_00d0c590 | 577 | 0x00DBD750, call | not in the lift set (status documen |
+| 0x00D8BCE0 | FUN_00d8bce0 | 469 | 0x00D08B40, call | not in the lift set (status documen |
+| 0x00FEE130 | FUN_00fee130 | 480 | 0x00DAF000, call | not in the lift set (status documen |
+| 0x012EE1A1 | vf14 | 42 | 0x0041B400, vtable 0x0155ace4 slot 21 | not in the lift set (status documen |
+| 0x01304753 | FUN_01304753 | 327 | 0x01304690, call | not in the lift set (status documen |
+
+
+Two hops (wider candidates): 45
+
+Codex (30):
+
+| Function | Name | Bytes | Reached through | Note |
+|---|---|---:|---|---|
+| 0x00416740 | FUN_00416740 | 378 | 0x00737900, call |  |
+| 0x004EE3E0 | FUN_004ee3e0 | 437 | 0x004EE3B0, call |  |
+| 0x004EE720 | vf05 | 1853 | 0x004EE180, vtable 0x0156bda8 slot 5 |  |
+| 0x005F3450 | vf05 | 301 | 0x00E0CE80, vtable 0x0157e4c0 slot 55 |  |
+| 0x006076F0 | FUN_006076f0 | 533 | 0x006E9B50, call |  |
+| 0x00633A70 | FUN_00633a70 | 253 | 0x00633260, call |  |
+| 0x00633B70 | FUN_00633b70 | 167 | 0x00633260, call |  |
+| 0x0064DD20 | vf58 | 315 | 0x0064DC90, vtable 0x015811a0 slot 58 |  |
+| 0x006692F0 | vf59 | 488 | 0x006677D0, vtable 0x01582508 slot 59 |  |
+| 0x00677930 | vf60 | 647 | 0x00677880, vtable 0x01582f38 slot 60 |  |
+| 0x00685030 | FUN_00685030 | 242 | 0x00685130, call |  |
+| 0x00689960 | FUN_00689960 | 1944 | 0x006894C0, call |  |
+| 0x0068A9F0 | FUN_0068a9f0 | 133 | 0x0068B340, call |  |
+| 0x00691E50 | FUN_00691e50 | 816 | 0x006894C0, call |  |
+| 0x00692A40 | FUN_00692a40 | 737 | 0x006928E0, call |  |
+| 0x006A1770 | FUN_006a1770 | 168 | 0x006A1550, call |  |
+| 0x006E0EB0 | vf05 | 310 | 0x006E4A00, call |  |
+| 0x006F1590 | FUN_006f1590 | 223 | 0x006F04B0, call |  |
+| 0x00705E00 | FUN_00705e00 | 462 | 0x00705010, call |  |
+| 0x007BEA60 | FUN_007bea60 | 373 | 0x007BF180, call |  |
+| 0x00811A90 | FUN_00811a90 | 2199 | 0x00812980, call |  |
+| 0x00860A60 | vf25 | 27 | 0x00860660, vtable 0x0159ea38 slot 25 |  |
+| 0x00874F90 | vf25 | 24 | 0x00859660, vtable 0x0159e760 slot 25 |  |
+| 0x00B54BE0 | vf25 | 27 | 0x0078A5B0, vtable 0x015e87c0 slot 25 |  |
+| 0x00C9BAA0 | FUN_00c9baa0 | 308 | 0x00737900, call |  |
+| 0x00DC7D00 | FUN_00dc7d00 | 127 | 0x00DDDCC0, vtable 0x0142b0d8 slot 14 |  |
+| 0x00DC8270 | FUN_00dc8270 | 935 | 0x00DD1F60, call |  |
+| 0x00FB9A10 | vf14 | 86 | 0x00FC8AE0, vtable 0x01438cb8 slot 116 |  |
+| 0x011251F0 | FUN_011251f0 | 943 | 0x011EC4C0, call |  |
+| 0x011591C0 | vf11 | 93 | 0x01159260, vtable 0x01443fec slot 11 |  |
+
+claude-6 (15):
+
+| Function | Name | Bytes | Reached through | Note |
+|---|---|---:|---|---|
+| 0x00410000 | vf10 | 136 | 0x010784B0, pointer | not in the lift set (status untouch |
+| 0x00476D60 | FUN_00476d60 | 425 | 0x00435A10, call | not in the lift set (status untouch |
+| 0x00534658 | entry_00534658 | 256 | 0x00D0C7E0, pointer | not in the lift set (status documen |
+| 0x0064E2B0 | vf05 | 1887 | 0x0064DFE0, vtable 0x01581348 slot 5 | not in the lift set (status documen |
+| 0x0066006E | entry_0066006E | 11 | 0x00CFFB00, vtable 0x01407180 slot 35 | not in the lift set (status untouch |
+| 0x00670069 | entry_00670069 | 516 | 0x00CFFB00, vtable 0x01407180 slot 36 | not in the lift set (status untouch |
+| 0x0069002E | entry_0069002E | 46 | 0x00CFFB00, vtable 0x01407180 slot 37 | not in the lift set (status untouch |
+| 0x0069006E | entry_0069006E | 260 | 0x00CFFB00, vtable 0x01407180 slot 38 | not in the lift set (status untouch |
+| 0x006F0063 | entry_006F0063 | 1 | 0x00CFFB00, vtable 0x01407180 slot 34 | not in the lift set (status documen |
+| 0x007DF790 | FUN_007df790 | 933 | 0x007DCF30, call | not in the lift set (status documen |
+| 0x00DBC3B0 | FUN_00dbc3b0 | 400 | 0x00DBC550, pointer | not in the lift set (status untouch |
+| 0x00E0D750 | vf10 | 136 | 0x00E0D1A0, vtable 0x0142e220 slot 10 | not in the lift set (status documen |
+| 0x00E0D940 | vf10 | 1599 | 0x00E0D240, vtable 0x0142e278 slot 31 | not in the lift set (status documen |
+| 0x0109DAC0 | FUN_0109dac0 | 10305 | 0x010A8570, call | not in the lift set (status untouch |
+| 0x010A3C00 | FUN_010a3c00 | 10283 | 0x010A8920, call | not in the lift set (status untouch |
+
+8. main e3d0fdd6 (train 3), previewed on Codex's frozen `native-L28c`
+   (59,534 functions generated locally, not committed), which records
+   0x00DAFED0. Runtime game tests 46/46. The real boot passes 0x00DAFED0.
+   Stop: untranslated 0x00DA9EC0, called from just before 0x00DB187E (in
+   0x00DB1480, `sRender`'s set-up). Cause 2: it lifts but has no fixture
+   (`lift_novector.json` in native-L28c). Owner: Codex. It was in the
+   look-ahead table (sRender ctor, depth 2).
+   The frontier probe's 0x01305585 is the CRT's `_fptrap` (push 2; call
+   `__amsg_exit`), reached through the `__cfltcvt_tab` slots that
+   `_FPinit` replaces (claude-6). The probe skips `_FPinit`, so it is not
+   a real-boot issue.
+9. Preview on native-L28c (59,547 records, with Codex's 0x00DA9EC0,
+   0x01129030, 0x01129460, 0x01104470; generated locally and restored).
+   Runtime game tests 46/46. The boot passes all of `sRender`'s set-up.
+   Stop: untranslated 0x00419100, called from just before 0x00417AF6 (the
+   archive manager set-up 0x00417AF0 in `sBbsRpgMain`'s constructor). It
+   is a 50-byte loop that registers ten tables of (id, entry) pairs at
+   0x018D9288. Cause 2: no fixture in native-L28c. Owner: Codex.
+   - Ten more constructor-route functions from the look-ahead are also
+     still without fixtures there: 0x00475400, 0x00478600, 0x0049F990,
+     0x00480240, 0x00490E80, 0x004915A0, 0x00DD5ED0, 0x0075BAD0,
+     0x00DB8B90 and 0x00480950.
+   - claude-6's not-lifted group on the same route is unchanged:
+     0x004AB440, 0x00DFECF0, 0x00E0E470, 0x00F9FBA0, 0x012E1A13,
+     0x012F9D82, 0x012F1C9D.

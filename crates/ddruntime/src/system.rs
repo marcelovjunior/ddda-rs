@@ -619,6 +619,18 @@ pub fn debug_break(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn raise_exception(m: &mut dyn Mem, cpu: &mut Cpu) {
     crate::seh::raise_exception(m, cpu);
 }
+/// KERNEL32 `CreateProcessA(lpApplicationName, lpCommandLine, ...)`: the
+/// game starts a process only to restart itself (0x011797F0, from the
+/// shutdown path 0x00DF1140 -> 0x01179A70, with its own path and arguments).
+/// The runtime does not start host processes: the session stops with a
+/// report naming the command line.
+pub fn create_process_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (app, cmd) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let text = |p: u32| if p == 0 { String::from("NULL") } else { format!("{:?}", ansi_str(m, p)) };
+    panic!("CreateProcessA(application {}, command line {}) called from {:#010x}: the game asks to restart itself;             starting processes is not modelled",
+           text(app), text(cmd), m.u32(cpu.esp));
+}
+
 // --- PSAPI and WININET --------------------------------------------------------
 
 /// PSAPI `GetModuleFileNameExA(hProcess, hModule, lpFilename, nSize)`
@@ -705,6 +717,7 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "VerifyVersionInfoA", verify_version_info_a),
     ("KERNEL32.dll", "DebugBreak", debug_break),
     ("KERNEL32.dll", "RaiseException", raise_exception),
+    ("KERNEL32.dll", "CreateProcessA", create_process_a),
     ("PSAPI.DLL", "GetModuleFileNameExA", get_module_file_name_ex_a),
     ("WININET.dll", "InternetGetConnectedState", internet_get_connected_state),
 ];

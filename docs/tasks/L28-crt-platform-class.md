@@ -318,3 +318,508 @@ Then hand the pair to the train; no local Rust replay (batched rule).
 
 The lift rejections (STMXCSR/LDMXCSR, x87 forms, RCR and others) are
 claude-6's (L22).
+
+### L28b takeover: run 4 audit and run 5 (2026-10-12)
+
+**Batch ready (codex, task/L28b-crt): +25 functions / +70 cases in run 6,
+59,115 entries total; alloca promotion and its 23 caller refreshes audited.
+33 light tests pass; Rust replay belongs to the integration train.**
+
+Run 4 printed `run4 done` before this work touched native-L17. Its final
+pair contains **59,090 selected entries / 175,899 cases**, leaving **317**
+prepared candidates without fixtures. The inherited `L28/audit_b2.py`,
+pointed at the head's native-L28b2 snapshot, reports **6 additions / 16 new
+cases**, no removals and no unexpected edits; the only existing entry
+changed is the promoted 0x00DB9C30.
+
+The six additions are 0x007F2120 (random), 0x007DF790
+(objects-mockzero-v1), and 0x004AB440, 0x00E0E470, 0x00E0E5A0,
+0x00E111A0 (small-mockzero-v1). In particular **the shader loader
+0x00E0E470 already recorded in run 4**. Run 5 preserves accepted entries;
+promotion refreshes the helper and its previously mocking callers, and
+the strategy passes retry the remaining candidates. It does not refresh
+every accepted record.
+
+Run 5 uses the supplied `L17BC/l28d.sh` with only its working-directory
+line changed to this L28b worktree. It runs through `heavy.py codex`, with
+native-L17's LIFT_DATA, INVENTORY_DB and INVENTORY_EXTRA and six workers.
+Recorder source stays fixed throughout the run. No private data snapshot
+was made. `research/native/audit_records.py` records hashes and addresses
+only, then checks the complete selected pair: existing record hashes and
+case multisets must match, except newly closed helpers and callers whose
+old cases mocked them. Those callers must receive new cases, and no case
+may still mock a newly closed helper. Missing entries also fail the audit.
+
+Run 5 finished at 02:32:03: **59,090 entries / 175,899 cases**, zero
+additions and zero promotions. `L28/run5-audit.json` reports **all 59,090
+existing entries unchanged**, including their case multisets. No removals,
+unexpected edits or stale mock cases. All prescribed strategy passes ran.
+
+**Why the fallback still failed.** The existing recorder always initializes
+ESP to a multiple of 16. The alignment wrappers 0x012F4E90 and 0x012F4EA6
+compute alignment from `ESP + 4 - EAX`. Even zero EAX therefore allocates
+four bytes, and their exit ESP equals entry ESP; the ordinary stack guard
+rejects it. Merely switching among the existing input distributions cannot
+exercise their zero-allocation path.
+
+The new opt-in `zero-call-v1` uses the zero-input distribution with entry
+ESP four bytes below an aligned caller stack (ESP modulo 16 = 12).
+It adds no address special case or stack-contract exemption, preserves all
+existing distributions and checks, and is included in promotion fallback.
+Synthetic 8-/16-byte alignment tests reproduce the old rejection and the
+new valid return; the promotion test proves this distribution is tried for
+an affected caller. The existing rejection test still forbids promotion
+when a caller cannot re-record. **33 light tests pass** (16 structured-input,
+13 frame-contract, 4 audit).
+
+Run 6 (`L28/run6.sh`, `L28/run6.log`) starts with an assertion against each
+original alignment wrapper, then promotes, prepares, and records/adopts
+random, zero, zero-call-v1 and small-mockzero-v1 (three seeds, 20 seconds).
+It moves old trial logs aside; no selected-data snapshots are taken. Since
+run 5 preserved the entire pair, the run-5 hash manifest is also the exact
+run-6 baseline. Both original wrappers rejected under the old zero strategy
+and returned with ESP increased by four under zero-call-v1, **3/3 seeds
+each**. Promotion then closed **0x012F2280**, re-recorded all **23** existing
+mocking callers and kept every selected entry (59,090 / 175,901 cases at
+that point). Run 6 finished at 02:49:42:
+
+| Measure | Before run 5 | After run 6 |
+|---|---:|---:|
+| Selected entries | 59,090 | 59,115 |
+| Recorded cases | 175,899 | 175,969 |
+| Liftable candidates without a fixture | 317 | 292 |
+| Lift rejections (this branch, before L22 integration) | 157 | 157 |
+
+Random added 17 functions / 44 cases; zero added 8 / 24. Promotion added
+two cases while refreshing the existing helper/callers. The new aligned
+strategy enabled promotion; it added no functions directly in its own
+pass. Seven new entries occur in TITLE_PATH.md: **0x004403A0, 0x00448500,
+0x0044E6F0, 0x004709D0, 0x004A3260, 0x00F9FBA0, 0x00FEE130**.
+
+**Preservation proved:** `L28/run6-audit.json` reports **59,066 unchanged
+old records and case multisets**. Exactly 24 existing entries changed:
+the promoted 0x012F2280 and its 23 previously mocking callers. No entries
+were removed, no unrelated entries changed, and no cases still mock the
+promoted helper. The report lists every added and refreshed address.
+
+**Adoption / verification:** native-L17 is frozen after run 6 for the head
+to snapshot and adopt. Use its `patterns/lift.json`, `vectors/lift.json`,
+`patterns/lift_novector.json`, `patterns/lift_novector_keys.json`, plus the
+unchanged quarantine metadata. This is a boundary-changing pair, not just
+25 append-only additions: when combining another lane's data, re-record
+any imported case still mocking 0x012F2280. No Rust build or replay was
+run here, per batched verification; all 25 additions and the refreshed
+24 entries await the integration train. The original-wrapper assertions
+and the 33 light tests passed. No shared native/inventory data was written,
+and no snapshots were taken by this agent.
+
+The audit can be repeated without modifying the pair:
+
+```
+E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/audit_records.py compare --root E:/ddda-re/notes/native-L17 --manifest E:/ddda-re/notes/native-L17/L28/run5-before-hashes.json --report E:/ddda-re/notes/native-L17/L28/run6-audit.json
+```
+
+**One next action:** integration replay of this pair; then resolve the
+image-table/stack-slot bounded loops below with the lifter lane. NaN and
+instruction rejections still wait for L22 integration. The outside-image
+terminal-call cleanup finding remains a diagnosis, not a shipped fix.
+
+**Title-path follow-up evidence (not fixes).** Of the 317 run-4 residuals,
+62 addresses occur in TITLE_PATH.md (this is a document intersection, not
+a newly proven reachability closure). Private evidence is in
+`L28/run4-title-residue.json` and `L28/title-loop-evidence.json`.
+
+- Archive registration 0x00419100 reads ten descriptors via 0x0153B6BC.
+  Their image-backed counts total 13,061 records. Its six-instruction
+  inner loop at 0x00419113 already requires 78,366 instructions, above
+  the default 20,000 budget. Random inputs cannot remove this loop.
+- `sObjCollision::ctor` initializes a stack-slot counter to 799 at
+  0x0047862B and decrements it at 0x004786B5 (800 iterations).
+  `sNpcManager::ctor` also has a stack-slot counter initialized at
+  0x0047549A and decremented at 0x00475540. These require bounded-loop
+  analysis beyond the register-counter forms in the L22 lane; sent to
+  head and claude-6 on the board.
+- 0x00DB8B90 pushes one argument for 0x00DB8AC0. The latter's normal
+  exit 0x00DB8B65 tail-jumps to LeaveCriticalSection through 0x0139D164
+  (four-byte cleanup), but its other path calls 0x004080A0 at 0x00DB8B7F
+  then reaches INT3 at 0x00DB8B84. The recorder's static cleanup analysis
+  returns zero because of that trap path. This is a candidate diagnosis,
+  not a proved recording fix: terminal-path classification needs evidence
+  before changing the conservative fallback. The next link is concrete:
+  0x004080A0 calls inventory symbol `__invoke_watson` (0x012EDDD5) at
+  0x004080C5, then reaches INT3 at 0x004080CB. Neither name is covered by
+  the current four-symbol `noreturn_entries` set. Sent to the lifter lane.
+
+### L28c: boot partition and imported alloca boundary (2026-10-12)
+
+**Batch ready: boot blocker 0x00DAFED0 has eight accepted fixtures;
+0x00F6A380 is refreshed. 59,534 entries / 177,196 cases, both changes
+audited separately. 39 light tests pass; Rust replay awaits the train.**
+
+Merged main into task/L28b-crt at **3d8ac913**, retaining both sides of the
+milestone-note conflict. Harness and structured-input changes merged
+automatically; all 33 preceding light tests passed. This batch uses only
+**native-L28c**, initially **59,533 selected records / 177,188 cases**.
+native-L17 stays frozen; native-train3 is untouched. INVENTORY_EXTRA points
+to native-L28c/extra_functions.tsv; the shared inventory database is opened
+read-only (no private database was supplied with this data set).
+
+**Boot blocker 0x00DAFED0:** random, zero, small-v1 and objects-v1 each
+rejected as `runaway` in the original recorder, with its ordinary 20,000
+instruction limit. Read-only disassembly/decompilation establishes:
+
+- First and last are entry-stack arguments +8/+12 (loads at 0x00DAFEE2
+  and 0x00DAFEDD); +4 is the output iterator-pair pointer.
+- The distance is converted to a midpoint and multiplied by **0x5C** at
+  0x00DAFF06. Median selection calls 0x00DAFD10 at 0x00DAFF12.
+- Comparisons use two unsigned words at record offsets **0x50/0x54**
+  and a float at **0x58** (e.g. 0x00DAFF30..0x00DAFF4C).
+
+Independent random pointers/counts do not describe this bounded range;
+zeroing both pointers still does not supply the nonempty median-selection
+precondition. The general `record-range-v1` strategy takes a private JSON
+layout describing stride, first/last/result stack or register bindings,
+and finite float/unsigned-key fields. No function-address dispatch is
+used. It fixes all initial bytes before execution, keeps image reads and
+guest writes unchanged, and records the layout for exact re-recording.
+Its seeded cases include ascending, descending, equal and mixed keys,
+3/5/8/17/33 records, and page-crossing records. No budget or rejection
+check is relaxed.
+
+The baseline audit also finds exactly one imported stale caller:
+**0x00F6A380** still mocks already-closed **0x012F2280**. The generic
+`refresh-closed` operation re-lifts/re-records only such callers, preserving
+the current lifter's x87-entry and instruction-budget metadata. A failed
+caller refresh writes neither selected file. This repairs an imported
+boundary mismatch without re-promoting or demoting unrelated entries.
+
+**Original-code checks:** all four old distributions rejected. The bounded
+range produced **8/8 accepted trials** without increasing the instruction
+budget. Every trial also passed independent checks on its recorded writes:
+returned bounds are inside the input range and record-aligned; the output
+records are a permutation of the inputs; and the less/equal/greater
+partitions satisfy the lexicographic two-uint/float comparator. Counts
+3/5/8/17/33 and equal-key cases are exercised. These are original-code
+recording checks, not a claim that Rust replay has passed.
+
+The harness owner agreed to the five input-only hooks in board #9531;
+the source patch was then applied. **39 light tests pass** (19 structured
+inputs, 13 frame contracts, 2 range-generator tests, 5 audit tests). The
+refresh tests also check failure before pair writes and removal of stale
+optional x87/budget metadata when the current lifter no longer emits it.
+
+The first refresh job was terminated before reporting a result. Its hash
+audit confirmed all 59,533 entries and 177,188 cases unchanged. The retry
+repaired only 0x00F6A380; `L28c/refresh-audit.json` confirms **59,532 old
+records/case multisets unchanged**, no removals, no unrelated changes,
+and no remaining mocks of 0x012F2280. Counts stayed 59,533 / 177,188.
+
+**Final pair:** **59,534 records / 177,196 cases** (+1 / +8); missing
+prepared candidates **229 → 228**, with **20 lift rejections / 3
+quarantines** unchanged. `L28c/partition-audit.json` compares against the
+post-refresh hash manifest and proves **all 59,533 pre-existing records
+and case multisets unchanged** during adoption. Its only addition is
+0x00DAFED0. Together with the preceding refresh audit, exactly one original
+entry changed (0x00F6A380) and exactly one was added. No snapshots were
+taken; the manifests contain hashes/addresses only.
+
+**Private evidence:** `L28c/diagnose.log`, `partition-trial.json`,
+`partition-check.log`, `refresh-audit.json`, `partition-audit.json` and
+`partition-layout.json` under native-L28c. The eight trial cases were
+recorded through heavy.py using the exact proposed hook in an isolated
+process while waiting for the shared-file owner. After agreement the
+same hook was applied to source and light-tested normally. Adoption and
+hashing execute no guest code; that light step ran directly with 16 GB
+free after cancelling its unnecessary queued heavy wrapper.
+
+**Reproduction for a missing candidate:** set LIFT_DATA to
+`E:/ddda-re/notes/native-L28c` and INVENTORY_EXTRA to its
+`extra_functions.tsv`, then run through heavy.py as codex:
+
+```
+python research/native/structured_inputs.py record --strategy record-range-v1 --layout E:/ddda-re/notes/native-L28c/L28c/partition-layout.json --address 0x00DAFED0 --seeds 8 --seconds 20
+python research/native/structured_inputs.py adopt --strategy record-range-v1
+```
+
+Use the research Python interpreter specified above. The private layout is
+`stride=92`, `first={stack:8}`, `last={stack:12}`, `result={stack:4}`,
+`uint_offsets=[80,84]`, `float_offsets=[88]`. `--address` is an optional
+candidate filter, not an address-specific implementation rule. Successful
+existing functions are not re-recorded by `record`. `refresh-closed`
+repairs imported stale closed-call boundaries; its audit requires explicit
+`--refresh-closed 0x012F2280` authorization of that exact target.
+
+**Adoption:** native-L28c is frozen for head's snapshot/merge. Take its
+selected pair and updated `patterns/lift_novector.json` /
+`patterns/lift_novector_keys.json`; quarantine metadata is unchanged. No
+full Rust replay was run here. The next action is integration replay and
+resuming the real boot, then prioritizing the next executed title-path
+failure. Image-table/stack-slot loop budgets and the terminal-call cleanup
+diagnosis above remain open; coordinate with L45 before changing extents
+or terminal evidence. Both L45's `refresh`/`table_goals` and this branch's
+separate `refresh-closed` command must be retained when merging.
+
+### L28c render cleanup batch (2026-10-12, boot preview ready)
+
+**59,534 → 59,542 selected records; 177,196 → 177,220 cases.** Eight
+additions, three original-code fixtures each: **0x00DAA4B0, 0x00DAE760,
+0x01128EE0, 0x01128F40, 0x01129030, 0x01129310, 0x01129370,
+0x01129460**. All 59,534 old records and case multisets are hash-identical
+(`native-L28c/L28c/title-cleanup-audit.json`); no removals, promotions or
+stale mocked targets. Missing prepared candidates: **228 → 220**.
+
+The recorder's indirect-call cleanup overcounted arguments when a later
+stdcall/thiscall consumes an argument pushed before the indirect call.
+Concrete evidence: 0x01128F4F pushes the diagnostic string, 0x01128F54
+pushes the COM receiver, and 0x01128F55 calls Unlock. 0x01128F57 then
+pushes HRESULT and 0x01128F5A calls 0x00DA89B0, whose return at
+0x00DA8C15 is `ret 8`. Unlock consumes four bytes, leaving the string for
+the later call. The analogous Lock sequence is 0x01128F19..0x01128F31.
+The general forward cleanup scan now accounts for the later direct
+callee's static pop, reserving its pre-pushed prefix. No address-specific
+case, changed input distribution, or relaxed execution guard is involved.
+
+**41 light tests pass:** 15 frame-contract (two new regressions), 19
+structured-input, two range-generator and five audit tests. The new tests
+cover the saved prefix and a subsequent callee consuming only intervening
+pushes before explicit caller cleanup. Original recording ran through
+heavy.py; seven additions use zero-call-v1, 0x00DAE760 uses zero-objects-v1.
+Rust replay remains for the head's integration train.
+
+Before this change all 29 remaining direct-title candidates rejected with
+three seeds in each of zero-call-v1, zero-objects-v1, small-mockzero-v1 and
+image-v1. Private evidence: `L28c/title-diagnosis.jsonl` and
+`L28c/title-cleanup.jsonl`. The broader one-hop trial was stopped on head's
+new priority order, preserving its completed rows. **native-L28c is not
+frozen**, per head: 0x01129030 and 0x01129460 are ready for preview now;
+0x00DA9EC0 still rejects and is being traced first, then 0x01104470.
+Constructor constant-loop analysis remains open (stack counters, copied
+initializers and closed-callee cost); no speculative budget change landed.
+
+### L28c priority boot-route follow-up (2026-10-12)
+
+**0x00DA9EC0 and 0x01104470 now record 3/3 each.** The preceding batch
+already added 0x01129030 and 0x01129460, so all four requested boot-route
+functions have accepted fixtures. Private pair: **59,542 → 59,544 records,
+177,220 → 177,226 cases**. `L28c/boot-route-audit.json` compares against
+the post-render hash manifest and proves every old record/case multiset
+unchanged. Missing prepared candidates: **220 → 218**. No promotions,
+removals or unrelated changes; native-L17 and native-train3 remain untouched.
+
+For 0x00DA9EC0 the original trace reached its own return at 0x00DAA4A4,
+but ESP was four bytes too high. At 0x00DA9F2E the COM call is followed
+by `mov ecx,[esp+0x20]` (0x00DA9F30), before the HRESULT push and call
+to 0x00DA89B0. The cleanup scan previously stopped at that neutral setup
+because it had not yet seen a later push. It now crosses non-branching,
+non-ESP-writing instructions before as well as after that push. Its
+24-instruction bound and branch/call/stack barriers remain. A synthetic
+MOV case passes; replacing it with a jump still rejects, demonstrating the
+conservative barrier. **42 light tests pass** across the four test files.
+
+0x00DA9EC0 uses zero-call-v1. 0x01104470 uses image-v1: zero-based
+distributions correctly reject at the `div ecx` at 0x01104491, whose
+divisor is the byte loaded from its first argument +0x25 at 0x01104489.
+With the cleanup correction, all three image-backed trials return normally.
+No input bytes or arithmetic were repaired during execution.
+
+Evidence: `L28c/trace-da9ec0.log`, `trace-00da9ec0.json`,
+`boot-route.jsonl`, and `boot-route-audit.json`. Recording used heavy.py;
+no Rust replay. The data set stays **open, not frozen**, as explicitly
+requested by head, so claude-2 can preview these additions immediately.
+
+### L28c pointer-route batch and hand-off (2026-10-12)
+
+**Final selected pair: 59,547 records / 177,235 cases.** The last batch
+adds **0x00860A60, 0x00874F90, 0x00B54BE0**, three zero-call-v1 fixtures
+each (**59,544 → 59,547 / 177,226 → 177,235**). All 59,544 previous
+records/case multisets are unchanged (`L28c/pointer-audit.json`). Across
+this entire title-route task, **13 functions / 39 cases** were added;
+`L28c/title-cumulative-audit.json` proves **all 59,534 original records
+and case multisets unchanged**, with no removals, promotions, affected
+callers, unexpected changes, or stale mocked closed targets.
+
+These three virtual wrappers use the same deferred argument shape, with
+**no stack arguments belonging to the intervening virtual call**. At
+0x00860A6B the pre-pushed value belongs to 0x0112F940, called at
+0x00860A74 after pushing the virtual result. Both returns of 0x0112F940
+(0x0112F98B / 0x0112F991) pop eight bytes. Thus the indirect call at
+0x00860A6F pops zero. A separate synthetic regression covers this limit;
+no further harness change was needed. **43 light tests pass**: 17 frame,
+19 structured-input, two range-generator, five audit. No full Rust replay.
+
+**Queue coverage:** all 32 one-hop entries after excluding the explicitly
+forbidden 0x00520003/0x00520004 were attempted. All 29 eligible two-hop
+entries were attempted; 0x00FB9A10 remains quarantined and was skipped.
+Each unsuccessful entry was tried with three seeds of zero-call-v1,
+zero-objects-v1, image-v1, and random, bounded to eight seconds per strategy.
+No additional one-hop entry recorded; the three additions above are from
+two hops. Together with the direct-title trials there are **77 tested
+residuals**, with each attempt's exact reason in
+`L28c/title-residual-evidence.json`. Missing prepared candidates:
+**228 → 215** overall; the current legacy lift_novector list contains 175
+entries. The 20 prepared lift rejections and three quarantines are unchanged.
+
+**Remaining work / routing questions:**
+
+- Constructor budgets were not guessed or increased. 0x00478600 uses a
+  stack-slot countdown; 0x00490E80 has a flag-neutral store between its
+  decrement and latch; 0x0049F990 copies a register initializer. The current
+  constant-loop analysis refuses these forms. 0x00475400 / 0x004915A0
+  also fail cost analysis at closed 0x00475180 (it saves EDI, uses it in
+  the loop at 0x004751A0, and restores it at 0x004751EE); 0x00480240
+  fails at closed 0x0047F660. 0x00DD5ED0's loop contains an indirect call
+  at 0x00DD5F99, so a universal static callee cost is unavailable. Board
+  #9540/#9542/#9552 requests coordination; **lift.py was not edited**.
+- Some remaining cleanup failures require different evidence. For example,
+  0x011590E0 calls 0x01156B00 at 0x01159141 with two pushed arguments;
+  the latter's non-switch indirect tail leaves its cleanup unresolved by
+  static_pop. Do not substitute an assumed pop or relax the own-return check.
+- Head/claude-2 received each boot-route success in board #9548/#9550/#9551.
+  The relevant implementation commits are **111bbe4e** and **92f14963**.
+  Head should replay these fixtures in the integration train and continue
+  the boot. All four priority addresses are now present. **native-L28c
+  remains open, not frozen**, as head explicitly requested; no snapshots,
+  shared-data writes, full replay, or pushes were made.
+
+Recording jobs have finished and released their heavy slot. Private audit
+manifests contain hashes only. The untouched comparison base remains
+native-train3, and native-L17 remains frozen. Source/doc/test changes are
+committed on task/L28b-crt as janne without trailers.
+
+### L28c archive registration boot stop (2026-10-12)
+
+**0x00419100 records 3/3; ready for immediate boot preview.** Private
+native-L28c: **59,547 → 59,548 selected records**, **177,235 → 177,238
+cases**. `L28c/archive-audit.json` proves all 59,547 old records/case
+multisets unchanged; only 0x00419100 is added. Missing prepared candidates:
+**215 → 214**. The data remains open, not frozen, as head requested.
+
+The function loads ten descriptor pointers through 0x0153B6BC at
+0x00419104. Each descriptor gives an entry pointer and count; the loop
+at 0x00419113 stores that entry pointer at `0x018D9288 + id*4`. The
+image contains **13,061 entries** across those tables. Its control flow
+does not depend on the caller's inputs, but its **78,453 instructions**
+exceed the ordinary 20,000 recorder budget.
+
+The opt-in **image-bounded-v1** policy keeps image-v1's input distribution.
+A separate conservative abstract interpreter starts with unknown GPRs
+(except the recorder's actual ESP) and unknown flags; reads only original
+image bytes and its own tracked stores; and must reach a balanced return
+without overwriting the root return address. Unknown conditions/addresses,
+calls, indirect flow, unsupported instructions, self-modifying writes,
+excessive proof memory or time, and paths beyond the hard instruction
+ceiling refuse the proof. Unknown stores invalidate image facts, rather
+than reloading the old bytes. No input-dependent loop obtains a bound.
+The ordinary limit remains when the proof fails. A successful long proof
+adds its exact count to the ordinary allowance, capped at two million;
+here the resulting limit is **98,453**. The proof never executes instead
+of the original: Unicorn still runs and checks every access/instruction,
+including all previous return, flag, page, and time guards. Each accepted
+case records its strategy and the derived bound for repeatability.
+
+**Verification:** six new synthetic tests check exact bounds, modified
+image counts, unknown stores and inputs, unchanged default runaway
+rejection, stack/code/ceiling/resource refusals, and an actual original-code
+recording using the opt-in policy. **49 light tests pass** across image
+budget (6), frame (17), structured-input (19), range (2) and audit (5).
+The three real archive cases also pass an independent output-map check:
+every one of the 13,061 registration slots contains its expected entry
+pointer read from the exe. Evidence is private in `L28c/archive-check.log`,
+`archive-record.log`, `archive-audit.json`, and the normal
+`structured-image-bounded-v1.jsonl` trial log. Original recording used
+heavy.py; no full Rust replay or data snapshots.
+
+The unused identity-instruction helper draft was reverted after its tests
+passed: it did not by itself establish the constructor bounds. The lifter
+owner granted the budget area in board #9567, and requested merging
+`task/L27b-integrate` (acdd978b) before changing lift.py. That merge and the
+remaining requested constructor route follow this boot-stop commit.
+
+### L28c constructor and title bounds (2026-10-12)
+
+**Eleven more functions record 3/3 each:** private native-L28c moves
+**59,548 → 59,559 records / 177,238 → 177,271 cases** after the archive
+commit ab1c2dbe. All **59,548 previous records and case multisets are
+unchanged**, with no removals, promotions, stale mock boundaries, or
+unrelated changes (`L28c/guarded-cumulative-audit.json`). The first six
+also have their own audit (`L28c/constructors-audit.json`). Including
+the archive function, this continuation adds **12 functions / 36 cases**.
+The data set remains **open, not frozen**, for the head's boot preview.
+
+| Address | Guarded instruction bound | Route |
+|---|---:|---|
+| 0x00475400 | 91,980 | requested constructor |
+| 0x0049F990 | 25,242 | requested constructor |
+| 0x00480240 | 45,500 | requested constructor |
+| 0x00490E80 | 32,140 | requested constructor |
+| 0x004915A0 | 208,066 | requested constructor |
+| 0x00480950 | 45,329 | requested constructor |
+| 0x004755E0 | 51,233 | remaining title queue |
+| 0x00478050 | 29,125 | remaining pointer queue |
+| 0x0048AC80 | 31,691 | remaining title queue |
+| 0x0048CC00 | 42,582 | remaining pointer queue |
+| 0x004918D0 | 174,153 | remaining title queue |
+
+The opt-in **guarded-bounded-v1** distribution uses zero-call-v1 inputs
+and zero-return mocks. Its abstract trace starts with unknown GPRs except
+the actual entry ESP. It follows direct closed calls, including exact
+stack saves/restores, and the recorder's existing direct mock cleanup and
+platform models. Known memory writes update abstract memory; unknown
+values never become constants. An unknown-address output store may be
+ignored only with a **runtime non-aliasing obligation**: it must not touch
+any concrete byte read by the proof, any executed code byte, or the root
+return address. Both Unicorn memory-write hooks and platform-model
+`mwrite` enforce that guard; a violation rejects the original run. Bounds
+include conservative mock/trampoline overhead and the ordinary 20,000
+allowance, within the existing two-million ceiling. Unknown branches,
+unknown indirect targets, unsupported effects, unbalanced returns, and
+proof resource limits still refuse an enlarged budget. Original execution,
+not the abstract interpreter, produces every accepted fixture.
+
+The four requested constructors still without cases are evidenced:
+
+- **0x00478600:** proof stops at unknown `call edx`, **0x00478854**.
+- **0x00DD5ED0:** proof stops at unknown `call eax`, **0x00DD5F99**.
+  The vtable store/reload through an unknown object pointer is not yet
+  tracked symbolically; no callee contract is assumed.
+- **0x0075BAD0:** after tracing its known table branch and bounded REP
+  store, the condition at **0x0075BCA8** remains unknown.
+- **0x00DB8B90:** its return at **0x00DB8BD8** is four bytes off because
+  0x00DB8AC0's cleanup is unresolved. Its normal tail at **0x00DB8B65**
+  reaches LeaveCriticalSection through IAT **0x0139D164** (pop four);
+  its failure path at **0x00DB8B7F** calls 0x004080A0 before INT3.
+  Noreturn evidence for that failure path belongs to claude-6's lane;
+  board #9586 reports the dependency. No pop was guessed.
+
+After the first six adoptions, a static census of all **70** remaining
+eligible title/pointer candidates found precisely the five additional
+bounds above. They all recorded; **65** remain without a fixture in that
+queue. This is not a new successful strategy for unknown control flow.
+Private evidence: `L28c/constructor-proof-evidence.json`,
+`remaining_proofs.py`, `queue-proof-evidence.json`, the two recording logs,
+and `structured-guarded-bounded-v1.jsonl`. Missing prepared candidates
+fall **214 → 203**; rejected/quarantined entries were not admitted.
+
+**Light checks:** 79 tests pass: image bounds 15, frame contracts 20,
+function tails 13, structured inputs 19, record inputs 2, record audit 5,
+existing lifter budgets 5. The budget tests cover actual Unicorn alias
+rejection (including platform writes), closed callee save/restore, unknown
+conditions, REP/count/DF constraints, known interior jumps, and unchanged
+default runaway rejection. No lift.py change was needed.
+
+One pre-existing expectation exposed by the owner merge is still awaiting
+its owner's update: `test_lift_remaining.py` passes 12/13, but its old
+negative `sub esp,8; indirect call; xor eax,eax; add esp,4; ret` now has
+the valid split cleanup (callee four plus caller four). The earlier
+cleanup scanner stopped at XOR and incorrectly popped eight. A new
+owned frame regression proves pop zero/caller eight, pop four/caller four,
+and rejection of the genuinely imbalanced caller twelve. Board #9583
+requests permission to update the other owner's test; that file is
+unchanged. This outstanding test is explicitly **not** reported green.
+
+Merged the lifter owner's acdd978b and 9c412273 through **4104d570** and
+**e76ab8bb**, preserving both refresh commands, input_layout/visited, and
+the owner's terminal/x87 changes. Recording ran serially through heavy.py
+as codex, at most six workers; free memory stayed above 16 GB during this
+batch. No Rust replay (head's integration train), snapshots, shared-data
+writes, native-L17/native-train3 changes, generated-code commits or pushes.

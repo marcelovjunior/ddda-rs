@@ -15,8 +15,9 @@ import lift
 class ShardTests(unittest.TestCase):
     def test_crate_graph_calls_and_stable_writes(self):
         root = Path(__file__).resolve().parents[2]
-        (root / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=root / "target", prefix="shards-test-") as tmp:
+        target = Path(os.environ.get('CARGO_TARGET_DIR', 'C:/ddda-targets/L27b'))
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=target, prefix="shards-test-") as tmp:
             repo = Path(tmp)
             (repo / "Cargo.toml").write_text('[workspace]\nresolver="2"\nmembers=["crates/*", "crates/ddlift/lift_*"]\nexclude=["crates/ddlift"]\n[workspace.package]\nedition="2021"\nlicense="MIT"\npublish=false\n')
             shutil.copytree(root / "crates/ddnative-base", repo / "crates/ddnative-base")
@@ -50,25 +51,25 @@ class ShardTests(unittest.TestCase):
             patterns = repo / "patterns/lift.json"
             patterns.write_text(json.dumps(functions))
             with patch.object(lift, "R", str(repo)), patch.object(lift, "N", str(repo)):
-                lift.gen()
+                lift.gen(instructions=False)
                 files = list(repo.glob("crates/**/*.rs"))
                 stamps = {p: p.stat().st_mtime_ns for p in files}
-                lift.gen()
+                lift.gen(instructions=False)
                 self.assertEqual(stamps, {p: p.stat().st_mtime_ns for p in files})
                 functions[2]["arms"][0] = functions[2]["arms"][0].replace('+= 2', '+= 3')
                 patterns.write_text(json.dumps(functions))
-                lift.gen()
+                lift.gen(instructions=False)
                 changed = [p.relative_to(repo).as_posix() for p in files if p.stat().st_mtime_ns != stamps[p]]
                 self.assertEqual(changed, ['crates/ddlift/lift_05/src/generated/lifted_000.rs'])
                 # Removal of an entire shard leaves a valid empty registry.
                 patterns.write_text(json.dumps(functions[:3]))
                 with self.assertRaisesRegex(ValueError, 'missing lifted callees'):
-                    lift.gen()
+                    lift.gen(instructions=False)
                 patterns.write_text(json.dumps([functions[2]]))
-                lift.gen()
+                lift.gen(instructions=False)
                 self.assertFalse((repo / 'crates/ddlift/lift_06/src/generated/lifted_000.rs').exists())
                 patterns.write_text(json.dumps(functions))
-                lift.gen()
+                lift.gen(instructions=False)
             (native / 'tests/shards.rs').write_text(r'''
 use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
 #[test] fn nested_direct_calls_and_external_boundary() {
@@ -91,9 +92,9 @@ use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
     x86::set_ext_calls(None);
 }
 ''')
-            env = dict(os.environ, CARGO_BUILD_JOBS="2")
+            env = dict(os.environ, CARGO_BUILD_JOBS="2", CARGO_INCREMENTAL="0",
+                       CARGO_TARGET_DIR=str(repo / 'target'))
             # Each synthetic workspace is isolated; never compile the real batch here.
-            env.pop('CARGO_TARGET_DIR', None)
             run = subprocess.run(['cargo', 'test', '-p', 'ddnative', '--test', 'shards', '--offline'], cwd=repo, env=env, capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 

@@ -634,7 +634,57 @@ pub mod check {
     }
 }
 
+/// USER32 `wsprintfA(lpOut, lpFmt, ...)` (cdecl, varargs; Microsoft Learn
+/// "wsprintfA function (winuser.h)"), for the conversions the game uses:
+/// literal characters, `%%`, and `%S` (a UTF-16 string written in code
+/// page 1252, each unit as WideCharToMultiByte(1252, 0) converts it: its
+/// byte, a best-fit byte or '?'; NULL writes nothing). Measured on Windows
+/// 11 (research/runtime/windows/Wsprintf.cs): the output holds at most 1024
+/// characters; a literal is written while fewer than 1024 are, a `%S`
+/// argument only if all of it ends below 1024, and output stops at the
+/// first piece that does not fit; a NUL follows. Returns the characters
+/// written. Callers: 0x00DA3300 and 0x00DA3650 (`"%S"`). Other conversions
+/// are not modelled (stop).
+pub fn wsprintf_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    const LIMIT: usize = 1024;
+    let (out, fmt) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let mut next_arg = 2;
+    let fmt = guest_bytes(m, fmt, -1);
+    let mut text: Vec<u8> = Vec::new();
+    let mut k = 0;
+    'fmt: while k < fmt.len() && fmt[k] != 0 {
+        let piece: Vec<u8> = if fmt[k] == b'%' {
+            match fmt.get(k + 1) {
+                Some(b'%') => vec![b'%'],
+                Some(b'S') => {
+                    let p = arg(m, cpu, next_arg);
+                    next_arg += 1;
+                    if p == 0 { Vec::new() } else {
+                        guest_units(m, p, -1).iter().take_while(|&&u| u != 0).map(|&u| encode_1252(u, true).unwrap_or(b'?')).collect()
+                    }
+                }
+                _ => not_modelled("wsprintfA", format_args!("format {:?}", String::from_utf8_lossy(&fmt[k..]))),
+            }
+        } else {
+            vec![fmt[k]]
+        };
+        let conversion = fmt[k] == b'%' && fmt.get(k + 1) == Some(&b'S');
+        let fits = if conversion { text.len() + piece.len() < LIMIT } else { text.len() < LIMIT };
+        if !fits {
+            break 'fmt;
+        }
+        text.extend(piece);
+        k += if fmt[k] == b'%' { 2 } else { 1 };
+    }
+    for (i, &b) in text.iter().chain([0u8].iter()).enumerate() {
+        m.set_u8(out.wrapping_add(i as u32), b);
+    }
+    cpu.eax = text.len() as u32;
+    ret(m, cpu, 0);
+}
+
 pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
+    ("USER32.dll", "wsprintfA", wsprintf_a),
     ("KERNEL32.dll", "MultiByteToWideChar", multi_byte_to_wide_char),
     ("KERNEL32.dll", "WideCharToMultiByte", wide_char_to_multi_byte),
     ("KERNEL32.dll", "GetStringTypeW", get_string_type_w),

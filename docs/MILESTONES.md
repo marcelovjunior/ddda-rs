@@ -1,5 +1,142 @@
 # Milestones
 
+### L28c constructor/title fixtures (2026-10-12, pending replay)
+
+- A guarded finite-trace strategy records eleven more constructor/title
+  functions, three cases each. It traces closed callees and enforces
+  unknown-write non-aliasing assumptions during original execution.
+  Ordinary instruction limits and unknown-control refusals remain.
+- Private native-L28c: **59,548 → 59,559 records / 177,238 → 177,271
+  cases**; all old records/cases unchanged. **79 light tests pass**.
+  One older cleanup-test expectation awaits its file owner's correction;
+  the valid split cleanup and actual imbalance have a passing regression.
+- Four requested constructors retain evidenced blockers (two indirect
+  calls, one unknown condition, one unresolved terminal-path cleanup).
+  **Next action:** head replay/boot preview and claude-6's cleanup evidence;
+  details and exact residual addresses are in L28 Results. Data stays open.
+
+### L28c archive boot stop recorded (2026-10-12, pending replay)
+
+- `0x00419100` now records **3/3** cases. A conservative image-only
+  abstract trace proves its **78,453-instruction** return path; the opt-in
+  `image-bounded-v1` policy uses that proof plus the existing 20,000
+  allowance. Unknown/input-dependent control retains the ordinary guard.
+- Every original case registers all **13,061** entries from ten image
+  tables correctly. Private native-L28c: **59,547 → 59,548 records /
+  177,235 → 177,238 cases**. Hash audit: every old record/case unchanged.
+  **49 light tests pass**; no full Rust replay or shared-data writes.
+- **Next action:** boot preview, then the remaining constructor route;
+  merge the lifter owner's integration branch before budget-area edits.
+
+### L28c title-route batch audited (2026-10-12, pending integration replay)
+
+- Final pointer-route trials add `0x00860A60`, `0x00874F90`, and
+  `0x00B54BE0`, three fixtures each, using the same delayed-callee cleanup
+  rule. Its no-stack-arguments regression passes: **43 light tests** total.
+- This batch adds **13 functions / 39 cases** overall: native-L28c
+  **59,534 → 59,547 records / 177,196 → 177,235 cases**. Cumulative hash
+  audit proves all old records and case multisets unchanged. All four
+  requested boot-route functions are recorded and reported for preview.
+- **Next action:** integration replay/boot preview; coordinate remaining
+  constructor budget proofs with the lifter owner. Trials covered all 32
+  eligible one-hop and 29 two-hop candidates; 77 tested title/pointer
+  residuals retain rejection evidence. No guard relaxed or quarantine
+  overridden. The data set remains open per head's latest instruction.
+
+### L28c next boot route recorded (2026-10-12, pending integration replay)
+
+- `0x00DA9EC0` and `0x01104470` now have three original-code fixtures
+  each. The indirect-call cleanup scan now crosses neutral register setup
+  before the later argument push; branch and ESP barriers remain. The
+  constructor's image-backed inputs avoid its byte-divisor zero at
+  `0x01104491`. **42 light tests pass** including the new barrier test.
+- Private native-L28c: **59,542 → 59,544 records / 177,220 → 177,226
+  cases**; all old records/case multisets unchanged by hash audit. All
+  four requested boot-route functions now have fixtures. The set remains
+  open for preview, with full replay deferred to the integration train.
+- **Next action:** resume boot and continue the remaining no-fixture queue.
+
+### L28c render-call fixtures (2026-10-12, pending integration replay)
+
+- Fixed mock cleanup when a later direct callee consumes arguments pushed
+  before an indirect call. At `0x01128F55`, the saved diagnostic string
+  belongs to `0x00DA89B0` (`ret 8`), not the COM call. The general rule has
+  two synthetic regression tests; all **41** relevant light tests pass.
+- Eight render functions now record, including boot-route `0x01129030`
+  and `0x01129460`: **59,534 → 59,542 records / 177,196 → 177,220 cases**.
+  Hash audit proves every old record/case multiset unchanged. Private
+  native-L28c remains open for head's requested boot preview and additions.
+- **Next action:** trace remaining boot stop `0x00DA9EC0`, then
+  `0x01104470`; constructor loop budgets remain unresolved. No Rust replay
+  here; the head verifies the integration train.
+
+### L28c boot-blocker fixtures (2026-10-12, pending integration replay)
+
+- `0x00DAFED0` now records **8/8** bounded record-range inputs, including
+  ascending, descending, equal and mixed finite keys. Original recorded
+  writes pass bounds, permutation and partition checks; no execution
+  budget or recorder guard was relaxed. The reusable layout strategy
+  seeds related first/last/output arguments before execution.
+- Refreshed `0x00F6A380`, the sole imported caller still mocking closed
+  `__alloca_probe` (`0x012F2280`). Private native-L28c:
+  **59,533 → 59,534 entries**, **177,188 → 177,196 cases**; missing
+  candidate fixtures **229 → 228**. Separate hash audits prove the refresh
+  changed only that caller and the partition addition changed no old
+  records. **39 light tests pass**; Rust replay is the head's train.
+- **Next action:** integrate this frozen pair and resume the real boot;
+  use its next executed missing function to prioritize the remaining
+  title-path queue. Evidence and merge notes are in
+  [L28 Results](tasks/L28-crt-platform-class.md).
+
+### L45 function tails, gate and boot triage (2026-10-12, pending train 4)
+
+- **Evidence:** table jumps proven on every path (both memcpy variants
+  16/16, tails past Ghidra's end lifted), frame tails (`__VEC_memcpy`)
+  and EH4 scope code (all 39 L27b scope targets) decoded into their
+  functions. `gen` no longer declares functions with verification gaps:
+  44 unproven tables remain, against 59,173 of 59,500 expected verified
+  on the train-2 base. native-L45: 33 stale records refreshed in place,
+  everything else hash-identical. native-L45b (train 3): 12 boot
+  functions recorded (0x00DFECF0, `___crtExitProcess`, `_purecall`, …),
+  audit ok. The discovery boundary rule drops 58 non-code admissions.
+  L27b is merged on `task/L27b-integrate`.
+- **Checked:** 134 Python tests plus `test_steps.py`. **Not checked:**
+  `gen` and the Rust replay (train), `tests/options.rs`.
+- **Blockers:** `__VEC_memcpy` has no vector (no input reaches its size
+  range); x87 interior helpers 0x012F1C9D and 0x01304753; mock-return-1
+  loops 0x00410000 and 0x00E0D750.
+- **One next action:** train 4 merges native-L45 (train-2 base) and
+  native-L45b (train-3 base) per address, regenerates and replays; see
+  [L45 Results](tasks/L45-function-tails.md#results).
+
+### L28b recorder batch (2026-10-12, pending integration replay)
+
+- The opt-in `zero-call-v1` input strategy supplies a call from an aligned
+  caller stack. Original wrappers 0x012F4E90/0x012F4EA6 each pass 3/3
+  trials; `__alloca_probe` 0x012F2280 now promotes and all 23 existing
+  mocking callers re-record. No recorder rejection check changed.
+- Private native-L17: 59,090 → **59,115 selected entries**, 175,899 →
+  **175,969 cases**, 317 → **292** missing fixtures. Seven additions are
+  in TITLE_PATH.md, including 0x004709D0 (title-data loading). Hash audit:
+  59,066 old entries/case multisets unchanged; only the promoted helper
+  and its 23 callers refreshed, with no removals or stale mocks.
+- **Checked:** 33 light Python tests and original-wrapper trials. **Not
+  yet checked:** Rust replay (head's integration train). The image-table
+  loop at 0x00419100 and stack-slot loops at 0x004786B5/0x00475540 remain
+  recorder-budget blockers; see [L28 Results](tasks/L28-crt-platform-class.md).
+- **One next action:** integrate and replay the boundary-changing pair;
+  refresh any other lane's cases that still mock 0x012F2280.
+
+
+L27b continuation batch (2026-10-12): production instruction emission and
+Registry/Session routing now deliver transactional AV/#DE and transfer across
+service callbacks. Light checks pass: 94 runtime + 7 base + 52 lifter tests;
+12 emitted execution fixtures include original `0x01303CB9`/`0x013070E5`
+after RtlUnwind. Windows oracle passes. Blocker to claiming all real __except
+paths: 39 of 58 census filter/body addresses are absent from the selected
+instruction keys. Next action: train 3 regeneration/replay and lifter-lane
+scope coverage; see [L27b Results](tasks/L27b-seh-faults.md#results).
+
 L27 runtime SEH batch (2026-10-11): read-only census identifies 42 EH4
 registrations / 48 scope records, seven C++ FuncInfo thunks and five throw
 sites. Per-thread TEBs, software exception search/nesting and target-frame

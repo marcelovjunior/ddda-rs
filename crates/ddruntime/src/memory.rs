@@ -271,6 +271,13 @@ fn page_range(addr: u32, len: u32) -> std::ops::Range<usize> {
 }
 
 impl Mem for GuestMemory {
+    fn probe(&self, addr: u32, width: u32, write: bool) -> Result<(), u32> {
+        self.check(addr, width, write).map_err(|_| {
+            (0..width).map(|k| addr.wrapping_add(k))
+                .find(|&a| self.check(a, 1, write).is_err())
+                .expect("mapping changed during instruction preflight")
+        })
+    }
     fn u8(&self, addr: u32) -> u8 {
         self.load(addr, 1) as u8
     }

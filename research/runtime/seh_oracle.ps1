@@ -27,10 +27,14 @@ if errorlevel 1 exit /b 1
         'divide resumed eax=42',
         'direction saved=1 handler=0',
         'arithmetic flags=44',
+        'split code=c0000005 kind=1 bad_page=1 prefix=1234',
+        'split caught',
+        'nonlocal access caught',
         'access code=c0000005 kind=1 address=0000dead ip=1'
     )) {
         if ($Required -cnotin $Lines) { throw "$Name missing expected observation: $Required" }
     }
+    if ($Lines -match '^unexpected (inner|outer) return$') { throw 'Nonlocal SEH resumed an abandoned call' }
     if (-not $Safe) {
         $Observed = @($Lines | Where-Object { $_ -match '^handler ' } | ForEach-Object { $_ -replace ' eax=[0-9a-f]+$', '' })
         $Expected = @(
