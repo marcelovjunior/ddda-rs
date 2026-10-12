@@ -114,6 +114,11 @@ class RemainingTests(unittest.TestCase):
         out=lift.exact_compares(arm,read=lambda a,n:code[a-0x400000:a-0x400000+n])
         self.assertIn('x86::comiss_hw::<true>(xmm0[0], xmm1[0])',out)
         self.assertIn('x86::comisd_hw::<false>(xmm0, xmm1)',out)
+        # a straight-line body reaches cpu_arm without its arm prefix
+        with patch.object(h,'code',lambda a,n:code[a-0x400000:a-0x400000+n]):
+            src=lift.rust_fn(0x400000,'t',['            0x400000 => { fl = x86::comiss(xmm0[0], xmm1[0]); return; }'])
+        self.assertIn('x86::comiss_hw::<true>(cpu.xmm[0][0], cpu.xmm[1][0])',src)
+        self.assertNotIn('loop {',src)
 
     def test_xlatb_reads_ebx_plus_al(self):
         arms,_,c=self.program('d7c3',True)

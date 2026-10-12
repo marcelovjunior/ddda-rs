@@ -1459,7 +1459,7 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
-def cpu_arm(arm):
+def cpu_arm(arm, start=None):
     """Lower cached local-register IR onto the shared Cpu in place.
 
     SAVE/LOAD delimit calls in patterns/lift.json; removing them is valid
@@ -1467,7 +1467,7 @@ def cpu_arm(arm):
     the cache representation (and thus scan/callee discovery) unchanged.
     Substitute whole identifiers, leaving Rust strings untouched.
     """
-    arm = compact_alu(exact_compares(arm)).replace(SAVE, "").replace(LOAD, "")
+    arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
@@ -1489,7 +1489,7 @@ def straight_line(addr, arms):
     return body
 
 
-def exact_compares(arm, read=None):
+def exact_compares(arm, read=None, start=None):
     """L22: cached arms emitted COMISS/UCOMISS as x86::comiss and COMISD/
     UCOMISD as x86::comisd (emulated compares that set no MXCSR flags, or
     the wrong ones). Retarget each call, in order, to the hardware helper
@@ -1499,7 +1499,10 @@ def exact_compares(arm, read=None):
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     read = read or h.code
-    pc = int(re.match(r"\s*0x([0-9A-Fa-f]+) =>", arm)[1], 16)
+    head = re.match(r"\s*0x([0-9A-Fa-f]+) =>", arm)
+    pc = int(head[1], 16) if head else start  # a straight-line body has no arm prefix
+    if pc is None:
+        raise ValueError("compare retargeting: no block address")
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     wanted = arm.count("x86::comiss(") + arm.count("x86::comisd(")
     found = []
@@ -1531,7 +1534,7 @@ def rust_fn(addr, name, arms):
     traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
     if body is not None:
-        return "\n".join([*header, "    " + cpu_arm(body), "}", ""])
+        return "\n".join([*header, "    " + cpu_arm(body, start=addr), "}", ""])
     return "\n".join([*header,
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
