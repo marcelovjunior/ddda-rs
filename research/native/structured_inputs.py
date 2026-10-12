@@ -224,7 +224,7 @@ def _inputs(cases):
     return {} if strategy == 'random' else dict(input_strategy=strategy)
 
 
-FALLBACK_INPUTS = ({}, dict(zero_inputs=True), dict(input_strategy='small-v1'),
+FALLBACK_INPUTS = ({}, dict(zero_inputs=True), dict(input_strategy='zero-call-v1'), dict(input_strategy='small-v1'),
                    dict(input_strategy='mockzero-v1'), dict(input_strategy='objects-v1'))
 
 

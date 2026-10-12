@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'zero-call-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -809,6 +809,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # retains the random distribution elsewhere and tags that input policy.
     if input_strategy is not None and input_strategy not in INPUT_STRATEGIES:
         raise ValueError(f'unknown input strategy: {input_strategy}')
+    # A CALL from a 16-byte-aligned caller leaves ESP congruent to 12.
+    # Opt in: preserve every old distribution and every return guard.
+    # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
+    # zero EAX this input exercises their zero-allocation return path.
+    call_stack = input_strategy == 'zero-call-v1'
+    zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
     mock_zero = input_strategy in MOCKZERO
@@ -834,7 +840,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 buf = bytearray(0x1000)
                 buf[lo - page:hi - page] = b[lo - va:hi - va]
                 return bytes(buf)
-        if zero_inputs:
+        if zero_values:
             return bytes(0x1000)
         if inputs:
             return inputs.page(seed, page)
@@ -1362,7 +1368,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
                "pop": pop}
-        if zero_inputs:
+        if zero_values:
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         if inputs:
             out.update(inputs.returns(rnd))
@@ -1405,12 +1411,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     regs_in = {}
     for name, r in GPR:
         v = rnd.getrandbits(32)
-        if zero_inputs:
+        if zero_values:
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
         if name == "esp":
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
+            if call_stack:
+                v -= 4
         regs_in[name] = v
         uc.reg_write(r, v)
     # the return address at [esp]; the rest of the stack page is random

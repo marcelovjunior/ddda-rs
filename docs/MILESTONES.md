@@ -1,5 +1,23 @@
 # Milestones
 
+### L28b recorder batch (2026-10-12, pending integration replay)
+
+- The opt-in `zero-call-v1` input strategy supplies a call from an aligned
+  caller stack. Original wrappers 0x012F4E90/0x012F4EA6 each pass 3/3
+  trials; `__alloca_probe` 0x012F2280 now promotes and all 23 existing
+  mocking callers re-record. No recorder rejection check changed.
+- Private native-L17: 59,090 → **59,115 selected entries**, 175,899 →
+  **175,969 cases**, 317 → **292** missing fixtures. Seven additions are
+  in TITLE_PATH.md, including 0x004709D0 (title-data loading). Hash audit:
+  59,066 old entries/case multisets unchanged; only the promoted helper
+  and its 23 callers refreshed, with no removals or stale mocks.
+- **Checked:** 33 light Python tests and original-wrapper trials. **Not
+  yet checked:** Rust replay (head's integration train). The image-table
+  loop at 0x00419100 and stack-slot loops at 0x004786B5/0x00475540 remain
+  recorder-budget blockers; see [L28 Results](tasks/L28-crt-platform-class.md).
+- **One next action:** integrate and replay the boundary-changing pair;
+  refresh any other lane's cases that still mock 0x012F2280.
+
 **Current focus (2026-10-09): the opening slice.** M5 is now a vertical
 slice from the new game to the Encampment, played in co-op; see
 [OPENING_SLICE.md](OPENING_SLICE.md). Other systems advance only where the
