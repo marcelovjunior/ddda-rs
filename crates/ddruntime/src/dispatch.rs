@@ -182,6 +182,9 @@ impl Registry {
                 // rounding or sticky flags.
                 cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
                 x86::ldmxcsr(x86::MXCSR_DEFAULT);
+                // L62: the guest x87 state leaves the host FPU, so host
+                // code (drivers, libraries) sees the thread's own FPU
+                ddnative_base::x87::park();
                 // a service runs holding the guest lock in parallel mode
                 // (crate::threads); an API call is also where a guest
                 // thread's time slice may end
@@ -203,6 +206,7 @@ impl Registry {
                 // L51: the diagnostic emulator runs untranslated exe code
                 #[cfg(feature = "emu")]
                 if crate::emu::enabled() && crate::emu::in_text(target) {
+                    ddnative_base::x87::park();
                     crate::emu::run(self, m, cpu, target);
                     return Ok(());
                 }

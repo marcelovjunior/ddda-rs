@@ -2,37 +2,208 @@
 //!
 //! Intel SDM volume 1, x87 FPU state (32-bit protected-mode FSAVE format),
 //! and volume 2, FNSAVE/FRSTOR. These instructions are valid in 64-bit mode.
-//! Only x87 state is swapped: SSE/MXCSR and the host's x87 state are preserved.
+//!
+//! Live mode (L62): a guest's x87 state stays loaded in the host thread's
+//! FPU between instructions, so an instruction is just itself. Host code
+//! never uses the x87 on x86-64 Windows (floats are SSE), and the OS keeps
+//! each thread's FPU across context switches. One `X87` per host thread is
+//! live at a time; another one executing on that thread displaces it into
+//! the thread's spill table, and it is reloaded on its next instruction.
+//! [`park`] displaces the live state so host code (services, drivers) runs
+//! with the thread's own control word. Reading the state (status, control,
+//! FNSAVE, clone) snapshots it without changing it. The arithmetic is the
+//! hardware's, as before; only the save/restore round trips between
+//! instructions are gone (FNSAVE then FRSTOR is the identity on the state).
+//! SSE/MXCSR are untouched. `X87` has no `Drop` (drop glue would give every
+//! lifted function an unwind cleanup): an X87 dropped while live leaves a
+//! stale table entry behind, which is harmless.
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Clone, Debug)]
+/// The FNINIT state: control 037Fh (all exceptions masked), tags empty.
+const INIT: [u8; 108] = {
+    let mut state = [0; 108];
+    state[0] = 0x7f;
+    state[1] = 0x03;
+    state[8] = 0xff;
+    state[9] = 0xff;
+    state
+};
+/// No X87 is live on this thread (ids start at 1; 0 is "not assigned").
+const NONE: u64 = u64::MAX;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// The id of the X87 whose state is in this thread's FPU.
+    static LIVE: Cell<u64> = const { Cell::new(NONE) };
+    /// States displaced from this thread's FPU, by X87 id.
+    static SPILLED: RefCell<HashMap<u64, [u8; 108]>> = RefCell::new(HashMap::new());
+    /// This thread's own control word, restored by [`park`].
+    static HOST_CW: Cell<Option<u16>> = const { Cell::new(None) };
+    static TOKEN: u64 = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+}
+
+fn token() -> u64 {
+    TOKEN.with(|t| *t)
+}
+
 pub struct X87 {
+    /// The state while `home` is 0; otherwise stale.
     state: [u8; 108],
+    /// Identity in the live/spilled tables (0: never live).
+    id: u64,
+    /// The host thread whose FPU or spill table holds the state (0: none).
+    home: u64,
 }
 
 impl Default for X87 {
     fn default() -> Self {
-        let mut state = [0; 108];
-        state[0..2].copy_from_slice(&0x037fu16.to_le_bytes());
-        state[8..10].copy_from_slice(&0xffffu16.to_le_bytes());
-        Self { state }
+        Self { state: INIT, id: 0, home: 0 }
     }
 }
 
+impl Clone for X87 {
+    fn clone(&self) -> Self {
+        Self { state: self.image(), id: 0, home: 0 }
+    }
+}
+
+impl std::fmt::Debug for X87 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("X87").field("state", &self.image()).finish()
+    }
+}
+
+/// Displace this thread's live guest x87 state (if any) into the spill
+/// table and give the FPU back to host code (FNINIT state with the
+/// thread's own control word). The owner reloads it on its next
+/// instruction.
+pub fn park() {
+    let live = LIVE.with(Cell::get);
+    if live == NONE {
+        return;
+    }
+    let mut image = [0u8; 108];
+    fnsave_host(&mut image);
+    image[12..28].fill(0);
+    SPILLED.with(|s| s.borrow_mut().insert(live, image));
+    LIVE.with(|l| l.set(NONE));
+    if let Some(cw) = HOST_CW.with(Cell::get) {
+        fldcw_host(cw);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn fnsave_host(image: &mut [u8; 108]) {
+    unsafe { std::arch::asm!("fnsave [{}]", in(reg) image.as_mut_ptr()) }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn frstor_host(image: &[u8; 108]) {
+    unsafe { std::arch::asm!("frstor [{}]", in(reg) image.as_ptr()) }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn fldcw_host(cw: u16) {
+    unsafe { std::arch::asm!("fldcw [{}]", in(reg) &cw) }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn fnstcw_host() -> u16 {
+    let mut cw = 0u16;
+    unsafe { std::arch::asm!("fnstcw [{}]", in(reg) &mut cw) }
+    cw
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn fnsave_host(_: &mut [u8; 108]) { panic!("exact lifted x87 requires an x86-64 host") }
+#[cfg(not(target_arch = "x86_64"))]
+fn frstor_host(_: &[u8; 108]) { panic!("exact lifted x87 requires an x86-64 host") }
+#[cfg(not(target_arch = "x86_64"))]
+fn fldcw_host(_: u16) { panic!("exact lifted x87 requires an x86-64 host") }
+#[cfg(not(target_arch = "x86_64"))]
+fn fnstcw_host() -> u16 { panic!("exact lifted x87 requires an x86-64 host") }
+
 impl X87 {
-    pub fn control(&self) -> u16 { u16::from_le_bytes(self.state[0..2].try_into().unwrap()) }
-    pub fn status(&self) -> u16 { u16::from_le_bytes(self.state[4..6].try_into().unwrap()) }
+    pub fn control(&self) -> u16 { let s = self.image(); u16::from_le_bytes([s[0], s[1]]) }
+    pub fn status(&self) -> u16 { let s = self.image(); u16::from_le_bytes([s[4], s[5]]) }
     pub fn is_empty(&self) -> bool {
-        let tags = u16::from_le_bytes(self.state[8..10].try_into().unwrap());
-        tags >> (2 * ((self.status() >> 11) & 7)) & 3 == 3
+        Self::empty(&self.image())
+    }
+    fn empty(s: &[u8; 108]) -> bool {
+        let (status, tags) = (u16::from_le_bytes([s[4], s[5]]), u16::from_le_bytes([s[8], s[9]]));
+        tags >> (2 * ((status >> 11) & 7)) & 3 == 3
     }
     pub fn depth(&self) -> u32 {
-        let tags = u16::from_le_bytes(self.state[8..10].try_into().unwrap());
+        let s = self.image();
+        let tags = u16::from_le_bytes([s[8], s[9]]);
         (0..8).filter(|k| (tags >> (2 * k)) & 3 != 3).count() as u32
     }
     pub fn top_extended(&self) -> Option<(u64, u16)> {
-        if self.is_empty() { return None; }
-        Some((u64::from_le_bytes(self.state[28..36].try_into().unwrap()),
-              u16::from_le_bytes(self.state[36..38].try_into().unwrap())))
+        let s = self.image();
+        if Self::empty(&s) { return None; }
+        Some((u64::from_le_bytes(s[28..36].try_into().unwrap()),
+              u16::from_le_bytes(s[36..38].try_into().unwrap())))
+    }
+
+    /// The current state image (FSAVE layout, instruction/data pointers
+    /// zero), wherever it is held. Changes nothing.
+    fn image(&self) -> [u8; 108] {
+        if self.home == 0 {
+            return self.state;
+        }
+        assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
+        let mut image = if LIVE.with(Cell::get) == self.id {
+            let mut image = [0u8; 108];
+            fnsave_host(&mut image);
+            frstor_host(&image);
+            image
+        } else {
+            SPILLED.with(|s| *s.borrow().get(&self.id).expect("spilled x87 state"))
+        };
+        image[12..28].fill(0);
+        image
+    }
+
+    /// Replace the state (it is no longer live or spilled anywhere).
+    fn set_image(&mut self, image: [u8; 108]) {
+        if self.home != 0 {
+            assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
+            if LIVE.with(Cell::get) == self.id {
+                LIVE.with(|l| l.set(NONE));
+            } else {
+                SPILLED.with(|s| s.borrow_mut().remove(&self.id));
+            }
+            self.home = 0;
+        }
+        self.state = image;
+    }
+
+    /// Make this state the thread's live FPU state (displacing another).
+    #[cold]
+    #[inline(never)]
+    fn acquire(&mut self) {
+        let me = token();
+        if self.id == 0 {
+            self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        }
+        let image = if self.home == 0 {
+            self.state
+        } else {
+            assert_eq!(self.home, me, "x87 state used on another host thread than the one it is live on");
+            SPILLED.with(|s| s.borrow_mut().remove(&self.id)).expect("spilled x87 state")
+        };
+        // Unmasked exceptions are unsupported (a guest trap must not trap Rust).
+        assert_eq!(image[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
+        if HOST_CW.with(Cell::get).is_none() {
+            HOST_CW.with(|c| c.set(Some(fnstcw_host())));
+        }
+        park();
+        frstor_host(&image);
+        LIVE.with(|l| l.set(self.id));
+        self.home = me;
     }
 
     /// Execute a statically selected x87 opcode. OP is the opcode byte plus
@@ -71,24 +242,19 @@ impl X87 {
         if OP == 0x28d9 {
             assert_eq!(data[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
         }
-        assert_eq!(self.control() & 0x3f, 0x3f, "unmasked guest x87 exceptions");
-        let mut host = [0u8; 108];
+        if LIVE.with(Cell::get) != self.id {
+            self.acquire();
+        }
         let flags: u64;
         unsafe {
             std::arch::asm!(
-                "fnsave [{host}]", "frstor [{guest}]",
                 ".byte {opcode}, {modrm}",
                 "pushfq", "pop {flags}",
-                "fnsave [{guest}]", "frstor [{host}]",
-                host = in(reg) host.as_mut_ptr(), guest = in(reg) self.state.as_mut_ptr(),
                 in("rax") data.as_mut_ptr(),
                 opcode = const (OP & 255), modrm = const (OP >> 8),
                 flags = out(reg) flags,
             );
         }
-        // Host instruction/data pointers are not guest addresses. Environment
-        // load/store instructions that expose them remain unsupported.
-        self.state[12..28].fill(0);
         flags as u32
     }
 
@@ -105,7 +271,7 @@ impl X87 {
     /// them). The tag word is the full one the hardware keeps for the
     /// image. Afterwards the unit is in the FNINIT state.
     pub fn fnsave(&mut self, m: &mut dyn crate::mem::Mem, addr: u32, fip: u32, fop: u16, fdp: u32) {
-        let mut image = self.state;
+        let mut image = self.image();
         for k in [2, 6, 10, 26] {
             image[k..k + 2].copy_from_slice(&0xffffu16.to_le_bytes());
         }
@@ -117,7 +283,7 @@ impl X87 {
         for (k, byte) in image.iter().enumerate() {
             m.set_u8(addr.wrapping_add(k as u32), *byte);
         }
-        *self = Self::default();
+        self.set_image(INIT);
     }
 
     /// FRSTOR m108: the hardware keeps the loaded control and status words
@@ -129,8 +295,9 @@ impl X87 {
         for (k, byte) in image.iter_mut().enumerate() {
             *byte = m.u8(addr.wrapping_add(k as u32));
         }
-        self.state = Self::normalized(image);
-        self.state[12..28].fill(0);
+        let mut image = Self::normalized(image);
+        image[12..28].fill(0);
+        self.set_image(image);
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -170,14 +337,24 @@ impl X87 {
         assert!(SIZE <= 10);
         let mut data = [0; 10];
         if !WRITE {
-            for (k, byte) in data[..SIZE].iter_mut().enumerate() {
-                *byte = m.u8(addr.wrapping_add(k as u32));
+            let mut k = 0;
+            while k + 4 <= SIZE {
+                data[k..k + 4].copy_from_slice(&m.u32(addr.wrapping_add(k as u32)).to_le_bytes());
+                k += 4;
+            }
+            if k < SIZE {
+                data[k..k + 2].copy_from_slice(&m.u16(addr.wrapping_add(k as u32)).to_le_bytes());
             }
         }
         self.exec::<OP>(&mut data);
         if WRITE {
-            for (k, byte) in data[..SIZE].iter().enumerate() {
-                m.set_u8(addr.wrapping_add(k as u32), *byte);
+            let mut k = 0;
+            while k + 4 <= SIZE {
+                m.set_u32(addr.wrapping_add(k as u32), u32::from_le_bytes(data[k..k + 4].try_into().unwrap()));
+                k += 4;
+            }
+            if k < SIZE {
+                m.set_u16(addr.wrapping_add(k as u32), u16::from_le_bytes([data[k], data[k + 1]]));
             }
         }
     }
@@ -189,10 +366,18 @@ impl X87 {
 
     /// Observe st0 as a float using guest rounding, without changing state.
     pub fn top_f32(&self) -> Option<u32> {
-        if self.is_empty() { return None; }
-        let mut copy = self.clone();
-        let mut data = [0; 10];
-        copy.exec::<0x18d9>(&mut data); // fstp m32real
-        Some(u32::from_le_bytes(data[..4].try_into().unwrap()))
+        let mut image = self.image();
+        if Self::empty(&image) { return None; }
+        let mut bits = 0u32;
+        // the live state (if any) is saved and restored around the store
+        let mut host = [0u8; 108];
+        unsafe {
+            std::arch::asm!(
+                "fnsave [{host}]", "frstor [{image}]", "fst dword ptr [{out}]", "frstor [{host}]",
+                host = in(reg) host.as_mut_ptr(), image = in(reg) image.as_mut_ptr(),
+                out = in(reg) &mut bits,
+            );
+        }
+        Some(bits)
     }
 }
