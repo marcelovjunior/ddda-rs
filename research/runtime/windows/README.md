@@ -42,3 +42,13 @@ DDDA.exe's, has no `supportedOS` entries: Windows then reports version 6.2
 (about 68,000 cases). Point `DDRUNTIME_WINDOWS_VECTORS` at that directory
 and `cargo test -p ddruntime --test runtime conversions_and_sort_keys`
 compares the runtime against all of them.
+
+`Imm.cs` (brief L43) must run in a 32-bit process, as the game is one:
+
+```powershell
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Add-Type -Path Imm.cs; [Imm]::Run('<out>\imm.txt')"
+```
+
+It makes a window like the game's and calls every IMM32 function the game
+imports with the game's arguments, then again with a NULL context.
+`crates/ddruntime/tests/imm32.rs` holds its answers.

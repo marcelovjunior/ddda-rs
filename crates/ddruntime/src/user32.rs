@@ -108,6 +108,8 @@ pub(crate) struct Desktop {
     cursor: (i32, i32),
     cursor_shown: i32,
     period_ms: Vec<u32>,
+    /// The thread's default IME window and input context (IMM32 below).
+    ime: Ime,
 }
 
 fn desk<R>(f: impl FnOnce(&mut Desktop) -> R) -> R {
@@ -283,6 +285,12 @@ fn create_window(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     let hwnd = desk(|d| {
         let hwnd = HWND_BASE + 2 * d.next_hwnd;
         d.next_hwnd += 1;
+        if a[8] == 0 && d.ime.window == 0 {
+            // Windows creates the thread's default IME window (class "IME",
+            // hidden, owned by this window) with its first top-level window
+            d.ime.window = HWND_BASE + 2 * d.next_hwnd;
+            d.next_hwnd += 1;
+        }
         d.windows.insert(hwnd, Window {
             class: class.name.clone(),
             title,
@@ -866,6 +874,150 @@ pub fn time_get_time(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 0);
 }
 
+// --- IMM32: the default input context, no IME open -----------------------------
+// What Windows answers for a top-level window with the default input
+// context, an en-US layout and no IME open, measured on Windows 11 26200
+// in a 32-bit process with the game's arguments
+// (research/runtime/windows/Imm.cs). The game sets the context up once
+// when its window is made (0x01106C80 from 0x00DF1200), closes it on
+// WM_IME_SETCONTEXT/WM_IME_STARTCOMPOSITION handling (0x01106680,
+// 0x01106B30), polls the open status and the last key for its text
+// entry (0x01106A80, 0x01106AD0, 0x01106720) and reads the composition
+// and candidates while one exists (0x01106970, 0x01106BB0, 0x011067F0,
+// 0x01147CC0); with no IME none ever exists.
+
+/// The thread's input context (HIMC values are opaque; any nonzero one).
+pub const HIMC_DEFAULT: u32 = 0x7FB0_0004;
+const ERROR_INVALID_HANDLE: u32 = 6;
+
+#[derive(Default)]
+pub(crate) struct Ime {
+    /// The default IME window (0 until the first top-level window). Not a
+    /// window record: the game only keeps its handle (sKeyboard +0x1000) as
+    /// "an IME window exists" and sends it nothing.
+    window: u32,
+    open: bool,
+    /// The last COMPOSITIONFORM (28 bytes) and CANDIDATEFORMs (32 bytes, index 0..3).
+    composition: Option<[u32; 7]>,
+    candidates: [Option<[u32; 8]>; 4],
+}
+
+fn himc_valid(c: u32) -> bool {
+    c == HIMC_DEFAULT
+}
+
+/// The default IME window (tests, diagnostics).
+pub fn ime_window() -> u32 {
+    desk(|d| d.ime.window)
+}
+
+/// ImmGetDefaultIMEWnd(hwnd): the thread's default IME window (also for
+/// NULL), NULL before the thread has a top-level window.
+pub fn imm_get_default_ime_wnd(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = desk(|d| d.ime.window);
+    ret(m, cpu, 4);
+}
+
+/// ImmGetContext(hwnd): the thread's default input context for any of its
+/// windows (the same one each time); NULL for NULL (measured) and for a
+/// handle that is no window.
+pub fn imm_get_context(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let hwnd = arg(m, cpu, 0);
+    cpu.eax = if window(hwnd).is_some() { HIMC_DEFAULT } else { 0 };
+    ret(m, cpu, 4);
+}
+
+/// ImmReleaseContext(hwnd, himc): TRUE (also for NULL or a second release).
+pub fn imm_release_context(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 1;
+    ret(m, cpu, 8);
+}
+
+fn read_words<const N: usize>(m: &dyn Mem, p: u32) -> [u32; N] {
+    std::array::from_fn(|k| m.u32(p + 4 * k as u32))
+}
+
+/// ImmSetCompositionWindow(himc, COMPOSITIONFORM*): kept, TRUE; FALSE with
+/// ERROR_INVALID_HANDLE for NULL.
+pub fn imm_set_composition_window(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (c, form) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    cpu.eax = if himc_valid(c) {
+        let f = read_words::<7>(m, form);
+        desk(|d| d.ime.composition = Some(f));
+        1
+    } else {
+        with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+        0
+    };
+    ret(m, cpu, 8);
+}
+
+/// ImmSetCandidateWindow(himc, CANDIDATEFORM*): kept per dwIndex, TRUE;
+/// FALSE with ERROR_INVALID_HANDLE for NULL. A dwIndex above 3 (outside
+/// the documented 0..3) is refused (not measured).
+pub fn imm_set_candidate_window(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (c, form) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let f = read_words::<8>(m, form);
+    cpu.eax = if himc_valid(c) && f[0] < 4 {
+        desk(|d| d.ime.candidates[f[0] as usize] = Some(f));
+        1
+    } else {
+        if !himc_valid(c) {
+            with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+        }
+        0
+    };
+    ret(m, cpu, 8);
+}
+
+/// ImmSetOpenStatus(himc, open): TRUE; FALSE with ERROR_INVALID_HANDLE for
+/// NULL. Only closing is measured; an opened status is kept and reported
+/// back (no IME then converts anything).
+pub fn imm_set_open_status(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (c, open) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    cpu.eax = if himc_valid(c) {
+        desk(|d| d.ime.open = open != 0);
+        1
+    } else {
+        with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+        0
+    };
+    ret(m, cpu, 8);
+}
+
+/// ImmGetOpenStatus(himc): FALSE with no IME open, and for NULL (no error).
+pub fn imm_get_open_status(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let c = arg(m, cpu, 0);
+    cpu.eax = (himc_valid(c) && desk(|d| d.ime.open)) as u32;
+    ret(m, cpu, 4);
+}
+
+/// ImmGetCompositionStringA/W(himc, index, buffer, size): 0 and the buffer
+/// untouched for every index (GCS_COMPSTR 8, GCS_COMPATTR 0x10,
+/// GCS_RESULTSTR 0x800 measured), size or context: there is no composition.
+pub fn imm_get_composition_string(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0;
+    ret(m, cpu, 16);
+}
+
+/// ImmGetCandidateListCountA(himc, DWORD* count): *count = 0; the result
+/// is 144 for the default context (the size Windows 11 26200 reports for
+/// an empty list, measured) and 0 for NULL.
+pub fn imm_get_candidate_list_count_a(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (c, count) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    m.set_u32(count, 0);
+    cpu.eax = if himc_valid(c) { 144 } else { 0 };
+    ret(m, cpu, 8);
+}
+
+/// ImmGetCandidateListW(himc, index, CANDIDATELIST*, size): 0, the buffer
+/// untouched: there are no candidates.
+pub fn imm_get_candidate_list_w(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = 0;
+    ret(m, cpu, 16);
+}
+
+
 pub const APIS: &[(&str, &str, Api)] = &[
     ("USER32.dll", "RegisterClassExA", register_class_ex_a),
     ("USER32.dll", "RegisterClassExW", register_class_ex_w),
@@ -910,4 +1062,17 @@ pub const APIS: &[(&str, &str, Api)] = &[
     ("WINMM.dll", "timeBeginPeriod", time_begin_period),
     ("WINMM.dll", "timeEndPeriod", time_end_period),
     ("WINMM.dll", "timeGetTime", time_get_time),
+    ("IMM32.dll", "ImmGetDefaultIMEWnd", imm_get_default_ime_wnd),
+    ("IMM32.dll", "ImmGetContext", imm_get_context),
+    ("IMM32.dll", "ImmReleaseContext", imm_release_context),
+    ("IMM32.dll", "ImmSetCompositionWindow", imm_set_composition_window),
+    ("IMM32.dll", "ImmSetCandidateWindow", imm_set_candidate_window),
+    ("IMM32.dll", "ImmSetOpenStatus", imm_set_open_status),
+    ("IMM32.dll", "ImmGetOpenStatus", imm_get_open_status),
+    ("IMM32.dll", "ImmGetCompositionStringA", imm_get_composition_string),
+    ("IMM32.dll", "ImmGetCompositionStringW", imm_get_composition_string),
+    ("IMM32.dll", "ImmGetCandidateListCountA", imm_get_candidate_list_count_a),
+    ("IMM32.dll", "ImmGetCandidateListW", imm_get_candidate_list_w),
+    // ImmGetVirtualKey is crate::input's (VK_PROCESSKEY 0xE5, the measured
+    // answer with and without a translated key message)
 ];
