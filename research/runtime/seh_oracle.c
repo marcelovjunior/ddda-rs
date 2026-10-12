@@ -11,6 +11,16 @@ static DWORD unwind_eax;
 static DWORD collided_frame;
 static EXCEPTION_RECORD *active;
 static DWORD fault_ip, resume_ip;
+static BYTE *split_page;
+static int split_filter(EXCEPTION_POINTERS *p) {
+    printf("split code=%08lx kind=%lu bad_page=%d prefix=%04x\n",
+        p->ExceptionRecord->ExceptionCode, p->ExceptionRecord->ExceptionInformation[0],
+        p->ExceptionRecord->ExceptionInformation[1] == (ULONG_PTR)(split_page+4096),
+        *(WORD*)(split_page+4094));
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+__declspec(noinline) static void inner_fault(void) { *(volatile DWORD*)0xdead=1; }
+__declspec(noinline) static void outer_fault(void) { inner_fault(); puts("unexpected inner return"); }
 typedef struct Frame { struct Frame *next; void *handler; DWORD id; } Frame;
 
 static EXCEPTION_DISPOSITION __cdecl handler(EXCEPTION_RECORD *r, Frame *f,
@@ -85,6 +95,18 @@ static int access_filter(EXCEPTION_POINTERS *p) {
 
 int main(int argc, char **argv) {
     ULONG_PTR values[] = {0x12345678};
+    DWORD old_protect;
+    split_page=(BYTE*)VirtualAlloc(NULL,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    if (!split_page) return 2;
+    *(WORD*)(split_page+4094)=0x1234;
+    if (!VirtualProtect(split_page+4096,4096,PAGE_NOACCESS,&old_protect)) return 3;
+    __try { *(volatile DWORD*)(split_page+4094)=0xffffffff; }
+    __except(split_filter(GetExceptionInformation())) { puts("split caught"); }
+    VirtualFree(split_page,0,MEM_RELEASE);
+    __try { outer_fault(); puts("unexpected outer return"); }
+    __except(GetExceptionCode()==EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        puts("nonlocal access caught");
+    }
     __try { RaiseException(0xe0420000, 0, 1, values); }
     __except(filter(GetExceptionInformation())) { puts("caught"); }
     __asm { mov fault_ip, offset faulting_divide }

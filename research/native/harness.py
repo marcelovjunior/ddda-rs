@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'zero-call-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -732,7 +732,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False):
+               terminal=False, visited=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -798,6 +798,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     registers, for such loops that also walk a count read from memory; each
     is identical to its page strategy up to the first mocked call. These are
     test inputs, not callee models.
+
+    `visited`, a set, receives the address of every executed instruction
+    (coverage for case selection, L45); it changes nothing in the run.
     """
     import random
     import time
@@ -809,6 +812,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # retains the random distribution elsewhere and tags that input policy.
     if input_strategy is not None and input_strategy not in INPUT_STRATEGIES:
         raise ValueError(f'unknown input strategy: {input_strategy}')
+    # A CALL from a 16-byte-aligned caller leaves ESP congruent to 12.
+    # Opt in: preserve every old distribution and every return guard.
+    # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
+    # zero EAX this input exercises their zero-allocation return path.
+    call_stack = input_strategy == 'zero-call-v1'
+    zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
     mock_zero = input_strategy in MOCKZERO
@@ -844,7 +853,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 buf = bytearray(0x1000)
                 buf[lo - page:hi - page] = b[lo - va:hi - va]
                 return bytes(buf)
-        if zero_inputs:
+        if zero_values:
             return bytes(0x1000)
         if inputs:
             return inputs.page(seed, page)
@@ -1024,6 +1033,23 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     root_frame = [True]
     entering = [False]  # a call was just made: the next instruction is the callee's entry
     terminal_call = [None]  # return PC of a root call at a noreturn site (terminal runs)
+    padded_call = [False]   # that call is followed by int3 padding, not a known noreturn callee
+
+    def padded_return(addr, size, _cache={}):
+        """The straight-line code at a call's return address reaches an
+        int3 stop (noreturn_sites) within 8 instructions, with no branch,
+        return or call before it."""
+        pc = addr + size
+        for _ in range(8):
+            if pc in noreturn_sites:
+                return code(pc, 1) == b"\xcc"
+            if not is_own(pc):
+                return False
+            i = next(nmd.disasm(code(pc, 15), pc, count=1), None)
+            if i is None or i.mnemonic.startswith(("j", "ret", "call", "loop", "int")):
+                return False
+            pc += i.size
+        return False
     stopped = [False]       # a terminal call ended the case
     frame_contracts = {a: c if isinstance(c, str) else (c[0], c[1], tuple(tuple(t) for t in c[2]))
                        for a, c in (frame_contracts or {}).items()}
@@ -1110,7 +1136,17 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # body is the code under test (e.g. `__exit` 0x012EDC4B returns
         # syntactically; its callee does the exit) and runs like any root.
         if (terminal_call[0] is not None and frames and frames[-1][0] == terminal_call[0]
-                and addr in noreturn_targets and addr not in lifted):
+                and (addr in noreturn_targets or padded_call[0]) and addr not in lifted):
+            stopped[0] = True
+            calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
+            uc_.emu_stop()
+            return
+        if (terminal and end is not None and addr in noreturn_targets and addr != address
+                and addr not in lifted and not frames and branch[0] is not None
+                and branch[0].mnemonic == "jmp"):
+            # L45: a root tail jump into a mocked noreturn entry (`_purecall`
+            # 0x012EE1A1: jmp _abort) ends the case like a call there; no
+            # return address is pushed, the registers are the callee's entry.
             stopped[0] = True
             calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
             uc_.emu_stop()
@@ -1139,6 +1175,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 except (KeyError, StopIteration):
                     rets[addr] = False
             own_ret[0] = rets[addr]
+            if (terminal and end is not None and padded_return(addr, size)
+                    and next(nmd.disasm(code(addr, 15), addr)).mnemonic == "call"):
+                # L45: a call whose return path runs straight into int3 (a
+                # decode_body stop, possibly after a dead `pop esi`) does
+                # not return by the compiler's own evidence, whatever its
+                # callee (`__invoke_watson`, `ExitProcess` through the IAT):
+                # a mocked callee ends the case like a known noreturn entry.
+                terminal_call[0] = addr + size
+                padded_call[0] = True
             if addr in noreturn_sites:
                 if terminal and end is not None:
                     terminal_call[0] = addr + size
@@ -1376,7 +1421,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         out = {"eax": rnd.getrandbits(32), "ecx": rnd.getrandbits(32), "edx": rnd.getrandbits(32),
                "xmm0": [struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0] for _ in range(4)],
                "pop": pop}
-        if zero_inputs:
+        if zero_values:
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
         if inputs:
             out.update(inputs.returns(rnd))
@@ -1402,6 +1447,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.hook_add(UC_HOOK_CODE, on_frame)
     if end is not None:
         uc.hook_add(UC_HOOK_CODE, on_ext)
+    if visited is not None:
+        uc.hook_add(UC_HOOK_CODE, lambda uc_, pc, size, _: visited.add(pc))
     if x87_push:
         # fixed code on its own page (Unicorn caches translated code per
         # page): fld dword [X87_SLOT]; jmp dword [X87_SLOT + 4]
@@ -1420,12 +1467,14 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     regs_in = {}
     for name, r in GPR:
         v = rnd.getrandbits(32)
-        if zero_inputs:
+        if zero_values:
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
         if name == "esp":
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
+            if call_stack:
+                v -= 4
         regs_in[name] = v
         uc.reg_write(r, v)
     # the return address at [esp]; the rest of the stack page is random

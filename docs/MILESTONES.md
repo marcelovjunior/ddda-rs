@@ -1,5 +1,53 @@
 # Milestones
 
+### L45 function tails, gate and boot triage (2026-10-12, pending train 4)
+
+- **Evidence:** table jumps proven on every path (both memcpy variants
+  16/16, tails past Ghidra's end lifted), frame tails (`__VEC_memcpy`)
+  and EH4 scope code (all 39 L27b scope targets) decoded into their
+  functions. `gen` no longer declares functions with verification gaps:
+  44 unproven tables remain, against 59,173 of 59,500 expected verified
+  on the train-2 base. native-L45: 33 stale records refreshed in place,
+  everything else hash-identical. native-L45b (train 3): 12 boot
+  functions recorded (0x00DFECF0, `___crtExitProcess`, `_purecall`, …),
+  audit ok. The discovery boundary rule drops 58 non-code admissions.
+  L27b is merged on `task/L27b-integrate`.
+- **Checked:** 134 Python tests plus `test_steps.py`. **Not checked:**
+  `gen` and the Rust replay (train), `tests/options.rs`.
+- **Blockers:** `__VEC_memcpy` has no vector (no input reaches its size
+  range); x87 interior helpers 0x012F1C9D and 0x01304753; mock-return-1
+  loops 0x00410000 and 0x00E0D750.
+- **One next action:** train 4 merges native-L45 (train-2 base) and
+  native-L45b (train-3 base) per address, regenerates and replays; see
+  [L45 Results](tasks/L45-function-tails.md#results).
+
+### L28b recorder batch (2026-10-12, pending integration replay)
+
+- The opt-in `zero-call-v1` input strategy supplies a call from an aligned
+  caller stack. Original wrappers 0x012F4E90/0x012F4EA6 each pass 3/3
+  trials; `__alloca_probe` 0x012F2280 now promotes and all 23 existing
+  mocking callers re-record. No recorder rejection check changed.
+- Private native-L17: 59,090 → **59,115 selected entries**, 175,899 →
+  **175,969 cases**, 317 → **292** missing fixtures. Seven additions are
+  in TITLE_PATH.md, including 0x004709D0 (title-data loading). Hash audit:
+  59,066 old entries/case multisets unchanged; only the promoted helper
+  and its 23 callers refreshed, with no removals or stale mocks.
+- **Checked:** 33 light Python tests and original-wrapper trials. **Not
+  yet checked:** Rust replay (head's integration train). The image-table
+  loop at 0x00419100 and stack-slot loops at 0x004786B5/0x00475540 remain
+  recorder-budget blockers; see [L28 Results](tasks/L28-crt-platform-class.md).
+- **One next action:** integrate and replay the boundary-changing pair;
+  refresh any other lane's cases that still mock 0x012F2280.
+
+L27b continuation batch (2026-10-12): production instruction emission and
+Registry/Session routing now deliver transactional AV/#DE and transfer across
+service callbacks. Light checks pass: 94 runtime + 7 base + 52 lifter tests;
+12 emitted execution fixtures include original `0x01303CB9`/`0x013070E5`
+after RtlUnwind. Windows oracle passes. Blocker to claiming all real __except
+paths: 39 of 58 census filter/body addresses are absent from the selected
+instruction keys. Next action: train 3 regeneration/replay and lifter-lane
+scope coverage; see [L27b Results](tasks/L27b-seh-faults.md#results).
+
 L27 runtime SEH batch (2026-10-11): read-only census identifies 42 EH4
 registrations / 48 scope records, seven C++ FuncInfo thunks and five throw
 sites. Per-thread TEBs, software exception search/nesting and target-frame

@@ -106,6 +106,7 @@ impl Session {
                 } else {
                     let msg = e.downcast_ref::<String>().cloned()
                         .or_else(|| e.downcast_ref::<crate::seh::Stop>().map(ToString::to_string))
+                        .or_else(|| e.downcast_ref::<crate::executor::Stop>().map(|s| format!("{s:?}")))
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "panic".into());
                     let regs = [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi];

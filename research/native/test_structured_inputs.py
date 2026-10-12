@@ -60,6 +60,24 @@ class InputTests(unittest.TestCase):
         self.assertEqual(image.pop('input_strategy'),'image-v1')
         self.assertEqual(image,ordinary)
 
+    def test_zero_call_stack_exercises_zero_allocation_alignment(self):
+        # Synthetic alignment wrapper followed by a call-free stack mover:
+        # eax += (esp+4-eax)&mask; then transfer the return PC to esp-eax.
+        # With zero eax, aligned entry ESP requires allocation; a CALL from
+        # an aligned caller (entry ESP = aligned-4) requires none.
+        for mask in (7, 15):
+            code = bytes.fromhex('51 8d4c2408 2bc8 83e1') + bytes([mask])
+            code += bytes.fromhex('03c1 59 51 8d4c2404 2bc8 8bc1 59 94 8b00 890424 c3')
+            with self.assertRaisesRegex(h.Rejected, 'misaligned stack'):
+                self.record(code, zero_inputs=True)
+            c = self.record(code, 'zero-call-v1')
+            self.assertEqual(c['regs_in']['esp'] % 16, 12)
+            self.assertEqual(c['regs_in']['eax'], 0)
+            self.assertEqual(c['regs_out']['esp'], c['regs_in']['esp'] + 4)
+            self.assertNotIn('stack_contract', c)
+            self.assertEqual(c, self.record(code, 'zero-call-v1'))
+            self.assertEqual(trials._inputs([c]), dict(input_strategy='zero-call-v1'))
+
     def test_mockzero_keeps_random_memory_and_zeroes_mock_returns(self):
         code=bytes.fromhex('a1000240008b11c3').ljust(0x200,b'\xcc')+struct.pack('<I',0x12345678)
         ordinary=self.record(code)
@@ -189,7 +207,8 @@ class InputTests(unittest.TestCase):
         runs=[]
         def run(a,seed,**kw):
             runs.append((a,kw.get('input_strategy'),'end' in kw,0x20 in kw.get('lifted',())))
-            if a==0x60 and not caller_records:
+            if a==0x60 and (not caller_records or
+                           isinstance(caller_records,str) and kw.get('input_strategy') != caller_records):
                 raise h.Rejected('runaway')
             return dict(regs_in={},fresh=True)
         lifts=[]
@@ -244,5 +263,13 @@ class InputTests(unittest.TestCase):
             self.assertIn(dict(addr=0x60,input_strategy='objects-mockzero-v1',calls=[{'target':0x20},{'target':0x70}]),out)
             self.assertEqual(trials.read(root/'structured-promoted.json'),
                              dict(promoted=[0x10],rerecorded=[],kept_ext=[0x20]))
+
+    def test_promotion_tries_call_stack_distribution_for_affected_caller(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+            selected,out,runs=self.promote_fixture(root,caller_records='zero-call-v1')
+            self.assertNotIn('ext',selected[0x20])
+            self.assertIn((0x60,'zero-call-v1',True,True),runs)
+            self.assertTrue(all(c.get('fresh') for c in out if c['addr']==0x60))
 
 if __name__=='__main__':unittest.main()
