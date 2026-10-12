@@ -6099,6 +6099,8 @@ pub fn f_013296a8(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x13296A8;
     loop {
         match pc {
+            0x1300706 => { cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp); pc = 0x1300709; continue; }
+            0x1300709 => { { let v = m.fast_u32(pt, cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.edx = v; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0x13296A8 => { { let v = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } cpu.st.memory::<0x38d9, 2, true>(m, cpu.esp); pc = if cpu.fl.cond("e") { 0x13296FB } else { 0x13296AF }; continue; }
             0x13296AF => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); { let r = cpu.fl.alu_sub((m.fast_u16(pt, cpu.esp) as u32), 0x27Fu32, 16); } pc = if cpu.fl.cond("e") { 0x13296C1 } else { 0x13296BB }; continue; }
             0x13296BB => { cpu.st.memory::<0x28d9, 2, false>(m, 0u32.wrapping_add(0x1458668)); pc = 0x13296C1; continue; }
@@ -6170,6 +6172,8 @@ pub fn f_0132992d(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x132992D;
     loop {
         match pc {
+            0x1300706 => { cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp); pc = 0x1300709; continue; }
+            0x1300709 => { { let v = m.fast_u32(pt, cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.edx = v; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0x132992D => { { let v = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } cpu.st.memory::<0x38d9, 2, true>(m, cpu.esp); cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); pc = if cpu.fl.cond("e") { 0x1329989 } else { 0x1329938 }; continue; }
             0x1329938 => { { let r = cpu.fl.alu_sub((m.fast_u16(pt, cpu.esp) as u32), 0x27Fu32, 16); } pc = if cpu.fl.cond("e") { 0x1329945 } else { 0x1329940 }; continue; }
             0x1329940 => { { let t = 0x1300675u32; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0x1329945);  x86::call_ext(m, cpu, t);  } pc = 0x1329945; continue; }

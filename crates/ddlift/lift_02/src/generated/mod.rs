@@ -1197,10 +1197,13 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012E12A0, f_012e12a0),
 (0x012E12E0, f_012e12e0),
 (0x012E19F6, f_012e19f6),
+(0x012E1A13, f_012e1a13),
 (0x012E1A43, f_012e1a43),
+(0x012E1A60, f_012e1a60),
 (0x012E1A90, f_012e1a90),
 (0x012E1AAD, f_012e1aad),
 (0x012E1ACE, f_012e1ace),
+(0x012E1AD4, f_012e1ad4),
 (0x012E1AFA, f_012e1afa),
 (0x012E1B18, f_012e1b18),
 (0x012E1B1E, f_012e1b1e),
@@ -1391,6 +1394,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012ED973, f_012ed973),
 (0x012ED991, f_012ed991),
 (0x012ED9B2, f_012ed9b2),
+(0x012ED9DD, f_012ed9dd),
 (0x012ED9F5, f_012ed9f5),
 (0x012ED9FE, f_012ed9fe),
 (0x012EDA07, f_012eda07),
@@ -1408,6 +1412,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012EDDFA, f_012eddfa),
 (0x012EDE27, f_012ede27),
 (0x012EDE40, f_012ede40),
+(0x012EE1A1, f_012ee1a1),
 (0x012EE1D0, f_012ee1d0),
 (0x012EE2F4, f_012ee2f4),
 (0x012EE3BE, f_012ee3be),
@@ -1608,6 +1613,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012F9211, f_012f9211),
 (0x012F9244, f_012f9244),
 (0x012F927D, f_012f927d),
+(0x012F9290, f_012f9290),
 (0x012F92C8, f_012f92c8),
 (0x012F92D9, f_012f92d9),
 (0x012F92F7, f_012f92f7),
@@ -1714,6 +1720,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012FE60E, f_012fe60e),
 (0x012FE663, f_012fe663),
 (0x012FE68C, f_012fe68c),
+(0x012FE702, f_012fe702),
 (0x012FE74B, f_012fe74b),
 (0x012FE871, f_012fe871),
 (0x012FE8E7, f_012fe8e7),
@@ -1749,4 +1756,10 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 ];
 pub fn lookup(addr: u32) -> Option<LiftFn> {
     FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)
+}
+use ddnative_base::execution::Step;
+pub const INSTRUCTIONS: &[(u32, Step)] = &[
+];
+pub fn instruction(ip: u32) -> Option<Step> {
+INSTRUCTIONS.binary_search_by_key(&ip, |e| e.0).ok().map(|i| INSTRUCTIONS[i].1)
 }
