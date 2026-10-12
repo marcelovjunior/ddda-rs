@@ -139,6 +139,49 @@ def noreturn_entries():
         return frozenset(a for a, name in db.execute("SELECT address, name FROM functions") if name in names)
 
 
+_FRAME_TAILS = {}
+
+
+def frame_tail(target, entries, noreturn, read, is_code):
+    """Whether the inventory entry `target` is a shared tail of the code
+    that jumps to it rather than a function (L45): its derived exit
+    (harness.frame_exit) is entry ESP plus more than its `ret` pops, so
+    it pops registers its jumper saved and returns to the jumper's caller.
+    `__VEC_memcpy` 0x012F9D82, entered by `jmp` from the memcpy variants,
+    ends `pop eax; pop esi; pop edi; pop ebp; ret` (exit ESP + 16). A
+    direct jump there is local code, decoded inline, not a tail call."""
+    import harness as h
+    key = (target, read, is_code, frozenset(entries) if not isinstance(entries, frozenset) else entries)
+    if key not in _FRAME_TAILS:
+        _FRAME_TAILS[key] = result = False  # a cycle of tail checks is not evidence
+        try:
+            ins = decode_body(target, 1, entries, noreturn, read, is_code, ext=True)[0]
+            TABLE_PROOF.pop(target, None)
+            rets = {(i.operands[0].imm if i.operands else 0) for i in ins if i.mnemonic in ("ret", "retn")}
+            if len(rets) == 1 and not any(i.mnemonic == "call" for i in ins):
+                with _patched_code(h, read):
+                    exit_ = h.frame_exit(target, {i.address for i in ins})
+                result = (exit_ is not None and exit_[0] == "esp" and not exit_[2]
+                          and exit_[1] > 4 + rets.pop())
+        except Unsupported:
+            result = False
+        _FRAME_TAILS[key] = result
+    return _FRAME_TAILS[key]
+
+
+class _patched_code:
+    """harness.frame_exit reads harness.code; decode with the same reader."""
+    def __init__(self, h, read):
+        self.h, self.read = h, read
+
+    def __enter__(self):
+        self.saved = self.h.code
+        self.h.code = self.read
+
+    def __exit__(self, *_):
+        self.h.code = self.saved
+
+
 def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None, ext=False):
     """Deterministic reachable instructions. Inventory sizes are not spans.
 
@@ -196,7 +239,8 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
               if mn.startswith("j"):
                   if i.operands[0].type == 2:
                       target = i.operands[0].imm & 0xffffffff
-                      if target == addr or target not in entries:
+                      if (target == addr or target not in entries
+                              or (target != addr and frame_tail(target, entries, noreturn, read, is_code))):
                           heapq.heappush(todo, target)
                   else:
                       accept = lambda t: ((addr <= t < upper or t in found) and
@@ -2392,31 +2436,38 @@ def wired_lines(selected, ported, chunk):
 
 TABLE_DISPATCH = re.compile(r"pc = m\.u32\(|let t = m\.u32\([^;]*\); if matches!")
 EXT_CONSTANT = re.compile(r"x86::call_ext\(m, cpu, 0x([0-9A-F]+)\)")
+LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
 
 
 def verification_gaps(lifted):
     """{entry: [reasons]} of the lifted functions that must not count as
     verified (L45): a direct transfer to an address that is not a known
     function, import or platform model (nothing is bound there at run
-    time), or a table jump the current lifter cannot prove complete
-    (TABLE_PROOF: other slots may reach code the vectors never ran). Only
-    records whose arms dispatch through a table are re-decoded."""
+    time), a table jump the current lifter cannot prove complete
+    (TABLE_PROOF: other slots may reach code the vectors never ran), or a
+    stale body. Only records whose arms dispatch through a table or name
+    a frame tail (frame_tail: now local code) are re-decoded."""
     import harness as h
-    bound = function_entries() | set(h.import_pops()[1]) | set(h.PLATFORM)
+    entries, noreturn = function_entries(), noreturn_entries()
+    bound = entries | set(h.import_pops()[1]) | set(h.PLATFORM)
     gaps = {}
     for f in lifted:
-        unbound = sorted({int(t, 16) for arm in f["arms"] for t in EXT_CONSTANT.findall(arm)} - bound)
+        constants = {int(t, 16) for arm in f["arms"] for t in EXT_CONSTANT.findall(arm)}
+        unbound = sorted(constants - bound)
         reasons = [f"unbound target 0x{t:08X}" for t in unbound]
-        if any(TABLE_DISPATCH.search(arm) for arm in f["arms"]):
+        named = constants | {int(t, 16) for arm in f["arms"] for t in LIFTED_CALLEE.findall(arm)}
+        if (any(TABLE_DISPATCH.search(arm) for arm in f["arms"])
+                or any(t in entries and t != f["addr"] and frame_tail(t, entries, noreturn, h.code, h.executable)
+                       for t in named)):
             try:
                 ins = decode_body(f["addr"], f["size"], ext=bool(f.get("ext")))[0]
                 proof = TABLE_PROOF.pop(f["addr"], {})
                 reasons += [f"unproven table at 0x{pc:08X}" for pc, ok in sorted(proof.items()) if not ok]
-                # a record lifted before its tables were proven lacks the
-                # code they reach (0x012EDE40 before L45)
+                # a record lifted before its tables were proven (or its
+                # frame tails inlined) lacks that code (0x012EDE40 before L45)
                 missing = {i.address for i in ins} - set(f.get("body") or [i.address for i in ins])
                 if missing:
-                    reasons.append(f"stale body: {len(missing)} table-reached instructions from 0x{min(missing):08X} not lifted")
+                    reasons.append(f"stale body: {len(missing)} instructions from 0x{min(missing):08X} not lifted")
             except Unsupported as e:
                 reasons.append(f"rejected by the current lifter: {e}")
         if reasons:

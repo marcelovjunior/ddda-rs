@@ -89,16 +89,37 @@ class EdgeBoundTests(unittest.TestCase):
         self.assertFalse(switches[0x1004].proven)
 
 
+class FrameTailTests(unittest.TestCase):
+    def test_a_jump_to_an_entry_that_pops_its_jumpers_frame_is_local(self):
+        # 0x1000: push ebp; push edi; jmp 0x1010 (entry: pop edi; pop ebp; ret)
+        # 0x1020: push esi; jmp 0x1030 (entry: ret, an ordinary tail call)
+        code = bytearray(b"\xcc" * 0x40)
+        code[0x00:0x04] = bytes.fromhex("5557eb0c")
+        code[0x10:0x13] = bytes.fromhex("5f5dc3")
+        code[0x20:0x23] = bytes.fromhex("56eb0d")
+        code[0x30:0x31] = bytes.fromhex("c3")
+        read, is_code = image_fixture(bytes(code), {})
+        entries = frozenset({0x1000, 0x1010, 0x1020, 0x1030})
+        decode = lambda a: {i.address for i in
+                            lift.decode_body(a, 1, entries, frozenset(), read, is_code, ext=True)[0]}
+        self.assertEqual(decode(0x1000), {0x1000, 0x1001, 0x1002, 0x1010, 0x1011, 0x1012})
+        self.assertEqual(decode(0x1020), {0x1020, 0x1021})
+        self.assertTrue(lift.frame_tail(0x1010, entries, frozenset(), read, is_code))
+        self.assertFalse(lift.frame_tail(0x1030, entries, frozenset(), read, is_code))
+
+
 class VerificationGapTests(unittest.TestCase):
     def gaps(self, records, code, tables):
         read, is_code = image_fixture(code, tables)
         decode = lift.decode_body
 
-        def fixture_decode(addr, size, ext=False):
+        def fixture_decode(addr, size, entries=None, noreturn=None, read_=None, is_code_=None, ext=False):
             return decode(addr, size, entries=frozenset({0x1000}), noreturn=frozenset(),
                           read=read, is_code=is_code, ext=ext)
         with patch.object(lift, "decode_body", fixture_decode), \
                 patch.object(lift, "function_entries", lambda: frozenset({0x1000, 0x3000})), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()), \
+                patch.object(h, "code", read), patch.object(h, "executable", is_code), \
                 patch.object(h, "import_pops", lambda: ({}, {})):
             return lift.verification_gaps(records)
 
@@ -122,7 +143,7 @@ class VerificationGapTests(unittest.TestCase):
         full = [0x1000, 0x1003, 0x1005, 0x1006, 0x1008] + list(range(0x1010, 0x1018))
         stale = dict(addr=0x1000, size=0x10, ext=True, arms=[arm], body=full[:5] + [0x1017])
         self.assertEqual(self.gaps([stale], code, tables),
-                         {0x1000: ["stale body: 7 table-reached instructions from 0x00001010 not lifted"]})
+                         {0x1000: ["stale body: 7 instructions from 0x00001010 not lifted"]})
         self.assertEqual(self.gaps([dict(stale, body=full)], code, tables), {})
 
 
