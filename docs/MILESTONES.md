@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c bounded callee cleanup batch (2026-10-12, pending replay)
+
+- **+9/+27**, all targeted dispatchers 3/3; this round **+16/+48**.
+  Private **59,662 / 177,580**, all baseline **59,646 / 177,532** unchanged.
+- Source **9a345bd2**, **186 light tests pass**, clean combined audit.
+  RESIDUALS has **65 rows, 16 pending replay**; main train 13 merged.
+- **Next action:** remaining fixed-frame input hints and shared CRT tails;
+  18 dispatch, seven bound, six individual recorder blockers remain.
+
+
 ### L28c aligned-frame dispatch batch (2026-10-12, pending replay)
 
 - **+7 functions / +21 cases**, all 3/3; private **59,653 / 177,553**.

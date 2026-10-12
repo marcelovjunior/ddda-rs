@@ -35,6 +35,41 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
+
+**All nine targeted dispatchers record 3/3:** 685B40, 83FFF0, B952C0,
+B955C0, B97220, BA31D0, BA4160, BA5540, 11251F0. Source **9a345bd2** adds
+body-call-v1, an opt-in mock-input strategy. The private layout supplies
+already-verified callee bodies; every control-flow edge must remain inside
+the body, indirect tables need finite register bounds across joins, and all
+RET immediates must agree. Bounds are rechecked after all switch edges are
+known. Missing instructions, unknown jumps, incomplete tables, exceptional
+exits and differing returns retain the existing fallback. The actual mock
+pop and the input layout are recorded; no global ABI/return/memory check
+was relaxed. This is an input hint, not proof of every callee effect.
+
+The four source callees are 686AD0 (pop4), 840180 (pop4), B94DC0 (pop28),
+and 1121450 (pop44), all verified in inventory. 1078190 remains refused
+because its jump target is unknown. Traces explain the NPC failures: old
+mock cleanup left outgoing arguments in front of the return address.
+Evidence: `dispatch-body-cleanup-layout.json`, `dispatch-body-cleanup.log`.
+
+**186 light tests pass**, including a synthetic original caller with
+joining switch paths and negative control-flow cases. Private totals are
+**59,662 functions / 177,580 cases**. This round is **+16/+48**, all 3/3;
+`dispatch-body-cleanup-audit.json` confirms all **59,646 functions /
+177,532 cases unchanged**, no stale mocks, promotions, missing records or
+unexpected edits. All recording jobs exited; frozen base untouched. Main
+train 13 merged before handoff; full Rust replay remains the head's task.
+
+RESIDUALS has **65 inventory rows, 16 pending replay**. Remaining recorder
+work is **18 dispatch/return, seven instruction-bound, one continuation
+frame and five individual recipes**. 493AA0 stays set aside. **Next:** the
+fixed local-frame prefixes (4644D0, 691AE0/691E50) and the CRT shared-tail
+boundary findings sent to claude-6; boot requests first. The static findings
+are not silently credited or reassigned without the owner's confirmation.
+
+
 ### Aligned-frame dispatch batch: +7/+21 (2026-10-12, pending replay)
 
 **Six aligned-frame matches record 3/3:** 608AE0, 618880, 64DD20, 663040,
