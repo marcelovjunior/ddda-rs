@@ -252,8 +252,8 @@ SRC (every game voice is 48 kHz), and channel layouts the game does not use
   call, output equals ddaudio's decode), `xaudio_runs_guest_xapos_and_skips_unlifted_ones`
   (lock format/frames, in-place halving, unbound LockForProcess passes
   through, references balance).
-- Pending (queued when the head paused builds): the `ddplay` build with
-  `sink.rs` and its two unit tests, and the ignored
+- Left to the head's integration build (batched verification): the
+  `ddplay` build with `sink.rs` and its two unit tests, and the ignored
   `original_engine_initialization` run on the player's exe (lifted
   0x00DCE0E0 with the mixer in the loop).
 - Implemented and compared against the original XAudio2 (2.7 and 2.9) for
