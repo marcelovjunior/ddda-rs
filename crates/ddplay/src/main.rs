@@ -15,8 +15,12 @@
 //! has) instead of waiting for the display's refresh. F11 or Alt+Enter
 //! toggles borderless fullscreen. `--test-pattern` runs a moving pattern
 //! through the backend instead of the game (a presentation diagnostic).
-//! Input is not forwarded yet (brief L16).
+//! Keyboard, mouse and the host's XInput pads reach the game through the
+//! runtime's input seam (`input.rs`). Audio plays on the default output
+//! device (`sink.rs`, brief L19).
+mod input;
 mod present;
+mod sink;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,6 +31,8 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 enum GameEvent {
+    /// The session's host input, connected on the guest thread.
+    Input(ddruntime::input::HostInput),
     Status(String),
 }
 
@@ -56,6 +62,7 @@ struct App {
     next_title: Instant,
     modifiers: ModifiersState,
     started: bool,
+    input: Option<input::Input>,
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -133,6 +140,8 @@ impl App {
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
                 ddruntime::session::install_fault_hook();
+                let _ = proxy.send_event(GameEvent::Input(ddruntime::input::connect()));
+                sink::start(ddruntime::audio::output());
                 match gpu {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
@@ -206,6 +215,7 @@ impl ApplicationHandler<GameEvent> for App {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: GameEvent) {
         match event {
+            GameEvent::Input(host) => self.input = Some(input::Input::new(host)),
             GameEvent::Status(s) => {
                 self.status = s;
                 self.update_title();
@@ -214,6 +224,13 @@ impl ApplicationHandler<GameEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let (Some(input), Some(w)) = (self.input.as_mut(), &self.window) {
+            let size = w.inner_size();
+            // the game's back buffer is its window's client area
+            let client = self.gpu.as_ref().map(|g| g.window.stats.lock().unwrap().back_buffer).filter(|&(w, h)| w > 0 && h > 0)
+                .unwrap_or((size.width.max(1), size.height.max(1)));
+            input.window_event(&event, (size.width, size.height), client);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -235,6 +252,12 @@ impl ApplicationHandler<GameEvent> for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        if let Some(input) = self.input.as_mut() {
+            input.device_event(&event);
         }
     }
 
@@ -267,6 +290,7 @@ fn main() {
         next_title: Instant::now(),
         modifiers: ModifiersState::empty(),
         started: false,
+        input: None,
     };
     event_loop.run_app(&mut app).expect("the event loop");
 }

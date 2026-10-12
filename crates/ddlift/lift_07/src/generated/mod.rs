@@ -8,6 +8,29 @@ mod lifted_004; pub use lifted_004::*;
 mod lifted_005; pub use lifted_005::*;
 mod lifted_006; pub use lifted_006::*;
 mod lifted_007; pub use lifted_007::*;
+pub use mtmath::abi::f_007ad7a0;
+pub use mtmath::abi::f_007ad870;
+pub use mtmath::abi::f_007ad8e0;
+pub use mtmath::abi::f_007ad9d0;
+pub use mtmath::abi::f_007adc00;
+pub use mtmath::abi::f_007adca0;
+pub use mtmath::abi::f_007ae860;
+pub use mtmath::abi::f_007aeed0;
+pub use mtmath::abi::f_007af450;
+pub use mtmath::abi::f_007af5b0;
+/// The lifted bodies of the functions mtmath replaces.
+pub mod replaced {
+    pub use super::lifted_005::f_007ad7a0;
+    pub use super::lifted_005::f_007ad870;
+    pub use super::lifted_005::f_007ad8e0;
+    pub use super::lifted_005::f_007ad9d0;
+    pub use super::lifted_006::f_007adc00;
+    pub use super::lifted_006::f_007adca0;
+    pub use super::lifted_006::f_007ae860;
+    pub use super::lifted_006::f_007aeed0;
+    pub use super::lifted_006::f_007af450;
+    pub use super::lifted_006::f_007af5b0;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00700350, f_00700350),
@@ -176,6 +199,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x0070E910, f_0070e910),
 (0x0070EBC0, f_0070ebc0),
 (0x0070EEA0, f_0070eea0),
+(0x0070F180, f_0070f180),
 (0x0070FDD0, f_0070fdd0),
 (0x00710730, f_00710730),
 (0x00710850, f_00710850),
@@ -455,6 +479,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00726890, f_00726890),
 (0x007268A0, f_007268a0),
 (0x00726980, f_00726980),
+(0x007269F0, f_007269f0),
 (0x00726AA0, f_00726aa0),
 (0x00726B40, f_00726b40),
 (0x00726B70, f_00726b70),
@@ -1121,6 +1146,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x0075D4D0, f_0075d4d0),
 (0x0075D4F0, f_0075d4f0),
 (0x0075D560, f_0075d560),
+(0x0075D810, f_0075d810),
 (0x0075D980, f_0075d980),
 (0x0075DA30, f_0075da30),
 (0x0075DA50, f_0075da50),
@@ -1272,6 +1298,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00763B10, f_00763b10),
 (0x00763BC0, f_00763bc0),
 (0x00763BF0, f_00763bf0),
+(0x00763C10, f_00763c10),
 (0x00764160, f_00764160),
 (0x007641B0, f_007641b0),
 (0x00764230, f_00764230),
@@ -1895,6 +1922,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00798350, f_00798350),
 (0x00798390, f_00798390),
 (0x007983E0, f_007983e0),
+(0x007983F0, f_007983f0),
 (0x00798450, f_00798450),
 (0x00798480, f_00798480),
 (0x00798490, f_00798490),
@@ -2609,6 +2637,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x007C1A60, f_007c1a60),
 (0x007C20A0, f_007c20a0),
 (0x007C3770, f_007c3770),
+(0x007C38C0, f_007c38c0),
 (0x007C3FC0, f_007c3fc0),
 (0x007C4020, f_007c4020),
 (0x007C4090, f_007c4090),

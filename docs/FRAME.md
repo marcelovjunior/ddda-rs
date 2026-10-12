@@ -35,6 +35,79 @@ There is no fixed-rate loop. One iteration is one frame at whatever rate
 the machine reaches (`mMaxFps` 150; RECORDINGS.md). The step is measured
 inside the frame (section 3).
 
+## 1a. The clock and the frame pacer (`sMain::vf06`, `0x00DBFA90`)
+
+`sMain`'s properties (the DTI list in `sMain::vf03`, 0x00DBEB70, decoded
+from its records) name the timing fields [exe]:
+
+| Field | Offset | Type | Notes |
+|---|---|---|---|
+| `mTimer` | +0x20 | u64 | elapsed milliseconds (QPC-based) |
+| `mFrameTimer` | +0x30 | u32 | `mTimer` × `mFps` / 1000: elapsed frames at the base rate |
+| `mFps` | +0x38 | f32 | the **base rate**: **30.0 in the game** (`sBbsRpgMain`'s constructor stores it at 0x0041CEC9 over `sMain`'s default 60.0), so one unit of `mDeltaTime` is 1/30 s |
+| `mMaxFps` | +0x3c | f32 | the **cap**, 3000.0 at construction; the `MaxFPS` option sets it (range 30-1000) |
+| `mFrameWait` | +0x40 | bool | fixed-step mode (accessor 0x00DBD0A0) |
+| `mActualFps` | +0x44 | f32 | measured rate |
+| `mPause` | +0x6c | bool | capture/benchmark pause (section 3) |
+| `mDeltaTime` | +0x70 | f32 | this frame's step, in base frames |
+| `mDeltaTimeBorder` | +0x74 | f32 | above this, the frame is treated as a hitch (100.0 at construction) |
+| `mDeltaTimeLimite` | +0x78 | f32 | the largest step (16.0 at construction) |
+| `mGlobalSpeed` | +0x80 | f32 | multiplies the step (slow motion) |
+| `mDelayFrame` | +0x84 | f32 | accumulated base frames dropped by hitches |
+| (QPC ticks per base frame) | +0x1c030 | i64 | |
+
+Defaults come from the constructor (0x00DBE810) [exe]. It sets `+0x48` = 30.0
+(not yet named), registers the application option **`MaxFPS`**
+(0x0142A8D0, f32, range 30.0-1000.0, setter 0x00F5BB60) and the job-thread
+count option. `FrameRate`, `Time` and `System` are property groups. `ResetFrame`
+(0x00DBD710) and `ResetTimer` (0x00DBE210) are property actions.
+
+**What `vf06` does each frame** [exe]:
+
+1. It reads QueryPerformanceCounter through 0x0130A5A0 into
+   `+0x1c000..`, and updates `mTimer` and `mFrameTimer`. It also
+   accumulates the elapsed ticks at `+0x50` (`+0x58` is the tick count at
+   the last frame boundary).
+2. **Variable mode** (`mFrameWait` = 0), the normal path:
+   - `mDeltaTime` = ticks since the last frame / ticks per base frame.
+   - The minimum step is `mFps / mMaxFps`. If the frame came sooner than
+     that, it `Sleep`s for (minimum − step) × 1000/`mFps` − 1 ms (when that
+     is at least 2 ms). It then **spins** on QPC until the step reaches the
+     minimum. This is the frame cap.
+   - A negative step becomes 0.
+   - A step above `mDeltaTimeBorder` is a hitch: the excess is added to
+     `mDelayFrame`, the step becomes 1.0 and the timebase is resynced.
+   - A step above `mDeltaTimeLimite` is clamped to it.
+   - The boundary then advances by the frame just taken.
+3. **Fixed mode** (`mFrameWait` ≠ 0): it sleeps 1 ms at a time until the
+   next base-frame boundary, then advances it by exactly one base frame,
+   and `mDeltaTime` = 1.0.
+4. `mDeltaTime` ×= `mGlobalSpeed`.
+5. `+0x7c` = 30.0 / max(1, `mActualFps`): `DAT_018d0b28` is `sMain` itself
+   (its constructor stores `this` there), so this is the 1-s averaged rate in
+   base frames (L30).
+
+**What this means for the frame rate** (*inferred* from the code above;
+not yet checked live; the per-system audit is [FRAME_RATE.md](FRAME_RATE.md), L30):
+- The game is built to run at any rate. Gameplay advances by
+  `mDeltaTime` in units of `mFps` frames: units take line rate ×
+  `mDeltaTime` (section 3), and the saved clock uses `mDeltaTime / mFps`
+  (section 6.1).
+- The rate is capped only by `mMaxFps`. The user-facing `MaxFPS` option
+  allows 30-1000, and RECORDINGS.md measured 150 live.
+- In the rebuild, an unlocked or higher frame rate is a data change:
+  `mMaxFps` (and `mFrameWait` = 0). It is not a code change. The base
+  rate `mFps` = 30 only sets the unit of `mDeltaTime`. Changing it would
+  rescale gameplay, so leave it alone.
+- Anything that misbehaves at high rates is a per-system bug to find
+  where that system ignores `mDeltaTime`. Physics, animation blending,
+  cloth and UI timers are the usual candidates, each to be measured.
+- The pacer's `Sleep` + spin can also be replaced in the host (for
+  example by waiting on present/vsync) without touching the step logic.
+  The game only sees `mDeltaTime`.
+- `mDeltaTimeLimite` (16 base frames during the states in table A4, else
+  2) bounds how far one frame can step after a hitch.
+
 ## 2. One frame: `sBbsRpgMain::vf06` (`0x0041DD60`)
 
 The calls in order [exe]. `vfNN` is a virtual slot of the singleton

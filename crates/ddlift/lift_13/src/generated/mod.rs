@@ -7,6 +7,13 @@ mod lifted_003; pub use lifted_003::*;
 mod lifted_004; pub use lifted_004::*;
 mod lifted_005; pub use lifted_005::*;
 mod lifted_006; pub use lifted_006::*;
+pub use mtmath::abi::f_00d00690;
+pub use mtmath::abi::f_00d006c0;
+/// The lifted bodies of the functions mtmath replaces.
+pub mod replaced {
+    pub use super::lifted_000::f_00d00690;
+    pub use super::lifted_000::f_00d006c0;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D00010, f_00d00010),
@@ -367,7 +374,9 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D18ED0, f_00d18ed0),
 (0x00D19C90, f_00d19c90),
 (0x00D19CB0, f_00d19cb0),
+(0x00D19E40, f_00d19e40),
 (0x00D1A130, f_00d1a130),
+(0x00D1A420, f_00d1a420),
 (0x00D1A9E0, f_00d1a9e0),
 (0x00D1ADA0, f_00d1ada0),
 (0x00D1AE90, f_00d1ae90),
@@ -380,6 +389,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D1C790, f_00d1c790),
 (0x00D1CB00, f_00d1cb00),
 (0x00D1CEE0, f_00d1cee0),
+(0x00D1D2D0, f_00d1d2d0),
 (0x00D1DD70, f_00d1dd70),
 (0x00D1E930, f_00d1e930),
 (0x00D1F500, f_00d1f500),
@@ -918,6 +928,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D93B50, f_00d93b50),
 (0x00D94810, f_00d94810),
 (0x00D949E0, f_00d949e0),
+(0x00D94A20, f_00d94a20),
 (0x00D94AD0, f_00d94ad0),
 (0x00D94B80, f_00d94b80),
 (0x00D95040, f_00d95040),
@@ -1314,6 +1325,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00DAA8B0, f_00daa8b0),
 (0x00DAB420, f_00dab420),
 (0x00DAB480, f_00dab480),
+(0x00DAC090, f_00dac090),
 (0x00DAC1C0, f_00dac1c0),
 (0x00DAC260, f_00dac260),
 (0x00DAC570, f_00dac570),
@@ -1347,6 +1359,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00DB0D00, f_00db0d00),
 (0x00DB0D10, f_00db0d10),
 (0x00DB0DB0, f_00db0db0),
+(0x00DB0DE0, f_00db0de0),
 (0x00DB1480, f_00db1480),
 (0x00DB1A50, f_00db1a50),
 (0x00DB2420, f_00db2420),
@@ -1527,6 +1540,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00DB9AD0, f_00db9ad0),
 (0x00DB9B70, f_00db9b70),
 (0x00DB9BD0, f_00db9bd0),
+(0x00DB9C80, f_00db9c80),
 (0x00DB9F40, f_00db9f40),
 (0x00DBA120, f_00dba120),
 (0x00DBA170, f_00dba170),
@@ -1539,6 +1553,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00DBA490, f_00dba490),
 (0x00DBA930, f_00dba930),
 (0x00DBA940, f_00dba940),
+(0x00DBA9A0, f_00dba9a0),
 (0x00DBAC80, f_00dbac80),
 (0x00DBAD70, f_00dbad70),
 (0x00DBB0C0, f_00dbb0c0),

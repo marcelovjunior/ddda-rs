@@ -35,6 +35,10 @@ fn setup() -> (GuestMemory, Arc<Registry>) {
         (0x1080, fx_ref),
         (0x1090, fx_release),
         (0x10a0, fx_parameters),
+        (0x10b0, xapo_query),
+        (0x10c0, xapo_lock),
+        (0x10d0, xapo_halve),
+        (0x10e0, user32::def_window_proc),
     ] {
         r.insert(a, Binding::Service(f)).unwrap();
     }
@@ -673,8 +677,9 @@ fn fx_query(m: &mut dyn Mem, c: &mut Cpu) {
     let this = m.u32(c.esp + 4);
     let iid = m.u32(c.esp + 8);
     let out = m.u32(c.esp + 12);
-    assert_eq!(m.u32(iid), 0x26d95c66);
-    assert_eq!(m.u32(iid + 12), 0x986d1cf0);
+    // IXAPOParameters, 2.7 IID (game rdata 0x0142AF38)
+    assert_eq!(m.u32(iid), 0xa90bc001);
+    assert_eq!(m.u32(iid + 12), 0x01000000);
     m.set_u32(out, this);
     m.set_u32(DATA + 0xa00, m.u32(DATA + 0xa00) + 1);
     c.eax = 0;
@@ -820,6 +825,7 @@ fn extended_modifiers_mouse_extra_buttons_and_screen_coordinates() {
 
 /// Private integration fixture: uses the player's exe, never checked-in bytes.
 /// Run with DDDA_EXE set and `cargo test -p ddruntime --test input_audio -- --ignored`.
+#[cfg(feature = "game")]
 #[test]
 #[ignore = "requires the player's DDDA.exe and the generated lifted program"]
 fn original_engine_initialization() {
@@ -874,4 +880,263 @@ fn all_input_audio_import_names_bind_including_xinput_ordinals() {
             i.full_name()
         );
     }
+}
+
+#[test]
+fn host_input_without_a_window_handle_goes_to_the_focused_window() {
+    let (mut m, _r) = setup();
+    let host = input::connect();
+    // a window like the game's: 1286x749 at (32, 32), style 0xCA0000, so its
+    // client area starts at (35, 58) on the screen
+    let (wc, name) = (DATA + 0xa00, DATA + 0xa80);
+    m.set_u8(name, b'W');
+    m.set_u32(wc, 0x30);
+    m.set_u32(wc + 8, 0x10e0);
+    m.set_u32(wc + 40, name);
+    assert_ne!(api(&mut m, user32::register_class_ex_a, &[wc]), 0);
+    let hwnd = api(&mut m, user32::create_window_ex_a, &[0, name, 0, 0x00CA_0000, 32, 32, 1286, 749, 0, 0, 0, 0]);
+    assert_ne!(hwnd, 0);
+    api(&mut m, user32::show_window, &[hwnd, 1]);
+    // drain the start-up messages; dispatching WM_PAINT to DefWindowProc validates the window
+    while api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]) != 0 {
+        api(&mut m, user32::dispatch_message, &[DATA]);
+    }
+    host.events
+        .send(input::Event::Key { hwnd: 0, vk: 0x42, scan: 48, down: true, extended: false, system: false })
+        .unwrap();
+    assert_eq!(api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]), 1);
+    assert_eq!((m.u32(DATA), m.u32(DATA + 4), m.u32(DATA + 8)), (hwnd, 0x100, 0x42));
+    host.events
+        .send(input::Event::Mouse { hwnd: 0, x: 10, y: 20, dx: 0, dy: 0, wheel: 0, buttons: [false; 8] })
+        .unwrap();
+    assert_eq!(api(&mut m, user32::peek_message, &[DATA, 0, 0, 0, 1]), 1);
+    assert_eq!((m.u32(DATA), m.u32(DATA + 4)), (hwnd, 0x200));
+    assert_eq!(m.u32(DATA + 12), 20 << 16 | 10, "client coordinates as sent");
+    let point = DATA + 0xb00;
+    assert_eq!(api(&mut m, user32::get_cursor_pos, &[point]), 1);
+    assert_eq!((m.u32(point), m.u32(point + 4)), (45, 78), "the cursor on the screen");
+
+// --- audible output (brief L19) ----------------------------------------
+
+fn take_output(output: &std::sync::mpsc::Receiver<audio::AudioBlock>) -> (Vec<f32>, Vec<f32>) {
+    let (mut left, mut right) = (vec![], vec![]);
+    while let Ok(b) = output.try_recv() {
+        assert_eq!((b.sample_rate, b.channels), (48000, 2));
+        for f in b.samples.chunks(2) {
+            left.push(f[0]);
+            right.push(f[1]);
+        }
+    }
+    (left, right)
+}
+/// The frames of `want` appear, in order, from the first non-silent one.
+fn assert_contains(got: &[f32], want: &[f32]) {
+    let start = got.iter().position(|x| *x != 0.0).expect("audible output");
+    assert_eq!(&got[start..start + want.len()], want);
+}
+
+#[test]
+fn xaudio_mixes_submitted_pcm_into_the_output() {
+    let (mut m, r) = setup();
+    let output = audio::output();
+    let e = engine(&mut m, &r);
+    assert_eq!(method(&mut m, &r, e, 10, &[DATA + 32, 0, 0, 0, 0, 0]), 0);
+    let master = m.u32(DATA + 32);
+    let voice = source(&mut m, &r, e, 0);
+    let pcm: Vec<i16> = (0..480).map(|i| (i * 37 - 9000) as i16).collect();
+    for (i, x) in pcm.iter().enumerate() {
+        m.set_u16(DATA + 0x1000 + 2 * i as u32, *x as u16);
+    }
+    buffer(&mut m, 0x1234, 0x40);
+    assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+    assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+    sleep(&mut m, 60);
+    let (left, right) = take_output(&output);
+    // 16-bit PCM is x / 32768; a mono voice's default send to a stereo
+    // mastering voice feeds both channels at full scale.
+    let want: Vec<f32> = pcm.iter().map(|x| *x as f32 / 32768.0).collect();
+    assert_contains(&left, &want);
+    assert_contains(&right, &want);
+    method(&mut m, &r, voice, 18, &[]);
+    method(&mut m, &r, master, 18, &[]);
+    assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+    sleep(&mut m, 15);
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+}
+
+/// The bank voices' format, as 0x00DCE1F0 builds it.
+fn game_adpcm_format(m: &mut dyn Mem, f: u32) {
+    for (o, w) in [(0, 2u16), (2, 1), (12, 70), (14, 4), (16, 32), (18, 128), (20, 7)] {
+        m.set_u16(f + o, w);
+    }
+    m.set_u32(f + 4, 48000);
+    m.set_u32(f + 8, 0x668a);
+    for (i, (a, b)) in [
+        (256, 0),
+        (512, -256),
+        (0, 0),
+        (192, 64),
+        (240, 0),
+        (460, -208),
+        (392, -232),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        m.set_u16(f + 22 + 4 * i as u32, a as i16 as u16);
+        m.set_u16(f + 24 + 4 * i as u32, b as i16 as u16);
+    }
+}
+
+#[test]
+fn xaudio_decodes_the_games_adpcm_bank_format() {
+    let (mut m, r) = setup();
+    let output = audio::output();
+    let e = engine(&mut m, &r);
+    assert_eq!(method(&mut m, &r, e, 10, &[DATA + 32, 0, 0, 0, 0, 0]), 0);
+    let f = DATA + 0x100;
+    game_adpcm_format(&mut m, f);
+    // 0x00DCE1F0's call: flags 0, max ratio 2, no callback, sends or effects.
+    assert_eq!(
+        method(&mut m, &r, e, 8, &[DATA + 32, f, 0, 2.0f32.to_bits(), 0, 0, 0]),
+        0
+    );
+    let voice = m.u32(DATA + 32);
+    // Three blocks: coefficient index, delta, two header samples, nibbles.
+    let mut bytes = vec![];
+    for k in 0..3u8 {
+        bytes.push(k % 7);
+        bytes.extend((40i16 + 30 * k as i16).to_le_bytes());
+        bytes.extend((1200i16 - 500 * k as i16).to_le_bytes());
+        bytes.extend((-800i16 + 300 * k as i16).to_le_bytes());
+        bytes.extend((0..63).map(|i| (i * 29 + k as i32 * 7) as u8));
+    }
+    for (i, b) in bytes.iter().enumerate() {
+        m.set_u8(DATA + 0x3000 + i as u32, *b);
+    }
+    for (i, v) in [0x40, 210, DATA + 0x3000, 0, 0, 0, 0, 0, 7]
+        .into_iter()
+        .enumerate()
+    {
+        m.set_u32(DATA + 0x200 + 4 * i as u32, v);
+    }
+    assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+    assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+    sleep(&mut m, 60);
+    let (left, right) = take_output(&output);
+    let mut format = vec![0u8; 50];
+    for (i, b) in format.iter_mut().enumerate() {
+        *b = m.u8(f + i as u32);
+    }
+    let mut want = vec![];
+    ddaudio::Format::parse(&format)
+        .unwrap()
+        .decode(&bytes, 0, 384, &mut want);
+    // The first decoded sample (block 0's second header sample) is not 0.
+    assert_contains(&left, &want);
+    assert_contains(&right, &want);
+    assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+    sleep(&mut m, 15);
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+}
+
+// A guest XAPO: QueryInterface (IID_IXAPO expected), LockForProcess
+// (records the channel count, format tag and maximum frames), Process (in
+// place: halves the buffer when enabled and the input is valid, copies the
+// flag to the output).
+fn xapo_query(m: &mut dyn Mem, c: &mut Cpu) {
+    let (this, iid, out) = (m.u32(c.esp + 4), m.u32(c.esp + 8), m.u32(c.esp + 12));
+    // IXAPO, 2.7 IID (game rdata 0x0142AF28)
+    assert_eq!((m.u32(iid), m.u32(iid + 12)), (0xa90bc001, 0));
+    m.set_u32(out, this);
+    // QueryInterface adds a reference (the counter shared with fx_ref).
+    m.set_u32(DATA + 0xa00, m.u32(DATA + 0xa00) + 1);
+    c.eax = 0;
+    c.esp += 16;
+}
+fn xapo_lock(m: &mut dyn Mem, c: &mut Cpu) {
+    let input = m.u32(c.esp + 12);
+    let format = m.u32(input);
+    m.set_u32(DATA + 0xf00, m.u16(format + 2) as u32);
+    m.set_u32(DATA + 0xf04, m.u16(format) as u32);
+    m.set_u32(DATA + 0xf08, m.u32(input + 4));
+    c.eax = 0;
+    c.esp += 24;
+}
+fn xapo_halve(m: &mut dyn Mem, c: &mut Cpu) {
+    let (input, output, enabled) = (m.u32(c.esp + 12), m.u32(c.esp + 20), m.u32(c.esp + 24));
+    let (data, flags, frames) = (m.u32(input), m.u32(input + 4), m.u32(input + 8));
+    if enabled != 0 && flags == 1 {
+        for i in 0..frames * m.u32(DATA + 0xf00) {
+            let x = f32::from_bits(m.u32(data + 4 * i)) * 0.5;
+            m.set_u32(data + 4 * i, x.to_bits());
+        }
+    }
+    m.set_u32(output + 4, flags);
+    m.set_u32(output + 8, frames);
+    m.set_u32(DATA + 0xf0c, m.u32(DATA + 0xf0c) + 1);
+    c.esp += 28;
+}
+
+#[test]
+fn xaudio_runs_guest_xapos_and_skips_unlifted_ones() {
+    let (mut m, r) = setup();
+    let output = audio::output();
+    let e = engine(&mut m, &r);
+    // Effect 0 cannot run: its LockForProcess is not bound to any code.
+    // Effect 1 halves the mix.
+    for (object, lock) in [(DATA + 0xc00, 0x3000u32), (DATA + 0xc80, 0x10c0)] {
+        let vt = object + 0x40;
+        m.set_u32(object, vt);
+        for (slot, target) in [
+            (0, 0x10b0),
+            (1, 0x1080),
+            (2, 0x1090),
+            (8, lock),
+            (9, 0x1010),
+            (10, 0x10d0),
+        ] {
+            m.set_u32(vt + 4 * slot, target);
+        }
+    }
+    // Both objects start with one reference (shared counter).
+    m.set_u32(DATA + 0xa00, 2);
+    let chain = DATA + 0xe00;
+    m.set_u32(chain, 2);
+    m.set_u32(chain + 4, chain + 8);
+    for (i, object) in [DATA + 0xc00, DATA + 0xc80].into_iter().enumerate() {
+        let d = chain + 8 + 12 * i as u32;
+        m.set_u32(d, object);
+        m.set_u32(d + 4, 1);
+        m.set_u32(d + 8, 2);
+    }
+    assert_eq!(method(&mut m, &r, e, 10, &[DATA + 32, 0, 0, 0, 0, chain]), 0);
+    let master = m.u32(DATA + 32);
+    let voice = source(&mut m, &r, e, 0);
+    let pcm: Vec<i16> = (0..480).map(|i| (i * 53 - 12000) as i16).collect();
+    for (i, x) in pcm.iter().enumerate() {
+        m.set_u16(DATA + 0x1000 + 2 * i as u32, *x as u16);
+    }
+    buffer(&mut m, 0x1234, 0x40);
+    assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
+    assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
+    sleep(&mut m, 60);
+    let (left, right) = take_output(&output);
+    let want: Vec<f32> = pcm.iter().map(|x| *x as f32 / 32768.0 * 0.5).collect();
+    assert_contains(&left, &want);
+    assert_contains(&right, &want);
+    // Locked once with the mastering voice's float format: stereo,
+    // WAVE_FORMAT_EXTENSIBLE, 480 frames per pass.
+    assert_eq!(
+        (m.u32(DATA + 0xf00), m.u32(DATA + 0xf04), m.u32(DATA + 0xf08)),
+        (2, 0xfffe, 480)
+    );
+    assert!(m.u32(DATA + 0xf0c) > 3);
+    method(&mut m, &r, voice, 18, &[]);
+    method(&mut m, &r, master, 18, &[]);
+    // Every reference taken (effect chain, QueryInterface) was released.
+    assert_eq!(m.u32(DATA + 0xa00), 2);
+    assert_eq!(method(&mut m, &r, e, 2, &[]), 0);
+    sleep(&mut m, 15);
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
 }

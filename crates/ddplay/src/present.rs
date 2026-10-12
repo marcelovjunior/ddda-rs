@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 pub struct Stats {
     pub frames: u64,
     pub last_present: Option<Instant>,
+    /// The last presented back buffer's size (the game window's client area).
+    pub back_buffer: (u32, u32),
     interval_start: Option<Instant>,
     interval_frames: u32,
     longest: Duration,
@@ -199,7 +201,9 @@ impl PresentSink for Sink {
                 gamma: frame.gamma.map(|g| Box::new(*g)),
             });
         }
-        w.stats.lock().unwrap().presented(Instant::now());
+        let mut stats = w.stats.lock().unwrap();
+        stats.presented(Instant::now());
+        stats.back_buffer = (frame.width, frame.height);
     }
 }
 
@@ -218,6 +222,7 @@ pub fn test_pattern(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::Ada
         gpu.clear(&ClearCall {
             rects: vec![], flags: 1, colour: 0xFF10_1828, z: 1.0, stencil: 0,
             targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, w, h, 0, 0],
+            scissor: None, srgb: false,
         });
         let x = (k * 8 % (w - 64)) as i32;
         gpu.fill(&FillCall { dst: bb.clone(), rect: [x, 0, x + 64, h as i32], colour: 0xFFE0_E0E0 });

@@ -45,11 +45,13 @@ def native_declarations(repo=REPO):
     paths = [p for p in repo.glob("crates/ddnative/src/**/*.rs")
              if not p.name.startswith("lifted_")]
     paths += list(repo.glob("crates/ddlift/lift_*/src/generated/**/*.rs"))
+    # readable ports that replace lifted bodies (L24, docs/MATH.md)
+    paths += list(repo.glob("crates/mtmath/src/**/*.rs"))
     for path in paths:
         for line in path.read_text(encoding="utf-8").splitlines():
             if "Translated from" in line:
                 ported.update(int(m.group(1), 16) for m in ADDR.finditer(line))
-    for path in repo.glob("crates/ddnative/tests/*.rs"):
+    for path in [*repo.glob("crates/ddnative/tests/*.rs"), *repo.glob("crates/mtmath/tests/*.rs")]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("// verifies"):
                 tested.update(int(m.group(1), 16) for m in ADDR.finditer(line))
@@ -183,7 +185,7 @@ def next_up(n=25):
 
 
 GAP = re.compile(r"not yet|unsupported|stand-?in|placeholder|not traced|untraced|not modell?ed|"
-                 r"unimplemented|OPEN|TODO|approximat|guess", re.I)
+                 r"unimplemented|\bOPEN\b|TODO|approximat|guess", re.I)
 CRT = re.compile(r"^(_|__|FUN_012[EF]|operator|std::|Catch|Unwind)")
 
 

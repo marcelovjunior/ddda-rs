@@ -23,6 +23,11 @@ fn ps_constant() -> Vec<u32> {
     vec![0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0xA0E4_0000, 0x0000_FFFF]
 }
 
+/// mov oC0, c0; mov oC1, c0 (two targets)
+fn ps_two() -> Vec<u32> {
+    vec![0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0xA0E4_0000, 0x0200_0001, 0x800F_0801, 0xA0E4_0000, 0x0000_FFFF]
+}
+
 /// texld r0, v0, s0; mul oC0, r0, c0
 fn ps_texture() -> Vec<u32> {
     vec![
@@ -62,6 +67,11 @@ fn depth_target() -> Target {
     Target { surface: 0x101, format: 75, width: W, height: H, texture: None, level: 0 }
 }
 
+/// The second render target of MRT draws; its format varies by frame.
+fn second_target(format: u32) -> Target {
+    Target { surface: 0x102, format, width: W, height: H, texture: None, level: 0 }
+}
+
 /// A random vertex (position float4, texcoord float2).
 fn vertex(rng: &mut Rng) -> [f32; 6] {
     [rng.unit() * 2.4 - 1.2, rng.unit() * 2.4 - 1.2, rng.unit(), 1.0, rng.unit() * 2.0, rng.unit() * 2.0]
@@ -71,10 +81,13 @@ fn bytes(v: &[[f32; 6]]) -> Vec<u8> {
     v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect()
 }
 
-/// One frame's commands: uploads (with the textures' formats), a clear and
-/// a few draws with random states.
-fn frame(rng: &mut Rng) -> (Vec<Upload>, ClearCall, Vec<DrawCall>) {
+/// One frame's commands: uploads (with the textures' formats), clears (a
+/// full one, sometimes a partial one: viewport, rectangle, scissor, sRGB)
+/// and a few draws with random states, some into two targets (the second
+/// of a random format).
+fn frame(rng: &mut Rng) -> (Vec<Upload>, Vec<ClearCall>, Vec<DrawCall>, Target) {
     let mut uploads = Vec::new();
+    let second = second_target(rng.pick(&[21u32, 113, 114]));
     // three textures; their formats vary between frames
     let mut formats = [0u32; 3];
     for (k, f) in formats.iter_mut().enumerate() {
@@ -90,11 +103,24 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, ClearCall, Vec<DrawCall>) {
     uploads.push(Upload::Buffer { resource: 0x301, bytes: [0u16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].iter().flat_map(|i| i.to_le_bytes()).collect() });
     let clear = ClearCall {
         rects: vec![], flags: 7, colour: rng.next(), z: rng.pick(&[0.4f32, 0.7, 1.0]), stencil: rng.next() % 256,
-        targets: [Some(back_buffer()), None, None, None], depth: Some(depth_target()), viewport: [0, 0, W, H, 0, 0],
+        targets: [Some(back_buffer()), Some(second.clone()), None, None], depth: Some(depth_target()), viewport: [0, 0, W, H, 0, 0], scissor: None, srgb: false,
     };
+    let mut clears = vec![clear.clone()];
+    if rng.next() % 2 == 0 {
+        let r = |rng: &mut Rng| (rng.next() % 8) as i32;
+        clears.push(ClearCall {
+            flags: rng.pick(&[1u32, 3, 7, 6]), colour: rng.next(), z: rng.unit(), stencil: rng.next() % 256,
+            viewport: [rng.next() % 6, rng.next() % 6, 4 + rng.next() % 8, 4 + rng.next() % 8, 0, 0],
+            rects: if rng.next() % 2 == 0 { vec![] } else { vec![[r(rng), r(rng), 8 + r(rng), 8 + r(rng)]] },
+            scissor: (rng.next() % 2 == 0).then(|| [r(rng), r(rng), 8 + r(rng), 8 + r(rng)]),
+            srgb: rng.next() % 2 == 0,
+            ..clear
+        });
+    }
     let mut draws = Vec::new();
     for _ in 0..4 {
-        let textured = rng.next().is_multiple_of(2);
+        let mrt = rng.next() % 3 == 0;
+        let textured = !mrt && rng.next().is_multiple_of(2);
         let tex = rng.next() % 3;
         let mut st = [0u32, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
         st[1] = rng.pick(&[1u32, 2, 3]);
@@ -126,7 +152,7 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, ClearCall, Vec<DrawCall>) {
             primitive, primitives, start, base_vertex: 0, min_index: 0, vertex_count: 12,
             vertices, indices,
             vertex_shader: Some(vs()),
-            pixel_shader: Some(if textured { ps_texture() } else { ps_constant() }),
+            pixel_shader: Some(if mrt { ps_two() } else if textured { ps_texture() } else { ps_constant() }),
             declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]],
             fvf: 0,
             vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
@@ -139,24 +165,26 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, ClearCall, Vec<DrawCall>) {
             render_states: states,
             viewport: [vp[0], vp[1], vp[2].min(W - vp[0]), vp[3].min(H - vp[1]), 0f32.to_bits(), 1f32.to_bits()],
             scissor: [(rng.next() % 8) as i32, (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32],
-            targets: [Some(back_buffer()), None, None, None],
+            targets: [Some(back_buffer()), mrt.then(|| second.clone()), None, None],
             depth: Some(depth_target()),
         });
     }
-    (uploads, clear, draws)
+    (uploads, clears, draws, second)
 }
 
-fn run(gpu: &mut ddgpu::WgpuBackend, uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall]) -> Vec<u8> {
+fn run(gpu: &mut ddgpu::WgpuBackend, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], second: &Target) -> (Vec<u8>, Vec<u8>) {
     for u in uploads {
         gpu.upload(u.clone());
     }
-    gpu.clear(clear);
+    for c in clears {
+        gpu.clear(c);
+    }
     for d in draws {
         gpu.draw(d);
     }
     gpu.present(&back_buffer());
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
-    gpu.last_frame.clone().expect("frame").rgba
+    (gpu.last_frame.clone().expect("frame").rgba, gpu.read_back(second).expect("second target"))
 }
 
 #[test]
@@ -168,14 +196,15 @@ fn a_long_lived_backend_draws_every_frame_like_a_fresh_one() {
     let mut rng = Rng(0xCAC4_E001);
     let mut differ = Vec::new();
     for k in 0..120 {
-        let (uploads, clear, draws) = frame(&mut rng);
-        // the textures change format: the guest releases them first
-        for r in 0x200..0x203 {
+        let (uploads, clears, draws, second) = frame(&mut rng);
+        // the textures and the second target change format: the guest
+        // releases them first
+        for r in [0x200, 0x201, 0x202, 0x102] {
             shared.release(r);
         }
-        let ours = run(&mut shared, &uploads, &clear, &draws);
+        let ours = run(&mut shared, &uploads, &clears, &draws, &second);
         let mut fresh = ddgpu::WgpuBackend::headless().unwrap();
-        let theirs = run(&mut fresh, &uploads, &clear, &draws);
+        let theirs = run(&mut fresh, &uploads, &clears, &draws, &second);
         if ours != theirs {
             differ.push(k);
         }

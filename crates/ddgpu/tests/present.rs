@@ -66,7 +66,7 @@ fn present_quadrants(w: u32, h: u32, gamma: Option<&GammaRamp>) -> Option<(Vec<u
     gpu.gamma(gamma);
     gpu.clear(&ClearCall {
         rects: vec![], flags: 1, colour: 0xFF10_2030, z: 1.0, stencil: 0,
-        targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0],
+        targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false,
     });
     // ColorFill quadrants (D3DCOLOR is ARGB): red, green / blue, a mix
     for (rect, colour) in [([0, 0, 2, 2], 0xFFFF_0000), ([2, 0, 4, 2], 0xFF00_FF00), ([0, 2, 2, 4], 0xFF00_00FF), ([2, 2, 4, 4], 0xFFC8_7828)] {

@@ -285,6 +285,9 @@ pub struct WgpuBackend {
     modules: HashMap<(u64, u64, bool), (wgpu::ShaderModule, d3d9wgsl::Interface)>,
     samplers: HashMap<[u32; 14], wgpu::Sampler>,
     blits: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    /// clears of part of a target, by (colour formats per slot, depth
+    /// format, depth written, stencil written)
+    clears: HashMap<ClearKey, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// the last presented frame, if reading frames back is enabled
     pub last_frame: Option<Frame>,
     pub read_frames: bool,
@@ -363,6 +366,19 @@ impl WgpuBackend {
         wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::TEXTURE_COMPRESSION_BC
     }
 
+    /// Features used where the adapter has them: D3DTADDRESS_BORDER, 16-bit
+    /// normalised targets (G16R16, A16B16G16R16), D3DFILL_WIREFRAME/POINT,
+    /// and blending into 32-bit float targets (the D3D9 driver blends every
+    /// render-target format: POSTPIXELSHADER_BLENDING in the recorded
+    /// profile). Without one, the draws that need it report an error.
+    pub fn optional_features() -> wgpu::Features {
+        wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::POLYGON_MODE_POINT | wgpu::Features::FLOAT32_BLENDABLE
+            // render attachments of formats beyond WebGPU's baseline
+            // (G16R16 and A16B16G16R16 as Rg16Unorm/Rgba16Unorm targets)
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+    }
+
     /// A backend on the default adapter without a window.
     pub fn headless() -> Option<WgpuBackend> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -371,10 +387,7 @@ impl WgpuBackend {
         if !adapter.features().contains(needed) {
             return None;
         }
-        // used where the adapter has them: D3DTADDRESS_BORDER, 16-bit
-        // normalised targets (G16R16, A16B16G16R16), D3DFILL_WIREFRAME/POINT
-        let optional = wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-            | wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::POLYGON_MODE_POINT;
+        let optional = Self::optional_features();
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: needed | (adapter.features() & optional),
             ..Default::default()
@@ -416,6 +429,7 @@ impl WgpuBackend {
             modules: HashMap::new(),
             samplers: HashMap::new(),
             blits: HashMap::new(),
+            clears: HashMap::new(),
             last_frame: None,
             read_frames: true,
             errors: Vec::new(),
@@ -661,6 +675,114 @@ impl WgpuBackend {
         Some((rt.texture.clone(), 0, 0, rt.format, rt.width, rt.height))
     }
 
+    /// The pipeline that clears part of a target: a triangle over the
+    /// scissored region writing each colour slot's value, the depth and the
+    /// stencil reference.
+    fn clear_pipeline(&mut self, key: &ClearKey) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
+        if let Some(p) = self.clears.get(key) {
+            return p.clone();
+        }
+        let (colours, depth, write_depth, write_stencil) = key;
+        let mut wgsl = String::from("struct P { c: array<vec4<f32>, 4>, z: vec4<f32> }\n@group(0) @binding(0) var<uniform> p: P;\n");
+        wgsl.push_str("@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n  let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n  return vec4<f32>(c * vec2<f32>(4.0, -4.0) + vec2<f32>(-1.0, 1.0), p.z.x, 1.0);\n}\n");
+        let slots: Vec<usize> = colours.iter().enumerate().filter(|(_, f)| f.is_some()).map(|(k, _)| k).collect();
+        if !slots.is_empty() {
+            wgsl.push_str("struct O {");
+            for k in &slots {
+                wgsl.push_str(&format!(" @location({k}) o{k}: vec4<f32>,"));
+            }
+            wgsl.push_str(" }\n@fragment fn fs() -> O { return O(");
+            wgsl.push_str(&slots.iter().map(|k| format!("p.c[{k}]")).collect::<Vec<_>>().join(", "));
+            wgsl.push_str("); }\n");
+        }
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("clear"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }],
+        });
+        let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let targets: Vec<Option<wgpu::ColorTargetState>> = colours.iter().map(|f| f.map(|format| wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })).collect();
+        let replace = wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Replace, depth_fail_op: wgpu::StencilOperation::Replace, pass_op: wgpu::StencilOperation::Replace };
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("clear"),
+            layout: Some(&pl),
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth.map(|format| wgpu::DepthStencilState {
+                format,
+                depth_write_enabled: Some(*write_depth),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: if *write_stencil {
+                    wgpu::StencilState { front: replace, back: replace, read_mask: 0xFF, write_mask: 0xFF }
+                } else {
+                    wgpu::StencilState::default()
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: (!slots.is_empty()).then(|| wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &targets }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.clears.insert(key.clone(), (pipeline.clone(), layout.clone()));
+        (pipeline, layout)
+    }
+
+    /// A clear of `regions` (not the whole target): the clear pipeline,
+    /// scissored to each region.
+    fn clear_regions_with_pipeline(&mut self, c: &ClearCall, regions: &[[i32; 4]]) {
+        let colour_views: Vec<Option<(wgpu::TextureView, wgpu::TextureFormat)>> = if c.flags & 1 != 0 {
+            c.targets.iter().map(|t| t.as_ref().and_then(|t| self.target_view(t, c.srgb))).collect()
+        } else {
+            vec![None; 4]
+        };
+        let depth = if c.flags & 6 != 0 { c.depth.as_ref().and_then(|t| self.target_view(t, false)) } else { None };
+        let write_stencil = c.flags & 4 != 0 && depth.as_ref().is_some_and(|(_, f)| f.has_stencil_aspect());
+        let max_out = colour_views.iter().rposition(|v| v.is_some()).map(|p| p + 1).unwrap_or(0);
+        let key: ClearKey = (colour_views[..max_out].iter().map(|v| v.as_ref().map(|(_, f)| *f)).collect(), depth.as_ref().map(|(_, f)| *f), c.flags & 2 != 0, write_stencil);
+        let (pipeline, layout) = self.clear_pipeline(&key);
+        let mut p: Vec<u8> = Vec::new();
+        for k in 0..4 {
+            let col = colour_views.get(k).and_then(|v| v.as_ref()).map(|(_, f)| clear_colour(c.colour, *f)).unwrap_or(wgpu::Color::TRANSPARENT);
+            for v in [col.r, col.g, col.b, col.a] {
+                p.extend_from_slice(&(v as f32).to_le_bytes());
+            }
+        }
+        for v in [c.z, 0.0, 0.0, 0.0] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: p.len() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        self.queue.write_buffer(&ubuf, 0, &p);
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }] });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = colour_views[..max_out].iter().map(|v| v.as_ref().map(|(view, _)| wgpu::RenderPassColorAttachment {
+                view, depth_slice: None, resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })).collect();
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &attachments,
+                depth_stencil_attachment: depth.as_ref().map(|(view, f)| wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: f.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_stencil_reference(c.stencil);
+            for r in regions {
+                pass.set_scissor_rect(r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit([enc.finish()]);
+    }
+
     fn blit_pipeline(&mut self, format: wgpu::TextureFormat) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
         if let Some(p) = self.blits.get(&format) {
             return p.clone();
@@ -771,12 +893,14 @@ impl WgpuBackend {
             return Some((view, tx.gpu_format));
         }
         let format = target_format(t.format, false)?;
-        let rt = self.surfaces.entry(t.surface).or_insert_with(|| {
+        if !self.surfaces.contains_key(&t.surface) {
             let srgb_view = match format {
                 wgpu::TextureFormat::Bgra8Unorm => vec![wgpu::TextureFormat::Bgra8UnormSrgb],
                 wgpu::TextureFormat::Rgba8Unorm => vec![wgpu::TextureFormat::Rgba8UnormSrgb],
                 _ => vec![],
             };
+            // a format the adapter cannot render to is refused (None)
+            let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
@@ -787,8 +911,12 @@ impl WgpuBackend {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &srgb_view,
             });
-            Rt { texture, format, width: t.width, height: t.height }
-        });
+            if block_on(scope.pop()).is_some() {
+                return None;
+            }
+            self.surfaces.insert(t.surface, Rt { texture, format, width: t.width, height: t.height });
+        }
+        let rt = self.surfaces.get(&t.surface)?;
         let view_format = if srgb { target_format(t.format, true).unwrap_or(rt.format) } else { rt.format };
         let view = rt.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(view_format), ..Default::default() });
         Some((view, view_format))
@@ -976,7 +1104,9 @@ impl WgpuBackend {
         let mut colour: Vec<Option<(wgpu::TextureView, wgpu::TextureFormat)>> = Vec::new();
         for (k, t) in d.targets.iter().enumerate() {
             colour.push(match t {
-                Some(t) if ps_iface.outputs.contains(&(k as u32)) || k == 0 => self.cached_target_view(t, srgb && k == 0),
+                Some(t) if ps_iface.outputs.contains(&(k as u32)) || k == 0 => {
+                    Some(self.cached_target_view(t, srgb && k == 0).ok_or_else(|| format!("render target {k}: format {} is not supported", t.format))?)
+                }
                 _ => None,
             });
         }
@@ -1004,9 +1134,16 @@ impl WgpuBackend {
         });
         let writes = [168u32, 190, 191, 192];
         let max_out = colour.iter().rposition(|c| c.is_some()).map(|p| p + 1).unwrap_or(0);
+        // the D3D9 driver blends into every render-target format it offers
+        // (the recorded profile answers POSTPIXELSHADER_BLENDING for all of
+        // them, 32-bit float ones included)
+        let float32 = |f: &wgpu::TextureFormat| matches!(f, wgpu::TextureFormat::R32Float | wgpu::TextureFormat::Rg32Float | wgpu::TextureFormat::Rgba32Float);
+        if blend.is_some() && colour.iter().flatten().any(|(_, f)| float32(f)) && !self.device.features().contains(wgpu::Features::FLOAT32_BLENDABLE) {
+            return Err("blending into a 32-bit float target: the adapter has no FLOAT32_BLENDABLE".into());
+        }
         let targets: Vec<Option<wgpu::ColorTargetState>> = (0..max_out).map(|k| colour[k].as_ref().map(|(_, f)| wgpu::ColorTargetState {
             format: *f,
-            blend: if f.is_srgb() || matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float) { blend } else { None },
+            blend,
             write_mask: wgpu::ColorWrites::from_bits_truncate(state(writes[k])),
         })).collect();
         let depth_state = depth.as_ref().map(|(_, f)| wgpu::DepthStencilState {
@@ -1286,7 +1423,9 @@ impl WgpuBackend {
                 pass.set_scissor_rect(s[0].max(0) as u32, s[1].max(0) as u32, (s[2] - s[0]).max(0) as u32, (s[3] - s[1]).max(0) as u32);
             }
             pass.set_stencil_reference(state(57));
-            pass.set_blend_constant(colour_of(state(193)));
+            // BLENDFACTOR in single precision as the driver converts it
+            // (byte * (1/255 as f32); measured on 32-bit float targets)
+            pass.set_blend_constant(clear_colour(state(193), wgpu::TextureFormat::Rgba32Float));
             for (k, (b, off, end, _)) in vbufs.iter().enumerate() {
                 pass.set_vertex_buffer(k as u32, b.slice(*off..*end));
             }
@@ -1440,10 +1579,56 @@ fn stencil_op(v: u32) -> wgpu::StencilOperation {
     }
 }
 
-/// A D3DCOLOR (ARGB) as a wgpu colour.
-fn colour_of(c: u32) -> wgpu::Color {
-    let ch = |s: u32| ((c >> s) & 0xFF) as f64 / 255.0;
-    wgpu::Color { r: ch(16), g: ch(8), b: ch(0), a: ch(24) }
+/// The value Clear stores for a D3DCOLOR in a target of `format`, as the
+/// D3D9 driver computes it (measured, tests/targets.rs): float targets get
+/// byte * (1/255 as f32) in single precision (one ulp above k/255 for some
+/// bytes), and 16-bit float targets that value truncated to half; unorm
+/// targets k/255 (rounded to their precision by the GPU, which matches).
+fn clear_colour(c: u32, format: wgpu::TextureFormat) -> wgpu::Color {
+    use wgpu::TextureFormat as F;
+    let byte = |s: u32| ((c >> s) & 0xFF) as f32 * (1.0f32 / 255.0);
+    let channel = |s: u32| -> f64 {
+        match format {
+            F::R16Float | F::Rg16Float | F::Rgba16Float => half_toward_zero(byte(s)),
+            F::R32Float | F::Rg32Float | F::Rgba32Float => byte(s) as f64,
+            _ => ((c >> s) & 0xFF) as f64 / 255.0,
+        }
+    };
+    wgpu::Color { r: channel(16), g: channel(8), b: channel(0), a: channel(24) }
+}
+
+/// A non-negative f32 below 65504 rounded toward zero to an IEEE half,
+/// returned exactly.
+fn half_toward_zero(v: f32) -> f64 {
+    let b = v.to_bits();
+    let e = ((b >> 23) & 0xFF) as i32 - 127;
+    if v == 0.0 || e < -24 {
+        return 0.0;
+    }
+    // keep 10 fraction bits for normal halves, fewer below 2^-14
+    let keep = if e >= -14 { 10 } else { 10 - (-14 - e) };
+    let drop = 23 - keep;
+    f32::from_bits(b & !((1u32 << drop) - 1)) as f64
+}
+
+/// A partial clear's pipeline key: colour formats per slot, depth format,
+/// depth written, stencil written.
+type ClearKey = (Vec<Option<wgpu::TextureFormat>>, Option<wgpu::TextureFormat>, bool, bool);
+
+/// The rectangles (left, top, right, bottom) a Clear covers in a target of
+/// `size`: the viewport, each of `rects` within it (none: the viewport),
+/// within the scissor rectangle when the test is on (measured on the
+/// driver, tests/targets.rs explore_clear_states).
+fn clear_regions(c: &ClearCall, size: (i32, i32)) -> Vec<[i32; 4]> {
+    let v = c.viewport;
+    let vp = [v[0] as i32, v[1] as i32, (v[0] + v[2]) as i32, (v[1] + v[3]) as i32];
+    let meet = |a: [i32; 4], b: [i32; 4]| [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
+    let base = if c.rects.is_empty() { vec![vp] } else { c.rects.iter().map(|&r| meet(r, vp)).collect() };
+    base.into_iter()
+        .map(|r| c.scissor.map_or(r, |s| meet(r, s)))
+        .map(|r| meet(r, [0, 0, size.0, size.1]))
+        .filter(|r| r[2] > r[0] && r[3] > r[1])
+        .collect()
 }
 
 /// A rectangle, or the whole `w` x `h` target when D3D9 passed NULL (all zero).
@@ -1566,20 +1751,27 @@ impl GraphicsBackend for WgpuBackend {
     fn clear(&mut self, c: &ClearCall) {
         self.flush();
         let mut enc = self.device.create_command_encoder(&Default::default());
-        let colour = colour_of(c.colour);
         let views: Vec<Option<(wgpu::TextureView, wgpu::TextureFormat)>> = if c.flags & 1 != 0 {
-            c.targets.iter().map(|t| t.as_ref().and_then(|t| self.target_view(t, false))).collect()
+            c.targets.iter().map(|t| t.as_ref().and_then(|t| self.target_view(t, c.srgb))).collect()
         } else {
             vec![]
         };
         let depth = if c.flags & 6 != 0 { c.depth.as_ref().and_then(|t| self.target_view(t, false)) } else { None };
-        if !c.rects.is_empty() {
-            self.errors.push("Clear with rectangles is done as a full clear".into());
+        // D3D9 clears the viewport, each rectangle within it, within the
+        // scissor rectangle when the scissor test is on (ClearCall)
+        let size = c.targets.iter().flatten().chain(c.depth.iter()).next().map(|t| (t.width as i32, t.height as i32)).unwrap_or((0, 0));
+        let regions = clear_regions(c, size);
+        let whole = regions.len() == 1 && regions[0] == [0, 0, size.0, size.1];
+        if !whole {
+            if !regions.is_empty() {
+                self.clear_regions_with_pipeline(c, &regions);
+            }
+            return;
         }
         {
-            let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views.iter().map(|v| v.as_ref().map(|(view, _)| wgpu::RenderPassColorAttachment {
+            let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views.iter().map(|v| v.as_ref().map(|(view, f)| wgpu::RenderPassColorAttachment {
                 view, depth_slice: None, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(colour), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear_colour(c.colour, *f)), store: wgpu::StoreOp::Store },
             })).collect();
             let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
