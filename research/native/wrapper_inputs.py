@@ -360,3 +360,84 @@ def null_leaf_cleanup(entry, read, registers, memory):
         return None
     value = memory((registers[register]+mem.disp) & 0xffffffff, 4)
     return pop if len(value) == 4 and int.from_bytes(value, 'little') == 0 else None
+
+
+def exception_frame_pushes(entry, body, read):
+    """Input hint for an inline exception frame with matching unlink exits.
+
+    Five entry pushes hold the state, handler, previous FS link, one local
+    slot and a frame value. Require the link store and every return's exact
+    inverse stack/link sequence before excluding those pushes from arguments.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    decoded = {}
+    for pc in body or ():
+        ins = next(md.disasm(read(pc, 15), pc, count=1), None)
+        if ins is None:
+            return set()
+        decoded[pc] = ins
+    prefix, pc = [], entry
+    for _ in range(10):
+        ins = decoded.get(pc)
+        if ins is None:
+            return set()
+        prefix.append(ins)
+        pc += ins.size
+    def reg(ins, op):
+        return ins.reg_name(op.reg) if op.type == X86_OP_REG and op.size == 4 else None
+    def fs_link(ins, op):
+        return (op.type == X86_OP_MEM and op.size == 4 and ins.addr_size == 4
+                and ins.reg_name(op.mem.segment) == 'fs'
+                and not op.mem.base and not op.mem.index and op.mem.disp == 0)
+    def stack_slot(ins, op, offset):
+        return (op.type == X86_OP_MEM and op.size == 4 and ins.addr_size == 4
+                and not op.mem.segment and ins.reg_name(op.mem.base) == 'esp'
+                and not op.mem.index and op.mem.disp == offset)
+    a,b,c,d,e,f,g,k,l,m = prefix
+    if (a.mnemonic != 'push' or a.operands[0].type != 2
+            or a.operands[0].size != 4 or a.operands[0].imm & 0xffffffff != 0xffffffff
+            or b.mnemonic != 'push' or b.operands[0].type != 2 or b.operands[0].size != 4
+            or c.mnemonic != 'mov' or len(c.operands) != 2
+            or not fs_link(c,c.operands[1])):
+        return set()
+    link_reg = reg(c,c.operands[0])
+    if (link_reg not in ('eax','ecx','edx') or d.mnemonic != 'push'
+            or reg(d,d.operands[0]) != link_reg or e.mnemonic != 'push'
+            or reg(e,e.operands[0]) not in ('eax','ecx','edx')
+            or f.mnemonic != 'mov' or len(f.operands) != 2
+            or f.operands[1].type != X86_OP_MEM or f.operands[1].size != 4
+            or f.operands[1].mem.segment or f.operands[1].mem.base or f.operands[1].mem.index):
+        return set()
+    value_reg = reg(f,f.operands[0])
+    if (value_reg not in ('eax','ecx','edx')
+            or (g.mnemonic,g.op_str) != ('xor', value_reg+', esp')
+            or k.mnemonic != 'push' or reg(k,k.operands[0]) != value_reg
+            or l.mnemonic != 'lea' or len(l.operands) != 2
+            or reg(l,l.operands[0]) != value_reg or not stack_slot(l,l.operands[1],8)
+            or m.mnemonic != 'mov' or len(m.operands) != 2
+            or not fs_link(m,m.operands[0]) or reg(m,m.operands[1]) != value_reg):
+        return set()
+    previous = {i.address+i.size: i for i in decoded.values()}
+    returns = [i for i in decoded.values() if i.mnemonic in ('ret','retn','repz ret')]
+    if not returns:
+        return set()
+    for ret in returns:
+        suffix, ins = [], ret
+        for _ in range(4):
+            ins = previous.get(ins.address)
+            if ins is None:
+                return set()
+            suffix.append(ins)
+        add,pop,unlink,load = suffix
+        if ((add.mnemonic,add.op_str) != ('add','esp, 0x10')
+                or pop.mnemonic != 'pop' or reg(pop,pop.operands[0]) not in ('eax','ecx','edx')
+                or unlink.mnemonic != 'mov' or len(unlink.operands) != 2
+                or not fs_link(unlink,unlink.operands[0])
+                or load.mnemonic != 'mov' or len(load.operands) != 2
+                or not stack_slot(load,load.operands[1],8)):
+            return set()
+        restore_reg = reg(load,load.operands[0])
+        if restore_reg not in ('eax','ecx','edx') or reg(unlink,unlink.operands[1]) != restore_reg:
+            return set()
+    return {i.address for i in (a,b,d,e,k)}

@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation, null_leaf_cleanup
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation, null_leaf_cleanup, exception_frame_pushes
 
 
 class WrapperTests(unittest.TestCase):
@@ -199,6 +199,32 @@ class WrapperTests(unittest.TestCase):
                     code.replace('83b90400000000', '80b90400000000')):
             self.assertIsNone(cleanup(bad))
         self.assertEqual(cleanup('83b90400000000 7401 cc 31c0 c20800'), 8)
+
+    def test_inline_exception_frame_is_not_counted_as_arguments(self):
+        prefix = ('6aff 6800034000 64a100000000 50 51 '
+                  'a100024000 33c4 50 8d442408 64a300000000 ')
+        suffix = '85c0 7400 8b4c2408 64890d00000000 59 83c410 c3'
+        with self.assertRaises(h.Rejected):
+            self.run_caller(suffix, 'tail-frame-v1', prefix)
+        result = self.run_caller(suffix, 'exception-frame-v1', prefix)
+        self.assertEqual(result['calls'][0]['out']['pop'], 8)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+
+    def test_exception_frame_requires_matching_links_and_all_returns(self):
+        def sites(code):
+            data = bytes.fromhex(code)
+            body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(data, 0)]
+            return exception_frame_pushes(0, body, lambda a,n:data[a:a+n])
+        prefix = ('6aff 6800034000 64a100000000 50 51 '
+                  'a100024000 33c4 50 8d442408 64a300000000 ')
+        suffix = '8b4c2408 64890d00000000 59 83c410 c3'
+        self.assertEqual(sites(prefix+'85c0 7400 '+suffix), {0,2,13,14,22})
+        for code in (prefix+suffix+' c3', prefix+suffix.replace('83c410','83c40c'),
+                     prefix.replace('8d442408','8d442404')+suffix,
+                     prefix+suffix.replace('8b4c2408','8b4c2404'),
+                     prefix+suffix.replace('64890d00000000','64890d04000000'),
+                     prefix.replace('64a100000000','65a100000000')+suffix):
+            self.assertEqual(sites(code), set())
 
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
